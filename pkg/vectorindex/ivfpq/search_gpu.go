@@ -455,14 +455,16 @@ func (s *IvfpqSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[B, Q], error)
 // of build-time free VRAM. But at search all N must be resident simultaneously
 // (the fan-out reads every sub-index per query), so the sum can exceed the
 // current free VRAM even though each individual model fit at build time.
-// Without an admission gate the first query would OOM after committing. Sum
-// the persisted tar sizes (idx.FileSize, includes every eagerly-resident
-// payload — PQ codes + graph + ids + bitset + INCLUDE filter blobs) and
-// refuse the load loudly if it will not fit 60% of currently-free VRAM.
+// Without an admission gate the first query would OOM after committing.
+//
+// That admission is enforced per sub-index inside IvfpqModel.LoadIndex, not as
+// an aggregate pre-pass here. It has to run after the tar is local, because
+// SHARDED attribution reads the shard count out of the tar manifest and a model
+// straight from LoadMetadata carries no Path yet; checking up front opened "".
+// Sub-indexes also load sequentially, so re-sampling free VRAM per sub-index
+// accounts for the ones already resident more precisely than one up-front sum,
+// and DeviceReserveLoad holds each claim across the not-yet-resident window.
 func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q]) ([]*IvfpqModel[B, Q], error) {
-	if err := s.admitLoad(indexes); err != nil {
-		return nil, err
-	}
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
 		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
@@ -473,51 +475,6 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		}
 	}
 	return indexes, nil
-}
-
-// admitLoad checks that every device participating in this search has enough
-// free VRAM to host the fraction of the load that will land on it — see the
-// matching comment on cagra/search_gpu.go admitLoad for the aggregate-vs-
-// per-device reasoning.
-func (s *IvfpqSearch[B, Q]) admitLoad(indexes []*IvfpqModel[B, Q]) error {
-	if len(indexes) == 0 || len(s.Devices) == 0 {
-		return nil
-	}
-	mode := vectorindex.DistributionMode(s.Idxcfg.CuvsIvfpq.DistributionMode)
-	perDev := make(map[int]uint64, len(s.Devices))
-	for _, idx := range indexes {
-		if idx.FileSize <= 0 {
-			continue
-		}
-		bytes := uint64(idx.FileSize)
-		switch mode {
-		case vectorindex.DistributionMode_SHARDED:
-			resolved, shardCount, err := cuvs.ResolveDevicesForTarLoad(s.Devices, idx.Path)
-			if err != nil {
-				return err
-			}
-			if shardCount == 0 || len(resolved) == 0 {
-				for _, d := range s.Devices {
-					perDev[d] += bytes
-				}
-				continue
-			}
-			per := bytes / uint64(shardCount)
-			for _, d := range resolved {
-				perDev[d] += per
-			}
-		case vectorindex.DistributionMode_REPLICATED:
-			for _, d := range s.Devices {
-				perDev[d] += bytes
-			}
-		default:
-			perDev[s.Devices[0]] += bytes
-		}
-	}
-	return vectorindex.AdmitLoadFitsPerDevice(perDev, func(d int) (uint64, error) {
-		_, freeBytes, err := cuvs.RowsFittingFreeMem(d, 1)
-		return freeBytes, err
-	}, "IvfpqSearch.loadIndexes")
 }
 
 // Destroy implements cache.VectorIndexSearchIf.

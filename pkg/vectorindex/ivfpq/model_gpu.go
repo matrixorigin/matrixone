@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -580,13 +581,43 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 	// index built under gpu_multi_simulation=N loads all N shards; on a
 	// multi-GPU host with fewer physical GPUs than the saved shard count
 	// this errors (misconfig should surface, not silently degrade).
-	if resolved, shardCount, perr := cuvs.ResolveDevicesForTarLoad(idx.Devices, idx.Path); perr != nil {
+	resolved, shardCount, perr := cuvs.ResolveDevicesForTarLoad(idx.Devices, idx.Path)
+	if perr != nil {
 		return perr
-	} else if shardCount > 0 && len(resolved) != len(idx.Devices) {
+	}
+	if shardCount > 0 && len(resolved) != len(idx.Devices) {
 		logutil.Infof("IvfpqModel.LoadIndex: adjusted idx.Devices from %v to %v to match manifest shard_count=%d",
 			idx.Devices, resolved, shardCount)
 		idx.Devices = resolved
 	}
+
+	// VRAM admission happens HERE rather than in a caller pre-pass, because it
+	// needs the shard topology from the tar manifest and the tar only exists
+	// locally after the download above. Admitting earlier meant opening idx.Path
+	// while it was still "" -- LoadMetadata builds models with Id/Checksum/
+	// Timestamp/FileSize but no Path -- so ResolveDevicesForTarLoad failed on
+	// os.Open("") and every SHARDED cold load died before its first query.
+	//
+	// Per-sub-index rather than one aggregate pre-check: sub-indexes load
+	// sequentially, so re-sampling free VRAM for each one already accounts for
+	// the ones loaded ahead of it, and the reservation covers the window where
+	// an admitted load is not resident yet. This still runs before
+	// NewGpuIvfPqEmpty, so no device memory has been committed at this point.
+	releaseVRAM, aerr := vimemory.DeviceReserveLoad(
+		vimemory.DeviceLoadBytes(
+			vectorindex.DistributionMode(idxcfg.CuvsIvfpq.DistributionMode),
+			idx.Devices, shardCount, uint64(idx.FileSize)),
+		func(d int) (uint64, error) {
+			_, freeBytes, ferr := cuvs.RowsFittingFreeMem(d, 1)
+			return freeBytes, ferr
+		}, "IvfpqModel.LoadIndex")
+	if aerr != nil {
+		return aerr
+	}
+	// Released on every path out: once LoadIndex returns, the bytes are either
+	// really resident (so the next free-VRAM sample counts them) or were freed
+	// by the failure path.
+	defer releaseVRAM()
 
 	cuvsMetric, bp, mode, err := idx.ivfpqConfig()
 	if err != nil {
@@ -613,7 +644,7 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 		return err
 	}
 
-	// idx.Path lives in LocalSpillDir; extract into the same directory so the
+	// idx.Path lives in HostSpillDir; extract into the same directory so the
 	// intermediate (same-size scratch as the tar) does NOT land in /tmp.
 	if err = gi.Unpack(idx.Path, filepath.Dir(idx.Path), mode); err != nil {
 		gi.Destroy()

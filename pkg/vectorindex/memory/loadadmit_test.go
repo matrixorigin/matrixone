@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package vectorindex
+package memory
 
 import (
 	"fmt"
@@ -22,33 +22,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAdmitLoadFits(t *testing.T) {
+func TestDeviceAdmitLoadAggregate(t *testing.T) {
 	free := func(v uint64) func() (uint64, error) {
 		return func() (uint64, error) { return v, nil }
 	}
 	errGetter := func() (uint64, error) { return 0, fmt.Errorf("boom") }
 
 	t.Run("zero bytes is a no-op even when getter would error", func(t *testing.T) {
-		require.NoError(t, AdmitLoadFits(0, errGetter, "T"))
+		require.NoError(t, DeviceAdmitLoadAggregate(0, errGetter, "T"))
 	})
 	t.Run("fits at exactly the 60% budget", func(t *testing.T) {
 		// 10 GiB free -> budget = 6 GiB. 6 GiB request fits (want <= budget).
-		require.NoError(t, AdmitLoadFits(6<<30, free(10<<30), "T"))
+		require.NoError(t, DeviceAdmitLoadAggregate(6<<30, free(10<<30), "T"))
 	})
 	t.Run("one byte over the 60% budget rejects", func(t *testing.T) {
-		err := AdmitLoadFits((6<<30)+1, free(10<<30), "T")
+		err := DeviceAdmitLoadAggregate((6<<30)+1, free(10<<30), "T")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "T:")
 	})
 	t.Run("getter error is surfaced as a fail-loud admission error", func(t *testing.T) {
-		err := AdmitLoadFits(1, errGetter, "T")
+		err := DeviceAdmitLoadAggregate(1, errGetter, "T")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cannot query free VRAM")
 		require.Contains(t, err.Error(), "boom")
 	})
 }
 
-func TestAdmitLoadFitsPerDevice(t *testing.T) {
+func TestDeviceAdmitLoad(t *testing.T) {
 	// A fixed per-device free-bytes table simplifies the tests.
 	makeGetter := func(freeByDev map[int]uint64) func(int) (uint64, error) {
 		return func(d int) (uint64, error) {
@@ -60,12 +60,12 @@ func TestAdmitLoadFitsPerDevice(t *testing.T) {
 	}
 
 	t.Run("empty map: nothing to admit", func(t *testing.T) {
-		require.NoError(t, AdmitLoadFitsPerDevice(nil, makeGetter(nil), "T"))
-		require.NoError(t, AdmitLoadFitsPerDevice(map[int]uint64{}, makeGetter(nil), "T"))
+		require.NoError(t, DeviceAdmitLoad(nil, makeGetter(nil), "T"))
+		require.NoError(t, DeviceAdmitLoad(map[int]uint64{}, makeGetter(nil), "T"))
 	})
 
 	t.Run("zero-demand device is skipped even if getter would error", func(t *testing.T) {
-		require.NoError(t, AdmitLoadFitsPerDevice(
+		require.NoError(t, DeviceAdmitLoad(
 			map[int]uint64{99: 0},
 			func(d int) (uint64, error) { return 0, fmt.Errorf("should not be called") },
 			"T",
@@ -73,7 +73,7 @@ func TestAdmitLoadFitsPerDevice(t *testing.T) {
 	})
 
 	t.Run("all devices fit at exactly 60%", func(t *testing.T) {
-		require.NoError(t, AdmitLoadFitsPerDevice(
+		require.NoError(t, DeviceAdmitLoad(
 			map[int]uint64{0: 6 << 30, 1: 3 << 30},
 			makeGetter(map[int]uint64{0: 10 << 30, 1: 5 << 30}),
 			"T",
@@ -81,7 +81,7 @@ func TestAdmitLoadFitsPerDevice(t *testing.T) {
 	})
 
 	t.Run("one device over budget rejects and names that device", func(t *testing.T) {
-		err := AdmitLoadFitsPerDevice(
+		err := DeviceAdmitLoad(
 			map[int]uint64{0: 6 << 30, 1: (3 << 30) + 1},
 			makeGetter(map[int]uint64{0: 10 << 30, 1: 5 << 30}),
 			"T",
@@ -96,14 +96,14 @@ func TestAdmitLoadFitsPerDevice(t *testing.T) {
 		// on one card); per-device fits (15 <= 15G budget per card).
 		perDev := map[int]uint64{0: 15 << 30, 1: 15 << 30}
 		freeMap := map[int]uint64{0: 25 << 30, 1: 25 << 30}
-		require.NoError(t, AdmitLoadFitsPerDevice(perDev, makeGetter(freeMap), "T"))
+		require.NoError(t, DeviceAdmitLoad(perDev, makeGetter(freeMap), "T"))
 	})
 
 	t.Run("gpu_multi_simulation aliased shards stack on one device", func(t *testing.T) {
 		// Sim path: SHARDED index built with sim=2 loads as 2 shards both on
 		// physical device 0. Per-device demand is 2*shardBytes on device 0.
 		// With 10 GiB free (6 GiB budget), 4 GiB total demand fits.
-		require.NoError(t, AdmitLoadFitsPerDevice(
+		require.NoError(t, DeviceAdmitLoad(
 			map[int]uint64{0: 4 << 30},
 			makeGetter(map[int]uint64{0: 10 << 30}),
 			"T",
@@ -111,7 +111,7 @@ func TestAdmitLoadFitsPerDevice(t *testing.T) {
 		// But 7 GiB total demand exceeds the 6 GiB budget and MUST reject —
 		// aggregate-single-device semantics would also reject here, so this
 		// pins the sim-mode behavior.
-		err := AdmitLoadFitsPerDevice(
+		err := DeviceAdmitLoad(
 			map[int]uint64{0: 7 << 30},
 			makeGetter(map[int]uint64{0: 10 << 30}),
 			"T",
@@ -121,7 +121,7 @@ func TestAdmitLoadFitsPerDevice(t *testing.T) {
 	})
 
 	t.Run("getter error for any participating device fails admission", func(t *testing.T) {
-		err := AdmitLoadFitsPerDevice(
+		err := DeviceAdmitLoad(
 			map[int]uint64{0: 1, 42: 1},
 			makeGetter(map[int]uint64{0: 10 << 30}), // 42 missing
 			"T",
@@ -134,11 +134,11 @@ func TestAdmitLoadFitsPerDevice(t *testing.T) {
 		// All devices need full copy; budget check per device.
 		perDev := map[int]uint64{0: 4 << 30, 1: 4 << 30, 2: 4 << 30}
 		freeMap := map[int]uint64{0: 10 << 30, 1: 10 << 30, 2: 10 << 30}
-		require.NoError(t, AdmitLoadFitsPerDevice(perDev, makeGetter(freeMap), "T"))
+		require.NoError(t, DeviceAdmitLoad(perDev, makeGetter(freeMap), "T"))
 	})
 
 	t.Run("error message contains the tag and human-readable remedy", func(t *testing.T) {
-		err := AdmitLoadFitsPerDevice(
+		err := DeviceAdmitLoad(
 			map[int]uint64{0: 100 << 30},
 			makeGetter(map[int]uint64{0: 10 << 30}),
 			"Cagra.loadIndexes",

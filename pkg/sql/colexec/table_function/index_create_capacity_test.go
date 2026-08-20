@@ -198,41 +198,11 @@ func TestPlanCapacityHostBound(t *testing.T) {
 	})
 
 	t.Run("zero disables the bound", func(t *testing.T) {
-		// hostRowsFittingMem returns 0 when the platform cannot report memory; that
+		// memory.HostRowsFitting returns 0 when the platform cannot report memory; that
 		// must not collapse capacity to nothing.
 		p, err := planCapacity(88_000_000, 0, 3_000_000, 0, 1024, false, algo, param)
 		require.NoError(t, err)
 		require.Equal(t, int64(3_000_000), p.Capacity)
 		require.False(t, p.HostBound)
 	})
-}
-
-// hostRowsFittingMem reads real memory, so assert the contract rather than a figure.
-func TestHostRowsFittingMem(t *testing.T) {
-	rows, avail, err := hostRowsFittingMem(1536) // dim 768 f16
-	require.NoError(t, err)
-	require.Positive(t, avail)
-	require.Positive(t, rows)
-	require.Less(t, uint64(rows)*1536, avail, "must leave headroom, not spend all of it")
-
-	// A wider row must not fit more of itself.
-	wide, _, err := hostRowsFittingMem(3072)
-	require.NoError(t, err)
-	require.LessOrEqual(t, wide, rows)
-
-	// Zero is inert rather than a divide-by-zero.
-	z, _, err := hostRowsFittingMem(0)
-	require.NoError(t, err)
-	require.Zero(t, z)
-
-	// A per-row cost larger than the whole 75% budget is a hard error, not a
-	// silent zero. Silently returning (0, avail, nil) here would let the caller
-	// treat the bound as "unmeasured" and disable it — exactly the OOM the
-	// bound exists to prevent.
-	huge, availHuge, err := hostRowsFittingMem(avail) // one row costs the entire node
-	require.Error(t, err)
-	require.Zero(t, huge)
-	require.Positive(t, availHuge, "err path must still report the measured avail")
-	require.Contains(t, err.Error(), "cannot hold one row",
-		"the message must explain WHY the sizing failed")
 }

@@ -18,8 +18,9 @@ import (
 	"fmt"
 	"strings"
 
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -315,68 +316,8 @@ func planTrainFraction(capacity, maxTrainRows, nLists int64, requested float64) 
 // arithmetic must use the DISTINCT count — inflating "aggregate VRAM budget"
 // by len(devices) in sim mode over-commits a single card by N× and OOMs at
 // extend time.
+// distinctDeviceCount counts distinct PHYSICAL devices. Delegates so the dedup
+// rule has exactly one definition, shared with the sizing path that surveys them.
 func distinctDeviceCount(devices []int) int {
-	if len(devices) == 0 {
-		return 0
-	}
-	seen := make(map[int]struct{}, len(devices))
-	for _, d := range devices {
-		seen[d] = struct{}{}
-	}
-	return len(seen)
-}
-
-// hostBudgetNumerator/Denominator take 75% of what is actually available. The
-// budget is now derived from an accurate baseline — cgroup limit (regardless of
-// PID) or MemAvailable (cache-aware) — and the per-row cost model includes every
-// eager capacity-sized allocation (vector staging + INCLUDE columns), so the
-// safety margin does not also need to absorb measurement error. 25% still leaves
-// headroom for concurrent queries, allocator slack, and the mpool. This is a
-// deliberate divergence from the device-side 60%: VRAM is contested by the RMM
-// pool + graph build workspace + kernel scratch, which host memory is not.
-const hostBudgetNumerator, hostBudgetDenominator = 3, 4
-
-// hostRowsFittingMem returns how many rows of perRowBytes fit the host budget, and the
-// available figure it was derived from.
-//
-// perRowBytes here is the HOST cost of a row, and MUST cover every eager
-// capacity-sized host allocation the build makes:
-//   - the flattened vector staging buffer: dim * sizeof(storage-Q)
-//   - every INCLUDE column's FilterStore column (FilterStore::init resizes
-//     each of them to capacity * elem_size up front)
-//
-// A model that only charges the vector width lets a narrow vector plus several
-// fixed-width INCLUDE columns allocate far beyond the claimed 60% budget.
-// Callers must sum both terms before calling this.
-//
-// Uses system.MemoryAvailableIncludingCache() — MemFree + reclaimable buffers/cache
-// (= /proc/meminfo:MemAvailable) on bare-metal, and cgroup-limit-minus-cgroup-used
-// wherever a process cgroup is discoverable (regardless of whether mo-service runs
-// as PID 1). A plain MemFree reading false-aborts on any warm-cache host, and a
-// plain /proc/meminfo reading inside a container reports HOST memory not the
-// cgroup limit and would allow pre-allocations sized against the whole node.
-//
-// Unlike the GPU query, an unavailable measurement here is NOT fatal:
-// (rows=0, availBytes=0, err=nil) signals "unmeasured" and the caller falls
-// back to the GPU / srcRowCount bounds. A measurement that reports 0 rows
-// (availBytes>0 but the 60% budget can't hold one row) is a hard error — the
-// host is out of memory for this build and silently disabling the bound would
-// hand the request straight to the OOM killer.
-func hostRowsFittingMem(perRowBytes uint64) (rows int64, availBytes uint64, err error) {
-	if perRowBytes == 0 {
-		return 0, 0, nil
-	}
-	avail := system.MemoryAvailableIncludingCache()
-	if avail == 0 {
-		return 0, 0, nil
-	}
-	budget := avail / hostBudgetDenominator * hostBudgetNumerator
-	rows = int64(budget / perRowBytes)
-	if rows == 0 {
-		return 0, avail, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-			"host memory budget of %d bytes (60%% of %d available) cannot hold one row of %d bytes; "+
-				"free memory on this node or run the build on a larger CN",
-			budget, avail, perRowBytes))
-	}
-	return rows, avail, nil
+	return len(vimemory.DeviceDistinct(devices))
 }

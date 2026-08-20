@@ -38,6 +38,7 @@ import (
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	ivfpqPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq"
 	ivfpqrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -421,29 +422,34 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// :1374 allocates the list data. Peak is max(train, index), so folding the
 		// trainset into perRow would shrink capacity to buy something that is not
 		// competing for the same bytes.
-		var rowsFit, maxTrainRows int64
-		if len(devices) > 0 {
-			var freeBytes uint64
-			rowsFit, freeBytes, err = cuvs.RowsFittingFreeMem(devices[0], perRow)
-			if err != nil {
-				// Never guess. Assuming the whole table fits is precisely the failure
-				// being prevented, so say which lever the operator has instead.
-				return moerr.NewInternalErrorf(proc.Ctx,
-					"ivfpq: cannot size the index build against GPU memory (%v); "+
-						"set max_index_capacity explicitly", err)
-			}
-			logutil.Infof("IVFPQ create: %d MB free on device %d, %d B/row resident -> %d rows fit",
-				freeBytes>>20, devices[0], perRow, rowsFit)
-
-			maxTrainRows, _, err = cuvs.RowsFittingFreeMem(devices[0], dim*trainsetBytesPerElem(qt))
-			if err != nil {
-				return moerr.NewInternalErrorf(proc.Ctx,
-					"ivfpq: cannot size the k-means trainset against GPU memory (%v); "+
-						"set kmeans_train_percent explicitly", err)
-			}
+		// Size against the SMALLEST participating card, not devices[0].
+		// Heterogeneous free VRAM is supported, and SHARDED cuts equal shards:
+		// sampling only devices[0] on a 40 GiB + 8 GiB pair sizes every shard for
+		// the 40 GiB card and the 8 GiB one OOMs the moment its shard lands.
+		// Iterate DISTINCT physical devices — under gpu_multi_simulation the list
+		// aliases one card N times, and querying it N times just returns the same
+		// number N times while pretending to have surveyed N cards.
+		rowsFit, minDev, minFree, derr := vimemory.DeviceMinRowsFitting(devices, perRow, cuvs.RowsFittingFreeMem)
+		if derr != nil {
+			// Never guess. Assuming the whole table fits is precisely the failure
+			// being prevented, so say which lever the operator has instead.
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"ivfpq: %v; set max_index_capacity explicitly", derr)
+		}
+		// The trainset is sized separately: it is a different per-row cost and its
+		// allocation does not overlap the index's, so it gets its own minimum.
+		maxTrainRows, _, _, terr := vimemory.DeviceMinRowsFitting(
+			devices, dim*trainsetBytesPerElem(qt), cuvs.RowsFittingFreeMem)
+		if terr != nil {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"ivfpq: %v; set kmeans_train_percent explicitly", terr)
+		}
+		if rowsFit > 0 {
+			logutil.Infof("IVFPQ create: smallest participating device %d has %d MB free, %d B/row resident -> %d rows fit",
+				minDev, minFree>>20, perRow, rowsFit)
 		}
 
-		// INCLUDE column metadata is resolved HERE — before hostRowsFittingMem —
+		// INCLUDE column metadata is resolved HERE — before memory.HostRowsFitting —
 		// so its per-row bytes can be added to the host cost model. FilterStore::init
 		// eagerly resizes each INCLUDE column to `capacity * elem_size` up front, so a
 		// narrow vector with several fixed-width INCLUDE columns can blow the 60%
@@ -459,20 +465,22 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// makes capacity ~7.7x larger than the old dataset-based bound did, so the host
 		// side now needs its own limit -- otherwise a 20 GB card derives 63M rows and
 		// asks the host for 97 GB.
-		hostPerRow := dim*quantizationBytes(qt) + ibprHost
-		hostRowsFit, availBytes, herr := hostRowsFittingMem(hostPerRow)
+		// vimemory.HostIDBytesPerRow covers host_ids + id_to_index_, which the C++ side reserves
+		// and populates for every row regardless of how narrow the vector is.
+		hostPerRow := dim*quantizationBytes(qt) + ibprHost + vimemory.HostIDBytesPerRow
+		hostRowsFit, availBytes, herr := vimemory.HostRowsFitting(hostPerRow)
 		if herr != nil {
-			// availBytes>0 with hostRowsFit==0 is a hard error: the host cannot
-			// hold one row even at the 60% budget. Surface as fatal — silently
-			// disabling the bound would hand the build straight to OOM.
-			if availBytes > 0 {
-				return moerr.NewInternalErrorf(proc.Ctx, "ivfpq: %v", herr)
-			}
-			logutil.Warnf("IVFPQ create: cannot read host memory (%v); "+
-				"capacity bounded by GPU memory only", herr)
-		} else if hostRowsFit > 0 {
-			logutil.Infof("IVFPQ create: %d MB host available, %d B/row host (%d vector + %d include) -> %d rows fit",
-				availBytes>>20, hostPerRow, dim*quantizationBytes(qt), ibprHost, hostRowsFit)
+			// memory.HostRowsFitting errors ONLY on a successful measurement that
+			// cannot hold one row — which now includes a cgroup sitting at its
+			// limit (avail==0). An unavailable measurement returns (0,0,nil) and
+			// falls through to the GPU-only bound below, so there is no longer an
+			// availBytes>0 proxy to test: previously a full cgroup reported 0 and
+			// was misread as "unmeasured", disabling the bound it should enforce.
+			return moerr.NewInternalErrorf(proc.Ctx, "ivfpq: %v", herr)
+		}
+		if hostRowsFit > 0 {
+			logutil.Infof("IVFPQ create: %d MB host available, %d B/row host (%d vector + %d include + %d ids) -> %d rows fit",
+				availBytes>>20, hostPerRow, dim*quantizationBytes(qt), ibprHost, uint64(vimemory.HostIDBytesPerRow), hostRowsFit)
 		}
 
 		// lists defaults to the cuVS default when unset; a 0 threshold would silently
@@ -537,7 +545,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// than /tmp: each tar is a whole sub-index, so a large build writes GB
 		// through it, and LOCAL is the provisioned data volume. "" when no LOCAL
 		// fileservice is attached, which os.MkdirTemp reads as $TMPDIR.
-		spillDir := vectorindex.LocalSpillDir(proc.Ctx, proc.Base.FileService)
+		spillDir := vimemory.HostSpillDir(proc.Ctx, proc.Base.FileService)
 		if spillDir == "" {
 			logutil.Infof("IVFPQ create: no LOCAL fileservice; index tars will use $TMPDIR")
 		}
@@ -568,7 +576,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 
 		// ---- pre-filter (INCLUDE columns) setup ----
-		// u.filterCols was already resolved above (before hostRowsFittingMem)
+		// u.filterCols was already resolved above (before memory.HostRowsFitting)
 		// so its per-row bytes could be added to the host cost model. Just wire
 		// it into the C++ FilterStore here.
 		if len(u.filterCols) > 0 {

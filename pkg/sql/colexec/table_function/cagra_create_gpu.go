@@ -37,6 +37,7 @@ import (
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
 	cagrart "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -379,20 +380,24 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 		perRow += graphDegree * 8
 
-		var rowsFit int64
-		if len(devices) > 0 {
-			var freeBytes uint64
-			rowsFit, freeBytes, err = cuvs.RowsFittingFreeMem(devices[0], perRow)
-			if err != nil {
-				return moerr.NewInternalErrorf(proc.Ctx,
-					"cagra: cannot size the index build against GPU memory (%v); "+
-						"set cagra_max_index_capacity explicitly", err)
-			}
-			logutil.Infof("CAGRA create: %d MB free on device %d, %d B/row -> %d rows fit",
-				freeBytes>>20, devices[0], perRow, rowsFit)
+		// Size against the SMALLEST participating card, not devices[0].
+		// Heterogeneous free VRAM is supported, and SHARDED cuts equal shards:
+		// sampling only devices[0] on a 40 GiB + 8 GiB pair sizes every shard for
+		// the 40 GiB card and the 8 GiB one OOMs the moment its shard lands.
+		// Iterate DISTINCT physical devices — under gpu_multi_simulation the list
+		// aliases one card N times, and querying it N times just returns the same
+		// number N times while pretending to have surveyed N cards.
+		rowsFit, minDev, minFree, derr := vimemory.DeviceMinRowsFitting(devices, perRow, cuvs.RowsFittingFreeMem)
+		if derr != nil {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"cagra: %v; set cagra_max_index_capacity explicitly", derr)
+		}
+		if rowsFit > 0 {
+			logutil.Infof("CAGRA create: smallest participating device %d has %d MB free, %d B/row -> %d rows fit",
+				minDev, minFree>>20, perRow, rowsFit)
 		}
 
-		// INCLUDE column metadata is resolved HERE — before hostRowsFittingMem —
+		// INCLUDE column metadata is resolved HERE — before memory.HostRowsFitting —
 		// so its per-row bytes can be added to the host cost model. FilterStore::init
 		// eagerly resizes each INCLUDE column to `capacity * elem_size` up front, so a
 		// narrow vector with several fixed-width INCLUDE columns can blow the 60%
@@ -401,29 +406,34 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
 			return err
 		}
+		// vimemory.HostIDBytesPerRow covers host_ids + id_to_index_, which the C++ side reserves
+		// and populates for every row regardless of how narrow the vector is.
 		hostPerRow := uint64(u.idxcfg.CuvsCagra.Dimensions)*quantizationBytes(qt) +
-			uint64(includeBytesPerRowFromCols(u.filterCols))
+			uint64(includeBytesPerRowFromCols(u.filterCols)) + vimemory.HostIDBytesPerRow
 
 		// CAGRA's per-row cost still includes the dataset, so its VRAM bound already
 		// keeps the host buffer at or under the device budget. The host bound is applied
 		// anyway: it costs one syscall, and it stops the two algorithms from drifting
 		// apart the next time one of their cost models changes.
-		hostRowsFit, availBytes, herr := hostRowsFittingMem(hostPerRow)
+		hostRowsFit, availBytes, herr := vimemory.HostRowsFitting(hostPerRow)
 		if herr != nil {
-			// availBytes>0 with hostRowsFit==0 is a hard error: the host cannot
-			// hold one row even at the 60% budget. Surface as fatal — silently
-			// disabling the bound would hand the build straight to OOM.
-			if availBytes > 0 {
-				return moerr.NewInternalErrorf(proc.Ctx, "cagra: %v", herr)
-			}
-			logutil.Warnf("CAGRA create: cannot read host memory (%v); "+
-				"capacity bounded by GPU memory only", herr)
-		} else if hostRowsFit > 0 {
-			logutil.Infof("CAGRA create: %d MB host available, %d B/row host (%d vector + %d include) -> %d rows fit",
+			// memory.HostRowsFitting errors ONLY on a successful measurement that
+			// cannot hold one row — which now includes a cgroup sitting at its
+			// limit (avail==0). An unavailable measurement returns (0,0,nil) and
+			// falls through to the GPU-only bound below, so there is no longer an
+			// availBytes>0 proxy to test: previously a full cgroup reported 0 and
+			// was misread as "unmeasured", disabling the bound it should enforce.
+			return moerr.NewInternalErrorf(proc.Ctx, "cagra: %v", herr)
+		}
+		if hostRowsFit > 0 {
+			logutil.Infof("CAGRA create: %d MB host available, %d B/row host (%d vector + %d include + %d ids) -> %d rows fit",
 				availBytes>>20, hostPerRow,
 				uint64(u.idxcfg.CuvsCagra.Dimensions)*quantizationBytes(qt),
 				includeBytesPerRowFromCols(u.filterCols),
+				vimemory.HostIDBytesPerRow,
 				hostRowsFit)
+		} else {
+			logutil.Warnf("CAGRA create: host memory unavailable; capacity bounded by GPU memory only")
 		}
 
 		// cuVS validate_build_params rejects `n_rows <= intermediate_graph_degree`,
@@ -468,7 +478,7 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// than /tmp: each tar is a whole sub-index, so a large build writes GB
 		// through it, and LOCAL is the provisioned data volume. "" when no LOCAL
 		// fileservice is attached, which os.MkdirTemp reads as $TMPDIR.
-		spillDir := vectorindex.LocalSpillDir(proc.Ctx, proc.Base.FileService)
+		spillDir := vimemory.HostSpillDir(proc.Ctx, proc.Base.FileService)
 		if spillDir == "" {
 			logutil.Infof("CAGRA create: no LOCAL fileservice; index tars will use $TMPDIR")
 		}
@@ -499,7 +509,7 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 
 		// ---- pre-filter (INCLUDE columns) setup ----
-		// u.filterCols was already resolved above (before hostRowsFittingMem)
+		// u.filterCols was already resolved above (before memory.HostRowsFitting)
 		// so its per-row bytes could be added to the host cost model. Just wire
 		// it into the C++ FilterStore here.
 		if len(u.filterCols) > 0 {

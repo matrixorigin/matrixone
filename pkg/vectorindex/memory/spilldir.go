@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package vectorindex
+package memory
 
 import (
 	"context"
@@ -29,7 +29,7 @@ import (
 // cannot delete another's in-flight files.
 const localSpillSubdir = "__vectorindex"
 
-// LocalSpillDir returns the on-disk scratch directory for GPU index build
+// HostSpillDir returns the on-disk scratch directory for GPU index build
 // artifacts, under the LOCAL fileservice, creating it if absent.
 //
 // WHY NOT $TMPDIR: a GPU index build packs each finished sub-index to a tar
@@ -38,7 +38,7 @@ const localSpillSubdir = "__vectorindex"
 // a small or slow mount (on AWS it is the ~128 MB/s root volume, which would add
 // minutes of pure write stall), while the LOCAL fileservice is by definition the
 // data directory the operator provisioned for exactly this kind of traffic.
-// fulltext2 moved its spill for the same reason; see LocalSpillDir there.
+// fulltext2 moved its spill for the same reason; see HostSpillDir there.
 //
 // Returns "" when rootFS has no LOCAL fileservice (unit tests, one-shot tools).
 // "" is what os.MkdirTemp/os.CreateTemp already interpret as $TMPDIR, so callers
@@ -47,7 +47,7 @@ const localSpillSubdir = "__vectorindex"
 // This is deliberately NOT carried on IndexTableConfig: that struct is JSON
 // marshalled into the table-function argument list and travels between CNs,
 // whereas this path is only meaningful on the node that resolved it.
-func LocalSpillDir(ctx context.Context, rootFS fileservice.FileService) string {
+func HostSpillDir(ctx context.Context, rootFS fileservice.FileService) string {
 	if rootFS == nil {
 		return ""
 	}
