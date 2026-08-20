@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -4324,6 +4325,9 @@ type UserDefinedVar struct {
 	// silently narrowing a decimal or floating-point variable.
 	Type             planpb.Type
 	PrepareParamKind vector.PrepareParamKind
+	// Replayable is true only when the proxy can replay the assignment as a
+	// captured raw COM_QUERY SET statement during legacy migration.
+	Replayable bool
 }
 
 // inferUserDefinedVarType supplies a conservative type for callers which set
@@ -4343,6 +4347,16 @@ func inferUserDefinedVarType(value interface{}) planpb.Type {
 		oid = types.T_float32
 	case float64:
 		oid = types.T_float64
+	case types.Date:
+		oid = types.T_date
+	case types.Time:
+		oid = types.T_time
+	case types.Datetime:
+		oid = types.T_datetime
+	case types.Timestamp:
+		oid = types.T_timestamp
+	case bytejson.ByteJson:
+		oid = types.T_json
 	case types.Decimal64:
 		oid = types.T_decimal64
 	case types.Decimal128:
@@ -4351,6 +4365,16 @@ func inferUserDefinedVarType(value interface{}) planpb.Type {
 		oid = types.T_decimal256
 	case types.Enum:
 		oid = types.T_enum
+	case types.MoYear:
+		oid = types.T_year
+	case types.Uuid:
+		oid = types.T_uuid
+	case types.TS:
+		oid = types.T_TS
+	case types.Rowid:
+		oid = types.T_Rowid
+	case types.Blockid:
+		oid = types.T_Blockid
 	case []byte:
 		oid = types.T_varbinary
 	case []float32:

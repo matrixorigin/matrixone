@@ -842,6 +842,22 @@ func releaseRetainedOrderRefs(colRefCnt map[[2]int32]int, refs [][2]int32) {
 }
 
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
+	return builder.remapAllColRefsForConsumer(
+		nodeID, step, colRefCnt, colRefBool, sinkColRef, false)
+}
+
+// remapAllColRefsForConsumer carries physical consumer capabilities down one
+// logical edge. The capability deliberately defaults to false at every other
+// recursive call, so projections, alternate aggregates, grouping, and plan
+// rewrites cannot accidentally inherit compressed multiplicity support.
+func (builder *QueryBuilder) remapAllColRefsForConsumer(
+	nodeID int32,
+	step int32,
+	colRefCnt map[[2]int32]int,
+	colRefBool map[[2]int32]bool,
+	sinkColRef map[[2]int32]int,
+	acceptsCompressedRowCount bool,
+) (*ColRefRemapping, error) {
 	node := builder.qry.Nodes[nodeID]
 
 	remapping := &ColRefRemapping{
@@ -1275,6 +1291,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_JOIN:
+		node.EmitCompressedRowCount = false
 		node.SpillMem = builder.joinSpillMem
 
 		var markOperandNotNullable [][]bool
@@ -1480,7 +1497,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		if len(node.ProjectList) == 0 && len(leftRemapping.localToGlobal) > 0 {
+		if len(node.ProjectList) == 0 && acceptsCompressedRowCount &&
+			isRowCountOnlyInnerEquiJoin(node) {
+			node.EmitCompressedRowCount = true
+		} else if len(node.ProjectList) == 0 && len(leftRemapping.localToGlobal) > 0 {
 			globalRef := leftRemapping.localToGlobal[0]
 			remapping.addColRef(globalRef)
 
@@ -1584,7 +1604,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		childRemapping, err := builder.remapAllColRefsForConsumer(
+			node.Children[0], step, colRefCnt, colRefBool, sinkColRef,
+			isSingleCountStarConsumer(node))
 		releaseRetainedOrderRefs(colRefCnt, retainedOrderRefs)
 		if err != nil {
 			return nil, err
@@ -3215,6 +3237,45 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	node.BindingTags = nil
 
 	return remapping, nil
+}
+
+// isRowCountOnlyInnerEquiJoin reports the join shape whose executor can carry
+// multiplicity in a zero-column batch.  Keep this deliberately narrower than
+// IsEquiJoin2: one residual predicate would require materialized candidate
+// rows, and outer/semi/anti joins have different row-preservation semantics.
+func isRowCountOnlyInnerEquiJoin(node *plan.Node) bool {
+	if node == nil || node.JoinType != plan.Node_INNER {
+		return false
+	}
+	conditions := splitPlanConjunctions(node.OnList)
+	if len(conditions) == 0 {
+		return false
+	}
+	for _, condition := range conditions {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
+			return false
+		}
+		left, right := HasColExpr(fn.Args[0], -1), HasColExpr(fn.Args[1], -1)
+		if !((left == 0 && right == 1) || (left == 1 && right == 0)) {
+			return false
+		}
+	}
+	return true
+}
+
+// isSingleCountStarConsumer is the only downstream shape that can consume a
+// join's complete multiplicity without materializing or chunking its rows.
+// Keep this check on the unpruned aggregate list so a multi-aggregate query
+// cannot acquire the capability merely because an outer projection drops one
+// of its results later.
+func isSingleCountStarConsumer(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_AGG ||
+		len(node.GroupBy) != 0 || len(node.AggList) != 1 {
+		return false
+	}
+	agg := node.AggList[0].GetF()
+	return agg != nil && agg.Func != nil && agg.Func.ObjName == "starcount"
 }
 
 func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBool map[[2]int32]bool) {
@@ -7363,7 +7424,12 @@ func (builder *QueryBuilder) bindSelectClause(
 				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
 					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 						if c.U64Val == 0 {
-							builder.isSkipResolveTableDef = true
+							// View metadata generation needs the complete catalog identity
+							// exposed by Resolve so it can persist reverse dependencies.
+							// Keep the mo_columns-only shortcut for ordinary LIMIT 0 queries.
+							if _, capturingViewDependencies := builder.compCtx.(viewDependencyScope); !capturingViewDependencies {
+								builder.isSkipResolveTableDef = true
+							}
 						}
 					}
 				}
@@ -10221,7 +10287,6 @@ func (builder *QueryBuilder) bindView(
 	viewCtx := NewBindContext(builder, nil)
 	viewCtx.restoreViewMySQLSpecialTypes = true
 	viewCtx.snapshot = snapshot
-	viewCtx.lower = ctx.lower
 
 	viewData := ViewData{}
 	err = json.Unmarshal([]byte(viewDefString), &viewData)
@@ -10233,7 +10298,13 @@ func (builder *QueryBuilder) bindView(
 	if viewData.SQLMode != nil {
 		parserSQLMode = *viewData.SQLMode
 	}
-	originStmts, err := mysql.ParseWithSQLMode(builder.GetContext(), viewData.Stmt, ctx.lower, parserSQLMode)
+	viewLowerCaseTableNames := ctx.lower
+	if viewData.LowerCaseTableNames != nil {
+		viewLowerCaseTableNames = *viewData.LowerCaseTableNames
+	}
+	viewCtx.lower = viewLowerCaseTableNames
+	originStmts, err := mysql.ParseWithSQLMode(
+		builder.GetContext(), viewData.Stmt, viewLowerCaseTableNames, parserSQLMode)
 	defer func() {
 		for _, s := range originStmts {
 			s.Free()
@@ -10296,6 +10367,10 @@ func (builder *QueryBuilder) bindView(
 		builder.isForUpdate = savedIsForUpdate
 	}()
 
+	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
+		capture.enterNestedView()
+		defer capture.leaveNestedView()
+	}
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -10305,7 +10380,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	viewCtx.markViewCTASDefaultBoundary()
+	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -10825,6 +10900,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, err
 		}
 
+		// Compiler contexts return immutable catalog metadata. Own the planner
+		// shell and column slice, which are replaced locally, without copying the
+		// immutable column definitions, indexes, constraints, or expressions.
+		tableDef = CloneTableDefForPlan(tableDef, true)
 		tableDef.Name2ColIndex = map[string]int32{}
 		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)
 		for i := 0; i < len(tableDef.Cols); i++ {
@@ -11179,7 +11258,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		plan.Node_SINK_SCAN,
 		plan.Node_RECURSIVE_SCAN,
 	}
-	lower := builder.compCtx.GetLowerCaseTableNames()
+	lower := ctx.lower
 	if node.NodeType == plan.Node_SINK_SCAN && alias.Alias != "" && len(node.BindingTags) > 0 && len(ctx.bindings) == 1 {
 		candidate := ctx.bindingByTag[node.BindingTags[0]]
 		if ctx.bindings[0] == candidate {
