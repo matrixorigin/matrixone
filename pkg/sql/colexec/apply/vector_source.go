@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -77,7 +78,12 @@ func (s *vectorSource) ApplyStart(row int, proc *process.Process, _ process.Anal
 	if s.execution == nil || s.execution.Spec() == nil {
 		return moerr.NewInvalidState(proc.Ctx, "correlated vector scan is not prepared")
 	}
-	identity, err := vectorscan.Identity(s.execution.Spec(), s.txnOffset, 1, 0)
+	currentSnapshot := timestamp.Timestamp{}
+	if txn := proc.GetTxnOperator(); txn != nil {
+		currentSnapshot = txn.Txn().SnapshotTS
+	}
+	identity, err := vectorscan.Identity(
+		s.execution.Spec(), currentSnapshot, s.txnOffset, 1, 0)
 	if err != nil {
 		return err
 	}

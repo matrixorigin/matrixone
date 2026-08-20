@@ -528,7 +528,8 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	}
 	txn := s.proc.GetTxnOperator()
 	if s.snapshot != nil && s.snapshot.TS != nil &&
-		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) {
+		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) &&
+		s.snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		clone := s.proc.GetCloneTxnOperator()
 		if clone == nil {
 			clone = txn.CloneSnapshotOp(*s.snapshot.TS)

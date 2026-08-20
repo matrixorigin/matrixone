@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
@@ -196,6 +197,7 @@ func (b *Execution) Close() {
 // publisher-over-snapshot precedence as ordinary table scans.
 func Identity(
 	spec *plan.VectorIndexScan,
+	currentSnapshot timestamp.Timestamp,
 	txnOffset int,
 	partitionCount int32,
 	partitionIndex int32,
@@ -211,14 +213,18 @@ func Identity(
 	if spec == nil {
 		return identity, moerr.NewInvalidInputNoCtx("vector index scan is missing metadata")
 	}
-	identity.Snapshot = plan2.DeepCopySnapshot(spec.ScanSnapshot)
+	historicalSnapshot := spec.ScanSnapshot != nil && spec.ScanSnapshot.TS != nil &&
+		!spec.ScanSnapshot.TS.Equal(timestamp.Timestamp{}) && spec.ScanSnapshot.TS.Less(currentSnapshot)
+	if historicalSnapshot {
+		identity.Snapshot = plan2.DeepCopySnapshot(spec.ScanSnapshot)
+	}
 	if spec.SourceTable != nil && spec.SourceTable.PubInfo != nil {
 		if spec.SourceTable.PubInfo.TenantId < 0 {
 			return identity, moerr.NewInvalidInputNoCtx("vector index scan has an invalid publisher tenant")
 		}
 		accountID := uint32(spec.SourceTable.PubInfo.TenantId)
 		identity.PhysicalAccountID = &accountID
-	} else if spec.ScanSnapshot != nil && spec.ScanSnapshot.Tenant != nil {
+	} else if historicalSnapshot && spec.ScanSnapshot.Tenant != nil {
 		accountID := spec.ScanSnapshot.Tenant.TenantID
 		identity.PhysicalAccountID = &accountID
 	}

@@ -28,5 +28,15 @@ order by l2_distance(v, '[0,0]') limit 1;
 select id from t {snapshot = 'vector_ivf_scan_snapshot'}
 order by l2_distance(v, '[0,0]') limit 1;
 
+-- A non-historical raw timestamp must keep both the source and hidden IVF
+-- tables on the current transaction workspace.  The in-transaction insert is
+-- the nearest row and disappears again after rollback.
+begin;
+insert into t values (4, '[0.01,0.01]');
+select id from t {MO_TS = 9223372036854775807}
+order by l2_distance(v, '[0,0]') limit 1;
+rollback;
+select id from t order by l2_distance(v, '[0,0]') limit 1;
+
 drop snapshot vector_ivf_scan_snapshot;
 drop database vector_ivf_snapshot;

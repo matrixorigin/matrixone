@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -707,6 +708,7 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	clone := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
 	snapshotTS := timestamp.Timestamp{PhysicalTime: 8}
+	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 10}})
 	original.EXPECT().CloneSnapshotOp(snapshotTS).Return(clone)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
@@ -737,6 +739,42 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	_, err = reader.(*planReader).scanner.ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
 	require.ErrorContains(t, err, "snapshot relation unavailable")
 	require.Same(t, clone, proc.GetCloneTxnOperator())
+}
+
+func TestRelationScannerKeepsCurrentTxnForEqualAndAheadSnapshots(t *testing.T) {
+	for _, snapshotTS := range []timestamp.Timestamp{
+		{PhysicalTime: 10},
+		{PhysicalTime: 11},
+	} {
+		t.Run(snapshotTS.DebugString(), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProc(t)
+			t.Cleanup(proc.Free)
+			original := mock_frontend.NewMockTxnOperator(ctrl)
+			proc.Base.TxnOperator = original
+			original.EXPECT().Txn().Return(txn.TxnMeta{
+				SnapshotTS: timestamp.Timestamp{PhysicalTime: 10},
+			})
+
+			eng := mock_frontend.NewMockEngine(ctrl)
+			proc.Base.SessionInfo.StorageEngine = eng
+			eng.EXPECT().Database(gomock.Any(), "db", original).
+				Return(nil, errors.New("current relation unavailable"))
+
+			reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+				Index:       &plan.IndexDef{},
+				SourceTable: &plan.ObjectRef{},
+			}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+				Snapshot:       &plan.Snapshot{TS: &snapshotTS},
+				PartitionCount: 1,
+			}})
+			require.NoError(t, err)
+			_, err = reader.(*planReader).scanner.ScanRelation(
+				sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
+			require.ErrorContains(t, err, "current relation unavailable")
+			require.Nil(t, proc.GetCloneTxnOperator())
+		})
+	}
 }
 
 func TestRelationScannerPropagatesRelationSetupFailures(t *testing.T) {

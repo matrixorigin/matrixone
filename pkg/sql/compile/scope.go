@@ -1791,7 +1791,13 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	}
 
 	membership, hasMembership := vectorScanMembershipFilter(runtimeFilters)
-	identity, err := vectorscan.Identity(spec, s.TxnOffset, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
+	currentSnapshot := timestamp.Timestamp{}
+	if s.Proc != nil && s.Proc.GetTxnOperator() != nil {
+		currentSnapshot = s.Proc.GetTxnOperator().Txn().SnapshotTS
+	}
+	identity, err := vectorscan.Identity(
+		spec, currentSnapshot,
+		s.TxnOffset, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
 	if err != nil {
 		return nil, err
 	}
