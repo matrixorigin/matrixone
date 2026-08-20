@@ -248,11 +248,12 @@ func (b *msgBuf) flushBufDst() error {
 	return b.bufDst.Flush()
 }
 
-// sendTo sends the data in buffer to destination.
-func (b *msgBuf) sendTo(dst io.Writer) error {
+// sendTo sends the data in buffer to destination. handled is true when the
+// complete client command was consumed by the proxy event path instead.
+func (b *msgBuf) sendTo(dst io.Writer) (handled bool, err error) {
 	l, err := b.preRecv()
 	if err != nil {
-		return err
+		return false, err
 	}
 	readPos := b.begin
 	writePos := readPos + l
@@ -273,10 +274,10 @@ func (b *msgBuf) sendTo(dst io.Writer) error {
 		// the data at the position of writePos.
 		extraLen, err = io.ReadFull(b.src, b.buf[writePos:writePos+dataLeft])
 		if err != nil {
-			return err
+			return false, err
 		}
 		if extraLen < dataLeft {
-			return io.ErrShortWrite
+			return false, io.ErrShortWrite
 		}
 		writePos += extraLen
 		dataLeft = 0
@@ -285,13 +286,11 @@ func (b *msgBuf) sendTo(dst io.Writer) error {
 	// add debug logs
 	b.debugLogs(b.buf[readPos:writePos], dataLeft)
 
-	var handled bool
-
 	if dataLeft == 0 && b.name == connClientName {
 		handled = b.consumeClient(b.buf[readPos:writePos])
 		// means the query has been handled
 		if handled {
-			return nil
+			return true, nil
 		}
 	}
 
@@ -308,20 +307,20 @@ func (b *msgBuf) sendTo(dst io.Writer) error {
 	// Write the data in buffer.
 	n, err := w.Write(b.buf[readPos:writePos])
 	if err != nil {
-		return err
+		return false, err
 	}
 	if n < writePos-readPos {
-		return io.ErrShortWrite
+		return false, io.ErrShortWrite
 	}
 
 	// The buffer does not hold all packet data, so continue to read the packet.
 	if dataLeft > 0 {
 		m, err := io.CopyN(w, b.src, int64(dataLeft))
 		if err != nil {
-			return err
+			return false, err
 		}
 		if int(m) < dataLeft {
-			return io.ErrShortWrite
+			return false, io.ErrShortWrite
 		}
 	}
 
@@ -331,11 +330,11 @@ func (b *msgBuf) sendTo(dst io.Writer) error {
 	// accumulated writes in a single syscall.
 	if b.bufDst != nil && b.readAvail() == 0 {
 		if ferr := b.bufDst.Flush(); ferr != nil {
-			return ferr
+			return false, ferr
 		}
 	}
 
-	return err
+	return false, nil
 }
 
 // receive receives a MySQL packet. This is used in test only.

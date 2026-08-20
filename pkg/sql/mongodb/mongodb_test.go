@@ -284,6 +284,7 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 		{name: "missing columns", param: validOptions(), table: validTable()},
 		{name: "column count", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}}, {Name: "other", Typ: planpb.Type{Id: int32(types.T_int64)}}}}},
 		{name: "column order", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "other", Typ: planpb.Type{Id: int32(types.T_int64)}}}}},
+		{name: "generated column", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}, GeneratedCol: &planpb.GeneratedCol{}}}}},
 		{name: "duplicate path", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBPath("a"), tree.NewAttributeMongoDBPath("b")), table: validTable()},
 		{name: "duplicate conversion", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBConvert("strict"), tree.NewAttributeMongoDBConvert("try_null")), table: validTable()},
 		{name: "invalid column conversion", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBConvert("lossy")), table: validTable()},
