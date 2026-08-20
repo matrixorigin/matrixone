@@ -2483,6 +2483,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			return err
 		}
 	}
+	if stmt.MongoDBParam != nil {
+		if err := rejectMongoDBExternalTableOnUpdate(ctx.GetContext(), stmt); err != nil {
+			return err
+		}
+	}
 
 	// Pre-scan all column definitions so that generated columns can reference
 	// base columns defined later in the CREATE TABLE statement (forward reference).
@@ -4937,6 +4942,23 @@ func rejectExternalTableInlineIndexes(ctx context.Context, stmt *tree.CreateTabl
 			}
 		case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
 			return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+		}
+	}
+	return nil
+}
+
+func rejectMongoDBExternalTableOnUpdate(ctx context.Context, stmt *tree.CreateTable) error {
+	for _, item := range stmt.Defs {
+		column, ok := item.(*tree.ColumnTableDef)
+		if !ok {
+			continue
+		}
+		for _, attribute := range column.Attributes {
+			if _, ok := attribute.(*tree.AttributeOnUpdate); ok {
+				return moerr.NewNotSupportedf(ctx,
+					"MongoDB external table column '%s' does not support ON UPDATE",
+					column.Name.ColNameOrigin())
+			}
 		}
 	}
 	return nil

@@ -288,6 +288,7 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 		{name: "duplicate conversion", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBConvert("strict"), tree.NewAttributeMongoDBConvert("try_null")), table: validTable()},
 		{name: "invalid column conversion", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBConvert("lossy")), table: validTable()},
 		{name: "invalid column path", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBPath("$where")), table: validTable()},
+		{name: "non-null default", param: validOptions(), defs: validDefs(tree.NewAttributeDefault(tree.NewNumVal("fallback", "fallback", false, tree.P_char))), table: validTable()},
 		{name: "unsupported type", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_array_float32)}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -301,6 +302,50 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 	), validTable())
 	require.NoError(t, err)
 	require.Equal(t, ConversionTryNull, spec.Mapping.Columns[0].Conversion)
+
+	spec, err = ParseTableMappingSpec(ctx, validOptions(), validDefs(
+		tree.NewAttributeDefault(&tree.ParenExpr{Expr: tree.NewNumVal("null", "null", false, tree.P_null)}),
+	), validTable())
+	require.NoError(t, err)
+	require.Len(t, spec.Mapping.Columns, 1)
+}
+
+func TestParseTableMappingSpecDefaultContractFromSQL(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		defaultClause string
+		wantError     bool
+	}{
+		{name: "string", defaultClause: "DEFAULT 'fallback'", wantError: true},
+		{name: "number", defaultClause: "DEFAULT 42", wantError: true},
+		{name: "expression", defaultClause: "DEFAULT (uuid())", wantError: true},
+		{name: "null", defaultClause: "DEFAULT NULL"},
+		{name: "parenthesized null", defaultClause: "DEFAULT (NULL)"},
+		{name: "unspecified"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := fmt.Sprintf(`CREATE EXTERNAL TABLE mongo_default (
+				v VARCHAR(64) %s MONGODB_PATH 'payload.value'
+			) ENGINE=MONGODB WITH (
+				'connection'='source', 'database'='telemetry', 'collection'='samples'
+			)`, tc.defaultClause)
+			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			create, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			_, err = ParseTableMappingSpec(t.Context(), create.MongoDBParam, create.Defs, &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "v", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 64}}},
+			})
+			if tc.wantError {
+				require.ErrorContains(t, err, "do not support non-NULL DEFAULT values")
+				require.ErrorContains(t, err, "column v")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestProjectColumnsByNameKeepsCompactResidualLayout(t *testing.T) {
