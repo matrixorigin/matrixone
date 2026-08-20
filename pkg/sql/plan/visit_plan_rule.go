@@ -473,6 +473,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		compareArgTypes := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
 		for i, arg := range exprImpl.F.Args {
+			originalArgTyp := plan.Type{}
+			originalArgFuncObj := int64(0)
+			if arg != nil {
+				originalArgTyp = arg.Typ
+				originalArgFuncObj = preparedExprFunctionObj(arg)
+			}
 			implicitParamCast := isImplicitPreparedParamCast(arg)
 			paramPos, hasParamPos := implicitPreparedParamPosition(arg)
 			if _, ok := arg.Expr.(*plan.Expr_P); ok && exprImpl.F.Func.GetObjName() != "cast" {
@@ -493,6 +499,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
+			if preparedExprBindingChanged(originalArgTyp, originalArgFuncObj, rewrittenArg) {
+				// A nested typed function may have changed overload/result domain
+				// after its parameter was rebound.  The enclosing function was
+				// bound against the old child domain and must be resolved again.
+				needResetFunction = true
+				compareArgTypes = true
+			}
 			if implicitParamCast {
 				// Keep decimal casts: decimal arithmetic requires every operand to
 				// be materialized as a decimal vector, even when the protocol value
@@ -560,6 +573,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func preparedExprFunctionObj(expr *plan.Expr) int64 {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return 0
+	}
+	return fn.Func.Obj
+}
+
+func preparedExprBindingChanged(originalTyp plan.Type, originalFuncObj int64, rewritten *plan.Expr) bool {
+	if rewritten == nil || !reflect.DeepEqual(rewritten.Typ, originalTyp) {
+		return true
+	}
+	return preparedExprFunctionObj(rewritten) != originalFuncObj
 }
 
 func functionBindingChanged(

@@ -226,6 +226,13 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			require.NoError(t, textAbsStmt.QueryRowContext(ctx, "-1.5").Scan(&absResult))
 			require.Equal(t, "1.5", absResult)
 
+			nestedAbsStmt, err := conn.PrepareContext(ctx, "select abs(? + 0)")
+			require.NoError(t, err)
+			defer nestedAbsStmt.Close()
+			var nestedAbsResult float64
+			require.NoError(t, nestedAbsStmt.QueryRowContext(ctx, float64(-1.5)).Scan(&nestedAbsResult))
+			require.Equal(t, 1.5, nestedAbsResult)
+
 			textSleepStmt, err := conn.PrepareContext(ctx, "select sleep(?)")
 			require.NoError(t, err)
 			defer textSleepStmt.Close()

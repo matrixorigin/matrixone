@@ -1122,6 +1122,29 @@ func TestResetParamRefRulePreservesAggregateConfig(t *testing.T) {
 	require.Equal(t, byte(1), expr.GetF().AggConfig[0])
 }
 
+func TestResetParamRefRuleRebindsTypedAncestors(t *testing.T) {
+	ctx := context.Background()
+	param := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	inner, err := BindFuncExprImplByPlanExpr(ctx, "+", []*planpb.Expr{
+		param,
+		makePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	outer, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{inner})
+	require.NoError(t, err)
+
+	rule := NewResetParamRefRule(ctx, []*planpb.Expr{
+		makePlan2Float64ConstExprWithType(-1.5),
+	})
+	rewritten, err := rule.ApplyExpr(outer)
+	require.NoError(t, err)
+	require.Equal(t, types.T_float64, types.T(rewritten.Typ.Id))
+	require.Equal(t, types.T_float64, types.T(rewritten.GetF().Args[0].Typ.Id))
+}
+
 func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	ctx := context.Background()
 	param := func() *planpb.Expr {
