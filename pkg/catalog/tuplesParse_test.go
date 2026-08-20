@@ -25,6 +25,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGenCreateTableTuplePreservesExplicitCreatedTime(t *testing.T) {
+	m := mpool.MustNew("created-time")
+	packer := types.NewPacker()
+	defer packer.Close()
+	want := types.Timestamp(123456789)
+	bat, err := GenCreateTableTuple(Table{TableId: 10001, CreatedTime: want}, m, packer)
+	require.NoError(t, err)
+	defer bat.Clean(m)
+	require.Equal(t, want,
+		vector.MustFixedColNoTypeCheck[types.Timestamp](bat.Vecs[MO_TABLES_CREATED_TIME_IDX])[0])
+}
+
 func mustToPBBatch(bat *batch.Batch) *api.Batch {
 	rbat := new(api.Batch)
 	rbat.Attrs = bat.Attrs
