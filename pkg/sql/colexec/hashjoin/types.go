@@ -95,7 +95,7 @@ type container struct {
 	probeMark              bool
 	buildHasNullKey        bool
 	asofCompare            compare.Compare
-	asofIndexes            map[uint64][]int32
+	asofIndexes            []asofIndex
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -120,6 +120,15 @@ type container struct {
 	spillEngine       *spillutil.SpillEngine
 	spillThreshold    int64
 	probeBucketActive bool // true while reading probe batches from a bucket
+}
+
+// asofIndex keeps the equality-group key and its accounted temporal ordering
+// in one accounted slice.  Keeping the metadata in the same mpool-owned
+// backing storage prevents the per-group map/slice headers from escaping the
+// query allocation account.
+type asofIndex struct {
+	key    uint64
+	values []int32
 }
 
 type HashJoin struct {
@@ -310,9 +319,10 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 
 func (ctr *container) cleanAsofIndexes(proc *process.Process) {
 	if proc != nil {
-		for _, values := range ctr.asofIndexes {
-			mpool.FreeSlice(proc.Mp(), values)
+		for _, index := range ctr.asofIndexes {
+			mpool.FreeSlice(proc.Mp(), index.values)
 		}
+		mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
 	}
 	ctr.asofIndexes = nil
 }

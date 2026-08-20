@@ -890,15 +890,24 @@ func (ctr *container) findAsofPredecessor(
 		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
 		return candidate, qualified, evalErr
 	}
-	if ctr.asofIndexes == nil {
-		ctr.asofIndexes = make(map[uint64][]int32)
+	indexPos := sort.Search(len(ctr.asofIndexes), func(i int) bool { return ctr.asofIndexes[i].key >= groupKey })
+	ok := indexPos < len(ctr.asofIndexes) && ctr.asofIndexes[indexPos].key == groupKey
+	var ordered []int32
+	if ok {
+		ordered = ctr.asofIndexes[indexPos].values
 	}
-	ordered, ok := ctr.asofIndexes[groupKey]
 	if ok && len(ordered) != len(candidates) {
 		// A build bucket with a changed row set cannot reuse the previous
 		// ordering. This also protects prepared/test reuse from stale ordinals.
 		mpool.FreeSlice(proc.Mp(), ordered)
-		delete(ctr.asofIndexes, groupKey)
+		newIndexes, allocErr := mpool.MakeSliceAccounted[asofIndex](len(ctr.asofIndexes)-1, proc.Mp(), hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex)
+		if allocErr != nil {
+			return -1, false, allocErr
+		}
+		copy(newIndexes, ctr.asofIndexes[:indexPos])
+		copy(newIndexes[indexPos:], ctr.asofIndexes[indexPos+1:])
+		mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
+		ctr.asofIndexes = newIndexes
 		ok = false
 	}
 	if !ok {
@@ -929,7 +938,18 @@ func (ctr *container) findAsofPredecessor(
 			}
 			return left > right
 		})
-		ctr.asofIndexes[groupKey] = ordered
+		if !ok {
+			newIndexes, allocErr := mpool.MakeSliceAccounted[asofIndex](len(ctr.asofIndexes)+1, proc.Mp(), hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex)
+			if allocErr != nil {
+				mpool.FreeSlice(proc.Mp(), ordered)
+				return -1, false, allocErr
+			}
+			copy(newIndexes[:indexPos], ctr.asofIndexes[:indexPos])
+			newIndexes[indexPos] = asofIndex{key: groupKey, values: ordered}
+			copy(newIndexes[indexPos+1:], ctr.asofIndexes[indexPos:])
+			mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
+			ctr.asofIndexes = newIndexes
+		}
 	}
 
 	leftCol, strict := asofTemporalMetadata(hashJoin.NonEqCond)
