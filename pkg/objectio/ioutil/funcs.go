@@ -41,6 +41,23 @@ func (c TombstoneCommitTSColumn) At(row int) types.TS {
 	return vector.GetFixedAtNoTypeCheck[types.TS](c.vec, row)
 }
 
+// ResolveLegacyBackupTombstoneCommitTS recognizes the legacy non-appendable
+// backup layout [rowid, primary-key, commitTS], where commitTS was persisted
+// as an ordinary trailing column instead of a special column.
+func ResolveLegacyBackupTombstoneCommitTS(block objectio.BlockObject) (uint16, bool) {
+	const legacyCommitTSPosition uint16 = 2
+	if block.BlockHeader().Appendable() ||
+		block.GetColumnCount() != 3 ||
+		block.GetMetaColumnCount() != 3 ||
+		block.GetMaxSeqnum() != legacyCommitTSPosition ||
+		block.ColumnMeta(0).DataType() != uint8(types.T_Rowid) ||
+		block.ColumnMeta(1).DataType() == uint8(types.T_any) ||
+		block.ColumnMeta(legacyCommitTSPosition).DataType() != uint8(types.T_TS) {
+		return 0, false
+	}
+	return legacyCommitTSPosition, true
+}
+
 func ValidateTombstoneCommitTSColumn(expectedRows int, commitTSVec *vector.Vector) (TombstoneCommitTSColumn, error) {
 	if expectedRows < 0 {
 		return TombstoneCommitTSColumn{}, moerr.NewInvalidInputNoCtxf("negative tombstone row count %d", expectedRows)
@@ -516,6 +533,28 @@ func ReadDeletes(
 	if _, err = ValidateTombstoneCommitTSColumn(
 		cacheVectors[0].Length(), &cacheVectors[commitIdx],
 	); err != nil {
+		if cacheVectors[commitIdx].IsConstNull() {
+			if physicalCommitTS, ok := ResolveLegacyBackupTombstoneCommitTS(
+				meta.GetBlockMeta(uint32(deltaLoc.ID())),
+			); ok {
+				if release != nil {
+					release()
+				}
+				cols[commitIdx] = physicalCommitTS
+				meta, release, err = LoadTombstoneColumns(
+					ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
+				)
+				if err != nil {
+					return meta, release, err
+				}
+				_, err = ValidateTombstoneCommitTSColumn(
+					cacheVectors[0].Length(), &cacheVectors[commitIdx],
+				)
+			}
+		}
+		if err == nil {
+			return meta, release, nil
+		}
 		if release != nil {
 			release()
 		}

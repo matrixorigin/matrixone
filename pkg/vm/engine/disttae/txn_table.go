@@ -2045,6 +2045,12 @@ func (tbl *txnTable) Delete(
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
 	}
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("disttae table delete context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	var (
 		deletionTyp = bat.Attrs[0]
@@ -3013,6 +3019,29 @@ func tombstonePKExistsInRange(
 					mp,
 					fileservice.Policy(0),
 				)
+				if err == nil && !usable {
+					objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+					if metaErr != nil {
+						err = metaErr
+					} else if legacyCommitTS, ok := ioutil.ResolveLegacyBackupTombstoneCommitTS(
+						objectMeta.MustDataMeta().GetBlockMeta(uint32(loc.ID())),
+					); ok {
+						changed, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
+							ctx,
+							objectio.TombstoneAttr_PK_SeqNum,
+							pkType,
+							fs,
+							loc,
+							cachedSearch,
+							false,
+							legacyCommitTS,
+							from,
+							to,
+							mp,
+							fileservice.Policy(0),
+						)
+					}
+				}
 				if err != nil {
 					return true, "tombstone_read_error", nil
 				}
