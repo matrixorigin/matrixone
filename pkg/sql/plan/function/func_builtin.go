@@ -73,6 +73,35 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	return nil
 }
 
+// ToInterval normalizes dynamic string interval values per row. Invalid values
+// become NULL, matching DATE_ADD/DATE_SUB invalid-interval behavior.
+func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	values := vector.GenerateFunctionStrParameter(ivecs[0])
+	units := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := values.GetStrValue(i)
+		unit, unitNull := units.GetValue(i)
+		if valueNull || unitNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		number, _, err := types.NormalizeInterval(string(value), types.IntervalType(unit))
+		if err != nil {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.Append(number, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 

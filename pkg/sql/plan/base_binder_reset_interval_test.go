@@ -397,7 +397,7 @@ func TestResetIntervalFunctionArgsNullHandling(t *testing.T) {
 	require.NotNil(t, args[1])
 }
 
-// TestResetIntervalFunctionArgsNonLiteral tests non-literal expressions (should go through cast path)
+// TestResetIntervalFunctionArgsNonLiteral tests non-literal expressions.
 func TestResetIntervalFunctionArgsNonLiteral(t *testing.T) {
 	ctx := context.Background()
 
@@ -485,11 +485,12 @@ func TestResetIntervalFunctionArgsNonLiteral(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, args4, 2)
 
-	castExpr := args4[0].GetF()
-	require.NotNil(t, castExpr)
-	require.NotNil(t, castExpr.Func)
-	require.Equal(t, "cast", castExpr.Func.GetObjName())
-	require.Equal(t, colRefVarcharExpr, castExpr.Args[0])
+	normalizeExpr := args4[0].GetF()
+	require.NotNil(t, normalizeExpr)
+	require.NotNil(t, normalizeExpr.Func)
+	require.Equal(t, "to_interval", normalizeExpr.Func.GetObjName())
+	require.Equal(t, colRefVarcharExpr, normalizeExpr.Args[0])
+	require.Equal(t, int64(types.Second), extractInt64FromExpr(normalizeExpr.Args[1]))
 }
 
 // TestResetIntervalFunction tests the wrapper function resetIntervalFunction

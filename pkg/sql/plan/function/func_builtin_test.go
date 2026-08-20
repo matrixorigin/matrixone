@@ -510,6 +510,36 @@ func Test_BuiltIn_IntervalRegistered(t *testing.T) {
 	require.Equal(t, types.T_int64, fn.retType.Oid)
 }
 
+func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("day_second and NULL", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1 02:03:04", ""}, []bool{false, true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Day_Second)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{93784, 0}, []bool{false, true}),
+			ToInterval,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("year_month and invalid value", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1-2", "1-2-3"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Year_Month)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{14, 0}, []bool{false, true}),
+			ToInterval,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+}
+
 func Test_BuiltIn_IntervalCheck(t *testing.T) {
 	result := builtInIntervalCheck(nil, []types.Type{types.T_int64.ToType()})
 	require.Equal(t, failedFunctionParametersWrong, result.status)

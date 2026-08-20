@@ -12395,6 +12395,28 @@ var supportedControlBuiltIns = []FuncNew{
 }
 
 var supportedOthersBuiltIns = []FuncNew{
+	// Internal helper used by the interval binder for dynamic string values.
+	{
+		functionId: TO_INTERVAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
+				newOp:      func() executeLogicOfOverload { return ToInterval },
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
+				newOp:      func() executeLogicOfOverload { return ToInterval },
+			},
+		},
+	},
+
 	// function `build_version`
 	{
 		functionId: BUILD_VERSION,
