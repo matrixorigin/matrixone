@@ -550,7 +550,7 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwarePipeline))
 	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 22")
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 	affectedRowsPipeline := &pipeline.Pipeline{
 		InstructionList: []*pipeline.Instruction{{
 			Op: int32(vm.MultiUpdate),
@@ -563,24 +563,32 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	}
 	require.ErrorContains(t,
 		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
-		"requires MORPC protocol version 22")
+		"requires MORPC protocol version 23")
 	combinedPipeline := &pipeline.Pipeline{
 		InstructionList: append(targetAwarePipeline.Children[0].InstructionList, affectedRowsPipeline.InstructionList...),
 	}
 	require.ErrorContains(t,
 		validateRemoteTargetAwareUpdatePipelineProtocol(proc, combinedPipeline),
-		"requires MORPC protocol version 22",
-		"a preceding v20-compatible operator must not hide a later v22 field")
+		"requires MORPC protocol version 23",
+		"a preceding v20-compatible operator must not hide a later v23 field")
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
 	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 22",
+	require.ErrorContains(t, err, "requires MORPC protocol version 23",
 		"v21 is reserved for RIGHT DEDUP and must not accept affected-row selectors")
 	require.ErrorContains(t,
 		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
-		"requires MORPC protocol version 22")
+		"requires MORPC protocol version 23")
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23",
+		"v22 is reserved for typed user variables and must not accept affected-row selectors")
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
+		"requires MORPC protocol version 23")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
 	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
 	require.NoError(t, err)
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline))

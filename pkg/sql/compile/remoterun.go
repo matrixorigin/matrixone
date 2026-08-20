@@ -1649,7 +1649,7 @@ func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required
 	}
 	if proc == nil || !supportsRemoteAffectedRowsSelectors(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"per-target affected-row selector metadata requires MORPC protocol version 22",
+			"per-target affected-row selector metadata requires MORPC protocol version 23",
 		)
 	}
 	return nil

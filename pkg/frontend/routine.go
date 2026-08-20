@@ -597,6 +597,48 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
+	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {
+		// Typed snapshots can only be replayed by a v22 target when the proxy's
+		// raw COM_QUERY history did not observe every assignment (for example,
+		// prepared SET values). Keep that fact explicit for target negotiation.
+		resp.UserDefinedVarsReplayable = !ses.hasUnreplayableMigrationUserVars()
+		resp.SystemVariablesReplayable = !ses.hasUnreplayableMigrationSystemVars()
+		var userVars []*query.MigrateUserDefinedVar
+		var userVarsExported bool
+		vars, err := ses.snapshotUserDefinedVars(operationCtx)
+		if err != nil {
+			// A v22 target must not re-evaluate raw SET expressions when the
+			// evaluated user-variable snapshot is omitted. Keep the overflow
+			// reason explicit so the proxy can fail closed for v22 while still
+			// allowing complete raw replay to legacy targets.
+			if !isMigrationSnapshotSizeLimitError(err) {
+				return err
+			}
+			resp.UserDefinedVarsSnapshotTooLarge = true
+		} else {
+			userVars = vars
+			userVarsExported = true
+		}
+		var systemVars []*query.MigrateSystemVariable
+		var systemVarsExported bool
+		systemVars, err = ses.snapshotSessionSystemVars(operationCtx)
+		if err != nil {
+			// A complete raw replay remains valid for a pre-v22 target, but a
+			// v22 target cannot safely consume the system-only projection. Keep
+			// the reason explicit so the proxy can negotiate that distinction.
+			if !isMigrationSnapshotSizeLimitError(err) ||
+				ses.hasUnreplayableMigrationSystemVars() {
+				return err
+			}
+			resp.SystemVariablesSnapshotTooLarge = true
+		} else {
+			systemVarsExported = true
+		}
+		resp.UserDefinedVars = userVars
+		resp.UserDefinedVarsExported = userVarsExported
+		resp.SystemVariables = systemVars
+		resp.SystemVariablesExported = systemVarsExported
+	}
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
 			Name:       st.Name,
