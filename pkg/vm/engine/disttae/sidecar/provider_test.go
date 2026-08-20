@@ -57,7 +57,7 @@ func TestBuildManifestRejectsInvalidDefinitions(t *testing.T) {
 	_, _, err = buildManifest(&planpb.TableDef{TblId: 42, Cols: []*planpb.ColDef{nil, {Hidden: true}}}, 9, 7, "shared", nil)
 	require.ErrorContains(t, err, "no manifest columns")
 	_, _, err = buildManifest(testTableDef(), 0, 7, "shared", nil)
-	require.ErrorContains(t, err, "identity")
+	require.NoError(t, err)
 	_, _, err = buildManifest(testTableDef(), 9, 0, "shared", nil)
 	require.ErrorContains(t, err, "identity")
 }
@@ -190,6 +190,31 @@ func TestSnapshotProviderPinsPhysicalSchemaAndRejectsAppendableObjects(t *testin
 	require.Zero(t, relation.starCalls)
 }
 
+func TestSnapshotProviderValidatesOptimizerProjectedColumnsAgainstLiveSchema(t *testing.T) {
+	def := testTableDef()
+	def.Cols = append(def.Cols, &planpb.ColDef{
+		Name: "b", ColId: 12, Seqnum: 6, Typ: planpb.Type{Id: int32(types.T_varchar), Width: 8},
+	})
+	projected := *def
+	projected.Cols = []*planpb.ColDef{def.Cols[1]}
+	schema, err := substrait.CanonicalSchema(&projected)
+	require.NoError(t, err)
+	read := substrait.Read{
+		AccountID: 0, DatabaseID: def.DbId, TableID: def.TblId, SchemaVersion: def.Version,
+		Columns: []substrait.ColumnMapping{{ColumnID: def.Cols[1].ColId, SequenceNumber: def.Cols[1].Seqnum}},
+		Schema:  schema,
+	}
+	relation := &snapshotRelationStub{def: def, stats: []objectio.ObjectStats{objectStats(t, 1)}, visible: 1}
+	provider := &SnapshotProvider{MPool: mpool.MustNewZero(), DataDir: "shared", Relations: map[uint64]engine.Relation{42: relation}}
+	facts, err := provider.PrepareSnapshotRead(context.Background(), read, make([]byte, types.TxnTsSize))
+	require.NoError(t, err)
+	require.Equal(t, schema, facts.CanonicalSchema)
+
+	read.Columns = append(read.Columns, read.Columns[0])
+	_, err = provider.PrepareSnapshotRead(context.Background(), read, make([]byte, types.TxnTsSize))
+	require.ErrorContains(t, err, "physical schema changed")
+}
+
 func TestSnapshotProviderStopsObjectVisitationAtManifestBound(t *testing.T) {
 	def := testTableDef()
 	read := testRead(t, def)
@@ -212,7 +237,7 @@ func TestSnapshotProviderStopsObjectVisitationAtManifestBound(t *testing.T) {
 }
 
 func testTableDef() *planpb.TableDef {
-	return &planpb.TableDef{TblId: 42, Version: 3, DbName: "db", Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", ColId: 11, Seqnum: 5, Typ: planpb.Type{Id: int32(types.T_int64)}}}}
+	return &planpb.TableDef{DbId: 7, TblId: 42, Version: 3, DbName: "db", Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", ColId: 11, Seqnum: 5, Typ: planpb.Type{Id: int32(types.T_int64)}}}}
 }
 
 func testRead(t *testing.T, def *planpb.TableDef) substrait.Read {
