@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -49,6 +50,14 @@ func (r *preparedParamCommonTypeDependencyRule) visit(expr *Expr) {
 		}
 	case *planpb.Expr_F:
 		functionID, _ := function.DecodeOverloadID(impl.F.Func.Obj)
+		if impl.F.Func.GetObjName() == "cast" && len(impl.F.Args) > 0 {
+			// An implicit binder cast directly over a parameter fixes the
+			// physical input domain just as an explicitly marked CAST does. Do
+			// not recursively claim parameters hidden below unrelated functions.
+			if param := impl.F.Args[0].GetP(); param != nil {
+				r.executionPositions[param.Pos] = struct{}{}
+			}
+		}
 		if functionID == function.COALESCE || functionID == function.GREATEST || functionID == function.LEAST {
 			for _, arg := range impl.F.Args {
 				r.collectDirectParams(arg)
@@ -302,14 +311,17 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 					return
 				case "coalesce", "greatest", "least":
 					allRuntime := len(fn.Args) > 0
+					hasNumericPeer := false
 					for _, valueArg := range fn.Args {
 						if !containsPreparedParam(valueArg) {
 							allRuntime = false
-							break
+							if valueArg != nil && (types.Type{Oid: types.T(valueArg.Typ.Id)}).IsNumeric() {
+								hasNumericPeer = true
+							}
 						}
 					}
 					for _, valueArg := range fn.Args {
-						if allRuntime || valueArg.ExactDecimalParam {
+						if allRuntime || hasNumericPeer || valueArg.ExactDecimalParam {
 							traceExpr(currentNodeID, valueArg, true)
 						}
 					}
@@ -361,6 +373,11 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 					}
 					if node != nil && len(node.Children) == 1 {
 						traceOutput(node.Children[0], ref.ColPos, allowSetCast)
+						return
+					}
+					if node != nil && len(node.Children) > 1 && ref.RelPos >= 0 &&
+						int(ref.RelPos) < len(node.Children) {
+						traceOutput(node.Children[ref.RelPos], ref.ColPos, allowSetCast)
 						return
 					}
 				}
@@ -438,7 +455,7 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 
 func preparedResultTypePropagatingFunction(name string) bool {
 	switch name {
-	case "abs", "max", "min", "sum":
+	case "abs", "max", "min", "sum", "round", "ceil", "ceiling", "floor":
 		return true
 	default:
 		return false

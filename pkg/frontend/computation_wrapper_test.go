@@ -422,9 +422,11 @@ func TestNormalizePreparedDecimalPayload(t *testing.T) {
 	}
 }
 
-func TestPreparedParamBindingCategoryTracksExactDecimalDomain(t *testing.T) {
-	require.False(t, preparedParamBindingCategoryEqual(
+func TestPreparedParamBindingCategoryUsesDecimalSemanticDomain(t *testing.T) {
+	require.True(t, preparedParamBindingCategoryEqual(
 		types.New(types.T_decimal256, 7, 6), types.New(types.T_decimal256, 13, 2)))
+	require.False(t, preparedParamBindingCategoryEqual(
+		types.New(types.T_decimal128, 7, 6), types.New(types.T_decimal256, 13, 2)))
 	left := types.T_text.ToType()
 	left.Charset = preparedNumericTextBindingCharset
 	left.Size = preparedNumericTextPrefix
@@ -442,6 +444,12 @@ func TestPreparedParamBindingCategoryTracksExactDecimalDomain(t *testing.T) {
 	differentExact := exact
 	differentExact.Scale = 11
 	require.False(t, preparedParamBindingCategoryEqual(exact, differentExact))
+}
+
+func TestPreparedResultDecimalTypePromotesScale38ToDecimal256(t *testing.T) {
+	require.Equal(t, types.T_decimal128, preparedResultDecimalType(38, 37).Oid)
+	require.Equal(t, types.T_decimal256, preparedResultDecimalType(38, 38).Oid)
+	require.Equal(t, types.T_decimal256, preparedResultDecimalType(39, 39).Oid)
 }
 
 func TestPreparedDecimalBindingUsesStableNonNarrowingCategories(t *testing.T) {
@@ -955,7 +963,7 @@ func TestInitExecuteStmtParamMasksNonDependentTargetFunctionBindings(t *testing.
 	require.True(t, resultTypes[1].IsDecimal())
 }
 
-func TestInitExecuteStmtParamIgnoresUnrelatedRuntimeCategories(t *testing.T) {
+func TestInitExecuteStmtParamRebindsArithmeticRuntimeCategories(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 113, "select ? + 1")
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
@@ -976,10 +984,10 @@ func TestInitExecuteStmtParamIgnoresUnrelatedRuntimeCategories(t *testing.T) {
 
 	initialPlan := prepareStmt.PreparePlan
 	setParam("1", defines.MYSQL_TYPE_VAR_STRING)
-	require.Same(t, initialPlan, execute(), "an unrelated text parameter must not trigger the first rebuild")
+	textPlan := execute()
+	require.NotSame(t, initialPlan, textPlan)
 	setParam("1", defines.MYSQL_TYPE_DOUBLE)
-	require.Same(t, initialPlan, execute(), "an unrelated category transition must reuse the plan")
-	require.Empty(t, prepareStmt.paramBindingDependencies)
+	require.NotSame(t, textPlan, execute(), "FLOAT arithmetic must not reuse an integer-bound overload")
 }
 
 func TestSQLVariablePrepareParamKind(t *testing.T) {
@@ -1069,7 +1077,7 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 				want   types.T
 			}{
 				{defines.MYSQL_TYPE_NEWDECIMAL, "-12345678901234567890.123456789", false, types.T_decimal128},
-				{defines.MYSQL_TYPE_NEWDECIMAL, "", true, types.T_decimal128},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "", true, types.T_text},
 				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal64},
 			},
 		},
@@ -1162,6 +1170,7 @@ func TestStablePreparedResultMetadataColumnsOnlyNormalizesDecimalOutputs(t *test
 		columns,
 		[][]bool{{true, false}, {true, true}, {false, true}},
 		[]vector.PrepareParamKind{vector.PrepareParamDecimal, vector.PrepareParamFloat},
+		nil,
 	)
 	require.Equal(t, plan.Type{
 		Id: int32(types.T_decimal256), Width: 65, Scale: 30,
@@ -1323,7 +1332,7 @@ func TestExplicitCastControlFlowRebindsExecutionCategory(t *testing.T) {
 	}
 }
 
-func TestPreparedResultColumnKeepsDoubleDomain(t *testing.T) {
+func TestPreparedResultMetadataKeepsDoubleWithoutChangingExecutionDomain(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 214,
 		"select if(false, ?, ?)")
 	defer prepareStmt.Close()
@@ -1334,7 +1343,7 @@ func TestPreparedResultColumnKeepsDoubleDomain(t *testing.T) {
 	}{
 		{[]defines.MysqlType{defines.MYSQL_TYPE_NEWDECIMAL, defines.MYSQL_TYPE_NEWDECIMAL}, []string{"1", "2"}, types.T_decimal64},
 		{[]defines.MysqlType{defines.MYSQL_TYPE_DOUBLE, defines.MYSQL_TYPE_NEWDECIMAL}, []string{"1.5", "2"}, types.T_float64},
-		{[]defines.MysqlType{defines.MYSQL_TYPE_NEWDECIMAL, defines.MYSQL_TYPE_VAR_STRING}, []string{"1", "tail"}, types.T_float64},
+		{[]defines.MysqlType{defines.MYSQL_TYPE_NEWDECIMAL, defines.MYSQL_TYPE_VAR_STRING}, []string{"1", "tail"}, types.T_varchar},
 	}
 	for _, step := range steps {
 		if prepareStmt.params != nil {
@@ -1356,6 +1365,7 @@ func TestPreparedResultColumnKeepsDoubleDomain(t *testing.T) {
 			"bindings=%v resultDeps=%v resultTypes=%v", prepareStmt.paramBindingTypes,
 			prepareStmt.paramResultMetadataDependencies, prepareStmt.paramResultColumnTypes)
 	}
+	require.Equal(t, types.T_float64, prepareStmt.paramResultColumnTypes[0].Oid)
 	require.Equal(t, types.T_decimal64, prepareStmt.paramBindingTypes[0].Oid)
 	require.Equal(t, types.T_text, prepareStmt.paramBindingTypes[1].Oid)
 }
@@ -1400,7 +1410,7 @@ func TestAllParameterDecimalCommonTypeRebuilds(t *testing.T) {
 	}
 }
 
-func TestPreparedResultColumnKeepsNumericDomain(t *testing.T) {
+func TestPreparedResultMetadataKeepsNumericWithoutChangingExecutionDomain(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		first defines.MysqlType
@@ -1437,11 +1447,20 @@ func TestPreparedResultColumnKeepsNumericDomain(t *testing.T) {
 				require.NoError(t, err)
 				columns := plan2.GetResultColumnsFromPlan(queryPlan)
 				actual := types.T(columns[0].Typ.Id)
-				if test.want.IsDecimal() {
-					require.True(t, actual.IsDecimal())
+				if step == 0 {
+					if test.want.IsDecimal() {
+						require.True(t, actual.IsDecimal())
+					} else {
+						require.Equal(t, test.want, actual)
+					}
 				} else {
-					require.Equal(t, test.want, actual)
+					require.Equal(t, types.T_varchar, actual)
 				}
+			}
+			if test.want.IsDecimal() {
+				require.True(t, prepareStmt.paramResultColumnTypes[0].Oid.IsDecimal())
+			} else {
+				require.Equal(t, test.want, prepareStmt.paramResultColumnTypes[0].Oid)
 			}
 		})
 	}

@@ -259,6 +259,17 @@ func TestPreparedParamResultMetadataDependenciesFollowControlFlowValues(t *testi
 	}
 }
 
+func TestPreparedParamExecutionDependenciesIncludeImplicitComparisonCast(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t,
+		"prepare p from 'select p_partkey from part where p_partkey = ?'")
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Equal(t, []bool{true},
+		PreparedParamExecutionDependencies(prepare.Plan, 1))
+}
+
 func TestPreparedAllParameterResultTypeDependencies(t *testing.T) {
 	for _, name := range []string{"coalesce", "greatest", "least"} {
 		t.Run(name, func(t *testing.T) {
@@ -280,8 +291,13 @@ func TestPreparedNestedCommonTypeAndOutputLineageDependencies(t *testing.T) {
 		sql  string
 	}{
 		{"nested greatest", "prepare p from 'select greatest(abs(?), ?)'"},
+		{"nested greatest static peer", "prepare p from 'select greatest(abs(?), cast(2 as decimal(3,1)))'"},
+		{"nested coalesce static peer", "prepare p from 'select coalesce(abs(?), cast(0 as decimal(3,1)))'"},
 		{"nested arithmetic", "prepare p from 'select greatest(? + 0, ?)'"},
 		{"outer function", "prepare p from 'select abs(if(false, ?, ?))'"},
+		{"outer round", "prepare p from 'select round(if(false, ?, ?))'"},
+		{"outer ceil", "prepare p from 'select ceil(if(false, ?, ?))'"},
+		{"outer floor", "prepare p from 'select floor(if(false, ?, ?))'"},
 		{"aggregate", "prepare p from 'select max(if(false, ?, ?))'"},
 		{"join lineage", "prepare p from 'select x from (select ? x limit 1) a join (select 1 y) b on true'"},
 		{"left join lineage", "prepare p from 'select x from (select ? x limit 1) a left join (select 1 y) b on true'"},
@@ -297,4 +313,15 @@ func TestPreparedNestedCommonTypeAndOutputLineageDependencies(t *testing.T) {
 				"plan=%v", prepare.Plan.GetQuery())
 		})
 	}
+}
+
+func TestPreparedResultMetadataDependenciesUseExactJoinBranch(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t,
+		"prepare p from 'select a.x from (select ? x limit 1) a join (select ? y) b on true'")
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Equal(t, []bool{true, false},
+		PreparedParamResultMetadataDependencies(prepare.Plan, 2))
 }

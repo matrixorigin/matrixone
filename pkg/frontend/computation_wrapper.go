@@ -1095,7 +1095,7 @@ func preparedResultDecimalType(width, scale int32) types.Type {
 	switch {
 	case width <= 18:
 		return types.New(types.T_decimal64, width, scale)
-	case width <= 38:
+	case width <= 38 && scale < 38:
 		return types.New(types.T_decimal128, width, scale)
 	case width <= 76:
 		return types.New(types.T_decimal256, width, scale)
@@ -1123,11 +1123,7 @@ func preparedParamBindingTypesEqualAtDependencies(
 		if i < len(right) {
 			rightType = right[i]
 		}
-		equal := preparedParamBindingCategoryEqual(leftType, rightType)
-		if executionDependent || resultDependent {
-			equal = leftType.Eq(rightType)
-		}
-		if !equal {
+		if !preparedParamBindingCategoryEqual(leftType, rightType) {
 			return false
 		}
 	}
@@ -1148,7 +1144,10 @@ func preparedParamBindingCategoryEqual(left, right types.Type) bool {
 			(left.Size != preparedNumericExact || left.Width == right.Width && left.Scale == right.Scale)
 	}
 	if left.Oid.IsDecimal() && right.Oid.IsDecimal() {
-		return left.Eq(right)
+		// Width and scale describe the current payload, not a distinct runtime
+		// semantic category. Rebinding 1.0 as 1.00 must therefore reuse the
+		// same prepared plan while a Decimal64/128/256 transition still rebuilds.
+		return true
 	}
 	return left.Eq(right)
 }
@@ -1564,13 +1563,7 @@ func initExecuteStmtParamWithResolverInSession(
 		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 			txnHaveDDL = sessionTxnHaveDDL(executionSes)
 		}
-		if err = stabilizePreparedResultExpressions(
-			reqCtx, newPreparePlan.Plan, plan2.PreparedParamResultMetadataDependencyColumns(
-				newPreparePlan.Plan, len(newPreparePlan.ParamTypes)),
-			prepareStmt.paramResultColumnTypes); err != nil {
-			return nil, nil, nil, "", false, err
-		}
-		columns = getPreparedResultColumnsFromPlan(
+		columns := getPreparedResultColumnsFromPlan(
 			prepareStmt.PrepareStmt, newPlan, txnHaveDDL)
 		prepareStmt.paramResultColumnTypes = preservePreparedResultColumnTypes(
 			prepareStmt.paramResultColumnTypes, columns)
@@ -1579,6 +1572,7 @@ func initExecuteStmtParamWithResolverInSession(
 			plan2.PreparedParamResultMetadataDependencyColumns(
 				newPreparePlan.Plan, len(newPreparePlan.ParamTypes)),
 			paramState.paramKinds,
+			prepareStmt.paramResultColumnTypes,
 		)
 		resper := execCtx.resper
 		if executionSes.IsBackgroundSession() {
@@ -1750,14 +1744,21 @@ func stablePreparedResultMetadataColumns(
 	columns []*plan2.ColDef,
 	dependencies [][]bool,
 	paramKinds []vector.PrepareParamKind,
+	stableTypes []types.Type,
 ) []*plan2.ColDef {
 	var result []*plan2.ColDef
 	for columnPos, positions := range dependencies {
 		if columnPos >= len(columns) {
 			break
 		}
-		if columns[columnPos] == nil || !types.T(columns[columnPos].Typ.Id).IsDecimal() {
+		if columns[columnPos] == nil {
 			continue
+		}
+		target := types.Type{
+			Oid: types.T(columns[columnPos].Typ.Id), Width: columns[columnPos].Typ.Width, Scale: columns[columnPos].Typ.Scale,
+		}
+		if columnPos < len(stableTypes) && preparedResultTypeIsStableNumeric(stableTypes[columnPos]) {
+			target = stableTypes[columnPos]
 		}
 		stableDecimal := false
 		for paramPos, dependent := range positions {
@@ -1767,61 +1768,28 @@ func stablePreparedResultMetadataColumns(
 				break
 			}
 		}
-		if !stableDecimal {
+		if stableDecimal && target.Oid.IsDecimal() {
+			target = types.New(types.T_decimal256, 65, 30)
+		}
+		current := types.Type{
+			Oid: types.T(columns[columnPos].Typ.Id), Width: columns[columnPos].Typ.Width, Scale: columns[columnPos].Typ.Scale,
+		}
+		if target.Eq(current) {
 			continue
 		}
 		if result == nil {
 			result = append([]*plan2.ColDef(nil), columns...)
 		}
 		column := plan2.DeepCopyColDef(columns[columnPos])
-		column.Typ.Id = int32(types.T_decimal256)
-		column.Typ.Width = 65
-		column.Typ.Scale = 30
+		column.Typ.Id = int32(target.Oid)
+		column.Typ.Width = target.Width
+		column.Typ.Scale = target.Scale
 		result[columnPos] = column
 	}
 	if result == nil {
 		return columns
 	}
 	return result
-}
-
-func stabilizePreparedResultExpressions(
-	ctx context.Context, p *plan.Plan, dependencies [][]bool, previous []types.Type,
-) error {
-	query := p.GetQuery()
-	if query == nil || len(query.Steps) == 0 {
-		return nil
-	}
-	step := len(query.Steps) - 1
-	if query.HasReturning {
-		step = int(query.ReturningStep)
-	}
-	if step < 0 || step >= len(query.Steps) {
-		return nil
-	}
-	nodeID := query.Steps[step]
-	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
-		return nil
-	}
-	projects := query.Nodes[nodeID].ProjectList
-	for i := range projects {
-		if i >= len(dependencies) || !slices.Contains(dependencies[i], true) || i >= len(previous) ||
-			!preparedResultTypeIsStableNumeric(previous[i]) || projects[i] == nil {
-			continue
-		}
-		current := types.Type{Oid: types.T(projects[i].Typ.Id), Width: projects[i].Typ.Width, Scale: projects[i].Typ.Scale}
-		target := mergePreparedResultColumnType(previous[i], current)
-		if target.Eq(current) {
-			continue
-		}
-		targetType := plan.Type{Id: int32(target.Oid), Width: target.Width, Scale: target.Scale}
-		cast, err := plan2.MakePlan2CastExpr(ctx, projects[i], targetType)
-		if err != nil {
-			return err
-		}
-		projects[i] = cast
-	}
-	return nil
 }
 
 func preservePreparedResultColumnTypes(previous []types.Type, columns []*plan2.ColDef) []types.Type {
@@ -1861,6 +1829,9 @@ func mergePreparedResultColumnType(previous, current types.Type) types.Type {
 		// Width and scale describe one execution value, not independent
 		// dimensions that may be unioned across executions. Keep DECIMAL in its
 		// semantic category without manufacturing a wider physical domain.
+		return current
+	}
+	if previous.Oid.IsInteger() && current.Oid.IsInteger() && previous.Oid != current.Oid {
 		return current
 	}
 	return previous
