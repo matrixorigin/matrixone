@@ -523,6 +523,18 @@ func setPrepareParamKindProtocolVersion(t *testing.T, proc *process.Process, ver
 	})
 }
 
+func TestExplicitTextWireRequiresMORPCVersion23(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion22)
+	require.False(t, explicitTextWireEnabled(proc),
+		"version 22 predates aggregate explicit-text provenance")
+
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	require.True(t, explicitTextWireEnabled(proc))
+}
+
 func mergePreparedMinPartial(
 	t *testing.T,
 	proc *process.Process,

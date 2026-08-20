@@ -670,9 +670,9 @@ func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
 	_, _, _, _, err := prepareRemoteRunSendingData(
 		"", makeScope(types.T_varbinary.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
 		proc, nil, uuid.Nil)
-	require.ErrorContains(t, err, "requires MORPC protocol version 22")
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 	_, _, _, _, err = prepareRemoteRunSendingData("", makeDynamicScope(), proc, nil, uuid.Nil)
-	require.ErrorContains(t, err, "requires MORPC protocol version 22")
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 
 	compatibleData, _, _, _, err := prepareRemoteRunSendingData(
 		"", makeScope(types.T_varchar.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
@@ -683,8 +683,18 @@ func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
 	compatibleScope.release()
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	_, _, _, _, err = prepareRemoteRunSendingData(
+		"", makeScope(types.T_varbinary.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
+		proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23",
+		"version 22 predates cross-domain literal provenance")
+	_, _, _, _, err = prepareRemoteRunSendingData("", makeDynamicScope(), proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23",
+		"version 22 predates runtime string provenance")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
 	dynamicData, _, _, _, err := prepareRemoteRunSendingData("", makeDynamicScope(), proc, nil, uuid.Nil)
-	require.NoError(t, err, "version 22 accepts dynamic selected-value provenance")
+	require.NoError(t, err, "version 23 accepts dynamic selected-value provenance")
 	dynamicScope, err := decodeScope(dynamicData, proc, true, nil)
 	require.NoError(t, err)
 	dynamicScope.release()
@@ -700,11 +710,11 @@ func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
 	require.Equal(t, planpb.StringLiteralForm_STRING_LITERAL_TEXT,
 		wirePipeline.Qry.GetQuery().Nodes[0].ProjectList[0].GetLit().LiteralForm)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
 	_, err = decodeScope(scopeData, proc, true, nil)
-	require.ErrorContains(t, err, "requires MORPC protocol version 22")
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 	_, err = decodeScope(dynamicData, proc, true, nil)
-	require.ErrorContains(t, err, "requires MORPC protocol version 22")
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {

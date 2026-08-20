@@ -66,10 +66,10 @@ func TestMarshalRemoteBatchExplicitTextProtocolGate(t *testing.T) {
 			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
 		}
 	})
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
-	_, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
-	require.ErrorContains(t, err, "MORPCVersion22")
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	_, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
+	require.ErrorContains(t, err, "MORPCVersion23")
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
 	_, err = marshalRemoteBatch(proc, bat, &bytes.Buffer{})
 	require.NoError(t, err)
 }

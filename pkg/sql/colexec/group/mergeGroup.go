@@ -409,7 +409,7 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 			if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
 				vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
 				return moerr.NewInvalidStateNoCtx(
-					"aggregate explicit-text metadata requires MORPCVersion22")
+					"aggregate explicit-text metadata requires MORPCVersion23")
 			}
 			if err := validateDecodedAggregateGroupCount(
 				ctr.spillAggList[i], bat.RowCount()); err != nil {

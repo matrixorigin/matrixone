@@ -61,7 +61,7 @@ func binaryStringRemoteWireEnabled(proc *process.Process) bool {
 }
 
 func explicitTextRemoteWireEnabled(proc *process.Process) bool {
-	return remoteBatchWireVersion(proc) >= defines.MORPCVersion22
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion23
 }
 
 func remoteBatchWireVersion(proc *process.Process) int64 {
@@ -95,7 +95,7 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 	}
 	if bat.HasExplicitTextStringMetadata() && !explicitTextRemoteWireEnabled(proc) {
 		return nil, moerr.NewInvalidStateNoCtx(
-			"explicit-text provenance requires MORPCVersion22 for remote dispatch")
+			"explicit-text provenance requires MORPCVersion23 for remote dispatch")
 	}
 	if bat.HasPrepareParamKindMetadata() && !wireEnabled {
 		return nil, moerr.NewInvalidStateNoCtx(

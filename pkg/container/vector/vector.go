@@ -303,10 +303,7 @@ func (v *Vector) SetLength(n int) {
 	if v.typ.IsVarlen() && n != v.length {
 		v.areaDisjoint = false
 	}
-	metadataLength := n
-	if v.IsConst() && metadataLength > 0 {
-		metadataLength = 1
-	}
+	metadataLength := v.physicalMetadataRowCountForLength(n)
 	if err := v.preExtendPrepareParamKinds(metadataLength, nil); err != nil {
 		panic(err)
 	}
@@ -329,6 +326,26 @@ func (v *Vector) SetLength(n int) {
 		}
 		v.normalizeBinaryStringRows()
 	}
+}
+
+// physicalMetadataRowCount returns the number of row-parallel metadata slots
+// owned by the vector's current logical value set. A non-empty constant owns
+// only physical row zero; its remaining logical rows are broadcasts.
+func (v *Vector) physicalMetadataRowCount() int {
+	if v == nil {
+		return 0
+	}
+	return v.physicalMetadataRowCountForLength(v.length)
+}
+
+func (v *Vector) physicalMetadataRowCountForLength(length int) int {
+	if length == 0 {
+		return 0
+	}
+	if v.IsConst() {
+		return 1
+	}
+	return length
 }
 
 // AppendCheckpoint captures the logical state changed by append operations.
@@ -1238,10 +1255,7 @@ func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error 
 // already reserved. It cannot allocate and initializes newly visible ordinary
 // rows with PrepareParamNone.
 func (v *Vector) setLengthAfterExtend(n int) {
-	metadataLength := n
-	if v.IsConst() && metadataLength > 0 {
-		metadataLength = 1
-	}
+	metadataLength := v.physicalMetadataRowCountForLength(n)
 	if v.prepareParamKinds != nil {
 		if metadataLength > cap(v.prepareParamKinds) {
 			panic("prepared parameter sidecar capacity was not extended")
@@ -2257,10 +2271,7 @@ func (v *Vector) setRuntimeStringDomainAt(
 		row = 0
 	}
 	if !v.binaryStringRowsActive {
-		physicalRows := v.length
-		if v.IsConst() {
-			physicalRows = 1
-		}
+		physicalRows := v.physicalMetadataRowCount()
 		if err := v.ensureBinaryStringCapacity(physicalRows, pool); err != nil {
 			return err
 		}
@@ -2361,10 +2372,7 @@ func (v *Vector) SetRuntimeStringDomainWithMP(domain types.RuntimeStringDomain, 
 			v.resetBinaryString()
 			return nil
 		}
-		physicalRows := v.length
-		if v.IsConst() {
-			physicalRows = 1
-		}
+		physicalRows := v.physicalMetadataRowCount()
 		if err := v.ensureBinaryStringCapacity(physicalRows, mp); err != nil {
 			return err
 		}
@@ -2770,7 +2778,7 @@ func (v *Vector) copyBinaryStringTo(dst *Vector, mp *mpool.MPool) error {
 		dst.setBinaryStringScalar(v.binaryString)
 		return nil
 	}
-	if err := dst.ensureBinaryStringCapacity(v.length, mp); err != nil {
+	if err := dst.ensureBinaryStringCapacity(v.physicalMetadataRowCount(), mp); err != nil {
 		return err
 	}
 	dst.binaryStringRows.InitWith(v.binaryStringRows)
@@ -2796,12 +2804,13 @@ func (v *Vector) copyBinaryStringWindowTo(dst *Vector, start, end int, mp *mpool
 			// installed, so the public setter would temporarily see a const-null
 			// destination and discard Text. Publish the already-validated source
 			// domain directly instead.
-			if err := dst.ensureBinaryStringCapacity(dst.length, mp); err != nil {
+			physicalRows := dst.physicalMetadataRowCount()
+			if err := dst.ensureBinaryStringCapacity(physicalRows, mp); err != nil {
 				return err
 			}
-			dst.binaryStringRows.InitWithSize(int64(dst.length))
-			dst.textStringRows.InitWithSize(int64(dst.length))
-			dst.textStringRows.AddRange(0, uint64(dst.length))
+			dst.binaryStringRows.InitWithSize(int64(physicalRows))
+			dst.textStringRows.InitWithSize(int64(physicalRows))
+			dst.textStringRows.Add(0)
 			dst.binaryString = false
 			dst.binaryStringRowsActive = true
 		}

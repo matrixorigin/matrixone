@@ -1554,6 +1554,39 @@ func TestAccountedConstRuntimeStringDomainUsesPhysicalRowCapacity(t *testing.T) 
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestAccountedConstRuntimeStringDomainCopiesUsePhysicalRowCapacity(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 256, 16)
+	mp := mpool.MustNewZero()
+	source, err := NewConstBytes(
+		types.T_varbinary.ToType(), []byte("selected"), 8192, mp,
+	)
+	require.NoError(t, err)
+	require.NoError(t, source.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+
+	assertPhysicalText := func(t *testing.T, vec *Vector) {
+		require.Equal(t, 1, vec.binaryStringRows.ExternalStorageCapacity())
+		require.Equal(t, 1, vec.textStringRows.ExternalStorageCapacity())
+		require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0))
+		require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(8191))
+	}
+
+	duplicate, err := source.DupOffHeapWithAllocation(mp, state.selection)
+	require.NoError(t, err)
+	assertPhysicalText(t, duplicate)
+	duplicate.Free(mp)
+	require.Zero(t, state.account.Snapshot().Used)
+
+	window, err := source.WindowWithAllocation(0, 8192, mp, state.selection)
+	require.NoError(t, err)
+	assertPhysicalText(t, window)
+	window.Free(mp)
+	require.Zero(t, state.account.Snapshot().Used)
+
+	source.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAccountedBinaryStringInplaceSortHasPreflightedBitmaps(t *testing.T) {
 	for _, compact := range []bool{false, true} {
 		t.Run(fmt.Sprintf("compact=%t", compact), func(t *testing.T) {

@@ -261,7 +261,7 @@ func TestPrepareParamKindDomainTrailerRequiresExplicitTextCapability(t *testing.
 	})
 	_, err := readPrepareParamKindTrailer(context.Background(), bytes.NewReader(encoded.Bytes()),
 		1, &states, nil, mpool.MustNewZero(), true)
-	require.ErrorContains(t, err, "MORPCVersion22")
+	require.ErrorContains(t, err, "MORPCVersion23")
 }
 
 func TestPrepareParamKindTrailerV2StreamsSelectedRowsForMultipleAggregates(t *testing.T) {

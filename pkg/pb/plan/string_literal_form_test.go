@@ -91,7 +91,7 @@ func TestNormalizeTextLiteralFormsForCompatibility(t *testing.T) {
 	require.Equal(t, StringLiteralForm_STRING_LITERAL_TEXT, expr.GetF().Args[2].GetLit().LiteralForm)
 }
 
-func TestRequiresMORPCVersion22StringLiterals(t *testing.T) {
+func TestRequiresMORPCVersion23StringLiterals(t *testing.T) {
 	tests := []struct {
 		name string
 		typ  Type
@@ -112,14 +112,14 @@ func TestRequiresMORPCVersion22StringLiterals(t *testing.T) {
 				LiteralForm: test.form,
 				IsBin:       test.form == StringLiteralForm_STRING_LITERAL_HEX,
 			}}}
-			required, err := RequiresMORPCVersion22StringLiterals(&struct{ Expr *Expr }{Expr: expr})
+			required, err := RequiresMORPCVersion23StringLiterals(&struct{ Expr *Expr }{Expr: expr})
 			require.NoError(t, err)
 			require.Equal(t, test.want, required)
 		})
 	}
 }
 
-func TestRequiresMORPCVersion22DynamicStringProvenance(t *testing.T) {
+func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
 	textType := Type{Id: 61}
 	binaryType := Type{Id: 65}
 	boolType := Type{Id: 10}
@@ -186,7 +186,7 @@ func TestRequiresMORPCVersion22DynamicStringProvenance(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			required, err := RequiresMORPCVersion22StringProvenance(test.expr)
+			required, err := RequiresMORPCVersion23StringProvenance(test.expr)
 			require.NoError(t, err)
 			require.Equal(t, test.want, required)
 		})

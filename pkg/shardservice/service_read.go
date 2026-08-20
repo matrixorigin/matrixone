@@ -47,12 +47,12 @@ func requiresVersionedShardRead(param pb.ReadParam) (bool, error) {
 	if hasVersionedPrepareParamMetadata(param) {
 		return true, nil
 	}
-	required, err := planpb.RequiresMORPCVersion22StringProvenance(param.ReaderBuildParam.Expr)
+	required, err := planpb.RequiresMORPCVersion23StringProvenance(param.ReaderBuildParam.Expr)
 	if err != nil || required {
 		return required, err
 	}
 	for _, expr := range param.RangesParam.Exprs {
-		required, err = planpb.RequiresMORPCVersion22StringProvenance(expr)
+		required, err = planpb.RequiresMORPCVersion23StringProvenance(expr)
 		if err != nil || required {
 			return required, err
 		}

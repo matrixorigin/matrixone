@@ -1629,16 +1629,16 @@ func validateRemoteStringProvenancePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
-	requiresVersion22, err := plan.RequiresMORPCVersion22StringProvenance(p)
+	requiresVersion23, err := plan.RequiresMORPCVersion23StringProvenance(p)
 	if err != nil {
 		return err
 	}
-	if !requiresVersion22 {
+	if !requiresVersion23 {
 		return nil
 	}
 	if proc == nil || !supportsRemoteCrossDomainStringLiterals(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"cross-domain string provenance requires MORPC protocol version 22",
+			"cross-domain string provenance requires MORPC protocol version 23",
 		)
 	}
 	return nil

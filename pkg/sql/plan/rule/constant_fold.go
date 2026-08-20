@@ -147,6 +147,13 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			if cannotFold {
 				return expr
 			}
+			requiresStringProvenance, err := plan.RequiresMORPCVersion23StringProvenance(exprList)
+			if err != nil || requiresStringProvenance {
+				// LiteralVec uses the stable Vector wire format, which cannot carry
+				// per-item runtime string domains. Keep the literal list executable
+				// and visible to the remote protocol capability analysis.
+				return expr
+			}
 			isSerialized := ContainsSerializedLiteral(exprList)
 
 			vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)

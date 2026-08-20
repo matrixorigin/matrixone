@@ -752,9 +752,9 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion21)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion22")
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion22)
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion23")
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion23)
 	require.NoError(t, receiver.sendBatch(bat))
 	require.NotNil(t, sent)
 	decoded := batch.NewOffHeapEmpty()

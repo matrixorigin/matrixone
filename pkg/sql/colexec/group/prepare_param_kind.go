@@ -473,7 +473,7 @@ func explicitTextWireEnabled(proc *process.Process) bool {
 	}
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion22
+	return ok && version >= defines.MORPCVersion23
 }
 
 func hasPrepareParamKindPreservingAgg(aggs []aggexec.AggFuncExecExpression) bool {
@@ -641,7 +641,7 @@ func readPrepareParamKindTrailer(
 	textAllowed := len(allowExplicitText) == 1 && allowExplicitText[0]
 	if version == prepareParamKindTrailerDomainVersion && !textAllowed {
 		return nil, moerr.NewInvalidStateNoCtx(
-			"aggregate explicit-text metadata requires MORPCVersion22")
+			"aggregate explicit-text metadata requires MORPCVersion23")
 	}
 	encodedAggs, err := types.ReadInt32(reader)
 	if err != nil {

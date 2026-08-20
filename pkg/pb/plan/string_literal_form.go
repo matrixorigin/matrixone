@@ -124,13 +124,13 @@ func possibleStringDomainForStaticType(typ Type) uint8 {
 	}
 }
 
-// RequiresMORPCVersion22StringProvenance reports whether an owner can produce
+// RequiresMORPCVersion23StringProvenance reports whether an owner can produce
 // runtime string provenance that differs from an expression's static domain.
 // Besides cross-domain literals, IF/CASE/COALESCE preserve the domain of their
 // selected value through binder-inserted casts. Older workers cannot represent
 // that dynamic provenance, so such plans cannot cross a remote owner boundary
-// before MORPC version 22.
-func RequiresMORPCVersion22StringProvenance(owner any) (bool, error) {
+// before MORPC version 23.
+func RequiresMORPCVersion23StringProvenance(owner any) (bool, error) {
 	required := false
 	err := walkExpressionsInOwner(owner, func(expr *Expr) error {
 		_, exprRequired, err := expr.possibleRuntimeStringDomains()
@@ -140,10 +140,10 @@ func RequiresMORPCVersion22StringProvenance(owner any) (bool, error) {
 	return required, err
 }
 
-// RequiresMORPCVersion22StringLiterals is retained for callers built against
+// RequiresMORPCVersion23StringLiterals is retained for callers built against
 // the original literal-only API. Its result now includes dynamic provenance.
-func RequiresMORPCVersion22StringLiterals(owner any) (bool, error) {
-	return RequiresMORPCVersion22StringProvenance(owner)
+func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
+	return RequiresMORPCVersion23StringProvenance(owner)
 }
 
 func (m *Expr) possibleRuntimeStringDomains() (uint8, bool, error) {
