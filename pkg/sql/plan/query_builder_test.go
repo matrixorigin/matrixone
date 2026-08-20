@@ -492,6 +492,114 @@ func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
 	require.False(t, exprContainsFunc(projectExpr, "or"))
 }
 
+func TestBindViewUsesStoredLowerCaseTableNames(t *testing.T) {
+	storedCaseSensitive := int64(0)
+	for _, test := range []struct {
+		name   string
+		target string
+		views  map[string]ViewData
+	}{
+		{
+			name:   "direct view",
+			target: "v_direct",
+			views: map[string]ViewData{
+				"v_direct": {
+					Stmt:                "create view v_direct as select Nation.n_name from Nation",
+					DefaultDatabase:     "db",
+					LowerCaseTableNames: &storedCaseSensitive,
+				},
+			},
+		},
+		{
+			name:   "nested view",
+			target: "v_outer",
+			views: map[string]ViewData{
+				"v_inner": {
+					Stmt:                "create view v_inner as select Nation.n_name from Nation",
+					DefaultDatabase:     "db",
+					LowerCaseTableNames: &storedCaseSensitive,
+				},
+				"v_outer": {
+					Stmt:            "create view v_outer as select v_inner.n_name from v_inner",
+					DefaultDatabase: "db",
+				},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, nodeID := buildViewsForLowerCaseTest(t, test.target, test.views)
+			require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[nodeID].NodeType)
+			require.Len(t, builder.qry.Nodes[nodeID].ProjectList, 1)
+		})
+	}
+}
+
+func buildViewsForLowerCaseTest(
+	t *testing.T,
+	target string,
+	views map[string]ViewData,
+) (*QueryBuilder, int32) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	type relation struct {
+		obj   *ObjectRef
+		table *TableDef
+	}
+	store := map[string]relation{
+		"db.Nation": {
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: "Nation"},
+			table: &plan.TableDef{
+				DbName: "db", Name: "Nation", TableType: catalog.SystemOrdinaryRel,
+				Cols: []*ColDef{{Name: "n_name", Typ: plan.Type{Id: int32(types.T_varchar), Width: 60, Table: "Nation"}}},
+			},
+		},
+	}
+	for name, data := range views {
+		viewJSON, err := json.Marshal(data)
+		require.NoError(t, err)
+		store["db."+name] = relation{
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: name},
+			table: &plan.TableDef{
+				DbName: "db", Name: name, TableType: catalog.SystemViewRel,
+				Cols:    []*ColDef{{Name: "n_name", Typ: plan.Type{Id: int32(types.T_varchar), Width: 60, Table: name}}},
+				ViewSql: &plan.ViewDef{View: string(viewJSON)},
+			},
+		}
+	}
+
+	ctx := NewMockCompilerContext2(ctrl)
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+			if schemaName == "" {
+				schemaName = "db"
+			}
+			relation := store[schemaName+"."+tableName]
+			return relation.obj, relation.table, nil
+		}).AnyTimes()
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
+	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(uint32(0), nil).AnyTimes()
+	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	tableName := &tree.TableName{}
+	tableName.SchemaName = "db"
+	tableName.ObjectName = tree.Identifier(target)
+	nodeID, err := builder.buildTable(tableName, bindCtx, nil)
+	require.NoError(t, err)
+	return builder, nodeID
+}
+
 func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (*QueryBuilder, int32) {
 	t.Helper()
 	ctrl := gomock.NewController(t)
