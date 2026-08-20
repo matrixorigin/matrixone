@@ -1508,6 +1508,7 @@ type AObjectHandle struct {
 	mp                 *mpool.MPool
 	cache              []*batch.Batch
 	specialLayouts     []objectio.SpecialColumnLayout
+	seqnums            [][]uint16
 	blks               []types.Blockid
 	p                  *baseHandle
 
@@ -1863,6 +1864,7 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		window := res.Res.(*persistedBlockWindow)
 		h.cache = append(h.cache, window.batch)
 		h.specialLayouts = append(h.specialLayouts, window.specialLayout)
+		h.seqnums = append(h.seqnums, window.seqnums)
 		h.blks = append(h.blks, blks[i])
 		if bounded {
 			h.blockRowOffset += window.rows
@@ -1914,6 +1916,11 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 			specialLayout = &h.specialLayouts[0]
 			h.specialLayouts = h.specialLayouts[1:]
 		}
+		var seqnums []uint16
+		if len(h.seqnums) > 0 {
+			seqnums = h.seqnums[0]
+			h.seqnums = h.seqnums[1:]
+		}
 		var blk *types.Blockid
 		if len(h.blks) > 0 {
 			blk = &h.blks[0]
@@ -1921,11 +1928,11 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 		}
 		t0 := time.Now()
 		if h.isTombstone {
-			if err = updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, blk, specialLayout, h.p.changesHandle.retainRowID, h.mp); err != nil {
+			if err = updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, blk, specialLayout, seqnums, h.p.changesHandle.retainRowID, h.mp); err != nil {
 				return err
 			}
 		} else {
-			if err = updateDataBatch(h.currentBatch, h.start, h.end, blk, specialLayout, h.p.changesHandle.retainRowID, h.mp); err != nil {
+			if err = updateDataBatch(h.currentBatch, h.start, h.end, blk, specialLayout, seqnums, h.p.changesHandle.retainRowID, h.mp); err != nil {
 				return err
 			}
 		}
@@ -2029,6 +2036,8 @@ func (h *AObjectHandle) Close() {
 		}
 	}
 	h.cache = nil
+	h.specialLayouts = nil
+	h.seqnums = nil
 	h.blks = nil
 	h.batchLength = 0
 	h.rowOffsetCursor = 0
@@ -3973,6 +3982,17 @@ type persistedBlockWindow struct {
 	rows          int
 	totalRows     int
 	specialLayout objectio.SpecialColumnLayout
+	seqnums       []uint16
+}
+
+func persistedColumnSeqnums(meta objectio.BlockObject) []uint16 {
+	seqnums := make([]uint16, 0, meta.GetMetaColumnCount())
+	for seqnum := uint16(0); seqnum < meta.GetMetaColumnCount(); seqnum++ {
+		if meta.ColumnMeta(seqnum).DataType() != 0 {
+			seqnums = append(seqnums, seqnum)
+		}
+	}
+	return seqnums
 }
 
 func prefetchObjects(
@@ -4016,10 +4036,7 @@ func prefetchObjects(
 						windowRows = min(windowRows, max(1, int(uint64(windowByteBudget)*uint64(totalRows)/decodedBytes)))
 					}
 				}
-				cols := make([]uint16, blockMeta.GetMetaColumnCount())
-				for i := range cols {
-					cols[i] = uint16(i)
-				}
+				cols := persistedColumnSeqnums(blockMeta)
 				bat, err := objectio.ReadOneBlockAllColumnsWindow(
 					ctx, &dataMeta, loc.Name().String(), blockID, cols,
 					rowOffset, windowRows, fileservice.SkipAllCache, fs, mp,
@@ -4033,7 +4050,7 @@ func prefetchObjects(
 				}
 				return &tasks.JobResult{Res: &persistedBlockWindow{
 					batch: bat, rows: windowRows, totalRows: totalRows,
-					specialLayout: objectio.ResolveSpecialColumnLayout(blockMeta),
+					specialLayout: objectio.ResolveSpecialColumnLayout(blockMeta), seqnums: cols,
 				}}
 			}
 			bat, _, specialLayout, err := ioutil.LoadOneBlockWithSpecialLayout(
@@ -4048,7 +4065,7 @@ func prefetchObjects(
 			} else {
 				res.Res = &persistedBlockWindow{
 					batch: bat, rows: bat.RowCount(), totalRows: bat.RowCount(),
-					specialLayout: specialLayout,
+					specialLayout: specialLayout, seqnums: nil,
 				}
 			}
 			return
@@ -4127,12 +4144,13 @@ func updateTombstoneBatch(
 	sort bool,
 	blk *types.Blockid,
 	specialLayout *objectio.SpecialColumnLayout,
+	seqnums []uint16,
 	retainRowID bool,
 	mp *mpool.MPool,
 ) error {
 	if specialLayout != nil {
 		return updatePersistedTombstoneBatch(
-			bat, start, end, skipTS, sort, *specialLayout, retainRowID, mp,
+			bat, start, end, skipTS, sort, *specialLayout, seqnums, retainRowID, mp,
 		)
 	}
 	if retainRowID {
@@ -4199,23 +4217,42 @@ func updatePersistedTombstoneBatch(
 	skipTS map[types.TS]struct{},
 	sortBatchByTS bool,
 	layout objectio.SpecialColumnLayout,
+	seqnums []uint16,
 	retainRowID bool,
 	mp *mpool.MPool,
 ) error {
 	if bat == nil || len(bat.Vecs) <= int(objectio.TombstoneAttr_PK_SeqNum) {
 		return moerr.NewInternalErrorNoCtx("invalid persisted tombstone batch layout for collect changes")
 	}
+	physicalIndex := func(seqnum uint16) int {
+		if seqnums == nil {
+			return int(seqnum)
+		}
+		for i, physical := range seqnums {
+			if physical == seqnum {
+				return i
+			}
+		}
+		return -1
+	}
 	commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
-	if !ok || int(commitPos) >= len(bat.Vecs) || bat.Vecs[commitPos].GetType().Oid != types.T_TS {
+	commitIdx := physicalIndex(commitPos)
+	if !ok || commitIdx < 0 || commitIdx >= len(bat.Vecs) || bat.Vecs[commitIdx].GetType().Oid != types.T_TS {
 		return moerr.NewInternalErrorNoCtx("persisted tombstone object has no valid commit-ts column")
 	}
 	abortPos, hasAbort := layout.Resolve(objectio.SEQNUM_ABORT)
-	if hasAbort && (int(abortPos) >= len(bat.Vecs) || bat.Vecs[abortPos].GetType().Oid != types.T_bool) {
+	abortIdx := physicalIndex(abortPos)
+	if hasAbort && (abortIdx < 0 || abortIdx >= len(bat.Vecs) || bat.Vecs[abortIdx].GetType().Oid != types.T_bool) {
 		return moerr.NewInternalErrorNoCtx("persisted tombstone object has an invalid abort column")
 	}
-	rowIDVec := bat.Vecs[objectio.TombstoneAttr_Rowid_SeqNum]
-	pkVec := bat.Vecs[objectio.TombstoneAttr_PK_SeqNum]
-	commitTSVec := bat.Vecs[commitPos]
+	rowIDIdx := physicalIndex(objectio.TombstoneAttr_Rowid_SeqNum)
+	pkIdx := physicalIndex(objectio.TombstoneAttr_PK_SeqNum)
+	if rowIDIdx < 0 || pkIdx < 0 || rowIDIdx >= len(bat.Vecs) || pkIdx >= len(bat.Vecs) {
+		return moerr.NewInternalErrorNoCtx("persisted tombstone object has invalid key columns")
+	}
+	rowIDVec := bat.Vecs[rowIDIdx]
+	pkVec := bat.Vecs[pkIdx]
+	commitTSVec := bat.Vecs[commitIdx]
 	if rowIDVec.GetType().Oid != types.T_Rowid || commitTSVec.IsConstNull() {
 		return moerr.NewInternalErrorNoCtx("invalid persisted tombstone special columns")
 	}
@@ -4223,7 +4260,7 @@ func updatePersistedTombstoneBatch(
 	var abortVec *vector.Vector
 	var aborts []bool
 	if hasAbort {
-		abortVec = bat.Vecs[abortPos]
+		abortVec = bat.Vecs[abortIdx]
 		if abortVec.IsConstNull() {
 			return moerr.NewInternalErrorNoCtx("persisted tombstone abort column is null")
 		}
@@ -4244,9 +4281,13 @@ func updatePersistedTombstoneBatch(
 	}
 
 	for i, vec := range bat.Vecs {
-		if i == int(objectio.TombstoneAttr_Rowid_SeqNum) ||
-			i == int(objectio.TombstoneAttr_PK_SeqNum) ||
-			i == int(commitPos) {
+		physical := uint16(i)
+		if seqnums != nil {
+			physical = seqnums[i]
+		}
+		if physical == objectio.TombstoneAttr_Rowid_SeqNum ||
+			physical == objectio.TombstoneAttr_PK_SeqNum ||
+			physical == commitPos {
 			continue
 		}
 		vec.Free(mp)
@@ -4273,11 +4314,12 @@ func updateDataBatch(
 	start, end types.TS,
 	blk *types.Blockid,
 	specialLayout *objectio.SpecialColumnLayout,
+	seqnums []uint16,
 	retainRowID bool,
 	mp *mpool.MPool,
 ) error {
 	if specialLayout != nil {
-		return updatePersistedDataBatch(bat, start, end, blk, *specialLayout, retainRowID, mp)
+		return updatePersistedDataBatch(bat, start, end, blk, *specialLayout, seqnums, retainRowID, mp)
 	}
 	if retainRowID {
 		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
@@ -4335,36 +4377,52 @@ func updatePersistedDataBatch(
 	start, end types.TS,
 	blk *types.Blockid,
 	layout objectio.SpecialColumnLayout,
+	seqnums []uint16,
 	retainRowID bool,
 	mp *mpool.MPool,
 ) error {
 	if bat == nil {
 		return moerr.NewInternalErrorNoCtx("updatePersistedDataBatch: nil batch")
 	}
+	physicalIndex := func(seqnum uint16) int {
+		if seqnums == nil {
+			return int(seqnum)
+		}
+		for i, physical := range seqnums {
+			if physical == seqnum {
+				return i
+			}
+		}
+		return -1
+	}
 	commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
-	if !ok || int(commitPos) >= len(bat.Vecs) || bat.Vecs[commitPos].GetType().Oid != types.T_TS {
+	commitIdx := physicalIndex(commitPos)
+	if !ok || commitIdx < 0 || commitIdx >= len(bat.Vecs) || bat.Vecs[commitIdx].GetType().Oid != types.T_TS {
 		return moerr.NewInternalErrorNoCtx("persisted appendable object has no valid commit-ts column")
 	}
 	abortPos, hasAbort := layout.Resolve(objectio.SEQNUM_ABORT)
-	if hasAbort && (int(abortPos) >= len(bat.Vecs) || bat.Vecs[abortPos].GetType().Oid != types.T_bool) {
+	abortIdx := physicalIndex(abortPos)
+	if hasAbort && (abortIdx < 0 || abortIdx >= len(bat.Vecs) || bat.Vecs[abortIdx].GetType().Oid != types.T_bool) {
 		return moerr.NewInternalErrorNoCtx("persisted appendable object has an invalid abort column")
 	}
 	rowIDPos := uint16(objectio.InvalidSpecialColumnPosition)
+	rowIDIdx := -1
 	if layout.PhysicalAddr != objectio.InvalidSpecialColumnPosition {
 		rowIDPos = layout.PhysicalAddr
-		if int(rowIDPos) >= len(bat.Vecs) || bat.Vecs[rowIDPos] == nil ||
-			bat.Vecs[rowIDPos].GetType().Oid != types.T_Rowid {
+		rowIDIdx = physicalIndex(rowIDPos)
+		if rowIDIdx < 0 || rowIDIdx >= len(bat.Vecs) || bat.Vecs[rowIDIdx] == nil ||
+			bat.Vecs[rowIDIdx].GetType().Oid != types.T_Rowid {
 			return moerr.NewInternalErrorNoCtx("persisted appendable object has an invalid rowid column")
 		}
 	}
 
-	commitTSVec := bat.Vecs[commitPos]
+	commitTSVec := bat.Vecs[commitIdx]
 	if commitTSVec.IsConstNull() {
 		return moerr.NewInternalErrorNoCtx("persisted appendable object commit-ts column is null")
 	}
 	var abortVec *vector.Vector
 	if hasAbort {
-		abortVec = bat.Vecs[abortPos]
+		abortVec = bat.Vecs[abortIdx]
 		if abortVec.IsConstNull() {
 			return moerr.NewInternalErrorNoCtx("persisted appendable object abort column is null")
 		}
@@ -4408,6 +4466,9 @@ func updatePersistedDataBatch(
 	}
 	for i, vec := range bat.Vecs {
 		pos := uint16(i)
+		if seqnums != nil {
+			pos = seqnums[i]
+		}
 		switch {
 		case pos == commitPos:
 			if rebuildAttrs && bat.Attrs[i] != "" {

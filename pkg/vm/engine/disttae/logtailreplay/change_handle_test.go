@@ -1318,7 +1318,7 @@ func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	bat.Vecs[3] = commitTS
 	bat.SetRowCount(1)
 
-	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, nil, false, mp))
+	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, nil, nil, false, mp))
 
 	require.Equal(t, 4, len(bat.Vecs))
 	require.Equal(t, []string{"id", "created_at", "updated_at", objectio.DefaultCommitTS_Attr}, bat.Attrs)
@@ -1355,7 +1355,7 @@ func TestUpdateDataBatch_RetainsSynthesizedRowID(t *testing.T) {
 	bat.SetRowCount(2)
 
 	blk := types.Blockid{}
-	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), &blk, nil, true, mp))
+	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), &blk, nil, nil, true, mp))
 
 	require.Equal(t, 4, len(bat.Vecs))
 	require.Equal(t, catalog.Row_ID, bat.Attrs[0])
@@ -1392,12 +1392,13 @@ func TestUpdatePersistedDataBatch_RetainsLeadingRowID(t *testing.T) {
 	bat.SetRowCount(3)
 
 	layout := objectio.SpecialColumnLayout{
-		PhysicalAddr: 2,
-		CommitTS:     3,
-		Abort:        4,
+		PhysicalAddr: 3,
+		CommitTS:     4,
+		Abort:        5,
 	}
 	require.NoError(t, updatePersistedDataBatch(
-		bat, types.BuildTS(50, 0), types.BuildTS(150, 0), blk, layout, true, mp))
+		bat, types.BuildTS(50, 0), types.BuildTS(150, 0), blk, layout,
+		[]uint16{0, 2, 3, 4, 5}, true, mp))
 
 	require.Equal(t, []string{
 		catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr,
@@ -3358,6 +3359,7 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 			false,
 			nil,
 			&layout,
+			nil,
 			false,
 			mp,
 		))
@@ -3388,7 +3390,7 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		bat.SetRowCount(1)
 
 		require.NoError(t, updateDataBatch(
-			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, nil, false, mp))
+			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, nil, nil, false, mp))
 
 		assertNoRowID(t, bat)
 		// Trailing column must remain commit_ts.
