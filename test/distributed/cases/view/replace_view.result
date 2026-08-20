@@ -65,6 +65,26 @@ a    b
 2    22
 3    33
 drop database replace_view_dep;
+set global lower_case_table_names = 0;
+use replace_view;
+drop view if exists mode_i;
+drop view if exists MODE_V;
+drop view if exists mode_v;
+create view mode_v as select 1 as a;
+create view MODE_V as select 2 as a;
+create view mode_i as select * from MODE_V;
+set global lower_case_table_names = 2;
+use replace_view;
+create or replace view mode_v as select * from mode_i;
+select * from mode_v;
+a
+2
+set global lower_case_table_names = 0;
+use replace_view;
+drop view mode_i;
+drop view MODE_V;
+drop view mode_v;
+set global lower_case_table_names = 1;
 set global lower_case_table_names = 2;
 use replace_view;
 drop database if exists replace_view_case_dep;
@@ -131,12 +151,12 @@ select * from history_v;
 a
 22
 create or replace view history_v as select * from history_v {MO_TS = '9223372036854775807-0'};
-invalid argument invalid timestamp value, no corresponding snapshot , bad value 9223372036854775807-0
+internal error: there is a recursive reference to the view history_v
 select * from history_v;
 a
 22
 create or replace view history_v as select * from history_v {as of timestamp '2262-04-11 23:47:16'};
-invalid argument invalid timestamp value, no corresponding snapshot , bad value 2262-04-11 23:47:16
+internal error: there is a recursive reference to the view history_v
 select * from history_v;
 a
 22

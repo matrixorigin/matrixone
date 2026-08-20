@@ -33,10 +33,39 @@ create or replace view replace_view.v1 as select * from replace_view_dep.v3;
 select * from v1;
 drop database replace_view_dep;
 
-set global lower_case_table_names = 2;
+set global lower_case_table_names = 0;
 -- @session
 
 -- @session:id=1&user=sys:root&password=111
+use replace_view;
+drop view if exists mode_i;
+drop view if exists MODE_V;
+drop view if exists mode_v;
+create view mode_v as select 1 as a;
+create view MODE_V as select 2 as a;
+create view mode_i as select * from MODE_V;
+set global lower_case_table_names = 2;
+-- @session
+
+-- @session:id=2&user=sys:root&password=111
+use replace_view;
+create or replace view mode_v as select * from mode_i;
+select * from mode_v;
+set global lower_case_table_names = 0;
+-- @session
+
+-- @session:id=3&user=sys:root&password=111
+use replace_view;
+drop view mode_i;
+drop view MODE_V;
+drop view mode_v;
+set global lower_case_table_names = 1;
+-- @session
+
+set global lower_case_table_names = 2;
+-- @session
+
+-- @session:id=4&user=sys:root&password=111
 use replace_view;
 drop database if exists replace_view_case_dep;
 drop view if exists case_v2;

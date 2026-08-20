@@ -10927,9 +10927,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			// CREATE OR REPLACE VIEW and ALTER VIEW change the current catalog
 			// object. A same-named View resolved from an explicit historical
 			// snapshot belongs to a different catalog domain and is a valid source.
-			if !IsSnapshotValid(snapshot) {
+			if !builder.isHistoricalSnapshot(snapshot) {
 				if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
-					lowerCaseTableNames := builder.compCtx.GetLowerCaseTableNames()
+					lowerCaseTableNames := ctx.lower
 					databaseMatches := tree.NewCStr(dbOfView, lowerCaseTableNames).Compare() ==
 						tree.NewCStr(schema, lowerCaseTableNames).Compare()
 					viewMatches := tree.NewCStr(nameOfView, lowerCaseTableNames).Compare() ==
@@ -11960,11 +11960,12 @@ func (builder *QueryBuilder) validateTimestampHint(ts int64, value any, requireC
 		return moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", value)
 	}
 
-	age := time.Now().UTC().UnixNano() - ts
-	if age < 0 {
-		return moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", value)
+	if !requireCatalogSnapshot {
+		return nil
 	}
-	if !requireCatalogSnapshot || age <= options.DefaultGCTTL.Nanoseconds() {
+
+	age := time.Now().UTC().UnixNano() - ts
+	if age >= 0 && age <= options.DefaultGCTTL.Nanoseconds() {
 		return nil
 	}
 
@@ -12068,6 +12069,24 @@ func IsSnapshotValid(snapshot *Snapshot) bool {
 	}
 
 	return true
+}
+
+// isHistoricalSnapshot reports whether relation resolution will switch from
+// the current transaction to the requested snapshot transaction.
+func (builder *QueryBuilder) isHistoricalSnapshot(snapshot *Snapshot) bool {
+	if !IsSnapshotValid(snapshot) {
+		return false
+	}
+
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return false
+	}
+	return snapshot.TS.Less(txnOp.Txn().SnapshotTS)
 }
 
 // getPartitionColNameFromExpr tries to extract the first column name from a partition expression

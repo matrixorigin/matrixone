@@ -36,12 +36,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -82,6 +84,15 @@ func (c *viewReplacementCompilerContext) CheckTimeStampValid(int64) (bool, error
 
 func (c *viewReplacementCompilerContext) GetLowerCaseTableNames() int64 {
 	return c.lowerCaseTableNames
+}
+
+type viewReplacementTxnOperator struct {
+	client.TxnOperator
+	snapshotTS timestamp.Timestamp
+}
+
+func (o viewReplacementTxnOperator) Txn() txnpb.TxnMeta {
+	return txnpb.TxnMeta{SnapshotTS: o.snapshotTS}
 }
 
 type captureSQLExecutor struct {
@@ -823,12 +834,15 @@ func (c *rootSQLCompilerContext) GetRootSql() string {
 
 func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 	recentTimestamp := time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05.999999999")
-	newViewDef := func(t *testing.T, sql, defaultDatabase string) *plan.TableDef {
+	aheadOfWallClock := time.Now().Add(time.Minute)
+	currentTxnSnapshot := timestamp.Timestamp{PhysicalTime: time.Now().Add(2 * time.Minute).UnixNano()}
+	newViewDef := func(t *testing.T, sql, defaultDatabase string, lowerCaseTableNames *int64) *plan.TableDef {
 		t.Helper()
 		viewData, err := json.Marshal(ViewData{
-			Stmt:            sql,
-			DefaultDatabase: defaultDatabase,
-			SecurityType:    "DEFINER",
+			Stmt:                sql,
+			DefaultDatabase:     defaultDatabase,
+			SecurityType:        "DEFINER",
+			LowerCaseTableNames: lowerCaseTableNames,
 		})
 		require.NoError(t, err)
 		return &plan.TableDef{
@@ -846,6 +860,7 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 		wantIfNotExists bool
 		timestampValid  bool
 		lowerCaseMode   *int64
+		withoutTxn      bool
 	}{
 		{
 			name:    "direct reference",
@@ -898,6 +913,11 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 			lowerCaseMode: &lctn0,
 		},
 		{
+			name:          "persisted lctn0 nested view remains distinct under lctn2",
+			sql:           "create or replace view v as select * from i",
+			lowerCaseMode: &lctn2,
+		},
+		{
 			name: "historical snapshot reference",
 			sql:  "create or replace view v as select n_nationkey from v {snapshot = 'sp'}",
 		},
@@ -919,6 +939,28 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 			sql:  "create or replace view v as select n_nationkey from v {as of timestamp '2020-01-01 00:00:00'}",
 		},
 		{
+			name: "MO_TS ahead of wall clock but behind transaction HLC",
+			sql: fmt.Sprintf(
+				"create or replace view v as select n_nationkey from v {MO_TS = '%d-0'}",
+				aheadOfWallClock.UnixNano(),
+			),
+		},
+		{
+			name: "AS OF timestamp ahead of wall clock but behind transaction HLC",
+			sql: fmt.Sprintf(
+				"create or replace view v as select n_nationkey from v {as of timestamp '%s'}",
+				aheadOfWallClock.In(time.Local).Format("2006-01-02 15:04:05"),
+			),
+		},
+		{
+			name: "timestamp ahead of wall clock with catalog snapshot",
+			sql: fmt.Sprintf(
+				"create or replace view v as select n_nationkey from v {timestamp = '%s'}",
+				aheadOfWallClock.UTC().Format("2006-01-02 15:04:05.999999999"),
+			),
+			timestampValid: true,
+		},
+		{
 			name:    "future integer timestamp",
 			sql:     "create or replace view v as select n_nationkey from v {timestamp = 9223372036854775807}",
 			wantErr: "invalid argument invalid timestamp value, no corresponding snapshot , bad value 9223372036854775807",
@@ -926,17 +968,23 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 		{
 			name:    "future MO_TS",
 			sql:     "create or replace view v as select n_nationkey from v {MO_TS = '9223372036854775807-0'}",
-			wantErr: "invalid argument invalid timestamp value, no corresponding snapshot , bad value 9223372036854775807-0",
+			wantErr: "internal error: there is a recursive reference to the view v",
 		},
 		{
 			name:    "future integer MO_TS",
 			sql:     "create or replace view v as select n_nationkey from v {MO_TS = 9223372036854775807}",
-			wantErr: "invalid argument invalid timestamp value, no corresponding snapshot , bad value 9223372036854775807",
+			wantErr: "internal error: there is a recursive reference to the view v",
 		},
 		{
 			name:    "future AS OF timestamp",
 			sql:     "create or replace view v as select n_nationkey from v {as of timestamp '2262-04-11 23:47:16'}",
-			wantErr: "invalid argument invalid timestamp value, no corresponding snapshot , bad value 2262-04-11 23:47:16",
+			wantErr: "internal error: there is a recursive reference to the view v",
+		},
+		{
+			name:       "future MO_TS without transaction fails closed",
+			sql:        "create or replace view v as select n_nationkey from v {MO_TS = '9223372036854775807-0'}",
+			wantErr:    "internal error: there is a recursive reference to the view v",
+			withoutTxn: true,
 		},
 		{
 			name:    "past timestamp without snapshot",
@@ -955,13 +1003,20 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 				lowerCaseMode = *test.lowerCaseMode
 			}
 			mock := NewMockCompilerContext(false)
+			proc := testutil.NewProc(nil)
+			if !test.withoutTxn {
+				proc.Base.TxnOperator = viewReplacementTxnOperator{snapshotTS: currentTxnSnapshot}
+			}
+			mock.GetProcessFunc = func() *process.Process { return proc }
 			mock.dbs["other"] = true
-			mock.tables["v"] = newViewDef(t, "create view v as select n_nationkey from nation", "tpch")
-			mock.tables["v2"] = newViewDef(t, "create view v2 as select * from v", "tpch")
-			mock.tables["v3"] = newViewDef(t, "create view v3 as select * from tpch.v", "other")
+			mock.tables["v"] = newViewDef(t, "create view v as select n_nationkey from nation", "tpch", nil)
+			mock.tables["v2"] = newViewDef(t, "create view v2 as select * from v", "tpch", nil)
+			mock.tables["v3"] = newViewDef(t, "create view v3 as select * from tpch.v", "other", nil)
+			mock.tables["i"] = newViewDef(t, "create view i as select * from V", "tpch", &lctn0)
 			mock.objects["v"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v"}
 			mock.objects["v2"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v2"}
 			mock.objects["v3"] = &plan.ObjectRef{SchemaName: "other", ObjName: "v3"}
+			mock.objects["i"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "i"}
 			ctx := &viewReplacementCompilerContext{
 				rootSQLCompilerContext: &rootSQLCompilerContext{
 					MockCompilerContext: mock,
