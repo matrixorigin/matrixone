@@ -177,11 +177,15 @@ func (entry *ObjectEntry) GetCommandMVCCNode() *MVCCNode[*ObjectMVCCNode] {
 }
 func (entry *ObjectEntry) GetDropEntry(
 	txn txnif.TxnReader,
+	deleteByCN bool,
 ) (dropped *ObjectEntry, updatedCEntry *ObjectEntry, isNewNode bool) {
 	dropped = entry.Clone()
 	dropped.ObjectState = ObjectState_Delete_Active
 	dropped.DeletedAt = txnif.UncommitTS
 	dropped.DeleteNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
+	// ObjectStats must be finalized before UpdateMeta publishes this entry to
+	// readers.
+	objectio.SetObjectStatsCNDeleted(&dropped.ObjectStats, deleteByCN)
 	dropped.GetObjectData().UpdateMeta(dropped)
 	updatedCEntry = entry.Clone()
 	updatedCEntry.nextVersion = dropped
@@ -319,6 +323,9 @@ func (entry *ObjectEntry) PrepareRollback() (err error) {
 		entry.table.getObjectList(entry.IsTombstone).DeleteAllEntries(lastNode.ID())
 	case ObjectState_Delete_Active, ObjectState_Delete_PrepareCommit:
 		newEntry := entry.Clone()
+		// CNDeleted describes the rolled-back delete transition, not the
+		// underlying object. Do not let it become inherited C-entry state.
+		objectio.SetObjectStatsCNDeleted(&newEntry.ObjectStats, false)
 		newEntry.DeleteNode.Reset()
 		newEntry.prevVersion = nil
 		newEntry.nextVersion = nil
