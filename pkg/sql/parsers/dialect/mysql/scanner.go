@@ -928,7 +928,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 
 func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	prev := s.previousSignificantPos(start - 1)
-	if prev >= 0 && (s.buf[prev] == '.' || s.buf[prev] == ',' || s.buf[prev] == '(') {
+	if prev >= 0 && (s.buf[prev] == '.' || s.buf[prev] == ',' || s.buf[prev] == '(' || s.buf[prev] == ')') {
 		return false
 	}
 	end := prev + 1
@@ -943,20 +943,36 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	}
 	pos = s.skipBlankAndCommentsFrom(pos)
 	if hasKeywordAt(s.buf, pos, "join") {
-		return s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join"))
+		return s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start))
 	}
 	if !hasKeywordAt(s.buf, pos, "left") {
 		return false
 	}
 	pos = s.skipBlankAndCommentsFrom(pos + len("left"))
 	if hasKeywordAt(s.buf, pos, "join") {
-		return s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join"))
+		return s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start))
 	}
 	if !hasKeywordAt(s.buf, pos, "outer") {
 		return false
 	}
 	pos = s.skipBlankAndCommentsFrom(pos + len("outer"))
-	return hasKeywordAt(s.buf, pos, "join") && (s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join")))
+	return hasKeywordAt(s.buf, pos, "join") && s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start))
+}
+
+// asofLeftRelationName returns the unqualified name immediately preceding the
+// contextual ASOF spelling. It is used only to distinguish an actual temporal
+// predicate from an ordinary implicit alias whose ON clause happens to contain
+// an unrelated inequality.
+func (s *Scanner) asofLeftRelationName(start int) string {
+	end := s.previousSignificantPos(start - 1)
+	if end < 0 {
+		return ""
+	}
+	i := end
+	for i >= 0 && (isLetter(uint16(s.buf[i])) || isDigit(uint16(s.buf[i])) || s.buf[i] == '_') {
+		i--
+	}
+	return strings.ToLower(s.buf[i+1 : end+1])
 }
 
 func (s *Scanner) asofDerivedLeftRelation(start int) bool {
@@ -971,13 +987,13 @@ func (s *Scanner) asofDerivedLeftRelation(start int) bool {
 	return prev >= 0 && s.buf[prev] == ')'
 }
 
-func (s *Scanner) asofTemporalPredicateInJoin(pos int) bool {
+func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 	// The ASOF/implicit-alias spelling is ambiguous at the lexer level.  Treat
 	// it as the modifier when the ON clause contains a temporal inequality,
 	// which is the semantic distinction from the legacy implicit-alias spelling.
 	// Scan SQL tokens so relation/alias names, quoted strings, comments, and
 	// later joins cannot influence this decision.
-	inOn, escaped := false, false
+	inOn, escaped, leftRef := false, false, false
 	var quote byte
 	for i := pos; i < len(s.buf); {
 		ch := s.buf[i]
@@ -1018,8 +1034,11 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int) bool {
 			}
 			continue
 		}
-		if inOn && (ch == '<' || ch == '>') {
+		if inOn && (ch == '<' || ch == '>') && (leftName == "" || leftRef) {
 			return true
+		}
+		if inOn && (ch == '=' || ch == '<' || ch == '>') {
+			leftRef = false
 		}
 		if !isUnquotedIdentifierLetterAt(s.buf, i) && !isDigit(uint16(s.buf[i])) {
 			i++
@@ -1030,6 +1049,10 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int) bool {
 			i++
 		}
 		word := strings.ToLower(s.buf[start:i])
+		if inOn && leftName != "" && word == leftName {
+			next := s.skipBlankAndCommentsFrom(i)
+			leftRef = next < len(s.buf) && s.buf[next] == '.'
+		}
 		if !inOn {
 			if word == "on" {
 				inOn = true

@@ -71,6 +71,8 @@ func TestAsofImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
 	for _, sql := range []string{
 		"select * from t asof join u on t.k = u.k",
 		"select * from t asof join u on t.k = u.k and u.v = 1",
+		"select * from t asof join u on asof.k = u.k and asof.ts > u.ts",
+		"select * from (select 1 as k) asof join (select 1 as k) u on asof.k = u.k",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
