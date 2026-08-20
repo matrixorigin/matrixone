@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 // rowsFittingFrom builds a DeviceRowsFittingFunc over a per-device free-bytes
@@ -125,5 +127,47 @@ func TestDeviceMinRowsFittingHeterogeneous(t *testing.T) {
 	t.Run("nil getter is rejected", func(t *testing.T) {
 		_, _, _, err := DeviceMinRowsFitting([]int{0}, perRow, nil)
 		require.Error(t, err)
+	})
+}
+
+// TestDeviceBuildBytes covers the attribution the build-side VRAM claim depends
+// on. The predecessor this replaced (DeviceLoadBytes) had equivalent coverage;
+// losing it when the Go ledger was retired would have left the SHARDED split and
+// the simulation-aliasing case unexercised.
+func TestDeviceBuildBytes(t *testing.T) {
+	t.Run("sharded splits across devices", func(t *testing.T) {
+		got := DeviceBuildBytes(vectorindex.DistributionMode_SHARDED, []int{0, 1, 2, 3}, 400)
+		require.Equal(t, map[int]uint64{0: 100, 1: 100, 2: 100, 3: 100}, got)
+	})
+
+	t.Run("simulation aliases accumulate onto the one physical card", func(t *testing.T) {
+		// gpu_multi_simulation resolves every logical shard onto physical 0.
+		// Charging per-entry would understate that card 4x; keying the map by
+		// device id sums the shards back to the full demand.
+		got := DeviceBuildBytes(vectorindex.DistributionMode_SHARDED, []int{0, 0, 0, 0}, 400)
+		require.Equal(t, map[int]uint64{0: 400}, got)
+	})
+
+	t.Run("replicated charges a full copy per device", func(t *testing.T) {
+		got := DeviceBuildBytes(vectorindex.DistributionMode_REPLICATED, []int{0, 1}, 400)
+		require.Equal(t, map[int]uint64{0: 400, 1: 400}, got)
+	})
+
+	t.Run("single charges only the first device", func(t *testing.T) {
+		got := DeviceBuildBytes(vectorindex.DistributionMode_SINGLE_GPU, []int{2, 3}, 400)
+		require.Equal(t, map[int]uint64{2: 400}, got)
+	})
+
+	t.Run("a demand smaller than the device count still claims", func(t *testing.T) {
+		// Without the guard the per-device share rounds to 0, ReserveBuildMemory
+		// skips zero entries, and the build would take NO claim at all -- silently
+		// losing the admission it is supposed to get.
+		got := DeviceBuildBytes(vectorindex.DistributionMode_SHARDED, []int{0, 1, 2, 3}, 3)
+		require.Equal(t, map[int]uint64{0: 3, 1: 3, 2: 3, 3: 3}, got)
+	})
+
+	t.Run("degenerate inputs claim nothing", func(t *testing.T) {
+		require.Empty(t, DeviceBuildBytes(vectorindex.DistributionMode_SHARDED, nil, 400))
+		require.Empty(t, DeviceBuildBytes(vectorindex.DistributionMode_SHARDED, []int{0}, 0))
 	})
 }
