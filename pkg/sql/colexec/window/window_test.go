@@ -3094,7 +3094,6 @@ func TestWindowTimestampRangeUsesSessionTimeZone(t *testing.T) {
 			Val:  intervalExpr(1, types.Hour),
 		},
 	}
-
 	for _, test := range []struct {
 		name             string
 		utcValues        []string
@@ -3196,6 +3195,22 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 			Val:  intervalExpr(30, types.Minute),
 		},
 	}
+	unboundedPrecedingFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type:      plan.FrameBound_PRECEDING,
+			UnBounded: true,
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	unboundedFollowingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type:      plan.FrameBound_FOLLOWING,
+			UnBounded: true,
+		},
+	}
 
 	utcValues := []string{
 		"2024-11-03 05:00:00.000000", // 01:00 EDT
@@ -3233,6 +3248,18 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 			wantRows: []int{1, 2, 4, 5, 6},
 		},
 		{
+			name:     "asc unbounded preceding excludes later civil rows before the fold",
+			frame:    unboundedPrecedingFrame,
+			rowIdx:   4,
+			wantRows: []int{0, 1, 3, 4},
+		},
+		{
+			name:     "asc unbounded following excludes earlier civil rows after the fold",
+			frame:    unboundedFollowingFrame,
+			rowIdx:   1,
+			wantRows: []int{1, 2, 4, 5, 6, 7},
+		},
+		{
 			name:     "desc preceding includes both repeated upper wall times",
 			desc:     true,
 			frame:    precedingFrame,
@@ -3243,6 +3270,20 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 			name:     "desc following excludes intervening repeated higher wall time",
 			desc:     true,
 			frame:    followingFrame,
+			rowIdx:   6,
+			wantRows: []int{3, 4, 6, 7},
+		},
+		{
+			name:     "desc unbounded preceding excludes later civil rows before the fold",
+			desc:     true,
+			frame:    unboundedPrecedingFrame,
+			rowIdx:   3,
+			wantRows: []int{0, 1, 2, 3, 5, 6},
+		},
+		{
+			name:     "desc unbounded following excludes earlier civil rows after the fold",
+			desc:     true,
+			frame:    unboundedFollowingFrame,
 			rowIdx:   6,
 			wantRows: []int{3, 4, 6, 7},
 		},

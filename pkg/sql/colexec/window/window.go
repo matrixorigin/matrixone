@@ -1318,22 +1318,50 @@ func (ctr *container) timestampRangeSelection(
 		return nil, nil
 	}
 
-	startBoundary, hasStart, err := timestampRangeCivilBoundary(loc, vec, rowIdx, frame.Start, ctr.rangeDescending())
-	if err != nil || !hasStart {
+	desc := ctr.rangeDescending()
+	startBoundary, hasStart, err := timestampRangeCivilBoundary(loc, vec, rowIdx, frame.Start, desc)
+	if err != nil {
 		return nil, err
 	}
-	endBoundary, hasEnd, err := timestampRangeCivilBoundary(loc, vec, rowIdx, frame.End, ctr.rangeDescending())
-	if err != nil || !hasEnd {
+	endBoundary, hasEnd, err := timestampRangeCivilBoundary(loc, vec, rowIdx, frame.End, desc)
+	if err != nil {
 		return nil, err
-	}
-	low, high := startBoundary, endBoundary
-	if low > high {
-		low, high = high, low
 	}
 
-	// A valid conversion is a proof that civil membership remains one instant
-	// interval, so the existing binary searches are both correct and faster.
-	if _, _, monotonic := types.DatetimeRangeToTimestampRange(low, high, loc); monotonic {
+	// RANGE bounds are expressed in ORDER BY direction. Convert finite bounds
+	// into the natural civil-time order used for membership; an unbounded side
+	// remains open. This matters at a fall-back fold, where (for example)
+	// UNBOUNDED PRECEDING ... CURRENT ROW is not necessarily an instant prefix.
+	var low, high types.Datetime
+	hasLow, hasHigh := false, false
+	if hasStart && hasEnd {
+		low, high = startBoundary, endBoundary
+		if low > high {
+			low, high = high, low
+		}
+		hasLow, hasHigh = true, true
+	} else if hasStart {
+		if desc {
+			high, hasHigh = startBoundary, true
+		} else {
+			low, hasLow = startBoundary, true
+		}
+	} else if hasEnd {
+		if desc {
+			low, hasLow = endBoundary, true
+		} else {
+			high, hasHigh = endBoundary, true
+		}
+	}
+
+	// A finite, valid conversion is a proof that civil membership remains one
+	// instant interval, so the existing binary searches are both correct and faster.
+	if hasLow && hasHigh {
+		if _, _, monotonic := types.DatetimeRangeToTimestampRange(low, high, loc); monotonic {
+			return nil, nil
+		}
+	}
+	if !hasLow && !hasHigh {
 		return nil, nil
 	}
 
@@ -1344,7 +1372,7 @@ func (ctr *container) timestampRangeSelection(
 			continue
 		}
 		civil := col[i].ToDatetime(loc)
-		if low <= civil && civil <= high {
+		if (!hasLow || low <= civil) && (!hasHigh || civil <= high) {
 			rows = append(rows, i)
 		}
 	}
