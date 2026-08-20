@@ -50,6 +50,7 @@ drop database if exists db_snapshot_udf;
 drop database if exists db_snapshot_udf_copy;
 drop snapshot if exists sp_snapshot_udf;
 create database db_snapshot_udf;
+use db_snapshot_udf;
 create table db_snapshot_udf.t(a int);
 insert into db_snapshot_udf.t values (7);
 create function db_snapshot_udf.f_snapshot_answer() returns int language sql as 'select count(*) from db_snapshot_udf.t';
