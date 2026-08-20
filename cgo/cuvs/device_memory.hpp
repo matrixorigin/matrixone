@@ -167,16 +167,27 @@ public:
         int prev_device = device_id;
         cudaGetDevice(&prev_device);
         const bool rebind = (prev_device != device_id);
-        if (rebind && cudaSetDevice(device_id) != cudaSuccess) {
-            throw std::runtime_error(std::string(who) + ": cannot select device " +
-                                     std::to_string(device_id) + " to admit " +
-                                     std::to_string(need_bytes) + " bytes");
+        if (rebind) {
+            const cudaError_t serr = cudaSetDevice(device_id);
+            if (serr != cudaSuccess) {
+                // CONSUME the error before leaving. A failed CUDA call latches its
+                // status in the context, and the next cudaPeekAtLastError() —
+                // anywhere, in unrelated code — reports it. Throwing without
+                // clearing turns "this reservation asked for a device that does
+                // not exist" into a spurious failure in whatever runs next.
+                cudaGetLastError();
+                throw std::runtime_error(std::string(who) + ": cannot select device " +
+                                         std::to_string(device_id) + " to admit " +
+                                         std::to_string(need_bytes) +
+                                         " bytes: " + cudaGetErrorString(serr));
+            }
         }
 
         size_t free_bytes = 0, total_bytes = 0;
         cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
         if (rebind) cudaSetDevice(prev_device);
         if (err != cudaSuccess) {
+            cudaGetLastError();  // consume, as above
             // Same fail-loud policy as rows_fitting_gpu_mem: an allocation that
             // OOMs at first search is worse than one that never happens.
             throw std::runtime_error(std::string(who) + ": cudaMemGetInfo failed while admitting " +

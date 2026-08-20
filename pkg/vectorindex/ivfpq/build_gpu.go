@@ -132,10 +132,22 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 		if cerr != nil {
 			return nil, cerr
 		}
+		// Safety net for the paths the explicit release below cannot cover: a panic
+		// inside Build(), or any early return a later edit inserts between here and
+		// it. A leaked claim is not self-correcting -- it shrinks this device's
+		// budget for the life of the process and refuses every later load.
+		defer func() {
+			if claim != nil {
+				claim.Release()
+				claim = nil
+			}
+		}()
 		err := b.current.Build()
-		// Released once the memory is resident, so the next admission sees it
-		// through cudaMemGetInfo rather than through the ledger.
+		// Release promptly on the normal path, so the next admission sees the memory
+		// through cudaMemGetInfo rather than through the ledger. Clearing claim makes
+		// the deferred release a no-op; Release is idempotent regardless.
 		claim.Release()
+		claim = nil
 		if err != nil {
 			return nil, err
 		}
@@ -223,10 +235,22 @@ func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 		if cerr != nil {
 			return nil, cerr
 		}
+		// Safety net for the paths the explicit release below cannot cover: a panic
+		// inside Build(), or any early return a later edit inserts between here and
+		// it. A leaked claim is not self-correcting -- it shrinks this device's
+		// budget for the life of the process and refuses every later load.
+		defer func() {
+			if claim != nil {
+				claim.Release()
+				claim = nil
+			}
+		}()
 		err := b.current.Build()
-		// Released once the memory is resident, so the next admission sees it
-		// through cudaMemGetInfo rather than through the ledger.
+		// Release promptly on the normal path, so the next admission sees the memory
+		// through cudaMemGetInfo rather than through the ledger. Clearing claim makes
+		// the deferred release a no-op; Release is idempotent regardless.
 		claim.Release()
+		claim = nil
 		if err != nil {
 			return nil, err
 		}

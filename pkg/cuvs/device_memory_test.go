@@ -65,9 +65,12 @@ func TestReserveBuildMemoryRollsBackOnRefusal(t *testing.T) {
 	// one device refuses: a partially reserved build holds budget it can never
 	// use, and nothing would ever release it.
 	requireLedgerEmpty(t, "start")
+	// Both entries name device 0: an impossible SIZE forces the rollback without
+	// depending on how many GPUs the host has. Naming a nonexistent device would
+	// make this pass or fail by machine, and would leave cudaErrorInvalidDevice
+	// latched in the CUDA context for whatever test runs next.
 	_, err := ReserveBuildMemory(map[int]uint64{
-		0: 64 << 20,
-		1: 1 << 62, // impossible: forces the rollback path
+		0: 1 << 62, // impossible: forces the rollback path
 	})
 	require.Error(t, err)
 	requireLedgerEmpty(t, "rolled-back multi-device reservation")
