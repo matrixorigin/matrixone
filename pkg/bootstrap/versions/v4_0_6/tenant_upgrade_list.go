@@ -32,6 +32,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addForeignKeyMetadataColumn("on_update_origin", "varchar(64) not null default 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "on_delete_origin"),
 	upgradeInformationSchemaKeyColumnUsage(),
 	upgradeInformationSchemaReferentialConstraints(),
+	ensureInformationSchemaCharacterSetsTable(),
 	populateInformationSchemaCharacterSets(),
 	upgradeInformationSchemaColumns(),
 	upgradeInformationSchemaCheckConstraints(),
@@ -73,6 +74,18 @@ func addForeignKeyMetadataColumn(column, definition, after string) versions.Upgr
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			columnInfo, err := versions.CheckTableColumn(txn, accountID, catalog.MO_CATALOG, catalog.MOForeignKeys, column)
 			return columnInfo.IsExits, err
+		},
+	}
+}
+
+func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "CHARACTER_SETS",
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    sysview.InformationSchemaCharacterSetsDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "CHARACTER_SETS")
 		},
 	}
 }
