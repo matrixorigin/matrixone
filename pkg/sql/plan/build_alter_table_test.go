@@ -601,6 +601,78 @@ func TestIndexNameLookupIsCaseInsensitiveAndPreservesCatalogCase(t *testing.T) {
 	})
 }
 
+func TestUnicodeIndexNamesUseSameCreationAndLookupContract(t *testing.T) {
+	newMock := func(names ...string) *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		for i, name := range names {
+			part := "a"
+			if i > 0 {
+				part = "b"
+			}
+			mock.ctxt.tables["t1"].Indexes = append(mock.ctxt.tables["t1"].Indexes, &plan.IndexDef{
+				IndexName:  name,
+				Parts:      []string{part},
+				IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+				TableExist: true,
+			})
+		}
+		return mock
+	}
+
+	t.Run("inline create preserves distinct final sigma", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+			"CREATE TABLE unicode_idx (a INT, b INT, KEY `Σ` (a), KEY `ς` (b))")
+		require.NoError(t, err)
+		indexes := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()
+		require.Len(t, indexes, 2)
+		require.Equal(t, "Σ", indexes[0].IndexName)
+		require.Equal(t, "ς", indexes[1].IndexName)
+	})
+
+	t.Run("standalone create follows inline duplicate rules", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock("Σ"), t,
+			"CREATE INDEX `ς` ON t1(b)")
+		require.NoError(t, err)
+		indexes := logicPlan.GetDdl().GetCreateIndex().GetIndex().GetTableDef().GetIndexes()
+		require.Len(t, indexes, 1)
+		require.Equal(t, "ς", indexes[0].IndexName)
+
+		_, err = buildSingleStmt(newMock("Σ"), t,
+			"CREATE INDEX `σ` ON t1(b)")
+		require.Error(t, err)
+	})
+
+	t.Run("standalone drop resolves unique catalog object", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock("Σ", "ς"), t,
+			"DROP INDEX `ς` ON t1")
+		require.NoError(t, err)
+		require.Equal(t, "ς", logicPlan.GetDdl().GetDropIndex().IndexName)
+
+		logicPlan, err = buildSingleStmt(newMock("Σ", "ς"), t,
+			"DROP INDEX `σ` ON t1")
+		require.NoError(t, err)
+		require.Equal(t, "Σ", logicPlan.GetDdl().GetDropIndex().IndexName)
+	})
+
+	t.Run("sequential alter keeps distinct state", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock("Σ", "ς"), t,
+			"ALTER TABLE t1 DROP INDEX `ς`, DROP INDEX `Σ`")
+		require.NoError(t, err)
+		actions := logicPlan.GetDdl().GetAlterTable().GetActions()
+		require.Len(t, actions, 2)
+		require.Equal(t, "ς", actions[0].GetDrop().GetName())
+		require.Equal(t, "Σ", actions[1].GetDrop().GetName())
+	})
+
+	t.Run("alter visibility resolves unique catalog object", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock("Σ", "ς"), t,
+			"ALTER TABLE t1 ALTER INDEX `ς` INVISIBLE")
+		require.NoError(t, err)
+		require.Equal(t, "ς",
+			logicPlan.GetDdl().GetAlterTable().GetActions()[0].GetAlterIndex().GetIndexName())
+	})
+}
+
 func TestAlterTableInplaceUsesOrderedIndexState(t *testing.T) {
 	newMock := func() *MockOptimizer {
 		mock := NewMockOptimizer(false)

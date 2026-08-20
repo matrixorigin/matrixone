@@ -4712,10 +4712,8 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// check index
 	indexName := string(stmt.Name)
-	for _, def := range tableDef.Indexes {
-		if strings.EqualFold(def.IndexName, indexName) {
-			return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
-		}
+	if _, found := resolveIndexName(tableDef.Indexes, indexName); found {
+		return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
 	}
 	// build index
 	var ftIdx *tree.FullTextIndex
@@ -5265,7 +5263,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	currentTableDef := DeepCopyTableDef(tableDef, true)
 	currentIndexNames := make(map[string]bool, len(currentTableDef.Indexes))
 	for _, indexDef := range currentTableDef.Indexes {
-		currentIndexNames[strings.ToLower(indexDef.IndexName)] = true
+		currentIndexNames[indexNameKey(indexDef.IndexName)] = true
 	}
 	currentForeignKeyNames := make(map[string]bool, len(currentTableDef.Fkeys))
 	for _, foreignKey := range currentTableDef.Fkeys {
@@ -5301,13 +5299,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					name_not_found = false
 				}
 				if !name_not_found {
-					delete(currentIndexNames, strings.ToLower(constraintName))
-					droppedIndexNames[strings.ToLower(constraintName)] = true
+					delete(currentIndexNames, indexNameKey(constraintName))
+					droppedIndexNames[indexNameKey(constraintName)] = true
 					currentTableDef.Indexes = RemoveIf(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
 						return indexDef.IndexName == constraintName
 					})
 				} else {
-					sequentiallyDropped = droppedIndexNames[strings.ToLower(constraintName)]
+					sequentiallyDropped = droppedIndexNames[indexNameKey(constraintName)]
 				}
 			case tree.AlterTableDropForeignKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY

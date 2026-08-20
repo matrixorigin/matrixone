@@ -197,7 +197,7 @@ func reconcileIndexVisibility(
 		}
 		for i, name := range names {
 			value := visible[i] != 0
-			key := strings.ToLower(name)
+			key := indexNameKey(name)
 			if previous, ok := visibility[key]; ok && previous != value {
 				readErr = moerr.NewInternalErrorf(ctx.GetContext(),
 					"inconsistent visibility metadata for index '%s'", name)
@@ -213,7 +213,7 @@ func reconcileIndexVisibility(
 
 	resolvedVisibility := make([]bool, len(tableDef.Indexes))
 	for i, indexDef := range tableDef.Indexes {
-		visible, ok := visibility[strings.ToLower(indexDef.IndexName)]
+		visible, ok := visibility[indexNameKey(indexDef.IndexName)]
 		if !ok {
 			return moerr.NewInternalErrorf(ctx.GetContext(),
 				"missing visibility metadata for index %q on table %d", indexDef.IndexName, tableID)

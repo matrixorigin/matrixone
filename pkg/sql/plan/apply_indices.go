@@ -4635,7 +4635,7 @@ func (builder *QueryBuilder) indexAccessUsesIndex(nodeID int32, indexName string
 		return false
 	}
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		return node.IndexScanInfo.IsIndexScan && strings.EqualFold(node.IndexScanInfo.IndexName, indexName)
+		return node.IndexScanInfo.IsIndexScan && indexNamesEqual(node.IndexScanInfo.IndexName, indexName)
 	}
 	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INDEX {
 		return false

@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,12 +26,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-// resolveIndexName matches index identifiers using MySQL's case-insensitive
-// lookup semantics while returning the catalog spelling for later execution
-// and metadata updates.
+// indexNameKey defines the comparison contract shared by index creation,
+// duplicate detection, lookup, and sequential ALTER state. It deliberately
+// uses the parser's identifier normalization instead of strings.EqualFold:
+// Unicode simple folding can equate distinct MySQL identifiers such as Greek
+// sigma (Σ) and final sigma (ς).
+func indexNameKey(name string) string {
+	return tree.NewCStr(name, 1).Compare()
+}
+
+func indexNamesEqual(left, right string) bool {
+	return indexNameKey(left) == indexNameKey(right)
+}
+
+// resolveIndexName matches index identifiers while returning the catalog
+// spelling for later execution and metadata updates.
 func resolveIndexName(indexes []*planpb.IndexDef, name string) (string, bool) {
+	key := indexNameKey(name)
 	for _, index := range indexes {
-		if index != nil && strings.EqualFold(index.IndexName, name) {
+		if index != nil && indexNameKey(index.IndexName) == key {
 			return index.IndexName, true
 		}
 	}
@@ -70,14 +82,14 @@ func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign boo
 	if name == "" {
 		return nil
 	}
-	nameLower := strings.ToLower(name)
-	if namesMap[nameLower] {
+	nameKey := indexNameKey(name)
+	if namesMap[nameKey] {
 		if foreign {
 			return moerr.NewInvalidInputf(ctx, "Duplicate foreign key constraint name '%s'", name)
 		}
 		return moerr.NewDuplicateKey(ctx, name)
 	}
-	namesMap[nameLower] = true
+	namesMap[nameKey] = true
 	return nil
 }
 
@@ -87,17 +99,17 @@ func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueI
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
+		if indexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
-		for namesMap[constrName] {
+		for namesMap[indexNameKey(constrName)] {
 			// loop forever until we find constrName that haven't been used.
 			constrName = fmt.Sprintf("%s_%d", colName, i)
 			i++
 		}
 		indexConstr.Name = constrName
-		namesMap[constrName] = true
+		namesMap[indexNameKey(constrName)] = true
 	}
 }
 
@@ -107,17 +119,17 @@ func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
+		if indexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
-		for namesMap[constrName] {
+		for namesMap[indexNameKey(constrName)] {
 			//  loop forever until we find constrName that haven't been used.
 			constrName = fmt.Sprintf("%s_%d", colName, i)
 			i++
 		}
 		indexConstr.Name = constrName
-		namesMap[constrName] = true
+		namesMap[indexNameKey(constrName)] = true
 	}
 }
 
@@ -127,17 +139,17 @@ func setEmptyFullTextIndexName(namesMap map[string]bool, indexConstr *tree.FullT
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if strings.EqualFold(constrName, "PRIMARY") {
+		if indexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
-		for namesMap[constrName] {
+		for namesMap[indexNameKey(constrName)] {
 			//  loop forever until we find constrName that haven't been used.
 			constrName = fmt.Sprintf("%s_%d", colName, i)
 			i++
 		}
 		indexConstr.Name = constrName
-		namesMap[constrName] = true
+		namesMap[indexNameKey(constrName)] = true
 	}
 }
 
