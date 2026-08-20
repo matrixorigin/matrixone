@@ -1775,7 +1775,7 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				fol, err := doDateAdd(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
 					}
 					return left, err
 				}
@@ -1784,7 +1784,7 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return left, err
 				}
@@ -1806,7 +1806,7 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
 					}
 					return left, err
 				}
@@ -1815,7 +1815,7 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return left, err
 				}
@@ -1837,7 +1837,7 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				fol, err := doTimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
 					}
 					return left, err
 				}
@@ -1846,7 +1846,7 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				fol, err := doTimeSub(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return left, err
 				}
@@ -1868,7 +1868,7 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
 					}
 					return left, err
 				}
@@ -1877,7 +1877,7 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return left, err
 				}
@@ -2251,7 +2251,7 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return right, err
 				}
@@ -2260,7 +2260,7 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				fol, err := doDateAdd(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
 					}
 					return right, err
 				}
@@ -2291,7 +2291,7 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return right, err
 				}
@@ -2300,7 +2300,7 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
 					}
 					return right, err
 				}
@@ -2322,7 +2322,7 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				fol, err := doTimeSub(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return right, err
 				}
@@ -2331,7 +2331,7 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				fol, err := doTimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
 					}
 					return right, err
 				}
@@ -2353,7 +2353,7 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return right, err
 				}
@@ -2362,7 +2362,7 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
-						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+						return temporalRangeIntervalOverflowBoundary(start, end, true, diff, desc), nil
 					}
 					return right, err
 				}
@@ -2386,6 +2386,17 @@ func temporalRangeOverflowBoundary(start, end int, aboveDomain, desc bool) int {
 		return end
 	}
 	return start
+}
+
+// temporalRangeIntervalOverflowBoundary derives the side of a temporal-domain
+// overflow from the effective signed arithmetic. A negative interval reverses
+// the operation, so add/sub alone cannot identify the insertion point.
+func temporalRangeIntervalOverflowBoundary(start, end int, add bool, diff int64, desc bool) int {
+	aboveDomain := add
+	if diff < 0 {
+		aboveDomain = !aboveDomain
+	}
+	return temporalRangeOverflowBoundary(start, end, aboveDomain, desc)
 }
 
 // checkedMicrosecondArithmetic performs signed microsecond arithmetic without

@@ -2928,6 +2928,64 @@ func TestSearchLeftRightTemporalRangeOverflow(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		t.Run(tt.name+"_negative_add_below_domain_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumAsc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.belowDomainBy, tt.belowDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+
+		t.Run(tt.name+"_negative_sub_above_domain_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.aboveDomainBy, tt.aboveDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_negative_add_below_domain_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumDesc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.belowDomainBy, tt.belowDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_negative_sub_above_domain_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.descending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.aboveDomainBy, tt.aboveDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+	}
+
+	for _, tt := range tests {
 		t.Run(tt.name+"_invalid_interval_magnitude", func(t *testing.T) {
 			vec := tt.newVector(tt.ascending)
 			require.NotNil(t, vec)
@@ -2935,6 +2993,8 @@ func TestSearchLeftRightTemporalRangeOverflow(t *testing.T) {
 
 			_, err := searchRight(0, vec.Length(), 1, vec, intervalExpr(math.MaxInt64, tt.invalidIntervalUnit), false, false)
 			require.Error(t, err, "an invalid interval magnitude must not be treated as a domain boundary")
+			_, err = searchRight(0, vec.Length(), 1, vec, intervalExpr(math.MinInt64, tt.invalidIntervalUnit), false, false)
+			require.Error(t, err, "an invalid negative interval magnitude must not be treated as a domain boundary")
 		})
 	}
 
