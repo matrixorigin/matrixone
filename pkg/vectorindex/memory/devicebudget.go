@@ -26,8 +26,7 @@ import (
 // times ([0,0,0,0]). Anything that QUERIES hardware must iterate this rather
 // than the raw list, or it asks the same card N times and reports the answer as
 // though N cards had been surveyed. (Anything that ATTRIBUTES bytes wants the
-// raw list, so the aliased shards accumulate onto the one physical card --
-// see DeviceLoadBytes.)
+// raw list, so the aliased shards accumulate onto the one physical card.)
 func DeviceDistinct(devices []int) []int {
 	if len(devices) == 0 {
 		return nil

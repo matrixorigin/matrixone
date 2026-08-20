@@ -27,6 +27,7 @@
 #include "cuvs_types.h"
 #include "quantize.hpp"
 #include "helper.h"
+#include "device_memory.hpp"
 #include "dynamic_batching.hpp"
 
 #include <cuda_fp16.h>
@@ -1679,6 +1680,12 @@ public:
         auto task = [&](raft_handle_wrapper_t& handle) -> std::any {
             auto res = handle.get_raft_resources();
             auto local_idx = std::make_unique<ivf_pq_index>(*res);
+            // Claim the VRAM this load is about to materialise so a concurrent
+            // build or load on this device cannot spend the same free bytes. The
+            // claim holds no lock; it is dropped at scope exit, by which point the
+            // memory is resident and cudaMemGetInfo accounts for it.
+            auto load_claim = matrixone::device_memory_governor::reserve(
+                matrixone::path_bytes(filename), "ivf_pq::load");
             cuvs::neighbors::ivf_pq::deserialize(*res, filename, local_idx.get());
             // Drain `res`'s stream so any H2D copy committed by deserialize is
             // visible before any search thread reads the loaded index. Without
@@ -1845,6 +1852,12 @@ public:
             auto task = [&, full_path](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                // Claim the VRAM this load is about to materialise so a concurrent
+                // build or load on this device cannot spend the same free bytes. The
+                // claim holds no lock; it is dropped at scope exit, by which point the
+                // memory is resident and cudaMemGetInfo accounts for it.
+                auto load_claim = matrixone::device_memory_governor::reserve(
+                    matrixone::path_bytes(full_path), "ivf_pq::load");
                 cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
                 // Drain `res`'s stream so deserialize's H2D copy is committed
                 // before any search thread reads the loaded index. See the
@@ -1869,6 +1882,12 @@ public:
                 [&, full_path](raft_handle_wrapper_t& handle) -> std::any {
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                    // Claim the VRAM this load is about to materialise so a concurrent
+                    // build or load on this device cannot spend the same free bytes. The
+                    // claim holds no lock; it is dropped at scope exit, by which point the
+                    // memory is resident and cudaMemGetInfo accounts for it.
+                    auto load_claim = matrixone::device_memory_governor::reserve(
+                        matrixone::path_bytes(full_path), "ivf_pq::load");
                     cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
@@ -1894,6 +1913,12 @@ public:
                     std::string shard_path = dir + "/" + shard_files[rank];
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                    // Claim the VRAM this load is about to materialise so a concurrent
+                    // build or load on this device cannot spend the same free bytes. The
+                    // claim holds no lock; it is dropped at scope exit, by which point the
+                    // memory is resident and cudaMemGetInfo accounts for it.
+                    auto load_claim = matrixone::device_memory_governor::reserve(
+                        matrixone::path_bytes(shard_path), "ivf_pq::load");
                     cuvs::neighbors::ivf_pq::deserialize(*res, shard_path, local_idx.get());
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);

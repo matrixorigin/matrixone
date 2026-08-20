@@ -485,7 +485,8 @@ func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error)
 // straight from LoadMetadata carries no Path yet; checking up front opened "".
 // Sub-indexes also load sequentially, so re-sampling free VRAM per sub-index
 // accounts for the ones already resident more precisely than one up-front sum,
-// and DeviceReserveLoad holds each claim across the not-yet-resident window.
+// and cgo/cuvs/device_memory.hpp claims the bytes across the window where an
+// admitted load is not resident yet.
 func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q]) ([]*CagraModel[B, Q], error) {
 	for _, idx := range indexes {
 		idx.Devices = s.Devices

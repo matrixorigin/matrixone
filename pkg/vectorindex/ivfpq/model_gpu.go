@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
-	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -591,33 +590,11 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 		idx.Devices = resolved
 	}
 
-	// VRAM admission happens HERE rather than in a caller pre-pass, because it
-	// needs the shard topology from the tar manifest and the tar only exists
-	// locally after the download above. Admitting earlier meant opening idx.Path
-	// while it was still "" -- LoadMetadata builds models with Id/Checksum/
-	// Timestamp/FileSize but no Path -- so ResolveDevicesForTarLoad failed on
-	// os.Open("") and every SHARDED cold load died before its first query.
-	//
-	// Per-sub-index rather than one aggregate pre-check: sub-indexes load
-	// sequentially, so re-sampling free VRAM for each one already accounts for
-	// the ones loaded ahead of it, and the reservation covers the window where
-	// an admitted load is not resident yet. This still runs before
-	// NewGpuIvfPqEmpty, so no device memory has been committed at this point.
-	releaseVRAM, aerr := vimemory.DeviceReserveLoad(
-		vimemory.DeviceLoadBytes(
-			vectorindex.DistributionMode(idxcfg.CuvsIvfpq.DistributionMode),
-			idx.Devices, shardCount, uint64(idx.FileSize)),
-		func(d int) (uint64, error) {
-			_, freeBytes, ferr := cuvs.RowsFittingFreeMem(d, 1)
-			return freeBytes, ferr
-		}, "IvfpqModel.LoadIndex")
-	if aerr != nil {
-		return aerr
-	}
-	// Released on every path out: once LoadIndex returns, the bytes are either
-	// really resident (so the next free-VRAM sample counts them) or were freed
-	// by the failure path.
-	defer releaseVRAM()
+	// VRAM admission for this load lives in C++ now: cgo/cuvs/device_memory.hpp
+	// claims the bytes each deserialize is about to materialise, in one ledger
+	// that C++ builds can also join. A Go-side ledger could never see a build,
+	// whose decided-but-unallocated window spans minutes. It also needs no shard
+	// attribution: each shard's deserialize claims its own file on its own device.
 
 	cuvsMetric, bp, mode, err := idx.ivfpqConfig()
 	if err != nil {

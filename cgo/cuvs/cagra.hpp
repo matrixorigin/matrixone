@@ -27,6 +27,7 @@
 #include "cuvs_types.h"
 #include "quantize.hpp"
 #include "helper.h"
+#include "device_memory.hpp"
 #include "dynamic_batching.hpp"
 
 #include <cuda_fp16.h>
@@ -1572,6 +1573,12 @@ public:
             // freed memory. We stash it in dataset_device_ptr_ /
             // replicated_datasets_ so it lives as long as the index does.
             std::unique_ptr<padded_dataset_t> out_dataset;
+            // Claim the VRAM this load is about to materialise so a concurrent
+            // build or load on this device cannot spend the same free bytes. The
+            // claim holds no lock; it is dropped at scope exit, by which point the
+            // memory is resident and cudaMemGetInfo accounts for it.
+            auto load_claim = matrixone::device_memory_governor::reserve(
+                matrixone::path_bytes(filename), "cagra::load");
             cuvs::neighbors::cagra::deserialize(*res, filename, local_idx.get(), &out_dataset);
             // Drain `res`'s stream so the dataset H2D copy committed by
             // deserialize is visible before any search thread reads it.
@@ -1732,6 +1739,12 @@ public:
                 // See load() for why we capture out_dataset — keeps the view
                 // in local_idx->dataset() alive for the index's lifetime.
                 std::unique_ptr<padded_dataset_t> out_dataset;
+                // Claim the VRAM this load is about to materialise so a concurrent
+                // build or load on this device cannot spend the same free bytes. The
+                // claim holds no lock; it is dropped at scope exit, by which point the
+                // memory is resident and cudaMemGetInfo accounts for it.
+                auto load_claim = matrixone::device_memory_governor::reserve(
+                    matrixone::path_bytes(full_path), "cagra::load");
                 cuvs::neighbors::cagra::deserialize(*res, full_path, local_idx.get(), &out_dataset);
                 // cuVS' cagra::deserialize stages the dataset host→device on
                 // `res`'s stream and returns BEFORE the H2D copy is committed.
@@ -1762,6 +1775,12 @@ public:
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<cagra_index>(*res);
                     std::unique_ptr<padded_dataset_t> out_dataset;
+                    // Claim the VRAM this load is about to materialise so a concurrent
+                    // build or load on this device cannot spend the same free bytes. The
+                    // claim holds no lock; it is dropped at scope exit, by which point the
+                    // memory is resident and cudaMemGetInfo accounts for it.
+                    auto load_claim = matrixone::device_memory_governor::reserve(
+                        matrixone::path_bytes(full_path), "cagra::load");
                     cuvs::neighbors::cagra::deserialize(*res, full_path, local_idx.get(), &out_dataset);
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
@@ -1784,6 +1803,12 @@ public:
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<cagra_index>(*res);
                     std::unique_ptr<padded_dataset_t> out_dataset;
+                    // Claim the VRAM this load is about to materialise so a concurrent
+                    // build or load on this device cannot spend the same free bytes. The
+                    // claim holds no lock; it is dropped at scope exit, by which point the
+                    // memory is resident and cudaMemGetInfo accounts for it.
+                    auto load_claim = matrixone::device_memory_governor::reserve(
+                        matrixone::path_bytes(shard_path), "cagra::load");
                     cuvs::neighbors::cagra::deserialize(*res, shard_path, local_idx.get(), &out_dataset);
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
