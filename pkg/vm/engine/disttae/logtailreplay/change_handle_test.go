@@ -42,6 +42,55 @@ import (
 	"github.com/tidwall/btree"
 )
 
+func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	newData := func(values []int32, timestamps []int64) *batch.Batch {
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType()) // added FIRST
+		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType()) // logical primary key
+		bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		for i, ts := range timestamps {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], values[i], false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(1), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[2], types.BuildTS(ts, 0), false, mp))
+		}
+		bat.SetRowCount(len(timestamps))
+		return bat
+	}
+	newTombstone := func(timestamps []int64) *batch.Batch {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		for _, ts := range timestamps {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(ts, 0), false, mp))
+		}
+		bat.SetRowCount(len(timestamps))
+		return bat
+	}
+
+	t.Run("insert delete cancels with added-first layout", func(t *testing.T) {
+		data := newData([]int32{7}, []int64{10})
+		tombstone := newTombstone([]int64{20})
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.Zero(t, data.RowCount())
+		require.Zero(t, tombstone.RowCount())
+		data.Clean(mp)
+		tombstone.Clean(mp)
+	})
+
+	t.Run("update delete keeps only latest delete", func(t *testing.T) {
+		data := newData([]int32{7, 8}, []int64{10, 20})
+		tombstone := newTombstone([]int64{30})
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.Zero(t, data.RowCount())
+		require.Equal(t, 1, tombstone.RowCount())
+		data.Clean(mp)
+		tombstone.Clean(mp)
+	})
+}
+
 type peakTrackingFileService struct {
 	fileservice.FileService
 	current, readBytes, peak atomic.Int64
