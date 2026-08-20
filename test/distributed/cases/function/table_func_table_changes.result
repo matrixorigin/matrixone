@@ -314,6 +314,45 @@ change_count
 select disable_fault_injection();
 disable_fault_injection()
 1
+create table ddl_order_first (id int primary key, payload int);
+alter table ddl_order_first add column added int first;
+set @ddl_first_after = (select watermark from change_watermark() w);
+insert into ddl_order_first values (7, 1, 99);
+select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_first');
+mo_ctl(dn, flush, table_changes_db.ddl_order_first)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+set @ddl_first_until = (select watermark from change_watermark() w);
+select change_type, added, id, payload
+from table_changes('table_changes_db', 'ddl_order_first', @ddl_first_after, @ddl_first_until) c;
+change_type    added    id    payload
+insert    7    1    99
+create table ddl_order_after (id int primary key, payload int, tail int);
+alter table ddl_order_after add column added int after id;
+set @ddl_after_after = (select watermark from change_watermark() w);
+insert into ddl_order_after values (1, 7, 99, 100);
+select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_after');
+mo_ctl(dn, flush, table_changes_db.ddl_order_after)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+set @ddl_after_until = (select watermark from change_watermark() w);
+select change_type, id, added, payload, tail
+from table_changes('table_changes_db', 'ddl_order_after', @ddl_after_after, @ddl_after_until) c;
+change_type    id    added    payload    tail
+insert    1    7    99    100
+create table ddl_order_drop (id int primary key, payload int, tail int);
+alter table ddl_order_drop drop column payload;
+set @ddl_drop_after = (select watermark from change_watermark() w);
+insert into ddl_order_drop values (2, 100);
+select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_drop');
+mo_ctl(dn, flush, table_changes_db.ddl_order_drop)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+set @ddl_drop_until = (select watermark from change_watermark() w);
+select change_type, id, tail
+from table_changes('table_changes_db', 'ddl_order_drop', @ddl_drop_after, @ddl_drop_until) c;
+change_type    id    tail
+insert    2    100
+drop table ddl_order_first;
+drop table ddl_order_after;
+drop table ddl_order_drop;
 drop database table_changes_catalog_marker;
 drop database table_changes_db;
 drop account table_changes_acc;

@@ -3985,14 +3985,33 @@ type persistedBlockWindow struct {
 	seqnums       []uint16
 }
 
-func persistedColumnSeqnums(meta objectio.BlockObject) []uint16 {
-	seqnums := make([]uint16, 0, meta.GetMetaColumnCount())
-	for seqnum := uint16(0); seqnum < meta.GetMetaColumnCount(); seqnum++ {
-		if meta.ColumnMeta(seqnum).DataType() != 0 {
-			seqnums = append(seqnums, seqnum)
-		}
+type persistedColumnSeqnum struct {
+	seqnum uint16
+	idx    uint16
+}
+
+func orderPersistedColumnSeqnums(columns []persistedColumnSeqnum) []uint16 {
+	goSort.SliceStable(columns, func(i, j int) bool {
+		return columns[i].idx < columns[j].idx
+	})
+	seqnums := make([]uint16, len(columns))
+	for i, column := range columns {
+		seqnums[i] = column.seqnum
 	}
 	return seqnums
+}
+
+func persistedColumnSeqnums(meta objectio.BlockObject) []uint16 {
+	columns := make([]persistedColumnSeqnum, 0, meta.GetMetaColumnCount())
+	for seqnum := uint16(0); seqnum < meta.GetMetaColumnCount(); seqnum++ {
+		if meta.ColumnMeta(seqnum).DataType() != 0 {
+			columns = append(columns, persistedColumnSeqnum{
+				seqnum: seqnum,
+				idx:    meta.ColumnMeta(seqnum).Idx(),
+			})
+		}
+	}
+	return orderPersistedColumnSeqnums(columns)
 }
 
 func prefetchObjects(
@@ -4224,6 +4243,9 @@ func updatePersistedTombstoneBatch(
 	if bat == nil || len(bat.Vecs) <= int(objectio.TombstoneAttr_PK_SeqNum) {
 		return moerr.NewInternalErrorNoCtx("invalid persisted tombstone batch layout for collect changes")
 	}
+	if seqnums != nil && len(seqnums) != len(bat.Vecs) {
+		return moerr.NewInternalErrorNoCtx("persisted tombstone column sequence metadata mismatch")
+	}
 	physicalIndex := func(seqnum uint16) int {
 		if seqnums == nil {
 			return int(seqnum)
@@ -4383,6 +4405,9 @@ func updatePersistedDataBatch(
 ) error {
 	if bat == nil {
 		return moerr.NewInternalErrorNoCtx("updatePersistedDataBatch: nil batch")
+	}
+	if seqnums != nil && len(seqnums) != len(bat.Vecs) {
+		return moerr.NewInternalErrorNoCtx("persisted appendable column sequence metadata mismatch")
 	}
 	physicalIndex := func(seqnum uint16) int {
 		if seqnums == nil {

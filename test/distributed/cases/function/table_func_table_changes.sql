@@ -291,6 +291,39 @@ from table_changes(
 ) c;
 select disable_fault_injection();
 
+-- Persisted data must retain logical column order after ADD FIRST/AFTER and
+-- must skip dropped physical seqnums when table_changes reads a flushed object.
+create table ddl_order_first (id int primary key, payload int);
+alter table ddl_order_first add column added int first;
+set @ddl_first_after = (select watermark from change_watermark() w);
+insert into ddl_order_first values (7, 1, 99);
+select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_first');
+set @ddl_first_until = (select watermark from change_watermark() w);
+select change_type, added, id, payload
+from table_changes('table_changes_db', 'ddl_order_first', @ddl_first_after, @ddl_first_until) c;
+
+create table ddl_order_after (id int primary key, payload int, tail int);
+alter table ddl_order_after add column added int after id;
+set @ddl_after_after = (select watermark from change_watermark() w);
+insert into ddl_order_after values (1, 7, 99, 100);
+select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_after');
+set @ddl_after_until = (select watermark from change_watermark() w);
+select change_type, id, added, payload, tail
+from table_changes('table_changes_db', 'ddl_order_after', @ddl_after_after, @ddl_after_until) c;
+
+create table ddl_order_drop (id int primary key, payload int, tail int);
+alter table ddl_order_drop drop column payload;
+set @ddl_drop_after = (select watermark from change_watermark() w);
+insert into ddl_order_drop values (2, 100);
+select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_drop');
+set @ddl_drop_until = (select watermark from change_watermark() w);
+select change_type, id, tail
+from table_changes('table_changes_db', 'ddl_order_drop', @ddl_drop_after, @ddl_drop_until) c;
+
+drop table ddl_order_first;
+drop table ddl_order_after;
+drop table ddl_order_drop;
+
 drop database table_changes_catalog_marker;
 drop database table_changes_db;
 drop account table_changes_acc;
