@@ -195,6 +195,15 @@ func TestDumpCommonConfig(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestMongoDBEnableDefaultAndExplicitDisable(t *testing.T) {
+	cfg := NewConfig()
+	require.True(t, cfg.CN.Frontend.MongoDB.Enable)
+
+	require.NoError(t, parseFromString("[cn.frontend.mongodb]\nenable = false\n", cfg))
+	cfg.CN.Frontend.SetDefaultValues()
+	require.False(t, cfg.CN.Frontend.MongoDB.Enable)
+}
+
 func TestObservabilityRetiresSpansByDefault(t *testing.T) {
 	cfg := NewConfig()
 	effective := cfg.getObservabilityConfig()

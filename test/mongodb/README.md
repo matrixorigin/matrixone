@@ -11,6 +11,7 @@ Run package tests with `make test-mongodb-unit` and the complete local smoke wit
 - The indexed incremental timestamp must be declared `MONGODB_CONVERT 'try_null'`. Its BSON DateTime range is then pushed as an outward-rounded candidate and retained as an MO residual, so bounded ingestion does not pull the whole collection. A strict timestamp deliberately stays residual-only because pushdown could hide malformed source values outside the requested range.
 - Incremental bounds are `[low, high)`. `low` includes the configured overlap and `high` includes a safety lag. A cursor failure restarts from the last committed watermark.
 - MO does not yet expose an external-connection `USAGE` privilege object. Until it does, creating a MongoDB connection or a table mapping requires the account-admin role; ordinary users consume an existing mapping through normal table `SELECT` grants. Execution revalidates the tenant-scoped mapping ID/version, namespace, schema and connection generation before opening a cursor.
+- The MongoDB SQL surface is enabled by default for every account, but network access remains fail-closed: operators must configure a hostname-suffix or CIDR allowlist before any endpoint is accepted. Kubernetes is not an egress security boundary by itself; `NetworkPolicy`, CNI policy, routing controls, and cloud firewalls are defense in depth and do not replace the MO endpoint allowlists.
 
 ## Backfill, cutover and rollback
 
