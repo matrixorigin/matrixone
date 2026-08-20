@@ -5633,15 +5633,8 @@ func mysqlTimePrefixSuffixRejectsWithAttachedForExtract(clock, suffix string, at
 	if mysqlBareSignTimeSuffixBelongsToClock(candidate, token, attached) {
 		return false
 	}
-	if attached && token.trailingWhitespace && !token.allDigits &&
-		!mysqlSignedNumericTimeSuffixForExtract(token) {
-		// Attached textual punctuation (for example `:x `) terminates the
-		// already consumed H:M:S clock. Only the sign/numeric forms below are
-		// ambiguous date candidates.
-		return false
-	}
 	// MySQL's full-DATETIME attempt is length based. Numeric tokens followed by
-	// whitespace are consumed by the TIME scanner; other tokens remain part of
+	// whitespace are consumed by the TIME scanner. Other tokens remain part of
 	// the complete candidate and are rejected once that boundary is reached.
 	if token.allDigits && token.trailingWhitespace {
 		return false
