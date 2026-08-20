@@ -993,13 +993,17 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeSpecialized := false
 	if execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(cwft.paramVals) > 0 && executionPlan != nil &&
 		(executionPlan.GetQuery() != nil || executionPlan.GetDdl() != nil) {
-		runtimePlan, err := plan2.FillValuesOfParamsInPlan(reqCtx, executionPlan, cwft.paramVals)
+		runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
+			reqCtx, executionPlan, cwft.paramVals)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		if runtimePlan != nil {
+		// DDL plans still need their parameter literals materialized even when
+		// no overload/result-domain specialization was required.  Query plans
+		// can stay on the cached parameterized plan in that case.
+		if runtimePlan != nil && (specialized || executionPlan.GetDdl() != nil) {
 			executionPlan = runtimePlan
-			runtimeSpecialized = true
+			runtimeSpecialized = specialized
 			columns := getPreparedResultColumnsFor(
 				prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes))
 			resper := execCtx.resper
@@ -1188,15 +1192,17 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 				paramValue.RuntimeType = types.T_bool.ToType()
 				paramValue.HasRuntimeType = true
 			} else if runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, raw); ok {
-				// Text-typed protocol values keep the cached TEXT/implicit-cast path.
-				// A TEXT runtime marker would otherwise enable overload rebinding for
-				// every string predicate in a mixed-parameter statement.
 				if runtimeType.Oid != types.T_text {
 					paramValue.RuntimeType = runtimeType
 					paramValue.HasRuntimeType = true
 				}
 			}
 		}
+		// COM_STMT_EXECUTE values are binary-protocol values even when their
+		// declared MySQL type is VAR_STRING. Keep this provenance separate from
+		// RuntimeType so text values can safely participate in numeric overload
+		// inference without changing direct string result metadata.
+		paramValue.IsBinaryProtocol = true
 		values[i] = paramValue
 	}
 	return values, nil

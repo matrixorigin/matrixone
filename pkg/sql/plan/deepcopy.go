@@ -187,6 +187,13 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	return newCtx
 }
 
+func DeepCopyPostDmlCtx(ctx *plan.PostDmlCtx) *plan.PostDmlCtx {
+	if ctx == nil {
+		return nil
+	}
+	return proto.Clone(ctx).(*plan.PostDmlCtx)
+}
+
 func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 	if target == nil {
 		return nil
@@ -273,12 +280,14 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		ClusterTable:           DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:              DeepCopyInsertCtx(node.InsertCtx),
 		NotCacheable:           node.NotCacheable,
-		SourceStep:             node.SourceStep,
+		SourceStep:             slices.Clone(node.SourceStep),
 		PreInsertCtx:           DeepCopyPreInsertCtx(node.PreInsertCtx),
 		PreInsertUkCtx:         DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
+		PreInsertSkCtx:         DeepCopyPreInsertUkCtx(node.PreInsertSkCtx),
 		LockTargets:            make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:            DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:                  node.IsEnd,
+		RecursiveSink:          node.RecursiveSink,
 		ExternScan:             deepCopyExternScan(node.ExternScan),
 		SampleFunc:             DeepCopySampleFuncSpec(node.SampleFunc),
 		OnUpdateExprs:          DeepCopyExprList(node.OnUpdateExprs),
@@ -290,6 +299,13 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		OriginViews:            slices.Clone(node.OriginViews),
 		DirectView:             node.DirectView,
 		RankOption:             DeepCopyRankOption(node.RankOption),
+		WindowIdx:              node.WindowIdx,
+		ScanSnapshot:           DeepCopySnapshot(node.ScanSnapshot),
+		RecursiveCte:           node.RecursiveCte,
+		ApplyType:              node.ApplyType,
+		PostDmlCtx:             DeepCopyPostDmlCtx(node.PostDmlCtx),
+		OnDuplicateAction:      node.OnDuplicateAction,
+		RollupFilter:           node.RollupFilter,
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
 		FilterIsBarrier:        node.FilterIsBarrier,
 		PartitionByCount:       node.PartitionByCount,
@@ -699,12 +715,22 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 }
 
 func DeepCopyQuery(qry *plan.Query) *plan.Query {
+	backgroundQueries := make([]*plan.Query, len(qry.BackgroundQueries))
+	for idx, query := range qry.BackgroundQueries {
+		if query != nil {
+			backgroundQueries[idx] = DeepCopyQuery(query)
+		}
+	}
 	newQry := &plan.Query{
 		StmtType:            qry.StmtType,
-		Steps:               qry.Steps,
+		Steps:               slices.Clone(qry.Steps),
 		Nodes:               make([]*plan.Node, len(qry.Nodes)),
 		Params:              DeepCopyExprList(qry.Params),
-		Headings:            qry.Headings,
+		Headings:            slices.Clone(qry.Headings),
+		LoadTag:             qry.LoadTag,
+		LoadWriteS3:         qry.LoadWriteS3,
+		BackgroundQueries:   backgroundQueries,
+		MaxDop:              qry.MaxDop,
 		HasForeignKeyAction: qry.HasForeignKeyAction,
 		HasReturning:        qry.HasReturning,
 		ReturningStep:       qry.ReturningStep,

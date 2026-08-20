@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -238,6 +239,82 @@ func TestDeepCopyNodePreservesJoinMessages(t *testing.T) {
 	cloned.RecvMsgList[0].MsgType = 4
 	require.Equal(t, int32(17), source.SendMsgList[0].MsgTag)
 	require.Equal(t, int32(2), source.RecvMsgList[0].MsgType)
+}
+
+func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
+	source := &planpb.Node{
+		NodeType:          planpb.Node_MULTI_UPDATE,
+		OnDuplicateAction: planpb.Node_UPDATE,
+		ApplyType:         planpb.Node_OUTERAPPLY,
+		ScanSnapshot: &planpb.Snapshot{
+			TS: &timestamp.Timestamp{PhysicalTime: 11, LogicalTime: 7},
+		},
+		PreInsertSkCtx: &planpb.PreInsertUkCtx{
+			Columns:                []int32{1, 3},
+			KeyColumns:             []int32{4, 5},
+			ConflictColumns:        []int32{6},
+			OutputColumns:          2,
+			PkColumn:               1,
+			InsertIgnoreMultiDedup: true,
+		},
+		PostDmlCtx: &planpb.PostDmlCtx{
+			Ref:            &planpb.ObjectRef{Obj: 42, ObjName: "t"},
+			PrimaryKeyIdx:  3,
+			PrimaryKeyName: "id",
+			IsInsert:       true,
+		},
+	}
+
+	cloned := DeepCopyNode(source)
+	require.Equal(t, source.OnDuplicateAction, cloned.OnDuplicateAction)
+	require.Equal(t, source.ApplyType, cloned.ApplyType)
+	require.Equal(t, source.ScanSnapshot, cloned.ScanSnapshot)
+	require.NotSame(t, source.ScanSnapshot, cloned.ScanSnapshot)
+	require.NotSame(t, source.ScanSnapshot.TS, cloned.ScanSnapshot.TS)
+	require.Equal(t, source.PreInsertSkCtx, cloned.PreInsertSkCtx)
+	require.NotSame(t, source.PreInsertSkCtx, cloned.PreInsertSkCtx)
+	require.Equal(t, source.PostDmlCtx, cloned.PostDmlCtx)
+	require.NotSame(t, source.PostDmlCtx, cloned.PostDmlCtx)
+	require.NotSame(t, source.PostDmlCtx.Ref, cloned.PostDmlCtx.Ref)
+
+	cloned.OnDuplicateAction = planpb.Node_IGNORE
+	cloned.ScanSnapshot.TS.PhysicalTime = 99
+	cloned.PreInsertSkCtx.Columns[0] = 9
+	cloned.PostDmlCtx.Ref.ObjName = "changed"
+	require.Equal(t, planpb.Node_UPDATE, source.OnDuplicateAction)
+	require.Equal(t, int64(11), source.ScanSnapshot.TS.PhysicalTime)
+	require.Equal(t, int32(1), source.PreInsertSkCtx.Columns[0])
+	require.Equal(t, "t", source.PostDmlCtx.Ref.ObjName)
+}
+
+func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
+	source := &planpb.Query{
+		Steps:       []int32{3, 7},
+		Headings:    []string{"id"},
+		LoadTag:     true,
+		LoadWriteS3: true,
+		MaxDop:      8,
+		BackgroundQueries: []*planpb.Query{{
+			StmtType: planpb.Query_SELECT,
+			Headings: []string{"background"},
+		}},
+	}
+
+	cloned := DeepCopyQuery(source)
+	require.Equal(t, source.Steps, cloned.Steps)
+	require.Equal(t, source.Headings, cloned.Headings)
+	require.True(t, cloned.LoadTag)
+	require.True(t, cloned.LoadWriteS3)
+	require.Equal(t, int64(8), cloned.MaxDop)
+	require.Len(t, cloned.BackgroundQueries, 1)
+	require.NotSame(t, source.BackgroundQueries[0], cloned.BackgroundQueries[0])
+
+	cloned.Steps[0] = 99
+	cloned.Headings[0] = "changed"
+	cloned.BackgroundQueries[0].Headings[0] = "changed"
+	require.Equal(t, int32(3), source.Steps[0])
+	require.Equal(t, "id", source.Headings[0])
+	require.Equal(t, "background", source.BackgroundQueries[0].Headings[0])
 }
 
 func TestFilterBarrierSurvivesCopiesAndSerialization(t *testing.T) {

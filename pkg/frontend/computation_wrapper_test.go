@@ -265,6 +265,11 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
+	for i := 0; i < prepareStmt.params.Length(); i++ {
+		param, ok := cw.paramVals[i].(plan2.ParamValue)
+		require.True(t, ok)
+		require.True(t, param.IsBinaryProtocol, "parameter %d lost COM_STMT provenance", i)
+	}
 	for i, want := range []vector.PrepareParamKind{
 		vector.PrepareParamInteger,
 		vector.PrepareParamInteger,
@@ -910,6 +915,28 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestInitExecuteStmtParamReusesCachedCompileForTextParameter(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 111, "select ?")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("plain text"), false, cw.proc.Mp()))
+	prepareStmt.params = params
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+
+	retComp, retPlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, sentinel, retComp,
+		"unchanged text parameter domain must not force a full recompilation")
+	require.Same(t, sentinel, prepareStmt.compile)
+	require.NotNil(t, retPlan)
 }
 
 func TestInitExecuteStmtParamTransfersFreshCloneOwnership(t *testing.T) {

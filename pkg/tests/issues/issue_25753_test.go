@@ -215,6 +215,27 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			defer directStmt.Close()
 
+			// The Go driver sends string arguments as MYSQL_TYPE_VAR_STRING on
+			// COM_STMT_EXECUTE.  These values are nevertheless valid numeric
+			// arguments for overloaded functions; the execute path must infer
+			// their numeric domain without changing the cached prepared plan.
+			textAbsStmt, err := conn.PrepareContext(ctx, "select abs(?)")
+			require.NoError(t, err)
+			defer textAbsStmt.Close()
+			var absResult string
+			require.NoError(t, textAbsStmt.QueryRowContext(ctx, "-1.5").Scan(&absResult))
+			require.Equal(t, "1.5", absResult)
+
+			textSleepStmt, err := conn.PrepareContext(ctx, "select sleep(?)")
+			require.NoError(t, err)
+			defer textSleepStmt.Close()
+			var sleepResult int64
+			sleepStart := time.Now()
+			require.NoError(t, textSleepStmt.QueryRowContext(ctx, "0.05").Scan(&sleepResult))
+			require.GreaterOrEqual(t, time.Since(sleepStart), 40*time.Millisecond,
+				"VAR_STRING sleep argument was not rebound to a fractional numeric value")
+			require.Equal(t, int64(0), sleepResult)
+
 			assertDirectNumeric := func(value any, databaseType string, scanTarget any) {
 				t.Helper()
 				rows, queryErr := directStmt.QueryContext(ctx, value)

@@ -3129,33 +3129,53 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matc
 
 // FillValuesOfParamsInPlan replaces the params by their values
 func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
+	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals)
+	return filled, err
+}
+
+// FillValuesOfParamsInPlanWithSpecialization replaces parameters in an
+// isolated plan copy and reports whether the replacement changed an overload
+// or a result-column domain. Callers that already have a cached compile must
+// only invalidate that compile when this flag is true; replacing a parameter
+// with a same-domain literal is otherwise handled by the cached parameter
+// executor.
+func FillValuesOfParamsInPlanWithSpecialization(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+) (*Plan, bool, error) {
 	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
-		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
 	}
 	copied := DeepCopyPlan(preparePlan)
 	switch pp := copied.Plan.(type) {
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			err := replaceParamVals(ctx, copied, paramVals)
+			_, err := replaceParamVals(ctx, copied, paramVals)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 
 	case *plan.Plan_Query:
-		err := replaceParamVals(ctx, copied, paramVals)
+		specialized, err := replaceParamVals(ctx, copied, paramVals)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		return copied, specialized, nil
 	}
-	return copied, nil
+	return copied, false, nil
 }
 
 type ParamValue struct {
-	Value            any
-	IsBin            bool
+	Value any
+	IsBin bool
+	// IsBinaryProtocol records that the value came from COM_STMT_EXECUTE.
+	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
+	// binary-protocol value without being a binary string literal.
+	IsBinaryProtocol bool
 	PrepareParamKind vector.PrepareParamKind
 	// RuntimeType is the type advertised by the binary-protocol parameter
 	// binding.  Prepared plans deliberately keep parameter markers as TEXT
@@ -3523,7 +3543,7 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 	}
 }
 
-func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
+func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, error) {
 	params := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
@@ -3555,7 +3575,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 			if hasRuntimeType {
 				params[i], err = preparedRuntimeParamExpr(ctx, val, isBin, runtimeType)
 				if err != nil {
-					return err
+					return false, err
 				}
 				continue
 			}
@@ -3570,10 +3590,30 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
-	for _, val := range paramVals {
-		if param, ok := val.(ParamValue); ok && param.HasRuntimeType {
-			paramRule.inferTextParamTypes = true
-			break
+	paramRule.inferTextParamPositions = make(map[int]bool)
+	for i, val := range paramVals {
+		if param, ok := val.(ParamValue); ok {
+			if param.IsBinaryProtocol {
+				paramRule.inferTextParamPositions[i] = true
+			}
+			if param.HasRuntimeType && param.RuntimeType.Oid == types.T_text {
+				paramRule.inferTextParamTypes = true
+			}
+		}
+	}
+	directSelectRuntimeParam := make(map[int]bool)
+	if query := plan0.GetQuery(); query != nil && query.StmtType == plan.Query_SELECT {
+		for _, node := range query.Nodes {
+			if node == nil {
+				continue
+			}
+			for _, expr := range node.ProjectList {
+				param := expr.GetP()
+				if param != nil && int(param.Pos) >= 0 && int(param.Pos) < len(paramVals) &&
+					runtimeParamHasExplicitType(paramVals[param.Pos]) {
+					directSelectRuntimeParam[int(param.Pos)] = true
+				}
+			}
 		}
 	}
 	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
@@ -3595,9 +3635,25 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
 	err = VisitQuery.Visit(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return nil
+
+	// A direct SELECT parameter is part of the result-column contract. Its
+	// execute-time numeric domain must therefore be reflected in the copied
+	// plan even when it is not wrapped by a function overload.
+	specialized := paramRule.specialized
+	for pos := range directSelectRuntimeParam {
+		if runtimeParamHasExplicitType(paramVals[pos]) {
+			specialized = true
+			break
+		}
+	}
+	return specialized, nil
+}
+
+func runtimeParamHasExplicitType(value any) bool {
+	param, ok := value.(ParamValue)
+	return ok && param.HasRuntimeType
 }
 
 // XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.

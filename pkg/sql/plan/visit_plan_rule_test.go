@@ -1262,6 +1262,75 @@ func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) 
 	require.Equal(t, int64(1), bound.GetLit().GetI64Val())
 }
 
+func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing.T) {
+	ctx := context.Background()
+	param := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+		}
+	}
+	absExpr, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{param()})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{absExpr},
+		}},
+	}}}
+
+	_, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{Value: "-1.5", IsBinaryProtocol: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "COM_STMT text numeric values must rebind ABS")
+
+	sleepExpr, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
+	require.NoError(t, err)
+	sleepQuery := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{sleepExpr},
+		}},
+	}}}
+	sleepFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, sleepQuery, []any{
+		ParamValue{Value: "0.05", IsBinaryProtocol: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "COM_STMT text fractional values must rebind SLEEP")
+	require.NotNil(t, sleepFilled.GetQuery().Nodes[0].ProjectList[0].GetF())
+
+	_, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{Value: "-1.5", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	direct := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{param()},
+		}},
+	}}}
+	_, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, direct, []any{
+		ParamValue{Value: "text", IsBinaryProtocol: true},
+	})
+	require.NoError(t, err)
+	require.False(t, specialized, "same-domain text execution should reuse the cached plan")
+
+	_, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, direct, []any{
+		ParamValue{Value: "5", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "direct numeric result metadata must be specialized")
+}
+
 func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {
 	newPlan := func(t *testing.T) (*planpb.Plan, *planpb.WindowSpec, *planpb.Node) {
 		t.Helper()
