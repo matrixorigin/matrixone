@@ -7123,10 +7123,12 @@ func makeQueryIdIdx(loc, cnt int64, proc *process.Process) (int, error) {
 		}
 		idx = int(loc + cnt)
 	} else {
-		if loc > cnt {
+		// Positive positions are one-based: 1 is the first query in the
+		// session and cnt is the last. Zero is not a valid position.
+		if loc == 0 || loc > cnt {
 			return 0, moerr.NewInvalidInputf(proc.Ctx, "index out of range: %d", loc)
 		}
-		idx = int(loc)
+		idx = int(loc - 1)
 	}
 	return idx, nil
 }
@@ -7144,6 +7146,7 @@ func LastQueryID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
 		}
 		var idx int
 		idx, err = makeQueryIdIdx(loc, cnt, proc)

@@ -219,6 +219,8 @@ func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
+	dependencyCapture := newViewDependencyCaptureContext(ctx)
+	ctx = dependencyCapture
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
@@ -327,11 +329,14 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 		persistedCreateSQL = stableViewSQL
 	}
 
+	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	viewData, err := json.Marshal(ViewData{
-		Stmt:            viewSql,
-		DefaultDatabase: ctx.DefaultDatabase(),
-		SQLMode:         parserSQLModeFromContext(ctx),
-		SecurityType:    getViewSecurityTypeFromContext(ctx),
+		Stmt:                viewSql,
+		DefaultDatabase:     ctx.DefaultDatabase(),
+		SQLMode:             parserSQLModeFromContext(ctx),
+		SecurityType:        getViewSecurityTypeFromContext(ctx),
+		LowerCaseTableNames: &lowerCaseTableNames,
+		Dependencies:        dependencyCapture.dependencies(),
 	})
 	if err != nil {
 		return nil, err
