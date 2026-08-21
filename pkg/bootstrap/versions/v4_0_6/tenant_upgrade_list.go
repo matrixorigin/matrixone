@@ -32,6 +32,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addForeignKeyMetadataColumn("on_update_origin", "varchar(64) not null default 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "on_delete_origin"),
 	upgradeInformationSchemaKeyColumnUsage(),
 	upgradeInformationSchemaReferentialConstraints(),
+	ensureInformationSchemaCharacterSetsTable(),
 	populateInformationSchemaCharacterSets(),
 	upgradeInformationSchemaColumns(),
 	upgradeInformationSchemaCheckConstraints(),
@@ -77,6 +78,18 @@ func addForeignKeyMetadataColumn(column, definition, after string) versions.Upgr
 	}
 }
 
+func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "CHARACTER_SETS",
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    sysview.InformationSchemaCharacterSetsDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "character_sets")
+		},
+	}
+}
+
 func populateInformationSchemaCharacterSets() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:    sysview.InformationDBConst,
@@ -115,9 +128,10 @@ func upgradeInformationSchemaKeyColumnUsage() versions.UpgradeEntry {
 		Schema:    sysview.InformationDBConst,
 		TableName: "KEY_COLUMN_USAGE",
 		UpgType:   versions.CREATE_VIEW,
-		UpgSql:    sysview.InformationSchemaKeyColumnUsageDDL,
+		UpgSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
 		CheckFunc: checkViewDefinition("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
-		PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
+		PreSql:    fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
+		PostSql:   sysview.InformationSchemaKeyColumnUsageDDL,
 	}
 }
 

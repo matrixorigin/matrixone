@@ -105,7 +105,14 @@ const (
 // Certificate files are deliberately separate for the two mTLS directions:
 // CN -> Flight and sidecar -> CN read resolver.
 type SiriusConfig struct {
-	Enabled                bool          `toml:"enabled"`
+	Enabled bool `toml:"enabled"`
+	// BenchmarkNoGC enables the one-to-one CN/sidecar benchmark adapter. It
+	// must only be used together with TN GCCfg.DisableGC=true; normal Sirius
+	// startup keeps requiring durable GC-protected lease dependencies.
+	BenchmarkNoGC bool `toml:"benchmark-no-gc"`
+	// benchmarkGCDisabled is set by the top-level launcher after it verifies
+	// the paired TN configuration. It is intentionally not user-configurable.
+	benchmarkGCDisabled    bool
 	FlightAddress          string        `toml:"flight-address"`
 	FlightServerName       string        `toml:"flight-server-name"`
 	FlightClientCertPath   string        `toml:"flight-client-cert-path"`
@@ -508,7 +515,13 @@ func (c *Config) Validate() error {
 }
 
 func (c *SiriusConfig) validate() error {
-	if c == nil || !c.Enabled {
+	if c == nil {
+		return nil
+	}
+	if c.BenchmarkNoGC && !c.Enabled {
+		return moerr.NewBadConfigNoCtx("Sirius benchmark-no-gc requires Sirius enabled")
+	}
+	if !c.Enabled {
 		return nil
 	}
 	if c.MaxBatchBytes == 0 {

@@ -1,0 +1,134 @@
+drop database if exists ivf_l1_l2sq;
+create database ivf_l1_l2sq;
+use ivf_l1_l2sq;
+select l1_distance(cast('[1,2,3]' as vecf32(3)), cast('[10,20,30]' as vecf32(3))) as l1_f32;
+➤ l1_f32[8,53,31]  𝄀
+54.0
+select l1_distance(cast('[1,2,3]' as vecf64(3)), cast('[10,20,30]' as vecf64(3))) as l1_f64;
+➤ l1_f64[8,53,31]  𝄀
+54.0
+select l1_distance(cast('[1,2,3]' as vecbf16(3)), cast('[10,20,30]' as vecbf16(3))) as l1_bf16;
+➤ l1_bf16[8,53,31]  𝄀
+54.0
+select l1_distance(cast('[1,2,3]' as vecf16(3)), cast('[10,20,30]' as vecf16(3))) as l1_f16;
+➤ l1_f16[8,53,31]  𝄀
+54.0
+select l1_distance(cast('[1,2,3]' as vecint8(3)), cast('[10,20,30]' as vecint8(3))) as l1_int8;
+➤ l1_int8[8,53,31]  𝄀
+54.0
+select l1_distance(cast('[1,2,3]' as vecuint8(3)), cast('[10,20,30]' as vecuint8(3))) as l1_uint8;
+➤ l1_uint8[8,53,31]  𝄀
+54.0
+select l1_distance(cast('[1,2,3]' as vecf32(3)), cast('[1,2]' as vecf32(2)));
+invalid input: vector ops between different dimensions (3, 2) is not permitted.
+create table t(a int primary key, v vecf32(4));
+insert into t values
+(1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),
+(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
+create index ti_l1 using ivfflat on t(v) lists=2 op_type 'vector_l1_ops';
+explain select a from t order by l1_distance(v,'[1,1,1,1]') limit 3;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3
+select a from t order by l1_distance(v,'[1,1,1,1]') limit 3;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select a from t order by l1_distance(v,'[54,54,54,54]') limit 3;
+➤ a[4,32,0]  𝄀
+6  𝄀
+5  𝄀
+4
+select a, l1_distance(v,'[1,1,1,1]') as d from t order by d limit 2;
+➤ a[4,32,0]  ¦  d[8,9,0]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  8.0
+explain select a from t order by l2_distance(v,'[1,1,1,1]') limit 3;
+-- @regex("Table Function on ivf_search", false)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(t.v, ) INTERNAL, t.a INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Scan on ivf_l1_l2sq.t
+alter table t drop index ti_l1;
+create index ti_l2sq using ivfflat on t(v) lists=2 op_type 'vector_l2sq_ops';
+explain select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3
+select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+explain select a from t order by l2_distance(v,'[54,54,54,54]') limit 3;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3
+select a from t order by l2_distance(v,'[54,54,54,54]') limit 3;
+➤ a[4,32,0]  𝄀
+6  𝄀
+5  𝄀
+4
+select a, l2_distance_sq(v,'[1,1,1,1]') as dsq from t order by dsq limit 2;
+➤ a[4,32,0]  ¦  dsq[8,9,0]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  16.0
+select a, l2_distance(v,'[1,1,1,1]') as d from t order by d limit 2;
+➤ a[4,32,0]  ¦  d[8,9,0]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  4.0
+show create table t;
+➤ Table[12,0,0]  ¦  Create Table[12,123,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `a` int NOT NULL,
+  `v` vecf32(4) DEFAULT NULL,
+  PRIMARY KEY (`a`),
+  KEY `ti_l2sq` USING ivfflat (`v`) lists = 2  op_type 'vector_l2sq_ops'
+)
+alter table t drop index ti_l2sq;
+create index ti_l2 using ivfflat on t(v) lists=2 op_type 'vector_l2_ops';
+explain select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3
+select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select a from t order by l2_distance(v,'[54,54,54,54]') limit 3;
+➤ a[4,32,0]  𝄀
+6  𝄀
+5  𝄀
+4
+alter table t drop index ti_l2;
+create index ti_bad using ivfflat on t(v) lists=2 op_type 'vector_bogus_ops';
+invalid input: invalid op_type: 'vector_bogus_ops'
+drop database ivf_l1_l2sq;

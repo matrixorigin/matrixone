@@ -33,7 +33,9 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -360,9 +362,248 @@ func TestCanceledResetAdmissionDoesNotTouchSession(t *testing.T) {
 	routine.mc.endOperation()
 }
 
+func TestCanceledResetWaitingForRequestKeepsSession(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	routine := NewRoutine(context.Background(), oldSession.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	rm.setBaseService(&testMOServerBaseService{id: ""})
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	t.Cleanup(func() {
+		if current := routine.getSession(); current != nil {
+			rm.sessionManager.RemoveSession(current)
+			current.Close()
+		}
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+
+	oldProc := oldSession.GetProc()
+	oldTxnHandler := oldSession.GetTxnHandler()
+	require.True(t, routine.mc.tryBeginRequest())
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resetResult := make(chan error, 1)
+	go func() {
+		resetResult <- routine.resetSessionWithContext(ctx, "", &query.ResetSessionResponse{})
+	}()
+	select {
+	case err := <-resetResult:
+		t.Fatalf("reset returned before the request was canceled: %v", err)
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("reset did not enter the request-only admission wait")
+	}
+
+	cancel()
+	select {
+	case err := <-resetResult:
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, routine.mc.resetWaiterPending)
+	case <-time.After(time.Second):
+		t.Fatal("reset did not honor cancellation while waiting for request")
+	}
+	require.Same(t, oldSession, routine.getSession())
+	require.Same(t, oldProc, oldSession.GetProc())
+	require.Same(t, oldTxnHandler, oldSession.GetTxnHandler())
+	routine.mc.endRequest()
+}
+
+func TestResetAdmissionRejectsConcurrentLifecycleOperation(t *testing.T) {
+	for _, owner := range []string{"reset", "migration"} {
+		t.Run(owner, func(t *testing.T) {
+			routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+			t.Cleanup(routine.cancelRoutineFunc)
+			require.True(t, routine.mc.tryBeginOperation())
+			defer routine.mc.endOperation()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, ok := routine.mc.beginOperationAfterRequestWithContext(ctx)
+			require.False(t, ok, "reset admission must not queue behind concurrent %s", owner)
+		})
+	}
+}
+
+func TestResetAdmissionRejectsStaleLifecycleAttempt(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	routine := NewRoutine(context.Background(), oldSession.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	t.Cleanup(func() {
+		if current := routine.getSession(); current != nil {
+			rm.sessionManager.RemoveSession(current)
+			current.Close()
+		}
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+
+	// Model lifecycle A. The reset must reject this generation even if A ends
+	// before the reset caller's next scheduling point.
+	require.True(t, routine.mc.tryBeginOperation())
+	lifecycleHeld := true
+	defer func() {
+		if lifecycleHeld {
+			routine.mc.endOperation()
+		}
+	}()
+
+	attemptReached := make(chan struct{})
+	resumeAttempt := make(chan struct{})
+	routine.mc.tryBeginOperationHook = func() {
+		close(attemptReached)
+		<-resumeAttempt
+	}
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		result <- routine.resetSessionWithContext(ctx, "", &query.ResetSessionResponse{})
+	}()
+
+	select {
+	case err := <-result:
+		// The fixed path makes one atomic admission decision while lifecycle A
+		// is still active and therefore never invokes the optimistic hook.
+		require.ErrorContains(t, err, "cannot reset session as routine is closed or busy")
+		require.Same(t, oldSession, routine.getSession())
+		require.False(t, routine.mc.resetWaiterPending)
+	case <-attemptReached:
+		// The pre-fix two-step path reaches this hook after its first failed
+		// attempt. Let A finish, start request N+1, and resume the stale reset.
+		routine.mc.endOperation()
+		lifecycleHeld = false
+		require.True(t, routine.mc.tryBeginRequest())
+		close(resumeAttempt)
+
+		select {
+		case err := <-result:
+			t.Fatalf("stale reset completed before request N+1 ended: %v", err)
+		case <-waitEntered:
+		}
+		routine.mc.endRequest()
+
+		select {
+		case err := <-result:
+			require.ErrorContains(t, err, "cannot reset session as routine is closed or busy")
+		case <-time.After(time.Second):
+			t.Fatal("stale reset did not finish after request N+1 ended")
+		}
+	}
+}
+
+func TestResetAdmissionStopsWhenRoutineClosesDuringRequestWait(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	require.True(t, routine.mc.tryBeginRequest())
+	defer routine.mc.endRequest()
+
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
+	result := make(chan bool, 1)
+	go func() {
+		_, ok := routine.mc.beginOperationAfterRequestWithContext(context.Background())
+		result <- ok
+	}()
+	select {
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("reset admission did not enter the request-only wait")
+	}
+	routine.mc.startClose()
+	select {
+	case ok := <-result:
+		require.False(t, ok)
+		require.False(t, routine.mc.resetWaiterPending)
+	case <-time.After(time.Second):
+		t.Fatal("reset admission did not stop after routine close")
+	}
+}
+
+func TestResetAdmissionAllowsOnlyOnePendingRequestWaiter(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	require.True(t, routine.mc.tryBeginRequest())
+
+	waitEntered := make(chan struct{})
+	var waitOnce sync.Once
+	routine.mc.requestWaitHook = func() {
+		waitOnce.Do(func() { close(waitEntered) })
+	}
+
+	firstCtx, cancelFirst := context.WithTimeout(context.Background(), time.Second)
+	defer cancelFirst()
+	firstResult := make(chan bool, 1)
+	go func() {
+		_, ok := routine.mc.beginOperationAfterRequestWithContext(firstCtx)
+		firstResult <- ok
+	}()
+	select {
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first reset did not enter the request-only admission wait")
+	}
+
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecond()
+	secondResult := make(chan bool, 1)
+	go func() {
+		_, ok := routine.mc.beginOperationAfterRequestWithContext(secondCtx)
+		secondResult <- ok
+	}()
+	select {
+	case ok := <-secondResult:
+		require.False(t, ok, "a second reset must not reserve another request waiter")
+	case <-time.After(100 * time.Millisecond):
+		routine.mc.endRequest()
+		select {
+		case ok := <-firstResult:
+			if ok {
+				routine.mc.endOperation()
+			}
+		case <-time.After(time.Second):
+			t.Fatal("first reset did not finish after request release")
+		}
+		select {
+		case ok := <-secondResult:
+			require.False(t, ok, "second reset waiter must not be admitted after the first completes")
+		case <-time.After(time.Second):
+			t.Fatal("second reset waiter did not finish after request release")
+		}
+		t.Fatal("second reset incorrectly waited behind the same request")
+	}
+
+	routine.mc.endRequest()
+	select {
+	case ok := <-firstResult:
+		require.True(t, ok)
+		routine.mc.endOperation()
+	case <-time.After(time.Second):
+		t.Fatal("first reset did not finish after request release")
+	}
+}
+
 func TestRoutineCloseCancelsResetRollback(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
+	require.NoError(t, oldSession.SetUserDefinedVar("must_not_leak", "previous-client", ""))
 	oldSession.GetTxnHandler().Close()
 
 	eng := mock_frontend.NewMockEngine(ctrl)
@@ -480,6 +721,456 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	require.Equal(t, int64(7), resp.LastAffectedRows)
 }
 
+func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	prepared := &PrepareStmt{
+		Name:                GetPrepareStmtName(41),
+		getFromSendLongData: map[int]struct{}{0: {}},
+	}
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), prepared.Name, prepared))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+
+	prepared.resetBinaryParamState()
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Len(t, resp.PrepareStmts, 1)
+	require.Equal(t, prepared.Name, resp.PrepareStmts[0].Name)
+}
+
+func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	require.NoError(t, ses.setUserDefinedVarWithKindAndReplayability(
+		"TS0",
+		"2026-08-07 04:20:01.123456",
+		"set @ts0 = (select updated_at from src limit 1)",
+		false,
+		vector.PrepareParamNone,
+		true,
+	))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.UserDefinedVarsExported)
+	require.Len(t, resp.UserDefinedVars, 1)
+	require.Equal(t, "ts0", resp.UserDefinedVars[0].Name)
+	require.Equal(t, "set @ts0 = (select updated_at from src limit 1)", resp.UserDefinedVars[0].Sql)
+	require.True(t, resp.UserDefinedVarsReplayable)
+}
+
+func TestMigrateConnectionFromMarksPreparedUserStateUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	// An empty SQL field models a value produced by a prepared SET. The typed
+	// snapshot is valid for v22, but the legacy raw replay stream cannot carry it.
+	require.NoError(t, ses.setUserDefinedVarWithKind(
+		"prepared", "value", "", false, vector.PrepareParamNone))
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.UserDefinedVarsExported)
+	require.False(t, resp.UserDefinedVarsReplayable)
+	require.Len(t, resp.UserDefinedVars, 1)
+}
+
+func TestMigrateConnectionFromFailsClosedWhenTypedSnapshotTooLarge(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	// Prepared SET assignments are applied by the frontend but are not
+	// guaranteed to be captured as replayable raw COM_QUERY statements by the
+	// proxy. An oversized typed snapshot must therefore fail closed.
+	require.NoError(t, ses.setUserDefinedVarWithKind(
+		"large",
+		string(make([]byte, maxMigrateUserDefinedVarsSize)),
+		"",
+		false,
+		vector.PrepareParamNone,
+	))
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.False(t, resp.UserDefinedVarsExported)
+	require.Empty(t, resp.UserDefinedVars)
+	require.True(t, resp.UserDefinedVarsSnapshotTooLarge)
+	require.False(t, resp.UserDefinedVarsReplayable)
+	require.True(t, resp.SystemVariablesExported)
+}
+
+func TestMigrateConnectionFromMarksTypedUserSnapshotTooLargeForLegacyReplay(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	// A normal COM_QUERY SET is retained by the proxy, so a pre-v22 target can
+	// still use the legacy replay stream. A v22 target must reject this marker
+	// instead of re-evaluating the raw expression.
+	require.NoError(t, ses.setUserDefinedVarWithKindAndReplayability(
+		"large",
+		string(make([]byte, maxMigrateUserDefinedVarsSize)),
+		"set @large = repeat('a', 16777216)",
+		false,
+		vector.PrepareParamNone,
+		true,
+	))
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.False(t, resp.UserDefinedVarsExported)
+	require.Empty(t, resp.UserDefinedVars)
+	require.True(t, resp.UserDefinedVarsSnapshotTooLarge)
+	require.True(t, resp.UserDefinedVarsReplayable)
+	require.True(t, resp.SystemVariablesExported)
+}
+
+func TestMigrateConnectionFromFailsClosedWhenTypedSystemSnapshotTooLargeAndUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	// Prepared system assignments do not produce a proxy raw SET event. Mark
+	// the large value as unobserved and require migration to fail closed.
+	require.NoError(t, ses.SetSessionSysVar(
+		context.Background(), "optimizer_hints", string(make([]byte, maxMigrateUserDefinedVarsSize))))
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	err := rt.migrateConnectionFrom(resp)
+	require.ErrorContains(t, err, "size limit")
+	require.False(t, resp.UserDefinedVarsExported)
+	require.False(t, resp.SystemVariablesExported)
+	require.False(t, resp.SystemVariablesReplayable)
+}
+
+func TestMigrateConnectionFromMarksTypedSystemSnapshotTooLargeForLegacyReplay(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	require.NoError(t, ses.SetSessionSysVar(
+		context.Background(), "optimizer_hints", string(make([]byte, maxMigrateUserDefinedVarsSize))))
+	// A raw-replayable assignment can be handed to a pre-v22 target, but a v22
+	// target must still fail closed because the typed system snapshot is absent.
+	ses.markMigrationSystemVarReplayable("optimizer_hints", true)
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.UserDefinedVarsExported)
+	require.Empty(t, resp.UserDefinedVars)
+	require.False(t, resp.SystemVariablesExported)
+	require.True(t, resp.SystemVariablesSnapshotTooLarge)
+	require.True(t, resp.SystemVariablesReplayable)
+}
+
+func TestCancelledNextTransactionIsolationRemainsReplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	nextSQL := "set transaction isolation level read committed"
+	nextStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, nextSQL, 1)
+	require.NoError(t, err)
+	nextExecCtx := newTestExecCtx(ctx, ctrl)
+	nextExecCtx.ses = ses
+	nextExecCtx.singleStatementQuery = true
+	nextExecCtx.sqlOfStmt = nextSQL
+	require.NoError(t, handleSetTransaction(ses, nextExecCtx, nextStmt.(*tree.SetTransaction)))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+
+	cancelSQL := "set @@session.transaction_isolation = 'REPEATABLE-READ'"
+	cancelStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, cancelSQL, 1)
+	require.NoError(t, err)
+	cancelExecCtx := newTestExecCtx(ctx, ctrl)
+	cancelExecCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(
+		ses, cancelExecCtx, cancelStmt.(*tree.SetVar), cancelSQL, false))
+	require.False(t, ses.hasUnreplayableMigrationSystemVars())
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.SystemVariablesReplayable)
+}
+
+func TestPreparedSystemAssignmentIsMarkedUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set optimizer_hints = prepared_hint", 1)
+	require.NoError(t, err)
+	require.NoError(t, doSetVar(
+		ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), "", true))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestCapturedSystemAssignmentAfterPreparedWriteRemainsUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	preparedSQL := "set session sql_mode = 'ANSI_QUOTES'"
+	preparedStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, preparedSQL, 1)
+	require.NoError(t, err)
+	require.NoError(t, doSetVar(
+		ses, newTestExecCtx(ctx, ctrl), preparedStmt.(*tree.SetVar), "", true))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+
+	rawSQL := "set session sql_mode = @@sql_mode"
+	rawStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rawSQL, 1)
+	require.NoError(t, err)
+	rawExecCtx := newTestExecCtx(ctx, ctrl)
+	rawExecCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(
+		ses, rawExecCtx, rawStmt.(*tree.SetVar), rawSQL, false))
+	// A later captured assignment cannot prove that an earlier prepared
+	// assignment was replayable; retain the conservative migration marker.
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestCapturedUserAssignmentAfterPreparedWriteRemainsUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	preparedSQL := "set @x = 1"
+	preparedStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, preparedSQL, 1)
+	require.NoError(t, err)
+	require.NoError(t, doSetVar(
+		ses, newTestExecCtx(ctx, ctrl), preparedStmt.(*tree.SetVar), "", true))
+	require.True(t, ses.hasUnreplayableMigrationUserVars())
+
+	rawSQL := "set @x = @x + 1"
+	rawStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rawSQL, 1)
+	require.NoError(t, err)
+	rawExecCtx := newTestExecCtx(ctx, ctrl)
+	rawExecCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(
+		ses, rawExecCtx, rawStmt.(*tree.SetVar), rawSQL, false))
+	// A later captured write cannot prove that an earlier prepared write was
+	// replayable; retain the conservative migration marker for the variable.
+	require.True(t, ses.hasUnreplayableMigrationUserVars())
+}
+
+func TestPreparedGlobalRuntimeAssignmentIsMarkedUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, "optimizer_hints")] =
+		newMrsForSystemVariableNameOfAccount([][]interface{}{})
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, "optimizer_hints", "prepared_hint")] = nil
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+	previousExeSqlInBgSes := ExeSqlInBgSes
+	ExeSqlInBgSes = func(context.Context, BackgroundExec, string) ([]ExecResult, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { ExeSqlInBgSes = previousExeSqlInBgSes })
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set global optimizer_hints = prepared_hint", 1)
+	require.NoError(t, err)
+	require.NoError(t, doSetVar(
+		ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), "", true))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestMultiStatementGlobalRuntimeAssignmentIsMarkedUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, "runtime_filter_limit_in")] =
+		newMrsForSystemVariableNameOfAccount([][]interface{}{})
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, "runtime_filter_limit_in", "42")] = nil
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+	previousExeSqlInBgSes := ExeSqlInBgSes
+	ExeSqlInBgSes = func(context.Context, BackgroundExec, string) ([]ExecResult, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { ExeSqlInBgSes = previousExeSqlInBgSes })
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set global runtime_filter_limit_in = 42", 1)
+	require.NoError(t, err)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	// The frontend executes this as part of a multi-statement COM_QUERY, so
+	// the proxy does not retain the raw SET for a legacy migration hop.
+	execCtx.singleStatementQuery = false
+	require.NoError(t, doSetVar(
+		ses, execCtx, stmt.(*tree.SetVar), "set global runtime_filter_limit_in = 42", false))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestRawGlobalScopeBothAssignmentIsMarkedUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, "autocommit")] =
+		newMrsForSystemVariableNameOfAccount([][]interface{}{})
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, "autocommit", "0")] = nil
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+	previousExeSqlInBgSes := ExeSqlInBgSes
+	ExeSqlInBgSes = func(context.Context, BackgroundExec, string) ([]ExecResult, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { ExeSqlInBgSes = previousExeSqlInBgSes })
+
+	sql := "set global autocommit = 0"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(
+		ses, execCtx, stmt.(*tree.SetVar), sql, false))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestRawNextTransactionAssignmentIsReplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	sql := "set @@transaction_isolation = 'READ-COMMITTED'"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(
+		ses, execCtx, stmt.(*tree.SetVar), sql, false))
+	require.False(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestMultiStatementSetAssignmentIsUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	sql := "set @large = repeat('a', 16777216)"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	// The frontend executes this statement as part of a multi-statement
+	// COM_QUERY. The proxy does not capture raw replay for that request.
+	require.NoError(t, doSetVar(
+		ses, execCtx, stmt.(*tree.SetVar), sql, false))
+	require.True(t, ses.hasUnreplayableMigrationUserVars())
+}
+
+func TestMigrateConnectionFromV20KeepsLegacyUserVariableReplay(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	require.NoError(t, ses.SetUserDefinedVar("ts0", "stable-value", "set @ts0 = now()"))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.False(t, resp.UserDefinedVarsExported)
+	require.Empty(t, resp.UserDefinedVars)
+}
+
 func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
@@ -508,6 +1199,8 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 
 	require.NotSame(t, oldSession, newSession)
 	require.Equal(t, oldSession.GetUUIDString(), newSession.GetUUIDString())
+	_, err = newSession.GetUserDefinedVar("must_not_leak")
+	require.ErrorContains(t, err, "does not exist")
 	require.Same(t, timeZone, newSession.GetTimeZone())
 
 	registered := rm.sessionManager.GetAllSessions()

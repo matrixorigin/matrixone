@@ -787,6 +787,10 @@ message IndexReaderParam {
   DistRange dist_range = 4;
   int32 partition_cn_cnt = 5;
   int32 partition_cn_idx = 6;
+  // EXPLAIN-only annotation: the plan-time over-fetched candidate budget for a
+  // literal LIMIT (0 for a prepared LIMIT ?, whose over-fetch is computed at
+  // EXECUTE). Execution never reads it; the TVF derives its budget from `limit`.
+  uint64 over_fetch_limit = 7;
 }
 
 message Node {
@@ -1076,6 +1080,11 @@ message Node {
   // planner, so the right-side operator only needs to look up target keys and
   // must not retain incoming keys in its hashmap.
   bool dedup_input_keys_unique = 83;
+
+  // JOIN only: the planner proved that the join is consumed by a scalar,
+  // single COUNT(*) aggregate which understands a zero-column batch whose
+  // row count carries the complete join multiplicity.
+  bool emit_compressed_row_count = 84;
 }
 
 message SnapshotExtraInfo {

@@ -54,6 +54,22 @@ func TestWithCloneLockContext(t *testing.T) {
 	require.Same(t, oldCtx, proc.Ctx)
 }
 
+func TestRewriteCloneSequenceCreateSQL(t *testing.T) {
+	got, err := rewriteCloneSequenceCreateSQL(
+		"create sequence `source-db`.`seq-name` as bigint increment by 3 minvalue 1 maxvalue 99 start with 7 no cycle",
+		"target-db",
+		"seq-name",
+		0,
+	)
+	require.NoError(t, err)
+	require.Equal(t,
+		"create sequence `target-db`.`seq-name` as bigint increment by 3 minvalue 1 maxvalue 99 start with 7 no cycle",
+		got)
+
+	_, err = rewriteCloneSequenceCreateSQL("create table t(a int)", "target-db", "seq-name", 0)
+	require.ErrorContains(t, err, "expected *tree.CreateSequence")
+}
+
 func TestCloneCatalogLockBatch(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()
@@ -82,6 +98,46 @@ func TestGeneratedCloneRestoreSnapshotTS(t *testing.T) {
 				txnHandler: &TxnHandler{optionBits: test.optionBits},
 			}}
 			require.Equal(t, test.want, generatedCloneRestoreSnapshotTS(ses, 42))
+		})
+	}
+}
+
+func TestCloneForeignKeyChecksRestoresMigrationReplayability(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	for _, test := range []struct {
+		name       string
+		tracked    bool
+		replayable bool
+	}{
+		{name: "untracked"},
+		{name: "tracked replayable", tracked: true, replayable: true},
+		{name: "tracked unreplayable", tracked: true, replayable: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses := newTestSession(t, ctrl)
+			t.Cleanup(ses.Close)
+			ses.migrationSystemVarReplayable = make(map[string]bool)
+			if test.tracked {
+				ses.markMigrationSystemVarReplayable(
+					"foreign_key_checks", test.replayable)
+			}
+
+			oldReplayable, hadReplayability :=
+				ses.getMigrationSystemVarReplayability("foreign_key_checks")
+			ses.markMigrationSystemVarReplayable("foreign_key_checks", false)
+			ses.restoreMigrationSystemVarReplayability(
+				"foreign_key_checks", oldReplayable, hadReplayability)
+
+			gotReplayable, gotReplayability :=
+				ses.getMigrationSystemVarReplayability("foreign_key_checks")
+			require.Equal(t, test.tracked, gotReplayability)
+			if test.tracked {
+				require.Equal(t, test.replayable, gotReplayable)
+			}
+			require.Equal(t, test.tracked && !test.replayable,
+				ses.hasUnreplayableMigrationSystemVars())
 		})
 	}
 }
@@ -1049,4 +1105,18 @@ func Test_rewriteCloneCreateSQL_PreservesCaseSensitiveIdentifiers(t *testing.T) 
 	)
 	require.NoError(t, err)
 	require.Equal(t, "create view `DstDB`.`ViewName` as select `ID` from `DstDB`.`TableName`;", got)
+}
+
+func Test_rewriteCloneCreateSQL_PreservesModeTwoNames(t *testing.T) {
+	got, err := rewriteCloneCreateSQL(
+		"create view `SrcDB`.`ViewName` as select `SrcDB`.`TableName`.`ID` from `SrcDB`.`TableName`",
+		"SrcDB",
+		"DstDB",
+		2,
+	)
+	require.NoError(t, err)
+	require.Equal(t,
+		"create view `DstDB`.`ViewName` as select `DstDB`.`TableName`.`ID` from `DstDB`.`TableName`;",
+		got,
+	)
 }

@@ -105,15 +105,15 @@ func (m *flightData) String() string {
 func (*flightData) ProtoMessage() {}
 
 type executeSubstraitRequest struct {
-	ProtocolVersion  uint32 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3"`
-	SubstraitVersion string `protobuf:"bytes,2,opt,name=substrait_version,json=substraitVersion,proto3"`
-	CapabilityHash   []byte `protobuf:"bytes,3,opt,name=capability_hash,json=capabilityHash,proto3"`
-	MaxBatchBytes    uint64 `protobuf:"varint,4,opt,name=max_batch_bytes,json=maxBatchBytes,proto3"`
-	DeadlineUnixMS   uint64 `protobuf:"varint,5,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3"`
-	Plan             []byte `protobuf:"bytes,6,opt,name=plan,proto3"`
-	QueryID          []byte `protobuf:"bytes,7,opt,name=query_id,json=queryId,proto3"`
-	IdempotencyKey   []byte `protobuf:"bytes,8,opt,name=idempotency_key,json=idempotencyKey,proto3"`
-	AccountID        uint64 `protobuf:"varint,9,opt,name=account_id,json=accountId,proto3"`
+	ProtocolVersion  uint32  `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3"`
+	SubstraitVersion string  `protobuf:"bytes,2,opt,name=substrait_version,json=substraitVersion,proto3"`
+	CapabilityHash   []byte  `protobuf:"bytes,3,opt,name=capability_hash,json=capabilityHash,proto3"`
+	MaxBatchBytes    uint64  `protobuf:"varint,4,opt,name=max_batch_bytes,json=maxBatchBytes,proto3"`
+	DeadlineUnixMS   uint64  `protobuf:"varint,5,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3"`
+	Plan             []byte  `protobuf:"bytes,6,opt,name=plan,proto3"`
+	QueryID          []byte  `protobuf:"bytes,7,opt,name=query_id,json=queryId,proto3"`
+	IdempotencyKey   []byte  `protobuf:"bytes,8,opt,name=idempotency_key,json=idempotencyKey,proto3"`
+	AccountID        *uint64 `protobuf:"varint,9,opt,name=account_id,json=accountId,proto3,oneof"`
 }
 
 func (m *executeSubstraitRequest) Reset() { *m = executeSubstraitRequest{} }

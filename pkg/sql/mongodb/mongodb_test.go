@@ -284,10 +284,12 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 		{name: "missing columns", param: validOptions(), table: validTable()},
 		{name: "column count", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}}, {Name: "other", Typ: planpb.Type{Id: int32(types.T_int64)}}}}},
 		{name: "column order", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "other", Typ: planpb.Type{Id: int32(types.T_int64)}}}}},
+		{name: "generated column", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}, GeneratedCol: &planpb.GeneratedCol{}}}}},
 		{name: "duplicate path", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBPath("a"), tree.NewAttributeMongoDBPath("b")), table: validTable()},
 		{name: "duplicate conversion", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBConvert("strict"), tree.NewAttributeMongoDBConvert("try_null")), table: validTable()},
 		{name: "invalid column conversion", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBConvert("lossy")), table: validTable()},
 		{name: "invalid column path", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBPath("$where")), table: validTable()},
+		{name: "non-null default", param: validOptions(), defs: validDefs(tree.NewAttributeDefault(tree.NewNumVal("fallback", "fallback", false, tree.P_char))), table: validTable()},
 		{name: "unsupported type", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_array_float32)}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -301,6 +303,50 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 	), validTable())
 	require.NoError(t, err)
 	require.Equal(t, ConversionTryNull, spec.Mapping.Columns[0].Conversion)
+
+	spec, err = ParseTableMappingSpec(ctx, validOptions(), validDefs(
+		tree.NewAttributeDefault(&tree.ParenExpr{Expr: tree.NewNumVal("null", "null", false, tree.P_null)}),
+	), validTable())
+	require.NoError(t, err)
+	require.Len(t, spec.Mapping.Columns, 1)
+}
+
+func TestParseTableMappingSpecDefaultContractFromSQL(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		defaultClause string
+		wantError     bool
+	}{
+		{name: "string", defaultClause: "DEFAULT 'fallback'", wantError: true},
+		{name: "number", defaultClause: "DEFAULT 42", wantError: true},
+		{name: "expression", defaultClause: "DEFAULT (uuid())", wantError: true},
+		{name: "null", defaultClause: "DEFAULT NULL"},
+		{name: "parenthesized null", defaultClause: "DEFAULT (NULL)"},
+		{name: "unspecified"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := fmt.Sprintf(`CREATE EXTERNAL TABLE mongo_default (
+				v VARCHAR(64) %s MONGODB_PATH 'payload.value'
+			) ENGINE=MONGODB WITH (
+				'connection'='source', 'database'='telemetry', 'collection'='samples'
+			)`, tc.defaultClause)
+			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			create, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			_, err = ParseTableMappingSpec(t.Context(), create.MongoDBParam, create.Defs, &planpb.TableDef{
+				Cols: []*planpb.ColDef{{Name: "v", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 64}}},
+			})
+			if tc.wantError {
+				require.ErrorContains(t, err, "do not support non-NULL DEFAULT values")
+				require.ErrorContains(t, err, "column v")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestProjectColumnsByNameKeepsCompactResidualLayout(t *testing.T) {
@@ -1009,6 +1055,65 @@ func TestConverterDecimalBinaryAndInternalJSONEncoding(t *testing.T) {
 	require.JSONEq(t, `{"nested":[{"$numberInt":"1"},"two"]}`, types.DecodeJson(bat.Vecs[2].GetBytesAt(0)).String())
 	bat.Clean(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestConverterJSONValues(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("123.456")
+	require.NoError(t, err)
+	objectID := bson.NewObjectID()
+	instant := time.Date(2026, 8, 18, 9, 10, 11, 123000000, time.UTC)
+
+	tests := []struct {
+		name     string
+		value    any
+		missing  bool
+		wantJSON string
+		wantNull bool
+	}{
+		{name: "string", value: "text", wantJSON: `"text"`},
+		{name: "empty string", value: "", wantJSON: `""`},
+		{name: "int32", value: int32(32), wantJSON: `{"$numberInt":"32"}`},
+		{name: "int64", value: int64(64), wantJSON: `{"$numberLong":"64"}`},
+		{name: "double", value: 1.5, wantJSON: `{"$numberDouble":"1.5"}`},
+		{name: "decimal128", value: decimal, wantJSON: `{"$numberDecimal":"123.456"}`},
+		{name: "bool", value: true, wantJSON: `true`},
+		{name: "date", value: instant, wantJSON: fmt.Sprintf(`{"$date":{"$numberLong":"%d"}}`, instant.UnixMilli())},
+		{name: "binary", value: bson.Binary{Data: []byte{1, 2, 3}}, wantJSON: `{"$binary":{"base64":"AQID","subType":"00"}}`},
+		{name: "objectID", value: objectID, wantJSON: fmt.Sprintf(`{"$oid":"%s"}`, objectID.Hex())},
+		{name: "document", value: bson.D{{Key: "nested", Value: int32(1)}}, wantJSON: `{"nested":{"$numberInt":"1"}}`},
+		{name: "array", value: bson.A{int32(1), "two"}, wantJSON: `[{"$numberInt":"1"},"two"]`},
+		{name: "null", value: nil, wantNull: true},
+		{name: "missing", missing: true, wantNull: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			converter, err := NewConverter(t.Context(), []ColumnMapping{{
+				Name: "value", TypeID: int32(types.T_json),
+			}}, 1024)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+			bat := converter.NewBatch()
+			t.Cleanup(func() {
+				bat.Clean(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+
+			doc := bson.D{{Key: "value", Value: tc.value}}
+			if tc.missing {
+				doc = bson.D{{Key: "other", Value: int32(1)}}
+			}
+			raw, err := bson.Marshal(doc)
+			require.NoError(t, err)
+			require.NoError(t, converter.AppendDocument(t.Context(), bat, raw, mp))
+			require.Equal(t, 1, bat.RowCount())
+			if tc.wantNull {
+				require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+				return
+			}
+			require.JSONEq(t, tc.wantJSON, types.DecodeJson(bat.Vecs[0].GetBytesAt(0)).String())
+		})
+	}
 }
 
 func TestConverterCoversSupportedScalarFamilies(t *testing.T) {

@@ -805,6 +805,31 @@ func SeedMissingViewMetadataSQL(generation uint64) string {
 		strings.Join(catalog.SystemDatabases, "','"))
 }
 
+// ReconcileAccountViewMetadataSQL removes lifecycle rows whose target View no
+// longer exists after an account restore, then seeds restored Views that have
+// no refresh row. Sentinel rows are intentionally preserved.
+func ReconcileAccountViewMetadataSQL(accountID uint32, generation uint64) []string {
+	existingView := fmt.Sprintf(
+		"select 1 from %s.%s t where t.account_id=%d and t.rel_id=target_relation_id and t.relkind='%s'",
+		catalog.MO_CATALOG, catalog.MO_TABLES, accountID, catalog.SystemViewRel)
+	return []string{
+		fmt.Sprintf("delete from %s.%s where account_id=%d and target_relation_id<>0 and not exists (%s)",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID, existingView),
+		fmt.Sprintf("delete from %s.%s where account_id=%d and target_relation_id<>0 and not exists (%s)",
+			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, accountID, existingView),
+		fmt.Sprintf(
+			"insert into %s.%s (%s) select t.account_id,t.reldatabase_id,t.rel_id,"+
+				"coalesce(nullif(t.rel_logical_id,0),t.rel_id),t.reldatabase,t.relname,%d,0,'%s',"+
+				"0,null,'',0,null,0 from %s.%s t left join %s.%s r on "+
+				"t.account_id=r.account_id and t.rel_id=r.target_relation_id where t.account_id=%d "+
+				"and t.relkind='%s' and t.reldatabase not in ('%s') and r.target_relation_id is null",
+			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
+			generation, catalog.ViewRefreshStatusDiscovering,
+			catalog.MO_CATALOG, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
+			accountID, catalog.SystemViewRel, strings.Join(catalog.SystemDatabases, "','")),
+	}
+}
+
 func (c *Compile) refreshOneView(
 	target viewRefreshTarget,
 	source viewRelationMutation,

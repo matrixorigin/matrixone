@@ -28,6 +28,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type childProcessSession struct{}
+
+func (*childProcessSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*childProcessSession) AddTempTable(string, string, string)        {}
+func (*childProcessSession) RemoveTempTable(string, string)             {}
+func (*childProcessSession) RemoveTempTableByRealName(string)           {}
+func (*childProcessSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+
+func TestChildProcessesInheritSession(t *testing.T) {
+	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	parent.Session = &childProcessSession{}
+
+	child := parent.NewNoContextChildProc(0)
+	channelChild := parent.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
+	contextChild := parent.NewContextChildProc(0)
+
+	require.Same(t, parent.Session, child.Session)
+	require.Same(t, parent.Session, channelChild.Session)
+	require.Same(t, parent.Session, contextChild.Session)
+}
+
 func TestBuildPipelineContext(t *testing.T) {
 	// Create a parent context
 	parentCtx := context.Background()

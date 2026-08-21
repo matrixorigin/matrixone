@@ -54,6 +54,7 @@ import (
 )
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
+var _ plan2.ViewDependencyIdentityResolver = &TxnCompilerContext{}
 
 type TxnCompilerContext struct {
 	dbName               string
@@ -208,7 +209,12 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	// the source; only name resolution is redirected. Qualified references are
 	// remapped separately at the AST level by applyRemapDb.
 	if execCtx != nil && len(execCtx.remapDb) > 0 {
-		if dst, ok := execCtx.remapDb[db]; ok {
+		lowerCaseTableNames := int64(1)
+		if execCtx.ses != nil {
+			lowerCaseTableNames = parserLowerCaseTableNames(execCtx.ses)
+		}
+		databaseKey := tree.NewCStr(db, lowerCaseTableNames).Compare()
+		if dst, ok := execCtx.remapDb[databaseKey]; ok {
 			return dst
 		}
 	}
@@ -230,6 +236,36 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 
 func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
 	return tcc.execCtx.ses.GetAccountId(), nil
+}
+
+// ResolveViewDependencyAccount returns the account whose catalog namespace was
+// used to resolve a View dependency. Keep the override order aligned with
+// getRelation: snapshot tenant, subscription publisher, then relations that
+// are always read from the system account.
+func (tcc *TxnCompilerContext) ResolveViewDependencyAccount(
+	obj *plan2.ObjectRef,
+	tableDef *plan2.TableDef,
+	snapshot *plan2.Snapshot,
+) (uint32, error) {
+	accountID := tcc.execCtx.ses.GetAccountId()
+	if snapshot != nil && snapshot.Tenant != nil {
+		accountID = snapshot.Tenant.TenantID
+	}
+	if obj.PubInfo != nil {
+		accountID = uint32(obj.PubInfo.TenantId)
+	}
+
+	dbName, tableName := obj.SchemaName, obj.ObjName
+	if dbName == "" {
+		dbName = tableDef.DbName
+	}
+	if tableName == "" {
+		tableName = tableDef.Name
+	}
+	if isClusterTable(dbName, tableName) || ShouldSwitchToSysAccount(dbName, tableName) {
+		accountID = sysAccountID
+	}
+	return accountID, nil
 }
 
 func (tcc *TxnCompilerContext) GetAccountName() string {
@@ -616,38 +652,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	return obj, tableDef, nil
 }
 
-// ResolveViewDependencyAccount reports the physical account selected by the
-// resolver. Dependency capture must use this mapping instead of reconstructing
-// it later from SQL text or an unqualified relation name.
-func (tcc *TxnCompilerContext) ResolveViewDependencyAccount(
-	obj *plan2.ObjectRef,
-	tableDef *plan2.TableDef,
-	snapshot *plan2.Snapshot,
-) (uint32, error) {
-	if obj != nil && obj.PubInfo != nil {
-		return uint32(obj.PubInfo.TenantId), nil
-	}
-	if plan2.IsSnapshotValid(snapshot) && snapshot.Tenant != nil {
-		return snapshot.Tenant.TenantID, nil
-	}
-	databaseName, relationName := "", ""
-	if obj != nil {
-		databaseName, relationName = obj.SchemaName, obj.ObjName
-	}
-	if tableDef != nil {
-		if databaseName == "" {
-			databaseName = tableDef.DbName
-		}
-		if relationName == "" {
-			relationName = tableDef.Name
-		}
-	}
-	if isClusterTable(databaseName, relationName) || ShouldSwitchToSysAccount(databaseName, relationName) {
-		return uint32(sysAccountID), nil
-	}
-	return tcc.GetAccountId()
-}
-
 // EnsureViewMetadataCurrent prevents DESC/SHOW COLUMNS from presenting a
 // durable but stale View TableDef as current while bounded recovery is pending.
 func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
@@ -990,13 +994,41 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	} else {
 		var udVar *UserDefinedVar
 		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil {
-			return nil, err
+			// MySQL creates user variables lazily.  Reading a variable that has
+			// not been assigned yet therefore evaluates to NULL rather than
+			// producing an unknown-variable error.
+			return nil, nil
 		}
 
 		varValue = udVar.Value
 	}
 
 	return
+}
+
+// ResolveVariableType returns the type fixed when a user variable was
+// assigned. The value itself may be represented as text for protocol and
+// compatibility reasons (notably DECIMAL), so planner numeric binding must
+// not infer a narrower type from a sibling literal.
+func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (plan2.Type, error) {
+	if isSystemVar {
+		return plan2.Type{}, nil
+	}
+	if tcc.execCtx != nil {
+		if value, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+			return inferUserDefinedVarType(value), nil
+		}
+	}
+	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		// An unassigned user variable is NULL; TEXT is the neutral binding type
+		// and lets a numeric context perform the normal MySQL coercion.
+		return inferUserDefinedVarType(nil), nil
+	}
+	if udVar.Type.Id != 0 {
+		return udVar.Type, nil
+	}
+	return inferUserDefinedVarType(udVar.Value), nil
 }
 
 func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
@@ -1008,7 +1040,9 @@ func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar,
 	}
 	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
 	if err != nil {
-		return false, err
+		// See ResolveVariable: an unassigned user variable is NULL and has
+		// no binary-string attribute.
+		return false, nil
 	}
 	return udVar.IsBin, nil
 }
@@ -1034,7 +1068,9 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	}
 	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
 	if err != nil {
-		return vector.PrepareParamNone, err
+		// See ResolveVariable: an unassigned user variable is NULL and has no
+		// prepared-parameter conversion category.
+		return vector.PrepareParamNone, nil
 	}
 	return udVar.PrepareParamKind, nil
 }

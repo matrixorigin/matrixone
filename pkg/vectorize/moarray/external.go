@@ -178,6 +178,19 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	return float64(ret), err
 }
 
+// L1Distance returns the Manhattan distance sum|a-b|. Like its L2 siblings it checks the
+// dimensions here so a mismatch surfaces as the user-facing ARRAY_INVALID_OP naming both
+// dimensions, instead of the kernel's bare internal error (whose text also differs
+// between the SIMD and scalar builds).
+func L1Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+	}
+
+	ret, err := metric.L1Distance[T](v1, v2)
+	return float64(ret), err
+}
+
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	if len(v1) != len(v2) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))

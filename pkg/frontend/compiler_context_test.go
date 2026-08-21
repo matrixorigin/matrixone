@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,6 +75,8 @@ func TestSystemViewsDoNotRequireRefreshState(t *testing.T) {
 	}
 }
 
+var _ plan2.ViewDependencyIdentityResolver = (*TxnCompilerContext)(nil)
+
 func TestExecCtxWithRootSQLRestoresScopedValues(t *testing.T) {
 	ses := &Session{}
 	ses.SetSql("session SQL")
@@ -112,6 +116,41 @@ func TestExecCtxCloseClearsRootSQLOverride(t *testing.T) {
 	execCtx := &ExecCtx{rootSQLOverride: &rootSQL}
 	execCtx.Close()
 	require.Nil(t, execCtx.rootSQLOverride)
+}
+
+func TestResolveViewDependencyAccount(t *testing.T) {
+	ses := &Session{}
+	ses.SetTenantInfo(&TenantInfo{TenantID: 7})
+	ses.SetAccountId(7)
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{ses: ses}}
+
+	for _, test := range []struct {
+		name     string
+		obj      *pbplan.ObjectRef
+		snapshot *pbplan.Snapshot
+		want     uint32
+	}{
+		{name: "ordinary tenant table", obj: &pbplan.ObjectRef{SchemaName: "db", ObjName: "t"}, want: 7},
+		{name: "snapshot tenant", obj: &pbplan.ObjectRef{SchemaName: "db", ObjName: "t"},
+			snapshot: &pbplan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 8}}, want: 8},
+		{name: "subscription publisher", obj: &pbplan.ObjectRef{SchemaName: "db", ObjName: "t",
+			PubInfo: &pbplan.PubInfo{TenantId: 9}}, want: 9},
+		{name: "subscription overrides snapshot", obj: &pbplan.ObjectRef{SchemaName: "db", ObjName: "t",
+			PubInfo: &pbplan.PubInfo{TenantId: 9}},
+			snapshot: &pbplan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 8}}, want: 9},
+		{name: "cluster table", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_CATALOG, ObjName: "cluster_table"}, want: 0},
+		{name: "statement info", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_SYSTEM, ObjName: catalog.MO_STATEMENT}, want: 0},
+		{name: "system relation overrides publisher", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_SYSTEM,
+			ObjName: catalog.MO_STATEMENT, PubInfo: &pbplan.PubInfo{TenantId: 9}}, want: 0},
+		{name: "metric", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_SYSTEM_METRICS, ObjName: catalog.MO_METRIC}, want: 0},
+		{name: "sql statement cu", obj: &pbplan.ObjectRef{SchemaName: catalog.MO_SYSTEM_METRICS, ObjName: catalog.MO_SQL_STMT_CU}, want: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := tcc.ResolveViewDependencyAccount(test.obj, &pbplan.TableDef{}, test.snapshot)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
 }
 
 func TestGetConfig(t *testing.T) {

@@ -1099,6 +1099,8 @@ func handleCloneDatabaseWithSource(
 	}
 
 	if source.hasFkCycle {
+		oldForeignKeyChecksReplayable, hadForeignKeyChecksReplayability :=
+			ses.getMigrationSystemVarReplayability("foreign_key_checks")
 		oldForeignKeyChecks, getErr := ses.GetSessionSysVar("foreign_key_checks")
 		if getErr != nil {
 			return nil, getErr
@@ -1108,6 +1110,11 @@ func handleCloneDatabaseWithSource(
 		}
 		defer func() {
 			restoreErr := ses.SetSessionSysVar(reqCtx, "foreign_key_checks", oldForeignKeyChecks)
+			ses.restoreMigrationSystemVarReplayability(
+				"foreign_key_checks",
+				oldForeignKeyChecksReplayable,
+				hadForeignKeyChecksReplayability,
+			)
 			if err == nil {
 				err = restoreErr
 			}
@@ -1141,6 +1148,34 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 	restoreSnapshotTS := generatedCloneRestoreSnapshotTS(ses, snapshotTS)
+	sequenceSnapshotTS := restoreSnapshotTS
+	if source.snapshot != nil && source.snapshot.TS != nil {
+		sequenceSnapshotTS = source.snapshot.TS.PhysicalTime
+	}
+
+	cloneSequence := func(srcTbl *tableInfo) error {
+		createSQL, rewriteErr := rewriteCloneSequenceCreateSQL(
+			srcTbl.createSql,
+			stmt.DstDatabase.String(),
+			srcTbl.tblName,
+			parserLowerCaseTableNames(ses),
+		)
+		if rewriteErr != nil {
+			return rewriteErr
+		}
+		return restoreSequence(
+			reqCtx,
+			bh,
+			createSQL,
+			source.srcResolveDBName,
+			srcTbl.tblName,
+			stmt.DstDatabase.String(),
+			srcTbl.tblName,
+			sequenceSnapshotTS,
+			fromAccountID,
+			source.toAccountId,
+		)
+	}
 
 	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
 		srcTable := newQualifiedCloneTableName(srcDb, srcTbl, stmt.AtTsExpr)
@@ -1186,13 +1221,21 @@ func handleCloneDatabaseWithSource(
 	}
 
 	for _, srcTbl := range source.srcTblInfos {
+		if isSequence(srcTbl) {
+			if err = cloneSequence(srcTbl); err != nil {
+				return
+			}
+		}
+	}
+
+	for _, srcTbl := range source.srcTblInfos {
 
 		key := genKey(srcTbl.dbName, srcTbl.tblName)
 		if _, ok := source.fkTableMap[key]; ok {
 			continue
 		}
 
-		if srcTbl.typ == view {
+		if srcTbl.typ == view || isSequence(srcTbl) {
 			continue
 		}
 
@@ -1329,7 +1372,16 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 
 	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
 	original := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
-	applyRemapDb([]tree.Statement{createView}, map[string]string{srcDBName: dstDBName})
+	cloneTargetDatabase := dstDBName
+	if lowerCaseTableNames == 1 {
+		cloneTargetDatabase = tree.NewCStr(dstDBName, lowerCaseTableNames).Compare()
+	}
+	remapDbInStmt(createView, remapDbContext{
+		databases: map[string]string{
+			tree.NewCStr(srcDBName, lowerCaseTableNames).Compare(): cloneTargetDatabase,
+		},
+		lowerCaseTableNames: lowerCaseTableNames,
+	})
 	rewritten := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
 	if rewritten == original {
 		return sql, nil
@@ -1338,6 +1390,31 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 		rewritten += ";"
 	}
 	return rewritten, nil
+}
+
+func rewriteCloneSequenceCreateSQL(
+	sql string,
+	dstDBName string,
+	dstTblName string,
+	lowerCaseTableNames int64,
+) (string, error) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, lowerCaseTableNames)
+	if err != nil {
+		return "", err
+	}
+	createSequence, ok := stmt.(*tree.CreateSequence)
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtxf(
+			"clone sequence SQL is %T, expected *tree.CreateSequence", stmt)
+	}
+	targetName := newQualifiedCloneTableName(dstDBName, dstTblName, nil)
+	createSequence.Name = &targetName
+	return tree.StringWithOpts(
+		createSequence,
+		dialect.MYSQL,
+		tree.WithSingleQuoteString(),
+		tree.WithQuoteIdentifier(),
+	), nil
 }
 
 func tryToIncreaseTxnPhysicalTS(

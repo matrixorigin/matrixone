@@ -51,8 +51,8 @@ func ReplaceRegeneratedViewDependencies(
 	if data.LowerCaseTableNames != nil {
 		lowerCaseTableNames = *data.LowerCaseTableNames
 	}
-	updated, err := patchPersistedViewDependencies(
-		regenerated.TableDef.ViewSql.View, dependencies, lowerCaseTableNames)
+	updated, err := patchPersistedViewMetadata(
+		regenerated.TableDef.ViewSql.View, nil, dependencies, lowerCaseTableNames)
 	if err != nil {
 		return err
 	}
@@ -72,6 +72,26 @@ func (c *viewRegenerationContext) DefaultDatabase() string { return c.defaultDat
 func (c *viewRegenerationContext) GetRootSql() string      { return c.rootSQL }
 func (c *viewRegenerationContext) GetLowerCaseTableNames() int64 {
 	return c.lowerCaseTableNames
+}
+
+func (c *viewRegenerationContext) ResolveViewDependencyAccount(
+	obj *ObjectRef,
+	tableDef *TableDef,
+	snapshot *Snapshot,
+) (uint32, error) {
+	if resolver, ok := c.CompilerContext.(ViewDependencyIdentityResolver); ok {
+		return resolver.ResolveViewDependencyAccount(obj, tableDef, snapshot)
+	}
+	accountID, err := c.CompilerContext.GetAccountId()
+	if err != nil {
+		return 0, err
+	}
+	if obj.PubInfo != nil {
+		accountID = uint32(obj.PubInfo.TenantId)
+	} else if snapshot != nil && snapshot.Tenant != nil {
+		accountID = snapshot.Tenant.TenantID
+	}
+	return accountID, nil
 }
 
 // RegenerateViewDefinition parses a persisted View with its original lexical
@@ -133,8 +153,8 @@ func RegenerateViewDefinition(
 		return nil, err
 	}
 
-	updatedViewData, err := patchPersistedViewDependencies(
-		persistedViewData, generatedData.Dependencies, lowerCaseTableNames)
+	updatedViewData, err := patchPersistedViewMetadata(
+		persistedViewData, &generatedData.Stmt, generatedData.Dependencies, lowerCaseTableNames)
 	if err != nil {
 		return nil, err
 	}
@@ -145,8 +165,9 @@ func RegenerateViewDefinition(
 	}, nil
 }
 
-func patchPersistedViewDependencies(
+func patchPersistedViewMetadata(
 	persistedViewData string,
+	stableStatement *string,
 	dependencies []ViewDependency,
 	lowerCaseTableNames int64,
 ) (string, error) {
@@ -157,6 +178,13 @@ func patchPersistedViewDependencies(
 	encodedDependencies, err := json.Marshal(dependencies)
 	if err != nil {
 		return "", err
+	}
+	if stableStatement != nil {
+		encodedStatement, marshalErr := json.Marshal(*stableStatement)
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		fields["Stmt"] = encodedStatement
 	}
 	fields["dependencies"] = encodedDependencies
 	if _, ok := fields["lower_case_table_names"]; !ok {

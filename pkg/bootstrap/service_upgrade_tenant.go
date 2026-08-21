@@ -350,19 +350,23 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				return
 			}
 
-			for {
-				hasUpgradeTenants, err := fn()
-				if err != nil {
-					// Retry on the next bounded check interval. Retrying here would
-					// spin on a persistent catalog error and delay cancellation.
-					break
-				}
-				if hasUpgradeTenants {
-					continue
-				}
-				break
-			}
+			drainUpgradeTenants(ctx, fn)
 			timer.Reset(s.upgrade.checkUpgradeTenantDuration)
+		}
+	}
+}
+
+func drainUpgradeTenants(ctx context.Context, fn func() (bool, error)) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		hasUpgradeTenants, err := fn()
+		if err != nil || !hasUpgradeTenants {
+			return
 		}
 	}
 }

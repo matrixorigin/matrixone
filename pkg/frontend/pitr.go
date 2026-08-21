@@ -1084,6 +1084,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			if rtnErr != nil {
 				return rtnErr
 			}
+			if rtnErr = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); rtnErr != nil {
+				return rtnErr
+			}
 
 			if rtnErr = CancelCheck(ctx); rtnErr != nil {
 				return
@@ -1205,6 +1208,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			tenantInfo.GetTenantID(),
 			tenantInfo.GetTenantID(),
 		); err != nil {
+			return
+		}
+		if err = reconcileAccountViewMetadata(ctx, ses, bh, tenantInfo.GetTenantID()); err != nil {
 			return
 		}
 	}
@@ -1517,6 +1523,24 @@ func reCreateTableWithPitr(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
 	}
+	if isSequence(tblInfo) {
+		accountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreSequence(
+			ctx,
+			bh,
+			tblInfo.createSql,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			ts,
+			accountID,
+			accountID,
+		)
+	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
@@ -1590,6 +1614,17 @@ func getTableInfoWithPitr(
 		pitrName,
 		tableInfos,
 		func(tblInfo *tableInfo) (string, error) {
+			if isSequence(tblInfo) {
+				return getCreateSequenceSQL(
+					ctx,
+					ts,
+					tblInfo.dbName,
+					tblInfo.tblName,
+					func(queryCtx context.Context, sql string, colIndices ...uint64) ([][]string, error) {
+						return getStringColsList(queryCtx, bh, sql, colIndices...)
+					},
+				)
+			}
 			return getCreateTableSqlWithTs(ctx, bh, ts, tblInfo.dbName, tblInfo.tblName)
 		},
 	)
@@ -1806,6 +1841,18 @@ func restoreViewsWithPitr(
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
+				// The dependency sort plans every view BEFORE the restore loop, so the
+				// #27027 refusal lands here first and would abort the whole restore -- the
+				// skip further down never gets a chance.
+				//
+				// KEEP the vertex and mark the view (same reasoning as sortedViewInfos):
+				// dropping it from the graph meant the restore loop never visited it and so
+				// never ran the DROP, leaving the old object standing wherever the target
+				// database is not rebuilt. Marked, it is dropped and only its CREATE is
+				// skipped. No edges: its plan never built, so its dependencies are unknown.
+				if markUnservableViewInSort(ses, pitrName, viewEntry, &g, key, err) {
+					continue
+				}
 				return err
 			}
 		}
@@ -1837,11 +1884,25 @@ func restoreViewsWithPitr(
 				return err
 			}
 
+			if skipUnservableViewInRestore(ses, pitrName, tblInfo) {
+				continue
+			}
+
 			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 
 			if err = executeViewCreateSQLForRestore(ctx, bh, tblInfo); err != nil {
+				// Same reasoning as restoreViews: the view was dropped just above, and an
+				// unrunnable legacy definition must not make the entire PITR restore fail.
+				// This path has no skip flag at all, so the tolerance is unconditional.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
+							"the view is NOT present after the restore",
+						pitrName, tblInfo.dbName, tblInfo.tblName, err))
+					continue
+				}
 				return err
 			}
 		}

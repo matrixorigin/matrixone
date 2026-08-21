@@ -79,8 +79,16 @@ func viewMetadataRequireRevalidationSQL() []string {
 	}
 }
 
+// ViewMetadataRequireRevalidationSQL returns the statements that atomically
+// fence a lifecycle-unaware mutation. Frontend catalog mutations execute these
+// statements in their existing transaction while this lifecycle layer remains
+// inactive, matching Compile.viewMetadataRefreshAvailable.
+func ViewMetadataRequireRevalidationSQL() []string {
+	return viewMetadataRequireRevalidationSQL()
+}
+
 // RequireViewMetadataRevalidation durably records that lifecycle DDL may be
-// skipped while the cluster capability barrier is closed.
+// skipped while lifecycle activation is unavailable.
 func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor) error {
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
 	defer cancel()
@@ -181,7 +189,7 @@ func seedViewMetadataRevalidationPage(txn executor.TxnExecutor) (complete bool, 
 }
 
 // StartViewMetadataRevalidation starts one durable bounded pass over every
-// CURRENT user View after the rolling-upgrade capability barrier reopens.
+// CURRENT user View after a later activation layer opens the lifecycle gate.
 func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor, workerID string) error {
 	_ = workerID
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
@@ -201,7 +209,7 @@ func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQL
 		result, err := txn.Exec(fmt.Sprintf(
 			"update %s.%s set source_account_id=0,source_database_name='',source_relation_name='',"+
 				"source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
-				"where account_id=0 and target_relation_id=0 and dependency_ordinal=0 "+
+				"where target_relation_id=0 and dependency_ordinal=0 "+
 				"and source_relation_kind='%s'",
 			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 			catalog.ViewRefreshStatusRevalidateScan,
@@ -226,8 +234,11 @@ func RunViewMetadataRecovery(
 	defer cancel()
 	ctx = callCtx
 	blocked, err := viewMetadataRevalidationStillRequired(ctx, sqlExecutor)
-	if err != nil || blocked {
+	if err != nil {
 		return err
+	}
+	if blocked {
+		return StartViewMetadataRevalidation(ctx, sqlExecutor, workerID)
 	}
 	excludedTargets := make([]viewRefreshTarget, 0, viewMetadataRecoveryPageSize)
 	call := func(discover bool) (bool, error) {

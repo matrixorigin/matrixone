@@ -6111,6 +6111,164 @@ func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 	assert.Equal(t, "t1", arr[0].tableName)
 }
 
+func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
+	const (
+		dbName    = "mongodb_permission"
+		tableName = "events_ext"
+		viewName  = "events_view"
+	)
+
+	for _, tc := range []struct {
+		name        string
+		originViews []string
+		directView  string
+	}{
+		{name: "direct table"},
+		{
+			name:        "view",
+			originViews: []string{dbName + "." + viewName},
+			directView:  dbName + "." + viewName,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: &plan2.Query{
+						StmtType: plan.Query_SELECT,
+						Nodes: []*plan2.Node{
+							{
+								NodeType: plan.Node_EXTERNAL_SCAN,
+								ObjRef: &plan2.ObjectRef{
+									SchemaName: dbName,
+									ObjName:    tableName,
+								},
+								ExternScan: &plan.ExternScan{
+									Type: int32(plan.ExternType_MONGODB_TB),
+									MongodbScan: &plan.MongoScan{
+										Database:   "mongodb_source",
+										Collection: "events",
+									},
+								},
+								OriginViews: tc.originViews,
+								DirectView:  tc.directView,
+							},
+						},
+					},
+				},
+			}
+
+			arr := extractPrivilegeTipsFromPlan(p)
+			require.Len(t, arr, 1)
+			require.Equal(t, PrivilegeTypeSelect, arr[0].typ)
+			require.Equal(t, objectTypeTable, arr[0].objType)
+			require.Equal(t, dbName, arr[0].databaseName)
+			require.Equal(t, tableName, arr[0].tableName)
+			require.Equal(t, tc.originViews, arr[0].originViews)
+			require.Equal(t, tc.directView, arr[0].directView)
+		})
+	}
+}
+
+func TestMongoDBExternalTableScanDetectionExcludesOtherExternalScans(t *testing.T) {
+	for _, externType := range []plan.ExternType{
+		plan.ExternType_LOAD,
+		plan.ExternType_EXTERNAL_TB,
+		plan.ExternType_ICEBERG_TB,
+		plan.ExternType_RESULT_SCAN,
+	} {
+		node := &plan.Node{
+			NodeType:   plan.Node_EXTERNAL_SCAN,
+			ExternScan: &plan.ExternScan{Type: int32(externType)},
+		}
+		require.False(t, isMongoDBExternalTableScan(node), externType.String())
+	}
+	require.False(t, isMongoDBExternalTableScan(nil))
+	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_EXTERNAL_SCAN}))
+	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}))
+}
+
+func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
+	const (
+		dbName    = "mongodb_permission"
+		tableName = "events_ext"
+		viewName  = "events_view"
+		userID    = 3
+		roleID    = 5
+	)
+
+	for _, tc := range []struct {
+		name           string
+		originViews    []string
+		directView     string
+		tableSelect    bool
+		addRevokedView bool
+		want           bool
+	}{
+		{name: "table select revoked"},
+		{name: "table select granted", tableSelect: true, want: true},
+		{
+			name:           "view select revoked",
+			originViews:    []string{dbName + "." + viewName},
+			directView:     dbName + "." + viewName,
+			tableSelect:    true,
+			addRevokedView: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			stmt := &tree.Select{}
+			ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "test_account",
+				User:          "mongodb_reader",
+				DefaultRole:   "mongodb_reader_role",
+				TenantID:      1,
+				UserID:        userID,
+				DefaultRoleID: roleID,
+			})
+
+			sql2result := makeSql2ExecResult2(userID, nil, nil, nil, nil, nil, nil, nil, nil)
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, tableName, map[PrivilegeType]bool{
+				PrivilegeTypeSelect: tc.tableSelect,
+			})
+			if tc.addRevokedView {
+				addViewPrivilegeResultsForRole(t, sql2result, roleID, dbName, viewName, nil)
+			}
+			sql2result[getSqlForInheritedRoleIdOfRoleId(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+
+			bh := newBh(ctrl, sql2result)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan.Query{
+				StmtType: plan.Query_SELECT,
+				Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_EXTERNAL_SCAN,
+						ObjRef: &plan.ObjectRef{
+							SchemaName: dbName,
+							ObjName:    tableName,
+						},
+						ExternScan: &plan.ExternScan{
+							Type:        int32(plan.ExternType_MONGODB_TB),
+							MongodbScan: &plan.MongoScan{},
+						},
+						OriginViews: tc.originViews,
+						DirectView:  tc.directView,
+					},
+				},
+			}}}
+
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+				ses.GetTxnHandler().GetTxnCtx(), ses, stmt, p)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, ok)
+		})
+	}
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement
@@ -6941,6 +7099,39 @@ func addTablePrivilegeResultsForRole(
 		entry.objType = objectTypeTable
 		entry.databaseName = dbName
 		entry.tableName = tableName
+		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+		require.NoError(t, err)
+		for _, level := range levels {
+			sql, err := getSqlForPrivilege(context.TODO(), roleID, entry, level)
+			require.NoError(t, err)
+			rows := [][]interface{}{}
+			if allowed[privType] {
+				rows = [][]interface{}{{entry.privilegeId, true}}
+			}
+			sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+		}
+	}
+}
+
+func addViewPrivilegeResultsForRole(
+	t *testing.T,
+	sql2result map[string]ExecResult,
+	roleID int64,
+	dbName string,
+	viewName string,
+	allowed map[PrivilegeType]bool,
+) {
+	t.Helper()
+	privTypes := []PrivilegeType{
+		PrivilegeTypeSelect,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+	}
+	for _, privType := range privTypes {
+		entry := privilegeEntriesMap[privType]
+		entry.objType = objectTypeView
+		entry.databaseName = dbName
+		entry.tableName = viewName
 		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
 		require.NoError(t, err)
 		for _, level := range levels {
@@ -11652,7 +11843,6 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 	runtime := moruntime.ServiceRuntime(ses.GetService())
 	readyCluster := &mockMOCluster{cnServices: []metadata.CNService{{
 		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
-		ViewMetadataRefreshSupported: true,
 	}}}
 	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
 	runtime.SetGlobalVariables(moruntime.ClusterService, readyCluster)
@@ -11672,6 +11862,8 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 		require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
 		require.Contains(t, bh.executedSQLs[1], "select 42,0,0,0")
 		require.Contains(t, bh.executedSQLs[1], "d.dependency_generation")
+		require.Contains(t, bh.executedSQLs[1], "d.source_relation_kind")
+		require.NotContains(t, bh.executedSQLs[1], "'','','','','REVALIDATE_SCAN'")
 		require.Contains(t, bh.executedSQLs[1],
 			"in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN','ACTIVATED','LEGACY_SCAN')")
 	})
