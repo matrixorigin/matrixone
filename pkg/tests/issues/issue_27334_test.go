@@ -92,6 +92,7 @@ func TestIssue27334UpdateAffectedRowsHonorsClientFoundRows(t *testing.T) {
 		mustExec(t, ctx, changedConn, "insert into string_t values (1, 'a', 'a')")
 		assertAffected(changedConn, "update string_t set c = 'a   ' where id = 1", 0)
 		assertAffected(foundConn, "update string_t set c = 'a   ' where id = 1", 1)
+		assertAffected(changedConn, "update string_t set c = 'b   ' where id = 1", 1)
 		assertAffected(changedConn, "update string_t set v = 'a ' where id = 1", 1)
 		assertAffected(foundConn, "update string_t set v = 'a ' where id = 1", 1)
 
