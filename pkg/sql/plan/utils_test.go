@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,6 +61,20 @@ func TestSplitPlanConjunctionKeepsSharedVolatileMemoRoot(t *testing.T) {
 	split := splitPlanConjunction(outer)
 	require.Len(t, split, 2)
 	require.Same(t, shared, split[0])
+}
+
+func TestExprIsZonemappableRejectsVolatileRuntimeConstant(t *testing.T) {
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	volatile := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+			Obj: randFn.GetEncodedOverloadID(), ObjName: "rand",
+		}}},
+	}
+
+	require.False(t, ExprIsZonemappable(context.Background(), volatile))
+	require.True(t, ExprIsZonemappable(context.Background(), MakePlan2Int64ConstExprWithType(1)))
 }
 
 func TestHasTrailingZeros(t *testing.T) {

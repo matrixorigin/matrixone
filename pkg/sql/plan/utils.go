@@ -1235,6 +1235,16 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
+	// Column-free is not the same as scan-invariant. A volatile function can
+	// produce a new value for every row and must not be evaluated once more by
+	// block pruning before the row-level filter runs.
+	if containsVolatileFunction(expr) {
+		return false
+	}
+	return exprIsZonemappable(ctx, expr)
+}
+
+func exprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		isConst := true
@@ -1244,7 +1254,7 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 			} else {
 				isConst = false
 			}
-			isZonemappable := ExprIsZonemappable(ctx, arg)
+			isZonemappable := exprIsZonemappable(ctx, arg)
 			if !isZonemappable {
 				return false
 			}

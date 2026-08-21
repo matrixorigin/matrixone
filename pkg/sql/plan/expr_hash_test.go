@@ -67,6 +67,27 @@ func TestExprStructuralHashDistinguishesObjectRef(t *testing.T) {
 	require.True(t, exprStructuralEqual(a, c))
 }
 
+func TestExprStructuralIdentityIncludesNegativeAuxID(t *testing.T) {
+	a := int64Lit(1)
+	a.AuxId = -1
+	b := int64Lit(1)
+	b.AuxId = -2
+	c := int64Lit(1)
+	c.AuxId = -1
+
+	require.NotEqual(t, exprStructuralHash(a), exprStructuralHash(b))
+	require.False(t, exprStructuralEqual(a, b))
+	require.Equal(t, exprStructuralHash(a), exprStructuralHash(c))
+	require.True(t, exprStructuralEqual(a, c))
+
+	ordinaryA := int64Lit(1)
+	ordinaryA.AuxId = 1
+	ordinaryB := int64Lit(1)
+	ordinaryB.AuxId = 2
+	require.Equal(t, exprStructuralHash(ordinaryA), exprStructuralHash(ordinaryB))
+	require.True(t, exprStructuralEqual(ordinaryA, ordinaryB))
+}
+
 func int64Lit(v int64) *planpb.Expr {
 	return &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_int64)},

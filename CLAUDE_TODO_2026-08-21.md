@@ -71,3 +71,29 @@ sequence 上运行，不依赖随机数、sleep、执行顺序或概率重试。
 - base/head：`matrixorigin/matrixone:main` ← `ck89119:issue-27088-volatile-main`。
 - 使用仓库 PR 模板，类型勾选 `BUG`，英文标题与正文；明确说明本 PR 只拆出 volatile IN 单次求值闭环及精简专项回归。
 - 创建 Draft PR 后只回读 URL、head/base、Draft 状态与 CI 初始状态；不擅自评论 issue/PR。
+
+## PR #27448 review follow-up
+
+### P1：直接字面量 mixed-type IN/NOT IN
+
+- 不变量：无论候选来自 prepared 参数还是 SQL 字面量，mixed-type 展开后的同一 volatile 左操作数都必须在一个逻辑
+  predicate root 内只求值一次。
+- 反例：单行表 `WHERE nextval('s') [NOT] IN ('0', '2')` 当前使 sequence 推进两次并翻转结果；projection 与数字
+  同类型谓词是相邻控制组。
+- 方案：从真实 bind/optimize 结果定位 identity 丢失或 root 拆分的首个边界，在该共同边界保留 memo identity；不为
+  prepared 参数或字符串字面量分别增加特判。
+- 回归：在现有 embedded-CN 公共路径增加直接字面量 scalar `IN`/`NOT IN`，继续同时断言结果和 `currval`。
+
+### P1：结构去重必须尊重 memo identity
+
+- 不变量：负 AuxId 是 planner-local volatile occurrence identity；结构优化只能合并相同 identity，不能仅因表达式文本相同而
+  合并不同语法位置的 volatile 调用。
+- 反例：两个独立 `nextval('s') IN (0, 2)` 通过 `OR` 连接，正确应分别得到 1、2；当前 distributivity 将它们提取为一个
+  公共条件，得到 `count=0, currval=1`。
+- 方案：`exprStructuralHash` 与 `exprStructuralEqual` 仅在 AuxId 为负时纳入 identity；非负 AuxId 仍作为现有 planner
+  临时编号忽略，避免破坏普通结构等价与优化命中率。热路径只增加一次整数分支/写入，无额外递归或分配。
+- 回归：增加 hash/equality 白盒，覆盖相同负 identity 相等、不同负 identity 不等、非负 AuxId 仍忽略；增加上述 SQL
+  黑盒，证明两个独立 occurrence 均执行且 OR 结果正确。
+
+按 review-comment 例外直接实施。完成后重新运行 focused regressions、`pkg/sql/plan`、`pkg/sql/colexec`、
+`pkg/tests/issues`、build、vet 与 diff-check，再执行完整 self-review 后普通 push；不 force push、不擅自回复或 resolve 线程。

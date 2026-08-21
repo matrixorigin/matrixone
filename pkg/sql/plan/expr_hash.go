@@ -90,6 +90,12 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 		writeByte(h, tagNil)
 		return
 	}
+	if expr.AuxId < 0 {
+		writeByte(h, 1)
+		writeUint32(h, uint32(expr.AuxId))
+	} else {
+		writeByte(h, 0)
+	}
 	// Incorporate the Typ so that e.g. int64(5) and varchar("5") differ.
 	writeUint32(h, uint32(expr.Typ.Id))
 	writeUint32(h, uint32(expr.Typ.Width))
@@ -253,6 +259,9 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		return true
 	}
 	if a == nil || b == nil {
+		return false
+	}
+	if (a.AuxId < 0 || b.AuxId < 0) && a.AuxId != b.AuxId {
 		return false
 	}
 	if a.Typ.Id != b.Typ.Id || a.Typ.Width != b.Typ.Width ||
