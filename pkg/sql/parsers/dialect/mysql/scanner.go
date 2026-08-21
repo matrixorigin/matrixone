@@ -1017,7 +1017,7 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 	// which is the semantic distinction from the legacy implicit-alias spelling.
 	// Scan SQL tokens so relation/alias names, quoted strings, comments, and
 	// later joins cannot influence this decision.
-	inOn, escaped, leftRef, asofRef, pendingIneq, equalityKey := false, false, false, false, false, false
+	inOn, escaped, leftRef, asofRef, pendingIneq, equalityKey, operandRef := false, false, false, false, false, false, false
 	rightName := s.asofRightRelationName(pos)
 	var quote byte
 	for i := pos; i < len(s.buf); {
@@ -1045,6 +1045,7 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 				return false
 			}
 			if inOn {
+				operandRef = true
 				word := strings.ToLower(s.buf[i+1 : i+1+end])
 				next := s.skipBlankAndCommentsFrom(i + end + 2)
 				qualified := next < len(s.buf) && s.buf[next] == '.'
@@ -1085,13 +1086,14 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 		}
 		if inOn && (ch == '<' || ch == '>') {
 			pendingIneq = true
+			operandRef = false
 			if leftName != "" && leftRef && (!asofRef || rightName == "asof") {
 				return true
 			}
 		}
 		if inOn && ch == '=' && (i == 0 || (s.buf[i-1] != '<' && s.buf[i-1] != '>')) {
-			equalityKey = equalityKey || leftRef
-			leftRef, asofRef, pendingIneq = false, false, false
+			equalityKey = equalityKey || operandRef
+			leftRef, asofRef, pendingIneq, operandRef = false, false, false, false
 		}
 		if !isUnquotedIdentifierLetterAt(s.buf, i) && !isDigit(uint16(s.buf[i])) {
 			i++
@@ -1102,6 +1104,9 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 			i++
 		}
 		word := strings.ToLower(s.buf[start:i])
+		if inOn {
+			operandRef = true
+		}
 		if inOn && leftName != "" && word == leftName {
 			next := s.skipBlankAndCommentsFrom(i)
 			leftRef = next < len(s.buf) && s.buf[next] == '.'
@@ -1147,18 +1152,59 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 
 func (s *Scanner) asofRightRelationName(pos int) string {
 	pos = s.skipBlankAndCommentsFrom(pos)
-	if pos >= len(s.buf) || !isUnquotedIdentifierLetterAt(s.buf, pos) {
+	parseName := func(at int) (string, int, bool) {
+		at = s.skipBlankAndCommentsFrom(at)
+		if at < len(s.buf) && s.buf[at] == '`' {
+			end := strings.IndexByte(s.buf[at+1:], '`')
+			if end < 0 {
+				return "", at, false
+			}
+			return strings.ToLower(s.buf[at+1 : at+1+end]), at + end + 2, true
+		}
+		if at >= len(s.buf) || !isUnquotedIdentifierLetterAt(s.buf, at) {
+			return "", at, false
+		}
+		end := at + 1
+		for end < len(s.buf) && (isUnquotedIdentifierLetterAt(s.buf, end) || isDigit(uint16(s.buf[end])) || s.buf[end] == '_') {
+			end++
+		}
+		return strings.ToLower(s.buf[at:end]), end, true
+	}
+	if pos >= len(s.buf) {
 		return ""
 	}
-	end := pos + 1
-	for end < len(s.buf) && (isUnquotedIdentifierLetterAt(s.buf, end) || isDigit(uint16(s.buf[end])) || s.buf[end] == '_') {
-		end++
+	name, end, ok := parseName(pos)
+	if !ok {
+		if s.buf[pos] == '(' {
+			depth := 0
+			for i := pos; i < len(s.buf); i++ {
+				if s.buf[i] == '(' {
+					depth++
+				} else if s.buf[i] == ')' {
+					depth--
+					if depth == 0 {
+						name, end, ok = "", i+1, true
+						break
+					}
+				}
+			}
+		}
+		if !ok {
+			return ""
+		}
 	}
 	aliasPos := s.skipBlankAndCommentsFrom(end)
+	if hasKeywordAt(s.buf, aliasPos, "as") {
+		aliasPos = s.skipBlankAndCommentsFrom(aliasPos + len("as"))
+		alias, _, aliasOK := parseName(aliasPos)
+		if aliasOK {
+			return alias
+		}
+	}
 	if hasKeywordAt(s.buf, aliasPos, "asof") {
 		return "asof"
 	}
-	return strings.ToLower(s.buf[pos:end])
+	return name
 }
 
 func (s *Scanner) previousSignificantPos(pos int) int {

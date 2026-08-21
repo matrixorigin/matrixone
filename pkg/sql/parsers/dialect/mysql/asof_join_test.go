@@ -89,6 +89,8 @@ func TestAsofJoinProducesAsofAst(t *testing.T) {
 	for _, sql := range []string{
 		"select * from l asof join r on l.k = r.k and l.ts >= r.ts",
 		"select * from l asof join r on l.k = r.k and r.ts <= l.ts",
+		"select * from l asof join r on lk = r.rk and event_ts >= r.effective_ts",
+		"select * from l asof join r on lk = r.rk and r.effective_ts <= event_ts",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
@@ -104,6 +106,8 @@ func TestAsofJoinNamesDoNotChangeContext(t *testing.T) {
 		"select * from l asof join r asof on l.k = r.k and l.ts >= r.ts",
 		"select * from l asof join r asof on l.k = asof.k and l.ts >= asof.ts",
 		"select * from t as `l` asof join r on `l`.k = r.k and `l`.ts >= r.ts",
+		"select * from l asof join r AS asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from l asof join r AS `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
