@@ -649,6 +649,45 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 	require.Equal(t, "session-binary", params.GetStringAt(2))
 }
 
+func TestBuildExecuteUserParamsPreservesRuntimeTypes(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 106)
+	defer prepareStmt.Close()
+
+	decimalType := plan.Type{Id: int32(types.T_decimal64), Width: 3, Scale: 2}
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
+		"integer_value", int64(2), "", false,
+		plan.Type{Id: int32(types.T_int64)}, vector.PrepareParamInteger))
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
+		"decimal_value", "2.50", "", false,
+		decimalType, vector.PrepareParamDecimal))
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
+		"string_value", "2.5", "", false,
+		plan.Type{Id: int32(types.T_varchar), Width: 3}, vector.PrepareParamNone))
+
+	args := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "integer_value"}}},
+		{Typ: decimalType, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "decimal_value"}}},
+		{Typ: plan.Type{Id: int32(types.T_varchar), Width: 3}, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "string_value"}}},
+	}
+	params, paramVals, _, _, err := buildExecuteUserParams(cw.proc, args)
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+
+	require.Equal(t, []any{
+		plan2.ParamValue{
+			Value: int64(2), PrepareParamKind: vector.PrepareParamInteger,
+			RuntimeType: types.T_int64.ToType(), HasRuntimeType: true,
+		},
+		plan2.ParamValue{
+			Value: "2.50", PrepareParamKind: vector.PrepareParamDecimal,
+			RuntimeType: types.New(types.T_decimal64, 3, 2), HasRuntimeType: true,
+		},
+		plan2.ParamValue{
+			Value: "2.5", RuntimeType: types.New(types.T_varchar, 3, 0), HasRuntimeType: true,
+		},
+	}, paramVals)
+}
+
 // A nil cached compile means the statement was rejected for prepare-time
 // compile (e.g. AP query hitting ErrCantCompileForPrepare). Execute must not
 // retry that doomed compile on every run; the cache stays nil and the regular

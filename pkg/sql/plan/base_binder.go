@@ -331,7 +331,14 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 	}
 	internal := t.InternalType
 	switch defines.MysqlType(internal.Oid) {
-	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL,
+		defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG,
+		defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE,
+		defines.MYSQL_TYPE_BIT:
+		// Every explicit numeric CAST is a semantic boundary.  Overload zero is
+		// reserved for planner-generated coercions which execute-time prepared
+		// specialization may remove before rebinding a numeric consumer.
 		return true
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING,
 		defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT,
@@ -340,10 +347,6 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 		// Character and binary casts are semantic boundaries even though the
 		// value conversion is shared with ordinary overload-coercion casts.
 		return true
-	case defines.MYSQL_TYPE_LONGLONG:
-		family := strings.ToLower(internal.FamilyString)
-		return family == "signed" || family == "integer" ||
-			(internal.Unsigned && (family == "" || family == "unsigned"))
 	default:
 		return false
 	}

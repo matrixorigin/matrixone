@@ -62,11 +62,14 @@ func TestUseExplicitCastOverload(t *testing.T) {
 		{name: "binary", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_STRING), FamilyString: "binary"}, want: true},
 		{name: "varbinary", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING), FamilyString: "varbinary"}, want: true},
 		{name: "blob", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_BLOB), FamilyString: "blob"}, want: true},
-		{name: "tinyint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_TINY), FamilyString: "tinyint"}},
-		{name: "smallint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_SHORT), FamilyString: "smallint"}},
-		{name: "int", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONG), FamilyString: "int"}},
-		{name: "bigint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "bigint"}},
-		{name: "bigint unsigned", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "bigint", Unsigned: true}},
+		{name: "tinyint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_TINY), FamilyString: "tinyint"}, want: true},
+		{name: "smallint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_SHORT), FamilyString: "smallint"}, want: true},
+		{name: "int", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONG), FamilyString: "int"}, want: true},
+		{name: "bigint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "bigint"}, want: true},
+		{name: "bigint unsigned", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "bigint", Unsigned: true}, want: true},
+		{name: "float", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_FLOAT), FamilyString: "float"}, want: true},
+		{name: "double", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_DOUBLE), FamilyString: "double"}, want: true},
+		{name: "bit", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_BIT), FamilyString: "bit"}, want: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

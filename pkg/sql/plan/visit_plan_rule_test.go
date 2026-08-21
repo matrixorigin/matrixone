@@ -1209,9 +1209,11 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	stringResult := stringFilled.GetQuery().Nodes[0].ProjectList[0]
-	require.Equal(t, int32(types.T_decimal64), stringResult.Typ.Id)
-	require.Nil(t, stringResult.GetF().Args[0].GetF())
-	require.Equal(t, int64(-15), stringResult.GetF().Args[0].GetLit().GetDecimal64Val().A)
+	require.Equal(t, int32(types.T_float64), stringResult.Typ.Id)
+	stringArg := stringResult.GetF().Args[0]
+	require.Equal(t, "cast", stringArg.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_float64), stringArg.Typ.Id)
+	require.Equal(t, int32(types.T_text), stringArg.GetF().Args[0].Typ.Id)
 
 	sleepParam, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
 	require.NoError(t, err)
@@ -1275,7 +1277,42 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	require.Equal(t, int32(9), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Scale)
 }
 
-func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) {
+func TestFillValuesOfParamsInPlanRefreshesCTASSchema(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	statements, err := mysql.Parse(
+		ctx.GetContext(),
+		"create table runtime_ctas as select x + 1 as v from (select ? as x) d",
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	defer statements[0].Free()
+
+	prepared, err := BuildPlan(ctx, statements[0], true)
+	require.NoError(t, err)
+	_, _, err = ResetPreparePlan(ctx, prepared)
+	require.NoError(t, err)
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		ctx.GetContext(),
+		prepared,
+		[]any{ParamValue{
+			Value:          2.5,
+			RuntimeType:    types.T_float64.ToType(),
+			HasRuntimeType: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	query := filled.GetDdl().GetQuery()
+	require.NotEmpty(t, query.Steps)
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Equal(t, int32(types.T_float64), root.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(types.T_float64),
+		filled.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].Typ.Id)
+}
+
+func TestFillValuesOfParamsUsesApproximateDomainForInferredText(t *testing.T) {
 	ctx := context.Background()
 	param := func(pos int32) *planpb.Expr {
 		return &planpb.Expr{
@@ -1305,7 +1342,9 @@ func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) 
 	})
 	require.NoError(t, err)
 	bound := filled.GetQuery().Nodes[0].ProjectList[1].GetF().Args[1]
-	require.Equal(t, int64(1), bound.GetLit().GetI64Val())
+	require.Equal(t, int32(types.T_float64), bound.Typ.Id)
+	require.Equal(t, "cast", bound.GetF().Func.GetObjName())
+	require.Equal(t, "1", bound.GetF().Args[0].GetLit().GetSval())
 }
 
 func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing.T) {

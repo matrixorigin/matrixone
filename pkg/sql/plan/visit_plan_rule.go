@@ -31,6 +31,7 @@ var (
 	_ VisitPlanRule = &GetParamRule{}
 	_ VisitPlanRule = &ResetParamOrderRule{}
 	_ VisitPlanRule = &ResetParamRefRule{}
+	_ VisitPlanRule = &preparedRuntimeTypeLineageRule{}
 )
 
 type GetParamRule struct {
@@ -412,6 +413,229 @@ type ResetParamRefRule struct {
 	inferTextParamTypes bool
 }
 
+// preparedRuntimeTypeLineageRule closes the type generation created when a
+// prepared parameter is rebound at EXECUTE time.  Optimized plans can expose a
+// producer through a logical binding tag, a local physical coordinate, or a
+// scalar-subquery reference.  Updating only the producer leaves consumers
+// dispatching with stale overloads and, for wide numeric values, stale vector
+// layouts.
+type preparedRuntimeTypeLineageRule struct {
+	ctx     context.Context
+	query   *plan.Query
+	types   map[[2]int32]plan.Type
+	dirty   map[*plan.Expr]struct{}
+	changed bool
+}
+
+func (rule *preparedRuntimeTypeLineageRule) MatchNode(*Node) bool  { return false }
+func (rule *preparedRuntimeTypeLineageRule) IsApplyExpr() bool     { return true }
+func (rule *preparedRuntimeTypeLineageRule) ApplyNode(*Node) error { return nil }
+
+func (rule *preparedRuntimeTypeLineageRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
+	if expr == nil {
+		return nil, nil
+	}
+
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if typ, ok := rule.types[[2]int32{impl.Col.RelPos, impl.Col.ColPos}]; ok &&
+			!reflect.DeepEqual(expr.Typ, typ) {
+			expr.Typ = typ
+			rule.changed = true
+		}
+		return expr, nil
+
+	case *plan.Expr_Sub:
+		if impl.Sub == nil {
+			return expr, nil
+		}
+		if impl.Sub.Child != nil {
+			child, err := rule.ApplyExpr(impl.Sub.Child)
+			if err != nil {
+				return nil, err
+			}
+			impl.Sub.Child = child
+		}
+		if rule.query == nil || impl.Sub.Typ != plan.SubqueryRef_SCALAR ||
+			impl.Sub.NodeId < 0 || int(impl.Sub.NodeId) >= len(rule.query.Nodes) {
+			return expr, nil
+		}
+		root := rule.query.Nodes[impl.Sub.NodeId]
+		if root != nil && impl.Sub.RowSize == 1 && len(root.ProjectList) == 1 &&
+			!reflect.DeepEqual(expr.Typ, root.ProjectList[0].Typ) {
+			expr.Typ = root.ProjectList[0].Typ
+			rule.changed = true
+		}
+		return expr, nil
+
+	case *plan.Expr_F:
+		if impl.F == nil || impl.F.Func == nil {
+			return expr, nil
+		}
+		changed := false
+		for i, arg := range impl.F.Args {
+			oldType := plan.Type{}
+			oldObj := int64(0)
+			if arg != nil {
+				oldType = arg.Typ
+				oldObj = preparedExprFunctionObj(arg)
+			}
+			rewritten, err := rule.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+			impl.F.Args[i] = rewritten
+			changed = changed || preparedExprBindingChanged(oldType, oldObj, rewritten) ||
+				rule.isDirty(rewritten)
+		}
+		if !changed {
+			return expr, nil
+		}
+
+		name := impl.F.Func.GetObjName()
+		if name == "cast" {
+			_, overload := planfunction.DecodeOverloadID(impl.F.Func.GetObj())
+			if overload == 0 {
+				// A generated cast can keep the same result type after its source
+				// lineage changes. Mark the boundary dirty so its parent knows to
+				// remove the provisional coercion before rebinding. Root assignment
+				// casts remain intact because there is no parent consumer to remove
+				// them, while explicit SQL CAST uses overload one.
+				rule.markDirty(expr)
+			}
+			return expr, nil
+		}
+		if isPreparedRuntimeTypeBoundary(name) {
+			// Explicit CAST and DML assignment casts keep their target type.  Their
+			// source expression has still been refreshed above.
+			return expr, nil
+		}
+		args := make([]*plan.Expr, len(impl.F.Args))
+		for i, arg := range impl.F.Args {
+			restored, _, err := restorePreparedGeneratedNumericExpr(rule.ctx, arg)
+			if err != nil {
+				return nil, err
+			}
+			args[i] = restored
+		}
+		rewritten, err := BindFuncExprImplByPlanExpr(rule.ctx, name, args)
+		if err != nil {
+			return nil, err
+		}
+		if fn := rewritten.GetF(); fn != nil {
+			fn.AggConfig = bytes.Clone(impl.F.AggConfig)
+			fn.AggConfigType = impl.F.AggConfigType
+			fn.Func.Obj = int64(uint64(fn.Func.Obj) |
+				(uint64(impl.F.Func.Obj) & planfunction.Distinct))
+		}
+		rule.changed = true
+		return rewritten, nil
+
+	case *plan.Expr_List:
+		for i, item := range impl.List.List {
+			rewritten, err := rule.ApplyExpr(item)
+			if err != nil {
+				return nil, err
+			}
+			impl.List.List[i] = rewritten
+		}
+		return expr, nil
+
+	case *plan.Expr_W:
+		return applyWindowExpr(expr, rule.ApplyExpr)
+	}
+	return expr, nil
+}
+
+func (rule *preparedRuntimeTypeLineageRule) markDirty(expr *plan.Expr) {
+	if rule.dirty == nil {
+		rule.dirty = make(map[*plan.Expr]struct{})
+	}
+	rule.dirty[expr] = struct{}{}
+}
+
+func (rule *preparedRuntimeTypeLineageRule) isDirty(expr *plan.Expr) bool {
+	_, ok := rule.dirty[expr]
+	return ok
+}
+
+func isPreparedRuntimeTypeBoundary(name string) bool {
+	switch name {
+	case "cast_strict", "cast_assign", "cast_ignore":
+		return true
+	default:
+		return false
+	}
+}
+
+// restorePreparedGeneratedNumericExpr removes only overload-zero numeric
+// coercions. Explicit SQL CASTs use overload one, while DML assignment casts
+// form a boundary in ApplyExpr. The returned expression is rebound bottom-up
+// so nested exact siblings such as ABS(1), MOD(3,2), and (-1+0) re-enter their
+// natural domain before the new runtime consumer overload is selected.
+func restorePreparedGeneratedNumericExpr(
+	ctx context.Context,
+	expr *plan.Expr,
+) (*plan.Expr, bool, error) {
+	if expr == nil {
+		return nil, false, nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr, false, nil
+	}
+	name := fn.Func.GetObjName()
+	if name == "cast" && len(fn.Args) > 0 {
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			return expr, false, nil
+		}
+		source, changed, err := restorePreparedGeneratedNumericExpr(ctx, fn.Args[0])
+		if err != nil {
+			return nil, false, err
+		}
+		sourceType := makeTypeByPlan2Expr(source)
+		targetType := makeTypeByPlan2Expr(expr)
+		if sourceType.IsNumeric() && targetType.IsNumeric() {
+			return source, true, nil
+		}
+		if changed {
+			fn.Args[0] = source
+		}
+		return expr, changed, nil
+	}
+	if isPreparedRuntimeTypeBoundary(name) ||
+		planfunction.GetFunctionIsAggregateByName(name) ||
+		planfunction.GetFunctionIsWinFunByName(name) {
+		return expr, false, nil
+	}
+
+	args := make([]*plan.Expr, len(fn.Args))
+	changed := false
+	for i, arg := range fn.Args {
+		restored, childChanged, err := restorePreparedGeneratedNumericExpr(ctx, arg)
+		if err != nil {
+			return nil, false, err
+		}
+		args[i] = restored
+		changed = changed || childChanged
+	}
+	if !changed {
+		return expr, false, nil
+	}
+	rewritten, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+	if err != nil {
+		return nil, false, err
+	}
+	if rebound := rewritten.GetF(); rebound != nil {
+		rebound.AggConfig = bytes.Clone(fn.AggConfig)
+		rebound.AggConfigType = fn.AggConfigType
+		rebound.Func.Obj = int64(uint64(rebound.Func.Obj) |
+			(uint64(fn.Func.Obj) & planfunction.Distinct))
+	}
+	return rewritten, true, nil
+}
+
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
 	return &ResetParamRefRule{
 		ctx:    ctx,
@@ -651,30 +875,36 @@ func unwrapImplicitPreparedParamCast(ctx context.Context, rewritten *plan.Expr, 
 		return nil, false
 	}
 	arg := fn.Args[0]
-	if arg.Typ.Id == int32(types.T_text) {
-		if !inferText {
-			return nil, false
-		}
-		literal := arg.GetLit()
-		if literal == nil {
-			return nil, false
-		}
-		typ, ok := PreparedRuntimeTypeFromString(literal.GetSval())
-		if !ok {
-			return nil, false
-		}
-		bound, err := preparedRuntimeParamExpr(ctx, literal.GetSval(), literal.IsBin, typ)
-		if err != nil {
-			return nil, false
-		}
-		arg = bound
-	}
-	argType := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
-	if !argType.IsNumeric() {
+	if arg.Typ.Id == int32(types.T_text) && !inferText {
 		return nil, false
 	}
 	targetType := types.New(types.T(rewritten.Typ.Id), rewritten.Typ.Width, rewritten.Typ.Scale)
 	if !targetType.IsNumeric() {
+		// The provisional cast records the domain selected at PREPARE time.
+		// A string target is positive evidence that the parameter belongs to a
+		// string consumer (for example concat(v, '') = ?), so its runtime payload
+		// must not be reinterpreted as DOUBLE merely because VARCHAR is represented
+		// by a Go string.
+		return nil, false
+	}
+	argType := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+	if isStringBackedType(argType) {
+		// MySQL evaluates a string source in an arithmetic expression in the
+		// approximate numeric domain. Keep the source literal's string type for
+		// direct projections and explicit CAST, but replace the provisional
+		// prepare-time cast with the same value-independent DOUBLE conversion used
+		// when a string-backed user variable is bound directly.
+		if argType.Oid == types.T_text && !inferText {
+			return nil, false
+		}
+		cast, err := appendExplicitCastBeforeExpr(
+			ctx, arg, makeSimplePlan2Type(types.T_float64))
+		if err != nil {
+			return nil, false
+		}
+		return cast, true
+	}
+	if !argType.IsNumeric() {
 		return nil, false
 	}
 	if targetType.IsDecimal() || targetType.Oid == types.T_year {
@@ -724,6 +954,13 @@ func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (
 				return nil, err
 			}
 		}
+	}
+	if w.WindowFunc != nil {
+		// Expr_W is the producer contract consumed by the WINDOW node and its
+		// downstream physical ColRef. Rebinding only WindowFunc leaves this
+		// wrapper at the prepare-time type even though execution materializes the
+		// new function result layout.
+		e.Typ = w.WindowFunc.Typ
 	}
 	return e, nil
 }
