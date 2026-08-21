@@ -3337,6 +3337,96 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 	}
 }
 
+func TestWindowTimestampRangeFoldMembershipDetectsSparseTransitions(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	currentRowFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	followingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+
+	for _, test := range []struct {
+		name     string
+		desc     bool
+		utc      []string
+		frame    *plan.FrameClause
+		wantRows []int
+	}{
+		{
+			name: "sparse increasing civil values cross fall-back transition",
+			utc: []string{
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+			},
+			frame:    followingFrame,
+			wantRows: []int{0, 1},
+		},
+		{
+			name: "descending sparse civil values cross fall-back transition",
+			desc: true,
+			utc: []string{
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+			},
+			frame:    followingFrame,
+			wantRows: []int{0, 1},
+		},
+		{
+			name: "equal civil values cross fall-back transition",
+			utc: []string{
+				"2024-11-03 05:30:00.000000", // 01:30 EDT
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+			},
+			frame:    currentRowFrame,
+			wantRows: []int{0, 1},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			values := make([]types.Timestamp, len(test.utc))
+			for i, value := range test.utc {
+				values[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+			defer vec.Free(mp)
+
+			ctr := &container{
+				desc:      []bool{test.desc},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			}
+			_, _, selection, err := ctr.buildIntervalRows(proc, 0, 0, vec.Length(), test.frame)
+			require.NoError(t, err)
+			require.NotNil(t, selection)
+			var gotRows []int
+			for _, span := range selection.spans {
+				for row := span.start; row < span.end; row++ {
+					gotRows = append(gotRows, row)
+				}
+			}
+			require.Equal(t, test.wantRows, gotRows)
+		})
+	}
+}
+
 func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)

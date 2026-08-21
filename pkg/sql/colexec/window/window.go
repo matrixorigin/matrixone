@@ -1405,9 +1405,46 @@ func (ctr *container) timestampCivilOrderIndex(
 
 	index := &timestampCivilOrderIndex{}
 	col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
+	// A sparse vector can cross a fall-back transition without its sampled
+	// civil values reversing (01:00 EDT followed by 01:30 EST, for example).
+	// Find transitions from the instant range itself rather than inferring them
+	// solely from adjacent samples.
+	var firstTimestamp, lastTimestamp types.Timestamp
+	haveFirst, haveLast := false, false
+	for i := start; i < end; i++ {
+		if err := checkCanceled(proc, i-start); err != nil {
+			return nil, err
+		}
+		if vec.GetNulls().Contains(uint64(i)) || col[i] == types.ZeroTimestamp {
+			continue
+		}
+		firstTimestamp, haveFirst = col[i], true
+		break
+	}
+	for i := end - 1; i >= start; i-- {
+		if err := checkCanceled(proc, end-1-i); err != nil {
+			return nil, err
+		}
+		if vec.GetNulls().Contains(uint64(i)) || col[i] == types.ZeroTimestamp {
+			continue
+		}
+		lastTimestamp, haveLast = col[i], true
+		break
+	}
+	foldTransitions, err := timestampCivilFoldTransitions(proc, loc, firstTimestamp, lastTimestamp, haveFirst && haveLast)
+	if err != nil {
+		return nil, err
+	}
+	index.hasFold = len(foldTransitions) != 0
+
 	var previous types.Datetime
+	var previousTimestamp types.Timestamp
 	havePrevious := false
 	spanStart := -1
+	transition := 0
+	if desc {
+		transition = len(foldTransitions) - 1
+	}
 	for i := start; i < end; i++ {
 		if err := checkCanceled(proc, i-start); err != nil {
 			return nil, err
@@ -1424,18 +1461,71 @@ func (ctr *container) timestampCivilOrderIndex(
 		if spanStart < 0 {
 			spanStart = i
 		}
-		if havePrevious && ((!desc && civil < previous) || (desc && civil > previous)) {
-			index.hasFold = true
+		crossedFold := false
+		if havePrevious {
+			if !desc {
+				for transition < len(foldTransitions) && previousTimestamp < foldTransitions[transition] && col[i] >= foldTransitions[transition] {
+					crossedFold = true
+					transition++
+				}
+			} else {
+				for transition >= 0 && previousTimestamp >= foldTransitions[transition] && col[i] < foldTransitions[transition] {
+					crossedFold = true
+					transition--
+				}
+			}
+		}
+		if havePrevious && (crossedFold || (!desc && civil < previous) || (desc && civil > previous)) {
 			index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: i})
 			spanStart = i
 		}
-		previous, havePrevious = civil, true
+		previous, previousTimestamp, havePrevious = civil, col[i], true
 	}
 	if spanStart >= 0 {
 		index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: end})
 	}
 	ctr.timestampCivilOrder[key] = index
 	return index, nil
+}
+
+// timestampCivilFoldTransitions returns every UTC-offset decrease in the
+// instant range. ZoneBounds follows a location's recurring rules, so this
+// remains correct for sparse inputs and for ranges beyond its explicit zone
+// transition table.
+func timestampCivilFoldTransitions(
+	proc *process.Process,
+	loc *time.Location,
+	minTimestamp, maxTimestamp types.Timestamp,
+	haveTimestamp bool,
+) ([]types.Timestamp, error) {
+	if !haveTimestamp || loc == nil || minTimestamp == types.ZeroTimestamp || maxTimestamp == types.ZeroTimestamp {
+		return nil, nil
+	}
+	if minTimestamp > maxTimestamp {
+		minTimestamp, maxTimestamp = maxTimestamp, minTimestamp
+	}
+	probe := time.UnixMicro(int64(minTimestamp) - int64(types.UnixToTimestamp(0))).In(loc)
+	maxInstant := time.UnixMicro(int64(maxTimestamp) - int64(types.UnixToTimestamp(0)))
+	var transitions []types.Timestamp
+	for i := 0; ; i++ {
+		if err := checkCanceled(proc, i); err != nil {
+			return nil, err
+		}
+		_, next := probe.ZoneBounds()
+		if next.IsZero() || next.After(maxInstant) {
+			break
+		}
+		_, beforeOffset := time.UnixMicro(next.UnixMicro() - 1).In(loc).Zone()
+		_, afterOffset := next.In(loc).Zone()
+		if afterOffset < beforeOffset {
+			transitions = append(transitions, types.UnixMicroToTimestamp(next.UnixMicro()))
+		}
+		if !next.After(probe) {
+			break
+		}
+		probe = next.In(loc)
+	}
+	return transitions, nil
 }
 
 func (selection *timestampRangeSelection) nth(n int) (int, bool) {

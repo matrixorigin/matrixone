@@ -105,5 +105,32 @@ select id, sum(v) over (
 
 drop table fall_back_fold;
 
+-- Fold detection must come from the timezone transition, not merely an
+-- observed reversal in sampled civil values. These sparse/equal controls
+-- cross the same transition without a strictly decreasing display value.
+create table fall_back_sparse(id int primary key, ts timestamp(6), v int);
+insert into fall_back_sparse values
+  (1, '2024-11-03 05:00:00.000000', 1),
+  (2, '2024-11-03 06:30:00.000000', 10);
+
+select id, sum(v) over (
+  order by ts
+  range between current row and interval 30 minute following
+) as s from fall_back_sparse order by id;
+
+drop table fall_back_sparse;
+
+create table fall_back_equal(id int primary key, ts timestamp(6), v int);
+insert into fall_back_equal values
+  (1, '2024-11-03 05:30:00.000000', 1),
+  (2, '2024-11-03 06:30:00.000000', 10);
+
+select id, sum(v) over (
+  order by ts
+  range between current row and current row
+) as s from fall_back_equal order by id;
+
+drop table fall_back_equal;
+
 set time_zone = @old_time_zone_window_timestamp_range_dst;
 drop database window_timestamp_range_dst;
