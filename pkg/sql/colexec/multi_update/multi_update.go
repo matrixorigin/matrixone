@@ -512,10 +512,6 @@ func filterTargetRows(
 
 	physicalSelections := make([]int64, 0, filtered.RowCount())
 	duplicateAffectedRows := uint64(0)
-	var changed []bool
-	if updateCtx.ChangedRowsCol != nil {
-		changed = vector.MustFixedColWithTypeCheck[bool](filtered.Vecs[*updateCtx.ChangedRowsCol])
-	}
 	iterator := seen.NewIterator()
 	for offset := 0; offset < filtered.RowCount(); offset += hashmap.UnitLimit {
 		count := min(hashmap.UnitLimit, filtered.RowCount()-offset)
@@ -534,7 +530,7 @@ func filterTargetRows(
 			if zValues[i] != 0 && value > nextGroup {
 				nextGroup++
 				physicalSelections = append(physicalSelections, int64(offset+i))
-			} else if updateCtx.ChangedRowsCol == nil || changed[offset+i] {
+			} else if updateCtx.ChangedRowsCol == nil {
 				duplicateAffectedRows++
 			}
 		}

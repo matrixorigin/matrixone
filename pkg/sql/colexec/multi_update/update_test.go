@@ -280,7 +280,7 @@ func TestFilterTargetRowsDedupsRepeatedRowIDsWithinOneChunk(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, owned)
 	defer filtered.Clean(mp)
-	require.Equal(t, uint64(1), duplicateRows)
+	require.Zero(t, duplicateRows)
 	require.Equal(t, []int32{10, 20}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[2]))
 }
 

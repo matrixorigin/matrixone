@@ -88,6 +88,13 @@ func TestIssue27334UpdateAffectedRowsHonorsClientFoundRows(t *testing.T) {
 		mustExec(t, ctx, changedConn, "insert into geo_t values (1, st_geomfromtext('point(1 2)'))")
 		assertAffected(changedConn, "update geo_t set g = g where id = 1", 0)
 
+		mustExec(t, ctx, changedConn, "create table target_a (id int primary key, k int, v int)")
+		mustExec(t, ctx, changedConn, "create table target_b (id int primary key, k int, v int)")
+		mustExec(t, ctx, changedConn, "insert into target_a values (1,1,10)")
+		mustExec(t, ctx, changedConn, "insert into target_b values (1,1,20),(2,1,20)")
+		assertAffected(changedConn,
+			"update target_a a, target_b b set a.v = 11, b.v = b.v where a.k = b.k", 1)
+
 		stmt, err := changedConn.PrepareContext(ctx, "update t set v = ? where id = ?")
 		require.NoError(t, err)
 		defer stmt.Close()
