@@ -39,7 +39,13 @@ type executionResourceRecorder struct {
 	pendingAllocationQuality resource.QualityFlags
 }
 
-const remoteTerminalResourceVersion = 3
+const (
+	// Version 4 adds sparse, bounded allocation-owner totals. Older clients
+	// ignore the appended JSON field; newer clients accept owner-less v1-v3
+	// totals but mark their attribution incomplete.
+	remoteTerminalResourceVersion        = 4
+	remoteAllocationOwnerResourceVersion = 4
+)
 
 // remoteTerminalEnvelope keeps PhyPlan fields at the top level so clients from
 // before resource accounting can still decode the terminal plan during a
@@ -48,6 +54,8 @@ const remoteTerminalResourceVersion = 3
 type remoteTerminalEnvelope struct {
 	models.PhyPlan
 	TerminalResourceVersion   uint32                           `json:"terminal_resource_version,omitempty"`
+	WarningCount              uint64                           `json:"warning_count,omitempty"`
+	WarningDiagnostics        []remoteWarningDiagnostic        `json:"warning_diagnostics,omitempty"`
 	Delta                     resource.Delta                   `json:"resource_delta"`
 	Memory                    resource.MemoryTotals            `json:"memory"`
 	Allocation                resource.AllocationAccountTotals `json:"allocation_account"`
@@ -80,11 +88,68 @@ func (r *executionResourceRecorder) recordAllocationAccountTerminal(
 	if r == nil {
 		return
 	}
-	r.pendingAllocationQuality |= r.pendingAllocation.AddGeneration(
+	r.pendingAllocationQuality |= addAllocationAccountTerminal(
+		&r.pendingAllocation,
+		snapshot,
+	)
+}
+
+func addAllocationAccountTerminal(
+	totals *resource.AllocationAccountTotals,
+	snapshot mpool.AllocationAccountTerminalSnapshot,
+) resource.QualityFlags {
+	quality := totals.AddGeneration(
 		snapshot.Peak,
 		snapshot.Used,
 		snapshot.State == mpool.AllocationAccountTerminalValid,
 	)
+	var ownerLive uint64
+	var ownerPeakCoverage uint64
+	var ownerMask uint64
+	var hasMeasuredOwner bool
+	for _, owner := range snapshot.Owners {
+		ownerID := uint8(owner.Owner)
+		if ownerID == 0 || ownerID > resource.AllocationOwnerMaxID {
+			quality |= resource.QualityInvariantFailure
+			continue
+		}
+		bit := uint64(1) << ownerID
+		if ownerMask&bit != 0 {
+			quality |= resource.QualityInvariantFailure
+			continue
+		}
+		ownerMask |= bit
+		if owner.Peak == 0 && owner.Current == 0 {
+			quality |= resource.QualityInvariantFailure
+		} else {
+			hasMeasuredOwner = true
+		}
+		quality |= totals.AddOwnerGeneration(
+			ownerID,
+			owner.Peak,
+			owner.Current,
+		)
+		if owner.Peak > snapshot.Peak || owner.Current > owner.Peak {
+			quality |= resource.QualityInvariantFailure
+		}
+		if math.MaxUint64-ownerLive < owner.Current {
+			ownerLive = math.MaxUint64
+			quality |= resource.QualityInvariantFailure
+		} else {
+			ownerLive += owner.Current
+		}
+		if math.MaxUint64-ownerPeakCoverage < owner.Peak {
+			ownerPeakCoverage = math.MaxUint64
+		} else {
+			ownerPeakCoverage += owner.Peak
+		}
+	}
+	if ownerLive != snapshot.Used || snapshot.Peak != 0 && !hasMeasuredOwner ||
+		ownerPeakCoverage < snapshot.Peak ||
+		snapshot.Peak == 0 && len(snapshot.Owners) != 0 {
+		quality |= resource.QualityInvariantFailure
+	}
+	return quality
 }
 
 func newExecutionResourceRecorder(

@@ -1655,6 +1655,13 @@ func validateAutoIncrEpochAdvance(current uint32, resets uint64) error {
 	return nil
 }
 
+func validateReplaceDefVersion(current uint32, replaceDef *api.AlterTableReplaceDef) error {
+	if replaceDef != nil && replaceDef.GetCheckVersion() && replaceDef.GetExpectedVersion() != current {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return nil
+}
+
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 	// AlterTale Inplace do not touch columns, we don't use NextSeqNum at the moment.
 	if tbl.db.op.IsSnapOp() {
@@ -1664,6 +1671,11 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	for _, req := range reqs {
 		if req.GetKind() == api.AlterKind_UpdateAutoIncrement {
 			autoIncrResetCount++
+		}
+		if req.GetKind() == api.AlterKind_ReplaceDef {
+			if err := validateReplaceDefVersion(tbl.version, req.GetReplaceDef()); err != nil {
+				return err
+			}
 		}
 	}
 	if err := validateAutoIncrEpochAdvance(tbl.extraInfo.AutoIncrEpoch, autoIncrResetCount); err != nil {
@@ -1822,12 +1834,20 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
+	var preservedOwnership *tableCatalogOwnership
+	if replaceDefReq != nil && replaceDefReq.GetReplaceDef().GetPreserveOwnership() {
+		preservedOwnership = &tableCatalogOwnership{
+			creator:     replaceDefReq.GetReplaceDef().GetPreservedCreator(),
+			owner:       replaceDefReq.GetReplaceDef().GetPreservedOwner(),
+			createdTime: types.Timestamp(replaceDefReq.GetReplaceDef().GetPreservedCreatedTime()),
+		}
+	}
 	// deleteTable(forAlter=true) deliberately leaves the logical-ID index row for
 	// the recreation to replace. Pass that intent explicitly: inferring it from
 	// the hidden-table name would leave the old row and insert a duplicate.
 	if err := tbl.db.createWithID(
 		ctx, tbl.tableName, tbl.tableId, tbl.logicalId, true,
-		tbl.defs, !createdInTxn, tbl.extraInfo,
+		tbl.defs, !createdInTxn, tbl.extraInfo, preservedOwnership,
 	); err != nil {
 		return err
 	}

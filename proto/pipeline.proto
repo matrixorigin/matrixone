@@ -214,6 +214,10 @@ message PreInsert {
   bool is_old_update = 10;
   bool is_new_update = 11;
   bool reject_zero_temporal = 12;
+  bool has_target_selector = 13;
+  int32 target_row_number_col = 14;
+  int32 target_active_col = 15;
+  int32 target_row_id_col = 16;
 }
 
 message PostDml {
@@ -282,6 +286,7 @@ message HashJoin {
   repeated plan.Type right_types = 13 [(gogoproto.nullable) = false];
   int32 join_map_tag = 14;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 15;
+  bool emit_compressed_row_count = 16;
 }
 
 message LoopJoin {
@@ -341,6 +346,7 @@ message RightDedupJoin {
   repeated int32 update_col_idx_list = 14;
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
+  bool input_keys_unique = 17;
 }
 
 message Product {

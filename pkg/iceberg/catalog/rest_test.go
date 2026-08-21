@@ -245,6 +245,35 @@ func TestRESTClientRejectsPlainHTTPByDefault(t *testing.T) {
 	}
 }
 
+func TestValidateRESTCatalogURI(t *testing.T) {
+	tests := []struct {
+		name           string
+		uri            string
+		allowPlainHTTP bool
+		wantErr        string
+	}{
+		{name: "https", uri: "https://catalog.example.com/rest"},
+		{name: "http rejected", uri: "http://catalog.example.com/rest", wantErr: "must use https unless plain HTTP is explicitly enabled"},
+		{name: "http explicitly enabled", uri: "http://catalog.example.com/rest", allowPlainHTTP: true},
+		{name: "unsupported scheme", uri: "ftp://catalog.example.com/rest", wantErr: "must use https"},
+		{name: "invalid URI", uri: "not-a-uri", wantErr: "URI is invalid"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRESTCatalogURI(tt.uri, tt.allowPlainHTTP)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validate REST catalog URI: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestRESTClientDefaultTimeout(t *testing.T) {
 	client := NewRESTClient()
 	req := client.normalizeRequest(api.CatalogRequest{})

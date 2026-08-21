@@ -842,6 +842,22 @@ func releaseRetainedOrderRefs(colRefCnt map[[2]int32]int, refs [][2]int32) {
 }
 
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
+	return builder.remapAllColRefsForConsumer(
+		nodeID, step, colRefCnt, colRefBool, sinkColRef, false)
+}
+
+// remapAllColRefsForConsumer carries physical consumer capabilities down one
+// logical edge. The capability deliberately defaults to false at every other
+// recursive call, so projections, alternate aggregates, grouping, and plan
+// rewrites cannot accidentally inherit compressed multiplicity support.
+func (builder *QueryBuilder) remapAllColRefsForConsumer(
+	nodeID int32,
+	step int32,
+	colRefCnt map[[2]int32]int,
+	colRefBool map[[2]int32]bool,
+	sinkColRef map[[2]int32]int,
+	acceptsCompressedRowCount bool,
+) (*ColRefRemapping, error) {
 	node := builder.qry.Nodes[nodeID]
 
 	remapping := &ColRefRemapping{
@@ -1275,6 +1291,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_JOIN:
+		node.EmitCompressedRowCount = false
 		node.SpillMem = builder.joinSpillMem
 
 		var markOperandNotNullable [][]bool
@@ -1480,7 +1497,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		if len(node.ProjectList) == 0 && len(leftRemapping.localToGlobal) > 0 {
+		if len(node.ProjectList) == 0 && acceptsCompressedRowCount &&
+			isRowCountOnlyInnerEquiJoin(node) {
+			node.EmitCompressedRowCount = true
+		} else if len(node.ProjectList) == 0 && len(leftRemapping.localToGlobal) > 0 {
 			globalRef := leftRemapping.localToGlobal[0]
 			remapping.addColRef(globalRef)
 
@@ -1584,7 +1604,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		childRemapping, err := builder.remapAllColRefsForConsumer(
+			node.Children[0], step, colRefCnt, colRefBool, sinkColRef,
+			isSingleCountStarConsumer(node))
 		releaseRetainedOrderRefs(colRefCnt, retainedOrderRefs)
 		if err != nil {
 			return nil, err
@@ -1881,6 +1903,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	case plan.Node_TIME_WINDOW:
 		timeTag := node.BindingTags[0]
+		groupTag := node.BindingTags[1]
+
+		for _, expr := range node.FilterList {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
 
 		// Decide what survives before touching colRefCnt: a `_wstart`/`_wend`
 		// entry of AggList is a column reference to its own {timeTag, k}, so
@@ -2038,7 +2065,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		// selectable next to the window's aggregates. The operator always
 		// evaluates them to find its boundaries, so only their output is
 		// optional.
-		groupTag := node.BindingTags[1]
 		for p, slot := range layout.PartitionSlot {
 			if partitionSrc[p] < 0 {
 				continue
@@ -2064,6 +2090,31 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+
+		outputMap := make(map[[2]int32][2]int32, len(newToOld)+len(layout.PartitionSlot))
+		for k, oldIdx := range newToOld {
+			slot := layout.Slot[k]
+			if slot == TimeWindowSlotNone {
+				continue
+			}
+			outputMap[[2]int32{timeTag, oldIdx}] = [2]int32{0, slot}
+		}
+		for p, slot := range layout.PartitionSlot {
+			if partitionSrc[p] < 0 {
+				continue
+			}
+			outputMap[[2]int32{groupTag, partitionSrc[p]}] = [2]int32{0, slot}
+		}
+
+		remapInfo.tip = "FilterList"
+		for idx, expr := range node.FilterList {
+			increaseRefCnt(expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err = builder.remapColRefForExpr(expr, outputMap, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 	case plan.Node_WINDOW:
@@ -3004,6 +3055,36 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_PRE_INSERT:
+		var selectorRefs [3][2]int32
+		if node.PreInsertCtx.HasTargetSelector {
+			selectorInput := builder.qry.Nodes[node.Children[0]]
+			// Target-aware UPDATE can place pass-through ASSERT/FILTER nodes and
+			// another PRE_INSERT between this operator and the project that owns
+			// the selector columns. Walk through any single-child node without an
+			// output binding instead of assuming only nested PRE_INSERT can occur.
+			for len(selectorInput.BindingTags) == 0 {
+				if len(selectorInput.Children) != 1 {
+					return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector input")
+				}
+				selectorInput = builder.qry.Nodes[selectorInput.Children[0]]
+			}
+			if len(selectorInput.BindingTags) == 0 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector input")
+			}
+			selectorProject := selectorInput.ProjectList
+			selectorPositions := []int32{
+				node.PreInsertCtx.TargetRowNumberCol,
+				node.PreInsertCtx.TargetActiveCol,
+				node.PreInsertCtx.TargetRowIdCol,
+			}
+			for i, pos := range selectorPositions {
+				if pos < 0 || int(pos) >= len(selectorProject) {
+					return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector")
+				}
+				selectorRefs[i] = [2]int32{selectorInput.BindingTags[0], pos}
+				colRefCnt[selectorRefs[i]]++
+			}
+		}
 		if _, preserve := builder.preservePreInsertProjection[nodeID]; preserve {
 			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {
 				increaseRefCnt(expr, 1, colRefCnt)
@@ -3015,9 +3096,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		selectorOutputPos := [3]int32{-1, -1, -1}
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
+			}
+			if node.PreInsertCtx.HasTargetSelector {
+				for selectorIdx, selectorRef := range selectorRefs {
+					if globalRef == selectorRef {
+						selectorOutputPos[selectorIdx] = int32(len(node.ProjectList))
+					}
+				}
 			}
 
 			remapping.addColRef(globalRef)
@@ -3032,6 +3121,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+		if node.PreInsertCtx.HasTargetSelector {
+			for _, pos := range selectorOutputPos {
+				if pos < 0 {
+					return nil, moerr.NewInternalError(builder.GetContext(), "PRE_INSERT target selector was pruned")
+				}
+			}
+			node.PreInsertCtx.TargetRowNumberCol = selectorOutputPos[0]
+			node.PreInsertCtx.TargetActiveCol = selectorOutputPos[1]
+			node.PreInsertCtx.TargetRowIdCol = selectorOutputPos[2]
 		}
 
 		if node.PreInsertCtx.CompPkeyExpr != nil {
@@ -3138,6 +3237,45 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	node.BindingTags = nil
 
 	return remapping, nil
+}
+
+// isRowCountOnlyInnerEquiJoin reports the join shape whose executor can carry
+// multiplicity in a zero-column batch.  Keep this deliberately narrower than
+// IsEquiJoin2: one residual predicate would require materialized candidate
+// rows, and outer/semi/anti joins have different row-preservation semantics.
+func isRowCountOnlyInnerEquiJoin(node *plan.Node) bool {
+	if node == nil || node.JoinType != plan.Node_INNER {
+		return false
+	}
+	conditions := splitPlanConjunctions(node.OnList)
+	if len(conditions) == 0 {
+		return false
+	}
+	for _, condition := range conditions {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
+			return false
+		}
+		left, right := HasColExpr(fn.Args[0], -1), HasColExpr(fn.Args[1], -1)
+		if !((left == 0 && right == 1) || (left == 1 && right == 0)) {
+			return false
+		}
+	}
+	return true
+}
+
+// isSingleCountStarConsumer is the only downstream shape that can consume a
+// join's complete multiplicity without materializing or chunking its rows.
+// Keep this check on the unpruned aggregate list so a multi-aggregate query
+// cannot acquire the capability merely because an outer projection drops one
+// of its results later.
+func isSingleCountStarConsumer(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_AGG ||
+		len(node.GroupBy) != 0 || len(node.AggList) != 1 {
+		return false
+	}
+	agg := node.AggList[0].GetF()
+	return agg != nil && agg.Func != nil && agg.Func.ObjName == "starcount"
 }
 
 func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBool map[[2]int32]bool) {
@@ -4170,7 +4308,13 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	if len(cteRef.occurrences) == 0 {
 		builder.cteRefs = append(builder.cteRefs, cteRef)
 	}
-	if ctx.bindingNonRecurCte() {
+	// CTE reuse currently rewrites consumers reachable from the main query
+	// root. A CTE referenced while another CTE is being bound can also have
+	// consumers in separately appended steps, especially recursive anchor and
+	// member steps. Keep such nested references inline until reuse can rewrite
+	// the complete step graph; otherwise the added producer and an unreplaced
+	// consumer share one mutable subtree and column remapping visits it twice.
+	if ctx.bindingCte() {
 		cteRef.hasNestedUse = true
 		if ctx.cteState.cte != nil {
 			ctx.cteState.cte.hasNestedRef = true
@@ -4605,6 +4749,11 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	ctx.queryBlockOwner = ctx
+	if ctx.bindingRecurStmt() && ctx.cteState.recursiveRefQueryBlock == nil {
+		ctx.cteState.recursiveRefQueryBlock = ctx
+	}
+
 	if stmt.RewriteOption != nil {
 		ctx.remapOption = stmt.RewriteOption
 	}
@@ -4628,6 +4777,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	var helpFunc *helpFunc
 	var boundTimeWindowGroupBy *plan.Expr
 	var rollupFilter bool
+	var expandedSelectClause *tree.SelectClause
 
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
@@ -4716,6 +4866,18 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
+		expandedSelectClause = selectClause
+		// Keep the query-block aggregate state active while HAVING, SELECT
+		// projection, and ORDER BY are bound. bindSelectClause initializes the
+		// state after the pre-aggregation WHERE has been bound, so correlated
+		// columns in WHERE remain tied to the raw input rather than being
+		// classified as aggregate outputs. The aggregate-input correlation flag
+		// remains use-site-specific and prevents this state from classifying
+		// per-row aggregate arguments as bare output columns.
+		previousPendingAggregateQuery := ctx.pendingAggregateQuery
+		defer func() {
+			ctx.pendingAggregateQuery = previousPendingAggregateQuery
+		}()
 		if selectClause.GroupBy != nil && (selectClause.GroupBy.Rollup || selectClause.GroupBy.Cube) {
 			// ROLLUP/CUBE expansion rewrites the clause below. CTE bodies may bind
 			// the same parsed SELECT once per reference, so keep the declaration
@@ -4835,6 +4997,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				if isRoot {
 					builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
 				}
+				captureGroupingSetViewStarExpansion(ctx, expandedSelectClause, selectStmts, hiddenResultLen)
 				return
 			}
 		}
@@ -4842,6 +5005,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if nodeID, selectList, lockNode, notCacheable, boundTimeWindowGroupBy, havingBinder, boundHavingList, err = builder.bindSelectClause(
 			ctx,
 			selectClause,
+			astOrderBy,
 			astLimit,
 			astTimeWindow,
 			helpFunc,
@@ -4867,6 +5031,34 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	default:
 		return 0, moerr.NewNYIf(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
 	}
+	// Capture the visible projection for view definitions. SAMPLE(*) expands to
+	// sampled columns while binding, so the persisted AST must keep SAMPLE but
+	// replace its wildcard with the columns visible at CREATE VIEW time.
+	if ctx.captureViewStarExpansion && expandedSelectClause != nil {
+		if ctx.expandedSelectLists == nil {
+			ctx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
+		}
+		sampleStarColumns, captureErr := sampleStarColumnsForView(builder, ctx, expandedSelectClause)
+		if captureErr != nil {
+			err = captureErr
+			return
+		}
+		headings := ctx.headings
+		if len(headings) > len(selectList) {
+			headings = headings[len(headings)-len(selectList):]
+		}
+		ctx.expandedSelectLists[expandedSelectClause] = cloneViewSelectExprsForView(
+			ctx,
+			expandedSelectClause,
+			selectList,
+			headings,
+			sampleStarColumns,
+		)
+	}
+
+	if astTimeWindow != nil && boundTimeWindowGroupBy != nil {
+		setTimeWindowBoundaryType(ctx, boundTimeWindowGroupBy.Typ, astTimeWindow)
+	}
 
 	// bind SELECT clause (Projection List)
 	projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
@@ -4891,10 +5083,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// bind TIME WINDOW
 	var fillType plan.Node_FillType
 	var fillVals, fillCols []*Expr
-	var interval, sliding, ts, wEnd *Expr
+	var interval, sliding, ts, wEnd, gapFillStart, gapFillEnd *Expr
 	var boundTimeWindowOrderBy *plan.OrderBySpec
 	if astTimeWindow != nil {
-		if fillType, fillVals, fillCols, interval, sliding, ts, wEnd, boundTimeWindowOrderBy, err = builder.bindTimeWindow(
+		if fillType, fillVals, fillCols, interval, sliding, ts, wEnd, gapFillStart, gapFillEnd, boundTimeWindowOrderBy, err = builder.bindTimeWindow(
 			ctx,
 			projectionBinder,
 			astTimeWindow,
@@ -4935,11 +5127,33 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if boundOffsetExpr, boundCountExpr, rankOption, err = builder.bindLimit(ctx, astLimit, astRankOption); err != nil {
 			return
 		}
+	}
 
-		if astLimit != nil && lockNode != nil {
-			lockNode.Children[0] = nodeID
-			nodeID = builder.appendNode(lockNode, ctx)
+	// Keep the lock target collection in bindSelectClause, but attach the
+	// LOCK_OP only after any row-level HAVING rewrite has been applied.  A
+	// correlated HAVING is flattened into a MARK JOIN and FILTER; placing the
+	// lock before that rewrite would make the lock consume rows that the final
+	// predicate excludes.  Aggregate/sample plans keep their existing source
+	// row locking placement below.
+	appendLockNode := func() {
+		if lockNode == nil {
+			return
 		}
+		lockNode.Children[0] = nodeID
+		nodeID = builder.appendNode(lockNode, ctx)
+		lockNode = nil
+	}
+
+	var preWindowHavingList []*plan.Expr
+	if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
+		preWindowHavingList, _ = splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
+	}
+	deferLockForHaving := lockNode != nil &&
+		!ctx.sampleFunc.hasSampleFunc &&
+		len(ctx.groups) == 0 && len(ctx.aggregates) == 0 && len(ctx.times) == 0 &&
+		len(boundHavingList) > 0 && (len(ctx.windows) == 0 || len(preWindowHavingList) > 0)
+	if !deferLockForHaving {
+		appendLockNode()
 	}
 
 	if ctx.sampleFunc.hasSampleFunc {
@@ -4996,6 +5210,26 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if nodeID, err = builder.appendAggNode(ctx, nodeID, boundHavingList, rollupFilter); err != nil {
 			return
 		}
+	} else if len(boundHavingList) > 0 && len(ctx.windows) == 0 && len(ctx.times) == 0 {
+		if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, boundHavingList); err != nil {
+			return
+		}
+		if deferLockForHaving {
+			// Keep the cardinality-changing HAVING above the lock.  The filter
+			// optimizer must not push it through LOCK_OP and widen the lock scope.
+			builder.qry.Nodes[nodeID].FilterIsBarrier = true
+		}
+		appendLockNode()
+	} else if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
+		if len(preWindowHavingList) > 0 {
+			if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, preWindowHavingList); err != nil {
+				return
+			}
+			if deferLockForHaving {
+				builder.qry.Nodes[nodeID].FilterIsBarrier = true
+			}
+			appendLockNode()
+		}
 	}
 
 	// append TIME WINDOW node
@@ -5007,7 +5241,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			boundTimeWindowGroupBy,
 			fillType,
 			fillVals, fillCols,
-			interval, sliding, ts, wEnd,
+			interval, sliding, ts, wEnd, gapFillStart, gapFillEnd,
 			astTimeWindow,
 		); err != nil {
 			return
@@ -6878,6 +7112,41 @@ func rollupWindowFuncMustBeMaterialized(expr *tree.FuncExpr) bool {
 	return function.GetFunctionIsAggregateByName(funcName) || strings.EqualFold(funcName, "grouping")
 }
 
+func queryBlockHasPendingAggregate(selectList tree.SelectExprs, having *tree.Where, orderBy tree.OrderBy) bool {
+	for _, item := range selectList {
+		if exprHasPendingAggregate(item.Expr) {
+			return true
+		}
+	}
+	if having != nil && exprHasPendingAggregate(having.Expr) {
+		return true
+	}
+	for _, order := range orderBy {
+		if order != nil && exprHasPendingAggregate(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprHasPendingAggregate(astExpr tree.Expr) bool {
+	found := false
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		switch e := expr.(type) {
+		case *tree.Subquery:
+			return false
+		case *tree.FuncExpr:
+			funcRef, ok := e.Func.FunctionReference.(*tree.UnresolvedName)
+			if ok && e.WindowSpec == nil && function.GetFunctionIsAggregateByName(funcRef.ColName()) {
+				found = true
+				return false
+			}
+		}
+		return !found
+	})
+	return found
+}
+
 func rewriteRollupWindowExprs(exprs tree.Exprs, state *rollupWindowRewriteState) (tree.Exprs, bool) {
 	if len(exprs) == 0 {
 		return nil, true
@@ -7126,6 +7395,7 @@ func rollupWindowExprContainsWindow(expr tree.Expr) bool {
 func (builder *QueryBuilder) bindSelectClause(
 	ctx *BindContext,
 	clause *tree.SelectClause,
+	astOrderBy tree.OrderBy,
 	astLimit *tree.Limit,
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
@@ -7159,7 +7429,12 @@ func (builder *QueryBuilder) bindSelectClause(
 				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
 					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 						if c.U64Val == 0 {
-							builder.isSkipResolveTableDef = true
+							// View metadata generation needs the complete catalog identity
+							// exposed by Resolve so it can persist reverse dependencies.
+							// Keep the mo_columns-only shortcut for ordinary LIMIT 0 queries.
+							if _, capturingViewDependencies := builder.compCtx.(viewDependencyScope); !capturingViewDependencies {
+								builder.isSkipResolveTableDef = true
+							}
 						}
 					}
 				}
@@ -7207,7 +7482,9 @@ func (builder *QueryBuilder) bindSelectClause(
 	builder.rewriteRightJoinToLeftJoin(nodeID)
 	if clause.Where != nil {
 		var boundFilterList []*plan.Expr
-		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
+		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(
+			ctx, clause.Where, nodeID, astTimeWindow != nil && astTimeWindow.GapFill,
+		); err != nil {
 			return
 		}
 
@@ -7230,10 +7507,6 @@ func (builder *QueryBuilder) bindSelectClause(
 				TableDef:    builder.qry.Nodes[nodeID].GetTableDef(),
 				LockTargets: lockTargets,
 				BindingTags: []int32{builder.genNewBindTag()},
-			}
-
-			if astLimit == nil {
-				nodeID = builder.appendNode(lockNode, ctx)
 			}
 		}
 	}
@@ -7273,7 +7546,6 @@ func (builder *QueryBuilder) bindSelectClause(
 		}
 		ctx.projectByAst = append(ctx.projectByAst, field)
 	}
-
 	// bind GROUP BY clause
 	if clause.GroupBy != nil || astTimeWindow != nil {
 		if boundTimeWindowGroupBy, err = builder.bindGroupBy(ctx, clause.GroupBy, selectList, astTimeWindow, helpFunc); err != nil {
@@ -7281,10 +7553,19 @@ func (builder *QueryBuilder) bindSelectClause(
 		}
 	}
 
+	// The WHERE clause is evaluated on the raw input before this query block's
+	// aggregate stage. Delay the pending-aggregate marker until WHERE and GROUP
+	// BY binding are complete, while keeping it active for HAVING, projection,
+	// and ORDER BY. This preserves legal per-row correlations in pre-aggregate
+	// filters without making aggregate-query validation order-dependent.
+	ctx.pendingAggregateQuery = ctx.pendingAggregateQuery ||
+		queryBlockHasPendingAggregate(selectList, clause.Having, astOrderBy)
+
 	// bind HAVING clause
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
-		if boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder); err != nil {
+		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
+		if err != nil {
 			return
 		}
 	}
@@ -7298,11 +7579,15 @@ func (builder *QueryBuilder) bindWhere(
 	ctx *BindContext,
 	clause *tree.Where,
 	nodeID int32,
+	preserveGapFillFilters bool,
 ) (newNodeID int32, boundFilterList []*plan.Expr, notCacheable bool, err error) {
 	convertedExpr := builder.convertAccountToAccountIdIfNeeded(ctx, clause.Expr)
 	whereList, err := splitAndBindCondition(convertedExpr, NoAlias, ctx)
 	if err != nil {
 		return
+	}
+	if preserveGapFillFilters {
+		ctx.gapFillWhereFilters = DeepCopyExprList(whereList)
 	}
 	// Scalar-subquery decorrelation may need a safe outer-key domain while it
 	// is flattening one conjunct. Publish the complete bound WHERE list before
@@ -7516,8 +7801,19 @@ func (builder *QueryBuilder) bindHaving(
 		return
 	}
 	havingBinder.rollupHaving = clause.RollupHaving
+	havingBinder.bindingHaving = true
+	defer func() {
+		havingBinder.bindingHaving = false
+	}()
 	ctx.binder = havingBinder
-	return splitAndBindCondition(clause.Expr, AliasAfterColumn, ctx)
+	expandAlias := AliasAfterColumn
+	if builder.mysqlFullGroupByCompat && !ctx.aggregateQueryForFullGroupBy() {
+		// Defer unqualified-name resolution to HavingBinder. It must distinguish
+		// a visible output name from an anonymous expression that merely happens
+		// to be equal to a SELECT expression.
+		expandAlias = NoAlias
+	}
+	return splitAndBindCondition(clause.Expr, expandAlias, ctx)
 }
 
 func (builder *QueryBuilder) bindProjection(
@@ -7574,6 +7870,112 @@ func (builder *QueryBuilder) bindProjection(
 	return
 }
 
+func setTimeWindowBoundaryType(ctx *BindContext, typ plan.Type, astTimeWindow *tree.TimeWindow) {
+	if ctx == nil || astTimeWindow == nil {
+		return
+	}
+	typ = normalizeTimeWindowBoundaryType(typ, astTimeWindow)
+	ctx.timeBoundaryType = &typ
+}
+
+func normalizeTimeWindowBoundaryType(typ plan.Type, astTimeWindow *tree.TimeWindow) plan.Type {
+	if typ.Id == 0 {
+		typ.Id = int32(types.T_timestamp)
+	}
+	if types.T(typ.Id) == types.T_date {
+		typ.Id = int32(types.T_datetime)
+	}
+	if timeWindowUsesMicrosecond(astTimeWindow) && typ.Scale < 6 {
+		typ.Scale = 6
+	}
+	if timeWindowBoundaryTypeHasFsp(types.T(typ.Id)) && typ.Scale > 0 {
+		typ.Width = typ.Scale
+	}
+	typ.NotNullable = true
+	return typ
+}
+
+func timeWindowBoundaryTypeHasFsp(typ types.T) bool {
+	return typ == types.T_time || typ == types.T_datetime || typ == types.T_timestamp
+}
+
+func timeWindowBoundaryTypeForTimestamp(tsType plan.Type, astTimeWindow *tree.TimeWindow, fallback *plan.Type) plan.Type {
+	boundaryType := tsType
+	if boundaryType.Id == 0 && fallback != nil {
+		boundaryType = *DeepCopyType(fallback)
+	}
+	return normalizeTimeWindowBoundaryType(boundaryType, astTimeWindow)
+}
+
+func timeWindowUsesMicrosecond(astTimeWindow *tree.TimeWindow) bool {
+	if astTimeWindow == nil {
+		return false
+	}
+	if timeWindowUnitIsMicrosecond(astTimeWindow.Interval.Unit) {
+		return true
+	}
+	return astTimeWindow.Sliding != nil && timeWindowUnitIsMicrosecond(astTimeWindow.Sliding.Unit)
+}
+
+func timeWindowUnitIsMicrosecond(unit string) bool {
+	typ, err := types.IntervalTypeOf(unit)
+	return err == nil && typ == types.MicroSecond
+}
+
+func updateTimeWindowBoundaryTypes(ctx *BindContext, boundaryType plan.Type) {
+	if ctx == nil {
+		return
+	}
+	ctx.timeBoundaryType = &boundaryType
+	for _, expr := range ctx.times {
+		if isTimeWindowBoundaryExpr(ctx, expr) {
+			expr.Typ = boundaryType
+		}
+	}
+	for _, expr := range ctx.projects {
+		updateTimeWindowBoundaryType(ctx, expr, boundaryType)
+	}
+	for _, expr := range ctx.results {
+		updateTimeWindowBoundaryType(ctx, expr, boundaryType)
+	}
+}
+
+func updateTimeWindowBoundaryType(ctx *BindContext, expr *plan.Expr, boundaryType plan.Type) {
+	if isTimeWindowBoundaryExpr(ctx, expr) {
+		expr.Typ = boundaryType
+	}
+}
+
+func isTimeWindowBoundaryExpr(ctx *BindContext, expr *plan.Expr) bool {
+	if ctx == nil || expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	if col.Name == TimeWindowStart || col.Name == TimeWindowEnd {
+		return true
+	}
+	if col.RelPos != ctx.timeTag {
+		return false
+	}
+
+	// Repeated references to a time-window boundary are resolved through
+	// timeByAst and makeTimeWindowProjectionExpr. That projection carries only
+	// the time-tag/column position, not the boundary name. Resolve the carrier
+	// back through ctx.times so duplicate `_wstart`/`_wend` expressions receive
+	// the same type as their first occurrence. Other time-window aggregates are
+	// function expressions in ctx.times and therefore remain unaffected.
+	if col.ColPos < 0 || int(col.ColPos) >= len(ctx.times) {
+		return false
+	}
+	carrier := ctx.times[col.ColPos]
+	carrierCol := carrier.GetCol()
+	return carrierCol != nil &&
+		(carrierCol.Name == TimeWindowStart || carrierCol.Name == TimeWindowEnd)
+}
+
 func (builder *QueryBuilder) bindTimeWindow(
 	ctx *BindContext,
 	projectionBinder *ProjectionBinder,
@@ -7583,7 +7985,7 @@ func (builder *QueryBuilder) bindTimeWindow(
 ) (
 	fillType plan.Node_FillType,
 	fillVals, fillCols []*Expr,
-	interval, sliding, ts, wEnd *Expr,
+	interval, sliding, ts, wEnd, gapFillStart, gapFillEnd *Expr,
 	boundTimeWindowOrderBy *plan.OrderBySpec,
 	err error,
 ) {
@@ -7619,6 +8021,16 @@ func (builder *QueryBuilder) bindTimeWindow(
 			return
 		}
 	}
+	boundaryType := timeWindowBoundaryTypeForTimestamp(ts.Typ, astTimeWindow, ctx.timeBoundaryType)
+	ts.Typ = boundaryType
+	updateTimeWindowBoundaryTypes(ctx, boundaryType)
+
+	if astTimeWindow.GapFill {
+		gapFillStart, gapFillEnd, err = inferGapFillBounds(builder.GetContext(), ctx.gapFillWhereFilters, ts)
+		if err != nil {
+			return
+		}
+	}
 
 	// Copy rather than alias the group expression: remapping walks OrderBy and
 	// GroupBy separately, and rewriting one shared pointer twice would resolve
@@ -7641,7 +8053,7 @@ func (builder *QueryBuilder) bindTimeWindow(
 		if tmp, err = projectionBinder.BindExpr(helpFunc.dateAdd, 0, true); err != nil {
 			return
 		}
-		if wEnd, err = appendCastBeforeExpr(builder.GetContext(), tmp, ts.Typ); err != nil {
+		if wEnd, err = appendCastBeforeExpr(builder.GetContext(), tmp, boundaryType); err != nil {
 			return
 		}
 	}
@@ -7704,6 +8116,171 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 	return
+}
+
+// inferGapFillBounds recognizes only the exact half-open predicate shape used
+// by the executor: timestamp >= start AND timestamp < finish. Keeping the
+// inference deliberately narrow means complex predicates retain the legacy
+// observed-range GAPFILL semantics instead of silently widening their domain.
+func inferGapFillBounds(
+	ctx context.Context,
+	filters []*Expr,
+	timestamp *Expr,
+) (start, finish *Expr, err error) {
+	tsCol := timestamp.GetCol()
+	if tsCol == nil {
+		return nil, nil, nil
+	}
+
+	// Every predicate that references the window column must participate in the
+	// inferred domain. Skipping an unsupported edge and using only the remaining
+	// half-open subset can widen a contradictory WHERE range into a non-empty
+	// synthetic grid. Retain legacy observed-range behavior unless all such
+	// predicates are direct, constant half-open edges.
+	var starts, finishes []*Expr
+	for _, filter := range filters {
+		// Correlated references inside a subquery live in that subquery's plan,
+		// outside this expression tree. Conservatively decline inference for any
+		// pre-flatten subquery predicate so none of those hidden timestamp
+		// constraints can be omitted from the fixed domain.
+		if hasSubquery(filter) {
+			return nil, nil, nil
+		}
+		if !gapFillBoundContainsColumn(filter, tsCol) {
+			continue
+		}
+		fn := filter.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			return nil, nil, nil
+		}
+		left, right := fn.Args[0], fn.Args[1]
+		leftMatches := gapFillBoundColumnMatches(left, tsCol)
+		rightMatches := gapFillBoundColumnMatches(right, tsCol)
+		if leftMatches == rightMatches {
+			// Either the timestamp is nested in a more complex expression or it
+			// appears on both sides. Neither shape defines a safe fixed edge.
+			return nil, nil, nil
+		}
+		name := strings.ToLower(fn.Func.ObjName)
+		switch {
+		case leftMatches:
+			switch name {
+			case ">=":
+				if !gapFillBoundIsConstant(right) {
+					return nil, nil, nil
+				}
+				starts = append(starts, right)
+			case "<":
+				if !gapFillBoundIsConstant(right) {
+					return nil, nil, nil
+				}
+				finishes = append(finishes, right)
+			default:
+				return nil, nil, nil
+			}
+		case rightMatches:
+			// constant <= timestamp and constant > timestamp are the reversed
+			// spellings of the same canonical half-open predicates.
+			switch name {
+			case "<=":
+				if !gapFillBoundIsConstant(left) {
+					return nil, nil, nil
+				}
+				starts = append(starts, left)
+			case ">":
+				if !gapFillBoundIsConstant(left) {
+					return nil, nil, nil
+				}
+				finishes = append(finishes, left)
+			default:
+				return nil, nil, nil
+			}
+		}
+	}
+	if len(starts) == 0 || len(finishes) == 0 {
+		return nil, nil, nil
+	}
+
+	start, err = combineGapFillBounds(ctx, "greatest", starts, timestamp.Typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	finish, err = combineGapFillBounds(ctx, "least", finishes, timestamp.Typ)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// mo_win_truncate represents TIMESTAMP windows as DATETIME values whose raw
+	// microseconds are the source instants. Keep inferred TIMESTAMP bounds in
+	// their source type so the executor can reinterpret them in that same instant
+	// coordinate without applying the session timezone a second time.
+	if types.T(timestamp.Typ.Id) == types.T_timestamp {
+		return start, finish, nil
+	}
+
+	// The time-window key is evaluated as DATETIME by mo_win_truncate. Convert
+	// the already-combined bounds through the same cast path so every temporal
+	// input accepted by the binder (notably TIME and YEAR) reaches the executor
+	// in one representation.
+	datetimeType := plan.Type{Id: int32(types.T_datetime), Scale: timestamp.Typ.Scale}
+	start, err = appendCastBeforeExpr(ctx, start, datetimeType)
+	if err != nil {
+		return nil, nil, err
+	}
+	finish, err = appendCastBeforeExpr(ctx, finish, datetimeType)
+	if err != nil {
+		return nil, nil, err
+	}
+	return start, finish, nil
+}
+
+func gapFillBoundColumnMatches(expr *Expr, timestamp *plan.ColRef) bool {
+	col := expr.GetCol()
+	return col != nil && col.RelPos == timestamp.RelPos && col.ColPos == timestamp.ColPos
+}
+
+func gapFillBoundContainsColumn(expr *Expr, timestamp *plan.ColRef) bool {
+	if expr == nil {
+		return false
+	}
+	if gapFillBoundColumnMatches(expr, timestamp) {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if gapFillBoundContainsColumn(arg, timestamp) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, arg := range item.List.List {
+			if gapFillBoundContainsColumn(arg, timestamp) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func gapFillBoundIsConstant(expr *Expr) bool {
+	return expr != nil && !exprHasColRef(expr) && !hasCorrCol(expr) &&
+		!hasSubquery(expr) && !containsVolatileFunction(expr)
+}
+
+func combineGapFillBounds(ctx context.Context, name string, candidates []*Expr, targetType plan.Type) (*Expr, error) {
+	casted := make([]*Expr, len(candidates))
+	for i, candidate := range candidates {
+		var err error
+		casted[i], err = appendCastBeforeExpr(ctx, DeepCopyExpr(candidate), targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(casted) == 1 {
+		return casted[0], nil
+	}
+	return BindFuncExprImplByPlanExpr(ctx, name, casted)
 }
 
 // groupingSetOrderResolution carries, per ORDER BY entry of a grouping-set
@@ -8041,6 +8618,148 @@ func cloneTreeExpr(astExpr tree.Expr) tree.Expr {
 	}
 	cloned := cloneTreeValue(reflect.ValueOf(astExpr), make(map[treeClonePointer]reflect.Value))
 	return cloned.Interface().(tree.Expr)
+}
+
+func cloneTreeSelectExprs(exprs tree.SelectExprs) tree.SelectExprs {
+	if len(exprs) == 0 {
+		return nil
+	}
+	cloned := make(tree.SelectExprs, len(exprs))
+	for i := range exprs {
+		cloned[i].Expr = cloneTreeExpr(exprs[i].Expr)
+		if exprs[i].As != nil {
+			cloned[i].As = tree.NewCStr(exprs[i].As.Origin(), 1)
+		}
+	}
+	return cloned
+}
+
+func cloneTreeSelectExprsWithStableHeadings(exprs tree.SelectExprs, headings []string) tree.SelectExprs {
+	cloned := cloneTreeSelectExprs(exprs)
+	for i := range cloned {
+		if cloned[i].As != nil && !cloned[i].As.Empty() {
+			continue
+		}
+		if i < len(headings) && headings[i] != "" {
+			cloned[i].As = tree.NewCStr(headings[i], 1)
+		}
+	}
+	return cloned
+}
+
+func cloneTreeExprs(exprs tree.Exprs) tree.Exprs {
+	if len(exprs) == 0 {
+		return nil
+	}
+	cloned := make(tree.Exprs, len(exprs))
+	for i, expr := range exprs {
+		cloned[i] = cloneTreeExpr(expr)
+	}
+	return cloned
+}
+
+func sampleStarColumnsForView(
+	builder *QueryBuilder,
+	ctx *BindContext,
+	selectClause *tree.SelectClause,
+) (tree.Exprs, error) {
+	if builder == nil || ctx == nil || selectClause == nil {
+		return nil, nil
+	}
+	for _, selectExpr := range selectClause.Exprs {
+		sample, ok := selectExpr.Expr.(*tree.SampleExpr)
+		if !ok {
+			continue
+		}
+		_, isStar := sample.GetColumns()
+		if !isStar {
+			continue
+		}
+		accountID, err := builder.compCtx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		columns, _, err := ctx.unfoldStar(builder.GetContext(), "", accountID == catalog.System_Account)
+		if err != nil {
+			return nil, err
+		}
+		result := make(tree.Exprs, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, cloneTreeExpr(column.Expr))
+		}
+		return result, nil
+	}
+	return nil, nil
+}
+
+func cloneViewSelectExprsForView(
+	ctx *BindContext,
+	selectClause *tree.SelectClause,
+	exprs tree.SelectExprs,
+	headings []string,
+	sampleStarColumns tree.Exprs,
+) tree.SelectExprs {
+	cloned := cloneTreeSelectExprsWithStableHeadings(exprs, headings)
+	if ctx == nil || selectClause == nil ||
+		!selectClauseHasSampleExpr(selectClause) {
+		return cloned
+	}
+
+	sampleStart := ctx.sampleFunc.start
+	sampleEnd := sampleStart + ctx.sampleFunc.offset
+	if sampleStart < 0 || sampleEnd > len(cloned) || sampleStart >= sampleEnd {
+		return cloned
+	}
+
+	var sampleExpr tree.SelectExpr
+	foundSample := false
+	for _, expr := range selectClause.Exprs {
+		if _, ok := expr.Expr.(*tree.SampleExpr); ok {
+			sampleExpr = expr
+			foundSample = true
+			break
+		}
+	}
+	if !foundSample {
+		return cloned
+	}
+	stableSample := cloneTreeSelectExprs(tree.SelectExprs{sampleExpr})[0]
+	if len(sampleStarColumns) > 0 {
+		if sample, ok := stableSample.Expr.(*tree.SampleExpr); ok {
+			sample.SetColumns(cloneTreeExprs(sampleStarColumns), false)
+		}
+	}
+
+	stable := make(tree.SelectExprs, 0, len(cloned)-ctx.sampleFunc.offset+1)
+	stable = append(stable, cloned[:sampleStart]...)
+	stable = append(stable, stableSample)
+	stable = append(stable, cloned[sampleEnd:]...)
+	return stable
+}
+
+func captureGroupingSetViewStarExpansion(
+	ctx *BindContext,
+	original *tree.SelectClause,
+	branches []*tree.SelectClause,
+	hiddenResultLen int,
+) {
+	if ctx == nil || !ctx.captureViewStarExpansion || original == nil || len(branches) == 0 {
+		return
+	}
+	if ctx.expandedSelectLists == nil {
+		ctx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
+	}
+	for _, branch := range branches {
+		expanded, ok := ctx.expandedSelectLists[branch]
+		if !ok {
+			continue
+		}
+		if hiddenResultLen > 0 && hiddenResultLen < len(expanded) {
+			expanded = expanded[:len(expanded)-hiddenResultLen]
+		}
+		ctx.expandedSelectLists[original] = cloneTreeSelectExprs(expanded)
+		return
+	}
 }
 
 type treeClonePointer struct {
@@ -8433,6 +9152,31 @@ func (builder *QueryBuilder) appendWhereNode(
 	}, ctx)
 }
 
+func (builder *QueryBuilder) appendNonAggregateHavingNode(
+	ctx *BindContext,
+	nodeID int32,
+	boundHavingList []*plan.Expr,
+) (newNodeID int32, err error) {
+	if len(boundHavingList) == 0 {
+		return nodeID, nil
+	}
+
+	newFilterList := make([]*plan.Expr, 0, len(boundHavingList))
+	for _, cond := range boundHavingList {
+		var expr *plan.Expr
+		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			return
+		}
+		newFilterList = append(newFilterList, expr)
+	}
+
+	return builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{nodeID},
+		FilterList: newFilterList,
+	}, ctx), nil
+}
+
 func (builder *QueryBuilder) appendSampleNode(
 	ctx *BindContext,
 	nodeID int32,
@@ -8539,7 +9283,7 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 	boundTimeWindowGroupBy *plan.Expr,
 	fillType plan.Node_FillType,
 	fillVals, fillCols []*Expr,
-	interval, sliding, ts, wEnd *Expr,
+	interval, sliding, ts, wEnd, gapFillStart, gapFillEnd *Expr,
 	astTimeWindow *tree.TimeWindow,
 ) (newNodeID int32, err error) {
 	if ctx.bindingRecurStmt() {
@@ -8590,6 +9334,8 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 		TimeWindowPartitionBy: partitionBy,
 		Timestamp:             ts,
 		WEnd:                  wEnd,
+		GapFillStart:          gapFillStart,
+		GapFillEnd:            gapFillEnd,
 		GapFillMode: func() plan.Node_GapFillMode {
 			if astTimeWindow.GapFill {
 				return plan.Node_GAP_FILL_PARTITION
@@ -8905,7 +9651,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewTimeUnitExpr("second")
+		arg2 = tree.NewTimeUnitExpr("microsecond")
 		expr = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{div, arg2},
@@ -8929,7 +9675,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 }
 
 const (
-	unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit"
+	unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support MICROSECOND, SECOND, MINUTE, HOUR, DAY as the time unit"
 	timeWindowIntervalMustBePositive  = "time window interval must be greater than zero"
 	timeWindowSlidingMustBePositive   = "time window sliding value must be greater than zero"
 )
@@ -8976,7 +9722,7 @@ func validateTimeWindowIntervalUnit(ctx context.Context, unit string) error {
 		return err
 	}
 	switch typ {
-	case types.Second, types.Minute, types.Hour, types.Day:
+	case types.MicroSecond, types.Second, types.Minute, types.Hour, types.Day:
 		return nil
 	default:
 		return moerr.NewNotSupported(ctx, unsupportedTimeWindowIntervalUnit)
@@ -9553,7 +10299,6 @@ func (builder *QueryBuilder) bindView(
 	viewCtx := NewBindContext(builder, nil)
 	viewCtx.restoreViewMySQLSpecialTypes = true
 	viewCtx.snapshot = snapshot
-	viewCtx.lower = ctx.lower
 
 	viewData := ViewData{}
 	err = json.Unmarshal([]byte(viewDefString), &viewData)
@@ -9565,7 +10310,13 @@ func (builder *QueryBuilder) bindView(
 	if viewData.SQLMode != nil {
 		parserSQLMode = *viewData.SQLMode
 	}
-	originStmts, err := mysql.ParseWithSQLMode(builder.GetContext(), viewData.Stmt, ctx.lower, parserSQLMode)
+	viewLowerCaseTableNames := ctx.lower
+	if viewData.LowerCaseTableNames != nil {
+		viewLowerCaseTableNames = *viewData.LowerCaseTableNames
+	}
+	viewCtx.lower = viewLowerCaseTableNames
+	originStmts, err := mysql.ParseWithSQLMode(
+		builder.GetContext(), viewData.Stmt, viewLowerCaseTableNames, parserSQLMode)
 	defer func() {
 		for _, s := range originStmts {
 			s.Free()
@@ -9628,6 +10379,10 @@ func (builder *QueryBuilder) bindView(
 		builder.isForUpdate = savedIsForUpdate
 	}()
 
+	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
+		capture.enterNestedView()
+		defer capture.leaveNestedView()
+	}
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -9637,7 +10392,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	viewCtx.markViewCTASDefaultBoundary()
+	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -10021,11 +10776,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 						return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
 					}
 				}
-				// Only the CTE currently being expanded is backed by the
-				// recursive scan. Other CTEs visible from the declaration scope
-				// must still be bound as their own producers.
-				if ctx.bindingRecurStmt() && cteRef == ctx.cteState.cte {
-					nodeID = ctx.cteState.recScanNodeId
+				// An outer recursive CTE can remain active while a nested recursive
+				// CTE replaces the current state. Find the state that owns this
+				// exact CTE before deciding whether to reuse its recursive scan.
+				if recursiveState, active := ctx.activeRecursiveCteState(cteRef); active {
+					if ctx.queryBlockOwner != recursiveState.recursiveRefQueryBlock {
+						return 0, moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
+					}
+					nodeID = recursiveState.recScanNodeId
 					return
 				}
 
@@ -10052,7 +10810,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if len(schema) == 0 {
 				schema = builder.compCtx.DefaultDatabase()
 			}
-			key := schema + "." + table
+			lower := builder.compCtx.GetLowerCaseTableNames()
+			key := tree.NewCStr(schema, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
 			if chain, ok := ctx.remapOption.Rewrites[key]; ok && len(chain) > 0 {
 				// Apply the rewrite chain as stacked views: build the outermost
 				// (last) layer now. A reference to this same table inside that
@@ -10083,7 +10842,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				// Do not bind here to avoid double-binding. Instead, set the
 				// subquery context name so the outer AliasedTableExpr binds once.
 				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
-					builder.ctxByNode[nodeID].cteName = key
+					lower := builder.compCtx.GetLowerCaseTableNames()
+					builder.ctxByNode[nodeID].cteName =
+						tree.NewCStr(schema, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
 				}
 				ctx.remapOption = m
 				return
@@ -10154,6 +10915,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, err
 		}
 
+		// Compiler contexts return immutable catalog metadata. Own the planner
+		// shell and column slice, which are replaced locally, without copying the
+		// immutable column definitions, indexes, constraints, or expressions.
+		tableDef = CloneTableDefForPlan(tableDef, true)
 		tableDef.Name2ColIndex = map[string]int32{}
 		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)
 		for i := 0; i < len(tableDef.Cols); i++ {
@@ -10235,9 +11000,19 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		} else if tableDef.TableType == catalog.SystemSourceRel {
 			return 0, moerr.NewNotSupportedf(builder.GetContext(), "source table %s.%s", schema, table)
 		} else if tableDef.TableType == catalog.SystemViewRel {
-			if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
-				if dbOfView == schema && nameOfView == table {
-					return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+			// CREATE OR REPLACE VIEW and ALTER VIEW change the current catalog
+			// object. A same-named View resolved from an explicit historical
+			// snapshot belongs to a different catalog domain and is a valid source.
+			if !builder.isHistoricalSnapshot(snapshot) {
+				if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
+					lowerCaseTableNames := ctx.lower
+					databaseMatches := tree.NewCStr(dbOfView, lowerCaseTableNames).Compare() ==
+						tree.NewCStr(schema, lowerCaseTableNames).Compare()
+					viewMatches := tree.NewCStr(nameOfView, lowerCaseTableNames).Compare() ==
+						tree.NewCStr(table, lowerCaseTableNames).Compare()
+					if databaseMatches && viewMatches {
+						return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+					}
 				}
 			}
 
@@ -10508,7 +11283,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		plan.Node_SINK_SCAN,
 		plan.Node_RECURSIVE_SCAN,
 	}
-	lower := builder.compCtx.GetLowerCaseTableNames()
+	lower := ctx.lower
 	if node.NodeType == plan.Node_SINK_SCAN && alias.Alias != "" && len(node.BindingTags) > 0 && len(ctx.bindings) == 1 {
 		candidate := ctx.bindingByTag[node.BindingTags[0]]
 		if ctx.bindings[0] == candidate {
@@ -11183,26 +11958,10 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			}
 
 			tsNano := ts.UTC().UnixNano()
-			if tsNano <= 0 {
-				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+			if err = builder.validateTimestampHint(tsNano, lit.Sval, true); err != nil {
 				return
 			}
-
-			if time.Now().UTC().UnixNano()-tsNano <= options.DefaultGCTTL.Nanoseconds() && 0 <= time.Now().UTC().UnixNano()-tsNano {
-				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
-			} else {
-				var valid bool
-				if valid, err = builder.compCtx.CheckTimeStampValid(tsNano); err != nil {
-					return
-				}
-
-				if !valid {
-					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", lit.Sval)
-					return
-				}
-
-				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
-			}
+			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
 		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 			snapshot, err = builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
 			if err != nil && strings.Contains(err.Error(), "find 0 snapshot records") {
@@ -11213,8 +11972,7 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			// try human-readable datetime first, fall back to debug timestamp format
 			if ts, err2 := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval); err2 == nil {
 				tsNano := ts.UTC().UnixNano()
-				if tsNano <= 0 {
-					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+				if err = builder.validateTimestampHint(tsNano, lit.Sval, false); err != nil {
 					return
 				}
 				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
@@ -11223,11 +11981,17 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
 					return
 				}
+				if err = builder.validateTimestampHint(ts.PhysicalTime, lit.Sval, false); err != nil {
+					return
+				}
 				snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 			}
 		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
 			var ts int64
 			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {
+				return
+			}
+			if err = builder.validateTimestampHint(ts, lit.Sval, false); err != nil {
 				return
 			}
 			tStamp := &timestamp.Timestamp{PhysicalTime: ts}
@@ -11238,14 +12002,12 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 		}
 	case *plan.Literal_I64Val:
 		if tsExpr.Type == tree.ATTIMESTAMPTIME {
-			if lit.I64Val <= 0 {
-				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
+			if err = builder.validateTimestampHint(lit.I64Val, lit.I64Val, true); err != nil {
 				return
 			}
 			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
 		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
-			if lit.I64Val <= 0 {
-				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
+			if err = builder.validateTimestampHint(lit.I64Val, lit.I64Val, false); err != nil {
 				return
 			}
 			if bgSnapshot := builder.compCtx.GetSnapshot(); builder.isRestoreByTs {
@@ -11264,6 +12026,33 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 	}
 
 	return
+}
+
+// validateTimestampHint rejects timestamps that cannot identify historical state.
+// Raw MO_TS and AS OF TIMESTAMP are also used by internal PITR and restore paths,
+// while only the TIMESTAMP hint has an existing catalog-snapshot requirement.
+func (builder *QueryBuilder) validateTimestampHint(ts int64, value any, requireCatalogSnapshot bool) error {
+	if ts <= 0 {
+		return moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", value)
+	}
+
+	if !requireCatalogSnapshot {
+		return nil
+	}
+
+	age := time.Now().UTC().UnixNano() - ts
+	if age >= 0 && age <= options.DefaultGCTTL.Nanoseconds() {
+		return nil
+	}
+
+	valid, err := builder.compCtx.CheckTimeStampValid(ts)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", value)
+	}
+	return nil
 }
 
 func (builder *QueryBuilder) applyIcebergRefToScan(scan *plan.IcebergScan, ref *tree.IcebergRefSpec) error {
@@ -11356,6 +12145,24 @@ func IsSnapshotValid(snapshot *Snapshot) bool {
 	}
 
 	return true
+}
+
+// isHistoricalSnapshot reports whether relation resolution will switch from
+// the current transaction to the requested snapshot transaction.
+func (builder *QueryBuilder) isHistoricalSnapshot(snapshot *Snapshot) bool {
+	if !IsSnapshotValid(snapshot) {
+		return false
+	}
+
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return false
+	}
+	return snapshot.TS.Less(txnOp.Txn().SnapshotTS)
 }
 
 // getPartitionColNameFromExpr tries to extract the first column name from a partition expression

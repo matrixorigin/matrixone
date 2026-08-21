@@ -103,7 +103,7 @@ func growHashBuildSpillSlice[T any](
 		capacity,
 		mp,
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		site,
 		capacityClass,
 	)
@@ -131,7 +131,7 @@ func marshalSpillRecordAccounted(
 		if err != nil {
 			return 0, err
 		}
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	if err := buf.EnsureCapacity(batchSize + 24); err != nil {
 		return 0, err
@@ -165,7 +165,7 @@ func (ctr *container) writeSpillPayload(
 	analyzer process.Analyzer,
 ) error {
 	if file == nil || len(payload) == 0 {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	// All initial-spill writes funnel through this helper. Check after any
 	// vector projection/marshal and immediately before the physical write so a
@@ -176,7 +176,7 @@ func (ctr *container) writeSpillPayload(
 	}
 
 	if ctr.hashmapBuilder.budget == nil || ctr.spillBundle == nil {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	_, _, err := ctr.spillBundle.growDisk(file, ctr.hashmapBuilder.budget, uint64(len(payload)))
 	if err != nil {
@@ -219,7 +219,7 @@ func (ctr *container) getSpillFS(proc *process.Process) (fileservice.MutableFile
 // ensureSpillFile lazily creates an anonymous spill file for the given bucket.
 func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, bucket int) (*os.File, error) {
 	if bucket < 0 || bucket >= len(files) {
-		return nil, process.ErrHashBuildBudgetInvalid
+		return nil, process.ErrExecutionResourceInvalid
 	}
 	if files[bucket] != nil {
 		return files[bucket], nil
@@ -233,7 +233,7 @@ func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, b
 	}
 	name := fmt.Sprintf("join_%s_%d_build", ctr.spillUUID, bucket)
 	if ctr.hashmapBuilder.budget == nil {
-		return nil, process.ErrHashBuildBudgetInvalid
+		return nil, process.ErrExecutionResourceInvalid
 	}
 	fdToken, err := ctr.hashmapBuilder.budget.ReserveSpillFD(1)
 	if err != nil {
@@ -288,7 +288,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 
 	rows := bat.RowCount()
 	if !keycodec.ValidVectors(bat.Vecs, rows) {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	var err error
 
@@ -346,7 +346,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 		return err
 	}
 	if !keycodec.ValidVectors(keyVecs, rows) {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
@@ -399,7 +399,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 			}
 			for i, vec := range bat.Vecs {
 				if vec == nil {
-					return process.ErrHashBuildBudgetInvalid
+					return process.ErrExecutionResourceInvalid
 				}
 				selected.Vecs[i], err =
 					vector.NewOffHeapVecWithTypeAndAllocation(
@@ -422,7 +422,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 				var spillErr error
 				for i, vec := range bat.Vecs {
 					if vec == nil {
-						spillErr = process.ErrHashBuildBudgetInvalid
+						spillErr = process.ErrExecutionResourceInvalid
 						break
 					}
 					if spillErr = selected.Vecs[i].PreExtend(n, proc.Mp()); spillErr != nil {
@@ -522,7 +522,7 @@ func (ctr *container) reclaimOptionalSpillBuffers(
 		}
 		if buffer.Len() > 0 {
 			if bucket >= len(files) || files[bucket] == nil {
-				return process.ErrHashBuildBudgetInvalid
+				return process.ErrExecutionResourceInvalid
 			}
 			if err := ctr.flushPendingSpillBucket(
 				proc,
@@ -715,7 +715,7 @@ func (ctr *container) appendSpillRecord(
 	analyzer process.Analyzer,
 ) error {
 	if bucket < 0 || bucket >= spillNumBuckets {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	if ctr.spillAllocationMP != proc.Mp() ||
 		ctr.hashmapBuilder.mapAllocationAccount == nil {
@@ -726,7 +726,7 @@ func (ctr *container) appendSpillRecord(
 		ctr.spillAccountedWrite, err = mpool.NewAccountedBufferWithCapacityClass(
 			proc.Mp(),
 			ctr.hashmapBuilder.mapAllocationAccount,
-			HashBuildAllocationOwner,
+			mpool.AllocationOwnerHashBuild,
 			HashBuildSpillAllocationSiteMarshalBuffer,
 			ctr.recoveryCapacityClass,
 		)
@@ -761,7 +761,7 @@ func (ctr *container) appendSpillRecord(
 		buffer, err = mpool.NewAccountedBuffer(
 			proc.Mp(),
 			ctr.hashmapBuilder.mapAllocationAccount,
-			HashBuildAllocationOwner,
+			mpool.AllocationOwnerHashBuild,
 			HashBuildSpillAllocationSiteCoalesceBuffer,
 		)
 		if err != nil {
@@ -805,7 +805,7 @@ func (ctr *container) flushPendingSpillBucket(
 	analyzer process.Analyzer,
 ) error {
 	if bucket < 0 || bucket >= spillNumBuckets {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	rows := ctr.spillBucketWriteRows[bucket]
 	buffer := ctr.spillAccountedBuckets[bucket]
@@ -854,7 +854,7 @@ func (ctr *container) flushSpillBuffers(proc *process.Process, files []*os.File,
 			file = files[bucket]
 		}
 		if file == nil {
-			firstErr = process.ErrHashBuildBudgetInvalid
+			firstErr = process.ErrExecutionResourceInvalid
 			if ctr.spillAccountedBuckets[bucket] != nil {
 				ctr.spillAccountedBuckets[bucket].Reset()
 			}
@@ -874,7 +874,7 @@ func (ctr *container) flushSpillBuffers(proc *process.Process, files []*os.File,
 func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*plan.Expr) ([]colexec.ExpressionExecutor, error) {
 	for _, condition := range conditions {
 		if condition == nil {
-			return nil, &process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorInvalid, Message: "nil shuffle spill key"}
+			return nil, &process.ExecutionResourceError{Kind: process.ExecutionResourceErrorInvalid, Message: "nil shuffle spill key"}
 		}
 	}
 	ctr.spillConditions = conditions

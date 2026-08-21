@@ -101,13 +101,56 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 }
 
 func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
-	if b.insideAgg {
+	if !b.insideAgg && !b.bindingProjectedAlias && b.builder.mysqlFullGroupByCompat &&
+		b.ctx != nil && !b.ctx.aggregateQueryForFullGroupBy() && !astExpr.Star {
+		var projected tree.Expr
+		var found, ambiguous bool
+		if astExpr.NumParts == 1 {
+			projected, found, ambiguous = b.ctx.havingOutputExpr(astExpr.ColName())
+			if !found && !ambiguous {
+				// MySQL also keeps the unqualified source spelling visible when
+				// the source column is directly projected under a different alias
+				// (for example SELECT a AS x ... HAVING a). Resolve this only after
+				// output-name lookup so aliases still have precedence and duplicate
+				// output names remain ambiguous.
+				projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
+			}
+		} else {
+			projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
+		}
+		if ambiguous {
+			return nil, ambiguousHavingColumn(b.GetContext(), astExpr.ColName())
+		}
+		if found {
+			// Bind the expression represented by the visible output name while
+			// suppressing ONLY_FULL_GROUP_BY checks for its source columns. The
+			// flag is scoped to this recursive bind so an anonymous expression
+			// written directly in HAVING still follows normal visibility rules.
+			previous := b.bindingProjectedAlias
+			b.bindingProjectedAlias = true
+			expr, err := b.baseBindExpr(projected, depth, isRoot)
+			b.bindingProjectedAlias = previous
+			return expr, err
+		}
+	}
+
+	if b.insideAgg || b.bindingProjectedAlias {
 		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
 		if err != nil {
 			return nil, err
 		}
 
-		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			if b.builder.mysqlFullGroupByCompat && b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
+				return expr, nil
+			}
+			if b.bindingHaving && depth > 0 && b.builder.mysqlFullGroupByCompat &&
+				(b.corrColRefTargetsCurrentGroup(corr.Corr) ||
+					b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
+					b.corrColRefTargetsGroup(corr.Corr) ||
+					b.corrColRefAllowedByTargetQuery(corr.Corr)) {
+				return expr, nil
+			}
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 
@@ -140,7 +183,11 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			if b.corrColRefTargetsCurrentGroup(corr.Corr) || b.corrColRefTargetsGroup(corr.Corr) {
+			if b.corrColRefTargetsCurrentGroup(corr.Corr) ||
+				b.corrColRefTargetsAggregateInputParent(corr.Corr) ||
+				b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
+				b.corrColRefTargetsGroup(corr.Corr) ||
+				b.corrColRefAllowedByTargetQuery(corr.Corr) {
 				return expr, nil
 			}
 			return nil, b.newGroupByColumnError(astExpr)
@@ -170,6 +217,10 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 		return nil, b.newGroupByColumnError(astExpr)
 	}
+}
+
+func ambiguousHavingColumn(sysCtx context.Context, name string) error {
+	return moerr.NewInvalidInputf(sysCtx, "Column '%s' in having clause is ambiguous", name)
 }
 
 func (b *HavingBinder) newGroupByColumnError(astExpr *tree.UnresolvedName) error {
@@ -460,12 +511,19 @@ func needsTimeWindowResultAggRemap(expr *Expr) bool {
 }
 
 func makeTimeWindowProjectionExpr(ctx context.Context, bindCtx *BindContext, astExpr tree.Expr, colPos int32) (*plan.Expr, error) {
+	name := ""
+	if colPos >= 0 && int(colPos) < len(bindCtx.times) {
+		if col := bindCtx.times[colPos].GetCol(); col != nil {
+			name = col.Name
+		}
+	}
 	expr := &plan.Expr{
 		Typ: bindCtx.times[colPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: bindCtx.timeTag,
 				ColPos: colPos,
+				Name:   name,
 			},
 		},
 	}
@@ -672,6 +730,11 @@ func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dept
 }
 
 func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
+	prevSubqueryInAggregateInput := b.subqueryInAggregateInput
+	b.subqueryInAggregateInput = b.insideAgg
+	defer func() {
+		b.subqueryInAggregateInput = prevSubqueryInAggregateInput
+	}()
 	return b.baseBindSubquery(astExpr, isRoot)
 }
 

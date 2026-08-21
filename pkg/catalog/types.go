@@ -181,6 +181,11 @@ const (
 	// MO_SUBS subscriptions meta table
 	MO_SUBS = "mo_subs"
 
+	// MO_VIEW_DEPENDENCIES stores exact reverse bindings for persisted Views.
+	MO_VIEW_DEPENDENCIES = "mo_view_dependencies"
+	// MO_VIEW_REFRESH stores monotonic refresh state and worker leases.
+	MO_VIEW_REFRESH = "mo_view_refresh"
+
 	// MO_SNAPSHOTS
 	MO_SNAPSHOTS = "mo_snapshots"
 

@@ -31,8 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	groupop "github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -40,6 +45,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRetainingOperatorsActivateAllocationLifecycle(t *testing.T) {
+	group := groupop.NewArgument()
+	defer group.Release()
+	_, ownsAllocation := any(group).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	localOrder := order.NewArgument()
+	defer localOrder.Release()
+	_, ownsAllocation = any(localOrder).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	mergeGroup := groupop.NewArgumentMergeGroup()
+	defer mergeGroup.Release()
+	_, ownsAllocation = any(mergeGroup).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	order := mergeorder.NewArgument()
+	defer order.Release()
+	_, ownsAllocation = any(order).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	topN := top.NewArgument()
+	defer topN.Release()
+	_, ownsAllocation = any(topN).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	mergeTopN := mergetop.NewArgument()
+	defer mergeTopN.Release()
+	_, ownsAllocation = any(mergeTopN).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+}
 
 func TestJoinAllocationLifecycleErrorsPreservesSingle(t *testing.T) {
 	primary := moerr.NewDuplicateEntryNoCtx("duplicate", "primary")
@@ -199,7 +236,7 @@ func newRunLifecycleCompile(
 	)
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
 	c.anal = newAnalyzeModule()
-	budget, err := proc.GetHashBuildBudget()
+	budget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	registry, err := budget.AllocationAccountRegistry()
 	require.NoError(t, err)

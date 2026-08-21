@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -104,9 +103,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 
 	// check if the database is a subscription
-	if sub, err := ctx.GetSubscriptionMeta(dbName, snapshot); err != nil {
+	sub, err := ctx.GetSubscriptionMeta(dbName, snapshot)
+	if err != nil {
 		return nil, err
-	} else if sub != nil {
+	}
+	if sub != nil {
 		if !pubsub.InSubMetaTables(sub, tblName) {
 			return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tblName, sub.Name)
 		}
@@ -148,24 +149,23 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		newTableDef.Name = tblName
 		tableDef = &newTableDef
 	}
+	if sub == nil && tableDef.TblId != 0 {
+		// SHOW CREATE owns the local source table, its snapshot, and the compiler
+		// catalog context. Normalize legacy visibility before formatting while
+		// leaving subscription definitions to their publisher-provided metadata.
+		tableDef = DeepCopyTableDef(tableDef, true)
+		if err = reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+			return nil, err
+		}
+	}
 
 	ddlStr, _, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var buf bytes.Buffer
-	for i, ch := range ddlStr {
-		// escape double quote, for the sql pattern below
-		if ch == '"' {
-			if i == 0 || ddlStr[i-1] != '\\' {
-				buf.WriteRune('"')
-			}
-		}
-		buf.WriteRune(ch)
-	}
-	sql := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, buf.String())
+	sql := "SELECT %s AS `Table`, %s AS `Create Table`"
+	sql = fmt.Sprintf(sql, formatStrLit(tblName), formatStrLit(ddlStr))
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
@@ -1202,7 +1202,11 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 }
 
 func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) {
-	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 0)
+	return getRewriteSQLStmtWithSQLMode(ctx, sql, "")
+}
+
+func getRewriteSQLStmtWithSQLMode(ctx CompilerContext, sql, sqlMode string) (tree.Statement, error) {
+	newStmts, err := parsers.ParseWithSQLMode(ctx.GetContext(), dialect.MYSQL, sql, 0, sqlMode)
 	if err != nil {
 		return nil, err
 	}

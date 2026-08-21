@@ -41,12 +41,15 @@ type container struct {
 	bat     *batch.Batch
 	batAggs []aggexec.AggFuncExec
 
-	// runningAgg retains the one-group aggregate for a cumulative ROWS frame
-	// between bounded output chunks. runningNextRow is both the continuation
-	// cursor and a guard against accidentally reusing the state out of order.
+	// runningAgg retains the one-group aggregate for cumulative and bounded
+	// sliding ROWS frames between output chunks. runningNextRow guards against
+	// accidentally reusing the state out of order; runningLeft/runningRight
+	// describe the current half-open sliding frame.
 	runningAgg       aggexec.AggFuncExec
 	runningNextRow   int
 	runningPartition int
+	runningLeft      int
+	runningRight     int
 
 	desc      []bool
 	nullsLast []bool
@@ -123,7 +126,13 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	// hashes) in the mpool until the next reuse.
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
-	if ctr.bat != nil {
+	if ctr.hasAccountedBufferedData() {
+		// AppendWithCopy and Dup preserve a source vector's allocation
+		// selection. Release inherited backing at the prepared-statement
+		// generation boundary; only unaccounted buffers may be reused.
+		ctr.freeBatch(proc.Mp())
+		ctr.freeVector(proc.Mp())
+	} else if ctr.bat != nil {
 		ctr.bat.CleanOnlyData()
 	}
 }
@@ -203,6 +212,8 @@ func (ctr *container) freeRunningAgg() {
 	}
 	ctr.runningNextRow = 0
 	ctr.runningPartition = 0
+	ctr.runningLeft = 0
+	ctr.runningRight = 0
 }
 
 func (ctr *container) freeExes() {
@@ -216,20 +227,46 @@ func (ctr *container) freeExes() {
 }
 
 func (ctr *container) freeVector(mp *mpool.MPool) {
-	for _, e := range ctr.orderVecs {
-		for _, vec := range e.Vec {
+	for i := range ctr.orderVecs {
+		for j, vec := range ctr.orderVecs[i].Vec {
 			if vec != nil {
 				vec.Free(mp)
+				ctr.orderVecs[i].Vec[j] = nil
 			}
 		}
 	}
 
-	for _, e := range ctr.aggVecs {
-		for _, vec := range e.Vec {
+	for i := range ctr.aggVecs {
+		for j, vec := range ctr.aggVecs[i].Vec {
 			if vec != nil {
 				vec.Free(mp)
+				ctr.aggVecs[i].Vec[j] = nil
 			}
 		}
 	}
 
+}
+
+func (ctr *container) hasAccountedBufferedData() bool {
+	if ctr == nil {
+		return false
+	}
+	if ctr.bat != nil && ctr.bat.HasAllocationAccount() {
+		return true
+	}
+	for _, eval := range ctr.orderVecs {
+		for _, vec := range eval.Vec {
+			if vec != nil && vec.AllocationAccountSelection() != nil {
+				return true
+			}
+		}
+	}
+	for _, eval := range ctr.aggVecs {
+		for _, vec := range eval.Vec {
+			if vec != nil && vec.AllocationAccountSelection() != nil {
+				return true
+			}
+		}
+	}
+	return false
 }

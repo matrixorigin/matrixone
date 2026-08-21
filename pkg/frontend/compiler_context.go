@@ -51,6 +51,22 @@ import (
 )
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
+var _ plan2.ViewDependencyIdentityResolver = &TxnCompilerContext{}
+
+// resolveUdfInCallerTxnKey asks ResolveUdf to use the transaction that is
+// compiling the statement. Clone restores function metadata and dependent
+// views atomically, so view binding must be able to read those uncommitted
+// catalog rows. Ordinary compilation keeps its independent read transaction.
+type resolveUdfInCallerTxnKey struct{}
+
+func withResolveUdfInCallerTxn(ctx context.Context) context.Context {
+	return context.WithValue(ctx, resolveUdfInCallerTxnKey{}, true)
+}
+
+func resolvesUdfInCallerTxn(ctx context.Context) bool {
+	value, _ := ctx.Value(resolveUdfInCallerTxnKey{}).(bool)
+	return value
+}
 
 type TxnCompilerContext struct {
 	dbName               string
@@ -205,7 +221,12 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	// the source; only name resolution is redirected. Qualified references are
 	// remapped separately at the AST level by applyRemapDb.
 	if execCtx != nil && len(execCtx.remapDb) > 0 {
-		if dst, ok := execCtx.remapDb[db]; ok {
+		lowerCaseTableNames := int64(1)
+		if execCtx.ses != nil {
+			lowerCaseTableNames = parserLowerCaseTableNames(execCtx.ses)
+		}
+		databaseKey := tree.NewCStr(db, lowerCaseTableNames).Compare()
+		if dst, ok := execCtx.remapDb[databaseKey]; ok {
 			return dst
 		}
 	}
@@ -227,6 +248,36 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 
 func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
 	return tcc.execCtx.ses.GetAccountId(), nil
+}
+
+// ResolveViewDependencyAccount returns the account whose catalog namespace was
+// used to resolve a View dependency. Keep the override order aligned with
+// getRelation: snapshot tenant, subscription publisher, then relations that
+// are always read from the system account.
+func (tcc *TxnCompilerContext) ResolveViewDependencyAccount(
+	obj *plan2.ObjectRef,
+	tableDef *plan2.TableDef,
+	snapshot *plan2.Snapshot,
+) (uint32, error) {
+	accountID := tcc.execCtx.ses.GetAccountId()
+	if snapshot != nil && snapshot.Tenant != nil {
+		accountID = snapshot.Tenant.TenantID
+	}
+	if obj.PubInfo != nil {
+		accountID = uint32(obj.PubInfo.TenantId)
+	}
+
+	dbName, tableName := obj.SchemaName, obj.ObjName
+	if dbName == "" {
+		dbName = tableDef.DbName
+	}
+	if tableName == "" {
+		tableName = tableDef.Name
+	}
+	if isClusterTable(dbName, tableName) || ShouldSwitchToSysAccount(dbName, tableName) {
+		accountID = sysAccountID
+	}
+	return accountID, nil
 }
 
 func (tcc *TxnCompilerContext) GetAccountName() string {
@@ -697,12 +748,16 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	useCallerTxn := resolvesUdfInCallerTxn(ctx)
+	var bh BackgroundExec
+	if useCallerTxn {
+		bh = ses.GetShareTxnBackgroundExec(ctx, false)
+	} else {
+		bh = ses.GetBackgroundExec(ctx)
+	}
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin;")
 	defer func() {
-		err = finishTxn(ctx, bh, err)
 		if execResultArrayHasData(erArray) {
 			if matchNum < 1 {
 				err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("No matching function for call to %s(%s)", name, argTypeStr)))
@@ -711,13 +766,19 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			}
 		}
 	}()
-	if err != nil {
-		return nil, err
+	if !useCallerTxn {
+		err = bh.Exec(ctx, "begin;")
+		defer func() {
+			err = finishTxn(ctx, bh, err)
+		}()
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	queryCtx, sql := udfCatalogLookup(ctx, tcc.GetSnapshot(), name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
+	err = bh.Exec(queryCtx, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -841,6 +902,33 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	}
 }
 
+// udfCatalogLookup keeps UDF resolution aligned with the compiler context's
+// relation lookup. View dependency sorting installs a snapshot on that context
+// before it plans views, so function metadata must use the same timestamp and
+// tenant even though ResolveUdf reads it through a background executor.
+func udfCatalogLookup(
+	ctx context.Context,
+	snapshot *plan2.Snapshot,
+	name string,
+	database string,
+) (context.Context, string) {
+	catalogTable := "mo_catalog.mo_user_defined_function"
+	if snapshot != nil {
+		if snapshot.TS != nil {
+			catalogTable += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+		if snapshot.Tenant != nil {
+			ctx = defines.AttachAccountId(ctx, snapshot.Tenant.TenantID)
+		}
+	}
+	return ctx, fmt.Sprintf(
+		`select args, body, language, rettype, db, modified_time, sql_mode from %s where name = "%s" and db = "%s";`,
+		catalogTable,
+		name,
+		database,
+	)
+}
+
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (varValue interface{}, err error) {
 	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
@@ -867,13 +955,41 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	} else {
 		var udVar *UserDefinedVar
 		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil {
-			return nil, err
+			// MySQL creates user variables lazily.  Reading a variable that has
+			// not been assigned yet therefore evaluates to NULL rather than
+			// producing an unknown-variable error.
+			return nil, nil
 		}
 
 		varValue = udVar.Value
 	}
 
 	return
+}
+
+// ResolveVariableType returns the type fixed when a user variable was
+// assigned. The value itself may be represented as text for protocol and
+// compatibility reasons (notably DECIMAL), so planner numeric binding must
+// not infer a narrower type from a sibling literal.
+func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (plan2.Type, error) {
+	if isSystemVar {
+		return plan2.Type{}, nil
+	}
+	if tcc.execCtx != nil {
+		if value, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+			return inferUserDefinedVarType(value), nil
+		}
+	}
+	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		// An unassigned user variable is NULL; TEXT is the neutral binding type
+		// and lets a numeric context perform the normal MySQL coercion.
+		return inferUserDefinedVarType(nil), nil
+	}
+	if udVar.Type.Id != 0 {
+		return udVar.Type, nil
+	}
+	return inferUserDefinedVarType(udVar.Value), nil
 }
 
 func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
@@ -885,7 +1001,9 @@ func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar,
 	}
 	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
 	if err != nil {
-		return false, err
+		// See ResolveVariable: an unassigned user variable is NULL and has
+		// no binary-string attribute.
+		return false, nil
 	}
 	return udVar.IsBin, nil
 }
@@ -911,7 +1029,9 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	}
 	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
 	if err != nil {
-		return vector.PrepareParamNone, err
+		// See ResolveVariable: an unassigned user variable is NULL and has no
+		// prepared-parameter conversion category.
+		return vector.PrepareParamNone, nil
 	}
 	return udVar.PrepareParamKind, nil
 }

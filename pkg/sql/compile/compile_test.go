@@ -88,8 +88,12 @@ func TestHasOrderedGroupConcat(t *testing.T) {
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
 	proc.GetSessionInfo().Buf = buffer.New()
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return ^uint64(0), nil
+		}
 		return "STRICT_TRANS_TABLES", nil
 	})
 	compilerCtx := plan2.NewEmptyCompilerContext()
@@ -141,6 +145,241 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	c.Release()
 	proc.Free()
 	proc.GetSessionInfo().Buf.Free()
+}
+
+func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.GetSessionInfo().Buf = buffer.New()
+	t.Cleanup(func() {
+		proc.Free()
+		proc.GetSessionInfo().Buf.Free()
+	})
+	limitValue := uint64(1)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return limitValue, nil
+		}
+		return "STRICT_TRANS_TABLES", nil
+	})
+
+	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx.SetContext(ctx)
+	const sql = "select 1 union all select 2"
+	stmts, err := mysql.Parse(ctx, sql, 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+
+	ctrl := gomock.NewController(t)
+	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	rows := 0
+	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat != nil {
+			rows += bat.RowCount()
+		}
+		return nil
+	}
+	c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	t.Cleanup(c.Release)
+	c.SetIsPrepare(true)
+	require.NoError(t, c.Compile(ctx, pn, fill))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, 1, rows)
+
+	limitValue = 0
+	rows = 0
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Zero(t, rows)
+}
+
+func TestSQLSelectLimitOperatorSelection(t *testing.T) {
+	resolverErr := errors.New("sql_select_limit resolver failed")
+	tests := []struct {
+		name       string
+		limit      uint64
+		resolveErr error
+		isPrepare  bool
+		wantLimit  bool
+	}{
+		{name: "ordinary default is a no-op", limit: ^uint64(0), wantLimit: false},
+		{name: "ordinary finite value is enforced", limit: 1, wantLimit: true},
+		{name: "prepared default remains dynamic", limit: ^uint64(0), isPrepare: true, wantLimit: true},
+		{name: "resolver error fails compilation", resolveErr: resolverErr},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.ApplySQLSelectLimit = true
+			proc.GetSessionInfo().Buf = buffer.New()
+			t.Cleanup(func() {
+				proc.Free()
+				proc.GetSessionInfo().Buf.Free()
+			})
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == plan2.SQLSelectLimitVariable {
+					return tc.limit, tc.resolveErr
+				}
+				return "STRICT_TRANS_TABLES", nil
+			})
+
+			compilerCtx := plan2.NewEmptyCompilerContext()
+			compilerCtx.SetContext(ctx)
+			const sql = "select 1 union all select 2"
+			stmts, err := mysql.Parse(ctx, sql, 1)
+			require.NoError(t, err)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+			require.NoError(t, err)
+			pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+
+			ctrl := gomock.NewController(t)
+			txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+			proc.Base.TxnClient = txnCli
+			proc.Base.TxnOperator = txnOp
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+
+			c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+			t.Cleanup(c.Release)
+			c.SetIsPrepare(tc.isPrepare)
+			err = c.Compile(ctx, pn, func(*batch.Batch, *perfcounter.CounterSet) error {
+				return nil
+			})
+			if tc.resolveErr != nil {
+				require.ErrorIs(t, err, tc.resolveErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLimit, compiledScopesContainOperator(c.scopes, vm.Limit))
+		})
+	}
+}
+
+func TestSQLSelectLimitIsResolvedForEachCachedPlanReuse(t *testing.T) {
+	tests := []struct {
+		name   string
+		limits []uint64
+	}{
+		{name: "finite to finite", limits: []uint64{2, 4}},
+		{name: "unlimited to finite", limits: []uint64{^uint64(0), 3}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.ApplySQLSelectLimit = true
+			limitIndex := 0
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == plan2.SQLSelectLimitVariable {
+					return tc.limits[limitIndex], nil
+				}
+				return "STRICT_TRANS_TABLES", nil
+			})
+			t.Cleanup(proc.Free)
+
+			query := &plan.Query{
+				StmtType:            plan.Query_SELECT,
+				ApplySqlSelectLimit: true,
+				Steps:               []int32{0},
+				Nodes:               []*plan.Node{{NodeId: 0, NodeType: plan.Node_PROJECT}},
+			}
+			queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+			compiler := &Compile{proc: proc}
+
+			for i, want := range tc.limits {
+				limitIndex = i
+				materialization, err := compiler.materializeSQLSelectLimit(queryPlan)
+				require.NoError(t, err)
+				require.False(t, query.ApplySqlSelectLimit)
+				if want == ^uint64(0) {
+					require.Nil(t, query.Nodes[0].Limit)
+				} else {
+					require.Equal(t, want, query.Nodes[0].Limit.GetLit().GetU64Val())
+				}
+				materialization.restore()
+				require.True(t, query.ApplySqlSelectLimit)
+				require.Nil(t, query.Nodes[0].Limit)
+			}
+		})
+	}
+}
+
+type sqlSelectLimitReleaseOperator struct {
+	*colexec.MockOperator
+	released bool
+}
+
+func (op *sqlSelectLimitReleaseOperator) Release() {
+	op.released = true
+}
+
+func TestSQLSelectLimitResolverFailureReleasesCompileStepsTree(t *testing.T) {
+	resolverErr := errors.New("sql_select_limit resolver failed")
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return nil, resolverErr
+		}
+		return "STRICT_TRANS_TABLES", nil
+	})
+	t.Cleanup(proc.Free)
+
+	c := &Compile{
+		proc: proc, anal: &AnalyzeModule{}, ncpu: 1,
+		execType: plan2.ExecTypeAP_ONECN,
+	}
+	owners := []*sqlSelectLimitReleaseOperator{
+		{MockOperator: colexec.NewMockOperator()},
+		{MockOperator: colexec.NewMockOperator()},
+	}
+	scopes := make([]*Scope, len(owners))
+	for i, owner := range owners {
+		scope := newScope(Normal)
+		scope.NodeInfo.Mcpu = 1
+		scope.Proc = proc.NewNoContextChildProc(0)
+		scope.RootOp = owner
+		scopes[i] = scope
+	}
+
+	qry := &plan.Query{
+		StmtType:            plan.Query_SELECT,
+		ApplySqlSelectLimit: true,
+		Steps:               []int32{0},
+		Nodes:               []*plan.Node{{NodeId: 0, NodeType: plan.Node_PROJECT}},
+	}
+	compiled, err := c.compileSteps(qry, scopes, 0)
+	require.ErrorIs(t, err, resolverErr)
+	require.Nil(t, compiled)
+	for _, owner := range owners {
+		require.True(t, owner.released)
+	}
+}
+
+func compiledScopesContainOperator(scopes []*Scope, opType vm.OpType) bool {
+	for _, scope := range scopes {
+		found := false
+		_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			found = found || op.OpType() == opType
+			return nil
+		})
+		if found || compiledScopesContainOperator(scope.PreScopes, opType) {
+			return true
+		}
+	}
+	return false
 }
 
 type retryRecordingResultSink struct {
@@ -224,7 +463,10 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().Buf = buffer.New()
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return ^uint64(0), nil
+		}
 		return "STRICT_TRANS_TABLES", nil
 	})
 	compilerCtx := plan2.NewEmptyCompilerContext()
@@ -750,6 +992,11 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 	externalCause := moerr.NewInternalErrorNoCtx("client canceled query")
 	externalCauseCtx, cancelExternalCause := context.WithCancelCause(context.Background())
 	cancelExternalCause(externalCause)
+	remoteQueryCtx, cancelRemoteQuery := context.WithCancel(
+		context.WithValue(context.Background(), defines.RemoteRunContext{}, true))
+	remotePipelineCtx, cancelRemotePipeline := context.WithCancelCause(remoteQueryCtx)
+	cancelRemoteQuery()
+	defer cancelRemotePipeline(nil)
 
 	tests := []struct {
 		name      string
@@ -770,6 +1017,8 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "remote fragment stop remains secondary", current: scopeRunResult{err: queryInterrupted, ctx: remotePipelineCtx, queryCtx: remoteQueryCtx}},
+		{name: "remote fragment stop does not mask producer error", current: scopeRunResult{err: queryInterrupted, ctx: remotePipelineCtx, queryCtx: remoteQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx, queryCtx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
 		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
 		{name: "query deadline classification survives custom timeout cause", current: scopeRunResult{err: context.DeadlineExceeded, ctx: pipelineDeadlineCauseCtx, queryCtx: queryDeadlineCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
@@ -781,7 +1030,9 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := preferPrimaryScopeResult(tt.current, tt.candidate)
 			got, _ = got.resolveCancelCause()
-			if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
+			if tt.want == nil {
+				require.NoError(t, got.err)
+			} else if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
 				require.ErrorIs(t, got.err, tt.want)
 			} else {
 				require.Same(t, tt.want, got.err)

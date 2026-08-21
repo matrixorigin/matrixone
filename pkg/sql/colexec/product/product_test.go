@@ -37,6 +37,11 @@ const (
 	BenchmarkRows = 100000 // default rows for benchmark
 )
 
+func TestProductAllocationSiteLedger(t *testing.T) {
+	require.Equal(t, uint8(94), uint8(productAllocationSiteResultData))
+	require.Equal(t, uint8(97), uint8(productAllocationSiteResultGrouping))
+}
+
 // add unit tests for cases
 type productTestCase struct {
 	arg         *Product

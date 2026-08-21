@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 )
 
 type ivfIndexContext struct {
@@ -245,6 +246,30 @@ func buildIvfChildProjectionMap(childNode *plan.Node) map[[2]int32]*plan.Expr {
 		childMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(expr)
 	}
 	return childMap
+}
+
+// ivfIndexOnlyBoundary picks the projection that bounds which base-table columns can
+// still be read after the rewrite, and the child whose tags its expressions resolve
+// through. An index-only scan drops the base scan entirely, so anything outside this
+// boundary would fail column remap ("Missing Column: t.v") at build time.
+//
+//   - project-anchored (`select ... from (order by dist limit k)`): the boundary is the
+//     PROJECT above the Top-K, resolved through the Top-K's child project.
+//   - sort-anchored (#25967 outer ORDER BY, #25974 join input): there is no project above
+//     the Top-K — consumers live further up and reference the sort's output. That output
+//     IS the Top-K's child project, so the child bounds them: a consumer can only read a
+//     column the derived table exposes. Its expressions are already in scan terms, so
+//     they resolve through no child map.
+//   - neither (the ORDER BY expression is the distance call itself, so the sort sits
+//     straight on the scan): nothing narrows the scan's columns, so decline.
+func ivfIndexOnlyBoundary(projNode, childNode *plan.Node) (boundaryProj, boundaryChild *plan.Node) {
+	if projNode != nil {
+		return projNode, childNode
+	}
+	if childNode != nil && childNode.NodeType == plan.Node_PROJECT {
+		return childNode, nil
+	}
+	return nil, nil
 }
 
 func collectRequiredColumns(
@@ -1069,7 +1094,7 @@ func firstIvfSearchRoundLimit(limit *plan.Expr, hasFilterPressure bool) uint64 {
 		return originalLimit
 	}
 
-	overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
+	overFetchFactor := overfetch.FilteredPostModeFactor(originalLimit)
 	return max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
 }
 
@@ -1158,7 +1183,10 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 	}
 
 	origFuncName := vecCtx.distFnExpr.Func.ObjName
-	if opType != metric.DistFuncOpTypes[origFuncName] {
+	// An index serves this distance function when its op_type is metric-equivalent to the
+	// query's, not only when it is the canonical one — vector_l2_ops and vector_l2sq_ops
+	// build the same index and both answer l2_distance / l2_distance_sq (#25966).
+	if !metric.OpTypeServesDistFunc(opType, origFuncName) {
 		return nil, nil
 	}
 
@@ -1273,7 +1301,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		if scanNode.RankOption == nil {
 			scanNode.RankOption = vecCtx.rankOption
 		}
-		if projNode.RankOption == nil {
+		if projNode != nil && projNode.RankOption == nil {
 			projNode.RankOption = vecCtx.rankOption
 		}
 	}
@@ -1291,8 +1319,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			includeAwareColumns = nil
 		}
 	}
-	requiredCols := collectRequiredColumns(projNode, childNode, scanNode, orderExpr, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
-	projectedCols := collectProjectedColumns(projNode, childNode, scanNode, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	// Both maps exist only to decide (and populate) an index-only scan, which needs a
+	// projection that bounds every column a consumer can still read. Resolve that
+	// boundary once; a nil boundary means "unknown", and index-only stays off.
+	boundaryProj, boundaryChild := ivfIndexOnlyBoundary(projNode, childNode)
+	var requiredCols, projectedCols map[string]struct{}
+	if boundaryProj != nil {
+		requiredCols = collectRequiredColumns(boundaryProj, boundaryChild, scanNode, orderExpr, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+		projectedCols = collectProjectedColumns(boundaryProj, boundaryChild, scanNode, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	}
 	coveragePushdown, _ := splitFiltersByVectorIndexCoverage(newFilterList, scanNode, includeAwareColumns, ivfCtx.partPos)
 	timeZone := time.UTC
 	if proc := builder.compCtx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
@@ -1318,6 +1353,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// pre-filter path and use the legacy single-round IVF search.
 	includeModeFallbackToPre := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
 	usePreFilter := ivfCtx.pushdownEnabled || includeModeFallbackToPre
+
+	// In post-filter mode the residual filters drop index candidates after the
+	// search, so the search must over-fetch (fetch k' > k) to still return k rows.
+	// The over-fetch is done once at EXECUTE by the TVF (this flag), for literal
+	// AND parameterized limits alike (#26878). Auto mode that resolves to post
+	// filter (usePreFilter == false) flows through here too — the over-fetch
+	// factor is mode-agnostic.
+	postFilterOverFetch := len(remainingFilters) > 0 && !usePreFilter
+
 	if usePreFilter && len(remainingFilters) > 0 &&
 		types.T(ivfCtx.pkType.Id).IsInteger() &&
 		!localProtocolEnablesSortedMembershipFilter(
@@ -1327,7 +1371,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// original relational plan until the deployment-wide protocol gate rises.
 		return nodeID, nil
 	}
-	canIndexOnly := canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
+	canIndexOnly := boundaryProj != nil &&
+		canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
 	tableFuncIncludeColumns := make([]string, 0, len(includeAwareColumns))
 	if canIndexOnly {
 		for _, col := range includeAwareColumns {
@@ -1347,20 +1392,21 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 
 	tblCfg := vectorindex.IndexTableConfig{
-		DbName:             scanNode.ObjRef.SchemaName,
-		SrcTable:           scanNode.TableDef.Name,
-		MetadataTable:      ivfCtx.metaDef.IndexTableName,
-		IndexTable:         ivfCtx.idxDef.IndexTableName,
-		ThreadsSearch:      ivfCtx.nThread,
-		EntriesTable:       ivfCtx.entriesDef.IndexTableName,
-		Nprobe:             uint(ivfCtx.nProbe),
-		PKeyType:           ivfCtx.pkType.Id,
-		PKey:               scanNode.TableDef.Pkey.PkeyColName,
-		KeyPart:            ivfCtx.idxDef.Parts[0],
-		KeyPartType:        ivfCtx.partType.Id,
-		OrigFuncName:       ivfCtx.origFuncName,
-		IncludeColumns:     includeColumns,
-		IncludeColumnTypes: includeColumnTypes,
+		DbName:              scanNode.ObjRef.SchemaName,
+		SrcTable:            scanNode.TableDef.Name,
+		MetadataTable:       ivfCtx.metaDef.IndexTableName,
+		IndexTable:          ivfCtx.idxDef.IndexTableName,
+		ThreadsSearch:       ivfCtx.nThread,
+		EntriesTable:        ivfCtx.entriesDef.IndexTableName,
+		Nprobe:              uint(ivfCtx.nProbe),
+		PKeyType:            ivfCtx.pkType.Id,
+		PKey:                scanNode.TableDef.Pkey.PkeyColName,
+		KeyPart:             ivfCtx.idxDef.Parts[0],
+		KeyPartType:         ivfCtx.partType.Id,
+		OrigFuncName:        ivfCtx.origFuncName,
+		IncludeColumns:      includeColumns,
+		IncludeColumnTypes:  includeColumnTypes,
+		PostFilterOverFetch: postFilterOverFetch,
 	}
 	tblCfgBytes, err := json.Marshal(tblCfg)
 	if err != nil {
@@ -1421,59 +1467,20 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// change doc_id type to the primary type here
 	tableFuncNode.TableDef.Cols[0].Typ = ivfCtx.pkType
 
-	// push down the candidate limit to the table function.
-	limitExpr := DeepCopyExpr(outerResultNeedExpr)
-
-	if len(remainingFilters) > 0 && !usePreFilter {
-		// When there are filters, over-fetch to get more candidates.
-		// This ensures we have enough candidates after filtering.
-		// Over-fetch strategy: dynamically adjust factor based on limit size
-		// Smaller limits need more over-fetching due to higher variance
-		if limitConst := limitExpr.GetLit(); limitConst != nil {
-			originalLimit := limitConst.GetU64Val()
-
-			// Filtered post mode needs a larger candidate budget than the historical
-			// default, but we keep it as fixed buckets so the plan is predictable.
-			overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
-
-			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
-
-			if ivfCtx.isAutoMode {
-				logutil.Debugf(
-					"Auto mode over-fetch: original_limit=%d, factor=%.2f, filter_count=%d",
-					originalLimit, overFetchFactor, len(remainingFilters),
-				)
-				logutil.Debugf(
-					"Auto mode over-fetch result: original_limit=%d, new_limit=%d",
-					originalLimit, newLimit,
-				)
-			} else {
-				logutil.Debugf(
-					"Vector mode over-fetch: mode=post, original_limit=%d, factor=%.2f, filter_count=%d, new_limit=%d",
-					originalLimit, overFetchFactor, len(remainingFilters), newLimit,
-				)
-			}
-
-			limitExpr = &Expr{
-				Typ: limit.Typ,
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_U64Val{
-							U64Val: newLimit,
-						},
-					},
-				},
-			}
-		}
-	}
-
+	// The raw candidate limit (k) is always carried on IndexReaderParam.Limit — a
+	// TVF-only channel with no plan-level top — and node.Limit is always dropped,
+	// so the TVF is the single authority on the candidate budget. When a residual
+	// post-filter will drop candidates, the TVF over-fetches k -> k' at EXECUTE
+	// (post_filter_overfetch flag). Leaving node.Limit unset keeps the full
+	// candidate stream flowing to the JOIN, and lets a multi-CN merge see every
+	// shard's candidates rather than a per-shard-truncated subset.
 	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        limitExpr,
-		OrigFuncName: ivfCtx.origFuncName,
-		DistRange:    distRange,
+		Limit:          DeepCopyExpr(outerResultNeedExpr),
+		OrigFuncName:   ivfCtx.origFuncName,
+		DistRange:      distRange,
+		OverFetchLimit: overFetchDisplayLimit(outerResultNeedExpr, postFilterOverFetch, true),
 	}
-	tableFuncNode.Limit = DeepCopyExpr(limitExpr)
+	tableFuncNode.Limit = nil
 
 	// Determine join structure based on the effective filtering strategy:
 	//   no pre-filter: JOIN(scanNode, ivf_search)
@@ -1757,8 +1764,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	{
 		scanTag := scanNode.BindingTags[0]
 		scoreColType := tableFuncNode.TableDef.Cols[1].Typ // table function's score column
-		replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
-			ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)
+		if projNode != nil {
+			replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
+				ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)
+		}
 		if childNode != nil {
 			replaceDistFnExprsWithScoreCol(childNode.ProjectList, scanTag,
 				ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)
@@ -1792,39 +1801,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		SpillMem:   builder.sortSpillMem,
 	}, ctx)
 
-	projNode.Children[0] = sortByID
-
+	// Anchored at the PROJECT above the Top-K, or at the Top-K sort itself when a
+	// consumer (outer ORDER BY, join) sits between it and any project. Under an
+	// index-only scan the pass-through columns are additionally rewritten to the table
+	// function's outputs, since the base scan is gone.
+	var scanRemap map[[2]int32]*plan.Expr
 	if canIndexOnly {
-		scanToTFMap := buildIvfScanToTableFuncMap(tableFuncTag, tableFuncIncludeColumns, scanNode)
-		if childNode != nil {
-			sortIdx := orderExpr.GetCol().ColPos
-			projMap := make(map[[2]int32]*plan.Expr)
-			for i, proj := range childNode.ProjectList {
-				if i == int(sortIdx) {
-					projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(orderByScore[0].Expr)
-					continue
-				}
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = replaceColumnsForExpr(DeepCopyExpr(proj), scanToTFMap)
-			}
-			replaceColumnsForNode(projNode, projMap)
-		} else {
-			replaceColumnsForNode(projNode, scanToTFMap)
-		}
-	} else if childNode != nil {
-		sortIdx := orderExpr.GetCol().ColPos
-		projMap := make(map[[2]int32]*plan.Expr)
-		for i, proj := range childNode.ProjectList {
-			if i == int(sortIdx) {
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(orderByScore[0].Expr)
-			} else {
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = proj
-			}
-		}
-
-		replaceColumnsForNode(projNode, projMap)
+		scanRemap = buildIvfScanToTableFuncMap(tableFuncTag, tableFuncIncludeColumns, scanNode)
 	}
-
-	return nodeID, nil
+	remap := vectorRemapForChildProject(childNode, orderExpr, orderByScore[0].Expr, scanRemap)
+	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
 }
 
 func (builder *QueryBuilder) buildPkExprFromNode(nodeID int32, pkType plan.Type, pkName string) *plan.Expr {

@@ -30,9 +30,31 @@ import (
 const retiredKafkaSinkTaskCode = 4
 
 var clusterUpgEntries = append(
-	[]versions.UpgradeEntry{retireKafkaSinkDaemonTasks},
+	[]versions.UpgradeEntry{
+		retireKafkaSinkDaemonTasks,
+		createMoViewDependencies,
+		createMoViewRefresh,
+	},
 	makeLifecycleClusterUpgradeEntries()...,
 )
+
+var createMoViewDependencies = newViewMetadataCatalogTable(
+	catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesDDL)
+
+var createMoViewRefresh = newViewMetadataCatalogTable(
+	catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshDDL)
+
+func newViewMetadataCatalogTable(name, ddl string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: name,
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    ddl,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountID, catalog.MO_CATALOG, name)
+		},
+	}
+}
 
 func makeLifecycleClusterUpgradeEntries() []versions.UpgradeEntry {
 	entries := make([]versions.UpgradeEntry, 0, len(catalog.LifecycleClusterTableDefinitions)+2)

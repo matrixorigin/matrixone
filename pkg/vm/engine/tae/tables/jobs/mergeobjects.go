@@ -292,11 +292,12 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	task.tnDataBats[objIdx] = data
 
 	if task.isTombstone {
+		mergeStartTS := task.txn.GetStartTS()
 		err = data.Vecs[0].Foreach(func(v any, isNull bool, row int) error {
 			rowID := v.(types.Rowid)
 			objectID := rowID.BorrowObjectID()
 			obj, err := task.tableEntry.GetObjectByID(objectID, false)
-			if err != nil || obj.HasDropCommitted() {
+			if err != nil || canPruneTombstoneTarget(obj, mergeStartTS) {
 				if data.Deletes == nil {
 					data.Deletes = &nulls.Nulls{}
 				}
@@ -340,6 +341,18 @@ func (task *mergeObjectsTask) LoadNextBatch(
 
 	retBatch.SetRowCount(data.Length())
 	return retBatch, data.Deletes, releaseF, nil
+}
+
+// canPruneTombstoneTarget reports whether a target data object was already
+// dropped at the tombstone merge's snapshot. A later drop belongs to a
+// concurrent data-object generation, so this merge must retain the tombstone;
+// a subsequent merge can prune it after the drop enters its snapshot.
+func canPruneTombstoneTarget(target *catalog.ObjectEntry, mergeStartTS types.TS) bool {
+	if !target.HasDropCommitted() {
+		return false
+	}
+	dropTS := target.GetDeleteAt()
+	return dropTS.LE(&mergeStartTS)
 }
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {

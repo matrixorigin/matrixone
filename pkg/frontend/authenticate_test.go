@@ -72,6 +72,58 @@ func TestTemporaryTableSkipsPersistentOwnershipChanges(t *testing.T) {
 	))
 }
 
+func TestUserDefinedFunctionArgumentTypes(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		types []string
+		want  string
+	}{
+		{name: "no arguments", want: ""},
+		{name: "one argument", types: []string{"int"}, want: `["int"]`},
+		{name: "overload signature", types: []string{"varchar", "decimal(10,2)"}, want: `["varchar", "decimal(10,2)"]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := userDefinedFunctionArgumentTypes(test.types)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	got, err := userDefinedFunctionArgumentTypesFromJSON(`[{"name":"arg","type":"int"}]`)
+	require.NoError(t, err)
+	require.Equal(t, `["int"]`, got)
+	got, err = userDefinedFunctionArgumentTypesFromJSON(`[]`)
+	require.NoError(t, err)
+	require.Empty(t, got)
+	got, err = userDefinedFunctionArgumentTypesFromJSON(`[{"name":"left","type":"int"},{"name":"right","type":"int"}]`)
+	require.NoError(t, err)
+	require.Equal(t, `["int", "int"]`, got)
+	_, err = userDefinedFunctionArgumentTypesFromJSON(`not json`)
+	require.Error(t, err)
+
+	wideTypes := make([]string, 105)
+	for i := range wideTypes {
+		wideTypes[i] = "decimal(10,0)"
+	}
+	wideSignature, err := userDefinedFunctionArgumentTypes(wideTypes)
+	require.NoError(t, err)
+	require.Greater(t, len(wideSignature), 1024)
+	require.LessOrEqual(t, len(wideSignature), types.MaxStringSize)
+
+	maxSignature, err := userDefinedFunctionArgumentTypes([]string{strings.Repeat("x", types.MaxStringSize-4)})
+	require.NoError(t, err)
+	require.Len(t, maxSignature, types.MaxStringSize)
+
+	_, err = userDefinedFunctionArgumentTypes([]string{strings.Repeat("x", types.MaxStringSize)})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "catalog limit")
+}
+
+func TestUserDefinedFunctionCatalogSignatureWidth(t *testing.T) {
+	require.Contains(t, MoCatalogMoUserDefinedFunctionDDL,
+		fmt.Sprintf("arg_types varchar(%d)", types.MaxStringSize))
+}
+
 func TestGetTenantInfo(t *testing.T) {
 	convey.Convey("tenant", t, func() {
 		type input struct {
@@ -539,17 +591,29 @@ func Test_initFunction(t *testing.T) {
 		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccountId(ctx, sysAccountID)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().ClearExecResultSet().AnyTimes()
 		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		var executed []string
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, sql string) error {
+				executed = append(executed, sql)
+				return nil
+			},
+		).AnyTimes()
 		rs := mock_frontend.NewMockExecResult(ctrl)
 		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
+		oldNewBackgroundExec := NewBackgroundExec
+		defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+		var forcedPessimisticRC bool
+		NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+			forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+			return bh
+		}
 
 		locale := ""
 
@@ -592,6 +656,11 @@ func Test_initFunction(t *testing.T) {
 		}
 		err := InitFunction(ses, newTestExecCtx(ctx, ctrl), tenant, cu)
 		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(forcedPessimisticRC, convey.ShouldBeTrue)
+		convey.So(executed, convey.ShouldContain, "begin;")
+		convey.So(executed, convey.ShouldContain,
+			"select dat_id from mo_catalog.mo_database where datname = 'db' and account_id = 0 for update;")
+		convey.So(executed, convey.ShouldContain, "rollback;")
 	})
 }
 
@@ -6110,6 +6179,164 @@ func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 	assert.Equal(t, "t1", arr[0].tableName)
 }
 
+func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
+	const (
+		dbName    = "mongodb_permission"
+		tableName = "events_ext"
+		viewName  = "events_view"
+	)
+
+	for _, tc := range []struct {
+		name        string
+		originViews []string
+		directView  string
+	}{
+		{name: "direct table"},
+		{
+			name:        "view",
+			originViews: []string{dbName + "." + viewName},
+			directView:  dbName + "." + viewName,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: &plan2.Query{
+						StmtType: plan.Query_SELECT,
+						Nodes: []*plan2.Node{
+							{
+								NodeType: plan.Node_EXTERNAL_SCAN,
+								ObjRef: &plan2.ObjectRef{
+									SchemaName: dbName,
+									ObjName:    tableName,
+								},
+								ExternScan: &plan.ExternScan{
+									Type: int32(plan.ExternType_MONGODB_TB),
+									MongodbScan: &plan.MongoScan{
+										Database:   "mongodb_source",
+										Collection: "events",
+									},
+								},
+								OriginViews: tc.originViews,
+								DirectView:  tc.directView,
+							},
+						},
+					},
+				},
+			}
+
+			arr := extractPrivilegeTipsFromPlan(p)
+			require.Len(t, arr, 1)
+			require.Equal(t, PrivilegeTypeSelect, arr[0].typ)
+			require.Equal(t, objectTypeTable, arr[0].objType)
+			require.Equal(t, dbName, arr[0].databaseName)
+			require.Equal(t, tableName, arr[0].tableName)
+			require.Equal(t, tc.originViews, arr[0].originViews)
+			require.Equal(t, tc.directView, arr[0].directView)
+		})
+	}
+}
+
+func TestMongoDBExternalTableScanDetectionExcludesOtherExternalScans(t *testing.T) {
+	for _, externType := range []plan.ExternType{
+		plan.ExternType_LOAD,
+		plan.ExternType_EXTERNAL_TB,
+		plan.ExternType_ICEBERG_TB,
+		plan.ExternType_RESULT_SCAN,
+	} {
+		node := &plan.Node{
+			NodeType:   plan.Node_EXTERNAL_SCAN,
+			ExternScan: &plan.ExternScan{Type: int32(externType)},
+		}
+		require.False(t, isMongoDBExternalTableScan(node), externType.String())
+	}
+	require.False(t, isMongoDBExternalTableScan(nil))
+	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_EXTERNAL_SCAN}))
+	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}))
+}
+
+func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
+	const (
+		dbName    = "mongodb_permission"
+		tableName = "events_ext"
+		viewName  = "events_view"
+		userID    = 3
+		roleID    = 5
+	)
+
+	for _, tc := range []struct {
+		name           string
+		originViews    []string
+		directView     string
+		tableSelect    bool
+		addRevokedView bool
+		want           bool
+	}{
+		{name: "table select revoked"},
+		{name: "table select granted", tableSelect: true, want: true},
+		{
+			name:           "view select revoked",
+			originViews:    []string{dbName + "." + viewName},
+			directView:     dbName + "." + viewName,
+			tableSelect:    true,
+			addRevokedView: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			stmt := &tree.Select{}
+			ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "test_account",
+				User:          "mongodb_reader",
+				DefaultRole:   "mongodb_reader_role",
+				TenantID:      1,
+				UserID:        userID,
+				DefaultRoleID: roleID,
+			})
+
+			sql2result := makeSql2ExecResult2(userID, nil, nil, nil, nil, nil, nil, nil, nil)
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, tableName, map[PrivilegeType]bool{
+				PrivilegeTypeSelect: tc.tableSelect,
+			})
+			if tc.addRevokedView {
+				addViewPrivilegeResultsForRole(t, sql2result, roleID, dbName, viewName, nil)
+			}
+			sql2result[getSqlForInheritedRoleIdOfRoleId(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+
+			bh := newBh(ctrl, sql2result)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan.Query{
+				StmtType: plan.Query_SELECT,
+				Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_EXTERNAL_SCAN,
+						ObjRef: &plan.ObjectRef{
+							SchemaName: dbName,
+							ObjName:    tableName,
+						},
+						ExternScan: &plan.ExternScan{
+							Type:        int32(plan.ExternType_MONGODB_TB),
+							MongodbScan: &plan.MongoScan{},
+						},
+						OriginViews: tc.originViews,
+						DirectView:  tc.directView,
+					},
+				},
+			}}}
+
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+				ses.GetTxnHandler().GetTxnCtx(), ses, stmt, p)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, ok)
+		})
+	}
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement
@@ -6940,6 +7167,39 @@ func addTablePrivilegeResultsForRole(
 		entry.objType = objectTypeTable
 		entry.databaseName = dbName
 		entry.tableName = tableName
+		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+		require.NoError(t, err)
+		for _, level := range levels {
+			sql, err := getSqlForPrivilege(context.TODO(), roleID, entry, level)
+			require.NoError(t, err)
+			rows := [][]interface{}{}
+			if allowed[privType] {
+				rows = [][]interface{}{{entry.privilegeId, true}}
+			}
+			sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+		}
+	}
+}
+
+func addViewPrivilegeResultsForRole(
+	t *testing.T,
+	sql2result map[string]ExecResult,
+	roleID int64,
+	dbName string,
+	viewName string,
+	allowed map[PrivilegeType]bool,
+) {
+	t.Helper()
+	privTypes := []PrivilegeType{
+		PrivilegeTypeSelect,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+	}
+	for _, privType := range privTypes {
+		entry := privilegeEntriesMap[privType]
+		entry.objType = objectTypeView
+		entry.databaseName = dbName
+		entry.tableName = viewName
 		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
 		require.NoError(t, err)
 		for _, level := range levels {
@@ -9788,6 +10048,50 @@ func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {
 	require.Contains(t, createSQL, `"FamilyString":"decimal"`)
 	require.Contains(t, createSQL, `"DisplayWith":10`)
 	require.Contains(t, createSQL, `"Scale":2`)
+}
+
+func TestUpsertStoredProcedureReplaceAndDuplicateHandling(t *testing.T) {
+	ctx := context.Background()
+	tenant := &TenantInfo{User: "root"}
+	definition := storedProcedureDefinition{
+		name:    "p_replace",
+		args:    "[]",
+		lang:    "sql",
+		body:    "begin select 1; end",
+		sqlMode: "",
+		dbName:  "procedure_db",
+	}
+	checkSQL := getSqlForCheckProcedureExistence(definition.name, definition.dbName)
+
+	t.Run("replace updates the existing catalog row", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(99)}})
+
+		require.NoError(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
+		require.Len(t, bh.executedSQLs, 2)
+		require.Equal(t, checkSQL, bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "update mo_catalog.mo_stored_procedure")
+		require.Contains(t, bh.executedSQLs[1], "where proc_id = 99")
+	})
+
+	t.Run("non replace rejects an existing catalog row before persistence", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(99)}})
+
+		require.ErrorContains(t, upsertStoredProcedure(ctx, bh, tenant, definition, false), "procedure p_replace already exists")
+		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+	})
+
+	t.Run("replace rejects an invalid existing catalog id", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{"not-an-id"}})
+
+		require.Error(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
+		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+	})
 }
 
 func Test_initProcedure(t *testing.T) {

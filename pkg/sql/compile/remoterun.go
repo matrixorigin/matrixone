@@ -150,6 +150,14 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	if err != nil {
 		return nil, err
 	}
+	if isRemote {
+		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	ctx := &scopeContext{
 		parent: nil,
 		id:     p.PipelineId,
@@ -550,6 +558,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
+		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
+			return ctxId, nil, err
+		}
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName:         t.SchemaName,
 			TableDef:           t.TableDef,
@@ -562,6 +573,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ClusterByExpr:      t.ClusterByExpr,
 			ColOffset:          t.ColOffset,
 			RejectZeroTemporal: t.RejectZeroTemporal,
+			HasTargetSelector:  t.HasTargetSelector,
+			TargetRowNumberCol: t.TargetRowNumberCol,
+			TargetActiveCol:    t.TargetActiveCol,
+			TargetRowIdCol:     t.TargetRowIDCol,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
@@ -641,6 +656,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsRightJoin:            t.IsRightJoin,
 			HashOnPk:               t.HashOnPK,
 			CanSkipProbe:           t.CanSkipProbe,
+			EmitCompressedRowCount: t.EmitCompressedRowCount,
 			IsShuffle:              t.IsShuffle,
 			ShuffleIdx:             t.ShuffleIdx,
 			RelList:                relList,
@@ -859,6 +875,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		in.SpillMem = t.SpillThreshold
 	case *rightdedupjoin.RightDedupJoin:
+		if err := validateRemoteRightDedupInputKeysUniqueProtocol(proc, t.InputKeysUnique); err != nil {
+			return ctxId, nil, err
+		}
 		relList, colList := getRelColList(t.Result)
 		in.RightDedupJoin = &pipeline.RightDedupJoin{
 			RelList:                relList,
@@ -870,6 +889,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:             t.JoinMapTag,
 			ShuffleIdx:             t.ShuffleIdx,
 			OnDuplicateAction:      t.OnDuplicateAction,
+			InputKeysUnique:        t.InputKeysUnique,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
 			DelColIdx:              t.DelColIdx,
@@ -900,6 +920,16 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
 		}
 	case *multi_update.MultiUpdate:
+		targetAware := false
+		for _, muCtx := range t.MultiUpdateCtx {
+			if muCtx.DedupByTargetRowID || muCtx.TargetUpdateCtxIdx != 0 {
+				targetAware = true
+				break
+			}
+		}
+		if err := validateRemoteTargetAwareUpdateProtocol(proc, targetAware); err != nil {
+			return ctxId, nil, err
+		}
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
 		for i, muCtx := range t.MultiUpdateCtx {
 			updateCtxList[i] = &plan.UpdateCtx{
@@ -909,6 +939,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
 				IgnoreAffectedRows:    muCtx.IgnoreAffectedRows,
 				CountDeleteAffectRows: t.CountDeleteAffectRows,
+				DedupByTargetRowId:    muCtx.DedupByTargetRowID,
+				TargetUpdateCtxIdx:    int32(muCtx.TargetUpdateCtxIdx),
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1030,6 +1062,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ClusterByExpr = t.ClusterByExpr
 		arg.ColOffset = t.ColOffset
 		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
+		arg.HasTargetSelector = t.GetHasTargetSelector()
+		arg.TargetRowNumberCol = t.GetTargetRowNumberCol()
+		arg.TargetActiveCol = t.GetTargetActiveCol()
+		arg.TargetRowIDCol = t.GetTargetRowIdCol()
 		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
@@ -1145,6 +1181,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.CanSkipProbe = t.CanSkipProbe
+		arg.EmitCompressedRowCount = t.EmitCompressedRowCount
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
@@ -1385,6 +1422,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.InputKeysUnique = t.InputKeysUnique
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DelColIdx = t.DelColIdx
@@ -1431,6 +1469,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:     int(muCtx.InsertPkColIdx),
 				IgnoreAffectedRows: muCtx.IgnoreAffectedRows,
+				DedupByTargetRowID: muCtx.DedupByTargetRowId,
+				TargetUpdateCtxIdx: int(muCtx.TargetUpdateCtxIdx),
+				TargetTableID:      muCtx.TableDef.TblId,
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
@@ -1539,6 +1580,81 @@ func validateRemoteAggregateProtocol(
 			return moerr.NewNotSupportedNoCtx(
 				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
+		}
+	}
+	return nil
+}
+
+func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware bool) error {
+	if !targetAware {
+		return nil
+	}
+	if proc == nil || !supportsRemoteTargetAwareUpdate(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"target-aware multi-table UPDATE remote execution requires MORPC protocol version 20",
+		)
+	}
+	return nil
+}
+
+func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inputKeysUnique bool) error {
+	if !inputKeysUnique {
+		return nil
+	}
+	if proc == nil || !supportsRemoteRightDedupInputKeysUnique(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"lookup-only RIGHT DEDUP remote execution requires MORPC protocol version 21",
+		)
+	}
+	return nil
+}
+
+func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if rightDedup := instruction.GetRightDedupJoin(); rightDedup != nil {
+			if err := validateRemoteRightDedupInputKeysUniqueProtocol(
+				proc, rightDedup.InputKeysUnique,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteTargetAwareUpdatePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsert(); preInsert != nil && preInsert.HasTargetSelector {
+			return validateRemoteTargetAwareUpdateProtocol(proc, true)
+		}
+		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
+			for _, updateCtx := range multiUpdate.UpdateCtxList {
+				if updateCtx.DedupByTargetRowId || updateCtx.TargetUpdateCtxIdx != 0 {
+					return validateRemoteTargetAwareUpdateProtocol(proc, true)
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteTargetAwareUpdatePipelineProtocol(proc, child); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -10,162 +10,157 @@ insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
 drop procedure if exists test_if_hit_if;
 create procedure test_if_hit_if () 'begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
-id    val
-1    10
-2    20
-3    30
+➤ id[4,32,0]  ¦  val[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
 drop procedure test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
 create procedure test_if_hit_elseif_first_elseif() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_elseif_first_elseif();
-id    val
-1    a
-2    b
-3    c
+➤ id[4,32,0]  ¦  val[1,1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+3  ¦  c
 drop procedure test_if_hit_elseif_first_elseif;
 drop procedure if exists test_if_hit_second_elseif;
 create procedure test_if_hit_second_elseif() 'begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_second_elseif();
-id    val
-1    a
+➤ id[4,32,0]  ¦  val[1,1,0]  𝄀
+1  ¦  a
 drop procedure test_if_hit_second_elseif;
 drop procedure if exists test_if_hit_else;
 create procedure test_if_hit_else() 'begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_else();
-id    val
-1    1.5
-2    2.5
-3    3.5
+➤ id[4,32,0]  ¦  val[7,23,31]  𝄀
+1  ¦  1.5  𝄀
+2  ¦  2.5  𝄀
+3  ¦  3.5
 drop procedure test_if_hit_else;
 drop procedure if exists test_while;
 create procedure test_while() 'begin DECLARE v1 INT default 10; WHILE v1 < 100 DO insert into tmp(id) values(v1); set v1 = v1 + 10; END WHILE; select * from tmp; end';
 create table if not exists tmp(id int);
 call test_while();
-id
-10
-20
-30
-40
-50
-60
-70
-80
+➤ id[4,32,0]  𝄀
+10  𝄀
+20  𝄀
+30  𝄀
+40  𝄀
+50  𝄀
+60  𝄀
+70  𝄀
+80  𝄀
 90
 drop table if exists tmp;
 drop procedure test_while;
 drop procedure if exists test_repeat;
 create procedure test_repeat() 'begin declare p1 int default 10; declare v1 int default 5; repeat set v1 = v1 + 1; until v1 > p1 end repeat; select v1; end';
 call test_repeat();
-v1
+➤ v1[4,32,0]  𝄀
 11
 drop procedure test_repeat;
 drop procedure if exists test_loop;
 create procedure test_loop() 'begin declare p1 int default 5; label1: loop set p1 = p1 + 1; if p1 < 10 THEN iterate label1; end if; leave label1; end loop label1; select p1; end';
 call test_loop();
-p1
+➤ p1[4,32,0]  𝄀
 10
 drop procedure test_loop;
 drop procedure if exists test_var_access;
 create procedure test_var_access() 'begin declare v1 int default 10; begin declare v1 int default 5; select v1; end; select v1; end';
 call test_var_access();
-v1
+➤ v1[4,32,0]  𝄀
 5
 drop procedure test_var_access;
 drop procedure if exists test_in_param;
 create procedure test_in_param(in sid int) 'begin select val from tbh2 where id = sid; end';
 call test_in_param(3);
-val
+➤ val[1,1,0]  𝄀
 c
 drop procedure test_in_param;
 drop procedure if exists test_out_param;
 create procedure test_out_param(out sid int) 'begin set sid = 1000; end';
 call test_out_param(@id);
 select @id;
-@id
+➤ @id[-5,64,0]  𝄀
 1000
 drop procedure test_out_param;
 drop procedure if exists test_inout_param;
 create procedure test_inout_param(inout sid int) 'begin select sid; set sid = 1000 end';
 set @id = 100;
 call test_inout_param(@id);
-sid
+➤ sid[4,32,0]  𝄀
 100
 select @id;
-@id
+➤ @id[-5,64,0]  𝄀
 1000
 drop procedure test_inout_param;
 drop procedure if exists test_decimal_declared_type;
 set @decimal_io = '1.10';
 create procedure test_decimal_declared_type(in p1 decimal(10,2), inout io decimal(10,2), out ov decimal(10,2), out ocmp bool) 'begin declare v1 decimal(10,2) default 6; declare n1 decimal(10,2) default null; select v1 > p1 as default_cmp, n1 is null as null_default, v1 as default_value, p1 as in_value, io as inout_value; set v1 = 11; set io = io + 0.25; set ov = v1 + 1.3; set ocmp = v1 > p1; end';
 call test_decimal_declared_type(10, @decimal_io, @decimal_out, @decimal_cmp);
-default_cmp    null_default    default_value    in_value    inout_value
-0    1    6.00    10.00    1.10
+➤ default_cmp[-7,1,0]  ¦  null_default[-7,1,0]  ¦  default_value[3,10,2]  ¦  in_value[3,10,2]  ¦  inout_value[3,10,2]  𝄀
+0  ¦  1  ¦  6.00  ¦  10.00  ¦  1.10
 select @decimal_io, @decimal_out, @decimal_cmp;
-@decimal_io    @decimal_out    @decimal_cmp
-1.35    12.30    true
+➤ @decimal_io[12,0,0]  ¦  @decimal_out[12,0,0]  ¦  @decimal_cmp[-7,1,0]  𝄀
+1.35  ¦  12.30  ¦  1
 drop procedure test_decimal_declared_type;
-
 drop table if exists t_prepare_inside;
 create table t_prepare_inside (id int primary key, v int);
 insert into t_prepare_inside values (1, 10), (2, 20), (3, 30);
 drop procedure if exists test_prepare_literal;
 create procedure test_prepare_literal() 'begin prepare s from ''select sum(v) as prep_sum from t_prepare_inside''; execute s; deallocate prepare s; end';
 call test_prepare_literal();
-prep_sum
+➤ prep_sum[-5,64,0]  𝄀
 60
 drop procedure test_prepare_literal;
 drop procedure if exists test_prepare_user_var;
 create procedure test_prepare_user_var() 'begin set @sql = ''select sum(v) as prep_sum from t_prepare_inside''; prepare s from @sql; execute s; deallocate prepare s; end';
 call test_prepare_user_var();
-prep_sum
+➤ prep_sum[-5,64,0]  𝄀
 60
 drop procedure test_prepare_user_var;
 drop procedure if exists test_prepare_using;
 create procedure test_prepare_using() 'begin set @left_arg = 20; set @right_arg = 40; prepare s from ''select ? + ? as prep_sum''; execute s using @left_arg, @right_arg; end';
 call test_prepare_using();
-prep_sum
-60
+➤ prep_sum[8,53,31]  𝄀
+60.0
 execute s using @left_arg, @right_arg;
-prep_sum
-60
+➤ prep_sum[8,53,31]  𝄀
+60.0
 deallocate prepare s;
 drop procedure test_prepare_using;
 drop table t_prepare_inside;
-
 drop procedure if exists test_temp_table_lifecycle;
 create procedure test_temp_table_lifecycle() 'begin create temporary table tmp_proc_lifecycle (id int primary key, v int); insert into tmp_proc_lifecycle select id, val from tbh1 where id <= 2; select sum(v) as tmp_sum from tmp_proc_lifecycle; drop table tmp_proc_lifecycle; end';
 call test_temp_table_lifecycle();
-tmp_sum
+➤ tmp_sum[-5,64,0]  𝄀
 30
 drop procedure test_temp_table_lifecycle;
 drop procedure if exists test_temp_table_session_binding;
 create procedure test_temp_table_session_binding() 'begin create temporary table tmp_proc_session (id int primary key, v int); insert into tmp_proc_session select id, val from tbh1 where id <= 2; end';
 call test_temp_table_session_binding();
 select sum(v) as tmp_sum from tmp_proc_session;
-tmp_sum
+➤ tmp_sum[-5,64,0]  𝄀
 30
 drop table tmp_proc_session;
 drop procedure test_temp_table_session_binding;
-
 drop procedure if exists test_nested_temp_table_outer;
 drop procedure if exists test_nested_temp_table_inner;
 create procedure test_nested_temp_table_inner() 'begin create temporary table tmp_nested_proc_session (id int primary key, v int); insert into tmp_nested_proc_session select id, val from tbh1 where id <= 2; end';
 create procedure test_nested_temp_table_outer() 'begin call test_nested_temp_table_inner(); end';
 call test_nested_temp_table_outer();
 select sum(v) as tmp_sum from tmp_nested_proc_session;
-tmp_sum
+➤ tmp_sum[-5,64,0]  𝄀
 30
 drop table tmp_nested_proc_session;
 drop procedure test_nested_temp_table_outer;
 drop procedure test_nested_temp_table_inner;
-
 set sql_mode = 'PIPES_AS_CONCAT';
 create procedure test_sql_mode_pipes() 'begin select ''a''||''b'' as c; end';
 set sql_mode = '';
 call test_sql_mode_pipes();
-c
+➤ c[12,65535,0]  𝄀
 ab
 drop procedure test_sql_mode_pipes;
 set sql_mode = default;
-
 drop database if exists procedure_test;

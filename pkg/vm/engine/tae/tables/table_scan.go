@@ -80,7 +80,9 @@ TombstoneRangeScanByObject scans the an object's tombstones committed in the ran
 Since the returned batch must have accruate ts for each row, we need collect the data from appendable objects.
 
 Targets:
- 1. CNCreated entries where start <= CreatedAt <= end
+ 1. CNCreated entries where start <= CreatedAt <= end. These immutable source
+    objects remain the unique scan owners after tombstone merges; scanning the
+    TN-created copies as well would duplicate the same delete rows.
  2. Appendable entries whose catalog lifetime can overlap the range. All live
     appendable entries created before end remain candidates because their rows
     can commit out of object creation order.
@@ -179,9 +181,12 @@ func tombstoneRangeScanByObject(
 	// solely because an object's catalog lifetime precedes start.
 	for ok := it.Last(); ok; ok = it.Prev() {
 		tombstone := it.Item()
-		if tombstone.IsCEntry() && tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
-			// The dropped counterpart owns the persisted appendable tombstone data.
-			// Scanning both versions duplicates the same committed delete rows.
+		if tombstone.IsAppendable() && tombstone.IsCEntry() &&
+			tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
+			// The D counterpart owns the same persisted appendable data. A
+			// non-appendable C entry is different: it is the immutable
+			// CN-created source of a tombstone merge and remains the unique
+			// range-scan owner after its drop commits.
 			continue
 		}
 
@@ -201,9 +206,22 @@ func tombstoneRangeScanByObject(
 				}
 			}
 		} else {
-			// we only check the created version of the object.
+			// Check only CN-created immutable source versions. Tombstone-merge
+			// outputs copy these rows and are deliberately excluded below.
 			if tombstone.HasDropIntent() {
 				continue
+			}
+			// A CN-side publication rewrite retains CN provenance on its output.
+			// Once the explicitly marked D counterpart commits within the scan
+			// range, this C entry no longer owns the rows; its CN replacement (if
+			// any) is the unique range-scan owner.
+			if tombstone.IsCEntry() && tombstone.HasDCounterpart() {
+				drop := tombstone.GetNextVersion()
+				deleteAt := drop.GetDeleteAt()
+				if drop.HasDropCommitted() && !deleteAt.GT(&end) &&
+					drop.ObjectStats.GetCNDeleted() {
+					continue
+				}
 			}
 			if !tombstone.ObjectStats.GetCNCreated() {
 				continue

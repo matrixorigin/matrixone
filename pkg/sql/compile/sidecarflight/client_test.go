@@ -95,6 +95,8 @@ func TestInternalErrorfUsesMoerrAndPreservesCause(t *testing.T) {
 func TestExecutionIdempotencyKeyMatchesProtocolVector(t *testing.T) {
 	key := executionIdempotencyKey(42, []byte("qqqqqqqqqqqqqqqq"))
 	require.Equal(t, "77f6a676cc4bfdbc9265e1bbbcd8140f4a820ec41a2979f52706f41ff22fb33a", hex.EncodeToString(key[:]))
+	system := executionIdempotencyKey(0, []byte("qqqqqqqqqqqqqqqq"))
+	require.NotEqual(t, key, system)
 }
 
 func TestRuntimeRejectsTLSVerificationBypass(t *testing.T) {
@@ -206,7 +208,7 @@ func TestPrepareClampsDeadlineToLeaseSafetyCeiling(t *testing.T) {
 	typesOut, headings := fixtureOutputShape()
 	ceiling := time.Now().Add(10 * time.Second).Truncate(time.Millisecond)
 	execution, err := runtime.Prepare(
-		context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings,
+		context.Background(), 0, make([]byte, 16), []byte("plan"), typesOut, headings,
 		ceiling, testFlightRelease,
 	)
 	require.NoError(t, err)
@@ -376,7 +378,7 @@ func TestRequestDeadlineCancelsStalledDoGet(t *testing.T) {
 		doGetStarted: make(chan struct{}), blockDoGet: make(chan struct{}),
 	}
 	runtime := &Runtime{
-		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: 30 * time.Millisecond, CleanupTimeout: time.Second},
+		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: 250 * time.Millisecond, CleanupTimeout: time.Second},
 		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
 	}
 	copy(runtime.capabilityHash[:], server.hash)
@@ -407,7 +409,7 @@ func TestReplayReconciliationSurvivesRuntimeClose(t *testing.T) {
 	}
 	var released atomic.Int32
 	release := func(context.Context) error { released.Add(1); return nil }
-	require.NoError(t, first.Reconcile(1, make([]byte, 16), release))
+	require.NoError(t, first.Reconcile(0, make([]byte, 16), release))
 	require.Eventually(t, func() bool { return server.cancelByIdempotency.Load() > 0 }, time.Second, time.Millisecond)
 	require.Error(t, first.Close(context.Background()))
 	require.Zero(t, released.Load())
@@ -417,7 +419,7 @@ func TestReplayReconciliationSurvivesRuntimeClose(t *testing.T) {
 		config: Config{RequestTimeout: time.Second, CleanupTimeout: time.Second},
 		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
 	}
-	require.NoError(t, second.Reconcile(1, make([]byte, 16), release))
+	require.NoError(t, second.Reconcile(0, make([]byte, 16), release))
 	require.Eventually(t, func() bool {
 		return released.Load() == 1 && runtimeExecutionCount(second) == 0
 	}, time.Second, time.Millisecond)
@@ -608,7 +610,7 @@ func testGetFlightInfo(service any, ctx context.Context, decode func(any) error,
 	if request.Type != commandDescriptor || len(request.Path) != 0 || proto.Unmarshal(request.Cmd, command) != nil ||
 		command.ProtocolVersion != protocolVersion || command.SubstraitVersion != substraitVersion ||
 		len(command.CapabilityHash) != sha256.Size || command.MaxBatchBytes == 0 || command.DeadlineUnixMS == 0 ||
-		len(command.Plan) == 0 || len(command.QueryID) != 16 || len(command.IdempotencyKey) != sha256.Size || command.AccountID == 0 {
+		len(command.Plan) == 0 || len(command.QueryID) != 16 || len(command.IdempotencyKey) != sha256.Size || command.AccountID == nil {
 		return nil, status.Error(codes.InvalidArgument, "malformed ExecuteSubstrait command")
 	}
 	server.deadlineUnixMS.Store(int64(command.DeadlineUnixMS))

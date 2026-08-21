@@ -326,6 +326,27 @@ func TestPreparedNtileParameter(t *testing.T) {
 	require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
 }
 
+func TestPreparedLagLeadOffsetParameter(t *testing.T) {
+	for _, name := range []string{"lag", "lead"} {
+		t.Run(name, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, fmt.Sprintf(
+				"select n_nationkey, %s(n_nationkey, ?) over (partition by n_regionkey order by n_nationkey) from nation",
+				name,
+			))
+			require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
+			require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+
+			originalTypes := preparedEffectiveParamTypes(t, prepare)
+			require.Equal(t, int32(types.T_int64), originalTypes[0].Id)
+
+			filled, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{int64(1)})
+			require.NoError(t, err)
+			require.NotSame(t, prepare.Plan, filled)
+			require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
+		})
+	}
+}
+
 func TestNtileRequiresIntegerArgument(t *testing.T) {
 	for _, sql := range []string{
 		"select ntile(n_name) over (order by n_nationkey) from nation",

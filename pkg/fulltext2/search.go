@@ -345,39 +345,47 @@ func sortedIndexInt64(a []int64, v int64) int {
 // intersection, decoding ONE docID block + ONE position block at a time (never the whole
 // list). It is the phrase analogue of wandIter, but also carries the block's positions.
 type phraseCursor struct {
-	tp     *termPostings
-	off    int32      // this slot's byte offset within the phrase
-	idx    int        // current global posting index (0..df-1)
-	curBlk int        // block currently decoded into bDocs/bPos (-1 = none)
-	blen   int        // valid entries in bDocs/bPos
-	bDocs  []int64    // decoded docIDs of curBlk (cap BlockSize); backed by buf
-	bPos   [][]int32  // decoded positions of curBlk (cap BlockSize); backed by buf
-	tfbuf  []uint8    // scratch for fillBlock's tfs (phrase ignores tf); backed by buf
-	buf    *phraseBuf // pooled backing for bDocs/bPos/tfbuf; returned by releasePhraseCursors
+	tp        *termPostings
+	off       int32      // this slot's byte offset within the phrase
+	idx       int        // current global posting index (0..df-1)
+	curDocBlk int        // block currently decoded into bDocs (-1 = none)
+	curPosBlk int        // block currently decoded into bPos (-1 = none)
+	blen      int        // valid entries in bDocs
+	bDocs     []int64    // decoded docIDs of curDocBlk (cap BlockSize); backed by buf
+	bPos      [][]int32  // decoded positions of curPosBlk (cap BlockSize); backed by buf
+	buf       *phraseBuf // pooled backing for bDocs/bPos; returned by releasePhraseCursors
 }
 
 func newPhraseCursor(tp *termPostings, off int32) *phraseCursor {
 	b := getPhraseBuf()
 	return &phraseCursor{
-		tp: tp, off: off, curBlk: -1,
+		tp: tp, off: off, curDocBlk: -1, curPosBlk: -1,
 		bDocs: b.docs,
 		bPos:  b.pos,
-		tfbuf: b.tfs,
 		buf:   b,
 	}
 }
 
 func (c *phraseCursor) atEnd() bool { return c.idx >= c.tp.df() }
 
-// decode ensures block b is the one loaded in bDocs/bPos (a field compare when the cursor
-// stays within a block; skipped blocks are never decoded).
-func (c *phraseCursor) decode(b int) {
-	if b == c.curBlk {
+// ensureDocBlock loads only doc IDs. Positional payload stays compressed until all
+// phrase cursors reach the same document.
+func (c *phraseCursor) ensureDocBlock(b int) {
+	if b == c.curDocBlk {
 		return
 	}
-	c.blen = c.tp.fillBlock(b, c.bDocs, c.tfbuf)
+	c.blen = c.tp.fillBlockDocs(b, c.bDocs)
+	c.curDocBlk = b
+}
+
+// ensurePositionBlock loads positions for block b on first use. A cursor can skip many
+// doc blocks without ever calling this method.
+func (c *phraseCursor) ensurePositionBlock(b int) {
+	if b == c.curPosBlk {
+		return
+	}
 	c.tp.fillBlockPositions(b, c.bPos)
-	c.curBlk = b
+	c.curPosBlk = b
 }
 
 // doc returns the current doc ord, or MaxInt64 when exhausted (sorts last).
@@ -385,13 +393,13 @@ func (c *phraseCursor) doc() int64 {
 	if c.atEnd() {
 		return math.MaxInt64
 	}
-	c.decode(c.idx / BlockSize)
+	c.ensureDocBlock(c.idx / BlockSize)
 	return c.bDocs[c.idx%BlockSize]
 }
 
 // positions returns the current doc's ascending byte positions.
 func (c *phraseCursor) positions() []int32 {
-	c.decode(c.idx / BlockSize)
+	c.ensurePositionBlock(c.idx / BlockSize)
 	return c.bPos[c.idx%BlockSize]
 }
 
@@ -407,9 +415,17 @@ func (c *phraseCursor) skipTo(target int64) {
 		c.idx = c.tp.df() // past the last posting → exhausted
 		return
 	}
-	c.decode(b)
-	w := sort.Search(c.blen, func(i int) bool { return c.bDocs[i] >= target })
-	c.idx = b*BlockSize + w
+	c.ensureDocBlock(b)
+	lo, hi := 0, c.blen
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if c.bDocs[mid] < target {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	c.idx = b*BlockSize + lo
 }
 
 // matchPhraseCursor runs the block-cursor conjunctive phrase intersection over EXACT

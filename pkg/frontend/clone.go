@@ -647,6 +647,17 @@ func cloneTableRestoreSQL(stmt *tree.CloneTable, snapshotTS int64) string {
 	)
 }
 
+// generatedCloneRestoreSnapshotTS returns the timestamp to put in nested clone
+// restore SQL. An explicit transaction must retain the shared transaction view
+// so it can read its own uncommitted source data and metadata. The caller still
+// keeps the generated timestamp for data-branch bookkeeping.
+func generatedCloneRestoreSnapshotTS(ses *Session, snapshotTS int64) int64 {
+	if ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN) {
+		return 0
+	}
+	return snapshotTS
+}
+
 func cloneTargetTableExists(ctx context.Context, bh BackgroundExec, dbName, tableName string, accountID uint32) (bool, error) {
 	sql, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, accountID, 0)
 	if err != nil {
@@ -726,6 +737,18 @@ func handleCloneTable(
 	bh BackgroundExec,
 	resolvedAccounts *cloneAccountResolution,
 ) (receipt cloneReceipt, err error) {
+	if stmt.CreateTable.Temporary {
+		switch {
+		case stmt.ToAccountOpt != nil:
+			return receipt, moerr.NewInvalidInputNoCtx(
+				"CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT",
+			)
+		case stmt.CopyGrants:
+			return receipt, moerr.NewInvalidInputNoCtx(
+				"CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS",
+			)
+		}
+	}
 
 	var (
 		ctx    context.Context
@@ -740,7 +763,19 @@ func handleCloneTable(
 		toAccountId   uint32
 		opAccountId   uint32
 		fromAccountId uint32
+
+		tempTargetDB               string
+		tempTargetAlias            string
+		tempTargetExistedBeforeRun bool
 	)
+	// This defer is intentionally registered before the background transaction's
+	// finish defer. It therefore observes commit failures as well as execution
+	// failures and removes only aliases introduced by this statement.
+	defer func() {
+		removeFailedTemporaryCloneAlias(
+			ses, tempTargetDB, tempTargetAlias, tempTargetExistedBeforeRun, err,
+		)
+	}()
 
 	if reqCtx.Value(tree.CloneLevelCtxKey{}) == nil {
 		reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
@@ -820,6 +855,11 @@ func handleCloneTable(
 			"no db selected for the dst table %s", stmt.CreateTable.Table.ObjectName)
 		return
 	}
+	if stmt.CreateTable.Temporary {
+		tempTargetDB = stmt.CreateTable.Table.SchemaName.String()
+		tempTargetAlias = stmt.CreateTable.Table.ObjectName.String()
+		_, tempTargetExistedBeforeRun = ses.GetTempTable(tempTargetDB, tempTargetAlias)
+	}
 
 	oldDefault := bh.(*backExec).backSes.GetDatabaseName()
 	bh.(*backExec).backSes.SetDatabaseName(ses.GetTxnCompileCtx().DefaultDatabase())
@@ -886,14 +926,7 @@ func handleCloneTable(
 			return
 		}
 	}
-	restoreSnapshotTS := snapshotTS
-	if ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN) {
-		// A timestamp hint resolves through a cloned snapshot transaction and
-		// cannot see tables created earlier in the current transaction. Keep
-		// snapshotTS for branch bookkeeping, but let the shared transaction
-		// resolve and scan its own uncommitted source table.
-		restoreSnapshotTS = 0
-	}
+	restoreSnapshotTS := generatedCloneRestoreSnapshotTS(ses, snapshotTS)
 	sql = cloneTableRestoreSQL(stmt, restoreSnapshotTS)
 
 	if stmt.CopyGrants && stmt.CreateTable.IfNotExists {
@@ -943,6 +976,17 @@ func handleCloneTable(
 	}
 
 	return
+}
+
+func removeFailedTemporaryCloneAlias(
+	ses *Session,
+	dbName, alias string,
+	existedBeforeRun bool,
+	err error,
+) {
+	if err != nil && alias != "" && !existedBeforeRun {
+		ses.RemoveTempTable(dbName, alias)
+	}
 }
 
 // create database x clone y {MO_TS, SNAPSHOT}
@@ -1038,6 +1082,13 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 	}
+	// Source collection validates public clone requests. Keep the persistence
+	// boundary defensive too: resolved sources can come from data-branch flow,
+	// and no path may create a target database for an imported package UDF whose
+	// external lifecycle is unsupported by database clone.
+	if err = validateCloneUserDefinedFunctions(source.userDefinedFuncs); err != nil {
+		return
+	}
 	fromAccountID := source.opAccountId
 	if source.snapshot != nil && source.snapshot.Tenant != nil {
 		fromAccountID = source.snapshot.Tenant.TenantID
@@ -1053,8 +1104,28 @@ func handleCloneDatabaseWithSource(
 	if err = revalidateTimestampDataBranchCloneDatabaseSource(reqCtx, ses, bh, source); err != nil {
 		return
 	}
+	if source.userDefinedFuncs, err = rewriteCloneUserDefinedFunctionBodies(
+		reqCtx,
+		source.userDefinedFuncs,
+		source.srcResolveDBName,
+		stmt.DstDatabase.String(),
+		parserLowerCaseTableNames(ses),
+	); err != nil {
+		return
+	}
+	if source.storedProcedures, err = rewriteCloneStoredProcedureBodies(
+		reqCtx,
+		source.storedProcedures,
+		source.srcResolveDBName,
+		stmt.DstDatabase.String(),
+		parserLowerCaseTableNames(ses),
+	); err != nil {
+		return
+	}
 
 	if source.hasFkCycle {
+		oldForeignKeyChecksReplayable, hadForeignKeyChecksReplayability :=
+			ses.getMigrationSystemVarReplayability("foreign_key_checks")
 		oldForeignKeyChecks, getErr := ses.GetSessionSysVar("foreign_key_checks")
 		if getErr != nil {
 			return nil, getErr
@@ -1064,6 +1135,11 @@ func handleCloneDatabaseWithSource(
 		}
 		defer func() {
 			restoreErr := ses.SetSessionSysVar(reqCtx, "foreign_key_checks", oldForeignKeyChecks)
+			ses.restoreMigrationSystemVarReplayability(
+				"foreign_key_checks",
+				oldForeignKeyChecksReplayable,
+				hadForeignKeyChecksReplayability,
+			)
 			if err == nil {
 				err = restoreErr
 			}
@@ -1096,11 +1172,40 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 	}
+	restoreSnapshotTS := generatedCloneRestoreSnapshotTS(ses, snapshotTS)
+	sequenceSnapshotTS := restoreSnapshotTS
+	if source.snapshot != nil && source.snapshot.TS != nil {
+		sequenceSnapshotTS = source.snapshot.TS.PhysicalTime
+	}
+
+	cloneSequence := func(srcTbl *tableInfo) error {
+		createSQL, rewriteErr := rewriteCloneSequenceCreateSQL(
+			srcTbl.createSql,
+			stmt.DstDatabase.String(),
+			srcTbl.tblName,
+			parserLowerCaseTableNames(ses),
+		)
+		if rewriteErr != nil {
+			return rewriteErr
+		}
+		return restoreSequence(
+			reqCtx,
+			bh,
+			createSQL,
+			source.srcResolveDBName,
+			srcTbl.tblName,
+			stmt.DstDatabase.String(),
+			srcTbl.tblName,
+			sequenceSnapshotTS,
+			fromAccountID,
+			source.toAccountId,
+		)
+	}
 
 	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
 		srcTable := newQualifiedCloneTableName(srcDb, srcTbl, stmt.AtTsExpr)
-		if stmt.AtTsExpr == nil && snapshotTS != 0 {
-			srcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
+		if stmt.AtTsExpr == nil && restoreSnapshotTS != 0 {
+			srcTable.AtTsExpr = newMoTimestampHint(restoreSnapshotTS)
 		}
 		dstTable := newQualifiedCloneTableName(dstDb, dstTbl, nil)
 		cloneStmt := &tree.CloneTable{
@@ -1141,13 +1246,21 @@ func handleCloneDatabaseWithSource(
 	}
 
 	for _, srcTbl := range source.srcTblInfos {
+		if isSequence(srcTbl) {
+			if err = cloneSequence(srcTbl); err != nil {
+				return
+			}
+		}
+	}
+
+	for _, srcTbl := range source.srcTblInfos {
 
 		key := genKey(srcTbl.dbName, srcTbl.tblName)
 		if _, ok := source.fkTableMap[key]; ok {
 			continue
 		}
 
-		if srcTbl.typ == view {
+		if srcTbl.typ == view || isSequence(srcTbl) {
 			continue
 		}
 
@@ -1171,9 +1284,31 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
+	// Routines are catalog metadata rather than mo_tables. Restore functions
+	// before views so view binding can resolve function dependencies.
+	routineTenant := ses.GetTenantInfo()
+	if len(source.userDefinedFuncs) != 0 || len(source.storedProcedures) != 0 {
+		routineTenant, err = resolveCloneDatabaseRoutineTenant(
+			reqCtx, bh, ses.GetTenantInfo(), source.toAccountId,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err = restoreCloneDatabaseUserDefinedFunctions(
+		ctx1, bh, routineTenant, source.userDefinedFuncs, stmt.DstDatabase.String(),
+	); err != nil {
+		return
+	}
+	if err = restoreCloneDatabaseStoredProcedures(
+		ctx1, bh, routineTenant, source.storedProcedures, stmt.DstDatabase.String(),
+	); err != nil {
+		return
+	}
+
 	// clone view table
 	if len(source.viewMap) != 0 {
-		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, snapshotTS)
+		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, restoreSnapshotTS)
 		fromAccount := source.opAccountId
 		if viewSnapshot != nil && viewSnapshot.Tenant != nil {
 			fromAccount = viewSnapshot.Tenant.TenantID
@@ -1198,7 +1333,10 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 
-		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
+		// The function metadata above is intentionally still uncommitted: the
+		// clone must remain atomic. Mark view restoration so ResolveUdf uses the
+		// same clone transaction and can bind newly restored functions.
+		if err = restoreViews(withResolveUdfInCallerTxn(reqCtx), ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
 			return
 		}
 	}
@@ -1284,7 +1422,16 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 
 	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
 	original := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
-	applyRemapDb([]tree.Statement{createView}, map[string]string{srcDBName: dstDBName})
+	cloneTargetDatabase := dstDBName
+	if lowerCaseTableNames == 1 {
+		cloneTargetDatabase = tree.NewCStr(dstDBName, lowerCaseTableNames).Compare()
+	}
+	remapDbInStmt(createView, remapDbContext{
+		databases: map[string]string{
+			tree.NewCStr(srcDBName, lowerCaseTableNames).Compare(): cloneTargetDatabase,
+		},
+		lowerCaseTableNames: lowerCaseTableNames,
+	})
 	rewritten := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
 	if rewritten == original {
 		return sql, nil
@@ -1293,6 +1440,31 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 		rewritten += ";"
 	}
 	return rewritten, nil
+}
+
+func rewriteCloneSequenceCreateSQL(
+	sql string,
+	dstDBName string,
+	dstTblName string,
+	lowerCaseTableNames int64,
+) (string, error) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, lowerCaseTableNames)
+	if err != nil {
+		return "", err
+	}
+	createSequence, ok := stmt.(*tree.CreateSequence)
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtxf(
+			"clone sequence SQL is %T, expected *tree.CreateSequence", stmt)
+	}
+	targetName := newQualifiedCloneTableName(dstDBName, dstTblName, nil)
+	createSequence.Name = &targetName
+	return tree.StringWithOpts(
+		createSequence,
+		dialect.MYSQL,
+		tree.WithSingleQuoteString(),
+		tree.WithQuoteIdentifier(),
+	), nil
 }
 
 func tryToIncreaseTxnPhysicalTS(

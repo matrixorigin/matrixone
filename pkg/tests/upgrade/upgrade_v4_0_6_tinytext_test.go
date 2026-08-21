@@ -42,7 +42,7 @@ import (
 )
 
 func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
-	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 

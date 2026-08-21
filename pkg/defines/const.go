@@ -55,7 +55,10 @@ const (
 	MORPCVersion17     int64 = 17 // ordered-set percentile aggregate IDs
 	MORPCVersion18     int64 = 18 // prepared-parameter binary-string metadata
 	MORPCVersion19     int64 = 19 // remote bounded partition Top-N operator
-	MORPCLatestVersion       = MORPCVersion19
+	MORPCVersion20     int64 = 20 // target-aware multi-table UPDATE pipeline fields
+	MORPCVersion21     int64 = 21 // lookup-only RIGHT DEDUP for proven-unique insert input
+	MORPCVersion22     int64 = 22 // typed user-defined variables during connection migration
+	MORPCLatestVersion       = MORPCVersion22
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
