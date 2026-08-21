@@ -97,25 +97,21 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 			if more < 0 {
 				return mpool.ErrAllocationAccountInvalid
 			}
-			pending := make([]*Vectors[T], more)
-			for i := range pending {
-				var err error
-				pending[i], err = newAccountedVectors[T](
-					exec.argType, exec.accounted.allocation)
-				if err != nil {
-					for j := 0; j < i; j++ {
-						pending[j].Free(exec.mp)
-					}
-					return err
-				}
+			active := exec.accounted.GetNumGroups()
+			if active > len(exec.groups) || more > math.MaxInt-active {
+				return mpool.ErrAllocationAccountInvariant
 			}
-			if err := exec.accounted.GroupGrow(more); err != nil {
-				for _, group := range pending {
-					group.Free(exec.mp)
-				}
+			oldLength := len(exec.groups)
+			if err := exec.prepareDenseGroups(active + more); err != nil {
 				return err
 			}
-			exec.groups = append(exec.groups, pending...)
+			if err := exec.accounted.GroupGrow(more); err != nil {
+				for _, group := range exec.groups[oldLength:] {
+					group.Free(exec.mp)
+				}
+				exec.groups = exec.groups[:oldLength]
+				return err
+			}
 			return nil
 		}
 		return exec.accounted.GroupGrow(more)
@@ -140,10 +136,26 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 
 func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
 	if exec.accounted != nil {
-		if exec.usesDenseAccountedState() && more > 0 {
+		if exec.usesDenseAccountedState() {
+			if more < 0 {
+				return mpool.ErrAllocationAccountInvalid
+			}
+			active := exec.accounted.GetNumGroups()
+			if active > len(exec.groups) || more > math.MaxInt-active {
+				return mpool.ErrAllocationAccountInvariant
+			}
 			oldLength := len(exec.groups)
-			exec.groups = append(exec.groups, make([]*Vectors[T], more)...)
-			exec.groups = exec.groups[:oldLength]
+			if err := exec.prepareDenseGroups(active + more); err != nil {
+				return err
+			}
+			if err := exec.accounted.PreAllocateGroups(more); err != nil {
+				for _, group := range exec.groups[oldLength:] {
+					group.Free(exec.mp)
+				}
+				exec.groups = exec.groups[:oldLength]
+				return err
+			}
+			return nil
 		}
 		return exec.accounted.PreAllocateGroups(more)
 	}
@@ -155,6 +167,33 @@ func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
 		exec.groups = exec.groups[:oldLength]
 	}
 	return exec.ret.preExtend(more)
+}
+
+// prepareDenseGroups materializes the empty vector holders needed by a Group
+// preflight. Group deliberately reserves storage for prospective group ids
+// before it publishes those ids and calls GroupGrow, so len(groups) includes
+// both active groups and prepared-but-unpublished groups.
+func (exec *medianColumnExecSelf[T, R]) prepareDenseGroups(total int) error {
+	if !exec.usesDenseAccountedState() || total < 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if total <= len(exec.groups) {
+		return nil
+	}
+	pending := make([]*Vectors[T], total-len(exec.groups))
+	for i := range pending {
+		var err error
+		pending[i], err = newAccountedVectors[T](
+			exec.argType, exec.accounted.allocation)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				pending[j].Free(exec.mp)
+			}
+			return err
+		}
+	}
+	exec.groups = append(exec.groups, pending...)
+	return nil
 }
 
 func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {

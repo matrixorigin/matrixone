@@ -400,6 +400,47 @@ func TestAccountedMedianRetainsOrdinaryInputWithoutSavedArgumentIndex(t *testing
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestAccountedMedianPreflightsProspectiveGroupsBeforePublication(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	exec, err := MakeAgg(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	median := exec.(*medianColumnNumericExec[int64])
+	owner := exec.(AllocationAccountOwner)
+	require.NoError(t, owner.SetAllocationAccount(allocation))
+	SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
+
+	// Group preallocates and preflights prospective ids before publishing the
+	// hash insertion and calling GroupGrow. Repeating the reservation must reuse
+	// the same prepared holders rather than manufacture additional groups.
+	require.NoError(t, exec.PreAllocateGroups(2))
+	require.NoError(t, exec.PreAllocateGroups(2))
+	require.Zero(t, median.GetNumGroups())
+	require.Len(t, median.groups, 2)
+
+	input := buildFixedVec(t, mp, types.T_int64.ToType(),
+		[]int64{1, 3, 5, 7})
+	groups := []uint64{1, 1, 2, 2}
+	require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
+		0, groups, []*vector.Vector{input}))
+	require.NoError(t, exec.GroupGrow(2))
+	require.NoError(t, exec.BatchFill(
+		0, groups, []*vector.Vector{input}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, []float64{2, 6},
+		vector.MustFixedColNoTypeCheck[float64](results[0]))
+
+	results[0].Free(mp)
+	input.Free(mp)
+	exec.Free()
+	require.NoError(t, owner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAccountedMedianKeepsIndexedStateForDistinctAndOrderedPercentile(t *testing.T) {
 	for _, tc := range []struct {
 		name string
