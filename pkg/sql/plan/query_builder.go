@@ -1355,6 +1355,10 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 	case plan.Node_JOIN:
 		node.EmitCompressedRowCount = false
 		node.SpillMem = builder.joinSpillMem
+		logicalOutputs := node.ProjectList
+		for _, expr := range logicalOutputs {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
 
 		var markOperandNotNullable [][]bool
 		if node.JoinType == plan.Node_MARK && len(node.Children) == 2 {
@@ -1498,6 +1502,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			node.DedupColTypes = []plan.Type{node.OnList[0].GetF().Args[0].Typ}
 		}
 
+		node.ProjectList = nil
 		childProjList := builder.qry.Nodes[leftID].ProjectList
 		for i, globalRef := range leftRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
@@ -1577,7 +1582,18 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				},
 			})
 		}
-
+		if len(node.BindingTags) > 0 {
+			for i, expr := range logicalOutputs {
+				if col := expr.GetCol(); col != nil {
+					if localRef, ok := remapping.globalToLocal[[2]int32{col.RelPos, col.ColPos}]; ok {
+						remapping.globalToLocal[[2]int32{node.BindingTags[0], int32(i)}] = localRef
+					}
+				}
+			}
+		}
+		for _, expr := range logicalOutputs {
+			increaseRefCnt(expr, -1, colRefCnt)
+		}
 	case plan.Node_AGG:
 		// Some DML duplicate-check aggregates intentionally expose positional
 		// output. They are already fully projected and cannot participate in the

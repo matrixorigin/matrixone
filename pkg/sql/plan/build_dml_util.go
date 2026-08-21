@@ -1238,6 +1238,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			}
 
 			combinedSetNull := make(map[*plan.ForeignKeyDef]struct{})
+			setNullDeleteSourcePending := false
 			if !isUpdate {
 				setNullFks := make([]*plan.ForeignKeyDef, 0, len(childTableDef.Fkeys))
 				for _, fk := range childTableDef.Fkeys {
@@ -1561,6 +1562,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					if err != nil {
 						return err
 					}
+					setNullDeleteSourcePending = delCtx.skipTargetDelete
 				}
 			}
 
@@ -1965,7 +1967,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 						upPlanCtx := getDmlPlanCtx()
 						upPlanCtx.objRef = childObjRef
-						upPlanCtx.tableDef = childTableDef
+						// buildUpdatePlans removes hidden columns from its TableDef while
+						// constructing the insert side. Keep sibling FK actions on the same
+						// child table isolated from that planner-local mutation.
+						upPlanCtx.tableDef = CloneTableDefForPlan(childTableDef, true)
 						upPlanCtx.updateColLength = len(rightConds)
 						upPlanCtx.isMulti = false
 						upPlanCtx.rowIdPos = childRowIdPos
@@ -1981,12 +1986,18 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						for _, childColID := range fk.Cols {
 							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
 						}
+						if delCtx.skipTargetDelete {
+							// Do not merge a preceding CASCADE source with this wider
+							// update stream; appendExcludeCascadeOwnedRows made them disjoint.
+							delete(builder.deleteNode, childTableDef.TblId)
+						}
 
 						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 						putDmlPlanCtx(upPlanCtx)
 						if err != nil {
 							return err
 						}
+						setNullDeleteSourcePending = delCtx.skipTargetDelete
 
 					case plan.ForeignKeyDef_CASCADE:
 						// A self-reference is expanded to its complete descendant set by
@@ -2106,6 +2117,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							upPlanCtx.beginIdx = 0
 							upPlanCtx.allDelTableIDs = allDelTableIDs
 							upPlanCtx.isFkRecursionCall = true
+							if setNullDeleteSourcePending {
+								// SET NULL has already anti-joined every CASCADE-owned row.
+								// Keep these disjoint action streams independent: merging them
+								// would narrow the SET NULL update stream to the base-row ABI.
+								delete(builder.deleteNode, childTableDef.TblId)
+								setNullDeleteSourcePending = false
+							}
 
 							err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
 							putDmlPlanCtx(upPlanCtx)

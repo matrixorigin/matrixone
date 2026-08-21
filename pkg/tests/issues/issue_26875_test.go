@@ -184,6 +184,67 @@ func TestIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t *testing.T) {
 	})
 }
 
+func TestIssue26875MixedIndexedSetNullAndCascadeActions(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		conn := openIssue26875Conn(t, ctx, c, 0)
+		defer conn.Close()
+		dbName := createIssue26875Database(t, ctx, conn)
+		defer dropIssue26875Database(t, conn, dbName)
+
+		for _, prepared := range []bool{false, true} {
+			suffix := "literal"
+			if prepared {
+				suffix = "prepared"
+			}
+			parent := "mixed_parent_" + suffix
+			child := "mixed_child_" + suffix
+			mustExec(t, ctx, conn, fmt.Sprintf("create table %s(id int primary key)", parent))
+			foreignKeys := fmt.Sprintf(`foreign key(set_id) references %s(id) on delete set null,
+				foreign key(cascade_id) references %s(id) on delete cascade`, parent, parent)
+			if prepared {
+				foreignKeys = fmt.Sprintf(`foreign key(cascade_id) references %s(id) on delete cascade,
+					foreign key(set_id) references %s(id) on delete set null`, parent, parent)
+			}
+			mustExec(t, ctx, conn, fmt.Sprintf(`create table %s(
+				id int primary key, set_id int, cascade_id int, marker int,
+				key sk_set(set_id), key sk_cascade(cascade_id),
+				%s)`, child, foreignKeys))
+			mustExec(t, ctx, conn, fmt.Sprintf("insert into %s values(1),(2)", parent))
+			mustExec(t, ctx, conn, fmt.Sprintf(
+				"insert into %s values(10,1,2,10),(20,2,1,20),(30,1,1,30),(40,2,2,40)", child))
+			if prepared {
+				stmt, err := conn.PrepareContext(ctx, fmt.Sprintf("replace into %s values(?)", parent))
+				require.NoError(t, err)
+				_, err = stmt.ExecContext(ctx, 1)
+				require.NoError(t, err)
+				require.NoError(t, stmt.Close())
+			} else {
+				mustExec(t, ctx, conn, fmt.Sprintf("replace into %s values(1)", parent))
+			}
+
+			var setID sql.NullInt64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				fmt.Sprintf("select set_id from %s where id=10", child)).Scan(&setID))
+			require.False(t, setID.Valid)
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				fmt.Sprintf("select count(*) from %s where id in (20,30)", child)).Scan(&count))
+			require.Zero(t, count)
+			require.NoError(t, conn.QueryRowContext(ctx,
+				fmt.Sprintf("select count(*) from %s where id=40 and set_id=2 and cascade_id=2", child)).Scan(&count))
+			require.Equal(t, 1, count)
+			require.NoError(t, conn.QueryRowContext(ctx,
+				fmt.Sprintf("select count(*) from %s force index(sk_set) where set_id=2", child)).Scan(&count))
+			require.Equal(t, 1, count)
+			require.NoError(t, conn.QueryRowContext(ctx,
+				fmt.Sprintf("select count(*) from %s force index(sk_cascade) where cascade_id=2", child)).Scan(&count))
+			require.Equal(t, 2, count)
+		}
+	})
+}
+
 func TestIssue26875MultiRowSelfSetNullExcludesReplaceOwnedRows(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
