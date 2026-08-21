@@ -16,23 +16,1009 @@ package logtailreplay
 
 import (
 	"context"
+	"io"
+	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/tidwall/btree"
 )
+
+func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	newData := func(values []int32, timestamps []int64) *batch.Batch {
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType()) // added FIRST
+		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType()) // logical primary key
+		bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		for i, ts := range timestamps {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], values[i], false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(1), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[2], types.BuildTS(ts, 0), false, mp))
+		}
+		bat.SetRowCount(len(timestamps))
+		return bat
+	}
+	newTombstone := func(timestamps []int64) *batch.Batch {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		for _, ts := range timestamps {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(ts, 0), false, mp))
+		}
+		bat.SetRowCount(len(timestamps))
+		return bat
+	}
+
+	t.Run("insert delete cancels with added-first layout", func(t *testing.T) {
+		data := newData([]int32{7}, []int64{10})
+		tombstone := newTombstone([]int64{20})
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.Zero(t, data.RowCount())
+		require.Zero(t, tombstone.RowCount())
+		data.Clean(mp)
+		tombstone.Clean(mp)
+	})
+
+	t.Run("update delete keeps only latest delete", func(t *testing.T) {
+		data := newData([]int32{7, 8}, []int64{10, 20})
+		// The first tombstone is the delete side of the preceding update. The
+		// final tombstone is the delete being tested and must remain as the
+		// latest net effect.
+		tombstone := newTombstone([]int64{5, 30})
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.Zero(t, data.RowCount())
+		require.Equal(t, 1, tombstone.RowCount())
+		data.Clean(mp)
+		tombstone.Clean(mp)
+	})
+}
+
+type peakTrackingFileService struct {
+	fileservice.FileService
+	current, readBytes, peak atomic.Int64
+}
+
+type peakTrackingAllocator struct {
+	base    fileservice.CacheDataAllocator
+	tracker *peakTrackingFileService
+}
+
+type peakTrackingAllocation struct {
+	fscache.Data
+	tracker *peakTrackingFileService
+	size    int64
+	refs    *atomic.Int64
+}
+
+func newPeakTrackingFileService(fs fileservice.FileService) *peakTrackingFileService {
+	return &peakTrackingFileService{FileService: fs}
+}
+
+func (p *peakTrackingFileService) observePeak() {
+	value := p.current.Load() + p.readBytes.Load()
+	for old := p.peak.Load(); value > old && !p.peak.CompareAndSwap(old, value); old = p.peak.Load() {
+	}
+}
+
+func (p *peakTrackingFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	var compressedBytes int64
+	for i := range vector.Entries {
+		if vector.Entries[i].ReadCloserForRead == nil && vector.Entries[i].WriterForRead == nil {
+			compressedBytes += vector.Entries[i].Size
+		}
+		constructor := vector.Entries[i].ToCacheData
+		if constructor != nil {
+			vector.Entries[i].ToCacheData = func(
+				ctx context.Context,
+				reader io.Reader,
+				data []byte,
+				allocator fileservice.CacheDataAllocator,
+			) (fscache.Data, error) {
+				return constructor(ctx, reader, data, &peakTrackingAllocator{base: allocator, tracker: p})
+			}
+		}
+	}
+	p.readBytes.Add(compressedBytes)
+	p.observePeak()
+	err := p.FileService.Read(ctx, vector)
+	p.readBytes.Add(-compressedBytes)
+	p.observePeak()
+	return err
+}
+
+func (a *peakTrackingAllocator) track(data fscache.Data, size int64) fscache.Data {
+	refs := &atomic.Int64{}
+	refs.Store(1)
+	a.tracker.current.Add(size)
+	a.tracker.observePeak()
+	return &peakTrackingAllocation{Data: data, tracker: a.tracker, size: size, refs: refs}
+}
+
+func (a *peakTrackingAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
+	return a.track(a.base.AllocateCacheData(ctx, size), int64(size))
+}
+
+func (a *peakTrackingAllocator) AllocateCacheDataWithHint(
+	ctx context.Context, size int, hints malloc.Hints,
+) fscache.Data {
+	return a.track(a.base.AllocateCacheDataWithHint(ctx, size, hints), int64(size))
+}
+
+func (a *peakTrackingAllocator) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
+	return a.track(a.base.CopyToCacheData(ctx, data), int64(len(data)))
+}
+
+func (a *peakTrackingAllocator) BackingSize(size int) int {
+	return a.base.BackingSize(size)
+}
+
+func (d *peakTrackingAllocation) Slice(length int) fscache.Data {
+	return &peakTrackingAllocation{
+		Data: d.Data.Slice(length), tracker: d.tracker, size: d.size, refs: d.refs,
+	}
+}
+
+func (d *peakTrackingAllocation) Retain() {
+	d.Data.Retain()
+	d.refs.Add(1)
+}
+
+func (d *peakTrackingAllocation) Release() {
+	d.Data.Release()
+	if d.refs.Add(-1) == 0 {
+		d.tracker.current.Add(-d.size)
+		d.tracker.observePeak()
+	}
+}
+
+func TestPartitionStateRangeHandlerPropagatesPKFilter(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state := NewPartitionState("", true, 42, false)
+	filter := &engine.PKFilter{
+		ReplaySpec: &engine.PKReplaySpec{Keys: [][]byte{{1}}},
+	}
+
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		engine.WithPKFilter(context.Background(), filter),
+		state,
+		types.BuildTS(1, 0),
+		types.BuildTS(2, 0),
+		false,
+		objectio.BlockMaxRows,
+		0,
+		mp,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Same(t, filter, handle.pkFilter)
+	require.Zero(t, handle.maxInMemoryRows)
+	require.Zero(t, handle.maxInMemoryBytes)
+	require.NoError(t, handle.Close())
+}
+
+func TestObjectPrefetchWidthHonorsOptionalRangeBudget(t *testing.T) {
+	require.Equal(t, LoadParallism, objectPrefetchWidth(0, 0))
+	require.Equal(t, LoadParallism, objectPrefetchWidth(-1, -1))
+	require.Equal(t, 1, objectPrefetchWidth(1, 0))
+	require.Equal(t, 1, objectPrefetchWidth(0, 1))
+}
+
+func TestPersistedObjectPrefetchSlicesToProgressWithinBudget(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	obj, fs := writeTestObjectWithCommitTS(t, mp, []types.TS{
+		types.BuildTS(10, 0), types.BuildTS(11, 0), types.BuildTS(12, 0),
+	})
+	baseline := mp.CurrNB()
+	scheduler := tasks.NewParallelJobScheduler(2)
+	defer scheduler.Stop()
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	changes := &ChangeHandler{
+		scheduler: scheduler, maxInMemoryBytes: 1, spillConfig: spillConfig,
+	}
+	base := &baseHandle{changesHandle: changes}
+
+	cn := NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, base, mp)
+	cnRows, cnWindows := 0, 0
+	for !cn.isEnd() {
+		err := cn.prefetch(context.Background())
+		require.NoError(t, err)
+		for _, bat := range cn.cache {
+			cnRows += bat.RowCount()
+			cnWindows++
+			bat.Clean(mp)
+		}
+		cn.cache, cn.blks, cn.TSs = nil, nil, nil
+	}
+	require.Equal(t, 3, cnRows)
+	require.Equal(t, 3, cnWindows)
+
+	aobj := NewAObjectHandle(context.Background(), base, false,
+		types.BuildTS(1, 0), types.BuildTS(20, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+	aRows, aWindows := 0, 0
+	for !aobj.isEnd() {
+		err := aobj.prefetch(context.Background())
+		require.NoError(t, err)
+		for _, bat := range aobj.cache {
+			aRows += bat.RowCount()
+			aWindows++
+			bat.Clean(mp)
+		}
+		aobj.cache, aobj.blks = nil, nil
+	}
+	require.Equal(t, 3, aRows)
+	require.Equal(t, 3, aWindows)
+	require.Equal(t, baseline, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
+}
+
+func TestPersistedObjectPrefetchHonorsRowLimitWithByteBudget(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const maxRows = 8
+	obj, fs := writeTestObjectWithCommitTS(t, mp, []types.TS{
+		types.BuildTS(10, 0), types.BuildTS(11, 0),
+		types.BuildTS(12, 0), types.BuildTS(13, 0),
+		types.BuildTS(14, 0), types.BuildTS(15, 0),
+		types.BuildTS(16, 0), types.BuildTS(17, 0),
+	})
+	baseline := mp.CurrNB()
+	scheduler := tasks.NewParallelJobScheduler(2)
+	defer scheduler.Stop()
+	changes := &ChangeHandler{
+		scheduler: scheduler, maxInMemoryRows: maxRows, maxInMemoryBytes: 64 << 20,
+	}
+	base := &baseHandle{changesHandle: changes}
+
+	drain := func(
+		prefetch func(context.Context) error,
+		isEnd func() bool,
+		cache *[]*batch.Batch,
+		clearMetadata func(),
+	) {
+		readRows, windows := 0, 0
+		for !isEnd() {
+			require.NoError(t, prefetch(context.Background()))
+			require.Len(t, *cache, 1, "a row-only limit must disable parallel block prefetch")
+			for _, bat := range *cache {
+				require.LessOrEqual(t, bat.RowCount(), maxRows/4)
+				readRows += bat.RowCount()
+				windows++
+				bat.Clean(mp)
+			}
+			*cache = nil
+			clearMetadata()
+		}
+		require.Equal(t, 8, readRows)
+		require.Equal(t, 4, windows)
+		require.Equal(t, baseline, mp.CurrNB())
+	}
+
+	cn := NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, base, mp)
+	drain(cn.prefetch, cn.isEnd, &cn.cache, func() {
+		cn.prepared, cn.blks, cn.TSs = nil, nil, nil
+	})
+
+	aobj := NewAObjectHandle(context.Background(), base, false,
+		types.BuildTS(1, 0), types.BuildTS(20, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+	drain(aobj.prefetch, aobj.isEnd, &aobj.cache, func() {
+		aobj.specialLayouts, aobj.blks = nil, nil
+	})
+}
+
+func TestOrderPersistedColumnSeqnumsUsesLogicalColumnOrder(t *testing.T) {
+	// ADD COLUMN FIRST/AFTER allocates a new physical seqnum while inserting
+	// the column at a different logical position. Persisted readers must use
+	// the metadata's logical index, not the physical seqnum.
+	columns := []persistedColumnSeqnum{
+		{seqnum: 0, idx: 1},
+		{seqnum: 1, idx: 2},
+		{seqnum: 2, idx: 0},
+	}
+	require.Equal(t, []uint16{2, 0, 1}, orderPersistedColumnSeqnums(columns))
+
+	// Sparse metadata from a dropped column must not create a hole.
+	columns = []persistedColumnSeqnum{
+		{seqnum: 0, idx: 1},
+		{seqnum: 2, idx: 2},
+		{seqnum: 4, idx: 0},
+	}
+	require.Equal(t, []uint16{4, 0, 2}, orderPersistedColumnSeqnums(columns))
+}
+
+func TestPartitionStateRangeRejectsRowOnlyLimitBeforeReadingLegacyWideObject(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const (
+		rows         = 120
+		payloadBytes = 32 << 10
+	)
+	obj, rawFS := writeTestWideObjectWithCommitTS(t, mp, rows, payloadBytes)
+	metaLoc := obj.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, rawFS)
+	require.NoError(t, err)
+	payloadExtent := meta.MustGetMeta(objectio.SchemaData).
+		GetBlockMeta(0).ColumnMeta(0).Location()
+	require.Equal(t, uint8(compress.Lz4), payloadExtent.Alg())
+	require.Greater(t, payloadExtent.OriginSize(), uint32(1<<20))
+
+	state := NewPartitionState("", true, 42, false)
+	state.dataObjectsNameIndex.Set(*obj)
+	fs := newPeakTrackingFileService(rawFS)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: 8,
+	})
+	baseline := mp.CurrNB()
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, types.TS{}, types.BuildTS(200, 0), false,
+		objectio.BlockMaxRows, 0, mp, fs,
+	)
+	require.Error(t, err)
+	require.Nil(t, handle)
+	require.Contains(t, err.Error(), "MaxInMemoryBytes")
+	require.Zero(t, fs.peak.Load(), "row-only configuration must fail before object decoding")
+	require.Zero(t, fs.current.Load())
+	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestPersistedWideObjectWindowsBoundAAndCNOutput(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const (
+		rows         = 144
+		payloadBytes = 65535
+		maxBytes     = 8 << 20
+	)
+	obj, rawFS := writeTestWideObjectWithCommitTS(t, mp, rows, payloadBytes)
+	fs := newPeakTrackingFileService(rawFS)
+	metaLoc := obj.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, fs)
+	require.NoError(t, err)
+	require.Equal(t, uint8(compress.Lz4Chunked),
+		meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(0).ColumnMeta(0).Location().Alg())
+	require.Greater(t,
+		meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(0).ColumnMeta(0).Location().OriginSize(),
+		uint32(maxBytes),
+	)
+	baseline := mp.CurrNB()
+	scheduler := tasks.NewParallelJobScheduler(2)
+	defer scheduler.Stop()
+	changes := &ChangeHandler{scheduler: scheduler, maxInMemoryBytes: maxBytes}
+	base := &baseHandle{changesHandle: changes}
+
+	drain := func(prefetch func(context.Context) error, isEnd func() bool, cache *[]*batch.Batch) {
+		readRows, peak := 0, 0
+		for !isEnd() {
+			require.NoError(t, prefetch(context.Background()))
+			for _, bat := range *cache {
+				readRows += bat.RowCount()
+				peak = max(peak, bat.Allocated())
+				bat.Clean(mp)
+			}
+			*cache = nil
+		}
+		require.Equal(t, rows, readRows)
+		require.LessOrEqual(t, peak, maxBytes/2,
+			"one persisted window must leave budget for merge/output copies")
+		require.Equal(t, baseline, mp.CurrNB())
+	}
+
+	cn := NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, base, mp)
+	drain(cn.prefetch, cn.isEnd, &cn.cache)
+	cn.blks, cn.TSs = nil, nil
+	aobj := NewAObjectHandle(context.Background(), base, false,
+		types.BuildTS(1, 0), types.BuildTS(200, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+	drain(aobj.prefetch, aobj.isEnd, &aobj.cache)
+	aobj.blks = nil
+	require.Less(t, fs.peak.Load(), int64(24<<20),
+		"file-service compressed/decompressed allocations must stay chunk-bounded")
+	require.Zero(t, fs.current.Load())
+}
+
+func TestPersistedLegacyWideObjectWindowsBoundAAndCNOutput(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const (
+		rows         = 120
+		payloadBytes = 32 << 10
+		maxBytes     = 1 << 20
+	)
+	obj, rawFS := writeTestWideObjectWithCommitTS(t, mp, rows, payloadBytes)
+	fs := newPeakTrackingFileService(rawFS)
+	metaLoc := obj.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, fs)
+	require.NoError(t, err)
+	payloadExtent := meta.MustGetMeta(objectio.SchemaData).
+		GetBlockMeta(0).ColumnMeta(0).Location()
+	require.Equal(t, uint8(compress.Lz4), payloadExtent.Alg())
+	require.Greater(t, payloadExtent.OriginSize(), uint32(maxBytes))
+
+	baseline := mp.CurrNB()
+	scheduler := tasks.NewParallelJobScheduler(2)
+	defer scheduler.Stop()
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	changes := &ChangeHandler{
+		scheduler: scheduler, maxInMemoryBytes: maxBytes, spillConfig: spillConfig,
+	}
+	base := &baseHandle{changesHandle: changes}
+	drain := func(prefetch func(context.Context) error, isEnd func() bool, cache *[]*batch.Batch) {
+		readRows, peak := 0, 0
+		for !isEnd() {
+			require.NoError(t, prefetch(context.Background()))
+			for _, bat := range *cache {
+				readRows += bat.RowCount()
+				peak = max(peak, bat.Allocated())
+				bat.Clean(mp)
+			}
+			*cache = nil
+		}
+		require.Equal(t, rows, readRows)
+		require.LessOrEqual(t, peak, maxBytes/2)
+		require.Equal(t, baseline, mp.CurrNB())
+	}
+
+	cn := NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, base, mp)
+	drain(cn.prefetch, cn.isEnd, &cn.cache)
+	cn.prepared, cn.blks, cn.TSs = nil, nil, nil
+	aobj := NewAObjectHandle(context.Background(), base, false,
+		types.BuildTS(1, 0), types.BuildTS(200, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+	drain(aobj.prefetch, aobj.isEnd, &aobj.cache)
+	aobj.blks = nil
+	require.Less(t, fs.peak.Load(), int64(2<<20))
+	require.Zero(t, fs.current.Load())
+	spillTracker.requireReleased(t, true)
+}
+
+func TestPersistedZeroRowWindowReleased(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	obj, fs := writeTestWideObjectWithCommitTS(t, mp, 32, 1024)
+	scheduler := tasks.NewParallelJobScheduler(1)
+	defer scheduler.Stop()
+	changes := &ChangeHandler{scheduler: scheduler, maxInMemoryRows: 8}
+	base := &baseHandle{changesHandle: changes}
+	aobj := NewAObjectHandle(context.Background(), base, false,
+		types.BuildTS(1000, 0), types.BuildTS(2000, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+	baseline := mp.CurrNB()
+	require.NoError(t, aobj.getNextAObject(context.Background()))
+	require.Nil(t, aobj.currentBatch)
+	require.Zero(t, aobj.batchLength)
+	require.Equal(t, baseline, mp.CurrNB())
+	aobj.Close()
+}
+
+func TestEmptyStartPersistedLegacyWideRangeStaysBounded(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const (
+		rows         = 120
+		payloadBytes = 32 << 10
+		maxBytes     = 1 << 20
+	)
+	obj, rawFS := writeTestWideObjectWithCommitTS(t, mp, rows, payloadBytes)
+	fs := newPeakTrackingFileService(rawFS)
+	metaLoc := obj.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, fs)
+	require.NoError(t, err)
+	payloadExtent := meta.MustGetMeta(objectio.SchemaData).
+		GetBlockMeta(0).ColumnMeta(0).Location()
+	require.Equal(t, uint8(compress.Lz4), payloadExtent.Alg())
+	require.Greater(t, payloadExtent.OriginSize(), uint32(maxBytes))
+
+	state := NewPartitionState("", true, 42, false)
+	state.dataObjectsNameIndex.Set(*obj)
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: objectio.BlockMaxRows, MaxInMemoryBytes: maxBytes,
+	})
+	ctx = engine.WithChangeRangeSpill(ctx, spillConfig)
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, types.TS{}, types.BuildTS(200, 0), false,
+		objectio.BlockMaxRows, 0, mp, fs,
+	)
+	require.NoError(t, err)
+
+	readRows, peakOutput := 0, 0
+	for {
+		data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		require.Nil(t, tombstone)
+		if data == nil {
+			break
+		}
+		readRows += data.RowCount()
+		peakOutput = max(peakOutput, data.Allocated())
+		data.Clean(mp)
+	}
+	require.Equal(t, rows, readRows)
+	require.LessOrEqual(t, peakOutput, maxBytes)
+	require.Less(t, fs.peak.Load(), int64(2<<20),
+		"empty-start legacy reads must not decode the complete persisted column")
+	require.NoError(t, handle.Close())
+	require.Zero(t, fs.current.Load())
+	require.Zero(t, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
+}
+
+func TestCNObjectHandleCleansSourceAfterCopy(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(sourceMP)
+	outputMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(outputMP)
+
+	source := batch.NewWithSize(1)
+	source.Attrs = []string{"id"}
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < 200_000; i++ {
+		require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(i), false, sourceMP))
+	}
+	source.SetRowCount(200_000)
+	h := &CNObjectHandle{
+		mp:    sourceMP,
+		base:  &baseHandle{changesHandle: &ChangeHandler{}},
+		cache: []*batch.Batch{source},
+		TSs:   []types.TS{types.BuildTS(2, 1)},
+	}
+
+	var out *batch.Batch
+	err := h.Next(context.Background(), &out, outputMP)
+	require.NoError(t, err)
+	require.Empty(t, h.cache)
+	require.Zero(t, sourceMP.CurrNB(), "the dequeued CN source batch must always be released")
+	require.Equal(t, 200_000, out.RowCount())
+	if out != nil {
+		out.Clean(outputMP)
+	}
+	require.Zero(t, outputMP.CurrNB())
+}
+
+func TestPartitionStateRangeSpillsSingleCommitLargerThanMemoryLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const rows = 20
+	state, src, start, end := newPartitionStateRangeRows(t, mp, rows, true)
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows:  8,
+		MaxInMemoryBytes: 64 << 20,
+	})
+	ctx = engine.WithChangeRangeSpill(ctx, spillConfig)
+
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 8, handle.maxInMemoryRows)
+	require.True(t, handle.spillConfig.Enabled())
+	require.Equal(t, rows, handle.spillNetEffectData.Rows())
+	require.IsType(t, &spilledBatchHandle{}, handle.spillNetEffectData)
+
+	readRows := 0
+	for {
+		data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		require.Nil(t, tombstone)
+		if data == nil {
+			break
+		}
+		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])
+		for _, commitTS := range commitTSs {
+			require.Equal(t, end, commitTS)
+		}
+		readRows += data.RowCount()
+		data.Clean(mp)
+	}
+	require.Equal(t, rows, readRows, "a commit larger than the memory threshold must remain resumable")
+	require.NoError(t, handle.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
+}
+
+func TestPartitionStateRangeSpillReadHonorsByteLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const (
+		rows       = 24
+		payloadLen = 8 << 10
+		maxBytes   = 32 << 10
+	)
+	state, src, start, end := newPartitionStateRangeWideRows(t, mp, rows, payloadLen)
+	baseline := mp.CurrNB()
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows:  1 << 20,
+		MaxInMemoryBytes: maxBytes,
+	})
+	ctx = engine.WithChangeRangeSpill(ctx, spillConfig)
+
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.NoError(t, err)
+	require.IsType(t, &spilledBatchHandle{}, handle.spillNetEffectData)
+
+	readRows, peakOutputBytes, peakExtraMPool := 0, 0, mp.CurrNB()-baseline
+	for {
+		data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		require.Nil(t, tombstone)
+		if data == nil {
+			break
+		}
+		readRows += data.RowCount()
+		peakOutputBytes = max(peakOutputBytes, data.Allocated())
+		peakExtraMPool = max(peakExtraMPool, mp.CurrNB()-baseline)
+		data.Clean(mp)
+	}
+	require.Equal(t, rows, readRows)
+	require.Less(t, peakOutputBytes, maxBytes*2,
+		"spill replay may exceed the byte limit by at most one wide row allocation")
+	require.Less(t, peakExtraMPool, int64(maxBytes*8),
+		"retained replay memory must stay proportional to the configured batch limit")
+	require.NoError(t, handle.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
+}
+
+func TestPartitionStateRangeSpillPreservesCrossChunkNetEffect(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const rows = int(objectio.BlockMaxRows)
+	state, src, start, _ := newPartitionStateRangeRows(t, mp, rows, true)
+	end := types.BuildTS(2, 2)
+	rowID := vector.GetFixedAtNoTypeCheck[types.Rowid](src.Vecs[0], 1)
+	state.rows.Set(&RowEntry{
+		BlockID: rowID.CloneBlockID(), RowID: rowID, Time: end,
+		ID: int64(rows + 1), Deleted: true, Batch: src, Offset: 1,
+	})
+
+	collectPKOne := func(ctx context.Context) (inserts, deletes int) {
+		handle, err := NewChangesHandlerWithPartitionStateRange(
+			ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, handle.Close()) }()
+		for {
+			data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+			require.NoError(t, nextErr)
+			if data == nil && tombstone == nil {
+				break
+			}
+			if data != nil {
+				for _, pk := range vector.MustFixedColWithTypeCheck[int64](data.Vecs[0]) {
+					if pk == 1 {
+						inserts++
+					}
+				}
+				data.Clean(mp)
+			}
+			if tombstone != nil {
+				for _, pk := range vector.MustFixedColWithTypeCheck[int64](tombstone.Vecs[0]) {
+					if pk == 1 {
+						deletes++
+					}
+				}
+				tombstone.Clean(mp)
+			}
+		}
+		return
+	}
+
+	wantInserts, wantDeletes := collectPKOne(context.Background())
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: 4 * int(objectio.BlockMaxRows), MaxInMemoryBytes: 64 << 20,
+	})
+	ctx = engine.WithChangeRangeSpill(ctx, spillConfig)
+	gotInserts, gotDeletes := collectPKOne(ctx)
+	require.Equal(t, 0, wantInserts)
+	require.Equal(t, 0, wantDeletes)
+	require.Equal(t, wantInserts, gotInserts)
+	require.Equal(t, wantDeletes, gotDeletes)
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
+}
+
+func TestNewBaseHandlerReleasesSpillWhenObjectResolutionFails(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state, src, start, end := newPartitionStateRangeRows(t, mp, 20, true)
+	missing := makeTestObjectEntry(t, 1, true, false, end)
+	state.dataObjectsNameIndex.Set(*missing)
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	changes := &ChangeHandler{
+		start: start, end: end, mp: mp,
+		fs:                       &stubStatFileFS{existing: map[string]struct{}{}},
+		enableDeleteChainResolve: true,
+		maxInMemoryRows:          8,
+		maxInMemoryBytes:         64 << 20,
+		spillConfig:              spillConfig,
+	}
+
+	handle, err := NewBaseHandler(
+		state, changes, start, end, mp, false, changes.fs, context.Background(),
+	)
+	require.Nil(t, handle)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	spillTracker.requireReleased(t, true)
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestSpilledBatchHandleNextHonorsOutputLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state, src, start, end := newPartitionStateRangeRows(t, mp, 12, true)
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: 8, MaxInMemoryBytes: 64 << 20,
+	})
+	ctx = engine.WithChangeRangeSpill(ctx, spillConfig)
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.NoError(t, err)
+	spilled := handle.spillNetEffectData.(*spilledBatchHandle)
+	require.False(t, spilled.IsEmpty())
+	require.Equal(t, 12, spilled.Rows())
+	require.Equal(t, end, spilled.NextTS())
+
+	readRows := 0
+	var data *batch.Batch
+	for {
+		nextErr := spilled.Next(&data, mp)
+		if moerr.IsMoErrCode(nextErr, moerr.OkExpectedEOF) {
+			if data != nil {
+				readRows += data.RowCount()
+				data.Clean(mp)
+			}
+			break
+		}
+		if moerr.IsMoErrCode(nextErr, moerr.OkExpectedEOB) {
+			readRows += data.RowCount()
+			data.Clean(mp)
+			data = nil
+			continue
+		}
+		require.NoError(t, nextErr)
+	}
+	require.Equal(t, 12, readRows)
+	require.NoError(t, handle.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
+}
+
+func TestChangeRangeSpillRejectsMissingResources(t *testing.T) {
+	ctx := context.Background()
+	_, err := newRangeSpillFile(ctx, engine.ChangeRangeSpillConfig{})
+	require.EqualError(t, err, "internal error: change range spill is unavailable")
+
+	config := engine.ChangeRangeSpillConfig{
+		FileFactory: func(context.Context, string) (*os.File, error) { return nil, nil },
+		ReserveDisk: func(uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
+			return &testChangeRangeSpillReservation{}, nil
+		},
+		ReserveFiles: func(uint64) (engine.ChangeRangeSpillReservation, error) { return nil, nil },
+	}
+	_, err = newRangeSpillFile(ctx, config)
+	require.EqualError(t, err, "internal error: change range spill file reservation is nil")
+
+	fileReservation := &testChangeRangeSpillReservation{}
+	config.ReserveFiles = func(uint64) (engine.ChangeRangeSpillReservation, error) {
+		return fileReservation, nil
+	}
+	config.ReserveDisk = func(uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
+		return nil, nil
+	}
+	_, err = newRangeSpillFile(ctx, config)
+	require.EqualError(t, err, "internal error: change range spill disk reservation is nil")
+	require.True(t, fileReservation.released)
+
+	fileReservation = &testChangeRangeSpillReservation{}
+	diskReservation := &testChangeRangeSpillReservation{}
+	config.ReserveFiles = func(uint64) (engine.ChangeRangeSpillReservation, error) {
+		return fileReservation, nil
+	}
+	config.ReserveDisk = func(uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
+		return diskReservation, nil
+	}
+	_, err = newRangeSpillFile(ctx, config)
+	require.EqualError(t, err, "internal error: change range spill file is nil")
+	require.True(t, fileReservation.released)
+	require.True(t, diskReservation.released)
+
+	_, err = newSpilledBatchHandle(nil, 0, 0, 0, nil)
+	require.EqualError(t, err, "internal error: empty change range spill")
+}
+
+type testChangeRangeSpillReservation struct {
+	grown    uint64
+	released bool
+}
+
+type testChangeRangeSpillTracker struct {
+	diskReservations []*testChangeRangeSpillReservation
+	fileReservations []*testChangeRangeSpillReservation
+}
+
+func newTestChangeRangeSpillConfig(
+	t *testing.T,
+) (engine.ChangeRangeSpillConfig, *testChangeRangeSpillTracker) {
+	t.Helper()
+	spillDir := t.TempDir()
+	tracker := &testChangeRangeSpillTracker{}
+	return engine.ChangeRangeSpillConfig{
+		FileFactory: func(_ context.Context, _ string) (*os.File, error) {
+			file, err := os.CreateTemp(spillDir, "change-range-*")
+			if err != nil {
+				return nil, err
+			}
+			if err = os.Remove(file.Name()); err != nil {
+				_ = file.Close()
+				return nil, err
+			}
+			return file, nil
+		},
+		ReserveDisk: func(size uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
+			reservation := &testChangeRangeSpillReservation{grown: size}
+			tracker.diskReservations = append(tracker.diskReservations, reservation)
+			return reservation, nil
+		},
+		ReserveFiles: func(uint64) (engine.ChangeRangeSpillReservation, error) {
+			reservation := &testChangeRangeSpillReservation{}
+			tracker.fileReservations = append(tracker.fileReservations, reservation)
+			return reservation, nil
+		},
+	}, tracker
+}
+
+func (tracker *testChangeRangeSpillTracker) requireReleased(t *testing.T, requireMultiple bool) {
+	t.Helper()
+	if requireMultiple {
+		require.Greater(t, len(tracker.diskReservations), 1,
+			"multi-run input must exercise merge spilling")
+	}
+	require.NotEmpty(t, tracker.diskReservations)
+	require.Equal(t, len(tracker.diskReservations), len(tracker.fileReservations))
+	for _, reservation := range tracker.diskReservations {
+		require.True(t, reservation.released)
+		require.Positive(t, reservation.grown)
+	}
+	for _, reservation := range tracker.fileReservations {
+		require.True(t, reservation.released)
+	}
+}
+
+func (r *testChangeRangeSpillReservation) Grow(size uint64) error {
+	r.grown += size
+	return nil
+}
+
+func (r *testChangeRangeSpillReservation) Release() bool {
+	if r.released {
+		return false
+	}
+	r.released = true
+	return true
+}
+
+func TestDataBranchVisibleStateRangeExceedingTableChangesCapIsUnbounded(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const previousGenericCap = int(objectio.BlockMaxRows) * 4
+	state, src, start, end := newPartitionStateRangeRows(t, mp, previousGenericCap+1, false)
+	ctx := engine.WithSnapshotReadPolicy(context.Background(), engine.SnapshotReadPolicyVisibleState)
+
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.NoError(t, err)
+	require.Zero(t, handle.maxInMemoryRows)
+	require.Zero(t, handle.maxInMemoryBytes)
+	require.Equal(t, previousGenericCap+1, handle.dataHandle.inMemoryHandle.Rows())
+	require.NoError(t, handle.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func newPartitionStateRangeRows(
+	t *testing.T,
+	mp *mpool.MPool,
+	rows int,
+	sameCommit bool,
+) (*PartitionState, *batch.Batch, types.TS, types.TS) {
+	t.Helper()
+	state := NewPartitionState("", true, 42, false)
+	src := batch.NewWithSize(3)
+	src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk"})
+	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	blockID := types.Blockid{}
+	for row := 0; row < rows; row++ {
+		rowOffset := uint32(row)
+		rowID := types.NewRowid(&blockID, rowOffset)
+		ts := types.BuildTS(2, rowOffset)
+		if sameCommit {
+			ts = types.BuildTS(2, 1)
+		}
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[1], ts, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(row), false, mp))
+		state.rows.Set(&RowEntry{
+			BlockID: blockID,
+			RowID:   rowID,
+			Offset:  int64(rowOffset),
+			Time:    ts,
+			ID:      int64(rowOffset),
+			Batch:   src,
+		})
+	}
+	src.SetRowCount(rows)
+	if sameCommit {
+		return state, src, types.BuildTS(2, 1), types.BuildTS(2, 1)
+	}
+	return state, src, types.BuildTS(2, 0), types.BuildTS(2, uint32(rows-1))
+}
+
+func newPartitionStateRangeWideRows(
+	t *testing.T,
+	mp *mpool.MPool,
+	rows, payloadLen int,
+) (*PartitionState, *batch.Batch, types.TS, types.TS) {
+	t.Helper()
+	state := NewPartitionState("", true, 42, false)
+	src := batch.NewWithSize(4)
+	src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk", "payload"})
+	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	src.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	blockID := types.Blockid{}
+	commitTS := types.BuildTS(2, 1)
+	payload := []byte(strings.Repeat("x", payloadLen))
+	for row := 0; row < rows; row++ {
+		rowOffset := uint32(row)
+		rowID := types.NewRowid(&blockID, rowOffset)
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[1], commitTS, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(row), false, mp))
+		require.NoError(t, vector.AppendBytes(src.Vecs[3], payload, false, mp))
+		state.rows.Set(&RowEntry{
+			BlockID: blockID, RowID: rowID, Offset: int64(rowOffset),
+			Time: commitTS, ID: int64(rowOffset), Batch: src,
+		})
+	}
+	src.SetRowCount(rows)
+	return state, src, commitTS, commitTS
+}
 
 func TestBatchHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -88,6 +1074,113 @@ func TestAObjectHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 	require.Equal(t, 0, handle.rowOffsetCursor)
 	require.NotNil(t, handle.currentBatch)
+}
+
+func TestCNObjectHandleNextRetainsSourceOnSchemaBoundary(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(sourceMP)
+	outputMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(outputMP)
+	source := batch.NewWithSize(1)
+	source.Attrs = []string{"value"}
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, sourceMP))
+	source.SetRowCount(1)
+	h := &CNObjectHandle{
+		mp: sourceMP, base: &baseHandle{changesHandle: &ChangeHandler{}},
+		cache: []*batch.Batch{source}, prepared: []bool{false},
+		TSs: []types.TS{types.BuildTS(2, 1)},
+	}
+	dst := batch.NewWithSize(1)
+	dst.Attrs = []string{"other"}
+	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(dst.Vecs[0], types.BuildTS(1, 0), false, outputMP))
+	dst.SetRowCount(1)
+	err := h.Next(context.Background(), &dst, outputMP)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	require.Len(t, h.cache, 1)
+	require.True(t, h.prepared[0])
+	require.Equal(t, 1, h.cache[0].RowCount())
+	dst.Clean(outputMP)
+	dst = nil
+	require.NoError(t, h.Next(context.Background(), &dst, outputMP))
+	require.Equal(t, 1, dst.RowCount())
+	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](dst.Vecs[0], 0))
+	require.Empty(t, h.cache)
+	require.Empty(t, h.prepared)
+	require.Zero(t, sourceMP.CurrNB())
+	dst.Clean(outputMP)
+	require.Zero(t, outputMP.CurrNB())
+}
+
+func TestCNObjectHandleCloseReleasesRetainedSchemaBoundarySource(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(sourceMP)
+	outputMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(outputMP)
+
+	source := batch.NewWithSize(1)
+	source.Attrs = []string{"value"}
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0].SetOffHeap(true)
+	for row := 0; row < 4096; row++ {
+		require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(row), false, sourceMP))
+	}
+	require.NotZero(t, sourceMP.CurrNB())
+	source.SetRowCount(4096)
+	base := &baseHandle{changesHandle: &ChangeHandler{}}
+	handle := &CNObjectHandle{
+		mp: sourceMP, base: base,
+		cache: []*batch.Batch{source}, prepared: []bool{false},
+		TSs: []types.TS{types.BuildTS(2, 1)},
+	}
+	base.cnObjectHandle = handle
+
+	dst := batch.NewWithSize(1)
+	dst.Attrs = []string{"other"}
+	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(dst.Vecs[0], types.BuildTS(1, 0), false, outputMP))
+	dst.SetRowCount(1)
+	err := handle.Next(context.Background(), &dst, outputMP)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	require.NotZero(t, sourceMP.CurrNB())
+	require.Len(t, handle.cache, 1)
+
+	base.Close()
+	require.Zero(t, sourceMP.CurrNB())
+	require.Empty(t, handle.cache)
+	require.Empty(t, handle.prepared)
+	base.Close()
+	dst.Clean(outputMP)
+	require.Zero(t, outputMP.CurrNB())
+}
+
+func TestAObjectHandleCloseReleasesOwnedBatches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	newOwnedBatch := func(value int64) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0].SetOffHeap(true)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
+		bat.SetRowCount(1)
+		return bat
+	}
+	base := &baseHandle{changesHandle: &ChangeHandler{}}
+	handle := &AObjectHandle{
+		mp: mp, currentBatch: newOwnedBatch(1),
+		cache: []*batch.Batch{newOwnedBatch(2)}, batchLength: 1, rowOffsetCursor: 1,
+	}
+	base.aobjHandle = handle
+	require.NotZero(t, mp.CurrNB())
+
+	base.Close()
+	require.Zero(t, mp.CurrNB())
+	require.Nil(t, handle.currentBatch)
+	require.Empty(t, handle.cache)
+	require.Zero(t, handle.batchLength)
+	require.Zero(t, handle.rowOffsetCursor)
+	base.Close()
 }
 
 func TestUpdateCNTombstoneBatch_IsIdempotent(t *testing.T) {
@@ -297,7 +1390,7 @@ func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	bat.Vecs[3] = commitTS
 	bat.SetRowCount(1)
 
-	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, nil, false, mp))
+	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, nil, nil, false, mp))
 
 	require.Equal(t, 4, len(bat.Vecs))
 	require.Equal(t, []string{"id", "created_at", "updated_at", objectio.DefaultCommitTS_Attr}, bat.Attrs)
@@ -334,7 +1427,7 @@ func TestUpdateDataBatch_RetainsSynthesizedRowID(t *testing.T) {
 	bat.SetRowCount(2)
 
 	blk := types.Blockid{}
-	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), &blk, nil, true, mp))
+	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), &blk, nil, nil, true, mp))
 
 	require.Equal(t, 4, len(bat.Vecs))
 	require.Equal(t, catalog.Row_ID, bat.Attrs[0])
@@ -371,12 +1464,13 @@ func TestUpdatePersistedDataBatch_RetainsLeadingRowID(t *testing.T) {
 	bat.SetRowCount(3)
 
 	layout := objectio.SpecialColumnLayout{
-		PhysicalAddr: 2,
-		CommitTS:     3,
-		Abort:        4,
+		PhysicalAddr: 3,
+		CommitTS:     4,
+		Abort:        5,
 	}
 	require.NoError(t, updatePersistedDataBatch(
-		bat, types.BuildTS(50, 0), types.BuildTS(150, 0), blk, layout, true, mp))
+		bat, types.BuildTS(50, 0), types.BuildTS(150, 0), blk, layout,
+		[]uint16{0, 2, 3, 4, 5}, true, mp))
 
 	require.Equal(t, []string{
 		catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr,
@@ -669,7 +1763,8 @@ func TestBaseHandleNextTS_SelectsEarliestHandle(t *testing.T) {
 	require.Equal(t, types.BuildTS(8, 0), ts)
 	require.Equal(t, NextChangeHandle_InMemory, kind)
 
-	p.inMemoryHandle.rowOffsetCursor = 1
+	inMemory := p.inMemoryHandle.(*BatchHandle)
+	inMemory.rowOffsetCursor = 1
 	ts, kind = p.nextTS()
 	require.Equal(t, types.BuildTS(10, 0), ts)
 	require.Equal(t, NextChangeHandle_AObj, kind)
@@ -681,7 +1776,7 @@ func TestBaseHandleNextTS_SelectsEarliestHandle(t *testing.T) {
 	require.Equal(t, NextChangeHandle_CNObj, kind)
 
 	p.aobjHandle.currentBatch.Clean(mp)
-	p.inMemoryHandle.batches.Clean(mp)
+	inMemory.batches.Clean(mp)
 }
 
 func makeTestObjectEntry(
@@ -1940,6 +3035,51 @@ func writeTestObjectWithCommitTS(
 	return entry, fs
 }
 
+func writeTestWideObjectWithCommitTS(
+	t *testing.T,
+	mp *mpool.MPool,
+	rows, payloadBytes int,
+) (*objectio.ObjectEntry, fileservice.FileService) {
+	t.Helper()
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	writer := ioutil.ConstructWriter(
+		0, []uint16{0, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS},
+		-1, false, false, fs,
+	)
+	// This helper covers both chunked and legacy reader windows. Production
+	// direct writers are fail-closed; tests that need the new format opt in.
+	writer.SetChunkedColumnPolicy(func() bool { return true })
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	payload := []byte(strings.Repeat("w", payloadBytes))
+	var blk types.Blockid
+	for i := 0; i < rows; i++ {
+		rowKey := uint64(i)
+		copy(payload, types.EncodeUint64(&rowKey))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, mp))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[1], types.NewRowid(&blk, uint32(i+1)), false, mp,
+		))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[2], types.BuildTS(100, uint32(i)), false, mp,
+		))
+	}
+	bat.SetRowCount(rows)
+	_, err = writer.WriteBatch(bat)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(context.Background())
+	require.NoError(t, err)
+	bat.Clean(mp)
+	stats := writer.Stats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats, uint32(len(blocks))))
+	return &objectio.ObjectEntry{ObjectStats: stats, CreateTime: types.BuildTS(150, 0)}, fs
+}
+
 func writeTestObjectWithAbort(
 	t *testing.T,
 	mp *mpool.MPool,
@@ -2004,7 +3144,10 @@ func TestAObjectHandlePersistedAbortColumnIsHidden(t *testing.T) {
 	defer scheduler.Stop()
 	handle := NewAObjectHandle(
 		context.Background(),
-		&baseHandle{changesHandle: &ChangeHandler{scheduler: scheduler}},
+		&baseHandle{changesHandle: &ChangeHandler{
+			scheduler:        scheduler,
+			maxInMemoryBytes: 1 << 20,
+		}},
 		false,
 		types.BuildTS(50, 0),
 		types.BuildTS(150, 0),
@@ -2248,7 +3391,7 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		bat.SetRowCount(1)
 
 		require.NoError(t, updateTombstoneBatch(
-			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, nil, nil, false, mp))
+			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, nil, nil, nil, false, mp))
 
 		require.Equal(t, []string{
 			objectio.TombstoneAttr_PK_Attr,
@@ -2288,6 +3431,7 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 			false,
 			nil,
 			&layout,
+			nil,
 			false,
 			mp,
 		))
@@ -2318,7 +3462,7 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		bat.SetRowCount(1)
 
 		require.NoError(t, updateDataBatch(
-			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, nil, false, mp))
+			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, nil, nil, false, mp))
 
 		assertNoRowID(t, bat)
 		// Trailing column must remain commit_ts.
@@ -2377,13 +3521,37 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 
 		entry := &RowEntry{Batch: src, Offset: 0, Time: types.BuildTS(100, 0)}
 		var out *batch.Batch
-		fillInInsertBatch(&out, entry, false, mp)
+		fillInInsertBatch(&out, entry, false, nil, mp)
 		require.NotNil(t, out)
 		require.Equal(t, []string{"pk", "val", objectio.DefaultCommitTS_Attr}, out.Attrs)
 		require.Equal(t, 3, len(out.Vecs))
 		assertNoRowID(t, out)
 		// Trailing column must be commit_ts.
 		require.Equal(t, types.T_TS, out.Vecs[len(out.Vecs)-1].GetType().Oid)
+		out.Clean(mp)
+		src.Clean(mp)
+	})
+
+	t.Run("fillInInsertBatch normalizes physical seqnums to logical order", func(t *testing.T) {
+		src := batch.NewWithSize(5)
+		src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "id", "payload", "added"})
+		for i, typ := range []types.T{types.T_Rowid, types.T_TS, types.T_int32, types.T_int32, types.T_int32} {
+			src.Vecs[i] = vector.NewVec(typ.ToType())
+		}
+		blk := types.Blockid{}
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], types.NewRowid(&blk, 0), false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[1], types.BuildTS(100, 0), false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[2], int32(1), false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[3], int32(99), false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[4], int32(7), false, mp))
+		src.SetRowCount(1)
+		entry := &RowEntry{Batch: src, Offset: 0, Time: types.BuildTS(100, 0)}
+		var out *batch.Batch
+		fillInInsertBatch(&out, entry, false, []uint16{2, 0, 1}, mp)
+		require.Equal(t, []string{"added", "id", "payload", objectio.DefaultCommitTS_Attr}, out.Attrs)
+		require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](out.Vecs[0], 0))
+		require.Equal(t, int32(1), vector.GetFixedAtNoTypeCheck[int32](out.Vecs[1], 0))
+		require.Equal(t, int32(99), vector.GetFixedAtNoTypeCheck[int32](out.Vecs[2], 0))
 		out.Clean(mp)
 		src.Clean(mp)
 	})

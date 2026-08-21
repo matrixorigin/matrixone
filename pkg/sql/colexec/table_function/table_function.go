@@ -156,6 +156,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = metaScanPrepare(proc, tblArg)
 	case "current_account":
 		tblArg.ctr.state, err = currentAccountPrepare(proc, tblArg)
+	case "change_watermark":
+		tblArg.ctr.state, err = changeWatermarkPrepare(proc, tblArg)
+	case "table_changes":
+		tblArg.ctr.state, err = tableChangesPrepare(proc, tblArg)
 	case "metadata_scan":
 		tblArg.ctr.state, err = metadataScanPrepare(proc, tblArg)
 	case "processlist":

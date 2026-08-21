@@ -32,6 +32,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// ChunkedColumnPolicy is evaluated by the owning service at the point where a
+// large persisted column may be emitted. A nil policy is deliberately
+// fail-closed so standalone tools and writer paths without a service-specific
+// rollout owner retain the legacy format.
+type ChunkedColumnPolicy func() bool
+
 // arenaMaxSize caps WriteArena backing-array growth to bound memory use
 // for unusually large block write cycles.
 const arenaMaxSize = 128 * 1024 * 1024
@@ -150,27 +156,28 @@ func (a *WriteArena) FreeBuffers() {
 
 type objectWriterV1 struct {
 	sync.RWMutex
-	arena             *WriteArena
-	lz4c              lz4.Compressor
-	schemaVer         uint32
-	seqnums           *Seqnums
-	object            *Object
-	blocks            [][]blockData
-	tombstonesColmeta []ColumnMeta
-	totalRow          uint32
-	colmeta           []ColumnMeta
-	buffer            *ObjectBuffer
-	fileName          string
-	lastId            uint32
-	name              ObjectName
-	compressBuf       []byte
-	buf               bytes.Buffer
-	bloomFilter       []byte
-	objStats          ObjectStats
-	sortKeySeqnum     uint16
-	appendable        bool
-	originSize        uint32
-	size              uint32
+	arena               *WriteArena
+	lz4c                lz4.Compressor
+	schemaVer           uint32
+	seqnums             *Seqnums
+	object              *Object
+	blocks              [][]blockData
+	tombstonesColmeta   []ColumnMeta
+	totalRow            uint32
+	colmeta             []ColumnMeta
+	buffer              *ObjectBuffer
+	fileName            string
+	lastId              uint32
+	name                ObjectName
+	compressBuf         []byte
+	buf                 bytes.Buffer
+	bloomFilter         []byte
+	objStats            ObjectStats
+	sortKeySeqnum       uint16
+	appendable          bool
+	chunkedColumnPolicy ChunkedColumnPolicy
+	originSize          uint32
+	size                uint32
 }
 
 type blockData struct {
@@ -320,7 +327,9 @@ func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
 		panic(fmt.Sprintf("Unmatched Write Batch, expect %d, get %d, %v", col, len(batch.Vecs), batch.Attrs))
 	}
 	block := NewBlock(w.seqnums)
-	w.AddBlock(block, batch, w.seqnums)
+	if _, err := w.AddBlock(block, batch, w.seqnums); err != nil {
+		return nil, err
+	}
 	return block, nil
 }
 
@@ -340,7 +349,9 @@ func (w *objectWriterV1) WriteWithoutSeqnum(batch *batch.Batch) (BlockObject, er
 	denseSeqnums := NewSeqnums(nil)
 	denseSeqnums.InitWithColCnt(len(batch.Vecs))
 	block := NewBlock(denseSeqnums)
-	w.AddBlock(block, batch, denseSeqnums)
+	if _, err := w.AddBlock(block, batch, denseSeqnums); err != nil {
+		return nil, err
+	}
 	return block, nil
 }
 
@@ -365,6 +376,13 @@ func (w *objectWriterV1) AllocFromArena(size int) []byte {
 
 func (w *objectWriterV1) SetAppendable() {
 	w.appendable = true
+}
+
+// SetChunkedColumnPolicy installs a service-specific, live rollout policy.
+// Callers must set it before Write. The policy is queried lazily only for
+// columns large enough to benefit from chunking.
+func (w *objectWriterV1) SetChunkedColumnPolicy(policy ChunkedColumnPolicy) {
+	w.chunkedColumnPolicy = policy
 }
 
 func (w *objectWriterV1) SetSortKeySeqnum(seqnum uint16) {
@@ -778,6 +796,8 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 	var data []byte
 	var rows int
 	var size int
+	var chunkedPolicyChecked bool
+	var chunkedColumnAllowed bool
 	for i, vec := range bat.Vecs {
 		if i == 0 {
 			rows = vec.Length()
@@ -810,8 +830,29 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		}
 		var ext Extent
 		var err error
-		if data, ext, err = w.WriteWithCompress(0, sbuf.Bytes()); err != nil {
-			return 0, err
+		useChunked := false
+		if sbuf.Len() > columnChunkTargetBytes && vec.Length() > 1 {
+			if !chunkedPolicyChecked {
+				chunkedPolicyChecked = true
+				chunkedColumnAllowed = w.chunkedColumnPolicy != nil && w.chunkedColumnPolicy()
+			}
+			if chunkedColumnAllowed {
+				var chunked bool
+				if data, chunked, err = encodeChunkedColumn(vec); err != nil {
+					return 0, err
+				}
+				if chunked {
+					useChunked = true
+					ext = NewExtent(
+						compress.Lz4Chunked, 0, uint32(len(data)), uint32(sbuf.Len()),
+					)
+				}
+			}
+		}
+		if !useChunked {
+			if data, ext, err = w.WriteWithCompress(0, sbuf.Bytes()); err != nil {
+				return 0, err
+			}
 		}
 		size += len(data)
 		block.data = append(block.data, data)

@@ -1996,8 +1996,8 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		return nil, "", err
 	}
 
-	s3Writer := colexec.NewCNS3DataWriter(
-		proc.Mp(), fs, tbl.tableDef, -1, false,
+	s3Writer := colexec.NewCNS3DataWriterForService(
+		proc.GetService(), proc.Mp(), fs, tbl.tableDef, -1, false,
 	)
 
 	defer func() { s3Writer.Close() }()

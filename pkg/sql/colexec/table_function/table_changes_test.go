@@ -1,0 +1,519 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package table_function
+
+import (
+	"context"
+	"testing"
+
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/require"
+)
+
+func TestParseTableChangesTS(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		allowEmpty bool
+		want       types.TS
+		wantErr    bool
+	}{
+		{name: "empty lower bound", value: "", allowEmpty: true},
+		{name: "valid", value: "123-7", want: types.BuildTS(123, 7)},
+		{name: "empty upper bound", value: "", wantErr: true},
+		{name: "missing logical", value: "123", wantErr: true},
+		{name: "negative physical", value: "-1-0", wantErr: true},
+		{name: "logical overflow", value: "1-4294967296", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseTableChangesTS(tt.value, tt.allowEmpty)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestTableFunctionPrepareIncrementalDiscoveryFunctions(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	for _, name := range []string{"change_watermark", "table_changes"} {
+		t.Run(name, func(t *testing.T) {
+			tf := &TableFunction{FuncName: name}
+			require.NoError(t, tf.Prepare(proc))
+			require.NotNil(t, tf.ctr.state)
+			tf.ctr.state.free(tf, proc, false, nil)
+		})
+	}
+}
+
+func TestTableChangesSpillConfigUsesExecutionResourceBudget(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	config := tableChangesSpillConfig(proc)
+	require.True(t, config.Enabled())
+
+	disk, err := config.ReserveDisk(0)
+	require.NoError(t, err)
+	require.NotNil(t, disk)
+	require.True(t, disk.Release())
+
+	files, err := config.ReserveFiles(0)
+	require.NoError(t, err)
+	require.NotNil(t, files)
+	require.True(t, files.Release())
+}
+
+func TestTableChangesStartRejectsInvalidArguments(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	makeString := func(value string) *vector.Vector {
+		v := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(v, []byte(value), false, proc.Mp()))
+		return v
+	}
+	valid := []*vector.Vector{makeString("db"), makeString("table"), makeString(""), makeString("1-0")}
+	defer func() {
+		for _, v := range valid {
+			v.Free(proc.Mp())
+		}
+	}()
+
+	for _, tc := range []struct {
+		name  string
+		index int
+		make  func() *vector.Vector
+		want  string
+	}{
+		{name: "database null", index: 0, make: func() *vector.Vector {
+			v := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendBytes(v, nil, true, proc.Mp()))
+			return v
+		}, want: "database name cannot be NULL"},
+		{name: "table type", index: 1, make: func() *vector.Vector {
+			v := vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(v, int64(1), false, proc.Mp()))
+			return v
+		}, want: "table name must be a string"},
+		{name: "after format", index: 2, make: func() *vector.Vector {
+			return makeString("not-a-watermark")
+		}, want: "invalid table_changes after"},
+		{name: "until format", index: 3, make: func() *vector.Vector {
+			return makeString("not-a-watermark")
+		}, want: "invalid table_changes until"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]*vector.Vector(nil), valid...)
+			args[tc.index] = tc.make()
+			defer args[tc.index].Free(proc.Mp())
+			tf := &TableFunction{
+				Attrs: []string{"value"},
+				ctr:   container{argVecs: args, retSchema: []types.Type{types.T_varchar.ToType()}},
+			}
+			state := &tableChangesState{accountColumnIdx: -1}
+			err := state.start(tf, proc, 0, nil)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+func TestChangeWatermarkStartAndTableChangesPrepare(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(42, 7).ToTimestamp()).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	tf := &TableFunction{
+		Attrs: []string{"watermark"},
+		ctr:   container{retSchema: []types.Type{types.T_varchar.ToType()}},
+	}
+	state := &changeWatermarkState{}
+	require.NoError(t, state.start(tf, proc, 0, nil))
+	require.Equal(t, 1, state.batch.RowCount())
+	require.Equal(t, types.BuildTS(42, 7).ToString(), state.batch.Vecs[0].GetStringAt(0))
+	state.free(tf, proc, false, nil)
+
+	prepared, err := tableChangesPrepare(proc, &TableFunction{})
+	require.NoError(t, err)
+	require.IsType(t, &tableChangesState{}, prepared)
+}
+
+func TestTableChangesStateLifecycleAndAlreadyCalled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	tf := &TableFunction{Attrs: []string{"value"}, ctr: container{
+		retSchema: []types.Type{types.T_varchar.ToType()},
+	}}
+	state := &tableChangesState{batch: tf.createResultBatch()}
+	state.handle = mock_frontend.NewMockChangesHandle(ctrl)
+	state.handle.(*mock_frontend.MockChangesHandle).EXPECT().Close().Return(nil)
+	require.NoError(t, state.end(tf, proc))
+	require.Nil(t, state.handle)
+
+	state.handle = mock_frontend.NewMockChangesHandle(ctrl)
+	state.handle.(*mock_frontend.MockChangesHandle).EXPECT().Close().Return(nil)
+	state.called = true
+	state.reset(tf, proc)
+	require.False(t, state.called)
+	require.Nil(t, state.relation)
+
+	state.handle = mock_frontend.NewMockChangesHandle(ctrl)
+	state.handle.(*mock_frontend.MockChangesHandle).EXPECT().Close().Return(nil)
+	state.free(tf, proc, false, nil)
+	require.Nil(t, state.batch)
+
+	state.called = true
+	result, err := state.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.CancelResult.Status, result.Status)
+}
+
+func TestTableChangesStartStopsBeforeEngineLookup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(100, 0).ToTimestamp()).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	args := make([]*vector.Vector, 4)
+	for i, value := range []string{"db", "table", "", "100-0"} {
+		args[i] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(args[i], []byte(value), false, proc.Mp()))
+		defer args[i].Free(proc.Mp())
+	}
+	tf := &TableFunction{
+		Attrs: []string{"value"},
+		ctr:   container{argVecs: args, retSchema: []types.Type{types.T_varchar.ToType()}},
+	}
+	err := (&tableChangesState{accountColumnIdx: -1}).start(tf, proc, 0, nil)
+	require.EqualError(t, err, "internal error: engine is missing from table_changes context")
+}
+
+func TestValidateTableChangesWindow(t *testing.T) {
+	snapshot := types.BuildTS(100, 5)
+
+	require.NoError(t, validateTableChangesWindow(types.BuildTS(99, 0), snapshot, snapshot))
+	require.NoError(t, validateTableChangesWindow(types.TS{}, snapshot, snapshot))
+	require.EqualError(t,
+		validateTableChangesWindow(types.BuildTS(99, 0), snapshot.Next(), snapshot),
+		"invalid input: table_changes until must not be newer than the statement snapshot",
+	)
+	require.EqualError(t,
+		validateTableChangesWindow(snapshot, snapshot, snapshot),
+		"invalid input: table_changes until must be greater than after",
+	)
+}
+
+func TestValidateRuntimeTableChangesSourceTemporaryTable(t *testing.T) {
+	err := validateRuntimeTableChangesSource(&plan.TableDef{
+		TableType:   catalog.SystemTemporaryTable,
+		IsTemporary: true,
+	})
+	require.EqualError(t, err, "not supported: table_changes does not support temporary tables")
+}
+
+func TestValidateRuntimeTableChangesSourceContracts(t *testing.T) {
+	valid := func() *plan.TableDef {
+		return &plan.TableDef{
+			TableType: catalog.SystemOrdinaryRel,
+			Pkey:      &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		}
+	}
+	require.EqualError(t, validateRuntimeTableChangesSource(nil),
+		"invalid input: table_changes source table does not exist")
+
+	unsupported := valid()
+	unsupported.TableType = catalog.SystemViewRel
+	require.ErrorContains(t, validateRuntimeTableChangesSource(unsupported),
+		"table_changes does not support table type")
+
+	partitioned := valid()
+	partitioned.Partition = &plan.Partition{}
+	require.EqualError(t, validateRuntimeTableChangesSource(partitioned),
+		"not supported: table_changes does not support partitioned tables")
+
+	for _, pkey := range []*plan.PrimaryKeyDef{
+		nil,
+		{},
+		{Names: []string{"id"}, PkeyColName: catalog.FakePrimaryKeyColName},
+	} {
+		withoutPK := valid()
+		withoutPK.Pkey = pkey
+		require.EqualError(t, validateRuntimeTableChangesSource(withoutPK),
+			"not supported: table_changes requires an explicit primary key")
+	}
+
+	cluster := valid()
+	cluster.TableType = catalog.SystemClusterRel
+	require.EqualError(t, validateRuntimeTableChangesSource(cluster),
+		"not supported: table_changes requires cluster table primary keys to include account_id")
+	cluster.Pkey.Names = append(cluster.Pkey.Names, "ACCOUNT_ID")
+	require.NoError(t, validateRuntimeTableChangesSource(cluster))
+	require.True(t, containsTableChangesKey(cluster.Pkey.Names, "account_id"))
+	require.False(t, containsTableChangesKey(cluster.Pkey.Names, "missing"))
+}
+
+func TestRequiredTableChangesString(t *testing.T) {
+	proc := testutil.NewProc(t)
+	stringsVec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(stringsVec, []byte("value"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(stringsVec, nil, true, proc.Mp()))
+	defer stringsVec.Free(proc.Mp())
+
+	value, err := requiredTableChangesString(proc, stringsVec, 0, "argument")
+	require.NoError(t, err)
+	require.Equal(t, "value", value)
+	_, err = requiredTableChangesString(proc, stringsVec, 1, "argument")
+	require.ErrorContains(t, err, "cannot be NULL")
+	_, err = requiredTableChangesString(proc, nil, 0, "argument")
+	require.ErrorContains(t, err, "cannot be NULL")
+
+	intVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(intVec, int64(1), false, proc.Mp()))
+	defer intVec.Free(proc.Mp())
+	_, err = requiredTableChangesString(proc, intVec, 0, "argument")
+	require.ErrorContains(t, err, "must be a string")
+}
+
+func TestTableChangesAppendInsertAndDeleteRows(t *testing.T) {
+	proc := testutil.NewProc(t)
+	attrs := []string{
+		catalog.TableChangesAttrChangeType,
+		catalog.TableChangesAttrCommitTS,
+		catalog.TableChangesAttrTableID,
+		catalog.TableChangesAttrSchemaVersion,
+		"id",
+		"payload",
+	}
+	state := &tableChangesState{
+		tableDef: &plan.TableDef{
+			TblId: 42, Version: 7,
+			Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		},
+		batch: batch.NewWithSize(len(attrs)),
+	}
+	for idx, typ := range []types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(),
+		types.T_uint64.ToType(), types.T_uint32.ToType(),
+		types.T_int64.ToType(), types.T_varchar.ToType(),
+	} {
+		state.batch.Vecs[idx] = vector.NewVec(typ)
+	}
+	defer state.batch.Clean(proc.Mp())
+
+	commitTS := types.BuildTS(10, 2)
+	inserts := batch.NewWithSize(3)
+	inserts.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	inserts.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	inserts.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(inserts.Vecs[0], int64(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(inserts.Vecs[1], []byte("inserted"), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(inserts.Vecs[2], commitTS, false, proc.Mp()))
+	inserts.SetRowCount(1)
+	require.NoError(t, state.appendInsertRows(attrs, inserts, proc))
+	inserts.Clean(proc.Mp())
+
+	deletes := batch.NewWithSize(2)
+	deletes.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	deletes.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(deletes.Vecs[0], int64(2), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(deletes.Vecs[1], commitTS.Next(), false, proc.Mp()))
+	deletes.SetRowCount(1)
+	require.NoError(t, state.appendDeleteRows(attrs, deletes, proc))
+	deletes.Clean(proc.Mp())
+
+	require.Equal(t, 2, state.batch.RowCount())
+	require.Equal(t, []string{"insert", "delete"}, vector.InefficientMustStrCol(state.batch.Vecs[0]))
+	require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](state.batch.Vecs[4]))
+	require.Equal(t, "inserted", state.batch.Vecs[5].GetStringAt(0))
+	require.True(t, state.batch.Vecs[5].IsNull(1))
+	require.NoError(t, state.appendInsertRows(attrs, nil, proc))
+	require.NoError(t, state.appendDeleteRows(attrs, nil, proc))
+}
+
+func TestTableChangesDeleteKeyNamesAreCaseInsensitive(t *testing.T) {
+	proc := testutil.NewProc(t)
+	attrs := []string{"MixedCasePK"}
+	state := &tableChangesState{
+		tableDef: &plan.TableDef{
+			Name2ColIndex: map[string]int32{"mixedcasepk": 0},
+			Pkey:          &plan.PrimaryKeyDef{Names: attrs, PkeyColName: attrs[0]},
+		},
+		batch: batch.NewWithSize(1),
+	}
+	state.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	defer state.batch.Clean(proc.Mp())
+
+	deletes := batch.NewWithSize(2)
+	deletes.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	deletes.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(deletes.Vecs[0], int64(7), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(deletes.Vecs[1], types.BuildTS(10, 2), false, proc.Mp()))
+	deletes.SetRowCount(1)
+	defer deletes.Clean(proc.Mp())
+
+	require.NoError(t, state.appendDeleteRows(attrs, deletes, proc))
+	require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](state.batch.Vecs[0]))
+}
+
+func TestTableChangesDeleteKeyValuesCompositeAndMalformed(t *testing.T) {
+	state := &tableChangesState{tableDef: &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"PartA", "PartB"}},
+	}}
+	packer := types.NewPacker()
+	packer.EncodeInt64(11)
+	packer.EncodeStringType([]byte("value"))
+	keyVec := vector.NewVec(types.T_varbinary.ToType())
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	defer keyVec.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(keyVec, packer.GetBuf(), false, proc.Mp()))
+	values, err := state.deleteKeyValues(keyVec, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(11), values["parta"])
+	require.Equal(t, "value", string(values["partb"].([]byte)))
+
+	bad := vector.NewVec(types.T_varbinary.ToType())
+	defer bad.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(bad, []byte{1, 2, 3}, false, proc.Mp()))
+	_, err = state.deleteKeyValues(bad, 0)
+	require.Error(t, err)
+}
+
+func TestValidateRuntimeTableChangesSourceRejectsMetadataColumnNames(t *testing.T) {
+	for _, name := range []string{
+		catalog.TableChangesAttrChangeType,
+		catalog.TableChangesAttrCommitTS,
+		catalog.TableChangesAttrTableID,
+		catalog.TableChangesAttrSchemaVersion,
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validateRuntimeTableChangesColumnNames(&plan.TableDef{
+				Cols: []*plan.ColDef{{Name: name}},
+			})
+			require.EqualError(t, err,
+				"invalid input: table_changes source column \""+name+"\" conflicts with reserved metadata column")
+		})
+	}
+}
+
+func TestValidateTableChangesSchemaIdentity(t *testing.T) {
+	current := &plan.TableDef{TblId: 7, Version: 2}
+
+	require.NoError(t, validateTableChangesSchemaIdentity(
+		current,
+		&plan.TableDef{TblId: 7, Version: 2},
+		&plan.TableDef{TblId: 7, Version: 2},
+		false,
+	))
+	for _, tc := range []struct {
+		name  string
+		after *plan.TableDef
+		until *plan.TableDef
+	}{
+		{name: "add or drop changes version at after", after: &plan.TableDef{TblId: 7, Version: 1}, until: current},
+		{name: "type change changes version at until", after: current, until: &plan.TableDef{TblId: 7, Version: 3}},
+		{name: "drop and recreate changes table identity", after: &plan.TableDef{TblId: 6, Version: 2}, until: current},
+		{name: "table absent at range endpoint", after: current, until: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateTableChangesSchemaIdentity(current, tc.after, tc.until, false)
+			require.EqualError(t, err,
+				"not supported: table_changes requires a single source schema version across after, until, and the query snapshot")
+		})
+	}
+
+	require.NoError(t, validateTableChangesSchemaIdentity(
+		&plan.TableDef{TblId: 7, Version: 0}, nil,
+		&plan.TableDef{TblId: 7, Version: 0}, true,
+	))
+	require.Error(t, validateTableChangesSchemaIdentity(current, nil, current, true))
+}
+
+func TestTableChangesCleansBatchesReturnedWithError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	state := &tableChangesState{handle: &errorWithBatchChangesHandle{}}
+
+	_, err := state.call(&TableFunction{}, proc)
+	require.EqualError(t, err, "internal error: allocated read failure")
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+type errorWithBatchChangesHandle struct{}
+
+func (h *errorWithBatchChangesHandle) Next(
+	_ context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	if err := vector.AppendFixed(data.Vecs[0], int64(1), false, mp); err != nil {
+		return data, nil, engine.ChangesHandle_Tail_done, err
+	}
+	data.SetRowCount(1)
+	return data, nil, engine.ChangesHandle_Tail_done,
+		moerr.NewInternalErrorNoCtx("allocated read failure")
+}
+
+func (h *errorWithBatchChangesHandle) Close() error { return nil }
+
+func TestTableChangesReadFailpoints(t *testing.T) {
+	require.True(t, fault.Enable())
+	t.Cleanup(func() { fault.Disable() })
+
+	for _, point := range []string{"collect", "next"} {
+		t.Run(point, func(t *testing.T) {
+			remove, err := objectio.InjectTableChangesRead(point)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, _ = remove()
+			})
+
+			require.NoError(t, tableChangesReadFailpoint("other"))
+			require.EqualError(t, tableChangesReadFailpoint(point),
+				"internal error: table_changes injected "+point+" failure")
+			_, err = remove()
+			require.NoError(t, err)
+			require.NoError(t, tableChangesReadFailpoint(point))
+		})
+	}
+}

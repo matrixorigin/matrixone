@@ -55,6 +55,13 @@ const (
 	TableTailAttrAborted     = objectio.TombstoneAttr_Abort_Attr
 	TableTailAttrPKVal       = objectio.TombstoneAttr_PK_Attr
 
+	// TableChanges metadata columns are reserved because table_changes exposes
+	// them in the same row shape as source-table columns.
+	TableChangesAttrChangeType    = "change_type"
+	TableChangesAttrCommitTS      = "commit_ts"
+	TableChangesAttrTableID       = "table_id"
+	TableChangesAttrSchemaVersion = "schema_version"
+
 	MOAccountTable = "mo_account"
 	// MOVersionTable mo version table. This table records information about the
 	// versions of the MO cluster that have been upgraded. In other words, you can
@@ -124,6 +131,18 @@ const (
 	System_Role    = uint32(0)
 	System_Account = uint32(0)
 )
+
+func IsTableChangesMetadataColumn(name string) bool {
+	switch strings.ToLower(name) {
+	case TableChangesAttrChangeType,
+		TableChangesAttrCommitTS,
+		TableChangesAttrTableID,
+		TableChangesAttrSchemaVersion:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	MO_COMMENT_NO_DEL_HINT = "[mo_no_del_hint]"

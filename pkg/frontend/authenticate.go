@@ -6967,7 +6967,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 
 		for nodeID, node := range q.Nodes {
-			if node.NodeType == plan.Node_TABLE_SCAN || isMongoDBExternalTableScan(node) {
+			if isPrivilegeBearingTableScan(node) || isMongoDBExternalTableScan(node) {
 				if _, ok := insertDedupScans[int32(nodeID)]; ok {
 					continue
 				}
@@ -7244,6 +7244,17 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 	}
 	return pts
+}
+
+func isPrivilegeBearingTableScan(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return true
+	}
+	return node.NodeType == plan.Node_FUNCTION_SCAN &&
+		node.GetTableDef().GetTblFunc().GetName() == "table_changes"
 }
 
 func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privilegeTipsArray {

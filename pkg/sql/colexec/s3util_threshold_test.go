@@ -15,15 +15,20 @@
 package colexec
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -73,6 +78,137 @@ func TestCNS3DataWriterMemoryThresholdAndSyncAndFillBlockInfoBat(t *testing.T) {
 		defer writer.Close()
 		require.Equal(t, math.MaxInt, writer.MemorySizeThreshold())
 	})
+}
+
+func TestCNS3DataWriterChunkedColumnProtocolGateIsLive(t *testing.T) {
+	previousObjectSizeLimit := objectio.ObjectSizeLimit
+	objectio.SetObjectSizeLimit(3 * mpool.GB)
+	t.Cleanup(func() { objectio.SetObjectSizeLimit(previousObjectSizeLimit) })
+
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+
+	serviceID := "chunked-column-" + t.Name()
+	rt := moruntime.DefaultRuntime()
+	originalVersion, hadOriginalVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginalVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, originalVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+
+	tableDef := &plan.TableDef{
+		Name: "wide_column",
+		Cols: []*plan.ColDef{
+			{ColId: 0, Name: "payload", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_text)}},
+			{ColId: 1, Name: catalog.Row_ID, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{},
+	}
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{"payload"}
+	bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+	payload := make([]byte, 20<<10)
+	for i := range 512 {
+		payload[0] = byte(i)
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, proc.Mp()))
+	}
+	bat.SetRowCount(bat.Vecs[0].Length())
+	defer bat.Clean(proc.Mp())
+
+	writeAndColumnAlgorithm := func(writer *CNS3Writer) uint8 {
+		t.Helper()
+		defer writer.Close()
+		require.NoError(t, writer.Write(proc.Ctx, bat))
+		stats, syncErr := writer.Sync(proc.Ctx)
+		require.NoError(t, syncErr)
+		require.Len(t, stats, 1)
+		location := stats[0].ObjectLocation()
+		meta, loadErr := objectio.FastLoadObjectMeta(proc.Ctx, &location, false, fs)
+		require.NoError(t, loadErr)
+		dataMeta, ok := meta.DataMeta()
+		require.True(t, ok)
+		return dataMeta.GetBlockMeta(0).MustGetColumn(0).Location().Alg()
+	}
+
+	// The latest pre-feature protocol must remain on the legacy extent format.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
+	enabledAfterConstruction := NewCNS3DataWriterForService(
+		serviceID, proc.Mp(), fs, tableDef, -1, true,
+	)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	require.Equal(t, uint8(compress.Lz4Chunked), writeAndColumnAlgorithm(enabledAfterConstruction))
+
+	disabledAfterConstruction := NewCNS3DataWriterForService(
+		serviceID, proc.Mp(), fs, tableDef, -1, true,
+	)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
+	require.Equal(t, uint8(compress.Lz4), writeAndColumnAlgorithm(disabledAfterConstruction))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion16)
+	withoutServiceOwner := NewCNS3DataWriter(proc.Mp(), fs, tableDef, -1, true)
+	require.Equal(t, uint8(compress.Lz4), writeAndColumnAlgorithm(withoutServiceOwner))
+}
+
+func TestChunkedColumnPolicyProtocolThreshold(t *testing.T) {
+	require.Nil(t, chunkedColumnPolicyForService(""))
+
+	serviceID := fmt.Sprintf("chunked-policy-%s", t.Name())
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	policy := chunkedColumnPolicyForService(serviceID)
+	require.NotNil(t, policy)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+	require.False(t, policy())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	require.True(t, policy())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int32(defines.MORPCVersion23))
+	require.False(t, policy())
+
+	missingPolicy := chunkedColumnPolicyForService("missing-" + serviceID)
+	require.NotNil(t, missingPolicy)
+	require.False(t, missingPolicy())
+}
+
+func TestCNS3TombstoneWriterProtocolGate(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+
+	serviceID := fmt.Sprintf("chunked-tombstone-%s", t.Name())
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+	legacy := NewCNS3TombstoneWriterForService(
+		serviceID, proc.Mp(), fs, types.T_int32.ToType(), -1,
+	)
+	require.NotNil(t, legacy)
+	require.NoError(t, legacy.Close())
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	chunked := NewCNS3TombstoneWriterForService(
+		serviceID, proc.Mp(), fs, types.T_int32.ToType(), -1,
+	)
+	require.NotNil(t, chunked)
+	require.NoError(t, chunked.Close())
+
+	withoutOwner := NewCNS3TombstoneWriter(
+		proc.Mp(), fs, types.T_int32.ToType(), -1,
+	)
+	require.NotNil(t, withoutOwner)
+	require.NoError(t, withoutOwner.Close())
 }
 
 func testCNS3WriterTableDef() *plan.TableDef {

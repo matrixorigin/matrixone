@@ -11746,6 +11746,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, nil)
 		case "current_account":
 			nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, nil)
+		case "change_watermark":
+			nodeId, err = builder.buildChangeWatermark(tbl, ctx, exprs, nil)
+		case "table_changes":
+			nodeId, err = builder.buildTableChanges(tbl, ctx, exprs, nil)
 		case "metadata_scan":
 			nodeId = builder.buildMetadataScan(tbl, ctx, exprs, nil)
 		case "processlist", "mo_sessions":

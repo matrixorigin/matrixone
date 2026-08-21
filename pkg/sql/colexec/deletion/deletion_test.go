@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -192,4 +193,15 @@ func TestFlush(t *testing.T) {
 	ct := container{}
 	_, err := ct.flush(proc, nil)
 	require.Error(t, err)
+}
+
+func TestNewDeletionTombstoneWriterUsesProcessService(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	writer := newDeletionTombstoneWriter(proc, fs, types.T_int64.ToType())
+	require.NotNil(t, writer)
+	require.NoError(t, writer.Close())
 }

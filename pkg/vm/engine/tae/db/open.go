@@ -147,7 +147,6 @@ func Open(
 		dbutils.WithRuntimeScheduler(scheduler),
 		dbutils.WithRuntimeOptions(db.Opts),
 	)
-
 	logutil.Info(Phase_Open + "-open-catalog-start")
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
