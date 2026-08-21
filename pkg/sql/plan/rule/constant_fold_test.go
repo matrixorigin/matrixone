@@ -113,9 +113,16 @@ func TestConstantFoldPreservesSerializedResultProvenance(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			registered, err := function.GetFunctionByName(context.Background(), name, []types.Type{inputType})
 			require.NoError(t, err)
+			resultType := registered.GetReturnType()
+			require.Equal(t, types.CharsetBinary, resultType.Charset)
 
 			expr := &plan.Expr{
-				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Typ: plan.Type{
+					Id:      int32(resultType.Oid),
+					Width:   resultType.Width,
+					Scale:   resultType.Scale,
+					Charset: uint32(resultType.Charset),
+				},
 				Expr: &plan.Expr_F{F: &plan.Function{
 					Func: &plan.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: name},
 					Args: []*plan.Expr{{
@@ -128,6 +135,7 @@ func TestConstantFoldPreservesSerializedResultProvenance(t *testing.T) {
 			folded := NewConstantFold(false).constantFold(expr, proc)
 			literal := folded.GetLit()
 			require.NotNil(t, literal)
+			require.Equal(t, uint32(types.CharsetBinary), folded.Typ.Charset)
 			require.Equal(t, string([]byte{0x27}), literal.GetSval())
 			require.False(t, literal.GetIsBin(), "serial folding must not acquire SQL hex/bit semantics")
 			require.True(t, literal.GetIsSerialized(), "serialized bytes lost their diagnostic provenance")
