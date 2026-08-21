@@ -652,19 +652,6 @@ func normalizeScopeRunError(
 	// attach the cause after observing DeadlineExceeded.
 	if queryCtx != nil {
 		if queryErr := queryCtx.Err(); queryErr != nil {
-			// A remote-run query context belongs to one RPC fragment. StopSending
-			// cancels it as internal teardown when another fragment has finished or
-			// failed. Do not let that generic cancellation mask a substantive child
-			// result collected while the remote fragment is draining; the origin
-			// query context still owns user cancellation and deadline classification.
-			if remoteRun, _ := queryCtx.Value(defines.RemoteRunContext{}).(bool); remoteRun &&
-				isScopeCancellationFrom(err, queryErr) {
-				if cause := context.Cause(pipelineCtx); cause != nil &&
-					!isScopeCancellationError(cause) {
-					return cause, true
-				}
-				return nil, true
-			}
 			if errors.Is(queryErr, context.DeadlineExceeded) {
 				return queryErr, true
 			}
@@ -5759,6 +5746,19 @@ func supportsRemoteRightDedupInputKeysUnique(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion21
+}
+
+func supportsRemoteAffectedRowsSelectors(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion24
 }
 
 func supportsRemoteCrossDomainStringLiterals(service string) bool {
