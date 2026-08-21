@@ -5108,7 +5108,9 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 		// MySQL would return NULL.
 		return timeExtractParseResult{}
 	}
+	interstitialWhitespaceCount := 0
 	for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
+		interstitialWhitespaceCount++
 		pos++
 	}
 	clockStart := pos
@@ -5188,6 +5190,7 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	// DATETIME candidate, including a trailing whitespace/token suffix.
 	if yearDigits == 1 && monthDigits == 1 && dayDigits == 1 && dateSeparatorCount == 1 && secondDateSeparatorCount == 1 &&
 		clockFields == 3 && hourDigits == 1 && minuteDigits == 1 && secondDigits == 1 &&
+		interstitialWhitespaceCount == 1 &&
 		mysqlDatetimeClockSuffixIsCompactTimeForExtract(str, pos) {
 		return timeExtractParseResult{}
 	}
@@ -5399,7 +5402,8 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 				// example `12:34::56 78`). Split only the four-or-more digit
 				// date-shaped tail, or a punctuation tail after complete seconds.
 				splitAttached := strings.HasPrefix(attached, ":") ||
-					(asciiDigits(attached) && len(attached) >= 4)
+					(asciiDigits(attached) && len(attached) >= 4) ||
+					mysqlSignedNumericAttachedTimeSuffixForExtract(attached)
 				if !splitAttached {
 					if mysqlTimePrefixSuffixRejectsForExtract(clock, suffix) {
 						return 0, 0, 0, false
@@ -5571,10 +5575,14 @@ func mysqlTimePrefixSuffixRejectsWithAttachedForExtract(clock, suffix string, at
 	}
 	if candidate.hasOmittedSeconds && candidate.fieldCount == 2 {
 		// For an attached numeric tail after omitted seconds, the complete
-		// candidate length is the DATETIME ownership gate. Short tails such as
-		// `12:34::56 ` remain the consumed H:M prefix; a four-digit tail makes
-		// the 12-byte candidate invalid, as in MySQL's `01:01::0100 `.
-		if attached && token.valid && (token.allDigits || mysqlSignedNumericTimeSuffixForExtract(token)) &&
+		// candidate length is the DATETIME ownership gate once the attached
+		// numeric token is terminated. Short tails such as `12:34::56 ` remain
+		// the consumed H:M prefix; a terminated four-digit tail makes the
+		// 12-byte candidate invalid, as in MySQL's `01:01::0100 `. Without a
+		// terminating whitespace boundary, the wider token is still part of the
+		// consumed TIME prefix (`01:01::0100`).
+		if attached && token.trailingWhitespace &&
+			(token.allDigits || mysqlSignedNumericTimeSuffixForExtract(token)) &&
 			len(token.token) >= 4 && len(clock)+len(suffix) >= 12 {
 			return true
 		}
@@ -5733,6 +5741,11 @@ func mysqlSignedNumericTimeSuffixForExtract(token mysqlTimeSuffixToken) bool {
 		return false
 	}
 	return asciiDigits(token.token[1:])
+}
+
+func mysqlSignedNumericAttachedTimeSuffixForExtract(suffix string) bool {
+	return len(suffix) >= 2 && (suffix[0] == '+' || suffix[0] == '-') &&
+		asciiDigits(suffix[1:])
 }
 
 type mysqlTimeSuffixToken struct {

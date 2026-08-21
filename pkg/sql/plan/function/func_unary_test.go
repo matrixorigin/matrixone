@@ -11387,6 +11387,60 @@ func TestStringTimeExtractSignedSuffixWidthOwnership(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtractInterstitialWhitespaceOwnership(t *testing.T) {
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "1-1-1 1:2:3", want: "0/0/1"},
+		{input: "1-1-1  1:2:3", want: "1/2/3"},
+		{input: "1-1-1   1:2:3", want: "1/2/3"},
+		{input: "1-1-1\t1:2:3", want: "0/0/1"},
+		{input: "1-1-1\t 1:2:3", want: "1/2/3"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
+func TestStringTimeExtractAttachedSignedOmittedSecondsOwnership(t *testing.T) {
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "01:01::+1", want: "1/1/0"},
+		{input: "01:01::+12", want: "1/1/0"},
+		{input: "01:01::+123", want: "1/1/0"},
+		{input: "01:01::+1234", want: "1/1/0"},
+		{input: "01:01::+1 ", want: "1/1/0"},
+		{input: "01:01::+12 ", want: "1/1/0"},
+		{input: "01:01::+123 ", want: "NULL"},
+		{input: "01:01::+1234 ", want: "NULL"},
+		{input: "12:34::-123", want: "12/34/0"},
+		{input: "12:34::-123 ", want: "NULL"},
+		{input: "12:34::-1234", want: "12/34/0"},
+		{input: "12:34::-1234 ", want: "NULL"},
+		{input: "01:01::-1 ", want: "1/1/0"},
+		{input: "01:01::-12 ", want: "1/1/0"},
+		{input: "01:01::-123 ", want: "NULL"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			if tc.want == "NULL" {
+				require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
 func TestStringTimeExtractDatetimeSeparatorAndSignedSuffixBoundaries(t *testing.T) {
 	inputs := []string{
 		"01:01:01:: +",
