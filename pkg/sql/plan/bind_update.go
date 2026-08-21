@@ -118,6 +118,17 @@ func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
 			Typ:  selectNode.ProjectList[newPos].Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: newPos}},
 		}
+		var err error
+		if oldExpr.Typ.Id == int32(types.T_char) {
+			oldExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "rtrim", []*plan.Expr{oldExpr})
+			if err != nil {
+				return nil, err
+			}
+			newExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "rtrim", []*plan.Expr{newExpr})
+			if err != nil {
+				return nil, err
+			}
+		}
 		equal, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldExpr, newExpr})
 		if err != nil {
 			return nil, err
