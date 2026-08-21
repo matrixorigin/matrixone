@@ -1725,6 +1725,24 @@ func recreateTable(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 	}
+	if isSequence(tblInfo) {
+		curAccountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreSequence(
+			ctx,
+			bh,
+			tblInfo.createSql,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			snapshotTs,
+			curAccountID,
+			toAccountId,
+		)
+	}
 
 	getLogger(sid).Debug(
 		fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d",
@@ -2212,7 +2230,6 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 	if len(tblName) > 0 {
 		whereClause += fmt.Sprintf(" and relname = %s", quoteSQLStringLiteral(tblName))
 	}
-	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	return whereClause
 }
 
@@ -2262,9 +2279,174 @@ func getTableInfos(
 		fmt.Sprint(snapshot),
 		tableInfos,
 		func(tblInfo *tableInfo) (string, error) {
+			if isSequence(tblInfo) {
+				sequenceCtx := ctx
+				if snapshot != nil && snapshot.Tenant != nil {
+					sequenceCtx = defines.AttachAccountId(sequenceCtx, snapshot.Tenant.TenantID)
+				}
+				return getCreateSequenceSQL(
+					sequenceCtx,
+					snapshotPhysicalTime(snapshot),
+					tblInfo.dbName,
+					tblInfo.tblName,
+					func(queryCtx context.Context, sql string, colIndices ...uint64) ([][]string, error) {
+						return getStringColsList(queryCtx, bh, sql, colIndices...)
+					},
+				)
+			}
 			return getCreateTableSql(ctx, bh, snapshot, tblInfo.dbName, tblInfo.tblName)
 		},
 	)
+}
+
+type restoreStringRows func(context.Context, string, ...uint64) ([][]string, error)
+
+func snapshotPhysicalTime(snapshot *plan.Snapshot) int64 {
+	if snapshot == nil || snapshot.TS == nil {
+		return 0
+	}
+	return snapshot.TS.PhysicalTime
+}
+
+func isSequence(tblInfo *tableInfo) bool {
+	return tblInfo != nil && tblInfo.relKind == catalog.SystemSequenceRel
+}
+
+func getCreateSequenceSQL(
+	ctx context.Context,
+	snapshotTS int64,
+	dbName string,
+	tblName string,
+	query restoreStringRows,
+) (string, error) {
+	snapshotSpec := ""
+	if snapshotTS > 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
+
+	typeSQL := fmt.Sprintf(
+		"select mo_show_visible_bin(atttyp, 2) from %s.mo_columns%s where att_database = %s and att_relname = %s and attname = %s",
+		moCatalog,
+		snapshotSpec,
+		quoteSQLStringLiteral(dbName),
+		quoteSQLStringLiteral(tblName),
+		quoteSQLStringLiteral(plan.Sequence_cols_name[0]),
+	)
+	typeRows, err := query(ctx, typeSQL, 0)
+	if err != nil {
+		return "", err
+	}
+	if len(typeRows) != 1 || len(typeRows[0]) != 1 || typeRows[0][0] == "" {
+		return "", moerr.NewNoSuchTable(ctx, dbName, tblName)
+	}
+
+	stateSQL := fmt.Sprintf(
+		"select %s, %s, %s, %s, %s from %s%s",
+		quoteIdentifierForSQL(plan.Sequence_cols_name[1]),
+		quoteIdentifierForSQL(plan.Sequence_cols_name[2]),
+		quoteIdentifierForSQL(plan.Sequence_cols_name[3]),
+		quoteIdentifierForSQL(plan.Sequence_cols_name[4]),
+		quoteIdentifierForSQL(plan.Sequence_cols_name[5]),
+		qualifiedTableName(dbName, tblName),
+		snapshotSpec,
+	)
+	stateRows, err := query(ctx, stateSQL, 0, 1, 2, 3, 4)
+	if err != nil {
+		return "", err
+	}
+	if len(stateRows) != 1 || len(stateRows[0]) != 5 {
+		return "", moerr.NewNoSuchTable(ctx, dbName, tblName)
+	}
+
+	cycleSQL := "no cycle"
+	switch strings.ToLower(stateRows[0][4]) {
+	case "1", "true":
+		cycleSQL = "cycle"
+	case "0", "false":
+	default:
+		return "", moerr.NewInternalErrorf(ctx,
+			"invalid cycle state %q for sequence %s.%s", stateRows[0][4], dbName, tblName)
+	}
+
+	return fmt.Sprintf(
+		"create sequence %s as %s increment by %s minvalue %s maxvalue %s start with %s %s",
+		qualifiedTableName(dbName, tblName),
+		typeRows[0][0],
+		stateRows[0][3],
+		stateRows[0][0],
+		stateRows[0][1],
+		stateRows[0][2],
+		cycleSQL,
+	), nil
+}
+
+func dropCurrentRestoreObject(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	tblName string,
+) error {
+	tableInfos, err := showFullTables(ctx, "", bh, nil, dbName, tblName)
+	if err != nil {
+		return err
+	}
+	if len(tableInfos) == 0 {
+		return nil
+	}
+	if len(tableInfos) != 1 {
+		return moerr.NewInternalErrorf(ctx,
+			"found %d current objects named %s.%s during restore", len(tableInfos), dbName, tblName)
+	}
+
+	current := tableInfos[0]
+	name := qualifiedTableName(dbName, tblName)
+	var dropSQL string
+	switch current.relKind {
+	case catalog.SystemSequenceRel:
+		dropSQL = "drop sequence if exists " + name
+	case catalog.SystemViewRel:
+		dropSQL = "drop view if exists " + name
+	default:
+		dropSQL = dropTableIfExistsSQL(dbName, tblName)
+	}
+	return bh.Exec(ctx, dropSQL)
+}
+
+func restoreSequence(
+	ctx context.Context,
+	bh BackgroundExec,
+	createSQL string,
+	srcDBName string,
+	srcTblName string,
+	dstDBName string,
+	dstTblName string,
+	snapshotTS int64,
+	fromAccountID uint32,
+	toAccountID uint32,
+) error {
+	toCtx := defines.AttachAccountId(ctx, toAccountID)
+	dstName := qualifiedTableName(dstDBName, dstTblName)
+	if err := dropCurrentRestoreObject(toCtx, bh, dstDBName, dstTblName); err != nil {
+		return err
+	}
+	if err := bh.Exec(toCtx, createSQL); err != nil {
+		return err
+	}
+	if err := bh.Exec(toCtx, "delete from "+dstName+" where true"); err != nil {
+		return err
+	}
+
+	snapshotSpec := ""
+	if snapshotTS > 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
+	copySQL := fmt.Sprintf(
+		"insert into %s select * from %s%s",
+		dstName,
+		qualifiedTableName(srcDBName, srcTblName),
+		snapshotSpec,
+	)
+	return bh.ExecRestore(toCtx, copySQL, fromAccountID, toAccountID)
 }
 
 func fillTableCreateSQLsForRestore(
@@ -2273,6 +2455,7 @@ func fillTableCreateSQLsForRestore(
 	tableInfos []*tableInfo,
 	getCreateSQL func(*tableInfo) (string, error),
 ) ([]*tableInfo, error) {
+	sequences := make([]*tableInfo, 0)
 	restorable := make([]*tableInfo, 0, len(tableInfos))
 	for _, tblInfo := range tableInfos {
 		createSQL, err := getCreateSQL(tblInfo)
@@ -2291,9 +2474,13 @@ func fillTableCreateSQLsForRestore(
 		}
 
 		tblInfo.createSql = createSQL
-		restorable = append(restorable, tblInfo)
+		if isSequence(tblInfo) {
+			sequences = append(sequences, tblInfo)
+		} else {
+			restorable = append(restorable, tblInfo)
+		}
 	}
-	return restorable, nil
+	return append(sequences, restorable...), nil
 }
 
 const legacyViewParserSQLModeForRestore = "PIPES_AS_CONCAT"
@@ -2670,7 +2857,7 @@ func getFkDepsFromTableInfos(
 ) (map[string][]string, error) {
 	deps := make(map[string][]string)
 	for _, info := range tableInfos {
-		if info == nil || info.typ == view || info.createSql == "" {
+		if info == nil || info.typ == view || isSequence(info) || info.createSql == "" {
 			continue
 		}
 		statements, err := parsers.Parse(ctx, dialect.MYSQL, info.createSql, 0)

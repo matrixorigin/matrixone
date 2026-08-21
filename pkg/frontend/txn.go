@@ -989,6 +989,12 @@ func needToFinishTransactionAtStatementEnd(execCtx *ExecCtx) bool {
 	if IsParameterModificationStatement(execCtx.stmt) {
 		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
 	}
+	// Sequence DDL normally finishes an active user transaction. In a background
+	// executor it is nested inside an enclosing clone or restore transaction and
+	// must not finish that transaction early.
+	if execCtx.ses != nil && execCtx.ses.IsBackgroundSession() && IsCreateDropSequence(execCtx.stmt) {
+		return false
+	}
 	if NeedToBeCommittedInActiveTransaction(execCtx.stmt) {
 		return true
 	}
