@@ -54,6 +54,12 @@ func TestWithCloneLockContext(t *testing.T) {
 	require.Same(t, oldCtx, proc.Ctx)
 }
 
+func TestResolveUdfInCallerTxnContext(t *testing.T) {
+	ctx := context.Background()
+	require.False(t, resolvesUdfInCallerTxn(ctx))
+	require.True(t, resolvesUdfInCallerTxn(withResolveUdfInCallerTxn(ctx)))
+}
+
 func TestRewriteCloneSequenceCreateSQL(t *testing.T) {
 	got, err := rewriteCloneSequenceCreateSQL(
 		"create sequence `source-db`.`seq-name` as bigint increment by 3 minvalue 1 maxvalue 99 start with 7 no cycle",
@@ -790,6 +796,104 @@ func TestHandleCloneDatabaseWithSourceAuthorizesTargetBeforeIfNotExistsCheck(t *
 	)
 	require.EqualError(t, err, "internal error: only sys can clone table to another account")
 	require.False(t, lockCalled)
+}
+
+func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
+	newSource := func() *cloneDatabaseSource {
+		return &cloneDatabaseSource{
+			srcResolveDBName: "source",
+			opAccountId:      sysAccountID,
+			toAccountId:      sysAccountID,
+			userDefinedFuncs: []userDefinedFunctionDefinition{{
+				name:    "f_answer",
+				args:    "{}",
+				retType: "int",
+				body:    "select 42",
+				lang:    "sql",
+				sqlMode: "",
+				dbName:  "source",
+			}},
+			storedProcedures: []storedProcedureDefinition{{
+				name:    "p_answer",
+				args:    "[]",
+				lang:    "sql",
+				body:    "begin select 42; end",
+				sqlMode: "",
+				dbName:  "source",
+			}},
+		}
+	}
+	newStatement := func() *tree.CloneDatabase {
+		return &tree.CloneDatabase{
+			DstDatabase: tree.Identifier("destination"),
+			SrcDatabase: tree.Identifier("source"),
+			AtTsExpr:    &tree.AtTimeStamp{},
+		}
+	}
+
+	t.Run("restores functions before procedures after creating destination", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkSQL := getSqlForCheckProcedureExistence("p_answer", "destination")
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser(nil)
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses, bh, newStatement(), newSource(),
+		)
+		require.NoError(t, err)
+		require.Len(t, bh.executedSQLs, 4)
+		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
+		require.Equal(t, checkSQL, bh.executedSQLs[2])
+		require.Contains(t, bh.executedSQLs[3], "insert into mo_catalog.mo_stored_procedure")
+	})
+
+	t.Run("propagates procedure restoration failures", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkSQL := getSqlForCheckProcedureExistence("p_answer", "destination")
+		wantErr := errors.New("procedure lookup failed")
+		bh.sql2err[checkSQL] = wantErr
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses, bh, newStatement(), newSource(),
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
+		require.Equal(t, checkSQL, bh.executedSQLs[2])
+	})
+
+	t.Run("rejects imported functions before target database creation", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+
+		source := newSource()
+		source.userDefinedFuncs[0] = userDefinedFunctionDefinition{
+			name: "f_imported", args: "{}", retType: "int", lang: "python",
+			body:   `{"handler":"f_imported","import":true,"body":"shared:udf/source/f_imported.py"}`,
+			dbName: "source",
+		}
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses, bh, newStatement(), source,
+		)
+		require.ErrorContains(t, err, "imported python function f_imported is not supported")
+		require.Empty(t, bh.executedSQLs)
+	})
 }
 
 func TestCheckCloneDatabaseTargetSerializesConcurrentIfNotExistsDecisions(t *testing.T) {
