@@ -22,6 +22,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1830,6 +1831,26 @@ func (ae *aggExec) freeStandby() {
 	ae.standby = nil
 }
 
+// canonicalDistinctArgumentBytes returns the comparison key payload used by
+// saved-argument DISTINCT aggregates. The saved payload is also replayed into
+// the aggregate state, so do not apply broader FLOAT32 scale normalization
+// here: only signed zero needs canonicalization for SQL equality.
+func canonicalDistinctArgumentBytes(vec *vector.Vector, row int) []byte {
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		if vector.MustFixedColNoTypeCheck[float32](vec)[row] == 0 {
+			zero := keycodec.NewFloat32Codec(0).CanonicalBytes(0)
+			return zero[:]
+		}
+	case types.T_float64:
+		if vector.MustFixedColNoTypeCheck[float64](vec)[row] == 0 {
+			zero := keycodec.CanonicalFloat64Bytes(0)
+			return zero[:]
+		}
+	}
+	return vec.GetRawBytesAt(row)
+}
+
 func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
 	for i, group := range groups {
 		if group == GroupNotMatched {
@@ -1849,6 +1870,9 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			}
 			x, y := ae.getXY(group - 1)
 			bs := vectors[0].GetRawBytesAt(row)
+			if distinct {
+				bs = canonicalDistinctArgumentBytes(vectors[0], row)
+			}
 			if err := ae.state[x].fillArg(ae.mp, y, bs, distinct); err != nil {
 				return err
 			}
@@ -1883,6 +1907,9 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				return err
 			}
 			raw := vec.GetRawBytesAt(row)
+			if distinct {
+				raw = canonicalDistinctArgumentBytes(vec, row)
+			}
 			if uint64(len(raw)) > math.MaxUint32 ||
 				len(raw) > math.MaxInt-totalSize-4 {
 				return mpool.ErrAllocationAllocatorLimit
@@ -1915,6 +1942,9 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				return err
 			}
 			raw := vec.GetRawBytesAt(row)
+			if distinct {
+				raw = canonicalDistinctArgumentBytes(vec, row)
+			}
 			binary.BigEndian.PutUint32(key[off:], uint32(len(raw)))
 			off += 4
 			copy(key[off:], raw)

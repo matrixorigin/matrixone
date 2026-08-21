@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"math"
 	"strings"
 	"testing"
 
@@ -130,6 +131,47 @@ func TestCountColumnExec(t *testing.T) {
 
 func TestCountColumnDistinctExec(t *testing.T) {
 	testAggExec(t, makeCountColumnDistinctExec, expectedCount{count: 11, count20k: 36000})
+}
+
+func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
+	mp := mpool.MustNewZero()
+	count := func(t *testing.T, argTypes []types.Type, vectors []*vector.Vector) {
+		t.Helper()
+		exec := newCountColumnExec(mp, AggIdOfCountColumn, true, argTypes)
+		require.NoError(t, exec.GroupGrow(1))
+		groups := []uint64{1, 1}
+		require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(0, groups, vectors))
+		require.NoError(t, exec.BatchFill(0, groups, vectors))
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), vector.MustFixedColNoTypeCheck[int64](results[0])[0])
+		for _, result := range results {
+			result.Free(mp)
+		}
+		exec.Free()
+	}
+
+	t.Run("float32", func(t *testing.T) {
+		values := testutil.NewFloat32Vector(2, types.T_float32.ToType(), mp, false, nil, []float32{float32(math.Copysign(0, -1)), 0.0})
+		defer values.Free(mp)
+		count(t, []types.Type{types.T_float32.ToType()}, []*vector.Vector{values})
+	})
+
+	t.Run("float64", func(t *testing.T) {
+		values := testutil.NewFloat64Vector(2, types.T_float64.ToType(), mp, false, nil, []float64{math.Copysign(0, -1), 0.0})
+		defer values.Free(mp)
+		count(t, []types.Type{types.T_float64.ToType()}, []*vector.Vector{values})
+	})
+
+	t.Run("multi_column", func(t *testing.T) {
+		values := testutil.NewFloat64Vector(2, types.T_float64.ToType(), mp, false, nil, []float64{math.Copysign(0, -1), 0.0})
+		partner := testutil.NewInt64Vector(2, types.T_int64.ToType(), mp, false, nil, []int64{7, 7})
+		defer values.Free(mp)
+		defer partner.Free(mp)
+		count(t, []types.Type{types.T_float64.ToType(), types.T_int64.ToType()}, []*vector.Vector{values, partner})
+	})
+
+	require.Zero(t, mp.CurrNB())
 }
 
 // TestCountMultiColumnDistinct tests COUNT(DISTINCT col1, col2) with multiple args.

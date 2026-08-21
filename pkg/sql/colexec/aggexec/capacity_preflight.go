@@ -311,7 +311,10 @@ func preflightArgumentRowsEqual(
 		if leftNull || rightNull {
 			return leftNull && rightNull, nil
 		}
-		if !bytes.Equal(vec.GetRawBytesAt(leftRow), vec.GetRawBytesAt(rightRow)) {
+		if !bytes.Equal(
+			canonicalDistinctArgumentBytes(vec, leftRow),
+			canonicalDistinctArgumentBytes(vec, rightRow),
+		) {
 			return false, nil
 		}
 	}
@@ -371,7 +374,11 @@ func (ag *aggState) preparePreflightArgumentKey(
 		if err != nil {
 			return nil, err
 		}
-		copy(key[off:], vectors[0].GetRawBytesAt(row))
+		raw := vectors[0].GetRawBytesAt(row)
+		if distinct {
+			raw = canonicalDistinctArgumentBytes(vectors[0], row)
+		}
+		copy(key[off:], raw)
 	} else {
 		for _, vec := range vectors {
 			row, err := preflightPhysicalRow(vec, logicalRow)
@@ -379,6 +386,9 @@ func (ag *aggState) preparePreflightArgumentKey(
 				return nil, err
 			}
 			raw := vec.GetRawBytesAt(row)
+			if distinct {
+				raw = canonicalDistinctArgumentBytes(vec, row)
+			}
 			binary.BigEndian.PutUint32(key[off:], uint32(len(raw)))
 			off += 4
 			copy(key[off:], raw)
