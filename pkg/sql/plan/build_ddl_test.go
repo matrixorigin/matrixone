@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -1292,6 +1293,95 @@ func TestValidateMaterializedViewSourceTableRejectsUnsupportedRelations(t *testi
 		require.Contains(t, err.Error(), tc.want, tc.name)
 	}
 	require.NoError(t, validateMaterializedViewSourceTable(ctx, "tpch", "missing_orders"))
+}
+
+func TestMaterializedViewRefreshSQLIsReparseable(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create materialized view mv as select service, date_trunc('minute', event_ts), count(*) from events where status >= 500 group by service, date_trunc('minute', event_ts)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	refreshSQL := materializedViewRefreshSQL(stmt.(*tree.CreateView).AsSource)
+	require.Contains(t, refreshSQL, "date_trunc('minute'")
+	require.Contains(t, refreshSQL, "status >= 500")
+	reparsed, err := parsers.ParseOne(t.Context(), dialect.MYSQL, refreshSQL, 1)
+	require.NoError(t, err)
+	reparsed.Free()
+}
+
+func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		query    string
+		outputs  []string
+		eligible bool
+	}{
+		{name: "direct aggregate", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
+		{name: "where", query: "select service, count(*) requests, sum(bytes) bytes_sum from events where status = 500 group by service", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
+		{name: "time bucket avg conditional", query: "select service, date_trunc('minute', event_ts) minute, count(*) requests, sum(case when status >= 500 then 1 else 0 end) errors, avg(duration) avg_duration from events where region = 'us' group by service, date_trunc('minute', event_ts)", outputs: []string{"service", "minute", "requests", "errors", "avg_duration"}, eligible: true},
+		{name: "having", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service having count(*) > 1", outputs: []string{"service", "requests", "bytes_sum"}},
+		{name: "distinct select", query: "select distinct service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}},
+		{name: "limit", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service limit 1", outputs: []string{"service", "requests", "bytes_sum"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.query, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			outputCols := make([]*ColDef, len(tc.outputs))
+			for i, name := range tc.outputs {
+				outputCols[i] = &ColDef{Name: name, Typ: Type{Id: int32(types.T_float64)}}
+			}
+			spec, stateCols, refreshSQL := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputCols)
+			require.Equal(t, tc.eligible, spec != "")
+			if !tc.eligible {
+				require.Empty(t, stateCols)
+				require.Empty(t, refreshSQL)
+				return
+			}
+			decoded, err := base64.StdEncoding.DecodeString(spec)
+			require.NoError(t, err)
+			var desc materializedViewIncrementalDescription
+			require.NoError(t, json.Unmarshal(decoded, &desc))
+			require.NotEmpty(t, desc.RowCountColumn)
+			require.Contains(t, refreshSQL, "count(*)")
+			if tc.name == "time bucket avg conditional" {
+				require.Equal(t, "region = 'us'", desc.Filter)
+				require.Len(t, desc.Groups, 2)
+				require.Len(t, desc.Aggregates, 3)
+				require.Equal(t, "avg", desc.Aggregates[2].Kind)
+				require.Contains(t, refreshSQL, "sum(duration)")
+				require.Contains(t, refreshSQL, "count(duration)")
+			}
+			for _, stateCol := range stateCols {
+				require.Contains(t, refreshSQL, "as "+stateCol.Name)
+			}
+		})
+	}
+}
+
+func TestMaterializedViewRefreshCanWriteHiddenState(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	ctx := &mock.ctxt
+	ctx.SetContext(context.Background())
+	def := &TableDef{
+		Name: "mv_state", DbName: "tpch", TableType: catalog.SystemOrdinaryRel,
+		Createsql: "create materialized view mv_state as select service, count(*) from nation group by service",
+		Cols: []*ColDef{
+			{Name: "service", Typ: Type{Id: int32(types.T_varchar)}},
+			{Name: "__mv_state", Hidden: true, Typ: Type{Id: int32(types.T_int64)}},
+			{Name: catalog.FakePrimaryKeyColName, Hidden: true, Primary: true, Typ: Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{Name: catalog.Row_ID, Hidden: true, Typ: Type{Id: int32(types.T_Rowid)}},
+		},
+		Pkey: &PrimaryKeyDef{Names: []string{catalog.FakePrimaryKeyColName}, PkeyColName: catalog.FakePrimaryKeyColName},
+	}
+	ctx.tables[def.Name] = def
+	ctx.objects[def.Name] = &ObjectRef{SchemaName: "tpch", ObjName: def.Name}
+
+	ctx.SetContext(context.WithValue(context.Background(), defines.MaterializedViewRefreshKey{}, true))
+	_, err := runOneStmt(mock, t, "insert into mv_state (service, __mv_state, __mo_fake_pk_col) select 'api', 1, 1")
+	require.NoError(t, err)
+	_, err = runOneStmt(mock, t, "update mv_state set __mv_state = __mv_state + 1 where service = 'api'")
+	require.NoError(t, err)
 }
 
 func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {

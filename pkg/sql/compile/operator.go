@@ -818,14 +818,15 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 
 	//var attrs []string
 	attrs := make([]string, 0)
+	ctx := proc.GetTopContext()
+	writeMVState := plan2.CanWriteMaterializedViewHiddenColumns(ctx, preCtx.TableDef)
 	for _, col := range preCtx.TableDef.Cols {
-		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName && !(writeMVState && col.Name != catalog.Row_ID) {
 			continue
 		}
 		attrs = append(attrs, col.GetOriginCaseName())
 	}
 
-	ctx := proc.GetTopContext()
 	txnOp := proc.GetTxnOperator()
 	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
 		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&

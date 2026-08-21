@@ -79,6 +79,13 @@ func resolveMVBatchIndexes(bat *batch.Batch, def *plan.TableDef, insert bool, re
 				break
 			}
 		}
+		if retainRowID {
+			for i, vec := range bat.Vecs {
+				if vec != nil && vec.GetType().Oid == types.T_Rowid {
+					return tsIdx, i
+				}
+			}
+		}
 		if len(def.Pkey.Names) == 1 {
 			for i, attr := range bat.Attrs {
 				if attr == def.Pkey.Names[0] {
@@ -99,11 +106,34 @@ func resolveMVBatchIndexes(bat *batch.Batch, def *plan.TableDef, insert bool, re
 		}
 	}
 	if retainRowID {
-		pkIdx = 1
+		for i, vec := range bat.Vecs {
+			if vec != nil && vec.GetType().Oid == types.T_Rowid {
+				return tsIdx, i
+			}
+		}
+		pkIdx = 0
 	} else {
 		pkIdx = 0
 	}
 	return tsIdx, pkIdx
+}
+
+func resolveSingleSourceInsertIndexes(def *plan.TableDef, retainRowID bool) (tsIdx, pkIdx int) {
+	tsIdx = len(def.Cols) - 1
+	pkIdx = len(def.Cols) - 2
+	if retainRowID {
+		tsIdx++
+		pkIdx++
+	}
+	if len(def.Pkey.Names) == 1 {
+		pkIdx = int(def.Name2ColIndex[def.Pkey.Names[0]])
+		// CollectChanges prepends the retained rowid to the insert batch. The
+		// table definition indexes do not include that synthetic column.
+		if retainRowID {
+			pkIdx++
+		}
+	}
+	return
 }
 
 func (iterCtx *IterationContext) String() string {
@@ -380,22 +410,13 @@ func ExecuteIterationWithRuntime(
 	}
 
 	retainRowID := engine.RetainRowIDFromContext(collectCtx)
-	insTSColIdx := len(tableDef.Cols) - 1
-	insCompositedPkColIdx := len(tableDef.Cols) - 2
-	if retainRowID {
-		insTSColIdx++
-		insCompositedPkColIdx++
-	}
+	insTSColIdx, insCompositedPkColIdx := resolveSingleSourceInsertIndexes(tableDef, retainRowID)
 	delTSColIdx := 1
 	delCompositedPkColIdx := 0
 	if retainRowID {
 		delTSColIdx = 2
 		delCompositedPkColIdx = 1
 	}
-	if len(tableDef.Pkey.Names) == 1 {
-		insCompositedPkColIdx = int(tableDef.Name2ColIndex[tableDef.Pkey.Names[0]])
-	}
-
 	typ := ISCPDataType_Tail
 	if iterCtx.fromTS.IsEmpty() {
 		typ = ISCPDataType_Snapshot
@@ -427,6 +448,7 @@ func ExecuteIterationWithRuntime(
 		changeStreams,
 		consumers,
 		statuses,
+		tableDef,
 		typ,
 		packer,
 		mp,
@@ -478,6 +500,7 @@ func runISCPTaskIterationConsumers(
 	changeInput any,
 	consumers []Consumer,
 	statuses []*JobStatus,
+	defaultTableDef *plan.TableDef,
 	typ int8,
 	packer *types.Packer,
 	mp *mpool.MPool,
@@ -598,9 +621,18 @@ func runISCPTaskIterationConsumers(
 			if insertData != nil {
 				dataLength += insertData.RowCount()
 			}
-			if stream.def != nil {
-				streamInsTSColIdx, streamInsPKColIdx = resolveMVBatchIndexes(insertData, stream.def, true, engine.RetainRowIDFromContext(ctxWithCancel))
-				streamDelTSColIdx, streamDelPKColIdx = resolveMVBatchIndexes(deleteData, stream.def, false, engine.RetainRowIDFromContext(ctxWithCancel))
+			// Resolve against the actual change-batch layout. Retaining rowid
+			// rewrites that layout, so table-definition offsets are only a
+			// fallback for consumers using the legacy shape.
+			streamDef := stream.def
+			if streamDef == nil {
+				streamDef = defaultTableDef
+			}
+			if insertData != nil && streamDef != nil {
+				streamInsTSColIdx, streamInsPKColIdx = resolveMVBatchIndexes(insertData, streamDef, true, engine.RetainRowIDFromContext(ctxWithCancel))
+			}
+			if deleteData != nil && streamDef != nil {
+				streamDelTSColIdx, streamDelPKColIdx = resolveMVBatchIndexes(deleteData, streamDef, false, engine.RetainRowIDFromContext(ctxWithCancel))
 			}
 			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {

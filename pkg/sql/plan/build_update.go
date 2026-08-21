@@ -340,7 +340,8 @@ func rewriteGeneratedColumnsForUpdate(
 		tableDef := upPlanCtx.tableDef
 		for idx, col := range tableDef.Cols {
 			// row_id, compPrimaryKey, clusterByKey are not inserted from old data.
-			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName &&
+				!(CanWriteMaterializedViewHiddenColumns(builder.GetContext(), tableDef) && col.Name != catalog.Row_ID) {
 				continue
 			}
 			if offset, ok := upPlanCtx.updateColPosMap[col.Name]; ok {

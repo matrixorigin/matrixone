@@ -79,6 +79,17 @@ func TestMaterializedViewRefreshAtSourcesDoesNotRewriteColumnReferences(t *testi
 		query)
 }
 
+func TestMaterializedViewRefreshAtSourcesPreservesStringLiterals(t *testing.T) {
+	ts := types.BuildTS(100, 7)
+	query, err := materializedViewRefreshAtSources(
+		"select date_trunc('minute', event_ts), count(*) from events where status >= 500 group by date_trunc('minute', event_ts)",
+		[]TableInfo{{DBName: "observability", TableName: "events"}}, ts)
+	require.NoError(t, err)
+	require.Equal(t,
+		"select date_trunc('minute', `event_ts`), count(*) from `observability`.`events`{MO_TS = '100-7'} where `status` >= 500 group by date_trunc('minute', `event_ts`)",
+		query)
+}
+
 func TestMaterializedViewDrainSkipsRowsForFullRefresh(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -100,12 +111,7 @@ func TestMaterializedViewDrainSkipsRowsForFullRefresh(t *testing.T) {
 			consumer := &MaterializedViewConsumer{info: &ConsumerInfo{
 				DBName: "db", TableName: "mv", IncrementalSpec: tc.spec,
 			}}
-			collect := r.GetDataType() == ISCPDataType_Tail && consumer.info.IncrementalSpec != ""
-			inserts, deletes, canIncrement, err := consumer.drainChanges(r, collect)
-			require.NoError(t, err)
-			require.False(t, canIncrement)
-			require.Empty(t, inserts)
-			require.Empty(t, deletes)
+			require.NoError(t, consumer.drainChanges(r))
 		})
 	}
 }

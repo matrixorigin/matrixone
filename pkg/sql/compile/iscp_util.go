@@ -42,6 +42,7 @@ import (
 var (
 	iscpRegisterJobFunc     = iscp.RegisterJob
 	iscpUnregisterJobFunc   = iscp.UnregisterJob
+	iscpUnregisterMV        = iscp.UnregisterMaterializedView
 	iscpLookupJobLogFunc    = iscp.LookupJobLog
 	iscpGetExecutorFunc     = iscp.GetExecutorRuntime
 	iscpGetTaskRunnerFunc   = iscp.GetTaskRunner
@@ -73,6 +74,11 @@ func CreateCdcTask(c *Compile, spec *iscp.JobSpec, job *iscp.JobID, startFromNow
 func DeleteCdcTask(c *Compile, job *iscp.JobID) (bool, error) {
 	logutil.Infof("Delete Index Task %v", job)
 	return UnregisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), job)
+}
+
+func DeleteMaterializedViewTask(c *Compile, dbName, tableName string) error {
+	logutil.Infof("Delete materialized view task %s.%s", dbName, tableName)
+	return iscpUnregisterMV(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName, tableName)
 }
 
 func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {

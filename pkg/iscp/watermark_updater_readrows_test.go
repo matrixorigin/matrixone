@@ -46,6 +46,55 @@ func TestGetTableIDCountsRowsAcrossBatches(t *testing.T) {
 	require.Contains(t, err.Error(), "invalid rows 2")
 }
 
+func TestMarshalJobSpecPreservesSQLCharacters(t *testing.T) {
+	spec, err := MarshalJobSpec(&JobSpec{ConsumerInfo: ConsumerInfo{
+		RefreshSQL: "select date_trunc('minute', ts) where status >= 500",
+	}})
+	require.NoError(t, err)
+	require.Contains(t, spec, "status >= 500")
+	require.NotContains(t, spec, `\u003e`)
+
+	byteJSON, err := types.ParseStringToByteJson(spec)
+	require.NoError(t, err)
+	encoded, err := types.EncodeJson(byteJSON)
+	require.NoError(t, err)
+	decoded, err := UnmarshalJobSpec(encoded)
+	require.NoError(t, err)
+	require.Equal(t, "select date_trunc('minute', ts) where status >= 500", decoded.RefreshSQL)
+}
+
+func TestMaterializedViewJobReferencesSingleAndMultipleSources(t *testing.T) {
+	legacy := &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView),
+		SrcTable:     TableInfo{TableID: 10},
+	}}
+	require.True(t, materializedViewJobReferencesSource(legacy, 10))
+	require.False(t, materializedViewJobReferencesSource(legacy, 11))
+
+	multi := &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView),
+		SrcTables:    []TableInfo{{TableID: 10}, {TableID: 11}},
+	}}
+	require.True(t, materializedViewJobReferencesSource(multi, 10))
+	require.True(t, materializedViewJobReferencesSource(multi, 11))
+
+	indexJob := &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_IndexSync), SrcTable: TableInfo{TableID: 10},
+	}}
+	require.False(t, materializedViewJobReferencesSource(indexJob, 10))
+}
+
+func TestMaterializedViewJobMatchesTargetAvoidsJobNameCollisions(t *testing.T) {
+	spec := &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_MaterializedView), DBName: "a_b", TableName: "c",
+	}}
+	require.True(t, materializedViewJobMatchesTarget(spec, "a_b", "c"))
+	require.True(t, materializedViewJobMatchesTarget(spec, "A_B", "C"))
+	require.False(t, materializedViewJobMatchesTarget(spec, "a", "b_c"))
+	spec.ConsumerType = int8(ConsumerType_IndexSync)
+	require.False(t, materializedViewJobMatchesTarget(spec, "a_b", "c"))
+}
+
 func newTableIDResult(t *testing.T, tableIDBatches, dbIDBatches [][]uint64) (executor.Result, *mpool.MPool) {
 	t.Helper()
 	require.Len(t, tableIDBatches, len(dbIDBatches))

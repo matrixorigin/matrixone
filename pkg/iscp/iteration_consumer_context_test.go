@@ -163,6 +163,7 @@ func runIterationConsumersWithStatusesForTest(
 			changes,
 			consumers,
 			statuses,
+			nil,
 			typ,
 			packer,
 			mp,

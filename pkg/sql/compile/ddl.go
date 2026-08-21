@@ -3798,23 +3798,8 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 
 	// Unregister the source-table ISCP job before deleting its materialized result.
 	if plan2.IsMaterializedViewTableDef(qry.GetTableDef()) {
-		var sourceDB, sourceTable string
-		for _, def := range qry.GetTableDef().GetDefs() {
-			if props := def.GetProperties(); props != nil {
-				for _, prop := range props.GetProperties() {
-					if prop.GetKey() == "mv_source_database" {
-						sourceDB = prop.GetValue()
-					} else if prop.GetKey() == "mv_source_table" {
-						sourceTable = prop.GetValue()
-					}
-				}
-			}
-		}
-		if sourceDB != "" && sourceTable != "" {
-			job := &iscp.JobID{DBName: sourceDB, TableName: sourceTable, JobName: "materialized_view_" + qry.Database + "_" + qry.Table}
-			if _, err = DeleteCdcTask(c, job); err != nil {
-				return err
-			}
+		if err = DeleteMaterializedViewTask(c, qry.Database, qry.Table); err != nil {
+			return err
 		}
 	}
 

@@ -377,7 +377,16 @@ func (bat *AtomicBatch) Append(
 		//ts columns
 		tsVec := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[tsColIdx])
 		//composited pk columns
-		compositedPkBytes := readutil.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
+		var compositedPkBytes [][]byte
+		if batch.Vecs[compositedPkColIdx].GetType().Oid == types.T_Rowid {
+			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[compositedPkColIdx])
+			compositedPkBytes = make([][]byte, len(rowids))
+			for i := range rowids {
+				compositedPkBytes[i] = append([]byte(nil), rowids[i][:]...)
+			}
+		} else {
+			compositedPkBytes = readutil.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
+		}
 
 		for i, pk := range compositedPkBytes {
 			// if ts is constant, then tsVec[0] is the ts for all rows

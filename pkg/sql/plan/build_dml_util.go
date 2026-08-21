@@ -282,7 +282,8 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	newCols := make([]*ColDef, 0, len(updatePlanCtx.tableDef.Cols))
 	oldRowIdPos := len(updatePlanCtx.tableDef.Cols) - 1
 	for _, col := range updatePlanCtx.tableDef.Cols {
-		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName &&
+			!(CanWriteMaterializedViewHiddenColumns(ctx.GetContext(), updatePlanCtx.tableDef) && col.Name != catalog.Row_ID) {
 			continue
 		}
 		newCols = append(newCols, col)
@@ -558,7 +559,8 @@ func appendSelfReferOnUpdateCascadeRoots(
 
 	visiblePos := 0
 	for oldPos, col := range tableDef.Cols {
-		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName &&
+			!(CanWriteMaterializedViewHiddenColumns(builder.GetContext(), tableDef) && col.Name != catalog.Row_ID) {
 			continue
 		}
 		if pos, updated := updatePlanCtx.updateColPosMap[col.Name]; updated {

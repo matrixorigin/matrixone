@@ -83,7 +83,7 @@ func (tbl *txnTableDelegate) ReadRowsByRowID(
 					valid = false
 					break
 				}
-				row[i] = vector.GetAny(entry.Batch.Vecs[idx], int(entry.Offset), false)
+				row[i] = rowIDReaderValue(entry.Batch.Vecs[idx], int(entry.Offset))
 			}
 			if valid {
 				found[entry.RowID] = row
@@ -108,7 +108,7 @@ func (tbl *txnTableDelegate) ReadRowsByRowID(
 				}
 				row := make([]any, len(attrs))
 				for j := range attrs {
-					row[j] = vector.GetAny(bat.Vecs[j+1], i, false)
+					row[j] = rowIDReaderValue(bat.Vecs[j+1], i)
 				}
 				found[rowid] = row
 			}
@@ -126,4 +126,14 @@ func (tbl *txnTableDelegate) ReadRowsByRowID(
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+func rowIDReaderValue(vec *vector.Vector, row int) any {
+	if vec == nil || vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	return vector.GetAny(vec, row, false)
 }

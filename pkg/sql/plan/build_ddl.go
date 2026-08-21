@@ -1524,6 +1524,20 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		// kind makes the normal TAE/DistTAE DML path treat refreshes as a
 		// relation-definition change.
 		createView.TableDef.TableType = catalog.SystemOrdinaryRel
+		refreshSQL := materializedViewRefreshSQL(stmt.AsSource)
+		incrementalSpec := ""
+		if len(sources) == 1 {
+			var stateCols []*ColDef
+			var stateRefreshSQL string
+			incrementalSpec, stateCols, stateRefreshSQL = buildMaterializedViewIncrementalPlan(stmt.AsSource, createView.TableDef.Cols)
+			if incrementalSpec != "" {
+				for _, col := range stateCols {
+					col.ColId = uint64(len(createView.TableDef.Cols))
+					createView.TableDef.Cols = append(createView.TableDef.Cols, col)
+				}
+				refreshSQL = stateRefreshSQL
+			}
+		}
 		// A materialized view is stored as a physical ordinary table. Views do
 		// not normally need a primary key, so add the same fake key used by an
 		// ordinary CREATE TABLE without an explicit key.
@@ -1567,7 +1581,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 				&plan.Property{Key: "mv_source_database", Value: sourceDB},
 				&plan.Property{Key: "mv_source_table", Value: string(source.ObjectName)},
 				&plan.Property{Key: "mv_source_sql", Value: tree.String(source, dialect.MYSQL)},
-				&plan.Property{Key: "mv_refresh_sql", Value: tree.String(stmt.AsSource, dialect.MYSQL)},
+				&plan.Property{Key: "mv_refresh_sql", Value: refreshSQL},
 			)
 			if len(sources) > 1 {
 				type sourceName struct{ Database, Table string }
@@ -1585,14 +1599,8 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 				}
 				props.Properties = append(props.Properties, &plan.Property{Key: "mv_source_tables", Value: base64.StdEncoding.EncodeToString(encoded)})
 			}
-			visibleOutputCols := createView.TableDef.Cols
-			if len(visibleOutputCols) > 0 && visibleOutputCols[len(visibleOutputCols)-1].Name == catalog.FakePrimaryKeyColName {
-				visibleOutputCols = visibleOutputCols[:len(visibleOutputCols)-1]
-			}
-			if len(sources) == 1 {
-				if incrementalSpec := materializedViewIncrementalSpec(clause, visibleOutputCols); incrementalSpec != "" {
-					props.Properties = append(props.Properties, &plan.Property{Key: "mv_incremental_spec", Value: incrementalSpec})
-				}
+			if incrementalSpec != "" {
+				props.Properties = append(props.Properties, &plan.Property{Key: "mv_incremental_spec", Value: incrementalSpec})
 			}
 		}
 	}
@@ -1681,6 +1689,12 @@ func IsMaterializedViewTableDef(def *plan.TableDef) bool {
 	return false
 }
 
+// CanWriteMaterializedViewHiddenColumns is true only for SQL issued by the MV
+// consumer. State columns remain hidden and unavailable to ordinary user DML.
+func CanWriteMaterializedViewHiddenColumns(ctx context.Context, def *plan.TableDef) bool {
+	return ctx != nil && ctx.Value(defines.MaterializedViewRefreshKey{}) != nil && IsMaterializedViewTableDef(def)
+}
+
 // ValidateMaterializedViewSources verifies that the source tables recorded in
 // a materialized view's durable CREATE SQL still exist. The MV is a physical
 // table, so resolving the MV itself is not sufficient to establish that its
@@ -1723,112 +1737,35 @@ func ValidateMaterializedViewSources(ctx CompilerContext, def *plan.TableDef) er
 const materializedViewMarkerComment = "matrixone materialized view"
 
 type materializedViewIncrementalAggregate struct {
-	Kind         string `json:"kind"`
-	InputColumn  string `json:"input_column,omitempty"`
+	Kind             string `json:"kind"`
+	InputExpression  string `json:"input_expression,omitempty"`
+	OutputColumn     string `json:"output_column"`
+	StateSumColumn   string `json:"state_sum_column,omitempty"`
+	StateCountColumn string `json:"state_count_column,omitempty"`
+}
+
+type materializedViewIncrementalGroup struct {
+	Expression   string `json:"expression"`
 	OutputColumn string `json:"output_column"`
 }
 
 type materializedViewIncrementalDescription struct {
-	GroupColumns []string                               `json:"group_columns"`
-	GroupOutputs []string                               `json:"group_outputs"`
-	Aggregates   []materializedViewIncrementalAggregate `json:"aggregates"`
+	SourceAlias    string                                 `json:"source_alias"`
+	SourceColumns  []string                               `json:"source_columns"`
+	Filter         string                                 `json:"filter,omitempty"`
+	Groups         []materializedViewIncrementalGroup     `json:"groups"`
+	Aggregates     []materializedViewIncrementalAggregate `json:"aggregates"`
+	RowCountColumn string                                 `json:"row_count_column"`
+	StateColumns   []string                               `json:"state_columns"`
 }
 
-func materializedViewIncrementalSpec(clause *tree.SelectClause, outputCols []*ColDef) string {
-	if clause == nil || clause.GroupBy == nil || clause.GroupBy.Cube || clause.GroupBy.Rollup || clause.GroupBy.GroupingSets || clause.GroupBy.Apart {
-		return ""
-	}
-	groupColumns := make([]string, 0)
-	for _, exprs := range clause.GroupBy.GroupByExprsList {
-		for _, expr := range exprs {
-			name, ok := materializedViewDirectColumn(expr)
-			if !ok {
-				return ""
-			}
-			groupColumns = append(groupColumns, name)
-		}
-	}
-	if len(groupColumns) == 0 || len(clause.Exprs) != len(outputCols) {
-		return ""
-	}
+func materializedViewRefreshSQL(stmt *tree.Select) string {
+	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+}
 
-	groupOutputs := make(map[string]string, len(groupColumns))
-	spec := materializedViewIncrementalDescription{GroupColumns: groupColumns, GroupOutputs: make([]string, len(groupColumns))}
-	for i, selectExpr := range clause.Exprs {
-		outputName := outputCols[i].Name
-		if selectExpr.As != nil && !selectExpr.As.Empty() {
-			outputName = selectExpr.As.Origin()
-		}
-		if col, ok := materializedViewDirectColumn(selectExpr.Expr); ok {
-			found := false
-			for _, groupColumn := range groupColumns {
-				if strings.EqualFold(groupColumn, col) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return ""
-			}
-			groupOutputs[strings.ToLower(col)] = outputName
-			continue
-		}
-		fn, ok := selectExpr.Expr.(*tree.FuncExpr)
-		if !ok {
-			return ""
-		}
-		name := ""
-		if fn.FuncName != nil {
-			name = fn.FuncName.Origin()
-		} else if fn.Func.FunctionReference != nil {
-			name = fn.Func.FunctionReference.(*tree.UnresolvedName).ColName()
-		}
-		name = strings.ToLower(name)
-		if name != "count" && name != "sum" {
-			return ""
-		}
-		if fn.Type == tree.FUNC_TYPE_DISTINCT {
-			return ""
-		}
-		if name == "count" && (len(fn.Exprs) == 0 || (len(fn.Exprs) == 1 && isMaterializedViewStar(fn.Exprs[0]))) {
-			spec.Aggregates = append(spec.Aggregates, materializedViewIncrementalAggregate{Kind: "count_star", OutputColumn: outputName})
-			continue
-		}
-		if len(fn.Exprs) != 1 {
-			return ""
-		}
-		input, ok := materializedViewDirectColumn(fn.Exprs[0])
-		if !ok {
-			return ""
-		}
-		kind := name
-		if name == "count" {
-			kind = "count_column"
-		}
-		spec.Aggregates = append(spec.Aggregates, materializedViewIncrementalAggregate{Kind: kind, InputColumn: input, OutputColumn: outputName})
-	}
-	for i, groupColumn := range groupColumns {
-		output, ok := groupOutputs[strings.ToLower(groupColumn)]
-		if !ok {
-			return ""
-		}
-		spec.GroupOutputs[i] = output
-	}
-	hasCount := false
-	for _, agg := range spec.Aggregates {
-		if agg.Kind == "count_star" || agg.Kind == "count_column" {
-			hasCount = true
-			break
-		}
-	}
-	if len(spec.Aggregates) == 0 || !hasCount {
-		return ""
-	}
-	b, err := json.Marshal(spec)
-	if err != nil {
-		return ""
-	}
-	return base64.StdEncoding.EncodeToString(b)
+func materializedViewIncrementalSpec(stmt *tree.Select, outputCols []*ColDef) string {
+	spec, _, _ := buildMaterializedViewIncrementalPlan(stmt, outputCols)
+	return spec
 }
 
 func materializedViewDirectColumn(expr tree.Expr) (string, bool) {

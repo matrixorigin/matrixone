@@ -337,17 +337,26 @@ func convertColIntoSql(
 		sqlBuff = appendString(sqlBuff, value.String())
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_datetime:
-		value := data.(string)
+		value, ok := data.(string)
+		if !ok {
+			value = data.(types.Datetime).String2(typ.Scale)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_time:
-		value := data.(string)
+		value, ok := data.(string)
+		if !ok {
+			value = data.(types.Time).String2(typ.Scale)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_timestamp:
-		value := data.(string)
+		value, ok := data.(string)
+		if !ok {
+			value = data.(types.Timestamp).String2(time.UTC, typ.Scale)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')

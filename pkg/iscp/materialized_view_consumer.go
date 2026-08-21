@@ -16,23 +16,19 @@ package iscp
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -57,26 +53,31 @@ type materializedViewFromBoundaryRetriever interface {
 }
 
 type incrementalAggregate struct {
-	Kind         string `json:"kind"`
-	InputColumn  string `json:"input_column,omitempty"`
+	Kind             string `json:"kind"`
+	InputExpression  string `json:"input_expression,omitempty"`
+	OutputColumn     string `json:"output_column"`
+	StateSumColumn   string `json:"state_sum_column,omitempty"`
+	StateCountColumn string `json:"state_count_column,omitempty"`
+}
+
+type incrementalGroup struct {
+	Expression   string `json:"expression"`
 	OutputColumn string `json:"output_column"`
 }
 
 type incrementalDescription struct {
-	GroupColumns []string               `json:"group_columns"`
-	GroupOutputs []string               `json:"group_outputs"`
-	Aggregates   []incrementalAggregate `json:"aggregates"`
+	SourceAlias    string                 `json:"source_alias"`
+	SourceColumns  []string               `json:"source_columns"`
+	Filter         string                 `json:"filter,omitempty"`
+	Groups         []incrementalGroup     `json:"groups"`
+	Aggregates     []incrementalAggregate `json:"aggregates"`
+	RowCountColumn string                 `json:"row_count_column"`
+	StateColumns   []string               `json:"state_columns"`
 }
 
 type materializedViewChangeRow struct {
 	Values map[string]any
 	RowID  types.Rowid
-}
-
-type incrementalDelta struct {
-	groupValues map[string]any
-	countDelta  map[string]int64
-	sumTerms    map[string][]string
 }
 
 var _ Consumer = (*MaterializedViewConsumer)(nil)
@@ -98,23 +99,51 @@ func NewMaterializedViewConsumer(
 }
 
 func (c *MaterializedViewConsumer) Consume(ctx context.Context, r DataRetriever) error {
-	collectChanges := r.GetDataType() == ISCPDataType_Tail && c.info.IncrementalSpec != ""
-	inserts, deletes, collectChanges, err := c.drainChanges(r, collectChanges)
-	if err != nil {
-		return err
-	}
-
-	if collectChanges {
-		if err := c.consumeIncremental(ctx, r, inserts, deletes); err == nil {
+	drained := false
+	if r.GetDataType() == ISCPDataType_Tail && c.info.IncrementalSpec != "" {
+		started := time.Now()
+		var incrementalErr error
+		drained, incrementalErr = c.consumeIncremental(ctx, r)
+		if incrementalErr == nil {
+			metricv2.ISCPMaterializedViewRefreshDuration.WithLabelValues("incremental", "success").Observe(time.Since(started).Seconds())
+			observeMaterializedViewWatermarkLag(r)
 			return nil
 		} else {
-			logutil.Warnf("materialized view incremental refresh fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, err)
+			metricv2.ISCPMaterializedViewRefreshDuration.WithLabelValues("incremental", "error").Observe(time.Since(started).Seconds())
+			metricv2.ISCPMaterializedViewFallback.Inc()
+			logutil.Warnf("materialized view incremental refresh fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, incrementalErr)
 		}
 		// Incremental refresh is deliberately fail-closed: the fallback starts
-		// a new transaction, so a partial delta can never be committed.
+		// a new transaction, so a partial delta can never be committed. Drain any
+		// remaining payload before evaluating the definition at the boundary.
+	}
+	if !drained {
+		if err := c.drainChanges(r); err != nil {
+			return err
+		}
 	}
 
-	return c.consumeFullRefresh(ctx, r)
+	started := time.Now()
+	err := c.consumeFullRefresh(ctx, r)
+	result := "success"
+	if err != nil {
+		result = "error"
+	} else {
+		observeMaterializedViewWatermarkLag(r)
+	}
+	metricv2.ISCPMaterializedViewRefreshDuration.WithLabelValues("full", result).Observe(time.Since(started).Seconds())
+	return err
+}
+
+func observeMaterializedViewWatermarkLag(r DataRetriever) {
+	boundary, ok := r.(iterationBoundaryRetriever)
+	if !ok {
+		return
+	}
+	lag := time.Since(time.Unix(0, boundary.GetToTS().Physical())).Seconds()
+	if lag >= 0 {
+		metricv2.ISCPMaterializedViewWatermarkLag.Observe(lag)
+	}
 }
 
 // NeedsChangePayload reports whether this iteration can use row deltas. The
@@ -124,16 +153,9 @@ func (c *MaterializedViewConsumer) NeedsChangePayload(dataType int8) bool {
 	return dataType == ISCPDataType_Tail && c.info.IncrementalSpec != ""
 }
 
-// drainChanges always advances the ISCP stream to its iteration boundary, but
-// only materializes row values when this tail can use incremental maintenance.
-// Snapshot and full-refresh-only tails use the stream as a synchronization
-// barrier; retaining their row payload would add an unnecessary table-sized
-// memory copy before the boundary query runs.
-func (c *MaterializedViewConsumer) drainChanges(
-	r DataRetriever,
-	collectChanges bool,
-) (inserts, deletes []materializedViewChangeRow, canIncrement bool, err error) {
-	canIncrement = collectChanges
+// drainChanges advances a snapshot or full-refresh-only stream to its
+// iteration boundary without retaining its table-sized row payload.
+func (c *MaterializedViewConsumer) drainChanges(r DataRetriever) error {
 	for {
 		data := r.Next()
 		if data == nil {
@@ -141,27 +163,7 @@ func (c *MaterializedViewConsumer) drainChanges(
 		}
 		if data.err != nil {
 			data.Done()
-			return nil, nil, false, data.err
-		}
-		if canIncrement {
-			if data.insertBatch != nil {
-				rows, decodeErr := materializedViewRowsFromBatch(data.insertBatch, true)
-				if decodeErr != nil {
-					logutil.Warnf("materialized view incremental batch fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, decodeErr)
-					canIncrement = false
-				} else {
-					inserts = append(inserts, rows...)
-				}
-			}
-			if data.deleteBatch != nil {
-				rows, decodeErr := materializedViewRowsFromBatch(data.deleteBatch, false)
-				if decodeErr != nil {
-					logutil.Warnf("materialized view incremental delete batch fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, decodeErr)
-					canIncrement = false
-				} else {
-					deletes = append(deletes, rows...)
-				}
-			}
+			return data.err
 		}
 		done := data.noMoreData
 		data.Done()
@@ -169,7 +171,7 @@ func (c *MaterializedViewConsumer) drainChanges(
 			break
 		}
 	}
-	return inserts, deletes, canIncrement, nil
+	return nil
 }
 
 func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r DataRetriever) error {
@@ -198,9 +200,17 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 			}
 			insertSQL := fmt.Sprintf("insert into `%s`.`%s` %s", c.info.DBName, c.info.TableName, refreshSQL)
 			if len(c.info.Columns) > 0 {
-				columns := make([]string, 0, len(c.info.Columns)+1)
-				selectColumns := make([]string, 0, len(c.info.Columns))
-				for _, column := range c.info.Columns {
+				targetColumns := append([]string(nil), c.info.Columns...)
+				if c.info.IncrementalSpec != "" {
+					desc, decodeErr := decodeIncrementalDescription(c.info.IncrementalSpec)
+					if decodeErr != nil {
+						return decodeErr
+					}
+					targetColumns = append(targetColumns, desc.StateColumns...)
+				}
+				columns := make([]string, 0, len(targetColumns)+1)
+				selectColumns := make([]string, 0, len(targetColumns))
+				for _, column := range targetColumns {
 					quoted := "`" + strings.ReplaceAll(column, "`", "``") + "`"
 					columns = append(columns, quoted)
 					selectColumns = append(selectColumns, quoted)
@@ -253,294 +263,6 @@ func materializedViewRowsFromBatch(bat *AtomicBatch, insert bool) ([]materialize
 		rows = append(rows, row)
 	}
 	return rows, nil
-}
-
-func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r DataRetriever, inserts, deletes []materializedViewChangeRow) error {
-	var desc incrementalDescription
-	spec, err := base64.StdEncoding.DecodeString(c.info.IncrementalSpec)
-	if err != nil {
-		return fmt.Errorf("invalid materialized view incremental specification encoding: %w", err)
-	}
-	if err := json.Unmarshal(spec, &desc); err != nil || len(desc.GroupColumns) == 0 || len(desc.GroupColumns) != len(desc.GroupOutputs) {
-		return fmt.Errorf("invalid materialized view incremental specification")
-	}
-	for _, agg := range desc.Aggregates {
-		if agg.Kind != "count_star" && agg.Kind != "count_column" && agg.Kind != "sum" {
-			return fmt.Errorf("incremental aggregate %q is not supported", agg.Kind)
-		}
-	}
-	from, ok := r.(materializedViewFromBoundaryRetriever)
-	if !ok {
-		return fmt.Errorf("materialized view retriever does not expose from boundary")
-	}
-	return runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 24*time.Hour, nil, nil,
-		func(sqlproc *sqlexec.SqlProcess, _ any) error {
-			sqlctx := sqlproc.SqlCtx
-			refreshCtx := context.WithValue(sqlproc.GetContext(), defines.MaterializedViewRefreshKey{}, true)
-			db, err := c.cnEngine.Database(refreshCtx, c.jobID.DBName, sqlctx.Txn())
-			if err != nil {
-				return err
-			}
-			rel, err := db.Relation(refreshCtx, c.jobID.TableName, nil)
-			if err != nil {
-				return err
-			}
-			reader, ok := rel.(engine.RowIDReader)
-			if !ok {
-				return fmt.Errorf("source relation does not support rowid lookup")
-			}
-			scales := make(map[string]int32)
-			if tableDef := rel.GetTableDef(refreshCtx); tableDef != nil {
-				for _, col := range tableDef.Cols {
-					scales[strings.ToLower(col.Name)] = col.Typ.Scale
-				}
-			}
-			attrs := make([]string, 0, len(desc.GroupColumns)+len(desc.Aggregates))
-			seen := make(map[string]struct{})
-			addAttr := func(name string) {
-				name = strings.ToLower(name)
-				if _, exists := seen[name]; !exists {
-					seen[name] = struct{}{}
-					attrs = append(attrs, name)
-				}
-			}
-			for _, name := range desc.GroupColumns {
-				addAttr(name)
-			}
-			for _, agg := range desc.Aggregates {
-				if agg.InputColumn != "" {
-					addAttr(agg.InputColumn)
-				}
-			}
-			rowids := make([]types.Rowid, 0, len(deletes))
-			for _, row := range deletes {
-				rowids = append(rowids, row.RowID)
-			}
-			oldRows, err := reader.ReadRowsByRowID(refreshCtx, rowids, from.GetFromTS(), attrs, nil)
-			if err != nil {
-				return err
-			}
-			deltas := make(map[string]*incrementalDelta)
-			normalize := func(row map[string]any) {
-				for name, value := range row {
-					row[name] = normalizeMaterializedViewValue(value, scales[name])
-				}
-			}
-			apply := func(row map[string]any, sign int64) error {
-				normalize(row)
-				keyParts := make([]string, 0, len(desc.GroupColumns))
-				groupValues := make(map[string]any, len(desc.GroupColumns))
-				for _, col := range desc.GroupColumns {
-					value, exists := row[strings.ToLower(col)]
-					if !exists {
-						return fmt.Errorf("missing group column %q", col)
-					}
-					groupValues[strings.ToLower(col)] = value
-					keyParts = append(keyParts, fmt.Sprintf("%#v", value))
-				}
-				key := strings.Join(keyParts, "\x00")
-				delta := deltas[key]
-				if delta == nil {
-					delta = &incrementalDelta{groupValues: groupValues, countDelta: make(map[string]int64), sumTerms: make(map[string][]string)}
-					deltas[key] = delta
-				}
-				for _, agg := range desc.Aggregates {
-					if agg.Kind == "count_star" {
-						delta.countDelta[agg.OutputColumn] += sign
-						continue
-					}
-					value := row[strings.ToLower(agg.InputColumn)]
-					if value == nil {
-						continue
-					}
-					if agg.Kind == "count_column" {
-						delta.countDelta[agg.OutputColumn] += sign
-						continue
-					}
-					literal, err := materializedViewSQLNumericLiteral(value)
-					if err != nil {
-						return err
-					}
-					term := literal
-					if sign < 0 {
-						term = "- (" + literal + ")"
-					}
-					delta.sumTerms[agg.OutputColumn] = append(delta.sumTerms[agg.OutputColumn], term)
-				}
-				return nil
-			}
-			for _, row := range inserts {
-				if err := apply(row.Values, 1); err != nil {
-					return err
-				}
-			}
-			for i := range deletes {
-				if i >= len(oldRows) {
-					return fmt.Errorf("rowid lookup returned too few rows")
-				}
-				old := make(map[string]any, len(attrs))
-				for j, name := range attrs {
-					old[strings.ToLower(name)] = oldRows[i][j]
-				}
-				if err := apply(old, -1); err != nil {
-					return err
-				}
-			}
-			for _, delta := range deltas {
-				if err := applyIncrementalDelta(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, &desc, delta); err != nil {
-					return err
-				}
-			}
-			return r.UpdateWatermark(refreshCtx, sqlctx.GetService(), sqlctx.Txn())
-		})
-}
-
-func applyIncrementalDelta(ctx context.Context, service string, txn client.TxnOperator, info *ConsumerInfo, desc *incrementalDescription, delta *incrementalDelta) error {
-	where := make([]string, 0, len(desc.GroupColumns))
-	for i, col := range desc.GroupColumns {
-		value, err := materializedViewSQLLiteral(delta.groupValues[strings.ToLower(col)])
-		if err != nil {
-			return err
-		}
-		out := desc.GroupOutputs[i]
-		where = append(where, fmt.Sprintf("((`%s` = %s) or (`%s` is null and %s is null))", strings.ReplaceAll(out, "`", "``"), value, strings.ReplaceAll(out, "`", "``"), value))
-	}
-	predicate := strings.Join(where, " and ")
-	selectSQL := fmt.Sprintf("select count(*) from `%s`.`%s` where %s", info.DBName, info.TableName, predicate)
-	res, err := ExecWithResult(ctx, selectSQL, service, txn)
-	if err != nil {
-		return err
-	}
-	exists := false
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows > 0 && cols[0].Length() > 0 {
-			value := vector.GetAny(cols[0], 0, false)
-			exists = fmt.Sprint(value) != "0"
-		}
-		return false
-	})
-	res.Close()
-	if !exists {
-		countDelta := int64(0)
-		for _, agg := range desc.Aggregates {
-			if agg.Kind == "count_star" || agg.Kind == "count_column" {
-				countDelta = delta.countDelta[agg.OutputColumn]
-				break
-			}
-		}
-		if countDelta <= 0 {
-			return fmt.Errorf("cannot apply a delete-only delta to a missing materialized-view group")
-		}
-		columns, values := make([]string, 0), make([]string, 0)
-		for i, col := range desc.GroupOutputs {
-			columns = append(columns, "`"+strings.ReplaceAll(col, "`", "``")+"`")
-			value, err := materializedViewSQLLiteral(delta.groupValues[strings.ToLower(desc.GroupColumns[i])])
-			if err != nil {
-				return err
-			}
-			values = append(values, value)
-		}
-		for _, agg := range desc.Aggregates {
-			columns = append(columns, "`"+strings.ReplaceAll(agg.OutputColumn, "`", "``")+"`")
-			if agg.Kind == "count_star" || agg.Kind == "count_column" {
-				values = append(values, fmt.Sprint(delta.countDelta[agg.OutputColumn]))
-			} else {
-				values = append(values, incrementalSumExpression(delta.sumTerms[agg.OutputColumn]))
-			}
-		}
-		return execAndClose(ctx, fmt.Sprintf("insert into `%s`.`%s` (%s) values (%s)", info.DBName, info.TableName, strings.Join(columns, ","), strings.Join(values, ",")), service, txn)
-	}
-	sets := make([]string, 0, len(desc.Aggregates))
-	for _, agg := range desc.Aggregates {
-		col := "`" + strings.ReplaceAll(agg.OutputColumn, "`", "``") + "`"
-		if agg.Kind == "count_star" || agg.Kind == "count_column" {
-			sets = append(sets, fmt.Sprintf("%s = %s + %d", col, col, delta.countDelta[agg.OutputColumn]))
-		} else if terms := delta.sumTerms[agg.OutputColumn]; len(terms) > 0 {
-			sets = append(sets, fmt.Sprintf("%s = coalesce(%s, 0) + (%s)", col, col, incrementalSumExpression(terms)))
-		}
-	}
-	if len(sets) == 0 {
-		return nil
-	}
-	if err := execAndClose(ctx, fmt.Sprintf("update `%s`.`%s` set %s where %s", info.DBName, info.TableName, strings.Join(sets, ","), predicate), service, txn); err != nil {
-		return err
-	}
-	for _, agg := range desc.Aggregates {
-		if agg.Kind != "count_star" && agg.Kind != "count_column" {
-			continue
-		}
-		countCol := "`" + strings.ReplaceAll(agg.OutputColumn, "`", "``") + "`"
-		if err := execAndClose(ctx, fmt.Sprintf("delete from `%s`.`%s` where %s and %s <= 0", info.DBName, info.TableName, predicate, countCol), service, txn); err != nil {
-			return err
-		}
-		break
-	}
-	return nil
-}
-
-func incrementalSumExpression(terms []string) string {
-	if len(terms) == 0 {
-		return "0"
-	}
-	return strings.Join(terms, " + ")
-}
-
-func execAndClose(ctx context.Context, sql, service string, txn client.TxnOperator) error {
-	res, err := ExecWithResult(ctx, sql, service, txn)
-	if err == nil {
-		res.Close()
-	}
-	return err
-}
-
-func materializedViewSQLLiteral(value any) (string, error) {
-	if value == nil {
-		return "null", nil
-	}
-	if s, ok := value.(string); ok {
-		return "'" + strings.ReplaceAll(s, "'", "''") + "'", nil
-	}
-	if b, ok := value.([]byte); ok {
-		return "'" + strings.ReplaceAll(string(b), "'", "''") + "'", nil
-	}
-	rv := reflect.ValueOf(value)
-	if rv.Kind() >= reflect.Int && rv.Kind() <= reflect.Float64 {
-		return fmt.Sprint(value), nil
-	}
-	if s, ok := value.(fmt.Stringer); ok {
-		return "'" + strings.ReplaceAll(s.String(), "'", "''") + "'", nil
-	}
-	return "", fmt.Errorf("unsupported incremental value type %T", value)
-}
-
-func materializedViewSQLNumericLiteral(value any) (string, error) {
-	if s, ok := value.(string); ok {
-		if _, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err != nil {
-			return "", fmt.Errorf("incremental SUM value %q is not numeric", s)
-		}
-		return strings.TrimSpace(s), nil
-	}
-	if b, ok := value.([]byte); ok {
-		s := strings.TrimSpace(string(b))
-		if _, err := strconv.ParseFloat(s, 64); err != nil {
-			return "", fmt.Errorf("incremental SUM value %q is not numeric", s)
-		}
-		return s, nil
-	}
-	return materializedViewSQLLiteral(value)
-}
-
-func normalizeMaterializedViewValue(value any, scale int32) any {
-	switch v := value.(type) {
-	case types.Decimal64:
-		return types.Decimal64ToFloat64(v, scale)
-	case types.Decimal128:
-		return types.Decimal128ToFloat64(v, scale)
-	case types.Decimal256:
-		return types.Decimal256ToFloat64(v, scale)
-	default:
-		return value
-	}
 }
 
 func materializedViewRefreshAt(query, source string, ts types.TS) (string, error) {
@@ -662,5 +384,5 @@ func materializedViewRefreshAtSources(query string, sources []TableInfo, ts type
 			return "", fmt.Errorf("materialized view source %q not found in refresh query", key.table)
 		}
 	}
-	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteIdentifier()), nil
+	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()), nil
 }
