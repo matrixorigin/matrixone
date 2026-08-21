@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -104,6 +105,8 @@ func (c *Compile) querySchedulePlacementFields(placement schedule.QueryDecision)
 		zap.Bool("pool-fallback", placement.ResolvedPool.Fallback),
 		zap.String("worker-set", placement.Intent.WorkerSet.Mode.String()),
 		zap.Int("max-workers", placement.Intent.WorkerSet.MaxWorkers),
+		zap.Bool("require-current-cn", placement.RequireCurrentCN),
+		zap.Bool("ingress-only", placement.IngressOnly),
 		zap.Bool("is-internal", c.isInternal),
 	}
 }
@@ -388,15 +391,55 @@ func (c *Compile) evaluateQueryPlacement(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var requireCurrentCN, ingressOnly, currentCNOrdinalZero bool
+	// TP and AP_ONECN are already local, so inspecting workspace/AST state
+	// cannot change their placement. Keep their legacy hot path untouched and
+	// derive these guards only for the remotely schedulable execution kind.
+	if c.execType == plan2.ExecTypeAP_MULTICN {
+		requireCurrentCN = c.executionRequiresCurrentCN()
+		ingressOnly = c.ingressOnlyExecution()
+		var qry *plan.Query
+		if c.pn != nil {
+			qry = c.pn.GetQuery()
+		}
+		if queryHasIvfSearchEntriesInternalScan(qry) {
+			// The local partition is the only one that can see the coordinator's
+			// appendable IVF ranges. This is an execution invariant, not a
+			// user-selectable current-CN preference, so give it the same identity
+			// proof and route canonicalization as a writable workspace.
+			requireCurrentCN = true
+			currentCNOrdinalZero = true
+		}
+	}
 	currentCN := c.currentCNWorker()
 	intent := c.effectiveQuerySchedulingIntent()
 	req := schedule.QueryRequest{
-		ExecKind:        toScheduleExecKind(c.execType),
-		CurrentCN:       currentCN,
-		CurrentCNPolicy: intent.CurrentCNPolicy,
-		Intent:          intent,
+		ExecKind:             toScheduleExecKind(c.execType),
+		CurrentCN:            currentCN,
+		RequireCurrentCN:     requireCurrentCN,
+		IngressOnly:          ingressOnly,
+		CurrentCNPolicy:      intent.CurrentCNPolicy,
+		CurrentCNOrdinalZero: currentCNOrdinalZero,
+		Intent:               intent,
+	}
+	if (requireCurrentCN || ingressOnly) && intent.CurrentCNPolicy == schedule.CurrentCNExcluded {
+		return schedule.DecideQueryPlacement(req), "", nil
 	}
 	if schedule.ValidateSchedulingIntent(intent) != "" {
+		return schedule.DecideQueryPlacement(req), "", nil
+	}
+	if c.execType == plan2.ExecTypeAP_MULTICN {
+		if err := ctx.Err(); err != nil {
+			return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
+		}
+	}
+	if ingressOnly && intent.PoolFallback != schedule.PoolFallbackStrict {
+		// With no strict target pool to prove, LOCAL input has exactly one
+		// executable owner. Avoid candidate discovery on this ingress-only path.
+		req.CandidateResolution = schedule.CandidateResolution{
+			DiscoverySource: schedule.CandidateSourceNotRequired,
+			PoolResolution:  schedule.PoolResolutionNotRequired,
+		}
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
@@ -406,10 +449,6 @@ func (c *Compile) evaluateQueryPlacement(
 		}
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
-	if err := ctx.Err(); err != nil {
-		return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
-	}
-
 	poolRequest := queryCandidatePoolRequest{
 		IsInternal:     c.isInternal,
 		Tenant:         c.tenant,
@@ -442,19 +481,35 @@ func (c *Compile) evaluateQueryPlacement(
 	resolved.pool.Workers = markCurrentWorkerRoute(resolved.pool.Workers, currentCN)
 	req.ResolvedPool = resolved.pool
 	req.CandidateResolution = resolved.resolution
-	var qry *plan.Query
-	if c.pn != nil {
-		qry = c.pn.GetQuery()
-	}
-	isIvfEntriesScan := queryHasIvfSearchEntriesInternalScan(qry)
-	// The local partition is the only one that can see the coordinator's
-	// appendable IVF ranges. Keep it at partition zero; persisted ranges remain
-	// distributed by ObjectID across all selected workers.
-	if isIvfEntriesScan {
-		req.CurrentCNPolicy = schedule.CurrentCNRequired
-		req.CurrentCNOrdinalZero = true
-	}
 	return schedule.DecideQueryPlacement(req), "", nil
+}
+
+// executionRequiresCurrentCN identifies coordinator-owned transaction state
+// that cannot be reconstructed by a remote CN. A writable workspace is the
+// conservative boundary: read-only snapshot workspaces remain remotely
+// schedulable, while a writable transaction keeps ingress participation so
+// its local partition can observe uncommitted state.
+func (c *Compile) executionRequiresCurrentCN() bool {
+	if c == nil || c.proc == nil {
+		return false
+	}
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil {
+		return false
+	}
+	workspace := txnOp.GetWorkspace()
+	return workspace != nil && !workspace.Readonly()
+}
+
+// ingressOnlyExecution identifies LOAD DATA LOCAL, whose client input stream
+// exists only at the ingress CN and cannot be sent through a remote scheduler
+// decision.
+func (c *Compile) ingressOnlyExecution() bool {
+	if c == nil || c.stmt == nil {
+		return false
+	}
+	load, ok := c.stmt.(*tree.Load)
+	return ok && load.Local
 }
 
 func (c *Compile) SetQuerySchedulingIntent(intent schedule.SchedulingIntent) {
@@ -802,7 +857,11 @@ func toEngineNode(worker schedule.Worker) engine.Node {
 
 func (c *Compile) materializeScheduledWorker(worker schedule.Worker) engine.Node {
 	node := toEngineNode(worker)
-	if node.Addr == "" && c.canUseLocalExecutionRoute(worker) {
+	// Route is the placement decision; the candidate address is discovery
+	// metadata. Once a worker is identified as the ingress CN, always use the
+	// actual in-process address so a stale/aliased advertised address cannot
+	// turn the transaction-workspace partition into RemoteRun.
+	if c.canUseLocalExecutionRoute(worker) {
 		node.Addr = c.addr
 	}
 	return node
