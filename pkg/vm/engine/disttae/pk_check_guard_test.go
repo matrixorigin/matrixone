@@ -156,33 +156,33 @@ func TestPKCommitTSMatchedInRange(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(20, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(vec, types.BuildTS(21, 0), false, mp))
 
-	changed, ok := pkCommitTSMatchedInRange(vec, []int64{0, 3}, from, to)
+	changed, ok := pkCommitTSMatchedInRange(vec, nil, []int64{0, 3}, from, to)
 	require.True(t, ok)
 	require.False(t, changed)
 
-	changed, ok = pkCommitTSMatchedInRange(vec, []int64{1}, from, to)
+	changed, ok = pkCommitTSMatchedInRange(vec, nil, []int64{1}, from, to)
 	require.True(t, ok)
 	require.True(t, changed)
 
-	changed, ok = pkCommitTSMatchedInRange(vec, []int64{2}, from, to)
+	changed, ok = pkCommitTSMatchedInRange(vec, nil, []int64{2}, from, to)
 	require.True(t, ok)
 	require.True(t, changed)
 
 	vec.SetNull(1)
-	changed, ok = pkCommitTSMatchedInRange(vec, []int64{1}, from, to)
+	changed, ok = pkCommitTSMatchedInRange(vec, nil, []int64{1}, from, to)
 	require.False(t, ok)
 	require.False(t, changed)
 
 	constNull := vector.NewConstNull(types.T_TS.ToType(), 1, mp)
 	defer constNull.Free(mp)
-	changed, ok = pkCommitTSMatchedInRange(constNull, []int64{0}, from, to)
+	changed, ok = pkCommitTSMatchedInRange(constNull, nil, []int64{0}, from, to)
 	require.False(t, ok)
 	require.False(t, changed)
 
 	constant, err := vector.NewConstFixed(types.T_TS.ToType(), types.BuildTS(15, 0), 4, mp)
 	require.NoError(t, err)
 	defer constant.Free(mp)
-	changed, ok = pkCommitTSMatchedInRange(constant, []int64{3}, from, to)
+	changed, ok = pkCommitTSMatchedInRange(constant, nil, []int64{3}, from, to)
 	require.True(t, ok)
 	require.True(t, changed)
 }

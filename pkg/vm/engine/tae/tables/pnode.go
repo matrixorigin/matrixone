@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"slices"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -117,7 +118,7 @@ func (node *persistedNode) Scan(
 	}
 	vecs, deletes, release, err := LoadPersistedColumnData(
 		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, tsForAppendable,
-		!isScanNoCopy(ctx), node.object.meta.Load().IsTombstone,
+		!isScanNoCopy(ctx),
 	)
 	replaceCommitts := func(vecs []containers.Vector, i int) {
 		createTS := node.object.meta.Load().GetCreatedAt()
@@ -142,6 +143,8 @@ func (node *persistedNode) Scan(
 					replaceCommitts(vecs, i)
 				}
 				/// TODO: Read old version of nonappendable block?
+			} else if idx == objectio.SEQNUM_ABORT {
+				attr = objectio.TombstoneAttr_Abort_Attr
 			} else {
 				attr = readSchema.ColDefs[idx].Name
 			}
@@ -176,6 +179,8 @@ func (node *persistedNode) Scan(
 				if vecs[i].IsConstNull() {
 					replaceCommitts(vecs, i)
 				}
+			} else if idx == objectio.SEQNUM_ABORT {
+				attr = objectio.TombstoneAttr_Abort_Attr
 			} else {
 				attr = readSchema.ColDefs[idx].Name
 			}
@@ -234,10 +239,11 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 	if !node.object.meta.Load().IsTombstone {
 		panic("not support")
 	}
-	colIdxes := objectio.TombstoneColumns_TN_Created
+	colIdxes := append(
+		slices.Clone(objectio.TombstoneColumns_TN_Created),
+		objectio.SEQNUM_ABORT,
+	)
 	readSchema := node.object.meta.Load().GetTable().GetLastestSchema(true)
-	pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
-	pkType := readSchema.ColDefs[pkIdx].GetType()
 	var startTS types.TS
 	if !node.object.meta.Load().IsAppendable() {
 		startTS = node.object.meta.Load().GetCreatedAt()
@@ -267,8 +273,10 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 	if err != nil {
 		return err
 	}
-	colCount := objDataMeta.MustGetMeta(objectio.SchemaData).GetBlockMeta(0).GetColumnCount()
-	persistedByCN := colCount == 2
+	firstBlock := objDataMeta.MustGetMeta(objectio.SchemaData).GetBlockMeta(0)
+	persistedByCN := firstBlock.GetColumnCount() == 2 &&
+		objectio.ResolveSpecialColumnLayout(firstBlock).CommitTS ==
+			objectio.InvalidSpecialColumnPosition
 	for blkID := 0; blkID < node.object.meta.Load().BlockCnt(); blkID++ {
 		buf := bf.GetBloomFilter(uint32(blkID))
 		bfIndex := index.NewEmptyBloomFilterWithType(index.HBF)
@@ -289,28 +297,31 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		}
 		vecs, _, _, err := LoadPersistedColumnData(
 			ctx, readSchema, node.object.rt, id, colIdxes, location, mp, nil,
-			true, true,
+			true,
 		)
 		if err != nil {
 			return err
 		}
+		var commitTSs []types.TS
 		if !persistedByCN {
-			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
-			commitTSs, err := ioutil.ValidateTombstoneCommitTSColumn(
-				len(rowIDs),
-				vecs[2].GetDownstreamVector(),
+			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2].GetDownstreamVector())
+			aborts, abortErr := ioutil.ValidateTombstoneAbortColumn(
+				len(commitTSs), vecs[3].GetDownstreamVector(),
 			)
-			if err != nil {
-				for i := range vecs {
-					vecs[i].Close()
-				}
-				return err
+			if abortErr != nil {
+				return abortErr
 			}
-			for i := range rowIDs {
-				commitTS := commitTSs.At(i)
+			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
+			for i := 0; i < len(commitTSs); i++ {
+				if aborts.IsPresent() && aborts.At(i) {
+					continue
+				}
+				commitTS := commitTSs[i]
 				if commitTS.GE(&start) && commitTS.LE(&end) &&
 					types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
+						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
+						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
 					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
@@ -320,9 +331,11 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 			}
 		} else {
 			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
-			for i := range rowIDs {
+			for i := 0; i < len(rowIDs); i++ {
 				if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
+						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
+						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
 					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
@@ -366,14 +379,14 @@ func (node *persistedNode) FillBlockTombstones(
 	); err != nil {
 		return err
 	}
-	isAppendable := node.object.meta.Load().IsAppendable()
 	colIdxs := []int{0}
-	if !isAppendable {
-		// A non-appendable tombstone can contain rows committed at different
-		// timestamps.  The object CreatedAt check above is only a coarse object
-		// visibility gate; use the hidden per-row commitTS for snapshot filtering.
-		// LoadPersistedColumnData also maps the affected Backup layout and leaves
-		// the exact two-column CN layout as const-null (CreatedAt semantics).
+	var snapshotTS *types.TS
+	if node.object.meta.Load().IsAppendable() {
+		colIdxs = append(colIdxs, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT)
+		snapshotTS = &startTS
+	} else {
+		// Non-appendable tombstones can contain rows committed at different
+		// timestamps, including legacy backup objects.
 		colIdxs = append(colIdxs, objectio.SEQNUM_COMMITTS)
 	}
 	for tombstoneBlkID := 0; tombstoneBlkID < node.object.meta.Load().BlockCnt(); tombstoneBlkID++ {
@@ -394,16 +407,19 @@ func (node *persistedNode) FillBlockTombstones(
 		if err != nil {
 			return err
 		}
-		vecs, _, _, err := LoadPersistedColumnData(
-			ctx, readSchema, node.object.rt, id, colIdxs, location, mp, nil,
-			true, true,
+		vecs, visibilityDeletes, _, err := LoadPersistedColumnData(
+			ctx, readSchema, node.object.rt, id, colIdxs, location, mp, snapshotTS,
+			true,
 		)
 		if err != nil {
 			return err
 		}
-		var commitTSVec containers.Vector
-		if isAppendable {
-			commitTSVec, err = node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
+		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
+		var commitTSs ioutil.TombstoneCommitTSColumn
+		if !node.object.meta.Load().IsAppendable() && !vecs[1].IsConstNull() {
+			commitTSs, err = ioutil.ValidateTombstoneCommitTSColumn(
+				len(rowIDs), vecs[1].GetDownstreamVector(),
+			)
 			if err != nil {
 				for i := range vecs {
 					vecs[i].Close()
@@ -411,28 +427,10 @@ func (node *persistedNode) FillBlockTombstones(
 				return err
 			}
 		}
-		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
-		var commitTSs ioutil.TombstoneCommitTSColumn
-		if isAppendable {
-			commitTSs, err = ioutil.ValidateTombstoneCommitTSColumn(
-				len(rowIDs), commitTSVec.GetDownstreamVector(),
-			)
-		} else if !vecs[1].IsConstNull() {
-			commitTSs, err = ioutil.ValidateTombstoneCommitTSColumn(
-				len(rowIDs), vecs[1].GetDownstreamVector(),
-			)
-		}
-		if err != nil {
-			if commitTSVec != nil {
-				commitTSVec.Close()
-			}
-			for i := range vecs {
-				vecs[i].Close()
-			}
-			return err
-		}
-		// TODO: biselect, check visibility
 		for i := 0; i < len(rowIDs); i++ {
+			if visibilityDeletes != nil && visibilityDeletes.Contains(uint64(i)) {
+				continue
+			}
 			if commitTSs.IsPresent() {
 				commitTS := commitTSs.At(i)
 				if commitTS.GT(&startTS) {
@@ -447,9 +445,6 @@ func (node *persistedNode) FillBlockTombstones(
 				offset := rowID.GetRowOffset()
 				(*deletes).Add(uint64(offset) + deleteStartOffset)
 			}
-		}
-		if commitTSVec != nil {
-			commitTSVec.Close()
 		}
 		for i := range vecs {
 			vecs[i].Close()

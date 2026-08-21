@@ -185,6 +185,25 @@ func TestBackupTombstoneWriterBroadcastsConstantCommitTS(t *testing.T) {
 	}
 }
 
+func TestVisibleAppendableRowsBroadcastsConstantAbort(t *testing.T) {
+	input := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS, types.T_bool})
+	defer input.Clean(common.DebugAllocator)
+	input.Vecs[3].Free(common.DebugAllocator)
+	abortVec, err := vector.NewConstFixed(
+		types.T_bool.ToType(), false, input.RowCount(), common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	input.Vecs[3] = abortVec
+
+	visibleRows, err := visibleAppendableRows(
+		context.Background(), input,
+		newBackupTombstoneLayout(2, invalidBackupSpecialColumnPosition, 3),
+		ptrTo(types.BuildTS(15, 0)),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 1}, visibleRows)
+}
+
 func TestBackupTombstoneValidationRejectsMalformedColumns(t *testing.T) {
 	tests := []struct {
 		name   string

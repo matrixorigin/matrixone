@@ -35,6 +35,7 @@ enum Method {
   StopSending = 4;
   PipelineStreamFinish = 5;
   PipelineStreamFinishAck = 6;
+  PipelineBatchAck = 7;
 }
 
 // StreamTeardownMode negotiates whether a completed logical pipeline stream can
@@ -66,6 +67,12 @@ message Message {
   string debugMsg = 10;
   StreamTeardownMode requested_teardown_mode = 11;
   StreamTeardownMode accepted_teardown_mode = 12;
+  uint32 requested_batch_credit_count = 13;
+  uint64 requested_batch_credit_bytes = 14;
+  uint32 accepted_batch_credit_count = 15;
+  uint64 accepted_batch_credit_bytes = 16;
+  uint64 batch_sequence = 17;
+  uint64 batch_ack_sequence = 18;
 }
 
 message Connector {

@@ -460,6 +460,8 @@ func (r *mergeReader) ReadWithFilter(
 }
 
 // -----------------------------------------------------------------
+// NewReader consumes source and filterHint.BF on entry. On success the reader
+// releases them from Close; on construction failure NewReader releases them.
 func NewReader(
 	ctx context.Context,
 	mp *mpool.MPool,
@@ -472,7 +474,18 @@ func NewReader(
 	source engine.DataSource,
 	threshHold uint64,
 	filterHint engine.FilterHint,
-) (*reader, error) {
+) (r *reader, err error) {
+	defer func() {
+		if r != nil {
+			return
+		}
+		if source != nil {
+			source.Close()
+		}
+		if filterHint.BF != nil {
+			filterHint.BF.Free()
+		}
+	}()
 
 	baseFilter, err := ConstructBasePKFilter(
 		expr,
@@ -504,7 +517,7 @@ func NewReader(
 		return nil, err
 	}
 
-	r := &reader{
+	r = &reader{
 		withFilterMixin: withFilterMixin{
 			fs:         fs,
 			ts:         ts,
@@ -871,7 +884,7 @@ func (r *reader) read(
 	r.readBlockCnt++
 
 	if len(r.cacheVectors) == 0 {
-		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
+		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 2)
 	}
 	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit && detachedDistVec != nil {
 		// Re-attach the detached distVec so BlockDataRead can take its fast reuse branch.

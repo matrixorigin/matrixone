@@ -1997,18 +1997,24 @@ func (mr *MockEngineMockRecorder) AllocateIDByKey(ctx, key interface{}) *gomock.
 }
 
 // BuildBlockReaders mocks base method.
-func (m *MockEngine) BuildBlockReaders(ctx context.Context, proc any, ts timestamp.Timestamp, expr *plan.Expr, def *plan.TableDef, relData engine.RelData, num int) ([]engine.Reader, error) {
+func (m *MockEngine) BuildBlockReaders(ctx context.Context, proc any, ts timestamp.Timestamp, expr *plan.Expr, def *plan.TableDef, relData engine.RelData, num int, filterHint ...engine.FilterHint) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "BuildBlockReaders", ctx, proc, ts, expr, def, relData, num)
+	args := []interface{}{ctx, proc, ts, expr, def, relData, num}
+	for _, hint := range filterHint {
+		args = append(args, hint)
+	}
+	ret := m.ctrl.Call(m, "BuildBlockReaders", args...)
 	ret0, _ := ret[0].([]engine.Reader)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // BuildBlockReaders indicates an expected call of BuildBlockReaders.
-func (mr *MockEngineMockRecorder) BuildBlockReaders(ctx, proc, ts, expr, def, relData, num interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) BuildBlockReaders(ctx, proc, ts, expr, def, relData, num interface{}, filterHint ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildBlockReaders", reflect.TypeOf((*MockEngine)(nil).BuildBlockReaders), ctx, proc, ts, expr, def, relData, num)
+	args := []interface{}{ctx, proc, ts, expr, def, relData, num}
+	args = append(args, filterHint...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BuildBlockReaders", reflect.TypeOf((*MockEngine)(nil).BuildBlockReaders), args...)
 }
 
 // Create mocks base method.
