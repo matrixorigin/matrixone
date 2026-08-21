@@ -49,26 +49,29 @@ func TestPlanCapacity(t *testing.T) {
 		require.Equal(t, int64(20040), p.CdcCutoff, "a 40-row tail can seed 32 centroids")
 	})
 
-	// The VRAM bound is the point of the change: it applies whatever the request was.
-	t.Run("VRAM caps an explicit request", func(t *testing.T) {
-		p, err := planCapacity(88_000_000, 10_000_000, 3_000_000, 0, 1024, false, algo, param)
-		require.NoError(t, err)
-		require.Equal(t, int64(3_000_000), p.Capacity, "an explicit request is a request, not an override")
-		require.True(t, p.VRAMBound)
-		require.Equal(t, int64(30), p.NumSubIdx)
+	// The VRAM bound applies whatever the request was -- but capping capacity only
+	// bounds one BUILD. 88M rows still have to be resident together to be searched,
+	// and 3M fit, so this build is refused rather than accepted and left unusable.
+	t.Run("VRAM caps an explicit request, and the aggregate is refused", func(t *testing.T) {
+		_, err := planCapacity(88_000_000, 10_000_000, 3_000_000, 0, 1024, false, algo, param)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "resident to search")
+		require.Contains(t, err.Error(), "88000000")
 	})
 
-	t.Run("VRAM caps the auto default", func(t *testing.T) {
-		p, err := planCapacity(88_000_000, 0, 3_000_000, 0, 1024, false, algo, param)
-		require.NoError(t, err)
-		require.Equal(t, int64(3_000_000), p.Capacity)
-		require.True(t, p.VRAMBound)
+	t.Run("VRAM caps the auto default, and the aggregate is refused", func(t *testing.T) {
+		_, err := planCapacity(88_000_000, 0, 3_000_000, 0, 1024, false, algo, param)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "resident to search")
 	})
 
-	t.Run("a request under the VRAM limit is honoured", func(t *testing.T) {
-		p, err := planCapacity(88_000_000, 1_000_000, 3_000_000, 0, 1024, false, algo, param)
+	// A capacity under the VRAM limit still splits the build; that stays legal as
+	// long as everything is resident together afterwards.
+	t.Run("a request under the VRAM limit is honoured when the aggregate fits", func(t *testing.T) {
+		p, err := planCapacity(2_500_000, 1_000_000, 3_000_000, 0, 1024, false, algo, param)
 		require.NoError(t, err)
 		require.Equal(t, int64(1_000_000), p.Capacity)
+		require.Equal(t, int64(3), p.NumSubIdx, "splitting is fine; 2.5M of 3M rows stay resident")
 		require.False(t, p.VRAMBound)
 	})
 
@@ -154,21 +157,37 @@ func TestPlanCapacityHostBound(t *testing.T) {
 
 	t.Run("host bound wins when it is tighter than VRAM", func(t *testing.T) {
 		// The regression, in its own units: a 20 GB card fits 63M rows of PQ codes,
-		// but the host can only hold 8M rows of dim-768 f16 vectors.
-		p, err := planCapacity(88_000_000, 0, 63_000_000, 8_000_000, 6000, false, algo, param)
+		// but the host can only hold 8M rows of dim-768 f16 vectors. 40M rows keeps
+		// the aggregate inside the 63M the device can hold, so the split is legal and
+		// the question is only which bound decided the per-sub-index capacity.
+		p, err := planCapacity(40_000_000, 0, 63_000_000, 8_000_000, 6000, false, algo, param)
 		require.NoError(t, err)
 		require.Equal(t, int64(8_000_000), p.Capacity)
 		require.True(t, p.HostBound)
 		require.False(t, p.VRAMBound, "only one bound may claim to have decided capacity")
-		require.Equal(t, int64(11), p.NumSubIdx)
+		require.Equal(t, int64(5), p.NumSubIdx)
+	})
+
+	t.Run("a host-bound split is still refused when the aggregate exceeds VRAM", func(t *testing.T) {
+		// Same shape, but 88M rows cannot be resident on a 63M device. The host bound
+		// decided capacity; the device still decides whether it can be searched.
+		_, err := planCapacity(88_000_000, 0, 63_000_000, 8_000_000, 6000, false, algo, param)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "resident to search")
 	})
 
 	t.Run("VRAM bound wins when it is tighter", func(t *testing.T) {
-		p, err := planCapacity(88_000_000, 0, 3_000_000, 8_000_000, 1024, false, algo, param)
+		p, err := planCapacity(2_800_000, 0, 3_000_000, 8_000_000, 1024, false, algo, param)
 		require.NoError(t, err)
-		require.Equal(t, int64(3_000_000), p.Capacity)
-		require.True(t, p.VRAMBound)
+		require.Equal(t, int64(2_800_000), p.Capacity, "clamped to the row count, under both bounds")
+		require.False(t, p.VRAMBound)
 		require.False(t, p.HostBound)
+
+		// With more rows than fit, VRAM is the tighter bound -- and also makes the
+		// aggregate unsearchable, which is now the outcome.
+		_, err = planCapacity(88_000_000, 0, 3_000_000, 8_000_000, 1024, false, algo, param)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "resident to search")
 	})
 
 	t.Run("host bound clamps an explicit request too", func(t *testing.T) {
@@ -200,9 +219,17 @@ func TestPlanCapacityHostBound(t *testing.T) {
 	t.Run("zero disables the bound", func(t *testing.T) {
 		// memory.HostRowsFitting returns 0 when the platform cannot report memory; that
 		// must not collapse capacity to nothing.
-		p, err := planCapacity(88_000_000, 0, 3_000_000, 0, 1024, false, algo, param)
+		p, err := planCapacity(2_500_000, 0, 3_000_000, 0, 1024, false, algo, param)
 		require.NoError(t, err)
-		require.Equal(t, int64(3_000_000), p.Capacity)
+		require.Equal(t, int64(2_500_000), p.Capacity)
 		require.False(t, p.HostBound)
+	})
+
+	// An unmeasured device must not manufacture a refusal: rowsFit <= 0 means "no
+	// device figure", not "nothing fits".
+	t.Run("unmeasured VRAM does not refuse the aggregate", func(t *testing.T) {
+		p, err := planCapacity(88_000_000, 8_000_000, 0, 0, 1024, false, algo, param)
+		require.NoError(t, err)
+		require.Equal(t, int64(11), p.NumSubIdx)
 	})
 }

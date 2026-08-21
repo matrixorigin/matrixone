@@ -84,6 +84,9 @@ type ivfpqBuilder interface {
 	// so each sub-index can claim its eager capacity-sized host allocation
 	// against the per-CN ledger before InitEmpty spends it.
 	SetHostBytesPerRow(perRow uint64)
+	// SetDeviceTrainsetBytes hands the builder the k-means trainset's device
+	// cost, so the VRAM claim covers the training phase when it is the peak.
+	SetDeviceTrainsetBytes(total uint64)
 	ToInsertSql(ts int64) ([]string, error)
 	Destroy() error
 }
@@ -592,6 +595,11 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// model that is easy to get wrong (IVF-PQ charges PQ codes, not the
 		// dataset, and budgets the trainset as max(train, index)).
 		u.builder.SetDeviceBytesPerRow(perRow)
+		// The trainset is the other half of the build's peak. tp.Rows is the
+		// EFFECTIVE training row count decided above (already clamped to what the
+		// device can hold), so this is what the build will really allocate --
+		// claiming rows*perRow alone leaves the training-dominant case unclaimed.
+		u.builder.SetDeviceTrainsetBytes(uint64(tp.Rows) * dim * trainsetBytesPerElem(qt))
 		// hostPerRow was computed for the capacity decision above; hand the same
 		// number to the builder so admission and the capacity model agree.
 		u.builder.SetHostBytesPerRow(hostPerRow)

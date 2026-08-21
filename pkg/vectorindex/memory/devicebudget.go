@@ -117,3 +117,29 @@ func DeviceBuildBytes(mode vectorindex.DistributionMode, devices []int, totalByt
 	}
 	return perDev
 }
+
+// DeviceBuildPeakBytes is the device demand a build must claim: the PEAK of its
+// two phases, not the footprint of whichever one the caller happened to size.
+//
+// An IVF-PQ build allocates in two phases that do NOT overlap. The k-means
+// trainset block closes (ivf_pq_build.cuh:1369) before detail::extend allocates
+// the list data (:1374), so the two never coexist and the demand is max(), not
+// the sum -- charging the sum would shrink capacity to buy bytes that are not
+// competing.
+//
+// But max() also means the claim cannot be the resident figure alone. When
+// training dominates -- a wide vector with a generous kmeans_train_percent
+// against narrow PQ codes -- the trainset is the larger allocation, and claiming
+// only the resident codes leaves the difference unclaimed. A concurrent load or
+// build is then admitted against memory this build is about to take, and the
+// combined allocation can OOM even though both admissions succeeded.
+//
+// Both figures are TOTALS for the build; distribution across devices is applied
+// afterwards by DeviceBuildBytes, so a sharded build divides the peak and a
+// replicated one charges it to every device.
+func DeviceBuildPeakBytes(residentTotal, trainsetTotal uint64) uint64 {
+	if trainsetTotal > residentTotal {
+		return trainsetTotal
+	}
+	return residentTotal
+}

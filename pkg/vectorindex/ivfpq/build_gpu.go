@@ -63,6 +63,11 @@ type IvfpqBuild[B, Q cuvs.VectorType] struct {
 	// which owns the per-algo model. 0 means the caller did not supply it and
 	// no claim is taken -- direct API users and tests keep today's behaviour.
 	deviceBytesPerRow uint64
+	// deviceTrainsetBytes is the TOTAL device bytes the k-means trainset takes
+	// for one sub-index build. It is tracked separately from deviceBytesPerRow
+	// because the two phases do not overlap: the claim is the peak of the two,
+	// not their sum, and not the resident figure alone.
+	deviceTrainsetBytes uint64
 
 	// hostBytesPerRow is the per-row HOST cost of the eager capacity-sized
 	// staging buffers (vector staging + INCLUDE columns + per-row ids), supplied
@@ -355,6 +360,13 @@ func (b *IvfpqBuild[B, Q]) SetDeviceBytesPerRow(perRow uint64) {
 	b.deviceBytesPerRow = perRow
 }
 
+// SetDeviceTrainsetBytes records the total device bytes the k-means trainset
+// occupies for one sub-index build, so the VRAM claim can cover the training
+// phase when it is the larger of the two. See memory.DeviceBuildPeakBytes.
+func (b *IvfpqBuild[B, Q]) SetDeviceTrainsetBytes(total uint64) {
+	b.deviceTrainsetBytes = total
+}
+
 // SetHostBytesPerRow records the per-row host cost used to claim host memory
 // around each sub-index's eager capacity-sized allocation.
 func (b *IvfpqBuild[B, Q]) SetHostBytesPerRow(perRow uint64) {
@@ -396,10 +408,20 @@ func (b *IvfpqBuild[B, Q]) releaseHostClaim() {
 // sub-index is empty: reserve() refuses a zero claim by design, and there is
 // nothing to protect.
 func (b *IvfpqBuild[B, Q]) reserveBuildVRAM(rows int64) (cuvs.DeviceReservations, error) {
-	if b.deviceBytesPerRow == 0 || rows <= 0 || len(b.devices) == 0 {
+	if rows <= 0 || len(b.devices) == 0 {
 		return nil, nil
 	}
-	total := uint64(rows) * b.deviceBytesPerRow
+	resident := uint64(rows) * b.deviceBytesPerRow
+	// Claim the PEAK of the build's two non-overlapping phases. Charging only the
+	// resident PQ codes under-claims whenever training is the larger allocation,
+	// and the unclaimed gap is exactly what a concurrent load or build can be
+	// admitted against.
+	total := memory.DeviceBuildPeakBytes(resident, b.deviceTrainsetBytes)
+	if total == 0 {
+		// Neither cost was supplied: nothing to protect, and reserve() refuses a
+		// zero claim by design.
+		return nil, nil
+	}
 	perDev := memory.DeviceBuildBytes(
 		vectorindex.DistributionMode(b.idxcfg.CuvsIvfpq.DistributionMode), b.devices, total)
 	return cuvs.ReserveBuildMemory(perDev)
