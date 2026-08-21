@@ -27,6 +27,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -115,6 +116,21 @@ func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
 		}
 	}
 	return bat
+}
+
+func TestBuildQueryResultMetaBatchCleansPartialBatchOnAppendFailure(t *testing.T) {
+	originalCapLimit := mpool.CapLimit
+	mpool.CapLimit = 128
+	t.Cleanup(func() { mpool.CapLimit = originalCapLimit })
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	bat, err := buildQueryResultMetaBatch(&catalog.Meta{
+		Statement: strings.Repeat("x", 256),
+	}, mp)
+	require.Error(t, err)
+	require.Nil(t, bat)
 }
 
 func Test_saveQueryResultMeta(t *testing.T) {
