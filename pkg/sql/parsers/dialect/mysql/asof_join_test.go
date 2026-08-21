@@ -74,6 +74,7 @@ func TestAsofImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
 		"select * from t asof join u on asof.k = u.k and asof.ts > u.ts",
 		"select * from t asof join u on t.k = u.k and u.v > 1",
 		"select * from t asof join u on asof.k = u.k and u.tolerance = 1",
+		"select * from t asof join u on a = b and x > y",
 		"select * from (select 1 as k) asof join (select 1 as k) u on asof.k = u.k",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
@@ -92,6 +93,7 @@ func TestAsofJoinProducesAsofAst(t *testing.T) {
 		"select * from l asof join r on l.k = r.k and r.ts <= l.ts",
 		"select * from l asof join r on lk = r.rk and event_ts >= r.effective_ts",
 		"select * from l asof join r on lk = r.rk and r.effective_ts <= event_ts",
+		"select * from l asof join r on lk = rk and event_ts >= effective_ts",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
@@ -111,7 +113,10 @@ func TestAsofJoinNamesDoNotChangeContext(t *testing.T) {
 		"select * from l asof join r AS `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",
 		"select * from l asof join db.r AS asof on l.k = asof.k and l.ts >= asof.ts",
 		"select * from l asof join db.`r` AS `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",
+		"select * from l asof join db.r `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",
+		"select * from `l` asof join `db`.`r` AS `asof` on `l`.k = `asof`.k and `l`.ts >= `asof`.ts",
 		"select * from l asof join (select 1 k, ')' marker) AS asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from l asof join (select 1 k, now() ts /* ) */) AS asof on l.k = asof.k and l.ts >= asof.ts",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
