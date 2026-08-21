@@ -485,11 +485,13 @@ func (c *managedHAKeeperClient) CheckLogServiceHealth(ctx context.Context) error
 		}
 		var err1 error
 		for _, tnStore := range details.TNStores {
-			for _, shard := range tnStore.Shards {
+			for range tnStore.Shards {
+				// A TN shard and its backing Log shard have distinct IDs. The only
+				// supported TN shard is backed by the first Log shard.
 				err1 = firstError(err1, client.checkLogServiceHealth(
 					ctx,
 					pb.CheckHealth{
-						ShardID: shard.ShardID,
+						ShardID: firstLogShardID,
 					},
 				))
 			}
