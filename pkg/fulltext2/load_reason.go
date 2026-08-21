@@ -90,11 +90,18 @@ func takeLoadReason(index string) LoadMissReason {
 	return v.reason
 }
 
-// invalidateLoadGeneration records why the next load will miss. The
-// observability layer deliberately leaves cache eviction semantics unchanged;
-// generation reuse clears its pools in the follow-up implementation.
+// invalidateLoadGeneration records why the next load will miss and clears
+// reusable immutable state only when the base itself is known to have changed.
+// It runs from the generic cache's invalidation hook, so the existing cache
+// lifecycle remains the only integration surface for other index algorithms.
 func invalidateLoadGeneration(cfg TableConfig, reason LoadMissReason) {
 	if reason != LoadMissReason("process_shutdown") {
 		rememberLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), reason)
+	}
+	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	switch reason {
+	case LoadMissMerge, LoadMissRebuild, LoadMissReason("process_shutdown"):
+		loadedBasePool.clearIndex(index)
+		loadedTailPool.clear(index)
 	}
 }
