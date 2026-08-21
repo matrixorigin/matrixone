@@ -1067,6 +1067,79 @@ func TestRestoreSQLQuotesEmbeddedBackticks(t *testing.T) {
 		restoreTableDataByNameSQL(dbName, tableName, snapshotName))
 }
 
+func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) {
+	const (
+		sourceAccount = uint32(10)
+		targetAccount = uint32(20)
+		snapshotName  = "udf_snapshot"
+		snapshotTS    = int64(123)
+	)
+	legacyCreateSQL := "create table mo_catalog.mo_user_defined_function (function_id int auto_increment, name varchar(100), args json)"
+	udfTable := &tableInfo{
+		dbName:    moCatalog,
+		tblName:   "mo_user_defined_function",
+		createSql: legacyCreateSQL,
+	}
+
+	t.Run("same account timestamp snapshot", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, sourceAccount, snapshotTS))
+		require.Equal(t, []string{
+			dropTableIfExistsSQL(moCatalog, udfTable.tblName),
+			MoCatalogMoUserDefinedFunctionDDL,
+			"insert into `mo_catalog`.`mo_user_defined_function` (" + userDefinedFunctionCatalogColumns +
+				") select " + userDefinedFunctionCatalogSourceColumns +
+				" from `mo_catalog`.`mo_user_defined_function` {MO_TS = 123}",
+		}, bh.executedSQLs)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), legacyCreateSQL)
+	})
+
+	t.Run("cross account named snapshot", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, targetAccount, snapshotTS))
+		require.Equal(t,
+			"insert into `mo_catalog`.`mo_user_defined_function` ("+userDefinedFunctionCatalogColumns+
+				") select "+userDefinedFunctionCatalogSourceColumns+
+				" from `mo_catalog`.`mo_user_defined_function` {SNAPSHOT = 'udf_snapshot'}",
+			bh.executedSQLs[len(bh.executedSQLs)-1],
+		)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), legacyCreateSQL)
+	})
+
+	t.Run("cross account timestamp restore", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		require.NoError(t, recreateTableFromTS(
+			t.Context(), "", bh, udfTable, snapshotTS, sourceAccount, targetAccount,
+		))
+		require.Equal(t,
+			"insert into `mo_catalog`.`mo_user_defined_function` ("+userDefinedFunctionCatalogColumns+
+				") select "+userDefinedFunctionCatalogSourceColumns+
+				" from `mo_catalog`.`mo_user_defined_function` {MO_TS = 123}",
+			bh.executedSQLs[len(bh.executedSQLs)-1],
+		)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), legacyCreateSQL)
+	})
+
+	t.Run("point in time recovery", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
+		require.NoError(t, reCreateTableWithPitr(ctx, "", bh, "udf_pitr", snapshotTS, udfTable))
+		require.Equal(t,
+			"insert into `mo_catalog`.`mo_user_defined_function` ("+userDefinedFunctionCatalogColumns+
+				") select "+userDefinedFunctionCatalogSourceColumns+
+				" from `mo_catalog`.`mo_user_defined_function` {MO_TS = 123}",
+			bh.executedSQLs[len(bh.executedSQLs)-1],
+		)
+		require.NotContains(t, strings.Join(bh.executedSQLs, "\n"), legacyCreateSQL)
+	})
+}
+
 func Test_fkTablesTopoSortWithTS(t *testing.T) {
 	convey.Convey("fkTablesTopoSortWithTS ", t, func() {
 		ctrl := gomock.NewController(t)
