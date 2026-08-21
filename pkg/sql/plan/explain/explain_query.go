@@ -237,9 +237,6 @@ func summarizeBackgroundQueries(qry *plan.Query) string {
 		parts = append(parts, "round_limits="+truncateSummaryList(roundLimits, 4))
 	}
 	parts = append(parts, fmt.Sprintf("empty_rounds=%d", emptyRounds))
-	if dedupOutputRows, ok := findIvfSearchOutputRows(qry); ok {
-		parts = append(parts, fmt.Sprintf("dedup_output_rows=%d", dedupOutputRows))
-	}
 	parts = append(parts, "use EXPLAIN VERBOSE ANALYZE to expand")
 	return strings.Join(parts, " ")
 }
@@ -317,22 +314,6 @@ func queryOutputRows(qry *plan.Query) int64 {
 		}
 	}
 	return 0
-}
-
-func findIvfSearchOutputRows(qry *plan.Query) (int64, bool) {
-	if qry == nil {
-		return 0, false
-	}
-	for _, node := range qry.Nodes {
-		if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN || node.TableDef == nil || node.TableDef.TblFunc == nil {
-			continue
-		}
-		if node.TableDef.TblFunc.Name != "ivf_search" || node.AnalyzeInfo == nil {
-			continue
-		}
-		return node.AnalyzeInfo.OutputRows, true
-	}
-	return 0, false
 }
 
 func truncateSummaryList(items []string, maxItems int) string {

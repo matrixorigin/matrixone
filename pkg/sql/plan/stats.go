@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1384,6 +1383,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 
+	case plan.Node_VECTOR_INDEX_SCAN:
+		// The index plugin computes this leaf's access-path cardinality and cost
+		// before join ordering. Recalculation must not replace it with child or
+		// synthetic-table statistics.
+		if node.Stats == nil {
+			node.Stats = DefaultStats()
+		}
+
 	case plan.Node_INSERT:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.BlockNum = childStats.BlockNum
@@ -1878,6 +1885,12 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		}
 	}
 	if node.NodeType != plan.Node_JOIN {
+		return
+	}
+	// A predeclared runtime-filter pair is a physical dependency: child 1 must
+	// build and publish before child 0 may probe. Reversing the children turns
+	// the producer into a consumer and creates a wait cycle.
+	if len(node.RuntimeFilterBuildList) > 0 {
 		return
 	}
 
@@ -2437,7 +2450,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if IsIvfSearchEntriesInternalScan(node) {
+		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
 			execType := ExecTypeAP_MULTICN
 			if stats.GetForceOneCN() || !canUseMultiCN {
 				execType = ExecTypeAP_ONECN
@@ -2465,38 +2478,6 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 	}
 	return ret
-}
-
-func isIvfSearchEntriesTableScan(node *plan.Node) bool {
-	return node != nil &&
-		node.NodeType == plan.Node_TABLE_SCAN &&
-		node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries
-}
-
-func isIvfSearchFunctionScan(node *plan.Node) bool {
-	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN {
-		return false
-	}
-	tblDef := node.GetTableDef()
-	if tblDef == nil || tblDef.GetTblFunc() == nil {
-		return false
-	}
-	return tblDef.GetTblFunc().GetName() == ivfflatplan.IVFFLATSearchFuncName
-}
-
-// IsIvfSearchEntriesInternalScan reports the internal entries table scan issued by ivf_search.
-// It recognizes both the FUNCTION_SCAN form produced by the production ivf_search planner
-// path and the legacy TABLE_SCAN form used by unit tests.
-func IsIvfSearchEntriesInternalScan(node *plan.Node) bool {
-	if isIvfSearchFunctionScan(node) {
-		return isIvfEntriesIndexReaderScan(node)
-	}
-	return isIvfSearchEntriesTableScan(node) && isIvfEntriesIndexReaderScan(node)
-}
-
-func isIvfEntriesIndexReaderScan(node *plan.Node) bool {
-	param := node.GetIndexReaderParam()
-	return param.GetOrigFuncName() != ""
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {
