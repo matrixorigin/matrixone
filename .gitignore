@@ -51,6 +51,9 @@ vendor/
 /.proto-vendor/
 gen_config
 main
+# the bare 'main' pattern above (a built binary) also matches Maven's
+# src/main directory; re-include jstfu's source tree
+!xtool/jstfu/src/main/
 mo-tool
 /mo-server
 /mo-service
