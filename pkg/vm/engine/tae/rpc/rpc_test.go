@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -173,6 +174,68 @@ func TestHandleCommitStaleTableGenerationRequestsDefinitionRetry(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleSoftDeleteObjectMarksCNProvenance(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+	defer h.HandleClose(ctx)
+
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Name = "cn_soft_delete"
+	_, createdRel := testutil.CreateRelation(
+		t, h.db, testutil.DefaultTestDB, schema, true,
+	)
+	tableEntry := createdRel.GetMeta().(*catalog.TableEntry)
+	databaseID := tableEntry.GetDB().ID
+	tableID := tableEntry.ID
+
+	sourceID := objectio.NewObjectid()
+	createTxn, err := h.db.StartTxn(nil)
+	require.NoError(t, err)
+	createDB, err := createTxn.GetDatabaseByID(databaseID)
+	require.NoError(t, err)
+	createRel, err := createDB.GetRelationByID(tableID)
+	require.NoError(t, err)
+	obj, err := createRel.CreateNonAppendableObject(true, &objectio.CreateObjOpt{
+		Stats:       objectio.NewObjectStatsWithObjectID(&sourceID, false, true, true),
+		IsTombstone: true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, obj.Close())
+	require.NoError(t, createTxn.Commit(ctx))
+
+	deleteTxn, err := h.db.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, h.HandleSoftDeleteObject(ctx, deleteTxn, &cmd_util.WriteReq{
+		DatabaseId:   databaseID,
+		TableID:      tableID,
+		DatabaseName: testutil.DefaultTestDB,
+		TableName:    schema.Name,
+		ObjectID:     &sourceID,
+		IsTombstone:  true,
+	}))
+	require.NoError(t, deleteTxn.Commit(ctx))
+
+	readTxn, err := h.db.StartTxn(nil)
+	require.NoError(t, err)
+	readDB, err := readTxn.GetDatabaseByID(databaseID)
+	require.NoError(t, err)
+	readRel, err := readDB.GetRelationByID(tableID)
+	require.NoError(t, err)
+	it := readRel.GetMeta().(*catalog.TableEntry).MakeTombstoneObjectIt()
+	marked := false
+	for ok := it.Last(); ok; ok = it.Prev() {
+		entry := it.Item()
+		if entry.IsDEntry() && *entry.ID() == sourceID {
+			marked = entry.ObjectStats.GetCNDeleted()
+			break
+		}
+	}
+	it.Release()
+	require.True(t, marked)
+	require.NoError(t, readTxn.Commit(ctx))
 }
 
 func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
