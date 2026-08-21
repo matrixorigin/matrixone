@@ -228,7 +228,9 @@ func (a *catalogInvalidationAttribution) observeTable(
 			a.shadowOverflow = true
 			return
 		}
-		a.tables[key] = catalogShadowTableState{id: id, version: version, ts: ts, deleted: deleted}
+		a.tables[key] = catalogShadowTableState{
+			id: id, version: version, ts: ts, deleted: deleted, ambiguous: state.ambiguous,
+		}
 		return
 	}
 	if !state.ts.Greater(ts) && (state.id != id || state.version != version || state.deleted != deleted) {
@@ -258,7 +260,9 @@ func (a *catalogInvalidationAttribution) observeDatabase(
 			a.shadowOverflow = true
 			return
 		}
-		a.databases[key] = catalogShadowDatabaseState{id: id, ts: ts, deleted: deleted}
+		a.databases[key] = catalogShadowDatabaseState{
+			id: id, ts: ts, deleted: deleted, ambiguous: state.ambiguous,
+		}
 		return
 	}
 	if !state.ts.Greater(ts) && (state.id != id || state.deleted != deleted) {

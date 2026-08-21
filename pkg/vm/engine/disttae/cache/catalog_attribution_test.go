@@ -110,9 +110,10 @@ func TestCatalogInvalidationShadowEqualTimestampConflictIsConservative(t *testin
 	firstTS := timestamp.Timestamp{PhysicalTime: 200}
 	a.observeTable(1, 10, "db", "t", 20, 3, firstTS, false)
 	a.observeTable(1, 10, "db", "t", 21, 1, firstTS, false)
+	a.observeTable(1, 10, "db", "t", 20, 3, timestamp.Timestamp{PhysicalTime: 300}, false)
 	require.True(t, a.preciseDecision(&TableChangeQuery{
 		AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", TableId: 20, Version: 3,
-		Ts: timestamp.Timestamp{PhysicalTime: 100},
+		Ts: timestamp.Timestamp{PhysicalTime: 250},
 	}))
 }
 
