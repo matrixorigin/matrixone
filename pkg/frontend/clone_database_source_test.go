@@ -552,15 +552,54 @@ func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
 }
 
 func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
-	source := cloneDatabaseSource{
-		srcTblInfos: []*tableInfo{
-			{tblName: "regular"},
-			{tblName: "foreign_key"},
-			{tblName: "view", typ: view},
+	tests := []struct {
+		name   string
+		tables []*tableInfo
+		want   int64
+	}{
+		{
+			name: "empty database consumes no branch table quota",
+			want: 0,
+		},
+		{
+			name: "mixed objects count only receipt-backed tables",
+			tables: []*tableInfo{
+				{tblName: "regular"},
+				{tblName: "sequence", relKind: catalog.SystemSequenceRel},
+				{tblName: "view", typ: view},
+			},
+			want: 1,
+		},
+		{
+			name: "sequence-only database consumes no branch table quota",
+			tables: []*tableInfo{
+				{tblName: "sequence", relKind: catalog.SystemSequenceRel},
+			},
+			want: 0,
+		},
+		{
+			name: "view-only database consumes no branch table quota",
+			tables: []*tableInfo{
+				{tblName: "view", typ: view},
+			},
+			want: 0,
+		},
+		{
+			name: "ordinary tables each consume branch table quota",
+			tables: []*tableInfo{
+				{tblName: "regular"},
+				{tblName: "foreign_key"},
+			},
+			want: 2,
 		},
 	}
 
-	require.Equal(t, int64(2), source.branchTableCount())
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := cloneDatabaseSource{srcTblInfos: test.tables}
+			require.Equal(t, test.want, source.branchTableCount())
+		})
+	}
 }
 
 func TestValidateCloneDatabaseAccounts(t *testing.T) {

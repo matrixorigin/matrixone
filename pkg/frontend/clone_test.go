@@ -60,6 +60,22 @@ func TestResolveUdfInCallerTxnContext(t *testing.T) {
 	require.True(t, resolvesUdfInCallerTxn(withResolveUdfInCallerTxn(ctx)))
 }
 
+func TestRewriteCloneSequenceCreateSQL(t *testing.T) {
+	got, err := rewriteCloneSequenceCreateSQL(
+		"create sequence `source-db`.`seq-name` as bigint increment by 3 minvalue 1 maxvalue 99 start with 7 no cycle",
+		"target-db",
+		"seq-name",
+		0,
+	)
+	require.NoError(t, err)
+	require.Equal(t,
+		"create sequence `target-db`.`seq-name` as bigint increment by 3 minvalue 1 maxvalue 99 start with 7 no cycle",
+		got)
+
+	_, err = rewriteCloneSequenceCreateSQL("create table t(a int)", "target-db", "seq-name", 0)
+	require.ErrorContains(t, err, "expected *tree.CreateSequence")
+}
+
 func TestCloneCatalogLockBatch(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()

@@ -57,7 +57,7 @@ type cloneDatabaseAccountResolution struct {
 func (source *cloneDatabaseSource) branchTableCount() int64 {
 	var count int64
 	for _, table := range source.srcTblInfos {
-		if table.typ != view {
+		if table.typ != view && !isSequence(table) {
 			count++
 		}
 	}
