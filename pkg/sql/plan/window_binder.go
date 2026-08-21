@@ -337,11 +337,11 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start cannot be UNBOUNDED FOLLOWING.")
 		}
 		if ws.Frame.End.Type == tree.Preceding || ws.Frame.End.Type == tree.CurrentRow {
-			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
+			return nil, newWindowFrameIllegalError(b.GetContext())
 		}
 	case tree.CurrentRow:
 		if ws.Frame.End.Type == tree.Preceding {
-			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
+			return nil, newWindowFrameIllegalError(b.GetContext())
 		}
 	}
 
@@ -617,9 +617,7 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 			returnType = intervalType
 		}
 
-		e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(returnNum)
-		e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(returnType))
-		return e, nil
+		return setWindowIntervalValue(bindCtx, e, returnNum, returnType)
 	}
 
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
@@ -657,6 +655,9 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 		}
 
 		if hasValue {
+			if floatVal < 0 {
+				return nil, newWindowFrameIllegalError(bindCtx)
+			}
 			var finalValue int64
 			switch intervalType {
 			case types.Second:
@@ -668,9 +669,7 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 			case types.Day:
 				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerDay)))
 			}
-			e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(finalValue)
-			e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(types.MicroSecond))
-			return e, nil
+			return setWindowIntervalValue(bindCtx, e, finalValue, types.MicroSecond)
 		}
 	}
 
@@ -700,8 +699,24 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 		return nil, moerr.NewInvalidInput(bindCtx, "invalid interval value")
 	}
 
-	e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(finalValue)
-	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
+	return setWindowIntervalValue(bindCtx, e, finalValue, intervalType)
+}
 
+func setWindowIntervalValue(
+	bindCtx context.Context,
+	e *Expr,
+	value int64,
+	intervalType types.IntervalType,
+) (*Expr, error) {
+	if value < 0 {
+		return nil, newWindowFrameIllegalError(bindCtx)
+	}
+
+	e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(value)
+	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
+}
+
+func newWindowFrameIllegalError(ctx context.Context) error {
+	return moerr.NewParseError(ctx, "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
 }
