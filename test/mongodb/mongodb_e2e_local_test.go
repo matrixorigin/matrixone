@@ -60,7 +60,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	require.NoError(t, err)
 	db, mock := newMongoDBE2ESQLMock(t)
 
-	for range 7 {
+	for range 8 {
 		mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
@@ -72,6 +72,10 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 		"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
 	expectMongoDBE2EScalar(mock, `"text"`)
+	expectMongoDBE2EScalar(mock, "2")
+	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "4")
+	expectMongoDBE2EScalar(mock, "0")
 	expectMongoDBE2EScalar(mock, "5")
 	fixtureRows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
 	for _, row := range manifest.Rows {
@@ -121,7 +125,8 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"secret-backed-ddl",
 		"show-connections-admin-metadata-redaction",
 		"show-create-redaction-roundtrip",
-		"json-scalar-conversion",
+		"json-relaxed-extended-conversion",
+		"fixed-binary-padding",
 		"scan-projection-pushdown-null-conversion",
 		"low-precision-temporal-residual",
 		"decoded-vector-budget-enforced",
@@ -134,6 +139,44 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"connection-disable-enable",
 	}, result.Cases)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		failedQuery string
+	}{
+		{name: "payload", failedQuery: "json_unquote"},
+		{name: "array", failedQuery: "json_contains"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repoRoot := mongoDBTestRepoRoot(t)
+			previous, err := os.Getwd()
+			require.NoError(t, err)
+			require.NoError(t, os.Chdir(repoRoot))
+			t.Cleanup(func() { require.NoError(t, os.Chdir(previous)) })
+
+			db, mock := newMongoDBE2ESQLMock(t)
+			for range 8 {
+				mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
+				"name", "discovery_mode", "auth_mechanism", "tls_mode",
+				"read_preference", "read_concern", "version", "disabled",
+			}).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
+			mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
+				"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+			expectMongoDBE2EScalar(mock, `"text"`)
+			if tc.failedQuery == "json_contains" {
+				expectMongoDBE2EScalar(mock, "2")
+			}
+			mock.ExpectQuery(tc.failedQuery).WillReturnError(errors.New("relaxed JSON query failed"))
+
+			err = run(t.Context(), db, "127.0.0.1:27017", &report{})
+			require.ErrorContains(t, err, "relaxed JSON query failed")
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestMongoDBLocalE2EHelpers(t *testing.T) {

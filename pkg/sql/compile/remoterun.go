@@ -93,6 +93,17 @@ func encodeScope(s *Scope) ([]byte, error) {
 	return p.Marshal()
 }
 
+func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
+	p, err := fillPipeline(s)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	return p.Marshal()
+}
+
 func icebergPlanningStatsToPipeline(stats process.ParquetProfileStats) *pipeline.IcebergPlanningStats {
 	if stats.Empty() {
 		return nil
@@ -151,12 +162,20 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
+		return nil, err
 	}
 	ctx := &scopeContext{
 		parent: nil,
@@ -548,6 +567,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
+		if err := validateRemoteStatementLastInsertIDProtocol(proc, t.HasAutoCol); err != nil {
+			return ctxId, nil, err
+		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
@@ -1609,6 +1631,37 @@ func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inpu
 	return nil
 }
 
+func validateRemoteStatementLastInsertIDProtocol(proc *process.Process, hasAutoCol bool) error {
+	if !hasAutoCol {
+		return nil
+	}
+	if proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"remote auto-increment PRE_INSERT requires MORPC protocol version 24",
+		)
+	}
+	return nil
+}
+
+func validateRemoteStringProvenancePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	requiresVersion23, err := plan.RequiresMORPCVersion23StringProvenance(p)
+	if err != nil {
+		return err
+	}
+	if !requiresVersion23 {
+		return nil
+	}
+	if proc == nil || !supportsRemoteCrossDomainStringLiterals(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"cross-domain string provenance requires MORPC protocol version 23",
+		)
+	}
+	return nil
+}
+
 func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -1627,6 +1680,28 @@ func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteStatementLastInsertIDPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsert(); preInsert != nil {
+			if err := validateRemoteStatementLastInsertIDProtocol(proc, preInsert.HasAutoCol); err != nil {
+				return err
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteStatementLastInsertIDPipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}

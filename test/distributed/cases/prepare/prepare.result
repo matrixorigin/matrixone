@@ -364,7 +364,7 @@ execute stmt1 using @a_var;
 a    b
 1    1
 prepare stmt2 from select * from t1 limit ?;
-set @b_var = '1';
+set @b_var = 1;
 execute stmt2 using @b_var;
 a    b
 1    1

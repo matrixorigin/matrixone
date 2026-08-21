@@ -333,6 +333,13 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 	switch defines.MysqlType(internal.Oid) {
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		return true
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING,
+		defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT,
+		defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB,
+		defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_BLOB:
+		// Character and binary casts are semantic boundaries even though the
+		// value conversion is shared with ordinary overload-coercion casts.
+		return true
 	case defines.MYSQL_TYPE_LONGLONG:
 		family := strings.ToLower(internal.FamilyString)
 		return family == "signed" || family == "integer" ||
@@ -5143,12 +5150,24 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		return makePlan2DecimalExprWithType(b.GetContext(), val)
 	}
 
-	returnHexNumExpr := func(val string, isBin ...bool) (*Expr, error) {
+	returnRawLiteralExpr := func(val string, form plan.StringLiteralForm) (*Expr, error) {
+		isBin := form == plan.StringLiteralForm_STRING_LITERAL_HEX ||
+			form == plan.StringLiteralForm_STRING_LITERAL_BIT
+		expr := makePlan2StringConstExprWithType(val, isBin)
+		expr.GetLit().LiteralForm = form
 		if !typ.IsEmpty() {
 			isFloat := typ.Id == int32(types.T_float32) || typ.Id == int32(types.T_float64)
-			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(val, isBin[0]), typ, isBin[0], isFloat)
+			return appendCastBeforeExpr(b.GetContext(), expr, typ, isBin, isFloat)
 		}
-		return makePlan2StringConstExprWithType(val, isBin...), nil
+		return expr, nil
+	}
+	returnBinaryIntroducerExpr := func(val string) (*Expr, error) {
+		expr := makePlan2VarBinaryConstExprWithType(val)
+		expr.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+		if !typ.IsEmpty() {
+			return appendCastBeforeExpr(b.GetContext(), expr, typ)
+		}
+		return expr, nil
 	}
 
 	switch astExpr.ValType {
@@ -5286,26 +5305,20 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 			s = string('0') + s
 		}
 		bytes, _ := hex.DecodeString(s)
-		return returnHexNumExpr(string(bytes), true)
+		return returnRawLiteralExpr(string(bytes), plan.StringLiteralForm_STRING_LITERAL_HEX)
 	case tree.P_ScoreBinaryHexnum:
 		s := astExpr.String()[2:]
 		if len(s)%2 != 0 {
 			s = string('0') + s
 		}
 		bytes, _ := hex.DecodeString(s)
-		if !typ.IsEmpty() {
-			return appendCastBeforeExpr(b.GetContext(), makePlan2VarBinaryConstExprWithType(string(bytes)), typ)
-		}
-		return makePlan2VarBinaryConstExprWithType(string(bytes)), nil
+		return returnBinaryIntroducerExpr(string(bytes))
 	case tree.P_ScoreBinary:
-		if !typ.IsEmpty() {
-			return appendCastBeforeExpr(b.GetContext(), makePlan2VarBinaryConstExprWithType(astExpr.String()), typ)
-		}
-		return makePlan2VarBinaryConstExprWithType(astExpr.String()), nil
+		return returnBinaryIntroducerExpr(astExpr.String())
 	case tree.P_bit:
 		s := astExpr.String()[2:]
 		bytes, _ := util.DecodeBinaryString(s)
-		return returnHexNumExpr(string(bytes), true)
+		return returnRawLiteralExpr(string(bytes), plan.StringLiteralForm_STRING_LITERAL_BIT)
 	case tree.P_char:
 		expr := makePlan2StringConstExprWithType(astExpr.String())
 		return expr, nil

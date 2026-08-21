@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -233,9 +234,9 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 		Plan: &plan.Plan_Query{Query: &plan.Query{
 			Steps: []int32{0},
 			Nodes: []*plan.Node{{
-				NodeType: plan.Node_VALUE_SCAN,
-				Limit:    &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
-				Offset:   binaryLiteral,
+				NodeType:    plan.Node_VALUE_SCAN,
+				ProjectList: []*plan.Expr{{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}},
+				Offset:      binaryLiteral,
 			}},
 		}},
 	}
@@ -253,12 +254,12 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 			ParamValue{Value: test.value, IsBin: test.isBin},
 		})
 		require.NoError(t, err)
-		literal := filled.GetQuery().Nodes[0].Limit.GetLit()
+		literal := filled.GetQuery().Nodes[0].ProjectList[0].GetLit()
 		require.NotNil(t, literal)
 		require.Equal(t, test.isBin, literal.GetIsBin())
 		require.Equal(t, test.value, literal.GetSval())
 		require.NotSame(t, queryPlan, filled)
-		require.NotNil(t, queryPlan.GetQuery().Nodes[0].Limit.GetP())
+		require.NotNil(t, queryPlan.GetQuery().Nodes[0].ProjectList[0].GetP())
 		copiedLiteral := filled.GetQuery().Nodes[0].Offset.GetLit()
 		require.True(t, copiedLiteral.GetIsBin())
 		require.Equal(t, "AB\x00\x00", copiedLiteral.GetSval())
@@ -538,6 +539,100 @@ func TestFillValuesOfParamsInPlanRejectsControlStatements(t *testing.T) {
 		Plan: &plan.Plan_Dcl{Dcl: &plan.DataControl{}},
 	}, nil)
 	require.Error(t, err)
+}
+
+func TestValidatePreparedPaginationParams(t *testing.T) {
+	buildPreparedPlan := func(t *testing.T, sql string) *plan.Plan {
+		t.Helper()
+		prepared, err := runOneStmt(NewMockOptimizer(false), t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
+		require.NoError(t, err)
+		queryPlan := prepared.GetDcl().GetPrepare().GetPlan()
+		require.NotNil(t, queryPlan)
+		return queryPlan
+	}
+	assertWrongExecuteArgs := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok)
+		require.Equal(t, moerr.ER_WRONG_ARGUMENTS, moErr.MySQLCode())
+		require.Equal(t, "Incorrect arguments to EXECUTE", err.Error())
+	}
+
+	limitPlan := buildPreparedPlan(t, "select n_nationkey from nation limit ?")
+	for _, test := range []struct {
+		name       string
+		value      any
+		wrongArgs  bool
+		outOfRange bool
+	}{
+		{name: "signed integer", value: int64(2)},
+		{name: "unsigned integer", value: uint64(math.MaxUint64)},
+		{name: "boolean", value: true},
+		{name: "null", value: nil},
+		{name: "string", value: "3", wrongArgs: true},
+		{name: "float", value: float64(3), wrongArgs: true},
+		{name: "decimal", value: types.Decimal64(3), wrongArgs: true},
+		{name: "text integer", value: ParamValue{Value: int64(2), PrepareParamKind: vector.PrepareParamInteger}},
+		{name: "binary integer", value: ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger}},
+		{name: "binary uint64", value: ParamValue{Value: "18446744073709551615", PrepareParamKind: vector.PrepareParamInteger}},
+		{name: "runtime boolean", value: ParamValue{Value: true, PrepareParamKind: vector.PrepareParamBoolean}},
+		{name: "binary boolean", value: ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamBoolean}},
+		{name: "binary string", value: ParamValue{Value: "2"}, wrongArgs: true},
+		{name: "binary float", value: ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamFloat}, wrongArgs: true},
+		{name: "binary decimal", value: ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamDecimal}, wrongArgs: true},
+		{name: "negative signed", value: int64(-1), outOfRange: true},
+		{name: "negative binary", value: ParamValue{Value: "-1", PrepareParamKind: vector.PrepareParamInteger}, outOfRange: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidatePreparedPaginationParams(context.Background(), limitPlan, []any{test.value})
+			if test.wrongArgs {
+				assertWrongExecuteArgs(t, err)
+				return
+			}
+			if test.outOfRange {
+				require.Error(t, err)
+				moErr, ok := err.(*moerr.Error)
+				require.True(t, ok)
+				require.Equal(t, uint16(1690), moErr.MySQLCode())
+				require.Equal(t, "22003", moErr.SqlState())
+				require.Equal(t, "unsigned integer value is out of range in 'EXECUTE'", err.Error())
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+
+	t.Run("offset and parameter positions", func(t *testing.T) {
+		for _, sql := range []string{
+			"select n_nationkey from nation limit ? offset ?",
+			"select n_nationkey from nation limit ?, ?",
+		} {
+			paginationPlan := buildPreparedPlan(t, sql)
+			assertWrongExecuteArgs(t, ValidatePreparedPaginationParams(
+				context.Background(), paginationPlan, []any{int64(2), "1"}))
+			assertWrongExecuteArgs(t, ValidatePreparedPaginationParams(
+				context.Background(), paginationPlan, []any{"1", int64(-1)}))
+			err := ValidatePreparedPaginationParams(
+				context.Background(), paginationPlan, []any{int64(-1), "1"})
+			require.Error(t, err)
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, uint16(1690), moErr.MySQLCode())
+		}
+	})
+
+	t.Run("ctas", func(t *testing.T) {
+		ctasPlan := buildPreparedPlan(t, "create table prepared_limit_ctas as select 1 limit ?")
+		assertWrongExecuteArgs(t, ValidatePreparedPaginationParams(
+			context.Background(), ctasPlan, []any{ParamValue{Value: "1"}}))
+	})
+
+	t.Run("ordinary parameter is ignored", func(t *testing.T) {
+		ordinaryPlan := buildPreparedPlan(t, "select cast(? as unsigned) from nation limit 1")
+		require.NoError(t, ValidatePreparedPaginationParams(
+			context.Background(), ordinaryPlan, []any{"3"}))
+	})
 }
 
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
