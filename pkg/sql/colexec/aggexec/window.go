@@ -873,7 +873,7 @@ type valueWindowExec struct {
 // valueEntry stores a single value from the window frame
 type valueEntry struct {
 	isNull       bool
-	binaryString bool
+	stringDomain types.RuntimeStringDomain
 	data         []byte
 	kind         vector.PrepareParamKind
 }
@@ -910,7 +910,7 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 
 	if !entry.isNull {
 		entry.kind = vec.GetPrepareParamKindAt(row)
-		entry.binaryString = vec.GetBinaryStringMetadataAt(row)
+		entry.stringDomain = vec.GetRuntimeStringDomainAt(row)
 		// Copy the value data
 		if vec.GetType().IsVarlen() {
 			bs := vec.GetBytesAt(row)
@@ -1203,7 +1203,7 @@ func (exec *valueWindowExec) appendValueEntry(result *vector.Vector, entry *valu
 	if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
 		return err
 	}
-	return result.SetIsBinaryStringAt(row, entry.binaryString, exec.mp)
+	return result.SetRuntimeStringDomainAtWithMP(row, entry.stringDomain, exec.mp)
 }
 
 // appendValueToVector appends a value to the result vector based on the type

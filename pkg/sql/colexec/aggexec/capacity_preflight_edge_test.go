@@ -144,6 +144,30 @@ func TestCapacityPreflightPrimitiveBoundaries(t *testing.T) {
 		mp, 0, []*vector.Vector{normal}, 0, len(normal.GetRawBytesAt(0)), false, 11)
 	require.NoError(t, err)
 	require.Len(t, key, kAggArgPrefixSz+kAggArgOrdinalSz+1)
+
+	// Exercise every key-copy mode used by the DISTINCT preflight path. In
+	// particular, signed zero must be canonicalized in-place in the accounted
+	// scratch key, while non-distinct and non-zero values retain their bytes.
+	floatValues := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixed(floatValues, math.Copysign(0, -1), false, mp))
+	require.NoError(t, vector.AppendFixed(floatValues, float64(3), false, mp))
+	intValues := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(intValues, int64(7), false, mp))
+	key, err = exec.state[0].preparePreflightArgumentKey(
+		mp, 0, []*vector.Vector{floatValues}, 0,
+		len(floatValues.GetRawBytesAt(0)), true, 0)
+	require.NoError(t, err)
+	require.Equal(t, make([]byte, 8), key[kAggArgPrefixSz:])
+	key, err = exec.state[0].preparePreflightArgumentKey(
+		mp, 0, []*vector.Vector{floatValues, intValues}, 0,
+		4+len(floatValues.GetRawBytesAt(0))+4+len(intValues.GetRawBytesAt(0)), true, 0)
+	require.NoError(t, err)
+	require.Len(t, key, kAggArgPrefixSz+4+8+4+8)
+	key, err = exec.state[0].preparePreflightArgumentKey(
+		mp, 0, []*vector.Vector{normal, intValues}, 0,
+		4+len(normal.GetRawBytesAt(0))+4+len(intValues.GetRawBytesAt(0)), false, 11)
+	require.NoError(t, err)
+	require.Len(t, key, kAggArgPrefixSz+kAggArgOrdinalSz+4+1+4+8)
 	_, err = exec.state[0].preparePreflightArgumentKey(
 		mp, 0, []*vector.Vector{normal}, 99, 0, true, 0)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
@@ -157,6 +181,8 @@ func TestCapacityPreflightPrimitiveBoundaries(t *testing.T) {
 	exec.allocation = nil
 	normal.Free(mp)
 	constant.Free(mp)
+	floatValues.Free(mp)
+	intValues.Free(mp)
 	finishTestAggregateAllocation(t, registry, account)
 	require.Zero(t, mp.CurrNB())
 }

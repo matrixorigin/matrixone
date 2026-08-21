@@ -2550,7 +2550,7 @@ func TestHAKeeperClientCheckLogServiceHealth(t *testing.T) {
 					UUID: "uuid1",
 					Shards: []pb.TNShardInfo{
 						{
-							ShardID:   1,
+							ShardID:   2,
 							ReplicaID: 100,
 						},
 					},
