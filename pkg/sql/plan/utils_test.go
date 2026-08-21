@@ -35,6 +35,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSplitPlanConjunctionKeepsSharedVolatileMemoRoot(t *testing.T) {
+	memo := func(id int32) *plan.Expr {
+		return &plan.Expr{AuxId: id, Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}
+	}
+	fn := func(name string, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: args,
+		}}}
+	}
+
+	shared := fn("and",
+		fn("!=", memo(-1), &plan.Expr{}),
+		fn("!=", memo(-1), &plan.Expr{}))
+	require.Equal(t, []*plan.Expr{shared}, splitPlanConjunction(shared))
+
+	distinct := fn("and",
+		fn("!=", memo(-1), &plan.Expr{}),
+		fn("!=", memo(-2), &plan.Expr{}))
+	require.Len(t, splitPlanConjunction(distinct), 2)
+
+	outer := fn("and", shared, fn("=", &plan.Expr{}, &plan.Expr{}))
+	split := splitPlanConjunction(outer)
+	require.Len(t, split, 2)
+	require.Same(t, shared, split[0])
+}
+
 func TestHasTrailingZeros(t *testing.T) {
 	tests := []struct {
 		name         string

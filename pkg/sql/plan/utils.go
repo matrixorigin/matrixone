@@ -881,7 +881,7 @@ func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	var exprs []*plan.Expr
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if exprImpl.F.Func.ObjName == "and" {
+		if exprImpl.F.Func.ObjName == "and" && !conjunctionSharesMemoAcrossBranches(exprImpl.F.Args) {
 			exprs = append(exprs, splitPlanConjunction(exprImpl.F.Args[0])...)
 			exprs = append(exprs, splitPlanConjunction(exprImpl.F.Args[1])...)
 		} else {
@@ -893,6 +893,54 @@ func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	}
 
 	return exprs
+}
+
+// conjunctionSharesMemoAcrossBranches reports whether splitting an AND would
+// separate occurrences that must share one volatile-expression memo cache.
+func conjunctionSharesMemoAcrossBranches(args []*plan.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	left := make(map[int32]struct{})
+	collectNegativeAuxIDs(args[0], left)
+	if len(left) == 0 {
+		return false
+	}
+	right := make(map[int32]struct{})
+	collectNegativeAuxIDs(args[1], right)
+	for id := range left {
+		if _, ok := right[id]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func collectNegativeAuxIDs(expr *plan.Expr, ids map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	if expr.AuxId < 0 {
+		ids[expr.AuxId] = struct{}{}
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F != nil {
+			for _, arg := range e.F.Args {
+				collectNegativeAuxIDs(arg, ids)
+			}
+		}
+	case *plan.Expr_List:
+		if e.List != nil {
+			for _, item := range e.List.List {
+				collectNegativeAuxIDs(item, ids)
+			}
+		}
+	case *plan.Expr_Lit:
+		if e.Lit != nil {
+			collectNegativeAuxIDs(e.Lit.Src, ids)
+		}
+	}
 }
 
 func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan.Expr, err error) {
