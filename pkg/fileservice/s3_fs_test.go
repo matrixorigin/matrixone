@@ -1009,18 +1009,11 @@ func TestS3PrefetchFileDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 		Policy: SkipDiskCache | SkipMemoryCache,
 	}))
 
-	syncStarted := make(chan struct{})
-	releaseSync := make(chan struct{})
-	unblock := sync.OnceFunc(func() { close(releaseSync) })
+	syncStarted, unblock := installBlockedDiskCacheFileSync(fs.diskCache)
 	t.Cleanup(func() {
 		unblock()
 		fs.Close(ctx)
 	})
-	fs.diskCache.fileSync = func(file *os.File) error {
-		close(syncStarted)
-		<-releaseSync
-		return file.Sync()
-	}
 
 	prefetchDone := make(chan error, 1)
 	go func() {
@@ -1028,13 +1021,13 @@ func TestS3PrefetchFileDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 	}()
 	select {
 	case <-syncStarted:
-	case <-time.After(time.Second):
+	case <-time.After(diskCacheLifecycleTestTimeout):
 		t.Fatal("async prefetch finalizer did not start")
 	}
 	select {
 	case err := <-prefetchDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(diskCacheLifecycleTestTimeout):
 		unblock()
 		t.Fatalf("prefetch waited for disk finalization: %v", <-prefetchDone)
 	}
@@ -1045,7 +1038,7 @@ func TestS3PrefetchFileDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 	require.True(t, fs.diskCache.isUpdating(diskPath))
 
 	unblock()
-	flushCtx, cancel := context.WithTimeout(ctx, time.Second)
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
 	defer cancel()
 	fs.FlushCache(flushCtx)
 	require.NoError(t, flushCtx.Err())
@@ -1083,18 +1076,11 @@ func TestS3FSWriteDiskCacheFinalizeMode(t *testing.T) {
 			require.NoError(t, err)
 			fs.SetAsyncUpdate(test.async)
 
-			syncStarted := make(chan struct{})
-			releaseSync := make(chan struct{})
-			unblock := sync.OnceFunc(func() { close(releaseSync) })
+			syncStarted, unblock := installBlockedDiskCacheFileSync(fs.diskCache)
 			t.Cleanup(func() {
 				unblock()
 				fs.Close(ctx)
 			})
-			fs.diskCache.fileSync = func(file *os.File) error {
-				close(syncStarted)
-				<-releaseSync
-				return file.Sync()
-			}
 
 			writeDone := make(chan error, 1)
 			go func() {
@@ -1108,7 +1094,7 @@ func TestS3FSWriteDiskCacheFinalizeMode(t *testing.T) {
 			}()
 			select {
 			case <-syncStarted:
-			case <-time.After(time.Second):
+			case <-time.After(diskCacheLifecycleTestTimeout):
 				t.Fatal("disk-cache finalization did not start")
 			}
 
@@ -1118,7 +1104,7 @@ func TestS3FSWriteDiskCacheFinalizeMode(t *testing.T) {
 				select {
 				case err := <-writeDone:
 					require.NoError(t, err)
-				case <-time.After(time.Second):
+				case <-time.After(diskCacheLifecycleTestTimeout):
 					unblock()
 					t.Fatalf("async write waited for disk finalization: %v", <-writeDone)
 				}
@@ -1136,7 +1122,7 @@ func TestS3FSWriteDiskCacheFinalizeMode(t *testing.T) {
 			if !test.async {
 				require.NoError(t, <-writeDone)
 			}
-			flushCtx, cancel := context.WithTimeout(ctx, time.Second)
+			flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
 			defer cancel()
 			fs.FlushCache(flushCtx)
 			require.NoError(t, flushCtx.Err())
@@ -2185,18 +2171,11 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotWaitForAsyncFinalize(t *te
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	require.NoError(t, err)
 
-	syncStarted := make(chan struct{})
-	releaseSync := make(chan struct{})
-	unblock := sync.OnceFunc(func() { close(releaseSync) })
+	syncStarted, unblock := installBlockedDiskCacheFileSync(cache)
 	t.Cleanup(func() {
 		unblock()
 		cache.Close(ctx)
 	})
-	cache.fileSync = func(file *os.File) error {
-		close(syncStarted)
-		<-releaseSync
-		return file.Sync()
-	}
 
 	s3 := &S3FS{
 		diskCache:   cache,
@@ -2228,14 +2207,14 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotWaitForAsyncFinalize(t *te
 
 	select {
 	case <-syncStarted:
-	case <-time.After(time.Second):
+	case <-time.After(diskCacheLifecycleTestTimeout):
 		t.Fatal("async full-object finalizer did not start")
 	}
 	select {
 	case result := <-readDone:
 		require.NoError(t, result.err)
 		require.True(t, result.done)
-	case <-time.After(time.Second):
+	case <-time.After(diskCacheLifecycleTestTimeout):
 		unblock()
 		result := <-readDone
 		t.Fatalf("full-object read waited for disk finalization: %v", result.err)
@@ -2247,7 +2226,7 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotWaitForAsyncFinalize(t *te
 	require.True(t, cache.isUpdating(cache.pathForFile("foo/bar")))
 
 	unblock()
-	flushCtx, cancel := context.WithTimeout(ctx, time.Second)
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
 	defer cancel()
 	cache.Flush(flushCtx)
 	require.NoError(t, flushCtx.Err())
@@ -2290,18 +2269,11 @@ func TestS3FSReadIOMergerReleaseMatchesDiskFinalizeMode(t *testing.T) {
 			}))
 			fs.SetAsyncUpdate(test.async)
 
-			syncStarted := make(chan struct{})
-			releaseSync := make(chan struct{})
-			unblock := sync.OnceFunc(func() { close(releaseSync) })
+			syncStarted, unblock := installBlockedDiskCacheFileSync(fs.diskCache)
 			t.Cleanup(func() {
 				unblock()
 				fs.Close(ctx)
 			})
-			fs.diskCache.fileSync = func(file *os.File) error {
-				close(syncStarted)
-				<-releaseSync
-				return file.Sync()
-			}
 
 			vector := &IOVector{
 				FilePath: "foo/bar",
@@ -2313,7 +2285,7 @@ func TestS3FSReadIOMergerReleaseMatchesDiskFinalizeMode(t *testing.T) {
 			go func() { readDone <- fs.Read(ctx, vector) }()
 			select {
 			case <-syncStarted:
-			case <-time.After(time.Second):
+			case <-time.After(diskCacheLifecycleTestTimeout):
 				t.Fatal("full-object disk-cache finalization did not start")
 			}
 
@@ -2321,7 +2293,7 @@ func TestS3FSReadIOMergerReleaseMatchesDiskFinalizeMode(t *testing.T) {
 				select {
 				case err := <-readDone:
 					require.NoError(t, err)
-				case <-time.After(time.Second):
+				case <-time.After(diskCacheLifecycleTestTimeout):
 					unblock()
 					t.Fatalf("async full-object read waited for disk finalization: %v", <-readDone)
 				}
@@ -2341,7 +2313,7 @@ func TestS3FSReadIOMergerReleaseMatchesDiskFinalizeMode(t *testing.T) {
 				require.NoError(t, <-readDone)
 			}
 			require.Equal(t, []byte("ello"), vector.Entries[0].Data)
-			flushCtx, cancel := context.WithTimeout(ctx, time.Second)
+			flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
 			defer cancel()
 			fs.FlushCache(flushCtx)
 			require.NoError(t, flushCtx.Err())
@@ -2380,18 +2352,11 @@ func TestS3FSRangeFollowerDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 		Policy:   SkipDiskCache | SkipMemoryCache,
 	}))
 
-	syncStarted := make(chan struct{})
-	releaseSync := make(chan struct{})
-	unblock := sync.OnceFunc(func() { close(releaseSync) })
+	syncStarted, unblock := installBlockedDiskCacheFileSync(fs.diskCache)
 	t.Cleanup(func() {
 		unblock()
 		fs.Close(ctx)
 	})
-	fs.diskCache.fileSync = func(file *os.File) error {
-		close(syncStarted)
-		<-releaseSync
-		return file.Sync()
-	}
 
 	newVector := func() *IOVector {
 		return &IOVector{
@@ -2406,7 +2371,7 @@ func TestS3FSRangeFollowerDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 	require.Equal(t, []byte("ello"), leader.Entries[0].Data)
 	select {
 	case <-syncStarted:
-	case <-time.After(time.Second):
+	case <-time.After(diskCacheLifecycleTestTimeout):
 		t.Fatal("async range finalizer did not start")
 	}
 
@@ -2417,7 +2382,7 @@ func TestS3FSRangeFollowerDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 	select {
 	case err := <-followerDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(diskCacheLifecycleTestTimeout):
 		unblock()
 		<-followerDone
 		t.Fatal("range follower waited for async disk finalization")

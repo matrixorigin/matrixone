@@ -35,7 +35,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const diskCacheLifecycleTestTimeout = time.Second
+// Lifecycle tests use explicit phase barriers. This timeout is only a hang
+// guard for a broken transition, so leave enough room for a loaded race/CI
+// worker to schedule the goroutine that owns the release edge.
+const diskCacheLifecycleTestTimeout = 5 * time.Second
 
 func newLifecycleTestDiskCache(t *testing.T) *DiskCache {
 	t.Helper()
@@ -64,6 +67,22 @@ type blockingDiskCacheWriter struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+// installBlockedDiskCacheFileSync isolates lifecycle scheduling from real
+// filesystem sync latency. The injected call still marks the exact finalizer
+// phase and blocks until released; normal cache writes retain the production
+// file.Sync implementation.
+func installBlockedDiskCacheFileSync(cache *DiskCache) (<-chan struct{}, func()) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	cache.fileSync = func(*os.File) error {
+		close(started)
+		<-release
+		return nil
+	}
+	return started, unblock
 }
 
 func (w *blockingDiskCacheWriter) Write(p []byte) (int, error) {
@@ -127,15 +146,8 @@ func TestDiskCacheIOEntryWaitIsBoundedDuringAsyncFinalize(t *testing.T) {
 	shortIOWaitDuration = 5 * time.Millisecond
 	t.Cleanup(func() { shortIOWaitDuration = originalShortWait })
 
-	syncStarted := make(chan struct{})
-	releaseSync := make(chan struct{})
-	unblock := sync.OnceFunc(func() { close(releaseSync) })
+	syncStarted, unblock := installBlockedDiskCacheFileSync(cache)
 	t.Cleanup(unblock)
-	cache.fileSync = func(file *os.File) error {
-		close(syncStarted)
-		<-releaseSync
-		return file.Sync()
-	}
 	require.NoError(t, cache.Update(context.Background(), &IOVector{
 		FilePath: "foo",
 		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
@@ -667,16 +679,8 @@ func TestDiskCacheAsyncCallbacksRemainOrderedAndBounded(t *testing.T) {
 
 func TestDiskCacheAsyncSetFileReturnsBeforeFinalize(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
-	syncStarted := make(chan struct{})
-	releaseSync := make(chan struct{})
-	var releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(releaseSync) }) }
+	syncStarted, unblock := installBlockedDiskCacheFileSync(cache)
 	t.Cleanup(unblock)
-	cache.fileSync = func(file *os.File) error {
-		close(syncStarted)
-		<-releaseSync
-		return file.Sync()
-	}
 
 	readerOpened := false
 	require.NoError(t, cache.setFile(
@@ -801,16 +805,8 @@ func TestDiskCacheAsyncSetFileFinalizeErrorIsFailOpenAndObservable(t *testing.T)
 
 func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
-	syncStarted := make(chan struct{})
-	releaseSync := make(chan struct{})
-	var releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(releaseSync) }) }
+	syncStarted, unblock := installBlockedDiskCacheFileSync(cache)
 	t.Cleanup(unblock)
-	cache.fileSync = func(file *os.File) error {
-		close(syncStarted)
-		<-releaseSync
-		return file.Sync()
-	}
 
 	open := func(value string) func(context.Context) (io.ReadCloser, error) {
 		return func(context.Context) (io.ReadCloser, error) {
@@ -818,6 +814,7 @@ func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 		}
 	}
 	require.NoError(t, cache.setFile(context.Background(), "first", open("first"), true))
+	firstPath := cache.pathForFile("first")
 	select {
 	case <-syncStarted:
 	case <-time.After(diskCacheLifecycleTestTimeout):
@@ -844,6 +841,25 @@ func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	defer finishCancel()
 	cache.Close(finishCtx)
 	require.NoError(t, finishCtx.Err())
+	require.False(t, cache.isUpdating(firstPath))
+	require.False(t, cache.isUpdating(queuedPath))
+	cache.async.mu.Lock()
+	require.Empty(t, cache.async.mu.pending)
+	cache.async.mu.Unlock()
+	require.Empty(t, cache.async.slots)
+	select {
+	case <-cache.async.done:
+	default:
+		t.Fatal("successful Close did not join the async finalizer generation")
+	}
+	for _, diskPath := range []string{firstPath, queuedPath} {
+		_, err := os.Stat(diskPath)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
+	tempFiles, err := filepath.Glob(filepath.Join(cache.path, "*"+cacheFileTempSuffix))
+	require.NoError(t, err)
+	require.Empty(t, tempFiles)
+	require.True(t, cache.writeFailures.failed.Load())
 }
 
 func TestDiskCacheCloseOwnsAsyncLoaderGeneration(t *testing.T) {
@@ -932,15 +948,8 @@ func TestDiskCacheCloseOwnsAsyncLoaderGeneration(t *testing.T) {
 
 func TestDiskCacheCloseCancelsActiveFileFinalizeBeforePublish(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
-	syncStarted := make(chan struct{})
-	releaseSync := make(chan struct{})
-	unblock := sync.OnceFunc(func() { close(releaseSync) })
+	syncStarted, unblock := installBlockedDiskCacheFileSync(cache)
 	t.Cleanup(unblock)
-	cache.fileSync = func(file *os.File) error {
-		close(syncStarted)
-		<-releaseSync
-		return file.Sync()
-	}
 
 	require.NoError(t, cache.setFile(
 		context.Background(),
