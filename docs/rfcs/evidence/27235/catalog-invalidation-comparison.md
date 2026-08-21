@@ -2,7 +2,7 @@
 
 Status: evidence-only; no production candidate selected
 
-Measurement head: `badab14cb6d05060663fdfb691f3da19975b09c1`
+Measurement head: `8c147612cb0723e1cd90638aa0ab21503a4ab1a2`
 Base: `5735684d69c9b171c4d7a5ebee3ebcc539ffc8cc`
 Harness: `pkg/embed`, one Log, one TN, two CNs
 
@@ -30,7 +30,7 @@ Across both CN reports, stable checks had zero inconclusive observations and:
 | Oracle | Stable FN | Stable FP | Overflow |
 | --- | ---: | ---: | --- |
 | precise shadow | 0 | 0 | false |
-| 4096-account bucket | 0 | 36 | false |
+| 4096-account bucket | 0 | 6 | false |
 
 The bucket false positives are measured mechanism evidence, not a production
 budget. The bucket remains measurement-only until Catalog, frontend, and
@@ -46,10 +46,13 @@ changed states is stored outside the repository under
 `/Users/violet/bench/tpcc-mutex-next/results/27235/`.
 
 The attribution-disabled wrapper versus exact warmed-negative comparison used
-five runs per history. `benchstat` reports a +1.59% geometric-mean latency
-change, 0.00% bytes/op change, and no additional allocations. The precise
-warmed-negative path reports `0 B/op` and `0 allocs/op`. These are microbenchmark
-results only and are not TPS or transaction-tail claims.
+five runs per history after the competing local build had finished.
+`benchstat` reports a -10.16% geometric-mean latency change, 0.00% bytes/op
+change, and 0.00% allocs/op change. A separate run during a competing local
+build produced +44.32% and is retained as invalid contention evidence, not
+used for the gate. The precise warmed-negative path reports `0 B/op` and
+`0 allocs/op`. These are microbenchmark results only and are not TPS or
+transaction-tail claims.
 
 ## Decision
 
