@@ -848,6 +848,12 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 	return makePlan2CastExprWithName(ctx, expr, targetType, "cast")
 }
 
+// MakePlan2CastExpr builds the ordinary SQL CAST used at a prepared result
+// boundary so the result vector and advertised protocol metadata stay equal.
+func MakePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	return makePlan2CastExpr(ctx, expr, targetType)
+}
+
 // makePlan2AssignmentCastExpr builds a cast used when validating/storing a value
 // against a real column type at the DDL layer (e.g. column DEFAULT / ON UPDATE).
 // It uses cast_strict for width-constrained strings and temporal zero-date

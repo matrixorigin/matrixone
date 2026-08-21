@@ -406,6 +406,7 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 	// vector and keeps the ParamRef below.
 	materialize := false
 	pos := int(astExpr.Offset) - 1
+	bindingType, bindingFound := b.preparedParamBindingType(int32(astExpr.Offset))
 	if ctx := b.GetContext(); ctx != nil {
 		if params, ok := ctx.Value(prepareRuntimeParamsKey{}).(prepareRuntimeParams); ok {
 			_, selected := params.positions[int32(pos)]
@@ -451,6 +452,10 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 					cast.ExactDecimalParam = true
 					return cast, nil
 				}
+				if bindingFound && !bindingType.Oid.IsMySQLString() &&
+					types.T(expr.Typ.Id) != bindingType.Oid {
+					return appendCastBeforeExpr(b.GetContext(), expr, makePlan2Type(&bindingType))
+				}
 				return expr, nil
 			}
 		}
@@ -464,7 +469,16 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			},
 		},
 	}
-	bindingType, bindingFound := b.preparedParamBindingType(int32(astExpr.Offset))
+	if bindingFound && bindingType.Oid == types.T_text && bindingType.Charset == 255 {
+		marker := fmt.Sprintf(
+			"mo_runtime_numeric:%d:%d:%d", bindingType.Size, bindingType.Width, bindingType.Scale)
+		param.Typ.Enumvalues = marker
+		if runtimeType, _, found := runtimePreparedNumericType(param); found {
+			param.Typ = makePlan2Type(&runtimeType)
+			param.Typ.Enumvalues = marker
+		}
+		return param, nil
+	}
 	if b.directParamCommonTypeTarget {
 		if bindingFound {
 			param.Typ = makePlan2Type(&bindingType)
@@ -472,10 +486,6 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 		return param, nil
 	}
 	if bindingFound && b.decimalParamCommonTypeTarget {
-		if bindingType.Oid == types.T_text && bindingType.Charset == 255 {
-			param.Typ.Enumvalues = fmt.Sprintf("mo_runtime_numeric:%d:%d:%d", bindingType.Size, bindingType.Width, bindingType.Scale)
-			return param, nil
-		}
 		if bindingType.Oid.IsMySQLString() {
 			param.Typ = makePlan2Type(&bindingType)
 			return param, nil
@@ -498,6 +508,7 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 		return param, nil
 	}
 	if b.numericParamType != nil {
+		param.Typ.Enumvalues = "mo_implicit_numeric_param_dependency"
 		return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
 	}
 	return param, nil

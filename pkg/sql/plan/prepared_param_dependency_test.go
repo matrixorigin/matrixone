@@ -188,7 +188,8 @@ func TestPreparedParamResultMetadataDependencies(t *testing.T) {
 		PreparedParamResultMetadataDependencies(prepare.Plan, 3))
 	require.Equal(t, [][]bool{{true, false, false}, nil, nil},
 		PreparedParamResultMetadataDependencyColumns(prepare.Plan, 3))
-	require.Empty(t, PreparedParamCommonTypeDependencies(prepare.Plan, 3))
+	require.Equal(t, []bool{false, false, true},
+		PreparedParamCommonTypeDependencies(prepare.Plan, 3))
 }
 
 func TestPreparedParamResultMetadataDependenciesFollowUnionOutputs(t *testing.T) {
@@ -266,8 +267,20 @@ func TestPreparedParamExecutionDependenciesIncludeImplicitComparisonCast(t *test
 	require.NoError(t, err)
 	prepare := logicPlan.GetDcl().GetPrepare()
 	require.NotNil(t, prepare)
-	require.Equal(t, []bool{true},
-		PreparedParamExecutionDependencies(prepare.Plan, 1))
+	require.Empty(t, PreparedParamCommonTypeDependencies(prepare.Plan, 1))
+	require.Empty(t, PreparedParamExecutionDependencies(prepare.Plan, 1))
+}
+
+func TestPreparedParamExecutionDependenciesIncludeArithmeticCasts(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t,
+		"prepare p from 'select cast((? + ?) + 1 as decimal(30,0))'")
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Equal(t, []bool{true, true},
+		PreparedParamCommonTypeDependencies(prepare.Plan, 2))
+	require.Empty(t, PreparedParamExecutionDependencies(prepare.Plan, 2))
 }
 
 func TestPreparedAllParameterResultTypeDependencies(t *testing.T) {

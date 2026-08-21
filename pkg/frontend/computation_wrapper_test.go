@@ -308,7 +308,7 @@ func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 	}{
 		{defines.MYSQL_TYPE_TINY, false, "0", vector.PrepareParamInteger},
 		{defines.MYSQL_TYPE_TINY, false, "1", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_TINY, true, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_TINY, true, "1", vector.PrepareParamBoolean},
 		{defines.MYSQL_TYPE_TINY, false, "2", vector.PrepareParamInteger},
 		{defines.MYSQL_TYPE_TINY, false, "-1", vector.PrepareParamInteger},
 		{defines.MYSQL_TYPE_SHORT, false, "1", vector.PrepareParamInteger},
@@ -894,7 +894,7 @@ func TestInitExecuteStmtParamMapsRuntimeBindingCategoriesByPosition(t *testing.T
 	setParams("1e-40", defines.MYSQL_TYPE_DOUBLE, "1.25", defines.MYSQL_TYPE_VAR_STRING)
 	resultTypes = executeTypes()
 	require.Equal(t, types.T_float64, resultTypes[0])
-	require.True(t, resultTypes[1].IsDecimal())
+	require.Equal(t, types.T_float64, resultTypes[1])
 	require.Equal(t, types.T_float64.ToType(), prepareStmt.paramBindingTypes[0])
 	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[1].Size)
 }
@@ -1077,7 +1077,7 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 				want   types.T
 			}{
 				{defines.MYSQL_TYPE_NEWDECIMAL, "-12345678901234567890.123456789", false, types.T_decimal128},
-				{defines.MYSQL_TYPE_NEWDECIMAL, "", true, types.T_text},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "", true, types.T_decimal128},
 				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal64},
 			},
 		},
@@ -1332,7 +1332,7 @@ func TestExplicitCastControlFlowRebindsExecutionCategory(t *testing.T) {
 	}
 }
 
-func TestPreparedResultMetadataKeepsDoubleWithoutChangingExecutionDomain(t *testing.T) {
+func TestPreparedResultMetadataAndVectorKeepDoubleDomain(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 214,
 		"select if(false, ?, ?)")
 	defer prepareStmt.Close()
@@ -1343,7 +1343,7 @@ func TestPreparedResultMetadataKeepsDoubleWithoutChangingExecutionDomain(t *test
 	}{
 		{[]defines.MysqlType{defines.MYSQL_TYPE_NEWDECIMAL, defines.MYSQL_TYPE_NEWDECIMAL}, []string{"1", "2"}, types.T_decimal64},
 		{[]defines.MysqlType{defines.MYSQL_TYPE_DOUBLE, defines.MYSQL_TYPE_NEWDECIMAL}, []string{"1.5", "2"}, types.T_float64},
-		{[]defines.MysqlType{defines.MYSQL_TYPE_NEWDECIMAL, defines.MYSQL_TYPE_VAR_STRING}, []string{"1", "tail"}, types.T_varchar},
+		{[]defines.MysqlType{defines.MYSQL_TYPE_NEWDECIMAL, defines.MYSQL_TYPE_VAR_STRING}, []string{"1", "tail"}, types.T_float64},
 	}
 	for _, step := range steps {
 		if prepareStmt.params != nil {
@@ -1410,7 +1410,7 @@ func TestAllParameterDecimalCommonTypeRebuilds(t *testing.T) {
 	}
 }
 
-func TestPreparedResultMetadataKeepsNumericWithoutChangingExecutionDomain(t *testing.T) {
+func TestPreparedResultMetadataAndVectorKeepNumericDomain(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		first defines.MysqlType
@@ -1453,8 +1453,10 @@ func TestPreparedResultMetadataKeepsNumericWithoutChangingExecutionDomain(t *tes
 					} else {
 						require.Equal(t, test.want, actual)
 					}
+				} else if test.want.IsDecimal() {
+					require.True(t, actual.IsDecimal())
 				} else {
-					require.Equal(t, types.T_varchar, actual)
+					require.Equal(t, test.want, actual)
 				}
 			}
 			if test.want.IsDecimal() {

@@ -6720,6 +6720,12 @@ func parseSignedExplicitCastString(s string, bitSize int) (int64, error) {
 	return int64(unsigned), nil
 }
 
+// ParsePreparedStringToInt64 applies the ordinary SQL string-to-BIGINT cast
+// contract when a stable prepared plan exposes an integer ParamRef.
+func ParsePreparedStringToInt64(s string) (int64, error) {
+	return parseSignedExplicitCastString(s, 64)
+}
+
 func parseUnsignedExplicitCastString(s string, bitSize int) (uint64, error) {
 	parseInput := explicitIntegerCastInput(s)
 	value, err := parseUnsignedCastString(parseInput, bitSize)
@@ -6744,6 +6750,12 @@ func parseUnsignedExplicitCastString(s string, bitSize int) (uint64, error) {
 		return new(big.Int).Sub(modulus, big.NewInt(1)).Uint64(), nil
 	}
 	return magnitude.Uint64(), nil
+}
+
+// ParsePreparedStringToUint64 applies the ordinary SQL string-to-UNSIGNED
+// BIGINT cast contract when a stable prepared plan exposes an integer ParamRef.
+func ParsePreparedStringToUint64(s string) (uint64, error) {
+	return parseUnsignedExplicitCastString(s, 64)
 }
 
 func strToUnsigned[T constraints.Unsigned](

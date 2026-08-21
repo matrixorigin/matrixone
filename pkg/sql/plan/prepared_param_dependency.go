@@ -48,16 +48,11 @@ func (r *preparedParamCommonTypeDependencyRule) visit(expr *Expr) {
 		if expr.Typ.Enumvalues == "mo_explicit_cast_param_dependency" {
 			r.executionPositions[impl.P.Pos] = struct{}{}
 		}
+		if expr.Typ.Enumvalues == "mo_implicit_numeric_param_dependency" {
+			r.positions[impl.P.Pos] = struct{}{}
+		}
 	case *planpb.Expr_F:
 		functionID, _ := function.DecodeOverloadID(impl.F.Func.Obj)
-		if impl.F.Func.GetObjName() == "cast" && len(impl.F.Args) > 0 {
-			// An implicit binder cast directly over a parameter fixes the
-			// physical input domain just as an explicitly marked CAST does. Do
-			// not recursively claim parameters hidden below unrelated functions.
-			if param := impl.F.Args[0].GetP(); param != nil {
-				r.executionPositions[param.Pos] = struct{}{}
-			}
-		}
 		if functionID == function.COALESCE || functionID == function.GREATEST || functionID == function.LEAST {
 			for _, arg := range impl.F.Args {
 				r.collectDirectParams(arg)

@@ -350,6 +350,18 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 				})
 			}
 		}
+		mustExec(t, ctx, conn, "create table prepared_range (id int primary key, i int)")
+		mustExec(t, ctx, conn, "insert into prepared_range values (1,-1),(2,0),(3,1)")
+		for _, query := range []string{
+			"select id from prepared_range where i between ? and ? order by id",
+			"select id from prepared_range where i >= ? and i <= ? order by id",
+		} {
+			stmt, err := conn.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			require.Empty(t, queryIssue27088IDs(t, ctx, stmt, nil, nil))
+			require.Equal(t, []int{1, 2, 3}, queryIssue27088IDs(t, ctx, stmt, "-1", "1"))
+			require.NoError(t, stmt.Close())
+		}
 		wideCommon, err := conn.PrepareContext(ctx, "select coalesce(?, cast(2 as decimal(1,0)))")
 		require.NoError(t, err)
 		defer wideCommon.Close()

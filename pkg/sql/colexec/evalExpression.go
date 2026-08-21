@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -626,13 +625,13 @@ func setPreparedParamValue(
 		}
 		return setPreparedParamFixed(vec, typ, parsed, mp, selection)
 	case types.T_int64:
-		parsed, err := strconv.ParseInt(text, 10, 64)
+		parsed, err := function.ParsePreparedStringToInt64(text)
 		if err != nil {
 			return nil, err
 		}
 		return setPreparedParamFixed(vec, typ, parsed, mp, selection)
 	case types.T_uint64:
-		parsed, err := strconv.ParseUint(text, 10, 64)
+		parsed, err := function.ParsePreparedStringToUint64(text)
 		if err != nil {
 			return nil, err
 		}

@@ -708,13 +708,17 @@ func initExecuteStmtParamWithResolver(
 
 func binaryProtocolPrepareParamKind(
 	mysqlType defines.MysqlType,
-	_ bool,
-	_ []byte,
+	unsigned bool,
+	value []byte,
 ) vector.PrepareParamKind {
 	switch mysqlType {
 	case defines.MYSQL_TYPE_TINY:
-		// MYSQL_TYPE_TINY carries no Boolean identity. MySQL exposes signed
-		// TINY parameters as integers even when their payload is 0 or 1.
+		// database/sql encodes bool as unsigned TINY 0/1. Preserve that source
+		// identity for JSON and BOOL consumers; signed TINY and every other
+		// unsigned value remain ordinary integers.
+		if unsigned && (bytes.Equal(value, []byte("0")) || bytes.Equal(value, []byte("1"))) {
+			return vector.PrepareParamBoolean
+		}
 		return vector.PrepareParamInteger
 	case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
 		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_BIT,
@@ -1202,39 +1206,6 @@ func preserveWiderPreparedParamBindings(
 	return result
 }
 
-func preservePreparedResultMetadataBindings(
-	previous, current []types.Type, dependencies []bool, count int,
-) []types.Type {
-	if len(previous) == 0 {
-		return current
-	}
-	result := clonePreparedParamBindingTypes(current)
-	if len(result) < count {
-		result = append(result, make([]types.Type, count-len(result))...)
-	}
-	for i := 0; i < count; i++ {
-		if i >= len(dependencies) || !dependencies[i] || i >= len(previous) {
-			continue
-		}
-		previousType := previous[i]
-		currentType := result[i]
-		switch {
-		case currentType.Oid == 0:
-			result[i] = previousType
-		case previousType.Oid == types.T_float64:
-			result[i] = previousType
-		case previousType.Oid.IsDecimal() &&
-			(currentType.Oid.IsInteger() || currentType.Oid == types.T_bool):
-			result[i] = previousType
-		case previousType.Oid.IsDecimal() && currentType.Oid.IsDecimal():
-			integral := max(previousType.Width-previousType.Scale, currentType.Width-currentType.Scale)
-			scale := max(previousType.Scale, currentType.Scale)
-			result[i] = preparedResultDecimalType(integral+scale, scale)
-		}
-	}
-	return result
-}
-
 func preparedParamBindingTypesAtDependencies(bindingTypes []types.Type, dependencies []bool) []types.Type {
 	if len(bindingTypes) == 0 || len(dependencies) == 0 {
 		return nil
@@ -1280,6 +1251,13 @@ func (state *preparedExecuteParamState) apply(proc *process.Process) {
 	if state.owned {
 		proc.SetOwnedPrepareParamsWithMeta(state.params, state.paramIsBin, state.paramKinds)
 		state.owned = false
+		return
+	}
+	proc.SetPrepareParamsWithMeta(state.params, state.paramIsBin, state.paramKinds)
+}
+
+func (state *preparedExecuteParamState) borrow(proc *process.Process) {
+	if state == nil || state.params == nil || proc == nil {
 		return
 	}
 	proc.SetPrepareParamsWithMeta(state.params, state.paramIsBin, state.paramKinds)
@@ -1494,6 +1472,12 @@ func initExecuteStmtParamWithResolverInSession(
 	if needRebuild {
 		compilerCtx := executionSes.GetTxnCompileCtx()
 		rebuildWithBindingTypes := func(bindingTypes []types.Type, dependencies []bool) (*plan.Plan, error) {
+			// Internal SQL may replace the process parameter slot between rebuilds.
+			// Borrow the caller-owned vector immediately before every bind so the
+			// binder sees both the current values and their protocol source kinds.
+			if slices.Contains(dependencies, true) {
+				paramState.borrow(cwft.proc)
+			}
 			compilerCtx.setPreparedParamBindingTypes(preparedParamBindingTypesAtDependencies(
 				bindingTypes, dependencies))
 			defer compilerCtx.setPreparedParamBindingTypes(nil)
@@ -1510,6 +1494,12 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		newResultDependencies := plan2.PreparedParamResultMetadataDependencies(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+		newCommonDependencies = mergePreparedParamDependencies(
+			prepareStmt.paramBindingDependencies, newCommonDependencies, len(newPreparePlan.ParamTypes))
+		newExecutionDependencies = mergePreparedParamDependencies(
+			prepareStmt.paramExecutionDependencies, newExecutionDependencies, len(newPreparePlan.ParamTypes))
+		newResultDependencies = mergePreparedParamDependencies(
+			prepareStmt.paramResultMetadataDependencies, newResultDependencies, len(newPreparePlan.ParamTypes))
 		newDependencies := mergePreparedParamDependencies(
 			newCommonDependencies,
 			mergePreparedParamDependencies(newExecutionDependencies, newResultDependencies,
@@ -1532,6 +1522,12 @@ func initExecuteStmtParamWithResolverInSession(
 				newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 			finalResultDependencies := plan2.PreparedParamResultMetadataDependencies(
 				newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+			finalCommonDependencies = mergePreparedParamDependencies(
+				newCommonDependencies, finalCommonDependencies, len(newPreparePlan.ParamTypes))
+			finalExecutionDependencies = mergePreparedParamDependencies(
+				newExecutionDependencies, finalExecutionDependencies, len(newPreparePlan.ParamTypes))
+			finalResultDependencies = mergePreparedParamDependencies(
+				newResultDependencies, finalResultDependencies, len(newPreparePlan.ParamTypes))
 			finalDependencies := mergePreparedParamDependencies(
 				finalCommonDependencies,
 				mergePreparedParamDependencies(finalExecutionDependencies, finalResultDependencies,
@@ -1562,6 +1558,12 @@ func initExecuteStmtParamWithResolverInSession(
 		switch prepareStmt.PrepareStmt.(type) {
 		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 			txnHaveDDL = sessionTxnHaveDDL(executionSes)
+		}
+		if err = stabilizePreparedResultExpressions(
+			reqCtx, newPreparePlan.Plan, plan2.PreparedParamResultMetadataDependencyColumns(
+				newPreparePlan.Plan, len(newPreparePlan.ParamTypes)),
+			prepareStmt.paramResultColumnTypes); err != nil {
+			return nil, nil, nil, "", false, err
 		}
 		columns := getPreparedResultColumnsFromPlan(
 			prepareStmt.PrepareStmt, newPlan, txnHaveDDL)
@@ -1738,6 +1740,45 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
+}
+
+func stabilizePreparedResultExpressions(
+	ctx context.Context, p *plan.Plan, dependencies [][]bool, previous []types.Type,
+) error {
+	query := p.GetQuery()
+	if query == nil || len(query.Steps) == 0 {
+		return nil
+	}
+	step := len(query.Steps) - 1
+	if query.HasReturning {
+		step = int(query.ReturningStep)
+	}
+	if step < 0 || step >= len(query.Steps) {
+		return nil
+	}
+	nodeID := query.Steps[step]
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+		return nil
+	}
+	projects := query.Nodes[nodeID].ProjectList
+	for i := range projects {
+		if i >= len(dependencies) || !slices.Contains(dependencies[i], true) || i >= len(previous) ||
+			!preparedResultTypeIsStableNumeric(previous[i]) || projects[i] == nil {
+			continue
+		}
+		current := types.Type{Oid: types.T(projects[i].Typ.Id), Width: projects[i].Typ.Width, Scale: projects[i].Typ.Scale}
+		target := mergePreparedResultColumnType(previous[i], current)
+		if target.Eq(current) {
+			continue
+		}
+		targetType := plan.Type{Id: int32(target.Oid), Width: target.Width, Scale: target.Scale}
+		cast, err := plan2.MakePlan2CastExpr(ctx, projects[i], targetType)
+		if err != nil {
+			return err
+		}
+		projects[i] = cast
+	}
+	return nil
 }
 
 func stablePreparedResultMetadataColumns(
