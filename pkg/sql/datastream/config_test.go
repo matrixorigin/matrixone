@@ -43,16 +43,16 @@ func TestParseTableOptions(t *testing.T) {
 	require.False(t, cfg.Recheck)
 
 	for _, bad := range []*tree.DataStreamTableParam{
-		options("port", "4444", "table", "t"),                                  // missing server
-		options("server", "h", "table", "t"),                                   // missing port
-		options("server", "h", "port", "4444"),                                 // missing table
-		options("server", "h", "port", "0", "table", "t"),                      // port 0
-		options("server", "h", "port", "99999", "table", "t"),                  // port overflow
-		options("server", "h", "port", "abc", "table", "t"),                    // port not a number
-		options("server", "h", "port", "4444", "table", "t", "recheck", "xx"),  // bad recheck
-		options("server", "h", "port", "4444", "table", "t", "server", "h2"),   // duplicate
-		options("server", "h", "port", "4444", "table", "t", "bogus", "v"),     // unknown key
-		options("server", "", "port", "4444", "table", "t"),                    // empty value
+		options("port", "4444", "table", "t"),                                 // missing server
+		options("server", "h", "table", "t"),                                  // missing port
+		options("server", "h", "port", "4444"),                                // missing table
+		options("server", "h", "port", "0", "table", "t"),                     // port 0
+		options("server", "h", "port", "99999", "table", "t"),                 // port overflow
+		options("server", "h", "port", "abc", "table", "t"),                   // port not a number
+		options("server", "h", "port", "4444", "table", "t", "recheck", "xx"), // bad recheck
+		options("server", "h", "port", "4444", "table", "t", "server", "h2"),  // duplicate
+		options("server", "h", "port", "4444", "table", "t", "bogus", "v"),    // unknown key
+		options("server", "", "port", "4444", "table", "t"),                   // empty value
 	} {
 		_, err := ParseTableOptions(ctx, bad)
 		require.Error(t, err)
@@ -78,14 +78,14 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 
 	// recognized but malformed envelopes are errors
 	for _, badEnv := range []string{
-		"/* MO_DATASTREAM: version=1",                                                      // unclosed
+		"/* MO_DATASTREAM: version=1", // unclosed
 		"/* MO_DATASTREAM: version=2; kind=datastream_table; server=h; port=1; table=t; recheck=true */", // bad version
 		"/* MO_DATASTREAM: version=1; kind=other; server=h; port=1; table=t; recheck=true */",            // bad kind
 		"/* MO_DATASTREAM: version=1; kind=datastream_table; server=h; port=x; table=t; recheck=true */", // bad port
 		"/* MO_DATASTREAM: version=1; kind=datastream_table; server=h; port=1; table=t; recheck=zz */",   // bad recheck
 		"/* MO_DATASTREAM: version=1; kind=datastream_table; server=; port=1; table=t; recheck=true */",  // no server
-		"/* MO_DATASTREAM: noequalsign */",                                                               // not key=value
-		"/* MO_DATASTREAM: server=%zz; version=1 */",                                                     // bad escape
+		"/* MO_DATASTREAM: noequalsign */",           // not key=value
+		"/* MO_DATASTREAM: server=%zz; version=1 */", // bad escape
 	} {
 		_, found, err = ParseCreateSQLEnvelope(ctx, badEnv)
 		require.True(t, found, badEnv)
