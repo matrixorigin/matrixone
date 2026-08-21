@@ -1082,6 +1082,20 @@ func (l *store) updateGlobalSysVarCommitTS(
 	return nil
 }
 
+func (l *store) updateGlobalSysVarState(
+	ctx context.Context, update pb.GlobalSysVarUpdate,
+) (uint64, error) {
+	cmd := hakeeper.GetUpdateGlobalSysVarStateCmd(update)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		l.runtime.Logger().Error("failed to propose global sysvar state",
+			zap.Error(err))
+		return 0, handleNotHAKeeperError(ctx, err)
+	}
+	return result.Value, nil
+}
+
 func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
 	state, err := l.getCheckerState()
 	if err != nil {

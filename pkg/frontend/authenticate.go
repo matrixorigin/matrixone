@@ -11893,6 +11893,7 @@ func doSetGlobalSystemVariables(
 	ses *Session,
 	varNames []string,
 	varValue interface{},
+	generation uint64,
 ) (epoch uint64, err error) {
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
@@ -11932,10 +11933,20 @@ func doSetGlobalSystemVariables(
 				"invalid global system variable epoch %q", value)
 		}
 	}
-	if epoch == math.MaxUint64 {
-		return 0, moerr.NewInternalError(ctx, "global system variable epoch exhausted")
+	// The HAKeeper generation is allocated before this transaction and is
+	// persisted atomically with the value.  It is therefore both the cache
+	// epoch and a durable outbox record that an independent CN can consume
+	// after the committing frontend disappears.
+	if generation == 0 {
+		if epoch == math.MaxUint64 {
+			return 0, moerr.NewInternalError(ctx, "global system variable epoch exhausted")
+		}
+		generation = epoch + 1
+	} else if generation <= epoch {
+		return 0, moerr.NewInternalErrorf(ctx,
+			"invalid global system variable generation %d after epoch %d", generation, epoch)
 	}
-	epoch++
+	epoch = generation
 	if epochExists {
 		err = bh.Exec(ctx, getSqlForUpdateSysVarValue(
 			strconv.FormatUint(epoch, 10), accountId, globalSystemVariableEpochName))

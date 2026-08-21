@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
@@ -66,15 +65,13 @@ func TestValidate(t *testing.T) {
 		name: "empty",
 		cfg:  Config{},
 	}, {
-		name: "heartbeat cycle exceeds global sysvar progress budget",
+		name: "long heartbeat timeout remains compatible",
 		cfg: func() Config {
 			var cfg Config
 			cfg.HAKeeper.HeartbeatInterval.Duration = time.Second
-			cfg.HAKeeper.HeartbeatTimeout.Duration =
-				logservice.GlobalSysVarHeartbeatProgressBudget
+			cfg.HAKeeper.HeartbeatTimeout.Duration = 15 * time.Second
 			return cfg
 		}(),
-		wantErr: true,
 	}, {
 		name: "negative client handshake timeout",
 		cfg: Config{

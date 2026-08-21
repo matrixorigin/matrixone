@@ -41,8 +41,10 @@ type testHAClient struct {
 type watermarkHAClient struct {
 	*testHAClient
 	sync.Mutex
-	details   pb.ClusterDetails
-	heartbeat pb.ProxyHeartbeat
+	details    pb.ClusterDetails
+	heartbeat  pb.ProxyHeartbeat
+	heartbeats []pb.ProxyHeartbeat
+	desired    timestamp.Timestamp
 }
 
 func (tclient *testHAClient) Close() error {
@@ -122,7 +124,8 @@ func (client *watermarkHAClient) SendProxyHeartbeat(
 	client.Lock()
 	defer client.Unlock()
 	client.heartbeat = hb
-	return pb.CommandBatch{}, nil
+	client.heartbeats = append(client.heartbeats, hb)
+	return pb.CommandBatch{GlobalSysVarCommitTS: client.desired}, nil
 }
 
 func TestServer_doHeartbeat(t *testing.T) {
@@ -167,6 +170,37 @@ func TestServerInitialRouteBarrierAcknowledgesPublishedWatermark(t *testing.T) {
 	require.Equal(t, commitTS, hb.GlobalSysVarCommitTS)
 	require.Equal(t, "proxy-generation", hb.GlobalSysVarGeneration)
 	require.Equal(t, defines.MORPCLatestVersion, hb.ProtocolVersion)
+}
+
+func TestProxyHeartbeatRefreshesDesiredWatermarkWithoutPeriodicTick(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	commitTS := timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 3}
+	client := &watermarkHAClient{
+		testHAClient: &testHAClient{},
+		details:      pb.ClusterDetails{GlobalSysVarCommitTS: commitTS},
+		desired:      commitTS,
+	}
+	cluster := clusterservice.NewMOCluster("", client, time.Minute)
+	defer cluster.Close()
+	server := &Server{
+		haKeeperClient: client,
+		configData:     util.NewConfigData(nil),
+		runtime:        runtime.ServiceRuntime(""),
+		handler:        &handler{moCluster: cluster},
+	}
+	server.config.UUID = "proxy-1"
+	server.config.HAKeeper.HeartbeatInterval.Duration = time.Second
+	server.config.HAKeeper.HeartbeatTimeout.Duration = 15 * time.Second
+
+	require.NoError(t, server.sendHeartbeat(context.Background()))
+	require.True(t, server.canAcceptNewConnections())
+	client.Lock()
+	heartbeats := append([]pb.ProxyHeartbeat(nil), client.heartbeats...)
+	client.Unlock()
+	require.Len(t, heartbeats, 2)
+	require.True(t, heartbeats[0].GlobalSysVarCommitTS.IsEmpty())
+	require.Equal(t, commitTS, heartbeats[1].GlobalSysVarCommitTS)
 }
 
 func TestProxyServingLeaseExpiresAndHeartbeatFailureRevokesIt(t *testing.T) {

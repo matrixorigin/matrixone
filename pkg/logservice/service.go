@@ -355,6 +355,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleUpdateCNWorkState(ctx, req), pb.LogRecordResponse{}
 	case pb.UPDATE_GLOBAL_SYS_VAR_COMMIT_TS:
 		return s.handleUpdateGlobalSysVarCommitTS(ctx, req), pb.LogRecordResponse{}
+	case pb.UPDATE_GLOBAL_SYS_VAR_STATE:
+		return s.handleUpdateGlobalSysVarState(ctx, req), pb.LogRecordResponse{}
 	case pb.PATCH_CN_STORE:
 		return s.handlePatchCNStore(ctx, req), pb.LogRecordResponse{}
 	case pb.DELETE_CN_STORE:
@@ -670,6 +672,22 @@ func (s *Service) handleUpdateGlobalSysVarCommitTS(ctx context.Context, req pb.R
 	if err := s.store.updateGlobalSysVarCommitTS(ctx, req.GlobalSysVarCommitTS); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
+	return resp
+}
+
+func (s *Service) handleUpdateGlobalSysVarState(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if req.GlobalSysVarUpdate == nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
+			moerr.NewInvalidInput(ctx, "global sysvar update is missing"))
+		return resp
+	}
+	generation, err := s.store.updateGlobalSysVarState(ctx, *req.GlobalSysVarUpdate)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	resp.GlobalSysVarGeneration = generation
 	return resp
 }
 

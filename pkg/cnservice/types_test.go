@@ -18,7 +18,9 @@ import (
 	"testing"
 	"time"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,9 +49,10 @@ func TestValidateHeartbeatDurations(t *testing.T) {
 	cfg.HAKeeper.HeatbeatTimeout.Duration = -time.Nanosecond
 	require.ErrorContains(t, cfg.Validate(), "hakeeper heartbeat timeout")
 
-	cfg = Config{UUID: "cn1"}
+	cfg = Config{UUID: "cn-long-heartbeat"}
+	moruntime.SetupServiceBasedRuntime(cfg.UUID,
+		moruntime.NewRuntime(metadata.ServiceType_CN, cfg.UUID, nil))
 	cfg.HAKeeper.HeatbeatInterval.Duration = time.Second
-	cfg.HAKeeper.HeatbeatTimeout.Duration =
-		logservice.GlobalSysVarHeartbeatProgressBudget
-	require.ErrorContains(t, cfg.Validate(), "global-system-variable progress budget")
+	cfg.HAKeeper.HeatbeatTimeout.Duration = 15 * time.Second
+	require.NoError(t, cfg.Validate())
 }

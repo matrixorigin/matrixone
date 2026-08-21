@@ -61,6 +61,7 @@ message CNStore {
   timestamp.Timestamp GlobalSysVarCommitTS = 17 [(gogoproto.nullable) = false];
   string GlobalSysVarGeneration = 18;
   int64 ProtocolVersion = 19;
+  int64 GlobalSysVarProgressTimeoutNanos = 20;
 }
 
 message TNStore {
@@ -159,6 +160,7 @@ message CNStoreHeartbeat {
   timestamp.Timestamp GlobalSysVarCommitTS = 18 [(gogoproto.nullable) = false];
   string GlobalSysVarGeneration = 19;
   int64 ProtocolVersion = 20;
+  int64 GlobalSysVarProgressTimeoutNanos = 21;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -285,6 +287,7 @@ enum MethodType {
   UPDATE_LEASEHOLDER_ID = 28;
   GET_SCHEDULE_COMMANDS = 29;
   UPDATE_GLOBAL_SYS_VAR_COMMIT_TS = 30;
+  UPDATE_GLOBAL_SYS_VAR_STATE = 31;
 };
 
 enum RecordType {
@@ -368,6 +371,7 @@ message Request {
   CheckHealth CheckHealth        = 16;
   ScheduleCommandQuery ScheduleCommandQuery = 17;
   timestamp.Timestamp GlobalSysVarCommitTS = 18 [(gogoproto.nullable) = false];
+  GlobalSysVarUpdate GlobalSysVarUpdate = 19;
 };
 
 message LogResponse {
@@ -394,7 +398,21 @@ message Response {
   ShardInfoQueryResult ShardInfo = 10;
   AllocateIDResponse AllocateID  = 11;
   CheckerState CheckerState      = 12;
+  uint64 GlobalSysVarGeneration  = 13;
 };
+
+enum GlobalSysVarUpdateType {
+  BeginGlobalSysVarUpdate = 0;
+  CompleteGlobalSysVarUpdate = 1;
+}
+
+message GlobalSysVarUpdate {
+  GlobalSysVarUpdateType Type = 1;
+  uint64 MembershipRevision = 2;
+  uint64 Generation = 3;
+  timestamp.Timestamp CommitTS = 4 [(gogoproto.nullable) = false];
+  int64 MinProtocolVersion = 5;
+}
 
 message LogRecordResponse {
   repeated LogRecord Records = 1 [(gogoproto.nullable) = false];
@@ -431,6 +449,7 @@ enum HAKeeperUpdateType {
   CompleteLogServiceRecoveryUpdate = 19;
   EnableCommandDeliveryUpdate = 20;
   UpdateGlobalSysVarCommitTS = 21;
+  UpdateGlobalSysVarState = 22;
 }
 
 // HAKeeperState state transition diagram
@@ -623,6 +642,7 @@ message CommandBatch {
   repeated ScheduleCommandID CommandIDs = 4 [(gogoproto.nullable) = false];
   // GlobalSysVarCommitTS is the desired cluster-wide visibility watermark.
   timestamp.Timestamp GlobalSysVarCommitTS = 5 [(gogoproto.nullable) = false];
+  int64 GlobalSysVarMinProtocolVersion = 6;
 }
 
 // CNStoreInfo contains information on a CN store.
@@ -651,6 +671,7 @@ message CNStoreInfo {
   timestamp.Timestamp GlobalSysVarCommitTS = 19 [(gogoproto.nullable) = false];
   string GlobalSysVarGeneration = 20;
   int64 ProtocolVersion = 21;
+  int64 GlobalSysVarProgressTimeoutNanos = 22;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -659,6 +680,10 @@ message CNState {
   map<string, CNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
   // GlobalSysVarCommitTS is the durable admission watermark for routable CNs.
   timestamp.Timestamp GlobalSysVarCommitTS = 2 [(gogoproto.nullable) = false];
+  int64 GlobalSysVarMinProtocolVersion = 3;
+  uint64 GlobalSysVarMembershipRevision = 4;
+  uint64 GlobalSysVarPendingGeneration = 5;
+  uint64 GlobalSysVarCompletedGeneration = 6;
 }
 
 
@@ -702,6 +727,7 @@ message ProxyStore {
   string GlobalSysVarGeneration = 6;
   NodeState State = 7;
   int64 ProtocolVersion = 8;
+  int64 GlobalSysVarProgressTimeoutNanos = 9;
 }
 
 message ProxyState {
@@ -715,6 +741,7 @@ message ProxyHeartbeat {
   timestamp.Timestamp GlobalSysVarCommitTS = 4 [(gogoproto.nullable) = false];
   string GlobalSysVarGeneration = 5;
   int64 ProtocolVersion = 6;
+  int64 GlobalSysVarProgressTimeoutNanos = 7;
 };
 
 message ClusterDetails {
@@ -724,6 +751,10 @@ message ClusterDetails {
   repeated ProxyStore ProxyStores = 4 [(gogoproto.nullable) = false];
   repeated DeletedStore DeletedStores = 5 [(gogoproto.nullable) = false];
   timestamp.Timestamp GlobalSysVarCommitTS = 6 [(gogoproto.nullable) = false];
+  int64 GlobalSysVarMinProtocolVersion = 7;
+  uint64 GlobalSysVarMembershipRevision = 8;
+  uint64 GlobalSysVarPendingGeneration = 9;
+  uint64 GlobalSysVarCompletedGeneration = 10;
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It

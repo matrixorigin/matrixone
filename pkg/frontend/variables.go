@@ -994,6 +994,24 @@ func (m *GlobalSysVarsMgr) reconcileCatalogEpoch(
 	ctx context.Context,
 	ses *Session,
 ) error {
+	pu := getPuIfPresent(ses.GetService())
+	if pu != nil && pu.HAKeeperClient != nil {
+		details, err := pu.HAKeeperClient.GetClusterDetails(ctx)
+		if err != nil {
+			return err
+		}
+		if details.GlobalSysVarPendingGeneration > details.GlobalSysVarCompletedGeneration &&
+			epoch >= details.GlobalSysVarPendingGeneration {
+			if err = completeAndSyncGlobalSysVarCommit(
+				ctx, ses, details.GlobalSysVarPendingGeneration); err != nil {
+				return err
+			}
+			if epoch != 0 {
+				m.markCatalogEpochReconciled(accountID, epoch)
+			}
+			return nil
+		}
+	}
 	if epoch == 0 {
 		return nil
 	}

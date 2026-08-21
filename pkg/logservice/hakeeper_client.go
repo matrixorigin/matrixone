@@ -42,12 +42,9 @@ const (
 	// ScheduleCommandPollInterval bounds the start-to-start delay between
 	// degraded-path command reads. ScheduleCommandPollTimeout bounds each read.
 	// Neither value inherits the heartbeat RPC timeout.
-	ScheduleCommandPollInterval = time.Second
-	// GlobalSysVarHeartbeatProgressBudget is the maximum supported interval
-	// from one successful service heartbeat attempt to the next. The SQL fence
-	// timeout covers two such cycles plus control-plane RPC slack.
-	GlobalSysVarHeartbeatProgressBudget   = 10 * time.Second
-	GlobalSysVarFenceTimeout              = 3 * GlobalSysVarHeartbeatProgressBudget
+	ScheduleCommandPollInterval           = time.Second
+	GlobalSysVarFenceTimeoutFloor         = 30 * time.Second
+	GlobalSysVarFenceControlPlaneSlack    = 10 * time.Second
 	ScheduleCommandPollTimeout            = 3 * time.Second
 	scheduleCommandInitialPollJitterRange = 250 * time.Millisecond
 )
@@ -219,6 +216,8 @@ type ScheduleCommandHAKeeperClient interface {
 // publish the durable global-system-variable routing watermark.
 type GlobalSysVarHAKeeperClient interface {
 	UpdateGlobalSysVarCommitTS(context.Context, timestamp.Timestamp) error
+	BeginGlobalSysVarUpdate(context.Context, uint64, int64) (uint64, error)
+	CompleteGlobalSysVarUpdate(context.Context, uint64, timestamp.Timestamp) error
 }
 
 // LogHAKeeperClient is the HAKeeper client used by a Log store.
@@ -1033,6 +1032,69 @@ func (c *managedHAKeeperClient) UpdateGlobalSysVarCommitTS(
 	}
 }
 
+func (c *managedHAKeeperClient) BeginGlobalSysVarUpdate(
+	ctx context.Context, membershipRevision uint64, minProtocolVersion int64,
+) (uint64, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return 0, err
+	}
+	for {
+		client, err := c.getPreparedClient(ctx)
+		if err == nil {
+			generation, requestErr := client.updateGlobalSysVarState(ctx, pb.GlobalSysVarUpdate{
+				Type: pb.BeginGlobalSysVarUpdate, MembershipRevision: membershipRevision,
+				MinProtocolVersion: minProtocolVersion,
+			})
+			if shouldResetHAKeeperClient(requestErr) {
+				c.resetClientIfCurrent(client)
+			}
+			if requestErr == nil || !c.isRetryableError(requestErr) {
+				return generation, requestErr
+			}
+			err = requestErr
+		}
+		if !c.isRetryableError(err) {
+			return 0, err
+		}
+		if err = c.waitRetry(ctx); err != nil {
+			return 0, err
+		}
+	}
+}
+
+func (c *managedHAKeeperClient) CompleteGlobalSysVarUpdate(
+	ctx context.Context, generation uint64, commitTS timestamp.Timestamp,
+) error {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return err
+	}
+	for {
+		client, err := c.getPreparedClient(ctx)
+		if err == nil {
+			completed, requestErr := client.updateGlobalSysVarState(ctx, pb.GlobalSysVarUpdate{
+				Type: pb.CompleteGlobalSysVarUpdate, Generation: generation, CommitTS: commitTS,
+			})
+			if requestErr == nil && completed != generation {
+				requestErr = moerr.NewInternalErrorf(ctx,
+					"HAKeeper rejected global system variable generation %d", generation)
+			}
+			if shouldResetHAKeeperClient(requestErr) {
+				c.resetClientIfCurrent(client)
+			}
+			if requestErr == nil || !c.isRetryableError(requestErr) {
+				return requestErr
+			}
+			err = requestErr
+		}
+		if !c.isRetryableError(err) {
+			return err
+		}
+		if err = c.waitRetry(ctx); err != nil {
+			return err
+		}
+	}
+}
+
 // PatchCNStore implements the ProxyHAKeeperClient interface.
 func (c *managedHAKeeperClient) PatchCNStore(
 	ctx context.Context, stateLabel pb.CNStateLabel,
@@ -1714,6 +1776,18 @@ func (c *hakeeperClient) updateGlobalSysVarCommitTS(
 	}
 	_, err := c.request(ctx, req)
 	return err
+}
+
+func (c *hakeeperClient) updateGlobalSysVarState(
+	ctx context.Context, update pb.GlobalSysVarUpdate,
+) (uint64, error) {
+	resp, err := c.request(ctx, pb.Request{
+		Method: pb.UPDATE_GLOBAL_SYS_VAR_STATE, GlobalSysVarUpdate: &update,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return resp.GlobalSysVarGeneration, nil
 }
 
 func (c *hakeeperClient) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {

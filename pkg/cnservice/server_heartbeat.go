@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -77,6 +78,7 @@ func (s *service) controlTask(ctx context.Context) {
 	s.initControlChannels()
 	commandDone := make(chan struct{})
 	watermarkDone := make(chan struct{})
+	reconcilerDone := make(chan struct{})
 	go func() {
 		defer close(commandDone)
 		s.commandTask(ctx)
@@ -85,9 +87,29 @@ func (s *service) controlTask(ctx context.Context) {
 		defer close(watermarkDone)
 		s.globalSysVarWatermarkTask(ctx)
 	}()
+	go func() {
+		defer close(reconcilerDone)
+		s.globalSysVarOutboxTask(ctx)
+	}()
 	s.heartbeatTask(ctx)
 	<-commandDone
 	<-watermarkDone
+	<-reconcilerDone
+}
+
+func (s *service) globalSysVarOutboxTask(ctx context.Context) {
+	ticker := time.NewTicker(s.cfg.HAKeeper.HeatbeatInterval.Duration)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := frontend.ReconcileGlobalSysVarOutbox(ctx, s.cfg.UUID); err != nil {
+				s.logger.Warn("failed to reconcile global system variable outbox", zap.Error(err))
+			}
+		}
+	}
 }
 
 func (s *service) initControlChannels() {
@@ -346,6 +368,8 @@ func (s *service) heartbeat(ctx context.Context) {
 		CommandDeliveryAckSupported: true,
 		GlobalSysVarGeneration:      s.globalSysVarGeneration,
 		ProtocolVersion:             defines.MORPCLatestVersion,
+		GlobalSysVarProgressTimeoutNanos: int64(
+			s.cfg.HAKeeper.HeatbeatInterval.Duration + s.cfg.HAKeeper.HeatbeatTimeout.Duration),
 	}
 	if applied := s.globalSysVarApplied.Load(); applied != nil {
 		hb.GlobalSysVarCommitTS = *applied
@@ -372,6 +396,13 @@ func (s *service) heartbeat(ctx context.Context) {
 		s.revokeServingLease()
 		s.commandPollNeeded.Store(true)
 		s.notifyCommandPoll()
+		return
+	}
+	if cb.GlobalSysVarMinProtocolVersion > defines.MORPCLatestVersion {
+		s.revokeServingLease()
+		s.logger.Error("CN protocol is below activated global sysvar minimum",
+			zap.Int64("current", defines.MORPCLatestVersion),
+			zap.Int64("minimum", cb.GlobalSysVarMinProtocolVersion))
 		return
 	}
 	s.commandPollNeeded.Store(false)

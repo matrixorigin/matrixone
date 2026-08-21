@@ -376,13 +376,6 @@ func (c *Config) Validate() error {
 	if c.HAKeeper.HeatbeatTimeout.Duration < 0 {
 		return moerr.NewBadConfigNoCtx("hakeeper heartbeat timeout must be positive")
 	}
-	if c.HAKeeper.HeatbeatInterval.Duration+c.HAKeeper.HeatbeatTimeout.Duration >
-		logservice.GlobalSysVarHeartbeatProgressBudget {
-		return moerr.NewBadConfigNoCtxf(
-			"hakeeper heartbeat cycle %s exceeds global-system-variable progress budget %s",
-			c.HAKeeper.HeatbeatInterval.Duration+c.HAKeeper.HeatbeatTimeout.Duration,
-			logservice.GlobalSysVarHeartbeatProgressBudget)
-	}
 	if c.TaskRunner.Parallelism == 0 {
 		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
 		if c.TaskRunner.Parallelism <= ReservedTasks {

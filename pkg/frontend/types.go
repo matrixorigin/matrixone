@@ -1484,7 +1484,8 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	// A mixed-version deployment must reject before the catalog mutation. Old
 	// CNs implement SyncCommit with an uninterruptible five-minute/Fatal path
 	// and do not participate in the HAKeeper routing fence.
-	if err = validateGlobalSysVarSyncProtocol(ctx, ses); err != nil {
+	var globalSysVarGeneration uint64
+	if globalSysVarGeneration, err = beginGlobalSysVarUpdate(ctx, ses); err != nil {
 		return err
 	}
 	accountID := ses.GetTenantInfo().TenantID
@@ -1498,11 +1499,13 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		persistNames = append(persistNames, transactionIsolationSystemVariableAlias)
 	}
 	var catalogEpoch uint64
-	if catalogEpoch, err = doSetGlobalSystemVariables(ctx, ses, persistNames, val); err != nil {
+	if catalogEpoch, err = doSetGlobalSystemVariables(
+		ctx, ses, persistNames, val, globalSysVarGeneration); err != nil {
+		completeAbortedGlobalSysVarUpdate(ctx, ses, globalSysVarGeneration)
 		return
 	}
 	ses.gSysVars.setAtCatalogEpoch(canonicalName, val, catalogEpoch)
-	if err = syncGlobalSysVarCommit(ctx, ses); err != nil {
+	if err = completeAndSyncGlobalSysVarCommit(ctx, ses, globalSysVarGeneration); err != nil {
 		// The catalog epoch row remains as a durable reconciliation intent.
 		// A subsequent session on any CN will replay the fence before publishing
 		// that epoch into its local cache.

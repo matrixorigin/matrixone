@@ -59,7 +59,8 @@ const (
 	MORPCVersion21     int64 = 21 // lookup-only RIGHT DEDUP for proven-unique insert input
 	MORPCVersion22     int64 = 22 // typed user-defined variables during connection migration
 	MORPCVersion23     int64 = 23 // HAKeeper-fenced global-system-variable visibility
-	MORPCLatestVersion       = MORPCVersion23
+	MORPCVersion24     int64 = 24 // durable global-system-variable activation and publication intents
+	MORPCLatestVersion       = MORPCVersion24
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

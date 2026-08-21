@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -262,6 +263,106 @@ func TestGlobalSysVarCommitWatermarkIsDurableAndMonotonic(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, rsm.state.CNState.Stores[hb.UUID].GlobalSysVarCommitTS,
 		"a restarted CN must not inherit the previous process's visibility ack")
+}
+
+func TestGlobalSysVarProtocolActivationAndIntentGenerationsAreDurable(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CNState.GlobalSysVarMembershipRevision = 7
+
+	stale := pb.GlobalSysVarUpdate{
+		Type: pb.BeginGlobalSysVarUpdate, MembershipRevision: 6,
+		MinProtocolVersion: defines.MORPCVersion24,
+	}
+	result, err := rsm.Update(sm.Entry{Index: 1, Cmd: GetUpdateGlobalSysVarStateCmd(stale)})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.Zero(t, rsm.state.CNState.GlobalSysVarMinProtocolVersion)
+
+	begin := stale
+	begin.MembershipRevision = 7
+	result, err = rsm.Update(sm.Entry{Index: 2, Cmd: GetUpdateGlobalSysVarStateCmd(begin)})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Value)
+	require.Equal(t, int64(defines.MORPCVersion24),
+		rsm.state.CNState.GlobalSysVarMinProtocolVersion)
+	require.Equal(t, uint64(1), rsm.state.CNState.GlobalSysVarPendingGeneration)
+
+	result, err = rsm.Update(sm.Entry{Index: 3, Cmd: GetUpdateGlobalSysVarStateCmd(begin)})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	future := pb.GlobalSysVarUpdate{
+		Type: pb.CompleteGlobalSysVarUpdate, Generation: 2,
+		CommitTS: timestamp.Timestamp{PhysicalTime: 200},
+	}
+	result, err = rsm.Update(sm.Entry{Index: 4, Cmd: GetUpdateGlobalSysVarStateCmd(future)})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.Zero(t, rsm.state.CNState.GlobalSysVarCompletedGeneration)
+	require.Empty(t, rsm.state.CNState.GlobalSysVarCommitTS)
+
+	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	completeFirst := pb.GlobalSysVarUpdate{
+		Type: pb.CompleteGlobalSysVarUpdate, Generation: 1, CommitTS: commitTS,
+	}
+	_, err = rsm.Update(sm.Entry{Index: 5, Cmd: GetUpdateGlobalSysVarStateCmd(completeFirst)})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), rsm.state.CNState.GlobalSysVarPendingGeneration)
+	require.Equal(t, uint64(1), rsm.state.CNState.GlobalSysVarCompletedGeneration)
+	require.Equal(t, commitTS, rsm.state.CNState.GlobalSysVarCommitTS)
+
+	result, err = rsm.Update(sm.Entry{Index: 6, Cmd: GetUpdateGlobalSysVarStateCmd(begin)})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), result.Value)
+
+	completeSecond := pb.GlobalSysVarUpdate{
+		Type: pb.CompleteGlobalSysVarUpdate, Generation: 2, CommitTS: timestamp.Timestamp{PhysicalTime: 90},
+	}
+	_, err = rsm.Update(sm.Entry{Index: 7, Cmd: GetUpdateGlobalSysVarStateCmd(completeSecond)})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), rsm.state.CNState.GlobalSysVarCompletedGeneration)
+	require.Equal(t, commitTS, rsm.state.CNState.GlobalSysVarCommitTS)
+
+	details := rsm.handleClusterDetailsQuery(Config{})
+	require.Equal(t, int64(defines.MORPCVersion24), details.GlobalSysVarMinProtocolVersion)
+	require.Equal(t, uint64(2), details.GlobalSysVarPendingGeneration)
+	require.Equal(t, uint64(2), details.GlobalSysVarCompletedGeneration)
+}
+
+func TestActivatedGlobalSysVarProtocolIsolatesLateOldParticipants(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CNState.GlobalSysVarMinProtocolVersion = defines.MORPCVersion24
+	rsm.state.Tick = 1
+
+	cn := pb.CNStoreHeartbeat{UUID: "old-cn", SQLAddress: "sql", ProtocolVersion: defines.MORPCVersion23}
+	data, err := cn.Marshal()
+	require.NoError(t, err)
+	cnResult, err := rsm.Update(sm.Entry{Index: 1, Cmd: GetCNStoreHeartbeatCmd(data)})
+	require.NoError(t, err)
+	var cnBatch pb.CommandBatch
+	require.NoError(t, cnBatch.Unmarshal(cnResult.Data))
+	require.Equal(t, int64(defines.MORPCVersion24), cnBatch.GlobalSysVarMinProtocolVersion)
+	require.Len(t, cnBatch.Commands, 1)
+	require.NotNil(t, cnBatch.Commands[0].ShutdownStore)
+	proxy := pb.ProxyHeartbeat{UUID: "old-proxy", ProtocolVersion: defines.MORPCVersion23}
+	data, err = proxy.Marshal()
+	require.NoError(t, err)
+	_, err = rsm.Update(sm.Entry{Index: 2, Cmd: GetProxyHeartbeatCmd(data)})
+	require.NoError(t, err)
+	logStore := pb.LogStoreHeartbeat{UUID: "old-log", ProtocolVersion: defines.MORPCVersion23}
+	data, err = logStore.Marshal()
+	require.NoError(t, err)
+	logResult, err := rsm.Update(sm.Entry{Index: 3, Cmd: GetLogStoreHeartbeatCmd(data)})
+	require.NoError(t, err)
+	var logBatch pb.CommandBatch
+	require.NoError(t, logBatch.Unmarshal(logResult.Data))
+	require.Equal(t, int64(defines.MORPCVersion24), logBatch.GlobalSysVarMinProtocolVersion)
+	require.Len(t, logBatch.Commands, 1)
+	require.NotNil(t, logBatch.Commands[0].ShutdownStore)
+
+	details := rsm.handleClusterDetailsQuery(Config{})
+	require.Empty(t, details.CNStores)
+	require.Empty(t, details.ProxyStores)
+	require.Empty(t, details.LogStores)
 }
 
 func TestProxyGlobalSysVarCommitWatermarkTracksIncarnation(t *testing.T) {
