@@ -21,67 +21,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
 
-type membershipFilterCaptureEngine struct {
-	engine.Engine
-	hint engine.FilterHint
-}
-
-func (e *membershipFilterCaptureEngine) BuildBlockReaders(
-	_ context.Context,
-	_ any,
-	_ timestamp.Timestamp,
-	_ *plan.Expr,
-	_ *plan.TableDef,
-	_ engine.RelData,
-	_ int,
-	filterHint ...engine.FilterHint,
-) ([]engine.Reader, error) {
-	e.hint = engine.FilterHint{}
-	if len(filterHint) > 0 {
-		e.hint = filterHint[0]
-	}
-	return []engine.Reader{new(readutil.EmptyReader)}, nil
-}
-
-func TestBuildReadersPassesMembershipFilter(t *testing.T) {
+func TestReaderFilterHintPrefersSourceAndFallsBackToContext(t *testing.T) {
 	t.Run("from source", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		expectedMembershipFilter := []byte{1, 2, 3}
-
-		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
-				Rel:                   mockRel,
 				MembershipFilterBytes: expectedMembershipFilter,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
 			},
 		}
-
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
 
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
+		hint := s.readerFilterHint(c, &plan.TableDef{
+			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+		})
+		require.Equal(t, expectedMembershipFilter, hint.MembershipFilterBytes)
 	})
 
 	t.Run("from context", func(t *testing.T) {
@@ -89,36 +49,23 @@ func TestBuildReadersPassesMembershipFilter(t *testing.T) {
 		expectedMembershipFilter := []byte{7, 8, 9}
 		proc.Ctx = context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
 
-		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
-				Rel:                   mockRel,
-				MembershipFilterBytes: nil, // Trigger else if
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
+				MembershipFilterBytes: nil,
 			},
 		}
-
 		c := NewMockCompile(t)
 		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
 
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
+		hint := s.readerFilterHint(c, &plan.TableDef{
+			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+		})
+		require.Equal(t, expectedMembershipFilter, hint.MembershipFilterBytes)
 	})
 }
 
-func TestRemoteBuildReadersScopesMembershipFilterToIndexTable(t *testing.T) {
+func TestReaderFilterHintScopesMembershipFilterToIndexTable(t *testing.T) {
 	ivfFilter := []byte{1, 2, 3}
 	fulltextFilter := []byte{4, 5, 6}
 	tests := []struct {
@@ -153,25 +100,42 @@ func TestRemoteBuildReadersScopesMembershipFilterToIndexTable(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.Ctx = context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, ivfFilter)
 			proc.Ctx = context.WithValue(proc.Ctx, defines.FulltextMembershipFilter{}, fulltextFilter)
-			capture := new(membershipFilterCaptureEngine)
 			scope := &Scope{
-				Proc:     proc,
-				IsRemote: true,
-				DataSource: &Source{
-					TableDef:           test.tableDef,
-					FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
-					RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-				},
-				NodeInfo: engine.Node{Mcpu: 1},
+				Proc:       proc,
+				DataSource: &Source{},
 			}
 			compile := NewMockCompile(t)
 			compile.proc = proc
-			compile.e = capture
 
-			readers, err := scope.buildReaders(compile)
-			require.NoError(t, err)
-			require.Len(t, readers, 1)
-			require.Equal(t, test.expected, capture.hint.MembershipFilterBytes)
+			hint := scope.readerFilterHint(compile, test.tableDef)
+			require.Equal(t, test.expected, hint.MembershipFilterBytes)
 		})
 	}
+}
+
+func TestReaderFilterHintPreservesFulltextSourceScope(t *testing.T) {
+	fulltextTable := &plan.TableDef{
+		Name:      "__mo_index_secondary_fulltext",
+		TableType: catalog.FullTextIndex_TblType,
+	}
+	sourceFilter := []byte{1, 2, 3}
+
+	t.Run("local scan ignores source field", func(t *testing.T) {
+		compile := NewMockCompile(t)
+		scope := &Scope{DataSource: &Source{MembershipFilterBytes: sourceFilter}}
+
+		hint := scope.readerFilterHint(compile, fulltextTable)
+		require.Nil(t, hint.MembershipFilterBytes)
+	})
+
+	t.Run("remote scan uses source field", func(t *testing.T) {
+		compile := NewMockCompile(t)
+		scope := &Scope{
+			IsRemote:   true,
+			DataSource: &Source{MembershipFilterBytes: sourceFilter},
+		}
+
+		hint := scope.readerFilterHint(compile, fulltextTable)
+		require.Equal(t, sourceFilter, hint.MembershipFilterBytes)
+	})
 }

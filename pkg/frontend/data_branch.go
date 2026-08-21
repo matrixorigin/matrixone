@@ -805,7 +805,7 @@ func diffMergeAgency(
 
 	// do not open another transaction,
 	// if this already executed within a transaction.
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getDataBranchOperationExecutor(execCtx, ses); err != nil {
 		return
 	}
 
@@ -1055,6 +1055,53 @@ func diffMergeAgency(
 	}
 
 	return err
+}
+
+// getDataBranchOperationExecutor gives one logical workspace statement sole
+// ownership of an independent Data Branch transaction.  A diff/merge/pick
+// operation runs a producer and a consumer concurrently; both may execute SQL
+// through the same background transaction, so an individual nested SQL must
+// not advance the workspace statement while the other side still has open
+// write scopes.
+//
+// An explicit user transaction already has an outer frontend statement owner,
+// and getBackExecutor returns a derived shared-transaction executor for it.
+// Only the independent background transaction needs the boundary below.
+func getDataBranchOperationExecutor(
+	execCtx *ExecCtx,
+	ses *Session,
+) (BackgroundExec, func(error) error, error) {
+	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+		return getBackExecutor(execCtx.reqCtx, ses)
+	}
+
+	bh, finish, err := getBackExecutor(execCtx.reqCtx, ses)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	back := bh.(*backExec)
+	txnOp := back.backSes.GetTxnHandler().GetTxn()
+	if txnOp == nil {
+		err = moerr.NewInternalError(execCtx.reqCtx, "data branch background transaction is not active")
+		return nil, nil, finish(err)
+	}
+
+	workspace := txnOp.GetWorkspace()
+	workspace.StartStatement()
+	if err = incrWorkspaceStatement(execCtx, txnOp); err != nil {
+		workspace.EndStatement()
+		return nil, nil, finish(err)
+	}
+	back.backSes.statementBoundaryManagedExternally = true
+
+	return bh, func(operationErr error) error {
+		// diffMergeAgency waits for both producer and consumer before invoking
+		// this closure, so no nested execution can observe the transition.
+		back.backSes.statementBoundaryManagedExternally = false
+		workspace.EndStatement()
+		return finish(operationErr)
+	}, nil
 }
 
 func prepareDataBranchWorker(

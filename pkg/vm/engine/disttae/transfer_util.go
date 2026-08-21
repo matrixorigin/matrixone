@@ -79,11 +79,18 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	tombstoneObjects := make([]objectio.ObjectStats, 0)
 
-	for _, e := range txn.writes {
-		if e.tableId != table.tableId || e.databaseId != table.db.databaseId {
-			continue
-		}
-
+	workspaceEntries, err := txn.workspace.tableEntries(
+		txn.workspace.currentReadView(),
+		table.accountId,
+		table.db.databaseId,
+		table.tableId,
+	)
+	if err != nil {
+		return nil, logs, err
+	}
+	defer workspaceEntries.Close()
+	for _, view := range workspaceEntries.entries {
+		e := view.Entry
 		if e.fileName != "" && e.typ == DELETE {
 			for i := range e.bat.Vecs[0].Length() {
 				stats := objectio.ObjectStats(e.bat.Vecs[0].GetBytesAt(i))

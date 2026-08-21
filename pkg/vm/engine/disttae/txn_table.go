@@ -254,7 +254,7 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	//Stats only stats the committed data of the table.
-	if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
+	if tbl.db.getTxn().workspace.tableCreatedInTxn(tbl.tableId) ||
 		strings.ToUpper(tbl.relKind) == "V" {
 		return nil, nil
 	}
@@ -271,7 +271,11 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
 
-	rows += tbl.getUncommittedRows(deletes)
+	uncommitted, err := tbl.getUncommittedRows(deletes)
+	if err != nil {
+		return 0, err
+	}
+	rows += uncommitted
 
 	v, err := tbl.getCommittedRows(
 		ctx,
@@ -308,11 +312,12 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 
 	deletes := make(map[types.Rowid]struct{})
-	tbl.getTxn().ForEachTableWrites(
+	err = tbl.getTxn().ForEachTableMutation(
+		tbl.currentWorkspaceReadView(),
+		tbl.accountId,
 		tbl.db.databaseId,
 		tbl.tableId,
-		tbl.getTxn().GetSnapshotWriteOffset(),
-		func(entry Entry) {
+		func(entry workspaceEntryView) {
 			if entry.typ == INSERT {
 				for i, s := range entry.bat.Attrs {
 					if _, ok := neededCols[s]; ok {
@@ -328,6 +333,9 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 				}
 			}
 		})
+	if err != nil {
+		return 0, err
+	}
 
 	iter := part.NewRowsIter(ts, nil, false)
 	defer func() { _ = iter.Close() }()
@@ -606,9 +614,55 @@ func (tbl *txnTable) GetProcess() any {
 	return tbl.proc.Load()
 }
 
+func (tbl *txnTable) workspaceEntries(
+	view client.WorkspaceReadView,
+) (*workspaceEntrySet, error) {
+	return tbl.getTxn().workspace.tableEntries(
+		view,
+		tbl.accountId,
+		tbl.db.databaseId,
+		tbl.tableId,
+	)
+}
+
+func (tbl *txnTable) workspacePointInsertEntries(
+	view client.WorkspaceReadView,
+	encodedKeys [][]byte,
+) (*workspaceEntrySet, bool, error) {
+	return tbl.getTxn().workspace.tablePointInsertEntries(
+		view, tbl.accountId, tbl.db.databaseId, tbl.tableId, encodedKeys...)
+}
+
+func (tbl *txnTable) workspaceMemoryDeleteOffsets(
+	view client.WorkspaceReadView,
+	blockID objectio.Blockid,
+	candidates []int64,
+) ([]int64, bool, error) {
+	return tbl.getTxn().workspace.tableMemoryDeleteOffsets(
+		view, tbl.accountId, tbl.db.databaseId, tbl.tableId, blockID, candidates)
+}
+
+func (tbl *txnTable) workspaceTombstoneObjects(
+	view client.WorkspaceReadView,
+) ([]objectio.ObjectStats, bool, error) {
+	return tbl.getTxn().workspace.tableTombstoneObjects(
+		view, tbl.accountId, tbl.db.databaseId, tbl.tableId)
+}
+
+func (tbl *txnTable) currentWorkspaceReadView() client.WorkspaceReadView {
+	// The relation's transaction owns the workspace whose local mutations are
+	// visible here. A snapshot operator owns an isolated read-only workspace;
+	// reusing the parent transaction's published statement view would cross
+	// workspace identities and make visibility depend on an unrelated mutable
+	// boundary. Operator-bound readers receive their explicit statement view
+	// from compile; these direct table methods intentionally inspect the owning
+	// workspace's current state.
+	return tbl.getTxn().workspace.currentReadView()
+}
+
 func (tbl *txnTable) CollectTombstones(
 	ctx context.Context,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
 	tombstone := readutil.NewEmptyTombstoneData()
@@ -617,17 +671,18 @@ func (tbl *txnTable) CollectTombstones(
 
 	if policy&engine.Policy_CollectUncommittedTombstones != 0 {
 
-		offset := txnOffset
-		if tbl.db.op.IsSnapOp() {
-			offset = tbl.getTxn().GetSnapshotWriteOffset()
-		}
-
-		tbl.getTxn().ForEachTableWrites(tbl.db.databaseId, tbl.tableId,
-			offset, func(entry Entry) {
+		if err := tbl.getTxn().ForEachTableMutation(
+			readView, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			func(entry workspaceEntryView) {
 				if entry.typ == INSERT {
 					return
 				}
-				//entry.typ == DELETE
+				if entry.forEachVisibleObjectStats(func(stats objectio.ObjectStats) {
+					tombstone.AppendFiles(stats)
+				}) {
+					return
+				}
+				// entry.typ == DELETE with in-memory rowids.
 				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
 					/*
 						CASE:
@@ -642,22 +697,33 @@ func (tbl *txnTable) CollectTombstones(
 					//deletes in txn.Write maybe comes from PartitionState.Rows ,
 					// PartitionReader need to skip them.
 					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
-					tombstone.AppendInMemory(vs...)
+					entry.forEachVisibleRow(func(row int) {
+						tombstone.AppendInMemory(vs[row])
+					})
 				}
-			})
-
-		//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row types.Rowid) {
-			tombstone.AppendInMemory(row)
-		})
-
-		//collect uncommitted persisted tombstones.
-		if err := tbl.getTxn().getUncommittedS3Tombstone(
-			func(stats *objectio.ObjectStats) {
-				tombstone.AppendFiles(*stats)
 			}); err != nil {
 			return nil, err
 		}
+
+		// Collect pending deletes against rows in transaction-local CN objects.
+		// These deletes are journaled separately from ordinary DELETE entries until
+		// object compaction rewrites the source INSERT object, but they obey the same
+		// generation-pinned read view.
+		objectDeletes, err := tbl.getTxn().workspace.tableObjectDeletes(
+			readView,
+			tbl.accountId,
+			tbl.db.databaseId,
+			tbl.tableId,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for blockID, offsets := range objectDeletes {
+			for _, offset := range offsets {
+				tombstone.AppendInMemory(types.NewRowid(&blockID, uint32(offset)))
+			}
+		}
+
 	}
 
 	//collect committed tombstones.
@@ -699,7 +765,7 @@ func (tbl *txnTable) CollectTombstones(
 // Parameters:
 //   - ctx: Context used to control the lifecycle of the request.
 //   - exprs: A slice of expressions used to filter data.
-//   - txnOffset: Transaction offset used to specify the starting position for reading data.
+//   - rangesParam.TxnReadView: Stable workspace visibility boundary.
 func (tbl *txnTable) Ranges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
 	if len(rangesParam.BlockFilters) == 0 && rangesParam.PreAllocBlocks > 128 && !rangesParam.DontSupportRelData {
 		//no block filters, no agg optimization, not partition table, then we can return object list instead of block list
@@ -727,27 +793,34 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 		return part.CountRows(ctx, types.TimestampToTS(snapshot), fs, tbl.getTxn().proc.Mp())
 	}
 
-	// Determine the range of workspace entries to scan.
-	// For snapshot operations, only scan entries before the snapshot offset.
-	// For normal operations, scan all entries.
-	txnOffset := len(tbl.getTxn().writes)
-	if tbl.db.op.IsSnapOp() {
-		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
-	}
+	readView := tbl.currentWorkspaceReadView()
 
 	// Check if there are uncommitted tombstones in the workspace.
 	// This determines whether we can use the fast path (inserts only) or
 	// need the slow path (inserts minus tombstones).
 	hasUncommittedTombstones := false
-	tbl.getTxn().ForEachTableWrites(
+	if err := tbl.getTxn().ForEachTableMutation(
+		readView,
+		tbl.accountId,
 		tbl.db.databaseId,
 		tbl.tableId,
-		txnOffset,
-		func(entry Entry) {
-			if entry.typ == DELETE && entry.bat != nil && !entry.bat.IsEmpty() {
+		func(entry workspaceEntryView) {
+			if entry.typ == DELETE && entry.visibleRowCount() != 0 {
 				hasUncommittedTombstones = true
 			}
-		})
+		}); err != nil {
+		return 0, err
+	}
+	pendingObjectDeletes, err := tbl.getTxn().workspace.tableObjectDeleteCount(
+		readView,
+		tbl.accountId,
+		tbl.db.databaseId,
+		tbl.tableId,
+	)
+	if err != nil {
+		return 0, err
+	}
+	hasUncommittedTombstones = hasUncommittedTombstones || pendingObjectDeletes != 0
 
 	// Get committed row count from PartitionState.
 	// This already accounts for committed inserts minus committed tombstones.
@@ -758,28 +831,31 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 
 	// Count uncommitted inserts from workspace (both in-memory and persisted).
 	uncommittedInserts := uint64(0)
-	tbl.getTxn().ForEachTableWrites(
+	if err := tbl.getTxn().ForEachTableMutation(
+		readView,
+		tbl.accountId,
 		tbl.db.databaseId,
 		tbl.tableId,
-		txnOffset,
-		func(entry Entry) {
+		func(entry workspaceEntryView) {
 			if entry.typ != INSERT || entry.bat == nil || entry.bat.IsEmpty() {
 				return
 			}
 
-			// Persisted inserts have ObjectStats in column 1 (one row per object; batch may have multiple objects).
-			// In-memory inserts have raw data rows.
-			if len(entry.bat.Attrs) >= 2 && entry.bat.Attrs[1] == catalog.ObjectMeta_ObjectStats {
-				vec := entry.bat.Vecs[1]
-				for i := 0; i < vec.Length(); i++ {
-					var stats objectio.ObjectStats
-					stats.UnMarshal(vec.GetBytesAt(i))
-					uncommittedInserts += uint64(stats.Rows())
-				}
-			} else {
-				uncommittedInserts += uint64(entry.bat.RowCount())
+			// Persisted inserts carry one ObjectStats value per object, while
+			// in-memory inserts carry one batch row per logical row. Always count
+			// through the pinned entry view: transaction-local DELETEs retire raw
+			// INSERT rows by publishing selections on that exact payload generation.
+			// Counting Batch.RowCount directly would resurrect those hidden rows in
+			// COUNT(*) even though normal readers correctly exclude them.
+			if entry.forEachVisibleObjectStats(func(stats objectio.ObjectStats) {
+				uncommittedInserts += uint64(stats.Rows())
+			}) {
+				return
 			}
-		})
+			uncommittedInserts += uint64(entry.visibleRowCount())
+		}); err != nil {
+		return 0, err
+	}
 
 	// Fast path: no uncommitted tombstones, just add uncommitted inserts
 	if !hasUncommittedTombstones {
@@ -795,31 +871,35 @@ func (tbl *txnTable) StarCount(ctx context.Context) (uint64, error) {
 	// 2. Persisted: tombstone objects on S3, need visibility check because
 	//    after transfer, both old (pointing to deleted objects) and new
 	//    (pointing to new objects) tombstone entries exist in workspace.
-	uncommittedDeletes := uint64(0)
-	inMemoryDeletes := uint64(0)
-	tbl.getTxn().ForEachTableWrites(
+	// Pending object deletes target transaction-local CN objects. They are
+	// represented by the table overlay rather than ordinary DELETE mutations,
+	// so COUNT(*) must subtract them explicitly before object rewrite/commit.
+	uncommittedDeletes := pendingObjectDeletes
+	if err := tbl.getTxn().ForEachTableMutation(
+		readView,
+		tbl.accountId,
 		tbl.db.databaseId,
 		tbl.tableId,
-		txnOffset,
-		func(entry Entry) {
-			if entry.typ != DELETE || entry.bat == nil || entry.bat.IsEmpty() {
+		func(entry workspaceEntryView) {
+			if entry.typ != DELETE || entry.visibleRowCount() == 0 {
 				return
 			}
 
 			if entry.fileName == "" {
 				// In-memory tombstones: direct count without visibility check.
 				// Transfer updates rowids in-place, so all rowids point to visible objects.
-				count := uint64(entry.bat.RowCount())
+				count := uint64(entry.visibleRowCount())
 				uncommittedDeletes += count
-				inMemoryDeletes += count
 			}
 			// Persisted tombstones are handled separately below
-		})
+		}); err != nil {
+		return 0, err
+	}
 
 	// Count persisted uncommitted tombstones with visibility check.
 	// These require reading from S3 and checking if target data objects are visible.
 	persistedTombstoneCount, err := tbl.countUncommittedPersistedTombstones(
-		ctx, part, types.TimestampToTS(snapshot), fs, txnOffset)
+		ctx, part, types.TimestampToTS(snapshot), fs, readView)
 	if err != nil {
 		return 0, err
 	}
@@ -844,15 +924,16 @@ func (tbl *txnTable) countUncommittedPersistedTombstones(
 	part *logtailreplay.PartitionState,
 	snapshot types.TS,
 	fs fileservice.FileService,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 ) (uint64, error) {
 	count := uint64(0)
 	var firstErr error
-	tbl.getTxn().ForEachTableWrites(
+	err := tbl.getTxn().ForEachTableMutation(
+		readView,
+		tbl.accountId,
 		tbl.db.databaseId,
 		tbl.tableId,
-		txnOffset,
-		func(entry Entry) {
+		func(entry workspaceEntryView) {
 			if firstErr != nil {
 				return
 			}
@@ -876,6 +957,9 @@ func (tbl *txnTable) countUncommittedPersistedTombstones(
 				count += objDeleteCount
 			}
 		})
+	if err != nil {
+		return 0, err
+	}
 
 	return count, firstErr
 }
@@ -970,7 +1054,10 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 
 	if needUncommited {
 		objRelData.TotalBlocks = 1 // first empty block
-		uncommittedObjects, _ := tbl.collectUnCommittedDataObjs(rangesParam.TxnOffset)
+		uncommittedObjects, _, collectErr := tbl.collectUnCommittedDataObjs(rangesParam.TxnReadView)
+		if collectErr != nil {
+			return nil, collectErr
+		}
 		for i := range uncommittedObjects {
 			objRelData.AppendObj(&uncommittedObjects[i])
 		}
@@ -1097,7 +1184,10 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 	}()
 
 	if rangesParam.Policy&engine.Policy_CollectUncommittedPersistedData != 0 {
-		uncommittedObjects, _ = tbl.collectUnCommittedDataObjs(rangesParam.TxnOffset)
+		uncommittedObjects, _, err = tbl.collectUnCommittedDataObjs(rangesParam.TxnReadView)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// get the table's snapshot
@@ -1142,11 +1232,11 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 //      deletes(rowids) for committed block exist in the following four places:
 //      1. in delta location formed by TN writing S3. read by blockReader.
 //      2. in CN's partition state, read by partitionReader.
-//  	3. in txn's workspace(txn.writes) being deleted by txn, read by partitionReader.
+//  	3. in txn's workspace being deleted by txn, read by partitionReader.
 //  	4. in delta location being deleted through CN writing S3, read by blockMergeReader.
 
 //  2. data in txn's workspace:
-//     1>.Raw batch data resides in txn.writes,read by partitionReader.
+//     1>.Raw batch data resides in the transaction workspace, read by partitionReader.
 //     2>.CN blocks resides in S3, read by blockReader.
 
 var slowPathCounter atomic.Int64
@@ -1331,53 +1421,61 @@ func (tbl *txnTable) rangesOnePart(
 }
 
 // Parameters:
-//   - txnOffset: Transaction writes offset used to specify the starting position for reading data.
+//   - readView: Stable workspace visibility boundary.
 //   - typ: Transaction write entry type to collect object stats from.
 func (tbl *txnTable) collectUnCommittedObjStats(
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	typ int,
-) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
-	var unCommittedObjects []objectio.ObjectStats
-	unCommittedObjNames := make(map[objectio.ObjectNameShort]struct{})
-
-	if tbl.db.op.IsSnapOp() {
-		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
-	}
-	tbl.getTxn().ForEachTableWrites(
+) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}, error) {
+	unCommittedObjects, indexed, err := tbl.getTxn().workspace.tableObjectStats(
+		readView,
+		tbl.accountId,
 		tbl.db.databaseId,
 		tbl.tableId,
-		txnOffset,
-		func(entry Entry) {
-			stats := objectio.ObjectStats{}
-			if entry.typ != typ ||
-				entry.bat == nil ||
-				entry.bat.IsEmpty() {
-				return
-			}
+		typ,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	unCommittedObjNames := make(map[objectio.ObjectNameShort]struct{})
+	if !indexed {
+		err = tbl.getTxn().ForEachTableMutation(
+			readView,
+			tbl.accountId,
+			tbl.db.databaseId,
+			tbl.tableId,
+			func(entry workspaceEntryView) {
+				if entry.typ != typ ||
+					entry.bat == nil ||
+					entry.bat.IsEmpty() {
+					return
+				}
 
-			// Data and tombstone write batches do not have to place object stats
-			// at the same column offset.
-			statsIdx := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats)
-			if statsIdx == -1 {
-				return
-			}
+				entry.forEachVisibleObjectStats(func(stats objectio.ObjectStats) {
+					unCommittedObjects = append(unCommittedObjects, stats)
+				})
+			})
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	for idx := range unCommittedObjects {
+		unCommittedObjNames[*unCommittedObjects[idx].ObjectShortName()] = struct{}{}
+	}
 
-			for i := 0; i < entry.bat.Vecs[statsIdx].Length(); i++ {
-				stats.UnMarshal(entry.bat.Vecs[statsIdx].GetBytesAt(i))
-				unCommittedObjects = append(unCommittedObjects, stats)
-				unCommittedObjNames[*stats.ObjectShortName()] = struct{}{}
-			}
-		})
-
-	return unCommittedObjects, unCommittedObjNames
+	return unCommittedObjects, unCommittedObjNames, nil
 }
 
-func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
-	return tbl.collectUnCommittedObjStats(txnOffset, INSERT)
+func (tbl *txnTable) collectUnCommittedDataObjs(
+	readView client.WorkspaceReadView,
+) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}, error) {
+	return tbl.collectUnCommittedObjStats(readView, INSERT)
 }
 
-func (tbl *txnTable) collectUnCommittedTombstoneObjs(txnOffset int) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}) {
-	return tbl.collectUnCommittedObjStats(txnOffset, DELETE)
+func (tbl *txnTable) collectUnCommittedTombstoneObjs(
+	readView client.WorkspaceReadView,
+) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}, error) {
+	return tbl.collectUnCommittedObjStats(readView, DELETE)
 }
 
 // the return defs has no rowid column
@@ -1644,7 +1742,7 @@ func (tbl *txnTable) isCreatedInTxn(_ context.Context) (bool, error) {
 		return false, nil
 	}
 
-	return tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId), nil
+	return tbl.db.getTxn().workspace.tableCreatedInTxn(tbl.tableId), nil
 
 }
 
@@ -1724,9 +1822,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		tbl.tableDef = nil
 		tbl.GetTableDef(ctx)
 	}
-	txn.Lock()
-	txn.restoreTxnTableFunc = append(txn.restoreTxnTableFunc, restore)
-	txn.Unlock()
+	if err := txn.workspace.addStatementRollbackAction(restore); err != nil {
+		return err
+	}
 
 	// update tbl properties and reconstruct supplement TableDef
 	var hasReplaceDef bool
@@ -1852,33 +1950,66 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		return err
 	}
 	if createdInTxn {
-		// 3. adjust writes for the table
+		// 3. Rewrite the exact table overlay atomically. An ALTER may rename
+		// columns and table metadata together; publishing entry-by-entry would
+		// let readers observe a partially rewritten in-transaction table.
 		txn.Lock()
 		defer txn.Unlock()
-		for i, n := 0, len(txn.writes); i < n; i++ {
-			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
-				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
-					continue
+		entrySet, err := txn.workspace.tableEntries(
+			txn.workspace.currentReadView(),
+			tbl.accountId,
+			tbl.db.databaseId,
+			tbl.tableId,
+		)
+		if err != nil {
+			return err
+		}
+		defer entrySet.Close()
+
+		rewrites := make([]workspaceMutationRewrite, 0, len(entrySet.entries))
+		published := false
+		defer func() {
+			if published {
+				return
+			}
+			for idx := range rewrites {
+				if rewrites[idx].entry.bat != nil {
+					rewrites[idx].entry.bat.Clean(txn.proc.Mp())
 				}
-				transferred := cur
-				transferred.tableName = tbl.tableName // in case renaming
-				transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
-				transferred.accountedSize = 0
-				if err != nil {
-					return err
-				}
-				if len(renameColMap) > 0 {
-					for i, attr := range transferred.bat.Attrs {
-						if newName, ok := renameColMap[attr]; ok {
-							transferred.bat.Attrs[i] = newName
-						}
+			}
+		}()
+		for idx := range entrySet.entries {
+			view := &entrySet.entries[idx]
+			cur := view.Entry
+			if cur.bat == nil || cur.bat.RowCount() == 0 ||
+				len(view.selections) == cur.bat.RowCount() {
+				continue
+			}
+			transferred := cur
+			transferred.tableName = tbl.tableName // in case renaming
+			transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
+			if err != nil {
+				return err
+			}
+			if len(renameColMap) > 0 {
+				for attrIdx, attr := range transferred.bat.Attrs {
+					if newName, ok := renameColMap[attr]; ok {
+						transferred.bat.Attrs[attrIdx] = newName
 					}
 				}
-				txn.appendWorkspaceEntryLocked(transferred)
-				txn.selectAllBatchRowsLocked(cur.bat)
-
 			}
+			rewrites = append(rewrites, workspaceMutationRewrite{
+				mutationID: cur.workspaceMutationID,
+				oldBat:     cur.bat,
+				selections: view.selections,
+				entry:      transferred,
+			})
 		}
+		_, err = txn.workspace.rewriteMutations(rewrites)
+		if err != nil {
+			return err
+		}
+		published = true
 	}
 
 	return nil
@@ -1960,7 +2091,10 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
 	}
-	return tbl.getTxn().dumpBatch(ctx, tbl.getTxn().GetSnapshotWriteOffset())
+	return tbl.getTxn().dumpBatch(
+		ctx,
+		workspaceDumpCurrentAttempt(),
+	)
 }
 
 func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
@@ -2066,7 +2200,6 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	if len(stats) != 0 {
 		fileName = stats[0].ObjectLocation().String()
 	}
-
 	ret, err := bat.Dup(proc.Mp())
 
 	return ret, fileName, err
@@ -2112,7 +2245,7 @@ func (tbl *txnTable) Delete(
 
 	switch deletionTyp {
 	case catalog.Row_ID:
-		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		bat = tbl.getTxn().deleteBatch(bat, tbl.accountId, tbl.db.databaseId, tbl.tableId)
 		if bat.RowCount() == 0 {
 			return nil
 		}
@@ -2226,11 +2359,11 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 func buildRemoteDS(
 	ctx context.Context,
 	tbl *txnTable,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	relData engine.RelData,
 ) (source engine.DataSource, err error) {
 
-	tombstones, err := tbl.CollectTombstones(ctx, txnOffset, engine.Policy_CollectAllTombstones)
+	tombstones, err := tbl.CollectTombstones(ctx, readView, engine.Policy_CollectAllTombstones)
 	if err != nil {
 		return nil, err
 	}
@@ -2263,7 +2396,7 @@ func BuildLocalDataSource(
 	ctx context.Context,
 	rel engine.Relation,
 	ranges engine.RelData,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 ) (source engine.DataSource, err error) {
 
 	var (
@@ -2277,7 +2410,7 @@ func BuildLocalDataSource(
 
 	return tbl.buildLocalDataSource(
 		ctx,
-		txnOffset,
+		readView,
 		ranges,
 		engine.Policy_CheckAll,
 		engine.GeneralLocalDataSource)
@@ -2326,7 +2459,7 @@ func extractPStateFromRelData(
 
 func (tbl *txnTable) buildLocalDataSource(
 	ctx context.Context,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	relData engine.RelData,
 	policy engine.TombstoneApplyPolicy,
 	category engine.DataSourceType,
@@ -2344,10 +2477,6 @@ func (tbl *txnTable) buildLocalDataSource(
 		ranges := relData.GetBlockInfoSlice()
 		skipReadMem := !ranges.Get(0).IsMemBlk()
 
-		if tbl.db.op.IsSnapOp() {
-			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
-		}
-
 		forceBuildRemoteDS := false
 		if force, tbls := engine.GetForceBuildRemoteDS(); force {
 			for _, t := range tbls {
@@ -2357,12 +2486,12 @@ func (tbl *txnTable) buildLocalDataSource(
 			}
 		}
 		if skipReadMem && forceBuildRemoteDS {
-			source, err = buildRemoteDS(ctx, tbl, txnOffset, relData)
+			source, err = buildRemoteDS(ctx, tbl, readView, relData)
 		} else {
 			source, err = NewLocalDataSource(
 				ctx,
 				tbl,
-				txnOffset,
+				readView,
 				pState,
 				ranges,
 				relData.GetTombstones(),
@@ -2386,14 +2515,14 @@ func (tbl *txnTable) buildLocalDataSource(
 //   - expr: Expression used to filter data.
 //   - ranges: Byte array representing the data range to read.
 //   - orderedScan: Whether to scan the data in order.
-//   - txnOffset: Transaction offset used to specify the starting position for reading data.
+//   - readView: Stable workspace visibility boundary.
 func (tbl *txnTable) BuildReaders(
 	ctx context.Context,
 	p any,
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	orderBy bool,
 	tombstonePolicy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
@@ -2454,7 +2583,7 @@ func (tbl *txnTable) BuildReaders(
 			readerFilter = mainFilter.Share()
 			hint.BF = readerFilter
 		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
+		ds, err := tbl.buildLocalDataSource(ctx, readView, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {
 			if readerFilter != nil {
 				readerFilter.Free()
@@ -2493,7 +2622,7 @@ func (tbl *txnTable) BuildShardingReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	orderBy bool,
 	tombstonePolicy engine.TombstoneApplyPolicy,
 ) ([]engine.Reader, error) {
@@ -3572,13 +3701,14 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 
 func (tbl *txnTable) getUncommittedRows(
 	deletes map[types.Rowid]struct{},
-) uint64 {
+) (uint64, error) {
 	rows := uint64(0)
-	tbl.getTxn().ForEachTableWrites(
+	err := tbl.getTxn().ForEachTableMutation(
+		tbl.currentWorkspaceReadView(),
+		tbl.accountId,
 		tbl.db.databaseId,
 		tbl.tableId,
-		tbl.getTxn().GetSnapshotWriteOffset(),
-		func(entry Entry) {
+		func(entry workspaceEntryView) {
 			if entry.typ == INSERT {
 				rows = rows + uint64(entry.bat.RowCount())
 			} else {
@@ -3591,7 +3721,7 @@ func (tbl *txnTable) getUncommittedRows(
 			}
 		},
 	)
-	return rows
+	return rows, err
 }
 
 func (tbl *txnTable) getCommittedRows(

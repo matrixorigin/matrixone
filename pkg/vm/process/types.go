@@ -400,9 +400,9 @@ type BaseProcess struct {
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
-	// must not advance the workspace snapshot write offset: that is a
-	// statement-boundary action, and moving the boundary mid-statement breaks
-	// the positional visibility of the caller's workspace entries.
+	// must not publish a workspace read view: that is a statement-boundary
+	// action, and publishing a boundary mid-statement exposes an incomplete
+	// mutation set to the caller.
 	incrStatementDisabled bool
 
 	// post dml sqls run right after all pipelines finished.
@@ -584,13 +584,13 @@ func (proc *Process) GetPrepareParamIsBinaryString(i int) bool {
 
 // SetIncrStatementDisabled marks this process (and every child process
 // sharing its BaseProcess) as running internal SQL that must not advance the
-// workspace snapshot write offset. See BaseProcess.incrStatementDisabled.
+// published workspace read view. See BaseProcess.incrStatementDisabled.
 func (proc *Process) SetIncrStatementDisabled(disabled bool) {
 	proc.Base.incrStatementDisabled = disabled
 }
 
 // IncrStatementDisabled reports whether compiles on this process must skip
-// advancing the workspace snapshot write offset.
+// publishing the workspace statement read view.
 func (proc *Process) IncrStatementDisabled() bool {
 	return proc.Base.incrStatementDisabled
 }

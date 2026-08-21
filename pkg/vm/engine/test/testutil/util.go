@@ -292,10 +292,10 @@ func NewDefaultTableReader(
 	ranges engine.RelData,
 	snapshotTS timestamp.Timestamp,
 	e *disttae.Engine,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 ) (engine.Reader, error) {
 
-	source, err := disttae.BuildLocalDataSource(ctx, rel, ranges, txnOffset)
+	source, err := disttae.BuildLocalDataSource(ctx, rel, ranges, readView)
 	if err != nil {
 		return nil, err
 	}
@@ -427,11 +427,23 @@ func TxnRanges(
 	txn client.TxnOperator,
 	relation engine.Relation,
 	exprs []*plan.Expr,
+
+) (engine.RelData, client.WorkspaceReadView, error) {
+	readView := txn.GetWorkspace().PublishReadView()
+	ranges, err := TxnRangesWithReadView(ctx, relation, exprs, readView)
+	return ranges, readView, err
+}
+
+func TxnRangesWithReadView(
+	ctx context.Context,
+	relation engine.Relation,
+	exprs []*plan.Expr,
+	readView client.WorkspaceReadView,
 ) (engine.RelData, error) {
 	rangesParam := engine.RangesParam{
 		BlockFilters:   exprs,
 		PreAllocBlocks: 2,
-		TxnOffset:      txn.GetWorkspace().GetSnapshotWriteOffset(),
+		TxnReadView:    readView,
 		Policy:         engine.Policy_CollectAllData,
 	}
 	return relation.Ranges(ctx, rangesParam)
@@ -446,7 +458,22 @@ func GetRelationReader(
 	mp *mpool.MPool,
 	t *testing.T,
 ) (reader engine.Reader, err error) {
-	ranges, err := TxnRanges(ctx, txn, relation, exprs)
+	readView := txn.GetWorkspace().PublishReadView()
+	return GetRelationReaderWithReadView(
+		ctx, e, txn, relation, exprs, mp, t, readView)
+}
+
+func GetRelationReaderWithReadView(
+	ctx context.Context,
+	e *TestDisttaeEngine,
+	txn client.TxnOperator,
+	relation engine.Relation,
+	exprs []*plan.Expr,
+	mp *mpool.MPool,
+	t *testing.T,
+	readView client.WorkspaceReadView,
+) (reader engine.Reader, err error) {
+	ranges, err := TxnRangesWithReadView(ctx, relation, exprs, readView)
 	require.NoError(t, err)
 	var expr *plan.Expr
 	if len(exprs) > 0 {
@@ -460,7 +487,7 @@ func GetRelationReader(
 		ranges,
 		txn.SnapshotTS(),
 		e.Engine,
-		txn.GetWorkspace().GetSnapshotWriteOffset())
+		readView)
 	require.NoError(t, err)
 	return
 }
@@ -480,7 +507,7 @@ func GetTableTxnReader(
 ) {
 	_, relation, txn, err = e.GetTable(ctx, dbName, tableName)
 	require.NoError(t, err)
-	ranges, err := TxnRanges(ctx, txn, relation, exprs)
+	ranges, readView, err := TxnRanges(ctx, txn, relation, exprs)
 	require.NoError(t, err)
 	var expr *plan.Expr
 	if len(exprs) > 0 {
@@ -494,7 +521,7 @@ func GetTableTxnReader(
 		ranges,
 		txn.SnapshotTS(),
 		e.Engine,
-		txn.GetWorkspace().GetSnapshotWriteOffset())
+		readView)
 	require.NoError(t, err)
 	return
 }
@@ -524,7 +551,7 @@ func EndThisStatement(
 ) (err error) {
 	err = txn.GetWorkspace().IncrStatementID(ctx, false)
 	txn.GetWorkspace().EndStatement()
-	txn.GetWorkspace().UpdateSnapshotWriteOffset()
+	txn.GetWorkspace().PublishReadView()
 
 	return
 }

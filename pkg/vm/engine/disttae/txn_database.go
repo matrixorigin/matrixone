@@ -116,14 +116,14 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
 
 	// check the table is deleted or not
-	if !openSys && txn.tableOps.existAndDeleted(key) {
+	if !openSys && txn.workspace.tableDeleted(key) {
 		logutil.Info("[relation] deleted in txn", zap.String("table", name))
 		return nil, nil
 	}
 
 	// get relation from the txn created tables cache: created by this txn
 	if !openSys {
-		if v := txn.tableOps.existAndActive(key); v != nil {
+		if v := txn.workspace.activeTable(key); v != nil {
 			v.proc.Store(p)
 			return v, nil
 		}
@@ -299,7 +299,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 		if err != nil {
 			return nil, err
 		}
-		if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID); bat.RowCount() > 0 {
+		if bat = txn.deleteBatch(bat, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID); bat.RowCount() > 0 {
 			// the deleted table is not created by this txn
 			note := noteForDrop(id, name)
 			if useAlterNote {
@@ -316,9 +316,13 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			// An insert batch for mo_tables is cancelled, the dml on this table should be eliminated?
 			// The answer for forAlter as true is NO, because later a table with the same tableId will be created.
 			// The answer for forAlter as false is YES, because the table is really deleted, which is triggered by delete & truncate
-			txn.Lock()
-			txn.tablesInVain[id] = txn.statementID
-			txn.Unlock()
+			if err := txn.workspace.markTableDropped(
+				accountId,
+				db.databaseId,
+				id,
+			); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -330,7 +334,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			return nil, err
 		}
 
-		if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID); bat.RowCount() > 0 {
+		if bat = txn.deleteBatch(bat, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID); bat.RowCount() > 0 {
 			note := noteForDrop(id, name)
 			if useAlterNote {
 				note = noteForAlterDel(id, name)
@@ -356,7 +360,9 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	// 5. handle map cache
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
 	txn.tableCache.Delete(key)
-	txn.tableOps.addDeleteTable(key, txn.statementID, id)
+	if err := txn.workspace.addTableOp(key, DELETE, id, nil); err != nil {
+		return nil, err
+	}
 	return defs, nil
 }
 
@@ -377,7 +383,9 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 			return err
 		}
 	}
-	txn.tableOps.addCreatedInTxn(tableId, txn.statementID)
+	if err := txn.workspace.addCreatedTable(tableId); err != nil {
+		return err
+	}
 
 	logicalId := tableId
 	replaceLogicalIdIndex := false
@@ -596,8 +604,7 @@ func (db *txnDatabase) createWithID(
 
 	// 6. handle map cache
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
-	txn.tableOps.addCreateTable(key, txn.statementID, tbl)
-	return nil
+	return txn.workspace.addTableOp(key, INSERT, tbl.tableId, tbl)
 }
 
 func (db *txnDatabase) loadTableFromStorage(
@@ -736,7 +743,7 @@ func (db *txnDatabase) syncLogicalIdIndexInsert(
 	if err != nil {
 		return err
 	}
-	// Note: Do NOT clean bat here. WriteBatch stores the batch reference in txn.writes,
+	// Note: Do NOT clean bat here. WriteBatch transfers the batch reference to the workspace,
 	// and the batch lifecycle is managed by the transaction (cleaned on commit/rollback).
 
 	note := fmt.Sprintf("sync logical_id index insert %d", logicalId)
@@ -782,7 +789,7 @@ func (db *txnDatabase) syncLogicalIdIndexDelete(
 	}
 
 	// Use deleteBatch to filter out rows that were created in this txn (same pattern as deleteTable)
-	if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID); bat.RowCount() > 0 {
+	if bat = txn.deleteBatch(bat, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID); bat.RowCount() > 0 {
 		note := fmt.Sprintf("sync logical_id index delete %d", logicalId)
 		if _, err = txn.WriteBatch(
 			DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_LOGICAL_ID_INDEX_ID,

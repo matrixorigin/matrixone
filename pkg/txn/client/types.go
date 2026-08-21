@@ -292,39 +292,107 @@ type TimestampWaiter interface {
 	LatestTS() timestamp.Timestamp
 }
 
+// WorkspaceReadView is an immutable logical visibility boundary of one CN
+// transaction workspace. Callers may carry and compare the value, but only the
+// owning workspace can interpret it; no field is a physical slice position.
+type WorkspaceReadView struct {
+	workspaceID   uint64
+	revision      uint64
+	maxMutationID uint64
+}
+
+// NoWorkspaceReadView returns an explicit read boundary that excludes every
+// transaction-local workspace mutation. Callers use this for committed-only,
+// remote-shard, and other reads that deliberately have no local workspace
+// visibility; it must not be treated as an omitted view to be filled later.
+func NoWorkspaceReadView() WorkspaceReadView {
+	return WorkspaceReadView{}
+}
+
+func NewWorkspaceReadView(workspaceID, revision, maxMutationID uint64) WorkspaceReadView {
+	return WorkspaceReadView{
+		workspaceID:   workspaceID,
+		revision:      revision,
+		maxMutationID: maxMutationID,
+	}
+}
+
+func (v WorkspaceReadView) WorkspaceID() uint64   { return v.workspaceID }
+func (v WorkspaceReadView) Revision() uint64      { return v.revision }
+func (v WorkspaceReadView) MaxMutationID() uint64 { return v.maxMutationID }
+func (v WorkspaceReadView) IsZero() bool {
+	return v.workspaceID == 0 && v.revision == 0 && v.maxMutationID == 0
+}
+
+// WorkspaceWriteMark identifies one statement execution attempt and the
+// mutation frontier at which it started. Adjust and retry use this stable mark
+// instead of a positional write-list offset.
+type WorkspaceWriteMark struct {
+	workspaceID   uint64
+	statementID   uint64
+	attemptID     uint64
+	maxMutationID uint64
+	writeScopeID  uint64
+}
+
+// NewWorkspaceWriteMark creates an opaque mark owned by one concrete
+// workspace write scope. Callers may carry the mark but must not interpret its
+// fields as physical workspace positions or commit-order boundaries.
+func NewWorkspaceWriteMark(
+	workspaceID, statementID, attemptID, maxMutationID, writeScopeID uint64,
+) WorkspaceWriteMark {
+	return WorkspaceWriteMark{
+		workspaceID:   workspaceID,
+		statementID:   statementID,
+		attemptID:     attemptID,
+		maxMutationID: maxMutationID,
+		writeScopeID:  writeScopeID,
+	}
+}
+
+func (m WorkspaceWriteMark) WorkspaceID() uint64   { return m.workspaceID }
+func (m WorkspaceWriteMark) StatementID() uint64   { return m.statementID }
+func (m WorkspaceWriteMark) AttemptID() uint64     { return m.attemptID }
+func (m WorkspaceWriteMark) MaxMutationID() uint64 { return m.maxMutationID }
+func (m WorkspaceWriteMark) WriteScopeID() uint64  { return m.writeScopeID }
+
 type Workspace interface {
 	Readonly() bool
 
-	// StartStatement tag a statement is running
+	// StartStatement opens the frontend execution guard for one statement. It
+	// does not advance the logical StatementID or publish a read boundary.
 	StartStatement()
-	// EndStatement tag end a statement is completed
+	// EndStatement closes the frontend execution guard and expires read views
+	// published by that execution. Already pinned workspace entries remain valid
+	// until their owner closes them.
 	EndStatement()
 
-	// IncrStatementID incr the execute statement id. It maintains the statement id, first statement is 1,
-	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
-	// workspace will update snapshot data for later read request.
+	// IncrStatementID publishes the next logical statement-attempt boundary after
+	// completing required merge, spill and RC snapshot work. A normal boundary
+	// advances StatementID; a retry keeps StatementID and advances AttemptID.
 	IncrStatementID(ctx context.Context, commit bool) error
 	// AdvanceSnapshot advances an RC transaction's snapshot and transfers its
 	// tombstones to the newly visible objects before returning.
 	AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error
-	// RollbackLastStatement rollback the last statement.
+	// RollbackLastStatement removes only the current statement attempt and
+	// restores transaction-local state changed by that attempt. The following
+	// IncrStatementID opens the replacement retry attempt.
 	RollbackLastStatement(ctx context.Context) error
 
-	// UpdateSnapshotWriteOffset advances the statement boundary of the
-	// workspace to its current end. Only statement-boundary callers may use
-	// it (compiling a new user statement); internal sub-sql executions must
-	// not move the caller's boundary.
-	UpdateSnapshotWriteOffset()
-	// GetSnapshotWriteOffset returns the current statement boundary.
-	GetSnapshotWriteOffset() int
-	// WriteOffset returns the current end of the workspace write list. An
-	// internal sub-sql (DisableIncrStatement) compiles against this value to
-	// see everything its caller has written so far without touching the
-	// shared statement boundary.
-	WriteOffset() uint64
+	// PublishReadView advances the public statement boundary to all mutations
+	// currently present in the workspace and returns that immutable view.
+	PublishReadView() WorkspaceReadView
+	// CurrentReadView captures all mutations currently present without moving
+	// the public statement boundary. Internal SQL uses this operation.
+	CurrentReadView() WorkspaceReadView
+	// BeginWriteAttempt returns the stable identity and mutation frontier of
+	// the current statement execution attempt.
+	BeginWriteAttempt() WorkspaceWriteMark
 
-	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
-	Adjust(writeOffset uint64) error
+	// Adjust closes the write scope opened by BeginWriteAttempt. The workspace
+	// validates scope ownership and exactly-once completion; mutation commit
+	// order is assigned when each mutation is created and is not changed here.
+	Adjust(mark WorkspaceWriteMark) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
 	FinalizeCommit(ctx context.Context)

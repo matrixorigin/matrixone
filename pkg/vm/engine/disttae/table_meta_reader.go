@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -53,11 +54,11 @@ const (
 )
 
 type TableMetaReader struct {
-	table     *txnTable
-	fs        fileservice.FileService
-	snapshot  types.TS
-	txnOffset int
-	state     int
+	table    *txnTable
+	fs       fileservice.FileService
+	snapshot types.TS
+	readView client.WorkspaceReadView
+	state    int
 	//tblDef   *plan.TableDef
 	pState *logtailreplay.PartitionState
 
@@ -128,9 +129,9 @@ func newTableMetaReader(
 		ok  bool
 		err error
 
-		fs        fileservice.FileService
-		snapshot  types.TS
-		txnOffset int
+		fs       fileservice.FileService
+		snapshot types.TS
+		readView client.WorkspaceReadView
 		//tblDef   *plan.TableDef
 		pState *logtailreplay.PartitionState
 
@@ -145,21 +146,18 @@ func newTableMetaReader(
 	fs = table.getTxn().proc.GetFileService()
 	snapshot = types.TimestampToTS(table.getTxn().op.SnapshotTS())
 	// A clone source may itself be created by an earlier ALTER in the same
-	// transaction. Keep the visible write boundary so metadata and row scans
-	// include those txn-local objects without seeing later writes.
-	txnOffset = len(table.getTxn().writes)
-	if table.db.op.IsSnapOp() {
-		txnOffset = table.getTxn().GetSnapshotWriteOffset()
-	}
+	// transaction. Capture one immutable logical view so metadata and row scans
+	// agree even if later statements append or compact workspace payloads.
+	readView = table.currentWorkspaceReadView()
 
 	if pState, err = table.getPartitionState(ctx); err != nil {
 		return nil, err
 	}
 
 	return &TableMetaReader{
-		fs:        fs,
-		snapshot:  snapshot,
-		txnOffset: txnOffset,
+		fs:       fs,
+		snapshot: snapshot,
+		readView: readView,
 		//tblDef:   tblDef,
 		table:  table,
 		pState: pState,
@@ -347,9 +345,12 @@ func (r *TableMetaReader) collect(
 	// txn-local object stats up to the reader's write boundary.
 	var uncommittedObjs []objectio.ObjectStats
 	if isTombstone {
-		uncommittedObjs, _ = r.table.collectUnCommittedTombstoneObjs(r.txnOffset)
+		uncommittedObjs, _, err = r.table.collectUnCommittedTombstoneObjs(r.readView)
 	} else {
-		uncommittedObjs, _ = r.table.collectUnCommittedDataObjs(r.txnOffset)
+		uncommittedObjs, _, err = r.table.collectUnCommittedDataObjs(r.readView)
+	}
+	if err != nil {
+		return nil, err
 	}
 	for i := range uncommittedObjs {
 		if err = appendObjectStats(&uncommittedObjs[i], cloneObjectFromTxnWorkspace); err != nil {
@@ -408,11 +409,12 @@ func (r *TableMetaReader) rejectInMemoryRows(isTombstone bool) error {
 		wantType = DELETE
 	}
 	found := false
-	r.table.getTxn().ForEachTableWrites(
+	err := r.table.getTxn().ForEachTableMutation(
+		r.readView,
+		r.table.accountId,
 		r.table.db.databaseId,
 		r.table.tableId,
-		r.txnOffset,
-		func(entry Entry) {
+		func(entry workspaceEntryView) {
 			if found || entry.typ != wantType || entry.bat == nil || entry.bat.IsEmpty() {
 				return
 			}
@@ -421,6 +423,9 @@ func (r *TableMetaReader) rejectInMemoryRows(isTombstone bool) error {
 			}
 		},
 	)
+	if err != nil {
+		return err
+	}
 	if found {
 		return moerr.NewInvalidInputNoCtxf(
 			"table %s contains uncommitted in-memory rows; flush it before DUMP TABLE",
@@ -458,7 +463,7 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 	source, err := NewLocalDataSource(
 		ctx,
 		r.table,
-		r.txnOffset,
+		r.readView,
 		r.pState,
 		objRelData.GetBlockInfoSlice(),
 		nil,
@@ -546,11 +551,12 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 	var appendErr error
 	// Row-level tombstones created earlier in this transaction are not in pState
 	// yet, but clone must carry them into the new tombstone object.
-	r.table.getTxn().ForEachTableWrites(
+	err = r.table.getTxn().ForEachTableMutation(
+		r.readView,
+		r.table.accountId,
 		r.table.db.databaseId,
 		r.table.tableId,
-		r.txnOffset,
-		func(entry Entry) {
+		func(entry workspaceEntryView) {
 			if appendErr != nil ||
 				entry.typ != DELETE ||
 				entry.bat == nil ||
@@ -565,6 +571,9 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 				}
 			}
 		})
+	if err != nil {
+		return zap.Skip(), err
+	}
 	if appendErr != nil {
 		return zap.Skip(), appendErr
 	}

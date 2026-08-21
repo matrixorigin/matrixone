@@ -728,9 +728,10 @@ func (l *localLockTable) handleLockConflictLocked(
 	c.w.conflictKey.Store(&key)
 	c.w.lt.Store(l)
 	c.w.waitFor = c.w.waitFor[:0]
-	for _, txn := range conflictWith.holders.txns {
+	conflictWith.holders.iter(func(txn pb.WaitTxn) bool {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
-	}
+		return true
+	})
 	c.result.ConflictKey = key
 	if len(c.w.waitFor) > 0 {
 		c.result.ConflictTxn = c.w.waitFor[0]

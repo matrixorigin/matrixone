@@ -105,12 +105,12 @@ const (
 	FJ_CNCommitAfterWorkspaceDumpFailed = "fj/cn/commit_after_workspace_dump_fails"
 	FJ_CNNeedRetryError                 = "fj/cn/need_retry_error"
 
-	// FJ_CNReenterSnapshotOffsetOnGetTable is a test-only fault that makes
-	// Transaction.getTable reenter UpdateSnapshotWriteOffset, deterministically
+	// FJ_CNReenterWorkspaceReadViewOnGetTable is a test-only fault that makes
+	// Transaction.getTable capture or publish a workspace read view, deterministically
 	// simulating the internal-SQL leg of the issue #25557 deadlock:
 	// getTable -> Engine.Database -> loadDatabaseFromStorage -> execReadSql
-	// -> NewCompile -> UpdateSnapshotWriteOffset.
-	FJ_CNReenterSnapshotOffsetOnGetTable = "fj/cn/reenter_snapshot_offset_on_get_table"
+	// -> NewCompile -> PublishReadView.
+	FJ_CNReenterWorkspaceReadViewOnGetTable = "fj/cn/reenter_workspace_read_view_on_get_table"
 
 	// FJ_CNDumpResolveWindowWait is a test-only orchestration point inside the
 	// unlocked table-resolution window of a workspace dump. Armed with the
@@ -354,19 +354,19 @@ func SimpleInjected(key string) bool {
 	return injected
 }
 
-// CNReenterSnapshotOffsetOnGetTableInjected reports whether the
-// FJ_CNReenterSnapshotOffsetOnGetTable fault is active. When it is,
+// CNReenterWorkspaceReadViewOnGetTableInjected reports whether the
+// FJ_CNReenterWorkspaceReadViewOnGetTable fault is active. When it is,
 // Transaction.getTable simulates the internal-SQL leg of the issue #25557
 // deadlock chain (taking the transaction lock and capturing the workspace
-// write offset). The iarg selects the variant:
+// read view). The iarg selects the variant:
 //
 //	0 (the SimpleInject default): fail with an injected error afterwards;
 //	1: continue the normal lookup;
-//	2: additionally call UpdateSnapshotWriteOffset — a rogue boundary
+//	2: additionally call PublishReadView — a rogue boundary
 //	   advance that the fixed internal SQL never performs — then fail with
 //	   the injected error.
-func CNReenterSnapshotOffsetOnGetTableInjected() (injected bool, rogueUpdate bool, errorOut bool) {
-	iarg, _, injected := fault.TriggerFault(FJ_CNReenterSnapshotOffsetOnGetTable)
+func CNReenterWorkspaceReadViewOnGetTableInjected() (injected bool, rogueUpdate bool, errorOut bool) {
+	iarg, _, injected := fault.TriggerFault(FJ_CNReenterWorkspaceReadViewOnGetTable)
 	if !injected {
 		return false, false, false
 	}

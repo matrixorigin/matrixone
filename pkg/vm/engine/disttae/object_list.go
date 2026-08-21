@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -56,34 +57,24 @@ func (tbl *txnTable) visitSnapshotObjects(
 
 func (tbl *txnTable) hasSnapshotTombstones(
 	ctx context.Context,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	snapshotTS types.TS,
 ) (bool, error) {
 	txn := tbl.getTxn()
-	offset := txnOffset
+	// Snapshot operators own an isolated workspace. Never interpret a read view
+	// from the parent operator in that workspace, even when both operators share
+	// the same transaction identifier.
 	if tbl.db.op.IsSnapOp() {
-		offset = txn.GetSnapshotWriteOffset()
+		readView = tbl.currentWorkspaceReadView()
 	}
-	if txn.hasTableWrite(tbl.db.databaseId, tbl.tableId, offset, func(entry Entry) bool {
-		if entry.typ != DELETE || entry.bat == nil || entry.bat.RowCount() == 0 || len(entry.bat.Vecs) == 0 || entry.bat.Vecs[0] == nil {
-			return false
-		}
-		return entry.bat.Vecs[0].GetType().Oid == types.T_Rowid
-	}) {
-		return true, nil
-	}
-	if txn.deletedBlocks.size() != 0 {
-		return true, nil
-	}
-	if txn.cn_flushed_s3_tombstone_object_stats_list != nil {
-		hasFlushedTombstone := false
-		txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(_, _ any) bool {
-			hasFlushedTombstone = true
-			return false
-		})
-		if hasFlushedTombstone {
-			return true, nil
-		}
+	hasLocalTombstones, err := txn.workspace.hasTableTombstones(
+		readView,
+		tbl.accountId,
+		tbl.db.databaseId,
+		tbl.tableId,
+	)
+	if err != nil || hasLocalTombstones {
+		return hasLocalTombstones, err
 	}
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {

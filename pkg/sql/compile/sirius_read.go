@@ -74,7 +74,12 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	}
 	ws := txnOp.GetWorkspace()
 	readOnly := ws.Readonly()
-	priorWrites := ws.WriteOffset() != 0 || ws.GetSnapshotWriteOffset() != 0
+	// Sirius admission must use the same immutable statement boundary as the
+	// rest of this compile. A logical mutation frontier replaces the former
+	// positional write-list offsets; callers must not reconstruct workspace
+	// visibility from physical storage layout.
+	readView := txnReadViewForOperator(txnOp, c.TxnReadView)
+	priorWrites := readView.MaxMutationID() != 0
 	if !readOnly || priorWrites {
 		return nil, substrait.NotEligible(substrait.EligibilityTransaction, "transaction is not an admissible read-only snapshot")
 	}
@@ -84,13 +89,18 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	relations := make(map[uint64]engine.Relation, len(candidate.Reads()))
 	for _, read := range candidate.Reads() {
 		node := queryPlan.GetQuery().Nodes[read.NodeID]
-		rel, _, _, openErr := c.handleDbRelContext(node, false)
+		rel, _, _, _, openErr := c.handleDbRelContext(node, false)
 		if openErr != nil {
 			return nil, moerr.NewInternalErrorf(ctx, "substrait: open table %d: %v", read.TableID, openErr)
 		}
 		relations[read.TableID] = rel
 	}
-	provider := &disttaesidecar.SnapshotProvider{Relations: relations, MPool: c.proc.Mp(), DataDir: dataDir, TxnOffset: ws.GetSnapshotWriteOffset()}
+	provider := &disttaesidecar.SnapshotProvider{
+		Relations: relations,
+		MPool:     c.proc.Mp(),
+		DataDir:   dataDir,
+		ReadView:  readView,
+	}
 	snapshot := types.TimestampToTS(txnOp.SnapshotTS())
 	snapshotBytes, err := snapshot.Marshal()
 	if err != nil {

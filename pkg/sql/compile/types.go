@@ -204,8 +204,13 @@ type Scope struct {
 	parallelGenerations []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
-	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.
-	TxnOffset int
+	// TxnReadView is the immutable workspace visibility boundary captured for
+	// this execution. Its internals belong to the transaction workspace.
+	//
+	// The view is local to the CN workspace that created it. Remote scopes must
+	// not serialize this value: the receiving CN owns a different workspace and
+	// therefore starts with the zero view (no receiver-local mutations).
+	TxnReadView client.WorkspaceReadView
 	// Instructions contains command list of this scope.
 	// Instructions vm.Instructions
 	RootOp vm.Operator
@@ -310,8 +315,9 @@ type Compile struct {
 	reusePlanSnapshot bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
-	// TxnOffset read starting offset position within the transaction during the execute current statement
-	TxnOffset int
+	// TxnReadView is the immutable workspace visibility boundary used by the
+	// current statement execution.
+	TxnReadView client.WorkspaceReadView
 
 	MessageBoard *message.MessageBoard
 

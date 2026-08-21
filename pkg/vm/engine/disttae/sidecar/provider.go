@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -39,7 +40,7 @@ type SnapshotProvider struct {
 	Relations map[uint64]engine.Relation
 	MPool     *mpool.MPool
 	DataDir   string
-	TxnOffset int
+	ReadView  client.WorkspaceReadView
 }
 
 func (p *SnapshotProvider) PrepareSnapshotRead(ctx context.Context, read substrait.Read, snapshot []byte) (substrait.SnapshotFacts, error) {
@@ -105,7 +106,7 @@ func (p *SnapshotProvider) prepareSnapshotRead(ctx context.Context, read substra
 	}
 
 	tombstoneChecker, ok := rel.(interface {
-		HasSnapshotTombstones(context.Context, int, types.TS) (bool, error)
+		HasSnapshotTombstones(context.Context, client.WorkspaceReadView, types.TS) (bool, error)
 	})
 	if !ok {
 		rejected.NonTAE = true
@@ -114,7 +115,7 @@ func (p *SnapshotProvider) prepareSnapshotRead(ctx context.Context, read substra
 	// Any visible delete changes the scanner contract; v1 therefore rejects
 	// both row tombstones and tombstone objects. The presence probe must stop at
 	// the first match instead of materializing and sorting the delete set.
-	hasTombstones, err := tombstoneChecker.HasSnapshotTombstones(ctx, p.TxnOffset, ts)
+	hasTombstones, err := tombstoneChecker.HasSnapshotTombstones(ctx, p.ReadView, ts)
 	if err != nil {
 		return rejected, err
 	}

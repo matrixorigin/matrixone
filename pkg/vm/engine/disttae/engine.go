@@ -330,12 +330,14 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 
 	key := genDatabaseKey(accountId, name)
-	txn.databaseOps.addCreateDatabase(key, txn.statementID, &txnDatabase{
+	if err := txn.workspace.addDatabaseOp(key, INSERT, databaseId, &txnDatabase{
 		accountId:    accountId,
 		op:           op,
 		databaseId:   databaseId,
 		databaseName: name,
-	})
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -427,11 +429,11 @@ func (e *Engine) Database(
 
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
-	if txn.databaseOps.existAndDeleted(key) {
+	if txn.workspace.databaseDeleted(key) {
 		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
 	}
 
-	if v := txn.databaseOps.existAndActive(key); v != nil {
+	if v := txn.workspace.activeDatabase(key); v != nil {
 		return v, nil
 	}
 
@@ -581,7 +583,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	accountId, _ := defines.GetAccountId(ctx)
 	txn := op.GetWorkspace().(*Transaction)
-	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
+	dbName, tableName, deleted := txn.workspace.tableNameByID(tableId)
 	if tableName == "" && deleted {
 		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
 	}
@@ -741,7 +743,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 
-	if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID); bat.RowCount() > 0 {
+	if bat = txn.deleteBatch(bat, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID); bat.RowCount() > 0 {
 		note := noteForDrop(uint64(accountId), name)
 		if _, err := txn.WriteBatch(DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 			catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {
@@ -752,8 +754,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 
 	// adjust the state of txn cache
 	key := genDatabaseKey(accountId, name)
-	txn.databaseOps.addDeleteDatabase(key, txn.statementID, databaseId)
-	return nil
+	return txn.workspace.addDatabaseOp(key, DELETE, databaseId, nil)
 }
 
 func filterDeleteDatabaseRelations(db *txnDatabase, rels []string, databaseName string, op client.TxnOperator) []string {
@@ -778,7 +779,7 @@ func isDeleteDatabaseRelationDeletedInTxn(db *txnDatabase, accountId uint32, rel
 		accountId = catalog.System_Account
 	}
 	key := genTableKey(accountId, relName, db.databaseId, db.databaseName)
-	return db.getTxn().tableOps.existAndDeleted(key)
+	return db.getTxn().workspace.tableDeleted(key)
 }
 
 func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {

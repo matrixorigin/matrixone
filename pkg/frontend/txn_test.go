@@ -86,15 +86,16 @@ func (txn *testWorkspace) PPString() string {
 	return ""
 }
 
-func (txn *testWorkspace) UpdateSnapshotWriteOffset() {
-	//TODO implement me
-	// panic("implement me")
+func (txn *testWorkspace) PublishReadView() client.WorkspaceReadView {
+	return client.NewWorkspaceReadView(1, 1, txn.stmtId)
 }
 
-func (txn *testWorkspace) GetSnapshotWriteOffset() int {
-	//TODO implement me
-	// panic("implement me")
-	return 0
+func (txn *testWorkspace) CurrentReadView() client.WorkspaceReadView {
+	return client.NewWorkspaceReadView(1, 1, txn.stmtId)
+}
+
+func (txn *testWorkspace) BeginWriteAttempt() client.WorkspaceWriteMark {
+	return client.NewWorkspaceWriteMark(1, txn.stmtId, 1, txn.stmtId, 1)
 }
 
 func newTestWorkspace() *testWorkspace {
@@ -158,12 +159,7 @@ func (txn *testWorkspace) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
 
-func (t *testWorkspace) WriteOffset() uint64 {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (t *testWorkspace) Adjust(writeOffset uint64) error {
+func (t *testWorkspace) Adjust(client.WorkspaceWriteMark) error {
 	return nil
 }
 
