@@ -96,6 +96,27 @@ select found_rows() as after_nested_session_limit_first;
 execute ps_nested_session_limit;
 select found_rows() as after_nested_session_limit_second;
 deallocate prepare ps_nested_session_limit;
+
+-- A dynamic session LIMIT above an explicit final OFFSET must drain so the
+-- OFFSET owner can observe EOF and publish the pre-offset count. Reuse must
+-- also survive finite/unlimited session-limit transitions.
+prepare ps_offset_session_limit from 'select sql_calc_found_rows id from t where id <= 5 order by id offset 2';
+execute ps_offset_session_limit;
+select found_rows() as after_offset_session_limit_first;
+execute ps_offset_session_limit;
+select found_rows() as after_offset_session_limit_second;
+set sql_select_limit = 0;
+execute ps_offset_session_limit;
+-- The explicit LIMIT lets this diagnostic SELECT run while the session cap is
+-- zero; it must observe the count published by the preceding execution.
+select found_rows() as after_offset_session_limit_zero limit 1;
+set sql_select_limit = 18446744073709551615;
+execute ps_offset_session_limit;
+select found_rows() as after_offset_session_limit_unlimited;
+set sql_select_limit = 1;
+execute ps_offset_session_limit;
+select found_rows() as after_offset_session_limit_restored;
+deallocate prepare ps_offset_session_limit;
 set sql_select_limit = 18446744073709551615;
 
 select id from t order by id limit 2;
