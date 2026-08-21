@@ -60,7 +60,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	require.NoError(t, err)
 	db, mock := newMongoDBE2ESQLMock(t)
 
-	for range 7 {
+	for range 8 {
 		mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
@@ -74,6 +74,8 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	expectMongoDBE2EScalar(mock, `"text"`)
 	expectMongoDBE2EScalar(mock, "2")
 	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "4")
+	expectMongoDBE2EScalar(mock, "0")
 	expectMongoDBE2EScalar(mock, "5")
 	fixtureRows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
 	for _, row := range manifest.Rows {
@@ -124,6 +126,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"show-connections-admin-metadata-redaction",
 		"show-create-redaction-roundtrip",
 		"json-relaxed-extended-conversion",
+		"fixed-binary-padding",
 		"scan-projection-pushdown-null-conversion",
 		"low-precision-temporal-residual",
 		"decoded-vector-budget-enforced",
@@ -154,7 +157,7 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, os.Chdir(previous)) })
 
 			db, mock := newMongoDBE2ESQLMock(t)
-			for range 7 {
+			for range 8 {
 				mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 			}
 			mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
