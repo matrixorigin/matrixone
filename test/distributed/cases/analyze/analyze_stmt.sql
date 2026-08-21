@@ -59,8 +59,16 @@ select 'AFTER_MULTI';
 analyze table t_analyze_01, t_analyze_nonexistent, t_analyze_02;
 select 'AFTER_MID_LIST_ERROR';
 
+-- duplicate targets are accepted and each target is analyzed
+analyze table t_analyze_01, t_analyze_01;
+select 'AFTER_DUPLICATE_TARGETS';
+
 -- ANALYZE TABLE without column list: non-existent table
 analyze table t_analyze_nonexistent;
+
+-- explicit missing columns return a semantic error and keep the connection usable
+analyze table t_analyze_01(missing_column);
+select 'AFTER_MISSING_COLUMN_ERROR';
 
 -- implicit columns must be resolved from the same historical schema
 drop snapshot if exists analyze_schema_snapshot;
