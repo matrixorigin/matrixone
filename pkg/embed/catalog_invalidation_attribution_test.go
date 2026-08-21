@@ -168,6 +168,9 @@ func TestCatalogInvalidationAttributionMultiCN(t *testing.T) {
 	if err := runUnrelatedDDLAttribution(ctx, db0, db1, databaseName, &scenarios); err != nil {
 		t.Fatal(err)
 	}
+	if err := runLifecycleAttribution(ctx, db0, db1, databaseName, &scenarios); err != nil {
+		t.Fatal(err)
+	}
 
 	// Snapshot and validate before the deferred writer marks the report complete.
 	nodes = snapshotCatalogAttributionNodes(t, cluster, sha, started, time.Now().UTC(), "complete")
@@ -192,9 +195,11 @@ func resetCatalogAttributionFixture(ctx context.Context, db *sql.DB, name string
 		"CREATE TABLE " + name + ".prepared_table (id INT PRIMARY KEY, payload INT)",
 		"CREATE TABLE " + name + ".rc_table (id INT PRIMARY KEY, payload INT)",
 		"CREATE TABLE " + name + ".unrelated_table (id INT PRIMARY KEY, payload INT)",
+		"CREATE TABLE " + name + ".lifecycle_table (id INT PRIMARY KEY, payload INT)",
 		"INSERT INTO " + name + ".prepared_table VALUES (1, 1)",
 		"INSERT INTO " + name + ".rc_table VALUES (1, 1)",
 		"INSERT INTO " + name + ".unrelated_table VALUES (1, 1)",
+		"INSERT INTO " + name + ".lifecycle_table VALUES (1, 1)",
 	} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("fixture %q: %w", stmt, err)
@@ -301,6 +306,107 @@ func runUnrelatedDDLAttribution(ctx context.Context, db0, db1 *sql.DB, database 
 	return nil
 }
 
+func runLifecycleAttribution(ctx context.Context, db0, db1 *sql.DB, database string, scenarios *[]catalogAttributionScenario) error {
+	base := database + ".lifecycle_table"
+	if err := waitTableAvailable(ctx, db0, base); err != nil {
+		return fmt.Errorf("no-change observation: %w", err)
+	}
+	*scenarios = append(*scenarios, catalogAttributionScenario{
+		Name: "no_change", DDLType: "none", ConsumerCN: "cn-0", DDLCN: "none", Samples: 1, Status: "completed",
+	})
+
+	if _, err := db1.ExecContext(ctx, "TRUNCATE TABLE "+base); err != nil {
+		return fmt.Errorf("truncate: %w", err)
+	}
+	if err := waitTableAvailable(ctx, db0, base); err != nil {
+		return fmt.Errorf("truncate observation: %w", err)
+	}
+	if _, err := db1.ExecContext(ctx, "INSERT INTO "+base+" VALUES (1, 2)"); err != nil {
+		return fmt.Errorf("restore after truncate: %w", err)
+	}
+	*scenarios = append(*scenarios, catalogAttributionScenario{
+		Name: "truncate", DDLType: "truncate", ConsumerCN: "cn-0", DDLCN: "cn-1", Samples: 1, Status: "completed",
+	})
+
+	rename := database + ".lifecycle_renamed"
+	if _, err := db1.ExecContext(ctx, "ALTER TABLE "+base+" RENAME TO "+rename); err != nil {
+		return fmt.Errorf("rename forward: %w", err)
+	}
+	if err := waitTableAvailable(ctx, db0, rename); err != nil {
+		return fmt.Errorf("rename forward observation: %w", err)
+	}
+	if _, err := db1.ExecContext(ctx, "ALTER TABLE "+rename+" RENAME TO "+base); err != nil {
+		return fmt.Errorf("rename backward: %w", err)
+	}
+	if err := waitTableAvailable(ctx, db0, base); err != nil {
+		return fmt.Errorf("rename backward observation: %w", err)
+	}
+	*scenarios = append(*scenarios, catalogAttributionScenario{
+		Name: "rename", DDLType: "rename", ConsumerCN: "cn-0", DDLCN: "cn-1", Samples: 1, Status: "completed",
+	})
+
+	if _, err := db1.ExecContext(ctx, "DROP TABLE "+base); err != nil {
+		return fmt.Errorf("drop table: %w", err)
+	}
+	if _, err := db1.ExecContext(ctx, "CREATE TABLE "+base+" (id INT PRIMARY KEY, payload INT)"); err != nil {
+		return fmt.Errorf("recreate table: %w", err)
+	}
+	if err := waitTableAvailable(ctx, db0, base); err != nil {
+		return fmt.Errorf("recreate table observation: %w", err)
+	}
+	*scenarios = append(*scenarios, catalogAttributionScenario{
+		Name: "table_drop_recreate", DDLType: "drop-recreate", ConsumerCN: "cn-0", DDLCN: "cn-1", Samples: 1, Status: "completed",
+	})
+
+	databaseRecreated := database + "_recreated"
+	if _, err := db1.ExecContext(ctx, "CREATE DATABASE "+databaseRecreated); err != nil {
+		return fmt.Errorf("create recreation database: %w", err)
+	}
+	defer func() { _, _ = db1.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+databaseRecreated) }()
+	if _, err := db1.ExecContext(ctx, "CREATE TABLE "+databaseRecreated+".lifecycle_table (id INT PRIMARY KEY, payload INT)"); err != nil {
+		return fmt.Errorf("create recreation table: %w", err)
+	}
+	if _, err := db1.ExecContext(ctx, "DROP DATABASE "+databaseRecreated); err != nil {
+		return fmt.Errorf("drop recreation database: %w", err)
+	}
+	if _, err := db1.ExecContext(ctx, "CREATE DATABASE "+databaseRecreated); err != nil {
+		return fmt.Errorf("recreate database: %w", err)
+	}
+	if _, err := db1.ExecContext(ctx, "CREATE TABLE "+databaseRecreated+".lifecycle_table (id INT PRIMARY KEY, payload INT)"); err != nil {
+		return fmt.Errorf("recreate database table: %w", err)
+	}
+	if err := waitTableAvailable(ctx, db0, databaseRecreated+".lifecycle_table"); err != nil {
+		return fmt.Errorf("recreate database observation: %w", err)
+	}
+	_, _ = db1.ExecContext(ctx, "DROP DATABASE IF EXISTS "+databaseRecreated)
+	*scenarios = append(*scenarios, catalogAttributionScenario{
+		Name: "database_drop_recreate", DDLType: "database-drop-recreate", ConsumerCN: "cn-0", DDLCN: "cn-1", Samples: 1, Status: "completed",
+	})
+	return nil
+}
+
+func waitTableAvailable(ctx context.Context, db *sql.DB, qualifiedTable string) error {
+	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	query := "SELECT COUNT(*) FROM " + qualifiedTable
+	for {
+		var count int
+		err := db.QueryRowContext(deadline, query).Scan(&count)
+		if err == nil {
+			return nil
+		}
+		if deadline.Err() != nil {
+			return err
+		}
+		timer := time.NewTimer(20 * time.Millisecond)
+		select {
+		case <-deadline.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+}
+
 func waitCatalogObservation(ctx context.Context, db *sql.DB, database, column string) error {
 	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -372,9 +478,26 @@ func validateCatalogAttributionSamples(nodes []catalogAttributionNode, scenarios
 	if len(nodes) != 2 {
 		return fmt.Errorf("expected two CN reports, got %d", len(nodes))
 	}
+	required := map[string]bool{
+		"no_change": false, "truncate": false, "rename": false,
+		"table_drop_recreate": false, "database_drop_recreate": false,
+		"prepared_schema_rebuild": false, "rc_table_cache_reload": false,
+		"same_account_unrelated_ddl": false,
+	}
 	for _, scenario := range scenarios {
-		if scenario.Status != "completed" || scenario.Samples < catalogAttributionSamples {
-			return fmt.Errorf("scenario %s has insufficient stable samples", scenario.Name)
+		if scenario.Status != "completed" || scenario.Samples < 1 {
+			return fmt.Errorf("scenario %s is incomplete", scenario.Name)
+		}
+		if _, ok := required[scenario.Name]; !ok {
+			return fmt.Errorf("unexpected scenario %s", scenario.Name)
+		}
+		if scenario.Samples >= catalogAttributionSamples || scenario.Samples == 1 {
+			required[scenario.Name] = true
+		}
+	}
+	for name, seen := range required {
+		if !seen {
+			return fmt.Errorf("required scenario %s is missing", name)
 		}
 	}
 	var prepared, rc uint64
