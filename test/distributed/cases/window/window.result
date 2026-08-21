@@ -4850,6 +4850,31 @@ id    running_sum
 9    45
 10    55
 drop table t_window_23107;
+create table t_window_27352(id int primary key, v int);
+insert into t_window_27352 values (1, 10), (2, null), (3, 30), (4, 40), (5, null);
+prepare window_27352 from 'select id,
+sum(coalesce(v, 0)) over (
+order by id rows between ? preceding and current row
+) as sliding_sum
+from t_window_27352 order by id';
+set @window_bound = 2;
+execute window_27352 using @window_bound;
+id    sliding_sum
+1    10
+2    10
+3    40
+4    70
+5    70
+set @window_bound = 1;
+execute window_27352 using @window_bound;
+id    sliding_sum
+1    10
+2    10
+3    30
+4    70
+5    40
+deallocate prepare window_27352;
+drop table t_window_27352;
 drop table t_desc;
 drop database test_range_desc;
 drop database test;
