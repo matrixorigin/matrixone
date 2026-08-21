@@ -947,6 +947,9 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 		return false
 	}
 	pos = s.skipBlankAndCommentsFrom(pos)
+	if s.asofLegacyIdentifierAhead(start, pos) {
+		return false
+	}
 	if hasKeywordAt(s.buf, pos, "join") {
 		return true
 	}
@@ -962,6 +965,92 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	}
 	pos = s.skipBlankAndCommentsFrom(pos + len("outer"))
 	return hasKeywordAt(s.buf, pos, "join")
+}
+
+// asofLegacyIdentifierAhead preserves the pre-ASOF interpretation for an
+// identifier used as a table name or implicit alias. The only ambiguity that
+// remains after the contextual token check is the identical `t asof JOIN u`
+// spelling; equality-only joins and ON clauses that explicitly reference the
+// implicit alias are legacy SQL, not ASOF joins.
+func (s *Scanner) asofLegacyIdentifierAhead(start, joinPos int) bool {
+	prev := s.previousSignificantPos(start - 1)
+	raw := start - 1
+	for raw >= 0 && (s.buf[raw] == ' ' || s.buf[raw] == '\t' || s.buf[raw] == '\r' || s.buf[raw] == '\n') {
+		raw--
+	}
+	if raw >= 0 && s.buf[raw] == '`' {
+		prev = raw
+	}
+	if prev >= 0 && (s.buf[prev] == ',' || s.buf[prev] == '(' || s.buf[prev] == '.') {
+		return true
+	}
+	wordEnd := prev + 1
+	for prev >= 0 && (isLetter(uint16(s.buf[prev])) || isDigit(uint16(s.buf[prev])) || s.buf[prev] == '_') {
+		prev--
+	}
+	if wordEnd > prev+1 && strings.EqualFold(s.buf[prev+1:wordEnd], "from") {
+		return true
+	}
+
+	on := s.findAsofOnClause(joinPos)
+	if on < 0 {
+		return false
+	}
+	clause := s.buf[on:]
+	if !strings.Contains(clause, "<") && !strings.Contains(clause, ">") && !hasSQLWord(clause, "tolerance") {
+		return true
+	}
+	// A qualified `asof.*` reference belongs to a legacy implicit alias unless
+	// the right table factor itself uses asof as its effective alias.
+	rightFactor := strings.ToLower(s.buf[joinPos:on])
+	if hasQualifiedAsofRef(clause) && !strings.Contains(rightFactor, "asof") {
+		return true
+	}
+	return false
+}
+
+func (s *Scanner) findAsofOnClause(pos int) int {
+	for i := s.skipBlankAndCommentsFrom(pos); i < len(s.buf); {
+		if hasKeywordAt(s.buf, i, "on") {
+			return i
+		}
+		if isUnquotedIdentifierLetterAt(s.buf, i) {
+			i++
+			for i < len(s.buf) && (isUnquotedIdentifierLetterAt(s.buf, i) || isDigit(uint16(s.buf[i])) || s.buf[i] == '_') {
+				i++
+			}
+			continue
+		}
+		i++
+	}
+	return -1
+}
+
+func hasQualifiedAsofRef(sql string) bool {
+	for i := 0; i+5 < len(sql); i++ {
+		if strings.EqualFold(sql[i:i+4], "asof") && sql[i+4] == '.' {
+			return (i == 0 || !isUnquotedIdentifierLetterAt(sql, i-1))
+		}
+		if i+6 < len(sql) && sql[i] == '`' && strings.EqualFold(sql[i+1:i+5], "asof") && sql[i+5] == '`' && sql[i+6] == '.' {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSQLWord(sql, word string) bool {
+	for i := 0; i+len(word) <= len(sql); i++ {
+		if !strings.EqualFold(sql[i:i+len(word)], word) {
+			continue
+		}
+		leftOK := i == 0 || !isUnquotedIdentifierLetterAt(sql, i-1)
+		right := i + len(word)
+		rightOK := right == len(sql) || !isUnquotedIdentifierLetterAt(sql, right)
+		if leftOK && rightOK {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Scanner) previousSignificantPos(pos int) int {

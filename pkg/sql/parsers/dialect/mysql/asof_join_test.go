@@ -67,6 +67,20 @@ func TestAsofRemainsAnIdentifierOutsideJoin(t *testing.T) {
 	}
 }
 
+func TestAsofLegacyUnquotedJoinControls(t *testing.T) {
+	for _, sql := range []string{
+		"select * from asof join u on asof.k = u.k",
+		"select * from t asof join u on asof.k = u.k",
+		"select * from (select 1 as k) asof join (select 1 as k) u on asof.k = u.k",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
+		require.Equal(t, tree.JOIN_TYPE_INNER, join.JoinType, sql)
+		stmt.Free()
+	}
+}
+
 func TestAsofExplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
 	for _, sql := range []string{
 		"select * from t AS asof join u on asof.k = u.k",
