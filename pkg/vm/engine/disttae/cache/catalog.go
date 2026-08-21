@@ -435,8 +435,12 @@ func (cc *CatalogCache) HasNewerVersionFor(qry *TableChangeQuery, consumer Catal
 	}
 	startGeneration, startActive := cc.attribution.mutationSnapshot()
 	exact := cc.hasNewerVersion(qry)
-	bucket := cc.bucketHasNewerVersion(qry)
-	precise := cc.attribution.preciseDecision(qry)
+	shadowQuery := *qry
+	if shadowQuery.ShadowDatabaseName != "" {
+		shadowQuery.DatabaseName = shadowQuery.ShadowDatabaseName
+	}
+	bucket := cc.bucketHasNewerVersion(&shadowQuery)
+	precise := cc.attribution.preciseDecision(&shadowQuery)
 	endGeneration, endActive := cc.attribution.mutationSnapshot()
 	stable := startActive == 0 && endActive == 0 && startGeneration == endGeneration
 	cc.attribution.recordDecision(consumer, exact, bucket, precise, stable)
@@ -562,13 +566,14 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 		pk := cpks.GetBytesAt(i)
 		cc.tables.cpkeyIndex.Ascend(&TableItem{CPKey: pk, Ts: ts.ToTimestamp()}, func(item *TableItem) bool {
 			newItem := &TableItem{
-				deleted:    true,
-				Id:         item.Id,
-				Name:       item.Name,
-				CPKey:      append([]byte{}, item.CPKey...),
-				AccountId:  item.AccountId,
-				DatabaseId: item.DatabaseId,
-				Ts:         ts.ToTimestamp(),
+				deleted:      true,
+				Id:           item.Id,
+				Name:         item.Name,
+				DatabaseName: item.DatabaseName,
+				CPKey:        append([]byte{}, item.CPKey...),
+				AccountId:    item.AccountId,
+				DatabaseId:   item.DatabaseId,
+				Ts:           ts.ToTimestamp(),
 			}
 			cc.setTableItemLocked(newItem, false)
 			return false

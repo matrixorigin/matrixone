@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -41,13 +42,31 @@ const (
 )
 
 type catalogAttributionScenario struct {
-	Name       string `json:"name"`
-	DDLType    string `json:"ddl_type"`
-	ConsumerCN string `json:"consumer_cn"`
-	DDLCN      string `json:"ddl_cn"`
-	Protocol   string `json:"protocol,omitempty"`
-	Samples    int    `json:"stable_terminal_samples"`
-	Status     string `json:"status"`
+	Name        string                        `json:"name"`
+	DDLType     string                        `json:"ddl_type"`
+	ConsumerCN  string                        `json:"consumer_cn"`
+	DDLCN       string                        `json:"ddl_cn"`
+	Protocol    string                        `json:"protocol,omitempty"`
+	Samples     int                           `json:"stable_terminal_samples"`
+	Status      string                        `json:"status"`
+	Observation catalogAttributionObservation `json:"observation"`
+}
+
+// Observation is a counter delta captured around one scenario. Global totals
+// cannot prove that a lifecycle or collision scenario exercised its intended
+// consumer, so every scenario carries its own stable terminal evidence.
+type catalogAttributionObservation struct {
+	PreparedChecks           uint64 `json:"prepared_checks"`
+	PreparedStableChecks     uint64 `json:"prepared_stable_checks"`
+	PreparedTerminalOutcomes uint64 `json:"prepared_terminal_outcomes"`
+	RCChecks                 uint64 `json:"rc_checks"`
+	RCStableChecks           uint64 `json:"rc_stable_checks"`
+	RCTerminalOutcomes       uint64 `json:"rc_terminal_outcomes"`
+	BucketFalsePositives     uint64 `json:"bucket_false_positives"`
+	BucketFalseNegatives     uint64 `json:"bucket_false_negatives"`
+	PreciseFalsePositives    uint64 `json:"precise_false_positives"`
+	PreciseFalseNegatives    uint64 `json:"precise_false_negatives"`
+	ShadowOverflow           bool   `json:"shadow_overflow"`
 }
 
 type catalogAttributionNode struct {
@@ -80,6 +99,24 @@ type catalogAttributionReportV2 struct {
 	DecisionTotals map[string]uint64            `json:"decision_totals"`
 }
 
+func requireCatalogAttributionBuild(t *testing.T, expected string) {
+	t.Helper()
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		t.Fatal("catalog attribution requires VCS-attested build information")
+	}
+	settings := make(map[string]string, len(info.Settings))
+	for _, setting := range info.Settings {
+		settings[setting.Key] = setting.Value
+	}
+	if settings["vcs.revision"] != expected {
+		t.Fatalf("measurement SHA %s does not match executed build revision %q", expected, settings["vcs.revision"])
+	}
+	if settings["vcs.modified"] == "true" {
+		t.Fatal("catalog attribution requires a clean VCS-attested build")
+	}
+}
+
 func TestCatalogInvalidationAttributionMultiCN(t *testing.T) {
 	if os.Getenv(catalogAttributionEnabledEnv) != "1" {
 		t.Skip("opt-in catalog invalidation attribution workload")
@@ -92,6 +129,7 @@ func TestCatalogInvalidationAttributionMultiCN(t *testing.T) {
 	if len(sha) != 40 || strings.Trim(sha, "0123456789abcdefABCDEF") != "" {
 		t.Fatal("MO_CATALOG_INVALIDATION_MATRIXONE_SHA must be a complete 40-byte hexadecimal SHA")
 	}
+	requireCatalogAttributionBuild(t, sha)
 	if err := os.MkdirAll(reportDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -99,27 +137,54 @@ func TestCatalogInvalidationAttributionMultiCN(t *testing.T) {
 	started := time.Now().UTC()
 	var (
 		cluster   Cluster
+		db0, db1  *sql.DB
 		nodes     []catalogAttributionNode
 		scenarios []catalogAttributionScenario
 		passed    bool
+		cleanupOK = true
 		closeOnce sync.Once
 	)
 	defer func() {
 		windowEnd := time.Now().UTC()
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if db0 != nil {
+			if _, err := db0.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS catalog_attr_27235"); err != nil {
+				cleanupOK = false
+				t.Errorf("catalog fixture cleanup failed: %v", err)
+			}
+		}
+		cancel()
+		if db0 != nil {
+			if err := db0.Close(); err != nil {
+				cleanupOK = false
+				t.Errorf("CN0 database close failed: %v", err)
+			}
+		}
+		if db1 != nil {
+			if err := db1.Close(); err != nil {
+				cleanupOK = false
+				t.Errorf("CN1 database close failed: %v", err)
+			}
+		}
 		nodeIntegrity := "incomplete"
-		if passed {
+		if passed && cleanupOK {
 			nodeIntegrity = "complete"
 		}
 		if cluster != nil {
 			nodes = snapshotCatalogAttributionNodes(t, cluster, sha, started, windowEnd, nodeIntegrity)
-			closeOnce.Do(func() { _ = cluster.Close() })
+			closeOnce.Do(func() {
+				if err := cluster.Close(); err != nil {
+					cleanupOK = false
+					t.Errorf("embedded cluster cleanup failed: %v", err)
+				}
+			})
 		}
 		integrity := "incomplete"
-		if passed {
+		if passed && cleanupOK {
 			integrity = "complete"
 		}
 		report := catalogAttributionReportV2{
-			SchemaVersion:  2,
+			SchemaVersion:  3,
 			MatrixONESHA:   sha,
 			Config:         "pkg/embed:1log-1tn-2cn;exact-authoritative",
 			WindowStart:    started.Format(time.RFC3339Nano),
@@ -146,10 +211,8 @@ func TestCatalogInvalidationAttributionMultiCN(t *testing.T) {
 	require.NoError(t, err)
 	cn1, err := cluster.GetCNService(1)
 	require.NoError(t, err)
-	db0 := openCatalogAttributionDB(t, cn0)
-	db1 := openCatalogAttributionDB(t, cn1)
-	defer db0.Close()
-	defer db1.Close()
+	db0 = openCatalogAttributionDB(t, cn0)
+	db1 = openCatalogAttributionDB(t, cn1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -157,24 +220,30 @@ func TestCatalogInvalidationAttributionMultiCN(t *testing.T) {
 	if err := resetCatalogAttributionFixture(ctx, db0, databaseName); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _, _ = db0.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+databaseName) }()
-
-	if err := runPreparedAttribution(ctx, db0, db1, databaseName, &scenarios); err != nil {
+	runMeasured := func(run func() error) error {
+		before := snapshotCatalogAttributionNodes(t, cluster, sha, started, time.Now().UTC(), "measured")
+		startIndex := len(scenarios)
+		if err := run(); err != nil {
+			return err
+		}
+		return annotateCatalogAttributionScenario(t, cluster, sha, started, &scenarios, startIndex, before)
+	}
+	if err := runMeasured(func() error { return runPreparedAttribution(ctx, db0, db1, databaseName, &scenarios) }); err != nil {
 		t.Fatal(err)
 	}
-	if err := runRCAttribution(ctx, db0, db1, databaseName, &scenarios); err != nil {
+	if err := runMeasured(func() error { return runRCAttribution(ctx, db0, db1, databaseName, &scenarios) }); err != nil {
 		t.Fatal(err)
 	}
-	if err := runUnrelatedDDLAttribution(ctx, db0, db1, databaseName, &scenarios); err != nil {
+	if err := runMeasured(func() error { return runUnrelatedDDLAttribution(ctx, db0, db1, databaseName, &scenarios) }); err != nil {
 		t.Fatal(err)
 	}
-	if err := runLifecycleAttribution(ctx, db0, db1, databaseName, &scenarios); err != nil {
+	if err := runLifecycleAttribution(t, cluster, sha, started, ctx, db0, db1, databaseName, &scenarios); err != nil {
 		t.Fatal(err)
 	}
 
 	// Snapshot and validate before the deferred writer marks the report complete.
-	nodes = snapshotCatalogAttributionNodes(t, cluster, sha, started, time.Now().UTC(), "complete")
-	if err := validateCatalogAttributionSamples(nodes, scenarios); err != nil {
+	nodes = snapshotCatalogAttributionNodes(t, cluster, sha, started, time.Now().UTC(), "measured")
+	if err := validateCatalogAttributionSamples(nodes, scenarios, sha); err != nil {
 		t.Fatal(err)
 	}
 	passed = true
@@ -223,7 +292,11 @@ func runPreparedAttribution(ctx context.Context, db0, db1 *sql.DB, database stri
 	if _, err := conn.ExecContext(ctx, "PREPARE "+textName+" FROM 'SELECT payload FROM "+database+".prepared_table WHERE id = ?'"); err != nil {
 		return fmt.Errorf("prepare text statement: %w", err)
 	}
-	defer func() { _, _ = conn.ExecContext(context.Background(), "DEALLOCATE PREPARE "+textName) }()
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, _ = conn.ExecContext(cleanupCtx, "DEALLOCATE PREPARE "+textName)
+		cancel()
+	}()
 	for i := 0; i < catalogAttributionSamples; i++ {
 		column := fmt.Sprintf("prepared_c%03d", i)
 		if _, err := db1.ExecContext(ctx, "ALTER TABLE "+database+".prepared_table ADD COLUMN "+column+" INT"); err != nil {
@@ -286,6 +359,11 @@ func runRCAttribution(ctx context.Context, db0, db1 *sql.DB, database string, sc
 }
 
 func runUnrelatedDDLAttribution(ctx context.Context, db0, db1 *sql.DB, database string, scenarios *[]catalogAttributionScenario) error {
+	stmt, err := db0.PrepareContext(ctx, "SELECT payload FROM "+database+".prepared_table WHERE id = ?")
+	if err != nil {
+		return fmt.Errorf("prepare unrelated-DDL control statement: %w", err)
+	}
+	defer stmt.Close()
 	for i := 0; i < catalogAttributionSamples; i++ {
 		column := fmt.Sprintf("unrelated_c%03d", i)
 		if _, err := db1.ExecContext(ctx, "ALTER TABLE "+database+".unrelated_table ADD COLUMN "+column+" INT"); err != nil {
@@ -295,7 +373,7 @@ func runUnrelatedDDLAttribution(ctx context.Context, db0, db1 *sql.DB, database 
 			return err
 		}
 		var payload int
-		if err := db0.QueryRowContext(ctx, "SELECT payload FROM "+database+".prepared_table WHERE id = 1").Scan(&payload); err != nil {
+		if err := stmt.QueryRowContext(ctx, 1).Scan(&payload); err != nil {
 			return fmt.Errorf("unrelated read %d: %w", i, err)
 		}
 	}
@@ -306,82 +384,164 @@ func runUnrelatedDDLAttribution(ctx context.Context, db0, db1 *sql.DB, database 
 	return nil
 }
 
-func runLifecycleAttribution(ctx context.Context, db0, db1 *sql.DB, database string, scenarios *[]catalogAttributionScenario) error {
-	base := database + ".lifecycle_table"
-	if err := waitTableAvailable(ctx, db0, base); err != nil {
-		return fmt.Errorf("no-change observation: %w", err)
+func runLifecycleScenario(
+	t *testing.T,
+	cluster Cluster,
+	sha string,
+	started time.Time,
+	ctx context.Context,
+	scenarios *[]catalogAttributionScenario,
+	name, ddlType, protocol string,
+	db0, db1 *sql.DB,
+	fn func() error,
+) error {
+	t.Helper()
+	before := snapshotCatalogAttributionNodes(t, cluster, sha, started, time.Now().UTC(), "measured")
+	if err := fn(); err != nil {
+		return err
 	}
 	*scenarios = append(*scenarios, catalogAttributionScenario{
-		Name: "no_change", DDLType: "none", ConsumerCN: "cn-0", DDLCN: "none", Samples: 1, Status: "completed",
+		Name: name, DDLType: ddlType, ConsumerCN: "cn-0", DDLCN: "cn-1",
+		Protocol: protocol, Samples: 1, Status: "completed",
 	})
+	return annotateCatalogAttributionScenario(t, cluster, sha, started, scenarios, len(*scenarios)-1, before)
+}
 
-	if _, err := db1.ExecContext(ctx, "TRUNCATE TABLE "+base); err != nil {
-		return fmt.Errorf("truncate: %w", err)
+func runLifecycleAttribution(
+	t *testing.T,
+	cluster Cluster,
+	sha string,
+	started time.Time,
+	ctx context.Context,
+	db0, db1 *sql.DB,
+	database string,
+	scenarios *[]catalogAttributionScenario,
+) error {
+	base := database + ".lifecycle_table"
+	if err := runLifecycleScenario(t, cluster, sha, started, ctx, scenarios,
+		"no_change", "none", "binary-prepare", db0, db1, func() error {
+			stmt, err := db0.PrepareContext(ctx, "SELECT payload FROM "+base+" WHERE id = ?")
+			if err != nil {
+				return fmt.Errorf("no-change prepare: %w", err)
+			}
+			defer stmt.Close()
+			var payload int
+			if err := stmt.QueryRowContext(ctx, 1).Scan(&payload); err != nil {
+				return fmt.Errorf("no-change execute: %w", err)
+			}
+			return nil
+		}); err != nil {
+		return err
 	}
-	if err := waitTableAvailable(ctx, db0, base); err != nil {
-		return fmt.Errorf("truncate observation: %w", err)
+
+	if err := runLifecycleScenario(t, cluster, sha, started, ctx, scenarios,
+		"truncate", "truncate", "binary-prepare", db0, db1, func() error {
+			stmt, err := db0.PrepareContext(ctx, "SELECT payload FROM "+base+" WHERE id = ?")
+			if err != nil {
+				return fmt.Errorf("truncate prepare: %w", err)
+			}
+			defer stmt.Close()
+			if _, err := db1.ExecContext(ctx, "TRUNCATE TABLE "+base); err != nil {
+				return fmt.Errorf("truncate: %w", err)
+			}
+			var payload sql.NullInt64
+			err = stmt.QueryRowContext(ctx, 1).Scan(&payload)
+			if err != nil && err != sql.ErrNoRows {
+				return fmt.Errorf("truncate stale execute: %w", err)
+			}
+			if _, err := db1.ExecContext(ctx, "INSERT INTO "+base+" VALUES (1, 2)"); err != nil {
+				return fmt.Errorf("restore after truncate: %w", err)
+			}
+			return nil
+		}); err != nil {
+		return err
 	}
-	if _, err := db1.ExecContext(ctx, "INSERT INTO "+base+" VALUES (1, 2)"); err != nil {
-		return fmt.Errorf("restore after truncate: %w", err)
-	}
-	*scenarios = append(*scenarios, catalogAttributionScenario{
-		Name: "truncate", DDLType: "truncate", ConsumerCN: "cn-0", DDLCN: "cn-1", Samples: 1, Status: "completed",
-	})
 
 	rename := database + ".lifecycle_renamed"
-	if _, err := db1.ExecContext(ctx, "ALTER TABLE "+base+" RENAME TO "+rename); err != nil {
-		return fmt.Errorf("rename forward: %w", err)
+	if err := runLifecycleScenario(t, cluster, sha, started, ctx, scenarios,
+		"rename", "rename", "binary-prepare", db0, db1, func() error {
+			stmt, err := db0.PrepareContext(ctx, "SELECT payload FROM "+base+" WHERE id = ?")
+			if err != nil {
+				return fmt.Errorf("rename prepare: %w", err)
+			}
+			defer stmt.Close()
+			if _, err := db1.ExecContext(ctx, "ALTER TABLE "+base+" RENAME TO "+rename); err != nil {
+				return fmt.Errorf("rename forward: %w", err)
+			}
+			var payload int
+			if err := stmt.QueryRowContext(ctx, 1).Scan(&payload); err == nil {
+				return fmt.Errorf("rename stale dependency unexpectedly executed")
+			}
+			if _, err := db1.ExecContext(ctx, "ALTER TABLE "+rename+" RENAME TO "+base); err != nil {
+				return fmt.Errorf("rename backward: %w", err)
+			}
+			return waitTableAvailable(ctx, db0, base)
+		}); err != nil {
+		return err
 	}
-	if err := waitTableAvailable(ctx, db0, rename); err != nil {
-		return fmt.Errorf("rename forward observation: %w", err)
-	}
-	if _, err := db1.ExecContext(ctx, "ALTER TABLE "+rename+" RENAME TO "+base); err != nil {
-		return fmt.Errorf("rename backward: %w", err)
-	}
-	if err := waitTableAvailable(ctx, db0, base); err != nil {
-		return fmt.Errorf("rename backward observation: %w", err)
-	}
-	*scenarios = append(*scenarios, catalogAttributionScenario{
-		Name: "rename", DDLType: "rename", ConsumerCN: "cn-0", DDLCN: "cn-1", Samples: 1, Status: "completed",
-	})
 
-	if _, err := db1.ExecContext(ctx, "DROP TABLE "+base); err != nil {
-		return fmt.Errorf("drop table: %w", err)
+	if err := runLifecycleScenario(t, cluster, sha, started, ctx, scenarios,
+		"table_drop_recreate", "drop-recreate", "binary-prepare", db0, db1, func() error {
+			stmt, err := db0.PrepareContext(ctx, "SELECT payload FROM "+base+" WHERE id = ?")
+			if err != nil {
+				return fmt.Errorf("drop prepare: %w", err)
+			}
+			defer stmt.Close()
+			if _, err := db1.ExecContext(ctx, "DROP TABLE "+base); err != nil {
+				return fmt.Errorf("drop table: %w", err)
+			}
+			var payload int
+			if err := stmt.QueryRowContext(ctx, 1).Scan(&payload); err == nil {
+				return fmt.Errorf("drop stale dependency unexpectedly executed")
+			}
+			if _, err := db1.ExecContext(ctx, "CREATE TABLE "+base+" (id INT PRIMARY KEY, payload INT)"); err != nil {
+				return fmt.Errorf("recreate table: %w", err)
+			}
+			return waitTableAvailable(ctx, db0, base)
+		}); err != nil {
+		return err
 	}
-	if _, err := db1.ExecContext(ctx, "CREATE TABLE "+base+" (id INT PRIMARY KEY, payload INT)"); err != nil {
-		return fmt.Errorf("recreate table: %w", err)
-	}
-	if err := waitTableAvailable(ctx, db0, base); err != nil {
-		return fmt.Errorf("recreate table observation: %w", err)
-	}
-	*scenarios = append(*scenarios, catalogAttributionScenario{
-		Name: "table_drop_recreate", DDLType: "drop-recreate", ConsumerCN: "cn-0", DDLCN: "cn-1", Samples: 1, Status: "completed",
-	})
 
 	databaseRecreated := database + "_recreated"
-	if _, err := db1.ExecContext(ctx, "CREATE DATABASE "+databaseRecreated); err != nil {
-		return fmt.Errorf("create recreation database: %w", err)
+	if err := runLifecycleScenario(t, cluster, sha, started, ctx, scenarios,
+		"database_drop_recreate", "database-drop-recreate", "binary-prepare", db0, db1, func() error {
+			if _, err := db1.ExecContext(ctx, "CREATE DATABASE "+databaseRecreated); err != nil {
+				return fmt.Errorf("create recreation database: %w", err)
+			}
+			if _, err := db1.ExecContext(ctx, "CREATE TABLE "+databaseRecreated+".lifecycle_table (id INT PRIMARY KEY, payload INT)"); err != nil {
+				return fmt.Errorf("create recreation table: %w", err)
+			}
+			stmt, err := db0.PrepareContext(ctx, "SELECT payload FROM "+databaseRecreated+".lifecycle_table WHERE id = ?")
+			if err != nil {
+				return fmt.Errorf("database prepare: %w", err)
+			}
+			defer stmt.Close()
+			if _, err := db1.ExecContext(ctx, "DROP DATABASE "+databaseRecreated); err != nil {
+				return fmt.Errorf("drop recreation database: %w", err)
+			}
+			var payload int
+			if err := stmt.QueryRowContext(ctx, 1).Scan(&payload); err == nil {
+				return fmt.Errorf("database stale dependency unexpectedly executed")
+			}
+			if _, err := db1.ExecContext(ctx, "CREATE DATABASE "+databaseRecreated); err != nil {
+				return fmt.Errorf("recreate database: %w", err)
+			}
+			if _, err := db1.ExecContext(ctx, "CREATE TABLE "+databaseRecreated+".lifecycle_table (id INT PRIMARY KEY, payload INT)"); err != nil {
+				return fmt.Errorf("recreate database table: %w", err)
+			}
+			if err := waitTableAvailable(ctx, db0, databaseRecreated+".lifecycle_table"); err != nil {
+				return fmt.Errorf("recreate database observation: %w", err)
+			}
+			return nil
+		}); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, _ = db1.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS "+databaseRecreated)
+		cancel()
+		return err
 	}
-	defer func() { _, _ = db1.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+databaseRecreated) }()
-	if _, err := db1.ExecContext(ctx, "CREATE TABLE "+databaseRecreated+".lifecycle_table (id INT PRIMARY KEY, payload INT)"); err != nil {
-		return fmt.Errorf("create recreation table: %w", err)
-	}
-	if _, err := db1.ExecContext(ctx, "DROP DATABASE "+databaseRecreated); err != nil {
-		return fmt.Errorf("drop recreation database: %w", err)
-	}
-	if _, err := db1.ExecContext(ctx, "CREATE DATABASE "+databaseRecreated); err != nil {
-		return fmt.Errorf("recreate database: %w", err)
-	}
-	if _, err := db1.ExecContext(ctx, "CREATE TABLE "+databaseRecreated+".lifecycle_table (id INT PRIMARY KEY, payload INT)"); err != nil {
-		return fmt.Errorf("recreate database table: %w", err)
-	}
-	if err := waitTableAvailable(ctx, db0, databaseRecreated+".lifecycle_table"); err != nil {
-		return fmt.Errorf("recreate database observation: %w", err)
-	}
-	_, _ = db1.ExecContext(ctx, "DROP DATABASE IF EXISTS "+databaseRecreated)
-	*scenarios = append(*scenarios, catalogAttributionScenario{
-		Name: "database_drop_recreate", DDLType: "database-drop-recreate", ConsumerCN: "cn-0", DDLCN: "cn-1", Samples: 1, Status: "completed",
-	})
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_, _ = db1.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS "+databaseRecreated)
+	cancel()
 	return nil
 }
 
@@ -474,9 +634,76 @@ func snapshotCatalogAttributionNodes(t *testing.T, cluster Cluster, sha string, 
 	return nodes
 }
 
-func validateCatalogAttributionSamples(nodes []catalogAttributionNode, scenarios []catalogAttributionScenario) error {
+func catalogAttributionObservationFor(nodes []catalogAttributionNode) catalogAttributionObservation {
+	var out catalogAttributionObservation
+	for _, node := range nodes {
+		if node.Report.Shadow.Overflow {
+			out.ShadowOverflow = true
+		}
+		prepared := node.Report.Consumers["prepared_plan"]
+		rc := node.Report.Consumers["rc_table_cache"]
+		out.PreparedChecks += prepared.Checks
+		out.PreparedStableChecks += prepared.StableChecks
+		out.PreparedTerminalOutcomes += node.Report.PreparedPlanRebuild.Count
+		out.RCChecks += rc.Checks
+		out.RCStableChecks += rc.StableChecks
+		out.RCTerminalOutcomes += node.Report.RCTableCacheReload.Count
+		out.BucketFalsePositives += prepared.BucketFalsePositives + rc.BucketFalsePositives
+		out.BucketFalseNegatives += prepared.BucketFalseNegatives + rc.BucketFalseNegatives
+		out.PreciseFalsePositives += prepared.PreciseFalsePositives + rc.PreciseFalsePositives
+		out.PreciseFalseNegatives += prepared.PreciseFalseNegatives + rc.PreciseFalseNegatives
+	}
+	return out
+}
+
+func subtractCatalogAttributionObservation(after, before catalogAttributionObservation) catalogAttributionObservation {
+	return catalogAttributionObservation{
+		PreparedChecks:           after.PreparedChecks - before.PreparedChecks,
+		PreparedStableChecks:     after.PreparedStableChecks - before.PreparedStableChecks,
+		PreparedTerminalOutcomes: after.PreparedTerminalOutcomes - before.PreparedTerminalOutcomes,
+		RCChecks:                 after.RCChecks - before.RCChecks,
+		RCStableChecks:           after.RCStableChecks - before.RCStableChecks,
+		RCTerminalOutcomes:       after.RCTerminalOutcomes - before.RCTerminalOutcomes,
+		BucketFalsePositives:     after.BucketFalsePositives - before.BucketFalsePositives,
+		BucketFalseNegatives:     after.BucketFalseNegatives - before.BucketFalseNegatives,
+		PreciseFalsePositives:    after.PreciseFalsePositives - before.PreciseFalsePositives,
+		PreciseFalseNegatives:    after.PreciseFalseNegatives - before.PreciseFalseNegatives,
+		ShadowOverflow:           after.ShadowOverflow,
+	}
+}
+
+func annotateCatalogAttributionScenario(
+	t *testing.T,
+	cluster Cluster,
+	sha string,
+	started time.Time,
+	scenarios *[]catalogAttributionScenario,
+	startIndex int,
+	before []catalogAttributionNode,
+) error {
+	t.Helper()
+	if startIndex >= len(*scenarios) {
+		return fmt.Errorf("scenario did not publish a result")
+	}
+	after := snapshotCatalogAttributionNodes(t, cluster, sha, started, time.Now().UTC(), "measured")
+	delta := subtractCatalogAttributionObservation(
+		catalogAttributionObservationFor(after),
+		catalogAttributionObservationFor(before),
+	)
+	for i := startIndex; i < len(*scenarios); i++ {
+		(*scenarios)[i].Observation = delta
+	}
+	return nil
+}
+
+func validateCatalogAttributionSamples(nodes []catalogAttributionNode, scenarios []catalogAttributionScenario, sha string) error {
 	if len(nodes) != 2 {
 		return fmt.Errorf("expected two CN reports, got %d", len(nodes))
+	}
+	for _, node := range nodes {
+		if !node.Report.Enabled || node.Report.Metadata.MatrixONESHA != sha || node.Report.Metadata.Integrity != "measured" {
+			return fmt.Errorf("node %s has unbound report identity or integrity", node.ServiceID)
+		}
 	}
 	required := map[string]bool{
 		"no_change": false, "truncate": false, "rename": false,
@@ -494,6 +721,31 @@ func validateCatalogAttributionSamples(nodes []catalogAttributionNode, scenarios
 		if scenario.Samples >= catalogAttributionSamples || scenario.Samples == 1 {
 			required[scenario.Name] = true
 		}
+		if scenario.Observation.ShadowOverflow {
+			return fmt.Errorf("scenario %s observed shadow overflow", scenario.Name)
+		}
+		if scenario.Observation.PreciseFalseNegatives != 0 {
+			return fmt.Errorf("scenario %s observed precise false negatives: %d", scenario.Name, scenario.Observation.PreciseFalseNegatives)
+		}
+		if scenario.Observation.PreciseFalsePositives != 0 {
+			return fmt.Errorf("scenario %s observed precise false positives: %d", scenario.Name, scenario.Observation.PreciseFalsePositives)
+		}
+		if scenario.Name == "prepared_schema_rebuild" &&
+			(scenario.Observation.PreparedStableChecks < uint64(scenario.Samples) ||
+				scenario.Observation.PreparedTerminalOutcomes < uint64(scenario.Samples)) {
+			return fmt.Errorf("prepared scenario lacks per-scenario terminal evidence: %+v", scenario.Observation)
+		}
+		if scenario.Name == "rc_table_cache_reload" &&
+			(scenario.Observation.RCStableChecks < uint64(scenario.Samples) ||
+				scenario.Observation.RCTerminalOutcomes < uint64(scenario.Samples)) {
+			return fmt.Errorf("RC scenario lacks per-scenario terminal evidence: %+v", scenario.Observation)
+		}
+		if scenario.Name == "same_account_unrelated_ddl" && scenario.Observation.PreparedStableChecks < uint64(scenario.Samples) {
+			return fmt.Errorf("unrelated DDL did not exercise a prepared dependency: %+v", scenario.Observation)
+		}
+		if scenario.Name == "same_account_unrelated_ddl" && scenario.Observation.BucketFalsePositives == 0 {
+			return fmt.Errorf("unrelated DDL did not produce a bucket false-positive opportunity")
+		}
 	}
 	for name, seen := range required {
 		if !seen {
@@ -502,6 +754,18 @@ func validateCatalogAttributionSamples(nodes []catalogAttributionNode, scenarios
 	}
 	var prepared, rc uint64
 	for _, node := range nodes {
+		for name, histogram := range map[string]cache.CatalogInvalidationLatency{
+			"prepared": node.Report.PreparedPlanRebuild,
+			"rc":       node.Report.RCTableCacheReload,
+		} {
+			var bucketCount uint64
+			for _, bucket := range histogram.Buckets {
+				bucketCount += bucket.Count
+			}
+			if bucketCount != histogram.Count || histogram.Success+histogram.Error+histogram.Miss != histogram.Count {
+				return fmt.Errorf("node %s %s histogram is inconsistent", node.ServiceID, name)
+			}
+		}
 		for _, consumer := range []string{"prepared_plan", "rc_table_cache"} {
 			counter, ok := node.Report.Consumers[consumer]
 			if !ok || counter.StableChecks == 0 || counter.InconclusiveChecks != 0 {
@@ -510,6 +774,14 @@ func validateCatalogAttributionSamples(nodes []catalogAttributionNode, scenarios
 		}
 		prepared += node.Report.PreparedPlanRebuild.Count
 		rc += node.Report.RCTableCacheReload.Count
+		if node.Report.Shadow.Overflow {
+			return fmt.Errorf("node %s reports shadow overflow", node.ServiceID)
+		}
+		for consumer, counter := range node.Report.Consumers {
+			if counter.StableChecks+counter.InconclusiveChecks != counter.Checks {
+				return fmt.Errorf("node %s consumer %s has inconsistent decision counters", node.ServiceID, consumer)
+			}
+		}
 	}
 	if prepared < catalogAttributionSamples || rc < catalogAttributionSamples {
 		return fmt.Errorf("terminal samples below 128: prepared=%d rc=%d", prepared, rc)

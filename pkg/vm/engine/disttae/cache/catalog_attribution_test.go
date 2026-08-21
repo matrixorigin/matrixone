@@ -34,6 +34,24 @@ func TestCatalogInvalidationAttributionDisabledByDefault(t *testing.T) {
 	require.Empty(t, report.Consumers)
 }
 
+func TestCatalogInvalidationShadowIdentityDoesNotChangeExactRCDecision(t *testing.T) {
+	cc := NewCatalog()
+	cc.EnableCatalogInvalidationAttribution()
+	cc.databases.data.Set(&DatabaseItem{
+		AccountId: 1, Name: "db", Id: 20, Ts: timestamp.Timestamp{PhysicalTime: 200},
+	})
+	query := &TableChangeQuery{
+		AccountId: 1, DatabaseId: 10, Name: "t",
+		Ts: timestamp.Timestamp{PhysicalTime: 100}, ShadowDatabaseName: "db",
+	}
+	// RC's historical exact query did not carry the database name. The
+	// attribution-only identity must not make that exact decision invalidate.
+	require.False(t, cc.HasNewerVersionFor(query, CatalogInvalidationConsumerRCTableCache))
+	withExactDatabase := *query
+	withExactDatabase.DatabaseName = "db"
+	require.True(t, cc.hasNewerVersion(&withExactDatabase))
+}
+
 func TestCatalogInvalidationAttributionDifferentialAndCollision(t *testing.T) {
 	cc := NewCatalog()
 	cc.EnableCatalogInvalidationAttribution()

@@ -46,10 +46,14 @@ type TableChangeQuery struct {
 	AccountId    uint32
 	DatabaseId   uint64
 	DatabaseName string
-	Name         string
-	Version      uint32
-	TableId      uint64
-	Ts           timestamp.Timestamp
+	// ShadowDatabaseName is used only by the opt-in attribution oracle. It is
+	// deliberately separate from DatabaseName so a diagnostic identity cannot
+	// change the exact production lookup performed by HasNewerVersionFor.
+	ShadowDatabaseName string
+	Name               string
+	Version            uint32
+	TableId            uint64
+	Ts                 timestamp.Timestamp
 }
 
 const tableChangeBucketCount = 4096
