@@ -72,6 +72,23 @@ func Or(nsp, m, r *Nulls) {
 	if nsp.EmptyByFlag() && m.EmptyByFlag() {
 		r.Reset()
 	}
+	// A result vector may own an externally allocated bitmap sized for its
+	// visible row count, while a reused source vector can retain a longer
+	// logical bitmap from its backing batch. Rows beyond the result's logical
+	// length are not part of this operation and must not force external storage
+	// growth. Keep the destination length unchanged while copying the visible
+	// prefix in that case.
+	if r != nil && r.np.HasExternalStorage() &&
+		(nsp.np.Len() > r.np.Len() || m.np.Len() > r.np.Len()) {
+		limit := uint64(r.np.Len())
+		if nsp != r {
+			orLimited(nsp, r, limit)
+		}
+		if m != r {
+			orLimited(m, r, limit)
+		}
+		return
+	}
 
 	if !nsp.EmptyByFlag() {
 		r.np.Or(&nsp.np)
@@ -79,6 +96,20 @@ func Or(nsp, m, r *Nulls) {
 
 	if !m.EmptyByFlag() {
 		r.np.Or(&m.np)
+	}
+}
+
+func orLimited(src, dst *Nulls, limit uint64) {
+	if src == nil || src.EmptyByFlag() || limit == 0 {
+		return
+	}
+	itr := src.np.Iterator()
+	for itr.HasNext() {
+		row := itr.Next()
+		if row >= limit {
+			break
+		}
+		dst.np.Add(row)
 	}
 }
 
