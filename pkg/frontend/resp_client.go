@@ -37,7 +37,7 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 // untouched. The process copy serves a following statement in the same
 // multi-statement request; the session copy seeds the next request.
 func recordLastFoundRows(ses *Session, execCtx *ExecCtx) {
-	if ses == nil || execCtx == nil || execCtx.stmt == nil || execCtx.proc == nil ||
+	if ses == nil || ses.IsDerivedStmt() || execCtx == nil || execCtx.stmt == nil || execCtx.proc == nil ||
 		execCtx.stmt.StmtKind().OutputType() != tree.OUTPUT_RESULT_ROW {
 		return
 	}

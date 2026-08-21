@@ -89,6 +89,15 @@ func TestRecordLastFoundRows(t *testing.T) {
 		require.Equal(t, uint64(7), proc.GetFoundRows())
 		require.Equal(t, uint64(7), ses.GetLastFoundRows())
 	})
+
+	t.Run("derived result set preserves preceding count", func(t *testing.T) {
+		ses := &Session{lastFoundRows: 7}
+		ses.ReplaceDerivedStmt(true)
+		proc := newProc(7, 0)
+		recordLastFoundRows(ses, &ExecCtx{stmt: &tree.Select{}, proc: proc})
+		require.Equal(t, uint64(7), proc.GetFoundRows())
+		require.Equal(t, uint64(7), ses.GetLastFoundRows())
+	})
 }
 
 func TestMarkRowCountFailed(t *testing.T) {
