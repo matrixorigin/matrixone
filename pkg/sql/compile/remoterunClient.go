@@ -236,7 +236,7 @@ func prepareRemoteRunSendingData(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeScope(encodedScope); err != nil {
+	if scopeData, err = encodeRemoteScope(encodedScope, proc); err != nil {
 		return nil, false, nil, false, err
 	}
 

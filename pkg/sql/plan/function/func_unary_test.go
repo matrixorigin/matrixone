@@ -3505,12 +3505,12 @@ func initJsonUnquoteTestCase() []tcTemp {
 			info: "test json unquote",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`"hello"`, `"world"`, `""`},
-					[]bool{false, false, true}),
+					[]string{`"hello"`, `"world"`, `""`, `"\"x\""`, `"\"\""`},
+					[]bool{false, false, true, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"hello", "world", ""},
-				[]bool{false, false, true}),
+				[]string{"hello", "world", "", `"x"`, `""`},
+				[]bool{false, false, true, false, false}),
 		},
 	}
 }
@@ -3526,6 +3526,54 @@ func TestJsonUnquote(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
+	values := []string{
+		"plain",
+		"a\"b",
+		"\"leading",
+		"trailing\"",
+		"\"both\"",
+		"\"",
+		"\"\"",
+		"\"你好\"",
+	}
+	inputs := make([]string, len(values))
+	for i, value := range values {
+		inputs[i] = strconv.Quote(value)
+	}
+
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), inputs,
+				make([]bool, len(inputs))),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, values,
+			make([]bool, len(values))),
+		JsonUnquote)
+	s, info := tc.Run()
+	require.True(t, s, info)
+
+	jsonInputs := make([]string, len(values))
+	for i := range values {
+		bj, err := types.ParseStringToByteJson(inputs[i])
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		jsonInputs[i] = string(encoded)
+	}
+	jsonTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), jsonInputs,
+				make([]bool, len(jsonInputs))),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, values,
+			make([]bool, len(values))),
+		JsonUnquote)
+	s, info = jsonTC.Run()
+	require.True(t, s, info)
 }
 
 func TestLoadFile(t *testing.T) {
