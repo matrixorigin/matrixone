@@ -51,15 +51,15 @@ func TestAsofRemainsAnIdentifierOutsideJoin(t *testing.T) {
 		"select * from asof",
 		"select * from t as asof",
 		"create table asof (asof int)",
-		"select * from asof join u on asof.k = u.k",
+		"select * from `asof` join u on `asof`.k = u.k",
 		"select * from t as asof join u on asof.k = u.k",
-		"select * from db.asof join u on asof.k = u.k",
-		"select * from /* c */ asof join u on asof.k = u.k",
-		"select * from -- c\n  asof join u on asof.k = u.k",
-		"select * from # c\n  asof join u on asof.k = u.k",
-		"select * from // c\n  asof join u on asof.k = u.k",
-		"select * from t, asof join u on asof.k = u.k",
-		"select * from (asof join u on asof.k = u.k)",
+		"select * from db.`asof` join u on `asof`.k = u.k",
+		"select * from /* c */ `asof` join u on `asof`.k = u.k",
+		"select * from -- c\n  `asof` join u on `asof`.k = u.k",
+		"select * from # c\n  `asof` join u on `asof`.k = u.k",
+		"select * from // c\n  `asof` join u on `asof`.k = u.k",
+		"select * from t, `asof` join u on `asof`.k = u.k",
+		"select * from (`asof` join u on `asof`.k = u.k)",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
@@ -67,15 +67,15 @@ func TestAsofRemainsAnIdentifierOutsideJoin(t *testing.T) {
 	}
 }
 
-func TestAsofImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
+func TestAsofExplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
 	for _, sql := range []string{
-		"select * from t asof join u on t.k = u.k",
-		"select * from t asof join u on t.k = u.k and u.v = 1",
-		"select * from t asof join u on asof.k = u.k and asof.ts > u.ts",
-		"select * from t asof join u on t.k = u.k and u.v > 1",
-		"select * from t asof join u on asof.k = u.k and u.tolerance = 1",
-		"select * from t asof join u on a = b and x > y",
-		"select * from (select 1 as k) asof join (select 1 as k) u on asof.k = u.k",
+		"select * from t AS asof join u on asof.k = u.k",
+		"select * from t AS asof join u on asof.k = u.k and u.v = 1",
+		"select * from t AS asof join u on asof.k = u.k and asof.ts > u.ts",
+		"select * from t AS asof join u on asof.k = u.k and u.v > 1",
+		"select * from t AS asof join u on asof.k = u.k and u.tolerance = 1",
+		"select * from t AS asof join u on a = b and x > y",
+		"select * from (select 1 as k) AS asof join (select 1 as k) u on asof.k = u.k",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
@@ -94,6 +94,7 @@ func TestAsofJoinProducesAsofAst(t *testing.T) {
 		"select * from l asof join r on lk = r.rk and event_ts >= r.effective_ts",
 		"select * from l asof join r on lk = r.rk and r.effective_ts <= event_ts",
 		"select * from l asof join r on lk = rk and event_ts >= effective_ts",
+		"select * from l asof join r on lk = rk and a >= b",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)

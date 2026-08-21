@@ -927,9 +927,11 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 }
 
 func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
+	// ASOF is a contextual modifier, but its meaning must not depend on column
+	// spelling, qualification, comments, or expression shape. An unquoted
+	// `asof` immediately followed by JOIN (optionally LEFT/OUTER) is ASOF JOIN;
+	// an identifier in this position must be quoted or use explicit `AS asof`.
 	prev := s.previousSignificantPos(start - 1)
-	// previousSignificantPos intentionally ignores quoted contents; restore a
-	// closing identifier quote here so `alias` ASOF JOIN retains its context.
 	raw := start - 1
 	for raw >= 0 && (s.buf[raw] == ' ' || s.buf[raw] == '\t' || s.buf[raw] == '\r' || s.buf[raw] == '\n') {
 		raw--
@@ -937,35 +939,29 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	if raw >= 0 && s.buf[raw] == '`' {
 		prev = raw
 	}
-	if prev >= 0 && (s.buf[prev] == '.' || s.buf[prev] == ',' || s.buf[prev] == '(' || s.buf[prev] == ')') {
-		return false
-	}
 	end := prev + 1
 	for prev >= 0 && (isLetter(uint16(s.buf[prev])) || isDigit(uint16(s.buf[prev])) || s.buf[prev] == '_') {
 		prev--
 	}
-	if end > prev+1 {
-		switch strings.ToLower(s.buf[prev+1 : end]) {
-		case "from", "as", "into", "join", "update", "table":
-			return false
-		}
+	if end > prev+1 && strings.EqualFold(s.buf[prev+1:end], "as") {
+		return false
 	}
 	pos = s.skipBlankAndCommentsFrom(pos)
 	if hasKeywordAt(s.buf, pos, "join") {
-		return s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start))
+		return true
 	}
 	if !hasKeywordAt(s.buf, pos, "left") {
 		return false
 	}
 	pos = s.skipBlankAndCommentsFrom(pos + len("left"))
 	if hasKeywordAt(s.buf, pos, "join") {
-		return s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start))
+		return true
 	}
 	if !hasKeywordAt(s.buf, pos, "outer") {
 		return false
 	}
 	pos = s.skipBlankAndCommentsFrom(pos + len("outer"))
-	return hasKeywordAt(s.buf, pos, "join") && (s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start)))
+	return hasKeywordAt(s.buf, pos, "join")
 }
 
 // asofLeftRelationName returns the unqualified name immediately preceding the
