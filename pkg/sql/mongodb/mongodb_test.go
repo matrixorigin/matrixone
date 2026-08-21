@@ -1120,6 +1120,14 @@ func TestConverterJSONValues(t *testing.T) {
 	}
 }
 
+func TestRelaxedExtJSONValueRejectsMalformedBSON(t *testing.T) {
+	_, err := relaxedExtJSONValue(bson.RawValue{
+		Type:  bson.TypeString,
+		Value: []byte{1},
+	})
+	require.Error(t, err)
+}
+
 func TestConverterCoversSupportedScalarFamilies(t *testing.T) {
 	mp := mpool.MustNewZero()
 	decimal, err := bson.ParseDecimal128("12.345")
