@@ -104,7 +104,10 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.MODIFY_METADATA, userDefinedFunctionBackfill.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionBackfill.Schema)
 	require.Equal(t, "mo_user_defined_function", userDefinedFunctionBackfill.TableName)
-	require.Contains(t, strings.ToLower(userDefinedFunctionBackfill.UpgSql), "json_extract(args")
+	require.Equal(t,
+		"update mo_catalog.mo_user_defined_function set arg_types = "+catalog.UserDefinedFunctionArgumentTypesSQL,
+		userDefinedFunctionBackfill.UpgSql,
+	)
 	userDefinedFunctionSignatureIndex := tenantUpgEntries[16]
 	require.Equal(t, versions.ADD_INDEX, userDefinedFunctionSignatureIndex.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionSignatureIndex.Schema)

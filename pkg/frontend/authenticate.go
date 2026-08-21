@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -11219,12 +11220,21 @@ func userDefinedFunctionArgumentTypes(argumentTypes []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(encoded) > types.MaxStringSize {
+	value, err := bytejson.ParseFromByteSlice(encoded)
+	if err != nil {
+		return "", err
+	}
+	// JSON_EXTRACT renders arrays through ByteJson. Use that same rendering
+	// rather than encoding/json's compact form, otherwise a migrated
+	// multi-argument function receives a different overload identity from an
+	// equivalent CREATE FUNCTION issued after the upgrade.
+	canonical := value.String()
+	if len(canonical) > types.MaxStringSize {
 		return "", moerr.NewInvalidInputNoCtxf(
 			"function argument type signature exceeds the %d-byte catalog limit", types.MaxStringSize,
 		)
 	}
-	return string(encoded), nil
+	return canonical, nil
 }
 
 func userDefinedFunctionArgumentTypesFromJSON(args string) (string, error) {

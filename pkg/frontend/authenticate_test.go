@@ -80,7 +80,7 @@ func TestUserDefinedFunctionArgumentTypes(t *testing.T) {
 	}{
 		{name: "no arguments", want: ""},
 		{name: "one argument", types: []string{"int"}, want: `["int"]`},
-		{name: "overload signature", types: []string{"varchar", "decimal(10,2)"}, want: `["varchar","decimal(10,2)"]`},
+		{name: "overload signature", types: []string{"varchar", "decimal(10,2)"}, want: `["varchar", "decimal(10,2)"]`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := userDefinedFunctionArgumentTypes(test.types)
@@ -95,6 +95,9 @@ func TestUserDefinedFunctionArgumentTypes(t *testing.T) {
 	got, err = userDefinedFunctionArgumentTypesFromJSON(`[]`)
 	require.NoError(t, err)
 	require.Empty(t, got)
+	got, err = userDefinedFunctionArgumentTypesFromJSON(`[{"name":"left","type":"int"},{"name":"right","type":"int"}]`)
+	require.NoError(t, err)
+	require.Equal(t, `["int", "int"]`, got)
 	_, err = userDefinedFunctionArgumentTypesFromJSON(`not json`)
 	require.Error(t, err)
 

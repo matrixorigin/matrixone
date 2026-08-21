@@ -135,27 +135,25 @@ func backfillUserDefinedFunctionArgumentTypes() versions.UpgradeEntry {
 		Schema:    catalog.MO_CATALOG,
 		TableName: "mo_user_defined_function",
 		UpgType:   versions.MODIFY_METADATA,
-		UpgSql:    "update mo_catalog.mo_user_defined_function set arg_types = " + canonicalUserDefinedFunctionArgumentTypes,
+		UpgSql:    "update mo_catalog.mo_user_defined_function set arg_types = " + catalog.UserDefinedFunctionArgumentTypesSQL,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			if err := validateUserDefinedFunctionArgumentTypesFit(txn, accountID); err != nil {
 				return false, err
 			}
 			mismatch, err := versions.CheckTableDataExist(txn, accountID,
-				"select 1 from mo_catalog.mo_user_defined_function where arg_types != "+canonicalUserDefinedFunctionArgumentTypes+" limit 1",
+				"select 1 from mo_catalog.mo_user_defined_function where arg_types != "+catalog.UserDefinedFunctionArgumentTypesSQL+" limit 1",
 			)
 			return !mismatch, err
 		},
 	}
 }
 
-const canonicalUserDefinedFunctionArgumentTypes = "coalesce(cast(json_extract(args, '$[*].type') as char), '')"
-
 // validateUserDefinedFunctionArgumentTypesFit prevents the upgrade backfill
 // from truncating a legacy signature before the unique overload index is built.
 func validateUserDefinedFunctionArgumentTypesFit(txn executor.TxnExecutor, accountID uint32) error {
 	overLimit, err := versions.CheckTableDataExist(txn, accountID, fmt.Sprintf(
 		"select 1 from mo_catalog.mo_user_defined_function where length(%s) > %d limit 1",
-		canonicalUserDefinedFunctionArgumentTypes, types.MaxStringSize,
+		catalog.UserDefinedFunctionArgumentTypesSQL, types.MaxStringSize,
 	))
 	if err != nil {
 		return err

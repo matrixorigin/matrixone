@@ -629,6 +629,23 @@ func TestRemapCloneRoutineStatementsClosesNestedDatabaseReferences(t *testing.T)
 		require.NotContains(t, out, "source_db")
 	})
 
+	t.Run("labeled repeat preserves control flow and remaps nested query", func(t *testing.T) {
+		out := remapRoutine(t, `begin
+			repeat_label: repeat
+				select count(*) from source_db.t;
+				if true then iterate repeat_label; end if;
+				leave repeat_label;
+			until true end repeat repeat_label;
+		end`)
+		require.Contains(t, out, "target_db.t")
+		require.NotContains(t, out, "source_db")
+		require.Contains(t, out, "end repeat repeat_label")
+
+		formatted, err := parsers.Parse(context.Background(), dialect.MYSQL, out, 1)
+		require.NoError(t, err)
+		defer freeStatements(formatted)
+	})
+
 	t.Run("unrecognized alter option is rejected", func(t *testing.T) {
 		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
 			`alter table source_db.child drop column parent_id`, 1)

@@ -181,6 +181,68 @@ func TestIssue27091KeepsWideOverloadIdentities(t *testing.T) {
 	})
 }
 
+func TestIssue27091UsesMigrationCompatibleMultiArgumentIdentity(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+
+		const (
+			database = "issue_27091_canonical_signature"
+			function = "f_two_args"
+		)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, db, "drop database if exists "+database)
+		}()
+		execSQLRequire(t, ctx, db, "drop database if exists "+database)
+		execSQLRequire(t, ctx, db, "create database "+database)
+		testutils.WaitDatabaseCreated(t, database, cn)
+
+		create := fmt.Sprintf(
+			"create function %s.%s(left_arg int, right_arg int) returns int language sql as '$1 + $2'",
+			database,
+			function,
+		)
+		execSQLRequire(t, ctx, db, create)
+
+		var runtimeIdentity, migrationIdentity string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select arg_types, cast(json_extract(args, '$[*].type') as char) "+
+				"from mo_catalog.mo_user_defined_function where db = ? and name = ?",
+			database,
+			function,
+		).Scan(&runtimeIdentity, &migrationIdentity))
+		require.Equal(t, `["int", "int"]`, runtimeIdentity)
+		require.Equal(t, migrationIdentity, runtimeIdentity)
+
+		_, err = db.ExecContext(ctx, create)
+		require.Error(t, err)
+		execSQLRequire(t, ctx, db, "create or replace function "+database+"."+function+
+			"(left_arg int, right_arg int) returns int language sql as '$1 + $2 + 1'")
+
+		var count, value int
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_user_defined_function where db = ? and name = ?",
+			database,
+			function,
+		).Scan(&count))
+		require.Equal(t, 1, count)
+		execSQLRequire(t, ctx, db, "use "+database)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select "+function+"(2, 3)",
+		).Scan(&value))
+		require.Equal(t, 6, value)
+	})
+}
+
 func issue27091WideFunctionArguments(lastType string) string {
 	const argumentCount = 105
 	arguments := make([]string, argumentCount)

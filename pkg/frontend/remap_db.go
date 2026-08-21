@@ -174,6 +174,9 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		remapDbInExpr(s.Cond, remap)
 	case *tree.LoopStmt:
 		remappable = remapDbInStatements(s.Body, remap)
+	case *tree.IterateStmt, *tree.LeaveStmt:
+		// These statements refer only to a local compound-statement label; they
+		// cannot retain a database or table identity.
 	case *tree.Declare:
 		remapDbInExpr(s.DefaultVal, remap)
 	case *tree.SetVar:

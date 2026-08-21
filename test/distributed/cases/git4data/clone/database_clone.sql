@@ -10,6 +10,8 @@ insert into s1 select * from generate_series(1,5)g;
 create procedure db0.p_answer() 'begin select 42 as answer; end';
 create procedure db0.p_double(in input_value int, out output_value int) 'begin set output_value = input_value * 2; end';
 create procedure db0.p_source_qualified() 'begin select count(*) as answer from db0.s1; end';
+create procedure db0.p_labeled_repeat() 'begin declare n int default 0; repeat_label: repeat set n = n + 1; select count(*) as answer from db0.s1; until n >= 1 end repeat repeat_label; end';
+create procedure db0.p_labeled_loop() 'begin loop_label: loop select count(*) as answer from db0.s1; if true then leave loop_label; end if; iterate loop_label; end loop loop_label; end';
 set sql_mode = 'PIPES_AS_CONCAT';
 create procedure db0.p_sql_mode() 'begin select ''a'' || ''b'' as answer; end';
 set sql_mode = default;
@@ -41,6 +43,8 @@ call db0_copy_1.p_answer();
 drop database db0;
 use db0_copy_0;
 call p_source_qualified();
+call p_labeled_repeat();
+call p_labeled_loop();
 select f_clone_answer();
 select * from v_clone_answer;
 
