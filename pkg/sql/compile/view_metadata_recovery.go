@@ -769,18 +769,23 @@ func (c *recoveryCompilerContext) ResolveSnapshotWithSnapshotName(
 }
 
 func (c *recoveryCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
-	for _, dependency := range c.dependencies {
-		if dependency.Snapshot != nil && dependency.Snapshot.TS != nil &&
-			dependency.Snapshot.TS.PhysicalTime == ts {
-			return true, nil
-		}
+	accountID, err := c.GetAccountId()
+	if err != nil {
+		return false, err
 	}
-	for _, snapshot := range c.legacySnapshots {
-		if snapshot.TS != nil && snapshot.TS.PhysicalTime == ts {
-			return true, nil
-		}
+	result, err := c.execCatalogQuery(fmt.Sprintf(
+		"select snapshot_id from %s.mo_snapshots where ts=%d limit 1",
+		catalog.MO_CATALOG, ts), accountID)
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	defer result.Close()
+	valid := false
+	result.ReadRows(func(rows int, _ []*vector.Vector) bool {
+		valid = rows > 0
+		return false
+	})
+	return valid, nil
 }
 
 func (c *recoveryCompilerContext) execCatalogQuery(

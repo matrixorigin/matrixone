@@ -743,10 +743,21 @@ func viewMetadataClosureInvalidationPageSQL(
 }
 
 // SnapshotViewMetadataInvalidationSQL returns one atomic reverse-closure
-// invalidation statement for Views bound to the exact persisted snapshot.
-func SnapshotViewMetadataInvalidationSQL(snapshotData string, generation uint64) string {
-	return viewMetadataClosureInvalidationSQL(fmt.Sprintf(
-		"d.snapshot_data='%s'", sqlquote.EscapeString(snapshotData)), generation)
+// invalidation statement for Views bound to the exact persisted snapshot. A
+// timestamp-only binding is invalidated only when this is the last snapshot
+// retaining that timestamp.
+func SnapshotViewMetadataInvalidationSQL(
+	snapshotData string,
+	snapshotTS int64,
+	invalidateTimestampBindings bool,
+	generation uint64,
+) string {
+	predicate := fmt.Sprintf("d.snapshot_data='%s'", sqlquote.EscapeString(snapshotData))
+	if invalidateTimestampBindings {
+		predicate += fmt.Sprintf(" or (d.snapshot_name='' and "+
+			"cast(json_unquote(json_extract(d.snapshot_data,'$.TS.PhysicalTime')) as bigint)=%d)", snapshotTS)
+	}
+	return viewMetadataClosureInvalidationSQL(predicate, generation)
 }
 
 // PublicationViewMetadataInvalidationSQL invalidates subscription Views bound

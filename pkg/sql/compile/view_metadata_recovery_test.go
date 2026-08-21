@@ -229,8 +229,17 @@ func TestRunViewMetadataRecoveryPageIsBoundedAndFair(t *testing.T) {
 }
 
 func TestRecoveryCompilerContextRestoresValidatedSnapshot(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	liveSnapshot := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+	liveSnapshot.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(liveSnapshot, 0, []string{"snapshot-id"}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		liveSnapshot.GetResult(), {},
+	}}
+	installViewMetadataTestExecutor(t, proc, exec)
 	snapshot := &planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 123}}
 	ctx := &recoveryCompilerContext{
+		compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
 		dependencies:    []plan2.ViewDependency{{SnapshotName: "daily", Snapshot: snapshot}},
 		legacySnapshots: map[string]*plan2.Snapshot{"daily": snapshot},
 	}
@@ -244,6 +253,60 @@ func TestRecoveryCompilerContextRestoresValidatedSnapshot(t *testing.T) {
 	valid, err = ctx.CheckTimeStampValid(124)
 	require.NoError(t, err)
 	require.False(t, valid)
+	require.Equal(t, []string{
+		"select snapshot_id from mo_catalog.mo_snapshots where ts=123 limit 1",
+		"select snapshot_id from mo_catalog.mo_snapshots where ts=124 limit 1",
+	}, exec.sqls)
+}
+
+func TestRecoveryCompilerContextRejectsStalePersistedTimestamp(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exec := &viewMetadataCleanupRecordingExecutor{}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctx := &recoveryCompilerContext{
+		compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
+		dependencies: []plan2.ViewDependency{{
+			Snapshot: &planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 456}},
+		}},
+	}
+
+	valid, err := ctx.CheckTimeStampValid(456)
+	require.NoError(t, err)
+	require.False(t, valid)
+	require.Equal(t,
+		[]string{"select snapshot_id from mo_catalog.mo_snapshots where ts=456 limit 1"}, exec.sqls)
+}
+
+func TestRecoveryCompilerContextAcceptsLiveTimestampWithoutPersistedDependency(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	liveSnapshot := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+	liveSnapshot.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(liveSnapshot, 0, []string{"snapshot-id"}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{liveSnapshot.GetResult()}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctx := &recoveryCompilerContext{
+		compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
+	}
+
+	valid, err := ctx.CheckTimeStampValid(456)
+	require.NoError(t, err)
+	require.True(t, valid)
+	require.Equal(t,
+		[]string{"select snapshot_id from mo_catalog.mo_snapshots where ts=456 limit 1"}, exec.sqls)
+}
+
+func TestRecoveryCompilerContextPropagatesTimestampCatalogError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expected := errors.New("snapshot catalog unavailable")
+	exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: expected}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctx := &recoveryCompilerContext{
+		compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
+	}
+
+	valid, err := ctx.CheckTimeStampValid(456)
+	require.False(t, valid)
+	require.ErrorIs(t, err, expected)
 }
 
 func TestViewDependencyNameKeyHonorsLowerCaseTableNames(t *testing.T) {
@@ -303,8 +366,16 @@ func TestTableAndDatabaseRestoreInvalidateAtRelationRemoval(t *testing.T) {
 }
 
 func TestBindingLifecycleInvalidationSQLUsesPersistedIdentity(t *testing.T) {
-	snapshotSQL := SnapshotViewMetadataInvalidationSQL(`{"ExtraInfo":{"Name":"odd snapshot"}}`, 7)
+	snapshotSQL := SnapshotViewMetadataInvalidationSQL(
+		`{"ExtraInfo":{"Name":"odd snapshot"}}`, 123, true, 7)
 	require.Contains(t, snapshotSQL,
+		`d.snapshot_data='{"ExtraInfo":{"Name":"odd snapshot"}}'`)
+	require.Contains(t, snapshotSQL, "d.snapshot_name='' and cast(json_unquote(json_extract("+
+		"d.snapshot_data,'$.TS.PhysicalTime')) as bigint)=123")
+	preservedTimestampSQL := SnapshotViewMetadataInvalidationSQL(
+		`{"ExtraInfo":{"Name":"odd snapshot"}}`, 123, false, 7)
+	require.NotContains(t, preservedTimestampSQL, "$.TS.PhysicalTime")
+	require.Contains(t, preservedTimestampSQL,
 		`d.snapshot_data='{"ExtraInfo":{"Name":"odd snapshot"}}'`)
 	require.NotContains(t, strings.ToLower(snapshotSQL), " like ")
 
@@ -319,7 +390,10 @@ func TestBindingLifecycleInvalidationSQLUsesPersistedIdentity(t *testing.T) {
 		"d.account_id=11 and d.subscription_name='odd name'")
 	accountSQL := AccountViewMetadataInvalidationSQL(13, 14)
 	require.Contains(t, accountSQL, "d.source_account_id=13")
-	for _, sql := range []string{snapshotSQL, publicationSQL, accountPublicationSQL, subscriptionSQL, accountSQL} {
+	for _, sql := range []string{
+		snapshotSQL, preservedTimestampSQL, publicationSQL,
+		accountPublicationSQL, subscriptionSQL, accountSQL,
+	} {
 		require.Contains(t, sql, "with recursive affected")
 		require.Contains(t, sql, " union select ")
 		require.NotContains(t, sql, "select distinct")
@@ -1065,7 +1139,9 @@ func TestRecoveryContextMissingSnapshotAndDependencyIdentity(t *testing.T) {
 	ctx.legacySnapshots["daily"] = &plan2.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 789}}
 	valid, err := ctx.CheckTimeStampValid(789)
 	require.NoError(t, err)
-	require.True(t, valid)
+	require.False(t, valid)
+	require.Len(t, exec.sqls, 2)
+	require.Contains(t, exec.sqls[1], "where ts=789 limit 1")
 }
 
 func TestRecoveryContextRestoresCatalogSnapshot(t *testing.T) {

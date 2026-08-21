@@ -668,12 +668,18 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 			if snapshotData, err = json.Marshal(boundSnapshot); err != nil {
 				return err
 			}
+			var invalidateTimestampBindings bool
+			if invalidateTimestampBindings, err = shouldInvalidateTimestampSnapshotBindings(
+				ctx, bh, record.snapshotId, record.ts); err != nil {
+				return err
+			}
 			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 			if err = bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
 				return err
 			}
 			if err = bh.Exec(process.WithSystemCTELimits(systemCtx), compile.SnapshotViewMetadataInvalidationSQL(
-				string(snapshotData), uint64(time.Now().UnixNano()))); err != nil {
+				string(snapshotData), record.ts, invalidateTimestampBindings,
+				uint64(time.Now().UnixNano()))); err != nil {
 				return err
 			}
 		}
@@ -689,6 +695,37 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("drop snapshot %s success", string(stmt.Name)))
 	return err
+}
+
+func shouldInvalidateTimestampSnapshotBindings(
+	ctx context.Context,
+	bh BackgroundExec,
+	droppedSnapshotID string,
+	snapshotTS int64,
+) (bool, error) {
+	query := fmt.Sprintf(
+		"select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id for update;",
+		snapshotTS)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, query); err != nil {
+		return false, err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			snapshotID, getErr := result.GetString(ctx, row, 0)
+			if getErr != nil {
+				return false, getErr
+			}
+			if snapshotID != droppedSnapshotID {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }
 
 func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnapShot) (stats statistic.StatsArray, err error) {
