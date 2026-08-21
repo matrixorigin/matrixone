@@ -1185,7 +1185,7 @@ func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {
 
 func TestDupOperatorTableFunctionPreservesProbeState(t *testing.T) {
 	op := table_function.NewArgument()
-	op.FuncName = "ivf_search"
+	op.FuncName = "unnest"
 	op.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 		{Tag: 8, UseMembershipFilter: true},
 	}

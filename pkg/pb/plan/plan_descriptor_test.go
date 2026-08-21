@@ -74,12 +74,12 @@ func TestPlanDescriptorContainsAsofFields(t *testing.T) {
 			continue
 		}
 		for _, field := range message.GetField() {
-			if field.GetName() == "asof_right_col" && field.GetNumber() == 85 {
+			if field.GetName() == "asof_right_col" && field.GetNumber() == 86 {
 				return
 			}
 		}
 	}
-	t.Fatal("plan descriptor missing Node.asof_right_col = 85")
+	t.Fatal("plan descriptor missing Node.asof_right_col = 86")
 }
 
 func TestGeneratedPlanDescriptorContainsAsofContract(t *testing.T) {
@@ -96,11 +96,11 @@ func TestGeneratedPlanDescriptorContainsAsofContract(t *testing.T) {
 		t.Fatal("generated descriptor missing Node")
 	}
 	for _, field := range node.GetField() {
-		if field.GetName() == "asof_right_col" && field.GetNumber() == 85 {
+		if field.GetName() == "asof_right_col" && field.GetNumber() == 86 {
 			return
 		}
 	}
-	t.Fatal("generated Node descriptor missing asof_right_col = 85")
+	t.Fatal("generated Node descriptor missing asof_right_col = 86")
 }
 
 func decodePlanDescriptor(t *testing.T, b []byte) *descriptor.FileDescriptorProto {

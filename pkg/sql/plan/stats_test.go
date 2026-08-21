@@ -24,7 +24,6 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
@@ -374,23 +373,6 @@ func makeQueryWithScan(tableType string, rowsize float64, blockNum int32) *planp
 	}
 }
 
-func makeQueryWithScanStats(tableType string, rowsize float64, tableCnt float64, blockNum int32, nodes ...*planpb.Node) *planpb.Query {
-	scan := &planpb.Node{
-		NodeType: planpb.Node_TABLE_SCAN,
-		TableDef: &planpb.TableDef{TableType: tableType},
-		Stats: &planpb.Stats{
-			Rowsize:  rowsize,
-			TableCnt: tableCnt,
-			BlockNum: blockNum,
-		},
-	}
-	qryNodes := append([]*planpb.Node{scan}, nodes...)
-	return &planpb.Query{
-		Nodes: qryNodes,
-		Steps: []int32{0},
-	}
-}
-
 func makeLimitExprForStatsTest() *planpb.Expr {
 	return &planpb.Expr{
 		Expr: &planpb.Expr_Lit{
@@ -398,71 +380,6 @@ func makeLimitExprForStatsTest() *planpb.Expr {
 				Value: &planpb.Literal_U64Val{U64Val: 10},
 			},
 		},
-	}
-}
-
-func makeFunctionScanForStatsTest(funcName string, limit *planpb.Expr) *planpb.Node {
-	param := &planpb.IndexReaderParam{Limit: limit}
-	if funcName == ivfflatplan.IVFFLATSearchFuncName {
-		param.OrigFuncName = "l2_distance"
-	}
-	return &planpb.Node{
-		NodeType: planpb.Node_FUNCTION_SCAN,
-		Stats:    &planpb.Stats{},
-		TableDef: &planpb.TableDef{
-			TableType: "func_table",
-			TblFunc:   &planpb.TableFunction{Name: funcName},
-		},
-		IndexReaderParam: param,
-		Children:         []int32{0},
-	}
-}
-
-func makeShuffleJoinForStatsTest(exprBased bool) *planpb.Node {
-	right := &planpb.Expr{
-		Expr: &planpb.Expr_Col{
-			Col: &planpb.ColRef{ColPos: 1},
-		},
-	}
-	if exprBased {
-		right = &planpb.Expr{
-			Expr: &planpb.Expr_Lit{
-				Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}},
-			},
-		}
-	}
-	return &planpb.Node{
-		NodeType: planpb.Node_JOIN,
-		Stats: &planpb.Stats{
-			HashmapStats: &planpb.HashMapStats{
-				Shuffle:       true,
-				ShuffleColIdx: 0,
-			},
-		},
-		OnList: []*planpb.Expr{
-			{
-				Expr: &planpb.Expr_F{
-					F: &planpb.Function{
-						Args: []*planpb.Expr{
-							{
-								Expr: &planpb.Expr_Col{
-									Col: &planpb.ColRef{ColPos: 0},
-								},
-							},
-							right,
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func makeIvfEntriesOrderByLimitParamForStatsTest() *planpb.IndexReaderParam {
-	return &planpb.IndexReaderParam{
-		OrderBy:      []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-		Limit:        makeLimitExprForStatsTest(),
-		OrigFuncName: "l2_distance",
 	}
 }
 
@@ -498,465 +415,52 @@ func TestGetExecType_NonVectorTable_NotForcedByRowsize(t *testing.T) {
 	}
 }
 
-func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanUsesMultiCNEvenWithTinyStats(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		1,
-		1,
-		1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_MULTICN, got)
-}
-
-func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanDoesNotRequireStatsEstimate(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		0,
-		0,
-		1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_MULTICN, got)
-}
-
-func TestGetExecType_IvfSearchEntries_RowsizeShortcutDoesNotDowngradeMultiCN(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		float64(RowSizeThreshold+1),
-		1,
-		LargeBlockThresholdForOneCN+1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_MULTICN, got)
-}
-
-func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanMultiCNCappedForDDL(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		1,
-		1,
-		1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, true, false)
-
-	require.Equal(t, ExecTypeAP_ONECN, got)
-}
-
-func TestGetExecType_IvfSearchFunctionScanUsesMultiCNEvenWithTinyStats(t *testing.T) {
-	q := &planpb.Query{
-		Nodes: []*planpb.Node{
-			makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
-		},
+func TestGetExecType_VectorIndexScanUsesMultiCN(t *testing.T) {
+	query := &planpb.Query{
 		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeId:          0,
+			NodeType:        planpb.Node_VECTOR_INDEX_SCAN,
+			Stats:           &planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1},
+			VectorIndexScan: &planpb.VectorIndexScan{},
+		}},
 	}
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_MULTICN, got)
+	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(query, false, false))
 }
 
-func TestGetExecType_IvfSearchFunctionScanMultiCNCappedForDDL(t *testing.T) {
-	q := &planpb.Query{
-		Nodes: []*planpb.Node{
-			makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
-		},
-		Steps: []int32{0},
-	}
-
-	got := GetExecType(q, true, false)
-
-	require.Equal(t, ExecTypeAP_ONECN, got)
-}
-
-func TestGetExecType_IvfSearchFunctionScanRespectsForceOneCN(t *testing.T) {
-	q := &planpb.Query{
-		Nodes: []*planpb.Node{
-			makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
-		},
-		Steps: []int32{0},
-	}
-	q.Nodes[0].Stats.ForceOneCN = true
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_ONECN, got)
-}
-
-func TestGetExecType_IvfSearchFunctionScanWithNormalShuffleIsTraversalOrderIndependent(t *testing.T) {
-	tests := []struct {
-		name     string
-		ivfFirst bool
-	}{
-		{name: "ivf before shuffle", ivfFirst: true},
-		{name: "shuffle before ivf"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ivf := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
-			shuffle := makeShuffleJoinForStatsTest(false)
-			nodes := []*planpb.Node{shuffle, ivf}
-			if tt.ivfFirst {
-				nodes = []*planpb.Node{ivf, shuffle}
-			}
-			q := &planpb.Query{Nodes: nodes, Steps: []int32{0}}
-
-			got := GetExecType(q, false, false)
-
-			require.Equal(t, ExecTypeAP_MULTICN, got)
-		})
-	}
-}
-
-func TestGetExecType_IvfSearchFunctionScanWithShuffleKeepsHardOneCNBlockers(t *testing.T) {
-	tests := []struct {
-		name             string
-		txnHaveDDL       bool
-		exprBasedShuffle bool
-		forceOneCN       bool
-	}{
-		{name: "transaction DDL or write restriction", txnHaveDDL: true},
-		{name: "expression based shuffle", exprBasedShuffle: true},
-		{name: "explicit ForceOneCN", forceOneCN: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ivf := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
-			ivf.Stats.ForceOneCN = tt.forceOneCN
-			q := &planpb.Query{
-				Nodes: []*planpb.Node{ivf, makeShuffleJoinForStatsTest(tt.exprBasedShuffle)},
-				Steps: []int32{0},
-			}
-
-			got := GetExecType(q, tt.txnHaveDDL, false)
-
-			require.Equal(t, ExecTypeAP_ONECN, got)
-		})
-	}
-}
-
-func TestGetExecType_ForceOneCNPrecedesLargeStatsForEveryTraversalOrder(t *testing.T) {
-	largeScan := func(forceOneCN bool) *planpb.Node {
-		return &planpb.Node{
-			NodeType: planpb.Node_TABLE_SCAN,
-			TableDef: &planpb.TableDef{},
-			Stats: &planpb.Stats{
-				BlockNum:   int32(BlockThresholdForOneCN + 1),
-				Cost:       float64(costThresholdForOneCN + 1),
-				ForceOneCN: forceOneCN,
-			},
+func TestGetExecType_VectorIndexScanRespectsOneCNAndDDL(t *testing.T) {
+	makeQuery := func(force bool) *planpb.Query {
+		return &planpb.Query{
+			Steps: []int32{0},
+			Nodes: []*planpb.Node{{
+				NodeId:          0,
+				NodeType:        planpb.Node_VECTOR_INDEX_SCAN,
+				Stats:           &planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1, ForceOneCN: force},
+				VectorIndexScan: &planpb.VectorIndexScan{},
+			}},
 		}
 	}
-	forcedIvf := func() *planpb.Node {
-		n := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
-		n.Stats.ForceOneCN = true
-		return n
-	}
-
-	tests := []struct {
-		name  string
-		nodes []*planpb.Node
-	}{
-		{name: "large ordinary scan before forced IVF", nodes: []*planpb.Node{largeScan(false), forcedIvf()}},
-		{name: "forced IVF before large ordinary scan", nodes: []*planpb.Node{forcedIvf(), largeScan(false)}},
-		{name: "large forced IVF scan", nodes: []*planpb.Node{func() *planpb.Node {
-			n := forcedIvf()
-			n.Stats.BlockNum = int32(BlockThresholdForOneCN + 1)
-			n.Stats.Cost = float64(costThresholdForOneCN + 1)
-			return n
-		}()}},
-		{name: "large forced ordinary scan", nodes: []*planpb.Node{largeScan(true)}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := GetExecType(&planpb.Query{Nodes: tt.nodes, Steps: []int32{0}}, false, false)
-			require.Equal(t, ExecTypeAP_ONECN, got)
-		})
-	}
+	require.Equal(t, ExecTypeAP_ONECN, GetExecType(makeQuery(true), false, false))
+	require.Equal(t, ExecTypeAP_ONECN, GetExecType(makeQuery(false), true, false))
 }
 
-func TestGetExecType_ProductionIvfPlanShapeUsesMultiCNWithoutHint(t *testing.T) {
-	baseScan := &planpb.Node{
-		NodeType: planpb.Node_TABLE_SCAN,
-		TableDef: &planpb.TableDef{},
-		Stats: &planpb.Stats{
-			BlockNum: 50,
-			Cost:     400010,
+func TestDetermineBuildSidePreservesDeclaredRuntimeFilterDependency(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+	builder.qry.Nodes = []*planpb.Node{
+		{NodeId: 0, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: &planpb.Stats{Outcnt: 2}},
+		{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{Outcnt: 100}},
+		{
+			NodeId:                 2,
+			NodeType:               planpb.Node_JOIN,
+			JoinType:               planpb.Node_INNER,
+			Children:               []int32{0, 1},
+			Stats:                  &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			RuntimeFilterBuildList: []*planpb.RuntimeFilterSpec{{Tag: 1, UseMembershipFilter: true}},
 		},
 	}
-	ivf := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
-	ivf.Stats.Cost = 0
-	join := makeShuffleJoinForStatsTest(false)
-	join.Stats.BlockNum = 50
-	join.Stats.Cost = 400010
-
-	for _, nodes := range [][]*planpb.Node{
-		{baseScan, ivf, join},
-		{baseScan, join, ivf},
-		{join, ivf, baseScan},
-		{join, baseScan, ivf},
-		{ivf, baseScan, join},
-		{ivf, join, baseScan},
-	} {
-		got := GetExecType(&planpb.Query{Nodes: nodes, Steps: []int32{0}}, false, false)
-		require.Equal(t, ExecTypeAP_MULTICN, got)
-	}
-}
-
-func TestGetExecType_IvfSearchEntries_MultiCNCappedForExprBasedShuffle(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		1,
-		1,
-		1,
-		&planpb.Node{
-			NodeType: planpb.Node_JOIN,
-			Stats: &planpb.Stats{
-				HashmapStats: &planpb.HashMapStats{
-					Shuffle:       true,
-					ShuffleColIdx: 0,
-				},
-			},
-			OnList: []*planpb.Expr{
-				{
-					Expr: &planpb.Expr_F{
-						F: &planpb.Function{
-							Args: []*planpb.Expr{
-								{
-									Expr: &planpb.Expr_Col{
-										Col: &planpb.ColRef{ColPos: 0},
-									},
-								},
-								{
-									Expr: &planpb.Expr_Lit{
-										Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeAP_ONECN, got)
-}
-
-func TestGetExecType_IvfSearchEntries_MultiCNCappedForDDLEvenWithManyBlocks(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		float64(RowSizeThreshold+1),
-		500*1024,
-		LargeBlockThresholdForMultiCN+1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, true, false)
-
-	require.Equal(t, ExecTypeAP_ONECN, got)
-}
-
-func TestGetExecType_IvfSearchEntries_InternalIndexReaderScanRequiresSearchShape(t *testing.T) {
-	tests := []struct {
-		name  string
-		param *planpb.IndexReaderParam
-	}{
-		{
-			name: "nil index reader param",
-		},
-		{
-			name:  "limit only is not enough",
-			param: &planpb.IndexReaderParam{Limit: makeLimitExprForStatsTest()},
-		},
-		{
-			name:  "order only is not enough",
-			param: &planpb.IndexReaderParam{OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}}},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			q := makeQueryWithScanStats(
-				catalog.SystemSI_IVFFLAT_TblType_Entries,
-				1,
-				1,
-				1,
-			)
-			q.Nodes[0].IndexReaderParam = tt.param
-
-			got := GetExecType(q, false, false)
-
-			require.Equal(t, ExecTypeTP, got)
-		})
-	}
-}
-
-func TestGetExecType_IvfSearchEntries_FunctionScanDoesNotPromoteUnrelatedEntriesScan(t *testing.T) {
-	searchNode := makeFunctionScanForStatsTest("generate_series", makeLimitExprForStatsTest())
-	q := makeQueryWithScanStats(
-		catalog.SystemSI_IVFFLAT_TblType_Entries,
-		1,
-		1,
-		1,
-		searchNode,
-	)
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeTP, got)
-}
-
-func TestGetExecType_IvfSearchMultiCN_DoesNotApplyToOtherTableTypes(t *testing.T) {
-	q := makeQueryWithScanStats(
-		catalog.Hnsw_TblType_Storage,
-		1,
-		1,
-		1,
-	)
-	q.Nodes[0].IndexReaderParam = makeIvfEntriesOrderByLimitParamForStatsTest()
-
-	got := GetExecType(q, false, false)
-
-	require.Equal(t, ExecTypeTP, got)
-}
-
-func TestIsIvfSearchEntriesTableScan_UnhappyPaths(t *testing.T) {
-	require.False(t, isIvfSearchEntriesTableScan(nil))
-	require.False(t, isIvfSearchEntriesTableScan(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}))
-	require.False(t, isIvfSearchEntriesTableScan(&planpb.Node{
-		NodeType: planpb.Node_TABLE_SCAN,
-		TableDef: &planpb.TableDef{TableType: catalog.Hnsw_TblType_Storage},
-	}))
-	require.True(t, isIvfSearchEntriesTableScan(&planpb.Node{
-		NodeType: planpb.Node_TABLE_SCAN,
-		TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-	}))
-}
-
-func TestIsIvfEntriesIndexReaderScan_UnhappyPaths(t *testing.T) {
-	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{}))
-	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{
-		IndexReaderParam: &planpb.IndexReaderParam{Limit: makeLimitExprForStatsTest()},
-	}))
-	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{
-		IndexReaderParam: &planpb.IndexReaderParam{OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}}},
-	}))
-	require.False(t, isIvfEntriesIndexReaderScan(&planpb.Node{
-		IndexReaderParam: &planpb.IndexReaderParam{
-			OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-			Limit:   makeLimitExprForStatsTest(),
-		},
-	}))
-	require.True(t, isIvfEntriesIndexReaderScan(&planpb.Node{
-		IndexReaderParam: &planpb.IndexReaderParam{
-			OrigFuncName: "l2_distance",
-		},
-	}))
-}
-
-func TestIsIvfSearchEntriesInternalScan(t *testing.T) {
-	tests := []struct {
-		name string
-		node *planpb.Node
-		want bool
-	}{
-		{
-			name: "nil node",
-		},
-		{
-			name: "wrong table type",
-			node: &planpb.Node{
-				NodeType: planpb.Node_TABLE_SCAN,
-				TableDef: &planpb.TableDef{TableType: catalog.Hnsw_TblType_Storage},
-				IndexReaderParam: &planpb.IndexReaderParam{
-					OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-					Limit:   makeLimitExprForStatsTest(),
-				},
-			},
-		},
-		{
-			name: "not table scan",
-			node: &planpb.Node{
-				NodeType: planpb.Node_VALUE_SCAN,
-				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-				IndexReaderParam: &planpb.IndexReaderParam{
-					OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-					Limit:   makeLimitExprForStatsTest(),
-				},
-			},
-		},
-		{
-			name: "limit only is not internal search",
-			node: &planpb.Node{
-				NodeType:         planpb.Node_TABLE_SCAN,
-				TableDef:         &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-				IndexReaderParam: &planpb.IndexReaderParam{Limit: makeLimitExprForStatsTest()},
-			},
-		},
-		{
-			name: "order by limit without ivf marker",
-			node: &planpb.Node{
-				NodeType: planpb.Node_TABLE_SCAN,
-				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-				IndexReaderParam: &planpb.IndexReaderParam{
-					OrderBy: []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-					Limit:   makeLimitExprForStatsTest(),
-				},
-			},
-		},
-		{
-			name: "valid original distance function without limit",
-			node: &planpb.Node{
-				NodeType: planpb.Node_TABLE_SCAN,
-				TableDef: &planpb.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-				IndexReaderParam: &planpb.IndexReaderParam{
-					OrigFuncName: "l2_distance",
-				},
-			},
-			want: true,
-		},
-		{
-			name: "direct ivf search function without rewrite marker",
-			node: func() *planpb.Node {
-				n := makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest())
-				n.IndexReaderParam.OrigFuncName = ""
-				return n
-			}(),
-		},
-		{
-			name: "valid ivf search function scan",
-			node: makeFunctionScanForStatsTest(ivfflatplan.IVFFLATSearchFuncName, makeLimitExprForStatsTest()),
-			want: true,
-		},
-		{
-			name: "unrelated function scan",
-			node: makeFunctionScanForStatsTest("generate_series", makeLimitExprForStatsTest()),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, IsIvfSearchEntriesInternalScan(tt.node))
-		})
-	}
+	builder.determineBuildAndProbeSide(2, false)
+	require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+	require.False(t, builder.qry.Nodes[2].IsRightJoin)
 }
 
 func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {

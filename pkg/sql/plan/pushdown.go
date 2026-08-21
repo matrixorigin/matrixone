@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -616,7 +615,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 			}
 		}
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		downFilters := make([]*plan.Expr, 0)
 		selfFilters := make([]*plan.Expr, 0)
 		for _, filter := range filters {
@@ -844,13 +843,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	for _, childID := range node.Children {
 		builder.pushdownVectorIndexTopToTableScan(childID)
 	}
-	if node.NodeType == plan.Node_TABLE_SCAN && node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries {
-		if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
-			if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
-				applyIvfReaderParamToEntriesScan(node, readerParam)
-			}
-		}
-	}
 	if builder.optimizerHints != nil && builder.optimizerHints.pushDownLimitToScan != 0 {
 		return
 	}
@@ -911,11 +903,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		},
 		Limit: DeepCopyExpr(node.Limit),
 	}
-	if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
-		if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
-			applyIvfReaderParamToEntriesScan(scanNode, readerParam)
-		}
-	}
 
 	// if there is a limit, outcnt is limit number
 	scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
@@ -934,21 +921,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	}
 
 	builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
-}
-
-func applyIvfReaderParamToEntriesScan(scanNode *plan.Node, readerParam *plan.IndexReaderParam) {
-	if scanNode == nil || scanNode.NodeType != plan.Node_TABLE_SCAN ||
-		scanNode.GetTableDef().GetTableType() != catalog.SystemSI_IVFFLAT_TblType_Entries ||
-		readerParam == nil || readerParam.GetOrigFuncName() == "" {
-		return
-	}
-	if scanNode.IndexReaderParam == nil {
-		scanNode.IndexReaderParam = &plan.IndexReaderParam{}
-	}
-	scanNode.IndexReaderParam.OrigFuncName = readerParam.OrigFuncName
-	scanNode.IndexReaderParam.DistRange = readerParam.DistRange
-	scanNode.IndexReaderParam.PartitionCnCnt = readerParam.PartitionCnCnt
-	scanNode.IndexReaderParam.PartitionCnIdx = readerParam.PartitionCnIdx
 }
 
 // exprColRefsSubsetOf returns true when every column reference in expr

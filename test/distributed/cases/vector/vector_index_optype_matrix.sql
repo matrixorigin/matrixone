@@ -10,7 +10,7 @@
 --   vector_cosine_ops -> cosine_distance
 --
 -- Each block asserts three things: the served function reaches the index
--- (ivf_search / hnsw_search in the plan), a non-served function does not, and
+-- (VECTOR_INDEX_SCAN / hnsw_search in the plan), a non-served function does not, and
 -- the SCORE the index returns equals the brute-force distance — t_ref is the
 -- same rows with no index, so the two projections must print identical values.
 -- The score is what the rewrite substitutes for the distance expression, so a
@@ -42,19 +42,19 @@ insert into tc_ref select a, v from tc;
 create index ivf_l2 using ivfflat on t(v) lists=2 op_type 'vector_l2_ops';
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from t order by l2_distance(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("Table Function on ivf_search", false)
+-- @regex("Vector Index Scan", false)
 explain select a from t order by l1_distance(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("Table Function on ivf_search", false)
+-- @regex("Vector Index Scan", false)
 explain select a from t order by inner_product(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("Table Function on ivf_search", false)
+-- @regex("Vector Index Scan", false)
 explain select a from t order by cosine_distance(v,'[1,1,1,1]') limit 3;
 
 -- score validity: index score == brute force, for BOTH L2 forms.
@@ -75,13 +75,13 @@ alter table t drop index ivf_l2;
 create index ivf_l2sq using ivfflat on t(v) lists=2 op_type 'vector_l2sq_ops';
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from t order by l2_distance(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("Table Function on ivf_search", false)
+-- @regex("Vector Index Scan", false)
 explain select a from t order by cosine_distance(v,'[1,1,1,1]') limit 3;
 
 select a, l2_distance_sq(v,'[1,1,1,1]') as dsq from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
@@ -98,10 +98,10 @@ alter table t drop index ivf_l2sq;
 create index ivf_l1 using ivfflat on t(v) lists=2 op_type 'vector_l1_ops';
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from t order by l1_distance(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("Table Function on ivf_search", false)
+-- @regex("Vector Index Scan", false)
 explain select a from t order by l2_distance(v,'[1,1,1,1]') limit 3;
 
 -- L1 is NOT squared, so no transform may be applied: sum|a-b| = 8 for [3,3,3,3].
@@ -116,10 +116,10 @@ alter table t drop index ivf_l1;
 create index ivf_ip using ivfflat on t(v) lists=2 op_type 'vector_ip_ops';
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from t order by inner_product(v,'[1,1,1,1]') limit 3;
 -- @separator:table
--- @regex("Table Function on ivf_search", false)
+-- @regex("Vector Index Scan", false)
 explain select a from t order by l2_distance(v,'[1,1,1,1]') limit 3;
 
 select a, inner_product(v,'[1,1,1,1]') as d from t order by inner_product(v,'[1,1,1,1]') limit 3;
@@ -131,10 +131,10 @@ alter table t drop index ivf_ip;
 create index ivf_cos using ivfflat on tc(v) lists=2 op_type 'vector_cosine_ops';
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from tc order by cosine_distance(v,'[1,0,0,0]') limit 3;
 -- @separator:table
--- @regex("Table Function on ivf_search", false)
+-- @regex("Vector Index Scan", false)
 explain select a from tc order by l2_distance(v,'[1,0,0,0]') limit 3;
 
 -- round(d,4): row a=1 IS the query vector, so its cosine distance is the degenerate 0.
