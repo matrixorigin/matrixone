@@ -752,7 +752,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			return false, nil, nil, err
 		}
 
-	case *tree.SelectClause:
+	case *tree.SelectClause, *tree.UnionClause:
 		astSlt = stmt.Rows
 
 		subCtx := NewBindContext(builder, bindCtx)

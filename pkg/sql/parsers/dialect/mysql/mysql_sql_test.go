@@ -4316,6 +4316,12 @@ var (
 			input:  "drop table if exists ssb CASCADE",
 			output: "drop table if exists ssb",
 		}, {
+			input:  "drop view if exists ssb RESTRICT",
+			output: "drop view if exists ssb",
+		}, {
+			input:  "drop view if exists ssb CASCADE",
+			output: "drop view if exists ssb",
+		}, {
 			input: "create table t1 (a int) AUTOEXTEND_SIZE = 10",
 		}, {
 			input:  "create table t1 (a int) ENGINE_ATTRIBUTE = 'abc'",
