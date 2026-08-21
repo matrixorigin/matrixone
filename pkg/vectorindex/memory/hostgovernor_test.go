@@ -173,3 +173,69 @@ func TestReserveHostMemory_LedgerExactUnderChurn(t *testing.T) {
 	wg.Wait()
 	require.Zero(t, HostReservedBytes())
 }
+
+// TestReserveHostMemory_HoldingPastAllocationDoubleCounts pins the lifetime
+// contract by measuring what breaking it costs. A claim held after its memory is
+// allocated is counted twice -- once in the ledger, once in the availability it
+// already lowered -- and the headroom lost is the whole claim.
+//
+// This is why the builders release as soon as InitEmpty returns instead of at
+// the end of the build. If someone lengthens that lifetime again, this test
+// documents the bill.
+func TestReserveHostMemory_HoldingPastAllocationDoubleCounts(t *testing.T) {
+	const total = 512
+	const claim = 100
+
+	// Phase 1: the build is admitted while nothing is allocated yet.
+	withHostAvail(t, total, true)
+	held, err := ReserveHostMemory(claim, "build1")
+	require.NoError(t, err)
+
+	// Phase 2: the build has now allocated its 100, so availability reflects it.
+	hostAvailFn = func() (uint64, bool) { return total - claim, true }
+	budget := uint64(total-claim) / hostBudgetDenominator * hostBudgetNumerator // 309
+
+	// Still holding: the same 100 is charged again, so a second build that fits
+	// the real budget is refused.
+	_, err = ReserveHostMemory(budget, "build2")
+	require.Error(t, err, "claim held past allocation double counts")
+
+	// Committing at the allocation -- what the builders now do -- makes the same
+	// request fit, because availability alone already accounts for the 100.
+	held.Release()
+	second, err := ReserveHostMemory(budget, "build2")
+	require.NoError(t, err, "after release the second build sees the true budget")
+	second.Release()
+	require.Zero(t, HostReservedBytes())
+}
+
+// TestHostReservation_DeferredAndExplicitReleasePair checks the shape every call
+// site uses: a deferred Release covering the paths that never allocate, plus an
+// explicit one right after the allocation. Whichever runs first wins and the
+// other is a no-op, so no flag is needed to tell success from error.
+func TestHostReservation_DeferredAndExplicitReleasePair(t *testing.T) {
+	withHostAvail(t, 1000, true)
+
+	// Success path: Commit, then the deferred Release must not double-subtract.
+	r, err := ReserveHostMemory(300, "ok")
+	require.NoError(t, err)
+	r.Release() // explicit, right after the "allocation"
+	require.Zero(t, HostReservedBytes())
+	r.Release() // the deferred one
+	require.Zero(t, HostReservedBytes(), "the second Release must be a no-op")
+
+	// Error path: only the deferred Release runs, and a later Commit is inert.
+	r2, err := ReserveHostMemory(300, "failed")
+	require.NoError(t, err)
+	r2.Release() // only the deferred one runs
+	require.Zero(t, HostReservedBytes())
+	r2.Release()
+	require.Zero(t, HostReservedBytes())
+
+	// Both orders leave the ledger exactly empty, so the next build sees the
+	// full budget rather than a stranded claim.
+	full, err := ReserveHostMemory(750, "next")
+	require.NoError(t, err)
+	full.Release()
+	require.Zero(t, HostReservedBytes())
+}

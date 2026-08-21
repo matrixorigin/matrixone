@@ -49,11 +49,22 @@ import (
 //   - Budget is 75% (hostBudgetNumerator/Denominator), matching HostRowsFitting
 //     so the admission and the capacity model cannot disagree.
 //
-// Double counting is intentional and conservative: once a claim's memory is
-// actually allocated, the live availability figure drops AND the claim is still
-// on the ledger, so a concurrent caller sees the cost twice until release. A
-// governor that under-counts admits an OOM; one that over-counts refuses a build
-// that would have fit, which is recoverable.
+// LIFETIME CONTRACT -- hold a claim across the ALLOCATION, not for the lifetime
+// of the memory. Once the bytes are actually allocated, the live availability
+// figure has already dropped by that amount, so a claim still on the ledger is
+// counted TWICE: once in `inflight`, once in the lowered `avail`. The cost is
+// not a rounding error, it is the full size of the claim, for as long as it is
+// held:
+//
+//	total 512G, a build claims 100G and allocates it
+//	  avail  -> 412G, budget -> 309G, inflight -> 100G
+//	  a second build can now get 209G, when 309G is genuinely free
+//
+// For a build that runs for tens of minutes that is tens of minutes of a
+// concurrent build being refused memory that exists. So callers release as soon
+// as the allocation returns; the window the ledger has to cover is only the one
+// where a decision has been made and the memory not yet taken, which is exactly
+// the window the live figure cannot see.
 // ---------------------------------------------------------------------------
 
 // hostReserved is the per-CN ledger of host bytes claimed but not yet released.
@@ -81,10 +92,20 @@ func (r *HostReservation) Bytes() uint64 {
 	return r.bytes
 }
 
-// Release returns the claim to the ledger. Idempotent: callers are expected to
-// both `defer r.Release()` for the error/panic path and call it explicitly on
-// the success path, so the memory leaves the ledger as soon as it is really
-// freed rather than at function exit.
+// Release drops the claim from the ledger. WHERE it is called is the whole
+// contract: immediately after the allocation returns, not when the memory is
+// finally freed. See the lifetime note above -- a claim held past the allocation
+// is counted twice, and the headroom lost is its full size.
+//
+// Idempotent, so the canonical shape needs no flag to tell the paths apart:
+//
+//	claim, err := ReserveHostMemory(n, "who")
+//	if err != nil { return err }
+//	defer claim.Release()   // covers an early return or a panic
+//	... allocate ...
+//	claim.Release()         // allocated: stop counting it now
+//
+// whichever runs first wins and the other is a no-op.
 func (r *HostReservation) Release() {
 	if r == nil {
 		return
@@ -94,7 +115,7 @@ func (r *HostReservation) Release() {
 			return
 		}
 		// Subtracting via Add(-x) on the unsigned counter is exact as long as
-		// every claim is released once, which once.Do guarantees.
+		// every claim is dropped once, which once.Do guarantees.
 		hostReserved.Add(^(r.bytes - 1))
 		r.bytes = 0
 	})

@@ -74,10 +74,6 @@ type IvfpqBuild[B, Q cuvs.VectorType] struct {
 	// by the create TVF for the same reason as deviceBytesPerRow. 0 means no
 	// claim is taken, which keeps direct API users and tests as they were.
 	hostBytesPerRow uint64
-	// hostClaim covers the CURRENT sub-index's host buffers. Exactly one
-	// sub-index is being filled at a time, so one claim tracks the whole
-	// resident host footprint of this builder.
-	hostClaim *memory.HostReservation
 
 	count int64
 	idBuf [1]int64
@@ -175,14 +171,8 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 		b.count = 0
 		// Pack to a temp tar and release the GPU/host residency now. ToSql() calls
 		// saveToFile again later, which is a no-op once Index == nil.
-		serr := full.saveToFile()
-		// saveToFile drops this sub-index's GPU/host residency, so the host claim
-		// is returned here rather than at build end -- otherwise a rotating build
-		// would hold every sub-index's host budget at once. On failure the build
-		// aborts and Destroy releases anyway; Release is idempotent.
-		b.releaseHostClaim()
-		if serr != nil {
-			return nil, serr
+		if err := full.saveToFile(); err != nil {
+			return nil, err
 		}
 	}
 
@@ -195,14 +185,9 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 		if herr != nil {
 			return nil, herr
 		}
-		// Roll back on EVERY exit that does not hand the claim to b.hostClaim,
-		// including a panic out of the C++ constructor.
-		committed := false
-		defer func() {
-			if !committed {
-				hostClaim.Release()
-			}
-		}()
+		// Roll back if we never reach the allocation -- error return or a panic
+		// out of the C++ constructor. The explicit Release below makes this a no-op.
+		defer hostClaim.Release()
 
 		key := b.createKey(len(b.indexes))
 		m, err := NewIvfpqModelForBuild[B, Q](key, b.idxcfg, b.nthread, b.devices)
@@ -219,11 +204,16 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 				return nil, err
 			}
 		}
+		// The buffers are allocated now, so the ledger must stop counting them:
+		// they are already visible in MemoryAvailableIncludingCache, and holding
+		// the claim for the rest of the build would charge a concurrent build this
+		// claim's worth of headroom for as long as the build runs -- tens of
+		// minutes for a large index. The deferred Release above then does nothing.
+		hostClaim.Release()
+
 		m.TmpDir = b.tmpDir
 		b.current = m
 		b.count = 0
-		b.hostClaim = hostClaim
-		committed = true
 	}
 
 	return b.current, nil
@@ -323,9 +313,6 @@ func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 
 func (b *IvfpqBuild[B, Q]) Destroy() error {
 	var errs error
-	// Return the host claim first: it must leave the ledger even if a Destroy
-	// below fails, or an aborted build would strand the budget for the CN's life.
-	b.releaseHostClaim()
 	if b.current != nil {
 		if err := b.current.Destroy(); err != nil {
 			errs = errors.Join(errs, err)
@@ -377,7 +364,9 @@ func (b *IvfpqBuild[B, Q]) SetHostBytesPerRow(perRow uint64) {
 // eagerly. HostRowsFitting only answers "does it fit" from a snapshot, which two
 // concurrent CREATE INDEX statements both pass before either allocates; the
 // claim is what makes that decision exclusive. It is taken BEFORE InitEmpty,
-// whose native constructor performs the capacity-sized resize.
+// whose native constructor performs the capacity-sized resize, and dropped as
+// soon as that resize returns -- see the call site for why holding it longer
+// double-counts.
 //
 // Returns a no-op when the per-row cost was never supplied or the capacity is
 // zero: ReserveHostMemory refuses a zero claim by design and there is nothing
@@ -387,15 +376,6 @@ func (b *IvfpqBuild[B, Q]) reserveBuildHost(rows int64) (*memory.HostReservation
 		return nil, nil
 	}
 	return memory.ReserveHostMemory(uint64(rows)*b.hostBytesPerRow, "ivfpq build")
-}
-
-// releaseHostClaim returns the current sub-index's host claim. Safe to call when
-// no claim is held; Release itself is idempotent.
-func (b *IvfpqBuild[B, Q]) releaseHostClaim() {
-	if b.hostClaim != nil {
-		b.hostClaim.Release()
-		b.hostClaim = nil
-	}
 }
 
 // reserveBuildVRAM claims what this sub-index build is about to allocate, in the
