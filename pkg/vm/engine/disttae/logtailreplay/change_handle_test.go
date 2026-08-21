@@ -182,6 +182,125 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 	})
 }
 
+func TestQuickNextFiltersUsingLogicalPrimaryKeyIndex(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	data := batch.NewWithSize(3)
+	data.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	data.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	data.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(data.Vecs[0], int32(7), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[1], int32(1), false, mp))
+	require.NoError(t, vector.AppendFixed(data.Vecs[2], types.BuildTS(10, 0), false, mp))
+	data.SetRowCount(1)
+
+	ch := &ChangeHandler{coarseMaxRow: 0, primaryIdx: 1}
+	dataHandle := &baseHandle{changesHandle: ch}
+	dataHandle.aobjHandle = &AObjectHandle{
+		currentBatch: data,
+		batchLength:  1,
+		mp:           mp,
+		p:            dataHandle,
+		start:        types.BuildTS(1, 0),
+		end:          types.BuildTS(100, 0),
+	}
+	dataHandle.cnObjectHandle = NewCNObjectHandle(false, nil, nil, dataHandle, mp)
+	emptyHandle := &baseHandle{changesHandle: ch}
+	emptyHandle.aobjHandle = NewAObjectHandle(context.Background(), emptyHandle, true, types.BuildTS(1, 0), types.BuildTS(100, 0), nil, nil, mp)
+	emptyHandle.cnObjectHandle = NewCNObjectHandle(true, nil, nil, emptyHandle, mp)
+	ch.dataHandle = dataHandle
+	ch.tombstoneHandle = emptyHandle
+
+	got, tombstone, err := ch.quickNext(context.Background(), mp)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Nil(t, tombstone)
+	got.Clean(mp)
+	data.Clean(mp)
+}
+
+func TestNextFiltersUsingLogicalPrimaryKeyIndex(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	newAObjectHandle := func(ch *ChangeHandler, data *batch.Batch, tombstone bool) *baseHandle {
+		base := &baseHandle{changesHandle: ch}
+		base.aobjHandle = &AObjectHandle{
+			currentBatch: data,
+			batchLength:  data.RowCount(),
+			mp:           mp,
+			p:            base,
+			start:        types.BuildTS(1, 0),
+			end:          types.BuildTS(100, 0),
+			isTombstone:  tombstone,
+		}
+		base.cnObjectHandle = NewCNObjectHandle(tombstone, nil, nil, base, mp)
+		return base
+	}
+
+	newData := func() *batch.Batch {
+		data := batch.NewWithSize(3)
+		data.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		data.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		data.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(data.Vecs[0], int32(7), false, mp))
+		require.NoError(t, vector.AppendFixed(data.Vecs[1], int32(1), false, mp))
+		require.NoError(t, vector.AppendFixed(data.Vecs[2], types.BuildTS(10, 0), false, mp))
+		data.SetRowCount(1)
+		return data
+	}
+
+	t.Run("data branch", func(t *testing.T) {
+		ch := &ChangeHandler{coarseMaxRow: 0, primaryIdx: 1}
+		data := newData()
+		ch.dataHandle = newAObjectHandle(ch, data, false)
+		ch.tombstoneHandle = &baseHandle{changesHandle: ch,
+			aobjHandle:     NewAObjectHandle(context.Background(), nil, true, types.BuildTS(1, 0), types.BuildTS(100, 0), nil, nil, mp),
+			cnObjectHandle: NewCNObjectHandle(true, nil, nil, nil, mp)}
+		got, tombstone, _, err := ch.Next(context.Background(), mp)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Nil(t, tombstone)
+		got.Clean(mp)
+		data.Clean(mp)
+	})
+
+	t.Run("tombstone branch", func(t *testing.T) {
+		ch := &ChangeHandler{coarseMaxRow: 0, primaryIdx: 1}
+		tombstone := batch.NewWithSize(2)
+		tombstone.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		tombstone.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(tombstone.Vecs[0], int32(1), false, mp))
+		require.NoError(t, vector.AppendFixed(tombstone.Vecs[1], types.BuildTS(20, 0), false, mp))
+		tombstone.SetRowCount(1)
+		ch.dataHandle = &baseHandle{changesHandle: ch,
+			aobjHandle:     NewAObjectHandle(context.Background(), nil, false, types.BuildTS(1, 0), types.BuildTS(100, 0), nil, nil, mp),
+			cnObjectHandle: NewCNObjectHandle(false, nil, nil, nil, mp)}
+		ch.tombstoneHandle = newAObjectHandle(ch, tombstone, true)
+		got, gotTombstone, _, err := ch.Next(context.Background(), mp)
+		require.NoError(t, err)
+		require.Nil(t, got)
+		require.NotNil(t, gotTombstone)
+		gotTombstone.Clean(mp)
+		tombstone.Clean(mp)
+	})
+
+	t.Run("end of stream branch", func(t *testing.T) {
+		ch := &ChangeHandler{primaryIdx: 1}
+		ch.dataHandle = &baseHandle{changesHandle: ch,
+			aobjHandle:     NewAObjectHandle(context.Background(), nil, false, types.BuildTS(1, 0), types.BuildTS(100, 0), nil, nil, mp),
+			cnObjectHandle: NewCNObjectHandle(false, nil, nil, nil, mp)}
+		ch.tombstoneHandle = &baseHandle{changesHandle: ch,
+			aobjHandle:     NewAObjectHandle(context.Background(), nil, true, types.BuildTS(1, 0), types.BuildTS(100, 0), nil, nil, mp),
+			cnObjectHandle: NewCNObjectHandle(true, nil, nil, nil, mp)}
+		data, tombstone, _, err := ch.Next(context.Background(), mp)
+		require.NoError(t, err)
+		require.Nil(t, data)
+		require.Nil(t, tombstone)
+	})
+}
+
 func TestBatchHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
