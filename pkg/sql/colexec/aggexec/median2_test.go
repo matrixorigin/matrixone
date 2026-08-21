@@ -441,6 +441,118 @@ func TestAccountedMedianPreflightsProspectiveGroupsBeforePublication(t *testing.
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestAccountedMedianDirectFillAndMergeMethods(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+
+	leftExec, err := MakeAgg(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	rightExec, err := MakeAgg(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	leftOwner := leftExec.(AllocationAccountOwner)
+	rightOwner := rightExec.(AllocationAccountOwner)
+	require.NoError(t, leftOwner.SetAllocationAccount(allocation))
+	require.NoError(t, rightOwner.SetAllocationAccount(allocation))
+	SyncAggregatorsToChunkSize([]AggFuncExec{leftExec, rightExec}, AggBatchSize)
+	require.ErrorIs(t, leftExec.GroupGrow(-1), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, leftExec.PreAllocateGroups(-1), mpool.ErrAllocationAccountInvalid)
+	leftMedian := leftExec.(*medianColumnNumericExec[int64])
+	_, err = leftMedian.denseGroupIndex(-1, 0)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.ErrorIs(t, leftMedian.prepareDenseGroups(-1),
+		mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, leftExec.GroupGrow(2))
+	require.NoError(t, rightExec.GroupGrow(3))
+
+	// BulkFill must split a large direct input into bounded work units while
+	// preserving one logical group. Fill must retain scalar-broadcast semantics
+	// when the requested logical row is beyond the const vector's physical row.
+	values := make([]int64, hashmap.UnitLimit+1)
+	for i := range values {
+		values[i] = int64(i + 1)
+	}
+	bulk := buildFixedVec(t, mp, types.T_int64.ToType(), values)
+	require.NoError(t, leftExec.BulkFill(0, []*vector.Vector{bulk}))
+	constant, err := vector.NewConstFixed(
+		types.T_int64.ToType(), int64(99), 4, mp)
+	require.NoError(t, err)
+	require.NoError(t, rightExec.(BatchCapacityPreflight).PreflightBatchFill(
+		0, []uint64{1, 2}, []*vector.Vector{constant}))
+	require.NoError(t, rightExec.BatchFill(
+		0, []uint64{1, 2}, []*vector.Vector{constant}))
+	require.NoError(t, rightExec.Fill(1, 3, []*vector.Vector{constant}))
+	nullable := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		nullable, []int64{7, 0}, []bool{false, true}, mp))
+	require.NoError(t, leftExec.(BatchCapacityPreflight).PreflightBatchFill(
+		0, []uint64{1, 2}, []*vector.Vector{nullable}))
+	require.NoError(t, leftExec.BatchFill(
+		0, []uint64{1, 2}, []*vector.Vector{nullable}))
+	require.ErrorIs(t, leftExec.BatchFill(
+		-1, []uint64{1}, []*vector.Vector{nullable}),
+		mpool.ErrAllocationAccountInvalid)
+
+	// Exercise both direct Merge and the scheduler's preflight + BatchMerge
+	// pair. The not-matched entry must not publish or copy a group.
+	require.NoError(t, leftExec.Merge(rightExec, 1, 1))
+	require.NoError(t, leftExec.(BatchCapacityPreflight).PreflightBatchMerge(
+		rightExec, 0, []uint64{1, 2}))
+	require.NoError(t, leftExec.BatchMerge(
+		rightExec, 0, []uint64{1, 2}))
+	require.NoError(t, leftExec.(BatchCapacityPreflight).PreflightBatchMerge(
+		rightExec, 0, []uint64{GroupNotMatched}))
+	require.NoError(t, leftExec.BatchMerge(
+		rightExec, 0, []uint64{GroupNotMatched}))
+	require.NoError(t, leftExec.(BatchCapacityPreflight).PreflightBatchMerge(
+		rightExec, 2, []uint64{1}))
+	require.NoError(t, leftExec.BatchMerge(rightExec, 2, []uint64{1}))
+	require.Positive(t, leftExec.Size())
+
+	result, err := leftExec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 128.0,
+		vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
+	require.Equal(t, 99.0,
+		vector.GetFixedAtNoTypeCheck[float64](result[0], 1))
+
+	result[0].Free(mp)
+	bulk.Free(mp)
+	constant.Free(mp)
+	nullable.Free(mp)
+	leftExec.Free()
+	rightExec.Free()
+	require.NoError(t, leftOwner.ClearAllocationAccount(allocation))
+	require.NoError(t, rightOwner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestVectorsPreExtendBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	_, err := newAccountedVectors[int64](types.T_int64.ToType(), nil)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, (*Vectors[int64])(nil).PreExtend(1, mp),
+		mpool.ErrAllocationAccountInvalid)
+
+	preextended := NewVectors[int64](types.T_int64.ToType())
+	require.NoError(t, preextended.PreExtend(0, mp))
+	require.NoError(t, preextended.vecs[0].PreExtend(MaxVectorLength, mp))
+	preextended.vecs[0].SetLength(MaxVectorLength)
+	require.NoError(t, preextended.PreExtend(1, mp))
+	require.Len(t, preextended.vecs, 2)
+	preextended.Free(mp)
+
+	appended := NewVectors[int64](types.T_int64.ToType())
+	require.NoError(t, appended.vecs[0].PreExtend(MaxVectorLength, mp))
+	appended.vecs[0].SetLength(MaxVectorLength)
+	require.NoError(t, AppendMultiFixed(appended, int64(7), false, 1, mp))
+	require.Len(t, appended.vecs, 2)
+	require.Equal(t, int64(7),
+		vector.GetFixedAtNoTypeCheck[int64](appended.vecs[1], 0))
+	appended.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAccountedMedianKeepsIndexedStateForDistinctAndOrderedPercentile(t *testing.T) {
 	for _, tc := range []struct {
 		name string
