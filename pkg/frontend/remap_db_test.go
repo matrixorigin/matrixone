@@ -56,6 +56,11 @@ func TestApplyRemapDb(t *testing.T) {
 		require.Equal(t, "prepare s from select * from dbyyy.t", out)
 	})
 
+	t.Run("use preserves one-shot remap semantics", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "use dbxxx", remap)
+		require.Equal(t, "use dbxxx", out)
+	})
+
 	t.Run("qualified ref", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "select * from dbxxx.t", remap)
 		require.Contains(t, out, "dbyyy.t")
@@ -426,6 +431,300 @@ func TestApplyRemapDbDMLExpressionContainers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRemapDbInStmtRewritesExecutableWrapperReferences(t *testing.T) {
+	remap := remapDbContext{
+		databases:           map[string]string{"src": "dst"},
+		lowerCaseTableNames: 1,
+		remapUseDatabase:    true,
+	}
+	qualifiedTable := func(name string) *tree.TableName {
+		return tree.NewTableName(tree.Identifier(name), tree.ObjectNamePrefix{
+			SchemaName:     "src",
+			ExplicitSchema: true,
+		}, nil)
+	}
+	qualifiedObject := func(name string) *tree.UnresolvedObjectName {
+		return tree.NewUnresolvedObjectName("src", name)
+	}
+	qualifiedColumn := func(table, name string) *tree.UnresolvedName {
+		return tree.NewUnresolvedName(
+			tree.NewCStr("src", 1),
+			tree.NewCStr(table, 1),
+			tree.NewCStr(name, 1),
+		)
+	}
+	assertTable := func(t *testing.T, table *tree.TableName) {
+		t.Helper()
+		require.Equal(t, tree.Identifier("dst"), table.SchemaName)
+	}
+	assertObject := func(t *testing.T, object *tree.UnresolvedObjectName) {
+		t.Helper()
+		require.Equal(t, "dst", object.GetDBName())
+	}
+	assertColumn := func(t *testing.T, column *tree.UnresolvedName) {
+		t.Helper()
+		require.Equal(t, "dst", column.DbNameOrigin())
+	}
+
+	t.Run("do and merge", func(t *testing.T) {
+		doColumn := qualifiedColumn("do_table", "value")
+		remapDbInStmt(&tree.Do{Exprs: tree.Exprs{doColumn}}, remap)
+		assertColumn(t, doColumn)
+
+		target := qualifiedTable("merge_target")
+		source := qualifiedTable("merge_source")
+		onColumn := qualifiedColumn("merge_source", "id")
+		conditionColumn := qualifiedColumn("merge_target", "matched")
+		updateName := qualifiedColumn("merge_target", "value")
+		updateValue := qualifiedColumn("merge_source", "value")
+		insertValue := qualifiedColumn("merge_source", "new_value")
+		returningColumn := qualifiedColumn("merge_target", "value")
+		remapDbInStmt(&tree.Merge{
+			Target: target,
+			Source: source,
+			On:     onColumn,
+			Clauses: tree.MergeClauses{
+				nil,
+				{
+					Condition:    conditionColumn,
+					UpdateExprs:  tree.UpdateExprs{{Names: []*tree.UnresolvedName{updateName}, Expr: updateValue}},
+					InsertValues: tree.Exprs{insertValue},
+				},
+			},
+			Returning: tree.SelectExprs{{Expr: returningColumn}},
+		}, remap)
+		assertTable(t, target)
+		assertTable(t, source)
+		for _, column := range []*tree.UnresolvedName{
+			onColumn, conditionColumn, updateName, updateValue, insertValue, returningColumn,
+		} {
+			assertColumn(t, column)
+		}
+	})
+
+	t.Run("load dump and sequence statements", func(t *testing.T) {
+		loadTable := qualifiedTable("load_data")
+		dumpTable := qualifiedTable("dump_table")
+		attachTable := qualifiedTable("attach_table")
+		createSequence := qualifiedTable("new_sequence")
+		dropFirst := qualifiedTable("drop_first")
+		dropSecond := qualifiedTable("drop_second")
+		alterSequence := qualifiedTable("alter_sequence")
+		for _, statement := range []tree.Statement{
+			&tree.Load{Table: loadTable},
+			&tree.DumpTable{Table: dumpTable},
+			&tree.LoadTable{Table: attachTable},
+			&tree.CreateSequence{Name: createSequence},
+			&tree.DropSequence{Names: tree.TableNames{dropFirst, dropSecond}},
+			&tree.AlterSequence{Name: alterSequence},
+		} {
+			remapDbInStmt(statement, remap)
+		}
+		for _, table := range []*tree.TableName{
+			loadTable, dumpTable, attachTable, createSequence, dropFirst, dropSecond, alterSequence,
+		} {
+			assertTable(t, table)
+		}
+	})
+
+	t.Run("show statements", func(t *testing.T) {
+		showCreateDatabase := &tree.ShowCreateDatabase{Name: "src"}
+		showCreateTable := qualifiedObject("create_table")
+		showCreateView := qualifiedObject("create_view")
+		showColumnsTable := qualifiedObject("columns_table")
+		showColumnsLike := qualifiedColumn("columns_table", "name")
+		showColumnsWhere := qualifiedColumn("columns_table", "id")
+		showIndexTable := qualifiedObject("index_table")
+		showIndexWhere := qualifiedColumn("index_table", "id")
+		showColumnNumber := qualifiedObject("column_number")
+		showTableValues := qualifiedObject("table_values")
+		showTableSize := qualifiedObject("table_size")
+		showTarget := &tree.ShowTarget{DbName: "src"}
+		showTableStatus := &tree.ShowTableStatus{DbName: "src"}
+		showSequences := &tree.ShowSequences{DBName: "src"}
+		showTables := &tree.ShowTables{DBName: "src"}
+		showTableNumber := &tree.ShowTableNumber{DbName: "src"}
+		useDatabase := tree.NewUse(tree.NewCStr("src", 1), false, tree.SecondaryRoleTypeAll, nil)
+		for _, statement := range []tree.Statement{
+			showCreateDatabase,
+			&tree.ShowCreateTable{Name: showCreateTable},
+			&tree.ShowCreateView{Name: showCreateView},
+			&tree.ShowColumns{
+				Table:  showColumnsTable,
+				DBName: "src",
+				Like:   &tree.ComparisonExpr{Left: showColumnsLike},
+				Where:  &tree.Where{Expr: showColumnsWhere},
+			},
+			&tree.ShowIndex{
+				TableName: showIndexTable,
+				DbName:    "src",
+				Where:     &tree.Where{Expr: showIndexWhere},
+			},
+			&tree.ShowColumnNumber{Table: showColumnNumber, DbName: "src"},
+			&tree.ShowTableValues{Table: showTableValues, DbName: "src"},
+			&tree.ShowTableSize{Table: showTableSize, DbName: "src"},
+			showTarget,
+			showTableStatus,
+			showSequences,
+			showTables,
+			showTableNumber,
+			useDatabase,
+		} {
+			remapDbInStmt(statement, remap)
+		}
+		require.Equal(t, "dst", showCreateDatabase.Name)
+		for _, object := range []*tree.UnresolvedObjectName{
+			showCreateTable, showCreateView, showColumnsTable, showIndexTable,
+			showColumnNumber, showTableValues, showTableSize,
+		} {
+			assertObject(t, object)
+		}
+		for _, column := range []*tree.UnresolvedName{showColumnsLike, showColumnsWhere, showIndexWhere} {
+			assertColumn(t, column)
+		}
+		require.Equal(t, "dst", showTarget.DbName)
+		require.Equal(t, "dst", showTableStatus.DbName)
+		require.Equal(t, "dst", showSequences.DBName)
+		require.Equal(t, "dst", showTables.DBName)
+		require.Equal(t, "dst", showTableNumber.DbName)
+		require.Equal(t, "dst", useDatabase.Name.Compare())
+	})
+}
+
+func TestRemapCloneRoutineStatementsClosesNestedDatabaseReferences(t *testing.T) {
+	remapRoutine := func(t *testing.T, sql string) string {
+		t.Helper()
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer freeStatements(stmts)
+		require.NoError(t, remapCloneRoutineStatements(
+			context.Background(), stmts, map[string]string{"source_db": "target_db"}, 1,
+		))
+		return tree.StringWithOpts(stmts[0], dialect.MYSQL, tree.WithSingleQuoteString())
+	}
+
+	t.Run("create table foreign key reference", func(t *testing.T) {
+		out := remapRoutine(t, `begin
+			create table source_db.child (
+				id int,
+				parent_id int,
+				foreign key (parent_id) references source_db.parent(id)
+			);
+		end`)
+		require.Contains(t, out, "target_db.child")
+		require.Contains(t, out, "references target_db.parent")
+		require.NotContains(t, out, "source_db")
+	})
+
+	t.Run("alter table add foreign key reference", func(t *testing.T) {
+		out := remapRoutine(t, `begin
+			alter table source_db.child
+				add constraint fk_child_parent foreign key (parent_id)
+				references source_db.parent(id);
+		end`)
+		require.Contains(t, out, "alter table target_db.child")
+		require.Contains(t, out, "references target_db.parent")
+		require.NotContains(t, out, "source_db")
+	})
+
+	t.Run("labeled repeat preserves control flow and remaps nested query", func(t *testing.T) {
+		out := remapRoutine(t, `begin
+			repeat_label: repeat
+				select count(*) from source_db.t;
+				if true then iterate repeat_label; end if;
+				leave repeat_label;
+			until true end repeat repeat_label;
+		end`)
+		require.Contains(t, out, "target_db.t")
+		require.NotContains(t, out, "source_db")
+		require.Contains(t, out, "end repeat repeat_label")
+
+		formatted, err := parsers.Parse(context.Background(), dialect.MYSQL, out, 1)
+		require.NoError(t, err)
+		defer freeStatements(formatted)
+	})
+
+	t.Run("unrecognized alter option is rejected", func(t *testing.T) {
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+			`alter table source_db.child drop column parent_id`, 1)
+		require.NoError(t, err)
+		defer freeStatements(stmts)
+		err = remapCloneRoutineStatements(
+			context.Background(), stmts, map[string]string{"source_db": "target_db"}, 1,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot be safely remapped")
+	})
+
+	t.Run("table function arguments and embedded select", func(t *testing.T) {
+		out := remapRoutine(t,
+			`select * from unnest((select id from source_db.argument_source)) as f`)
+		require.Contains(t, out, "target_db.argument_source")
+		require.NotContains(t, out, "source_db")
+
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+			`select * from source_db.embedded_source`, 1)
+		require.NoError(t, err)
+		defer freeStatements(stmts)
+		function := &tree.TableFunction{SelectStmt: stmts[0].(*tree.Select)}
+		remapDbInTableExpr(function, remapDbContext{
+			databases:           map[string]string{"source_db": "target_db"},
+			lowerCaseTableNames: 1,
+		})
+		require.Contains(t,
+			tree.StringWithOpts(function.SelectStmt, dialect.MYSQL, tree.WithSingleQuoteString()),
+			"target_db.embedded_source",
+		)
+	})
+
+	t.Run("every create table definition is audited", func(t *testing.T) {
+		qualifiedColumn := func(table, name string) *tree.UnresolvedName {
+			return tree.NewUnresolvedName(
+				tree.NewCStr("source_db", 1),
+				tree.NewCStr(table, 1),
+				tree.NewCStr(name, 1),
+			)
+		}
+		qualified := func(name string) *tree.TableName {
+			return tree.NewTableName(tree.Identifier(name), tree.ObjectNamePrefix{
+				SchemaName: "source_db", ExplicitSchema: true,
+			}, nil)
+		}
+		column := qualifiedColumn("child", "value")
+		keyPart := &tree.KeyPart{ColName: qualifiedColumn("child", "value")}
+		defs := tree.TableDefs{
+			&tree.ColumnTableDef{
+				Name: column,
+				Attributes: []tree.ColumnAttribute{
+					&tree.AttributeNull{}, &tree.AttributeAutoIncrement{}, &tree.AttributeUniqueKey{},
+					&tree.AttributeUnique{}, &tree.AttributeKey{}, &tree.AttributePrimaryKey{},
+					&tree.AttributeCollate{}, &tree.AttributeCharset{}, &tree.AttributeColumnFormat{},
+					&tree.AttributeStorage{}, &tree.AttributeLowCardinality{}, &tree.AttributeAutoRandom{},
+					&tree.AttributeSRID{}, &tree.AttributeVisable{}, &tree.AttributeMongoDBPath{},
+					&tree.AttributeMongoDBConvert{}, &tree.AttributeDefault{}, &tree.AttributeComment{},
+					&tree.AttributeCheckConstraint{}, &tree.AttributeGeneratedAlways{}, &tree.AttributeOnUpdate{},
+					&tree.AttributeReference{TableName: qualified("attribute_parent")}, keyPart,
+				},
+			},
+			&tree.PrimaryKeyIndex{KeyParts: []*tree.KeyPart{keyPart}},
+			&tree.Index{KeyParts: []*tree.KeyPart{keyPart}},
+			&tree.UniqueIndex{KeyParts: []*tree.KeyPart{keyPart}},
+			&tree.ForeignKey{
+				KeyParts: []*tree.KeyPart{keyPart},
+				Refer:    &tree.AttributeReference{TableName: qualified("foreign_parent")},
+			},
+			&tree.FullTextIndex{KeyParts: []*tree.KeyPart{keyPart}},
+			&tree.CheckIndex{},
+		}
+		require.True(t, remapDbInTableDefs(defs, remapDbContext{
+			databases:           map[string]string{"source_db": "target_db"},
+			lowerCaseTableNames: 1,
+		}))
+		require.Equal(t, "target_db", column.DbNameOrigin())
+		require.Equal(t, tree.Identifier("target_db"), defs[4].(*tree.ForeignKey).Refer.TableName.SchemaName)
+	})
 }
 
 func TestApplyRemapDbByStatementKeepsPolicyBoundaries(t *testing.T) {

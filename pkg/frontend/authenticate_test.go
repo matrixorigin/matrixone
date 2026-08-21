@@ -72,6 +72,58 @@ func TestTemporaryTableSkipsPersistentOwnershipChanges(t *testing.T) {
 	))
 }
 
+func TestUserDefinedFunctionArgumentTypes(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		types []string
+		want  string
+	}{
+		{name: "no arguments", want: ""},
+		{name: "one argument", types: []string{"int"}, want: `["int"]`},
+		{name: "overload signature", types: []string{"varchar", "decimal(10,2)"}, want: `["varchar", "decimal(10,2)"]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := userDefinedFunctionArgumentTypes(test.types)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	got, err := userDefinedFunctionArgumentTypesFromJSON(`[{"name":"arg","type":"int"}]`)
+	require.NoError(t, err)
+	require.Equal(t, `["int"]`, got)
+	got, err = userDefinedFunctionArgumentTypesFromJSON(`[]`)
+	require.NoError(t, err)
+	require.Empty(t, got)
+	got, err = userDefinedFunctionArgumentTypesFromJSON(`[{"name":"left","type":"int"},{"name":"right","type":"int"}]`)
+	require.NoError(t, err)
+	require.Equal(t, `["int", "int"]`, got)
+	_, err = userDefinedFunctionArgumentTypesFromJSON(`not json`)
+	require.Error(t, err)
+
+	wideTypes := make([]string, 105)
+	for i := range wideTypes {
+		wideTypes[i] = "decimal(10,0)"
+	}
+	wideSignature, err := userDefinedFunctionArgumentTypes(wideTypes)
+	require.NoError(t, err)
+	require.Greater(t, len(wideSignature), 1024)
+	require.LessOrEqual(t, len(wideSignature), types.MaxStringSize)
+
+	maxSignature, err := userDefinedFunctionArgumentTypes([]string{strings.Repeat("x", types.MaxStringSize-4)})
+	require.NoError(t, err)
+	require.Len(t, maxSignature, types.MaxStringSize)
+
+	_, err = userDefinedFunctionArgumentTypes([]string{strings.Repeat("x", types.MaxStringSize)})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "catalog limit")
+}
+
+func TestUserDefinedFunctionCatalogSignatureWidth(t *testing.T) {
+	require.Contains(t, MoCatalogMoUserDefinedFunctionDDL,
+		fmt.Sprintf("arg_types varchar(%d)", types.MaxStringSize))
+}
+
 func TestGetTenantInfo(t *testing.T) {
 	convey.Convey("tenant", t, func() {
 		type input struct {
@@ -539,17 +591,29 @@ func Test_initFunction(t *testing.T) {
 		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccountId(ctx, sysAccountID)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().ClearExecResultSet().AnyTimes()
 		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		var executed []string
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, sql string) error {
+				executed = append(executed, sql)
+				return nil
+			},
+		).AnyTimes()
 		rs := mock_frontend.NewMockExecResult(ctrl)
 		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
+		oldNewBackgroundExec := NewBackgroundExec
+		defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+		var forcedPessimisticRC bool
+		NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+			forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+			return bh
+		}
 
 		locale := ""
 
@@ -592,6 +656,11 @@ func Test_initFunction(t *testing.T) {
 		}
 		err := InitFunction(ses, newTestExecCtx(ctx, ctrl), tenant, cu)
 		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(forcedPessimisticRC, convey.ShouldBeTrue)
+		convey.So(executed, convey.ShouldContain, "begin;")
+		convey.So(executed, convey.ShouldContain,
+			"select dat_id from mo_catalog.mo_database where datname = 'db' and account_id = 0 for update;")
+		convey.So(executed, convey.ShouldContain, "rollback;")
 	})
 }
 
@@ -9979,6 +10048,50 @@ func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {
 	require.Contains(t, createSQL, `"FamilyString":"decimal"`)
 	require.Contains(t, createSQL, `"DisplayWith":10`)
 	require.Contains(t, createSQL, `"Scale":2`)
+}
+
+func TestUpsertStoredProcedureReplaceAndDuplicateHandling(t *testing.T) {
+	ctx := context.Background()
+	tenant := &TenantInfo{User: "root"}
+	definition := storedProcedureDefinition{
+		name:    "p_replace",
+		args:    "[]",
+		lang:    "sql",
+		body:    "begin select 1; end",
+		sqlMode: "",
+		dbName:  "procedure_db",
+	}
+	checkSQL := getSqlForCheckProcedureExistence(definition.name, definition.dbName)
+
+	t.Run("replace updates the existing catalog row", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(99)}})
+
+		require.NoError(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
+		require.Len(t, bh.executedSQLs, 2)
+		require.Equal(t, checkSQL, bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "update mo_catalog.mo_stored_procedure")
+		require.Contains(t, bh.executedSQLs[1], "where proc_id = 99")
+	})
+
+	t.Run("non replace rejects an existing catalog row before persistence", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(99)}})
+
+		require.ErrorContains(t, upsertStoredProcedure(ctx, bh, tenant, definition, false), "procedure p_replace already exists")
+		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+	})
+
+	t.Run("replace rejects an invalid existing catalog id", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{"not-an-id"}})
+
+		require.Error(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
+		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+	})
 }
 
 func Test_initProcedure(t *testing.T) {
