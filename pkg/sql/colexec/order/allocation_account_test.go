@@ -222,6 +222,67 @@ func TestAccountedOrderResidentMultiKeyAndExpressionLifecycle(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestAccountedOrderVariableProjectionAcrossBatches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "time_zone", name)
+		require.True(t, system)
+		require.False(t, global)
+		return "UTC", nil
+	})
+	variable, err := colexec.NewExpressionExecutor(proc, &plan.Expr{
+		Expr: &plan.Expr_V{V: &plan.VarRef{
+			Name:   "time_zone",
+			System: true,
+		}},
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+	})
+	require.NoError(t, err)
+
+	newInput := func(ids []int64) *batch.Batch {
+		logical := batch.New(nil)
+		logical.SetRowCount(len(ids))
+		zone, evalErr := variable.Eval(proc, []*batch.Batch{logical}, nil)
+		require.NoError(t, evalErr)
+		zone, evalErr = zone.Dup(proc.Mp())
+		require.NoError(t, evalErr)
+
+		input := batch.NewWithSize(2)
+		input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(input.Vecs[0], ids, nil, proc.Mp()))
+		input.Vecs[1] = zone
+		input.SetRowCount(len(ids))
+		return input
+	}
+
+	op := newAccountedOrder(
+		&plan.OrderBySpec{Expr: newOrderColumnExpression(0, types.T_int64)},
+	)
+	state := installOrderTestAllocation(t, op, 64<<20, nil)
+	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newInput([]int64{4, 1}),
+		newInput([]int64{3, 2}),
+	}))
+	require.NoError(t, op.Prepare(proc))
+
+	result, err := vm.Exec(op, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{1, 2, 3, 4},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	require.Equal(t, result.Batch.RowCount(), result.Batch.Vecs[1].Length())
+	for row := range result.Batch.RowCount() {
+		require.Equal(t, "UTC", result.Batch.Vecs[1].GetStringAt(row))
+	}
+
+	op.Children[0].Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	finalizeOrderTestAllocation(t, op, state)
+	variable.Free()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestAccountedOrderFinalShufflePressureCleans(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	op := newAccountedOrder(

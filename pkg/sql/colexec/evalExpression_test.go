@@ -954,10 +954,10 @@ func TestVarExpressionExecutor(t *testing.T) {
 	t.Log(tree)
 
 	input := &batch.Batch{}
-	input.SetRowCount(1)
+	input.SetRowCount(4)
 	vec, err := varExprExecutor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, vec.Length())
+	require.Equal(t, input.RowCount(), vec.Length())
 	require.Equal(t, types.T_int64.ToType(), *vec.GetType())
 	require.Equal(t, int64(12345), vector.MustFixedColNoTypeCheck[int64](vec)[0])
 	require.False(t, vec.GetNulls().Contains(0))
@@ -967,9 +967,38 @@ func TestVarExpressionExecutor(t *testing.T) {
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return int64(67890), nil
 	})
+	input.SetRowCount(2)
 	vec, err = varExprExecutor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
+	require.Equal(t, input.RowCount(), vec.Length())
 	require.Equal(t, int64(67890), vector.MustFixedColNoTypeCheck[int64](vec)[0])
+}
+
+func TestParamExpressionExecutorMatchesBatchRowCount(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("UTC"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() {
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+	})
+
+	executor := NewParamExpressionExecutor(proc.Mp(), 0, types.T_varchar.ToType())
+	t.Cleanup(executor.Free)
+	input := batch.New(nil)
+	input.SetRowCount(4)
+
+	vec, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.True(t, vec.IsConst())
+	require.Equal(t, input.RowCount(), vec.Length())
+	require.Equal(t, "UTC", vec.GetStringAt(3))
+
+	input.SetRowCount(2)
+	vec, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, input.RowCount(), vec.Length())
 }
 
 func TestVarExpressionExecutorTypedJSONAndUUID(t *testing.T) {
