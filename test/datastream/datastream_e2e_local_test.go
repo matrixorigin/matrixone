@@ -63,6 +63,31 @@ func freePort(t *testing.T) int {
 // the fixture CSV and (optionally) a jdbc datasource pointing at MO.
 func startJstfu(t *testing.T, moDSNForJdbc string) (port int) {
 	t.Helper()
+	fixture, err := filepath.Abs(fixtureCSV)
+	require.NoError(t, err)
+	return startJstfuWithConfig(t, func(port int) string {
+		jdbcSource := ""
+		if moDSNForJdbc != "" {
+			jdbcSource = fmt.Sprintf(`,
+        { "name": "jdbc_t", "type": "jdbc",
+          "connectionstring": "%s",
+          "user": "dump", "password": "111",
+          "sql": "select col1, col2, col3, col4 from datastream_e2e.src_t where ${FILTER}" }`, moDSNForJdbc)
+		}
+		return fmt.Sprintf(`{
+    "port": %d,
+    "datasource": [
+        { "name": "file_t", "type": "file", "path": "%s" },
+        { "name": "bad_file", "type": "file", "path": "/nonexistent/file.csv" }%s
+    ]
+}`, port, fixture, jdbcSource)
+	})
+}
+
+// startJstfuWithConfig launches the jar with an arbitrary config rendered by
+// buildConfig for a freshly allocated port.
+func startJstfuWithConfig(t *testing.T, buildConfig func(port int) string) (port int) {
+	t.Helper()
 	if _, err := exec.LookPath("java"); err != nil {
 		t.Skip("java not found; skip jstfu e2e")
 	}
@@ -70,25 +95,9 @@ func startJstfu(t *testing.T, moDSNForJdbc string) (port int) {
 	if _, err := os.Stat(jar); err != nil {
 		t.Skip("xtool/jstfu/target/jstfu.jar not built; run `make jstfu` first")
 	}
-	fixture, err := filepath.Abs(fixtureCSV)
-	require.NoError(t, err)
 
 	port = freePort(t)
-	jdbcSource := ""
-	if moDSNForJdbc != "" {
-		jdbcSource = fmt.Sprintf(`,
-        { "name": "jdbc_t", "type": "jdbc",
-          "connectionstring": "%s",
-          "user": "dump", "password": "111",
-          "sql": "select col1, col2, col3, col4 from datastream_e2e.src_t where ${FILTER}" }`, moDSNForJdbc)
-	}
-	config := fmt.Sprintf(`{
-    "port": %d,
-    "datasource": [
-        { "name": "file_t", "type": "file", "path": "%s" },
-        { "name": "bad_file", "type": "file", "path": "/nonexistent/file.csv" }%s
-    ]
-}`, port, fixture, jdbcSource)
+	config := buildConfig(port)
 	configPath := filepath.Join(t.TempDir(), "jstfu.json")
 	require.NoError(t, os.WriteFile(configPath, []byte(config), 0o644))
 
@@ -117,6 +126,14 @@ func startJstfu(t *testing.T, moDSNForJdbc string) (port int) {
 
 func readAll(t *testing.T, port int, table, filter string) (string, error) {
 	t.Helper()
+	content, _, err := readAllChunks(t, port, table, filter)
+	return content, err
+}
+
+// readAllChunks reads the full stream, returning the concatenated content and
+// the individual chunks as received on the wire.
+func readAllChunks(t *testing.T, port int, table, filter string) (string, [][]byte, error) {
+	t.Helper()
 	conn, err := grpc.NewClient(fmt.Sprintf("127.0.0.1:%d", port),
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
@@ -126,17 +143,19 @@ func readAll(t *testing.T, port int, table, filter string) (string, error) {
 	stream, err := datastream.NewDataStreamClient(conn).Read(ctx, &datastream.ReadRequest{Table: table, Filter: filter})
 	require.NoError(t, err)
 	var sb strings.Builder
+	var chunks [][]byte
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
-			return sb.String(), nil
+			return sb.String(), chunks, nil
 		}
 		if err != nil {
-			return sb.String(), err
+			return sb.String(), chunks, err
 		}
 		if e := resp.GetError(); e != nil {
-			return sb.String(), fmt.Errorf("server error %s: %s", e.GetCode(), e.GetMessage())
+			return sb.String(), chunks, fmt.Errorf("server error %s: %s", e.GetCode(), e.GetMessage())
 		}
+		chunks = append(chunks, resp.GetChunk().GetData())
 		sb.Write(resp.GetChunk().GetData())
 	}
 }
@@ -153,6 +172,63 @@ func TestJstfuFileSource(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, string(fixture), got)
 	}
+}
+
+// TestJstfuMultiChunkStreaming forces a large file through a small chunksize
+// and verifies real multi-chunk streaming: many chunks on the wire, every
+// chunk boundary on a record boundary (even across quoted embedded
+// newlines), and lossless reassembly.
+func TestJstfuMultiChunkStreaming(t *testing.T) {
+	// ~1MB file: every 7th record has a quoted field with embedded newlines
+	// and quotes, so chunk alignment has to respect quote state
+	dir := t.TempDir()
+	bigCSV := filepath.Join(dir, "big.csv")
+	var sb strings.Builder
+	for i := range 20000 {
+		if i%7 == 0 {
+			fmt.Fprintf(&sb, "%d,\"multi\nline \\\" value %d,with comma\",tail-%d\n", i, i, i)
+		} else {
+			fmt.Fprintf(&sb, "%d,plain value %d,tail-%d\n", i, i, i)
+		}
+	}
+	require.NoError(t, os.WriteFile(bigCSV, []byte(sb.String()), 0o644))
+
+	const chunkSize = 2048
+	port := startJstfuWithConfig(t, func(port int) string {
+		return fmt.Sprintf(`{
+    "port": %d,
+    "chunksize": %d,
+    "datasource": [ { "name": "big", "type": "file", "path": "%s" } ]
+}`, port, chunkSize, bigCSV)
+	})
+
+	content, chunks, err := readAllChunks(t, port, "big", "")
+	require.NoError(t, err)
+
+	// genuinely multi-chunk: ~1MB / 2KB
+	require.Greater(t, len(chunks), 100, "expected hundreds of chunks, got %d", len(chunks))
+	for i, chunk := range chunks {
+		require.NotEmpty(t, chunk, "chunk %d empty", i)
+		require.Equal(t, byte('\n'), chunk[len(chunk)-1], "chunk %d does not end on a record boundary", i)
+		// record-aligned also means quote-balanced: an odd number of
+		// unescaped quotes would mean the boundary split a quoted field
+		quotes := 0
+		escaped := false
+		for _, b := range chunk {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch b {
+			case '\\':
+				escaped = true
+			case '"':
+				quotes++
+			}
+		}
+		require.Zero(t, quotes%2, "chunk %d splits a quoted field", i)
+	}
+	require.Equal(t, sb.String(), content, "reassembled stream differs from the file")
 }
 
 func TestJstfuErrors(t *testing.T) {

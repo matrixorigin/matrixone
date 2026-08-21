@@ -15,6 +15,7 @@
 package external
 
 import (
+	"fmt"
 	"net"
 	"testing"
 
@@ -191,6 +192,69 @@ func TestDataStreamReaderConnectionRefused(t *testing.T) {
 		_, err = r.ReadBatch(proc.Ctx, bat, proc, nil)
 	}
 	require.Error(t, err)
+	require.NoError(t, r.Close())
+}
+
+func TestDataStreamReaderManyChunks(t *testing.T) {
+	// hundreds of small chunks, one per record
+	const rows = 500
+	fake := &fakeDataStreamServer{script: func(*datastream.ReadRequest) []*datastream.ReadResponse {
+		responses := make([]*datastream.ReadResponse, 0, rows)
+		for i := 0; i < rows; i++ {
+			responses = append(responses, chunk(fmt.Sprintf("%d,row-%d\n", i, i)))
+		}
+		return responses
+	}}
+	host, port := startFakeServer(t, fake)
+	param, proc, bat := newDatastreamTestParam(t, host, port, "")
+
+	r := NewDataStreamReader(param)
+	_, err := r.Open(param, proc)
+	require.NoError(t, err)
+
+	total := 0
+	for {
+		bat.CleanOnlyData()
+		finished, err := r.ReadBatch(proc.Ctx, bat, proc, nil)
+		require.NoError(t, err)
+		total += bat.RowCount()
+		if finished {
+			break
+		}
+	}
+	require.Equal(t, rows, total)
+
+	a := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+	last := bat.RowCount() - 1
+	require.Equal(t, int32(rows-1), a[last])
+	require.Equal(t, fmt.Sprintf("row-%d", rows-1), bat.Vecs[1].GetStringAt(last))
+	require.NoError(t, r.Close())
+}
+
+func TestDataStreamReaderRecordSpansChunks(t *testing.T) {
+	// The proto contract says servers must not split a record across chunks,
+	// but the reader consumes the stream as plain bytes, so it tolerates a
+	// misbehaving server rather than corrupting rows.
+	fake := &fakeDataStreamServer{script: func(*datastream.ReadRequest) []*datastream.ReadResponse {
+		return []*datastream.ReadResponse{
+			chunk("1,fo"),
+			chunk("o\n2,"),
+			chunk("\"split,"),
+			chunk("value\"\n"),
+		}
+	}}
+	host, port := startFakeServer(t, fake)
+	param, proc, bat := newDatastreamTestParam(t, host, port, "")
+
+	r := NewDataStreamReader(param)
+	_, err := r.Open(param, proc)
+	require.NoError(t, err)
+	finished, err := r.ReadBatch(proc.Ctx, bat, proc, nil)
+	require.NoError(t, err)
+	require.True(t, finished)
+	require.Equal(t, 2, bat.RowCount())
+	require.Equal(t, "foo", bat.Vecs[1].GetStringAt(0))
+	require.Equal(t, "split,value", bat.Vecs[1].GetStringAt(1))
 	require.NoError(t, r.Close())
 }
 

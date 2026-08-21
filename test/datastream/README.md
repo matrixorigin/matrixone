@@ -15,6 +15,12 @@ go test ./test/datastream/       # TestJstfu* need only java + the jar
 - `TestJstfuFileSource` / `TestJstfuErrors` — Go gRPC client against the Java
   server directly: file datasource verbatim streaming, filter-hint noop,
   TABLE_NOT_FOUND and DATASOURCE_ERROR frames.
+- `TestJstfuMultiChunkStreaming` — a generated ~1MB file served with a 2KB
+  chunksize: asserts hundreds of chunks on the wire, every chunk boundary on
+  a record boundary (quote-state checked, incl. quoted embedded newlines),
+  and lossless reassembly.  The BVT server config
+  (`optools/jstfu_bvt.sh`) likewise sets `chunksize: 4096` so the BVT
+  fixtures stream as hundreds of chunks instead of one or two 1MB chunks.
 - `TestDatastreamThroughMatrixOne` — the full path through a running
   MatrixOne: DDL, file + jdbc scans (the jdbc datasource dials back into the
   same MO over the mysql wire), predicate pushdown with recheck on/off,
