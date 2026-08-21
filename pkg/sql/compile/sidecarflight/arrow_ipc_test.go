@@ -74,6 +74,24 @@ func TestArrowIPCDecodesNegotiatedTPCHTypes(t *testing.T) {
 	require.Equal(t, types.DaysFromUnixEpochToDate(1), vector.GetFixedAtNoTypeCheck[types.Date](bat.Vecs[10], 0))
 	require.Equal(t, uint32(42), vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[11], 0))
 	bat.Clean(mp)
+
+	charTypes := append([]planpb.Type(nil), typesOut...)
+	charTypes[7] = planpb.Type{Id: int32(types.T_char), Width: 8}
+	charSchema, err := ParseSchema(schemaWire, charTypes, headings)
+	require.NoError(t, err)
+	charBatch, err := charSchema.decodeRecordBatch(header, body, 1<<20, mp)
+	require.NoError(t, err)
+	require.Equal(t, types.T_char, charBatch.Vecs[7].GetType().Oid)
+	require.Equal(t, "tpch", charBatch.Vecs[7].GetStringAt(0))
+	charBatch.Clean(mp)
+
+	requiredTypes := append([]planpb.Type(nil), typesOut...)
+	requiredTypes[0].NotNullable = true
+	requiredSchema, err := ParseSchema(schemaWire, requiredTypes, headings)
+	require.NoError(t, err)
+	_, err = requiredSchema.decodeRecordBatch(header, body, 1<<20, mp)
+	require.ErrorContains(t, err, "required field contains nulls")
+
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
@@ -229,7 +247,7 @@ func TestArrowSchemaRejectsNegotiationMismatches(t *testing.T) {
 	_, err = parseArrowField(flatTable{}, typesOut[0])
 	require.ErrorContains(t, err, "missing name")
 	_, err = parseArrowField(fieldTables[0], planpb.Type{Id: int32(types.T_bool), NotNullable: true})
-	require.ErrorContains(t, err, "nullability")
+	require.NoError(t, err)
 	for _, tc := range []struct {
 		index    int
 		expected planpb.Type
