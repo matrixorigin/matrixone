@@ -44,6 +44,8 @@ var (
 	launchSleep             = time.Sleep
 )
 
+const waitAnyShardReadyTimeout = 5 * time.Minute
+
 func startCluster(
 	ctx context.Context,
 	stopper *stopper.Stopper,
@@ -384,7 +386,7 @@ func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
 }
 
 func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*30, moerr.CauseWaitAnyShardReady)
+	ctx, cancel := context.WithTimeoutCause(context.TODO(), waitAnyShardReadyTimeout, moerr.CauseWaitAnyShardReady)
 	defer cancel()
 
 	// wait shard ready

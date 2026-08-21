@@ -18,6 +18,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -27,6 +28,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWaitAnyShardReadyTimeout(t *testing.T) {
+	assert.Equal(t, 5*time.Minute, waitAnyShardReadyTimeout)
+}
 
 func TestParseTNConfig(t *testing.T) {
 	data := `
