@@ -6191,3 +6191,88 @@ func BenchmarkUnionBatchStaticBinaryNoMetadata(b *testing.B) {
 		}
 	}
 }
+
+func TestStringSourceLifecycle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(source, [][]byte{[]byte("a"), nil, []byte("c")}, []bool{false, true, false}, mp))
+	require.NoError(t, source.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceSQLPrepare,
+		types.StringSourceCOMStmt,
+	}, mp))
+	require.Equal(t, types.StringSourceSQLPrepare, source.GetStringSourceAt(1), "NULL must retain source")
+
+	clone, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.Equal(t, source.GetStringSources(), clone.GetStringSources())
+
+	window, err := source.CloneWindow(1, 3, mp)
+	require.NoError(t, err)
+	require.Equal(t, types.StringSourceSQLPrepare, window.GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, window.GetStringSourceAt(1))
+
+	require.NoError(t, clone.Shuffle([]int64{2, 0, 1}, mp))
+	require.Equal(t, types.StringSourceCOMStmt, clone.GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceLiteral, clone.GetStringSourceAt(1))
+	require.Equal(t, types.StringSourceSQLPrepare, clone.GetStringSourceAt(2))
+
+	destination := NewVec(types.T_varchar.ToType())
+	require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, mp))
+	for row := 0; row < source.Length(); row++ {
+		require.Equal(t, source.GetStringSourceAt(row), destination.GetStringSourceAt(row))
+	}
+
+	destination.ResetWithSameType()
+	require.False(t, destination.HasStringSourceMetadata())
+	require.Nil(t, destination.GetStringSources())
+
+	destination.Free(mp)
+	window.Free(mp)
+	clone.Free(mp)
+	source.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestStringSourceUniformFastPathAndValidation(t *testing.T) {
+	vec := NewVec(types.T_int64.ToType())
+	vec.SetLength(3)
+	require.NoError(t, vec.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceUserVariable,
+		types.StringSourceUserVariable,
+		types.StringSourceUserVariable,
+	}, nil))
+	require.Nil(t, vec.GetStringSources())
+	require.Equal(t, types.StringSourceUserVariable, vec.GetStringSource())
+	require.Error(t, vec.SetStringSource(types.StringSource(255)))
+	require.Error(t, vec.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSource(255),
+		types.StringSourceLiteral,
+	}, nil))
+	vec.CleanOnlyData()
+	require.False(t, vec.HasStringSourceMetadata())
+}
+
+func TestStringSourceAppendRollbackAndReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(vec, []byte("dynamic"), false, mp))
+	require.NoError(t, vec.SetStringSource(types.StringSourceCOMStmt))
+
+	checkpoint := vec.MakeAppendCheckpoint()
+	require.NoError(t, AppendBytes(vec, []byte("expression"), false, mp))
+	require.Equal(t, types.StringSourceCOMStmt, vec.GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(1))
+	require.NotNil(t, vec.GetStringSources())
+
+	vec.RollbackAppend(checkpoint, 1)
+	require.Equal(t, 1, vec.Length())
+	require.Nil(t, vec.GetStringSources())
+	require.Equal(t, types.StringSourceCOMStmt, vec.GetStringSourceAt(0))
+
+	require.NoError(t, AppendBytes(vec, []byte("again"), false, mp))
+	require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(1))
+	vec.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}

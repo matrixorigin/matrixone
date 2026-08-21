@@ -1011,6 +1011,11 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
 				"aggregate explicit-text metadata requires MORPCVersion23")
 		}
+		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
+			vec.HasStringSourceMetadata() && !stringSourceWireEnabled(proc) {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"aggregate string source metadata requires MORPCVersion24")
+		}
 		if err := ag.SaveIntermediateResultOfChunk(curr, writer); err != nil {
 			return vm.CancelResult, false, err
 		}

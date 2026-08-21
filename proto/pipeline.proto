@@ -658,6 +658,7 @@ message PrepareParamInfo {
   repeated bool nulls = 4;
   repeated bool is_bin = 5;
   repeated bool is_binary_string = 6;
+  repeated uint32 string_sources = 7;
 }
 
 message ProcessInfo {

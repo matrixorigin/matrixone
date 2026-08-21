@@ -222,6 +222,8 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
+	require.Equal(t, types.StringSourceSQLPrepare, params.GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, params.GetStringSourceAt(1))
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
@@ -229,6 +231,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.Nil(t, params.GetData())
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
 	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParams().GetStringSourceAt(0))
 
 	current := cw.proc.GetPrepareParams()
 	cw.proc.SetPrepareParams(vector.NewVec(types.T_text.ToType()))
@@ -266,6 +269,7 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	for i := 0; i < prepareStmt.params.Length(); i++ {
+		require.Equal(t, types.StringSourceCOMStmt, prepareStmt.params.GetStringSourceAt(i))
 		param, ok := cw.paramVals[i].(plan2.ParamValue)
 		require.True(t, ok)
 		require.True(t, param.IsBinaryProtocol, "parameter %d lost COM_STMT provenance", i)

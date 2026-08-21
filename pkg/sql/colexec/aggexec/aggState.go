@@ -39,6 +39,7 @@ const (
 	spillMagicNumber            = uint64(0x4752505350494c4c) // "GRPSPILL"
 	aggBinaryStringTrailerMagic = uint64(0x4147474253545231)
 	aggStringDomainTrailerMagic = uint64(0x4147474253545232)
+	aggStringStateTrailerMagic  = uint64(0x4147474253545233)
 )
 
 var _ [0]struct{} = [AggBatchSize & aggBatchSizeMask]struct{}{}       // mask == size-1
@@ -1588,6 +1589,7 @@ func writeAggBinaryStringByte(writer io.Writer, value byte) error {
 func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, writer io.Writer) error {
 	hasBinaryString := false
 	hasTextString := false
+	hasStringSource := false
 	var rowCount int32
 	for chunk, chunkFlags := range flags {
 		if chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
@@ -1603,14 +1605,19 @@ func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, writer 
 				hasBinaryString = true
 				hasTextString = hasTextString || vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringText
 			}
+			hasStringSource = hasStringSource ||
+				vec != nil && vec.GetStringSourceAt(row) != types.StringSourceExpression
 		}
 	}
-	if !hasBinaryString {
+	if !hasBinaryString && !hasStringSource {
 		return nil
 	}
 	marker := aggBinaryStringTrailerMagic
 	if hasTextString {
 		marker = aggStringDomainTrailerMagic
+	}
+	if hasStringSource {
+		marker = aggStringStateTrailerMagic
 	}
 	if err := types.WriteUint64(writer, marker); err != nil {
 		return err
@@ -1629,7 +1636,10 @@ func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, writer 
 			}
 			value := byte(0)
 			if vec != nil {
-				if hasTextString {
+				if marker == aggStringStateTrailerMagic {
+					value = byte(vec.GetRuntimeStringDomainAt(row)) |
+						byte(vec.GetStringSourceAt(row))<<2
+				} else if hasTextString {
 					value = byte(vec.GetRuntimeStringDomainAt(row))
 				} else if vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringBinary {
 					value = 1
@@ -1645,13 +1655,18 @@ func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, writer 
 
 func (ae *aggExec) writeBinaryStringTrailerForChunk(chunk int, writer io.Writer) error {
 	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
-		ae.state[chunk].vecs[0] == nil || !ae.state[chunk].vecs[0].HasBinaryStringMetadata() {
+		ae.state[chunk].vecs[0] == nil ||
+		(!ae.state[chunk].vecs[0].HasBinaryStringMetadata() &&
+			!ae.state[chunk].vecs[0].HasStringSourceMetadata()) {
 		return nil
 	}
 	vec := ae.state[chunk].vecs[0]
 	marker := aggBinaryStringTrailerMagic
 	if vec.HasExplicitTextStringMetadata() {
 		marker = aggStringDomainTrailerMagic
+	}
+	if vec.HasStringSourceMetadata() {
+		marker = aggStringStateTrailerMagic
 	}
 	if err := types.WriteUint64(writer, marker); err != nil {
 		return err
@@ -1661,7 +1676,9 @@ func (ae *aggExec) writeBinaryStringTrailerForChunk(chunk int, writer io.Writer)
 	}
 	for row := 0; row < vec.Length(); row++ {
 		value := byte(0)
-		if marker == aggStringDomainTrailerMagic {
+		if marker == aggStringStateTrailerMagic {
+			value = byte(vec.GetRuntimeStringDomainAt(row)) | byte(vec.GetStringSourceAt(row))<<2
+		} else if marker == aggStringDomainTrailerMagic {
 			value = byte(vec.GetRuntimeStringDomainAt(row))
 		} else if vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringBinary {
 			value = 1
@@ -1793,7 +1810,8 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 	if marker == magicNumber {
 		return nil
 	}
-	if marker != aggBinaryStringTrailerMagic && marker != aggStringDomainTrailerMagic {
+	if marker != aggBinaryStringTrailerMagic && marker != aggStringDomainTrailerMagic &&
+		marker != aggStringStateTrailerMagic {
 		return moerr.NewInvalidInputNoCtxf(
 			"invalid aggregate state magic number %d", marker)
 	}
@@ -1811,12 +1829,19 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 		}
 		vec := ae.state[chunk].vecs[0]
 		for row := 0; row < vec.Length(); row++ {
-			domain, err := types.ReadByte(reader)
+			encoded, err := types.ReadByte(reader)
 			if err != nil {
 				return err
 			}
+			domain := encoded
+			source := types.StringSourceExpression
+			if marker == aggStringStateTrailerMagic {
+				domain = encoded & 0x03
+				source = types.StringSource(encoded >> 2)
+			}
 			if marker == aggBinaryStringTrailerMagic && domain > 1 ||
-				marker == aggStringDomainTrailerMagic && types.RuntimeStringDomain(domain) > types.RuntimeStringBinary {
+				(marker == aggStringDomainTrailerMagic || marker == aggStringStateTrailerMagic) &&
+					types.RuntimeStringDomain(domain) > types.RuntimeStringBinary || !source.Valid() {
 				return moerr.NewInvalidInputNoCtx("invalid aggregate binary provenance row")
 			}
 			runtimeDomain := types.RuntimeStringDomain(domain)
@@ -1824,6 +1849,9 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 				runtimeDomain = types.RuntimeStringBinary
 			}
 			if err := vec.SetRuntimeStringDomainAtWithMP(row, runtimeDomain, mp); err != nil {
+				return err
+			}
+			if err := vec.SetStringSourceAtWithMP(row, source, mp); err != nil {
 				return err
 			}
 		}

@@ -334,6 +334,35 @@ func TestBinaryStringPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestStringSourcePrepareParamMetadataForRemoteCompatibility(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion23)
+	_, err := StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 4})
+	require.ErrorContains(t, err, "protocol version 24")
+
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion24)
+	metadata, err := StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 4})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{0, 4}, metadata)
+	_, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 255})
+	require.ErrorContains(t, err, "invalid string source")
+	_, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{4})
+	require.ErrorContains(t, err, "metadata length")
+
+	metadata, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 0})
+	require.NoError(t, err)
+	require.Nil(t, metadata, "source-free metadata must not change the payload")
+}
+
 func TestCodecServiceRejectsPreparedProvenanceForOldProtocol(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
@@ -639,6 +668,11 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("0"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("true"), false, proc.Mp()))
+	require.NoError(t, frameParams.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceCOMStmt,
+		types.StringSourceSQLPrepare,
+		types.StringSourceUserVariable,
+	}, proc.Mp()))
 	proc.SetPrepareParamsWithMeta(frameParams, []bool{true, false, false}, []vector.PrepareParamKind{
 		vector.PrepareParamNone,
 		vector.PrepareParamDecimal,
@@ -657,6 +691,7 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 		false, true, false,
 		false, false, true,
 	}, info.PrepareParams.IsBin)
+	require.Equal(t, []uint32{4, 3, 2}, info.PrepareParams.StringSources)
 	decodedProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decodedProc.Free()
@@ -675,6 +710,9 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.Equal(t, "1", decodedParams.GetStringAt(0))
 	require.Equal(t, "0", decodedParams.GetStringAt(1))
 	require.Equal(t, "true", decodedParams.GetStringAt(2))
+	require.Equal(t, types.StringSourceCOMStmt, decodedParams.GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, decodedParams.GetStringSourceAt(1))
+	require.Equal(t, types.StringSourceUserVariable, decodedParams.GetStringSourceAt(2))
 }
 
 func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) {

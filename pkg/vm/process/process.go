@@ -339,6 +339,42 @@ func BinaryStringPrepareParamMetadataForRemote(
 	return append([]bool(nil), metadata...), nil
 }
 
+// StringSourcePrepareParamMetadataForRemote validates the independent source
+// axis and gates non-default ownership on the protocol version that can carry
+// it. A nil result preserves the source-free protobuf fast path.
+func StringSourcePrepareParamMetadataForRemote(
+	service string,
+	paramCount int,
+	metadata []uint32,
+) ([]uint32, error) {
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	if paramCount <= 0 || len(metadata) != paramCount {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"invalid string source prepare parameter metadata length %d for %d parameters",
+			len(metadata), paramCount)
+	}
+	hasMetadata := false
+	for i, encoded := range metadata {
+		source := types.StringSource(encoded)
+		if !source.Valid() {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"invalid string source %d at parameter %d", encoded, i)
+		}
+		hasMetadata = hasMetadata || source != types.StringSourceExpression
+	}
+	if !hasMetadata {
+		return nil, nil
+	}
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion24 {
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"prepared-parameter string source requires MORPC protocol version %d",
+			defines.MORPCVersion24)
+	}
+	return append([]uint32(nil), metadata...), nil
+}
+
 func prepareParamProtocolVersion(service string) int64 {
 	rt := runtime.ServiceRuntime(service)
 	if rt == nil {

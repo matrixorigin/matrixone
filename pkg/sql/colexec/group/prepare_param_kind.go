@@ -476,6 +476,19 @@ func explicitTextWireEnabled(proc *process.Process) bool {
 	return ok && version >= defines.MORPCVersion23
 }
 
+func stringSourceWireEnabled(proc *process.Process) bool {
+	if proc == nil {
+		return false
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion24
+}
+
 func hasPrepareParamKindPreservingAgg(aggs []aggexec.AggFuncExecExpression) bool {
 	for i := range aggs {
 		if aggs[i].PreservesFirstArgPrepareParamKind() {

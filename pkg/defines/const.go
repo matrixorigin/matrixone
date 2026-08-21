@@ -59,7 +59,8 @@ const (
 	MORPCVersion21     int64 = 21 // lookup-only RIGHT DEDUP for proven-unique insert input
 	MORPCVersion22     int64 = 22 // typed user-defined variable migration
 	MORPCVersion23     int64 = 23 // explicit-text runtime string provenance
-	MORPCLatestVersion       = MORPCVersion23
+	MORPCVersion24     int64 = 24 // independent prepared-parameter string source
+	MORPCLatestVersion       = MORPCVersion24
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

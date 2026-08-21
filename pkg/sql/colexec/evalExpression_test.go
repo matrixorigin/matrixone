@@ -200,6 +200,7 @@ func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
 			}, nil)
 			require.NoError(t, err)
 			defer vec.Free(proc.Mp())
+			require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(0))
 			require.Equal(t, test.want, vec.GetRuntimeStringDomainAt(0))
 			effective := types.StaticStringDomain(*vec.GetType())
 			if test.want == types.RuntimeStringText {
@@ -485,6 +486,7 @@ func TestFlowControlConstantFoldingPreservesSelectedMetadata(t *testing.T) {
 			selected, err := vector.NewConstBytes(test.sourceType, []byte("selected"), 1, proc.Mp())
 			require.NoError(t, err)
 			selected.SetPrepareParamKind(vector.PrepareParamFloat)
+			require.NoError(t, selected.SetStringSource(types.StringSourceSQLPrepare))
 			fallback, err := vector.NewConstBytes(test.resultType, []byte("fallback"), 1, proc.Mp())
 			require.NoError(t, err)
 			condition, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
@@ -518,6 +520,7 @@ func TestFlowControlConstantFoldingPreservesSelectedMetadata(t *testing.T) {
 			require.Equal(t, "selected", result.GetStringAt(0))
 			require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(0))
 			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKindAt(0))
+			require.Equal(t, types.StringSourceSQLPrepare, result.GetStringSourceAt(0))
 
 			zeroBatch := batch.New(nil)
 			zeroBatch.SetRowCount(0)
@@ -534,6 +537,7 @@ func TestFlowControlConstantFoldingPreservesSelectedMetadata(t *testing.T) {
 				require.Equal(t, "selected", result.GetStringAt(row))
 				require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(row))
 				require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKindAt(row))
+				require.Equal(t, types.StringSourceSQLPrepare, result.GetStringSourceAt(row))
 			}
 		})
 	}
@@ -548,6 +552,14 @@ func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing
 	require.NoError(t, vector.AppendBytes(params, []byte("5.9"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("true"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
+	require.NoError(t, params.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceCOMStmt,
+		types.StringSourceSQLPrepare,
+		types.StringSourceUserVariable,
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+		types.StringSourceCOMStmt,
+	}, proc.Mp()))
 	proc.SetPrepareParamsWithMeta(params, []bool{true, false, false, false, false, false}, []vector.PrepareParamKind{
 		vector.PrepareParamNone,
 		vector.PrepareParamInteger,
@@ -576,17 +588,20 @@ func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing
 	require.True(t, binaryVec.GetIsBin())
 	require.Equal(t, vector.PrepareParamNone, binaryVec.GetPrepareParamKind())
 	require.Equal(t, "AB\x00\x00", binaryVec.GetStringAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, binaryVec.GetStringSource())
 
 	integerVec, err := integerExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.False(t, integerVec.GetIsBin())
 	require.Equal(t, vector.PrepareParamInteger, integerVec.GetPrepareParamKind())
 	require.Equal(t, "5", integerVec.GetStringAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, integerVec.GetStringSource())
 
 	floatVec, err := floatExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamFloat, floatVec.GetPrepareParamKind())
 	require.Equal(t, "5.5", floatVec.GetStringAt(0))
+	require.Equal(t, types.StringSourceUserVariable, floatVec.GetStringSource())
 
 	decimalVec, err := decimalExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)

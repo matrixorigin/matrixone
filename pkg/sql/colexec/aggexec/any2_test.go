@@ -85,11 +85,12 @@ func TestAnyValuePreservesFirstPrepareParamKind(t *testing.T) {
 	results[0].Free(mp)
 }
 
-func TestAnyValueIntermediateRoundTripPreservesBinaryString(t *testing.T) {
+func TestAnyValueIntermediateRoundTripPreservesStringSemantics(t *testing.T) {
 	mp := mpool.MustNewZero()
 	input := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(input, []byte("binary"), false, mp))
 	input.SetIsBinaryString(true)
+	require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
 	source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
 	require.NoError(t, source.GroupGrow(1))
 	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
@@ -101,6 +102,7 @@ func TestAnyValueIntermediateRoundTripPreservesBinaryString(t *testing.T) {
 	results, err := restored.Flush()
 	require.NoError(t, err)
 	require.True(t, results[0].GetBinaryStringMetadataAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(0))
 
 	results[0].Free(mp)
 	restored.Free()

@@ -79,6 +79,18 @@ func (proc *Process) BuildProcessInfo(
 
 		vec := proc.GetPrepareParams()
 		if vec != nil {
+			var stringSources []uint32
+			if vec.HasStringSourceMetadata() {
+				stringSources = make([]uint32, vec.Length())
+				for i := range stringSources {
+					stringSources[i] = uint32(vec.GetStringSourceAt(i))
+				}
+			}
+			stringSources, err = StringSourcePrepareParamMetadataForRemote(
+				proc.GetService(), vec.Length(), stringSources)
+			if err != nil {
+				return procInfo, err
+			}
 			binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
 				proc.GetService(), vec.Length(), proc.Base.prepareParamsBinaryString)
 			if err != nil {
@@ -105,6 +117,7 @@ func (proc *Process) BuildProcessInfo(
 			if binaryStringMetadata != nil {
 				procInfo.PrepareParams.IsBinaryString = binaryStringMetadata
 			}
+			procInfo.PrepareParams.StringSources = stringSources
 		}
 	}
 	{ // session info
@@ -282,6 +295,12 @@ func (c *codecService) Decode(
 	stmtProfile.SetStatementRuntimeProfile("", "", value.StatementRuntimeIgnore)
 	proc.Base.StmtProfile = stmtProfile
 	if value.PrepareParams.Length > 0 {
+		stringSources, err := StringSourcePrepareParamMetadataForRemote(
+			service, int(value.PrepareParams.Length), value.PrepareParams.StringSources)
+		if err != nil {
+			proc.Free()
+			return nil, err
+		}
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
 			int(value.PrepareParams.Length),
@@ -296,6 +315,17 @@ func (c *codecService) Decode(
 		for i := range value.PrepareParams.Nulls {
 			if value.PrepareParams.Nulls[i] {
 				prepareParams.GetNulls().Add(uint64(i))
+			}
+		}
+		if len(stringSources) > 0 {
+			sources := make([]types.StringSource, len(stringSources))
+			for i, source := range stringSources {
+				sources[i] = types.StringSource(source)
+			}
+			if err = prepareParams.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
+				prepareParams.Free(proc.Mp())
+				proc.Free()
+				return nil, err
 			}
 		}
 		proc.SetOwnedPrepareParamsWithMetadata(

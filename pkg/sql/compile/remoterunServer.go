@@ -1086,6 +1086,10 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return moerr.NewInvalidStateNoCtx(
 			"explicit-text provenance requires MORPCVersion23 for remote results")
 	}
+	if b.HasStringSourceMetadata() && version < defines.MORPCVersion24 {
+		return moerr.NewInvalidStateNoCtx(
+			"string source provenance requires MORPCVersion24 for remote results")
+	}
 	if b.HasPrepareParamKindMetadata() && version < defines.MORPCVersion12 {
 		return moerr.NewInvalidStateNoCtx(
 			"prepared parameter provenance requires MORPCVersion12 for remote results")
