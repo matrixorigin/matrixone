@@ -9792,7 +9792,7 @@ func TestSnapshotLag1(t *testing.T) {
 	err = txn1.Commit(context.Background())
 	assert.NoError(t, err)
 	err = txn2.Commit(context.Background())
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 }
 
 func TestMarshalPartioned(t *testing.T) {

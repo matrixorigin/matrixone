@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,55 +18,87 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/stretchr/testify/require"
 )
 
-func TestContainsSkipsDuplicateAbortedOffsets(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
+func TestMutIndexDeleteAtPreservesOtherPositions(t *testing.T) {
 	idx := NewMutIndex(types.T_int32.ToType())
+	keys := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer keys.Close()
+	keys.Append(int32(7), false)
+	keys.Append(int32(7), false)
+	require.NoError(t, idx.BatchUpsert(keys.GetDownstreamVector(), 0))
 
-	insert := func(offset int) {
-		vec := vector.NewVec(types.T_int32.ToType())
-		require.NoError(t, vector.AppendFixed(vec, int32(7), false, mp))
-		require.NoError(t, idx.BatchUpsert(vec, offset))
-		vec.Free(mp)
+	require.NoError(t, idx.DeleteAt(int32(7), 0))
+	rows, err := idx.GetActiveRow(int32(7))
+	require.NoError(t, err)
+	require.Equal(t, []uint32{1}, rows)
+}
+
+func TestGetDuplicatedRowsSkipsIneligibleCandidates(t *testing.T) {
+	idx := NewMutIndex(types.T_int32.ToType())
+	indexedKeys := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer indexedKeys.Close()
+	for i := 0; i < 3; i++ {
+		indexedKeys.Append(int32(7), false)
 	}
-	insert(0)
-	insert(1)
+	require.NoError(t, idx.BatchUpsert(indexedKeys.GetDownstreamVector(), 0))
 
-	check := func(skipFn func(uint32) error) bool {
-		keys := vector.NewVec(types.T_int32.ToType())
-		require.NoError(t, vector.AppendFixed(keys, int32(7), false, mp))
-		err := idx.Contains(
-			context.Background(),
-			keys,
-			index.NewZM(types.T_int32, 0),
-			&types.Blockid{},
-			skipFn,
-			mp,
-		)
-		require.NoError(t, err)
-		deleted := keys.IsNull(0)
-		keys.Free(mp)
-		return deleted
-	}
+	query := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer query.Close()
+	query.Append(int32(7), false)
+	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer rowIDs.Close()
+	rowIDs.Append(nil, true)
 
-	require.True(t, check(func(row uint32) error {
-		if row == 0 {
-			return index.ErrNotFound
-		}
-		return nil
-	}), "a live retry offset must still classify the key as deleted")
-	require.False(t, check(func(uint32) error {
-		return index.ErrNotFound
-	}), "all-aborted offsets must leave the key visible")
+	objID := types.NewObjectid()
+	blkID := types.NewBlockidWithObjectID(&objID, 0)
+	err := idx.GetDuplicatedRows(
+		context.Background(),
+		query.GetDownstreamVector(),
+		nil,
+		&blkID,
+		rowIDs.GetDownstreamVector(),
+		func() (index.RowSelection, error) {
+			return index.RowSelection{MinRow: 0, MaxRow: 3}, nil
+		},
+		func(row uint32) error {
+			if row > 0 {
+				return index.ErrNotFound
+			}
+			return nil
+		},
+		common.DefaultAllocator,
+	)
+	require.NoError(t, err)
+	require.False(t, rowIDs.IsNull(0))
+	rid := rowIDs.Get(0).(types.Rowid)
+	require.Equal(t, uint32(0), rid.GetRowOffset())
+
+	skippedRowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer skippedRowIDs.Close()
+	skippedRowIDs.Append(nil, true)
+	err = idx.GetDuplicatedRows(
+		context.Background(),
+		query.GetDownstreamVector(),
+		nil,
+		&blkID,
+		skippedRowIDs.GetDownstreamVector(),
+		func() (index.RowSelection, error) {
+			return index.RowSelection{MinRow: 0, MaxRow: 3}, nil
+		},
+		func(uint32) error { return index.ErrNotFound },
+		common.DefaultAllocator,
+	)
+	require.NoError(t, err)
+	require.True(t, skippedRowIDs.IsNull(0))
 }
 
 func TestGetDuplicatedRowsWindow(t *testing.T) {
