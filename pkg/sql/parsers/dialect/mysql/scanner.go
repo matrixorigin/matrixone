@@ -1106,8 +1106,6 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 			i++
 		}
 		word := strings.ToLower(s.buf[start:i])
-		if inOn {
-		}
 		if inOn && leftName != "" && word == leftName {
 			next := s.skipBlankAndCommentsFrom(i)
 			leftRef = next < len(s.buf) && s.buf[next] == '.'
