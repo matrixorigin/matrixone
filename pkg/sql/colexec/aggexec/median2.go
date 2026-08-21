@@ -46,6 +46,7 @@ type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R type
 	groups       []*Vectors[T]
 	argType      types.Type
 	mp           *mpool.MPool
+	singleGroup  bool
 }
 
 // usesDenseAccountedState is deliberately limited to ordinary, non-DISTINCT
@@ -55,7 +56,16 @@ type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R type
 func (exec *medianColumnExecSelf[T, R]) usesDenseAccountedState() bool {
 	return exec != nil && exec.accounted != nil &&
 		exec.AggID() == AggIdOfMedian && !exec.IsDistinct() &&
-		!exec.accounted.saveArg
+		exec.singleGroup && !exec.accounted.saveArg
+}
+
+func (exec *medianColumnExecSelf[T, R]) setSingleGroupExecution() error {
+	if exec == nil || exec.accounted != nil || len(exec.groups) != 0 ||
+		len(exec.ret.resultList) != 1 || exec.ret.resultList[0].Length() != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	exec.singleGroup = true
+	return nil
 }
 
 func (exec *medianColumnExecSelf[T, R]) denseGroupIndex(chunk, row int) (int, error) {
@@ -98,7 +108,7 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 				return mpool.ErrAllocationAccountInvalid
 			}
 			active := exec.accounted.GetNumGroups()
-			if active > len(exec.groups) || more > math.MaxInt-active {
+			if active > len(exec.groups) || more > math.MaxInt-active || active+more > 1 {
 				return mpool.ErrAllocationAccountInvariant
 			}
 			oldLength := len(exec.groups)
@@ -141,7 +151,7 @@ func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
 				return mpool.ErrAllocationAccountInvalid
 			}
 			active := exec.accounted.GetNumGroups()
-			if active > len(exec.groups) || more > math.MaxInt-active {
+			if active > len(exec.groups) || more > math.MaxInt-active || active+more > 1 {
 				return mpool.ErrAllocationAccountInvariant
 			}
 			oldLength := len(exec.groups)
@@ -169,13 +179,14 @@ func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
 	return exec.ret.preExtend(more)
 }
 
-// prepareDenseGroups materializes the empty vector holders needed by a Group
-// preflight. Group deliberately reserves storage for prospective group ids
-// before it publishes those ids and calls GroupGrow, so len(groups) includes
-// both active groups and prepared-but-unpublished groups.
+// prepareDenseGroups materializes the sole holder needed by an H0 preflight.
+// It may run before Group publishes that statically bounded group id.
 func (exec *medianColumnExecSelf[T, R]) prepareDenseGroups(total int) error {
 	if !exec.usesDenseAccountedState() || total < 0 {
 		return mpool.ErrAllocationAccountInvalid
+	}
+	if total > 1 {
+		return mpool.ErrAllocationAccountInvariant
 	}
 	if total <= len(exec.groups) {
 		return nil
@@ -295,6 +306,7 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp
 	}
 	replacement := newMedianColumnExecSelf[T, R](
 		mp, exec.singleAggInfo, exec.ret.InitialValue)
+	replacement.singleGroup = exec.singleGroup
 	if err := replacement.unmarshalFromReader(reader, mp); err != nil {
 		replacement.Free()
 		return err
@@ -599,6 +611,10 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 		exec.accounted.Free()
 		exec.freeGroups()
 		return nil
+	}
+	if exec.usesDenseAccountedState() && rows != 1 {
+		return moerr.NewInvalidInputNoCtx(
+			"single-group median has multiple result rows")
 	}
 	result, err := exec.accounted.allocation.newVector(exec.retType)
 	if err != nil {
@@ -1396,6 +1412,8 @@ func (exec *medianColumnExecSelf[T, R]) SetAllocationAccount(
 		exec.ret.resultList[0].Length() != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
+	saveArgument := !exec.singleGroup ||
+		exec.AggID() != AggIdOfMedian || exec.IsDistinct()
 	base := &aggExec{
 		mp: exec.mp,
 		aggInfo: aggInfo{
@@ -1404,12 +1422,13 @@ func (exec *medianColumnExecSelf[T, R]) SetAllocationAccount(
 			argTypes:   []types.Type{exec.argType},
 			retType:    exec.retType,
 			emptyNull:  true,
-			// Ordinary MEDIAN retains fixed values in append-only accounted
-			// vectors. Building an ordered skiplist for every row made a 1B-row
-			// median spend nearly all of its time rebuilding and reinserting the
-			// saved-argument arena. DISTINCT median and ordered percentile keep
-			// the generic saved-argument representation.
-			saveArg: exec.AggID() != AggIdOfMedian || exec.IsDistinct(),
+			// A statically single-group ordinary MEDIAN retains fixed values in
+			// append-only accounted vectors. Building an ordered skiplist for
+			// every row made a 1B-row median spend nearly all of its time
+			// rebuilding and reinserting the saved-argument arena. Grouped or
+			// DISTINCT median and ordered percentile keep the generic governed
+			// representation.
+			saveArg: saveArgument,
 		},
 	}
 	if err := base.SetAllocationAccount(allocation); err != nil {
@@ -1511,8 +1530,8 @@ func (exec *medianColumnExecSelf[T, R]) saveDenseMedianSpillRows(
 	rows []int32,
 	writer io.Writer,
 ) error {
-	if !exec.usesDenseAccountedState() || writer == nil || len(rows) == 0 ||
-		len(rows) > AggBatchSize || chunk < 0 || chunk >= len(exec.accounted.state) {
+	if !exec.usesDenseAccountedState() || writer == nil || len(rows) != 1 ||
+		chunk < 0 || chunk >= len(exec.accounted.state) {
 		return moerr.NewInvalidInputNoCtx("invalid median spill selection")
 	}
 	state := &exec.accounted.state[chunk]
@@ -1563,7 +1582,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalDenseMedianSpill(
 	if err != nil {
 		return err
 	}
-	if count <= 0 || count > AggBatchSize {
+	if count != 1 {
 		return moerr.NewInvalidInputNoCtx("invalid median spill group count")
 	}
 

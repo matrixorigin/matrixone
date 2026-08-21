@@ -804,8 +804,15 @@ func BenchmarkAccountedMedianRetainedInput(b *testing.B) {
 			b.SetBytes(rows * 8)
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				agg, err := MakeAgg(
-					mp, AggIdOfMedian, false, types.T_int64.ToType())
+				var agg AggFuncExec
+				var err error
+				if tc.accounted {
+					agg, err = MakeSingleGroupAgg(
+						mp, AggIdOfMedian, false, nil, nil, types.T_int64.ToType())
+				} else {
+					agg, err = MakeAgg(
+						mp, AggIdOfMedian, false, types.T_int64.ToType())
+				}
 				if err != nil {
 					b.Fatal(err)
 				}
