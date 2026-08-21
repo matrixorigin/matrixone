@@ -40,4 +40,9 @@ source.decoded_budget.insertOne({
 });
 
 source.json_scalar.drop();
-source.json_scalar.insertOne({_id: 1, value: "text"});
+source.json_scalar.insertOne({
+  _id: 1,
+  value: "text",
+  payload: {a: NumberInt(2)},
+  arr: [NumberInt(1), NumberInt(2)]
+});

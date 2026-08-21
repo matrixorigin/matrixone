@@ -1082,6 +1082,13 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 	}
+	// Source collection validates public clone requests. Keep the persistence
+	// boundary defensive too: resolved sources can come from data-branch flow,
+	// and no path may create a target database for an imported package UDF whose
+	// external lifecycle is unsupported by database clone.
+	if err = validateCloneUserDefinedFunctions(source.userDefinedFuncs); err != nil {
+		return
+	}
 	fromAccountID := source.opAccountId
 	if source.snapshot != nil && source.snapshot.Tenant != nil {
 		fromAccountID = source.snapshot.Tenant.TenantID
@@ -1095,6 +1102,24 @@ func handleCloneDatabaseWithSource(
 		return
 	}
 	if err = revalidateTimestampDataBranchCloneDatabaseSource(reqCtx, ses, bh, source); err != nil {
+		return
+	}
+	if source.userDefinedFuncs, err = rewriteCloneUserDefinedFunctionBodies(
+		reqCtx,
+		source.userDefinedFuncs,
+		source.srcResolveDBName,
+		stmt.DstDatabase.String(),
+		parserLowerCaseTableNames(ses),
+	); err != nil {
+		return
+	}
+	if source.storedProcedures, err = rewriteCloneStoredProcedureBodies(
+		reqCtx,
+		source.storedProcedures,
+		source.srcResolveDBName,
+		stmt.DstDatabase.String(),
+		parserLowerCaseTableNames(ses),
+	); err != nil {
 		return
 	}
 
@@ -1259,6 +1284,28 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
+	// Routines are catalog metadata rather than mo_tables. Restore functions
+	// before views so view binding can resolve function dependencies.
+	routineTenant := ses.GetTenantInfo()
+	if len(source.userDefinedFuncs) != 0 || len(source.storedProcedures) != 0 {
+		routineTenant, err = resolveCloneDatabaseRoutineTenant(
+			reqCtx, bh, ses.GetTenantInfo(), source.toAccountId,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err = restoreCloneDatabaseUserDefinedFunctions(
+		ctx1, bh, routineTenant, source.userDefinedFuncs, stmt.DstDatabase.String(),
+	); err != nil {
+		return
+	}
+	if err = restoreCloneDatabaseStoredProcedures(
+		ctx1, bh, routineTenant, source.storedProcedures, stmt.DstDatabase.String(),
+	); err != nil {
+		return
+	}
+
 	// clone view table
 	if len(source.viewMap) != 0 {
 		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, restoreSnapshotTS)
@@ -1286,7 +1333,10 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 
-		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
+		// The function metadata above is intentionally still uncommitted: the
+		// clone must remain atomic. Mark view restoration so ResolveUdf uses the
+		// same clone transaction and can bind newly restored functions.
+		if err = restoreViews(withResolveUdfInCallerTxn(reqCtx), ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
 			return
 		}
 	}

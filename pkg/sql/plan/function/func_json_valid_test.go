@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -1101,6 +1102,30 @@ func TestJsonExtractStringTypedScalars(t *testing.T) {
 	}
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonExtract().jsonExtractString)
 	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestJsonExtractStringPreservesPayloadBoundaryQuotes(t *testing.T) {
+	values := []string{"\"leading", "trailing\"", "\"both\"", "\"\"", "\"你好\""}
+	docs := make([]string, len(values))
+	paths := make([]string, len(values))
+	nulls := make([]bool, len(values))
+	for i, value := range values {
+		encoded, err := json.Marshal(value)
+		require.NoError(t, err)
+		docs[i] = fmt.Sprintf(`{"v":%s}`, encoded)
+		paths[i] = "$.v"
+	}
+
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), docs, nulls),
+			NewFunctionTestInput(types.T_varchar.ToType(), paths, nulls),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, values, nulls),
+		newOpBuiltInJsonExtract().jsonExtractString)
+	s, info := tc.Run()
 	require.True(t, s, info)
 }
 
