@@ -363,6 +363,12 @@ public:
         this->current_offset_ = this->count;
         this->build_params.graph_degree = static_cast<size_t>(index_->graph_degree());
         this->is_loaded_ = true;
+        // Every index carries its cost model, including one adopted from an
+        // existing cuVS index. Leaving cost_ null here would make
+        // build_peak_bytes() answer 0 rather than fail, which is the shape of
+        // bug that hides: a claim silently sized at nothing.
+        this->cost_ = std::make_unique<matrixone::cagra_cost>(
+            this->dimension, sizeof(T), this->build_params.intermediate_graph_degree);
     }
 
     void start() override {

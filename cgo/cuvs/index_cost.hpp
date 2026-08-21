@@ -266,13 +266,5 @@ private:
     ivf_pq_cost cost_;
 };
 
-class ivf_flat_trainset_cost final : public index_cost_base {
-public:
-    ivf_flat_trainset_cost(size_t dim, size_t elem_size) : cost_(dim, elem_size) {}
-    size_t bytes_per_row() const override { return cost_.trainset_bytes_per_row(); }
-
-private:
-    ivf_flat_cost cost_;
-};
 
 }  // namespace matrixone
