@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -82,6 +83,8 @@ type catalogShadowTableState struct {
 
 type catalogInvalidationCounters struct {
 	checks               uint64
+	stableChecks         uint64
+	inconclusiveChecks   uint64
 	invalidations        uint64
 	bucketInvalidations  uint64
 	preciseInvalidations uint64
@@ -171,6 +174,9 @@ func (h catalogLatencyHistogram) quantile(q float64) int64 {
 type catalogInvalidationAttribution struct {
 	mu sync.Mutex
 
+	activeMutations atomic.Int64
+	generation      atomic.Uint64
+
 	counters         map[CatalogInvalidationConsumer]catalogInvalidationCounters
 	preparedRebuilds catalogLatencyHistogram
 	rcCacheReloads   catalogLatencyHistogram
@@ -181,6 +187,18 @@ type catalogInvalidationAttribution struct {
 	tables         map[catalogShadowTableKey]catalogShadowTableState
 	metadata       CatalogInvalidationReportMetadata
 	shadowOverflow bool
+}
+
+func (a *catalogInvalidationAttribution) beginMutation() func() {
+	a.activeMutations.Add(1)
+	return func() {
+		a.generation.Add(1)
+		a.activeMutations.Add(-1)
+	}
+}
+
+func (a *catalogInvalidationAttribution) mutationSnapshot() (uint64, int64) {
+	return a.generation.Load(), a.activeMutations.Load()
 }
 
 func newCatalogInvalidationAttribution() *catalogInvalidationAttribution {
@@ -304,11 +322,17 @@ func (a *catalogInvalidationAttribution) recordDecision(
 	exact bool,
 	bucket bool,
 	precise bool,
+	stable bool,
 ) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	c := a.counters[consumer]
 	c.checks++
+	if stable {
+		c.stableChecks++
+	} else {
+		c.inconclusiveChecks++
+	}
 	if exact {
 		c.invalidations++
 	}
@@ -318,16 +342,16 @@ func (a *catalogInvalidationAttribution) recordDecision(
 	if precise {
 		c.preciseInvalidations++
 	}
-	if bucket && !exact {
+	if stable && bucket && !exact {
 		c.bucketFalsePositive++
 	}
-	if exact && !bucket {
+	if stable && exact && !bucket {
 		c.bucketFalseNegative++
 	}
-	if precise && !exact {
+	if stable && precise && !exact {
 		c.preciseFalsePositive++
 	}
-	if exact && !precise {
+	if stable && exact && !precise {
 		c.preciseFalseNegative++
 	}
 	a.counters[consumer] = c
@@ -352,6 +376,8 @@ func (a *catalogInvalidationAttribution) recordRCTableCacheReload(d time.Duratio
 // CatalogInvalidationCounter is the JSON-safe per-consumer counter view.
 type CatalogInvalidationCounter struct {
 	Checks                uint64 `json:"checks"`
+	StableChecks          uint64 `json:"stable_checks"`
+	InconclusiveChecks    uint64 `json:"inconclusive_checks"`
 	Invalidations         uint64 `json:"invalidations"`
 	BucketInvalidations   uint64 `json:"bucket_invalidations"`
 	PreciseInvalidations  uint64 `json:"precise_invalidations"`
@@ -373,13 +399,19 @@ type CatalogInvalidationReportMetadata struct {
 
 // CatalogInvalidationLatency is the bounded latency view used in the report.
 type CatalogInvalidationLatency struct {
-	Count   uint64 `json:"count"`
-	Success uint64 `json:"successes"`
-	Error   uint64 `json:"errors"`
-	Miss    uint64 `json:"misses"`
-	P50NS   int64  `json:"p50_ns"`
-	P95NS   int64  `json:"p95_ns"`
-	P99NS   int64  `json:"p99_ns"`
+	Count   uint64                             `json:"count"`
+	Success uint64                             `json:"successes"`
+	Error   uint64                             `json:"errors"`
+	Miss    uint64                             `json:"misses"`
+	P50NS   int64                              `json:"p50_ns"`
+	P95NS   int64                              `json:"p95_ns"`
+	P99NS   int64                              `json:"p99_ns"`
+	Buckets []CatalogInvalidationLatencyBucket `json:"buckets"`
+}
+
+type CatalogInvalidationLatencyBucket struct {
+	UpperBoundNS int64  `json:"upper_bound_ns"`
+	Count        uint64 `json:"count"`
 }
 
 // CatalogInvalidationShadow is a bounded-state summary of the precise shadow
@@ -406,9 +438,21 @@ type CatalogInvalidationReport struct {
 }
 
 func histogramReport(h catalogLatencyHistogram) CatalogInvalidationLatency {
+	buckets := make([]CatalogInvalidationLatencyBucket, 0, len(h.bucket))
+	for i, count := range h.bucket {
+		upperBound := int64(-1)
+		if i < len(catalogLatencyBounds) {
+			upperBound = int64(catalogLatencyBounds[i])
+		}
+		buckets = append(buckets, CatalogInvalidationLatencyBucket{
+			UpperBoundNS: upperBound,
+			Count:        count,
+		})
+	}
 	return CatalogInvalidationLatency{
 		Count: h.count, Success: h.success, Error: h.error, Miss: h.miss,
 		P50NS: h.quantile(0.50), P95NS: h.quantile(0.95), P99NS: h.quantile(0.99),
+		Buckets: buckets,
 	}
 }
 
@@ -419,6 +463,8 @@ func (a *catalogInvalidationAttribution) report() CatalogInvalidationReport {
 	for consumer, c := range a.counters {
 		consumers[consumer.String()] = CatalogInvalidationCounter{
 			Checks:                c.checks,
+			StableChecks:          c.stableChecks,
+			InconclusiveChecks:    c.inconclusiveChecks,
 			Invalidations:         c.invalidations,
 			BucketInvalidations:   c.bucketInvalidations,
 			PreciseInvalidations:  c.preciseInvalidations,
@@ -440,7 +486,7 @@ func (a *catalogInvalidationAttribution) report() CatalogInvalidationReport {
 		retained += uint64(stringSize(key.name) + len(key.databaseName) + 40)
 	}
 	return CatalogInvalidationReport{
-		SchemaVersion:       1,
+		SchemaVersion:       2,
 		Enabled:             true,
 		Metadata:            a.metadata,
 		Consumers:           consumers,
@@ -501,7 +547,7 @@ func (cc *CatalogCache) RecordRCTableCacheReload(d time.Duration, outcome Catalo
 func (cc *CatalogCache) SnapshotCatalogInvalidationReport() CatalogInvalidationReport {
 	if cc.attribution == nil {
 		return CatalogInvalidationReport{
-			SchemaVersion: 1,
+			SchemaVersion: 2,
 			Enabled:       false,
 			Consumers:     map[string]CatalogInvalidationCounter{},
 			Events:        map[string]uint64{},

@@ -113,6 +113,11 @@ type GCReport struct {
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 	cc.gcMu.Lock()
 	defer cc.gcMu.Unlock()
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 
 	/*
 							GC
@@ -425,13 +430,16 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 // HasNewerVersionFor keeps the exact production decision while recording
 // bucket and precise-shadow decisions when attribution is explicitly enabled.
 func (cc *CatalogCache) HasNewerVersionFor(qry *TableChangeQuery, consumer CatalogInvalidationConsumer) bool {
-	exact := cc.hasNewerVersion(qry)
 	if cc.attribution == nil {
-		return exact
+		return cc.hasNewerVersion(qry)
 	}
+	startGeneration, startActive := cc.attribution.mutationSnapshot()
+	exact := cc.hasNewerVersion(qry)
 	bucket := cc.bucketHasNewerVersion(qry)
 	precise := cc.attribution.preciseDecision(qry)
-	cc.attribution.recordDecision(consumer, exact, bucket, precise)
+	endGeneration, endActive := cc.attribution.mutationSnapshot()
+	stable := startActive == 0 && endActive == 0 && startGeneration == endGeneration
+	cc.attribution.recordDecision(consumer, exact, bucket, precise, stable)
 	return exact
 }
 
@@ -542,6 +550,11 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 	cc.tableChange.Lock()
 	defer cc.tableChange.Unlock()
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 
 	cpks := bat.GetVector(MO_OFF + 0)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
@@ -564,6 +577,11 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 	cpks := bat.GetVector(MO_OFF + 0)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
@@ -638,6 +656,11 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	cc.tableChange.Lock()
 	defer cc.tableChange.Unlock()
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 
 	ParseTablesBatchAnd(bat, func(item *TableItem) {
 		cc.setTableItemLocked(item, true)
@@ -647,6 +670,11 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 func (cc *CatalogCache) setTableItem(item *TableItem, updateCPKey bool) {
 	cc.tableChange.Lock()
 	defer cc.tableChange.Unlock()
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 
 	cc.setTableItemLocked(item, updateCPKey)
 }
@@ -769,6 +797,11 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 	ParseDatabaseBatchAnd(bat, func(item *DatabaseItem) {
 		cc.databases.data.Set(item)
 		cc.databases.cpkeyIndex.Set(item)

@@ -61,9 +61,34 @@ func TestCatalogInvalidationAttributionDifferentialAndCollision(t *testing.T) {
 	report := cc.SnapshotCatalogInvalidationReport()
 	require.True(t, report.Enabled)
 	require.Equal(t, uint64(1), report.Consumers["prepared_plan"].Checks)
+	require.Equal(t, uint64(1), report.Consumers["prepared_plan"].StableChecks)
+	require.Zero(t, report.Consumers["prepared_plan"].InconclusiveChecks)
 	require.Zero(t, report.Consumers["prepared_plan"].PreciseFalseNegatives)
 	require.Equal(t, uint64(1), report.Consumers["rc_table_cache"].BucketFalsePositives)
 	require.Zero(t, report.Consumers["rc_table_cache"].PreciseFalsePositives)
+}
+
+func TestCatalogInvalidationConcurrentMutationIsInconclusive(t *testing.T) {
+	cc := NewCatalog()
+	cc.EnableCatalogInvalidationAttribution()
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 10, Name: "t", Id: 20, Version: 1,
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}, true)
+	query := &TableChangeQuery{
+		AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", TableId: 20,
+		Version: 1, Ts: timestamp.Timestamp{PhysicalTime: 200},
+	}
+
+	endMutation := cc.attribution.beginMutation()
+	defer endMutation()
+	require.False(t, cc.HasNewerVersionFor(query, CatalogInvalidationConsumerPreparedPlan))
+
+	counter := cc.SnapshotCatalogInvalidationReport().Consumers["prepared_plan"]
+	require.Equal(t, uint64(1), counter.Checks)
+	require.Zero(t, counter.StableChecks)
+	require.Equal(t, uint64(1), counter.InconclusiveChecks)
+	require.Zero(t, counter.PreciseFalseNegatives)
 }
 
 func TestCatalogInvalidationShadowIgnoresReplayAndReportsMetadata(t *testing.T) {
@@ -86,6 +111,7 @@ func TestCatalogInvalidationShadowIgnoresReplayAndReportsMetadata(t *testing.T) 
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &report))
 	require.Equal(t, "test-sha", report.Metadata.MatrixONESHA)
 	require.Equal(t, "complete", report.Metadata.Integrity)
+	require.Len(t, report.PreparedPlanRebuild.Buckets, len(catalogLatencyBounds)+1)
 }
 
 func TestCatalogInvalidationShadowDatabaseRecreation(t *testing.T) {
@@ -115,6 +141,183 @@ func TestCatalogInvalidationShadowEqualTimestampConflictIsConservative(t *testin
 		AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", TableId: 20, Version: 3,
 		Ts: timestamp.Timestamp{PhysicalTime: 250},
 	}))
+}
+
+func TestCatalogInvalidationDifferentialMatrix(t *testing.T) {
+	assertTable := func(t *testing.T, cc *CatalogCache, query *TableChangeQuery) {
+		t.Helper()
+		exact := cc.hasNewerVersion(query)
+		precise := cc.attribution.preciseDecision(query)
+		require.Equal(t, exact, precise, "query=%+v", query)
+	}
+
+	t.Run("table lifecycle", func(t *testing.T) {
+		cc := NewCatalog()
+		cc.EnableCatalogInvalidationAttribution()
+		cc.setTableItem(&TableItem{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", Id: 20,
+			Version: 1, Ts: timestamp.Timestamp{PhysicalTime: 100},
+		}, true)
+		assertTable(t, cc, &TableChangeQuery{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", TableId: 20,
+			Version: 1, Ts: timestamp.Timestamp{PhysicalTime: 200},
+		})
+
+		cc.setTableItem(&TableItem{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", Id: 20,
+			Version: 2, Ts: timestamp.Timestamp{PhysicalTime: 300},
+		}, true)
+		assertTable(t, cc, &TableChangeQuery{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", TableId: 20,
+			Version: 1, Ts: timestamp.Timestamp{PhysicalTime: 200},
+		})
+
+		cc.setTableItem(&TableItem{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", Id: 20,
+			deleted: true, Ts: timestamp.Timestamp{PhysicalTime: 400},
+		}, false)
+		cc.setTableItem(&TableItem{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", Id: 21,
+			Version: 1, Ts: timestamp.Timestamp{PhysicalTime: 500},
+		}, true)
+		assertTable(t, cc, &TableChangeQuery{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", TableId: 20,
+			Version: 2, Ts: timestamp.Timestamp{PhysicalTime: 350},
+		})
+
+		cc.setTableItem(&TableItem{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "old", Id: 20,
+			deleted: true, Ts: timestamp.Timestamp{PhysicalTime: 600},
+		}, false)
+		cc.setTableItem(&TableItem{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "new", Id: 21,
+			Version: 1, Ts: timestamp.Timestamp{PhysicalTime: 700},
+		}, true)
+		assertTable(t, cc, &TableChangeQuery{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "old", TableId: 20,
+			Version: 2, Ts: timestamp.Timestamp{PhysicalTime: 550},
+		})
+	})
+
+	t.Run("database identity and empty recreation", func(t *testing.T) {
+		cc := NewCatalog()
+		cc.EnableCatalogInvalidationAttribution()
+		cc.databases.data.Set(&DatabaseItem{
+			AccountId: 1, Name: "db", Id: 20, Ts: timestamp.Timestamp{PhysicalTime: 200},
+		})
+		cc.attribution.observeDatabase(1, "db", 20, timestamp.Timestamp{PhysicalTime: 200}, false)
+		require.True(t, cc.hasNewerVersion(&TableChangeQuery{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Ts: timestamp.Timestamp{PhysicalTime: 100},
+		}))
+		require.True(t, cc.attribution.preciseDecision(&TableChangeQuery{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Ts: timestamp.Timestamp{PhysicalTime: 100},
+		}))
+		cc.databases.data.Set(&DatabaseItem{
+			AccountId: 1, Name: "db", Id: 21, deleted: true, Ts: timestamp.Timestamp{PhysicalTime: 300},
+		})
+		cc.attribution.observeDatabase(1, "db", 21, timestamp.Timestamp{PhysicalTime: 300}, true)
+		cc.databases.data.Set(&DatabaseItem{
+			AccountId: 1, Name: "db", Id: 22, Ts: timestamp.Timestamp{PhysicalTime: 400},
+		})
+		cc.attribution.observeDatabase(1, "db", 22, timestamp.Timestamp{PhysicalTime: 400}, false)
+		require.True(t, cc.hasNewerVersion(&TableChangeQuery{
+			AccountId: 1, DatabaseId: 20, DatabaseName: "db", Ts: timestamp.Timestamp{PhysicalTime: 250},
+		}))
+		require.True(t, cc.attribution.preciseDecision(&TableChangeQuery{
+			AccountId: 1, DatabaseId: 20, DatabaseName: "db", Ts: timestamp.Timestamp{PhysicalTime: 250},
+		}))
+	})
+
+	t.Run("same account and collision", func(t *testing.T) {
+		cc := NewCatalog()
+		cc.EnableCatalogInvalidationAttribution()
+		cc.setTableItem(&TableItem{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "other", Id: 30,
+			Ts: timestamp.Timestamp{PhysicalTime: 500},
+		}, true)
+		query := &TableChangeQuery{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "target", TableId: 40,
+			Ts: timestamp.Timestamp{PhysicalTime: 400},
+		}
+		require.False(t, cc.hasNewerVersion(query))
+		require.False(t, cc.attribution.preciseDecision(query))
+		require.True(t, cc.bucketHasNewerVersion(query))
+		collision := *query
+		collision.AccountId += tableChangeBucketCount
+		require.False(t, cc.hasNewerVersion(&collision))
+		require.False(t, cc.attribution.preciseDecision(&collision))
+		require.True(t, cc.bucketHasNewerVersion(&collision))
+	})
+
+	t.Run("timestamp boundaries and gc", func(t *testing.T) {
+		cc := NewCatalog()
+		cc.EnableCatalogInvalidationAttribution()
+		cc.setTableItem(&TableItem{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", Id: 20,
+			Version: 3, Ts: timestamp.Timestamp{PhysicalTime: 500},
+		}, true)
+		for _, tc := range []struct {
+			name string
+			ts   int64
+			ver  uint32
+			want bool
+		}{
+			{name: "older changed", ts: 499, ver: 2, want: true},
+			{name: "equal", ts: 500, ver: 3, want: false},
+			{name: "newer", ts: 501, ver: 3, want: false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				query := &TableChangeQuery{
+					AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", TableId: 20,
+					Version: tc.ver, Ts: timestamp.Timestamp{PhysicalTime: tc.ts},
+				}
+				require.Equal(t, tc.want, cc.hasNewerVersion(query))
+				require.Equal(t, tc.want, cc.attribution.preciseDecision(query))
+			})
+		}
+		cc.setTableItem(&TableItem{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", Id: 20,
+			Version: 2, Ts: timestamp.Timestamp{PhysicalTime: 400},
+		}, true)
+		cc.GC(timestamp.Timestamp{PhysicalTime: 600})
+		require.False(t, cc.attribution.preciseDecision(&TableChangeQuery{
+			AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", TableId: 20,
+			Version: 3, Ts: timestamp.Timestamp{PhysicalTime: 500},
+		}))
+	})
+}
+
+func TestCatalogInvalidationDifferentialRandomizedSequences(t *testing.T) {
+	const seed uint64 = 27235
+	state := seed
+	next := func(limit uint64) uint64 {
+		state = state*6364136223846793005 + 1442695040888963407
+		return state % limit
+	}
+
+	cc := NewCatalog()
+	cc.EnableCatalogInvalidationAttribution()
+	for step := 1; step <= 4096; step++ {
+		account := uint32(1 + next(4))
+		databaseID := uint64(10 + next(4))
+		name := "t" + strconv.FormatUint(next(4), 10)
+		ts := timestamp.Timestamp{PhysicalTime: int64(step)}
+		if next(3) != 0 {
+			cc.setTableItem(&TableItem{
+				AccountId: account, DatabaseId: databaseID, DatabaseName: "db",
+				Name: name, Id: uint64(100 + next(8)), Version: uint32(1 + next(4)),
+				Ts: ts, deleted: next(5) == 0,
+			}, true)
+			continue
+		}
+		query := &TableChangeQuery{
+			AccountId: account, DatabaseId: databaseID, DatabaseName: "db", Name: name,
+			TableId: uint64(100 + next(8)), Version: uint32(1 + next(4)), Ts: ts,
+		}
+		exact := cc.hasNewerVersion(query)
+		precise := cc.attribution.preciseDecision(query)
+		require.Equal(t, exact, precise, "seed=%d step=%d query=%+v", seed, step, query)
+	}
 }
 
 func TestCatalogInvalidationShadowCapFailsClosed(t *testing.T) {
@@ -157,55 +360,72 @@ func TestCatalogInvalidationPreciseNoChangeDoesNotAllocate(t *testing.T) {
 }
 
 func BenchmarkCatalogInvalidationOracles(b *testing.B) {
-	query := &TableChangeQuery{
-		AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", TableId: 20, Version: 3,
-		Ts: timestamp.Timestamp{PhysicalTime: 1000},
-	}
 	for _, history := range []int{1, 16, 256, 4096} {
-		b.Run("history="+strconv.Itoa(history)+"/exact", func(b *testing.B) {
-			cc := NewCatalog()
-			for i := 0; i < history; i++ {
-				cc.setTableItem(&TableItem{
-					AccountId: 1, DatabaseId: uint64(100 + i), Name: "history", Id: uint64(i + 1),
-					Ts: timestamp.Timestamp{PhysicalTime: int64(i + 1)},
-				}, true)
+		for _, changed := range []bool{false, true} {
+			state := "warmed-negative"
+			if changed {
+				state = "changed"
 			}
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				cc.HasNewerVersion(query)
+			query := &TableChangeQuery{
+				AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t", TableId: uint64(history),
+				Version: uint32(history), Ts: timestamp.Timestamp{PhysicalTime: int64(history)},
 			}
-		})
+			if changed {
+				query.Version--
+				query.Ts.PhysicalTime--
+			} else {
+				query.Ts.PhysicalTime++
+			}
+			seed := func(cc *CatalogCache) {
+				for i := 0; i < history; i++ {
+					cc.setTableItem(&TableItem{
+						AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "t",
+						Id: uint64(i + 1), Version: uint32(i + 1),
+						Ts: timestamp.Timestamp{PhysicalTime: int64(i + 1)},
+					}, true)
+				}
+			}
+			b.Run("history="+strconv.Itoa(history)+"/"+state+"/exact", func(b *testing.B) {
+				cc := NewCatalog()
+				seed(cc)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					cc.HasNewerVersion(query)
+				}
+			})
 
-		b.Run("history="+strconv.Itoa(history)+"/bucket", func(b *testing.B) {
-			cc := NewCatalog()
-			for i := 0; i < history; i++ {
-				cc.setTableItem(&TableItem{
-					AccountId: 1, DatabaseId: uint64(100 + i), Name: "history", Id: uint64(i + 1),
-					Ts: timestamp.Timestamp{PhysicalTime: int64(i + 1)},
-				}, true)
-			}
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				cc.bucketHasNewerVersion(query)
-			}
-		})
+			b.Run("history="+strconv.Itoa(history)+"/"+state+"/disabled-wrapper", func(b *testing.B) {
+				cc := NewCatalog()
+				cc.attribution = nil
+				seed(cc)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					cc.HasNewerVersionFor(query, CatalogInvalidationConsumerPreparedPlan)
+				}
+			})
 
-		b.Run("history="+strconv.Itoa(history)+"/precise", func(b *testing.B) {
-			cc := NewCatalog()
-			cc.EnableCatalogInvalidationAttribution()
-			for i := 0; i < history; i++ {
-				cc.attribution.observeTable(
-					1, 10, "db", "history", uint64(i+1), 1,
-					timestamp.Timestamp{PhysicalTime: int64(i + 1)}, false,
-				)
-			}
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				cc.attribution.preciseDecision(query)
-			}
-		})
+			b.Run("history="+strconv.Itoa(history)+"/"+state+"/bucket", func(b *testing.B) {
+				cc := NewCatalog()
+				seed(cc)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					cc.bucketHasNewerVersion(query)
+				}
+			})
+
+			b.Run("history="+strconv.Itoa(history)+"/"+state+"/precise", func(b *testing.B) {
+				cc := NewCatalog()
+				cc.EnableCatalogInvalidationAttribution()
+				seed(cc)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					cc.attribution.preciseDecision(query)
+				}
+			})
+		}
 	}
 }

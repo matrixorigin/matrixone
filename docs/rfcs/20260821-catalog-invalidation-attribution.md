@@ -33,19 +33,24 @@ path.
 
 ## Report contract
 
-`CatalogCache.WriteCatalogInvalidationReport` emits JSON with schema version 1:
+`CatalogCache.WriteCatalogInvalidationReport` emits the per-CN JSON fragment
+with schema version 2:
 
 - exact decision/check/invalidation counts per prepared-plan and RC table-cache
-  consumer;
+  consumer, split into stable and inconclusive checks;
 - bucket and precise false-positive/false-negative counts separately;
 - catalog event counts;
-- prepared rebuild and RC reload bounded p50/p95/p99 latency buckets;
+- prepared rebuild and RC reload bounded p50/p95/p99 latency plus the raw
+  bounded histogram buckets;
 - shadow account/entry counts and estimated retained bytes;
 - explicit MatrixOne SHA, config, collection window, and integrity metadata.
 
-The harness must write the report to `catalog-invalidation-report.json` and set
-metadata before publication. Missing artifacts or a non-`complete` integrity
-value are measurement failures, not zero results.
+The two-CN harness wraps the fragments in a schema-v2 envelope containing the
+CN service identities, scenario/DDL/consumer mapping, merged decision totals,
+merged histograms, and `window_start_utc`/`window_end_utc`. It writes the
+report to `catalog-invalidation-report.json` through a same-directory
+temporary file and atomic rename. Missing artifacts or a non-`complete`
+integrity value are measurement failures, not zero results.
 
 ## Required measurement matrix
 
@@ -58,9 +63,11 @@ event sequences and deterministic update/check barriers under race.
 
 For exact, bucket, and precise microbenchmarks, use history lengths 1, 16, 256,
 and 4096, measure changed and warmed-negative paths for five runs, and retain
-the raw output plus `benchstat`. A warmed negative precise path must remain
-`0 allocs/op`. These measurements are directional and must not be converted
-into TPCC TPS claims.
+the raw output plus `benchstat`. Also compare the attribution-disabled wrapper
+with the exact implementation. A warmed negative precise path must remain
+`0 allocs/op`, and the disabled wrapper must not add more than 3% median
+latency. These measurements are directional and must not be converted into
+TPCC TPS claims.
 
 ## Candidate gate
 

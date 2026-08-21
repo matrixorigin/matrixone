@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "enabled": true,
   "metadata": {
     "matrixone_sha": "344d852ac3288e391a3ae6be3e3c7108caf2b75d",
@@ -10,6 +10,8 @@
   "consumers": {
     "prepared_plan": {
       "checks": 0,
+      "stable_checks": 0,
+      "inconclusive_checks": 0,
       "invalidations": 0,
       "bucket_invalidations": 0,
       "precise_invalidations": 0,
@@ -20,6 +22,8 @@
     },
     "rc_table_cache": {
       "checks": 0,
+      "stable_checks": 0,
+      "inconclusive_checks": 0,
       "invalidations": 0,
       "bucket_invalidations": 0,
       "precise_invalidations": 0,
@@ -37,7 +41,8 @@
     "misses": 0,
     "p50_ns": 0,
     "p95_ns": 0,
-    "p99_ns": 0
+    "p99_ns": 0,
+    "buckets": []
   },
   "rc_table_cache_reload": {
     "count": 0,
@@ -46,7 +51,8 @@
     "misses": 0,
     "p50_ns": 0,
     "p95_ns": 0,
-    "p99_ns": 0
+    "p99_ns": 0,
+    "buckets": []
   },
   "shadow": {
     "accounts": 0,

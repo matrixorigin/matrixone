@@ -156,6 +156,7 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 		*item,
 	)
 	if err != nil {
+		txn.finishCatalogReload(key, cache.CatalogInvalidationError)
 		return nil, err
 	}
 
