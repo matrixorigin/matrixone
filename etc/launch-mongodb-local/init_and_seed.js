@@ -46,3 +46,11 @@ source.json_scalar.insertOne({
   payload: {a: NumberInt(2)},
   arr: [NumberInt(1), NumberInt(2)]
 });
+
+source.binary_padding.drop();
+source.binary_padding.insertMany([
+  {_id: "d1", value: BinData(0, "YQ==")},
+  {_id: "d2", value: BinData(0, "YSA=")},
+  {_id: "d3", value: BinData(0, "YSAg")},
+  {_id: "d4", value: BinData(0, "QQ==")}
+]);

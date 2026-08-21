@@ -1283,6 +1283,33 @@ func TestDedupBuildIgnoreOnlyMarksCandidateOwnOldKey(t *testing.T) {
 	}
 }
 
+func TestDedupBuildIgnoreReleasesAcceptedCandidateOldKey(t *testing.T) {
+	hb := newTestHashmapBuilder(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hb.IsDedup = true
+	hb.OnDuplicateAction = plan.Node_IGNORE
+	defer func() {
+		hb.Reset(proc, true)
+		hb.Free(proc)
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, 1, 2, nil, proc))
+	bat := makeIntKeyValueBatchWithReleaseMarker(
+		proc,
+		[]int32{2, 4},
+		[]int32{1, 2},
+		[]bool{false, true},
+	)
+	require.NoError(t, hb.CopyBuildBatch(bat, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	bat.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.NotNil(t, hb.DelRows)
+	require.True(t, hb.DelRows.Contains(0), "the accepted row migration must release u=2")
+}
+
 func TestDedupBuildIgnorePrefersOriginalKeyOwner(t *testing.T) {
 	for _, oldKeys := range [][]int32{{1, 2}, {2, 1}} {
 		t.Run(strings.Join([]string{strconv.Itoa(int(oldKeys[0])), strconv.Itoa(int(oldKeys[1]))}, "_"), func(t *testing.T) {
@@ -1617,6 +1644,23 @@ func makeIntKeyValueBatch(proc *process.Process, keys []int32, values []int32) *
 	bat := batch.New([]string{"id", "v"})
 	bat.SetVector(0, keyVec)
 	bat.SetVector(1, valueVec)
+	bat.SetRowCount(len(keys))
+	return bat
+}
+
+func makeIntKeyValueBatchWithReleaseMarker(
+	proc *process.Process,
+	keys []int32,
+	values []int32,
+	released []bool,
+) *batch.Batch {
+	keyVec := testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	valueVec := testutil.MakeInt32Vector(values, nil, proc.Mp())
+	releasedVec := testutil.MakeBoolVector(released, nil, proc.Mp())
+	bat := batch.New([]string{"id", "v", "released"})
+	bat.SetVector(0, keyVec)
+	bat.SetVector(1, valueVec)
+	bat.SetVector(2, releasedVec)
 	bat.SetRowCount(len(keys))
 	return bat
 }
