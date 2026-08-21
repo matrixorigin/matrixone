@@ -16,12 +16,16 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -30,13 +34,23 @@ import (
 )
 
 type scriptedReader struct {
-	batches []*batch.Batch
-	idx     int
+	batches    []*batch.Batch
+	idx        int
+	readErr    error
+	closeCount int
 }
 
-func (r *scriptedReader) Close() error { return nil }
+func (r *scriptedReader) Close() error {
+	r.closeCount++
+	return nil
+}
 
 func (r *scriptedReader) Read(_ context.Context, _ []string, _ *pbplan.Expr, mp *mpool.MPool, dst *batch.Batch) (bool, error) {
+	if r.readErr != nil {
+		err := r.readErr
+		r.readErr = nil
+		return false, err
+	}
 	if r.idx >= len(r.batches) {
 		return true, nil
 	}
@@ -58,6 +72,290 @@ func (r *scriptedReader) GetOrderBy() []*plan.OrderBySpec { return nil }
 func (r *scriptedReader) SetIndexParam(*pbplan.IndexReaderParam) {}
 
 func (r *scriptedReader) SetFilterZM(objectio.ZoneMap) {}
+
+func TestNewVisibleStateChangesHandle(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	beforeRel := mock_frontend.NewMockRelation(ctrl)
+	afterRel := mock_frontend.NewMockRelation(ctrl)
+	tbl := &txnTable{
+		tableId:  42,
+		db:       &txnDatabase{op: txnOp},
+		eng:      eng,
+		tableDef: makeVisibleStateTableDef(true, true),
+	}
+	start := types.BuildTS(10, 0)
+	end := types.BuildTS(20, 0)
+	beforeRowID := types.BuildTestRowid(1, 1)
+	afterRowID := types.BuildTestRowid(2, 1)
+	before := makeVisibleStateBatch(t, mp, []types.Rowid{beforeRowID}, [][2]int32{{1, 10}})
+	after := makeVisibleStateBatch(t, mp, []types.Rowid{afterRowID}, [][2]int32{{1, 11}})
+	t.Cleanup(func() {
+		before.Clean(mp)
+		after.Clean(mp)
+	})
+	beforeReader := &scriptedReader{batches: []*batch.Batch{before}}
+	afterReader := &scriptedReader{batches: []*batch.Batch{after}}
+
+	gomock.InOrder(
+		txnOp.EXPECT().CloneSnapshotOp(start.Prev().ToTimestamp()).Return(txnOp),
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("", "", beforeRel, nil),
+		beforeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil),
+		beforeRel.EXPECT().BuildReaders(
+			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
+			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
+		).Return([]engine.Reader{beforeReader}, nil),
+		txnOp.EXPECT().CloneSnapshotOp(end.ToTimestamp()).Return(txnOp),
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("", "", afterRel, nil),
+		afterRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil),
+		afterRel.EXPECT().BuildReaders(
+			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
+			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
+		).Return([]engine.Reader{afterReader}, nil),
+	)
+
+	ctx := engine.WithRetainRowID(context.Background(), true)
+	h, err := NewVisibleStateChangesHandle(ctx, tbl, start, end, false, 16, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, h.Close())
+		require.Equal(t, 1, afterReader.closeCount)
+	})
+	require.Equal(t, 1, beforeReader.closeCount)
+	require.Equal(t, []string{catalog.Row_ID, "id", "v"}, h.scanAttrs)
+	require.Equal(t, []string{"id", "v"}, h.dataAttrs)
+
+	data, tombstone, hint, err := h.Next(ctx, mp)
+	require.NoError(t, err)
+	require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	require.Equal(t, []types.Rowid{afterRowID}, vector.MustFixedColWithTypeCheck[types.Rowid](data.Vecs[0]))
+	require.Equal(t, []types.Rowid{beforeRowID}, vector.MustFixedColWithTypeCheck[types.Rowid](tombstone.Vecs[0]))
+	data.Clean(mp)
+	tombstone.Clean(mp)
+}
+
+func TestNewVisibleStateChangesHandleRejectsInvalidInputs(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+
+	validEnd := types.BuildTS(10, 0)
+	_, err := NewVisibleStateChangesHandle(context.Background(), nil, types.TS{}, types.TS{}, false, 1, mp)
+	require.ErrorContains(t, err, "invalid timestamp")
+
+	_, err = NewVisibleStateChangesHandle(context.Background(), nil, types.BuildTS(11, 0), validEnd, false, 1, mp)
+	require.ErrorContains(t, err, "invalid timestamp")
+
+	_, err = NewVisibleStateChangesHandle(context.Background(), nil, types.TS{}, validEnd, false, 1, nil)
+	require.ErrorContains(t, err, "non-nil mpool")
+
+	_, err = NewVisibleStateChangesHandle(context.Background(), nil, types.TS{}, validEnd, false, 1, mp)
+	require.ErrorContains(t, err, "requires a table")
+
+	missingPK := &txnTable{tableDef: makeVisibleStateTableDef(false, true)}
+	_, err = NewVisibleStateChangesHandle(context.Background(), missingPK, types.TS{}, validEnd, false, 1, mp)
+	require.ErrorContains(t, err, "primary key column not found")
+
+	missingRowID := &txnTable{tableDef: makeVisibleStateTableDef(true, false)}
+	_, err = NewVisibleStateChangesHandle(
+		engine.WithRetainRowID(context.Background(), true),
+		missingRowID,
+		types.TS{},
+		validEnd,
+		false,
+		1,
+		mp,
+	)
+	require.ErrorContains(t, err, "rowid column not found")
+}
+
+func TestVisibleStateChangesHandleNextChunksAndSkipsDeletes(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+
+	h := &VisibleStateChangesHandle{
+		end:           types.BuildTS(30, 0),
+		skipDeletes:   true,
+		coarseMaxRow:  1,
+		mp:            mp,
+		scanAttrs:     []string{"id", "v"},
+		scanTypes:     []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		dataScanIdxes: []int{0, 1},
+		dataAttrs:     []string{"id", "v"},
+		dataTypes:     []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		pkScanIdx:     0,
+		pkType:        types.T_int32.ToType(),
+		beforeRows:    make(map[string]visibleStateRow),
+	}
+	before := makeInt32Batch(t, mp, [][2]int32{{1, 10}, {2, 20}})
+	after := makeInt32Batch(t, mp, [][2]int32{{1, 11}, {3, 30}})
+	t.Cleanup(func() {
+		before.Clean(mp)
+		after.Clean(mp)
+	})
+	for row := 0; row < before.RowCount(); row++ {
+		pkBytes, rowBytes := h.encodeSnapshotRow(before, row)
+		h.beforeRows[string(pkBytes)] = visibleStateRow{pk: pkBytes, row: rowBytes}
+	}
+	h.afterReaders = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
+	t.Cleanup(func() {
+		require.NoError(t, h.Close())
+	})
+
+	data, tombstone, _, err := h.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1}, vector.MustFixedColWithTypeCheck[int32](data.Vecs[0]))
+	require.Nil(t, tombstone)
+	data.Clean(mp)
+
+	data, tombstone, _, err = h.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.Equal(t, []int32{3}, vector.MustFixedColWithTypeCheck[int32](data.Vecs[0]))
+	require.Nil(t, tombstone)
+	data.Clean(mp)
+
+	data, tombstone, _, err = h.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.Nil(t, data)
+	require.Nil(t, tombstone)
+}
+
+func TestVisibleStateChangesHandleNextReaderError(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+
+	wantErr := errors.New("snapshot read failed")
+	h := &VisibleStateChangesHandle{
+		end:           types.BuildTS(40, 0),
+		coarseMaxRow:  1,
+		mp:            mp,
+		scanAttrs:     []string{"id"},
+		scanTypes:     []types.Type{types.T_int32.ToType()},
+		dataScanIdxes: []int{0},
+		dataAttrs:     []string{"id"},
+		dataTypes:     []types.Type{types.T_int32.ToType()},
+		pkScanIdx:     0,
+		pkType:        types.T_int32.ToType(),
+		beforeRows:    make(map[string]visibleStateRow),
+		afterReaders:  []engine.Reader{&scriptedReader{readErr: wantErr}},
+	}
+	t.Cleanup(func() {
+		require.NoError(t, h.Close())
+	})
+
+	data, tombstone, _, err := h.Next(context.Background(), mp)
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, data)
+	require.Nil(t, tombstone)
+}
+
+func TestVisibleStateChangesHandleBuildSnapshotReadersErrors(t *testing.T) {
+	at := types.BuildTS(50, 0)
+	wantErr := errors.New("snapshot unavailable")
+
+	t.Run("relation lookup", func(t *testing.T) {
+		tbl, txnOp, eng := newVisibleStateMockTable(t)
+		txnOp.EXPECT().CloneSnapshotOp(at.ToTimestamp()).Return(txnOp)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, tbl.tableId).Return("", "", nil, wantErr)
+
+		h := &VisibleStateChangesHandle{tbl: tbl}
+		readers, err := h.buildSnapshotReaders(context.Background(), at)
+		require.ErrorIs(t, err, wantErr)
+		require.Nil(t, readers)
+	})
+
+	t.Run("nil relation", func(t *testing.T) {
+		tbl, txnOp, eng := newVisibleStateMockTable(t)
+		txnOp.EXPECT().CloneSnapshotOp(at.ToTimestamp()).Return(txnOp)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, tbl.tableId).Return("", "", nil, nil)
+
+		h := &VisibleStateChangesHandle{tbl: tbl}
+		readers, err := h.buildSnapshotReaders(context.Background(), at)
+		require.ErrorContains(t, err, "resolved to nil")
+		require.Nil(t, readers)
+	})
+
+	t.Run("ranges", func(t *testing.T) {
+		tbl, txnOp, eng := newVisibleStateMockTable(t)
+		rel := mock_frontend.NewMockRelation(gomock.NewController(t))
+		txnOp.EXPECT().CloneSnapshotOp(at.ToTimestamp()).Return(txnOp)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, tbl.tableId).Return("", "", rel, nil)
+		rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, wantErr)
+
+		h := &VisibleStateChangesHandle{tbl: tbl}
+		readers, err := h.buildSnapshotReaders(context.Background(), at)
+		require.ErrorIs(t, err, wantErr)
+		require.Nil(t, readers)
+	})
+
+	t.Run("partial readers", func(t *testing.T) {
+		tbl, txnOp, eng := newVisibleStateMockTable(t)
+		rel := mock_frontend.NewMockRelation(gomock.NewController(t))
+		partial := &scriptedReader{}
+		txnOp.EXPECT().CloneSnapshotOp(at.ToTimestamp()).Return(txnOp)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, tbl.tableId).Return("", "", rel, nil)
+		rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
+		rel.EXPECT().BuildReaders(
+			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
+			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
+		).Return([]engine.Reader{partial}, wantErr)
+
+		h := &VisibleStateChangesHandle{tbl: tbl}
+		readers, err := h.buildSnapshotReaders(context.Background(), at)
+		require.ErrorIs(t, err, wantErr)
+		require.Nil(t, readers)
+		require.Equal(t, 1, partial.closeCount)
+	})
+}
+
+func TestVisibleStateChangesHandleRejectsInvalidRowIDs(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+
+	t.Run("insert has null rowid", func(t *testing.T) {
+		h := newRetainedRowIDChangesHandle(mp)
+		after := makeNullableRowIDBatch(t, mp, true)
+		t.Cleanup(func() {
+			after.Clean(mp)
+		})
+		h.afterReaders = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
+		t.Cleanup(func() {
+			require.NoError(t, h.Close())
+		})
+
+		data, tombstone, _, err := h.Next(context.Background(), mp)
+		require.ErrorContains(t, err, "null rowid")
+		require.Nil(t, data)
+		require.Nil(t, tombstone)
+	})
+
+	t.Run("delete has invalid rowid", func(t *testing.T) {
+		h := newRetainedRowIDChangesHandle(mp)
+		pk := types.EncodeValue(int32(1), types.T_int32)
+		h.beforeRows[string(pk)] = visibleStateRow{pk: pk, rowID: []byte{1}}
+		t.Cleanup(func() {
+			require.NoError(t, h.Close())
+		})
+
+		data, tombstone, _, err := h.Next(context.Background(), mp)
+		require.ErrorContains(t, err, "invalid rowid")
+		require.Nil(t, data)
+		require.Nil(t, tombstone)
+	})
+}
 
 func TestVisibleStateChangesHandleNext(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
@@ -260,5 +558,74 @@ func makeVisibleStateBatch(
 		require.NoError(t, vector.AppendFixed(bat.Vecs[2], row[1], false, mp))
 	}
 	bat.SetRowCount(len(rows))
+	return bat
+}
+
+func makeVisibleStateTableDef(includePK, includeRowID bool) *pbplan.TableDef {
+	cols := make([]*pbplan.ColDef, 0, 3)
+	if includeRowID {
+		cols = append(cols, &pbplan.ColDef{
+			Name: catalog.Row_ID,
+			Typ:  pbplan.Type{Id: int32(types.T_Rowid)},
+		})
+	}
+	cols = append(cols,
+		&pbplan.ColDef{Name: "id", Typ: pbplan.Type{Id: int32(types.T_int32)}},
+		&pbplan.ColDef{Name: "v", Typ: pbplan.Type{Id: int32(types.T_int32)}},
+	)
+	tblDef := &pbplan.TableDef{Cols: cols}
+	if includePK {
+		tblDef.Pkey = &pbplan.PrimaryKeyDef{PkeyColName: "id"}
+	} else {
+		tblDef.Pkey = &pbplan.PrimaryKeyDef{PkeyColName: "missing"}
+	}
+	return tblDef
+}
+
+func newVisibleStateMockTable(
+	t *testing.T,
+) (*txnTable, *mock_frontend.MockTxnOperator, *mock_frontend.MockEngine) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	tbl := &txnTable{
+		tableId: 42,
+		db:      &txnDatabase{op: txnOp},
+		eng:     eng,
+	}
+	return tbl, txnOp, eng
+}
+
+func newRetainedRowIDChangesHandle(mp *mpool.MPool) *VisibleStateChangesHandle {
+	return &VisibleStateChangesHandle{
+		end:           types.BuildTS(60, 0),
+		coarseMaxRow:  16,
+		mp:            mp,
+		scanAttrs:     []string{catalog.Row_ID, "id", "v"},
+		scanTypes:     []types.Type{types.T_Rowid.ToType(), types.T_int32.ToType(), types.T_int32.ToType()},
+		dataScanIdxes: []int{1, 2},
+		dataAttrs:     []string{"id", "v"},
+		dataTypes:     []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		pkScanIdx:     1,
+		pkType:        types.T_int32.ToType(),
+		rowIDScanIdx:  0,
+		rowIDType:     types.T_Rowid.ToType(),
+		retainRowID:   true,
+		beforeRows:    make(map[string]visibleStateRow),
+	}
+}
+
+func makeNullableRowIDBatch(t *testing.T, mp *mpool.MPool, rowIDIsNull bool) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(3)
+	bat.SetAttributes([]string{catalog.Row_ID, "id", "v"})
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTestRowid(1, 1), rowIDIsNull, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int32(10), false, mp))
+	bat.SetRowCount(1)
 	return bat
 }
