@@ -73,8 +73,19 @@ no such table db_analyze_stmt.t_analyze_nonexistent
 select 'AFTER_MID_LIST_ERROR';
 AFTER_MID_LIST_ERROR
 AFTER_MID_LIST_ERROR
+analyze table t_analyze_01, t_analyze_01;
+approx_count_distinct(a)	approx_count_distinct(b)
+2	3
+select 'AFTER_DUPLICATE_TARGETS';
+AFTER_DUPLICATE_TARGETS
+AFTER_DUPLICATE_TARGETS
 analyze table t_analyze_nonexistent;
 no such table db_analyze_stmt.t_analyze_nonexistent
+analyze table t_analyze_01(missing_column);
+invalid input: column missing_column does not exist
+select 'AFTER_MISSING_COLUMN_ERROR';
+AFTER_MISSING_COLUMN_ERROR
+AFTER_MISSING_COLUMN_ERROR
 drop snapshot if exists analyze_schema_snapshot;
 drop table if exists snapshot_cols;
 create table snapshot_cols(old_col int);
