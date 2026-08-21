@@ -106,4 +106,17 @@ func TestOrExternalResultBoundaryCases(t *testing.T) {
 		require.True(t, dst.Contains(1))
 		require.EqualValues(t, 3, dst.GetBitmap().Len())
 	})
+
+	t.Run("visible length bounds a longer source within spare capacity", func(t *testing.T) {
+		dst := NewWithSize(4)
+		dst.GetBitmap().InstallExternalStorage(make([]uint64, 1))
+
+		src := NewWithSize(8)
+		src.Add(2, 7)
+		Or(dst, src, dst)
+
+		require.True(t, dst.Contains(2))
+		require.False(t, dst.Contains(7))
+		require.EqualValues(t, 4, dst.GetBitmap().Len())
+	})
 }
