@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -317,6 +318,263 @@ func TestAccountedMedianResidentAndSpillRoundTrip(t *testing.T) {
 			require.Zero(t, mp.CurrNB())
 		})
 	}
+}
+
+func TestAccountedMedianRetainsOrdinaryInputWithoutSavedArgumentIndex(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	exec, err := MakeAgg(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	median := exec.(*medianColumnNumericExec[int64])
+	owner := exec.(AllocationAccountOwner)
+	require.NoError(t, owner.SetAllocationAccount(allocation))
+	SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
+	require.True(t, median.usesDenseAccountedState())
+	require.False(t, median.accounted.saveArg)
+	require.NoError(t, exec.GroupGrow(1))
+	require.Nil(t, median.accounted.state[0].argSkl)
+	require.Empty(t, median.accounted.state[0].argbuf)
+
+	const rows = MaxVectorLength + hashmap.UnitLimit
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = int64(rows - i)
+	}
+	input := buildFixedVec(t, mp, types.T_int64.ToType(), values)
+	groups := make([]uint64, hashmap.UnitLimit)
+	for i := range groups {
+		groups[i] = 1
+	}
+	for offset := 0; offset < rows; offset += hashmap.UnitLimit {
+		require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
+			offset, groups, []*vector.Vector{input}))
+		require.NoError(t, exec.BatchFill(
+			offset, groups, []*vector.Vector{input}))
+	}
+	require.Equal(t, rows, median.groups[0].Length())
+	require.Len(t, median.groups[0].vecs, 2)
+	require.Equal(t, MaxVectorLength, median.groups[0].vecs[0].Length())
+	require.Equal(t, hashmap.UnitLimit, median.groups[0].vecs[1].Length())
+	require.Nil(t, median.accounted.state[0].argSkl)
+	require.Empty(t, median.accounted.state[0].argbuf)
+	require.Positive(t, account.Snapshot().Used)
+
+	var spill bytes.Buffer
+	require.NoError(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
+		0, []int32{0}, &spill))
+	retainedBytes := 0
+	for _, vec := range median.groups[0].vecs {
+		require.Equal(t, vec.Length()*types.T_int64.ToType().TypeSize(),
+			len(vec.UnsafeGetRawData()))
+		retainedBytes += len(vec.UnsafeGetRawData())
+	}
+	require.Equal(t, rows*types.T_int64.ToType().TypeSize(), retainedBytes)
+	require.Equal(t, 8+4+8+retainedBytes+8, spill.Len())
+	restored, err := MakeAgg(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	restoredMedian := restored.(*medianColumnNumericExec[int64])
+	restoredOwner := restored.(AllocationAccountOwner)
+	require.NoError(t, restoredOwner.SetAllocationAccount(allocation))
+	SyncAggregatorsToChunkSize([]AggFuncExec{restored}, AggBatchSize)
+	require.NoError(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+		bytes.NewReader(spill.Bytes()), mp))
+	require.Equal(t, rows, restoredMedian.groups[0].Length())
+	require.Len(t, restoredMedian.groups[0].vecs, 2)
+
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, float64(rows+1)/2,
+		vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
+	restoredResult, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, float64(rows+1)/2,
+		vector.GetFixedAtNoTypeCheck[float64](restoredResult[0], 0))
+	result[0].Free(mp)
+	restoredResult[0].Free(mp)
+	input.Free(mp)
+	exec.Free()
+	restored.Free()
+	require.NoError(t, owner.ClearAllocationAccount(allocation))
+	require.NoError(t, restoredOwner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedMedianKeepsIndexedStateForDistinctAndOrderedPercentile(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   int64
+	}{
+		{name: "distinct-median", id: AggIdOfMedian},
+		{name: "ordered-percentile", id: AggIdOfPercentileCont},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+			exec, err := MakeAgg(
+				mp, tc.id, tc.id == AggIdOfMedian, types.T_int64.ToType())
+			require.NoError(t, err)
+			owner := exec.(AllocationAccountOwner)
+			require.NoError(t, owner.SetAllocationAccount(allocation))
+			require.NoError(t, exec.GroupGrow(1))
+
+			switch typed := exec.(type) {
+			case *medianColumnNumericExec[int64]:
+				require.False(t, typed.usesDenseAccountedState())
+				require.True(t, typed.accounted.saveArg)
+				require.NotNil(t, typed.accounted.state[0].argSkl)
+			case *orderedPercentileExec[int64, float64]:
+				require.False(t, typed.usesDenseAccountedState())
+				require.True(t, typed.accounted.saveArg)
+				require.NotNil(t, typed.accounted.state[0].argSkl)
+			default:
+				t.Fatalf("unexpected aggregate type %T", exec)
+			}
+
+			exec.Free()
+			require.NoError(t, owner.ClearAllocationAccount(allocation))
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestAccountedMedianDenseDecimalTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		values any
+	}{
+		{
+			name:   "decimal64",
+			typ:    types.New(types.T_decimal64, 10, 2),
+			values: mustDecimal64s(t, "1.00", "3.00", "2.00", "4.00", "6.00"),
+		},
+		{
+			name:   "decimal128",
+			typ:    types.New(types.T_decimal128, 20, 2),
+			values: mustDecimal128s(t, "1.00", "3.00", "2.00", "4.00", "6.00"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+			exec, err := MakeAgg(mp, AggIdOfMedian, false, tc.typ)
+			require.NoError(t, err)
+			owner := exec.(AllocationAccountOwner)
+			require.NoError(t, owner.SetAllocationAccount(allocation))
+			SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
+			require.NoError(t, exec.GroupGrow(2))
+
+			input := medianTestVector(t, mp, tc.typ, tc.values)
+			groups := []uint64{1, 1, 2, 2, 2}
+			require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
+				0, groups, []*vector.Vector{input}))
+			require.NoError(t, exec.BatchFill(
+				0, groups, []*vector.Vector{input}))
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, "2.000",
+				vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0).
+					Format(results[0].GetType().Scale))
+			require.Equal(t, "4.000",
+				vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 1).
+					Format(results[0].GetType().Scale))
+
+			results[0].Free(mp)
+			input.Free(mp)
+			exec.Free()
+			require.NoError(t, owner.ClearAllocationAccount(allocation))
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestAccountedMedianPreservesFloatNaNSemantics(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	legacy, err := MakeAgg(mp, AggIdOfMedian, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	accounted, err := MakeAgg(mp, AggIdOfMedian, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	owner := accounted.(AllocationAccountOwner)
+	require.NoError(t, owner.SetAllocationAccount(allocation))
+	SyncAggregatorsToChunkSize([]AggFuncExec{legacy, accounted}, AggBatchSize)
+	require.NoError(t, legacy.GroupGrow(1))
+	require.NoError(t, accounted.GroupGrow(1))
+
+	input := buildFixedVec(t, mp, types.T_float64.ToType(),
+		[]float64{1, math.NaN(), 2, 3})
+	groups := []uint64{1, 1, 1, 1}
+	require.NoError(t, legacy.BatchFill(
+		0, groups, []*vector.Vector{input}))
+	require.NoError(t, accounted.(BatchCapacityPreflight).PreflightBatchFill(
+		0, groups, []*vector.Vector{input}))
+	require.NoError(t, accounted.BatchFill(
+		0, groups, []*vector.Vector{input}))
+
+	legacyResult, err := legacy.Flush()
+	require.NoError(t, err)
+	accountedResult, err := accounted.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 2.5,
+		vector.GetFixedAtNoTypeCheck[float64](legacyResult[0], 0))
+	require.Equal(t,
+		math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](legacyResult[0], 0)),
+		math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](accountedResult[0], 0)))
+
+	legacyResult[0].Free(mp)
+	accountedResult[0].Free(mp)
+	input.Free(mp)
+	legacy.Free()
+	accounted.Free()
+	require.NoError(t, owner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestDenseMedianSelectorAcrossSegments(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+
+	ints := accountedMedianTestVectors(t, mp, allocation,
+		types.T_int64.ToType(), [][]int64{{9, 1}, {4, 4, -2}, {8, 3}})
+	gotInt, err := denseMedianNumeric(ints, allocation, mp)
+	require.NoError(t, err)
+	require.Equal(t, 4.0, gotInt)
+	ints.Free(mp)
+
+	floats := accountedMedianTestVectors(t, mp, allocation,
+		types.T_float64.ToType(), [][]float64{{math.NaN(), 0}, {math.NaN()}})
+	gotFloat, err := denseMedianNumeric(floats, allocation, mp)
+	require.NoError(t, err)
+	require.True(t, math.IsNaN(gotFloat))
+	floats.Free(mp)
+
+	decimal64s := accountedMedianTestVectors(t, mp, allocation,
+		types.New(types.T_decimal64, 10, 2), [][]types.Decimal64{
+			mustDecimal64s(t, "1.00", "3.00"),
+			mustDecimal64s(t, "2.00", "4.00"),
+		})
+	gotDecimal64, err := denseMedianDecimal64(decimal64s, allocation, mp)
+	require.NoError(t, err)
+	require.Equal(t, "2.500", gotDecimal64.Format(3))
+	decimal64s.Free(mp)
+
+	decimal128s := accountedMedianTestVectors(t, mp, allocation,
+		types.New(types.T_decimal128, 20, 2), [][]types.Decimal128{
+			mustDecimal128s(t, "1.00", "3.00"),
+			mustDecimal128s(t, "2.00", "4.00"),
+		})
+	gotDecimal128, err := denseMedianDecimal128(decimal128s, allocation, mp)
+	require.NoError(t, err)
+	require.Equal(t, "2.500", gotDecimal128.Format(3))
+	decimal128s.Free(mp)
+
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestAccountedMedianFinalizationExactCap(t *testing.T) {
@@ -779,6 +1037,25 @@ func medianTestVector(t *testing.T, mp *mpool.MPool, typ types.Type, values any)
 		t.Fatalf("unsupported test type %v", typ.Oid)
 	}
 	return v
+}
+
+func accountedMedianTestVectors[T numeric | types.Decimal64 | types.Decimal128](
+	t *testing.T,
+	mp *mpool.MPool,
+	allocation *AllocationAccount,
+	typ types.Type,
+	segments [][]T,
+) *Vectors[T] {
+	t.Helper()
+	ret := &Vectors[T]{allocation: allocation.vectorSelection()}
+	for _, values := range segments {
+		vec, err := allocation.newVector(typ)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+		ret.vecs = append(ret.vecs, vec)
+	}
+	ret.appendAt = len(ret.vecs) - 1
+	return ret
 }
 
 func mustDecimal64s(t *testing.T, vals ...string) []types.Decimal64 {
