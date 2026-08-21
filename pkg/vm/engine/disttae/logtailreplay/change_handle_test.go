@@ -34,6 +34,35 @@ import (
 	"github.com/tidwall/btree"
 )
 
+func TestChangesHandlerRangePrimaryIndex(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	state := NewPartitionState("", false, 42, false)
+	start := types.BuildTS(10, 0)
+	end := types.BuildTS(20, 0)
+
+	t.Run("explicit logical index", func(t *testing.T) {
+		h, err := NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
+			context.Background(), state, start, end, false, 16, 3, 1, mp, nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, 3, h.primarySeqnum)
+		require.Equal(t, 1, h.primaryIdx)
+		require.NoError(t, h.Close())
+	})
+
+	t.Run("legacy constructor uses seqnum as index", func(t *testing.T) {
+		h, err := NewChangesHandlerWithPartitionStateRange(
+			context.Background(), state, start, end, false, 16, 3, mp, nil,
+		)
+		require.NoError(t, err)
+		require.Equal(t, 3, h.primarySeqnum)
+		require.Equal(t, 3, h.primaryIdx)
+		require.NoError(t, h.Close())
+	})
+}
+
 func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
