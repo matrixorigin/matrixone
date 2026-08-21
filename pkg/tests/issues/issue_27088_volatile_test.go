@@ -55,6 +55,10 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 		execIssue27088VolatileSQL(t, ctx, conn, "insert into volatile_rows values (1)")
 		execIssue27088VolatileSQL(t, ctx, conn, "create table volatile_rhs (id int)")
 		execIssue27088VolatileSQL(t, ctx, conn, "insert into volatile_rhs values (1)")
+		execIssue27088VolatileSQL(t, ctx, conn, "create table volatile_left_zero (id int)")
+		execIssue27088VolatileSQL(t, ctx, conn, "insert into volatile_left_zero values (0)")
+		execIssue27088VolatileSQL(t, ctx, conn, "create table volatile_rhs_many (id int)")
+		execIssue27088VolatileSQL(t, ctx, conn, "insert into volatile_rhs_many values (1), (2)")
 
 		for _, test := range []struct {
 			name  string
@@ -185,6 +189,22 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx,
 				"select currval('volatile_scalar')").Scan(&current))
 			require.Equal(t, int64(1), current)
+			require.Equal(t, 1, got)
+		})
+
+		t.Run("join does not push down one-side volatile predicate", func(t *testing.T) {
+			execIssue27088VolatileSQL(t, ctx, conn, "drop sequence if exists volatile_scalar")
+			execIssue27088VolatileSQL(t, ctx, conn,
+				"create sequence volatile_scalar increment 1 start with 1 no cycle")
+
+			var got int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from volatile_left_zero l join volatile_rhs_many r on true "+
+					"where l.id + nextval('volatile_scalar') in ('0', '2')").Scan(&got))
+			var current int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select currval('volatile_scalar')").Scan(&current))
+			require.Equal(t, int64(2), current)
 			require.Equal(t, 1, got)
 		})
 

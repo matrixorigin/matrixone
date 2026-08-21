@@ -327,6 +327,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			for _, cond := range node.OnList {
 				conj := splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))
 				for _, conjElem := range conj {
+					if ContainsVolatileFunction(conjElem) {
+						newOnList = append(newOnList, conjElem)
+						continue
+					}
 					side := getJoinSideForPushdown(conjElem, leftTags, rightTags, markTag)
 					if side&JoinSideLeft == 0 {
 						rightPushdown = append(rightPushdown, conjElem)
@@ -367,17 +371,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
+			if ContainsVolatileFunction(filter) {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
 
 			switch joinSides[i] {
 			case JoinSideNone:
 				if filter.GetLit().GetBval() {
 					break
 				}
-				if ContainsVolatileFunction(filter) {
-					cantPushdown = append(cantPushdown, filter)
-					continue
-				}
-
 				switch node.JoinType {
 				case plan.Node_INNER:
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
@@ -472,7 +475,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 				for _, cond := range node.OnList {
 					joinSide := getJoinSideForPushdown(cond, leftTags, rightTags, markTag)
-					if joinSide == JoinSideRight {
+					if joinSide == JoinSideRight && !ContainsVolatileFunction(cond) {
 						rightPushdown = append(rightPushdown, cond)
 					} else {
 						newOnList = append(newOnList, cond)
@@ -499,6 +502,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {
 
 			for _, filter := range filters {
+				if ContainsVolatileFunction(filter) {
+					continue
+				}
 				down := false
 				if builder.checkExprCanPushdown(filter, builder.qry.Nodes[node.Children[0]]) {
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))

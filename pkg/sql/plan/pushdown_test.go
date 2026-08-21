@@ -27,32 +27,90 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestInnerJoinDoesNotDuplicateVolatileFilter(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+func makeVolatileJoinFilter(t *testing.T, ctx *MockCompilerContext, tag *int32) *plan.Expr {
+	t.Helper()
 	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
 	require.NoError(t, err)
-	randExpr := &plan.Expr{
+	value := &plan.Expr{
 		Typ: Type{Id: int32(types.T_float64)},
 		Expr: &plan.Expr_F{F: &plan.Function{
 			Func: &plan.ObjectRef{Obj: randFn.GetEncodedOverloadID(), ObjName: "rand"},
 		}},
 	}
+	if tag != nil {
+		value, err = BindFuncExprImplByPlanExpr(ctx.GetContext(), "+", []*plan.Expr{
+			{Typ: Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: *tag, ColPos: 0},
+			}},
+			value,
+		})
+		require.NoError(t, err)
+	}
 	filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "<", []*plan.Expr{
-		randExpr, makePlan2Float64ConstExprWithType(0.5),
+		value, makePlan2Float64ConstExprWithType(0.5),
 	})
 	require.NoError(t, err)
+	return filter
+}
+
+func newVolatileJoinPushdownBuilder(ctx *MockCompilerContext, joinType plan.Node_JoinType) (*QueryBuilder, int32, int32) {
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	leftTag := builder.GenNewBindTag()
+	rightTag := builder.GenNewBindTag()
 	builder.qry.Nodes = []*plan.Node{
-		{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{Outcnt: 1}},
-		{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{Outcnt: 1}},
-		{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER, Children: []int32{0, 1}},
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{leftTag}, Stats: &plan.Stats{Outcnt: 1}},
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{rightTag}, Stats: &plan.Stats{Outcnt: 1}},
+		{NodeType: plan.Node_JOIN, JoinType: joinType, Children: []int32{0, 1}},
+	}
+	return builder, leftTag, rightTag
+}
+
+func TestJoinDoesNotPushDownVolatileFilter(t *testing.T) {
+	for _, side := range []string{"none", "left", "right"} {
+		t.Run("inner/"+side, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			builder, leftTag, rightTag := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+			var tag *int32
+			switch side {
+			case "left":
+				tag = &leftTag
+			case "right":
+				tag = &rightTag
+			}
+			filter := makeVolatileJoinFilter(t, ctx, tag)
+
+			nodeID, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filter}, false)
+			require.Equal(t, int32(2), nodeID)
+			require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+			require.Empty(t, builder.qry.Nodes[0].FilterList)
+			require.Empty(t, builder.qry.Nodes[1].FilterList)
+		})
 	}
 
-	nodeID, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filter}, false)
-	require.Equal(t, int32(2), nodeID)
-	require.Equal(t, []*plan.Expr{filter}, cantPushdown)
-	require.Empty(t, builder.qry.Nodes[0].FilterList)
-	require.Empty(t, builder.qry.Nodes[1].FilterList)
+	t.Run("inner on-list", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		builder, leftTag, _ := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+		filter := makeVolatileJoinFilter(t, ctx, &leftTag)
+		builder.qry.Nodes[2].OnList = []*plan.Expr{filter}
+
+		_, cantPushdown := builder.pushdownFilters(2, nil, false)
+		require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+		require.Empty(t, builder.qry.Nodes[0].FilterList)
+		require.Empty(t, builder.qry.Nodes[1].FilterList)
+	})
+
+	t.Run("left on-list", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		builder, _, rightTag := newVolatileJoinPushdownBuilder(ctx, plan.Node_LEFT)
+		filter := makeVolatileJoinFilter(t, ctx, &rightTag)
+		builder.qry.Nodes[2].OnList = []*plan.Expr{filter}
+
+		_, cantPushdown := builder.pushdownFilters(2, nil, false)
+		require.Empty(t, cantPushdown)
+		require.Equal(t, []*plan.Expr{filter}, builder.qry.Nodes[2].OnList)
+		require.Empty(t, builder.qry.Nodes[0].FilterList)
+		require.Empty(t, builder.qry.Nodes[1].FilterList)
+	})
 }
 
 func TestAssertIsFilterPushdownBoundary(t *testing.T) {
