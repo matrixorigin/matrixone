@@ -22,9 +22,74 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewPartitionChangesHandlePreservesLogicalPrimaryIndex(t *testing.T) {
+	table := newTxnTableForTest()
+	table.fake = true
+	table.primarySeqnum = 3
+	table.primaryIdx = 1
+	table.relKind = "V"
+	table.eng.(*Engine).partitions = make(map[[2]uint64]*logtailreplay.Partition)
+
+	originalFactory := NewPartitionStateChangesHandler
+	t.Cleanup(func() { NewPartitionStateChangesHandler = originalFactory })
+	NewPartitionStateChangesHandler = func(
+		context.Context,
+		*logtailreplay.PartitionState,
+		types.TS,
+		types.TS,
+		bool,
+		uint32,
+		int,
+		*mpool.MPool,
+		fileservice.FileService,
+	) (*logtailreplay.ChangeHandler, error) {
+		return &logtailreplay.ChangeHandler{}, nil
+	}
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	h, err := NewPartitionChangesHandle(
+		context.Background(), table, types.MaxTs(), types.MaxTs(), false,
+		engine.SnapshotReadPolicyCheckpointReplay, mp,
+	)
+	require.NoError(t, err)
+	require.Equal(t, table.primarySeqnum, h.primarySeqnum)
+	require.Equal(t, table.primaryIdx, h.primaryIdx)
+	require.NoError(t, h.Close())
+}
+
+func TestSwapSnapshotRangePreservesLogicalPrimaryIndex(t *testing.T) {
+	table := newTxnTableForTest()
+	table.fake = true
+	table.relKind = "V"
+	table.primarySeqnum = 3
+	table.primaryIdx = 1
+	table.eng.(*Engine).partitions = make(map[[2]uint64]*logtailreplay.Partition)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	h := &PartitionChangesHandle{
+		tbl:                 table,
+		currentChangeHandle: &logtailreplay.ChangeHandler{},
+		currentPSFrom:       types.BuildTS(10, 0),
+		currentPSTo:         types.BuildTS(20, 0),
+		primarySeqnum:       table.primarySeqnum,
+		primaryIdx:          table.primaryIdx,
+		mp:                  mp,
+	}
+
+	require.NoError(t, h.swapCurrentHandleToSnapshotStateRangeWithTable(context.Background(), table))
+	require.NotNil(t, h.currentChangeHandle)
+	_, ok := h.currentChangeHandle.(*logtailreplay.ChangeHandler)
+	require.True(t, ok)
+	require.NoError(t, h.Close())
+}
 
 func TestPartitionChangesHandleCloseWithTypedNil(t *testing.T) {
 	var handle engine.ChangesHandle = (*PartitionChangesHandle)(nil)

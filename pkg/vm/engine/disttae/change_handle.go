@@ -100,6 +100,7 @@ type PartitionChangesHandle struct {
 
 	skipDeletes        bool
 	primarySeqnum      int
+	primaryIdx         int
 	snapshotReadPolicy engine.SnapshotReadPolicy
 	mp                 *mpool.MPool
 	fs                 fileservice.FileService
@@ -125,6 +126,7 @@ func NewPartitionChangesHandle(
 		toTs:               to,
 		skipDeletes:        skipDeletes,
 		primarySeqnum:      tbl.primarySeqnum,
+		primaryIdx:         tbl.primaryIdx,
 		snapshotReadPolicy: snapshotReadPolicy,
 		mp:                 mp,
 		fs:                 tbl.getTxn().engine.fs,
@@ -464,6 +466,13 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	if snapshotTbl == nil {
 		return moerr.NewErrStaleReadNoCtx(h.currentPSTo.ToString(), h.currentPSFrom.ToString())
 	}
+	return h.swapCurrentHandleToSnapshotStateRangeWithTable(ctx, snapshotTbl)
+}
+
+func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRangeWithTable(
+	ctx context.Context,
+	snapshotTbl *txnTable,
+) (err error) {
 	state, err := snapshotTbl.getPartitionState(ctx)
 	if err != nil {
 		return err
@@ -471,7 +480,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	if err = h.closeCurrentChangeHandle(); err != nil {
 		return err
 	}
-	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithPartitionStateRange(
+	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 		ctx,
 		state,
 		h.currentPSFrom,
@@ -479,6 +488,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 		h.skipDeletes,
 		objectio.BlockMaxRows,
 		h.primarySeqnum,
+		h.primaryIdx,
 		h.mp,
 		h.fs,
 	)
