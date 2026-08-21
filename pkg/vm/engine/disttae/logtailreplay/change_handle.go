@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -418,6 +419,22 @@ type aobjBlockPlan struct {
 	evaluableSamples []string
 }
 
+type commitTSBlockNotEvaluableError struct {
+	object string
+}
+
+func (e *commitTSBlockNotEvaluableError) Error() string {
+	return fmt.Sprintf("commit-ts block metadata is not evaluable for object %s", e.object)
+}
+
+// IsCommitTSBlockNotEvaluable reports that exact range replay cannot recover
+// row commit timestamps from a compacted TN object. Callers that require net
+// visible-state semantics may rebuild the range from its boundary snapshots.
+func IsCommitTSBlockNotEvaluable(err error) bool {
+	var target *commitTSBlockNotEvaluableError
+	return errors.As(err, &target)
+}
+
 func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, start, end types.TS, objects []*objectio.ObjectEntry, fs fileservice.FileService, mp *mpool.MPool) *AObjectHandle {
 	handle := &AObjectHandle{
 		isTombstone: isTombstone,
@@ -465,8 +482,9 @@ func (h *AObjectHandle) nextPrefetchTarget(
 //
 // For checkpoint-range recovery of TN-created non-appendable objects, this
 // method uses commit-ts zonemap to skip irrelevant blocks. If strict mode is
-// enabled and commit-ts zonemap is unavailable, it returns ErrFileNotFound so
-// caller can fall back to exact visible-state reconstruction.
+// enabled and commit-ts zonemap is unavailable, it returns a distinct error so
+// callers do not confuse an unsupported range scan with a physically missing
+// object file.
 func (h *AObjectHandle) shouldReadBlock(
 	ctx context.Context,
 	obj *objectio.ObjectEntry,
@@ -512,7 +530,9 @@ func (h *AObjectHandle) shouldReadBlock(
 				zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
 				zap.Strings("evaluable-samples", plan.evaluableSamples),
 			)
-			return false, moerr.NewFileNotFoundNoCtx(obj.ObjectName().String())
+			return false, &commitTSBlockNotEvaluableError{
+				object: obj.ObjectName().String(),
+			}
 		}
 		return true, nil
 	}

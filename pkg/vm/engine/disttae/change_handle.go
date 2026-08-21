@@ -200,11 +200,12 @@ func (h *PartitionChangesHandle) nextWithSnapshotRecovery(ctx context.Context, m
 }
 
 // bufferCurrentRange eagerly consumes the current sub-range into memory so
-// that a mid-iteration FileNotFound can discard partial output and rebuild
-// the same range via SnapshotStateRange recovery.
+// that a mid-iteration object loss or non-evaluable compacted object can
+// discard partial output and rebuild the same range without mixing semantics.
 func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpool.MPool) (err error) {
 	var queued []queuedChangeBatch
 	snapshotStateRangeTried := false
+	visibleStateTried := false
 	cleanQueued := func() {
 		for i := range queued {
 			if queued[i].data != nil {
@@ -218,11 +219,12 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 	for {
 		data, tombstone, hint, nextErr := h.currentChangeHandle.Next(ctx, mp)
 		if nextErr != nil {
-			if moerr.IsMoErrCode(nextErr, moerr.ErrFileNotFound) {
-				// A late FileNotFound means the replay handle for this sub-range is
-				// no longer trustworthy. Drop buffered output for the whole range,
-				// then rebuild from the end-snapshot partition state with
-				// delete-chain object rewrite.
+			if moerr.IsMoErrCode(nextErr, moerr.ErrFileNotFound) ||
+				logtailreplay.IsCommitTSBlockNotEvaluable(nextErr) {
+				// The replay handle for this sub-range is no longer trustworthy.
+				// Drop buffered output for the whole range, then rebuild from the
+				// end-snapshot state or, when row timestamps are unavailable, the
+				// exact boundary snapshots.
 				cleanQueued()
 				queued = nil
 				if !snapshotStateRangeTried {
@@ -237,8 +239,25 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 						zap.String("to", h.currentPSTo.ToString()),
 						zap.Error(swapErr),
 					)
+					if !moerr.IsMoErrCode(swapErr, moerr.ErrFileNotFound) &&
+						!logtailreplay.IsCommitTSBlockNotEvaluable(swapErr) {
+						return swapErr
+					}
 				}
-				cleanQueued()
+				if !visibleStateTried {
+					visibleStateTried = true
+					swapErr := h.swapCurrentHandleToVisibleState(ctx)
+					if swapErr == nil {
+						continue
+					}
+					logutil.Error("ChangesHandle-VisibleState rebuild failed",
+						zap.Uint64("table-id", h.tbl.tableId),
+						zap.String("from", h.currentPSFrom.ToString()),
+						zap.String("to", h.currentPSTo.ToString()),
+						zap.Error(swapErr),
+					)
+					return swapErr
+				}
 				return nextErr
 			}
 			cleanQueued()
@@ -380,14 +399,27 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		h.handleIdx++
 		snapshotRangeStart := time.Now()
 		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
-			logutil.Error("ChangesHandle-SnapshotStateRange init failed",
+			if !logtailreplay.IsCommitTSBlockNotEvaluable(err) {
+				return false, err
+			}
+			logutil.Warn("ChangesHandle-SnapshotStateRange init failed, rebuilding exact visible-state delta",
 				zap.Uint64("table-id", h.tbl.tableId),
 				zap.String("from", h.currentPSFrom.ToString()),
 				zap.String("to", h.currentPSTo.ToString()),
 				zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
 				zap.Error(err),
 			)
-			return false, err
+			visibleStateStart := time.Now()
+			if err = h.swapCurrentHandleToVisibleState(ctx); err != nil {
+				return false, err
+			}
+			logutil.Info("ChangesHandle-VisibleState-Ready",
+				zap.Uint64("table-id", h.tbl.tableId),
+				zap.String("from", h.currentPSFrom.ToString()),
+				zap.String("to", h.currentPSTo.ToString()),
+				zap.Duration("duration", time.Since(visibleStateStart)),
+			)
+			return false, nil
 		}
 		logutil.Info("ChangesHandle-SnapshotStateRange-Ready",
 			zap.Uint64("table-id", h.tbl.tableId),
@@ -481,6 +513,25 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 		h.primarySeqnum,
 		h.mp,
 		h.fs,
+	)
+	return err
+}
+
+func (h *PartitionChangesHandle) swapCurrentHandleToVisibleState(ctx context.Context) (err error) {
+	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
+		return nil
+	}
+	if err = h.closeCurrentChangeHandle(); err != nil {
+		return err
+	}
+	h.currentChangeHandle, err = NewVisibleStateChangesHandle(
+		ctx,
+		h.tbl,
+		h.currentPSFrom,
+		h.currentPSTo,
+		h.skipDeletes,
+		objectio.BlockMaxRows,
+		h.mp,
 	)
 	return err
 }
