@@ -16,6 +16,7 @@ package mongodb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"strconv"
@@ -396,14 +397,15 @@ func (c *Converter) appendValue(
 		}
 		return c.appendBytes(vec, data, column.Width, mp, budget)
 	case types.T_json:
-		// Canonical Extended JSON preserves BSON distinctions such as int32 vs
-		// int64, Decimal128, Date and Binary instead of silently relaxing them
-		// into a lossy generic JSON number/string representation.
-		text := value.String()
-		if text == "" {
+		// Relaxed Extended JSON maps BSON values that have a native JSON
+		// representation (including int32, int64 and finite double values) to
+		// ordinary JSON values. BSON-only values retain their Extended JSON
+		// wrappers so the result is still valid, lossless JSON.
+		text, err := relaxedExtJSONValue(value)
+		if err != nil {
 			return errConversion
 		}
-		jsonValue, err := types.ParseStringToByteJson(text)
+		jsonValue, err := types.ParseSliceToByteJson(text)
 		if err != nil {
 			return errConversion
 		}
@@ -415,6 +417,28 @@ func (c *Converter) appendValue(
 	default:
 		return errConversion
 	}
+}
+
+// MarshalExtJSON requires a document at the top level. Wrap a raw BSON value
+// in a temporary document, marshal it in relaxed mode, then unwrap the JSON
+// value without decoding its number tokens through float64.
+func relaxedExtJSONValue(value bson.RawValue) ([]byte, error) {
+	const field = "value"
+	doc := bsoncore.BuildDocument(nil, bsoncore.AppendValueElement(nil, field, bsoncore.Value{
+		Type: bsoncore.Type(value.Type),
+		Data: value.Value,
+	}))
+	text, err := bson.MarshalExtJSON(bson.Raw(doc), false, false)
+	if err != nil {
+		return nil, err
+	}
+	var wrapper struct {
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.Unmarshal(text, &wrapper); err != nil || len(wrapper.Value) == 0 {
+		return nil, errConversion
+	}
+	return wrapper.Value, nil
 }
 
 func (c *Converter) appendBytes(
