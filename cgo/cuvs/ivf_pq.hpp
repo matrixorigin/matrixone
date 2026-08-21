@@ -28,6 +28,7 @@
 #include "quantize.hpp"
 #include "helper.h"
 #include "device_memory.hpp"
+#include "index_cost.hpp"
 #include "dynamic_batching.hpp"
 
 #include <cuda_fp16.h>
@@ -186,6 +187,7 @@ public:
     using storage_type = T;
     using ivf_pq_index = cuvs::neighbors::ivf_pq::index<int64_t>;
     using search_result_t = ivf_pq_search_result_t;
+
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
     using host_mask_bundle_t = typename gpu_index_base_t<B, T, ivf_pq_build_params_t, int64_t>::host_mask_bundle_t;
@@ -223,6 +225,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_pq_cost>(
+            this->dimension, bp.m, bp.bits_per_code, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         this->host_ids.reserve(this->count);
@@ -255,6 +259,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_pq_cost>(
+            this->dimension, bp.m, bp.bits_per_code, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         this->host_ids.reserve(this->count);
@@ -281,6 +287,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_pq_cost>(
+            this->dimension, bp.m, bp.bits_per_code, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->current_offset_ = 0;
     }
@@ -502,6 +510,19 @@ public:
                 std::unique_ptr<ivf_pq_index> local_idx;
                 {
                     std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    matrixone::device_memory_governor::reservation build_claim;
+                    const size_t peak = this->build_peak_bytes(this->count);
+                    if (peak > 0) {
+                        // Claim what this build is about to allocate: max(kmeans
+                        // trainset, PQ codes), the peak of two phases that never
+                        // coexist. cuVS build() is stream-ordered -- it allocates
+                        // and enqueues, then returns -- so the claim ends when
+                        // this scope does, BEFORE the handle.sync() that waits on
+                        // the compute. By then the bytes are visible to
+                        // cudaMemGetInfo; holding the claim across the wait would
+                        // count them twice for the whole build, which is minutes.
+                        build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_pq::build");
+                    }
                     local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
                         *res, index_params, dataset_host));
                 }
@@ -546,6 +567,19 @@ public:
                 std::unique_ptr<ivf_pq_index> local_idx;
                 {
                     std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    matrixone::device_memory_governor::reservation build_claim;
+                    const size_t peak = this->build_peak_bytes(this->count);
+                    if (peak > 0) {
+                        // Claim what this build is about to allocate: max(kmeans
+                        // trainset, PQ codes), the peak of two phases that never
+                        // coexist. cuVS build() is stream-ordered -- it allocates
+                        // and enqueues, then returns -- so the claim ends when
+                        // this scope does, BEFORE the handle.sync() that waits on
+                        // the compute. By then the bytes are visible to
+                        // cudaMemGetInfo; holding the claim across the wait would
+                        // count them twice for the whole build, which is minutes.
+                        build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_pq::build");
+                    }
                     local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
                         *res, index_params, dataset_host));
                 }
@@ -569,6 +603,14 @@ public:
                 std::unique_ptr<ivf_pq_index> new_idx;
                 {
                     std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    matrixone::device_memory_governor::reservation build_claim;
+                    const size_t peak = this->build_peak_bytes(this->count);
+                    if (peak > 0) {
+                        // See the REPLICATED site: max(kmeans trainset, PQ codes),
+                        // released when this scope ends -- before handle.sync()
+                        // waits on the compute.
+                        build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_pq::build");
+                    }
                     new_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
                         *res, index_params, dataset_host));
                 }

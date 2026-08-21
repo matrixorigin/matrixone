@@ -17,58 +17,13 @@ package table_function
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
 )
 
-// calculatePqDim must agree with cuVS index<IdxT>::calculate_pq_dim
-// (cuvs/cpp/src/neighbors/ivf_pq_index.cu:611) or every derived capacity is wrong
-// for builds that leave m unset. The wiki_all case is the one that bites: at dim
-// 768 cuVS picks 384 while the benchmark template configures 192, so a default-m
-// index costs twice as much device memory as a configured one.
-func TestCalculatePqDim(t *testing.T) {
-	for _, tc := range []struct {
-		dim, want uint64
-		why       string
-	}{
-		{768, 384, "wiki_all: halved to 384, already a multiple of 32"},
-		{960, 480, "halved to 480, already a multiple of 32"},
-		{128, 64, "boundary: >=128 so it halves"},
-		{127, 96, "just under the boundary: no halving, round down 127 -> 96"},
-		{100, 96, "no halving, round down to a multiple of 32"},
-		{64, 64, "no halving, already a multiple of 32"},
-		{30, 16, "rounds down to 0, so falls back to the largest power of two <= dim"},
-		{1, 1, "degenerate"},
-	} {
-		require.Equalf(t, tc.want, calculatePqDim(tc.dim), "dim=%d (%s)", tc.dim, tc.why)
-	}
-}
-
-// pqCodeBytes is what bounds capacity now that the dataset is streamed, so it has
-// to count the int64 payload cuVS stores next to each code — omitting it
-// under-counts every row by 8 bytes, which at 88M rows is 0.7 GB.
-func TestPqCodeBytes(t *testing.T) {
-	require.Equal(t, uint64(200), pqCodeBytes(768, 192, 8), "wiki_all 88M: 192 code + 8 index")
-	require.Equal(t, uint64(392), pqCodeBytes(768, 0, 8), "m unset -> cuVS default 384, + 8")
-	require.Equal(t, uint64(200), pqCodeBytes(768, 192, 0), "bits unset -> 8")
-	require.Equal(t, uint64(104), pqCodeBytes(768, 192, 4), "4-bit codes pack two per byte")
-	require.Equal(t, uint64(33), pqCodeBytes(768, 100, 2), "200 bits rounds up to 25 bytes, + 8")
-}
-
-// The counter-intuitive one: a narrower storage type makes the TRAINSET bigger,
-// because cuVS keeps a float32 trainset and, for non-float T, a second copy in T
-// (ivf_pq_build.cuh:1288-1307). Sizing this with the storage width under-counts
-// f16 by a third and is how a derived default OOMs.
-func TestTrainsetBytesPerElem(t *testing.T) {
-	require.Equal(t, uint64(4), trainsetBytesPerElem(metric.Quantization_F32))
-	require.Equal(t, uint64(6), trainsetBytesPerElem(metric.Quantization_F16), "4 f32 + 2 half")
-	require.Equal(t, uint64(5), trainsetBytesPerElem(metric.Quantization_INT8), "4 f32 + 1 int8")
-	require.Equal(t, uint64(5), trainsetBytesPerElem(metric.Quantization_UINT8))
-	require.Greater(t, trainsetBytesPerElem(metric.Quantization_F16),
-		trainsetBytesPerElem(metric.Quantization_F32),
-		"narrow storage must cost MORE here, not less")
-}
-
+// planTrainFraction resolves the k-means sample against the capacity and the
+// training-row bound the index reported. The per-row costs behind that bound now
+// live in C++ (gpu_ivf_pq_t::device_bytes_per_row / trainset_bytes_per_row), so
+// what is left to test here is the clamping arithmetic, not the cost model.
 func TestPlanTrainFraction(t *testing.T) {
 	t.Run("request honoured when the device can hold it", func(t *testing.T) {
 		p := planTrainFraction(1_000_000, 500_000, 1000, 0.2)

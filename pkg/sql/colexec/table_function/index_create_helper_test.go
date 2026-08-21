@@ -109,25 +109,3 @@ func TestFetchSrcTableRowCount(t *testing.T) {
 		require.Error(t, err)
 	})
 }
-
-func TestDistinctDeviceCount(t *testing.T) {
-	cases := []struct {
-		name string
-		in   []int
-		want int
-	}{
-		{"nil", nil, 0},
-		{"empty", []int{}, 0},
-		{"single", []int{0}, 1},
-		{"all distinct", []int{0, 1, 2, 3}, 4},
-		{"gpu_multi_simulation aliased pair", []int{0, 0}, 1},
-		{"gpu_multi_simulation aliased quad", []int{0, 0, 0, 0}, 1},
-		{"mixed with duplicate", []int{0, 1, 0, 2}, 3},
-		{"reordered but same set", []int{2, 1, 0, 1}, 3},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, distinctDeviceCount(tc.in))
-		})
-	}
-}

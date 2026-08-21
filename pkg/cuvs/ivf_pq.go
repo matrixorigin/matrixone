@@ -1236,3 +1236,43 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries 
 
 	return uint64(jobID), nil
 }
+
+// IvfPqRowsFitting answers how many rows an IVF-PQ index of this shape fits on
+// these devices, and how many k-means training rows fit.
+//
+// No index is involved: the cost model is a value type in C++ (index_cost.hpp),
+// so capacity can be estimated before anything exists to estimate it for. The
+// per-row costs, the budget, de-duplicating aliased device ids and taking the
+// smallest card all happen there; Go supplies the shape and consumes row counts.
+//
+// ASK ONCE, before any sub-index has been built. A later call sees the memory
+// earlier sub-indexes took and would shrink each successive capacity instead of
+// all of them sharing one.
+func IvfPqRowsFitting(dim, m, bitsPerCode, elemSize uint64, devices []int, mode DistributionMode) (
+	rows int64, trainsetRows int64, perRow uint64, minDevice int, minFree uint64, err error) {
+	if len(devices) == 0 {
+		return 0, 0, 0, 0, 0, nil
+	}
+	cDevs := make([]C.int, len(devices))
+	for i, d := range devices {
+		cDevs[i] = C.int(d)
+	}
+	var errmsg *C.char
+	var cRows, cTrain C.int64_t
+	var cPerRow, cFree C.uint64_t
+	var cMinDev C.int
+	rc := C.gpu_ivf_pq_rows_fitting(
+		C.uint64_t(dim), C.uint64_t(m), C.uint64_t(bitsPerCode), C.uint64_t(elemSize),
+		&cDevs[0], C.int(len(cDevs)), C.int(mode),
+		&cRows, &cTrain, &cPerRow, &cMinDev, &cFree, unsafe.Pointer(&errmsg))
+	runtime.KeepAlive(cDevs)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, 0, 0, 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if rc != 0 {
+		return 0, 0, 0, 0, 0, moerr.NewInternalErrorNoCtx("IvfPqRowsFitting failed")
+	}
+	return int64(cRows), int64(cTrain), uint64(cPerRow), int(cMinDev), uint64(cFree), nil
+}

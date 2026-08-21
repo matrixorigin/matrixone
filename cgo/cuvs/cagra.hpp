@@ -28,6 +28,7 @@
 #include "quantize.hpp"
 #include "helper.h"
 #include "device_memory.hpp"
+#include "index_cost.hpp"
 #include "dynamic_batching.hpp"
 
 #include <cuda_fp16.h>
@@ -238,6 +239,7 @@ public:
     using cagra_index = cuvs::neighbors::cagra::device_padded_index<T, uint32_t>;
     using padded_dataset_t = cuvs::neighbors::device_padded_dataset<T, int64_t>;
     using search_result_t = cagra_search_result_t;
+
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
     using host_mask_bundle_t = typename gpu_index_base_t<B, T, cagra_build_params_t, int64_t>::host_mask_bundle_t;
@@ -275,6 +277,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::cagra_cost>(
+            this->dimension, sizeof(T), bp.intermediate_graph_degree);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         if (dataset_data) {
@@ -307,6 +311,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::cagra_cost>(
+            this->dimension, sizeof(T), bp.intermediate_graph_degree);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         this->host_ids.reserve(this->count);
@@ -333,6 +339,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::cagra_cost>(
+            this->dimension, sizeof(T), bp.intermediate_graph_degree);
 
         this->current_offset_ = 0;
     }

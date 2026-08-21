@@ -1301,3 +1301,36 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries 
 
 	return uint64(jobID), nil
 }
+
+// CagraRowsFitting answers how many rows a CAGRA index of this shape fits on
+// these devices. See IvfPqRowsFitting: the cost model is a value type in C++, so
+// no index is needed, and the answer must be taken once before anything has been
+// allocated.
+func CagraRowsFitting(dim, elemSize, intermediateGraphDegree uint64, devices []int, mode DistributionMode) (
+	rows int64, perRow uint64, minDevice int, minFree uint64, err error) {
+	if len(devices) == 0 {
+		return 0, 0, 0, 0, nil
+	}
+	cDevs := make([]C.int, len(devices))
+	for i, d := range devices {
+		cDevs[i] = C.int(d)
+	}
+	var errmsg *C.char
+	var cRows C.int64_t
+	var cPerRow, cFree C.uint64_t
+	var cMinDev C.int
+	rc := C.gpu_cagra_rows_fitting(
+		C.uint64_t(dim), C.uint64_t(elemSize), C.uint64_t(intermediateGraphDegree),
+		&cDevs[0], C.int(len(cDevs)), C.int(mode),
+		&cRows, &cPerRow, &cMinDev, &cFree, unsafe.Pointer(&errmsg))
+	runtime.KeepAlive(cDevs)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, 0, 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if rc != 0 {
+		return 0, 0, 0, 0, moerr.NewInternalErrorNoCtx("CagraRowsFitting failed")
+	}
+	return int64(cRows), uint64(cPerRow), int(cMinDev), uint64(cFree), nil
+}

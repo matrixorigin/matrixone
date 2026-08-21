@@ -183,6 +183,19 @@ uint64_t gpu_ivf_flat_search_quantize_with_filter_async(gpu_ivf_flat_c index_c, 
                                                       uint32_t limit, ivf_flat_search_params_t search_params,
                                                       const char* preds_json, void* errmsg);
 
+
+// gpu_ivf_flat_rows_fitting answers "how many rows of this index shape fit on these devices",
+// entirely in C++. The per-row cost model and the budget live on the cost class
+// (index_cost.hpp); the caller supplies the shape and consumes a row count.
+//
+// No index is needed: a cost object is a value type. ASK ONCE, before anything
+// has been allocated -- a later call sees the memory earlier sub-indexes took
+// and would shrink each successive capacity instead of sharing one.
+int gpu_ivf_flat_rows_fitting(uint64_t dim, uint64_t elem_size,
+                              const int* device_ids, int num_devices, int dist_mode,
+                              int64_t* out_rows, int64_t* out_trainset_rows, uint64_t* out_per_row,
+                              int* out_min_device, uint64_t* out_min_free, void* errmsg);
+
 #ifdef __cplusplus
 }
 #endif

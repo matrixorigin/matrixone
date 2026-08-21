@@ -418,39 +418,32 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			trainFrac = cuvs.DefaultIvfPqBuildParams().KmeansTrainsetFraction
 		}
 		dim := uint64(u.idxcfg.CuvsIvfpq.Dimensions)
-		perRow := pqCodeBytes(dim, uint64(u.idxcfg.CuvsIvfpq.M),
-			uint64(u.idxcfg.CuvsIvfpq.BitsPerCode))
 
-		// The trainset is budgeted separately because it never coexists with the
-		// index: its block closes at ivf_pq_build.cuh:1369, before detail::extend at
-		// :1374 allocates the list data. Peak is max(train, index), so folding the
-		// trainset into perRow would shrink capacity to buy something that is not
-		// competing for the same bytes.
-		// Size against the SMALLEST participating card, not devices[0].
-		// Heterogeneous free VRAM is supported, and SHARDED cuts equal shards:
-		// sampling only devices[0] on a 40 GiB + 8 GiB pair sizes every shard for
-		// the 40 GiB card and the 8 GiB one OOMs the moment its shard lands.
-		// Iterate DISTINCT physical devices — under gpu_multi_simulation the list
-		// aliases one card N times, and querying it N times just returns the same
-		// number N times while pretending to have surveyed N cards.
-		rowsFit, minDev, minFree, derr := vimemory.DeviceMinRowsFitting(devices, perRow, cuvs.RowsFittingFreeMem)
+		// Ask the index how many rows fit. Everything about device memory is
+		// computed in C++ -- the per-row cost model, the k-means trainset cost
+		// and the budget all live on the index class, and the per-device probe
+		// runs on its worker threads, which are already bound to their device.
+		// Go models no device bytes; host memory below is Go's.
+		//
+		// The probe index is created UNSIZED: it allocates nothing but a worker
+		// pool, because sizing it would need the number being asked for. It is
+		// thrown away here and the real index is created with the planned
+		// capacity by the builder.
+		//
+		// Asked exactly ONCE, before any sub-index exists. A second probe would
+		// run after the first sub-index allocated, see less free memory, and
+		// shrink every successive sub-index instead of sharing one capacity.
+		rowsFit, maxTrainRows, perRow, minDev, minFree, derr := ivfpqPkg.ProbeRowsFitting(
+			u.idxcfg, qt, devices)
 		if derr != nil {
 			// Never guess. Assuming the whole table fits is precisely the failure
 			// being prevented, so say which lever the operator has instead.
 			return moerr.NewInternalErrorf(proc.Ctx,
 				"ivfpq: %v; set max_index_capacity explicitly", derr)
 		}
-		// The trainset is sized separately: it is a different per-row cost and its
-		// allocation does not overlap the index's, so it gets its own minimum.
-		maxTrainRows, _, _, terr := vimemory.DeviceMinRowsFitting(
-			devices, dim*trainsetBytesPerElem(qt), cuvs.RowsFittingFreeMem)
-		if terr != nil {
-			return moerr.NewInternalErrorf(proc.Ctx,
-				"ivfpq: %v; set kmeans_train_percent explicitly", terr)
-		}
 		if rowsFit > 0 {
-			logutil.Infof("IVFPQ create: smallest participating device %d has %d MB free, %d B/row resident -> %d rows fit",
-				minDev, minFree>>20, perRow, rowsFit)
+			logutil.Infof("IVFPQ create: smallest participating device %d has %d MB free, %d B/row resident -> %d rows fit (%d training rows)",
+				minDev, minFree>>20, perRow, rowsFit, maxTrainRows)
 		}
 
 		// INCLUDE column metadata is resolved HERE — before memory.HostRowsFitting —
@@ -494,18 +487,11 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			threshold = int64(cuvs.DefaultIvfPqBuildParams().NLists)
 		}
 
-		// SHARDED distributes ONE sub-index across N devices; see the matching
-		// note in cagra_create_gpu.go — planCapacity's split guard needs the
-		// aggregate rowsFit for SHARDED or it rejects legitimate N-way shards.
-		// Scale by the DISTINCT physical device count so gpu_multi_simulation
-		// (devices aliased to one physical GPU) does not over-commit that card.
-		effectiveRowsFit := rowsFit
-		if u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED) {
-			if physN := distinctDeviceCount(devices); physN > 1 {
-				effectiveRowsFit = rowsFit * int64(physN)
-			}
-		}
-		plan, err := planCapacity(srcRowCount, requestedCapacity, effectiveRowsFit, hostRowsFit, threshold,
+		// The SHARDED aggregate -- one index spread over N cards, so N x the
+		// per-card capacity -- is applied by rows_fitting() in C++, which knows
+		// the distribution mode and the distinct device count. Scaling again here
+		// would double it.
+		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
 			u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
 			"ivfpq", "max_index_capacity")
 		if err != nil {

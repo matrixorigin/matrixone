@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include "device_memory.hpp"
+#include "index_cost.hpp"
+
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -544,6 +548,19 @@ public:
     // directly from this store (see filter.hpp / eval_filter_bitmap_cpu).
     // Empty means the index has no INCLUDE columns and only unfiltered search applies.
     FilterStore filter_host_;
+
+    // cost_ is this index's DEVICE cost model (index_cost.hpp). Each index type
+    // constructs its own concrete cost in its constructor, so "what does a row
+    // cost" and "what will this build peak at" have exactly one definition per
+    // index and every caller -- the capacity planner and the build claim alike --
+    // reads the same object.
+    std::unique_ptr<matrixone::index_cost_base> cost_;
+
+    // build_peak_bytes: what a build of `rows` rows is about to allocate. Routed
+    // through cost_ so the claim cannot drift from the planner's model.
+    size_t build_peak_bytes(uint64_t rows) const {
+        return cost_ ? cost_->build_peak_bytes(rows) : 0;
+    }
 
     gpu_index_base_t() = default;
     virtual ~gpu_index_base_t() {
@@ -2209,6 +2226,17 @@ protected:
         raft_handle_wrapper_t& handle, const T* host_data, uint64_t n_rows) {
         auto res    = handle.get_raft_resources();
         auto stream = raft::resource::get_cuda_stream(*res);
+        // Claim the upload before allocating it. extend() decides how much it is
+        // about to move to the device well before it moves it, and that window is
+        // invisible to a live cudaMemGetInfo -- which is exactly what a claim is
+        // for. The claim ends when this returns: by then the buffer exists and
+        // every later admission sees it in the free figure, so holding it longer
+        // would count the same bytes twice.
+        const size_t upload_bytes = static_cast<size_t>(n_rows) * this->dimension * sizeof(T);
+        matrixone::device_memory_governor::reservation upload_claim;
+        if (upload_bytes > 0) {
+            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload");
+        }
         rmm::device_uvector<T> storage(
             static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
         auto device_view = raft::make_device_matrix_view<T, int64_t>(
@@ -2228,6 +2256,23 @@ protected:
         raft_handle_wrapper_t& handle, const float* host_data, uint64_t n_rows) {
         auto res    = handle.get_raft_resources();
         auto stream = raft::resource::get_cuda_stream(*res);
+        // As upload_T_matrix, but this path can stage more than the destination:
+        // a non-float T also materialises the f32 source on device, and a half
+        // base adds a B buffer on top. Charge the peak, not just the result --
+        // under-claiming the staging is how a concurrent load gets admitted
+        // against memory this upload is about to take.
+        const size_t elems = static_cast<size_t>(n_rows) * this->dimension;
+        size_t upload_bytes = elems * sizeof(T);
+        if constexpr (!std::is_same_v<T, float>) {
+            upload_bytes += elems * sizeof(float);
+            if constexpr (!std::is_same_v<B, float>) {
+                upload_bytes += elems * sizeof(B);
+            }
+        }
+        matrixone::device_memory_governor::reservation upload_claim;
+        if (upload_bytes > 0) {
+            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload");
+        }
         rmm::device_uvector<T> storage(
             static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
         auto device_view = raft::make_device_matrix_view<T, int64_t>(

@@ -377,21 +377,16 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// index's whole life, not just the build. Streaming the build would not change
 		// that, which is why CAGRA still sizes against dim*sizeof(Q) here. On top of it
 		// sits the intermediate kNN graph (neighbour ids plus distances).
-		perRow := uint64(u.idxcfg.CuvsCagra.Dimensions) * quantizationBytes(qt)
-		graphDegree := uint64(u.idxcfg.CuvsCagra.IntermediateGraphDegree)
-		if graphDegree == 0 {
-			graphDegree = 128
-		}
-		perRow += graphDegree * 8
-
-		// Size against the SMALLEST participating card, not devices[0].
-		// Heterogeneous free VRAM is supported, and SHARDED cuts equal shards:
-		// sampling only devices[0] on a 40 GiB + 8 GiB pair sizes every shard for
-		// the 40 GiB card and the 8 GiB one OOMs the moment its shard lands.
-		// Iterate DISTINCT physical devices — under gpu_multi_simulation the list
-		// aliases one card N times, and querying it N times just returns the same
-		// number N times while pretending to have surveyed N cards.
-		rowsFit, minDev, minFree, derr := vimemory.DeviceMinRowsFitting(devices, perRow, cuvs.RowsFittingFreeMem)
+		// Ask the index how many rows fit. The per-row cost model -- resident
+		// dataset plus intermediate kNN graph -- and the budget are computed in
+		// C++, and the per-device probe runs on worker threads already bound to
+		// their device. Go models no device bytes; host memory below is Go's.
+		//
+		// The probe index is unsized (allocates nothing but a worker pool) and is
+		// thrown away; the builder creates the real one at the planned capacity.
+		// Asked ONCE, before any sub-index exists -- a later probe would see the
+		// memory earlier sub-indexes took and shrink each successive capacity.
+		rowsFit, perRow, minDev, minFree, derr := cagraPkg.ProbeRowsFitting(u.idxcfg, qt, devices)
 		if derr != nil {
 			return moerr.NewInternalErrorf(proc.Ctx,
 				"cagra: %v; set cagra_max_index_capacity explicitly", derr)
@@ -440,6 +435,10 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			logutil.Warnf("CAGRA create: host memory unavailable; capacity bounded by GPU memory only")
 		}
 
+		graphDegree := uint64(u.idxcfg.CuvsCagra.IntermediateGraphDegree)
+		if graphDegree == 0 {
+			graphDegree = 128
+		}
 		// cuVS validate_build_params rejects `n_rows <= intermediate_graph_degree`,
 		// not just `<`. If a sub-index ends up with EXACTLY graphDegree rows the
 		// build throws "number of vectors per shard must be > intermediate_graph_degree".
@@ -448,21 +447,11 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// route any `srcRowCount % capacity == graphDegree` tail to the CDC path.
 		threshold := int64(graphDegree) + 1
 
-		// SHARDED distributes ONE sub-index across N devices; the aggregate VRAM
-		// budget is N × per-device. planCapacity treats `capacity` as "per-sub-
-		// index build rows" and its SHARDED-can't-split guard needs to see the
-		// aggregate — otherwise a comfortable N-way shard (each shard fits on
-		// its device) gets rejected as if it had to fit on one card. Scale by
-		// the DISTINCT physical device count: under gpu_multi_simulation devices
-		// may be [0,0,...] (all sim GPUs aliased to physical device 0) and
-		// scaling by len(devices) would over-commit that single card by N×.
-		effectiveRowsFit := rowsFit
-		if u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED) {
-			if physN := distinctDeviceCount(devices); physN > 1 {
-				effectiveRowsFit = rowsFit * int64(physN)
-			}
-		}
-		plan, err := planCapacity(srcRowCount, requestedCapacity, effectiveRowsFit, hostRowsFit, threshold,
+		// The SHARDED aggregate -- one index spread over N cards, so N x the
+		// per-card capacity -- is applied by rows_fitting() in C++, which knows
+		// the distribution mode and the distinct device count. Scaling again here
+		// would double it.
+		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
 			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
 			"cagra", "max_index_capacity")
 		if err != nil {

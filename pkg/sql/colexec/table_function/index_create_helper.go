@@ -18,8 +18,6 @@ import (
 	"fmt"
 	"strings"
 
-	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -191,64 +189,6 @@ func quantizationBytes(qt metric.QuantizationType) uint64 {
 	}
 }
 
-// calculatePqDim mirrors cuVS index<IdxT>::calculate_pq_dim
-// (cuvs/cpp/src/neighbors/ivf_pq_index.cu:611), which is what cuVS uses when
-// pq_dim (our `m`) is left at 0. Sizing a build against the wrong value is not a
-// rounding error: at dim 768 cuVS picks 384, twice the 192 the wiki_all template
-// configures, so a default-m build needs twice the device memory a configured one
-// does.
-func calculatePqDim(dim uint64) uint64 {
-	if dim >= 128 {
-		dim /= 2
-	}
-	if r := dim &^ 31; r > 0 { // raft::round_down_safe(dim, 32)
-		return r
-	}
-	r := uint64(1)
-	for r<<1 <= dim {
-		r <<= 1
-	}
-	return r
-}
-
-// pqCodeBytes is the device footprint of ONE indexed row: its PQ code plus the
-// int64 payload cuVS stores alongside it in the IVF list. This is what actually
-// scales with row count, and unlike the build dataset it cannot be streamed — a
-// search has to reach every list, so the whole index stays resident. Sub-index
-// rotation does not help here; splitting an index does not shrink the sum.
-//
-// Real peak during extend runs above this by ~30-40% for cuVS workspace that is
-// not folded in here: at 87.5M / dim 768 / f16 / m=192 the tar is 17.6 GB but the
-// device peak is ~24 GB (measured on an L40S). The 60% VRAM rule the planner
-// applies on top of this bound absorbs the gap on any workload measured so far,
-// but a user tuning a build to exactly the advertised rowsFit ceiling will OOM
-// before the check says they should. See ivfpq_train_extend.md for the numbers.
-func pqCodeBytes(dim, m, bitsPerCode uint64) uint64 {
-	if m == 0 {
-		m = calculatePqDim(dim)
-	}
-	if bitsPerCode == 0 {
-		bitsPerCode = 8
-	}
-	return (m*bitsPerCode+7)/8 + 8
-}
-
-// trainsetBytesPerElem is the PEAK device cost of one vector component in the
-// k-means trainset.
-//
-// cuVS materialises the trainset as float32 whatever the storage type, and for a
-// non-float T it also allocates a trainset_tmp in T and converts
-// (ivf_pq_build.cuh:1288-1307). Both are live at the peak. So a NARROWER storage
-// type costs MORE here, not less: f16 is 4+2=6 bytes against f32's 4. Narrow
-// types still pay off in host memory and in the final index; this one term runs
-// the other way, and sizing it with the storage width under-counts f16 by a third.
-func trainsetBytesPerElem(qt metric.QuantizationType) uint64 {
-	if qt == metric.Quantization_F32 {
-		return 4
-	}
-	return 4 + quantizationBytes(qt)
-}
-
 // kmeansPointsPerCentroid is the conventional floor for k-means to have enough
 // evidence per cluster. cuVS does not enforce it — validate_build_params only
 // checks rows >= n_lists — so a build can train 16 points per centroid, succeed,
@@ -310,14 +250,3 @@ func planTrainFraction(capacity, maxTrainRows, nLists int64, requested float64) 
 }
 
 // distinctDeviceCount is len(devices) minus duplicates. Under
-// gpu_multi_simulation SimulateDevices aliases every simulated GPU to the same
-// physical ID (typically [0,0,...]), so len(devices)==N but there is still only
-// ONE physical card. SHARDED capacity scaling and any per-device budget
-// arithmetic must use the DISTINCT count — inflating "aggregate VRAM budget"
-// by len(devices) in sim mode over-commits a single card by N× and OOMs at
-// extend time.
-// distinctDeviceCount counts distinct PHYSICAL devices. Delegates so the dedup
-// rule has exactly one definition, shared with the sizing path that surveys them.
-func distinctDeviceCount(devices []int) int {
-	return len(vimemory.DeviceDistinct(devices))
-}

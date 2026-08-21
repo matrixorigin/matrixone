@@ -15,8 +15,6 @@
 package memory
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -49,42 +47,6 @@ func DeviceDistinct(devices []int) []int {
 // without a GPU; production passes cuvs.RowsFittingFreeMem, whose signature this
 // matches exactly.
 type DeviceRowsFittingFunc func(dev int, perRowBytes uint64) (rows int64, freeBytes uint64, err error)
-
-// DeviceMinRowsFitting sizes a build against the SMALLEST participating device.
-//
-// Heterogeneous free VRAM is supported and SHARDED cuts EQUAL shards, so the
-// binding constraint is the smallest card, not the first one. Sampling only
-// devices[0] on a 40 GiB + 8 GiB pair sizes every shard for the 40 GiB card and
-// the 8 GiB card OOMs the moment its shard lands.
-//
-// Returns the minimum row capacity along with which device produced it and that
-// device's free bytes, so callers can name the binding card in their log line.
-// An empty device list yields (0, 0, 0, nil): "not measured", matching the
-// caller contract that a missing GPU reading falls back to other bounds rather
-// than collapsing capacity to zero.
-func DeviceMinRowsFitting(devices []int, perRowBytes uint64, rowsFitting DeviceRowsFittingFunc) (
-	rows int64, minDev int, minFree uint64, err error) {
-	distinct := DeviceDistinct(devices)
-	if len(distinct) == 0 {
-		return 0, 0, 0, nil
-	}
-	if rowsFitting == nil {
-		return 0, 0, 0, moerr.NewInternalErrorNoCtx("DeviceMinRowsFitting: nil rows-fitting func")
-	}
-	for i, d := range distinct {
-		r, free, gerr := rowsFitting(d, perRowBytes)
-		if gerr != nil {
-			// Never guess. Assuming the whole table fits is precisely the
-			// failure being prevented.
-			return 0, d, 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-				"cannot size the index build against GPU memory on device %d: %v", d, gerr))
-		}
-		if i == 0 || r < rows {
-			rows, minDev, minFree = r, d, free
-		}
-	}
-	return rows, minDev, minFree, nil
-}
 
 // DeviceBuildBytes attributes a build's total device demand to the physical
 // devices that will hold it.

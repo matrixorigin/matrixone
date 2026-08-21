@@ -222,7 +222,12 @@ int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_
     }
     if (out_free_bytes) *out_free_bytes = free_bytes;
 
-    int64_t max_rows = static_cast<int64_t>((free_bytes / 10 * 6) / per_row_bytes);
+    // ONE definition of the budget fraction, shared with the admission path.
+    // Planning and claiming drifting apart would let a build be planned against
+    // one budget and refused against another.
+    const size_t budget = free_bytes / device_memory_governor::kBudgetDenominator *
+                          device_memory_governor::kBudgetNumerator;
+    int64_t max_rows = static_cast<int64_t>(budget / per_row_bytes);
     return max_rows < 1 ? 1 : max_rows;
 }
 
@@ -338,6 +343,7 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
         return -1;
     }
 }
+
 
 void* gpu_device_memory_reserve(int device_id, uint64_t bytes, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;

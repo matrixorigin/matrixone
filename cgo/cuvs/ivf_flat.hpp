@@ -24,6 +24,7 @@
 
 #include "index_base.hpp"
 #include "device_memory.hpp"
+#include "index_cost.hpp"
 #include "dynamic_batching.hpp"
 #include <iostream>
 #include <numeric>
@@ -198,6 +199,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_flat_cost>(
+            this->dimension, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         if (dataset_data) {
@@ -229,6 +232,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_flat_cost>(
+            this->dimension, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
 
@@ -255,6 +260,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_flat_cost>(
+            this->dimension, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->current_offset_ = 0;
     }
@@ -351,6 +358,19 @@ public:
             std::unique_ptr<ivf_flat_index> local_idx;
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                matrixone::device_memory_governor::reservation build_claim;
+                const size_t peak = this->build_peak_bytes(this->count);
+                if (peak > 0) {
+                    // max(kmeans trainset, list data): the two phases never
+                    // coexist. cuVS build() is stream-ordered -- it allocates and
+                    // enqueues, then returns -- so the claim ends with this scope,
+                    // BEFORE the sync that waits on the compute. The index body
+                    // comes from the plain cuda_memory_resource (see
+                    // cuvs_worker.hpp), i.e. cudaMalloc, so it is visible to
+                    // cudaMemGetInfo immediately and holding the claim longer
+                    // would count it twice.
+                    build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_flat::build");
+                }
                 local_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
                     *res, index_params, dataset_host));
             }
@@ -390,6 +410,19 @@ public:
             std::unique_ptr<ivf_flat_index> local_idx;
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                matrixone::device_memory_governor::reservation build_claim;
+                const size_t peak = this->build_peak_bytes(this->count);
+                if (peak > 0) {
+                    // max(kmeans trainset, list data): the two phases never
+                    // coexist. cuVS build() is stream-ordered -- it allocates and
+                    // enqueues, then returns -- so the claim ends with this scope,
+                    // BEFORE the sync that waits on the compute. The index body
+                    // comes from the plain cuda_memory_resource (see
+                    // cuvs_worker.hpp), i.e. cudaMalloc, so it is visible to
+                    // cudaMemGetInfo immediately and holding the claim longer
+                    // would count it twice.
+                    build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_flat::build");
+                }
                 local_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
                     *res, index_params, dataset_host));
             }
@@ -411,6 +444,19 @@ public:
             std::unique_ptr<ivf_flat_index> new_idx;
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                matrixone::device_memory_governor::reservation build_claim;
+                const size_t peak = this->build_peak_bytes(this->count);
+                if (peak > 0) {
+                    // max(kmeans trainset, list data): the two phases never
+                    // coexist. cuVS build() is stream-ordered -- it allocates and
+                    // enqueues, then returns -- so the claim ends with this scope,
+                    // BEFORE the sync that waits on the compute. The index body
+                    // comes from the plain cuda_memory_resource (see
+                    // cuvs_worker.hpp), i.e. cudaMalloc, so it is visible to
+                    // cudaMemGetInfo immediately and holding the claim longer
+                    // would count it twice.
+                    build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_flat::build");
+                }
                 new_idx = std::make_unique<ivf_flat_index>(cuvs::neighbors::ivf_flat::build(
                     *res, index_params, dataset_host));
             }
