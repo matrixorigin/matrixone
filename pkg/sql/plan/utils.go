@@ -1463,6 +1463,16 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		if cannotFold || !foldInExpr {
 			return expr, nil
 		}
+		requiresStringProvenance, err := plan.RequiresMORPCVersion23StringProvenance(exprList)
+		if err != nil {
+			return nil, err
+		}
+		if requiresStringProvenance {
+			// LiteralVec uses the stable Vector wire format, which cannot carry
+			// per-item runtime string domains. Keep the literal list executable
+			// and visible to the remote protocol capability analysis.
+			return expr, nil
+		}
 		isSerialized := rule.ContainsSerializedLiteral(exprList)
 
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -1561,6 +1571,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if c == nil {
 		return expr, nil
 	}
+	rule.PreserveFoldedLiteralStringDomain(expr, c)
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
@@ -3148,6 +3159,9 @@ func FillValuesOfParamsInPlanWithSpecialization(
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
 	}
+	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
+		return nil, false, err
+	}
 	copied := DeepCopyPlan(preparePlan)
 	switch pp := copied.Plan.(type) {
 
@@ -3167,6 +3181,138 @@ func FillValuesOfParamsInPlanWithSpecialization(
 		return copied, specialized, nil
 	}
 	return copied, false, nil
+}
+
+// ValidatePreparedPaginationParams validates parameter markers used by LIMIT
+// and OFFSET before the values are converted through the generic expression
+// cast path. MySQL accepts NULL and Boolean user variables here, but rejects
+// string, floating-point, and decimal sources even when their text is an
+// integer. Negative signed values use the unsigned-range error required by
+// EXECUTE.
+func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
+	for _, pos := range PreparedPaginationParamPositions(preparePlan) {
+		if pos < 0 || int(pos) >= len(paramVals) {
+			continue
+		}
+		valid, negative := validatePreparedPaginationValue(paramVals[pos])
+		if negative {
+			return moerr.NewPreparedParamOutOfRange(ctx, "unsigned integer", "EXECUTE")
+		}
+		if !valid {
+			return moerr.NewWrongArguments(ctx, "EXECUTE")
+		}
+	}
+	return nil
+}
+
+// PreparedPlanHasPaginationParams reports whether a prepared plan must bind
+// LIMIT/OFFSET values for each execution instead of reusing a value-filled
+// compile from an earlier execution.
+func PreparedPlanHasPaginationParams(preparePlan *Plan) bool {
+	return len(preparedPaginationParamPositions(preparePlan)) > 0
+}
+
+// PreparedPaginationParamPositions returns the zero-based parameter positions
+// used by LIMIT/OFFSET in a prepared plan.
+func PreparedPaginationParamPositions(preparePlan *Plan) []int32 {
+	positions := preparedPaginationParamPositions(preparePlan)
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func preparedPaginationParamPositions(preparePlan *Plan) map[int32]struct{} {
+	positions := make(map[int32]struct{})
+	if preparePlan == nil {
+		return positions
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return positions
+	}
+
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		collectPreparedParamPositions(node.GetLimit(), positions)
+		collectPreparedParamPositions(node.GetOffset(), positions)
+	}
+	return positions
+}
+
+func collectPreparedParamPositions(expr *Expr, positions map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		positions[exprImpl.P.Pos] = struct{}{}
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			collectPreparedParamPositions(arg, positions)
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			collectPreparedParamPositions(item, positions)
+		}
+	}
+}
+
+func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
+	kind := vector.PrepareParamNone
+	if param, ok := value.(ParamValue); ok {
+		value = param.Value
+		kind = param.PrepareParamKind
+	}
+	if value == nil {
+		return true, false
+	}
+	if kind != vector.PrepareParamNone && kind != vector.PrepareParamInteger && kind != vector.PrepareParamBoolean {
+		return false, false
+	}
+
+	switch value := value.(type) {
+	case int:
+		return true, value < 0
+	case int8:
+		return true, value < 0
+	case int16:
+		return true, value < 0
+	case int32:
+		return true, value < 0
+	case int64:
+		return true, value < 0
+	case uint, uint8, uint16, uint32, uint64, types.MoYear, bool:
+		return true, false
+	case string:
+		if kind == vector.PrepareParamBoolean {
+			return value == "0" || value == "1", false
+		}
+		if kind != vector.PrepareParamInteger {
+			return false, false
+		}
+		if strings.HasPrefix(value, "-") {
+			digits := strings.TrimPrefix(value, "-")
+			if digits == "" {
+				return false, false
+			}
+			if _, err := strconv.ParseUint(digits, 10, 64); err != nil {
+				return false, false
+			}
+			return true, strings.TrimLeft(digits, "0") != ""
+		}
+		_, err := strconv.ParseUint(value, 10, 64)
+		return err == nil, false
+	default:
+		return false, false
+	}
 }
 
 type ParamValue struct {

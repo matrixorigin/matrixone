@@ -188,8 +188,6 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = hnswSearchPrepare(proc, tblArg)
 	case "ivf_create":
 		tblArg.ctr.state, err = ivfCreatePrepare(proc, tblArg)
-	case "ivf_search":
-		tblArg.ctr.state, err = ivfSearchPrepare(proc, tblArg)
 	case "fulltext2_search":
 		tblArg.ctr.state, err = fulltext2SearchPrepare(proc, tblArg)
 	case "parse_jsonl_data":
