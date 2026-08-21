@@ -1,0 +1,536 @@
+{
+  "schema_version": 2,
+  "matrixone_sha": "cd90980a180edb03d3700d6845e875c827a57005",
+  "config": "pkg/embed:1log-1tn-2cn;exact-authoritative",
+  "window_start_utc": "2026-08-21T09:30:16.249184Z",
+  "window_end_utc": "2026-08-21T09:30:40.532024Z",
+  "integrity": "complete",
+  "nodes": [
+    {
+      "service_id": "0-cn-17001",
+      "report": {
+        "schema_version": 2,
+        "enabled": true,
+        "metadata": {
+          "matrixone_sha": "cd90980a180edb03d3700d6845e875c827a57005",
+          "config": "pkg/embed:1log-1tn-2cn;exact-authoritative",
+          "window": "2026-08-21T09:30:16.249184Z/2026-08-21T09:30:40.532024Z",
+          "integrity": "complete"
+        },
+        "consumers": {
+          "prepared_plan": {
+            "checks": 256,
+            "stable_checks": 256,
+            "inconclusive_checks": 0,
+            "invalidations": 255,
+            "bucket_invalidations": 255,
+            "precise_invalidations": 255,
+            "bucket_false_positives": 0,
+            "bucket_false_negatives": 0,
+            "precise_false_positives": 0,
+            "precise_false_negatives": 0
+          },
+          "rc_table_cache": {
+            "checks": 6349,
+            "stable_checks": 6349,
+            "inconclusive_checks": 0,
+            "invalidations": 128,
+            "bucket_invalidations": 128,
+            "precise_invalidations": 128,
+            "bucket_false_positives": 0,
+            "bucket_false_negatives": 0,
+            "precise_false_positives": 0,
+            "precise_false_negatives": 0
+          }
+        },
+        "events": {
+          "database_delete": 1,
+          "database_insert": 8,
+          "table_delete": 387,
+          "table_upsert": 551
+        },
+        "prepared_plan_rebuild": {
+          "count": 255,
+          "successes": 255,
+          "errors": 0,
+          "misses": 0,
+          "p50_ns": 250000,
+          "p95_ns": 250000,
+          "p99_ns": 500000,
+          "buckets": [
+            {
+              "upper_bound_ns": 1000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 25000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 50000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000,
+              "count": 85
+            },
+            {
+              "upper_bound_ns": 250000,
+              "count": 162
+            },
+            {
+              "upper_bound_ns": 500000,
+              "count": 6
+            },
+            {
+              "upper_bound_ns": 1000000,
+              "count": 2
+            },
+            {
+              "upper_bound_ns": 5000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": -1,
+              "count": 0
+            }
+          ]
+        },
+        "rc_table_cache_reload": {
+          "count": 128,
+          "successes": 128,
+          "errors": 0,
+          "misses": 0,
+          "p50_ns": 5000,
+          "p95_ns": 10000,
+          "p99_ns": 25000,
+          "buckets": [
+            {
+              "upper_bound_ns": 1000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000,
+              "count": 117
+            },
+            {
+              "upper_bound_ns": 10000,
+              "count": 7
+            },
+            {
+              "upper_bound_ns": 25000,
+              "count": 4
+            },
+            {
+              "upper_bound_ns": 50000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 250000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 500000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 1000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": -1,
+              "count": 0
+            }
+          ]
+        },
+        "shadow": {
+          "accounts": 1,
+          "database_entries": 8,
+          "table_entries": 170,
+          "overflow": false,
+          "estimated_retained_bytes": 12694
+        }
+      }
+    },
+    {
+      "service_id": "1-cn-17001",
+      "report": {
+        "schema_version": 2,
+        "enabled": true,
+        "metadata": {
+          "matrixone_sha": "cd90980a180edb03d3700d6845e875c827a57005",
+          "config": "pkg/embed:1log-1tn-2cn;exact-authoritative",
+          "window": "2026-08-21T09:30:16.249184Z/2026-08-21T09:30:40.532024Z",
+          "integrity": "complete"
+        },
+        "consumers": {
+          "prepared_plan": {
+            "checks": 24,
+            "stable_checks": 24,
+            "inconclusive_checks": 0,
+            "invalidations": 0,
+            "bucket_invalidations": 0,
+            "precise_invalidations": 0,
+            "bucket_false_positives": 0,
+            "bucket_false_negatives": 0,
+            "precise_false_positives": 0,
+            "precise_false_negatives": 0
+          },
+          "rc_table_cache": {
+            "checks": 80147,
+            "stable_checks": 80147,
+            "inconclusive_checks": 0,
+            "invalidations": 0,
+            "bucket_invalidations": 13,
+            "precise_invalidations": 0,
+            "bucket_false_positives": 13,
+            "bucket_false_negatives": 0,
+            "precise_false_positives": 0,
+            "precise_false_negatives": 0
+          }
+        },
+        "events": {
+          "database_delete": 1,
+          "database_insert": 8,
+          "table_delete": 387,
+          "table_upsert": 551
+        },
+        "prepared_plan_rebuild": {
+          "count": 0,
+          "successes": 0,
+          "errors": 0,
+          "misses": 0,
+          "p50_ns": 0,
+          "p95_ns": 0,
+          "p99_ns": 0,
+          "buckets": [
+            {
+              "upper_bound_ns": 1000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 25000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 50000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 250000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 500000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 1000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": -1,
+              "count": 0
+            }
+          ]
+        },
+        "rc_table_cache_reload": {
+          "count": 0,
+          "successes": 0,
+          "errors": 0,
+          "misses": 0,
+          "p50_ns": 0,
+          "p95_ns": 0,
+          "p99_ns": 0,
+          "buckets": [
+            {
+              "upper_bound_ns": 1000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 25000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 50000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 250000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 500000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 1000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": -1,
+              "count": 0
+            }
+          ]
+        },
+        "shadow": {
+          "accounts": 1,
+          "database_entries": 8,
+          "table_entries": 170,
+          "overflow": false,
+          "estimated_retained_bytes": 12694
+        }
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "prepared_schema_rebuild",
+      "ddl_type": "alter",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "protocol": "binary-and-text-prepare",
+      "stable_terminal_samples": 128,
+      "status": "completed"
+    },
+    {
+      "name": "rc_table_cache_reload",
+      "ddl_type": "alter",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "protocol": "read-committed",
+      "stable_terminal_samples": 128,
+      "status": "completed"
+    },
+    {
+      "name": "same_account_unrelated_ddl",
+      "ddl_type": "alter-unrelated",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "stable_terminal_samples": 128,
+      "status": "completed"
+    }
+  ],
+  "prepared_plan_rebuild": {
+    "count": 255,
+    "successes": 255,
+    "errors": 0,
+    "misses": 0,
+    "p50_ns": 250000,
+    "p95_ns": 250000,
+    "p99_ns": 500000,
+    "buckets": [
+      {
+        "upper_bound_ns": 1000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 5000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 10000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 25000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 50000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 100000,
+        "count": 85
+      },
+      {
+        "upper_bound_ns": 250000,
+        "count": 162
+      },
+      {
+        "upper_bound_ns": 500000,
+        "count": 6
+      },
+      {
+        "upper_bound_ns": 1000000,
+        "count": 2
+      },
+      {
+        "upper_bound_ns": 5000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 10000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 100000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": -1,
+        "count": 0
+      }
+    ]
+  },
+  "rc_table_cache_reload": {
+    "count": 128,
+    "successes": 128,
+    "errors": 0,
+    "misses": 0,
+    "p50_ns": 5000,
+    "p95_ns": 10000,
+    "p99_ns": 25000,
+    "buckets": [
+      {
+        "upper_bound_ns": 1000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 5000,
+        "count": 117
+      },
+      {
+        "upper_bound_ns": 10000,
+        "count": 7
+      },
+      {
+        "upper_bound_ns": 25000,
+        "count": 4
+      },
+      {
+        "upper_bound_ns": 50000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 100000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 250000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 500000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 1000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 5000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 10000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 100000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": -1,
+        "count": 0
+      }
+    ]
+  },
+  "decision_totals": {
+    "prepared_plan.bucket_false_negatives": 0,
+    "prepared_plan.bucket_false_positives": 0,
+    "prepared_plan.checks": 280,
+    "prepared_plan.inconclusive_checks": 0,
+    "prepared_plan.precise_false_negatives": 0,
+    "prepared_plan.precise_false_positives": 0,
+    "prepared_plan.stable_checks": 280,
+    "rc_table_cache.bucket_false_negatives": 0,
+    "rc_table_cache.bucket_false_positives": 13,
+    "rc_table_cache.checks": 86496,
+    "rc_table_cache.inconclusive_checks": 0,
+    "rc_table_cache.precise_false_negatives": 0,
+    "rc_table_cache.precise_false_positives": 0,
+    "rc_table_cache.stable_checks": 86496
+  }
+}
