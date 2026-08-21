@@ -98,11 +98,12 @@ type PartitionChangesHandle struct {
 	toTs   types.TS
 	tbl    *txnTable
 
-	skipDeletes        bool
-	primarySeqnum      int
-	snapshotReadPolicy engine.SnapshotReadPolicy
-	mp                 *mpool.MPool
-	fs                 fileservice.FileService
+	skipDeletes         bool
+	primarySeqnum       int
+	snapshotReadPolicy  engine.SnapshotReadPolicy
+	preserveAllVersions bool
+	mp                  *mpool.MPool
+	fs                  fileservice.FileService
 
 	bufferedBatches     []queuedChangeBatch
 	currentRangeDrained bool
@@ -120,14 +121,15 @@ func NewPartitionChangesHandle(
 		return nil, moerr.NewInternalErrorNoCtx("invalid timestamp")
 	}
 	handle := &PartitionChangesHandle{
-		tbl:                tbl,
-		fromTs:             from,
-		toTs:               to,
-		skipDeletes:        skipDeletes,
-		primarySeqnum:      tbl.primarySeqnum,
-		snapshotReadPolicy: snapshotReadPolicy,
-		mp:                 mp,
-		fs:                 tbl.getTxn().engine.fs,
+		tbl:                 tbl,
+		fromTs:              from,
+		toTs:                to,
+		skipDeletes:         skipDeletes,
+		primarySeqnum:       tbl.primarySeqnum,
+		snapshotReadPolicy:  snapshotReadPolicy,
+		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		mp:                  mp,
+		fs:                  tbl.getTxn().engine.fs,
 	}
 	end, err := handle.getNextChangeHandle(ctx)
 	if err != nil {
@@ -137,6 +139,13 @@ func NewPartitionChangesHandle(
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("logic error:from %s to %s", from.ToString(), to.ToString()))
 	}
 	return handle, err
+}
+
+func (h *PartitionChangesHandle) collectChangesContext(ctx context.Context) context.Context {
+	if h.preserveAllVersions {
+		return engine.WithCollectChangesPreserveAllVersions(ctx)
+	}
+	return ctx
 }
 
 func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
@@ -297,6 +306,7 @@ func (h *PartitionChangesHandle) loadCheckpointEntries(
 }
 
 func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end bool, err error) {
+	ctx = h.collectChangesContext(ctx)
 	if h.currentPSTo.EQ(&h.toTs) {
 		return true, nil
 	}
@@ -454,6 +464,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 }
 
 func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx context.Context) (err error) {
+	ctx = h.collectChangesContext(ctx)
 	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
 		return nil
 	}
