@@ -1,6 +1,6 @@
 # Catalog dependency watermark attribution
 
-Status: experimental instrumentation only (`MEASUREMENT_PENDING`)
+Status: experimental instrumentation only (`MEASUREMENT_REVISED_PENDING_REVIEW`)
 
 Base: `344d852ac3288e391a3ae6be3e3c7108caf2b75d`
 
@@ -45,7 +45,7 @@ with schema version 2:
 - shadow account/entry counts and estimated retained bytes;
 - explicit MatrixOne SHA, config, collection window, and integrity metadata.
 
-The two-CN harness wraps the fragments in a schema-v2 envelope containing the
+The two-CN harness wraps the fragments in a schema-v3 envelope containing the
 CN service identities, scenario/DDL/consumer mapping, merged decision totals,
 merged histograms, and `window_start_utc`/`window_end_utc`. It writes the
 report to `catalog-invalidation-report.json` through a same-directory
