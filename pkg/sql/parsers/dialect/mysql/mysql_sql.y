@@ -5629,7 +5629,7 @@ drop_table_stmt:
     }
 
 drop_view_stmt:
-    DROP VIEW exists_opt table_name_list
+    DROP VIEW exists_opt table_name_list drop_table_opt
     {
         var ifExists = $3
         var names = $4
@@ -14819,7 +14819,7 @@ char_type:
             },
         }
     }
-|   TEXT
+|   TEXT length_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -14828,6 +14828,7 @@ char_type:
                 FamilyString: $1,
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_TEXT),
+                DisplayWith: $2,
             },
         }
     }
@@ -14867,7 +14868,7 @@ char_type:
             },
         }
     }
-|   BLOB
+|   BLOB length_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -14876,6 +14877,7 @@ char_type:
                 FamilyString: $1,
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_BLOB),
+                DisplayWith: $2,
             },
         }
     }

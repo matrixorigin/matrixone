@@ -81,7 +81,11 @@ func dataBranchGeneratedColumnsEqual(left, right *plan.GeneratedCol) bool {
 		return false
 	}
 	if left.Expr != nil || right.Expr != nil {
-		return proto.Equal(left.Expr, right.Expr)
+		leftExpr := proto.Clone(left.Expr).(*plan.Expr)
+		rightExpr := proto.Clone(right.Expr).(*plan.Expr)
+		return leftExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+			rightExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+			proto.Equal(leftExpr, rightExpr)
 	}
 	return left.OriginString != "" && left.OriginString == right.OriginString
 }
@@ -123,7 +127,10 @@ func dataBranchGeneratedColumnsLogicallyEqual(
 		}
 		return strings.ToLower(col.Name), true
 	})
-	return leftOK && rightOK && proto.Equal(leftExpr, rightExpr)
+	return leftOK && rightOK &&
+		leftExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+		rightExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+		proto.Equal(leftExpr, rightExpr)
 }
 
 func dataBranchGeneratedExprColumn(tblDef *plan.TableDef, pos int32) *plan.ColDef {
@@ -533,7 +540,6 @@ func dataBranchCreateDatabase(
 		authStats statistic.StatsArray
 	)
 	stats.Reset()
-
 	if bh, deferred, err = getBackExecutor(
 		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
 	); err != nil {

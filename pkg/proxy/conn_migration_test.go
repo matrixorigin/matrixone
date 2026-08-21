@@ -52,6 +52,25 @@ func runTestWithQueryServiceHandler(
 	migrateConnToHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
 	fn func(cc *clientConn, addr string),
 ) {
+	runTestWithQueryServiceHandlers(t, cn, migrateConnToHandler, nil, fn)
+}
+
+func runTestWithQueryServiceResetHandler(
+	t *testing.T,
+	cn metadata.CNService,
+	resetSessionHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	fn func(cc *clientConn, addr string),
+) {
+	runTestWithQueryServiceHandlers(t, cn, nil, resetSessionHandler, fn)
+}
+
+func runTestWithQueryServiceHandlers(
+	t *testing.T,
+	cn metadata.CNService,
+	migrateConnToHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	resetSessionHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	fn func(cc *clientConn, addr string),
+) {
 	sid := ""
 	runtime.RunTest(
 		sid,
@@ -111,7 +130,10 @@ func runTestWithQueryServiceHandler(
 				}
 			}
 			qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, migrateConnToHandler, false)
-			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, buf *morpc.Buffer) error {
+				if resetSessionHandler != nil {
+					return resetSessionHandler(ctx, req, resp, buf)
+				}
 				if req.ResetSessionRequest == nil {
 					return moerr.NewInternalError(ctx, "bad request")
 				}
@@ -164,6 +186,50 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 		cc.migration.setVarStmts = append(cc.migration.setVarStmts, "set a=1")
 		err = cc.migrateConnTo(sc, resp)
 		assert.NoError(t, err)
+	})
+}
+
+func TestQueryServiceMigrateToClearsReadDeadlineAfterControlReads(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		raw := &phaseDeadlineConn{Conn: local}
+		statements := make([]string, 0, 2)
+		sc := &deadlineRearmingServerConn{
+			ServerConn: newMockServerConn(raw),
+			raw:        raw,
+			statements: &statements,
+		}
+		defer sc.Close()
+
+		cc.migration.setVarStmts = []string{"set @mode = 'PIPES_AS_CONCAT'"}
+		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastAffectedRows: 7}))
+		assert.Equal(t, []string{
+			"/* cloud_nonuser */ set transferred=1;",
+			"set @mode = 'PIPES_AS_CONCAT'",
+		}, statements)
+		assert.True(t, raw.readDeadline().IsZero(),
+			"migration must clear the deadline armed by its final control read")
+	})
+}
+
+func TestQueryServiceMigrateToRejectsReadDeadlineClearFailure(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		raw := &phaseDeadlineConn{Conn: local, failClear: true}
+		sc := &deadlineRearmingServerConn{
+			ServerConn: newMockServerConn(raw),
+			raw:        raw,
+		}
+		defer sc.Close()
+
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{})
+		assert.ErrorContains(t, err, "read deadline clear failed")
+		assert.False(t, raw.readDeadline().IsZero(),
+			"a failed clear must not make the backend eligible for handoff")
 	})
 }
 

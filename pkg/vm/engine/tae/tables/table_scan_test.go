@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,4 +90,226 @@ func TestTombstoneRangeScanKeepsOlderAppendableCandidates(t *testing.T) {
 	// the newer object's lifetime precedes start, the older appendable object
 	// can still contain rows committed in the requested range.
 	require.Equal(t, 1, oldData.scans)
+}
+
+func TestTombstoneRangeScanKeepsNonAppendableCNSourceAfterDrop(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+	require.NoError(t, err)
+
+	targetID := objectio.NewObjectid()
+	sourceID := objectio.NewObjectid()
+	sourceStats := objectio.NewObjectStatsWithObjectID(&sourceID, false, false, true)
+	zm := index.NewZM(types.T_Rowid, 0)
+	zm.Update(types.NewRowIDWithObjectIDBlkNumAndRowID(targetID, 0, 0))
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(sourceStats, zm))
+	sourceData := &tombstoneScanCounter{}
+	source, err := table.CreateCommittedObject(
+		types.BuildTS(1, 0),
+		&objectio.CreateObjOpt{Stats: sourceStats, IsTombstone: true},
+		func(*catalog.ObjectEntry) data.Object { return sourceData },
+	)
+	require.NoError(t, err)
+	catalog.MockDroppedObjectEntry2List(source, types.BuildTS(4, 0))
+
+	bat, err := TombstoneRangeScanByObject(
+		context.Background(),
+		table,
+		targetID,
+		types.TS{},
+		types.BuildTS(3, 0),
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Nil(t, bat)
+	require.Equal(t, 1, sourceData.scans)
+
+	sourceData.scans = 0
+	bat, err = TombstoneRangeScanByObject(
+		context.Background(),
+		table,
+		targetID,
+		types.TS{},
+		types.BuildTS(4, 0),
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Nil(t, bat)
+	require.Equal(t, 1, sourceData.scans)
+}
+
+func TestTombstoneRangeScanUsesCNSourceWhenTNReplacementCommitsInsideRange(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+	require.NoError(t, err)
+
+	targetID := objectio.NewObjectid()
+	newStats := func(cnCreated bool) *objectio.ObjectStats {
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, false, cnCreated)
+		zm := index.NewZM(types.T_Rowid, 0)
+		zm.Update(types.NewRowIDWithObjectIDBlkNumAndRowID(targetID, 0, 0))
+		require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
+		return stats
+	}
+
+	sourceData := &tombstoneScanCounter{}
+	source, err := table.CreateCommittedObject(
+		types.BuildTS(3, 0),
+		&objectio.CreateObjOpt{Stats: newStats(true), IsTombstone: true},
+		func(*catalog.ObjectEntry) data.Object { return sourceData },
+	)
+	require.NoError(t, err)
+	catalog.MockDroppedObjectEntry2List(source, types.BuildTS(4, 0))
+
+	replacementData := &tombstoneScanCounter{}
+	_, err = table.CreateCommittedObject(
+		types.BuildTS(4, 0),
+		&objectio.CreateObjOpt{Stats: newStats(false), IsTombstone: true},
+		func(*catalog.ObjectEntry) data.Object { return replacementData },
+	)
+	require.NoError(t, err)
+
+	bat, err := TombstoneRangeScanByObject(
+		context.Background(),
+		table,
+		targetID,
+		types.BuildTS(2, 0),
+		types.BuildTS(3, 0),
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Nil(t, bat)
+	require.Equal(t, 1, sourceData.scans)
+	require.Zero(t, replacementData.scans)
+
+	sourceData.scans = 0
+
+	bat, err = TombstoneRangeScanByObject(
+		context.Background(),
+		table,
+		targetID,
+		types.BuildTS(2, 0),
+		types.BuildTS(5, 0),
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Nil(t, bat)
+	require.Equal(t, 1, sourceData.scans)
+	require.Zero(t, replacementData.scans)
+}
+
+func TestTombstoneRangeScanUsesCNReplacementAfterCNRewrite(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+	require.NoError(t, err)
+
+	targetID := objectio.NewObjectid()
+	newStats := func() *objectio.ObjectStats {
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, false, true)
+		zm := index.NewZM(types.T_Rowid, 0)
+		zm.Update(types.NewRowIDWithObjectIDBlkNumAndRowID(targetID, 0, 0))
+		require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
+		return stats
+	}
+
+	sourceData := &tombstoneScanCounter{}
+	source, err := table.CreateCommittedObject(
+		types.BuildTS(3, 0),
+		&objectio.CreateObjOpt{Stats: newStats(), IsTombstone: true},
+		func(*catalog.ObjectEntry) data.Object { return sourceData },
+	)
+	require.NoError(t, err)
+	droppedSource := catalog.MockDroppedObjectEntry2List(source, types.BuildTS(4, 0))
+	objectio.SetObjectStatsCNDeleted(&droppedSource.ObjectStats, true)
+
+	replacementData := &tombstoneScanCounter{}
+	_, err = table.CreateCommittedObject(
+		types.BuildTS(4, 0),
+		&objectio.CreateObjOpt{Stats: newStats(), IsTombstone: true},
+		func(*catalog.ObjectEntry) data.Object { return replacementData },
+	)
+	require.NoError(t, err)
+
+	bat, err := TombstoneRangeScanByObject(
+		context.Background(),
+		table,
+		targetID,
+		types.BuildTS(2, 0),
+		types.BuildTS(3, 0),
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Nil(t, bat)
+	require.Equal(t, 1, sourceData.scans)
+	require.Zero(t, replacementData.scans)
+
+	sourceData.scans = 0
+
+	bat, err = TombstoneRangeScanByObject(
+		context.Background(),
+		table,
+		targetID,
+		types.BuildTS(2, 0),
+		types.BuildTS(5, 0),
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Nil(t, bat)
+	require.Zero(t, sourceData.scans)
+	require.Equal(t, 1, replacementData.scans)
+}
+
+func TestTombstoneRangeScanSkipsCNSourceRemovedWithoutReplacement(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+	require.NoError(t, err)
+
+	targetID := objectio.NewObjectid()
+	sourceID := objectio.NewObjectid()
+	sourceStats := objectio.NewObjectStatsWithObjectID(&sourceID, false, false, true)
+	zm := index.NewZM(types.T_Rowid, 0)
+	zm.Update(types.NewRowIDWithObjectIDBlkNumAndRowID(targetID, 0, 0))
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(sourceStats, zm))
+	sourceData := &tombstoneScanCounter{}
+	source, err := table.CreateCommittedObject(
+		types.BuildTS(3, 0),
+		&objectio.CreateObjOpt{Stats: sourceStats, IsTombstone: true},
+		func(*catalog.ObjectEntry) data.Object { return sourceData },
+	)
+	require.NoError(t, err)
+	droppedSource := catalog.MockDroppedObjectEntry2List(source, types.BuildTS(4, 0))
+	objectio.SetObjectStatsCNDeleted(&droppedSource.ObjectStats, true)
+
+	bat, err := TombstoneRangeScanByObject(
+		context.Background(),
+		table,
+		targetID,
+		types.BuildTS(2, 0),
+		types.BuildTS(5, 0),
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Nil(t, bat)
+	require.Zero(t, sourceData.scans)
 }
