@@ -34,6 +34,7 @@ import (
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 )
 
 // AlgoPlugin is the integration contract for a vector index algorithm.
@@ -55,6 +56,15 @@ type AlgoPlugin interface {
 	// IVF-FLAT / CAGRA / IVF-PQ implementations consult the storage
 	// table to enforce their respective minimums.
 	Idxcron() idxcronplugin.Hooks
+}
+
+// SearchPlugin is an optional capability implemented by algorithms that have
+// migrated query execution from a table function to VECTOR_INDEX_SCAN.  The
+// separate interface lets algorithms migrate independently without a SQL-layer
+// name switch or no-op hooks on unrelated fulltext/GPU plugins.
+type SearchPlugin interface {
+	AlgoPlugin
+	Search() searchplugin.Hooks
 }
 
 var (

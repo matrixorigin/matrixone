@@ -25,6 +25,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func TestBackgroundTickAndHeartbeat(t *testing.T) {
@@ -486,11 +488,18 @@ func Test_heartbeat(t *testing.T) {
 
 func TestCheckReplicaHealth(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		// no tn shard yet.
 		s.checkReplicaHealth(ctx)
+
+		peers := map[uint64]dragonboat.Target{100: s.ID()}
+		require.NoError(t, s.store.startReplica(firstLogShardID, 100, peers, false))
+		require.Eventually(t, func() bool {
+			_, _, ok, err := s.store.nh.GetLeaderID(firstLogShardID)
+			return err == nil && ok
+		}, 5*time.Second, 10*time.Millisecond)
 
 		req := pb.Request{
 			Method: pb.TN_HEARTBEAT,
@@ -498,23 +507,36 @@ func TestCheckReplicaHealth(t *testing.T) {
 				UUID: uuid.NewString(),
 				Shards: []pb.TNShardInfo{
 					{
-						ShardID:   1,
+						ShardID:   2,
 						ReplicaID: 100,
 					},
 				},
 			},
 		}
 		s.handleTNHeartbeat(ctx, req)
+		v2.LogServiceReplicaHealthGauge.Set(1)
 		s.checkReplicaHealth(ctx)
+		require.Equal(t, float64(0), testutil.ToFloat64(v2.LogServiceReplicaHealthGauge))
 
 		req = pb.Request{
 			Method: pb.LOG_HEARTBEAT,
 			LogHeartbeat: &pb.LogStoreHeartbeat{
 				UUID: s.ID(),
+				Replicas: []pb.LogReplicaInfo{
+					{
+						LogShardInfo: pb.LogShardInfo{
+							ShardID: firstLogShardID,
+							Replicas: map[uint64]string{
+								100: s.ID(),
+							},
+						},
+					},
+				},
 			},
 		}
 		s.handleLogHeartbeat(ctx, req)
 		s.checkReplicaHealth(ctx)
+		require.Equal(t, float64(1), testutil.ToFloat64(v2.LogServiceReplicaHealthGauge))
 	}
 	runServiceTest(t, true, true, fn)
 }

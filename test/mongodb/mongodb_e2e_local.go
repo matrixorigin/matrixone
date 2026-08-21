@@ -95,7 +95,7 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		"create external table mongodb_ci.events(mongo_id char(24) mongodb_path '_id', device_id varchar(20), site_id varchar(10), ts datetime(3) mongodb_convert 'try_null', measurement double mongodb_convert 'try_null', source_batch varchar(50)) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='events','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.temporal_edges(ts datetime(0) mongodb_convert 'try_null') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='temporal_edges','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.decoded_budget(payload_1 text mongodb_path 'payload', payload_2 text mongodb_path 'payload', payload_3 text mongodb_path 'payload', payload_4 text mongodb_path 'payload', payload_5 text mongodb_path 'payload', payload_6 text mongodb_path 'payload', payload_7 text mongodb_path 'payload', payload_8 text mongodb_path 'payload') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='decoded_budget','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
-		"create external table mongodb_ci.json_scalar(value json) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='json_scalar','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
+		"create external table mongodb_ci.json_scalar(value json, payload json, arr json) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='json_scalar','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -120,7 +120,13 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	if err := expectScalar(ctx, db, "select cast(value as char) from mongodb_ci.json_scalar", `"text"`); err != nil {
 		return err
 	}
-	r.Cases = append(r.Cases, "json-scalar-conversion")
+	if err := expectScalar(ctx, db, "select json_unquote(json_extract(payload, '$.a')) from mongodb_ci.json_scalar", "2"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select json_contains(arr, '2', '$') from mongodb_ci.json_scalar", "1"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "json-relaxed-extended-conversion")
 
 	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
 		return err

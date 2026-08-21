@@ -139,9 +139,12 @@ type Source struct {
 	FilterList      []*plan.Expr //from node.FilterList, use for reader
 	BlockFilterList []*plan.Expr //from node.BlockFilterList, use for range
 	node            *plan.Node
-	TableDef        *plan.TableDef
-	Timestamp       timestamp.Timestamp
-	AccountId       *plan.PubInfo
+	// vectorIndexScanTemplate retains the immutable prepared-plan expressions.
+	// Each execution folds a fresh copy into node.VectorIndexScan.
+	vectorIndexScanTemplate *plan.VectorIndexScan
+	TableDef                *plan.TableDef
+	Timestamp               timestamp.Timestamp
+	AccountId               *plan.PubInfo
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	OrderBy            []*plan.OrderBySpec // for ordered scan
