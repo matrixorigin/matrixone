@@ -307,6 +307,27 @@ one's types). Phase 4 only needs Phase 0 and can proceed in parallel with
 against a hand-run local jstfu (or a 20-line Go fake server) returns correct
 rows — before investing in deployment/CI plumbing.
 
+As-built status (2026-08-21, branch feat-datastream-external-table)
+-------------------------------------------------------------------
+
+Implemented as planned, with these notes:
+
+- Phases 0–4 landed as designed.  Verified end-to-end against a live MO:
+  `test/datastream/datastream_e2e_local_test.go` covers file + jdbc sources,
+  pushdown/recheck, SHOW CREATE, error frames, ETL, and parallel load; BVT
+  `test/distributed/cases/datastream/` passes 40/40 (server started via
+  `optools/jstfu_bvt.sh`).
+- The virtual-one-file convention reuses `ScanType = tree.INLINE` wholesale
+  (see `external.DatastreamExternParam`), which made the operator changes
+  minimal: a reader-dispatch case plus a synthetic-param branch in Prepare.
+- Remote-run is wired (`pipeline.ExternalScan.datastream_scan = 24`).
+- jdbc-source contract: the configured SQL's column names should match the
+  external table's column names or the pushed `${FILTER}` text will not be
+  valid on the source side (documented in xtool/jstfu/README.md).
+- Deferred: docker-compose/release-artifact packaging of jstfu.jar and the
+  CI step that starts it before BVT (the e2e harness self-manages the server
+  and is the primary automated integration test until that lands).
+
 Open questions (defaults chosen, flag if you disagree)
 ------------------------------------------------------
 

@@ -58,6 +58,7 @@ mo-tool
 cube*/
 store/
 mo-data/
+mo-data-s2h3/
 node-*-data/
 pkg/catalog/test/
 pkg/config/system_vars.go
@@ -106,3 +107,6 @@ etc/docker-multi-cn-local-disk/*.toml
 !.agents/skills/*/SKILL.md
 !.agents/skills/*/references/
 !.agents/skills/*/references/*.md
+
+# jstfu (datastream server) build output
+xtool/jstfu/target/

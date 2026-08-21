@@ -362,6 +362,20 @@ mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
 	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
+# Build the jstfu datastream gRPC server (xtool/jstfu/target/jstfu.jar), the
+# reference server for ENGINE = DATASTREAM external tables.  Requires a JDK
+# (17+) and Maven; set MVN to a specific mvn binary if it is not on PATH.
+MVN ?= mvn
+.PHONY: jstfu
+jstfu:
+	$(info [Build jstfu datastream server])
+	@if command -v $(MVN) >/dev/null 2>&1; then \
+		(cd xtool/jstfu && $(MVN) -q -B -DskipTests package) && \
+		echo "built xtool/jstfu/target/jstfu.jar"; \
+	else \
+		echo "skip jstfu: mvn not found (install maven or set MVN=/path/to/mvn)"; \
+	fi
+
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug

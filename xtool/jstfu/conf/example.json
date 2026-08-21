@@ -1,0 +1,19 @@
+{
+    "port": 4444,
+    "chunksize": 1048576,
+    "datasource": [
+        {
+            "name": "jdbc_example",
+            "type": "jdbc",
+            "connectionstring": "jdbc:mysql://127.0.0.1:6001/test?useSSL=false&allowPublicKeyRetrieval=true",
+            "user": "dump",
+            "password": "111",
+            "sql": "select col1, col2, col3, col4 from src_table where ${FILTER}"
+        },
+        {
+            "name": "file_example",
+            "type": "file",
+            "path": "/path/to/file.csv"
+        }
+    ]
+}
