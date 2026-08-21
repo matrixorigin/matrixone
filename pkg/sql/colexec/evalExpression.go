@@ -432,7 +432,10 @@ type ParamExpressionExecutor struct {
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	if noRowsSelected(selectList, expressionRowCount(batches)) {
+	// Scalar values stay physically constant, but their logical cardinality
+	// must follow the input batch for downstream materialization and shuffle.
+	rowCount := expressionRowCount(batches)
+	if noRowsSelected(selectList, rowCount) {
 		if expr.maskedNull == nil {
 			var err error
 			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
@@ -440,12 +443,15 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 				return nil, err
 			}
 		}
+		expr.maskedNull.SetLength(rowCount)
 		return expr.maskedNull, nil
 	}
 	if expr.folded {
 		if expr.foldedNull {
+			expr.null.SetLength(rowCount)
 			return expr.null, nil
 		}
+		expr.vec.SetLength(rowCount)
 		return expr.vec, nil
 	}
 
@@ -463,6 +469,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		}
 		expr.folded = true
 		expr.foldedNull = true
+		expr.null.SetLength(rowCount)
 		return expr.null, nil
 	}
 
@@ -479,6 +486,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
 		expr.folded = true
 		expr.foldedNull = false
+		expr.vec.SetLength(rowCount)
 	}
 	return expr.vec, err
 }
@@ -538,7 +546,10 @@ type VarExpressionExecutor struct {
 }
 
 func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	if noRowsSelected(selectList, expressionRowCount(batches)) {
+	// Scalar values stay physically constant, but their logical cardinality
+	// must follow the input batch for downstream materialization and shuffle.
+	rowCount := expressionRowCount(batches)
+	if noRowsSelected(selectList, rowCount) {
 		if expr.maskedNull == nil {
 			var err error
 			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
@@ -546,6 +557,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 				return nil, err
 			}
 		}
+		expr.maskedNull.SetLength(rowCount)
 		return expr.maskedNull, nil
 	}
 	resolveVariableFunc := proc.GetResolveVariableFunc()
@@ -580,6 +592,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		if err == nil {
 			expr.null.SetIsBin(isBin)
 			expr.null.SetPrepareParamKind(prepareParamKind)
+			expr.null.SetLength(rowCount)
 		}
 		return expr.null, err
 	}
@@ -612,6 +625,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
 		expr.vec.SetPrepareParamKind(prepareParamKind)
+		expr.vec.SetLength(rowCount)
 	}
 	return expr.vec, err
 }
@@ -1482,7 +1496,11 @@ func generateConstExpressionExecutor(
 		case *plan.Literal_I16Val:
 			vec, err = newExpressionConstFixed(constI16Type, int16(val.I16Val), 1, proc.Mp(), selection)
 		case *plan.Literal_I32Val:
-			vec, err = newExpressionConstFixed(constI32Type, val.I32Val, 1, proc.Mp(), selection)
+			if typ.Oid == types.T_year {
+				vec, err = newExpressionConstFixed(typ, types.MoYear(val.I32Val), 1, proc.Mp(), selection)
+			} else {
+				vec, err = newExpressionConstFixed(constI32Type, val.I32Val, 1, proc.Mp(), selection)
+			}
 		case *plan.Literal_I64Val:
 			vec, err = newExpressionConstFixed(constI64Type, val.I64Val, 1, proc.Mp(), selection)
 		case *plan.Literal_U8Val:

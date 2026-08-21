@@ -79,6 +79,29 @@ func TestPrepareRulesTraverseEveryWindowSpecParameter(t *testing.T) {
 	})
 }
 
+func TestPrepareRulesTraverseVectorIndexScanExpressions(t *testing.T) {
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeId:   0,
+			NodeType: planpb.Node_VECTOR_INDEX_SCAN,
+			VectorIndexScan: &planpb.VectorIndexScan{
+				QueryVector:     param(4),
+				CandidateLimit:  param(3),
+				FirstRoundLimit: param(0),
+				PreFilters:      []*planpb.Expr{param(2)},
+				DistanceRange:   &planpb.DistRange{LowerBound: param(1)},
+			},
+		}},
+	}}}
+	rule := NewGetParamRule()
+	require.NoError(t, NewVisitPlan(queryPlan, []VisitPlanRule{rule}).Visit(context.Background()))
+	require.Equal(t, map[int]int{0: 0, 1: 0, 2: 0, 3: 0, 4: 0}, rule.params)
+}
+
 func TestApplyRuleToWindowSpecPropagatesFieldErrors(t *testing.T) {
 	newWindow := func() *planpb.WindowSpec {
 		param := func() *planpb.Expr {
@@ -1120,6 +1143,238 @@ func TestResetParamRefRulePreservesAggregateConfig(t *testing.T) {
 
 	rewritten.GetF().AggConfig[0] = 9
 	require.Equal(t, byte(1), expr.GetF().AggConfig[0])
+}
+
+func TestResetParamRefRuleRebindsTypedAncestors(t *testing.T) {
+	ctx := context.Background()
+	param := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	inner, err := BindFuncExprImplByPlanExpr(ctx, "+", []*planpb.Expr{
+		param,
+		makePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	outer, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{inner})
+	require.NoError(t, err)
+
+	rule := NewResetParamRefRule(ctx, []*planpb.Expr{
+		makePlan2Float64ConstExprWithType(-1.5),
+	})
+	rewritten, err := rule.ApplyExpr(outer)
+	require.NoError(t, err)
+	require.Equal(t, types.T_float64, types.T(rewritten.Typ.Id))
+	require.Equal(t, types.T_float64, types.T(rewritten.GetF().Args[0].Typ.Id))
+}
+
+func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
+	ctx := context.Background()
+	param := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+		}
+	}
+
+	selectParam, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{param()})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{selectParam},
+		}},
+	}}}
+
+	decimal := types.New(types.T_decimal64, 2, 1)
+	filled, err := FillValuesOfParamsInPlan(ctx, query, []any{ParamValue{
+		Value:          "-1.5",
+		RuntimeType:    decimal,
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	result := filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal64), result.Typ.Id)
+	boundArg := result.GetF().Args[0]
+	require.Equal(t, int64(-15), boundArg.GetLit().GetDecimal64Val().A)
+	require.Nil(t, boundArg.GetF())
+	require.Equal(t, int32(types.T_decimal64), boundArg.Typ.Id)
+
+	stringFilled, err := FillValuesOfParamsInPlan(ctx, query, []any{ParamValue{
+		Value:          "-1.5",
+		RuntimeType:    types.T_text.ToType(),
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	stringResult := stringFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal64), stringResult.Typ.Id)
+	require.Nil(t, stringResult.GetF().Args[0].GetF())
+	require.Equal(t, int64(-15), stringResult.GetF().Args[0].GetLit().GetDecimal64Val().A)
+
+	sleepParam, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
+	require.NoError(t, err)
+	sleepQuery := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{sleepParam},
+		}},
+	}}}
+	sleepFilled, err := FillValuesOfParamsInPlan(ctx, sleepQuery, []any{ParamValue{
+		Value:          "0.05",
+		RuntimeType:    types.T_float64.ToType(),
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	sleepResult := sleepFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_uint8), sleepResult.Typ.Id)
+	require.Equal(t, int32(types.T_float64), sleepResult.GetF().Args[0].Typ.Id)
+	require.Nil(t, sleepResult.GetF().Args[0].GetF())
+
+	sleepFloat, err := FillValuesOfParamsInPlan(ctx, sleepQuery, []any{ParamValue{
+		Value:          "0.05",
+		RuntimeType:    types.T_float32.ToType(),
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	sleepFloatArg := sleepFloat.GetQuery().Nodes[0].ProjectList[0].GetF().Args[0]
+	require.Equal(t, int32(types.T_float64), sleepFloatArg.Typ.Id)
+	require.Equal(t, "cast", sleepFloatArg.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_float32), sleepFloatArg.GetF().Args[0].Typ.Id)
+
+	sleepDecimal, err := FillValuesOfParamsInPlan(ctx, sleepQuery, []any{ParamValue{
+		Value:          "0.05",
+		RuntimeType:    types.New(types.T_decimal64, 3, 2),
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	sleepDecimalArg := sleepDecimal.GetQuery().Nodes[0].ProjectList[0].GetF().Args[0]
+	require.Equal(t, int32(types.T_float64), sleepDecimalArg.Typ.Id)
+	require.Equal(t, "cast", sleepDecimalArg.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_decimal64), sleepDecimalArg.GetF().Args[0].Typ.Id)
+
+	direct := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{param()},
+		}},
+	}}}
+	filled, err = FillValuesOfParamsInPlan(ctx, direct, []any{ParamValue{
+		Value:          "-12345678901234567890.123456789",
+		RuntimeType:    types.New(types.T_decimal128, 29, 9),
+		HasRuntimeType: true,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_decimal128), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Id)
+	require.Equal(t, int32(29), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Width)
+	require.Equal(t, int32(9), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Scale)
+}
+
+func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) {
+	ctx := context.Background()
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
+		}
+	}
+	absExpr, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{param(0)})
+	require.NoError(t, err)
+	eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(1),
+		param(1),
+	})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{absExpr, eqExpr},
+		}},
+	}}}
+
+	filled, err := FillValuesOfParamsInPlan(ctx, query, []any{
+		ParamValue{Value: "-1.5", RuntimeType: types.T_text.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "1"},
+	})
+	require.NoError(t, err)
+	bound := filled.GetQuery().Nodes[0].ProjectList[1].GetF().Args[1]
+	require.Equal(t, int64(1), bound.GetLit().GetI64Val())
+}
+
+func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing.T) {
+	ctx := context.Background()
+	param := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+		}
+	}
+	absExpr, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{param()})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{absExpr},
+		}},
+	}}}
+
+	_, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{Value: "-1.5", IsBinaryProtocol: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "COM_STMT text numeric values must rebind ABS")
+
+	sleepExpr, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
+	require.NoError(t, err)
+	sleepQuery := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{sleepExpr},
+		}},
+	}}}
+	sleepFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, sleepQuery, []any{
+		ParamValue{Value: "0.05", IsBinaryProtocol: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "COM_STMT text fractional values must rebind SLEEP")
+	require.NotNil(t, sleepFilled.GetQuery().Nodes[0].ProjectList[0].GetF())
+
+	_, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{Value: "-1.5", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	direct := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{param()},
+		}},
+	}}}
+	_, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, direct, []any{
+		ParamValue{Value: "text", IsBinaryProtocol: true},
+	})
+	require.NoError(t, err)
+	require.False(t, specialized, "same-domain text execution should reuse the cached plan")
+
+	_, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, direct, []any{
+		ParamValue{Value: "5", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "direct numeric result metadata must be specialized")
 }
 
 func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {
