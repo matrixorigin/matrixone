@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -49,9 +50,23 @@ func (c *clientConn) migrateConnFromContext(
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
+		if c.tun != nil && moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
+			c.tun.rejectPendingLongDataReconciliation()
+		}
 		return nil, moerr.AttachCause(ctx, err)
 	}
+	defer c.queryClient.Release(resp)
 	r := resp.MigrateConnFromResponse
+	if r == nil {
+		return nil, moerr.NewInternalError(parent, "bad response")
+	}
+	if c.tun != nil && !c.tun.acceptPendingLongDataSnapshot(r.PreparedStmtLongDataChecked) {
+		c.tun.rejectPendingLongDataReconciliation()
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if c.tun != nil {
+		r.PrepareStmts = c.tun.filterClosedStatementsForMigration(r.PrepareStmts)
+	}
 
 	c.log.Info("connection migrate from server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
@@ -62,7 +77,6 @@ func (c *clientConn) migrateConnFromContext(
 		zap.Int64("goId", goid.Get()),
 	)
 
-	defer c.queryClient.Release(resp)
 	return r, nil
 }
 
@@ -78,32 +92,86 @@ func (c *clientConn) migrateConnToContext(
 	if parent == nil {
 		parent = context.Background()
 	}
+	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
+	defer cancel()
+
+	typedMigration := info.UserDefinedVarsExported || info.SystemVariablesExported ||
+		info.SystemVariablesSnapshotTooLarge || info.UserDefinedVarsSnapshotTooLarge
+	typedMigrationSupported := false
+	addr := ""
+	if typedMigration {
+		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
+		if addr == "" {
+			return moerr.NewInternalError(ctx, "cannot get query service address")
+		}
+		targetProtocol, err := c.getTargetProtocolVersion(ctx, addr)
+		if err != nil {
+			return err
+		}
+		typedMigrationSupported = targetProtocol >= defines.MORPCVersion22
+		if typedMigrationSupported && info.SystemVariablesSnapshotTooLarge {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate typed system variables because the snapshot exceeds the connection migration size limit")
+		}
+		if typedMigrationSupported && info.UserDefinedVarsSnapshotTooLarge {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate typed user variables because the snapshot exceeds the connection migration size limit")
+		}
+	}
+	if !typedMigrationSupported {
+		if info.UserDefinedVarsSnapshotTooLarge && !info.UserDefinedVarsReplayable {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate oversized user variables to a pre-v22 target without complete raw replay")
+		}
+		if info.UserDefinedVarsExported && !info.UserDefinedVarsReplayable {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate typed user variables to a pre-v22 target without complete raw replay")
+		}
+		if info.SystemVariablesExported && !info.SystemVariablesReplayable {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate typed system variables to a pre-v22 target without complete raw replay")
+		}
+	}
+
 	// Before migrate session info with RPC, we need to execute some
 	// SQLs to initialize the session and account in handler.
 	// Currently, the session variable transferred is not used anywhere else,
 	// and just used here.
-	if _, err := execStmtWithContext(parent, sc, internalStmt{
+	if _, err := execStmtWithContext(ctx, sc, internalStmt{
 		cmdType: cmdQuery,
 		s:       "/* cloud_nonuser */ set transferred=1;",
 	}, nil); err != nil {
 		return err
 	}
 
-	// First, we re-run the set variables statements.
-	for _, stmt := range c.migration.setVarStmts {
-		if _, err := execStmtWithContext(parent, sc, internalStmt{
-			cmdType: cmdQuery,
-			s:       stmt,
-		}, nil); err != nil {
-			v2.ProxyConnectCommonFailCounter.Inc()
-			return err
+	// Preserve raw replay whenever the target cannot consume typed state or the
+	// source did not export evaluated user variables. Typed system variables can
+	// still be applied by the target after that replay.
+	if !typedMigrationSupported || !info.UserDefinedVarsExported {
+		for _, stmt := range c.migration.setVarStmts {
+			if _, err := execStmtWithContext(ctx, sc, internalStmt{
+				cmdType: cmdQuery,
+				s:       stmt,
+			}, nil); err != nil {
+				v2.ProxyConnectCommonFailCounter.Inc()
+				return err
+			}
 		}
+	}
+	// The final control read above re-arms the frontend IOSession's
+	// SessionTimeout. Clear that phase-owned deadline before the backend is
+	// handed to the tunnel; otherwise an actively used migrated connection can
+	// still expire at the end of the session timeout period.
+	if err := clearServerConnReadDeadline(sc); err != nil {
+		return moerr.AttachCause(ctx, err)
 	}
 
 	// Then, migrate other info with RPC.
-	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 	if addr == "" {
-		return moerr.NewInternalError(parent, "cannot get query service address")
+		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
+	}
+	if addr == "" {
+		return moerr.NewInternalError(ctx, "cannot get query service address")
 	}
 	c.log.Info("connection migrate to server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
@@ -113,19 +181,59 @@ func (c *clientConn) migrateConnToContext(
 	)
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
-		ConnID:           c.connID,
-		DB:               info.DB,
-		PrepareStmts:     info.PrepareStmts,
-		LastAffectedRows: info.LastAffectedRows,
+		ConnID:                    c.connID,
+		DB:                        info.DB,
+		PrepareStmts:              info.PrepareStmts,
+		LastAffectedRows:          info.LastAffectedRows,
+		UserDefinedVars:           nil,
+		UserDefinedVarsExported:   false,
+		SystemVariables:           nil,
+		SystemVariablesExported:   false,
+		UserDefinedVarsReplayable: info.UserDefinedVarsReplayable,
+		SystemVariablesReplayable: info.SystemVariablesReplayable,
 	}
-	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
-	defer cancel()
+	if typedMigrationSupported {
+		req.MigrateConnToRequest.UserDefinedVars = info.UserDefinedVars
+		req.MigrateConnToRequest.UserDefinedVarsExported = info.UserDefinedVarsExported
+		req.MigrateConnToRequest.SystemVariables = info.SystemVariables
+		req.MigrateConnToRequest.SystemVariablesExported = info.SystemVariablesExported
+	}
+	if typedMigrationSupported && info.UserDefinedVarsExported && !info.SystemVariablesExported {
+		req.MigrateConnToRequest.SetVarStmts = append([]string(nil), c.migration.systemSetVarStmts...)
+	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
 	c.queryClient.Release(resp)
 	return nil
+}
+
+func (c *clientConn) getTargetProtocolVersion(ctx context.Context, addr string) (int64, error) {
+	if c.queryClient == nil {
+		return 0, moerr.NewInternalError(ctx, "query client is not initialized")
+	}
+	req := c.queryClient.NewRequest(query.CmdMethod_GetProtocolVersion)
+	req.GetProtocolVersion = &query.GetProtocolVersionRequest{}
+	resp, err := c.queryClient.SendMessage(ctx, addr, req)
+	if err != nil {
+		if resp != nil {
+			c.queryClient.Release(resp)
+		}
+		return 0, moerr.AttachCause(ctx, err)
+	}
+	if resp == nil || resp.GetProtocolVersion == nil {
+		if resp != nil {
+			c.queryClient.Release(resp)
+		}
+		return 0, moerr.NewInternalError(ctx, "target query service returned no protocol version")
+	}
+	version := resp.GetProtocolVersion.Version
+	c.queryClient.Release(resp)
+	if version <= 0 {
+		return 0, moerr.NewInternalErrorf(ctx, "target query service returned invalid protocol version %d", version)
+	}
+	return version, nil
 }
 
 func (c *clientConn) migrateConnContext(
@@ -140,14 +248,17 @@ func (c *clientConn) migrateConnContext(
 	if err != nil {
 		return err
 	}
-	if resp == nil {
-		return moerr.NewInternalError(ctx, "bad response")
-	}
 	if !resp.UserLevelLockReleaseSupported {
 		return moerr.NewInternalError(ctx, "cannot migrate connection from CN without user-level lock release support")
 	}
 	if len(resp.UserLevelLocks) > 0 {
 		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
 	}
-	return c.migrateConnToContext(ctx, sc, resp)
+	if err := c.migrateConnToContext(ctx, sc, resp); err != nil {
+		return err
+	}
+	if c.tun != nil {
+		c.tun.clearMigratedStatementState()
+	}
+	return nil
 }

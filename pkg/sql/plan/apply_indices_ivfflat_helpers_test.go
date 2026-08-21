@@ -91,7 +91,7 @@ func TestIvfIncludeHelperColumnCollection(t *testing.T) {
 				&Expr{
 					Typ: Type{Id: int32(types.T_array_float32)},
 					Expr: &planpb.Expr_Lit{
-						Lit: &planpb.Literal{Value: &planpb.Literal_VecVal{VecVal: "[1,1,1]"}},
+						Lit: &planpb.Literal{Value: &planpb.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 1, 1}))}},
 					},
 				},
 			),
@@ -104,13 +104,19 @@ func TestIvfIncludeHelperColumnCollection(t *testing.T) {
 	require.NotSame(t, childNode.ProjectList[0], childMap[[2]int32{childTag, 0}])
 	require.Nil(t, buildIvfChildProjectionMap(nil))
 
-	required := collectRequiredColumns(projNode, childNode, scanNode, orderExpr, 1)
+	// vecLitArg matches the WHERE-clause distance's query vector so that distance (on the index
+	// column) is recognized as rewritable-to-score and its embedding column is NOT collected.
+	vecLitArg := &Expr{
+		Typ:  Type{Id: int32(types.T_array_float32)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 1, 1}))}}},
+	}
+	required := collectRequiredColumns(projNode, childNode, scanNode, orderExpr, 1, "l2_distance", vecLitArg)
 	assert.Contains(t, required, "title")
 	assert.Contains(t, required, "category")
 	assert.Contains(t, required, "note")
 	assert.NotContains(t, required, "embedding")
 
-	projected := collectProjectedColumns(projNode, childNode, scanNode, 1)
+	projected := collectProjectedColumns(projNode, childNode, scanNode, 1, "l2_distance", vecLitArg)
 	assert.Equal(t, map[string]struct{}{
 		"title":    {},
 		"category": {},
@@ -510,18 +516,18 @@ func TestIvfSerializeFilterInvalidShapes(t *testing.T) {
 	}
 
 	cols := map[string]struct{}{}
-	collectScanColumnsFromExpr(nil, scanTag, 1, scanNode.TableDef, cols)
-	collectScanColumnsFromExpr(makeIvfHelperColExpr(scanTag+1, 2, scanNode.TableDef), scanTag, 1, scanNode.TableDef, cols)
+	collectScanColumnsFromExpr(nil, scanTag, 1, "l2_distance", nil, scanNode.TableDef, cols)
+	collectScanColumnsFromExpr(makeIvfHelperColExpr(scanTag+1, 2, scanNode.TableDef), scanTag, 1, "l2_distance", nil, scanNode.TableDef, cols)
 	collectScanColumnsFromExpr(
 		&Expr{Typ: Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &ColRef{RelPos: scanTag, ColPos: 99, Name: "missing"}}},
-		scanTag, 1, scanNode.TableDef, cols,
+		scanTag, 1, "l2_distance", nil, scanNode.TableDef, cols,
 	)
 	collectScanColumnsFromExpr(
 		&Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*Expr{
 			makeIvfHelperColExpr(scanTag, 2, scanNode.TableDef),
 			makeIvfHelperColExpr(scanTag, 3, scanNode.TableDef),
 		}}}},
-		scanTag, 1, scanNode.TableDef, cols,
+		scanTag, 1, "l2_distance", nil, scanNode.TableDef, cols,
 	)
 	assert.Equal(t, map[string]struct{}{
 		"title":    {},
@@ -909,10 +915,11 @@ func TestIvfFilterColumnAndDistanceRangeHelpers(t *testing.T) {
 
 func TestSkipPkDedupCoverage(t *testing.T) {
 	tests := []struct {
-		name string
-		old  *TableDef
-		new  *TableDef
-		want bool
+		name          string
+		old           *TableDef
+		new           *TableDef
+		sourceColumns map[string]selectExpr
+		want          bool
 	}{
 		{
 			name: "new table without primary key skips",
@@ -928,9 +935,16 @@ func TestSkipPkDedupCoverage(t *testing.T) {
 		},
 		{
 			name: "same primary key names skip dedup",
-			old:  &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}},
-			new:  &TableDef{Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}},
-			want: true,
+			old: &TableDef{
+				Cols: []*ColDef{{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}}},
+				Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			new: &TableDef{
+				Cols: []*ColDef{{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}}},
+				Pkey: &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			},
+			sourceColumns: map[string]selectExpr{"id": {sexprType: exprColumnName, sexprStr: "id"}},
+			want:          true,
 		},
 		{
 			name: "changed primary key names do not skip",
@@ -942,7 +956,7 @@ func TestSkipPkDedupCoverage(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, skipPkDedup(tc.old, tc.new))
+			assert.Equal(t, tc.want, skipPkDedup(tc.old, tc.new, tc.sourceColumns))
 		})
 	}
 }

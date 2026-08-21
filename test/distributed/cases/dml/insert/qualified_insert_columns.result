@@ -1,0 +1,202 @@
+drop database if exists qualified_insert_columns;
+create database qualified_insert_columns;
+use qualified_insert_columns;
+create database qualified_insert_columns_other;
+create table t (
+id int primary key,
+value int not null,
+note varchar(20) not null
+);
+create table qualified_insert_columns_other.t like qualified_insert_columns.t;
+insert into qualified_insert_columns.t(id, value, note)
+values (1, 10, 'unqualified');
+insert into qualified_insert_columns.t(t.id, t.value, t.note)
+values (2, 20, 'table');
+insert into qualified_insert_columns.t(
+qualified_insert_columns.t.id,
+qualified_insert_columns.t.value,
+qualified_insert_columns.t.note
+) values (3, 30, 'database');
+insert into `qualified_insert_columns`.`t`(
+`qualified_insert_columns`.`t`.`id`,
+`qualified_insert_columns`.`t`.`value`,
+`qualified_insert_columns`.`t`.`note`
+) values (4, 40, 'quoted');
+select id, value, note from t order by id;
+➤ id[4,32,0]  ¦  value[4,32,0]  ¦  note[12,20,0]  𝄀
+1  ¦  10  ¦  unqualified  𝄀
+2  ¦  20  ¦  table  𝄀
+3  ¦  30  ¦  database  𝄀
+4  ¦  40  ¦  quoted
+prepare qualified_insert from
+'insert into `qualified_insert_columns`.`t`(
+`qualified_insert_columns`.`t`.`id`,
+`qualified_insert_columns`.`t`.`value`,
+`qualified_insert_columns`.`t`.`note`
+) values (?, ?, ?)';
+set @id = 5;
+set @value = 50;
+set @note = 'prepared';
+execute qualified_insert using @id, @value, @note;
+deallocate prepare qualified_insert;
+select count(*) as row_count, sum(id) as id_sum, sum(value) as value_sum from t;
+➤ row_count[-5,64,0]  ¦  id_sum[-5,64,0]  ¦  value_sum[-5,64,0]  𝄀
+5  ¦  15  ¦  150
+insert into qualified_insert_columns.t(
+qualified_insert_columns.t.id,
+qualified_insert_columns.t.missing
+) values (6, 60);
+Unknown column 'missing' in 't'
+insert into qualified_insert_columns.t(
+qualified_insert_columns_other.t.id,
+qualified_insert_columns.t.value,
+qualified_insert_columns.t.note
+) values (6, 60, 'wrong_database');
+Unknown column 'qualified_insert_columns_other.t.id' in 'field list'
+insert into qualified_insert_columns.t(
+qualified_insert_columns.other.id,
+qualified_insert_columns.t.value,
+qualified_insert_columns.t.note
+) values (6, 60, 'wrong_table');
+Unknown column 'qualified_insert_columns.other.id' in 'field list'
+insert into qualified_insert_columns.t(
+nonexistent_database.t.id,
+qualified_insert_columns.t.value,
+qualified_insert_columns.t.note
+) values (6, 60, 'nonexistent_database');
+Unknown column 'nonexistent_database.t.id' in 'field list'
+insert into qualified_insert_columns.t(
+qualified_insert_columns_other.t.id,
+qualified_insert_columns.t.value,
+qualified_insert_columns.t.note
+) select 6, 60, 'insert_select';
+Unknown column 'qualified_insert_columns_other.t.id' in 'field list'
+insert into qualified_insert_columns.t set
+qualified_insert_columns_other.t.id = 6,
+qualified_insert_columns.t.value = 60,
+qualified_insert_columns.t.note = 'insert_set';
+Unknown column 'qualified_insert_columns_other.t.id' in 'field list'
+replace into qualified_insert_columns.t(
+qualified_insert_columns_other.t.id,
+qualified_insert_columns.t.value,
+qualified_insert_columns.t.note
+) values (6, 60, 'replace_values');
+Unknown column 'qualified_insert_columns_other.t.id' in 'field list'
+replace into qualified_insert_columns.t set
+qualified_insert_columns_other.t.id = 6,
+qualified_insert_columns.t.value = 60,
+qualified_insert_columns.t.note = 'replace_set';
+Unknown column 'qualified_insert_columns_other.t.id' in 'field list'
+prepare wrong_qualified_insert from
+'insert into qualified_insert_columns.t(
+qualified_insert_columns_other.t.id,
+qualified_insert_columns.t.value,
+qualified_insert_columns.t.note
+) values (?, ?, ?)';
+Unknown column 'qualified_insert_columns_other.t.id' in 'field list'
+select count(*) as row_count, sum(id) as id_sum, sum(value) as value_sum from t;
+➤ row_count[-5,64,0]  ¦  id_sum[-5,64,0]  ¦  value_sum[-5,64,0]  𝄀
+5  ¦  15  ¦  150
+select count(*) as other_row_count from qualified_insert_columns_other.t;
+➤ other_row_count[-5,64,0]  𝄀
+0
+insert into qualified_insert_columns.t(id, value, note)
+values (1, 999, 'wrong_values')
+on duplicate key update value = values(qualified_insert_columns.other.value);
+Unknown column 'qualified_insert_columns.other.value' in 'field list'
+select id, value, note from t where id = 1;
+➤ id[4,32,0]  ¦  value[4,32,0]  ¦  note[12,20,0]  𝄀
+1  ¦  10  ¦  unqualified
+insert into qualified_insert_columns.t(t.id, t.value, t.note)
+values (1, 20, 'values_table')
+on duplicate key update value = values(t.value);
+insert into qualified_insert_columns.t(
+qualified_insert_columns.t.id,
+qualified_insert_columns.t.value,
+qualified_insert_columns.t.note
+) values (1, 30, 'values_database')
+on duplicate key update value = values(qualified_insert_columns.t.value);
+prepare qualified_values from
+'insert into qualified_insert_columns.t(t.id, t.value, t.note) values (?, ?, ?)
+on duplicate key update value = values(qualified_insert_columns.t.value)';
+set @id = 1;
+set @value = 40;
+set @note = 'values_prepared';
+execute qualified_values using @id, @value, @note;
+deallocate prepare qualified_values;
+select id, value, note from t where id = 1;
+➤ id[4,32,0]  ¦  value[4,32,0]  ¦  note[12,20,0]  𝄀
+1  ¦  40  ¦  unqualified
+create table temp_shadow (
+id int primary key,
+value int not null,
+note varchar(20) not null
+);
+insert into temp_shadow values (100, 1000, 'permanent');
+create temporary table temp_shadow like temp_shadow;
+insert into temp_shadow(temp_shadow.id, temp_shadow.value, temp_shadow.note)
+values (1, 10, 'temp_values');
+insert into temp_shadow set
+temp_shadow.id = 2,
+temp_shadow.value = 20,
+temp_shadow.note = 'temp_set';
+replace into temp_shadow(temp_shadow.id, temp_shadow.value, temp_shadow.note)
+values (3, 30, 'replace_values');
+replace into temp_shadow set
+temp_shadow.id = 4,
+temp_shadow.value = 40,
+temp_shadow.note = 'replace_set';
+insert into temp_shadow(temp_shadow.id, temp_shadow.value, temp_shadow.note)
+values (1, 11, 'temp_values_table')
+on duplicate key update value = values(temp_shadow.value);
+insert into temp_shadow(
+qualified_insert_columns.temp_shadow.id,
+qualified_insert_columns.temp_shadow.value,
+qualified_insert_columns.temp_shadow.note
+) values (1, 12, 'temp_values_database')
+on duplicate key update value = values(qualified_insert_columns.temp_shadow.value);
+select id, value, note from temp_shadow order by id;
+➤ id[4,32,0]  ¦  value[4,32,0]  ¦  note[12,20,0]  𝄀
+1  ¦  12  ¦  temp_values  𝄀
+2  ¦  20  ¦  temp_set  𝄀
+3  ¦  30  ¦  replace_values  𝄀
+4  ¦  40  ¦  replace_set
+drop temporary table temp_shadow;
+select id, value, note from temp_shadow;
+➤ id[4,32,0]  ¦  value[4,32,0]  ¦  note[12,20,0]  𝄀
+100  ¦  1000  ¦  permanent
+drop table temp_shadow;
+insert into qualified_insert_columns.t(id, value, note)
+values (6, 60, 'after_error');
+select id, value, note from t order by id;
+➤ id[4,32,0]  ¦  value[4,32,0]  ¦  note[12,20,0]  𝄀
+1  ¦  40  ¦  unqualified  𝄀
+2  ¦  20  ¦  table  𝄀
+3  ¦  30  ¦  database  𝄀
+4  ¦  40  ¦  quoted  𝄀
+5  ¦  50  ¦  prepared  𝄀
+6  ¦  60  ¦  after_error
+drop database qualified_insert_columns;
+drop database qualified_insert_columns_other;
+set global lower_case_table_names = 0;
+create database CaseMode;
+create table CaseMode.T(id int primary key, value int not null);
+insert into CaseMode.T(CaseMode.T.id, CaseMode.T.value) values (0, 0);
+insert into CaseMode.T(casemode.T.id, CaseMode.T.value) values (1, 10);
+Unknown column 'casemode.T.id' in 'field list'
+insert into CaseMode.T(CaseMode.T.id, CaseMode.t.value) select 2, 20;
+Unknown column 'CaseMode.t.value' in 'field list'
+insert into CaseMode.T set CaseMode.t.id = 3, CaseMode.T.value = 30;
+Unknown column 'CaseMode.t.id' in 'field list'
+replace into CaseMode.T(casemode.T.id, CaseMode.T.value) values (4, 40);
+Unknown column 'casemode.T.id' in 'field list'
+replace into CaseMode.T set CaseMode.t.id = 5, CaseMode.T.value = 50;
+Unknown column 'CaseMode.t.id' in 'field list'
+prepare wrong_case_qualified_insert from
+'insert into CaseMode.T(casemode.T.id, CaseMode.T.value) values (?, ?)';
+Unknown column 'casemode.T.id' in 'field list'
+select id, value from CaseMode.T order by id;
+➤ id[4,32,0]  ¦  value[4,32,0]  𝄀
+0  ¦  0
+drop database CaseMode;
+set global lower_case_table_names = 1;

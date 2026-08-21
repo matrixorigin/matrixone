@@ -45,9 +45,9 @@ func validateGlobalSysVarSyncProtocol(ctx context.Context, ses *Session) error {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion14 {
+	if !ok || !valid || version < defines.MORPCVersion23 {
 		return moerr.NewInternalErrorf(ctx,
-			"SET GLOBAL requires MORPC protocol version %d", defines.MORPCVersion14)
+			"SET GLOBAL requires MORPC protocol version %d", defines.MORPCVersion23)
 	}
 	if _, ok := pu.HAKeeperClient.(logservice.GlobalSysVarHAKeeperClient); !ok {
 		return moerr.NewInternalError(ctx,
@@ -63,7 +63,7 @@ func validateGlobalSysVarSyncProtocol(ctx context.Context, ses *Session) error {
 			continue
 		}
 		hasServingCN = true
-		if cn.ProtocolVersion < defines.MORPCVersion14 {
+		if cn.ProtocolVersion < defines.MORPCVersion23 {
 			return moerr.NewInternalErrorf(ctx,
 				"CN %s protocol version %d does not support global system variable fencing",
 				cn.UUID, cn.ProtocolVersion)
@@ -78,14 +78,14 @@ func validateGlobalSysVarSyncProtocol(ctx context.Context, ses *Session) error {
 			"HAKeeper has no protocol-capable LogStore")
 	}
 	for _, store := range details.LogStores {
-		if store.ProtocolVersion < defines.MORPCVersion14 {
+		if store.ProtocolVersion < defines.MORPCVersion23 {
 			return moerr.NewInternalErrorf(ctx,
 				"LogStore %s protocol version %d does not support global system variable fencing",
 				store.UUID, store.ProtocolVersion)
 		}
 	}
 	for _, proxy := range details.ProxyStores {
-		if proxy.ProtocolVersion < defines.MORPCVersion14 {
+		if proxy.ProtocolVersion < defines.MORPCVersion23 {
 			return moerr.NewInternalErrorf(ctx,
 				"Proxy %s protocol version %d does not support global system variable fencing",
 				proxy.UUID, proxy.ProtocolVersion)

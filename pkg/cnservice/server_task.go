@@ -355,6 +355,7 @@ func (s *service) registerExecutorsLocked() {
 			s.task.runner.Attach,
 			s.cfg.UUID,
 			common.ISCPAllocator,
+			s.fileService,
 		),
 	)
 

@@ -40,8 +40,269 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCompileTemporalFilterExprUsesSessionTimezone(t *testing.T) {
+	zone := time.FixedZone("UTC+08", 8*3600)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.GetSessionInfo().TimeZone = zone
+	tableDef := &plan.TableDef{
+		Name:          "temporal_filter",
+		Name2ColIndex: map[string]int32{"v": 0},
+		Cols: []*plan.ColDef{{
+			Name:   "v",
+			Seqnum: 0,
+			Typ:    plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		}},
+	}
+	parseDatetime := func(value string) types.Datetime {
+		datetime, err := types.ParseDatetime(value, 6)
+		require.NoError(t, err)
+		return datetime
+	}
+	makeTimestampExpr := func(value string) *plan.Expr {
+		timestamp := parseDatetime(value).ToTimestamp(zone)
+		expr := plan2.MakePlan2TimestampConstExprWithType(int64(timestamp))
+		expr.Typ.Scale = 6
+		return expr
+	}
+	makeDatetimeMeta := func(values ...types.Datetime) objectio.BlockObject {
+		dataMeta := objectio.BuildMetaData(1, 1)
+		meta := dataMeta.GetBlockMeta(0)
+		zm := index.NewZM(types.T_datetime, 6)
+		for _, value := range values {
+			encoded := int64(value)
+			index.UpdateZM(zm, types.EncodeInt64(&encoded))
+		}
+		meta.MustGetColumn(0).SetZoneMap(zm)
+		return meta
+	}
+	compile := func(t *testing.T, name string, args []*plan.Expr) BlockFilterOp {
+		t.Helper()
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, name, args)
+		require.NoError(t, err)
+		var executors []colexec.ExpressionExecutor
+		_, err = plan2.ReplaceFoldExpr(proc, expr, &executors)
+		require.NoError(t, err)
+		require.NoError(t, plan2.EvalFoldExpr(proc, expr, &executors))
+		for _, executor := range executors {
+			t.Cleanup(executor.Free)
+		}
+
+		_, _, _, _, _, canCompileWithoutZone, _ := CompileFilterExpr(expr, tableDef, nil)
+		require.False(t, canCompileWithoutZone, "mixed temporal filters must fail open without a session timezone")
+		_, _, _, blockFilter, _, canCompile, _ := compileFilterExpr(expr, tableDef, nil, zone)
+		require.True(t, canCompile)
+		require.NotNil(t, blockFilter)
+		return blockFilter
+	}
+	column := func() *plan.Expr {
+		expr := MakeColExprForTest(0, types.T_datetime, "v")
+		expr.Typ.Scale = 6
+		return expr
+	}
+
+	tests := []struct {
+		name        string
+		op          string
+		columnFirst bool
+		bound       string
+		value       string
+		want        bool
+	}{
+		{name: "less", op: "<", columnFirst: true, bound: "2026-08-10 12:00:00", value: "2026-08-10 10:30:00", want: true},
+		{name: "less equal", op: "<=", columnFirst: true, bound: "2026-08-10 10:30:00", value: "2026-08-10 10:30:00", want: true},
+		{name: "greater", op: ">", columnFirst: true, bound: "2026-08-10 12:00:00", value: "2026-08-10 10:30:00", want: false},
+		{name: "greater equal", op: ">=", columnFirst: true, bound: "2026-08-10 10:30:00", value: "2026-08-10 10:30:00", want: true},
+		{name: "equal", op: "=", columnFirst: true, bound: "2026-08-10 10:30:00", value: "2026-08-10 10:30:00", want: true},
+		{name: "reversed less", op: "<", columnFirst: false, bound: "2026-08-10 12:00:00", value: "2026-08-10 10:30:00", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bound := makeTimestampExpr(test.bound)
+			args := []*plan.Expr{column(), bound}
+			if !test.columnFirst {
+				args[0], args[1] = args[1], args[0]
+			}
+			blockFilter := compile(t, test.op, args)
+			_, selected, err := blockFilter(0, makeDatetimeMeta(parseDatetime(test.value)), nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, selected)
+		})
+	}
+
+	t.Run("between", func(t *testing.T) {
+		blockFilter := compile(t, "between", []*plan.Expr{
+			column(),
+			makeTimestampExpr("2026-08-10 10:00:00"),
+			makeTimestampExpr("2026-08-10 11:00:00"),
+		})
+		_, selected, err := blockFilter(0, makeDatetimeMeta(parseDatetime("2026-08-10 10:30:00")), nil)
+		require.NoError(t, err)
+		require.True(t, selected)
+	})
+
+	t.Run("between preserves common value scale", func(t *testing.T) {
+		value := parseDatetime("2026-08-10 12:00:00.123456")
+		lower := makeTimestampExpr("2026-08-10 12:00:00.123456")
+		lower.Typ.Scale = 3
+		lower.GetLit().Value = &plan.Literal_Timestampval{
+			Timestampval: int64(value.ToTimestamp(zone).TruncateToScale(3)),
+		}
+		upper := makeTimestampExpr("2026-08-10 12:00:00.123100")
+		blockFilter := compile(t, "between", []*plan.Expr{column(), lower, upper})
+
+		_, selected, err := blockFilter(0, makeDatetimeMeta(value), nil)
+		require.NoError(t, err)
+		require.True(t, selected)
+	})
+
+	t.Run("timestamp column with datetime bound", func(t *testing.T) {
+		tableDef.Cols[0].Typ = plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+		t.Cleanup(func() {
+			tableDef.Cols[0].Typ = plan.Type{Id: int32(types.T_datetime), Scale: 6}
+		})
+		column := MakeColExprForTest(0, types.T_timestamp, "v")
+		column.Typ.Scale = 6
+		datetime := parseDatetime("2026-08-10 12:00:00")
+		bound := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Datetimeval{Datetimeval: int64(datetime)},
+			}},
+		}
+		blockFilter := compile(t, "<", []*plan.Expr{column, bound})
+
+		dataMeta := objectio.BuildMetaData(1, 1)
+		meta := dataMeta.GetBlockMeta(0)
+		zm := index.NewZM(types.T_timestamp, 6)
+		value := int64(parseDatetime("2026-08-10 10:30:00").ToTimestamp(zone))
+		index.UpdateZM(zm, types.EncodeInt64(&value))
+		meta.MustGetColumn(0).SetZoneMap(zm)
+		_, selected, err := blockFilter(0, meta, nil)
+		require.NoError(t, err)
+		require.True(t, selected)
+	})
+
+	t.Run("DST fold remains conservative", func(t *testing.T) {
+		newYork, err := time.LoadLocation("America/New_York")
+		require.NoError(t, err)
+		proc.GetSessionInfo().TimeZone = newYork
+		threshold, err := types.ParseTimestamp(time.UTC, "2024-11-03 06:15:00", 6)
+		require.NoError(t, err)
+		bound := plan2.MakePlan2TimestampConstExprWithType(int64(threshold))
+		bound.Typ.Scale = 6
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, ">", []*plan.Expr{column(), bound})
+		require.NoError(t, err)
+		var executors []colexec.ExpressionExecutor
+		_, err = plan2.ReplaceFoldExpr(proc, expr, &executors)
+		require.NoError(t, err)
+		require.NoError(t, plan2.EvalFoldExpr(proc, expr, &executors))
+		for _, executor := range executors {
+			defer executor.Free()
+		}
+		_, _, _, blockFilter, _, canCompile, _ := compileFilterExpr(expr, tableDef, nil, newYork)
+		require.True(t, canCompile)
+		_, selected, err := blockFilter(0, makeDatetimeMeta(
+			parseDatetime("2024-11-03 01:00:00"),
+			parseDatetime("2024-11-03 01:59:59"),
+		), nil)
+		require.NoError(t, err)
+		require.True(t, selected)
+	})
+}
+
+func TestConstructBasePKFilterRejectsMixedTemporalEncoding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+08", 8*3600)
+	datetime, err := types.ParseDatetime("2026-08-10 10:00:00", 6)
+	require.NoError(t, err)
+	timestamp := datetime.ToTimestamp(proc.GetSessionInfo().TimeZone)
+
+	makeTable := func(oid types.T) *plan.TableDef {
+		return &plan.TableDef{
+			Name:          "temporal_pk",
+			Name2ColIndex: map[string]int32{"v": 0},
+			Cols: []*plan.ColDef{{
+				Name: "v", Typ: plan.Type{Id: int32(oid), Scale: 6}, Primary: true,
+			}},
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"v"}, PkeyColName: "v"},
+		}
+	}
+	column := func(oid types.T) *plan.Expr {
+		expr := MakeColExprForTest(0, oid, "v")
+		expr.Typ.Scale = 6
+		return expr
+	}
+	datetimeValue := func() *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Datetimeval{Datetimeval: int64(datetime)},
+			}},
+		}
+	}
+	timestampValue := func() *plan.Expr {
+		expr := plan2.MakePlan2TimestampConstExprWithType(int64(timestamp))
+		expr.Typ.Scale = 6
+		return expr
+	}
+	assertInvalid := func(t *testing.T, tableDef *plan.TableDef, name string, args []*plan.Expr) {
+		t.Helper()
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, name, args)
+		require.NoError(t, err)
+		foldExpressionForTest(t, proc, expr)
+		filter, err := ConstructBasePKFilter(expr, tableDef, proc.Mp())
+		require.NoError(t, err)
+		require.False(t, filter.Valid)
+	}
+
+	datetimeTable := makeTable(types.T_datetime)
+	for _, op := range []string{"=", "<", "<=", ">", ">="} {
+		t.Run("datetime column "+op+" timestamp", func(t *testing.T) {
+			assertInvalid(t, datetimeTable, op, []*plan.Expr{column(types.T_datetime), timestampValue()})
+		})
+	}
+	t.Run("reversed operands", func(t *testing.T) {
+		assertInvalid(t, datetimeTable, "=", []*plan.Expr{timestampValue(), column(types.T_datetime)})
+	})
+	t.Run("between", func(t *testing.T) {
+		assertInvalid(t, datetimeTable, "between", []*plan.Expr{
+			column(types.T_datetime), timestampValue(), timestampValue(),
+		})
+	})
+	t.Run("timestamp column", func(t *testing.T) {
+		assertInvalid(t, makeTable(types.T_timestamp), "=", []*plan.Expr{
+			column(types.T_timestamp), datetimeValue(),
+		})
+	})
+	t.Run("same physical type remains valid", func(t *testing.T) {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{
+			column(types.T_datetime), datetimeValue(),
+		})
+		require.NoError(t, err)
+		foldExpressionForTest(t, proc, expr)
+		filter, err := ConstructBasePKFilter(expr, datetimeTable, proc.Mp())
+		require.NoError(t, err)
+		require.True(t, filter.Valid)
+	})
+}
+
+func foldExpressionForTest(t *testing.T, proc *process.Process, expr *plan.Expr) {
+	t.Helper()
+	var executors []colexec.ExpressionExecutor
+	_, err := plan2.ReplaceFoldExpr(proc, expr, &executors)
+	require.NoError(t, err)
+	require.NoError(t, plan2.EvalFoldExpr(proc, expr, &executors))
+	for _, executor := range executors {
+		t.Cleanup(executor.Free)
+	}
+}
 
 func Test_ConstructBasePKFilter(t *testing.T) {
 	m := mpool.MustNew(t.Name())

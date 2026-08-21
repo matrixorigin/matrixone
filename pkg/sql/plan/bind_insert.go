@@ -23,7 +23,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,6 +35,10 @@ import (
 )
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
+	// This flag is populated by initInsertReplaceStmt only for a plain
+	// INSERT ... SELECT.  Reset it before binding so a QueryBuilder cannot leak
+	// the proof into a later DML path (for example LOAD or REPLACE).
+	builder.insertInputKeysUnique = false
 	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
 	// CHAR/VARCHAR writes to truncation instead of rejection.
 	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
@@ -45,6 +51,23 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, stmt.With, nil, true)
 	builder.compCtx.SetContext(origCtx)
 	if err != nil {
+		return 0, err
+	}
+	targetDB := string(stmt.TargetDatabaseName)
+	targetTable := string(stmt.TargetTableName)
+	if targetTable == "" {
+		target := stmt.Table.(*tree.TableName)
+		targetDB = string(target.SchemaName)
+		targetTable = string(target.ObjectName)
+	}
+	if targetDB == "" {
+		targetDB = builder.compCtx.DefaultDatabase()
+	}
+	dmlCtx.targetDBName = targetDB
+	dmlCtx.targetTableName = targetTable
+	if err = validateInsertColumnQualifiers(
+		builder.GetContext(), stmt.ColumnNames, targetDB, targetTable, builder.compCtx.GetLowerCaseTableNames(),
+	); err != nil {
 		return 0, err
 	}
 
@@ -412,24 +435,40 @@ func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceSt
 func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	bindCtx *BindContext,
 	finalProjNodeID, finalProjTag, deletePkPos int32, deletePkTyp plan.Type,
+	targetRowNumberPos, targetActivePos int32,
 	irregularIndexes []*plan.IndexDef,
 	tableDef *plan.TableDef,
 	objRef *plan.ObjectRef,
-) int32 {
+) (int32, error) {
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, finalProjNodeID, finalProjTag)
 	joinStep := builder.appendStep(sinkID)
+	maintStep := joinStep
+	if targetRowNumberPos >= 0 {
+		selectedScanID := builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
+		selectedScan := builder.qry.Nodes[selectedScanID]
+		selected, err := builder.buildTargetSelectedExpr(
+			finalProjTag, selectedScan, targetRowNumberPos, targetActivePos)
+		if err != nil {
+			return 0, err
+		}
+		selectedID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_FILTER, Children: []int32{selectedScanID}, FilterList: []*plan.Expr{selected},
+		}, bindCtx)
+		selectedSinkID := appendSinkNodeWithTag(builder, bindCtx, selectedID, finalProjTag)
+		maintStep = builder.appendStep(selectedSinkID)
+	}
 
 	maintTableDef := *tableDef
 	maintTableDef.Indexes = irregularIndexes
-	builder.irregularMaintSourceStep = joinStep
-	builder.irregularMaintDeleteStep = joinStep
+	builder.irregularMaintSourceStep = maintStep
+	builder.irregularMaintDeleteStep = maintStep
 	builder.irregularMaintDeletePkPos = deletePkPos
 	builder.irregularMaintDeletePkTyp = deletePkTyp
 	builder.irregularMaintIndexes = irregularIndexes
 	builder.irregularMaintTableDef = &maintTableDef
 	builder.irregularMaintObjRef = objRef
 
-	return builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
+	return builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag), nil
 }
 
 // buildIrregularIndexMaintenance appends, after createQuery, the synchronous
@@ -607,7 +646,7 @@ func (builder *QueryBuilder) deletePkColExpr(relPos int32) *plan.Expr {
 // (the join key is the integer PK, never the vector), so it is robust to the
 // materialized layout and never copies the base vector through the hash join.
 func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, multiTableIndex *MultiTableIndex) error {
-	async, err := catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(multiTableIndex.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -695,7 +734,7 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 // the IVF delete: join the index table on doc_id == old/final PK and project only
 // the index row_id + fake pk into the output.
 func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindContext, indexdef *plan.IndexDef) error {
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	async, err := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -861,10 +900,23 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 // path uses (reduceSinkSinkScanNodes + tempOptimizeForDML). It is a no-op when the
 // table has no irregular indexes. Shared by the modern INSERT and LOAD paths.
 func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, bindCtx *BindContext) error {
-	if len(builder.irregularMaintIndexes) == 0 {
+	if len(builder.irregularMaintIndexes) == 0 && len(builder.irregularUpdateMaints) == 0 {
 		return nil
 	}
-	if len(builder.irregularMaintIndexes) > 0 {
+	if len(builder.irregularUpdateMaints) > 0 {
+		for _, maint := range builder.irregularUpdateMaints {
+			builder.irregularMaintSourceStep = maint.sourceStep
+			builder.irregularMaintDeleteStep = maint.deleteStep
+			builder.irregularMaintDeletePkPos = maint.deletePkPos
+			builder.irregularMaintDeletePkTyp = maint.deletePkTyp
+			builder.irregularMaintIndexes = maint.indexes
+			builder.irregularMaintTableDef = maint.tableDef
+			builder.irregularMaintObjRef = maint.objRef
+			if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
+				return err
+			}
+		}
+	} else if len(builder.irregularMaintIndexes) > 0 {
 		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
 			return err
 		}
@@ -1179,6 +1231,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			// name as the stable order shared by both sides.
 			targetKey := "0:"
 			if !partsEqual(pkeyNames, referencedNames) {
+				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
+					return 0, nil, err
+				}
 				for _, idxDef := range parentTableDef.Indexes {
 					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
 						targetKey = "1:" + idxDef.IndexTableName
@@ -1260,6 +1315,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					}
 				}
 			} else {
+				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
+					return 0, nil, err
+				}
 				var matchedIndex *plan.IndexDef
 				for _, idxDef := range parentTableDef.Indexes {
 					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
@@ -1762,11 +1820,18 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	} else {
 		onDupAction = plan.Node_UPDATE
 
-		binder := NewOndupUpdateBinder(builder.GetContext(), builder, bindCtx, scanTag, selectTag, tableDef)
+		binder := NewOndupUpdateBinder(
+			builder.GetContext(), builder, bindCtx, scanTag, selectTag, tableDef,
+			dmlCtx.targetDBName, dmlCtx.targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+		)
 		var updateExpr *plan.Expr
 		for _, astUpdateExpr := range astUpdateExprs {
 			colName := astUpdateExpr.Names[0].ColName()
-			colDef := tableDef.Cols[tableDef.Name2ColIndex[colName]]
+			colIdx, ok := tableDef.Name2ColIndex[colName]
+			if !ok {
+				return 0, moerr.NewBadFieldErrorf(builder.GetContext(), "invalid input: column '%s' does not exist", astUpdateExpr.Names[0].ColNameOrigin())
+			}
+			colDef := tableDef.Cols[colIdx]
 			astExpr := astUpdateExpr.Expr
 
 			if colDef.GeneratedCol != nil {
@@ -2367,6 +2432,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				OnDuplicateAction: onDupAction,
 				DedupColName:      dedupColName,
 				DedupColTypes:     dedupColTypes,
+				DedupInputKeysUnique: onDupAction == plan.Node_FAIL &&
+					!isFakePK && builder.insertInputKeysUnique,
 			}
 
 			if onDupAction == plan.Node_UPDATE {
@@ -2844,6 +2911,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			Children:    []int32{lastNodeID},
 			BindingTags: []int32{selectTag},
 		}, bindCtx)
+		if onDupAction == plan.Node_UPDATE {
+			lastNodeID, err = appendCheckConstraintPlan(
+				builder,
+				bindCtx,
+				tableDef,
+				lastNodeID,
+				selectTag,
+				colName2Idx,
+				false,
+			)
+			if err != nil {
+				return 0, err
+			}
+		}
 
 		// ON DUPLICATE KEY UPDATE: materialize the final merged image (this PROJECT)
 		// so the main plan, the irregular-index maintenance, and the row-scoped
@@ -2894,9 +2975,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// ODKU cannot change the PK, so the stale entries are keyed by the same
 			// PK the final image carries at its natural position.
 			odkuPkPos, odkuPkTyp := getPkPos(tableDef, false)
-			lastNodeID = builder.appendOnDupIrregularMaintSource(
+			lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), odkuPkTyp,
+				-1, -1,
 				irregularIndexes, tableDef, dmlCtx.objRefs[0])
+			if err != nil {
+				return 0, err
+			}
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}
@@ -3040,7 +3125,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
-	if onDupAction != plan.Node_IGNORE {
+	if onDupAction != plan.Node_IGNORE && onDupAction != plan.Node_UPDATE {
 		lastNodeID, err = appendCheckConstraintPlan(
 			builder,
 			bindCtx,
@@ -3069,6 +3154,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 // and returns an error if any of the column names are invalid.
 // The function returns the list of insert columns and an error, if any.
 func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, tableDef *TableDef) ([]string, error) {
+	if err := builder.rejectDuplicateInsertColumns(astCols); err != nil {
+		return nil, err
+	}
+
 	var insertColNames []string
 	colToIdx := make(map[string]int)
 	for i, col := range tableDef.Cols {
@@ -3096,11 +3185,31 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 	return insertColNames, nil
 }
 
+func (builder *QueryBuilder) rejectDuplicateInsertColumns(astCols tree.IdentifierList) error {
+	seen := make(map[string]struct{}, len(astCols))
+	for _, column := range astCols {
+		columnName := string(column)
+		key := strings.ToLower(columnName)
+		if _, ok := seen[key]; ok {
+			return moerr.NewFieldSpecifiedTwice(builder.GetContext(), columnName)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 // stripGeneratedDefaultCols removes generated columns from the INSERT column list
 // when their corresponding VALUES are all DEFAULT. This supports MySQL-compatible
 // syntax: INSERT INTO t(gen_col) VALUES(DEFAULT).
 // Non-DEFAULT values for generated columns still produce an error.
 func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierList, astRows *tree.Select, tableDef *plan.TableDef) (tree.IdentifierList, error) {
+	// Validate the original list before generated columns can be removed. This
+	// preserves the SQL-level duplicate-column contract independently of the
+	// generated-column DEFAULT rewrite below.
+	if err := builder.rejectDuplicateInsertColumns(astCols); err != nil {
+		return nil, err
+	}
+
 	// Find positions of generated columns in the explicit column list
 	genPositions := make(map[int]bool)
 	for i, col := range astCols {
@@ -3179,6 +3288,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		lastNodeID int32
 		err        error
 	)
+	builder.insertInputKeysUnique = false
 
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
@@ -3241,6 +3351,9 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if err != nil {
 			return 0, nil, nil, err
 		}
+		if !isReplace && builder.localProtocolEnablesRightDedupInputKeysUnique() {
+			builder.insertInputKeysUnique = builder.proveInsertInputKeysUnique(lastNodeID, insertColumns, tableDef)
+		}
 		//ifInsertFromUniqueColMap = make(map[string]bool)
 
 	case *tree.ParenSelect:
@@ -3251,6 +3364,9 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, err
+		}
+		if !isReplace && builder.localProtocolEnablesRightDedupInputKeysUnique() {
+			builder.insertInputKeysUnique = builder.proveInsertInputKeysUnique(lastNodeID, insertColumns, tableDef)
 		}
 		// ifInsertFromUniqueColMap = make(map[string]bool)
 
@@ -3311,6 +3427,212 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	} else {
 		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 	}
+}
+
+// localProtocolEnablesRightDedupInputKeysUnique reads the deployment-managed
+// rollout gate. It stays false until every participating CN can honor the
+// lookup-only operator bit, because the planner's memory proof depends on it.
+func (builder *QueryBuilder) localProtocolEnablesRightDedupInputKeysUnique() bool {
+	if builder == nil || builder.compCtx == nil {
+		return false
+	}
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion21
+}
+
+// insertSourceColumn identifies an output column that is still a direct
+// column of one source table.  Keeping this lineage separate from expression
+// rewriting makes the uniqueness proof fail closed for casts, functions, and
+// row-multiplying operators. table and colPos identify the origin;
+// outputTag advances at each PROJECT so stacked projections remain traceable.
+type insertSourceColumn struct {
+	table     *plan.TableDef
+	colPos    int32
+	outputTag int32
+}
+
+// proveInsertInputKeysUnique proves that every incoming target-PK key is
+// unique by tracing a row-preserving INSERT ... SELECT plan back to a source
+// table's explicit primary key.  The proof is deliberately conservative: only
+// direct column projections over a single table scan are accepted.
+func (builder *QueryBuilder) proveInsertInputKeysUnique(
+	sourceNodeID int32,
+	insertColumns []string,
+	targetTable *plan.TableDef,
+) bool {
+	targetPK, ok := insertPrimaryKeyColumnPositions(targetTable)
+	if !ok || len(insertColumns) == 0 {
+		return false
+	}
+
+	lineage, sourceTable, ok := builder.insertSourceLineage(sourceNodeID)
+	if !ok || sourceTable == nil || len(lineage) != len(insertColumns) {
+		return false
+	}
+	sourcePK, ok := insertPrimaryKeyColumnPositions(sourceTable)
+	if !ok {
+		return false
+	}
+
+	// The source PK must be present in the target key.  A target composite key
+	// such as (id, col1) is therefore safe when the source PK is (id), while a
+	// target key (id) is not safe for a source whose PK is (id, col1).
+	targetKeySourceCols := make(map[int32]struct{}, len(targetPK))
+	for _, targetPos := range targetPK {
+		if targetPos < 0 || int(targetPos) >= len(targetTable.Cols) || targetTable.Cols[targetPos] == nil {
+			return false
+		}
+		name := targetTable.Cols[targetPos].Name
+		inputPos := -1
+		for i, insertColumn := range insertColumns {
+			if strings.EqualFold(catalog.ResolveAlias(insertColumn), name) {
+				if inputPos >= 0 {
+					return false
+				}
+				inputPos = i
+			}
+		}
+		if inputPos < 0 || inputPos >= len(lineage) {
+			return false
+		}
+		if lineage[inputPos].table != sourceTable {
+			return false
+		}
+		sourcePos := lineage[inputPos].colPos
+		if sourcePos < 0 || int(sourcePos) >= len(sourceTable.Cols) || sourceTable.Cols[sourcePos] == nil ||
+			!insertKeyTypesCompatible(sourceTable.Cols[sourcePos].Typ, targetTable.Cols[targetPos].Typ) {
+			// The assignment projection may cast the source key to the target
+			// type after this proof runs. Only identical key encodings are
+			// accepted here; narrowing casts could collapse distinct source PKs.
+			return false
+		}
+		targetKeySourceCols[sourcePos] = struct{}{}
+	}
+	for _, sourcePos := range sourcePK {
+		if _, ok := targetKeySourceCols[sourcePos]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// insertSourceLineage accepts only row-preserving FILTER and SORT operators;
+// PROJECT is accepted only when every output is a direct child column
+// reference.
+func (builder *QueryBuilder) insertSourceLineage(nodeID int32) ([]insertSourceColumn, *plan.TableDef, bool) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nil, nil, false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return nil, nil, false
+	}
+
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		if len(node.Children) != 0 || node.TableDef == nil || len(node.TableDef.Cols) == 0 ||
+			len(node.BindingTags) != 1 {
+			return nil, nil, false
+		}
+		sourceTag := node.BindingTags[0]
+		if len(node.ProjectList) == 0 {
+			lineage := make([]insertSourceColumn, len(node.TableDef.Cols))
+			for i := range node.TableDef.Cols {
+				lineage[i] = insertSourceColumn{table: node.TableDef, colPos: int32(i), outputTag: sourceTag}
+			}
+			return lineage, node.TableDef, true
+		}
+		lineage := make([]insertSourceColumn, len(node.ProjectList))
+		for i, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.TableDef.Cols) {
+				return nil, nil, false
+			}
+			if col.RelPos != sourceTag {
+				return nil, nil, false
+			}
+			lineage[i] = insertSourceColumn{table: node.TableDef, colPos: col.ColPos, outputTag: sourceTag}
+		}
+		return lineage, node.TableDef, true
+
+	case plan.Node_FILTER, plan.Node_SORT:
+		if len(node.Children) != 1 || len(node.ProjectList) != 0 {
+			return nil, nil, false
+		}
+		return builder.insertSourceLineage(node.Children[0])
+
+	case plan.Node_PROJECT:
+		if len(node.Children) != 1 || len(node.ProjectList) == 0 || len(node.BindingTags) != 1 {
+			return nil, nil, false
+		}
+		childID := node.Children[0]
+		childLineage, sourceTable, ok := builder.insertSourceLineage(childID)
+		if !ok {
+			return nil, nil, false
+		}
+		lineage := make([]insertSourceColumn, len(node.ProjectList))
+		for i, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(childLineage) {
+				return nil, nil, false
+			}
+			if col.RelPos != childLineage[col.ColPos].outputTag {
+				return nil, nil, false
+			}
+			lineage[i] = childLineage[col.ColPos]
+			lineage[i].outputTag = node.BindingTags[0]
+		}
+		return lineage, sourceTable, true
+	}
+
+	return nil, nil, false
+}
+
+func insertPrimaryKeyColumnPositions(table *plan.TableDef) ([]int32, bool) {
+	if table == nil || table.Pkey == nil || table.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return nil, false
+	}
+	names := table.Pkey.Names
+	if len(names) == 0 && table.Pkey.PkeyColName != "" && table.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+		names = []string{table.Pkey.PkeyColName}
+	}
+	if len(names) == 0 {
+		return nil, false
+	}
+	positions := make([]int32, 0, len(names))
+	for _, name := range names {
+		name = catalog.ResolveAlias(name)
+		pos, ok := table.Name2ColIndex[name]
+		if !ok {
+			for i, col := range table.Cols {
+				if col != nil && strings.EqualFold(col.Name, name) {
+					pos = int32(i)
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok || pos < 0 || int(pos) >= len(table.Cols) {
+			return nil, false
+		}
+		positions = append(positions, pos)
+	}
+	return positions, true
+}
+
+func insertKeyTypesCompatible(source, target plan.Type) bool {
+	// Table records column provenance, not physical representation. Keys from
+	// different tables remain compatible when their encoded type fields match.
+	return isSameColumnType(source, target)
 }
 
 // isNumericAssignmentTarget reports whether a DML target column type may seed the

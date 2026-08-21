@@ -37,7 +37,7 @@ import (
 type spillTestHarness struct {
 	op         *HashBuild
 	proc       *process.Process
-	generation *process.HashBuildBudgetGeneration
+	generation *process.ExecutionResourceGeneration
 	registry   *mpool.AllocationAccountRegistry
 	account    *mpool.AllocationAccount
 	files      []*os.File
@@ -46,7 +46,7 @@ type spillTestHarness struct {
 func newSpillTestHarness(t *testing.T, limit uint64) *spillTestHarness {
 	t.Helper()
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	budget := process.MustNewHashBuildBudget(limit, limit)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 256)
@@ -177,6 +177,44 @@ func TestAccountedSpillAdaptsAndPreservesRows(t *testing.T) {
 		h.proc, input, h.files, executors, analyzer, false,
 	))
 	require.Positive(t, analyzer.GetOpStats().ExtraStats["HashBuildSpillInputReductions"])
+	require.NoError(t, h.op.ctr.flushSpillBuffers(h.proc, h.files, analyzer))
+	require.Equal(t, int64(len(values)), spillFileRows(t, h.files))
+}
+
+func TestAccountedSpillBroadcastsPreparedParamKey(t *testing.T) {
+	h := newSpillTestHarness(t, 80<<10)
+	defer h.close(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("prepared"), false, h.proc.Mp()))
+	defer func() {
+		h.op.ctr.freeSpillExprExecs()
+		params.Free(h.proc.Mp())
+	}()
+	h.proc.SetPrepareParams(params)
+
+	values := make([]int64, colexec.DefaultBatchSize)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt64Vector(values, nil, h.proc.Mp())
+	input.SetRowCount(len(values))
+	defer input.Clean(h.proc.Mp())
+	paramExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	executors, err := h.op.ctr.initSpillExprExecs(h.proc, []*plan.Expr{
+		paramExpr,
+		newExpr(0, types.T_int64.ToType()),
+	})
+	require.NoError(t, err)
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, h.op.ctr.spillBatchWithPressure(
+		h.proc, input, h.files, executors, analyzer, false,
+	))
+	require.Positive(t,
+		analyzer.GetOpStats().ExtraStats["HashBuildSpillInputReductions"])
 	require.NoError(t, h.op.ctr.flushSpillBuffers(h.proc, h.files, analyzer))
 	require.Equal(t, int64(len(values)), spillFileRows(t, h.files))
 }

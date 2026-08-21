@@ -16,6 +16,7 @@ package ioutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -177,4 +178,41 @@ func TestSinkerCancel(t *testing.T) {
 	cancel(expectErr)
 	err := sinker.Sync(ctx)
 	require.ErrorContains(t, err, expectErr.Error())
+}
+
+type persistThenErrorFS struct {
+	fileservice.FileService
+	persisted string
+}
+
+func (fs *persistThenErrorFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	if err := fs.FileService.Write(ctx, vector); err != nil {
+		return err
+	}
+	fs.persisted = vector.FilePath
+	return errors.New("injected post-persist sync failure")
+}
+
+func TestSinkerDeletePersistedAfterAmbiguousSyncFailure(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProc(t)
+	baseFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &persistThenErrorFS{FileService: baseFS}
+
+	_, typs, _, sinker := makeTestSinker(proc.Mp(), fs)
+	t.Cleanup(func() { require.NoError(t, sinker.Close()) })
+	bat := containers.MockBatch(typs, 1000, 2, nil)
+	require.NoError(t, sinker.Write(ctx, containers.ToCNBatch(bat)))
+	require.ErrorContains(t, sinker.Sync(ctx), "injected post-persist sync failure")
+	require.NotEmpty(t, fs.persisted)
+	_, err = baseFS.StatFile(ctx, fs.persisted)
+	require.NoError(t, err, "the injected failure happens after physical persistence")
+
+	files, err := sinker.DeletePersisted(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{fs.persisted}, files)
+	_, err = baseFS.StatFile(ctx, fs.persisted)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }

@@ -815,5 +815,9 @@ func (mo *MOServer) applyInteractiveWaitTimeout(ctx context.Context, ses *Sessio
 	}
 	if err = ses.SetSessionSysVar(ctx, "wait_timeout", val); err != nil {
 		ses.Errorf(ctx, "set wait_timeout from interactive_timeout failed: %v", err)
+		return
 	}
+	// The interactive handshake deterministically reproduces this assignment
+	// on the target, so it must not make legacy replay fail closed.
+	ses.markMigrationSystemVarReplayable("wait_timeout", true)
 }

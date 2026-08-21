@@ -55,6 +55,33 @@ type groupConcatExec struct {
 	maxLen           uint64
 }
 
+func (exec *groupConcatExec) SetAllocationAccount(
+	allocation *AllocationAccount,
+) error {
+	// The saved-argument arena provides the exact DISTINCT set in accounted
+	// Group mode. It replaces the auxiliary Go hash and uses the same bounded
+	// spill representation as ordinary saved arguments.
+	preserveDistinctInputOrder := exec.distinct && exec.orderArgCnt == 0
+	if err := exec.aggExec.SetAllocationAccount(allocation); err != nil {
+		return err
+	}
+	exec.aggInfo.isDistinct = preserveDistinctInputOrder
+	exec.aggInfo.preserveDistinctInputOrder = preserveDistinctInputOrder
+	exec.distinctHash.free()
+	return nil
+}
+
+func (exec *groupConcatExec) ClearAllocationAccount(
+	allocation *AllocationAccount,
+) error {
+	if err := exec.aggExec.ClearAllocationAccount(allocation); err != nil {
+		return err
+	}
+	exec.aggInfo.isDistinct = false
+	exec.aggInfo.preserveDistinctInputOrder = false
+	return nil
+}
+
 var (
 	groupConcatConfigMagic        = []byte{0xff, 'G', 'C', 1}
 	groupConcatOrderedConfigMagic = []byte{0xff, 'G', 'C', 'O', 1}
@@ -94,6 +121,21 @@ func EncodeGroupConcatOrderedConfig(config []byte, maxLen uint64) []byte {
 	return runtimeConfig
 }
 
+// HasGroupConcatOrder reports whether a GROUP_CONCAT_ORDER configuration
+// contains at least one real ORDER BY argument. The aggregate config is
+// carried in two forms: the plan payload starts with the version byte, while
+// the execution payload may be prefixed by the runtime max-length header.
+// Invalid payloads are treated as unordered so callers fail closed when
+// deciding whether generic DISTINCT spill is safe.
+func HasGroupConcatOrder(config []byte) bool {
+	if len(config) >= groupConcatOrderedConfigHeaderSize &&
+		bytes.Equal(config[:len(groupConcatOrderedConfigMagic)], groupConcatOrderedConfigMagic) {
+		config = config[groupConcatOrderedConfigHeaderSize:]
+	}
+	_, orderArgIndexes, _, _, _, err := decodeGroupConcatOrderConfig(config)
+	return err == nil && len(orderArgIndexes) > 0
+}
+
 func RefreshGroupConcatConfigMaxLen(config []byte, maxLen uint64) []byte {
 	if len(config) >= groupConcatOrderedConfigHeaderSize &&
 		bytes.Equal(config[:len(groupConcatOrderedConfigMagic)], groupConcatOrderedConfigMagic) {
@@ -113,7 +155,9 @@ func GroupConcatReturnType(args []types.Type) types.Type {
 			return types.T_blob.ToType()
 		}
 	}
-	return types.T_text.ToType()
+	result := types.T_text.ToType()
+	result.Charset = types.MergeStringCharset(args, result.Charset)
+	return result
 }
 
 func newGroupConcatExec(mg *mpool.MPool, info multiAggInfo, separator string) AggFuncExec {
@@ -142,7 +186,7 @@ func (exec *groupConcatExec) IsDistinct() bool {
 }
 
 func (exec *groupConcatExec) GroupGrow(more int) error {
-	if exec.distinct && exec.orderArgCnt == 0 {
+	if exec.allocation == nil && exec.distinct && exec.orderArgCnt == 0 {
 		if err := exec.distinctHash.grows(more); err != nil {
 			return err
 		}
@@ -150,12 +194,12 @@ func (exec *groupConcatExec) GroupGrow(more int) error {
 	if err := exec.aggExec.GroupGrow(more); err != nil {
 		return err
 	}
-	if exec.distinct && exec.orderArgCnt > 0 {
+	if exec.allocation == nil && exec.distinct && exec.orderArgCnt > 0 {
 		for len(exec.orderedDistinct) < exec.GetNumGroups() {
 			exec.orderedDistinct = append(exec.orderedDistinct, nil)
 		}
 	}
-	if exec.orderArgCnt > 0 {
+	if exec.allocation == nil && exec.orderArgCnt > 0 {
 		for len(exec.orderedSpillRuns) < exec.GetNumGroups() {
 			exec.orderedSpillRuns = append(exec.orderedSpillRuns, nil)
 		}
@@ -164,7 +208,7 @@ func (exec *groupConcatExec) GroupGrow(more int) error {
 }
 
 func (exec *groupConcatExec) PreAllocateGroups(more int) error {
-	if exec.distinct && exec.orderArgCnt == 0 {
+	if exec.allocation == nil && exec.distinct && exec.orderArgCnt == 0 {
 		if err := exec.distinctHash.grows(more); err != nil {
 			return err
 		}
@@ -184,6 +228,23 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 }
 
 func (exec *groupConcatExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	if len(vectors) == 0 {
+		return moerr.NewInternalErrorNoCtx("group_concat requires at least one argument")
+	}
+	if exec.allocation != nil {
+		if len(vectors) != len(exec.argTypes) {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid group_concat argument count: got %d, expected %d",
+				len(vectors), len(exec.argTypes))
+		}
+		for row := 0; row < vectors[0].Length(); row++ {
+			if err := exec.fillInputOrderRowAccounted(
+				uint64(groupIndex+1), vectors, row); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
 }
 
@@ -194,6 +255,18 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 			len(vectors),
 			len(exec.argTypes),
 		)
+	}
+	if exec.allocation != nil {
+		for i, group := range groups {
+			if group == GroupNotMatched {
+				continue
+			}
+			if err := exec.fillInputOrderRowAccounted(
+				group, vectors, offset+i); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	if exec.distinct && exec.orderArgCnt == 0 {
@@ -248,7 +321,6 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 		}
 		return nil
 	}
-
 	payloads := make([][]byte, len(groups))
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
@@ -261,6 +333,123 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 		payloads[i] = payload
 	}
 	return exec.batchFillOpaqueArgs(offset, groups, payloads, false)
+}
+
+func (exec *groupConcatExec) fillInputOrderRowAccounted(
+	group uint64,
+	vectors []*vector.Vector,
+	row int,
+) error {
+	concatPayloadSize := 0
+	for i, vec := range vectors[:exec.concatArgCnt] {
+		physicalRow := row
+		if vec.IsConst() {
+			physicalRow = 0
+		}
+		if vec.IsNull(uint64(physicalRow)) {
+			return nil
+		}
+		fieldSize := len(groupConcatFieldBytes(
+			vec, physicalRow, exec.argTypes[i]))
+		if uint64(fieldSize) > math.MaxUint32 ||
+			fieldSize > math.MaxInt-concatPayloadSize-5 {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		concatPayloadSize += 5 + fieldSize
+	}
+	payloadSize := concatPayloadSize
+	if exec.orderArgCnt != 0 {
+		if payloadSize > math.MaxInt-4 {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		payloadSize += 4
+		for _, index := range exec.orderArgIndexes {
+			vec := vectors[index]
+			physicalRow := row
+			if vec.IsConst() {
+				physicalRow = 0
+			}
+			if vec.IsNull(uint64(physicalRow)) {
+				if payloadSize == math.MaxInt {
+					return mpool.ErrAllocationAllocatorLimit
+				}
+				payloadSize++
+				continue
+			}
+			fieldSize := len(groupConcatFieldBytes(
+				vec, physicalRow, exec.argTypes[index]))
+			if uint64(fieldSize) > math.MaxUint32 {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			if fieldSize > math.MaxInt-payloadSize-5 {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			payloadSize += 5 + fieldSize
+		}
+	}
+
+	x, y := exec.getXY(group - 1)
+	state := &exec.state[x]
+	headerSize := kAggArgPrefixSz
+	if !exec.aggInfo.isDistinct {
+		headerSize += kAggArgOrdinalSz
+	}
+	if payloadSize > math.MaxInt-headerSize {
+		return mpool.ErrAllocationAllocatorLimit
+	}
+	key, err := state.resizeArgScratch(exec.mp, headerSize+payloadSize)
+	if err != nil {
+		return err
+	}
+	binary.BigEndian.PutUint16(key[:kAggArgPrefixSz], y)
+	if !exec.aggInfo.isDistinct {
+		binary.BigEndian.PutUint32(
+			key[kAggArgPrefixSz:headerSize], state.argCnt[y])
+	}
+	offset := headerSize
+	if exec.orderArgCnt != 0 {
+		binary.BigEndian.PutUint32(key[offset:], uint32(concatPayloadSize))
+		offset += 4
+	}
+	for i, vec := range vectors[:exec.concatArgCnt] {
+		physicalRow := row
+		if vec.IsConst() {
+			physicalRow = 0
+		}
+		field := groupConcatFieldBytes(vec, physicalRow, exec.argTypes[i])
+		key[offset] = 1
+		offset++
+		binary.NativeEndian.PutUint32(key[offset:], uint32(len(field)))
+		offset += 4
+		copy(key[offset:], field)
+		offset += len(field)
+	}
+	if exec.orderArgCnt != 0 {
+		for _, index := range exec.orderArgIndexes {
+			vec := vectors[index]
+			physicalRow := row
+			if vec.IsConst() {
+				physicalRow = 0
+			}
+			if vec.IsNull(uint64(physicalRow)) {
+				key[offset] = 0
+				offset++
+				continue
+			}
+			field := groupConcatFieldBytes(
+				vec, physicalRow, exec.argTypes[index])
+			key[offset] = 1
+			offset++
+			binary.NativeEndian.PutUint32(key[offset:], uint32(len(field)))
+			offset += 4
+			copy(key[offset:], field)
+			offset += len(field)
+		}
+	}
+	if exec.aggInfo.preserveDistinctInputOrder {
+		return state.fillDistinctArgInInputOrder(exec.mp, y, key)
+	}
+	return state.insertPreparedArg(exec.mp, y, key, exec.aggInfo.isDistinct)
 }
 
 func (exec *groupConcatExec) maybeSpillOrdered() error {
@@ -389,6 +578,9 @@ func (exec *groupConcatExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) e
 
 func (exec *groupConcatExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	other := next.(*groupConcatExec)
+	if exec.allocation != nil {
+		return exec.batchMergeArgs(&other.aggExec, offset, groups, false)
+	}
 	if exec.distinct && exec.orderArgCnt == 0 {
 		if err := exec.distinctHash.merge(&other.distinctHash); err != nil {
 			return err
@@ -475,12 +667,17 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 	exec.separator = separator
 	exec.retType = GroupConcatReturnType(exec.concatTypes())
 	if exec.distinct {
+		if exec.allocation != nil {
+			return nil
+		}
 		for len(exec.orderedDistinct) < exec.GetNumGroups() {
 			exec.orderedDistinct = append(exec.orderedDistinct, nil)
 		}
 	}
-	for len(exec.orderedSpillRuns) < exec.GetNumGroups() {
-		exec.orderedSpillRuns = append(exec.orderedSpillRuns, nil)
+	if exec.allocation == nil {
+		for len(exec.orderedSpillRuns) < exec.GetNumGroups() {
+			exec.orderedSpillRuns = append(exec.orderedSpillRuns, nil)
+		}
 	}
 	return nil
 }
@@ -498,6 +695,15 @@ func (exec *groupConcatExec) FlushWithContext(ctx context.Context) (_ []*vector.
 			return nil, err
 		}
 	}
+	var outputBuffer *mpool.AccountedBuffer
+	if exec.allocation != nil {
+		var err error
+		outputBuffer, err = exec.allocation.newArgumentBuffer(exec.mp)
+		if err != nil {
+			return nil, err
+		}
+		defer outputBuffer.Free()
+	}
 	vecs := make([]*vector.Vector, len(exec.state))
 	defer func() {
 		if retErr != nil {
@@ -509,14 +715,18 @@ func (exec *groupConcatExec) FlushWithContext(ctx context.Context) (_ []*vector.
 		}
 	}()
 	for i, st := range exec.state {
-		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
+		var err error
+		vecs[i], err = exec.allocation.newVector(exec.retType)
+		if err != nil {
+			return nil, err
+		}
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {
 			return nil, err
 		}
 		for j := 0; j < int(st.length); j++ {
 			globalGroup := i*AggBatchSize + j
 			empty := st.argCnt[j] == 0
-			if exec.distinct && exec.orderArgCnt > 0 {
+			if exec.allocation == nil && exec.distinct && exec.orderArgCnt > 0 {
 				empty = len(exec.orderedDistinct[globalGroup]) == 0
 			}
 			if len(exec.orderedSpillRuns) > globalGroup &&
@@ -530,12 +740,21 @@ func (exec *groupConcatExec) FlushWithContext(ctx context.Context) (_ []*vector.
 				continue
 			}
 			var buf []byte
-			var err error
 			if len(exec.orderedSpillRuns) > globalGroup &&
 				len(exec.orderedSpillRuns[globalGroup]) > 0 {
 				buf, err = exec.flushSpilledGroup(ctx, globalGroup)
-			} else if exec.distinct && exec.orderArgCnt > 0 {
+			} else if exec.allocation == nil && exec.distinct && exec.orderArgCnt > 0 {
 				buf, err = exec.flushOrderedDistinctGroup(ctx, exec.orderedDistinct[globalGroup])
+			} else if outputBuffer != nil && exec.orderArgCnt > 0 {
+				outputBuffer.Reset()
+				err = exec.flushOrderedGroupAccounted(
+					ctx, st, uint16(j), outputBuffer)
+				buf = outputBuffer.Bytes()
+			} else if outputBuffer != nil {
+				outputBuffer.Reset()
+				err = exec.flushGroupInInputOrderAccounted(
+					st, uint16(j), outputBuffer)
+				buf = outputBuffer.Bytes()
 			} else {
 				buf, err = exec.flushGroup(ctx, st, uint16(j))
 			}
@@ -568,7 +787,8 @@ func ConfigureGroupConcatH0Spill(
 	createFile func() (*os.File, error),
 	report func(int64, int64, int64),
 ) {
-	if exec, ok := agg.(*groupConcatExec); ok && exec.orderArgCnt > 0 {
+	if exec, ok := agg.(*groupConcatExec); ok &&
+		exec.allocation == nil && exec.orderArgCnt > 0 {
 		if ctx == nil {
 			ctx = context.Background()
 		}
@@ -1024,6 +1244,11 @@ type groupConcatOrderedEntry struct {
 	orderPayload  []byte
 }
 
+type groupConcatDistinctOrder struct {
+	entry int64
+	rank  int64
+}
+
 type groupConcatSpillRun struct {
 	start int64
 	end   int64
@@ -1308,7 +1533,12 @@ func (exec *groupConcatExec) restoreOrderVectors(
 	}
 
 	for i, typ := range orderTypes {
-		orderVectors[i] = vector.NewVec(typ)
+		var err error
+		orderVectors[i], err = exec.allocation.newVector(typ)
+		if err != nil {
+			freeOnError()
+			return nil, err
+		}
 		if err := orderVectors[i].PreExtend(len(entries), exec.mp); err != nil {
 			freeOnError()
 			return nil, err
@@ -1344,6 +1574,9 @@ func (exec *groupConcatExec) setOrderVectorRow(
 			vec := orderVectors[column]
 			vec.GetNulls().Del(uint64(row))
 			if isNull {
+				if err := vec.PreExtendNulls(vec.Length(), exec.mp); err != nil {
+					return err
+				}
 				vec.GetNulls().Add(uint64(row))
 				return nil
 			}
@@ -1391,6 +1624,229 @@ func (exec *groupConcatExec) flushGroupInInputOrder(st aggState, group uint16) (
 		return nil, err
 	}
 	return buf, nil
+}
+
+// accountedGroupConcatWriter caps the physical scratch at the published
+// result length while growing it through the aggregate allocation account.
+// It reports discarded suffix bytes as consumed so fmt does not turn SQL
+// truncation into an io.ErrShortWrite.
+type accountedGroupConcatWriter struct {
+	buffer       *mpool.AccountedBuffer
+	maxLen       uint64
+	binaryResult bool
+	truncated    bool
+}
+
+func (w *accountedGroupConcatWriter) Write(value []byte) (int, error) {
+	written := len(value)
+	if written == 0 || w.truncated {
+		return written, nil
+	}
+	length := uint64(w.buffer.Len())
+	if length >= w.maxLen {
+		w.truncated = true
+		return written, nil
+	}
+	remaining := w.maxLen - length
+	if uint64(len(value)) > remaining {
+		value = value[:int(remaining)]
+		w.truncated = true
+	}
+	if _, err := w.buffer.Write(value); err != nil {
+		return 0, err
+	}
+	if w.truncated && !w.binaryResult {
+		validLength := w.buffer.Len()
+		for validLength > 0 && !utf8.Valid(w.buffer.Bytes()[:validLength]) {
+			validLength--
+		}
+		if err := w.buffer.Resize(validLength); err != nil {
+			return 0, err
+		}
+	}
+	return written, nil
+}
+
+func (exec *groupConcatExec) flushGroupInInputOrderAccounted(
+	st aggState,
+	group uint16,
+	buffer *mpool.AccountedBuffer,
+) error {
+	writer := &accountedGroupConcatWriter{
+		buffer:       buffer,
+		maxLen:       exec.maxLen,
+		binaryResult: exec.retType.Oid == types.T_blob,
+	}
+	first := true
+	visit := st.iter
+	if exec.aggInfo.preserveDistinctInputOrder {
+		visit = func(group uint16, fn func([]byte) error) error {
+			return st.iterInputOrder(exec.mp, group, fn)
+		}
+	}
+	return visit(group, func(key []byte) error {
+		if writer.truncated {
+			return nil
+		}
+		payload := aggPayloadFromKey(&exec.aggInfo, key)
+		if !first {
+			if _, err := writer.Write(exec.separator); err != nil {
+				return err
+			}
+			if writer.truncated {
+				return nil
+			}
+		}
+		first = false
+		return payloadFieldIterator(
+			payload,
+			exec.concatArgCnt,
+			func(i int, isNull bool, data []byte) error {
+				if isNull || writer.truncated {
+					return nil
+				}
+				return writeGroupConcatData(writer, exec.argTypes[i], data)
+			},
+		)
+	})
+}
+
+func (exec *groupConcatExec) flushOrderedGroupAccounted(
+	ctx context.Context,
+	st aggState,
+	group uint16,
+	buffer *mpool.AccountedBuffer,
+) error {
+	count := int(st.argCnt[group])
+	entries, err := makeAccountedScratch[groupConcatOrderedEntry](
+		exec.allocation, exec.mp, count)
+	if err != nil {
+		return err
+	}
+	defer mpool.FreeSlice(exec.mp, entries)
+
+	index := 0
+	err = st.iter(group, func(key []byte) error {
+		if index&1023 == 0 {
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+		}
+		concatPayload, orderPayload, err := splitGroupConcatOrderedPayload(
+			aggPayloadFromKey(&exec.aggInfo, key))
+		if err != nil {
+			return err
+		}
+		entries[index] = groupConcatOrderedEntry{
+			concatPayload: concatPayload,
+			orderPayload:  orderPayload,
+		}
+		index++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if index != count {
+		return mpool.ErrAllocationAccountInvariant
+	}
+
+	selectors, err := makeAccountedScratch[int64](
+		exec.allocation, exec.mp, count)
+	if err != nil {
+		return err
+	}
+	defer mpool.FreeSlice(exec.mp, selectors)
+	for i := range selectors {
+		selectors[i] = int64(i)
+	}
+	orderVectors, err := exec.restoreOrderVectors(ctx, entries)
+	if err != nil {
+		return err
+	}
+	defer freeVectors(orderVectors, exec.mp)
+	mosort.SortByVectors(
+		selectors, orderVectors, exec.orderDesc, exec.orderNullsLast)
+
+	if exec.distinct {
+		dedup, err := makeAccountedScratch[groupConcatDistinctOrder](
+			exec.allocation, exec.mp, count)
+		if err != nil {
+			return err
+		}
+		defer mpool.FreeSlice(exec.mp, dedup)
+		for rank, entry := range selectors {
+			dedup[rank] = groupConcatDistinctOrder{
+				entry: entry,
+				rank:  int64(rank),
+			}
+		}
+		slices.SortFunc(dedup, func(left, right groupConcatDistinctOrder) int {
+			if cmp := bytes.Compare(
+				entries[left.entry].concatPayload,
+				entries[right.entry].concatPayload); cmp != 0 {
+				return cmp
+			}
+			return int(left.rank - right.rank)
+		})
+		kept := 0
+		for _, candidate := range dedup {
+			if kept > 0 && bytes.Equal(
+				entries[dedup[kept-1].entry].concatPayload,
+				entries[candidate.entry].concatPayload) {
+				continue
+			}
+			dedup[kept] = candidate
+			kept++
+		}
+		slices.SortFunc(dedup[:kept], func(left, right groupConcatDistinctOrder) int {
+			return int(left.rank - right.rank)
+		})
+		selectors = selectors[:kept]
+		for i := 0; i < kept; i++ {
+			selectors[i] = dedup[i].entry
+		}
+	}
+
+	writer := &accountedGroupConcatWriter{
+		buffer:       buffer,
+		maxLen:       exec.maxLen,
+		binaryResult: exec.retType.Oid == types.T_blob,
+	}
+	first := true
+	for i, selector := range selectors {
+		if i&1023 == 0 {
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+		}
+		if !first {
+			if _, err := writer.Write(exec.separator); err != nil {
+				return err
+			}
+			if writer.truncated {
+				break
+			}
+		}
+		first = false
+		entry := entries[selector]
+		if err := payloadFieldIterator(
+			entry.concatPayload,
+			exec.concatArgCnt,
+			func(column int, isNull bool, data []byte) error {
+				if isNull || writer.truncated {
+					return nil
+				}
+				return writeGroupConcatData(
+					writer, exec.argTypes[column], data)
+			}); err != nil {
+			return err
+		}
+		if writer.truncated {
+			break
+		}
+	}
+	return nil
 }
 
 func (exec *groupConcatExec) appendConcatPayload(
@@ -1619,45 +2075,45 @@ func (exec *groupConcatExec) orderedDistinctState() (*aggExec, error) {
 func (exec *groupConcatExec) SaveIntermediateResult(
 	cnt int64,
 	flags [][]uint8,
-	buf *bytes.Buffer,
+	writer io.Writer,
 ) error {
 	if exec.hasOrderedSpillRuns() {
 		return moerr.NewInternalErrorNoCtx("spilled final group_concat cannot be serialized as a partial result")
 	}
-	if !exec.distinct || exec.orderArgCnt == 0 {
-		return exec.aggExec.SaveIntermediateResult(cnt, flags, buf)
+	if exec.allocation != nil || !exec.distinct || exec.orderArgCnt == 0 {
+		return exec.aggExec.SaveIntermediateResult(cnt, flags, writer)
 	}
 	state, err := exec.orderedDistinctState()
 	if err != nil {
 		return err
 	}
 	defer state.Free()
-	return state.SaveIntermediateResult(cnt, flags, buf)
+	return state.SaveIntermediateResult(cnt, flags, writer)
 }
 
 func (exec *groupConcatExec) SaveIntermediateResultOfChunk(
 	chunk int,
-	buf *bytes.Buffer,
+	writer io.Writer,
 ) error {
 	if exec.hasOrderedSpillRuns() {
 		return moerr.NewInternalErrorNoCtx("spilled final group_concat cannot be serialized as a partial result")
 	}
-	if !exec.distinct || exec.orderArgCnt == 0 {
-		return exec.aggExec.SaveIntermediateResultOfChunk(chunk, buf)
+	if exec.allocation != nil || !exec.distinct || exec.orderArgCnt == 0 {
+		return exec.aggExec.SaveIntermediateResultOfChunk(chunk, writer)
 	}
 	state, err := exec.orderedDistinctState()
 	if err != nil {
 		return err
 	}
 	defer state.Free()
-	return state.SaveIntermediateResultOfChunk(chunk, buf)
+	return state.SaveIntermediateResultOfChunk(chunk, writer)
 }
 
 func (exec *groupConcatExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
 	if err := exec.aggExec.UnmarshalFromReader(reader, mp); err != nil {
 		return err
 	}
-	if !exec.distinct || exec.orderArgCnt == 0 {
+	if exec.allocation != nil || !exec.distinct || exec.orderArgCnt == 0 {
 		return nil
 	}
 	groupCount := exec.GetNumGroups()

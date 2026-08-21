@@ -206,7 +206,7 @@ func (exec *minMaxExecFixed[T]) BatchMerge(next AggFuncExec, offset int, groups 
 		y2 := g2 & aggBatchSizeMask
 
 		aggs1 := chunkArr[T](exec.state[x1].vecs[0])
-		aggs2 := chunkArr[T](other.state[x2].vecs[0])
+		aggs2 := chunkRows[T](other.state[x2].vecs[0])
 
 		if other.state[x2].vecs[0].IsNull(y2) {
 			continue
@@ -325,24 +325,38 @@ func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*v
 			value := vectors[0].GetBytesAt(int(idx))
 			kind := vectors[0].GetPrepareParamKindAt(int(idx))
 			if exec.state[x].vecs[0].IsNull(uint64(y)) {
-				exec.state[x].vecs[0].UnsetNull(uint64(y))
-				if err := vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp); err != nil {
+				if err := exec.state[x].vecs[0].PreflightSetPrepareParamKindAt(
+					int(y), kind, exec.mp); err != nil {
 					return err
 				}
+				if err := vector.SetBytesAtFrom(exec.state[x].vecs[0], int(y), vectors[0], int(idx), exec.mp); err != nil {
+					return err
+				}
+				exec.state[x].vecs[0].UnsetNull(uint64(y))
 				if err := exec.state[x].vecs[0].SetPrepareParamKindAtWithMP(int(y), kind, exec.mp); err != nil {
+					exec.state[x].vecs[0].SetNull(uint64(y))
 					return err
 				}
 			} else {
 				oldValue := exec.state[x].vecs[0].GetBytesAt(int(y))
 				switch cmp := exec.comp(value, oldValue); {
 				case cmp < 0:
-					if err := vector.SetBytesAt(exec.state[x].vecs[0], int(y), value, exec.mp); err != nil {
+					if err := exec.state[x].vecs[0].PreflightSetPrepareParamKindAt(
+						int(y), kind, exec.mp); err != nil {
+						return err
+					}
+					if err := vector.SetBytesAtFrom(exec.state[x].vecs[0], int(y), vectors[0], int(idx), exec.mp); err != nil {
 						return err
 					}
 					if err := exec.state[x].vecs[0].SetPrepareParamKindAtWithMP(int(y), kind, exec.mp); err != nil {
 						return err
 					}
 				case cmp == 0:
+					if err := exec.state[x].vecs[0].SetIsBinaryStringAt(
+						int(y), exec.state[x].vecs[0].GetBinaryStringMetadataAt(int(y)) ||
+							vectors[0].GetBinaryStringMetadataAt(int(idx)), exec.mp); err != nil {
+						return err
+					}
 					if err := mergeMinMaxPrepareParamKind(exec.state[x].vecs[0], int(y), kind, exec.mp); err != nil {
 						return err
 					}
@@ -371,13 +385,19 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 			continue
 		}
 		if exec.state[x1].vecs[0].IsNull(uint64(y1)) {
-			value := other.state[x2].vecs[0].GetBytesAt(int(y2))
-			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
-			if err := vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), value, exec.mp); err != nil {
+			kind := other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2))
+			if err := exec.state[x1].vecs[0].PreflightSetPrepareParamKindAt(
+				int(y1), kind, exec.mp); err != nil {
 				return err
 			}
+			if err := vector.SetBytesAtFrom(
+				exec.state[x1].vecs[0], int(y1), other.state[x2].vecs[0], int(y2), exec.mp); err != nil {
+				return err
+			}
+			exec.state[x1].vecs[0].UnsetNull(uint64(y1))
 			if err := exec.state[x1].vecs[0].SetPrepareParamKindAtWithMP(
-				int(y1), other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)), exec.mp); err != nil {
+				int(y1), kind, exec.mp); err != nil {
+				exec.state[x1].vecs[0].SetNull(uint64(y1))
 				return err
 			}
 		} else {
@@ -385,14 +405,25 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 			oldValue := exec.state[x1].vecs[0].GetBytesAt(int(y1))
 			switch cmp := exec.comp(value, oldValue); {
 			case cmp < 0:
-				if err := vector.SetBytesAt(exec.state[x1].vecs[0], int(y1), value, exec.mp); err != nil {
+				kind := other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2))
+				if err := exec.state[x1].vecs[0].PreflightSetPrepareParamKindAt(
+					int(y1), kind, exec.mp); err != nil {
+					return err
+				}
+				if err := vector.SetBytesAtFrom(
+					exec.state[x1].vecs[0], int(y1), other.state[x2].vecs[0], int(y2), exec.mp); err != nil {
 					return err
 				}
 				if err := exec.state[x1].vecs[0].SetPrepareParamKindAtWithMP(
-					int(y1), other.state[x2].vecs[0].GetPrepareParamKindAt(int(y2)), exec.mp); err != nil {
+					int(y1), kind, exec.mp); err != nil {
 					return err
 				}
 			case cmp == 0:
+				if err := exec.state[x1].vecs[0].SetIsBinaryStringAt(
+					int(y1), exec.state[x1].vecs[0].GetBinaryStringMetadataAt(int(y1)) ||
+						other.state[x2].vecs[0].GetBinaryStringMetadataAt(int(y2)), exec.mp); err != nil {
+					return err
+				}
 				if err := mergeMinMaxPrepareParamKind(
 					exec.state[x1].vecs[0],
 					int(y1),
@@ -440,7 +471,7 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 			for i := range vec.Length() {
 				if vec.IsNull(uint64(i)) {
 					vec.UnsetNull(uint64(i))
-					if err := vector.SetBytesAt(vec, int(i), exec.extra, exec.mp); err != nil {
+					if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
 						return freeResultsOnError(err)
 					}
 					if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
@@ -450,7 +481,7 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 					oldValue := vec.GetBytesAt(int(i))
 					switch cmp := exec.comp(exec.extra, oldValue); {
 					case cmp < 0:
-						if err := vector.SetBytesAt(vec, int(i), exec.extra, exec.mp); err != nil {
+						if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
 							return freeResultsOnError(err)
 						}
 						if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
@@ -469,6 +500,16 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 }
 
 func makeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	return makeMinMaxExecWithLegacyText(mp, aggID, isMin, param, false)
+}
+
+func makeMinMaxExecWithLegacyText(
+	mp *mpool.MPool,
+	aggID int64,
+	isMin bool,
+	param types.Type,
+	legacyTextComparator bool,
+) AggFuncExec {
 	switch param.Oid {
 	case types.T_bool:
 		return newBoolMinMaxExec(mp, aggID, isMin, param)
@@ -514,8 +555,16 @@ func makeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) 
 		return newUuidMinMaxExec(mp, aggID, isMin, param)
 	case types.T_enum:
 		return newGenericMinMaxExec[types.Enum](mp, aggID, isMin, param)
-	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_json, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_text:
+		if legacyTextComparator || param.Charset == types.CharsetBinary ||
+			param.Charset == types.CharsetLegacy {
+			return newStrMinMaxExec(mp, aggID, isMin, param)
+		}
+		if param.Charset == types.CharsetUTF8MB4Bin {
+			return newUTF8mb4BinMinMaxExec(mp, aggID, isMin, param)
+		}
+		return newTextMinMaxExec(mp, aggID, isMin, param)
+	case types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_datalink:
 		return newStrMinMaxExec(mp, aggID, isMin, param)
 	case types.T_array_float32, types.T_array_float64:
 		return newArrayMinMaxExec(mp, aggID, isMin, param)
@@ -614,6 +663,30 @@ func newStrMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type
 		exec.comp = bytes.Compare
 	} else {
 		exec.comp = func(x, y []byte) int { return -bytes.Compare(x, y) }
+	}
+	setupAggInfo(&exec.aggInfo, aggID, param)
+	return &exec
+}
+
+func newTextMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	var exec minMaxExecBytes
+	exec.mp = mp
+	if isMin {
+		exec.comp = compareUTF8mb4GeneralCI
+	} else {
+		exec.comp = func(x, y []byte) int { return -compareUTF8mb4GeneralCI(x, y) }
+	}
+	setupAggInfo(&exec.aggInfo, aggID, param)
+	return &exec
+}
+
+func newUTF8mb4BinMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	var exec minMaxExecBytes
+	exec.mp = mp
+	if isMin {
+		exec.comp = compareUTF8mb4Bin
+	} else {
+		exec.comp = func(x, y []byte) int { return -compareUTF8mb4Bin(x, y) }
 	}
 	setupAggInfo(&exec.aggInfo, aggID, param)
 	return &exec

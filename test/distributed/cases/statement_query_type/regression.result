@@ -6,14 +6,14 @@ use statement_query_type;
 create table test_table(col1 int,col2 varchar);
 create view test_view as select * from test_table;
 show create view test_view;
-View    Create View    character_set_client    collation_connection
-test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
+➤ View[12,6,0]  ¦  Create View[12,84,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+test_view  ¦  create view `test_view` as select `test_table`.`col1` as `col1`, `test_table`.`col2` as `col2` from `test_table`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 show collation like 'utf8mb4_general_ci';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 show collation like 'utf8mb4_general_ci%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 load data infile '$resources/load_data/test.csv' into table test_table fields terminated by ',';
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;

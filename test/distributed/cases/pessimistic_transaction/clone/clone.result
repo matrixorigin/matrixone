@@ -146,16 +146,16 @@ show create table mo_catalog_new.src_new;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 src_new  ¦  CREATE TABLE `src_new` (
   `dat_id` bigint unsigned DEFAULT NULL,
-  `datname` varchar(5000) NOT NULL,
-  `dat_catalog_name` varchar(5000) DEFAULT NULL,
-  `dat_createsql` varchar(5000) DEFAULT NULL,
+  `datname` varchar(5000) COLLATE utf8mb4_general_ci NOT NULL,
+  `dat_catalog_name` varchar(5000) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `dat_createsql` varchar(5000) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `owner` int unsigned DEFAULT NULL,
   `creator` int unsigned DEFAULT NULL,
   `created_time` timestamp NULL DEFAULT NULL,
   `account_id` int unsigned NOT NULL,
-  `dat_type` varchar(32) DEFAULT NULL,
+  `dat_type` varchar(32) COLLATE utf8mb4_general_ci DEFAULT NULL,
   PRIMARY KEY (`account_id`,`datname`)
-)
+) COLLATE=utf8mb4_bin
 select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new.mo_database where account_id = 0 and datname = 'test01';
 ➤ datname[12,-1,0]  ¦  dat_catalog_name[12,-1,0]  ¦  dat_createsql[12,-1,0]  ¦  account_id[4,32,0]  𝄀
 test01  ¦  def  ¦  create database test01  ¦  0
@@ -887,8 +887,8 @@ select count(*) from t1;
 select * from v1;
 ➤ a[4,32,0]
 show create table v1;
-➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
-v1  ¦  create view v1 as select * from t1;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,1,0]  ¦  Create View[12,39,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v1  ¦  create view `v1` as select `t1`.`a` as `a` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v2;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[1,20,0]
 show tables;
@@ -968,8 +968,8 @@ select count(*) from t1;
 select * from v1;
 ➤ a[4,32,0]
 show create table v1;
-➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
-v1  ¦  create view v1 as select * from t1;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,1,0]  ¦  Create View[12,39,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v1  ¦  create view `v1` as select `t1`.`a` as `a` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v2;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[1,20,0]
 use test09_table;
@@ -1043,8 +1043,8 @@ select count(*) from t1;
 select * from v1;
 ➤ a[4,32,0]
 show create table v1;
-➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
-v1  ¦  create view v1 as select * from t1;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,1,0]  ¦  Create View[12,39,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v1  ¦  create view `v1` as select `t1`.`a` as `a` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v2;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[1,20,0]
 use test09_table;

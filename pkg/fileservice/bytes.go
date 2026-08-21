@@ -29,7 +29,24 @@ import (
 type Bytes struct {
 	bytes       []byte
 	deallocator malloc.Deallocator
-	refs        atomic.Int32
+	owner       *fscache.DataOwner
+	reservation cacheDataReservation
+	// doNotReuse preserves malloc.DoNotReuse across the MemCache's internal
+	// pending-allocation pool. Such callers require Release to return the
+	// allocation to the underlying allocator immediately.
+	doNotReuse bool
+	// cacheAdmissionOwner identifies a cache that deliberately allocated this
+	// as a transient read buffer because it could not reserve cache capacity.
+	cacheAdmissionOwner *fscache.DataOwner
+	refs                atomic.Int32
+}
+
+// cacheDataReservation accounts for a buffer that has been allocated for a
+// cache but is not yet retained by the FIFO. The buffer owns the reservation
+// until it is committed by cache insertion or released with the allocation.
+type cacheDataReservation interface {
+	commit()
+	release()
 }
 
 func NewBytes(data []byte) *Bytes {
@@ -91,33 +108,98 @@ func (b *Bytes) Release() {
 	if n == 0 {
 		// Last reference: no other goroutine may legally touch b anymore
 		// (Retain from zero panics), so plain writes are safe here.
-		b.bytes = nil
-		if b.deallocator != nil {
-			b.deallocator.Deallocate()
-			b.deallocator = nil
+		if reservation, ok := b.reservation.(recyclableCacheDataReservation); ok &&
+			!b.doNotReuse && reservation.recycle(b) {
+			return
 		}
+		b.releaseAllocation()
 	} else if n < 0 {
 		panic("Bytes.Release: double free")
 	}
 }
 
+// releaseAllocation returns the native allocation and drops any pending cache
+// reservation. It is called on the ordinary final Release path and when a
+// MemCache drains an idle pending allocation at an explicit reclaim boundary.
+// The latter owns a Bytes with refs already at zero.
+func (b *Bytes) releaseAllocation() {
+	b.bytes = nil
+	if b.deallocator != nil {
+		b.deallocator.Deallocate()
+		b.deallocator = nil
+	}
+	if b.reservation != nil {
+		b.reservation.release()
+		b.reservation = nil
+	}
+}
+
+var _ fscache.DataOwnership = (*Bytes)(nil)
+var _ fscache.DataCacheReservation = (*Bytes)(nil)
+var _ fscache.DataCacheAdmission = (*Bytes)(nil)
+
+// CommitCacheReservation transfers pending capacity accounting to the FIFO
+// after this buffer has been retained by a cache.
+func (b *Bytes) CommitCacheReservation() {
+	if b.reservation != nil {
+		b.reservation.commit()
+	}
+}
+
+// CacheAdmissionAllowed reports whether this data can enter the destination
+// cache. A transient buffer must remain owned by the read and never turn into
+// an unaccounted cache allocation.
+func (b *Bytes) CacheAdmissionAllowed(owner *fscache.DataOwner) bool {
+	return b.cacheAdmissionOwner != owner
+}
+
+func (b *Bytes) CacheDataOwner() *fscache.DataOwner {
+	return b.owner
+}
+
+func (b *Bytes) RehomeCacheData(copyData func([]byte) fscache.Data) fscache.Data {
+	return copyData(b.Bytes())
+}
+
 type bytesAllocator struct {
 	allocator malloc.Allocator
+	owner     *fscache.DataOwner
 }
 
 var _ CacheDataAllocator = new(bytesAllocator)
 
+func newBytesAllocator(allocator malloc.Allocator) *bytesAllocator {
+	return &bytesAllocator{
+		allocator: allocator,
+		owner:     new(fscache.DataOwner),
+	}
+}
+
 func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache.Data {
-	slice, dec, err := b.allocator.Allocate(uint64(size), hints)
+	return b.allocateCacheBytes(size, hints)
+}
+
+func (b *bytesAllocator) allocateCacheBytes(size int, hints malloc.Hints) *Bytes {
+	bytes, err := b.tryAllocateCacheBytes(size, hints)
 	if err != nil {
 		panic(err)
+	}
+	return bytes
+}
+
+func (b *bytesAllocator) tryAllocateCacheBytes(size int, hints malloc.Hints) (*Bytes, error) {
+	slice, dec, err := b.allocator.Allocate(uint64(size), hints)
+	if err != nil {
+		return nil, err
 	}
 	bytes := &Bytes{
 		bytes:       slice,
 		deallocator: dec,
+		owner:       b.owner,
+		doNotReuse:  hints&malloc.DoNotReuse != 0,
 	}
 	bytes.refs.Store(1)
-	return bytes
+	return bytes, nil
 }
 
 func (b *bytesAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
@@ -151,6 +233,13 @@ type cacheCapacityGuardedAllocator struct {
 }
 
 var _ CacheDataAllocator = cacheCapacityGuardedAllocator{}
+
+type capacityGuardedCacheDataAllocator interface {
+	CacheDataAllocator
+	cacheDataAllocationCapacityGuarded()
+}
+
+func (cacheCapacityGuardedAllocator) cacheDataAllocationCapacityGuarded() {}
 
 func (c cacheCapacityGuardedAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	ensureCacheDataCapacity(ctx, c.cache, c.allocator, size)

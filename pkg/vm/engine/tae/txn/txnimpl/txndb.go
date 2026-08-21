@@ -86,14 +86,19 @@ func (db *txnDB) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readedObjects
 
 func (db *txnDB) Close() error {
 	var err error
-	for _, table := range db.tables {
-		if err = table.Close(); err != nil {
-			break
+	for id, table := range db.tables {
+		closeErr := table.Close()
+		err = combineTxnLifecycleErrors(err, closeErr)
+		if closeErr == nil {
+			delete(db.tables, id)
 		}
 	}
-	db.tables = nil
 	db.createEntry = nil
 	db.dropEntry = nil
+	if len(db.tables) != 0 {
+		return err
+	}
+	db.tables = nil
 	return err
 }
 
@@ -426,6 +431,14 @@ func (db *txnDB) SoftDeleteObject(id *common.ID, isTombstone bool) (err error) {
 	}
 	return table.SoftDeleteObject(id.ObjectID(), isTombstone)
 }
+
+func (db *txnDB) SoftDeleteObjectByCN(id *common.ID, isTombstone bool) (err error) {
+	var table *txnTable
+	if table, err = db.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.SoftDeleteObjectByCN(id.ObjectID(), isTombstone)
+}
 func (db *txnDB) NeedRollback() bool {
 	return db.createEntry != nil && db.dropEntry != nil
 }
@@ -638,19 +651,13 @@ func (db *txnDB) AddTxnEntry(entry txnif.TxnEntry) {
 func (db *txnDB) PrepareRollback() error {
 	var err error
 	if db.createEntry != nil {
-		if err := db.createEntry.PrepareRollback(); err != nil {
-			return err
-		}
+		err = combineTxnLifecycleErrors(err, db.createEntry.PrepareRollback())
 	}
 	for _, table := range db.tables {
-		if err = table.PrepareRollback(); err != nil {
-			break
-		}
+		err = combineTxnLifecycleErrors(err, table.PrepareRollback())
 	}
 	if db.dropEntry != nil {
-		if err := db.dropEntry.PrepareRollback(); err != nil {
-			return err
-		}
+		err = combineTxnLifecycleErrors(err, db.dropEntry.PrepareRollback())
 	}
 
 	return err

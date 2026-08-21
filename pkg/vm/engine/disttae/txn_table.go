@@ -1165,7 +1165,7 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	var done bool
 
-	if done, err = readutil.TryFastFilterBlocks(
+	if done, err = readutil.TryFastFilterBlocksWithZone(
 		ctx,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
@@ -1176,6 +1176,7 @@ func (tbl *txnTable) rangesOnePart(
 		outBlocks,
 		tbl.PrefetchAllMeta,
 		tbl.getTxn().engine.fs,
+		proc.GetSessionInfo().TimeZone,
 	); err != nil {
 		return err
 	} else if done {
@@ -1472,6 +1473,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						Table:       tbl.tableName,
 						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 						Enumvalues:  attr.Attr.EnumVlaues,
+						Charset:     uint32(attr.Attr.Type.Charset),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1602,6 +1604,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
 			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
+			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
 		}
 	}
 	return tbl.tableDef
@@ -1652,6 +1655,13 @@ func validateAutoIncrEpochAdvance(current uint32, resets uint64) error {
 	return nil
 }
 
+func validateReplaceDefVersion(current uint32, replaceDef *api.AlterTableReplaceDef) error {
+	if replaceDef != nil && replaceDef.GetCheckVersion() && replaceDef.GetExpectedVersion() != current {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return nil
+}
+
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 	// AlterTale Inplace do not touch columns, we don't use NextSeqNum at the moment.
 	if tbl.db.op.IsSnapOp() {
@@ -1661,6 +1671,11 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	for _, req := range reqs {
 		if req.GetKind() == api.AlterKind_UpdateAutoIncrement {
 			autoIncrResetCount++
+		}
+		if req.GetKind() == api.AlterKind_ReplaceDef {
+			if err := validateReplaceDefVersion(tbl.version, req.GetReplaceDef()); err != nil {
+				return err
+			}
 		}
 	}
 	if err := validateAutoIncrEpochAdvance(tbl.extraInfo.AutoIncrEpoch, autoIncrResetCount); err != nil {
@@ -1676,6 +1691,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldConstraint := tbl.constraint
 	oldAutoIncrOffset := tbl.extraInfo.AutoIncrOffset
 	oldAutoIncrEpoch := tbl.extraInfo.AutoIncrEpoch
+	oldChecks := api.CloneExtra(&api.SchemaExtra{Checks: tbl.extraInfo.Checks}).Checks
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
 	// 2. any TableDef about columns, like AttritebuteDef, PrimaryKeyDef, or CluterbyDef do not change, ensuring genColumnsFromDefs works well
@@ -1698,6 +1714,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				// Rollback for ReplaceDef is handled by restoring defs
 			case api.AlterKind_RenameColumn:
 				// RenameColumn takes effect in form of ReplaceDef
+				tbl.extraInfo.Checks = oldChecks
 			case api.AlterKind_UpdateAutoIncrement:
 				tbl.extraInfo.AutoIncrOffset = oldAutoIncrOffset
 				tbl.extraInfo.AutoIncrEpoch = oldAutoIncrEpoch
@@ -1738,6 +1755,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			hasReplaceDef = true
 			re := req.GetRenameCol()
 			renameColMap[re.OldName] = re.NewName
+			if re.Checks != nil {
+				tbl.extraInfo.Checks = api.CloneExtra(&api.SchemaExtra{Checks: re.Checks}).Checks
+			}
 		case api.AlterKind_UpdateAutoIncrement:
 			tbl.extraInfo.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
 			tbl.extraInfo.AutoIncrEpoch++
@@ -1812,11 +1832,23 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	tbl.defs = append(baseDefs, appendDef...)
 	tbl.RefeshTableDef(ctx)
 
-	ctx = context.WithValue(ctx, defines.LogicalIdKey{}, tbl.logicalId)
-
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
-	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn, tbl.extraInfo); err != nil {
+	var preservedOwnership *tableCatalogOwnership
+	if replaceDefReq != nil && replaceDefReq.GetReplaceDef().GetPreserveOwnership() {
+		preservedOwnership = &tableCatalogOwnership{
+			creator:     replaceDefReq.GetReplaceDef().GetPreservedCreator(),
+			owner:       replaceDefReq.GetReplaceDef().GetPreservedOwner(),
+			createdTime: types.Timestamp(replaceDefReq.GetReplaceDef().GetPreservedCreatedTime()),
+		}
+	}
+	// deleteTable(forAlter=true) deliberately leaves the logical-ID index row for
+	// the recreation to replace. Pass that intent explicitly: inferring it from
+	// the hidden-table name would leave the old row and insert a duplicate.
+	if err := tbl.db.createWithID(
+		ctx, tbl.tableName, tbl.tableId, tbl.logicalId, true,
+		tbl.defs, !createdInTxn, tbl.extraInfo, preservedOwnership,
+	); err != nil {
 		return err
 	}
 	if createdInTxn {
@@ -2610,38 +2642,28 @@ func pkCommitTSMatchedInRange(
 	sels []int64,
 	from, to types.TS,
 ) (bool, bool) {
-	if commitTSVec == nil ||
-		commitTSVec.GetType().Oid != types.T_TS ||
-		commitTSVec.IsConstNull() {
+	if commitTSVec == nil {
 		return false, false
 	}
-	timestamps := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
-	var aborts []bool
-	if abortVec != nil && !abortVec.IsConstNull() {
-		if abortVec.GetType().Oid != types.T_bool {
-			return false, false
-		}
-		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
-		if len(aborts) != len(timestamps) {
-			return false, false
-		}
+	rowCount := commitTSVec.Length()
+	timestamps, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, commitTSVec)
+	if err != nil {
+		return false, false
+	}
+	abortColumn, err := ioutil.ValidateTombstoneAbortColumn(rowCount, abortVec)
+	if err != nil {
+		return false, false
 	}
 	for _, sel := range sels {
-		if sel < 0 || int(sel) >= len(timestamps) {
+		if sel < 0 || int(sel) >= rowCount {
 			return false, false
 		}
-		if commitTSVec.IsNull(uint64(sel)) {
-			return false, false
-		}
-		if aborts != nil {
-			if abortVec.IsNull(uint64(sel)) {
-				return false, false
-			}
-			if aborts[sel] {
+		if abortColumn.IsPresent() {
+			if abortColumn.IsAborted(int(sel)) {
 				continue
 			}
 		}
-		ts := timestamps[sel]
+		ts := timestamps.At(int(sel))
 		if ts.GT(&from) && ts.LE(&to) {
 			return true, true
 		}

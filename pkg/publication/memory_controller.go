@@ -491,6 +491,7 @@ func ReleaseFilterObjectJobResult(res *FilterObjectJobResult) {
 	res.PreviousStats = objectio.ObjectStats{}
 	res.CurrentStats = objectio.ObjectStats{}
 	res.DownstreamStats = objectio.ObjectStats{}
+	res.DownstreamStatsList = nil
 	res.RowOffsetMap = nil
 	filterObjectJobResultPool.Put(res)
 }
@@ -508,6 +509,7 @@ func ReleaseAObjectMapping(mapping *AObjectMapping) {
 		return
 	}
 	mapping.DownstreamStats = objectio.ObjectStats{}
+	mapping.DownstreamObjectIDs = nil
 	mapping.IsTombstone = false
 	mapping.DBName = ""
 	mapping.TableName = ""

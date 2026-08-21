@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -90,6 +91,208 @@ func newMongoDBMappingTestCompile(
 	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
 	return &Compile{proc: proc, pn: &plan2.Plan{}},
 		mock_frontend.NewMockDatabase(ctrl), mock_frontend.NewMockRelation(ctrl)
+}
+
+func TestRequireCheckRenameProtocol(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := &Compile{proc: proc}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	checks := []*plan2.CheckDef{{OriginSql: "`renamed_col` > 0"}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion14)
+	require.ErrorContains(t, c.requireCheckRenameProtocol(checks), "protocol version 15")
+	require.NoError(t, c.requireCheckRenameProtocol(nil))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion15)
+	require.NoError(t, c.requireCheckRenameProtocol(checks))
+}
+
+func TestValidateAlterForeignKeyNameActionsUsesSequentialState(t *testing.T) {
+	dropFK := func(name string) *plan2.AlterTable_Action {
+		return &plan2.AlterTable_Action{Action: &plan2.AlterTable_Action_Drop{
+			Drop: &plan2.AlterTableDrop{Name: name, Typ: plan2.AlterTableDrop_FOREIGN_KEY},
+		}}
+	}
+	addFK := func(name string) *plan2.AlterTable_Action {
+		return &plan2.AlterTable_Action{Action: &plan2.AlterTable_Action_AddFk{
+			AddFk: &plan2.AlterTableAddFk{Fkey: &plan2.ForeignKeyDef{Name: name}},
+		}}
+	}
+
+	existing := map[string]bool{"fk_x": true}
+	require.NoError(t, validateAlterForeignKeyNameActions(
+		context.Background(), existing,
+		[]*plan2.AlterTable_Action{dropFK("fk_x"), addFK("fk_x")},
+	))
+	require.NoError(t, validateAlterForeignKeyNameActions(
+		context.Background(), nil,
+		[]*plan2.AlterTable_Action{addFK("fk_x"), dropFK("fk_x"), addFK("fk_x")},
+	))
+	require.NoError(t, validateAlterForeignKeyNameActions(
+		context.Background(), nil,
+		[]*plan2.AlterTable_Action{addFK("fk_x"), dropFK("fk_x")},
+	))
+	require.NoError(t, validateAlterForeignKeyNameActions(
+		context.Background(), existing,
+		[]*plan2.AlterTable_Action{dropFK("fk_x"), addFK("fk_x"), dropFK("fk_x")},
+	))
+
+	for _, tc := range []struct {
+		name    string
+		actions []*plan2.AlterTable_Action
+	}{
+		{name: "add before drop", actions: []*plan2.AlterTable_Action{addFK("fk_x"), dropFK("fk_x")}},
+		{name: "drop missing", actions: []*plan2.AlterTable_Action{dropFK("missing")}},
+		{name: "duplicate additions", actions: []*plan2.AlterTable_Action{addFK("fk_y"), addFK("fk_y")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, validateAlterForeignKeyNameActions(
+				context.Background(), existing, tc.actions,
+			))
+		})
+	}
+}
+
+func TestAlterTableInplaceUpdatesVisibilityForAllLogicalIndexParts(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		initialVisible bool
+		targetVisible  bool
+		wantVisibility plan2.IndexOption_Visibility
+	}{
+		{
+			name:           "invisible",
+			initialVisible: true,
+			targetVisible:  false,
+			wantVisibility: plan2.IndexOption_VISIBILITY_INVISIBLE,
+		},
+		{
+			name:           "visible",
+			initialVisible: false,
+			targetVisible:  true,
+			wantVisibility: plan2.IndexOption_VISIBILITY_VISIBLE,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			const indexName = "idx_vec"
+			indexes := make([]*plan2.IndexDef, 0, 3)
+			for _, tableType := range []string{
+				catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				catalog.SystemSI_IVFFLAT_TblType_Centroids,
+				catalog.SystemSI_IVFFLAT_TblType_Entries,
+			} {
+				index := &plan2.IndexDef{
+					IndexName:          indexName,
+					IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+					IndexAlgoTableType: tableType,
+					Visible:            tc.initialVisible,
+					Option:             &plan2.IndexOption{},
+				}
+				if tc.initialVisible {
+					index.Option.Visibility = plan2.IndexOption_VISIBILITY_VISIBLE
+				} else {
+					index.Option.Visibility = plan2.IndexOption_VISIBILITY_INVISIBLE
+				}
+				indexes = append(indexes, index)
+			}
+
+			tableDef := &plan2.TableDef{
+				TblId:   42,
+				Name:    "t",
+				Indexes: indexes,
+			}
+			alterTable := &plan2.AlterTable{
+				Database: "test",
+				TableDef: tableDef,
+				Actions: []*plan2.AlterTable_Action{{
+					Action: &plan2.AlterTable_Action_AlterIndex{
+						AlterIndex: &plan2.AlterTableAlterIndex{
+							IndexName: indexName,
+							Visible:   tc.targetVisible,
+						},
+					},
+				}},
+			}
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_ALTER_TABLE,
+				Definition: &plan2.DataDefinition_AlterTable{
+					AlterTable: alterTable,
+				},
+			}}}}
+
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.Buf = buffer.New()
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+			proc.Base.TxnClient = txnCli
+			proc.Base.TxnOperator = txnOp
+
+			exec := &mongoDBMappingTestExecutor{}
+			rt := moruntime.DefaultRuntime()
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+
+			relation := mock_frontend.NewMockRelation(ctrl)
+			relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).AnyTimes()
+			relation.EXPECT().GetDBID(gomock.Any()).Return(uint64(7))
+			relation.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{})
+			relation.EXPECT().AlterTable(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, constraint *engine.ConstraintDef, _ []*api.AlterTableReq) error {
+					var indexDef *engine.IndexDef
+					for _, ct := range constraint.Cts {
+						if def, ok := ct.(*engine.IndexDef); ok {
+							indexDef = def
+							break
+						}
+					}
+					require.NotNil(t, indexDef)
+					require.Len(t, indexDef.Indexes, 3)
+					for _, index := range indexDef.Indexes {
+						assert.Equal(t, tc.targetVisible, index.Visible, index.IndexAlgoTableType)
+						require.NotNil(t, index.Option, index.IndexAlgoTableType)
+						assert.Equal(t, tc.wantVisibility, index.Option.Visibility, index.IndexAlgoTableType)
+					}
+					return nil
+				},
+			)
+
+			database := mock_frontend.NewMockDatabase(ctrl)
+			database.EXPECT().GetDatabaseId(gomock.Any()).Return("7")
+			database.EXPECT().Relation(gomock.Any(), "t", gomock.Any()).Return(relation, nil)
+
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(database, nil)
+
+			getConstraintDef := gostub.Stub(&GetConstraintDef, func(context.Context, engine.Relation) (*engine.ConstraintDef, error) {
+				return &engine.ConstraintDef{}, nil
+			})
+			defer getConstraintDef.Reset()
+
+			c := NewCompile("test", "test", "alter table t alter index idx_vec", "", "", eng, proc, nil, false, nil, time.Now())
+			c.pn = s.Plan
+			require.NoError(t, s.AlterTableInplace(c))
+			visible := 0
+			if tc.targetVisible {
+				visible = 1
+			}
+			require.Equal(t, []string{
+				fmt.Sprintf(updateMoIndexesVisibleFormat, visible, tableDef.TblId, indexName),
+			}, exec.sqls, "catalog visibility must be updated once per logical index")
+		})
+	}
 }
 
 func mongoDBConnectionResult(t *testing.T, proc *process.Process, connectionID, disabled uint64) executor.Result {
@@ -751,6 +954,72 @@ func TestScopeCreateTemporaryTableRollsBackAliasAfterLateFailure(t *testing.T) {
 	require.Error(t, s.CreateTable(c))
 	_, exists := session.GetTempTable("test", "temporary_table")
 	require.False(t, exists)
+}
+
+func TestScopeRestoreTemporaryCloneValidatesPhysicalDestination(t *testing.T) {
+	newClonePlan := func() *plan2.CloneTable {
+		createTable := &plan2.CreateTable{
+			Database: "test", Temporary: true,
+			TableDef: &plan2.TableDef{Name: "temporary_table"},
+		}
+		createPlan := &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+		}}}
+		return &plan2.CloneTable{
+			CreateTable: createPlan, DstDatabaseName: "test", DstTableName: "temporary_table",
+		}
+	}
+
+	tests := []struct {
+		name    string
+		setup   func(*process.Process, *stubEngine)
+		wantErr string
+	}{
+		{
+			name:    "session is required",
+			setup:   func(*process.Process, *stubEngine) {},
+			wantErr: "session not found for temporary table clone",
+		},
+		{
+			name: "alias must be registered",
+			setup: func(proc *process.Process, _ *stubEngine) {
+				proc.Session = &trackingTempTableSession{tables: make(map[string]string)}
+			},
+			wantErr: "temporary table clone destination test.temporary_table is not registered",
+		},
+		{
+			name: "database lookup error is preserved",
+			setup: func(proc *process.Process, eng *stubEngine) {
+				session := &trackingTempTableSession{tables: make(map[string]string)}
+				session.AddTempTable("test", "temporary_table", "physical_temporary_table")
+				proc.Session = session
+				eng.dbErr = errors.New("database lookup failed")
+			},
+			wantErr: "database lookup failed",
+		},
+		{
+			name: "physical relation must exist",
+			setup: func(proc *process.Process, eng *stubEngine) {
+				session := &trackingTempTableSession{tables: make(map[string]string)}
+				session.AddTempTable("test", "temporary_table", "physical_temporary_table")
+				proc.Session = session
+				eng.dbs["test"] = newStubDatabase("test")
+			},
+			wantErr: "no such table test.physical_temporary_table",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			eng := newStubEngine()
+			test.setup(proc, eng)
+			c := NewCompile("test", "test", "create temporary table temporary_table clone src", "", "", eng, proc, nil, false, nil, time.Now())
+
+			err := (&Scope{}).RestoreTable(c, newClonePlan())
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }
 
 func TestScope_CreateView(t *testing.T) {

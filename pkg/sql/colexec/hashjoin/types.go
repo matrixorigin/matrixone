@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -83,16 +82,16 @@ type container struct {
 	probeState probeState
 
 	// Pre-computed per-query flags — avoid method calls in per-row probe loop.
-	probeHashOnPK      bool // HashOnPK || mp.HashOnUnique()
-	probeEmitUnmatched bool // EmitUnmatchedProbe()
-	probeRightSemiAnti bool // !IsRightSemi() && !IsAnti()
-	probeRightJoin     bool
-	probeSingle        bool
-	probeLeftSingle    bool
-	probeLeftSemi      bool
-	probeLeftAnti      bool
-	probeMark          bool
-	buildHasNullKey    bool
+	probeHashOnPK          bool // HashOnPK || mp.HashOnUnique()
+	probeEmitUnmatched     bool // EmitUnmatchedProbe()
+	probeRightSemiAnti     bool // !IsRightSemi() && !IsAnti()
+	probeTrackBuildMatches bool // EmitUnmatchedBuild()
+	probeSingle            bool
+	probeLeftSingle        bool
+	probeLeftSemi          bool
+	probeLeftAnti          bool
+	probeMark              bool
+	buildHasNullKey        bool
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -136,6 +135,9 @@ type HashJoin struct {
 
 	HashOnPK     bool
 	CanSkipProbe bool
+	// EmitCompressedRowCount is an explicit planner/executor contract. It is
+	// valid only when a scalar, single COUNT(*) directly consumes this join.
+	EmitCompressedRowCount bool
 
 	IsShuffle  bool
 	ShuffleIdx int32
@@ -168,7 +170,7 @@ func (hashJoin *HashJoin) SetAllocationAccount(
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		hashJoinAllocationSiteResultData,
 		hashJoinAllocationSiteResultArea,
 		hashJoinAllocationSiteResultNulls,

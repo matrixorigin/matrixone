@@ -23,6 +23,7 @@ import (
 	"math"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -383,6 +384,9 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		needCast := true
 		fn := expr.GetF()
 		if fn != nil {
+			// fulltext_match / bm25_match are rewritten to an index-scan join by the
+			// optimizer; leave them un-cast so the rewrite can find them by name in the
+			// filter list (a wrapping cast(... AS BOOL) would hide the function).
 			needCast = fn.Func.ObjName != "fulltext_match"
 		}
 		// expr must be bool type, if not, try to do type convert
@@ -1539,7 +1543,12 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		}
 
 		return &plan.Expr{
-			Typ: plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width},
+			Typ: plan.Type{
+				Id:      int32(vec.GetType().Oid),
+				Scale:   vec.GetType().Scale,
+				Width:   vec.GetType().Width,
+				Charset: uint32(vec.GetType().Charset),
+			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:  int32(vec.Length()),
@@ -1612,7 +1621,8 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 	var lit *plan.Literal
 	if constExpr.GetLit() != nil {
 		lit = constExpr.GetLit()
-	} else if funcExpr := constExpr.GetF(); funcExpr != nil {
+	} else if funcExpr := constExpr.GetF(); funcExpr != nil &&
+		funcExpr.Func != nil && funcExpr.Func.GetObjName() == "cast" {
 		// Check if it's a cast function with a literal argument
 		if len(funcExpr.Args) > 0 {
 			if innerLit := funcExpr.Args[0].GetLit(); innerLit != nil {
@@ -2565,7 +2575,7 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // }
 
 func ExprType2Type(typ *plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
 }
 
 func PkColByTableDef(tblDef *plan.TableDef) *plan.ColDef {
@@ -3119,43 +3129,436 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matc
 
 // FillValuesOfParamsInPlan replaces the params by their values
 func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
+	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals)
+	return filled, err
+}
+
+// FillValuesOfParamsInPlanWithSpecialization replaces parameters in an
+// isolated plan copy and reports whether the replacement changed an overload
+// or a result-column domain. Callers that already have a cached compile must
+// only invalidate that compile when this flag is true; replacing a parameter
+// with a same-domain literal is otherwise handled by the cached parameter
+// executor.
+func FillValuesOfParamsInPlanWithSpecialization(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+) (*Plan, bool, error) {
 	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
-		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
 	}
-
 	copied := DeepCopyPlan(preparePlan)
 	switch pp := copied.Plan.(type) {
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			err := replaceParamVals(ctx, copied, paramVals)
+			_, err := replaceParamVals(ctx, copied, paramVals)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 
 	case *plan.Plan_Query:
-		err := replaceParamVals(ctx, copied, paramVals)
+		specialized, err := replaceParamVals(ctx, copied, paramVals)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		return copied, specialized, nil
 	}
-	return copied, nil
+	return copied, false, nil
 }
 
 type ParamValue struct {
 	Value any
 	IsBin bool
+	// IsBinaryProtocol records that the value came from COM_STMT_EXECUTE.
+	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
+	// binary-protocol value without being a binary string literal.
+	IsBinaryProtocol bool
+	PrepareParamKind vector.PrepareParamKind
+	// RuntimeType is the type advertised by the binary-protocol parameter
+	// binding.  Prepared plans deliberately keep parameter markers as TEXT
+	// while they are cached, so the execute-time copy can use this optional
+	// type to rebind overloaded functions and result metadata without mutating
+	// the cached plan.
+	RuntimeType    types.Type
+	HasRuntimeType bool
 }
 
-func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
+// PreparedRuntimeTypeFromString infers the narrowest numeric type needed by a
+// textual value when it is used as an argument to a numeric overload.  A
+// direct SELECT ? remains TEXT unless the protocol supplied an explicit
+// numeric type; this helper is only used while rebinding a function argument.
+func PreparedRuntimeTypeFromString(value string) (types.Type, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return types.Type{}, false
+	}
+	if strings.ContainsAny(value, ".eE") {
+		return preparedDecimalType(value)
+	}
+	negative := strings.HasPrefix(value, "-")
+	value = strings.TrimPrefix(value, "+")
+	if negative {
+		value = value[1:]
+	}
+	if value == "" {
+		return types.Type{}, false
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return types.Type{}, false
+	}
+	if negative {
+		if parsed <= uint64(math.MaxInt64)+1 {
+			return types.T_int64.ToType(), true
+		}
+		return types.Type{}, false
+	}
+	if parsed <= uint64(math.MaxInt64) {
+		return types.T_int64.ToType(), true
+	}
+	return types.T_uint64.ToType(), true
+}
+
+func preparedDecimalType(value string) (types.Type, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return types.Type{}, false
+	}
+	if value[0] == '+' || value[0] == '-' {
+		value = value[1:]
+	}
+	if value == "" {
+		return types.Type{}, false
+	}
+	if strings.ContainsAny(value, "eE") {
+		// Exponent notation is accepted by the expression parser, but its
+		// textual precision is not available without evaluating it.  DECIMAL128
+		// is a safe overload domain and preserves the ordinary prepared values
+		// used by the protocol path.
+		parts := strings.FieldsFunc(value, func(r rune) bool { return r == 'e' || r == 'E' })
+		if len(parts) != 2 || !isDecimalMantissa(parts[0]) || !isDecimalExponent(parts[1]) {
+			return types.Type{}, false
+		}
+		return types.New(types.T_decimal128, 38, 18), true
+	}
+	parts := strings.SplitN(value, ".", 2)
+	if !isDecimalMantissa(value) {
+		return types.Type{}, false
+	}
+	integral := strings.TrimLeft(parts[0], "0")
+	if integral == "" {
+		integral = "0"
+	}
+	scale := int32(0)
+	if len(parts) == 2 {
+		scale = int32(len(parts[1]))
+	}
+	width := int32(len(integral)) + scale
+	if width < 1 {
+		width = 1
+	}
+	if width < scale {
+		width = scale
+	}
+	if width > types.T_decimal256.ToType().Width {
+		width = types.T_decimal256.ToType().Width
+	}
+	if scale > width {
+		scale = width
+	}
+	switch {
+	case width <= types.T_decimal64.ToType().Width:
+		return types.New(types.T_decimal64, width, scale), true
+	case width <= types.T_decimal128.ToType().Width:
+		return types.New(types.T_decimal128, width, scale), true
+	default:
+		return types.New(types.T_decimal256, width, scale), true
+	}
+}
+
+func isDecimalMantissa(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || len(parts) == 0 || (parts[0] == "" && (len(parts) == 1 || parts[1] == "")) {
+		return false
+	}
+	for _, part := range parts {
+		for i := 0; i < len(part); i++ {
+			if part[i] < '0' || part[i] > '9' {
+				return false
+			}
+		}
+	}
+	return parts[0] != "" || (len(parts) == 2 && parts[1] != "")
+}
+
+func isDecimalExponent(value string) bool {
+	if value == "" {
+		return false
+	}
+	if value[0] == '+' || value[0] == '-' {
+		value = value[1:]
+	}
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func preparedNthValueParamPosition(expr *Expr) (int32, bool) {
+	if param := expr.GetP(); param != nil {
+		return param.Pos, true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.GetFunc().GetObjName() != "cast" || len(fn.Args) == 0 {
+		return 0, false
+	}
+	param := fn.Args[0].GetP()
+	if param == nil {
+		return 0, false
+	}
+	return param.Pos, true
+}
+
+func isPositivePreparedInteger(value any) bool {
+	kind := vector.PrepareParamNone
+	if paramValue, ok := value.(ParamValue); ok {
+		value = paramValue.Value
+		kind = paramValue.PrepareParamKind
+	}
+	if value == nil || kind != vector.PrepareParamNone && kind != vector.PrepareParamInteger {
+		return false
+	}
+
+	switch value := value.(type) {
+	case int:
+		return value > 0
+	case int8:
+		return value > 0
+	case int16:
+		return value > 0
+	case int32:
+		return value > 0
+	case int64:
+		return value > 0
+	case uint:
+		return value > 0 && uint64(value) <= uint64(math.MaxInt64)
+	case uint8:
+		return value > 0
+	case uint16:
+		return value > 0
+	case uint32:
+		return value > 0
+	case uint64:
+		return value > 0 && value <= uint64(math.MaxInt64)
+	case types.MoYear:
+		return value > 0
+	case string:
+		if kind != vector.PrepareParamInteger {
+			return false
+		}
+		parsed, err := strconv.ParseUint(value, 10, 63)
+		return err == nil && parsed > 0
+	default:
+		return false
+	}
+}
+
+// preparedRuntimeParamExpr materializes a binary-protocol parameter using the
+// same literal representation that the expression executor uses for a value of
+// runtimeType.  Keeping only a numeric Expr.Typ is not sufficient: the
+// executor dispatches on Literal.Value, and a Sval always produces a VARCHAR
+// vector even when the surrounding expression advertises a numeric type.
+func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtimeType types.Type) (*Expr, error) {
+	rawText := fmt.Sprintf("%v", value)
+	text := strings.TrimSpace(rawText)
+	paramType := makePlan2Type(&runtimeType)
+	makeLiteral := func(literal any) *Expr {
+		lit := &plan.Literal{IsBin: isBin}
+		switch value := literal.(type) {
+		case *plan.Literal_Bval:
+			lit.Value = value
+		case *plan.Literal_I8Val:
+			lit.Value = value
+		case *plan.Literal_I16Val:
+			lit.Value = value
+		case *plan.Literal_I32Val:
+			lit.Value = value
+		case *plan.Literal_I64Val:
+			lit.Value = value
+		case *plan.Literal_U8Val:
+			lit.Value = value
+		case *plan.Literal_U16Val:
+			lit.Value = value
+		case *plan.Literal_U32Val:
+			lit.Value = value
+		case *plan.Literal_U64Val:
+			lit.Value = value
+		case *plan.Literal_Fval:
+			lit.Value = value
+		case *plan.Literal_Dval:
+			lit.Value = value
+		case *plan.Literal_Sval:
+			lit.Value = value
+		default:
+			lit.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", literal)}
+		}
+		return &Expr{Typ: paramType, Expr: &plan.Expr_Lit{Lit: lit}}
+	}
+	castText := func() (*Expr, error) {
+		return makePlan2CastExpr(
+			ctx,
+			makePlan2StringConstExprWithType(rawText, isBin),
+			paramType,
+		)
+	}
+
+	switch runtimeType.Oid {
+	case types.T_bool:
+		value, err := strconv.ParseBool(text)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_Bval{Bval: value}), nil
+	case types.T_int8:
+		value, err := strconv.ParseInt(text, 10, 8)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_I8Val{I8Val: int32(value)}), nil
+	case types.T_int16:
+		value, err := strconv.ParseInt(text, 10, 16)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_I16Val{I16Val: int32(value)}), nil
+	case types.T_int32:
+		value, err := strconv.ParseInt(text, 10, 32)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_I32Val{I32Val: int32(value)}), nil
+	case types.T_int64:
+		value, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_I64Val{I64Val: value}), nil
+	case types.T_uint8:
+		value, err := strconv.ParseUint(text, 10, 8)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_U8Val{U8Val: uint32(value)}), nil
+	case types.T_uint16:
+		value, err := strconv.ParseUint(text, 10, 16)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_U16Val{U16Val: uint32(value)}), nil
+	case types.T_uint32:
+		value, err := strconv.ParseUint(text, 10, 32)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_U32Val{U32Val: uint32(value)}), nil
+	case types.T_uint64, types.T_bit:
+		value, err := strconv.ParseUint(text, 10, 64)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_U64Val{U64Val: value}), nil
+	case types.T_year:
+		value, err := strconv.ParseInt(text, 10, 32)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_I32Val{I32Val: int32(value)}), nil
+	case types.T_float32:
+		value, err := strconv.ParseFloat(text, 32)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_Fval{Fval: float32(value)}), nil
+	case types.T_float64:
+		value, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return castText()
+		}
+		return makeLiteral(&plan.Literal_Dval{Dval: value}), nil
+	case types.T_decimal64:
+		width, scale := runtimeType.Width, runtimeType.Scale
+		if width <= 0 || scale < 0 || scale > width {
+			if inferred, ok := preparedDecimalType(text); ok && inferred.Oid == types.T_decimal64 {
+				width, scale = inferred.Width, inferred.Scale
+			}
+		}
+		value, err := types.ParseDecimal64(text, width, scale)
+		if err != nil {
+			return castText()
+		}
+		paramType.Width, paramType.Scale = width, scale
+		return &Expr{
+			Typ: paramType,
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				IsBin: isBin,
+				Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: int64(value)}},
+			}},
+		}, nil
+	case types.T_decimal128:
+		width, scale := runtimeType.Width, runtimeType.Scale
+		if width <= 0 || scale < 0 || scale > width {
+			if inferred, ok := preparedDecimalType(text); ok && inferred.Oid == types.T_decimal128 {
+				width, scale = inferred.Width, inferred.Scale
+			}
+		}
+		value, err := types.ParseDecimal128(text, width, scale)
+		if err != nil {
+			return castText()
+		}
+		paramType.Width, paramType.Scale = width, scale
+		return &Expr{
+			Typ: paramType,
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				IsBin: isBin,
+				Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{
+					A: int64(value.B0_63), B: int64(value.B64_127),
+				}},
+			}},
+		}, nil
+	case types.T_decimal256:
+		// The plan literal protocol has no Decimal256 oneof.  Keep the
+		// conversion explicit so execution still materializes a Decimal256
+		// vector instead of treating the value as VARCHAR.
+		return castText()
+	default:
+		return makeLiteral(&plan.Literal_Sval{Sval: rawText}), nil
+	}
+}
+
+func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, error) {
 	params := make([]*Expr, len(paramVals))
+	var err error
 	for i, val := range paramVals {
 		isBin := false
+		runtimeType := types.T_text.ToType()
+		hasRuntimeType := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
+			runtimeType = param.RuntimeType
+			hasRuntimeType = param.HasRuntimeType
+		}
+		paramType := plan.Type{Id: int32(types.T_text)}
+		if hasRuntimeType {
+			paramType = makePlan2Type(&runtimeType)
 		}
 		if val == nil {
 			pc := &plan.Literal{
@@ -3163,14 +3566,23 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 				Value:  &plan.Literal_Sval{Sval: ""},
 			}
 			params[i] = &plan.Expr{
+				Typ: paramType,
 				Expr: &plan.Expr_Lit{
 					Lit: pc,
 				},
 			}
 		} else {
+			if hasRuntimeType {
+				params[i], err = preparedRuntimeParamExpr(ctx, val, isBin, runtimeType)
+				if err != nil {
+					return false, err
+				}
+				continue
+			}
 			pc := &plan.Literal{IsBin: isBin}
 			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
 			params[i] = &plan.Expr{
+				Typ: paramType,
 				Expr: &plan.Expr_Lit{
 					Lit: pc,
 				},
@@ -3178,12 +3590,70 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
-	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
-	err := VisitQuery.Visit(ctx)
-	if err != nil {
-		return err
+	paramRule.inferTextParamPositions = make(map[int]bool)
+	for i, val := range paramVals {
+		if param, ok := val.(ParamValue); ok {
+			if param.IsBinaryProtocol {
+				paramRule.inferTextParamPositions[i] = true
+			}
+			if param.HasRuntimeType && param.RuntimeType.Oid == types.T_text {
+				paramRule.inferTextParamTypes = true
+			}
+		}
 	}
-	return nil
+	directSelectRuntimeParam := make(map[int]bool)
+	if query := plan0.GetQuery(); query != nil && query.StmtType == plan.Query_SELECT {
+		for _, node := range query.Nodes {
+			if node == nil {
+				continue
+			}
+			for _, expr := range node.ProjectList {
+				param := expr.GetP()
+				if param != nil && int(param.Pos) >= 0 && int(param.Pos) < len(paramVals) &&
+					runtimeParamHasExplicitType(paramVals[param.Pos]) {
+					directSelectRuntimeParam[int(param.Pos)] = true
+				}
+			}
+		}
+	}
+	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
+		if name != "nth_value" || len(args) != 2 {
+			return nil
+		}
+		pos, ok := preparedNthValueParamPosition(args[1])
+		if !ok {
+			return nil
+		}
+		if pos < 0 || int(pos) >= len(paramVals) {
+			return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
+		}
+		if !isPositivePreparedInteger(paramVals[pos]) {
+			return moerr.NewWrongArguments(ctx, "nth_value")
+		}
+		return nil
+	}
+	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
+	err = VisitQuery.Visit(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	// A direct SELECT parameter is part of the result-column contract. Its
+	// execute-time numeric domain must therefore be reflected in the copied
+	// plan even when it is not wrapped by a function overload.
+	specialized := paramRule.specialized
+	for pos := range directSelectRuntimeParam {
+		if runtimeParamHasExplicitType(paramVals[pos]) {
+			specialized = true
+			break
+		}
+	}
+	return specialized, nil
+}
+
+func runtimeParamHasExplicitType(value any) bool {
+	param, ok := value.(ParamValue)
+	return ok && param.HasRuntimeType
 }
 
 // XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.

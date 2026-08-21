@@ -39,12 +39,12 @@ func LoadColumnsData(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), fromCache bool, err error) {
-	name := location.Name().UnsafeString()
 	var meta objectio.ObjectMeta
 	var vectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
+	name := location.Name().UnsafeString()
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
 	if vectors, err = objectio.ReadOneBlock(
 		ctx,
@@ -113,11 +113,11 @@ func readColumnsData(
 		readTypes = append(readTypes, objectio.TSType, types.T_bool.ToType())
 	}
 
-	name := location.Name().UnsafeString()
 	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 	if err != nil {
 		return ioVectors, false, err
 	}
+	name := location.Name().UnsafeString()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	ioVectors, err = objectio.ReadOneBlock(
 		ctx,
@@ -345,6 +345,47 @@ func LoadColumnDataBySearch(
 	return
 }
 
+// LoadColumnDataByTopN computes vector TopN while the FileService cache entry
+// is pinned. The cached Vector remains private to ObjectIO and only row
+// coordinates plus distances escape this function.
+func LoadColumnDataByTopN(
+	ctx context.Context,
+	column uint16,
+	typ types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	selectRows []int64,
+	orderByLimit *objectio.IndexReaderTopOp,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (sels []int64, dists []float64, fromCache bool, err error) {
+	if m == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil mpool for object column topn")
+	}
+	ioVectors, fromCache, err := readColumnsData(
+		ctx,
+		[]uint16{column},
+		[]types.Type{typ},
+		fs,
+		location,
+		nil,
+		m,
+		policy,
+	)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer objectio.ReleaseIOVector(&ioVectors)
+
+	sels, dists, err = objectio.SearchCachedVectorTopN(
+		ctx,
+		ioVectors.Entries[0],
+		selectRows,
+		orderByLimit,
+	)
+	return sels, dists, fromCache, err
+}
+
 // LoadColumnDataBySearchAndCheckTS searches a varlen column and checks whether
 // any selected row's requested commit timestamp lies in (from, to].
 func LoadColumnDataBySearchAndCheckTS(
@@ -410,12 +451,12 @@ func LoadColumnsData2(
 	needCopy bool,
 	vPool *containers.VectorPool,
 ) (vectors []containers.Vector, release func(), err error) {
-	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
+	name := location.Name()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.UnsafeString(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return

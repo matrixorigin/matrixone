@@ -233,6 +233,14 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 
+			if hashJoin.canEmitMatchCountOnly() {
+				err = ctr.probeMatchCountOnly(hashJoin, proc, &result)
+				if err != nil {
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
+				}
+				return result, nil
+			}
+
 			if ctr.skipProbe {
 				rowCount := ctr.leftBat.RowCount()
 				var srcVec *vector.Vector
@@ -323,6 +331,63 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
+// canEmitMatchCountOnly checks the explicit planner/executor contract and the
+// currently loaded hashmap. Spilled joins install one in-memory hashmap per
+// ready bucket; empty spilled buckets never enter this path.
+func (hashJoin *HashJoin) canEmitMatchCountOnly() bool {
+	return hashJoin.EmitCompressedRowCount && hashJoin.IsInner() &&
+		hashJoin.NonEqCond == nil && len(hashJoin.ResultCols) == 0 &&
+		hashJoin.ctr.mp != nil
+}
+
+// probeMatchCountOnly emits one zero-column batch for the complete probe
+// batch.  In particular, duplicate build keys no longer force one operator
+// call per DefaultBatchSize matches.  A zero-column batch is the existing
+// row-count carrier used after projection pruning.
+func (ctr *container) probeMatchCountOnly(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	result *vm.CallResult,
+) error {
+	if err := ctr.evalJoinCondition(ctr.leftBat, proc); err != nil {
+		return err
+	}
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+
+	matchCount := 0
+	rowCount := ctr.leftBat.RowCount()
+	maxInt := int(^uint(0) >> 1)
+	for offset := 0; offset < rowCount; offset += hashmap.UnitLimit {
+		count := min(rowCount-offset, hashmap.UnitLimit)
+		values, zValues, err := ctr.itr.Find(offset, count, ctr.eqCondVecs)
+		if err != nil {
+			return err
+		}
+		for i, value := range values {
+			if zValues[i] == 0 || value == 0 {
+				continue
+			}
+			matches := 1
+			if !ctr.probeHashOnPK {
+				matches = len(ctr.mp.GetSels(value - 1))
+			}
+			if matches > maxInt-matchCount {
+				return moerr.NewInternalErrorNoCtx("hash join match count overflows int")
+			}
+			matchCount += matches
+		}
+	}
+
+	ctr.resBat.SetRowCount(matchCount)
+	result.Batch = ctr.resBat
+	ctr.leftBat = nil
+	ctr.lastIdx = 0
+	ctr.probeState = psNextBatch
+	return nil
+}
+
 func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &hashJoin.ctr
 	dep, err := process.MeasureWait(analyzer, resource.WaitOther, func() (message.JoinMapResult, error) {
@@ -341,7 +406,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	// Pre-compute per-query flags for the probe loop.
 	ctr.probeEmitUnmatched = hashJoin.EmitUnmatchedProbe()
 	ctr.probeRightSemiAnti = !hashJoin.IsRightSemi() && !hashJoin.IsAnti()
-	ctr.probeRightJoin = hashJoin.IsRightJoin
+	ctr.probeTrackBuildMatches = hashJoin.EmitUnmatchedBuild()
 	ctr.probeSingle = hashJoin.IsSingle()
 	ctr.probeLeftSingle = hashJoin.IsLeftSingle()
 	ctr.probeLeftSemi = hashJoin.IsLeftSemi()
@@ -377,7 +442,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				NeedAllocateSels:        !hashJoin.HashOnPK,
 				NeedBatches:             hashJoin.NeedBuildBatches(),
 				Budget:                  budget,
-			}, hashJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
+			}, hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
 				_ = payload.Close()
 				ctr.mp.Free()
@@ -425,7 +490,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				ctr.rightRowCnt,
 				proc.Mp(),
 				hashJoin.allocationAccount,
-				hashbuild.HashBuildAllocationOwner,
+				mpool.AllocationOwnerHashBuild,
 				hashJoinAllocationSiteMatchedRows,
 			)
 			if err != nil {
@@ -485,7 +550,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 									ctr.rightRowCnt,
 									proc.Mp(),
 									hashJoin.allocationAccount,
-									hashbuild.HashBuildAllocationOwner,
+									mpool.AllocationOwnerHashBuild,
 									hashJoinAllocationSiteMatchedRows,
 								)
 							ctr.rightMatchedIter = nil
@@ -621,7 +686,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						resRowCnt++
 					}
 
-					if ctr.probeRightJoin {
+					if ctr.probeTrackBuildMatches {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
@@ -644,7 +709,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							resRowCnt++
 						}
 
-						if ctr.probeRightJoin {
+						if ctr.probeTrackBuildMatches {
 							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
 								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
@@ -701,7 +766,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			// remove processed sels
 			ctr.sels = ctr.sels[processCount:]
 			if hashJoin.NonEqCond == nil {
-				if ctr.probeRightJoin {
+				if ctr.probeTrackBuildMatches {
 					for _, sel := range sels {
 						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
@@ -742,7 +807,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 
 					if ok {
-						if ctr.probeRightJoin {
+						if ctr.probeTrackBuildMatches {
 							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
 								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}

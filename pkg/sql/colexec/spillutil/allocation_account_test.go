@@ -36,7 +36,7 @@ type testSpillAllocationAccount struct {
 	registry   *mpool.AllocationAccountRegistry
 	account    *mpool.AllocationAccount
 	allocation *SpillAllocationAccount
-	generation *process.HashBuildBudgetGeneration
+	generation *process.ExecutionResourceGeneration
 }
 
 func makeTestCastKeyExpr(
@@ -73,9 +73,9 @@ func TestNewSpillEngineRequiresBudgetGeneration(t *testing.T) {
 	_, err = NewSpillEngine(
 		SpillEngineConfig{},
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
-	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
 }
 
 func newTestSpillAllocationAccount(
@@ -86,7 +86,7 @@ func newTestSpillAllocationAccount(
 	t.Helper()
 	registry, err := mpool.NewAllocationAccountRegistry(1, metadataSlots)
 	require.NoError(t, err)
-	budget := process.MustNewHashBuildBudget(limit, limit)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(limit, generation)
@@ -270,7 +270,7 @@ func TestSpillReadBufferReleasesWhenRewindFails(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("spill"), 0o600))
 	file, err := os.Open(path)
 	require.NoError(t, err)
-	reader, err := newAccountedFileReader(proc.Mp(), state.allocation, file)
+	reader, err := NewAccountedFileReader(proc.Mp(), state.allocation, file)
 	require.NoError(t, err)
 	require.NoError(t, reader.ensureBuffer())
 	require.NotNil(t, reader.buffer)
@@ -336,7 +336,7 @@ func TestSpillAllocationAccountDecodedReuseRetriesFromCleanRecord(t *testing.T) 
 
 	limit := max(firstUsed, secondUsed) + 128<<10
 	require.Less(t, limit, firstUsed+secondUsed)
-	budget := process.MustNewHashBuildBudget(limit, limit)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
@@ -443,7 +443,7 @@ func TestSpillAllocationAccountScatterDoesNotReadmitBorrowedSource(t *testing.T)
 	)
 	defer proc.Free()
 	const limit = uint64(8 << 20)
-	budget := process.MustNewHashBuildBudget(limit, limit)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
@@ -493,6 +493,114 @@ func TestSpillAllocationAccountScatterDoesNotReadmitBorrowedSource(t *testing.T)
 	require.Zero(t, generation.Used())
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
+}
+
+func TestSpillAllocationAccountScatterBroadcastsConstKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	state := newTestSpillAllocationAccount(t, 1<<20, 64)
+	engine, err := newSpillEngine(
+		SpillEngineConfig{Budget: state.generation},
+		state.allocation,
+	)
+	require.NoError(t, err)
+
+	values := []int64{1, 2, 3, 4, 5, 6, 7, 8}
+	constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, proc.Mp())
+	require.NoError(t, err)
+	source := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(
+			len(values),
+			types.T_int64.ToType(),
+			proc.Mp(),
+			false,
+			values,
+		),
+		constant,
+	}, nil)
+	defer source.Clean(proc.Mp())
+	writers := engine.makeBucketWriters("spill_allocation_scatter_const_key")
+	defer func() {
+		for i := range writers {
+			writers[i].Close()
+		}
+		engine.releaseScatterScratch()
+		engine.Cleanup(proc)
+		finalizeTestSpillAllocationAccount(t, state)
+	}()
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, engine.scatterBatchBounded(
+		proc,
+		source,
+		[]*vector.Vector{constant},
+		writers,
+		0,
+		false,
+		analyzer,
+	))
+	require.NoError(t, engine.flushScatterBuffers(proc, writers, analyzer))
+	var writtenRows int64
+	for i := range writers {
+		writtenRows += writers[i].Rows
+	}
+	require.Equal(t, int64(len(values)), writtenRows)
+}
+
+func TestSpillAllocationAccountScatterReducesBroadcastConstKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(
+		t, "", mpool.MustNew("spill-allocation-scatter-const-reduce"),
+	)
+	defer proc.Free()
+	state := newTestSpillAllocationAccount(t, 80<<10, 128)
+	engine, err := newSpillEngine(
+		SpillEngineConfig{Budget: state.generation},
+		state.allocation,
+	)
+	require.NoError(t, err)
+	values := make([]int64, 8_192)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	constant, err := vector.NewConstFixed(
+		types.T_int64.ToType(), int64(7), 1, proc.Mp(),
+	)
+	require.NoError(t, err)
+	defer constant.Free(proc.Mp())
+	constant.SetPrepareParamKind(vector.PrepareParamInteger)
+	source := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.MakeInt64Vector(values, nil, proc.Mp()),
+	}, nil)
+	defer source.Clean(proc.Mp())
+	writers := engine.makeBucketWriters("spill_allocation_scatter_const_reduce")
+	defer func() {
+		for i := range writers {
+			writers[i].Close()
+		}
+	}()
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, engine.scatterBatchWithPressure(
+		proc,
+		source,
+		[]*vector.Vector{constant, source.Vecs[0]},
+		writers,
+		0,
+		false,
+		analyzer,
+	))
+	require.Positive(t,
+		analyzer.GetOpStats().ExtraStats["JoinSpillInputReductions"])
+	require.NoError(t, engine.flushScatterBuffers(proc, writers, analyzer))
+	var rows int64
+	for i := range writers {
+		rows += writers[i].Rows
+	}
+	require.Equal(t, int64(len(values)), rows,
+		"pressure windows must preserve every broadcast row across offsets")
+
+	engine.releaseScatterScratch()
+	engine.Cleanup(proc)
+	require.Zero(t, state.account.Snapshot().Used)
+	finalizeTestSpillAllocationAccount(t, state)
 }
 
 func TestSpillAllocationAccountMarshalBufferLifecycle(t *testing.T) {
@@ -832,7 +940,7 @@ func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 	)
 	defer proc.Free()
 	const limit = uint64(64 << 20)
-	budget := process.MustNewHashBuildBudget(limit, limit)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGenerationWithSpillCaps(
 		1,
 		limit,
@@ -852,7 +960,7 @@ func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 			NeedsBuildForEmptyProbe: true,
 		},
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 

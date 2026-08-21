@@ -315,11 +315,11 @@ func (data *CheckpointData_V2) Sync(
 }
 
 func deletePersistedCheckpointObjects(ctx context.Context, sinker *ioutil.Sinker) error {
-	count, err := sinker.DeletePersisted(ctx)
+	files, err := sinker.DeletePersisted(ctx)
 	if err != nil {
 		return errors.Join(
 			moerr.NewInternalErrorf(
-				ctx, "delete %d unpublished checkpoint objects", count),
+				ctx, "delete %d unpublished checkpoint objects", len(files)),
 			err,
 		)
 	}

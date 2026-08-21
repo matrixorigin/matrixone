@@ -221,6 +221,7 @@ func TestNewInteractiveSessionWaitTimeoutFromGlobalInteractiveTimeout(t *testing
 	val, err := ses.GetSessionSysVar("wait_timeout")
 	require.NoError(t, err)
 	require.Equal(t, int64(21), val)
+	require.False(t, ses.hasUnreplayableMigrationSystemVars())
 
 	server.applyIdleTimeout(rs)
 	require.Equal(t, 21*time.Second, rs.timeout)

@@ -16,8 +16,11 @@ package frontend
 
 import (
 	"context"
+	"slices"
 	"sort"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -36,10 +39,16 @@ type cloneDatabaseSource struct {
 	toAccountId        uint32
 }
 
+type cloneDatabaseAccountResolution struct {
+	opAccountId uint32
+	toAccountId uint32
+	snapshot    *plan.Snapshot
+}
+
 func (source *cloneDatabaseSource) branchTableCount() int64 {
 	var count int64
 	for _, table := range source.srcTblInfos {
-		if table.typ != view {
+		if table.typ != view && !isSequence(table) {
 			count++
 		}
 	}
@@ -51,24 +60,26 @@ func collectCloneDatabaseSource(
 	ses *Session,
 	bh BackgroundExec,
 	stmt *tree.CloneDatabase,
+	resolvedAccounts *cloneDatabaseAccountResolution,
 ) (cloneDatabaseSource, error) {
 	source := cloneDatabaseSource{
 		srcPrivilegeDBName: stmt.SrcDatabase.String(),
 		viewMap:            make(map[string]*tableInfo),
 	}
 
-	opAccountId, toAccountId, snapshot, err := getOpAndToAccountId(
-		ctx, ses, bh, stmt.ToAccountOpt, stmt.AtTsExpr,
-	)
-	if err != nil {
+	var accounts cloneDatabaseAccountResolution
+	if resolvedAccounts != nil {
+		accounts = *resolvedAccounts
+	} else {
+		var err error
+		if accounts, err = resolveCloneDatabaseAccounts(ctx, ses, bh, stmt); err != nil {
+			return source, err
+		}
+	}
+	if err := validateCloneDatabaseAccounts(ctx, accounts); err != nil {
 		return source, err
 	}
-	if snapshot == nil && opAccountId != toAccountId {
-		return source, moerr.NewInternalErrorNoCtxf("clone database between different accounts need a snapshot")
-	}
-	if opAccountId != sysAccountID && opAccountId != toAccountId {
-		return source, moerr.NewInternalError(ctx, "only sys can clone table to another account")
-	}
+	snapshot := accounts.snapshot
 
 	srcDBName := stmt.SrcDatabase.String()
 	subMeta, err := ses.GetTxnCompileCtx().GetSubscriptionMeta(srcDBName, snapshot)
@@ -84,6 +95,17 @@ func collectCloneDatabaseSource(
 				Tenant: &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)},
 			}
 		}
+	}
+	if err := validateCloneDatabaseSourceAccess(accounts.opAccountId, srcDBName); err != nil {
+		return source, err
+	}
+
+	sourceExists, err := checkDatabaseExistsAtSnapshot(ctx, bh, snapshot, srcDBName)
+	if err != nil {
+		return source, err
+	}
+	if !sourceExists {
+		return source, moerr.NewBadDB(ctx, srcDBName)
 	}
 
 	srcTblInfos, err := getTableInfos(ctx, ses.GetService(), bh, snapshot, srcDBName, "")
@@ -117,9 +139,52 @@ func collectCloneDatabaseSource(
 	source.fkTableMap = fkTableMap
 	source.hasFkCycle = hasFkCycle
 	source.snapshot = snapshot
-	source.opAccountId = opAccountId
-	source.toAccountId = toAccountId
+	source.opAccountId = accounts.opAccountId
+	source.toAccountId = accounts.toAccountId
 	return source, nil
+}
+
+// validateCloneDatabaseSourceAccess preserves the clone privilege contract
+// before source metadata lookup. System databases are only clone sources for
+// sys; checking their existence first would expose them as missing to tenants.
+func validateCloneDatabaseSourceAccess(opAccountID uint32, sourceDatabase string) error {
+	if opAccountID != sysAccountID &&
+		slices.Contains(catalog.SystemDatabases, strings.ToLower(sourceDatabase)) {
+		return moerr.NewInternalErrorNoCtx("non-sys account cannot clone data from system database")
+	}
+	return nil
+}
+
+func resolveCloneDatabaseAccounts(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.CloneDatabase,
+) (cloneDatabaseAccountResolution, error) {
+	opAccountId, toAccountId, snapshot, err := getOpAndToAccountId(
+		ctx, ses, bh, stmt.ToAccountOpt, stmt.AtTsExpr,
+	)
+	if err != nil {
+		return cloneDatabaseAccountResolution{}, err
+	}
+	return cloneDatabaseAccountResolution{
+		opAccountId: opAccountId,
+		toAccountId: toAccountId,
+		snapshot:    snapshot,
+	}, nil
+}
+
+func validateCloneDatabaseAccounts(
+	ctx context.Context,
+	accounts cloneDatabaseAccountResolution,
+) error {
+	if accounts.snapshot == nil && accounts.opAccountId != accounts.toAccountId {
+		return moerr.NewInternalErrorNoCtxf("clone database between different accounts need a snapshot")
+	}
+	if accounts.opAccountId != sysAccountID && accounts.opAccountId != accounts.toAccountId {
+		return moerr.NewInternalError(ctx, "only sys can clone table to another account")
+	}
+	return nil
 }
 
 func cloneFkTableOrder(fkDeps map[string][]string) (sortedTbls []string, hasCycle bool) {

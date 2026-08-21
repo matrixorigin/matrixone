@@ -18,6 +18,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -31,8 +32,12 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addForeignKeyMetadataColumn("on_update_origin", "varchar(64) not null default 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "on_delete_origin"),
 	upgradeInformationSchemaKeyColumnUsage(),
 	upgradeInformationSchemaReferentialConstraints(),
+	ensureInformationSchemaCharacterSetsTable(),
 	populateInformationSchemaCharacterSets(),
 	upgradeInformationSchemaColumns(),
+	upgradeInformationSchemaCheckConstraints(),
+	upgradeInformationSchemaTableConstraints(),
+	upgradeInformationSchemaColumnsHideInternalColumns(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -54,6 +59,12 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 	}
 }
 
+// Keep a separate entry so tenants that already completed v4.0.6 rerun the
+// COLUMNS upgrade after the view starts filtering att_is_hidden columns.
+func upgradeInformationSchemaColumnsHideInternalColumns() versions.UpgradeEntry {
+	return upgradeInformationSchemaColumns()
+}
+
 func addForeignKeyMetadataColumn(column, definition, after string) versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:    catalog.MO_CATALOG,
@@ -63,6 +74,18 @@ func addForeignKeyMetadataColumn(column, definition, after string) versions.Upgr
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			columnInfo, err := versions.CheckTableColumn(txn, accountID, catalog.MO_CATALOG, catalog.MOForeignKeys, column)
 			return columnInfo.IsExits, err
+		},
+	}
+}
+
+func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "CHARACTER_SETS",
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    sysview.InformationSchemaCharacterSetsDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "character_sets")
 		},
 	}
 }
@@ -105,9 +128,10 @@ func upgradeInformationSchemaKeyColumnUsage() versions.UpgradeEntry {
 		Schema:    sysview.InformationDBConst,
 		TableName: "KEY_COLUMN_USAGE",
 		UpgType:   versions.CREATE_VIEW,
-		UpgSql:    sysview.InformationSchemaKeyColumnUsageDDL,
+		UpgSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
 		CheckFunc: checkViewDefinition("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
 		PreSql:    fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
+		PostSql:   sysview.InformationSchemaKeyColumnUsageDDL,
 	}
 }
 
@@ -119,6 +143,34 @@ func upgradeInformationSchemaReferentialConstraints() versions.UpgradeEntry {
 		UpgSql:    sysview.InformationSchemaReferentialConstraintsDDL,
 		CheckFunc: checkViewDefinition("REFERENTIAL_CONSTRAINTS", sysview.InformationSchemaReferentialConstraintsDDL),
 		PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
+	}
+}
+
+func upgradeInformationSchemaCheckConstraints() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "CHECK_CONSTRAINTS",
+		UpgType:                 versions.CREATE_VIEW,
+		UpgSql:                  sysview.InformationSchemaCheckConstraintsDDL,
+		RequiredProtocolVersion: defines.MORPCVersion16,
+		CheckFunc: checkViewDefinition("CHECK_CONSTRAINTS",
+			sysview.InformationSchemaCheckConstraintsDDL),
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst, "CHECK_CONSTRAINTS"),
+	}
+}
+
+func upgradeInformationSchemaTableConstraints() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "TABLE_CONSTRAINTS",
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  sysview.InformationSchemaTableConstraintsDDL,
+		RequiredProtocolVersion: defines.MORPCVersion16,
+		CheckFunc: checkViewDefinition("TABLE_CONSTRAINTS",
+			sysview.InformationSchemaTableConstraintsDDL),
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst, "TABLE_CONSTRAINTS"),
 	}
 }
 

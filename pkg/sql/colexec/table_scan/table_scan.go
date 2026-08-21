@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -78,6 +79,17 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	}
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.runtimeFilterExecutors...)
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.filterExecutors...)
+	tableScan.configureLateMaterialization()
+	if len(tableScan.ctr.earlyColumns) > 0 {
+		tableScan.ctr.readerFilter = func(
+			bat *batch.Batch,
+			loadedColumns []int,
+		) (engine.ReaderFilterResult, error) {
+			return tableScan.applyReaderFilter(proc, bat, loadedColumns)
+		}
+	} else {
+		tableScan.ctr.readerFilter = nil
+	}
 
 	err = tableScan.PrepareProjection(proc)
 	if tableScan.ctr.buf == nil {
@@ -141,12 +153,13 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		// read data from storage engine
 		tableScan.ctr.buf.CleanOnlyData()
+		tableScan.ctr.filterReadMetrics = false
+		tableScan.ctr.filterLateMaterialized = false
+		tableScan.ctr.filterActiveDuration = 0
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		isEnd, err := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
-			return tableScan.Reader.Read(newCtx, tableScan.Attrs, nil, proc.Mp(), tableScan.ctr.buf)
-		})
+		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {
 			e = err
 			return vm.CancelResult, err
@@ -166,32 +179,38 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			return vm.CancelResult, err
 		}
 
-		if tableScan.ctr.buf.IsEmpty() {
-			continue
-		}
-
-		trace.GetService(proc.GetService()).TxnRead(
-			proc.GetTxnOperator(),
-			proc.GetTxnOperator().Txn().SnapshotTS,
-			tableScan.TableID,
-			tableScan.Attrs,
-			tableScan.ctr.buf)
-
-		// record storage I/O metrics before filtering
-		analyzer.InputBlock()
-		analyzer.ScanBytes(tableScan.ctr.buf)
-		analyzer.Input(tableScan.ctr.buf) // record pre-filter rows for EXPLAIN ANALYZE inputRows
-		batSize := tableScan.ctr.buf.Size()
-		tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
-
-		// inline filter evaluation: filter rows before returning to caller
-		if len(tableScan.ctr.allFilterExecutors) > 0 {
-			if err = tableScan.evalFilter(proc); err != nil {
-				e = err
-				return vm.CancelResult, err
+		if tableScan.ctr.filterReadMetrics {
+			if tableScan.ctr.filterLateMaterialized && !tableScan.ctr.buf.IsEmpty() {
+				tableScan.recordLateInput(tableScan.ctr.buf)
 			}
 			if tableScan.ctr.buf.IsEmpty() {
-				continue // all rows filtered out, read next block
+				continue
+			}
+			if tableScan.ctr.filterLateMaterialized {
+				tableScan.traceRead(proc, tableScan.ctr.buf)
+			}
+		} else {
+			if tableScan.ctr.buf.IsEmpty() {
+				continue
+			}
+			tableScan.traceRead(proc, tableScan.ctr.buf)
+
+			// record storage I/O metrics before filtering
+			analyzer.InputBlock()
+			analyzer.ScanBytes(tableScan.ctr.buf)
+			analyzer.Input(tableScan.ctr.buf) // record pre-filter rows for EXPLAIN ANALYZE inputRows
+			batSize := tableScan.ctr.buf.Size()
+			tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, batSize)
+
+			// inline filter evaluation: filter rows before returning to caller
+			if len(tableScan.ctr.allFilterExecutors) > 0 {
+				if _, err = tableScan.evalFilter(proc, tableScan.ctr.buf, nil); err != nil {
+					e = err
+					return vm.CancelResult, err
+				}
+				if tableScan.ctr.buf.IsEmpty() {
+					continue // all rows filtered out, read next block
+				}
 			}
 		}
 
@@ -203,13 +222,68 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
 }
 
-// evalFilter evaluates inline filter expressions on ctr.buf in-place.
-// After evaluation, ctr.buf contains only the rows that pass all filters.
-// If all rows are filtered out, ctr.buf is set to EmptyBatch.
-func (tableScan *TableScan) evalFilter(proc *process.Process) error {
-	bat := tableScan.ctr.buf
+func (tableScan *TableScan) traceRead(proc *process.Process, bat *batch.Batch) {
+	trace.GetService(proc.GetService()).TxnRead(
+		proc.GetTxnOperator(),
+		proc.GetTxnOperator().Txn().SnapshotTS,
+		tableScan.TableID,
+		tableScan.Attrs,
+		bat,
+	)
+}
+
+// shrinkPopulatedVecs applies the surviving-row selection to every vector the reader
+// actually materialized, and skips any it left empty.
+//
+// batch.Shrink walks all of bat.Vecs and assumes each holds bat.RowCount() rows. The
+// vector-TopN pushdown breaks that: blockio.materializeVectorTopNRows loads only the rows
+// the in-block Top-K selected and then CleanOnlyData()s the ORDER BY vector column itself
+// (outputBat.Vecs[topColPos]) — its values were already consumed to compute the distances,
+// so it is deliberately left with 0 rows while its siblings hold len(selectRows). The
+// reader still hands that batch to the filter callback as fully loaded (readutil/reader.go
+// passes loadedColumns=nil whenever r.orderByLimit != nil, which also disables late
+// materialization), so shrinking by row index reached the empty column and panicked with
+// "index out of range [N] with length 0", killing the query. Reproduced on an IVF-FLAT
+// include-mode entries scan: ORDER BY vec_dist LIMIT 100 plus a predicate on an INCLUDE
+// column.
+//
+// Skipping is the only safe local action: a vector with no rows has nothing to realign,
+// and shrinking it is precisely the crash. It cannot mask a real misalignment either --
+// any vector the reader DID fill is shrunk, so every populated column stays consistent
+// with the row count set below.
+func shrinkPopulatedVecs(bat *batch.Batch, sels []int64) {
+	if len(sels) == bat.RowCount() {
+		return
+	}
+	rowCount := bat.RowCount()
+	for _, vec := range bat.Vecs {
+		if vec == nil || (vec.Length() == 0 && rowCount != 0) {
+			continue
+		}
+		vec.Shrink(sels, false)
+	}
+	bat.SetRowCount(len(sels))
+}
+
+// evalFilter evaluates inline filter expressions in-place. loadedColumns is
+// nil for an eager batch; otherwise it identifies the vectors currently
+// present in a late-materialized full-schema batch.
+func (tableScan *TableScan) evalFilter(
+	proc *process.Process,
+	bat *batch.Batch,
+	loadedColumns []int,
+) (engine.ReaderFilterResult, error) {
 	analyzer := tableScan.OpAnalyzer
 	var sels []int64
+	defer func() {
+		if sels != nil {
+			vector.PutSels(sels)
+		}
+	}()
+
+	tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
+	hasSelection := false
+	trackOriginalRows := loadedColumns != nil
 
 	for i := range tableScan.ctr.allFilterExecutors {
 		if bat.IsEmpty() {
@@ -218,16 +292,16 @@ func (tableScan *TableScan) evalFilter(proc *process.Process) error {
 
 		vec, err := tableScan.ctr.allFilterExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
-			return err
+			return engine.ReaderFilterResult{}, err
 		}
 
 		if proc.OperatorOutofMemory(int64(vec.Size())) {
-			return moerr.NewOOM(proc.Ctx)
+			return engine.ReaderFilterResult{}, moerr.NewOOM(proc.Ctx)
 		}
 		analyzer.Alloc(int64(vec.Size()))
 
 		if !vec.GetType().IsBoolean() {
-			return moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
+			return engine.ReaderFilterResult{}, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
 
 		if tableScan.ctr.filterBs == nil {
@@ -243,7 +317,9 @@ func (tableScan *TableScan) evalFilter(proc *process.Process) error {
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
-				bat.SetRowCount(0)
+				tableScan.clearLoadedFilterColumns(bat, loadedColumns)
+				tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
+				hasSelection = true
 				break
 			}
 		} else {
@@ -270,19 +346,52 @@ func (tableScan *TableScan) evalFilter(proc *process.Process) error {
 			}
 
 			if len(sels) == 0 {
-				bat.SetRowCount(0)
+				tableScan.clearLoadedFilterColumns(bat, loadedColumns)
+				tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
+				hasSelection = true
 				break
 			}
 
 			if len(sels) != bat.RowCount() {
-				bat.Shrink(sels, false)
+				if trackOriginalRows {
+					if !hasSelection {
+						tableScan.ctr.filterRows = append(tableScan.ctr.filterRows, sels...)
+						hasSelection = true
+					} else {
+						for j, row := range sels {
+							tableScan.ctr.filterRows[j] = tableScan.ctr.filterRows[row]
+						}
+						tableScan.ctr.filterRows = tableScan.ctr.filterRows[:len(sels)]
+					}
+				}
+
+				if loadedColumns == nil {
+					shrinkPopulatedVecs(bat, sels)
+				} else {
+					for _, pos := range loadedColumns {
+						bat.Vecs[pos].Shrink(sels, false)
+					}
+					bat.SetRowCount(len(sels))
+				}
 			}
 		}
 	}
 
-	if sels != nil {
-		vector.PutSels(sels)
+	if trackOriginalRows && hasSelection {
+		return engine.ReaderFilterResult{Sels: tableScan.ctr.filterRows}, nil
 	}
+	if !trackOriginalRows {
+		return engine.ReaderFilterResult{}, nil
+	}
+	return engine.ReaderFilterResult{All: true}, nil
+}
 
-	return nil
+func (tableScan *TableScan) clearLoadedFilterColumns(
+	bat *batch.Batch,
+	loadedColumns []int,
+) {
+	for _, pos := range loadedColumns {
+		bat.Vecs[pos].CleanOnlyData()
+	}
+	bat.SetRowCount(0)
 }

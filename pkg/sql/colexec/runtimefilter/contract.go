@@ -87,17 +87,17 @@ func ClassifyOptionalFallback(err error) OptionalFallbackKind {
 	// Reject every known fatal branch before accepting an admission branch.
 	// This also keeps errors.Join(admission, fatal) fatal regardless of the
 	// traversal order chosen by errors.As below.
-	if errors.Is(err, process.ErrHashBuildBudgetClosed) ||
-		errors.Is(err, process.ErrHashBuildBudgetInvalid) ||
-		errors.Is(err, process.ErrHashBuildCeilingMissing) {
+	if errors.Is(err, process.ErrExecutionResourceClosed) ||
+		errors.Is(err, process.ErrExecutionResourceInvalid) ||
+		errors.Is(err, process.ErrExecutionMemoryCeilingMissing) {
 		return OptionalFallbackNone
 	}
 
-	var budgetErr *process.HashBuildBudgetError
+	var budgetErr *process.ExecutionResourceError
 	if errors.As(err, &budgetErr) {
 		if budgetErr != nil &&
-			budgetErr.Kind == process.HashBuildBudgetErrorAdmission &&
-			budgetErr.Component == process.HashBuildBudgetComponentMemory {
+			budgetErr.Kind == process.ExecutionResourceErrorAdmission &&
+			budgetErr.Component == process.ExecutionResourceComponentMemory {
 			return OptionalFallbackBudgetAdmission
 		}
 		return OptionalFallbackNone
@@ -105,7 +105,7 @@ func ClassifyOptionalFallback(err error) OptionalFallbackKind {
 
 	// Raw sentinels cannot prove an ordinary capacity rejection and a marker
 	// must never override a lifecycle or accounting failure wrapped below it.
-	if errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+	if errors.Is(err, process.ErrExecutionResourceAdmission) {
 		return OptionalFallbackNone
 	}
 
@@ -293,7 +293,7 @@ func validateTupleEncodingComponents(
 }
 
 func planType(typ plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
 }
 
 // CloseFloatSignedZero appends the complementary representation when an exact
@@ -377,7 +377,7 @@ func MarshalExactFilterVector(
 	site mpool.AllocationSite,
 ) ([]byte, func(), error) {
 	if vec == nil || mp == nil || account == nil || vec.GetNulls().Any() {
-		return nil, nil, process.ErrHashBuildBudgetInvalid
+		return nil, nil, process.ErrExecutionResourceInvalid
 	}
 	plan, err := vec.PrepareMarshalBinary()
 	if err != nil {
@@ -400,7 +400,7 @@ func MarshalExactFilterVector(
 	}
 	if buf.Len() != plan.Size() {
 		buf.Free()
-		return nil, nil, process.ErrHashBuildBudgetInvalid
+		return nil, nil, process.ErrExecutionResourceInvalid
 	}
 	return buf.Bytes(), buf.Free, nil
 }

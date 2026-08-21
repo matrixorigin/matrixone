@@ -987,9 +987,9 @@ func TestPipelineAdmissionRejectsRequestAlreadyReadDuringClose(t *testing.T) {
 		}
 
 		require.NoError(t, s.closePipelineAdmission())
+		close(allowAdmission)
 		require.NoError(t, rpcServer.Close())
 		require.NoError(t, s.waitPipelineHandlers())
-		close(allowAdmission)
 
 		select {
 		case response := <-receiveC:

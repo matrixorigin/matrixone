@@ -76,18 +76,29 @@ func TestStripSidecarHint(t *testing.T) {
 	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("SELECT * FROM t"))
 }
 
-func TestSidecarPerformRunsLocally(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
+func TestSidecarSelectorIsScopedToOneStatement(t *testing.T) {
 	ctx := context.Background()
-
-	require.True(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR */ PERFORM SELECT 1"))
-	require.True(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR GPU */ PERFORM SELECT 1"))
-	require.False(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR */ SELECT 1"))
-	require.False(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR */ invalid"))
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []bool
+	}{
+		{name: "hinted select has unhinted sibling", sql: "/*+ SIDECAR */ SELECT 1; SELECT 2", want: []bool{true, false}},
+		{name: "perform remains local", sql: "/*+ SIDECAR */ PERFORM SELECT 1; SELECT 2", want: []bool{false, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer freeStatements(stmts)
+			fragments, err := schedulingSQLByStatementWithSQLMode(ctx, tc.sql, "")
+			require.NoError(t, err)
+			require.Len(t, fragments, len(stmts))
+			require.Len(t, stmts, len(tc.want))
+			for i := range stmts {
+				require.Equal(t, tc.want[i], siriusStatementSelected(fragments[i], stmts[i]))
+			}
+		})
+	}
 }
 
 func TestWrapForGPUExecution(t *testing.T) {
@@ -319,6 +330,30 @@ func TestBuildGPUResultSet(t *testing.T) {
 
 	col2, _ := mrs.GetColumn(nil, 1)
 	assert.Equal(t, "name", col2.Name())
+}
+
+func TestBuildGPUResultSetUsesBinaryBlobMetadata(t *testing.T) {
+	result := &sidecarResponse{
+		Meta: []sidecarColumn{
+			{Name: "blob_data", Type: "BLOB"},
+			{Name: "bytea_data", Type: "BYTEA"},
+			{Name: "text_data", Type: "VARCHAR"},
+		},
+	}
+
+	mrs := &MysqlResultSet{}
+	require.NoError(t, buildGPUResultSet(context.Background(), mrs, result))
+	require.Len(t, mrs.Columns, 3)
+
+	for _, resultColumn := range mrs.Columns[:2] {
+		col := resultColumn.(*MysqlColumn)
+		require.Equal(t, defines.MYSQL_TYPE_BLOB, col.ColumnType())
+		require.Equal(t, uint16(charsetBinary), col.Charset())
+		require.Equal(t, uint32(sidecarMaxResponseSize), col.Length())
+		require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())
+	}
+	require.Equal(t, defines.MYSQL_TYPE_VARCHAR, mrs.Columns[2].ColumnType())
+	require.Zero(t, mrs.Columns[2].(*MysqlColumn).Flag()&uint16(defines.BLOB_FLAG|defines.BINARY_FLAG))
 }
 
 func TestGpuTypeToMysql(t *testing.T) {

@@ -17,11 +17,14 @@ package plan
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 var (
@@ -105,7 +108,7 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 		}
 		if node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil && node.TableDef != nil {
 			for _, indexDef := range node.TableDef.Indexes {
-				if indexplugin.IsPluginAlgo(indexDef.IndexAlgo) && indexDef.IndexTableName != "" {
+				if indexDef != nil && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) && indexDef.IndexTableName != "" {
 					rule.indexDependencies = append(rule.indexDependencies, prepareIndexDependency{
 						baseRef:   node.ObjRef,
 						snapshot:  node.ScanSnapshot,
@@ -135,7 +138,7 @@ func (builder *QueryBuilder) recordPreparedPluginDependencies(scanNode *Node) er
 		prepareSchemaRefWithSnapshot(scanNode.ObjRef, scanNode.TableDef, scanNode.ScanSnapshot),
 	}
 	for _, indexDef := range scanNode.TableDef.Indexes {
-		if !indexplugin.IsPluginAlgo(indexDef.IndexAlgo) || indexDef.IndexTableName == "" {
+		if indexDef == nil || !indexplugin.IsPluginAlgo(indexDef.IndexAlgo) || indexDef.IndexTableName == "" {
 			continue
 		}
 		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(
@@ -390,9 +393,23 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 // ---------------------------
 
 type ResetParamRefRule struct {
-	ctx      context.Context
-	params   []*Expr
-	exprMemo map[*plan.Expr]*plan.Expr
+	ctx                  context.Context
+	params               []*Expr
+	exprMemo             map[*plan.Expr]*plan.Expr
+	validateFunctionArgs func(string, []*Expr) error
+	// specialized is set only when execute-time rebinding changes a function
+	// overload/result type. Literal replacement alone is not enough to require
+	// rebuilding a cached prepared compile.
+	specialized bool
+	// inferTextParamPositions records only the COM_STMT text parameters that may
+	// carry numeric payloads.  Keep this per parameter: enabling inference for
+	// every text marker in a mixed statement would reinterpret an ordinary
+	// string predicate merely because another marker came from COM_STMT.
+	inferTextParamPositions map[int]bool
+	// inferTextParamTypes retains the explicit TEXT runtime-type compatibility
+	// path used by FillValuesOfParamsInPlan callers.  COM_STMT values use the
+	// per-position map above instead of this broad fallback.
+	inferTextParamTypes bool
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -436,14 +453,71 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
-		needResetFunction := false
+		if rule.validateFunctionArgs != nil {
+			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
+				return nil, err
+			}
+		}
+		originalTyp := e.Typ
+		originalFuncObj := int64(0)
+		originalArgTypes := make([]plan.Type, len(exprImpl.F.Args))
+		if exprImpl.F.Func != nil {
+			originalFuncObj = exprImpl.F.Func.Obj
+		}
 		for i, arg := range exprImpl.F.Args {
-			if _, ok := arg.Expr.(*plan.Expr_P); ok {
+			if arg != nil {
+				originalArgTypes[i] = arg.Typ
+			}
+		}
+		needResetFunction := false
+		compareArgTypes := false
+		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
+		for i, arg := range exprImpl.F.Args {
+			originalArgTyp := plan.Type{}
+			originalArgFuncObj := int64(0)
+			if arg != nil {
+				originalArgTyp = arg.Typ
+				originalArgFuncObj = preparedExprFunctionObj(arg)
+			}
+			implicitParamCast := isImplicitPreparedParamCast(arg)
+			paramPos, hasParamPos := implicitPreparedParamPosition(arg)
+			if _, ok := arg.Expr.(*plan.Expr_P); ok && exprImpl.F.Func.GetObjName() != "cast" {
+				needResetFunction = true
+				compareArgTypes = true
+			}
+			if implicitParamCast {
+				// The prepare-time TEXT marker may have been wrapped in an
+				// implicit numeric cast selected by overload resolution.  The
+				// cast is provisional; the execute-time value must participate in
+				// resolving the outer function again.
 				needResetFunction = true
 			}
-			exprImpl.F.Args[i], err = rule.ApplyExpr(arg)
+			rewrittenArg, applyErr := rule.ApplyExpr(arg)
+			err = applyErr
 			if err != nil {
 				return nil, err
+			}
+			exprImpl.F.Args[i] = rewrittenArg
+			boundArgs[i] = rewrittenArg
+			if preparedExprBindingChanged(originalArgTyp, originalArgFuncObj, rewrittenArg) {
+				// A nested typed function may have changed overload/result domain
+				// after its parameter was rebound.  The enclosing function was
+				// bound against the old child domain and must be resolved again.
+				needResetFunction = true
+				compareArgTypes = true
+			}
+			if implicitParamCast {
+				// Keep decimal casts: decimal arithmetic requires every operand to
+				// be materialized as a decimal vector, even when the protocol value
+				// was encoded as an integer. For casts to other numeric domains, use
+				// the execute-time type so functions such as ABS can specialize a
+				// decimal parameter instead of retaining a prepare-time BIGINT cast.
+				inferText := rule.inferTextParamTypes ||
+					(hasParamPos && rule.inferTextParamPositions[paramPos])
+				if unwrapped, ok := unwrapImplicitPreparedParamCast(rule.ctx, rewrittenArg, inferText); ok {
+					boundArgs[i] = unwrapped
+					compareArgTypes = true
+				}
 			}
 		}
 
@@ -452,7 +526,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			rewritten, err := BindFuncExprImplByPlanExpr(
 				rule.ctx,
 				exprImpl.F.Func.GetObjName(),
-				exprImpl.F.Args,
+				boundArgs,
 			)
 			if err != nil {
 				return nil, err
@@ -461,6 +535,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if rewrittenFn != nil {
 				rewrittenFn.AggConfig = bytes.Clone(exprImpl.F.AggConfig)
 				rewrittenFn.AggConfigType = exprImpl.F.AggConfigType
+			}
+			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
+				rule.specialized = true
 			}
 			return rewritten, nil
 		}
@@ -471,9 +548,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}
+		param := rule.params[int(exprImpl.P.Pos)]
+		typ := e.Typ
+		// Most prepared parameters are intentionally replaced as TEXT to retain
+		// the historical SQL-EXECUTE behavior.  Binary protocol executions can
+		// carry an explicit numeric domain, represented by a non-text type on the
+		// replacement expression; preserve that domain for direct projections and
+		// for the function rebinding performed by the parent expression.
+		if param != nil && param.Typ.Id != int32(types.T_text) {
+			typ = param.Typ
+		}
 		return &plan.Expr{
-			Typ:  e.Typ,
-			Expr: rule.params[int(exprImpl.P.Pos)].Expr,
+			Typ:  typ,
+			Expr: param.Expr,
 		}, nil
 	case *plan.Expr_List:
 		for i, arg := range exprImpl.List.List {
@@ -486,6 +573,114 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func preparedExprFunctionObj(expr *plan.Expr) int64 {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return 0
+	}
+	return fn.Func.Obj
+}
+
+func preparedExprBindingChanged(originalTyp plan.Type, originalFuncObj int64, rewritten *plan.Expr) bool {
+	if rewritten == nil || !reflect.DeepEqual(rewritten.Typ, originalTyp) {
+		return true
+	}
+	return preparedExprFunctionObj(rewritten) != originalFuncObj
+}
+
+func functionBindingChanged(
+	originalTyp plan.Type,
+	originalFuncObj int64,
+	originalArgTypes []plan.Type,
+	rewritten *plan.Expr,
+	compareArgTypes bool,
+) bool {
+	if rewritten == nil || rewritten.GetF() == nil {
+		return true
+	}
+	if !reflect.DeepEqual(rewritten.Typ, originalTyp) || rewritten.GetF().Func == nil || rewritten.GetF().Func.Obj != originalFuncObj {
+		return true
+	}
+	if !compareArgTypes {
+		return false
+	}
+	if len(rewritten.GetF().Args) != len(originalArgTypes) {
+		return true
+	}
+	for i, arg := range rewritten.GetF().Args {
+		if arg == nil || !reflect.DeepEqual(arg.Typ, originalArgTypes[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isImplicitPreparedParamCast identifies the cast inserted by overload
+// resolution around a parameter marker. Explicit CAST(? AS ...) uses a
+// separate cast overload and must remain authoritative.
+func isImplicitPreparedParamCast(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 || fn.Args[0].GetP() == nil {
+		return false
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	return overload == 0
+}
+
+func implicitPreparedParamPosition(expr *plan.Expr) (int, bool) {
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) == 0 {
+		return 0, false
+	}
+	param := fn.Args[0].GetP()
+	if param == nil || param.Pos < 0 {
+		return 0, false
+	}
+	return int(param.Pos), true
+}
+
+// unwrapImplicitPreparedParamCast strips a provisional overload cast only when
+// the execute-time value has a numeric type that can safely drive rebinding.
+// Decimal and YEAR casts are retained because their executors require the
+// target physical representation for arithmetic and index serialization.
+func unwrapImplicitPreparedParamCast(ctx context.Context, rewritten *plan.Expr, inferText bool) (*plan.Expr, bool) {
+	fn := rewritten.GetF()
+	if fn == nil || len(fn.Args) == 0 {
+		return nil, false
+	}
+	arg := fn.Args[0]
+	if arg.Typ.Id == int32(types.T_text) {
+		if !inferText {
+			return nil, false
+		}
+		literal := arg.GetLit()
+		if literal == nil {
+			return nil, false
+		}
+		typ, ok := PreparedRuntimeTypeFromString(literal.GetSval())
+		if !ok {
+			return nil, false
+		}
+		bound, err := preparedRuntimeParamExpr(ctx, literal.GetSval(), literal.IsBin, typ)
+		if err != nil {
+			return nil, false
+		}
+		arg = bound
+	}
+	argType := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+	if !argType.IsNumeric() {
+		return nil, false
+	}
+	targetType := types.New(types.T(rewritten.Typ.Id), rewritten.Typ.Width, rewritten.Typ.Scale)
+	if !targetType.IsNumeric() {
+		return nil, false
+	}
+	if targetType.IsDecimal() || targetType.Oid == types.T_year {
+		return nil, false
+	}
+	return arg, true
 }
 
 func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {

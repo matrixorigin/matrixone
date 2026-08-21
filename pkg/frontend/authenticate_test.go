@@ -39,6 +39,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -57,6 +58,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -444,9 +446,86 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh)
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, "")
 		convey.So(err, convey.ShouldBeNil)
 	})
+}
+
+func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(t *testing.T) {
+	tests := []struct {
+		name              string
+		protocol          int64
+		wantCheckView     bool
+		wantLatestTable   bool
+		wantLegacyTable   bool
+		wantCheckFunction bool
+	}{
+		{
+			name:            "mixed version protocol uses legacy table constraints",
+			protocol:        defines.MORPCVersion15,
+			wantLegacyTable: true,
+		},
+		{
+			name:              "latest protocol uses check constraints views",
+			protocol:          defines.MORPCVersion16,
+			wantCheckView:     true,
+			wantLatestTable:   true,
+			wantCheckFunction: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			moruntime.RunTest("", func(rt moruntime.Runtime) {
+				oldProtocol, oldProtocolExists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+				defer func() {
+					if oldProtocolExists {
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+					} else {
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+					}
+				}()
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
+
+				ctrl := gomock.NewController(t)
+				defer ctrl.Finish()
+
+				var executed []string
+				bh := mock_frontend.NewMockBackgroundExec(ctrl)
+				bh.EXPECT().ClearExecResultSet().AnyTimes()
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, sql string) error {
+						executed = append(executed, sql)
+						return nil
+					}).AnyTimes()
+
+				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(context.Background(), bh, ""))
+
+				require.Equal(t, test.wantCheckView, containsSQL(executed, sysview.InformationSchemaCheckConstraintsDDL))
+				require.Equal(t, test.wantLatestTable, containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
+				require.Equal(t, test.wantLegacyTable, containsSQL(executed, sysview.InformationSchemaTableConstraintsLegacyDDL))
+				require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
+			})
+		})
+	}
+}
+
+func containsSQL(sqls []string, expected string) bool {
+	for _, sql := range sqls {
+		if sql == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSQLFragment(sqls []string, fragment string) bool {
+	for _, sql := range sqls {
+		if strings.Contains(sql, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func Test_initFunction(t *testing.T) {
@@ -6030,6 +6109,164 @@ func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 	assert.Equal(t, "t1", arr[0].tableName)
 }
 
+func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
+	const (
+		dbName    = "mongodb_permission"
+		tableName = "events_ext"
+		viewName  = "events_view"
+	)
+
+	for _, tc := range []struct {
+		name        string
+		originViews []string
+		directView  string
+	}{
+		{name: "direct table"},
+		{
+			name:        "view",
+			originViews: []string{dbName + "." + viewName},
+			directView:  dbName + "." + viewName,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: &plan2.Query{
+						StmtType: plan.Query_SELECT,
+						Nodes: []*plan2.Node{
+							{
+								NodeType: plan.Node_EXTERNAL_SCAN,
+								ObjRef: &plan2.ObjectRef{
+									SchemaName: dbName,
+									ObjName:    tableName,
+								},
+								ExternScan: &plan.ExternScan{
+									Type: int32(plan.ExternType_MONGODB_TB),
+									MongodbScan: &plan.MongoScan{
+										Database:   "mongodb_source",
+										Collection: "events",
+									},
+								},
+								OriginViews: tc.originViews,
+								DirectView:  tc.directView,
+							},
+						},
+					},
+				},
+			}
+
+			arr := extractPrivilegeTipsFromPlan(p)
+			require.Len(t, arr, 1)
+			require.Equal(t, PrivilegeTypeSelect, arr[0].typ)
+			require.Equal(t, objectTypeTable, arr[0].objType)
+			require.Equal(t, dbName, arr[0].databaseName)
+			require.Equal(t, tableName, arr[0].tableName)
+			require.Equal(t, tc.originViews, arr[0].originViews)
+			require.Equal(t, tc.directView, arr[0].directView)
+		})
+	}
+}
+
+func TestMongoDBExternalTableScanDetectionExcludesOtherExternalScans(t *testing.T) {
+	for _, externType := range []plan.ExternType{
+		plan.ExternType_LOAD,
+		plan.ExternType_EXTERNAL_TB,
+		plan.ExternType_ICEBERG_TB,
+		plan.ExternType_RESULT_SCAN,
+	} {
+		node := &plan.Node{
+			NodeType:   plan.Node_EXTERNAL_SCAN,
+			ExternScan: &plan.ExternScan{Type: int32(externType)},
+		}
+		require.False(t, isMongoDBExternalTableScan(node), externType.String())
+	}
+	require.False(t, isMongoDBExternalTableScan(nil))
+	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_EXTERNAL_SCAN}))
+	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}))
+}
+
+func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
+	const (
+		dbName    = "mongodb_permission"
+		tableName = "events_ext"
+		viewName  = "events_view"
+		userID    = 3
+		roleID    = 5
+	)
+
+	for _, tc := range []struct {
+		name           string
+		originViews    []string
+		directView     string
+		tableSelect    bool
+		addRevokedView bool
+		want           bool
+	}{
+		{name: "table select revoked"},
+		{name: "table select granted", tableSelect: true, want: true},
+		{
+			name:           "view select revoked",
+			originViews:    []string{dbName + "." + viewName},
+			directView:     dbName + "." + viewName,
+			tableSelect:    true,
+			addRevokedView: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			stmt := &tree.Select{}
+			ses := newSes(determinePrivilegeSetOfStatement(stmt), ctrl)
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        "test_account",
+				User:          "mongodb_reader",
+				DefaultRole:   "mongodb_reader_role",
+				TenantID:      1,
+				UserID:        userID,
+				DefaultRoleID: roleID,
+			})
+
+			sql2result := makeSql2ExecResult2(userID, nil, nil, nil, nil, nil, nil, nil, nil)
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, tableName, map[PrivilegeType]bool{
+				PrivilegeTypeSelect: tc.tableSelect,
+			})
+			if tc.addRevokedView {
+				addViewPrivilegeResultsForRole(t, sql2result, roleID, dbName, viewName, nil)
+			}
+			sql2result[getSqlForInheritedRoleIdOfRoleId(roleID)] = newMrsForInheritedRoleIdOfRoleId(nil)
+
+			bh := newBh(ctrl, sql2result)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan.Query{
+				StmtType: plan.Query_SELECT,
+				Nodes: []*plan.Node{
+					{
+						NodeType: plan.Node_EXTERNAL_SCAN,
+						ObjRef: &plan.ObjectRef{
+							SchemaName: dbName,
+							ObjName:    tableName,
+						},
+						ExternScan: &plan.ExternScan{
+							Type:        int32(plan.ExternType_MONGODB_TB),
+							MongodbScan: &plan.MongoScan{},
+						},
+						OriginViews: tc.originViews,
+						DirectView:  tc.directView,
+					},
+				},
+			}}}
+
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(
+				ses.GetTxnHandler().GetTxnCtx(), ses, stmt, p)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, ok)
+		})
+	}
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement
@@ -6860,6 +7097,39 @@ func addTablePrivilegeResultsForRole(
 		entry.objType = objectTypeTable
 		entry.databaseName = dbName
 		entry.tableName = tableName
+		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
+		require.NoError(t, err)
+		for _, level := range levels {
+			sql, err := getSqlForPrivilege(context.TODO(), roleID, entry, level)
+			require.NoError(t, err)
+			rows := [][]interface{}{}
+			if allowed[privType] {
+				rows = [][]interface{}{{entry.privilegeId, true}}
+			}
+			sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+		}
+	}
+}
+
+func addViewPrivilegeResultsForRole(
+	t *testing.T,
+	sql2result map[string]ExecResult,
+	roleID int64,
+	dbName string,
+	viewName string,
+	allowed map[PrivilegeType]bool,
+) {
+	t.Helper()
+	privTypes := []PrivilegeType{
+		PrivilegeTypeSelect,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+	}
+	for _, privType := range privTypes {
+		entry := privilegeEntriesMap[privType]
+		entry.objType = objectTypeView
+		entry.databaseName = dbName
+		entry.tableName = viewName
 		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
 		require.NoError(t, err)
 		for _, level := range levels {
@@ -10000,6 +10270,22 @@ func TestGetGlobalSysVar(t *testing.T) {
 }
 
 func TestSetGlobalSysVar(t *testing.T) {
+	GSysVarsMgr.Lock()
+	originalGlobalVars, hadOriginalGlobalVars := GSysVarsMgr.accountsGlobalSysVarsMap[sysAccountID]
+	if hadOriginalGlobalVars {
+		originalGlobalVars = originalGlobalVars.Clone()
+	}
+	GSysVarsMgr.Unlock()
+	t.Cleanup(func() {
+		GSysVarsMgr.Lock()
+		defer GSysVarsMgr.Unlock()
+		if hadOriginalGlobalVars {
+			GSysVarsMgr.accountsGlobalSysVarsMap[sysAccountID] = originalGlobalVars
+		} else {
+			delete(GSysVarsMgr.accountsGlobalSysVarsMap, sysAccountID)
+		}
+	})
+
 	convey.Convey("set global system variable succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -11580,6 +11866,14 @@ func (bt *backgroundExecTest) ClearExecResultBatches() {
 func (bt *backgroundExecTest) init() {
 	bt.sql2result = make(map[string]ExecResult)
 	bt.sql2err = make(map[string]error)
+}
+
+func prepareGlobalSysVarEpochForTest(bt *backgroundExecTest) {
+	bt.sql2result[getSqlForLockGlobalSystemVariableAccount(sysAccountID)] = nil
+	bt.sql2result[getSqlForGlobalSystemVariableEpoch(sysAccountID)] =
+		newMrsForSystemVariableNameOfAccount([][]interface{}{})
+	bt.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, globalSystemVariableEpochName, "1")] = nil
 }
 
 func (bt *backgroundExecTest) Close() {

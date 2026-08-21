@@ -641,14 +641,20 @@ func (l *store) checkHealth(shardID uint64) error {
 		SkipLogInfo: true,
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
+	shardFound := false
 	for _, ci := range nhi.ShardInfoList {
 		if ci.ShardID == shardID {
+			shardFound = true
 			if ci.Pending {
 				return moerr.NewInternalErrorNoCtxf("shard %d is pending on store %s",
 					shardID, l.cfg.UUID)
 			}
 			break
 		}
+	}
+	if !shardFound {
+		return moerr.NewInternalErrorNoCtxf("shard %d not started on store %s",
+			shardID, l.cfg.UUID)
 	}
 	cs, err := l.getCheckerState()
 	if err != nil {

@@ -256,7 +256,11 @@ func (rm *RoutineManager) getConnID() (uint32, error) {
 	if rm.pu.HAKeeperClient == nil {
 		return nextConnectionID(), nil
 	}
-	ctx, cancel := context.WithTimeoutCause(rm.ctx, time.Second*2, moerr.CauseGetConnID)
+	ctx, cancel := context.WithTimeoutCause(
+		rm.ctx,
+		rm.pu.SV.ConnectTimeout.Duration,
+		moerr.CauseGetConnID,
+	)
 	defer cancel()
 	connID, err := rm.pu.HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
 	if err != nil {
@@ -513,7 +517,11 @@ func (rm *RoutineManager) MigrateConnectionFromWithContext(
 }
 
 func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {
-	return rm.ResetSessionWithContext(rm.ctx, req, resp)
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
+	}
+	return routine.resetSession(rm.baseService.ID(), resp)
 }
 
 func (rm *RoutineManager) ResetSessionWithContext(

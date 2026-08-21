@@ -483,6 +483,16 @@ func requireBranchReadOnTableName(
 	if err != nil {
 		return stats, err
 	}
+	if normalized.AtTsExpr != nil && normalized.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+		snapshot, err := resolveSnapshot(ses, normalized.AtTsExpr)
+		if err != nil {
+			return stats, err
+		}
+		// Keep the historical relation used by the existing privilege probe, but
+		// avoid applying query scope validation to this synthetic statement. The
+		// DATA BRANCH endpoint validates the named snapshot against its relation.
+		normalized.AtTsExpr = newMoTimestampHint(snapshot.TS.PhysicalTime)
+	}
 	stmt := branchSelectForTableName(normalized)
 	p, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
@@ -692,6 +702,8 @@ func validateDataBranchDeleteDatabaseTarget(
 
 func branchDeleteDatabaseTableIDsSQL(accId uint32, dbName string) string {
 	whereClause := buildTableInfoListWhereClause(dbName, "", accId)
+	// Sequences and views do not have data-branch metadata receipts.
+	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemViewRel))
 	return fmt.Sprintf(
 		"select rel_id, relname from %s.%s where %s",

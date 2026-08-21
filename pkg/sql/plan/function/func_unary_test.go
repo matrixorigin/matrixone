@@ -3584,6 +3584,12 @@ func TestLoadFile(t *testing.T) {
 	}
 }
 
+func TestLoadFileRejectsEmptyPath(t *testing.T) {
+	proc := testutil.NewProc(t)
+	_, err := readLoadFileContents("", proc)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+}
+
 func evalLoadFileForTest(
 	t *testing.T,
 	proc *process.Process,
@@ -4059,6 +4065,91 @@ func TestToTime(t *testing.T) {
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestTimestampToTimeUsesSessionTimeZone(t *testing.T) {
+	storedUTC, err := types.ParseTimestamp(time.UTC, "2024-01-02 04:30:45.654321", 6)
+	require.NoError(t, err)
+
+	timestampType := types.T_timestamp.ToTypeWithScale(6)
+	timeType := types.T_time.ToTypeWithScale(6)
+	testCases := []struct {
+		name string
+		loc  *time.Location
+		want types.Time
+	}{
+		{
+			name: "utc",
+			loc:  time.UTC,
+			want: types.TimeFromClock(false, 4, 30, 45, 654321),
+		},
+		{
+			name: "utc_plus_8",
+			loc:  time.FixedZone("UTC+8", 8*60*60),
+			want: types.TimeFromClock(false, 12, 30, 45, 654321),
+		},
+		{
+			name: "utc_minus_5",
+			loc:  time.FixedZone("UTC-5", -5*60*60),
+			want: types.TimeFromClock(false, 23, 30, 45, 654321),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().TimeZone = tc.loc
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(timestampType,
+						[]types.Timestamp{storedUTC},
+						[]bool{false}),
+				},
+				NewFunctionTestResult(timeType, false,
+					[]types.Time{tc.want},
+					[]bool{false}),
+				TimestampToTime)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+			require.Equal(t, int32(6), fcTC.GetResultVectorDirectly().GetType().Scale)
+		})
+	}
+}
+
+func TestTimeTemporalOverloadsPreserveInputScale(t *testing.T) {
+	var timeFn *FuncNew
+	for i := range supportedDateAndTimeBuiltIns {
+		if supportedDateAndTimeBuiltIns[i].functionId == TIME {
+			timeFn = &supportedDateAndTimeBuiltIns[i]
+			break
+		}
+	}
+	require.NotNil(t, timeFn)
+
+	testCases := []struct {
+		argType types.T
+		scale   int32
+	}{
+		{argType: types.T_datetime, scale: 6},
+		{argType: types.T_timestamp, scale: 6},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.argType.String(), func(t *testing.T) {
+			var matched *overload
+			for i := range timeFn.Overloads {
+				overload := &timeFn.Overloads[i]
+				if len(overload.args) == 1 && overload.args[0] == tc.argType {
+					matched = overload
+					break
+				}
+			}
+			require.NotNil(t, matched)
+
+			got := matched.retType([]types.Type{tc.argType.ToTypeWithScale(tc.scale)})
+			require.Equal(t, types.T_time, got.Oid)
+			require.Equal(t, tc.scale, got.Scale)
+		})
 	}
 }
 
@@ -10500,4 +10591,77 @@ func TestDateStringExtractorsYearZeroAndLegacyDelimiters(t *testing.T) {
 			require.True(t, succeed, info)
 		})
 	}
+}
+
+func TestMakeQueryIdIdxUsesOneBasedPositivePositions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name    string
+		loc     int64
+		cnt     int64
+		want    int
+		wantErr bool
+	}{
+		{name: "first positive position", loc: 1, cnt: 2, want: 0},
+		{name: "last positive position", loc: 2, cnt: 2, want: 1},
+		{name: "most recent negative position", loc: -1, cnt: 2, want: 1},
+		{name: "oldest negative position", loc: -2, cnt: 2, want: 0},
+		{name: "zero is invalid", loc: 0, cnt: 2, wantErr: true},
+		{name: "positive position past last is invalid", loc: 3, cnt: 2, wantErr: true},
+		{name: "negative position before first is invalid", loc: -3, cnt: 2, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := makeQueryIdIdx(test.loc, test.cnt, proc)
+			if test.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestLastQueryIDUsesOneBasedPositivePositions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.QueryId = []string{"first-query", "second-query"}
+
+	for _, test := range []struct {
+		name string
+		loc  int64
+		want string
+	}{
+		{name: "first query", loc: 1, want: "first-query"},
+		{name: "second query", loc: 2, want: "second-query"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{test.loc}, []bool{false}),
+			}
+			expected := NewFunctionTestResult(
+				types.T_varchar.ToType(), false, []string{test.want}, []bool{false},
+			)
+
+			testCase := NewFunctionTestCase(proc, input, expected, LastQueryID)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestLastQueryIDWithNoQueryHistoryReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+	}
+	expected := NewFunctionTestResult(
+		types.T_varchar.ToType(), false, []string{""}, []bool{true},
+	)
+
+	testCase := NewFunctionTestCase(proc, input, expected, LastQueryID)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
 }

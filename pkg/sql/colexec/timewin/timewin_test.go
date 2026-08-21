@@ -17,6 +17,7 @@ package timewin
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -161,6 +162,187 @@ func TestTimeWin(t *testing.T) {
 	}
 }
 
+func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	value := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, value.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(value, int64(42), false, mp))
+	ctr := container{
+		colCnt: 1,
+		i:      1,
+		aggVec: [][][]*vector.Vector{{{value}}},
+	}
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	require.NoError(t, ctr.calResForInterval(&TimeWin{}, proc))
+	require.Same(t, value, ctr.bat.Vecs[0])
+	require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](ctr.bat.Vecs[0]))
+
+	// The interval buffer, not the forwarding batch, owns the vector.
+	ctr.bat = nil
+	value.Free(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	ts := vector.NewOffHeapVecWithType(types.T_datetime.ToType())
+	require.NoError(t, ts.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(ts, types.Datetime(1), false, mp))
+	value := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, value.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(value, int32(42), false, mp))
+	input := batch.NewOffHeapWithSize(2)
+	input.SetVector(0, ts)
+	input.SetVector(1, value)
+	input.SetRowCount(1)
+
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	arg := &TimeWin{
+		Types:    []types.Type{types.T_int32.ToType()},
+		Aggs:     []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil)},
+		TsType:   plan.Type{Id: int32(types.T_datetime)},
+		Ts:       newExpression(0),
+		EndExpr:  newExpression(0),
+		Interval: makeInterval(),
+	}
+	require.NoError(t, arg.Prepare(proc))
+	ok, err := arg.ctr.evalVector(input, proc)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// Pipeline cleanup resets children before parents. Once the input owner is
+	// gone, only TimeWin's inherited duplicate capacity remains in the attempt.
+	input.Clean(mp)
+	require.Positive(t, account.Snapshot().Used)
+	arg.Reset(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+
+	require.NoError(t, arg.Prepare(proc))
+	arg.Free(proc, false, nil)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestEvalVectorSkipsNullTimeRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &TimeWin{
+		Types: []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_datetime)},
+		Ts:       newExpression(0),
+		EndExpr:  newExpression(0),
+		Interval: makeInterval(),
+	}
+	require.NoError(t, arg.Prepare(proc))
+
+	bat := batch.New([]string{"ts", "v"})
+	bat.Vecs = []*vector.Vector{
+		testutil.MakeDatetimeVector([]string{
+			"2026-01-01 00:01:00",
+			"2026-01-01 00:02:00",
+			"2026-01-01 00:03:00",
+		}, []uint64{1}, proc.Mp()),
+		testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp()),
+	}
+	bat.SetRowCount(3)
+
+	ok, err := arg.ctr.evalVector(bat, proc)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 2, bat.RowCount())
+	require.Equal(t, 2, arg.ctr.tsVec[0].Length())
+	require.Equal(t, []int32{10, 30}, vector.MustFixedColWithTypeCheck[int32](arg.ctr.aggVec[0][0][0]))
+
+	bat.Clean(proc.Mp())
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinCallSkipsAllNullTimeBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_datetime)},
+		Ts:       newExpression(0),
+		EndExpr:  nil,
+		Interval: types.Datetime(types.SecsPerMinute * types.MicroSecsPerSec),
+		Sliding:  types.Datetime(types.SecsPerMinute * types.MicroSecsPerSec),
+	}
+
+	nullBatch := batch.New([]string{"ts", "v"})
+	nullBatch.Vecs = []*vector.Vector{
+		testutil.MakeDatetimeVector([]string{
+			"2026-01-01 00:00:00",
+			"2026-01-01 00:01:00",
+		}, []uint64{0, 1}, proc.Mp()),
+		testutil.MakeInt32Vector([]int32{999, 999}, nil, proc.Mp()),
+	}
+	nullBatch.SetRowCount(2)
+
+	validBatch := batch.New([]string{"ts", "v"})
+	validBatch.Vecs = []*vector.Vector{
+		testutil.MakeDatetimeVector([]string{
+			"2026-01-01 00:01:00",
+			"2026-01-01 00:02:00",
+		}, nil, proc.Mp()),
+		testutil.MakeInt32Vector([]int32{10, 20}, nil, proc.Mp()),
+	}
+	validBatch.SetRowCount(2)
+
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{nullBatch, validBatch})
+	arg.AppendChild(op)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{10, 20}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	first, err := types.ParseDatetime("2026-01-01 00:01:00", 6)
+	require.NoError(t, err)
+	second, err := types.ParseDatetime("2026-01-01 00:02:00", 6)
+	require.NoError(t, err)
+	require.Equal(t, []types.Datetime{
+		first,
+		second,
+	}, vector.MustFixedColWithTypeCheck[types.Datetime](result.Batch.Vecs[1]))
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestTimeWinApproxPercentileEndpointConfigs(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -264,7 +446,7 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
 	}
 
-	require.Equal(t, int32(nextWindow), arg.ctr.status)
+	require.Equal(t, int32(resumeAfterFlush), arg.ctr.status)
 	require.Len(t, arg.ctr.aggs, 1)
 	require.NotSame(t, agg, arg.ctr.aggs[0])
 
@@ -352,12 +534,719 @@ func TestFirstWindowKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 
 	window := &TimeWin{Interval: types.Datetime(types.MicroSecsPerSec), Sliding: types.Datetime(types.MicroSecsPerSec)}
 	ctr := container{tsVec: []*vector.Vector{ts}}
-	require.NoError(t, ctr.firstWindow(window))
+	require.NoError(t, ctr.firstWindow(window, proc))
 
 	require.Equal(t, types.ZeroDatetime, ctr.left)
 	require.Equal(t, types.ZeroDatetime, ctr.right)
 	require.Equal(t, types.ZeroDatetime, ctr.nextLeft)
 	require.Equal(t, types.ZeroDatetime, ctr.nextRight)
+}
+
+func TestTimestampWindowStartAlignsSlidingKeyInSessionTimezone(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	zone := time.FixedZone("UTC+8", 8*60*60)
+	proc.GetSessionInfo().TimeZone = zone
+	key, err := types.ParseTimestamp(zone, "2020-01-11 00:00:00", 6)
+	require.NoError(t, err)
+
+	ctr := container{tsOid: types.T_timestamp}
+	start := ctr.windowStart(
+		types.Datetime(key),
+		types.Datetime(100*types.SecsPerDay*types.MicroSecsPerSec),
+		proc,
+	)
+
+	require.Equal(t, mustDatetime(t, "2019-12-08 00:00:00"), types.Timestamp(start).ToDatetime(zone))
+
+	zone, err = time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	key, err = types.ParseTimestamp(zone, "2026-03-20 00:00:00", 6)
+	require.NoError(t, err)
+	start = ctr.windowStart(
+		types.Datetime(key),
+		types.Datetime(100*types.SecsPerDay*types.MicroSecsPerSec),
+		proc,
+	)
+	require.Equal(t, mustDatetime(t, "2025-12-16 00:00:00"), types.Timestamp(start).ToDatetime(zone))
+
+	key, err = types.ParseTimestamp(zone, "2026-03-08 03:30:00", 6)
+	require.NoError(t, err)
+	interval := types.Datetime(2 * types.SecsPerHour * types.MicroSecsPerSec)
+	start = ctr.windowStart(types.Datetime(key), interval, proc)
+	require.Equal(t, mustDatetime(t, "2026-03-08 03:00:00"), types.Timestamp(start).ToDatetime(zone))
+	require.Equal(t, start, ctr.windowStart(start, interval, proc))
+}
+
+func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		Interval: hour,
+		Sliding:  hour,
+	}
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	// The planner's mo_win_truncate expression supplies pre-aligned TIMESTAMP
+	// keys. This operator-level test verifies that their distinct instants pass
+	// through unchanged across DST gaps and folds.
+	inputTs := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 6, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 7, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()),
+	}
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], inputTs, nil, proc.Mp()))
+	bat.Vecs[0].SetLength(len(inputTs))
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, proc.Mp())
+	bat.SetRowCount(len(inputTs))
+
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+	require.NoError(t, arg.Prepare(proc))
+
+	var starts, ends []types.Timestamp
+	var sums []int64
+	for {
+		res, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+
+	wantStarts := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 6, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 7, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()),
+	}
+	wantEnds := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 7, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 8, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 7, 0, 0, 0, time.UTC).UnixMicro()),
+	}
+	require.Equal(t, []int64{1, 2, 3, 4}, sums)
+	require.Equal(t, wantStarts, starts)
+	require.Equal(t, wantEnds, ends)
+
+	arg.Free(proc, false, nil)
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinTimestampSubHourFoldBoundariesAdvanceForward(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	halfHour := types.Datetime(30 * types.SecsPerMinute * types.MicroSecsPerSec)
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		Interval: halfHour,
+		Sliding:  halfHour,
+	}
+	firstFoldLast := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+	secondFold := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
+	secondFoldHalfHour := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []types.Timestamp{firstFoldLast, secondFold}, nil, proc.Mp()))
+	bat.Vecs[0].SetLength(2)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	bat.SetRowCount(2)
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+	require.NoError(t, arg.Prepare(proc))
+
+	var starts, ends []types.Timestamp
+	var sums []int64
+	for {
+		res, execErr := vm.Exec(arg, proc)
+		require.NoError(t, execErr)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+
+	require.Equal(t, []int64{1, 2}, sums)
+	require.Equal(t, []types.Timestamp{firstFoldLast, secondFold}, starts)
+	require.Equal(t, []types.Timestamp{secondFold, secondFoldHalfHour}, ends)
+
+	arg.Free(proc, false, nil)
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinTimestampNonDivisorFoldBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	ninetyMinutes := types.Datetime(90 * types.SecsPerMinute * types.MicroSecsPerSec)
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		Interval: ninetyMinutes,
+		Sliding:  ninetyMinutes,
+	}
+	first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+	second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+	afterSecond := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC).UnixMicro())
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []types.Timestamp{first, second}, nil, proc.Mp()))
+	bat.Vecs[0].SetLength(2)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	bat.SetRowCount(2)
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+	require.NoError(t, arg.Prepare(proc))
+
+	var starts, ends []types.Timestamp
+	var sums []int64
+	for {
+		res, execErr := vm.Exec(arg, proc)
+		require.NoError(t, execErr)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+
+	require.Equal(t, []int64{1, 2}, sums)
+	require.Equal(t, []types.Timestamp{first, second}, starts)
+	require.Equal(t, []types.Timestamp{second, afterSecond}, ends)
+
+	arg.Free(proc, false, nil)
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinTimestampFoldInteriorNormalization(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	interval := types.Datetime(45 * types.SecsPerMinute * types.MicroSecsPerSec)
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		Interval: interval,
+		Sliding:  interval,
+	}
+	raw := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro()),
+	}
+	keys := []types.Timestamp{
+		function.NormalizeTimestampWindowStart(raw[0], int64(interval), zone),
+		function.NormalizeTimestampWindowStart(raw[1], int64(interval), zone),
+	}
+	wantStarts := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro()),
+	}
+	require.Equal(t, wantStarts, keys)
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], keys, nil, proc.Mp()))
+	bat.Vecs[0].SetLength(len(keys))
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	bat.SetRowCount(len(keys))
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+	require.NoError(t, arg.Prepare(proc))
+	defer func() {
+		arg.Free(proc, false, nil)
+		bat.Clean(proc.Mp())
+		proc.Free()
+	}()
+
+	var starts, ends []types.Timestamp
+	var sums []int64
+	for {
+		res, execErr := vm.Exec(arg, proc)
+		require.NoError(t, execErr)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+
+	require.Equal(t, []int64{1, 2}, sums)
+	require.Equal(t, wantStarts, starts)
+	require.Equal(t, []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 7, 15, 0, 0, time.UTC).UnixMicro()),
+	}, ends)
+}
+
+func TestTimeWinTimestampLordHoweFoldKeepsFirstOccurrence(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("Australia/Lord_Howe")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	fiveMinutes := types.Datetime(5 * types.SecsPerMinute * types.MicroSecsPerSec)
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		Interval: fiveMinutes,
+		Sliding:  fiveMinutes,
+	}
+	first := types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 30, 0, 0, time.UTC).UnixMicro())
+	firstNext := types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 35, 0, 0, time.UTC).UnixMicro())
+	firstAfterNext := types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 40, 0, 0, time.UTC).UnixMicro())
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []types.Timestamp{first, firstNext}, nil, proc.Mp()))
+	bat.Vecs[0].SetLength(2)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	bat.SetRowCount(2)
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+	require.NoError(t, arg.Prepare(proc))
+
+	var starts, ends []types.Timestamp
+	var sums []int64
+	for {
+		res, execErr := vm.Exec(arg, proc)
+		require.NoError(t, execErr)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+
+	require.Equal(t, []int64{1, 2}, sums)
+	require.Equal(t, []types.Timestamp{first, firstNext}, starts)
+	require.Equal(t, []types.Timestamp{firstNext, firstAfterNext}, ends)
+
+	arg.Free(proc, false, nil)
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinTimestampDSTSpringGapKeepsCivilGridPhase(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	interval := types.Datetime(2 * types.SecsPerHour * types.MicroSecsPerSec)
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		Interval: interval,
+		Sliding:  interval,
+	}
+	parse := func(s string) types.Timestamp {
+		value, parseErr := types.ParseTimestamp(zone, s, 6)
+		require.NoError(t, parseErr)
+		return value
+	}
+	first := batch.NewWithSize(2)
+	first.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixed(first.Vecs[0], parse("2026-03-08 03:00:00"), false, proc.Mp()))
+	first.Vecs[1] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	first.SetRowCount(1)
+	second := batch.NewWithSize(2)
+	second.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixed(second.Vecs[0], parse("2026-03-08 04:00:00"), false, proc.Mp()))
+	second.Vecs[1] = testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
+	second.SetRowCount(1)
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+	require.NoError(t, arg.Prepare(proc))
+
+	var starts, ends []types.Timestamp
+	var sums []int64
+	for {
+		res, execErr := vm.Exec(arg, proc)
+		require.NoError(t, execErr)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+	require.Equal(t, []int64{1, 2}, sums)
+	require.Equal(t, []types.Timestamp{parse("2026-03-08 03:00:00"), parse("2026-03-08 04:00:00")}, starts)
+	require.Equal(t, []types.Timestamp{parse("2026-03-08 04:00:00"), parse("2026-03-08 06:00:00")}, ends)
+
+	arg.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimestampIntervalBoundaryVectorPreservesZeroTimestamp(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+	normalStart := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
+
+	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(starts, []types.Timestamp{
+		types.ZeroTimestamp,
+		normalStart,
+	}, nil, proc.Mp()))
+
+	wstarts, err := appendTimestampIntervalBoundaryVector(starts, 0, false, typ, proc)
+	require.NoError(t, err)
+	wends, err := appendTimestampIntervalBoundaryVector(starts, hour, true, typ, proc)
+	require.NoError(t, err)
+
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		normalStart,
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](wstarts))
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(normalStart) + int64(hour)),
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](wends))
+
+	starts.Free(proc.Mp())
+	wstarts.Free(proc.Mp())
+	wends.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimestampIntervalBoundaryVectorUsesCivilDayGrid(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.GetSessionInfo().TimeZone = zone
+	day := types.Datetime(types.SecsPerDay * types.MicroSecsPerSec)
+	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+
+	for _, tc := range []struct {
+		name  string
+		start string
+		end   string
+	}{
+		{name: "spring-forward", start: "2026-03-08 00:00:00", end: "2026-03-09 00:00:00"},
+		{name: "fall-back", start: "2026-11-01 00:00:00", end: "2026-11-02 00:00:00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start, parseErr := types.ParseTimestamp(zone, tc.start, 6)
+			require.NoError(t, parseErr)
+			end, parseErr := types.ParseTimestamp(zone, tc.end, 6)
+			require.NoError(t, parseErr)
+			starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+			require.NoError(t, vector.AppendFixed(starts, start, false, proc.Mp()))
+
+			ends, callErr := appendTimestampIntervalBoundaryVector(starts, day, true, typ, proc)
+			require.NoError(t, callErr)
+			require.Equal(t, []types.Timestamp{end}, vector.MustFixedColNoTypeCheck[types.Timestamp](ends))
+
+			starts.Free(proc.Mp())
+			ends.Free(proc.Mp())
+		})
+	}
+
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimestampIntervalBoundaryVectorRejectsOutOfDomainBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+	beforeMin := types.Timestamp(int64(types.TimestampMinValue) - int64(types.MicroSecsPerSec))
+	maxHourStart := types.FromClockUTC(9999, 12, 31, 23, 0, 0, 0)
+
+	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(starts, []types.Timestamp{
+		types.ZeroTimestamp,
+		beforeMin,
+		types.TimestampMinValue,
+		maxHourStart,
+	}, nil, proc.Mp()))
+
+	wstarts, err := appendTimestampIntervalBoundaryVector(starts, 0, false, typ, proc)
+	require.NoError(t, err)
+	wends, err := appendTimestampIntervalBoundaryVector(starts, hour, true, typ, proc)
+	require.NoError(t, err)
+
+	require.False(t, wstarts.IsNull(0))
+	require.True(t, wstarts.IsNull(1))
+	require.False(t, wstarts.IsNull(2))
+	require.False(t, wstarts.IsNull(3))
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		0,
+		types.TimestampMinValue,
+		maxHourStart,
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](wstarts))
+
+	require.False(t, wends.IsNull(0))
+	require.False(t, wends.IsNull(1))
+	require.False(t, wends.IsNull(2))
+	require.True(t, wends.IsNull(3))
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(beforeMin) + int64(hour)),
+		types.Timestamp(int64(types.TimestampMinValue) + int64(hour)),
+		0,
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](wends))
+
+	starts.Free(proc.Mp())
+	wstarts.Free(proc.Mp())
+	wends.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimestampBoundaryVectorRejectsOutOfDomainBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+	beforeMin := types.Datetime(int64(types.TimestampMinValue) - int64(types.MicroSecsPerSec))
+	afterMax := types.Datetime(int64(types.TimestampMaxValue) + 1)
+	values := []types.Datetime{
+		types.ZeroDatetime,
+		beforeMin,
+		types.Datetime(types.TimestampMinValue),
+		types.Datetime(types.TimestampMaxValue),
+		afterMax,
+	}
+
+	vec, err := appendTimestampBoundaryVector(values, typ, proc)
+	require.NoError(t, err)
+	require.False(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+	require.False(t, vec.IsNull(2))
+	require.False(t, vec.IsNull(3))
+	require.True(t, vec.IsNull(4))
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		0,
+		types.TimestampMinValue,
+		types.TimestampMaxValue,
+		0,
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](vec))
+
+	vec.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimestampBoundaryVectorsFreeOnAppendFailure(t *testing.T) {
+	const rows = 200_000
+	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+
+	limited, err := mpool.NewMPool("timestamp-boundary-failure", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", limited)
+	values := make([]types.Datetime, rows)
+	for i := range values {
+		values[i] = types.Datetime(types.TimestampMinValue)
+	}
+	_, err = appendTimestampBoundaryVector(values, typ, proc)
+	require.Error(t, err)
+	require.Zero(t, limited.CurrNB())
+	proc.Free()
+	mpool.DeleteMPool(limited)
+
+	startsMP := mpool.MustNewZero()
+	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	startValues := make([]types.Timestamp, rows)
+	for i := range startValues {
+		startValues[i] = types.TimestampMinValue
+	}
+	require.NoError(t, vector.AppendFixedList(starts, startValues, nil, startsMP))
+
+	limited, err = mpool.NewMPool("timestamp-interval-boundary-failure", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc = testutil.NewProcessWithMPool(t, "", limited)
+	_, err = appendTimestampIntervalBoundaryVector(
+		starts,
+		types.Datetime(types.MicroSecsPerSec),
+		true,
+		typ,
+		proc,
+	)
+	require.Error(t, err)
+	require.Zero(t, limited.CurrNB())
+	proc.Free()
+	mpool.DeleteMPool(limited)
+
+	starts.Free(startsMP)
+	mpool.DeleteMPool(startsMP)
+}
+
+func TestTimeWinTimestampIntervalPathBoundaryVectorsAcrossBatchesAndReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	base := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
+
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		EndExpr:  newExpression(0),
+		Interval: hour,
+		Sliding:  hour,
+	}
+
+	makeInput := func(values []types.Timestamp, measures []int32) *batch.Batch {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, proc.Mp()))
+		bat.Vecs[1] = testutil.MakeInt32Vector(measures, nil, proc.Mp())
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	run := func(bats []*batch.Batch) (vals []int32, starts []types.Timestamp, ends []types.Timestamp) {
+		arg.Children = nil
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs(bats))
+		require.NoError(t, arg.Prepare(proc))
+		for {
+			res, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			if res.Batch == nil {
+				break
+			}
+			n := res.Batch.Vecs[0].Length()
+			vals = append(vals, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])[:n]...)
+			starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+			ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		}
+		return vals, starts, ends
+	}
+
+	first := makeInput([]types.Timestamp{
+		types.ZeroTimestamp,
+		base,
+	}, []int32{7, 11})
+	second := makeInput([]types.Timestamp{
+		types.Timestamp(int64(base) + int64(hour)),
+	}, []int32{13})
+	vals, starts, ends := run([]*batch.Batch{first, second})
+	require.Equal(t, []int32{7, 11, 13}, vals)
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		base,
+		types.Timestamp(int64(base) + int64(hour)),
+	}, starts)
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(base) + int64(hour)),
+		types.Timestamp(int64(base) + int64(2*hour)),
+	}, ends)
+
+	arg.Reset(proc, false, nil)
+
+	third := makeInput([]types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(base) + int64(2*hour)),
+	}, []int32{17, 19})
+	vals, starts, ends = run([]*batch.Batch{third})
+	require.Equal(t, []int32{17, 19}, vals)
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(base) + int64(2*hour)),
+	}, starts)
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(base) + int64(3*hour)),
+	}, ends)
+
+	arg.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	third.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 // singleAggInfo is the basic information of single column agg.

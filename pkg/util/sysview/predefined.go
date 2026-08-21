@@ -202,7 +202,7 @@ var (
 		" then cast(split_part(upper(mo_show_visible_bin(mc.atttyp,3)), ' SRID ', 2) as bigint) else NULL end) as SRS_ID "+
 		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
 		"where mc.account_id = current_account_id() "+
-		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and %s",
+		"and mc.att_is_hidden = 0 and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and %s",
 		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.NonTemporaryTableSQLPredicate("mt"))
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
@@ -428,6 +428,17 @@ var (
 		"GROUP BY db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name" +
 		") fk"
 
+	// CHECK_CONSTRAINTS is backed by a table function because CHECK metadata is
+	// stored in the serialized SchemaExtra of each table.  The function decodes
+	// that metadata at query time and applies the current tenant's visibility.
+	InformationSchemaCheckConstraintsDDL = "CREATE VIEW information_schema.CHECK_CONSTRAINTS AS " +
+		"SELECT " +
+		"cc.constraint_catalog AS CONSTRAINT_CATALOG, " +
+		"cc.constraint_schema AS CONSTRAINT_SCHEMA, " +
+		"cc.constraint_name AS CONSTRAINT_NAME, " +
+		"cc.check_clause AS CHECK_CLAUSE " +
+		"FROM mo_check_constraints() cc"
+
 	InformationSchemaEnginesDDL = "CREATE TABLE information_schema.ENGINES (" +
 		"ENGINE varchar(64)," +
 		"SUPPORT varchar(8)," +
@@ -533,6 +544,26 @@ var (
 		")"
 
 	InformationSchemaTableConstraintsDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
+		"'def' AS CONSTRAINT_CATALOG, "+
+		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
+		"idx.name AS CONSTRAINT_NAME, "+
+		"tbl.reldatabase AS TABLE_SCHEMA, "+
+		"tbl.relname AS TABLE_NAME, "+
+		"idx.type AS CONSTRAINT_TYPE, "+
+		"'YES' AS ENFORCED "+
+		"FROM mo_catalog.mo_indexes idx "+
+		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
+		"where %s UNION ALL "+
+		"SELECT cc.constraint_catalog AS CONSTRAINT_CATALOG, "+
+		"cc.constraint_schema AS CONSTRAINT_SCHEMA, "+
+		"cc.constraint_name AS CONSTRAINT_NAME, "+
+		"cc.constraint_schema AS TABLE_SCHEMA, "+
+		"cc.table_name AS TABLE_NAME, "+
+		"cc.constraint_type AS CONSTRAINT_TYPE, "+
+		"cc.enforced AS ENFORCED "+
+		"FROM mo_check_constraints() cc", catalog.NonTemporaryTableSQLPredicate("tbl"))
+
+	InformationSchemaTableConstraintsLegacyDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
 		"'def' AS CONSTRAINT_CATALOG, "+
 		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
 		"idx.name AS CONSTRAINT_NAME, "+

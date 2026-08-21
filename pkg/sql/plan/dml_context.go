@@ -23,10 +23,12 @@ import (
 )
 
 type DMLContext struct {
-	objRefs        []*plan.ObjectRef
-	tableDefs      []*plan.TableDef
-	aliases        []string
-	isClusterTable []bool
+	objRefs         []*plan.ObjectRef
+	tableDefs       []*plan.TableDef
+	aliases         []string
+	isClusterTable  []bool
+	targetDBName    string
+	targetTableName string
 
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
 	updatePartCol  []bool                 //If update cols contains col that Partition expr used
@@ -82,7 +84,7 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 				if allColumns[tblName][colName] {
 					appendToTbl(tblName, colName, expr)
 				} else {
-					return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
+					return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
 				}
 			} else {
 				return moerr.NewNoSuchTable(ctx.GetContext(), "", parts.TblNameOrigin())
@@ -107,18 +109,11 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 					}
 					str += string(c.Name.Alias)
 				}
-				return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
+				return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
 			} else if !found {
-				return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table", parts.ColNameOrigin())
+				return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table", parts.ColNameOrigin())
 			}
 		}
-	}
-
-	if len(usedTbl) > 1 {
-		return newLegacyUpdatePlannerRouteError(
-			updateRouteReasonMultiTarget,
-			moerr.NewUnsupportedDML(ctx.GetContext(), "multi-table update"),
-		)
 	}
 
 	dmlCtx.updateCol2Expr = make([]map[string]tree.Expr, len(dmlCtx.tableDefs))
@@ -288,17 +283,27 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 		}
 	}
 
-	//if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
-	//	dmlCtx.needAggFilter = true
-	//	err := setTableExprToDmlTableInfo(ctx, joinTbl.Left, dmlCtx, aliasMap, withMap)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	if joinTbl.Right != nil {
-	//		return setTableExprToDmlTableInfo(ctx, joinTbl.Right, dmlCtx, aliasMap, withMap)
-	//	}
-	//	return nil
-	//}
+	if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
+		if err := dmlCtx.resolveSingleTable(
+			ctx,
+			joinTbl.Left,
+			aliasMap,
+			withMap,
+			foreignKeyPolicy,
+		); err != nil {
+			return err
+		}
+		if joinTbl.Right != nil {
+			return dmlCtx.resolveSingleTable(
+				ctx,
+				joinTbl.Right,
+				aliasMap,
+				withMap,
+				foreignKeyPolicy,
+			)
+		}
+		return nil
+	}
 
 	if baseTbl, ok := tbl.(*tree.TableName); ok {
 		dbName = string(baseTbl.SchemaName)
@@ -331,6 +336,9 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return err
 	}
 
 	// External tables are not handled by the modern DML binder. Writable ones

@@ -35,6 +35,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	execpartition "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -187,6 +188,65 @@ func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestCumulativeWindowCancellationReleasesState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = cancellationCheckInterval * 2
+	values := make([]int32, rows)
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeCumulativeFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+
+	// Cancel at the second polling interval, after the running aggregate has
+	// accumulated state, to exercise the mid-chunk cleanup path.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
+	err := arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, arg.ctr.batAggs)
+	require.Nil(t, arg.ctr.runningAgg)
+
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingWindowCancellationReleasesState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = cancellationCheckInterval * 2
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = 1
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(31)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+
+	// Cancel after the sliding state has both added entering rows and removed
+	// expired rows, then verify the error path releases both aggregate owners.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
+	err := arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, arg.ctr.batAggs)
+	require.Nil(t, arg.ctr.runningAgg)
+
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowCallHonorsPreCancellation(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	ctx, cancel := context.WithCancel(proc.Ctx)
@@ -228,6 +288,30 @@ func makeCurrentRowFrame() *plan.FrameClause {
 		Type:  plan.FrameClause_ROWS,
 		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
 		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+}
+
+func makeCumulativeFrame() *plan.FrameClause {
+	return &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type:      plan.FrameBound_PRECEDING,
+			UnBounded: true,
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+}
+
+func makeFiniteCumulativeFrame(preceding uint64) *plan.FrameClause {
+	return &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_U64Val{U64Val: preceding},
+			}}},
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
 	}
 }
 
@@ -491,6 +575,70 @@ func TestWindowPrepareFrameBoundsFeedAggregateConsumer(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPreparedCumulativeBoundUsesRuntimeValue(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  makePreparedRowsBoundExpr(t, 0),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := makeWindowWithFrame(planned)
+	bat := makeInt32Batch(proc.Mp(), []int32{10, 20, 30, 40})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+	params := setWindowPrepareParams(t, proc, stringPtr("2147483647"))
+
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, cumulativeRowsFrame(arg.ctr.runtimeFrames[0], nil, bat.RowCount()))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 30, 60, 100},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPreparedBoundedSlidingSumUsesRuntimeValue(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  makePreparedRowsBoundExpr(t, 0),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := makeWindowWithFrame(planned)
+	bat := makeInt32Batch(proc.Mp(), []int32{10, 20, 30, 40})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+	params := setWindowPrepareParams(t, proc, stringPtr("1"))
+
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, boundedSlidingRowsFrame(arg.ctr.runtimeFrames[0]))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 30, 50, 70},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowPrepareFrameBoundsFeedValueConsumers(t *testing.T) {
 	tests := []struct {
 		name string
@@ -592,6 +740,63 @@ func TestBuildRowsIntervalSaturatesLargeOffsets(t *testing.T) {
 	}
 }
 
+func TestCumulativeRowsFrameEligibility(t *testing.T) {
+	tests := []struct {
+		name       string
+		frame      *plan.FrameClause
+		partitions []int64
+		rows       int
+		want       bool
+	}{
+		{name: "unbounded", frame: makeCumulativeFrame(), rows: 4, want: true},
+		{name: "finite covers partition", frame: makeFiniteCumulativeFrame(3), rows: 4, want: true},
+		{name: "finite shorter than partition", frame: makeFiniteCumulativeFrame(2), rows: 4},
+		{name: "finite covers largest partition", frame: makeFiniteCumulativeFrame(2), partitions: []int64{0, 3, 5}, rows: 7, want: true},
+		{name: "finite shorter than one partition", frame: makeFiniteCumulativeFrame(1), partitions: []int64{0, 3, 5}, rows: 7},
+		{name: "current row start", frame: makeCurrentRowFrame(), rows: 4},
+		{name: "following end", frame: makeFullFrame(), rows: 4},
+		{name: "range frame", frame: &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+			End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		}, rows: 4},
+		{name: "invalid partitions", frame: makeFiniteCumulativeFrame(10), partitions: []int64{1}, rows: 4},
+		{name: "empty partition", frame: makeFiniteCumulativeFrame(10), partitions: []int64{0, 0}, rows: 4},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want,
+				cumulativeRowsFrame(test.frame, test.partitions, test.rows))
+		})
+	}
+}
+
+func TestBoundedSlidingRowsFrameEligibility(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame *plan.FrameClause
+		want  bool
+	}{
+		{name: "finite preceding", frame: makeFiniteCumulativeFrame(31), want: true},
+		{name: "zero preceding", frame: makeFiniteCumulativeFrame(0), want: true},
+		{name: "unbounded", frame: makeCumulativeFrame()},
+		{name: "current row start", frame: makeCurrentRowFrame()},
+		{name: "following end", frame: makeFullFrame()},
+		{name: "range", frame: &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: makeFiniteCumulativeFrame(1).Start.Val},
+			End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, boundedSlidingRowsFrame(test.frame))
+		})
+	}
+}
+
 func makeWindowSpec() *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{},
@@ -655,7 +860,11 @@ func newTypedSumAggExpr(t *testing.T, pos int32, typ types.Type) aggexec.AggFunc
 }
 
 func newRowNumberAggExpr(t *testing.T) aggexec.AggFuncExecExpression {
-	e, err := function.GetFunctionByName(context.Background(), "row_number", nil)
+	return newOrderWindowAggExpr(t, "row_number")
+}
+
+func newOrderWindowAggExpr(t *testing.T, name string) aggexec.AggFuncExecExpression {
+	e, err := function.GetFunctionByName(context.Background(), name, nil)
 	require.NoError(t, err)
 	return aggexec.MakeAggFunctionExpression(e.GetEncodedOverloadID(), false, nil, nil)
 }
@@ -694,8 +903,10 @@ func TestWindowJsonObjectAggOutput(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	bat := makeKeyValBatch(proc.Mp(), []string{"k1", "k2", "k3"}, nil, []int32{10, 20, 30})
 
+	spec := makeAggWindowSpec("json_objectagg")
+	spec.GetW().Frame = makeCumulativeFrame()
 	arg := &Window{
-		WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
+		WinSpecList: []*plan.Expr{spec},
 		Aggs:        []aggexec.AggFuncExecExpression{jsonObjectAggColExpr(t, 0, 1)},
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{Idx: 0},
@@ -711,11 +922,17 @@ func TestWindowJsonObjectAggOutput(t *testing.T) {
 
 	resVec := result.Batch.Vecs[len(result.Batch.Vecs)-1]
 	require.Equal(t, 3, resVec.Length())
-	// Full frame over a single partition: every row aggregates the whole partition.
-	want := `{"k1": 10, "k2": 20, "k3": 30}`
-	for i := 0; i < resVec.Length(); i++ {
-		require.Equal(t, want, types.DecodeJson(resVec.GetBytesAt(i)).String(), "row %d", i)
+	// JSON aggregate Merge may consume its source state, so it must retain the
+	// ordinary frame evaluator instead of entering the SUM/AVG cumulative path.
+	want := []string{
+		`{"k1": 10}`,
+		`{"k1": 10, "k2": 20}`,
+		`{"k1": 10, "k2": 20, "k3": 30}`,
 	}
+	for i := 0; i < resVec.Length(); i++ {
+		require.Equal(t, want[i], types.DecodeJson(resVec.GetBytesAt(i)).String(), "row %d", i)
+	}
+	require.Nil(t, arg.ctr.runningAgg)
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -723,8 +940,8 @@ func TestWindowJsonObjectAggOutput(t *testing.T) {
 }
 
 // TestWindowJsonObjectAggNullKeyNoLeak reproduces the NULL-key error exit
-// (json_objectagg key cannot be NULL) mid-aggregation and asserts that Reset/Free
-// release the aggregators, guarding the error-path mpool leak fix.
+// (json_objectagg key cannot be NULL) mid-aggregation and asserts that the
+// chunk-local aggregator is released immediately.
 func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	// Row 1 has a NULL key: json_objectagg errors while filling the frame.
@@ -744,8 +961,8 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	_, err := vm.Exec(arg, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "key cannot be NULL")
-	// Aggregators were allocated during the failed eval and would leak without the fix.
-	require.NotNil(t, arg.ctr.batAggs)
+	// Chunk-local aggregators do not need to survive until pipeline Reset.
+	require.Nil(t, arg.ctr.batAggs)
 
 	arg.Reset(proc, true, err)
 	require.Nil(t, arg.ctr.batAggs, "Reset must release window aggregators after an error")
@@ -756,9 +973,27 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB(), "no mpool leak on the json_objectagg error path")
 }
 
-// TestWindowAggResultAcrossChunks verifies that the aggregate executor's
-// physical result chunks are invisible to the Window operator. CURRENT ROW is
-// deliberately used to keep the test O(n) while crossing AggBatchSize.
+func collectFixedWindowColumn[T types.FixedSizeT](
+	t *testing.T,
+	arg *Window,
+	proc *process.Process,
+	column int,
+) []T {
+	t.Helper()
+	var values []T
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			return values
+		}
+		require.LessOrEqual(t, result.Batch.RowCount(), colexec.DefaultBatchSize)
+		values = append(values, vector.MustFixedColWithTypeCheck[T](result.Batch.Vecs[column])...)
+	}
+}
+
+// TestWindowAggResultAcrossChunks verifies that a cumulative aggregate retains
+// its running state across bounded output batches.
 func TestWindowAggResultAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
@@ -775,7 +1010,7 @@ func TestWindowAggResultAcrossChunks(t *testing.T) {
 	second.SetRowCount(rows - split)
 
 	spec := makeWindowSpec()
-	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCumulativeFrame()
 	arg := &Window{
 		WinSpecList: []*plan.Expr{spec},
 		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
@@ -787,14 +1022,119 @@ func TestWindowAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	require.Len(t, resultValues, rows)
+	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
+		want := int64(idx+1) * int64(idx+2) / 2
+		require.Equal(t, want, resultValues[idx], "row %d", idx)
+	}
+	require.Nil(t, arg.ctr.runningAgg)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+// TestWindowAggregateResultDropsTailNulls verifies that the window output
+// exposes null bits only for logical result rows. Aggregate state may retain
+// null bits in unused capacity, which must not make a fully populated output
+// look nullable to downstream operators.
+func TestWindowAggregateResultDropsTailNulls(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := aggexec.AggBatchSize - 12
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
 	result, err := vm.Exec(arg, proc)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
-	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])
+	resultVec := result.Batch.Vecs[1]
+	resultValues := vector.MustFixedColWithTypeCheck[int64](resultVec)
 	require.Len(t, resultValues, rows)
-	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
+	for _, idx := range []int{0, rows - 1} {
 		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
 	}
+	require.False(t, resultVec.HasNull(), "tail capacity must not make a non-null window result nullable")
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowAggregateResultKeepsLogicalNulls(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 3}, []uint64{1}, proc.Mp())
+	bat.SetRowCount(3)
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	resultVec := result.Batch.Vecs[1]
+	require.True(t, resultVec.HasNull())
+	require.False(t, resultVec.IsNull(0))
+	require.True(t, resultVec.IsNull(1))
+	require.False(t, resultVec.IsNull(2))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowSkipsEmptyInputBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	empty := batch.NewWithSize(1)
+	empty.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	nonEmpty := makeInt32Batch(proc.Mp(), []int32{7})
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{empty, nonEmpty})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int64{7}, collectFixedWindowColumn[int64](t, arg, proc, 1))
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -832,10 +1172,7 @@ func TestWindowPartitionedAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	result, err := vm.Exec(arg, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2])
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 2)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
@@ -874,10 +1211,7 @@ func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	result, err := vm.Exec(arg, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	resultValues := vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[1])
+	resultValues := collectFixedWindowColumn[types.Decimal128](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, values[idx], resultValues[idx], "row %d", idx)
@@ -889,8 +1223,8 @@ func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-// TestWindowOrderResultAcrossChunks covers the dedicated window-function
-// executor, whose physical result is split independently of ordinary SUM.
+// TestWindowOrderResultAcrossChunks covers bounded rank-family output and the
+// row-number fast path across an output boundary.
 func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
@@ -914,10 +1248,7 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	result, err := vm.Exec(arg, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, int64(idx+1), resultValues[idx], "row %d", idx)
@@ -927,6 +1258,577 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowRankPeerAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := colexec.DefaultBatchSize + 17
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i / 3)
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:       "rank",
+				WindowFunc: newFunExpr("rank"),
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExpr(0),
+				}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	require.Len(t, resultValues, rows)
+	for _, row := range []int{0, 1, colexec.DefaultBatchSize - 2, colexec.DefaultBatchSize - 1, colexec.DefaultBatchSize, rows - 1} {
+		want := int64(row/3*3 + 1)
+		require.Equal(t, want, resultValues[row], "row %d", row)
+	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowRankTreatsFloatNaNsAsLastPeerGroup(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []float64{
+		math.Float64frombits(0x7ff8000000000002), 1,
+		math.Float64frombits(0x7ff8000000000001), -1,
+	}, nil, proc.Mp()))
+	bat.SetRowCount(4)
+
+	orderExpr := newColExprWithType(0, types.T_float64.ToType())
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:       "rank",
+				WindowFunc: newFunExpr("rank"),
+				OrderBy:    []*plan.OrderBySpec{{Expr: orderExpr}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 1))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionedRankTreatsFloatNaNsAsPeers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1}, nil, proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+		math.Float64frombits(0x7ff8000000000002), 1,
+		math.Float64frombits(0x7ff8000000000001), -1,
+	}, nil, proc.Mp()))
+	bat.SetRowCount(4)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "rank",
+				WindowFunc:  newFunExpr("rank"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExprWithType(1, types.T_float64.ToType()),
+				}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 2))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionedFloatNaNPeersUseLaterOrderKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(0x7ff8000000000002),
+		-1,
+	}, nil, proc.Mp()))
+	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{2, 1, 0}, nil, proc.Mp())
+	bat.SetRowCount(3)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: newColExprWithType(1, types.T_float64.ToType())},
+					{Expr: newColExprWithType(2, types.T_int32.ToType())},
+				},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int32{0, 1, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
+	require.Equal(t, []int64{1, 2, 3},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowValueResultAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := colexec.DefaultBatchSize + 17
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeLagWindowSpec()},
+		Aggs:        []aggexec.AggFuncExecExpression{makeValueWindowAggExpr("lag")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	var resultValues []int32
+	var resultNulls []bool
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		require.LessOrEqual(t, result.Batch.RowCount(), colexec.DefaultBatchSize)
+		vec := result.Batch.Vecs[1]
+		resultValues = append(resultValues, vector.MustFixedColWithTypeCheck[int32](vec)...)
+		for row := range vec.Length() {
+			resultNulls = append(resultNulls, vec.IsNull(uint64(row)))
+		}
+	}
+	require.Len(t, resultValues, rows)
+	require.True(t, resultNulls[0])
+	for row := 1; row < rows; row++ {
+		require.False(t, resultNulls[row], "row %d", row)
+		require.Equal(t, values[row-1], resultValues[row], "row %d", row)
+	}
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 10, 20, 30}, nil, proc.Mp())
+	bat.SetRowCount(4)
+
+	tests := []struct {
+		name        string
+		wantInt     []int64
+		wantFloat   []float64
+		bucketCount int64
+	}{
+		{name: "row_number", wantInt: []int64{2, 3, 4}},
+		{name: "rank", wantInt: []int64{1, 3, 4}},
+		{name: "dense_rank", wantInt: []int64{1, 2, 3}},
+		{name: "percent_rank", wantFloat: []float64{0, 2.0 / 3.0, 1}},
+		{name: "cume_dist", wantFloat: []float64{0.5, 0.75, 1}},
+		{name: "ntile", wantInt: []int64{1, 2, 3}, bucketCount: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctr := container{
+				bat: bat,
+				// Sorted rows have peer groups [0,2), [2,3), [3,4).
+				os: []int64{0, 2, 3},
+			}
+			if test.name == "ntile" {
+				bucketVec, err := vector.NewConstFixed(
+					types.T_int64.ToType(), test.bucketCount, bat.RowCount(), proc.Mp())
+				require.NoError(t, err)
+				defer bucketVec.Free(proc.Mp())
+				ctr.aggVecs = []colexec.ExprEvalVector{{Vec: []*vector.Vector{bucketVec}}}
+			}
+			arg := &Window{WinSpecList: []*plan.Expr{{
+				Expr: &plan.Expr_W{W: &plan.WindowSpec{Name: test.name}},
+			}}}
+			// Start in the middle of a peer group to prove chunk boundaries do
+			// not reset rank state.
+			result, err := ctr.processOrderFuncRange(0, arg, proc, 1, 4)
+			require.NoError(t, err)
+			defer result.Free(proc.Mp())
+			if test.wantFloat != nil {
+				require.Equal(t, test.wantFloat, vector.MustFixedColWithTypeCheck[float64](result))
+			} else {
+				require.Equal(t, test.wantInt, vector.MustFixedColWithTypeCheck[int64](result))
+			}
+		})
+	}
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestNtileBucketCountRejectsNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bucketVec := vector.NewConstNull(types.T_int64.ToType(), 1, mp)
+	defer bucketVec.Free(mp)
+
+	ctr := container{
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bucketVec}}},
+	}
+	_, err := ctr.ntileBucketCount(0)
+	require.ErrorContains(t, err, "ntile bucket count cannot be NULL")
+}
+
+func TestWindowResetBeforeAllChunksReleasesState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := colexec.DefaultBatchSize * 2
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	spec := makeWindowSpec()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCumulativeFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, colexec.DefaultBatchSize, result.Batch.RowCount())
+	require.Equal(t, colexec.DefaultBatchSize, arg.ctr.emitOffset)
+	require.Equal(t, emit, arg.ctr.status)
+	require.Nil(t, arg.ctr.batAggs)
+	require.NotNil(t, arg.ctr.runningAgg)
+
+	// Model LIMIT stopping the pipeline after the first output chunk.
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.runningAgg)
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 10, 20})
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		ps:      []int64{0, 2},
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3, 10, 30},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	require.Nil(t, ctr.runningAgg)
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := colexec.DefaultBatchSize*2 + 17
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = 1
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1024)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	require.Len(t, resultValues, rows)
+	for _, row := range []int{0, 1023, 1024, colexec.DefaultBatchSize - 1, colexec.DefaultBatchSize, rows - 1} {
+		require.Equal(t, int64(min(row+1, 1025)), resultValues[row], "row %d", row)
+	}
+	require.Nil(t, arg.ctr.runningAgg)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumRejectsNonSequentialOutput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3})
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
+	require.NoError(t, err)
+	first.Free(proc.Mp())
+	require.NotNil(t, ctr.runningAgg)
+
+	// A retained sliding state is valid only for the immediately following
+	// output range; skipping a row must fail and release that state.
+	_, err = ctr.processAggregateFuncRange(0, arg, proc, 2, 3)
+	require.ErrorContains(t, err, "sliding window output is not sequential")
+	require.Nil(t, ctr.runningAgg)
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumResetsAtPartitionBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3, 4, 10, 20, 30, 40})
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		ps:      []int64{0, 4},
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3, 5, 7, 10, 30, 50, 70},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	require.Nil(t, ctr.runningAgg)
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumPreservesNullSemantics(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 0, 4}, []uint64{1, 2}, proc.Mp())
+	bat.SetRowCount(4)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 1, 0, 4},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	require.False(t, result.IsNull(0))
+	require.False(t, result.IsNull(1))
+	require.True(t, result.IsNull(2))
+	require.False(t, result.IsNull(3))
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumSupportsInt64Arguments(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.NewInt64Vector(
+		4, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{1, 2, 3, 4})
+	bat.SetRowCount(4)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedSumAggExpr(t, 0, types.T_int64.ToType())},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []types.Decimal128{
+		types.Decimal128FromInt64(1),
+		types.Decimal128FromInt64(3),
+		types.Decimal128FromInt64(5),
+		types.Decimal128FromInt64(7),
+	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.New(types.T_decimal64, 18, 2)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.NewDecimal64Vector(
+		5, typ, proc.Mp(), false,
+		[]bool{false, true, true, false, false},
+		[]types.Decimal64{100, 0, 0, types.Decimal64(300).Minus(), 400})
+	bat.SetRowCount(5)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedSumAggExpr(t, 0, typ)},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []types.Decimal128{
+		types.Decimal128FromInt64(100),
+		types.Decimal128FromInt64(100),
+		{},
+		types.Decimal128FromInt64(-300),
+		types.Decimal128FromInt64(100),
+	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+	require.False(t, result.IsNull(0))
+	require.False(t, result.IsNull(1))
+	require.True(t, result.IsNull(2))
+	require.False(t, result.IsNull(3))
+	require.False(t, result.IsNull(4))
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestCumulativeAggregatePreservesNullSemantics(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 3}, []uint64{1}, proc.Mp())
+	bat.SetRowCount(3)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeCumulativeFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 1, 4},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	require.False(t, result.HasNull())
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestWindowOrdersPartitionedInput(t *testing.T) {
@@ -975,6 +1877,240 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	first := batch.NewWithSize(2)
+	first.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	first.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
+	first.SetRowCount(2)
+	second := batch.NewWithSize(2)
+	second.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 2}, nil, proc.Mp())
+	// Deliberately reuse the same order values in both groups. Without the
+	// partition-key prefix this would look like one peer stream.
+	second.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
+	second.SetRowCount(2)
+
+	partitionExpr := newColExpr(0)
+	orderExpr := newColExpr(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{partitionExpr},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: orderExpr, Flag: plan.OrderBySpec_DESC},
+				},
+			}},
+		}},
+		Aggs:          []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		PartitionTopN: true,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Len(t, arg.Fs, 2)
+	require.Len(t, arg.ctr.orderVecs, 2)
+	require.Equal(t, []int64{0, 2}, arg.ctr.ps)
+	require.Equal(t, []int32{1, 1, 2, 2}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int64{1, 2, 1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	makeBatch := func(partitionValue int32) *batch.Batch {
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = testutil.MakeInt32Vector(
+			[]int32{partitionValue, partitionValue, partitionValue}, nil, proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+			math.Float64frombits(0x7ff8000000000002),
+			math.Float64frombits(0x7ff8000000000001),
+			-1,
+		}, nil, proc.Mp()))
+		bat.Vecs[2] = testutil.MakeInt32Vector([]int32{2, 1, 0}, nil, proc.Mp())
+		bat.SetRowCount(3)
+		return bat
+	}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: newColExprWithType(1, types.T_float64.ToType())},
+					{Expr: newColExprWithType(2, types.T_int32.ToType())},
+				},
+			}},
+		}},
+		Aggs:          []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		PartitionTopN: true,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{makeBatch(1), makeBatch(2)})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{0, 3}, arg.ctr.ps)
+	require.Equal(t, []int32{1, 1, 1, 2, 2, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int32{0, 1, 2, 0, 1, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
+	require.Equal(t, []int64{1, 2, 3, 1, 2, 3},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		flag plan.OrderBySpec_OrderByFlag
+		want []int32
+	}{
+		{name: "asc", want: []int32{10, 20}},
+		{name: "desc", flag: plan.OrderBySpec_DESC, want: []int32{60, 40}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1, 1, 1, 1}, nil, proc.Mp())
+			input.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+			require.NoError(t, vector.AppendFixedList(input.Vecs[1], []float64{
+				math.Float64frombits(0x7ff8000000000002), math.Inf(1), 1, 0, -1,
+				math.Inf(-1), math.Float64frombits(0x7ff8000000000001),
+			}, nil, proc.Mp()))
+			input.Vecs[2] = testutil.MakeInt32Vector([]int32{70, 60, 40, 31, 20, 10, 71}, nil, proc.Mp())
+			input.SetRowCount(7)
+
+			// This is the physical shape of ROW_NUMBER() ... WHERE rn <= 2:
+			// the PARTITION reducer must retain the SQL-order prefix before the
+			// window operator assigns row numbers.
+			partitionArg := &execpartition.Partition{
+				OrderBySpecs: []*plan.OrderBySpec{
+					{Expr: newColExprWithType(0, types.T_int32.ToType())},
+					{Expr: newColExprWithType(1, types.T_float64.ToType()), Flag: tc.flag},
+					{Expr: newColExprWithType(2, types.T_int32.ToType())},
+				},
+				Limit: &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_uint64), NotNullable: true},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 2}}},
+				},
+				PartitionByCount: 1,
+				PreReduce:        true,
+			}
+			partitionChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			partitionArg.AppendChild(partitionChild)
+			require.NoError(t, partitionArg.Prepare(proc))
+
+			partitionExpr := newColExprWithType(0, types.T_int32.ToType())
+			orderExpr := newColExprWithType(1, types.T_float64.ToType())
+			windowArg := &Window{
+				WinSpecList: []*plan.Expr{{
+					Expr: &plan.Expr_W{W: &plan.WindowSpec{
+						Name:        "row_number",
+						WindowFunc:  newFunExpr("row_number"),
+						PartitionBy: []*plan.Expr{partitionExpr},
+						OrderBy: []*plan.OrderBySpec{
+							{Expr: orderExpr, Flag: tc.flag},
+							{Expr: newColExprWithType(2, types.T_int32.ToType())},
+						},
+					}},
+				}},
+				Aggs:          []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+				PartitionTopN: true,
+			}
+			windowArg.AppendChild(partitionArg)
+			require.NoError(t, windowArg.Prepare(proc))
+
+			result, err := vm.Exec(windowArg, proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
+			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+
+			windowArg.Free(proc, false, nil)
+			partitionArg.Free(proc, false, nil)
+			partitionChild.Free(proc, false, nil)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	partitionVec := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, partitionVec.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(partitionVec, int32(1), false, mp))
+	orderVec := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, orderVec.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(orderVec, int32(10), false, mp))
+	input := batch.NewOffHeapWithSize(2)
+	input.SetVector(0, partitionVec)
+	input.SetVector(1, orderVec)
+	input.SetRowCount(1)
+
+	partitionExpr := newColExpr(0)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{partitionExpr},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExpr(1),
+				}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+
+	// Mirror child-first pipeline cleanup. The remaining account usage belongs
+	// to Window's materialized input and expression duplicates.
+	child.Free(proc, false, nil)
+	require.Positive(t, account.Snapshot().Used)
+	arg.Reset(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+
+	require.NoError(t, arg.Prepare(proc))
+	arg.Free(proc, false, nil)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestWindowOrderHonorsCancellation(t *testing.T) {
@@ -1581,6 +2717,99 @@ func TestSearchLeftRightAllFloatTypes(t *testing.T) {
 		testSearchLeftRightNumeric(t, mp, types.T_float64,
 			[]float64{1, 2, 2, 4}, []float64{4, 2, 2, 1}, f64Lit)
 	})
+}
+
+func TestBuildRangeIntervalFloatNaNsUseSQLOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		oid        types.T
+		ascValues  []any
+		descValues []any
+		literal    func() *plan.Expr
+	}{
+		{
+			name: "float32",
+			oid:  types.T_float32,
+			ascValues: []any{
+				float32(1), float32(2), math.Float32frombits(0x7fc00001), math.Float32frombits(0x7fc00002),
+			},
+			descValues: []any{
+				float32(2), float32(1), math.Float32frombits(0x7fc00001), math.Float32frombits(0x7fc00002),
+			},
+			literal: f32Lit,
+		},
+		{
+			name: "float64",
+			oid:  types.T_float64,
+			ascValues: []any{
+				float64(1), float64(2), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000002),
+			},
+			descValues: []any{
+				float64(2), float64(1), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000002),
+			},
+			literal: f64Lit,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+			for _, direction := range []struct {
+				name   string
+				values []any
+				desc   bool
+			}{
+				{name: "asc", values: tc.ascValues},
+				{name: "desc", values: tc.descValues, desc: true},
+			} {
+				t.Run(direction.name, func(t *testing.T) {
+					vec := vector.NewVec(tc.oid.ToType())
+					switch tc.oid {
+					case types.T_float32:
+						values := make([]float32, len(direction.values))
+						for i, value := range direction.values {
+							values[i] = value.(float32)
+						}
+						require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+					case types.T_float64:
+						values := make([]float64, len(direction.values))
+						for i, value := range direction.values {
+							values[i] = value.(float64)
+						}
+						require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+					}
+					defer vec.Free(mp)
+
+					ctr := &container{
+						orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+						desc:      []bool{direction.desc},
+					}
+					frame := &plan.FrameClause{
+						Type: plan.FrameClause_RANGE,
+						Start: &plan.FrameBound{
+							Type: plan.FrameBound_PRECEDING,
+							Val:  tc.literal(),
+						},
+						End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+					}
+
+					// A finite row adjacent to the NaN peer group must still use
+					// the SQL relation for the binary search.
+					start, end, err := ctr.buildRangeInterval(1, 0, 4, frame)
+					require.NoError(t, err)
+					require.Equal(t, 0, start)
+					require.Equal(t, 2, end)
+
+					// All NaN payloads are one peer group, and an offset from a
+					// NaN remains NaN for RANGE boundary purposes.
+					start, end, err = ctr.buildRangeInterval(2, 0, 4, frame)
+					require.NoError(t, err)
+					require.Equal(t, 2, start)
+					require.Equal(t, 4, end)
+				})
+			}
+		})
+	}
 }
 
 // TestSearchLeftRightDecimalTypes covers decimal64/128.

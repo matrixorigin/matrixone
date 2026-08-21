@@ -468,7 +468,7 @@ func TestApplyIndicesForSortUsingHnsw_JoinThroughKeepsProviderChild(t *testing.T
 	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
 	require.NotNil(t, vecCtx)
 
-	newNodeID, err := tc.builder.applyIndicesForSortUsingHnsw(tc.projNodeID, vecCtx, newVectorJoinHnswIndex())
+	newNodeID, err := tc.builder.applyIndicesForSortUsingHnsw(tc.projNodeID, vecCtx, newVectorJoinHnswIndex(), nil)
 	require.NoError(t, err)
 	require.Equal(t, tc.projNodeID, newNodeID)
 
@@ -673,7 +673,7 @@ func TestSingleRowVectorProviderProofBranches(t *testing.T) {
 
 	tableDef := newVectorJoinTableDef(false, false)
 	tableDef.Pkey = nil
-	tableDef.Indexes = []*plan.IndexDef{{Unique: true, Parts: []string{"id", "v"}}}
+	tableDef.Indexes = []*plan.IndexDef{nil, {Unique: true, Parts: []string{"id", "v"}}}
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    tableDef,
@@ -783,6 +783,10 @@ func TestVectorJoinGuardHelperBranches(t *testing.T) {
 		TableDef:    newVectorJoinTableDef(false, false),
 		BindingTags: []int32{1},
 	}))
+	vectorDef := newVectorJoinTableDef(true, false)
+	vectorDef.Indexes = append([]*plan.IndexDef{nil}, vectorDef.Indexes...)
+	vectorScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: vectorDef, BindingTags: []int32{1}}
+	require.Same(t, vectorScan, builder.directScanWithVectorIndex(vectorScan))
 
 	require.Nil(t, vectorSearchProviderChildren(nil))
 	require.Nil(t, vectorSearchProviderChildren(&vectorSortContext{providerNodeID: 1}))

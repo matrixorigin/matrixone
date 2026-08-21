@@ -208,5 +208,13 @@ create snapshot spsp02 for account acc02;
 drop account acc02;
 restore account acc02{snapshot="spsp02"};
 
+-- The restored fulltext table's allocator update recreates its metadata. Its
+-- logical-ID index entry must be replaced rather than duplicated.
+select count(*)
+from mo_catalog.__mo_index_unique_mo_tables_logical_id i
+join mo_catalog.mo_tables t on i.__mo_index_idx_col = t.rel_logical_id
+where t.account_id = (select account_id from mo_catalog.mo_account where account_name = 'acc02')
+  and t.relkind = 'fulltext';
+
 drop snapshot if exists spsp02;
 drop account if exists acc02;

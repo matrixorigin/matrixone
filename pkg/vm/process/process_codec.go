@@ -79,6 +79,11 @@ func (proc *Process) BuildProcessInfo(
 
 		vec := proc.GetPrepareParams()
 		if vec != nil {
+			binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
+				proc.GetService(), vec.Length(), proc.Base.prepareParamsBinaryString)
+			if err != nil {
+				return procInfo, err
+			}
 			procInfo.PrepareParams.Length = int64(vec.Length())
 			procInfo.PrepareParams.Data = make([]byte, 0, len(vec.GetData()))
 			procInfo.PrepareParams.Data = append(procInfo.PrepareParams.Data, vec.GetData()...)
@@ -97,6 +102,9 @@ func (proc *Process) BuildProcessInfo(
 				return procInfo, err
 			}
 			procInfo.PrepareParams.IsBin = metadata
+			if binaryStringMetadata != nil {
+				procInfo.PrepareParams.IsBinaryString = binaryStringMetadata
+			}
 		}
 	}
 	{ // session info
@@ -228,6 +236,14 @@ func (c *codecService) Decode(
 	if err != nil {
 		return nil, err
 	}
+	binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.IsBinaryString,
+	)
+	if err != nil {
+		return nil, err
+	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
@@ -282,7 +298,11 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
+		proc.SetOwnedPrepareParamsWithMetadata(
+			prepareParams,
+			prepareParamMetadata,
+			binaryStringMetadata,
+		)
 	}
 	return proc, nil
 }
@@ -382,6 +402,18 @@ func resolveSqlMode(proc *Process) string {
 		if v, err := f("sql_mode", true, false); err == nil {
 			if s, ok := v.(string); ok {
 				if s == "" {
+					// Internal/background processes can retain a resolver from the
+					// executor that supplied the process. An empty value from that
+					// resolver is a compiled default, not an instruction to discard
+					// the session snapshot captured for remote execution. Keep an
+					// explicit empty sentinel as non-strict, but preserve any other
+					// snapshot so a second CN forward cannot silently lose strict
+					// assignment-cast behavior.
+					if proc.Base != nil && !proc.Base.IsFrontend {
+						if snapshot := proc.Base.SessionInfo.SqlMode; snapshot != "" {
+							return snapshot
+						}
+					}
 					return EmptySqlModeSentinel // explicitly non-strict
 				}
 				return s
@@ -391,6 +423,9 @@ func resolveSqlMode(proc *Process) string {
 	// Resolver is nil on a remote CN (no session). Fall back to the sql_mode
 	// captured from the upstream CN so it survives a second forward
 	// (encode -> decode -> encode); otherwise the next hop defaults to strict.
+	if proc.Base == nil {
+		return ""
+	}
 	return proc.Base.SessionInfo.SqlMode
 }
 

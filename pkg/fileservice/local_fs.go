@@ -39,7 +39,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -108,30 +107,33 @@ func newLocalFS(
 	noChecksum bool,
 ) (*LocalFS, error) {
 
-	// get absolute path
-	if rootPath != "" {
-		var err error
-		rootPath, err = filepath.Abs(rootPath)
+	// Keep os.CreateTemp and the final rename under one filesystem root. An
+	// empty root still means the current working directory, but make that
+	// meaning explicit before any temporary file is created.
+	if rootPath == "" {
+		rootPath = "."
+	}
+	var err error
+	rootPath, err = filepath.Abs(rootPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// ensure dir
+	f, err := os.Open(rootPath)
+	if os.IsNotExist(err) {
+		// not exists, create
+		err := os.MkdirAll(rootPath, 0755)
 		if err != nil {
 			return nil, err
 		}
 
-		// ensure dir
-		f, err := os.Open(rootPath)
-		if os.IsNotExist(err) {
-			// not exists, create
-			err := os.MkdirAll(rootPath, 0755)
-			if err != nil {
-				return nil, err
-			}
+	} else if err != nil {
+		// stat error
+		return nil, err
 
-		} else if err != nil {
-			// stat error
-			return nil, err
-
-		} else {
-			defer f.Close()
-		}
+	} else {
+		defer f.Close()
 
 	}
 
@@ -241,86 +243,47 @@ func (l *LocalFS) contentSize(fileSize int64) int64 {
 
 func (l *LocalFS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if l.memCache != nil {
-		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), size)
+		return l.memCache.AllocateCacheData(ctx, size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (l *LocalFS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if l.memCache != nil {
-		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), size)
+		return l.memCache.AllocateCacheDataWithHint(ctx, size, hints)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (l *LocalFS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if l.memCache != nil {
-		ensureCacheDataCapacity(ctx, l.memCache.cache, DefaultCacheDataAllocator(), len(data))
+		return l.memCache.CopyToCacheData(ctx, data)
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
 
 func (l *LocalFS) BackingSize(size int) int {
+	if l.memCache != nil {
+		return l.memCache.BackingSize(size)
+	}
 	return DefaultCacheDataAllocator().BackingSize(size)
 }
 
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
-	config.setDefaults()
-
-	// remote
-	if config.RemoteCacheEnabled {
-		if config.QueryClient == nil {
-			return moerr.NewInternalError(ctx, "query client is nil")
-		}
-		l.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
-		l.remoteCache.setAllocator(l)
-		logutil.Info("fileservice: remote cache initialized",
-			zap.Any("fs-name", l.name),
-		)
+	caches, err := newFileServiceCaches(
+		ctx,
+		config,
+		l.perfCounterSets,
+		l.name,
+		config.enableDiskCacheForLocalFS,
+		l,
+	)
+	if err != nil {
+		return err
 	}
-
-	// memory
-	if config.MemoryCapacity != nil &&
-		*config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
-		l.memCache = NewMemCache(
-			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
-			&config.CacheCallbacks,
-			l.perfCounterSets,
-			l.name,
-		)
-		logutil.Info("fileservice: memory cache initialized",
-			zap.Any("fs-name", l.name),
-			zap.Any("config", config),
-		)
-	}
-
-	// disk
-	if config.enableDiskCacheForLocalFS &&
-		config.DiskCapacity != nil &&
-		*config.DiskCapacity > DisableCacheCapacity &&
-		config.DiskPath != nil {
-		var err error
-		l.diskCache, err = NewDiskCache(
-			ctx,
-			*config.DiskPath,
-			fscache.ConstCapacity(int64(*config.DiskCapacity)),
-			l.perfCounterSets,
-			true,
-			nil,
-			l.name,
-		)
-		if err != nil {
-			return err
-		}
-		if l.memCache != nil {
-			l.diskCache.memoryCache = l.memCache.cache
-		}
-		logutil.Info("fileservice: disk cache initialized",
-			zap.Any("fs-name", l.name),
-			zap.Any("config", config),
-		)
-	}
-
+	l.remoteCache = caches.remote
+	l.memCache = caches.memory
+	l.diskCache = caches.disk
 	return nil
 }
 
@@ -344,7 +307,7 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 		metric.LocalWriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
-	path, err := ParsePathAtService(vector.FilePath, l.name)
+	path, err := parseFilePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -367,7 +330,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 		return 0, err
 	}
 
-	path, err := ParsePathAtService(vector.FilePath, l.name)
+	path, err := parseFilePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return 0, err
 	}
@@ -481,6 +444,9 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
+	}
+	if _, err := parseFilePathAtService(vector.FilePath, l.name); err != nil {
+		return err
 	}
 
 	for _, cache := range vector.Caches {
@@ -641,6 +607,9 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+	if _, err := parseFilePathAtService(vector.FilePath, l.name); err != nil {
+		return err
+	}
 
 	for _, cache := range vector.Caches {
 		if err := readCache(ctx, cache, vector); err != nil {
@@ -676,7 +645,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		return nil
 	}
 
-	path, err := ParsePathAtService(vector.FilePath, l.name)
+	path, err := parseFilePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -985,7 +954,7 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 		span.End()
 	}()
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -1014,7 +983,11 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 }
 
 func (l *LocalFS) PrefetchFile(ctx context.Context, filePath string) error {
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := parseFilePathAtService(filePath, l.name)
+	return err
 }
 
 func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
@@ -1057,7 +1030,7 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 }
 
 func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -1093,7 +1066,7 @@ func (l *LocalFS) NewReader(ctx context.Context, filePath string) (io.ReadCloser
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -1128,7 +1101,7 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -1264,7 +1237,10 @@ func (l *LocalFS) toNativeFilePath(filePath string) string {
 var _ MutableFileService = new(LocalFS)
 
 func (l *LocalFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
-	path, err := ParsePathAtService(filePath, l.name)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -1373,11 +1349,17 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 var _ CachingFileService = new(LocalFS)
 
 func (l *LocalFS) Close(ctx context.Context) {
-	if l.memCache != nil {
-		l.memCache.Close(ctx)
-	}
-	if l.diskCache != nil {
-		l.diskCache.Close(ctx)
+	caches := fileServiceCaches{memory: l.memCache, disk: l.diskCache}
+	caches.close(ctx)
+	closeDirFiles(&l.RWMutex, l.dirFiles)
+}
+
+func closeDirFiles(mu *sync.RWMutex, dirFiles map[string]*os.File) {
+	mu.Lock()
+	defer mu.Unlock()
+	for path, file := range dirFiles {
+		_ = file.Close()
+		delete(dirFiles, path)
 	}
 }
 
@@ -1432,7 +1414,14 @@ func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
 
 // open for read and write, raw os.File API.
 func (l *LocalFS) EnsureDir(ctx context.Context, filePath string) error {
-	return l.ensureDir(l.toNativeFilePath(filePath))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return err
+	}
+	return l.ensureDir(l.toNativeFilePath(path.File))
 }
 
 func (l *LocalFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
@@ -1441,7 +1430,7 @@ func (l *LocalFS) OpenFile(ctx context.Context, filePath string) (*os.File, erro
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -1456,7 +1445,7 @@ func (l *LocalFS) CreateFile(ctx context.Context, filePath string) (*os.File, er
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -1471,7 +1460,7 @@ func (l *LocalFS) RemoveFile(ctx context.Context, filePath string) error {
 		return err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -1486,7 +1475,7 @@ func (l *LocalFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}

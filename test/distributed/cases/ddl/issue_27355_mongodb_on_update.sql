@@ -1,0 +1,19 @@
+drop database if exists issue_27355;
+create database issue_27355;
+use issue_27355;
+
+-- @regex("MongoDB external table column 'ts' does not support ON UPDATE", true)
+create external table ext_onupdate (
+    id varchar(8) mongodb_path '_id',
+    ts datetime(3) default null on update current_timestamp mongodb_path 'ts'
+) engine=mongodb with (
+    'connection'='unused_connection',
+    'database'='unused_database',
+    'collection'='unused_collection',
+    'schema_mode'='explicit'
+);
+
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'issue_27355' and relname = 'ext_onupdate';
+
+drop database issue_27355;

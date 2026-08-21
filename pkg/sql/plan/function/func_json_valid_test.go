@@ -2263,6 +2263,66 @@ func TestJsonSetValueTypes(t *testing.T) {
 			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonSet, nil)
 		require.Equal(t, `{"a": 1.5}`, jsonVectorRowString(t, vec, 0))
 	})
+
+	t.Run("prepared text restores source types", func(t *testing.T) {
+		for _, tc := range []struct {
+			name     string
+			document string
+			fn       fEvalFn
+		}{
+			{name: "set", document: `{"a":0}`, fn: newOpBuiltInJsonSet().buildJsonSet},
+			{name: "insert", document: `{}`, fn: newOpBuiltInJsonSet().buildJsonInsert},
+			{name: "replace", document: `{"a":0}`, fn: newOpBuiltInJsonSet().buildJsonReplace},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				const rows = 9
+				inputs := []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(),
+						[]string{
+							tc.document, tc.document, tc.document, tc.document, tc.document,
+							tc.document, tc.document, tc.document, tc.document,
+						}, make([]bool, rows)),
+					NewFunctionTestInput(types.T_varchar.ToType(),
+						[]string{"$.a", "$.a", "$.a", "$.a", "$.a", "$.a", "$.a", "$.a", "$.a"},
+						make([]bool, rows)),
+					NewFunctionTestInput(types.T_varchar.ToType(),
+						[]string{
+							"7", "18446744073709551615", "-2", "1.5", "12345678901234567890.50",
+							"true", "false", "7", "",
+						}, []bool{false, false, false, false, false, false, false, false, true}),
+				}
+				fcTC := NewFunctionTestCase(proc, inputs,
+					NewFunctionTestResult(types.T_json.ToType(), false, nil, nil), tc.fn)
+				fcTC.parameters[2].SetPrepareParamKinds([]vector.PrepareParamKind{
+					vector.PrepareParamInteger,
+					vector.PrepareParamInteger,
+					vector.PrepareParamInteger,
+					vector.PrepareParamFloat,
+					vector.PrepareParamDecimal,
+					vector.PrepareParamBoolean,
+					vector.PrepareParamBoolean,
+					vector.PrepareParamNone,
+					vector.PrepareParamInteger,
+				})
+				require.NoError(t, fcTC.result.PreExtendAndReset(rows))
+				require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, rows, nil))
+				vec := fcTC.result.GetResultVector()
+				for row, want := range []string{
+					`{"a": 7}`,
+					`{"a": 18446744073709551615}`,
+					`{"a": -2}`,
+					`{"a": 1.5}`,
+					`{"a": 12345678901234567890.50}`,
+					`{"a": true}`,
+					`{"a": false}`,
+					`{"a": "7"}`,
+					`{"a": null}`,
+				} {
+					require.Equal(t, want, jsonVectorRowString(t, vec, uint64(row)), "row %d", row)
+				}
+			})
+		}
+	})
 }
 
 func TestJsonSetIgnoreAllRows(t *testing.T) {

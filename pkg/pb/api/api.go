@@ -85,6 +85,7 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		ParentTableID:     info.ParentTableID,
 		AutoIncrOffset:    info.AutoIncrOffset,
 		AutoIncrEpoch:     info.AutoIncrEpoch,
+		DefaultCharset:    info.DefaultCharset,
 		Checks:            checks,
 	}
 }
@@ -185,6 +186,17 @@ func NewRenameColumnReq(did, tid uint64, oldname, newname string, seqnum uint32)
 	}
 }
 
+func NewRenameColumnReqWithChecks(
+	did, tid uint64,
+	oldname, newname string,
+	seqnum uint32,
+	checks []*plan.CheckDef,
+) *AlterTableReq {
+	req := NewRenameColumnReq(did, tid, oldname, newname, seqnum)
+	req.GetRenameCol().Checks = CloneExtra(&SchemaExtra{Checks: checks}).Checks
+	return req
+}
+
 func NewReplaceDefReq(did, tid uint64, planDef *plan.TableDef) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,
@@ -196,6 +208,24 @@ func NewReplaceDefReq(did, tid uint64, planDef *plan.TableDef) *AlterTableReq {
 			},
 		},
 	}
+}
+
+func NewGuardedReplaceDefReq(
+	did, tid uint64,
+	expectedVersion uint32,
+	preservedCreator uint32,
+	preservedOwner uint32,
+	preservedCreatedTime int64,
+	planDef *plan.TableDef,
+) *AlterTableReq {
+	request := NewReplaceDefReq(did, tid, planDef)
+	request.GetReplaceDef().ExpectedVersion = expectedVersion
+	request.GetReplaceDef().CheckVersion = true
+	request.GetReplaceDef().PreserveOwnership = true
+	request.GetReplaceDef().PreservedCreator = preservedCreator
+	request.GetReplaceDef().PreservedOwner = preservedOwner
+	request.GetReplaceDef().PreservedCreatedTime = preservedCreatedTime
+	return request
 }
 
 func (m *SyncLogTailReq) MarshalBinary() ([]byte, error) {

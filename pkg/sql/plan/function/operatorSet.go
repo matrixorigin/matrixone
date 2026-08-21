@@ -53,7 +53,7 @@ func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
 		if hasString && hasNumeric {
 			retType := types.T_varchar.ToType()
 			retType.Width = types.MaxVarBinaryLen
-			return retType, true
+			return commonConditionalStringType(retType, source), true
 		}
 	}
 	return types.Type{}, false
@@ -195,7 +195,7 @@ func textStringCommonType(source []types.Type) (types.Type, bool, bool) {
 	if !hasText {
 		return types.Type{}, false, false
 	}
-	return types.T_text.ToType(), aligned, true
+	return commonConditionalStringType(types.T_text.ToType(), source), aligned, true
 }
 
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
@@ -333,7 +333,7 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 						continue
 					}
 				} else if retType.Oid.IsMySQLString() {
-					setMaxWidthFromSource(&retType, source)
+					retType = commonConditionalStringType(retType, source)
 				}
 				minCost = cost
 			}
@@ -568,6 +568,20 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
+		sameCollatedText := false
+		switch source[0].Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			sameCollatedText = source[0].Eq(source[1])
+		}
+		if sameCollatedText {
+			// Matching text branches already have a common collation identity.
+			// Preserve it instead of rebuilding the same OID with ToType(), which
+			// would turn legacy or utf8mb4_bin metadata into general_ci.
+			if needCast {
+				return newCheckResultWithCast(0, []types.Type{conditionType, source[0], source[1]})
+			}
+			return newCheckResultWithSuccess(0)
+		}
 		if source[0].Oid.IsArrayRelate() || source[1].Oid.IsArrayRelate() {
 			vectorIdx := 0
 			if !source[0].Oid.IsArrayRelate() {
@@ -659,7 +673,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 						continue
 					}
 				} else if retType.Oid.IsMySQLString() {
-					setMaxWidthFromSource(&retType, source)
+					retType = commonConditionalStringType(retType, source)
 				}
 				minCost = cost
 			}

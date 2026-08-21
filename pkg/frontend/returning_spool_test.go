@@ -180,7 +180,7 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 	ctx := context.Background()
 	ses := newValidateSession(t)
 	spool := &returningSpool{}
-	budget, err := ses.proc.GetHashBuildBudget()
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, spool.Close())
@@ -200,6 +200,12 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 	require.Zero(t, budget.SpillFDUsed())
 
 	final := returningTestBatch(t, ses, 7, 8, 9)
+	binaryValues := vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"a", "b", "c"} {
+		require.NoError(t, vector.AppendBytes(binaryValues, []byte(value), false, ses.proc.Mp()))
+	}
+	require.NoError(t, binaryValues.SetBinaryStringRowsWithMP([]bool{true, false, true}, ses.proc.Mp()))
+	final.Vecs = append(final.Vecs, binaryValues)
 	defer final.Clean(ses.proc.Mp())
 	require.NoError(t, spool.BeginAttempt(ctx, 1, ses.proc))
 	require.NoError(t, spool.Write(1, final, nil))
@@ -214,10 +220,13 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 		got = got[:0]
 		require.NoError(t, spool.Replay(ctx, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
 			got = append(got, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])...)
+			require.True(t, bat.Vecs[1].GetBinaryStringMetadataAt(0))
+			require.False(t, bat.Vecs[1].GetBinaryStringMetadataAt(1))
+			require.True(t, bat.Vecs[1].GetBinaryStringMetadataAt(2))
 			return nil
 		}))
 		require.Equal(t, []int64{7, 8, 9}, got)
-		require.Zero(t, budget.Used(), "replay must not create an estimated HashBuild charge")
+		require.Zero(t, budget.Used(), "replay must not create an estimated execution-resource charge")
 	}
 }
 
@@ -399,7 +408,7 @@ func TestDeferredReturningClientDisconnectCleansSpool(t *testing.T) {
 	ses := newValidateSession(t)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
-	budget, err := ses.proc.GetHashBuildBudget()
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 
 	spool := &returningSpool{}
@@ -636,7 +645,7 @@ func TestReturningSpoolRejectsCorruptMagic(t *testing.T) {
 func TestReturningSpoolReplayCancellationReleasesDecodeBudget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ses := newValidateSession(t)
-	budget, err := ses.proc.GetHashBuildBudget()
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	spool := &returningSpool{}
 	bat := returningTestBatch(t, ses, 1)
@@ -656,7 +665,7 @@ func TestReturningSpoolReplayCancellationReleasesDecodeBudget(t *testing.T) {
 func TestReturningSpoolConcurrentTerminalTransitions(t *testing.T) {
 	ctx := context.Background()
 	ses := newValidateSession(t)
-	budget, err := ses.proc.GetHashBuildBudget()
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	for i := 0; i < 16; i++ {
 		spool := &returningSpool{}

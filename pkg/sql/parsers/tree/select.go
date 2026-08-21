@@ -16,12 +16,20 @@ package tree
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 )
 
 type SelectStatement interface {
 	Statement
+}
+
+// SelectInto records either a SELECT INTO OUTFILE clause or MySQL's SELECT
+// expression INTO @user_variable form while the parser constructs a Select.
+type SelectInto struct {
+	Export   *ExportParam
+	UserVars []*VarExpr
 }
 
 // Select represents a SelectStatement with an ORDER and/or LIMIT.
@@ -36,6 +44,8 @@ type Select struct {
 	RankOption     *RankOption
 	With           *With
 	Ep             *ExportParam
+	IntoVars       []*VarExpr
+	DeprecatedInto bool
 	SelectLockInfo *SelectLockInfo
 }
 
@@ -64,9 +74,17 @@ func (node *Select) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.RankOption.Format(ctx)
 	}
-	if node.Ep != nil {
+	if node.Ep != nil && SelectIntoExport(node.Select) == nil {
 		ctx.WriteByte(' ')
 		node.Ep.Format(ctx)
+	} else if len(node.IntoVars) > 0 && len(SelectIntoVariables(node.Select)) == 0 {
+		ctx.WriteString(" into ")
+		for i, variable := range node.IntoVars {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			variable.Format(ctx)
+		}
 	}
 	if node.SelectLockInfo != nil {
 		ctx.WriteByte(' ')
@@ -402,11 +420,24 @@ type SelectClause struct {
 	SelectStatement
 	Distinct bool
 	Exprs    SelectExprs
-	From     *From
-	Where    *Where
-	GroupBy  *GroupByClause
-	Having   *Where
-	Option   uint64
+	// IntoVars is populated for MySQL's pre-FROM SELECT ... INTO @var form.
+	// The enclosing Select also copies it so frontend execution can handle both
+	// the pre-FROM and terminal placements uniformly.
+	IntoVars   []*VarExpr
+	IntoExport *ExportParam
+	From       *From
+	Where      *Where
+	GroupBy    *GroupByClause
+	Having     *Where
+	Option     uint64
+	// OrderByOriginalExprs is planner-internal metadata for a generated
+	// projection whose derived-table columns must retain the original output
+	// expression categories for ORDER BY duplicate-name resolution.
+	OrderByOriginalExprs []Expr
+	// OrderBySourceProbes is shared with generated grouping-set branches. Once
+	// their real FROM scope is bound, it tells the outer ORDER BY whether a
+	// potentially shadowed name denotes a source column or an output alias.
+	OrderBySourceProbes map[string]*GroupingSetOrderSourceProbe
 }
 
 func (node *SelectClause) Format(ctx *FmtCtx) {
@@ -429,6 +460,18 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 		}
 	}
 	node.Exprs.Format(ctx)
+	if node.IntoExport != nil {
+		ctx.WriteByte(' ')
+		node.IntoExport.Format(ctx)
+	} else if len(node.IntoVars) > 0 {
+		ctx.WriteString(" into ")
+		for i, variable := range node.IntoVars {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			variable.Format(ctx)
+		}
+	}
 	if len(node.From.Tables) > 0 {
 		canFrom := true
 		als, ok := node.From.Tables[0].(*AliasedTableExpr)
@@ -457,6 +500,970 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Having.Format(ctx)
 	}
+}
+
+// SelectIntoVariables returns variables attached to the pre-FROM SELECT
+// clause. It intentionally does not clear the clause field: tree formatting
+// needs the original placement while the enclosing Select uses the same list
+// for execution.
+func SelectIntoVariables(stmt SelectStatement) []*VarExpr {
+	vars, _, _ := SelectIntoVariablesForTopLevel(stmt)
+	return vars
+}
+
+const MisplacedIntoClauseMessage = "Misplaced INTO clause, INTO is not allowed inside subqueries, and must be placed at end of UNION clauses."
+const PerformIntoClauseMessage = "INTO is not allowed with PERFORM statements."
+
+func SelectIntoVariablesForTopLevel(stmt SelectStatement) (vars []*VarExpr, deprecated bool, err string) {
+	return selectIntoVariablesForTopLevel(stmt, false)
+}
+
+func selectIntoVariablesForTopLevel(stmt SelectStatement, insideUnion bool) (vars []*VarExpr, deprecated bool, err string) {
+	switch node := stmt.(type) {
+	case *Select:
+		if len(node.IntoVars) > 0 {
+			return node.IntoVars, insideUnion || node.DeprecatedInto, ""
+		}
+		vars, deprecated, err = selectIntoVariablesForTopLevel(node.Select, insideUnion)
+		if err != "" {
+			return nil, false, err
+		}
+		return vars, deprecated || node.DeprecatedInto, ""
+	case *SelectClause:
+		return node.IntoVars, insideUnion && len(node.IntoVars) > 0, ""
+	case *ParenSelect:
+		return selectIntoVariablesForTopLevel(node.Select, insideUnion)
+	case *UnionClause:
+		if selectTreeHasInto(node.Left) || selectTreeHasExport(node.Left) {
+			return nil, false, MisplacedIntoClauseMessage
+		}
+		vars, deprecated, err = selectIntoVariablesForTopLevel(node.Right, true)
+		if err != "" {
+			return nil, false, err
+		}
+		if len(vars) > 0 {
+			deprecated = true
+		}
+		return vars, deprecated, ""
+	default:
+		return nil, false, ""
+	}
+}
+
+func SelectIntoActionConflict(stmt SelectStatement, suffix *SelectInto) bool {
+	actions := 0
+	if vars, _, _ := SelectIntoVariablesForTopLevel(stmt); len(vars) > 0 {
+		actions++
+	}
+	if SelectIntoExport(stmt) != nil {
+		actions++
+	}
+	if suffix != nil {
+		if len(suffix.UserVars) > 0 {
+			actions++
+		}
+		if suffix.Export != nil {
+			actions++
+		}
+	}
+	return actions > 1
+}
+
+func ValidateSelectIntoPlacement(stmt *Select) string {
+	if stmt == nil {
+		return ""
+	}
+	if stmt.IsPerform && (len(stmt.IntoVars) > 0 || selectTreeHasInto(stmt.Select)) {
+		return PerformIntoClauseMessage
+	}
+	if withHasInto(stmt.With) ||
+		selectStatementHasNestedInto(stmt.Select) ||
+		timeWindowHasInto(stmt.TimeWindow) ||
+		orderByHasInto(stmt.OrderBy) ||
+		limitHasInto(stmt.Limit) {
+		return MisplacedIntoClauseMessage
+	}
+	return ""
+}
+
+// ValidateSelectIntoNotAllowed validates a SELECT used as a source of an
+// enclosing statement.  The source itself may own a direct user-variable
+// assignment (INSERT ... SELECT ... INTO and CTAS ... SELECT ... INTO are
+// accepted by MySQL), while nested assignments and SELECT ... INTO OUTFILE
+// still have no owner in that context.
+func ValidateSelectIntoNotAllowed(stmt *Select) string {
+	if stmt == nil {
+		return ""
+	}
+	if stmt.Ep != nil || selectTreeHasExport(stmt.Select) || withHasInto(stmt.With) ||
+		selectStatementHasNestedInto(stmt.Select) || timeWindowHasInto(stmt.TimeWindow) ||
+		orderByHasInto(stmt.OrderBy) || limitHasInto(stmt.Limit) {
+		return MisplacedIntoClauseMessage
+	}
+	return ""
+}
+
+// ValidateSelectIntoEnclosingStatement applies the context-specific shape
+// checks to statement forms which can contain a SELECT source.  The final
+// statement-root validator invokes this after all trailing clauses have been
+// attached.
+func ValidateSelectIntoEnclosingStatement(stmt Statement) string {
+	switch node := stmt.(type) {
+	case *Select:
+		if node.IsPerform {
+			return ValidatePerformSelectIntoPlacement(node)
+		}
+		return ValidateSelectIntoPlacement(node)
+	case *Insert:
+		if err := ValidateSelectIntoNotAllowed(node.Rows); err != "" {
+			return err
+		}
+		if withHasInto(node.With) || tableExprHasInto(node.Table) ||
+			partitionValuesHaveInto(node.PartitionValues) {
+			return MisplacedIntoClauseMessage
+		}
+		if updateExprsHaveInto(node.OnDuplicateUpdate) || selectExprsHaveInto(node.Returning) {
+			return MisplacedIntoClauseMessage
+		}
+		return ""
+	case *Replace:
+		if err := ValidateSelectIntoNotAllowed(node.Rows); err != "" {
+			return err
+		}
+		if tableExprHasInto(node.Table) || selectExprsHaveInto(node.Returning) {
+			return MisplacedIntoClauseMessage
+		}
+		return ""
+	case *Delete:
+		if withHasInto(node.With) || tableExprsHaveInto(node.Tables) ||
+			tableExprsHaveInto(node.TableRefs) || selectExprsHaveInto(node.Returning) ||
+			(node.Where != nil && exprHasNestedInto(node.Where.Expr)) ||
+			orderByHasInto(node.OrderBy) || limitHasInto(node.Limit) {
+			return MisplacedIntoClauseMessage
+		}
+		return ""
+	case *Update:
+		if withHasInto(node.With) || tableExprsHaveInto(node.Tables) ||
+			(node.From != nil && tableExprsHaveInto(node.From.Tables)) ||
+			updateExprsHaveInto(node.Exprs) || selectExprsHaveInto(node.Returning) ||
+			(node.Where != nil && exprHasNestedInto(node.Where.Expr)) ||
+			orderByHasInto(node.OrderBy) || limitHasInto(node.Limit) {
+			return MisplacedIntoClauseMessage
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
+// ValidateSelectIntoStatementRoot applies the ownership rule after the full
+// statement has been assembled.  Grammar productions historically validated
+// a SELECT source before INSERT/REPLACE RETURNING and ON DUPLICATE clauses
+// were attached, and a number of statement roots had no validation at all.
+// Keeping this final boundary exhaustive prevents nested assignments from
+// being silently discarded while retaining the MySQL-supported direct source
+// forms.
+func ValidateSelectIntoStatementRoot(stmt Statement) string {
+	switch node := stmt.(type) {
+	case *Select:
+		if node.IsPerform {
+			return ValidatePerformSelectIntoPlacement(node)
+		}
+		return ValidateSelectIntoPlacement(node)
+	case *ValuesStatement:
+		return ValidateValuesIntoPlacement(node)
+	case *Insert:
+		return ValidateSelectIntoEnclosingStatement(node)
+	case *Replace:
+		return ValidateSelectIntoEnclosingStatement(node)
+	case *Delete:
+		return ValidateSelectIntoEnclosingStatement(node)
+	case *Update:
+		return ValidateSelectIntoEnclosingStatement(node)
+	case *CreateView:
+		if node.AsSource != nil && selectStatementHasInto(node.AsSource) {
+			return MisplacedIntoClauseMessage
+		}
+	case *CreateTable:
+		if node.AsSource != nil {
+			return ValidateSelectIntoNotAllowed(node.AsSource)
+		}
+	case *ExplainStmt:
+		return ValidateSelectIntoStatementRoot(node.explainImpl.Statement)
+	case *ExplainAnalyze:
+		return ValidateSelectIntoStatementRoot(node.explainImpl.Statement)
+	case *ExplainPhyPlan:
+		return ValidateSelectIntoStatementRoot(node.explainImpl.Statement)
+	case *CompoundStmt:
+		for _, child := range node.Stmts {
+			if err := ValidateSelectIntoStatementRoot(child); err != "" {
+				return err
+			}
+		}
+	case *SetVar:
+		for _, assignment := range node.Assignments {
+			// A nested user-variable assignment has no owner in SET and must
+			// be rejected.  INTO OUTFILE is deliberately left to the existing
+			// planner diagnostic; it is a distinct export action and is kept
+			// valid by the expression-value path used by SET tests.
+			if assignment != nil && (exprHasUserVariableInto(assignment.Value) ||
+				exprHasUserVariableInto(assignment.Reserved)) {
+				return MisplacedIntoClauseMessage
+			}
+		}
+	case *Do:
+		if exprsHaveInto(node.Exprs) {
+			return MisplacedIntoClauseMessage
+		}
+	case *CallStmt:
+		if exprsHaveInto(node.Args) {
+			return MisplacedIntoClauseMessage
+		}
+	case *ShowTables:
+		if node.Like != nil && exprHasNestedInto(node.Like) ||
+			(node.Where != nil && exprHasNestedInto(node.Where.Expr)) {
+			return MisplacedIntoClauseMessage
+		}
+	default:
+		// SET, DO, CALL, SHOW predicates, and other statement roots do not
+		// provide an owner for a SELECT assignment.  Reflection is deliberate
+		// here: it follows every AST field, including newly added statement
+		// forms, instead of another incomplete type switch.
+		if selectTreeHasUserVariableInto(reflect.ValueOf(stmt)) {
+			return MisplacedIntoClauseMessage
+		}
+	}
+	return ""
+}
+
+func updateExprsHaveInto(exprs UpdateExprs) bool {
+	for _, expr := range exprs {
+		if expr != nil && exprHasNestedInto(expr.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func partitionValuesHaveInto(values PartitionValues) bool {
+	for _, value := range values {
+		if value.Expr != nil && exprHasNestedInto(value.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func ValidateValuesIntoPlacement(stmt *ValuesStatement) string {
+	if stmt == nil {
+		return ""
+	}
+	for _, row := range stmt.Rows {
+		if exprsHaveInto(row) {
+			return MisplacedIntoClauseMessage
+		}
+	}
+	if orderByHasInto(stmt.OrderBy) || limitHasInto(stmt.Limit) {
+		return MisplacedIntoClauseMessage
+	}
+	return ""
+}
+
+func ValidatePerformSelectIntoPlacement(stmt *Select) string {
+	if stmt == nil {
+		return ""
+	}
+	if selectTreeHasUserVariableInto(reflect.ValueOf(stmt)) {
+		return PerformIntoClauseMessage
+	}
+	return ""
+}
+
+func selectTreeHasUserVariableInto(value reflect.Value) bool {
+	if !value.IsValid() {
+		return false
+	}
+	if value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		if value.CanInterface() {
+			switch node := value.Interface().(type) {
+			case *Select:
+				if len(node.IntoVars) > 0 {
+					return true
+				}
+			case *SelectClause:
+				if len(node.IntoVars) > 0 {
+					return true
+				}
+			case Expr:
+				// Expression nodes may own private child fields (for example
+				// SampleExpr.columns).  Once the expression is interfaceable,
+				// use the user-variable-only expression traversal instead of
+				// reflecting through those private fields, which are not
+				// interfaceable.  EXPORT clauses are handled by the enclosing
+				// statement validators and must not make PERFORM report the
+				// user-variable error.
+				return exprHasUserVariableInto(node)
+			}
+		}
+		return selectTreeHasUserVariableInto(value.Elem())
+	}
+
+	switch value.Kind() {
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if selectTreeHasUserVariableInto(value.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if selectTreeHasUserVariableInto(value.Index(i)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func withHasInto(with *With) bool {
+	if with == nil {
+		return false
+	}
+	for _, cte := range with.CTEs {
+		if cte != nil && statementHasInto(cte.Stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func statementHasInto(stmt Statement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return len(node.IntoVars) > 0 || node.Ep != nil ||
+			withHasInto(node.With) || selectTreeHasInto(node.Select) ||
+			selectTreeHasExport(node.Select) || selectStatementHasNestedInto(node.Select) ||
+			timeWindowHasInto(node.TimeWindow) || orderByHasInto(node.OrderBy) ||
+			limitHasInto(node.Limit)
+	case *ValuesStatement:
+		return ValidateValuesIntoPlacement(node) != ""
+	default:
+		return false
+	}
+}
+
+func selectStatementHasNestedInto(stmt SelectStatement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return withHasInto(node.With) ||
+			selectStatementHasNestedInto(node.Select) ||
+			timeWindowHasInto(node.TimeWindow) ||
+			orderByHasInto(node.OrderBy) ||
+			limitHasInto(node.Limit)
+	case *SelectClause:
+		if selectExprsHaveInto(node.Exprs) {
+			return true
+		}
+		if node.From != nil && tableExprsHaveInto(node.From.Tables) {
+			return true
+		}
+		if node.Where != nil && exprHasNestedInto(node.Where.Expr) {
+			return true
+		}
+		if node.Having != nil && exprHasNestedInto(node.Having.Expr) {
+			return true
+		}
+		if groupByHasInto(node.GroupBy) {
+			return true
+		}
+		return false
+	case *ParenSelect:
+		return selectStatementHasNestedInto(node.Select)
+	case *UnionClause:
+		return selectStatementHasNestedInto(node.Left) || selectStatementHasNestedInto(node.Right)
+	case *ValuesClause:
+		for _, row := range node.Rows {
+			if exprsHaveInto(row) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func selectExprsHaveInto(exprs SelectExprs) bool {
+	for _, expr := range exprs {
+		if exprHasNestedInto(expr.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprsHaveInto(exprs TableExprs) bool {
+	for _, expr := range exprs {
+		if tableExprHasInto(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprHasInto(expr TableExpr) bool {
+	switch node := expr.(type) {
+	case nil:
+		return false
+	case *Subquery:
+		return selectStatementHasInto(node.Select)
+	case *AliasedTableExpr:
+		return tableExprHasInto(node.Expr)
+	case *ParenTableExpr:
+		return tableExprHasInto(node.Expr)
+	case *JoinTableExpr:
+		return tableExprHasInto(node.Left) || tableExprHasInto(node.Right) || joinCondHasInto(node.Cond)
+	case *ApplyTableExpr:
+		return tableExprHasInto(node.Left) || tableExprHasInto(node.Right)
+	case *TableFunction:
+		return exprHasNestedInto(node.Func) ||
+			(node.SelectStmt != nil && selectStatementHasInto(node.SelectStmt))
+	case *TableName:
+		if node.AtTsExpr != nil && exprHasNestedInto(node.AtTsExpr.Expr) {
+			return true
+		}
+		if node.IcebergRef != nil {
+			return exprHasNestedInto(node.IcebergRef.Snapshot) ||
+				exprHasNestedInto(node.IcebergRef.Timestamp)
+		}
+		return false
+	case *StatementSource:
+		return statementHasInto(node.Statement)
+	case SelectStatement:
+		return selectStatementHasInto(node)
+	default:
+		return false
+	}
+}
+
+func joinCondHasInto(cond JoinCond) bool {
+	switch node := cond.(type) {
+	case nil:
+		return false
+	case *OnJoinCond:
+		return exprHasNestedInto(node.Expr)
+	default:
+		return false
+	}
+}
+
+func groupByHasInto(groupBy *GroupByClause) bool {
+	if groupBy == nil {
+		return false
+	}
+	for _, exprs := range groupBy.GroupByExprsList {
+		if exprsHaveInto(exprs) {
+			return true
+		}
+	}
+	return exprsHaveInto(groupBy.GroupingSet)
+}
+
+func orderByHasInto(orderBy OrderBy) bool {
+	for _, order := range orderBy {
+		if order != nil && exprHasNestedInto(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func limitHasInto(limit *Limit) bool {
+	return limit != nil && (exprHasNestedInto(limit.Offset) || exprHasNestedInto(limit.Count))
+}
+
+func timeWindowHasInto(timeWindow *TimeWindow) bool {
+	if timeWindow == nil {
+		return false
+	}
+	if timeWindow.Interval != nil && exprHasNestedInto(timeWindow.Interval.Val) {
+		return true
+	}
+	if timeWindow.Sliding != nil && exprHasNestedInto(timeWindow.Sliding.Val) {
+		return true
+	}
+	return timeWindow.Fill != nil && exprHasNestedInto(timeWindow.Fill.Val)
+}
+
+func exprsHaveInto(exprs Exprs) bool {
+	for _, expr := range exprs {
+		if exprHasNestedInto(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+// The generic SELECT-into checks distinguish a user-variable assignment from
+// an INTO OUTFILE export.  PERFORM uses that distinction: a nested user
+// variable has no owner and must be rejected by the parser, while a nested
+// export is retained for the planner's existing PERFORM-specific diagnostic.
+// Keep this traversal separate from exprHasNestedInto so private expression
+// fields (notably SampleExpr.columns) are still visited without treating an
+// export as a user-variable assignment.
+func withHasUserVariableInto(with *With) bool {
+	if with == nil {
+		return false
+	}
+	for _, cte := range with.CTEs {
+		if cte != nil && statementHasUserVariableInto(cte.Stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func statementHasUserVariableInto(stmt Statement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return selectStatementHasUserVariableInto(node)
+	case *ValuesStatement:
+		for _, row := range node.Rows {
+			if exprsHaveUserVariableInto(row) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectStatementHasUserVariableInto(stmt SelectStatement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return len(node.IntoVars) > 0 ||
+			withHasUserVariableInto(node.With) ||
+			selectStatementHasUserVariableInto(node.Select) ||
+			timeWindowHasUserVariableInto(node.TimeWindow) ||
+			orderByHasUserVariableInto(node.OrderBy) ||
+			limitHasUserVariableInto(node.Limit)
+	case *SelectClause:
+		if len(node.IntoVars) > 0 || selectExprsHaveUserVariableInto(node.Exprs) {
+			return true
+		}
+		if node.From != nil && tableExprsHaveUserVariableInto(node.From.Tables) {
+			return true
+		}
+		if node.Where != nil && exprHasUserVariableInto(node.Where.Expr) {
+			return true
+		}
+		if node.Having != nil && exprHasUserVariableInto(node.Having.Expr) {
+			return true
+		}
+		return groupByHasUserVariableInto(node.GroupBy)
+	case *ParenSelect:
+		return selectStatementHasUserVariableInto(node.Select)
+	case *UnionClause:
+		return selectStatementHasUserVariableInto(node.Left) ||
+			selectStatementHasUserVariableInto(node.Right)
+	case *ValuesClause:
+		for _, row := range node.Rows {
+			if exprsHaveUserVariableInto(row) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectExprsHaveUserVariableInto(exprs SelectExprs) bool {
+	for _, expr := range exprs {
+		if exprHasUserVariableInto(expr.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprsHaveUserVariableInto(exprs TableExprs) bool {
+	for _, expr := range exprs {
+		if tableExprHasUserVariableInto(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprHasUserVariableInto(expr TableExpr) bool {
+	switch node := expr.(type) {
+	case nil:
+		return false
+	case *Subquery:
+		return selectStatementHasUserVariableInto(node.Select)
+	case *AliasedTableExpr:
+		return tableExprHasUserVariableInto(node.Expr)
+	case *ParenTableExpr:
+		return tableExprHasUserVariableInto(node.Expr)
+	case *JoinTableExpr:
+		return tableExprHasUserVariableInto(node.Left) ||
+			tableExprHasUserVariableInto(node.Right) ||
+			joinCondHasUserVariableInto(node.Cond)
+	case *ApplyTableExpr:
+		return tableExprHasUserVariableInto(node.Left) ||
+			tableExprHasUserVariableInto(node.Right)
+	case *TableFunction:
+		return exprHasUserVariableInto(node.Func) ||
+			(node.SelectStmt != nil && selectStatementHasUserVariableInto(node.SelectStmt))
+	case *TableName:
+		if node.AtTsExpr != nil && exprHasUserVariableInto(node.AtTsExpr.Expr) {
+			return true
+		}
+		if node.IcebergRef != nil {
+			return exprHasUserVariableInto(node.IcebergRef.Snapshot) ||
+				exprHasUserVariableInto(node.IcebergRef.Timestamp)
+		}
+		return false
+	case *StatementSource:
+		return statementHasUserVariableInto(node.Statement)
+	case SelectStatement:
+		return selectStatementHasUserVariableInto(node)
+	}
+	return false
+}
+
+func joinCondHasUserVariableInto(cond JoinCond) bool {
+	switch node := cond.(type) {
+	case *OnJoinCond:
+		return exprHasUserVariableInto(node.Expr)
+	}
+	return false
+}
+
+func groupByHasUserVariableInto(groupBy *GroupByClause) bool {
+	if groupBy == nil {
+		return false
+	}
+	for _, exprs := range groupBy.GroupByExprsList {
+		if exprsHaveUserVariableInto(exprs) {
+			return true
+		}
+	}
+	return exprsHaveUserVariableInto(groupBy.GroupingSet)
+}
+
+func orderByHasUserVariableInto(orderBy OrderBy) bool {
+	for _, order := range orderBy {
+		if order != nil && exprHasUserVariableInto(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func limitHasUserVariableInto(limit *Limit) bool {
+	return limit != nil && (exprHasUserVariableInto(limit.Offset) ||
+		exprHasUserVariableInto(limit.Count))
+}
+
+func timeWindowHasUserVariableInto(timeWindow *TimeWindow) bool {
+	if timeWindow == nil {
+		return false
+	}
+	if timeWindow.Interval != nil && exprHasUserVariableInto(timeWindow.Interval.Val) {
+		return true
+	}
+	if timeWindow.Sliding != nil && exprHasUserVariableInto(timeWindow.Sliding.Val) {
+		return true
+	}
+	return timeWindow.Fill != nil && exprHasUserVariableInto(timeWindow.Fill.Val)
+}
+
+func exprsHaveUserVariableInto(exprs Exprs) bool {
+	for _, expr := range exprs {
+		if exprHasUserVariableInto(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func frameHasUserVariableInto(frame *FrameClause) bool {
+	if frame == nil {
+		return false
+	}
+	return frameBoundHasUserVariableInto(frame.Start) ||
+		frameBoundHasUserVariableInto(frame.End)
+}
+
+func frameBoundHasUserVariableInto(bound *FrameBound) bool {
+	return bound != nil && exprHasUserVariableInto(bound.Expr)
+}
+
+func exprHasUserVariableInto(expr Expr) bool {
+	switch node := expr.(type) {
+	case nil:
+		return false
+	case *Subquery:
+		return selectStatementHasUserVariableInto(node.Select)
+	case *ParenExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *BinaryExpr:
+		return exprHasUserVariableInto(node.Left) || exprHasUserVariableInto(node.Right)
+	case *UnaryExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *ComparisonExpr:
+		return exprHasUserVariableInto(node.Left) ||
+			exprHasUserVariableInto(node.Right) ||
+			exprHasUserVariableInto(node.Escape)
+	case *AndExpr:
+		return exprHasUserVariableInto(node.Left) || exprHasUserVariableInto(node.Right)
+	case *XorExpr:
+		return exprHasUserVariableInto(node.Left) || exprHasUserVariableInto(node.Right)
+	case *OrExpr:
+		return exprHasUserVariableInto(node.Left) || exprHasUserVariableInto(node.Right)
+	case *NotExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsNullExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsNotNullExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsUnknownExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsNotUnknownExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsTrueExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsNotTrueExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsFalseExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsNotFalseExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *FuncExpr:
+		if exprsHaveUserVariableInto(node.Exprs) ||
+			orderByHasUserVariableInto(node.OrderBy) {
+			return true
+		}
+		if node.WindowSpec != nil {
+			return exprsHaveUserVariableInto(node.WindowSpec.PartitionBy) ||
+				orderByHasUserVariableInto(node.WindowSpec.OrderBy) ||
+				frameHasUserVariableInto(node.WindowSpec.Frame)
+		}
+		return false
+	case *SerialExtractExpr:
+		return exprHasUserVariableInto(node.SerialExpr) ||
+			exprHasUserVariableInto(node.IndexExpr)
+	case *CastExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *BitCastExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *Tuple:
+		return exprsHaveUserVariableInto(node.Exprs)
+	case *RangeCond:
+		return exprHasUserVariableInto(node.Left) ||
+			exprHasUserVariableInto(node.From) ||
+			exprHasUserVariableInto(node.To)
+	case *CaseExpr:
+		if exprHasUserVariableInto(node.Expr) || exprHasUserVariableInto(node.Else) {
+			return true
+		}
+		for _, when := range node.Whens {
+			if when != nil && (exprHasUserVariableInto(when.Cond) ||
+				exprHasUserVariableInto(when.Val)) {
+				return true
+			}
+		}
+		return false
+	case *IntervalExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *DefaultVal:
+		return exprHasUserVariableInto(node.Expr)
+	case *UpdateVal:
+		return false
+	case *SampleExpr:
+		return exprsHaveUserVariableInto(node.columns)
+	case *FullTextMatchExpr:
+		if exprHasUserVariableInto(node.Pattern) {
+			return true
+		}
+		for _, keyPart := range node.KeyParts {
+			if keyPart != nil && (exprHasUserVariableInto(keyPart.ColName) ||
+				exprHasUserVariableInto(keyPart.Expr)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprHasNestedInto(expr Expr) bool {
+	switch node := expr.(type) {
+	case nil:
+		return false
+	case *Subquery:
+		return selectStatementHasInto(node.Select)
+	case *ParenExpr:
+		return exprHasNestedInto(node.Expr)
+	case *BinaryExpr:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.Right)
+	case *UnaryExpr:
+		return exprHasNestedInto(node.Expr)
+	case *ComparisonExpr:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.Right) || exprHasNestedInto(node.Escape)
+	case *AndExpr:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.Right)
+	case *XorExpr:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.Right)
+	case *OrExpr:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.Right)
+	case *NotExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsNullExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsNotNullExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsUnknownExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsNotUnknownExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsTrueExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsNotTrueExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsFalseExpr:
+		return exprHasNestedInto(node.Expr)
+	case *IsNotFalseExpr:
+		return exprHasNestedInto(node.Expr)
+	case *FuncExpr:
+		if exprsHaveInto(node.Exprs) || orderByHasInto(node.OrderBy) {
+			return true
+		}
+		if node.WindowSpec != nil {
+			return exprsHaveInto(node.WindowSpec.PartitionBy) ||
+				orderByHasInto(node.WindowSpec.OrderBy) ||
+				frameHasInto(node.WindowSpec.Frame)
+		}
+		return false
+	case *SerialExtractExpr:
+		return exprHasNestedInto(node.SerialExpr) || exprHasNestedInto(node.IndexExpr)
+	case *CastExpr:
+		return exprHasNestedInto(node.Expr)
+	case *BitCastExpr:
+		return exprHasNestedInto(node.Expr)
+	case *Tuple:
+		return exprsHaveInto(node.Exprs)
+	case *RangeCond:
+		return exprHasNestedInto(node.Left) || exprHasNestedInto(node.From) || exprHasNestedInto(node.To)
+	case *CaseExpr:
+		if exprHasNestedInto(node.Expr) || exprHasNestedInto(node.Else) {
+			return true
+		}
+		for _, when := range node.Whens {
+			if when != nil && (exprHasNestedInto(when.Cond) || exprHasNestedInto(when.Val)) {
+				return true
+			}
+		}
+		return false
+	case *IntervalExpr:
+		return exprHasNestedInto(node.Expr)
+	case *DefaultVal:
+		return exprHasNestedInto(node.Expr)
+	case *UpdateVal:
+		return false
+	case *SampleExpr:
+		return exprsHaveInto(node.columns)
+	case *FullTextMatchExpr:
+		if exprHasNestedInto(node.Pattern) {
+			return true
+		}
+		for _, keyPart := range node.KeyParts {
+			if keyPart != nil && (exprHasNestedInto(keyPart.ColName) || exprHasNestedInto(keyPart.Expr)) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func frameHasInto(frame *FrameClause) bool {
+	if frame == nil {
+		return false
+	}
+	return frameBoundHasInto(frame.Start) || frameBoundHasInto(frame.End)
+}
+
+func frameBoundHasInto(bound *FrameBound) bool {
+	return bound != nil && exprHasNestedInto(bound.Expr)
+}
+
+func selectStatementHasInto(stmt SelectStatement) bool {
+	return selectTreeHasInto(stmt) || selectTreeHasExport(stmt) || selectStatementHasNestedInto(stmt)
+}
+
+func selectTreeHasInto(stmt SelectStatement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return len(node.IntoVars) > 0 || selectTreeHasInto(node.Select)
+	case *SelectClause:
+		return len(node.IntoVars) > 0
+	case *ParenSelect:
+		return selectTreeHasInto(node.Select)
+	case *UnionClause:
+		return selectTreeHasInto(node.Left) || selectTreeHasInto(node.Right)
+	default:
+		return false
+	}
+}
+
+func SelectIntoExport(stmt SelectStatement) *ExportParam {
+	return selectIntoExportForTopLevel(stmt)
+}
+
+func selectIntoExportForTopLevel(stmt SelectStatement) *ExportParam {
+	switch node := stmt.(type) {
+	case *Select:
+		if node.Ep != nil {
+			return node.Ep
+		}
+		return selectIntoExportForTopLevel(node.Select)
+	case *SelectClause:
+		return node.IntoExport
+	case *ParenSelect:
+		return selectIntoExportForTopLevel(node.Select)
+	case *UnionClause:
+		if selectTreeHasExport(node.Left) {
+			return nil
+		}
+		return selectIntoExportForTopLevel(node.Right)
+	default:
+		return nil
+	}
+}
+
+func selectTreeHasExport(stmt SelectStatement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return node.Ep != nil || selectTreeHasExport(node.Select)
+	case *SelectClause:
+		return node.IntoExport != nil
+	case *ParenSelect:
+		return selectTreeHasExport(node.Select)
+	case *UnionClause:
+		return selectTreeHasExport(node.Left) || selectTreeHasExport(node.Right)
+	default:
+		return false
+	}
+}
+
+func SelectIntoExportOr(stmt SelectStatement, fallback *ExportParam) *ExportParam {
+	if export := SelectIntoExport(stmt); export != nil {
+		return export
+	}
+	return fallback
 }
 
 func (node *SelectClause) GetStatementType() string { return "Select" }
@@ -516,11 +1523,57 @@ type GroupByClause struct {
 	GroupByExprsList []Exprs
 	GroupingSet      Exprs
 	Apart            bool
-	Cube             bool
-	Rollup           bool
+	// The next four fields are planner-internal metadata for generated
+	// grouping-set branches. They keep hidden ORDER BY expressions and bound
+	// output identity in the original FROM scope.
+	GroupingSetOrderHiddenCount  int
+	GroupingSetOrderAliases      map[string][]Expr
+	GroupingSetOrderSourceProbes map[string]*GroupingSetOrderSourceProbe
+	PreserveOrderSemanticKeys    bool
+	Cube                         bool
+	GroupingSets                 bool
+	Rollup                       bool
+}
+
+// GroupingSetOrderSourceProbe defers an otherwise unknowable name-resolution
+// choice until a generated branch has bound its real FROM scope.
+type GroupingSetOrderSourceProbe struct {
+	FallbackName string
+	Resolved     bool
+	SourceFound  bool
 }
 
 func (node *GroupByClause) Format(ctx *FmtCtx) {
+	if node.Apart {
+		if len(node.GroupingSet) == 0 {
+			return
+		}
+		ctx.WriteString("group by ")
+		node.GroupingSet.Format(ctx)
+		return
+	}
+	if node.Cube {
+		ctx.WriteString("group by cube(")
+		if len(node.GroupByExprsList) > 0 {
+			node.GroupByExprsList[0].Format(ctx)
+		}
+		ctx.WriteByte(')')
+		return
+	}
+	if node.GroupingSets {
+		ctx.WriteString("group by grouping sets (")
+		for i, list := range node.GroupByExprsList {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			ctx.WriteByte('(')
+			list.Format(ctx)
+			ctx.WriteByte(')')
+		}
+		ctx.WriteByte(')')
+		return
+	}
+
 	prefix := "group by "
 	for _, list := range node.GroupByExprsList {
 		for _, n := range list {
@@ -528,9 +1581,6 @@ func (node *GroupByClause) Format(ctx *FmtCtx) {
 			n.Format(ctx)
 			prefix = ", "
 		}
-	}
-	if node.Cube {
-		ctx.WriteString("with cube")
 	}
 	if node.Rollup {
 		ctx.WriteString(" with rollup")

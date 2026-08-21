@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"iter"
 	"path"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -138,8 +140,87 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 	return canonicalCreateTableSQL(stmt)
 }
 
+// validateViewDefinitionPlugins asks every registered index plugin to vet the optimized
+// plan of a view's defining SELECT before it is persisted.
+//
+// View DDL is the one statement that STORES a query without running it, so anything an
+// algorithm cannot execute commits silently and only surfaces when someone selects from
+// the view. Today only the fulltext family refuses anything: MATCH() AGAINST() binds to a
+// placeholder with no implementation, so a definition no FULLTEXT index can serve is
+// unrunnable rather than merely slow. Vector plugins return nil -- their distance
+// functions are real kernels, so a plan that misses the index still executes as a
+// brute-force scan.
+//
+// Plugins are consulted in a stable order so that a definition offending more than one
+// reports the same error every time.
+//
+// This must run on the OPTIMIZED plan, which is why it is not part of the validate hook
+// passed into the bind: that hook fires before createQuery, where an index rewrite has not
+// yet had its chance and every candidate expression still looks unresolved.
+// indexRewritesDisabled reports whether the global optimizer_hints variable turns off
+// applyIndices. Reads the same variable parseOptimizeHints does, in the same key=value
+// form, rather than depending on a QueryBuilder that genViewTableDef does not have.
+func indexRewritesDisabled(ctx CompilerContext) bool {
+	if ctx == nil {
+		return false
+	}
+	proc := ctx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables("optimizer_hints")
+	if !ok {
+		return false
+	}
+	str, ok := v.(string)
+	if !ok || len(str) == 0 {
+		return false
+	}
+	// splitOptimizerHint, not a private copy of the split: this must answer "did applyIndices
+	// really get switched off", and only the parser the optimizer itself uses knows that. A
+	// copy that trimmed whitespace read ` applyIndices=1` as a hint the optimizer had ignored,
+	// so the rewrites ran while validation below was skipped as if they had not.
+	for _, kv := range strings.Split(str, ",") {
+		if key, value, ok := splitOptimizerHint(kv); ok && key == "applyIndices" && value != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error {
+	if query == nil {
+		return nil
+	}
+	// Every plugin's answer is inferred from whether its rewrite fired, so the inference is
+	// only valid when rewrites were allowed to run at all. The global optimizer_hints knob
+	// can switch applyIndices off wholesale (apply_indices.go), leaving every placeholder in
+	// place regardless of the catalog -- under `set global optimizer_hints = 'applyIndices=1'`
+	// this would refuse EVERY fulltext view, including ones with a perfectly good index, and
+	// keep refusing cluster-wide until someone noticed the hint. A diagnostic knob must not
+	// silently turn into a DDL policy, so skip validation entirely while it is set: being
+	// permissive costs an unrunnable view, being wrong here costs working ones.
+	if indexRewritesDisabled(ctx) {
+		return nil
+	}
+	plugins := indexplugin.All()
+	sort.Slice(plugins, func(i, j int) bool { return plugins[i].Algo() < plugins[j].Algo() })
+	for _, p := range plugins {
+		hooks := p.Plan()
+		if hooks == nil {
+			continue
+		}
+		if err := hooks.ValidateViewDefinition(ctx, query); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
+	dependencyCapture := newViewDependencyCaptureContext(ctx)
+	ctx = dependencyCapture
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
@@ -161,11 +242,13 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	// check view statement
 	var stmtPlan *Plan
 	var outputColumnProvenance []OutputColumnProvenance
+	var expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
 	captureColumnTypes := func(bindCtx *BindContext) {
 		outputColumnProvenance = make([]OutputColumnProvenance, len(bindCtx.headings))
 		for i := range outputColumnProvenance {
 			outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
 		}
+		expandedSelectLists = bindCtx.expandedSelectLists
 	}
 	var err error
 	switch s := stmt.Select.(type) {
@@ -184,6 +267,12 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	}
 
 	query := stmtPlan.GetQuery()
+	// Must run on the OPTIMIZED plan, which is why it is not part of the validate hook
+	// above: that hook fires before createQuery, where every MATCH is still an unresolved
+	// function whether or not an index exists.
+	if err = validateViewDefinitionPlugins(ctx, query); err != nil {
+		return nil, err
+	}
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
@@ -234,12 +323,20 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 			viewSql = strings.Replace(viewSql, "alter", "create", 1)
 		}
 	}
+	persistedCreateSQL := rootSQL
+	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, expandedSelectLists); rewritten {
+		viewSql = stableViewSQL
+		persistedCreateSQL = stableViewSQL
+	}
 
+	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	viewData, err := json.Marshal(ViewData{
-		Stmt:            viewSql,
-		DefaultDatabase: ctx.DefaultDatabase(),
-		SQLMode:         parserSQLModeFromContext(ctx),
-		SecurityType:    getViewSecurityTypeFromContext(ctx),
+		Stmt:                viewSql,
+		DefaultDatabase:     ctx.DefaultDatabase(),
+		SQLMode:             parserSQLModeFromContext(ctx),
+		SecurityType:        getViewSecurityTypeFromContext(ctx),
+		LowerCaseTableNames: &lowerCaseTableNames,
+		Dependencies:        dependencyCapture.dependencies(),
 	})
 	if err != nil {
 		return nil, err
@@ -254,7 +351,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 		},
 		{
 			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: rootSQL,
+			Value: persistedCreateSQL,
 		},
 	}
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
@@ -266,6 +363,915 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	})
 
 	return &tableDef, nil
+}
+
+func stableViewSQLWithExpandedStars(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	viewSql string,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (string, bool) {
+	// SAMPLE(*) expands to a sampling operator during binding. The rewriter
+	// leaves that query block intact while still stabilizing ordinary stars in
+	// unrelated query blocks.
+	if viewSql == "" || len(expandedSelectLists) == 0 || !viewSelectHasStar(stmt) {
+		return viewSql, false
+	}
+
+	stableSelect, ok := viewSelectWithExpandedStars(stmt, expandedSelectLists)
+	if !ok {
+		return viewSql, false
+	}
+
+	parserSQLMode := ""
+	if sqlMode := parserSQLModeFromContext(ctx); sqlMode != nil {
+		parserSQLMode = *sqlMode
+	}
+	stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), viewSql, ctx.GetLowerCaseTableNames(), parserSQLMode)
+	if err != nil {
+		return viewSql, false
+	}
+	defer func() {
+		for _, statement := range stmts {
+			statement.Free()
+		}
+	}()
+	if len(stmts) != 1 {
+		return viewSql, false
+	}
+
+	switch viewStmt := stmts[0].(type) {
+	case *tree.CreateView:
+		stableStmt := *viewStmt
+		stableStmt.AsSource = stableSelect
+		return formatStableViewSQL(&stableStmt), true
+	case *tree.AlterView:
+		stableStmt := &tree.CreateView{
+			Name:     viewStmt.Name,
+			ColNames: viewStmt.ColNames,
+			AsSource: stableSelect,
+		}
+		return formatStableViewSQL(stableStmt), true
+	default:
+		return viewSql, false
+	}
+}
+
+func formatStableViewSQL(stmt *tree.CreateView) string {
+	return tree.StringWithOpts(
+		stmt,
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+		tree.WithModeIndependentStringLiterals(),
+	)
+}
+
+func viewSelectHasStar(stmt *tree.Select) bool {
+	if stmt == nil {
+		return false
+	}
+	return selectWithHasStar(stmt.With) ||
+		selectStatementHasStar(stmt.Select) ||
+		orderByHasStar(stmt.OrderBy) ||
+		limitHasStar(stmt.Limit) ||
+		timeWindowHasStar(stmt.TimeWindow)
+}
+
+func selectStatementHasStar(stmt tree.SelectStatement) bool {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		return selectClauseHasStar(selectStmt)
+	case *tree.Select:
+		return viewSelectHasStar(selectStmt)
+	case *tree.ParenSelect:
+		return selectStatementHasStar(selectStmt.Select)
+	case *tree.UnionClause:
+		return selectStatementHasStar(selectStmt.Left) || selectStatementHasStar(selectStmt.Right)
+	}
+	return false
+}
+
+func selectWithHasStar(with *tree.With) bool {
+	if with == nil {
+		return false
+	}
+	for _, cte := range with.CTEs {
+		if cte == nil {
+			continue
+		}
+		selectStmt, ok := cte.Stmt.(tree.SelectStatement)
+		if ok && selectStatementHasStar(selectStmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectClauseHasStar(selectClause *tree.SelectClause) bool {
+	if selectClause == nil {
+		return false
+	}
+	for _, expr := range selectClause.Exprs {
+		if selectExprHasStar(expr) {
+			return true
+		}
+	}
+	if fromHasStar(selectClause.From) {
+		return true
+	}
+	if whereHasStar(selectClause.Where) || whereHasStar(selectClause.Having) {
+		return true
+	}
+	return groupByHasStar(selectClause.GroupBy)
+}
+
+func fromHasStar(from *tree.From) bool {
+	if from == nil {
+		return false
+	}
+	for _, table := range from.Tables {
+		if tableExprHasStar(table) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprHasStar(table tree.TableExpr) bool {
+	switch tableExpr := table.(type) {
+	case *tree.Select:
+		return viewSelectHasStar(tableExpr)
+	case *tree.Subquery:
+		return selectStatementHasStar(tableExpr.Select)
+	case *tree.AliasedTableExpr:
+		return tableExprHasStar(tableExpr.Expr)
+	case *tree.ParenTableExpr:
+		return tableExprHasStar(tableExpr.Expr)
+	case *tree.JoinTableExpr:
+		return tableExprHasStar(tableExpr.Left) || tableExprHasStar(tableExpr.Right) || joinCondHasStar(tableExpr.Cond)
+	case *tree.ApplyTableExpr:
+		return tableExprHasStar(tableExpr.Left) || tableExprHasStar(tableExpr.Right)
+	case *tree.StatementSource:
+		if selectStmt, ok := tableExpr.Statement.(*tree.Select); ok {
+			return viewSelectHasStar(selectStmt)
+		}
+	case *tree.TableFunction:
+		return exprHasStar(tableExpr.Func)
+	}
+	return false
+}
+
+func joinCondHasStar(cond tree.JoinCond) bool {
+	onCond, ok := cond.(*tree.OnJoinCond)
+	return ok && exprHasStar(onCond.Expr)
+}
+
+func whereHasStar(where *tree.Where) bool {
+	return where != nil && exprHasStar(where.Expr)
+}
+
+func groupByHasStar(groupBy *tree.GroupByClause) bool {
+	if groupBy == nil {
+		return false
+	}
+	for _, exprs := range groupBy.GroupByExprsList {
+		if exprsHasStar(exprs) {
+			return true
+		}
+	}
+	return exprsHasStar(groupBy.GroupingSet)
+}
+
+func exprsHasStar(exprs tree.Exprs) bool {
+	for _, expr := range exprs {
+		if exprHasStar(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func orderByHasStar(orderBy tree.OrderBy) bool {
+	for _, order := range orderBy {
+		if order != nil && exprHasStar(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func limitHasStar(limit *tree.Limit) bool {
+	return limit != nil && (exprHasStar(limit.Offset) || exprHasStar(limit.Count))
+}
+
+func timeWindowHasStar(timeWindow *tree.TimeWindow) bool {
+	if timeWindow == nil {
+		return false
+	}
+	if timeWindow.Interval != nil && exprHasStar(timeWindow.Interval.Val) {
+		return true
+	}
+	if timeWindow.Sliding != nil && exprHasStar(timeWindow.Sliding.Val) {
+		return true
+	}
+	return timeWindow.Fill != nil && exprHasStar(timeWindow.Fill.Val)
+}
+
+func exprHasStar(expr tree.Expr) bool {
+	return exprValueHasStar(reflect.ValueOf(expr), make(map[treeClonePointer]struct{}))
+}
+
+func exprValueHasStar(value reflect.Value, visited map[treeClonePointer]struct{}) bool {
+	if !value.IsValid() {
+		return false
+	}
+	for value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return false
+		}
+		value = value.Elem()
+	}
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		key := treeClonePointer{typ: value.Type(), ptr: value.Pointer()}
+		if _, ok := visited[key]; ok {
+			return false
+		}
+		visited[key] = struct{}{}
+		if expr, ok := value.Interface().(tree.Expr); ok && directExprHasStar(expr) {
+			return true
+		}
+		if sample, ok := value.Interface().(*tree.SampleExpr); ok {
+			columns, isStar := sample.GetColumns()
+			if isStar {
+				return true
+			}
+			for _, column := range columns {
+				if exprValueHasStar(reflect.ValueOf(column), visited) {
+					return true
+				}
+			}
+		}
+		if subquery, ok := value.Interface().(*tree.Subquery); ok {
+			return selectStatementHasStar(subquery.Select)
+		}
+		value = value.Elem()
+	}
+	if value.Kind() == reflect.Struct {
+		if value.CanInterface() {
+			if expr, ok := value.Interface().(tree.Expr); ok && directExprHasStar(expr) {
+				return true
+			}
+		}
+		for i := 0; i < value.NumField(); i++ {
+			field := value.Field(i)
+			if !field.CanInterface() {
+				continue
+			}
+			if selectStmt, ok := field.Interface().(tree.SelectStatement); ok && selectStatementHasStar(selectStmt) {
+				return true
+			}
+			if exprValueHasStar(field, visited) {
+				return true
+			}
+		}
+	}
+	if value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
+		for i := 0; i < value.Len(); i++ {
+			if exprValueHasStar(value.Index(i), visited) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectExprHasStar(selectExpr tree.SelectExpr) bool {
+	return exprHasStar(selectExpr.Expr)
+}
+
+func selectClauseOutputHasStar(selectClause *tree.SelectClause) bool {
+	if selectClause == nil {
+		return false
+	}
+	for _, expr := range selectClause.Exprs {
+		if directExprHasStar(expr.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectClauseHasOrdinaryStar(selectClause *tree.SelectClause) bool {
+	if selectClause == nil {
+		return false
+	}
+	for _, expr := range selectClause.Exprs {
+		switch expr := expr.Expr.(type) {
+		case tree.UnqualifiedStar:
+			return true
+		case *tree.UnresolvedName:
+			if expr.Star {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectClauseHasSampleExpr(selectClause *tree.SelectClause) bool {
+	if selectClause == nil {
+		return false
+	}
+	for _, expr := range selectClause.Exprs {
+		if _, ok := expr.Expr.(*tree.SampleExpr); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func selectExprsHaveSampleExpr(exprs tree.SelectExprs) bool {
+	for _, expr := range exprs {
+		if _, ok := expr.Expr.(*tree.SampleExpr); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func directExprHasStar(expr tree.Expr) bool {
+	switch expr := expr.(type) {
+	case tree.UnqualifiedStar:
+		return true
+	case *tree.UnresolvedName:
+		return expr.Star
+	case *tree.SampleExpr:
+		_, isStar := expr.GetColumns()
+		if isStar {
+			return true
+		}
+	}
+	return false
+}
+
+func viewSelectWithExpandedStars(
+	stmt *tree.Select,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.Select, bool) {
+	if stmt == nil {
+		return nil, false
+	}
+	stableSelect := *stmt
+	stableWith, withRewritten := viewWithWithExpandedStars(stmt.With, expandedSelectLists)
+	stableSelect.With = stableWith
+	stableStatement, statementRewritten := viewSelectStatementWithExpandedStars(stmt.Select, expandedSelectLists)
+	stableSelect.Select = stableStatement
+	stableOrderBy, orderByRewritten := viewOrderByWithExpandedStars(stmt.OrderBy, expandedSelectLists)
+	stableSelect.OrderBy = stableOrderBy
+	stableLimit, limitRewritten := viewLimitWithExpandedStars(stmt.Limit, expandedSelectLists)
+	stableSelect.Limit = stableLimit
+	stableTimeWindow, timeWindowRewritten := viewTimeWindowWithExpandedStars(stmt.TimeWindow, expandedSelectLists)
+	stableSelect.TimeWindow = stableTimeWindow
+	rewritten := withRewritten || statementRewritten || orderByRewritten || limitRewritten || timeWindowRewritten
+	if stableStatement == nil || !rewritten {
+		return nil, false
+	}
+	return &stableSelect, rewritten
+}
+
+func viewSelectStatementWithExpandedStars(
+	stmt tree.SelectStatement,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.SelectStatement, bool) {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		stableClause := *selectStmt
+		rewritten := false
+		if selectStmt.From != nil {
+			stableFrom, fromRewritten := viewFromWithExpandedStars(selectStmt.From, expandedSelectLists)
+			stableClause.From = stableFrom
+			rewritten = fromRewritten
+		}
+		expandedSelectList, ok := expandedSelectLists[selectStmt]
+		if ok {
+			if selectClauseOutputHasStar(selectStmt) || len(expandedSelectList) != len(selectStmt.Exprs) {
+				// A SAMPLE-only clause must be replaced by the captured SAMPLE
+				// expression, not by a bare projection list supplied by an
+				// incomplete/foreign capture map. The production capture always
+				// preserves SAMPLE, while this guard keeps malformed input from
+				// silently changing the query shape.
+				if selectClauseHasSampleExpr(selectStmt) &&
+					!selectClauseHasOrdinaryStar(selectStmt) &&
+					!selectExprsHaveSampleExpr(expandedSelectList) {
+					stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(selectStmt.Exprs, expandedSelectLists)
+					stableClause.Exprs = stableExprs
+					rewritten = rewritten || exprsRewritten
+				} else {
+					stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(expandedSelectList, expandedSelectLists)
+					stableClause.Exprs = stableExprs
+					rewritten = true
+					rewritten = rewritten || exprsRewritten
+				}
+			} else {
+				stableExprs, exprsRewritten := viewSelectExprsWithExpandedStableHeadings(selectStmt.Exprs, expandedSelectList, expandedSelectLists)
+				stableClause.Exprs = stableExprs
+				rewritten = true
+				rewritten = rewritten || exprsRewritten
+			}
+		} else {
+			stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(selectStmt.Exprs, expandedSelectLists)
+			stableClause.Exprs = stableExprs
+			rewritten = rewritten || exprsRewritten
+		}
+		if stableWhere, whereRewritten := viewWhereWithExpandedStars(selectStmt.Where, expandedSelectLists); whereRewritten {
+			stableClause.Where = stableWhere
+			rewritten = true
+		}
+		if stableHaving, havingRewritten := viewWhereWithExpandedStars(selectStmt.Having, expandedSelectLists); havingRewritten {
+			stableClause.Having = stableHaving
+			rewritten = true
+		}
+		if stableGroupBy, groupByRewritten := viewGroupByWithExpandedStars(selectStmt.GroupBy, expandedSelectLists); groupByRewritten {
+			stableClause.GroupBy = stableGroupBy
+			rewritten = true
+		}
+		return &stableClause, rewritten
+	case *tree.Select:
+		stableSelect := *selectStmt
+		stableWith, withRewritten := viewWithWithExpandedStars(selectStmt.With, expandedSelectLists)
+		stableSelect.With = stableWith
+		stableStatement, statementRewritten := viewSelectStatementWithExpandedStars(selectStmt.Select, expandedSelectLists)
+		stableSelect.Select = stableStatement
+		stableOrderBy, orderByRewritten := viewOrderByWithExpandedStars(selectStmt.OrderBy, expandedSelectLists)
+		stableSelect.OrderBy = stableOrderBy
+		stableLimit, limitRewritten := viewLimitWithExpandedStars(selectStmt.Limit, expandedSelectLists)
+		stableSelect.Limit = stableLimit
+		stableTimeWindow, timeWindowRewritten := viewTimeWindowWithExpandedStars(selectStmt.TimeWindow, expandedSelectLists)
+		stableSelect.TimeWindow = stableTimeWindow
+		return &stableSelect, withRewritten || statementRewritten || orderByRewritten || limitRewritten || timeWindowRewritten
+	case *tree.ParenSelect:
+		stableParen := *selectStmt
+		stableStatement, rewritten := viewSelectStatementWithExpandedStars(selectStmt.Select, expandedSelectLists)
+		if stableStatement == nil {
+			return nil, false
+		}
+		stableSelect, ok := stableStatement.(*tree.Select)
+		if !ok {
+			return nil, false
+		}
+		stableParen.Select = stableSelect
+		return &stableParen, rewritten
+	case *tree.UnionClause:
+		stableUnion := *selectStmt
+		left, leftRewritten := viewSelectStatementWithExpandedStars(selectStmt.Left, expandedSelectLists)
+		right, rightRewritten := viewSelectStatementWithExpandedStars(selectStmt.Right, expandedSelectLists)
+		if left == nil || right == nil {
+			return nil, false
+		}
+		stableUnion.Left = left
+		stableUnion.Right = right
+		return &stableUnion, leftRewritten || rightRewritten
+	default:
+		return stmt, false
+	}
+}
+
+func viewWithWithExpandedStars(
+	with *tree.With,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.With, bool) {
+	if with == nil {
+		return nil, false
+	}
+	stableWith := *with
+	stableWith.CTEs = make([]*tree.CTE, len(with.CTEs))
+	rewritten := false
+	for i, cte := range with.CTEs {
+		if cte == nil {
+			continue
+		}
+		stableCTE := *cte
+		selectStmt, ok := cte.Stmt.(tree.SelectStatement)
+		if !ok {
+			stableWith.CTEs[i] = &stableCTE
+			continue
+		}
+		stableStmt, cteRewritten := viewSelectStatementWithExpandedStars(selectStmt, expandedSelectLists)
+		if stableStmt != nil {
+			stableCTE.Stmt = stableStmt
+		}
+		stableWith.CTEs[i] = &stableCTE
+		rewritten = rewritten || cteRewritten
+	}
+	return &stableWith, rewritten
+}
+
+func viewSelectExprsWithExpandedStars(
+	exprs tree.SelectExprs,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.SelectExprs, bool) {
+	if len(exprs) == 0 {
+		return exprs, false
+	}
+	stableExprs := make(tree.SelectExprs, len(exprs))
+	rewritten := false
+	for i, expr := range exprs {
+		stableExprs[i] = expr
+		stableExpr, exprRewritten := viewExprWithExpandedStars(expr.Expr, expandedSelectLists)
+		if exprRewritten {
+			stableExprs[i].Expr = stableExpr
+			rewritten = true
+		} else {
+			stableExprs[i].Expr = cloneTreeExpr(expr.Expr)
+		}
+		if expr.As != nil {
+			stableExprs[i].As = tree.NewCStr(expr.As.Origin(), 1)
+		}
+	}
+	return stableExprs, rewritten
+}
+
+func viewSelectExprsWithExpandedStableHeadings(
+	originalExprs tree.SelectExprs,
+	expandedExprs tree.SelectExprs,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.SelectExprs, bool) {
+	stableExprs := make(tree.SelectExprs, len(expandedExprs))
+	rewritten := false
+	for i, expandedExpr := range expandedExprs {
+		stableExprs[i] = expandedExpr
+		stableExprs[i].Expr = cloneTreeExpr(expandedExpr.Expr)
+		if expandedExpr.As != nil {
+			stableExprs[i].As = tree.NewCStr(expandedExpr.As.Origin(), 1)
+		}
+		if i >= len(originalExprs) {
+			continue
+		}
+		if rewriteClonedExprSubqueriesWithExpandedStars(
+			reflect.ValueOf(originalExprs[i].Expr),
+			reflect.ValueOf(stableExprs[i].Expr),
+			expandedSelectLists,
+			make(map[treeClonePointer]struct{}),
+		) {
+			rewritten = true
+		}
+	}
+	return stableExprs, rewritten
+}
+
+func viewWhereWithExpandedStars(
+	where *tree.Where,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.Where, bool) {
+	if where == nil {
+		return nil, false
+	}
+	stableWhere := *where
+	stableExpr, rewritten := viewExprWithExpandedStars(where.Expr, expandedSelectLists)
+	stableWhere.Expr = stableExpr
+	return &stableWhere, rewritten
+}
+
+func viewGroupByWithExpandedStars(
+	groupBy *tree.GroupByClause,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.GroupByClause, bool) {
+	if groupBy == nil {
+		return nil, false
+	}
+	stableGroupBy := *groupBy
+	rewritten := false
+	if len(groupBy.GroupByExprsList) > 0 {
+		stableGroupBy.GroupByExprsList = make([]tree.Exprs, len(groupBy.GroupByExprsList))
+		for i, exprs := range groupBy.GroupByExprsList {
+			stableExprs, exprsRewritten := viewExprsWithExpandedStars(exprs, expandedSelectLists)
+			stableGroupBy.GroupByExprsList[i] = stableExprs
+			rewritten = rewritten || exprsRewritten
+		}
+	}
+	if stableGroupingSet, groupingSetRewritten := viewExprsWithExpandedStars(groupBy.GroupingSet, expandedSelectLists); groupingSetRewritten {
+		stableGroupBy.GroupingSet = stableGroupingSet
+		rewritten = true
+	}
+	return &stableGroupBy, rewritten
+}
+
+func viewExprsWithExpandedStars(
+	exprs tree.Exprs,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.Exprs, bool) {
+	if len(exprs) == 0 {
+		return exprs, false
+	}
+	stableExprs := make(tree.Exprs, len(exprs))
+	rewritten := false
+	for i, expr := range exprs {
+		stableExpr, exprRewritten := viewExprWithExpandedStars(expr, expandedSelectLists)
+		stableExprs[i] = stableExpr
+		rewritten = rewritten || exprRewritten
+	}
+	return stableExprs, rewritten
+}
+
+func viewOrderByWithExpandedStars(
+	orderBy tree.OrderBy,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.OrderBy, bool) {
+	if len(orderBy) == 0 {
+		return orderBy, false
+	}
+	stableOrderBy := make(tree.OrderBy, len(orderBy))
+	rewritten := false
+	for i, order := range orderBy {
+		if order == nil {
+			continue
+		}
+		stableOrder := *order
+		stableExpr, exprRewritten := viewExprWithExpandedStars(order.Expr, expandedSelectLists)
+		stableOrder.Expr = stableExpr
+		stableOrderBy[i] = &stableOrder
+		rewritten = rewritten || exprRewritten
+	}
+	return stableOrderBy, rewritten
+}
+
+func viewLimitWithExpandedStars(
+	limit *tree.Limit,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.Limit, bool) {
+	if limit == nil {
+		return nil, false
+	}
+	stableLimit := *limit
+	offset, offsetRewritten := viewExprWithExpandedStars(limit.Offset, expandedSelectLists)
+	count, countRewritten := viewExprWithExpandedStars(limit.Count, expandedSelectLists)
+	stableLimit.Offset = offset
+	stableLimit.Count = count
+	return &stableLimit, offsetRewritten || countRewritten
+}
+
+func viewTimeWindowWithExpandedStars(
+	timeWindow *tree.TimeWindow,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.TimeWindow, bool) {
+	if timeWindow == nil {
+		return nil, false
+	}
+	stableTimeWindow := *timeWindow
+	rewritten := false
+	if timeWindow.Interval != nil {
+		stableInterval := *timeWindow.Interval
+		stableVal, valRewritten := viewExprWithExpandedStars(timeWindow.Interval.Val, expandedSelectLists)
+		stableInterval.Val = stableVal
+		stableTimeWindow.Interval = &stableInterval
+		rewritten = rewritten || valRewritten
+	}
+	if timeWindow.Sliding != nil {
+		stableSliding := *timeWindow.Sliding
+		stableVal, valRewritten := viewExprWithExpandedStars(timeWindow.Sliding.Val, expandedSelectLists)
+		stableSliding.Val = stableVal
+		stableTimeWindow.Sliding = &stableSliding
+		rewritten = rewritten || valRewritten
+	}
+	if timeWindow.Fill != nil {
+		stableFill := *timeWindow.Fill
+		stableVal, valRewritten := viewExprWithExpandedStars(timeWindow.Fill.Val, expandedSelectLists)
+		stableFill.Val = stableVal
+		stableTimeWindow.Fill = &stableFill
+		rewritten = rewritten || valRewritten
+	}
+	return &stableTimeWindow, rewritten
+}
+
+func viewExprWithExpandedStars(
+	expr tree.Expr,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.Expr, bool) {
+	if expr == nil {
+		return nil, false
+	}
+	stableExpr := cloneTreeExpr(expr)
+	rewritten := rewriteClonedExprSubqueriesWithExpandedStars(
+		reflect.ValueOf(expr),
+		reflect.ValueOf(stableExpr),
+		expandedSelectLists,
+		make(map[treeClonePointer]struct{}),
+	)
+	return stableExpr, rewritten
+}
+
+func rewriteClonedExprSubqueriesWithExpandedStars(
+	original reflect.Value,
+	cloned reflect.Value,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+	visited map[treeClonePointer]struct{},
+) bool {
+	if !original.IsValid() || !cloned.IsValid() {
+		return false
+	}
+	for original.Kind() == reflect.Interface {
+		if original.IsNil() {
+			return false
+		}
+		original = original.Elem()
+	}
+	for cloned.Kind() == reflect.Interface {
+		if cloned.IsNil() {
+			return false
+		}
+		cloned = cloned.Elem()
+	}
+	if original.Kind() == reflect.Pointer {
+		if original.IsNil() {
+			return false
+		}
+		key := treeClonePointer{typ: original.Type(), ptr: original.Pointer()}
+		if _, ok := visited[key]; ok {
+			return false
+		}
+		visited[key] = struct{}{}
+		if sample, ok := original.Interface().(*tree.SampleExpr); ok {
+			clonedSample, ok := cloned.Interface().(*tree.SampleExpr)
+			if !ok {
+				return false
+			}
+			originalColumns, isStar := sample.GetColumns()
+			clonedColumns, _ := clonedSample.GetColumns()
+			if len(clonedColumns) != len(originalColumns) {
+				clonedColumns = make(tree.Exprs, len(originalColumns))
+			} else {
+				clonedColumns = append(tree.Exprs(nil), clonedColumns...)
+			}
+			rewritten := false
+			for i, column := range originalColumns {
+				stableColumn, columnRewritten := viewExprWithExpandedStars(column, expandedSelectLists)
+				clonedColumns[i] = stableColumn
+				rewritten = rewritten || columnRewritten
+			}
+			if rewritten {
+				clonedSample.SetColumns(clonedColumns, isStar)
+			}
+			return rewritten
+		}
+		if subquery, ok := original.Interface().(*tree.Subquery); ok {
+			stableStatement, rewritten := viewSelectStatementWithExpandedStars(subquery.Select, expandedSelectLists)
+			if rewritten && stableStatement != nil && cloned.Kind() == reflect.Pointer && !cloned.IsNil() {
+				if clonedSubquery, ok := cloned.Interface().(*tree.Subquery); ok {
+					clonedSubquery.Select = stableStatement
+				}
+			}
+			return rewritten
+		}
+		original = original.Elem()
+		if cloned.Kind() == reflect.Pointer {
+			if cloned.IsNil() {
+				return false
+			}
+			cloned = cloned.Elem()
+		}
+	}
+	rewritten := false
+	switch original.Kind() {
+	case reflect.Struct:
+		if cloned.Kind() != reflect.Struct {
+			return false
+		}
+		for i := 0; i < original.NumField() && i < cloned.NumField(); i++ {
+			originalField := original.Field(i)
+			clonedField := cloned.Field(i)
+			if !originalField.CanInterface() {
+				continue
+			}
+			if selectStmt, ok := originalField.Interface().(tree.SelectStatement); ok {
+				stableStatement, fieldRewritten := viewSelectStatementWithExpandedStars(selectStmt, expandedSelectLists)
+				if fieldRewritten && stableStatement != nil && clonedField.CanSet() {
+					stableValue := reflect.ValueOf(stableStatement)
+					if stableValue.Type().AssignableTo(clonedField.Type()) {
+						clonedField.Set(stableValue)
+					}
+				}
+				rewritten = rewritten || fieldRewritten
+				continue
+			}
+			rewritten = rewriteClonedExprSubqueriesWithExpandedStars(originalField, clonedField, expandedSelectLists, visited) || rewritten
+		}
+	case reflect.Slice, reflect.Array:
+		if cloned.Kind() != reflect.Slice && cloned.Kind() != reflect.Array {
+			return false
+		}
+		for i := 0; i < original.Len() && i < cloned.Len(); i++ {
+			rewritten = rewriteClonedExprSubqueriesWithExpandedStars(original.Index(i), cloned.Index(i), expandedSelectLists, visited) || rewritten
+		}
+	}
+	return rewritten
+}
+
+func viewFromWithExpandedStars(
+	from *tree.From,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.From, bool) {
+	if from == nil {
+		return nil, false
+	}
+	stableFrom := *from
+	tables, rewritten := viewTableExprsWithExpandedStars(from.Tables, expandedSelectLists)
+	stableFrom.Tables = tables
+	return &stableFrom, rewritten
+}
+
+func viewTableExprsWithExpandedStars(
+	tables tree.TableExprs,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.TableExprs, bool) {
+	if len(tables) == 0 {
+		return tables, false
+	}
+	stableTables := make(tree.TableExprs, len(tables))
+	rewritten := false
+	for i, table := range tables {
+		stableTable, tableRewritten := viewTableExprWithExpandedStars(table, expandedSelectLists)
+		stableTables[i] = stableTable
+		rewritten = rewritten || tableRewritten
+	}
+	return stableTables, rewritten
+}
+
+func viewTableExprWithExpandedStars(
+	table tree.TableExpr,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.TableExpr, bool) {
+	switch tableExpr := table.(type) {
+	case *tree.Select:
+		return viewSelectWithExpandedStars(tableExpr, expandedSelectLists)
+	case *tree.Subquery:
+		stableSubquery := *tableExpr
+		stableStatement, rewritten := viewSelectStatementWithExpandedStars(tableExpr.Select, expandedSelectLists)
+		stableSubquery.Select = stableStatement
+		return &stableSubquery, rewritten
+	case *tree.AliasedTableExpr:
+		stableAliased := *tableExpr
+		stableExpr, rewritten := viewTableExprWithExpandedStars(tableExpr.Expr, expandedSelectLists)
+		stableAliased.Expr = stableExpr
+		return &stableAliased, rewritten
+	case *tree.ParenTableExpr:
+		stableParen := *tableExpr
+		stableExpr, rewritten := viewTableExprWithExpandedStars(tableExpr.Expr, expandedSelectLists)
+		stableParen.Expr = stableExpr
+		return &stableParen, rewritten
+	case *tree.JoinTableExpr:
+		stableJoin := *tableExpr
+		left, leftRewritten := viewTableExprWithExpandedStars(tableExpr.Left, expandedSelectLists)
+		right, rightRewritten := viewTableExprWithExpandedStars(tableExpr.Right, expandedSelectLists)
+		cond, condRewritten := viewJoinCondWithExpandedStars(tableExpr.Cond, expandedSelectLists)
+		stableJoin.Left = left
+		stableJoin.Right = right
+		stableJoin.Cond = cond
+		return &stableJoin, leftRewritten || rightRewritten || condRewritten
+	case *tree.ApplyTableExpr:
+		stableApply := *tableExpr
+		left, leftRewritten := viewTableExprWithExpandedStars(tableExpr.Left, expandedSelectLists)
+		right, rightRewritten := viewTableExprWithExpandedStars(tableExpr.Right, expandedSelectLists)
+		stableApply.Left = left
+		stableApply.Right = right
+		return &stableApply, leftRewritten || rightRewritten
+	case *tree.StatementSource:
+		stableSource := *tableExpr
+		if selectStmt, ok := tableExpr.Statement.(*tree.Select); ok {
+			stableSelect, rewritten := viewSelectWithExpandedStars(selectStmt, expandedSelectLists)
+			if rewritten {
+				stableSource.Statement = stableSelect
+				return &stableSource, true
+			}
+		}
+		return &stableSource, false
+	case *tree.TableFunction:
+		stableFunction := *tableExpr
+		stableFunc, rewritten := viewExprWithExpandedStars(tableExpr.Func, expandedSelectLists)
+		if funcExpr, ok := stableFunc.(*tree.FuncExpr); ok {
+			stableFunction.Func = funcExpr
+		}
+		return &stableFunction, rewritten
+	default:
+		return table, false
+	}
+}
+
+func viewJoinCondWithExpandedStars(
+	cond tree.JoinCond,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.JoinCond, bool) {
+	onCond, ok := cond.(*tree.OnJoinCond)
+	if !ok {
+		return cond, false
+	}
+	stableCond := *onCond
+	stableExpr, rewritten := viewExprWithExpandedStars(onCond.Expr, expandedSelectLists)
+	stableCond.Expr = stableExpr
+	return &stableCond, rewritten
 }
 
 func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) ([]*ColDef, *Query, error) {
@@ -280,16 +1286,27 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
 		return nil, nil, err
 	}
+	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
+	for i := range outputColumnProvenance {
+		outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
+	}
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
-	rootNode := builder.qry.Nodes[rootId]
+	// CTAS metadata must reflect the final query output: outer joins and scalar
+	// subqueries can synthesize NULLs even when their source columns are NOT NULL.
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, nil, err
+	}
+	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
-		typ := &expr.Typ
-		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
+		typ := expr.Typ
+		provenance := outputColumnProvenance[i]
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
-				typ = &provenance.Source.Metadata.Typ
+				typ = provenance.Source.Metadata.Typ
+				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
 		nullAbility := ctasExprCanBeNull(expr)
@@ -302,14 +1319,14 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 					defaultDef.NullAbility = nullAbility
 					if defaultDef.Expr == nil && defaultDef.OriginString != "" {
 						defaultDef, err = buildCTASDefaultFromOrigin(
-							ctx, *typ, nullAbility, defaultDef.OriginString)
+							ctx, typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
 							return nil, nil, err
 						}
 					}
 				}
 			case CTASDefaultUseTypeDefault:
-				defaultDef, err = buildCTASDefaultForView(ctx, *typ, nullAbility)
+				defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -319,11 +1336,11 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		cols[i] = &plan.ColDef{
 			Name:    strings.ToLower(bindCtx.headings[i]),
 			Alg:     plan.CompressType_Lz4,
-			Typ:     *typ,
+			Typ:     typ,
 			Default: defaultDef,
 		}
 	}
-	return cols, builder.qry, nil
+	return cols, query, nil
 }
 
 func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {
@@ -454,6 +1471,11 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
+	}
+
+	if stmt.Replace && !stmt.IfNotExists {
+		ctx.SetBuildingAlterView(true, createView.Database, string(viewName))
+		defer ctx.SetBuildingAlterView(false, "", "")
 	}
 
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
@@ -844,7 +1866,7 @@ func preserveChecksForCreateLike(p *Plan, src *plan.TableDef) {
 	ct.GetTableDef().Checks = dstChecks
 }
 
-func bindLegacyChecksForCreateLike(
+func bindLegacyChecks(
 	ctx CompilerContext,
 	tableDef *plan.TableDef,
 	sqlMode string,
@@ -886,21 +1908,27 @@ func bindLegacyChecksForCreateLike(
 				return nil, true, err
 			}
 		case *tree.ColumnTableDef:
-			columnPos := slices.IndexFunc(
-				tableDef.Cols,
-				func(col *plan.ColDef) bool { return col.Name == typedDef.Name.ColName() },
-			)
-			if columnPos == -1 {
-				return nil, true, moerr.NewInvalidInputf(
-					ctx.GetContext(),
-					"legacy CHECK column '%s' does not exist",
-					typedDef.Name.ColNameOrigin(),
-				)
-			}
+			columnPos := -1
 			for _, attr := range typedDef.Attributes {
 				check, ok := attr.(*tree.AttributeCheckConstraint)
 				if !ok {
 					continue
+				}
+				// CREATE SQL can be stale after an earlier ALTER, but columns
+				// without a column-level CHECK are irrelevant to recovery. Resolve
+				// the catalog position only when this column owns a CHECK.
+				if columnPos == -1 {
+					columnPos = slices.IndexFunc(
+						tableDef.Cols,
+						func(col *plan.ColDef) bool { return col.Name == typedDef.Name.ColName() },
+					)
+					if columnPos == -1 {
+						return nil, true, moerr.NewInvalidInputf(
+							ctx.GetContext(),
+							"legacy CHECK column '%s' does not exist",
+							typedDef.Name.ColNameOrigin(),
+						)
+					}
 				}
 				if !check.Enforced {
 					return nil, true, moerr.NewNotSupported(
@@ -929,11 +1957,11 @@ func equalCheckDefs(left, right []*plan.CheckDef) bool {
 	return true
 }
 
-// recoverLegacyChecksForCreateLike rebuilds structured CHECK metadata for
+// recoverLegacyChecks rebuilds structured CHECK metadata for
 // pre-upgrade tables, whose catalog rows contain only the original CREATE SQL.
 // The old catalog did not record the creating SQL mode, so recovery must not
 // silently choose between two valid but semantically different parses.
-func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableDef) error {
+func recoverLegacyChecks(ctx CompilerContext, tableDef *plan.TableDef) error {
 	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" ||
 		tableDef.TableType == catalog.SystemExternalRel ||
 		!strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
@@ -946,7 +1974,7 @@ func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableD
 	parsedModes := 0
 	successfulModes := 0
 	for _, sqlMode := range mysql.ParserSQLModeCombinations() {
-		checks, parsed, err := bindLegacyChecksForCreateLike(ctx, tableDef, sqlMode)
+		checks, parsed, err := bindLegacyChecks(ctx, tableDef, sqlMode)
 		if !parsed {
 			if firstParseErr == nil {
 				firstParseErr = err
@@ -1026,8 +2054,24 @@ func buildCreateTable(
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
+		}
+		// Resolve and rewrite a private source definition. Resolve can return a
+		// cached TableDef, and the reconstruction below changes its table name.
+		tableDef = DeepCopyTableDef(tableDef, true)
+		// IndexDef.Visible is ambiguous for pre-upgrade tables. Resolve the
+		// authoritative catalog value before CREATE TABLE LIKE/CLONE serializes
+		// a local source definition and asks the normal CREATE planner to rebuild
+		// it. A subscription definition belongs to the publisher, whose catalog
+		// is not available through this compiler context.
+		if sub == nil {
+			if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+				return nil, err
+			}
+		}
 		hadStructuredChecks := len(tableDef.Checks) > 0
-		if err := recoverLegacyChecksForCreateLike(ctx, tableDef); err != nil {
+		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
 			return nil, err
 		}
 		recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
@@ -1037,7 +2081,9 @@ func buildCreateTable(
 			}
 		}
 		// TODO WHY?
-		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
+		if tableDef.TableType == catalog.SystemViewRel ||
+			tableDef.TableType == catalog.SystemExternalRel ||
+			tableDef.TableType == catalog.SystemSequenceRel {
 			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
 			if err != nil {
 				return nil, err
@@ -1058,9 +2104,10 @@ func buildCreateTable(
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
+		likeSkeletonDef := normalizeLegacyTextCollationForCreateLike(tableDef)
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
-			tableDef,
+			likeSkeletonDef,
 			snapshot,
 			true,
 			cloneStmt,
@@ -1378,6 +2425,41 @@ func buildCreateTable(
 	}, nil
 }
 
+func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.TableDef {
+	legacy := tableDef.DefaultCharset == uint32(types.CharsetLegacy)
+	if !legacy {
+		for _, col := range tableDef.Cols {
+			switch types.T(col.Typ.Id) {
+			case types.T_char, types.T_varchar, types.T_text:
+				if col.Typ.Charset == uint32(types.CharsetLegacy) {
+					legacy = true
+				}
+			}
+		}
+	}
+	if !legacy {
+		return tableDef
+	}
+
+	// Charset zero was persisted before the field had semantics. CREATE LIKE
+	// reparses a generated DDL skeleton, so spell legacy text as utf8mb4_bin to
+	// retain its historical bytewise ordering. SHOW CREATE uses the same public
+	// compatibility spelling for catalog rows that still contain legacy text.
+	clone := DeepCopyTableDef(tableDef, true)
+	if clone.DefaultCharset == uint32(types.CharsetLegacy) {
+		clone.DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
+	}
+	for _, col := range clone.Cols {
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				col.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+			}
+		}
+	}
+	return clone
+}
+
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	// all below fields' key is lower case
 	var primaryKeys []string
@@ -1395,9 +2477,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
+	tableCharset, err := tableDefaultCharset(ctx, stmt.Options)
+	if err != nil {
+		return err
+	}
+	createTable.TableDef.DefaultCharset = tableCharset
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
+			return err
+		}
+	}
+	if stmt.MongoDBParam != nil {
+		if err := rejectMongoDBExternalTableOnUpdate(ctx.GetContext(), stmt); err != nil {
 			return err
 		}
 	}
@@ -1410,6 +2502,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if def, ok := item.(*tree.ColumnTableDef); ok {
 			cType, err := getTypeFromAst(ctx.GetContext(), def.Type)
 			if err != nil {
+				return err
+			}
+			cType.Charset = uint32(types.CharsetType(types.T(cType.Id)))
+			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &cType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			isGen := false
@@ -1434,7 +2530,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
-			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
+			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
+			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
@@ -1696,6 +2793,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		case *tree.ForeignKey:
+			if stmt.MongoDBParam != nil {
+				return moerr.NewNotSupported(
+					ctx.GetContext(),
+					"FOREIGN KEY constraints on MongoDB external tables",
+				)
+			}
 			if createTable.Temporary {
 				return moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
 			}
@@ -2026,7 +3129,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	// check Constraint Name (include index/ unique)
-	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	err = checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
 	if err != nil {
 		return err
 	}
@@ -2422,19 +3525,95 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 // lives at pkg/fulltext/plugin/plan/schema.go). It keeps the
 // batched, in-place-append signature the legacy callers used.
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
-	p, ok := indexplugin.Get(catalog.MOIndexFullTextAlgo.ToString())
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("fulltext plugin not registered")
+	if err := checkFulltextEngineConflict(indexInfos, existedIndexes, ctx); err != nil {
+		return err
 	}
 	for _, indexInfo := range indexInfos {
+		// CREATE FULLTEXT2 INDEX (IsV2) routes to the distinct fulltext2 plugin;
+		// classic CREATE FULLTEXT INDEX to the fulltext plugin.
+		algo := catalog.MOIndexFullTextAlgo.ToString()
+		if indexInfo.IsV2 {
+			algo = catalog.MoIndexFullText2Algo.ToString()
+		}
+		p, ok := indexplugin.Get(algo)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx(algo + " plugin not registered")
+		}
 		idxDefs, tblDefs, err := p.Plan().BuildFullTextIndexDefs(
 			ctx, indexInfo, colMap, existedIndexes, pkeyName,
 		)
 		if err != nil {
 			return err
 		}
+		// Capture the plugin's build-time session vars (BuildSessionVars) into each
+		// index def's algo_params.session_vars — mirroring CreateIndexDef's vector
+		// path — so background builds (idxcron reindex, ISCP async, clone/restore)
+		// reproduce the create-time config. fulltext2 pins lower_case_table_names;
+		// classic fulltext's BuildSessionVars returns nil, so this is a no-op there.
+		if ctx != nil {
+			if names := p.Catalog().BuildSessionVars(); len(names) > 0 {
+				sv, cerr := compileplugin.CaptureVars(ctx.ResolveVariable, names)
+				if cerr != nil {
+					return cerr
+				}
+				if len(sv) > 0 {
+					for _, idxDef := range idxDefs {
+						flat := map[string]string{}
+						if idxDef.IndexAlgoParams != "" {
+							if flat, err = catalog.IndexParamsStringToMap(idxDef.IndexAlgoParams); err != nil {
+								return err
+							}
+						}
+						if idxDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		setIndexDefsVisibility(idxDefs, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tblDefs...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, idxDefs...)
+	}
+	return nil
+}
+
+// ftColSetKey is an order-independent key for a fulltext index's column set, so
+// MATCH(a,b) and MATCH(b,a) map to the same key.
+func ftColSetKey(cols []string) string {
+	c := append([]string(nil), cols...)
+	slices.Sort(c)
+	return strings.Join(c, "\x00")
+}
+
+// checkFulltextEngineConflict rejects creating a classic FULLTEXT and a FULLTEXT2
+// index over the SAME column set — on the same table they would both resolve the same
+// MATCH(...) verb, so the engine (classic SQL fulltext vs WAND positional) that answers
+// the query would depend on index enumeration order and could flip across DDL/catalog
+// reloads, giving inconsistent scores/rows. This covers CREATE TABLE (all indexes in
+// indexInfos, existedIndexes nil) and CREATE INDEX / ALTER ADD (one new index vs the
+// table's existing indexes) since every fulltext creation routes through here.
+func checkFulltextEngineConflict(indexInfos []*tree.FullTextIndex, existedIndexes []*plan.IndexDef, ctx CompilerContext) error {
+	// colSet -> the fulltext engine (isV2) already claiming it (existing indexes).
+	engine := make(map[string]bool)
+	for _, idx := range existedIndexes {
+		v2 := catalog.IsFullText2IndexAlgo(idx.IndexAlgo)
+		if !v2 && !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+			continue
+		}
+		engine[ftColSetKey(idx.Parts)] = v2
+	}
+	for _, info := range indexInfos {
+		cols := make([]string, 0, len(info.KeyParts))
+		for _, kp := range info.KeyParts {
+			cols = append(cols, kp.ColName.ColName())
+		}
+		key := ftColSetKey(cols)
+		if prev, ok := engine[key]; ok && prev != info.IsV2 {
+			return moerr.NewInvalidInput(ctx.GetContext(),
+				"cannot create both a FULLTEXT and a FULLTEXT2 index on the same column(s); drop the existing one first")
+		}
+		engine[key] = info.IsV2 // also catches two conflicting indexes in one CREATE TABLE
 	}
 	return nil
 }
@@ -2492,10 +3671,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ: Type{
-					Id:    int32(types.T_varchar),
-					Width: types.MaxVarcharLen,
-				},
+				Typ:  makeHiddenColTyp(),
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
@@ -2514,9 +3690,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Alg:  plan.CompressType_Lz4,
 				Typ: plan.Type{
 					// don't copy auto increment
-					Id:    colMap[pkeyName].Typ.Id,
-					Width: colMap[pkeyName].Typ.Width,
-					Scale: colMap[pkeyName].Typ.Scale,
+					Id:      colMap[pkeyName].Typ.Id,
+					Width:   colMap[pkeyName].Typ.Width,
+					Scale:   colMap[pkeyName].Typ.Scale,
+					Charset: colMap[pkeyName].Typ.Charset,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -2545,6 +3722,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
+		setIndexDefVisibility(indexDef, indexInfo.IndexOption)
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
 		} else {
@@ -2627,11 +3805,22 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		if err != nil {
 			return err
 		}
+		setIndexDefsVisibility(indexDef, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef...)
 
 	}
 	return nil
+}
+
+func setIndexDefsVisibility(indexDefs []*plan.IndexDef, option *tree.IndexOption) {
+	for _, indexDef := range indexDefs {
+		setIndexDefVisibility(indexDef, option)
+	}
+}
+
+func setIndexDefVisibility(indexDef *plan.IndexDef, option *tree.IndexOption) {
+	catalog.SetIndexVisibility(indexDef, option == nil || option.Visible != tree.VISIBLE_TYPE_INVISIBLE)
 }
 
 func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef) error {
@@ -2698,10 +3887,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	colDef := &ColDef{
 		Name: keyName,
 		Alg:  plan.CompressType_Lz4,
-		Typ: Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
-		},
+		Typ:  makeHiddenColTyp(),
 		Default: &plan.Default{
 			NullAbility:  false,
 			Expr:         nil,
@@ -2719,9 +3905,10 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
+				Id:      colMap[pkeyName].Typ.Id,
+				Width:   colMap[pkeyName].Typ.Width,
+				Scale:   colMap[pkeyName].Typ.Scale,
+				Charset: colMap[pkeyName].Typ.Charset,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -2856,9 +4043,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
+				Id:      colMap[pkeyName].Typ.Id,
+				Width:   colMap[pkeyName].Typ.Width,
+				Scale:   colMap[pkeyName].Typ.Scale,
+				Charset: colMap[pkeyName].Typ.Charset,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -2873,10 +4061,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 	} else {
 		keyName = catalog.IndexTableIndexColName
-		idxColType := Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
-		}
+		idxColType := makeHiddenColTyp()
 		if spatialIndex {
 			idxColType = colMap[indexParts[0]].Typ
 		}
@@ -2902,9 +4087,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
+				Id:      colMap[pkeyName].Typ.Id,
+				Width:   colMap[pkeyName].Typ.Width,
+				Scale:   colMap[pkeyName].Typ.Scale,
+				Charset: colMap[pkeyName].Typ.Charset,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -3066,9 +4252,13 @@ func validateIncludeColumns(ctx CompilerContext,
 			}
 		}
 		if !supported {
+			names := make([]string, 0, len(supportedTypes))
+			for _, st := range supportedTypes {
+				names = append(names, st.String())
+			}
 			return moerr.NewNotSupportedf(ctx.GetContext(),
-				"INCLUDE column '%s' has unsupported type %s (supported: int32, int64, float32, float64)",
-				origin, colType.String())
+				"INCLUDE column '%s' has unsupported type %s (supported: %s)",
+				origin, colType.String(), strings.Join(names, ", "))
 		}
 	}
 	return nil
@@ -3100,6 +4290,7 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 
 	indexDef.Unique = isUnique
 	indexDef.TableExist = true
+	setIndexDefVisibility(indexDef, indexInfo.IndexOption)
 
 	// Algorithm related fields
 	indexDef.IndexAlgo = indexInfo.KeyType.ToString()
@@ -3193,6 +4384,16 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
+		}
+		// Temporary tables shadow same-named permanent tables, but TRUNCATE is
+		// not supported for temporary tables. Reject the visible temporary table
+		// here so execution can never fall through to the hidden permanent table.
+		if tableDef.GetIsTemporary() {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
+		}
+
 		if tableDef.TableType == catalog.SystemSourceRel {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate source '%v' ", truncateTable.Table)
 		}
@@ -3229,6 +4430,12 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.TableId = tableDef.TblId
 		if tableDef.Fkeys != nil {
 			for _, fk := range tableDef.Fkeys {
+				// A self-referencing foreign key uses table ID 0 as the durable
+				// marker for "this table". Its metadata is recreated together with
+				// the table and there is no external parent relation to refresh.
+				if fk.ForeignTbl == 0 {
+					continue
+				}
 				truncateTable.ForeignTbl = append(truncateTable.ForeignTbl, fk.ForeignTbl)
 			}
 		}
@@ -3357,6 +4564,9 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 		}
 		return dropTable, nil
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
 
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
@@ -3484,9 +4694,14 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		}
 	} else {
 		if tableDef.ViewSql == nil {
-			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
+			if !dropTable.IfExists {
+				return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
+			}
+			// DROP VIEW IF EXISTS must not target a same-named base table.
+			// An empty table name is the established DropTable executor no-op.
+			dropTable.Table = ""
 		}
-		if obj.PubInfo != nil {
+		if tableDef.ViewSql != nil && obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop view in subscription database")
 		}
 	}
@@ -3596,6 +4811,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
 	if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
@@ -3632,6 +4850,15 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			Name:        indexName,
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
+		}
+	case tree.INDEX_CATEGORY_FULLTEXT2:
+		// CREATE FULLTEXT2 INDEX — the distinct WAND positional engine; routed to
+		// the fulltext2 plugin by buildFullTextIndexTable via IsV2.
+		ftIdx = &tree.FullTextIndex{
+			Name:        indexName,
+			KeyParts:    stmt.KeyParts,
+			IndexOption: stmt.IndexOption,
+			IsV2:        true,
 		}
 	case tree.INDEX_CATEGORY_SPATIAL:
 		keyType := tree.INDEX_TYPE_RTREE
@@ -3726,6 +4953,23 @@ func rejectExternalTableInlineIndexes(ctx context.Context, stmt *tree.CreateTabl
 			}
 		case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
 			return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+		}
+	}
+	return nil
+}
+
+func rejectMongoDBExternalTableOnUpdate(ctx context.Context, stmt *tree.CreateTable) error {
+	for _, item := range stmt.Defs {
+		column, ok := item.(*tree.ColumnTableDef)
+		if !ok {
+			continue
+		}
+		for _, attribute := range column.Attributes {
+			if _, ok := attribute.(*tree.AttributeOnUpdate); ok {
+				return moerr.NewNotSupportedf(ctx,
+					"MongoDB external table column '%s' does not support ON UPDATE",
+					column.Name.ColNameOrigin())
+			}
 		}
 	}
 	return nil
@@ -3829,6 +5073,9 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
+	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
 	}
 
 	if obj.PubInfo != nil {
@@ -3937,6 +5184,24 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
+func rejectCrossDatabaseTableRename(
+	ctx context.Context,
+	sourceDatabase string,
+	option *tree.AlterOptionTableName,
+) error {
+	target := option.Name.ToTableName()
+	if !target.ExplicitSchema || string(target.Schema()) == sourceDatabase {
+		return nil
+	}
+
+	return moerr.NewNotSupportedf(
+		ctx,
+		"cross-database table rename from database '%s' to '%s'",
+		sourceDatabase,
+		target.Schema(),
+	)
+}
+
 func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error) {
 
 	type renamedInfo struct {
@@ -3970,6 +5235,16 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		}
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+		}
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
+		}
+		for _, option := range alterTable.Options {
+			if rename, ok := option.(*tree.AlterOptionTableName); ok {
+				if err := rejectCrossDatabaseTableRename(ctx.GetContext(), schemaName, rename); err != nil {
+					return nil, err
+				}
+			}
 		}
 
 		if tableDef.IsTemporary {
@@ -4116,12 +5391,23 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	var updateSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
-	droppedForeignKeys := make(map[string]struct{})
-	for _, option := range stmt.Options {
-		if drop, ok := option.(*tree.AlterOptionDrop); ok && drop.Typ == tree.AlterTableDropForeignKey {
-			droppedForeignKeys[string(drop.Name)] = struct{}{}
+	// Planning must consume ALTER actions in statement order without mutating
+	// tableDef: tableDef is also shipped to execution, where its original index
+	// list drives pre-DDL locking. currentTableDef is the planner-owned evolving
+	// schema used by every subsequent existence and semantic check.
+	currentTableDef := DeepCopyTableDef(tableDef, true)
+	currentIndexNames := make(map[string]bool, len(currentTableDef.Indexes))
+	for _, indexDef := range currentTableDef.Indexes {
+		currentIndexNames[strings.ToLower(indexDef.IndexName)] = true
+	}
+	currentForeignKeyNames := make(map[string]bool, len(currentTableDef.Fkeys))
+	for _, foreignKey := range currentTableDef.Fkeys {
+		if foreignKey.Name != "" {
+			currentForeignKeyNames[foreignKey.Name] = true
 		}
 	}
+	droppedIndexNames := make(map[string]bool)
+	droppedForeignKeyNames := make(map[string]bool)
 	for i, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
@@ -4137,22 +5423,31 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 			alterTableDrop.Name = constraintName
 			name_not_found := true
+			sequentiallyDropped := false
 			switch opt.Typ {
 			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_INDEX
-				// check index
-				for _, indexdef := range tableDef.Indexes {
+				for _, indexdef := range currentTableDef.Indexes {
 					if constraintName == indexdef.IndexName {
-						if err := checkDropReferencedKeyForeignKeyDependency(ctx, tableDef, constraintName, droppedForeignKeys); err != nil {
+						if err := checkDropReferencedKeyForeignKeyDependency(ctx, currentTableDef, constraintName, nil); err != nil {
 							return nil, err
 						}
 						name_not_found = false
 						break
 					}
 				}
+				if !name_not_found {
+					delete(currentIndexNames, strings.ToLower(constraintName))
+					droppedIndexNames[constraintName] = true
+					currentTableDef.Indexes = RemoveIf(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
+						return indexDef.IndexName == constraintName
+					})
+				} else {
+					sequentiallyDropped = droppedIndexNames[constraintName]
+				}
 			case tree.AlterTableDropForeignKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY
-				for _, fk := range tableDef.Fkeys {
+				for _, fk := range currentTableDef.Fkeys {
 					if fk.Name == constraintName {
 						name_not_found = false
 						updateSqls = append(
@@ -4166,6 +5461,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						break
 					}
 				}
+				if !name_not_found {
+					delete(currentForeignKeyNames, constraintName)
+					droppedForeignKeyNames[constraintName] = true
+					currentTableDef.Fkeys = RemoveIf(currentTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
+						return fk.Name == constraintName
+					})
+				} else {
+					sequentiallyDropped = droppedForeignKeyNames[constraintName]
+				}
 			default:
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
@@ -4174,6 +5478,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				)
 			}
 			if name_not_found {
+				if sequentiallyDropped {
+					return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), constraintName)
+				}
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					"Can't DROP '%s'; check that column/key exists",
@@ -4193,11 +5500,16 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if err != nil {
 					return nil, err
 				}
+				if currentForeignKeyNames[def.ConstraintSymbol] {
+					return nil, moerr.NewErrDuplicateKeyName(ctx.GetContext(), def.ConstraintSymbol)
+				}
+				currentForeignKeyNames[def.ConstraintSymbol] = true
 
-				fkData, err := getForeignKeyData(ctx, databaseName, tableDef, def)
+				fkData, err := getForeignKeyData(ctx, databaseName, currentTableDef, def)
 				if err != nil {
 					return nil, err
 				}
+				currentTableDef.Fkeys = append(currentTableDef.Fkeys, fkData.Def)
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddFk{
 						AddFk: &plan.AlterTableAddFk{
@@ -4213,21 +5525,29 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if fkData.IsSelfRefer {
 					// fk self refer.
 					// check columns of fk self refer are valid
-					err = checkFkColsAreValid(ctx, fkData, tableDef)
+					err = checkFkColsAreValid(ctx, fkData, currentTableDef)
 					if err != nil {
 						return nil, err
 					}
 					sqls, err := genSqlsForCheckFKSelfRefer(
 						ctx.GetContext(),
 						databaseName,
-						tableDef.Name,
-						tableDef.Cols,
+						currentTableDef.Name,
+						currentTableDef.Cols,
 						[]*plan.ForeignKeyDef{fkData.Def},
 					)
 					if err != nil {
 						return nil, err
 					}
 					detectSqls = append(detectSqls, sqls...)
+					if !slices.ContainsFunc(currentTableDef.RefChildTbls, func(tableID uint64) bool {
+						return tableID == 0 || tableID == currentTableDef.TblId
+					}) {
+						// Keep the planner-only evolving parent/child state in sync.
+						// The executor materializes this relationship after the ALTER,
+						// but later actions in this statement must already observe it.
+						currentTableDef.RefChildTbls = append(currentTableDef.RefChildTbls, 0)
+					}
 				} else {
 					// get table def of parent table
 					_, parentTableDef, err := ctx.Resolve(
@@ -4271,15 +5591,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 
 				indexName := def.GetIndexName()
-				constrNames := map[string]bool{}
-				// Check not empty constraint name whether is duplicated.
-				for _, idx := range tableDef.Indexes {
-					nameLower := strings.ToLower(idx.IndexName)
-					constrNames[nameLower] = true
-				}
-
 				if err := checkDuplicateConstraint(
-					constrNames,
+					currentIndexNames,
 					indexName,
 					false,
 					ctx.GetContext(),
@@ -4288,7 +5601,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				if len(indexName) == 0 {
 					// set empty constraint names(index and unique index)
-					setEmptyUniqueIndexName(constrNames, def)
+					setEmptyUniqueIndexName(currentIndexNames, def)
 				}
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
@@ -4302,6 +5615,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				); err != nil {
 					return nil, err
 				}
+				currentTableDef.Indexes = append(currentTableDef.Indexes, indexInfo.TableDef.Indexes...)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
@@ -4326,15 +5640,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 
 				indexName := def.Name
-				constrNames := map[string]bool{}
-				// Check not empty constraint name whether is duplicated.
-				for _, idx := range tableDef.Indexes {
-					nameLower := strings.ToLower(idx.IndexName)
-					constrNames[nameLower] = true
-				}
-
 				if err := checkDuplicateConstraint(
-					constrNames,
+					currentIndexNames,
 					indexName,
 					false,
 					ctx.GetContext(),
@@ -4344,7 +5651,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				if len(indexName) == 0 {
 					// set empty constraint names(index and unique index)
-					setEmptyFullTextIndexName(constrNames, def)
+					setEmptyFullTextIndexName(currentIndexNames, def)
 				}
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
@@ -4353,12 +5660,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					indexInfo,
 					[]*tree.FullTextIndex{def},
 					colMap,
-					tableDef.Indexes,
+					currentTableDef.Indexes,
 					oriPriKeyName,
 					ctx,
 				); err != nil {
 					return nil, err
 				}
+				currentTableDef.Indexes = append(currentTableDef.Indexes, indexInfo.TableDef.Indexes...)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
@@ -4384,15 +5692,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				indexName := def.Name
 
-				constrNames := map[string]bool{}
-				// Check not empty constraint name whether is duplicated.
-				for _, idx := range tableDef.Indexes {
-					nameLower := strings.ToLower(idx.IndexName)
-					constrNames[nameLower] = true
-				}
-
 				if err := checkDuplicateConstraint(
-					constrNames,
+					currentIndexNames,
 					indexName,
 					false,
 					ctx.GetContext(),
@@ -4402,7 +5703,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				if len(indexName) == 0 {
 					// set empty constraint names(index and unique index)
-					setEmptyIndexName(constrNames, def)
+					setEmptyIndexName(currentIndexNames, def)
 				}
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
@@ -4412,12 +5713,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					indexInfo,
 					[]*tree.Index{def},
 					colMap,
-					tableDef.Indexes,
+					currentTableDef.Indexes,
 					oriPriKeyName,
 					ctx,
 				); err != nil {
 					return nil, err
 				}
+				currentTableDef.Indexes = append(currentTableDef.Indexes, indexInfo.TableDef.Indexes...)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
@@ -4446,7 +5748,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			name_not_found := true
 			// check index
-			for _, indexdef := range tableDef.Indexes {
+			for _, indexdef := range currentTableDef.Indexes {
 				if constraintName == indexdef.IndexName {
 					name_not_found = false
 					break
@@ -4476,10 +5778,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// merge + reject happens at compile in Compile.ValidateReindexParams,
 			// reading the options straight off the parse tree.
 			alterTableReIndex.ForceSync = opt.ForceSync
+			alterTableReIndex.Merge = opt.Merge
 
 			name_not_found := true
 			// check index
-			for _, indexdef := range tableDef.Indexes {
+			for _, indexdef := range currentTableDef.Indexes {
 				if constraintName == indexdef.IndexName {
 					name_not_found = false
 					break
@@ -4530,7 +5833,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			name_not_found := true
 			// check index
-			for _, indexdef := range tableDef.Indexes {
+			for _, indexdef := range currentTableDef.Indexes {
 				if constraintName == indexdef.IndexName {
 					name_not_found = false
 					break
@@ -4703,6 +6006,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				opt,
 			)
 			if err != nil {
+				return nil, err
+			}
+			// Only INPLACE sends AlterTableRenameCol.checks to TN. COPY persists
+			// the rewritten CHECK definitions through its temporary-table schema
+			// and therefore remains compatible with protocol versions before v15.
+			if err := requireCheckRenameProtocol(ctx, alterTable.CopyTableDef.Checks); err != nil {
 				return nil, err
 			}
 
@@ -4937,7 +6246,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 			// column type from tableDef
 			fkData.ColTyps[i] = &colDef.Typ
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' no exists in the creating table '%v'", keyPart.ColName.ColNameOrigin(), tableDef.Name)
+			return nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' no exists in the creating table '%v'", keyPart.ColName.ColNameOrigin(), tableDef.Name)
 		}
 	}
 
@@ -4987,6 +6296,9 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateTableIndexDefinitions(parentTableDef); err != nil {
 		return nil, err
 	}
 	if parentTableDef == nil {
@@ -5108,7 +6420,7 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 	// 2. check if the referred column does not exist in the parent table
 	for _, colName := range fkData.ColsReferred.Cols {
 		if _, exists := columnNamePos[colName]; !exists { // column exists in parent table
-			return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkData.ParentTableName)
+			return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' no exists in table '%v'", colName, fkData.ParentTableName)
 		}
 	}
 	if err := checkFkVirtualGeneratedColumns(ctx.GetContext(), parentTableDef, fkData.ColsReferred.Cols); err != nil {
@@ -5853,6 +7165,7 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 			Width:       col.Typ.Width,
 			Scale:       col.Typ.Scale,
 			Enumvalues:  col.Typ.Enumvalues,
+			Charset:     col.Typ.Charset,
 			NullAbility: nullable,
 		})
 	}

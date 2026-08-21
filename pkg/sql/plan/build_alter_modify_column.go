@@ -38,7 +38,8 @@ func updateNewColumnInTableDef(
 	if err != nil {
 		return false, err
 	}
-	if err = applyColumnAttributesToType(ctx, &nTy, nColSpec.Attributes); err != nil {
+	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
+	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, tableDef.DefaultCharset, nColSpec.Attributes); err != nil {
 		return false, err
 	}
 
@@ -101,11 +102,6 @@ func ModifyColumn(
 	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
 		return false, err
-	}
-
-	alterCtx.alterColMap[nColName] = selectExpr{
-		sexprType: exprColumnName,
-		sexprStr:  oCol.Name,
 	}
 
 	return pkAffected, nil

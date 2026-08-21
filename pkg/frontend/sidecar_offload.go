@@ -36,8 +36,9 @@ import (
 )
 
 const (
-	sidecarHintPrefix    = "/*+ SIDECAR */"
-	sidecarGPUHintPrefix = "/*+ SIDECAR GPU */"
+	sidecarHintPrefix      = "/*+ SIDECAR */"
+	sidecarGPUHintPrefix   = "/*+ SIDECAR GPU */"
+	sidecarMaxResponseSize = 512 << 20 // 512 MB
 )
 
 // errSidecarNotConfigured is a sentinel indicating sidecar offload should
@@ -115,18 +116,6 @@ func stripSidecarHint(sql string) string {
 		return strings.TrimSpace(trimmed[len(sidecarHintPrefix):])
 	}
 	return sql
-}
-
-func sidecarQueryMustRunLocally(ctx context.Context, ses *Session, sql string) bool {
-	stmts, err := parsers.ParseWithSQLMode(
-		ctx,
-		dialect.MYSQL,
-		stripSidecarHint(sql),
-		parserLowerCaseTableNames(ses),
-		sessionSQLModeForParser(ses),
-	)
-	defer freeStatements(stmts)
-	return err == nil && len(stmts) == 1 && isPerformStatement(stmts[0])
 }
 
 // (sidecarRequest removed — httpserver accepts raw SQL body)
@@ -485,12 +474,11 @@ func sendToSidecar(ctx context.Context, sidecarURL string, sql string) (*sidecar
 	defer resp.Body.Close()
 	t1 := time.Now()
 
-	const maxResponseSize = 512 << 20 // 512 MB
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, sidecarMaxResponseSize+1))
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to read sidecar response: %v", err)
 	}
-	if int64(len(body)) > maxResponseSize {
+	if int64(len(body)) > sidecarMaxResponseSize {
 		return nil, moerr.NewInternalErrorf(ctx, "sidecar response too large (>512 MB)")
 	}
 	t2 := time.Now()
@@ -520,7 +508,11 @@ func buildGPUResultSet(ctx context.Context, mrs *MysqlResultSet, result *sidecar
 		colTypes[i] = sidecarTypeToMysql(col.Type)
 		mc := new(MysqlColumn)
 		mc.SetName(col.Name)
-		mc.SetColumnType(colTypes[i])
+		if colTypes[i] == defines.MYSQL_TYPE_BLOB {
+			setMysqlBinaryBlobColumnMetadata(mc, sidecarMaxResponseSize)
+		} else {
+			mc.SetColumnType(colTypes[i])
+		}
 		mrs.AddColumn(mc)
 	}
 

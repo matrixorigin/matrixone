@@ -33,6 +33,7 @@ message Type {
   int32 scale = 5;
   string table = 6;
   string enumvalues = 7;
+  uint32 charset = 8;
 }
 
 message msgHeader {
@@ -305,6 +306,12 @@ message ColDef {
   // get origin_name by ColDef.GetOriginCaseName(), letter case: origin
   string origin_name = 19;
   GeneratedCol generated_col = 20;
+  // Whether the column is part of a unique key. This is also used by result
+  // column metadata to populate the MySQL UNIQUE_KEY_FLAG.
+  bool unique = 21;
+  // Physical table name for result-column origin metadata. tbl_name is the
+  // visible table name (and can therefore be an alias).
+  string origin_tbl_name = 22;
 }
 
 message Default {
@@ -327,9 +334,19 @@ message GeneratedCol {
 }
 
 message IndexOption {
+  // Visibility carries DDL visibility independently of the legacy
+  // IndexDef.visible proto3 bool. Existing constraints omitted that bool for
+  // default-visible indexes, so its false value is ambiguous during upgrades.
+  enum Visibility {
+    VISIBILITY_UNSPECIFIED = 0;
+    VISIBILITY_VISIBLE = 1;
+    VISIBILITY_INVISIBLE = 2;
+  }
+
   bool create_extra_table = 1;
   string parser_name = 2;
   int32 ngram_token_size = 3;
+  Visibility visibility = 4;
 }
 
 message PrimaryKeyDef {
@@ -366,6 +383,10 @@ message IndexDef {
   string index_algo_params = 12;
   // Logical INCLUDE columns of the index, letter case: lower.
   repeated string included_columns = 13;
+  // Reserved after removing optimizer visibility gating. Reusing the wire
+  // identity would misinterpret plans produced by versions that carried it.
+  reserved 14;
+  reserved "visibility_set";
 }
 
 message ForeignKeyDef {
@@ -490,6 +511,9 @@ message TableDef {
   string original_name = 37;
   // Persistent cache epoch for AUTO_INCREMENT allocation.
   uint32 auto_incr_epoch = 38;
+  // Default collation class inherited by textual columns without an explicit
+  // column-level collation. Uses the container/types Charset constants.
+  uint32 default_charset = 39;
 }
 
 message TableFunction {
@@ -661,6 +685,8 @@ message UpdateCtx {
   int32 insert_pk_col_idx = 11;
   bool count_delete_affect_rows = 12;
   bool ignore_affected_rows = 13;
+  bool dedup_by_target_row_id = 14;
+  int32 target_update_ctx_idx = 15;
 }
 
 message InsertCtx {
@@ -761,6 +787,10 @@ message IndexReaderParam {
   DistRange dist_range = 4;
   int32 partition_cn_cnt = 5;
   int32 partition_cn_idx = 6;
+  // EXPLAIN-only annotation: the plan-time over-fetched candidate budget for a
+  // literal LIMIT (0 for a prepared LIMIT ?, whose over-fetch is computed at
+  // EXECUTE). Execution never reads it; the TVF derives its budget from `limit`.
+  uint64 over_fetch_limit = 7;
 }
 
 message Node {
@@ -1028,6 +1058,33 @@ message Node {
   // participates in hashing. A non-empty list must be a strict subset proven
   // by the optimizer to determine all remaining group_by expressions.
   repeated int32 group_by_hash_key = 78;
+
+  // FILTER only: evaluate this predicate at its current logical position.
+  // Neither the filter itself nor predicates from its parent may cross this
+  // node during pushdown. This is used when a predicate observes a final DML
+  // row image and moving it would change statement semantics.
+  bool filter_is_barrier = 79;
+
+  // PARTITION only: when limit is set, order_by begins with this many
+  // partition equality keys and the remaining entries are per-partition
+  // ordering keys for bounded Top-N execution.
+  int32 partition_by_count = 80;
+
+  // TIME_WINDOW only: optional half-open GAPFILL domain inferred from simple
+  // timestamp >= start and timestamp < finish predicates. Both expressions
+  // must be present before the executor extends the observed data domain.
+  Expr gap_fill_start = 81;
+  Expr gap_fill_end = 82;
+
+  // DEDUP only: the incoming key columns are proven unique by the insert
+  // planner, so the right-side operator only needs to look up target keys and
+  // must not retain incoming keys in its hashmap.
+  bool dedup_input_keys_unique = 83;
+
+  // JOIN only: the planner proved that the join is consumed by a scalar,
+  // single COUNT(*) aggregate which understands a zero-column batch whose
+  // row count carries the complete join multiplicity.
+  bool emit_compressed_row_count = 84;
 }
 
 message SnapshotExtraInfo {
@@ -1203,6 +1260,10 @@ message PreInsertCtx {
   Expr cluster_by_expr = 6;
   bool is_old_update = 7;
   bool is_new_update = 8;
+  bool has_target_selector = 9;
+  int32 target_row_number_col = 10;
+  int32 target_active_col = 11;
+  int32 target_row_id_col = 12;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure
@@ -1346,6 +1407,11 @@ message Query {
   // transaction outcome. It is a step-array index, not a node id.
   bool has_returning = 13;
   int32 returning_step = 14;
+
+  // Apply the session sql_select_limit to the final result pipeline. This is
+  // false when the SELECT has an explicit top-level LIMIT, which takes
+  // precedence according to MySQL semantics.
+  bool apply_sql_select_limit = 15;
 }
 
 message TransationControl {
@@ -1640,6 +1706,7 @@ message AlterTableAlterReIndex {
   string index_name = 3;
   int64 index_algo_param_list = 4;
   bool force_sync = 5;
+  bool merge = 6;
 }
 
 message AlterTableAlterAutoUpdate {

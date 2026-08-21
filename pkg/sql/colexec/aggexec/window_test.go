@@ -324,6 +324,60 @@ func TestValueWindowExec_VarlenTypes(t *testing.T) {
 	})
 }
 
+func TestValueWindowExec_BinaryStringProvenance(t *testing.T) {
+	tests := []struct {
+		name string
+		id   int64
+		want []bool
+	}{
+		{name: "lag", id: WinIdOfLag, want: []bool{false, true, false}},
+		{name: "lead", id: WinIdOfLead, want: []bool{false, true, false}},
+		{name: "first_value", id: WinIdOfFirstValue, want: []bool{true, true, true}},
+		{name: "last_value", id: WinIdOfLastValue, want: []bool{true, true, true}},
+		{name: "nth_value", id: WinIdOfNthValue, want: []bool{true, true, true}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mp.Free(nil)
+
+			exec, err := makeValueWindowExec(mp, tc.id, false, []types.Type{types.T_varchar.ToType()})
+			require.NoError(t, err)
+			defer exec.Free()
+
+			vec := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendStringList(vec, []string{"binary-0", "text-1", "binary-2"}, nil, mp))
+			defer vec.Free(mp)
+			require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+			require.NoError(t, vec.SetIsBinaryStringAt(2, true, mp))
+
+			require.NoError(t, exec.GroupGrow(3))
+			for outputRow := 0; outputRow < 3; outputRow++ {
+				for frameRow := 0; frameRow < 3; frameRow++ {
+					require.NoError(t, exec.Fill(outputRow, frameRow, []*vector.Vector{vec}))
+				}
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			for row, want := range tc.want {
+				require.Equal(t, want, results[0].GetBinaryStringMetadataAt(row), "row %d", row)
+			}
+			if tc.id == WinIdOfLag {
+				require.True(t, results[0].IsNull(0))
+				require.False(t, results[0].GetBinaryStringMetadataAt(0))
+			}
+			if tc.id == WinIdOfLead {
+				require.True(t, results[0].IsNull(2))
+				require.False(t, results[0].GetBinaryStringMetadataAt(2))
+			}
+		})
+	}
+}
+
 func TestValueWindowExec_NullValues(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mp.Free(nil)
@@ -1714,7 +1768,7 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 		exec.Free()
 	})
 
-	t.Run("null_bucket_defaults_to_1", func(t *testing.T) {
+	t.Run("null_bucket_count", func(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
 
@@ -1728,16 +1782,15 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
 
-		err = exec.GroupGrow(3)
+		err = exec.GroupGrow(1)
 		require.NoError(t, err)
 
-		for o := 0; o <= 3; o++ {
-			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
-			require.NoError(t, err)
-		}
+		err = exec.Fill(0, 0, []*vector.Vector{osVec, bucketVec})
+		require.ErrorContains(t, err, "ntile bucket count cannot be NULL")
 
 		ntileExec := exec.(*ntileWindowExec)
-		require.Equal(t, int64(1), ntileExec.bucketCounts[0])
+		require.Empty(t, ntileExec.groups[0])
+		require.Zero(t, ntileExec.bucketCounts[0])
 
 		exec.Free()
 	})
@@ -2447,6 +2500,40 @@ func TestCumeDistWindowExec_UnmarshalFromReader(t *testing.T) {
 
 	exec.Free()
 	exec2.Free()
+}
+
+func TestSingleWindowFailedUnmarshalPreservesOwnedState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	info := singleAggInfo{
+		aggID:     WinIdOfRowNumber,
+		retType:   types.T_int64.ToType(),
+		emptyNull: false,
+	}
+	input := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		input, []int64{7, 8, 9}, nil, mp))
+	defer input.Free(mp)
+
+	target := makeRankDenseRankRowNumber(mp, info).(*singleWindowExec)
+	require.NoError(t, target.GroupGrow(1))
+	require.NoError(t, target.Fill(0, 0, []*vector.Vector{input}))
+
+	source := makeRankDenseRankRowNumber(mp, info).(*singleWindowExec)
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, source.Fill(0, 1, []*vector.Vector{input}))
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResult(
+		1, [][]uint8{{1}}, &encoded))
+	broken := encoded.Bytes()[:encoded.Len()-1]
+
+	require.Error(t, target.UnmarshalFromReader(bytes.NewReader(broken), mp))
+	require.Equal(t, []i64Slice{{7}}, target.groups)
+	require.Len(t, target.ret.resultList, 1)
+	require.Equal(t, 1, target.ret.resultList[0].Length())
+
+	source.Free()
+	target.Free()
 }
 
 // TestCumeDistWindowExec_SizeWithData tests Size with actual data

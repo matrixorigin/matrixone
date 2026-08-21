@@ -356,7 +356,18 @@ order_year,
 order_month,
 c.city,
 cat.category_name;
-[unknown result because it is related to issue#19993]
+order_year    order_month    city    category_name    total_sales    year_grouping    month_grouping    city_grouping    customer_grouping    category_grouping
+null    null    null    null    139.95    1    1    1    1    1
+2024    null    null    null    139.95    0    1    1    1    1
+2024    1    null    null    139.95    0    0    1    1    1
+2024    1    null    Books    49.99    0    0    1    1    1
+2024    1    null    Electronics    89.96    0    0    1    1    1
+2024    1    Chicago    Books    49.99    0    0    0    1    1
+2024    1    Chicago    Books    49.99    0    0    0    0    1
+2024    1    Chicago    Books    49.99    0    0    0    0    0
+2024    1    New York    Electronics    89.96    0    0    0    1    1
+2024    1    New York    Electronics    89.96    0    0    0    0    1
+2024    1    New York    Electronics    89.96    0    0    0    0    0
 drop table if exists orders;
 drop table if exists order_items;
 drop table if exists customers;
@@ -1220,6 +1231,42 @@ a	b	ga	gb
 2	null	0	1
 null	null	1	1
 drop table grouping_not_null;
+drop table if exists grouping_argument_validation;
+create table grouping_argument_validation (a int, b int);
+insert into grouping_argument_validation values (1, 10), (2, 20);
+select grouping(a + b), count(*)
+from grouping_argument_validation
+group by a, b with rollup;
+SQL syntax error: Argument #1 of GROUPING function is not in GROUP BY
+select grouping(a + 1, b + 1), count(*)
+from grouping_argument_validation
+group by a + 1, b with rollup;
+SQL syntax error: Argument #2 of GROUPING function is not in GROUP BY
+select grouping(sum(a)), count(*)
+from grouping_argument_validation
+group by a with rollup;
+SQL syntax error: Argument #1 of GROUPING function is not in GROUP BY
+select count(*)
+from grouping_argument_validation
+group by a, b with rollup
+having grouping(a + b) = 0;
+SQL syntax error: Argument #1 of GROUPING function is not in GROUP BY
+select count(*)
+from grouping_argument_validation
+group by a, b with rollup
+order by grouping(a + b);
+SQL syntax error: Argument #1 of GROUPING function is not in GROUP BY
+select a + 1 as a1, b, grouping(a + 1, b) as grouping_bits, count(*) as cnt
+from grouping_argument_validation
+group by a + 1, b with rollup
+order by grouping_bits, a1, b;
+a1	b	grouping_bits	cnt
+2	10	0	1
+3	20	0	1
+2	null	1	1
+3	null	1	1
+null	null	3	2
+drop table grouping_argument_validation;
 select
 coalesce(region, '<null>') as display_region,
 coalesce(product, '<null>') as display_product,
@@ -1322,4 +1369,77 @@ qty    row_num
 20    2
 30    3
 drop table rollup_window_sales;
+drop table if exists grouping_extension_metadata_src;
+create table grouping_extension_metadata_src (a int not null, b int not null, v int not null);
+insert into grouping_extension_metadata_src values (1, 10, 5), (1, 20, 7), (2, 10, 9);
+create view grouping_extension_plain_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by a, b;
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_plain_v' and column_name in ('a', 'b') order by ordinal_position;
+column_name	is_nullable
+a	NO
+b	NO
+create view grouping_extension_rollup_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by a, b with rollup;
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_rollup_v' and column_name in ('a', 'b') order by ordinal_position;
+column_name	is_nullable
+a	YES
+b	YES
+select count(*) from grouping_extension_rollup_v where a is null or b is null;
+count(*)
+3
+create view grouping_extension_cube_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by cube(a, b);
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_cube_v' and column_name in ('a', 'b') order by ordinal_position;
+column_name	is_nullable
+a	YES
+b	YES
+select count(*) from grouping_extension_cube_v where a is null or b is null;
+count(*)
+5
+create view grouping_extension_sets_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by grouping sets ((a, b), (a), ());
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_sets_v' and column_name in ('a', 'b') order by ordinal_position;
+column_name	is_nullable
+a	YES
+b	YES
+select count(*) from grouping_extension_sets_v where a is null or b is null;
+count(*)
+3
+create view grouping_extension_partial_sets_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by grouping sets ((a, b), (a));
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_partial_sets_v' and column_name in ('a', 'b') order by ordinal_position;
+column_name	is_nullable
+a	NO
+b	YES
+select count(*) from grouping_extension_partial_sets_v where a is null;
+count(*)
+0
+select count(*) from grouping_extension_partial_sets_v where b is null;
+count(*)
+2
+create table grouping_extension_rollup_ctas as select a, b, sum(v) as s from grouping_extension_metadata_src group by a, b with rollup;
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_rollup_ctas' and column_name in ('a', 'b') order by ordinal_position;
+column_name	is_nullable
+a	YES
+b	YES
+select count(*) from grouping_extension_rollup_ctas;
+count(*)
+6
+select count(*) from grouping_extension_rollup_ctas where a is null or b is null;
+count(*)
+3
+create table grouping_extension_partial_sets_ctas as select a, b, count(*) as c from grouping_extension_metadata_src group by grouping sets ((a, b), (a));
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_partial_sets_ctas' and column_name in ('a', 'b') order by ordinal_position;
+column_name	is_nullable
+a	NO
+b	YES
+select count(*) from grouping_extension_partial_sets_ctas where a is null;
+count(*)
+0
+select count(*) from grouping_extension_partial_sets_ctas where b is null;
+count(*)
+2
+drop view grouping_extension_plain_v;
+drop view grouping_extension_rollup_v;
+drop view grouping_extension_cube_v;
+drop view grouping_extension_sets_v;
+drop view grouping_extension_partial_sets_v;
+drop table grouping_extension_rollup_ctas;
+drop table grouping_extension_partial_sets_ctas;
+drop table grouping_extension_metadata_src;
 drop database rollup_test;

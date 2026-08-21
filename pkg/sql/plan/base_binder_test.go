@@ -32,6 +32,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMissingColumnWithStaleAliasUsesBadFieldError(t *testing.T) {
+	ctx := NewBindContext(nil, nil)
+	ctx.aliasMap["missing_col"] = &aliasItem{idx: 0}
+	binder := &baseBinder{sysCtx: context.Background(), ctx: ctx}
+
+	_, err := binder.baseBindColRef(tree.NewUnresolvedColName("missing_col"), 0, false)
+	require.Error(t, err)
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok, "unexpected error type %T: %v", err, err)
+	require.Equal(t, moerr.ErrBadFieldError, moErr.ErrorCode())
+	require.Equal(t, uint16(moerr.ER_BAD_FIELD_ERROR), moErr.MySQLCode())
+	require.Equal(t, "42S22", moErr.SqlState())
+	require.EqualError(t, moErr, "invalid input: column missing_col does not exist")
+}
+
 func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	scopes := []map[string]interface{}{{
 		"p1": "10.00",
@@ -131,10 +146,24 @@ func TestIsPositiveIntegerLiteral(t *testing.T) {
 	}
 }
 
-func TestValidateNthValueArgsRequiresProcessAndTwoArgs(t *testing.T) {
+func TestValidateNthValueArgsRejectsInvalidShape(t *testing.T) {
 	err := validateNthValueArgs(context.Background(), nil, nil)
 	require.Error(t, err)
 	require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
+}
+
+func TestValidateNthValueArgsAllowsParamWithoutProcess(t *testing.T) {
+	args := []*plan.Expr{
+		makePlan2Int64ConstExprWithType(1),
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}},
+		},
+	}
+
+	require.NoError(t, validateNthValueArgs(context.Background(), nil, args))
+	require.Equal(t, int32(types.T_text), args[1].Typ.Id)
+	require.Equal(t, int32(1), args[1].GetP().Pos)
 }
 
 func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
@@ -647,6 +676,406 @@ func TestBindScoreBinaryStringUsesBinaryStringSemantics(t *testing.T) {
 	require.False(t, castFunc.Args[0].GetLit().GetIsBin())
 }
 
+func TestBinaryLiteralComparisonKeepsVarbinaryColumnUncast(t *testing.T) {
+	testCases := []struct {
+		name   string
+		filter string
+		colArg int
+	}{
+		{name: "column on left", filter: "a = binary x'41'", colArg: 0},
+		{name: "column on right", filter: "binary x'41' = a", colArg: 1},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			mock.ctxt.tables["bind_select"].Cols[0].Typ = plan.Type{
+				Id:      int32(types.T_varbinary),
+				Width:   8,
+				Charset: uint32(types.CharsetBinary),
+			}
+
+			p, err := runOneStmt(mock, t,
+				"select a from select_test.bind_select where "+tc.filter)
+			require.NoError(t, err)
+
+			var filter *plan.Expr
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.Name == "bind_select" {
+					require.Len(t, node.FilterList, 1)
+					filter = node.FilterList[0]
+					break
+				}
+			}
+			require.NotNil(t, filter)
+			eq := filter.GetF()
+			require.NotNil(t, eq)
+			require.Equal(t, "=", eq.Func.ObjName)
+			require.Len(t, eq.Args, 2)
+			require.NotNil(t, eq.Args[tc.colArg].GetCol(),
+				"the indexed VARBINARY column must not be wrapped in a cast")
+		})
+	}
+}
+
+func TestMinMaxSerialExpressionsKeepBinaryCollation(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true), t,
+		"select min(serial(a, b)), max(serial(a, b)), "+
+			"min(serial_full(a, b)), max(serial_full(a, b)) "+
+			"from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 4)
+	for _, aggregate := range aggregates {
+		fn := aggregate.GetF()
+		require.NotNil(t, fn)
+		require.Contains(t, []string{"min", "max"}, fn.Func.ObjName)
+		require.Equal(t, uint32(types.CharsetBinary), aggregate.Typ.Charset)
+		require.Len(t, fn.Args, 1)
+		require.Equal(t, uint32(types.CharsetBinary), fn.Args[0].Typ.Charset)
+	}
+}
+
+func TestMinMaxConcatExpressionsKeepBinaryCollation(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   10,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(concat(c, c)), max(concat_ws('-', c, c)) "+
+			"from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 2)
+	for _, aggregate := range aggregates {
+		aggregateFunction := aggregate.GetF()
+		require.NotNil(t, aggregateFunction)
+		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), aggregate.Typ.Charset)
+		require.Len(t, aggregateFunction.Args, 1)
+		concat := aggregateFunction.Args[0]
+		concatFunction := concat.GetF()
+		require.NotNil(t, concatFunction)
+		require.NotNil(t, concatFunction.Func)
+		require.Contains(t, []string{"concat", "concat_ws"}, concatFunction.Func.ObjName)
+		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), concat.Typ.Charset)
+	}
+}
+
+func TestMinMaxCastTextUsesExplicitGeneralCICollation(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true), t,
+		"select min(cast(c as char)), max(cast(c as varchar(20))), "+
+			"min(cast(c as text)) from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 3)
+	for _, aggregate := range aggregates {
+		aggregateFunction := aggregate.GetF()
+		require.NotNil(t, aggregateFunction)
+		require.Equal(t, uint32(types.CharsetUTF8), aggregate.Typ.Charset)
+		require.Len(t, aggregateFunction.Args, 1)
+		cast := aggregateFunction.Args[0]
+		require.NotNil(t, cast.GetF())
+		require.Equal(t, uint32(types.CharsetUTF8), cast.Typ.Charset)
+	}
+}
+
+func TestMinMaxDerivedStringExpressionsKeepCollation(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   10,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(convert(c using binary)), max(convert(c using utf8mb4)), "+
+			"min(substring(c, 1)), max(left(c, 1)), min(right(c, 1)), "+
+			"max(replace(c, 'x', 'y')), min(trim(c)), max(ltrim(c)), min(rtrim(c)) "+
+			"from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 9)
+	expectedCharsets := []uint32{
+		uint32(types.CharsetBinary),
+		uint32(types.CharsetUTF8),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+	}
+	for i, aggregate := range aggregates {
+		aggregateFunction := aggregate.GetF()
+		require.NotNil(t, aggregateFunction)
+		require.Len(t, aggregateFunction.Args, 1)
+		argumentFunction := aggregateFunction.Args[0].GetF()
+		require.NotNil(t, argumentFunction)
+		require.NotNil(t, argumentFunction.Func)
+		require.Equalf(t, expectedCharsets[i], aggregateFunction.Args[0].Typ.Charset,
+			"aggregate %d argument function %s", i, argumentFunction.Func.ObjName)
+		require.Equalf(t, expectedCharsets[i], aggregate.Typ.Charset,
+			"aggregate %d result", i)
+	}
+}
+
+func TestMinMaxConditionalStringExpressionsKeepCollation(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["bind_select"].Cols[1].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   80,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   10,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(case when a > 0 then c else c end), min(coalesce(c, c)), min(if(a > 0, c, c)), "+
+			"max(case when a > 0 then c else b end), max(coalesce(c, b)), max(if(a > 0, c, b)) "+
+			"from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 6)
+	for i, aggregate := range aggregates {
+		aggregateFunction := aggregate.GetF()
+		require.NotNil(t, aggregateFunction)
+		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), aggregate.Typ.Charset)
+		require.Len(t, aggregateFunction.Args, 1)
+		conditional := aggregateFunction.Args[0]
+		require.NotNil(t, conditional.GetF())
+		require.Contains(t, []string{"case", "coalesce", "if"}, conditional.GetF().Func.ObjName)
+		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), conditional.Typ.Charset)
+		if i < 3 {
+			require.Equal(t, int32(10), conditional.Typ.Width)
+		} else {
+			require.Equal(t, int32(80), conditional.Typ.Width)
+		}
+	}
+}
+
+func TestMinMaxParseJSONLStringUsesExplicitGeneralCICollation(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true), t,
+		"select min(col0), max(col0) from parse_jsonl_data($$[\"a\"]\n[\"B\"]$$, 's') t")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 2)
+	for _, aggregate := range aggregates {
+		aggregateFunction := aggregate.GetF()
+		require.NotNil(t, aggregateFunction)
+		require.Len(t, aggregateFunction.Args, 1)
+		require.Equal(t, uint32(types.CharsetUTF8), aggregateFunction.Args[0].Typ.Charset)
+		require.Equal(t, uint32(types.CharsetUTF8), aggregate.Typ.Charset)
+	}
+}
+
+func TestMinMaxGeneratedTableFunctionStringsUseExplicitGeneralCICollation(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		aggCount int
+	}{
+		{
+			name:     "unnest key and path",
+			query:    "select min(`key`), max(path) from unnest('{\"a\":1,\"B\":2}') u",
+			aggCount: 2,
+		},
+		{
+			name:     "current account names",
+			query:    "select min(account_name), max(user_name), min(role_name) from current_account() a",
+			aggCount: 3,
+		},
+		{
+			name:     "stage list file",
+			query:    "select min(file), max(file) from stage_list('stage://s/') s",
+			aggCount: 2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(true), t, test.query)
+			require.NoError(t, err)
+
+			var aggregates []*plan.Expr
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG {
+					aggregates = node.AggList
+					break
+				}
+			}
+			require.Len(t, aggregates, test.aggCount)
+			for _, aggregate := range aggregates {
+				fn := aggregate.GetF()
+				require.NotNil(t, fn)
+				require.Len(t, fn.Args, 1)
+				require.Equal(t, uint32(types.CharsetUTF8), fn.Args[0].Typ.Charset)
+				require.Equal(t, uint32(types.CharsetUTF8), aggregate.Typ.Charset)
+			}
+		})
+	}
+}
+
+func TestMinOverUnionTreatsPureNullAsCollationNeutral(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   1,
+		Charset: uint32(types.CharsetUTF8),
+	}
+
+	tests := []struct {
+		name        string
+		query       string
+		wantCharset uint32
+	}{
+		{
+			name:        "trailing pure null",
+			query:       "select min(x) from (select c as x from select_test.bind_select union all select null as x) s",
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+		{
+			name:        "leading pure null",
+			query:       "select min(x) from (select null as x union all select c as x from select_test.bind_select) s",
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+		{
+			name:        "pure null through derived table",
+			query:       "select min(x) from (select c as x from select_test.bind_select union all select x from (select null as x) n) s",
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+		{
+			name:        "pure null through cte",
+			query:       "with n as (select null as x) select min(x) from (select c as x from select_test.bind_select union all select x from n) s",
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t, test.query)
+			require.NoError(t, err)
+
+			var minExpr *plan.Expr
+			for _, node := range p.GetQuery().Nodes {
+				for _, aggregate := range node.AggList {
+					if aggregate.GetF().GetFunc().GetObjName() == "min" {
+						minExpr = aggregate
+					}
+				}
+			}
+			require.NotNil(t, minExpr)
+			require.Equal(t, test.wantCharset, minExpr.Typ.Charset)
+			require.Len(t, minExpr.GetF().Args, 1)
+			require.Equal(t, test.wantCharset, minExpr.GetF().Args[0].Typ.Charset)
+			require.Equal(t, int32(1), minExpr.GetF().Args[0].Typ.Width)
+		})
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(x) from (select null as x union all select null as x) s")
+	require.NoError(t, err)
+	for _, node := range p.GetQuery().Nodes {
+		for _, aggregate := range node.AggList {
+			if aggregate.GetF().GetFunc().GetObjName() == "min" {
+				require.Equal(t, uint32(types.CharsetLegacy), aggregate.Typ.Charset)
+				return
+			}
+		}
+	}
+	t.Fatal("min aggregate not found")
+}
+
+func TestMinOverGroupConcatPreservesTextShapedBinaryCollation(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   10,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(binary_gc), min(bin_gc) from ("+
+			"select group_concat(convert(c using binary)) as binary_gc, group_concat(c) as bin_gc "+
+			"from select_test.bind_select group by a) s")
+	require.NoError(t, err)
+
+	var groupConcatCharsets []uint32
+	var minCharsets []uint32
+	for _, node := range p.GetQuery().Nodes {
+		for _, aggregate := range node.AggList {
+			switch aggregate.GetF().GetFunc().GetObjName() {
+			case "group_concat":
+				groupConcatCharsets = append(groupConcatCharsets, aggregate.Typ.Charset)
+			case "min":
+				minCharsets = append(minCharsets, aggregate.Typ.Charset)
+				require.Len(t, aggregate.GetF().Args, 1)
+				require.Equal(t, aggregate.Typ.Charset, aggregate.GetF().Args[0].Typ.Charset)
+			}
+		}
+	}
+	require.ElementsMatch(t,
+		[]uint32{uint32(types.CharsetBinary), uint32(types.CharsetUTF8MB4Bin)},
+		groupConcatCharsets)
+	require.ElementsMatch(t,
+		[]uint32{uint32(types.CharsetBinary), uint32(types.CharsetUTF8MB4Bin)},
+		minCharsets)
+}
+
+func TestConvertUsingRejectsUnsupportedCharset(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
+		"select convert(c using latin1) from select_test.bind_select")
+	require.ErrorContains(t, err, "unsupported character set 'latin1' for CONVERT USING")
+}
+
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 
@@ -749,6 +1178,96 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 		require.NotNil(t, f)
 		require.Equal(t, int32(types.T_bool), result.Typ.Id)
 	})
+}
+
+func TestBindFuncExprImplByPlanExpr_DatetimeTimestampComparisonRemainsCrossTyped(t *testing.T) {
+	datetimeColumn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{ColPos: 0, Name: "request_at"},
+		},
+	}
+	timestampValue, err := BindFuncExprImplByPlanExpr(context.Background(), "now", nil)
+	require.NoError(t, err)
+
+	comparison, err := BindFuncExprImplByPlanExpr(context.Background(), ">", []*plan.Expr{
+		datetimeColumn,
+		timestampValue,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_bool), comparison.Typ.Id)
+	require.Len(t, comparison.GetF().Args, 2)
+	require.NotNil(t, comparison.GetF().Args[0].GetCol())
+	require.Equal(t, int32(types.T_datetime), comparison.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_timestamp), comparison.GetF().Args[1].Typ.Id)
+}
+
+func TestBindFuncExprImplByPlanExpr_NonConstantTemporalComparisonUsesCommonKeyType(t *testing.T) {
+	datetimeColumn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "d"},
+		},
+	}
+	timestampColumn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 3},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 1, ColPos: 0, Name: "t"},
+		},
+	}
+
+	comparison, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		datetimeColumn,
+		timestampColumn,
+	})
+	require.NoError(t, err)
+	require.Len(t, comparison.GetF().Args, 2)
+	cast := comparison.GetF().Args[0].GetF()
+	require.NotNil(t, cast)
+	require.Equal(t, "cast", cast.Func.ObjName)
+	require.Equal(t, int32(types.T_timestamp), comparison.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(3), comparison.GetF().Args[0].Typ.Scale)
+	require.NotNil(t, comparison.GetF().Args[1].GetCol())
+	require.Equal(t, int32(types.T_timestamp), comparison.GetF().Args[1].Typ.Id)
+}
+
+func TestBuildPlan_DatetimeTimestampComparisonIsZonemappable(t *testing.T) {
+	compilerCtx := NewMockCompilerContext(true)
+	compilerCtx.dbs["system"] = true
+	compilerCtx.objects["statement_info"] = &plan.ObjectRef{
+		SchemaName: "system",
+		ObjName:    "statement_info",
+	}
+	compilerCtx.tables["statement_info"] = &plan.TableDef{
+		Name: "statement_info",
+		Cols: []*plan.ColDef{{
+			Name: "request_at",
+			Typ:  plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		}},
+	}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select request_at from system.statement_info where request_at > date_sub(now(), interval 1 hour)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	queryPlan, err := BuildPlan(compilerCtx, stmt, false)
+	require.NoError(t, err)
+
+	var scan *plan.Node
+	for _, node := range queryPlan.GetQuery().GetNodes() {
+		if node.GetNodeType() == plan.Node_TABLE_SCAN && node.GetTableDef().GetName() == "statement_info" {
+			scan = node
+			break
+		}
+	}
+	require.NotNil(t, scan)
+	require.Len(t, scan.FilterList, 1)
+	filterArgs := scan.FilterList[0].GetF().GetArgs()
+	require.Len(t, filterArgs, 2)
+	require.NotNil(t, filterArgs[0].GetCol())
+	require.Equal(t, int32(types.T_datetime), filterArgs[0].Typ.Id)
+	require.Equal(t, int32(types.T_timestamp), filterArgs[1].Typ.Id)
+	require.True(t, ExprIsZonemappable(compilerCtx.GetContext(), scan.FilterList[0]))
 }
 
 func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {

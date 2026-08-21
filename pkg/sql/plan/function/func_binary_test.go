@@ -34,6 +34,204 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTimestampWindowBoundarySequenceSteps(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	hour := int64(types.SecsPerHour * types.MicroSecsPerSec)
+	day := int64(types.SecsPerDay * types.MicroSecsPerSec)
+	parse := func(s string) types.Timestamp {
+		ts, err := types.ParseTimestamp(zone, s, 6)
+		require.NoError(t, err)
+		return ts
+	}
+
+	t.Run("spring-forward-hourly-grid", func(t *testing.T) {
+		start := parse("2026-03-08 00:00:00")
+		end := parse("2026-03-08 04:00:00")
+		require.Equal(t, int64(3), TimestampWindowBoundarySteps(start, end, hour, zone))
+		require.Equal(t, end, AdvanceTimestampWindowBoundaryBy(start, 3, hour, zone))
+	})
+	t.Run("fall-back-hourly-grid", func(t *testing.T) {
+		start := parse("2026-11-01 00:00:00")
+		end := parse("2026-11-01 03:00:00")
+		require.Equal(t, int64(4), TimestampWindowBoundarySteps(start, end, hour, zone))
+	})
+	t.Run("fall-back-repeated-instant", func(t *testing.T) {
+		first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro())
+		second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
+		require.Equal(t, int64(1), TimestampWindowBoundarySteps(first, second, hour, zone))
+		require.Equal(t, second, AdvanceTimestampWindowBoundaryBy(first, 1, hour, zone))
+	})
+	t.Run("fall-back-sub-hour-repeated-instant", func(t *testing.T) {
+		halfHour := int64(30 * types.SecsPerMinute * types.MicroSecsPerSec)
+		first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro())
+		firstLast := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+		second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
+		firstNext := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+		secondNext := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+
+		require.Equal(t, firstNext, AdvanceTimestampWindowBoundary(first, halfHour, zone))
+		require.Equal(t, second, AdvanceTimestampWindowBoundary(firstLast, halfHour, zone))
+		require.Equal(t, second, AdvanceTimestampWindowBoundaryBy(firstLast, 1, halfHour, zone))
+		require.Equal(t, secondNext, AdvanceTimestampWindowBoundary(second, halfHour, zone))
+		require.Equal(t, secondNext, AdvanceTimestampWindowBoundaryBy(second, 1, halfHour, zone))
+		require.Greater(t, int64(secondNext), int64(second))
+	})
+	t.Run("fall-back-non-divisor-grid", func(t *testing.T) {
+		ninetyMinutes := int64(90 * types.SecsPerMinute * types.MicroSecsPerSec)
+		first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+		second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+		afterSecond := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC).UnixMicro())
+
+		require.Equal(t, first, NormalizeTimestampWindowStart(first, ninetyMinutes, zone))
+		require.Equal(t, second, NormalizeTimestampWindowStart(second, ninetyMinutes, zone))
+		require.Equal(t, second, AdvanceTimestampWindowBoundary(first, ninetyMinutes, zone))
+		require.Equal(t, second, AdvanceTimestampWindowBoundaryBy(first, 1, ninetyMinutes, zone))
+		require.Equal(t, afterSecond, AdvanceTimestampWindowBoundaryBy(first, 2, ninetyMinutes, zone))
+		require.Equal(t, int64(2), TimestampWindowBoundarySteps(first, afterSecond, ninetyMinutes, zone))
+		fifth := first
+		for i := 0; i < 5; i++ {
+			fifth = AdvanceTimestampWindowBoundary(fifth, ninetyMinutes, zone)
+		}
+		require.Equal(t, fifth, AdvanceTimestampWindowBoundaryBy(first, 5, ninetyMinutes, zone))
+		require.Equal(t, afterSecond, AdvanceTimestampWindowBoundary(second, ninetyMinutes, zone))
+		beforeFold := parse("2026-11-01 00:00:00")
+		bulk := beforeFold
+		for i := 0; i < 3; i++ {
+			bulk = AdvanceTimestampWindowBoundary(bulk, ninetyMinutes, zone)
+		}
+		require.Equal(t, bulk, AdvanceTimestampWindowBoundaryBy(beforeFold, 3, ninetyMinutes, zone))
+	})
+	t.Run("fall-back-fold-interior-normalization", func(t *testing.T) {
+		fortyFiveMinutes := int64(45 * types.SecsPerMinute * types.MicroSecsPerSec)
+		first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+		second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+		interior := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
+
+		require.Equal(t, first, NormalizeTimestampWindowStart(interior, fortyFiveMinutes, zone))
+		require.Equal(t, second, NormalizeTimestampWindowStart(second, fortyFiveMinutes, zone))
+	})
+	t.Run("civil-day-dst-grid", func(t *testing.T) {
+		springStart := parse("2026-03-08 00:00:00")
+		springEnd := parse("2026-03-09 00:00:00")
+		fallStart := parse("2026-11-01 00:00:00")
+		fallEnd := parse("2026-11-02 00:00:00")
+		require.Equal(t, int64(1), TimestampWindowBoundarySteps(springStart, springEnd, day, zone))
+		require.Equal(t, int64(1), TimestampWindowBoundarySteps(fallStart, fallEnd, day, zone))
+	})
+	t.Run("fixed-offset-sparse-jump", func(t *testing.T) {
+		fixed := time.FixedZone("UTC+8", 8*60*60)
+		start := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
+		count := int64(24 * 60 * 60 * 1_000_000)
+		end := types.Timestamp(int64(start) + count)
+		require.Equal(t, count, TimestampWindowBoundarySteps(start, end, 1, fixed))
+		require.Equal(t, end, AdvanceTimestampWindowBoundaryBy(start, count, 1, fixed))
+	})
+	t.Run("non-boundary-target-keeps-floor", func(t *testing.T) {
+		fixed := time.FixedZone("UTC+8", 8*60*60)
+		start := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
+		end := types.Timestamp(int64(start) + hour/2)
+		require.Equal(t, int64(0), TimestampWindowBoundarySteps(start, end, hour, fixed))
+		end = types.Timestamp(int64(start) + hour + hour/2)
+		require.Equal(t, int64(1), TimestampWindowBoundarySteps(start, end, hour, fixed))
+	})
+	t.Run("spring-forward-grid-phase", func(t *testing.T) {
+		interval := int64(2 * types.SecsPerHour * types.MicroSecsPerSec)
+		start := NormalizeTimestampWindowStart(parse("2026-03-08 00:30:00"), interval, zone)
+		first := AdvanceTimestampWindowBoundary(start, interval, zone)
+		second := AdvanceTimestampWindowBoundary(first, interval, zone)
+		bulk := AdvanceTimestampWindowBoundaryBy(start, 2, interval, zone)
+		want := NormalizeTimestampWindowStart(parse("2026-03-08 04:30:00"), interval, zone)
+		require.Equal(t, parse("2026-03-08 03:00:00"), first)
+		require.Equal(t, want, second)
+		require.Equal(t, second, bulk)
+	})
+}
+
+func TestTimestampWindowBoundaryGuardsAndArithmetic(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	fixed := time.FixedZone("UTC+8", 8*60*60)
+	hour := int64(types.SecsPerHour * types.MicroSecsPerSec)
+	start, err := types.ParseTimestamp(zone, "2026-01-01 00:00:00", 6)
+	require.NoError(t, err)
+
+	t.Run("zero-and-non-positive-inputs", func(t *testing.T) {
+		require.Equal(t, types.ZeroTimestamp, NormalizeTimestampWindowStart(types.ZeroTimestamp, hour, zone))
+		require.Equal(t, types.ZeroTimestamp, AdvanceTimestampWindowBoundary(types.ZeroTimestamp, hour, zone))
+		require.Equal(t, start, AdvanceTimestampWindowBoundaryBy(start, 0, hour, zone))
+		require.Equal(t, start, AdvanceTimestampWindowBoundaryBy(start, 1, 0, zone))
+		require.Equal(t, int64(0), TimestampWindowBoundarySteps(types.ZeroTimestamp, start, hour, zone))
+		require.Equal(t, int64(0), TimestampWindowBoundarySteps(start, start, hour, zone))
+		require.Equal(t, int64(0), TimestampWindowBoundarySteps(start, types.Timestamp(int64(start)+hour), 0, zone))
+	})
+
+	t.Run("overflow-fails-closed", func(t *testing.T) {
+		require.Equal(t, start, AdvanceTimestampWindowBoundaryBy(start, math.MaxInt64, 2, zone))
+
+		product, ok := safeTimestampWindowProduct(math.MaxInt64, 2)
+		require.False(t, ok)
+		require.Zero(t, product)
+		product, ok = safeTimestampWindowProduct(0, math.MaxInt64)
+		require.True(t, ok)
+		require.Zero(t, product)
+		_, ok = safeTimestampWindowProduct(-1, 1)
+		require.False(t, ok)
+
+		sum, ok := safeTimestampWindowSum(math.MaxInt64, 1)
+		require.False(t, ok)
+		require.Zero(t, sum)
+		sum, ok = safeTimestampWindowSum(0, 0)
+		require.True(t, ok)
+		require.Zero(t, sum)
+		_, ok = safeTimestampWindowSum(math.MinInt64, -1)
+		require.False(t, ok)
+	})
+
+	t.Run("non-transition-helper-controls", func(t *testing.T) {
+		require.Zero(t, timestampWindowGapAt(start, fixed))
+		require.False(t, timestampWindowFoldStep(start, start, hour, fixed))
+		require.False(t, timestampWindowFoldStep(start, types.Timestamp(int64(start)+hour), 0, fixed))
+
+		_, ok := timestampWindowFoldBoundary(start, types.Timestamp(int64(start)+hour), hour, fixed)
+		require.False(t, ok)
+		_, ok = timestampWindowFoldStepCount(start, types.Timestamp(int64(start)+hour), hour, fixed)
+		require.False(t, ok)
+	})
+}
+
+func TestTimestampWindowBoundaryLordHoweFold(t *testing.T) {
+	zone, err := time.LoadLocation("Australia/Lord_Howe")
+	require.NoError(t, err)
+	first := types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 30, 0, 0, time.UTC).UnixMicro())
+
+	for _, tc := range []struct {
+		name     string
+		interval int64
+		next     types.Timestamp
+		bulk     types.Timestamp
+	}{
+		{
+			name:     "five-minute-grid",
+			interval: 5 * types.SecsPerMinute * types.MicroSecsPerSec,
+			next:     types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 35, 0, 0, time.UTC).UnixMicro()),
+			bulk:     types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 40, 0, 0, time.UTC).UnixMicro()),
+		},
+		{
+			name:     "fifteen-minute-grid",
+			interval: 15 * types.SecsPerMinute * types.MicroSecsPerSec,
+			next:     types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 45, 0, 0, time.UTC).UnixMicro()),
+			bulk:     types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 15, 0, 0, 0, time.UTC).UnixMicro()),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.next, AdvanceTimestampWindowBoundary(first, tc.interval, zone))
+			require.Equal(t, tc.next, AdvanceTimestampWindowBoundaryBy(first, 1, tc.interval, zone))
+			require.Equal(t, tc.bulk, AdvanceTimestampWindowBoundaryBy(first, 2, tc.interval, zone))
+		})
+	}
+}
+
 func initAddFaultPointTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -8721,6 +8919,144 @@ func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
 	}
 }
 
+// L1 Distance — sum|a-b|, exact for these inputs in both float widths:
+// |1-10|+|2-20|+|3-30| = 54 and |4-40|+|5-50|+|6-60| = 135.
+func initL1DistanceArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test L1Distance float32 array",
+			typ:  types.T_array_float32,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{54, 135},
+				[]bool{false, false}),
+		},
+		{
+			info: "test L1Distance float64 array",
+			typ:  types.T_array_float64,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{54, 135},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestL1DistanceArray(t *testing.T) {
+	testCases := initL1DistanceArrayTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		var fcTC FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float32])
+		case types.T_array_float64:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// TestL1DistanceArrayConstQuery covers the BATCHED path: batchArrayDistanceSync only
+// engages when exactly one operand is constant, which is the shape of every real
+// `ORDER BY l1_distance(v, '[...]')` query. The two-column case above always falls back
+// to the per-row kernel, so without this the Metric_L1Distance pairwise branch — where a
+// wrong metric constant would live — has no coverage.
+func TestL1DistanceArrayConstQuery(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "test L1Distance float32 array against a constant query vector",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float32.ToType(),
+				[][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+			NewFunctionTestConstInput(types.T_array_float32.ToType(),
+				[][]float32{{10, 20, 30}}, []bool{false}),
+		},
+		// Both rows measured against the SAME constant [10,20,30]:
+		// |1-10|+|2-20|+|3-30| = 54 and |4-10|+|5-20|+|6-30| = 45.
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{54, 45}, []bool{false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float32])
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+}
+
+// TestL1DistanceArrayConstQueryF64Precision: whether the query vector is constant decides
+// whether the batched path runs, so it must not decide the VALUE. 16777217 is the first
+// integer float32 cannot hold; a result rounded through float32 answers 16777216. On a
+// vecf64 column that silently collapses distinct distances and can reorder an ORDER BY.
+func TestL1DistanceArrayConstQueryF64Precision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	const beyondF32 = 16777217.0
+	tc := tcTemp{
+		info: "l1_distance(vecf64 column, const) must keep float64 precision",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float64.ToType(),
+				[][]float64{{0}, {1}}, []bool{false, false}),
+			NewFunctionTestConstInput(types.T_array_float64.ToType(),
+				[][]float64{{beyondF32}}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{beyondF32, beyondF32 - 1}, []bool{false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float64])
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+}
+
+// TestL1DistanceArrayConstQueryDimMismatch: a dimension mismatch must raise the documented
+// ErrInvalidInput naming both dimensions, not the metric kernel's ErrInternal, regardless
+// of which operand is constant.
+func TestL1DistanceArrayConstQueryDimMismatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// Called directly rather than through the harness: the harness reports only THAT an
+	// expected error occurred, and the whole point here is WHICH error.
+	mp := proc.Mp()
+	col := makeColArrayVec[float64](t, mp, types.T_array_float64.ToType(), [][]float64{{1, 2, 3}})
+	cst := makeConstArrayVec64(t, mp, []float64{1, 2}, 1)
+	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp)
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	err := L1DistanceArray[float64]([]*vector.Vector{col, cst}, result, proc, 1, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid input", "must be the scalar error, not ErrInternal")
+	require.Contains(t, err.Error(), "(3, 2)", "the error must name both dimensions")
+}
+
+// TestL1DistanceArrayConstQueryMaskedRow: the batched path evaluates every row and lets any
+// row's error escape. A row the expression framework masked off must not be evaluated --
+// otherwise a bad dimension in a branch SQL never selected fails the whole query.
+func TestL1DistanceArrayConstQueryMaskedRow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "l1_distance must skip a masked row carrying a bad dimension",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float32.ToType(),
+				[][]float32{{1, 2, 3}, {4, 5}}, []bool{false, false}),
+			NewFunctionTestConstInput(types.T_array_float32.ToType(),
+				[][]float32{{1, 2}}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{0, 6}, []bool{true, false}),
+	}
+	// Row 0 holds the mismatched dimension and is masked off; only row 1 is evaluated:
+	// |4-1|+|5-2| = 6.
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect,
+		L1DistanceArray[float32]).WithSelectList(selectList)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+}
+
 // L2 Distance
 func initL2DistanceArrayTestCase() []tcTemp {
 	return []tcTemp{
@@ -13105,6 +13441,274 @@ func TestMoWinTruncateKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	got := vector.MustFixedColNoTypeCheck[types.Datetime](result.GetResultVector())
 	require.Equal(t, types.ZeroDatetime, got[0])
 	require.Equal(t, types.DatetimeEpoch, got[1])
+}
+
+func TestMoWinTruncateTimestampPreservesInstantIdentity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	location, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = location
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	fallFirst := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+	fallSecond := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+	require.NoError(t, vector.AppendFixedList(values, []types.Timestamp{types.ZeroTimestamp, fallFirst, fallSecond}, nil, proc.Mp()))
+	values.SetLength(3)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 3, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Hour), 3, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+
+	got := vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())
+	require.Equal(t, types.ZeroTimestamp, got[0])
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro()), got[1])
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()), got[2])
+}
+
+func TestMoWinTruncateTimestampUsesSessionTimezoneForBucketAlignment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+8", 8*60*60)
+	value := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 2, 30, 0, 0, time.UTC).UnixMicro())
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(values, []types.Timestamp{types.ZeroTimestamp, value}, nil, proc.Mp()))
+	values.SetLength(2)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 2, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Day), 2, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 2, nil))
+
+	got := vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())
+	require.Equal(t, types.ZeroTimestamp, got[0])
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2025, 12, 31, 16, 0, 0, 0, time.UTC).UnixMicro()), got[1])
+}
+
+func TestMoWinTruncateTimestampUsesBoundaryOffsetAcrossDST(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	location, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = location
+	value, err := types.ParseTimestamp(location, "2026-03-20 12:00:00", 6)
+	require.NoError(t, err)
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixed(values, value, false, proc.Mp()))
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(100), 1, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Day), 1, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 1, nil))
+
+	want, err := types.ParseTimestamp(location, "2025-12-16 00:00:00", 6)
+	require.NoError(t, err)
+	require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())[0])
+}
+
+func TestMoWinTruncateTimestampCanonicalizesDSTGapIdempotently(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	location, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = location
+
+	truncate := func(value types.Timestamp) types.Timestamp {
+		values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+		require.NoError(t, vector.AppendFixed(values, value, false, proc.Mp()))
+		defer values.Free(proc.Mp())
+		diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, proc.Mp())
+		require.NoError(t, err)
+		defer diff.Free(proc.Mp())
+		unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Hour), 1, proc.Mp())
+		require.NoError(t, err)
+		defer unit.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 1, nil))
+		return vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())[0]
+	}
+
+	value, err := types.ParseTimestamp(location, "2026-03-08 03:30:00", 6)
+	require.NoError(t, err)
+	want, err := types.ParseTimestamp(location, "2026-03-08 03:00:00", 6)
+	require.NoError(t, err)
+	got := truncate(value)
+	require.Equal(t, want, got)
+	require.Equal(t, got, truncate(got))
+}
+
+func TestMoWinTruncateTimestampOverloadDoesNotCastToDatetime(t *testing.T) {
+	got, err := GetFunctionByName(
+		context.Background(),
+		"mo_win_truncate",
+		[]types.Type{types.T_timestamp.ToTypeWithScale(6), types.T_int64.ToType(), types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+	_, shouldCast := got.ShouldDoImplicitTypeCast()
+	require.False(t, shouldCast)
+	_, overloadID := DecodeOverloadID(got.GetEncodedOverloadID())
+	require.Equal(t, int32(1), overloadID)
+	require.Equal(t, types.T_timestamp, got.GetReturnType().Oid)
+	require.Equal(t, int32(6), got.GetReturnType().Scale)
+}
+
+func TestMoWinTruncatePropagatesNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		values,
+		[]types.Datetime{types.DatetimeEpoch, types.DatetimeEpoch, types.DatetimeEpoch + types.MicroSecsPerSec},
+		[]bool{false, true, false},
+		proc.Mp(),
+	))
+	values.SetLength(3)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 3, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Second), 3, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+
+	got := result.GetResultVector()
+	require.False(t, got.IsNull(0))
+	require.True(t, got.IsNull(1))
+	require.False(t, got.IsNull(2))
+	require.Equal(t, []types.Datetime{
+		types.DatetimeEpoch,
+		0,
+		types.DatetimeEpoch + types.MicroSecsPerSec,
+	}, vector.MustFixedColNoTypeCheck[types.Datetime](got))
+}
+
+func TestMoWinTruncateTimestampPropagatesNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(
+		values,
+		[]types.Timestamp{
+			types.Timestamp(0),
+			types.Timestamp(0),
+			types.Timestamp(types.MicroSecsPerSec),
+		},
+		[]bool{false, true, false},
+		proc.Mp(),
+	))
+	values.SetLength(3)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 3, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Second), 3, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+
+	got := result.GetResultVector()
+	require.False(t, got.IsNull(0))
+	require.True(t, got.IsNull(1))
+	require.False(t, got.IsNull(2))
+	require.Equal(t, []types.Timestamp{
+		types.Timestamp(0),
+		0,
+		types.Timestamp(types.MicroSecsPerSec),
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](got))
+}
+
+func TestMoWinTruncateRejectsNonPositiveInterval(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixed(values, types.DatetimeEpoch, false, proc.Mp()))
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Minute), 1, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.ErrorContains(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 1, nil), "time window interval must be greater than zero")
+}
+
+func TestMoWinDivisorRejectsNonPositiveIntervalAndSliding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	newConst := func(v int64) *vector.Vector {
+		vec, err := vector.NewConstFixed(types.T_int64.ToType(), v, 1, proc.Mp())
+		require.NoError(t, err)
+		return vec
+	}
+	minute := newConst(int64(types.Minute))
+	defer minute.Free(proc.Mp())
+
+	for _, tc := range []struct {
+		name     string
+		interval int64
+		sliding  int64
+		wantErr  string
+	}{
+		{
+			name:     "zero interval",
+			interval: 0,
+			sliding:  1,
+			wantErr:  "time window interval must be greater than zero",
+		},
+		{
+			name:     "zero sliding",
+			interval: 5,
+			sliding:  0,
+			wantErr:  "time window sliding value must be greater than zero",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			interval := newConst(tc.interval)
+			defer interval.Free(proc.Mp())
+			sliding := newConst(tc.sliding)
+			defer sliding.Free(proc.Mp())
+
+			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.ErrorContains(t, Divisor([]*vector.Vector{interval, minute, sliding, minute}, result, proc, 1, nil), tc.wantErr)
+		})
+	}
 }
 
 func TestDateTruncCheckRejectsInvalidArguments(t *testing.T) {

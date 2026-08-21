@@ -55,7 +55,8 @@ func AddColumn(
 	if err != nil {
 		return false, err
 	}
-	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
+	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
+	if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableDef.DefaultCharset, specNewColumn.Attributes); err != nil {
 		return false, err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
@@ -192,6 +193,8 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCharset, *tree.AttributeCollate:
+			// Type metadata was resolved centrally before constructing the column.
 			//default:
 			//	return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
@@ -325,6 +328,7 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 		TableExist:     true,
 		Comment:        "",
 	}
+	setIndexDefVisibility(indexDef, uniKey.IndexOption)
 
 	if uniKey.IndexOption != nil {
 		indexDef.Comment = uniKey.IndexOption.Comment
@@ -441,6 +445,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			// handle unique index
 			if len(indexInfo.Parts) == 0 {
 				tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+				i--
 			}
 		} else if !indexInfo.Unique {
 			// handle secondary index
@@ -457,13 +462,16 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					//NOTE: if the last SK column is an __mo_alias or __mo_fake or __mo_cp, then the index will be deleted.
 					// There is no way that user can add __mo_alias or __mo_fake or __mo_cp as the SK column.
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				} else if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				}
 			case catalog.MOIndexMasterAlgo.ToString():
 				if len(indexInfo.Parts) == 0 {
 					// TODO: verify this
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				}
 			default:
 				// Plugin-registered indexes may span multiple hidden IndexDefs;

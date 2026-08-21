@@ -1358,19 +1358,11 @@ func TestNewClientWithMOCluster(t *testing.T) {
 				},
 			}))
 	defer cluster.Close()
-	var newClientFailed bool
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				newClientFailed = true
-			}
-		}()
-		_, err := NewClient(sid, morpc.Config{})
-		if err != nil {
-			newClientFailed = true
-		}
-	}()
-	require.True(t, newClientFailed, "new LockService Client without a process-level cluster nor a custom cluster should fail")
+	// The custom cluster is the dependency under test. Assert the process-level
+	// fallback is absent directly instead of spending the legacy ten-second
+	// GetMOCluster startup timeout proving the same precondition indirectly.
+	_, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.ClusterService)
+	require.False(t, ok)
 	c, err := NewClient(sid, morpc.Config{}, WithMOCluster(cluster))
 	require.NoError(t, err)
 	defer func() {

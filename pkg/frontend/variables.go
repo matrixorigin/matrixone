@@ -27,10 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
@@ -1108,6 +1111,23 @@ type SystemVariables struct {
 	catalogEpoch uint64
 }
 
+const (
+	transactionIsolationSystemVariable      = "transaction_isolation"
+	transactionIsolationSystemVariableAlias = "tx_isolation"
+)
+
+func canonicalSystemVariableName(name string) string {
+	name = strings.ToLower(name)
+	if name == transactionIsolationSystemVariableAlias {
+		return transactionIsolationSystemVariable
+	}
+	return name
+}
+
+func isTransactionIsolationSystemVariable(name string) bool {
+	return canonicalSystemVariableName(name) == transactionIsolationSystemVariable
+}
+
 func (sv *SystemVariables) getMutationGeneration() uint64 {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
@@ -1149,15 +1169,27 @@ func (sv *SystemVariables) Clone() *SystemVariables {
 func (sv *SystemVariables) Get(name string) interface{} {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	name = strings.ToLower(name)
-	return sv.mp[name]
+	name = canonicalSystemVariableName(name)
+	value, ok := sv.mp[name]
+	if !ok && name == transactionIsolationSystemVariable {
+		// Accept an in-memory snapshot produced by an older node that only
+		// populated the legacy alias. Catalog loading normalizes this state, but
+		// the fallback also keeps rolling upgrades and tests deterministic.
+		return sv.mp[transactionIsolationSystemVariableAlias]
+	}
+	return value
 }
 
 func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	name = strings.ToLower(name)
+	name = canonicalSystemVariableName(name)
 	sv.mp[name] = value
+	if name == transactionIsolationSystemVariable {
+		// Keep SHOW-style map iteration and any legacy direct lookup coherent
+		// while all semantic reads resolve through the canonical name.
+		sv.mp[transactionIsolationSystemVariableAlias] = value
+	}
 	sv.mutationGeneration++
 }
 
@@ -1363,7 +1395,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("collation_server"),
-		Default:           "utf8mb4_bin",
+		// This is also the fallback inherited by an unqualified CREATE TABLE.
+		Default: "utf8mb4_general_ci",
 	},
 	"license": {
 		Name:              "license",
@@ -3905,6 +3938,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
 		Default:           int8(0),
 	},
+	"experimental_fulltext2_index": {
+		Name:              "experimental_fulltext2_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_fulltext2_index"),
+		Default:           int8(0),
+	},
 	"ft_relevancy_algorithm": {
 		Name:              fulltext.FulltextRelevancyAlgo,
 		Scope:             ScopeBoth,
@@ -3912,6 +3953,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType(fulltext.FulltextRelevancyAlgo),
 		Default:           fulltext.FulltextRelevancyAlgo_tfidf,
+	},
+	"ft2_relevancy_algorithm": {
+		Name:              fulltext2.Fulltext2RelevancyAlgo,
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType(fulltext2.Fulltext2RelevancyAlgo),
+		Default:           fulltext2.Fulltext2RelevancyAlgo_bm25,
 	},
 	"experimental_hnsw_index": {
 		Name:              "experimental_hnsw_index",
@@ -4355,10 +4404,84 @@ func valueIsBoolTrue(value interface{}) (bool, error) {
 }
 
 type UserDefinedVar struct {
-	Value            interface{}
-	Sql              string
-	IsBin            bool
+	Value interface{}
+	Sql   string
+	IsBin bool
+	// Type is the type of the value at the time the variable was assigned.
+	// User variables are exposed to the planner as text values for wire
+	// compatibility, but MySQL fixes their effective type at statement start.
+	// Keeping the assignment type here prevents a numeric sibling operand from
+	// silently narrowing a decimal or floating-point variable.
+	Type             planpb.Type
 	PrepareParamKind vector.PrepareParamKind
+	// Replayable is true only when the proxy can replay the assignment as a
+	// captured raw COM_QUERY SET statement during legacy migration.
+	Replayable bool
+}
+
+// inferUserDefinedVarType supplies a conservative type for callers which set
+// a variable without an explicit expression type (for example tests and
+// stored-procedure helpers). Expression evaluation records the exact plan
+// type separately when it is available.
+func inferUserDefinedVarType(value interface{}) planpb.Type {
+	var oid types.T
+	switch v := value.(type) {
+	case bool:
+		oid = types.T_bool
+	case int, int8, int16, int32, int64:
+		oid = types.T_int64
+	case uint, uint8, uint16, uint32, uint64:
+		oid = types.T_uint64
+	case float32:
+		oid = types.T_float32
+	case float64:
+		oid = types.T_float64
+	case types.Date:
+		oid = types.T_date
+	case types.Time:
+		oid = types.T_time
+	case types.Datetime:
+		oid = types.T_datetime
+	case types.Timestamp:
+		oid = types.T_timestamp
+	case bytejson.ByteJson:
+		oid = types.T_json
+	case types.Decimal64:
+		oid = types.T_decimal64
+	case types.Decimal128:
+		oid = types.T_decimal128
+	case types.Decimal256:
+		oid = types.T_decimal256
+	case types.Enum:
+		oid = types.T_enum
+	case types.MoYear:
+		oid = types.T_year
+	case types.Uuid:
+		oid = types.T_uuid
+	case types.TS:
+		oid = types.T_TS
+	case types.Rowid:
+		oid = types.T_Rowid
+	case types.Blockid:
+		oid = types.T_Blockid
+	case []byte:
+		oid = types.T_varbinary
+	case []float32:
+		return planpb.Type{Id: int32(types.T_array_float32), Width: int32(len(v))}
+	case []float64:
+		return planpb.Type{Id: int32(types.T_array_float64), Width: int32(len(v))}
+	case []types.BF16:
+		return planpb.Type{Id: int32(types.T_array_bf16), Width: int32(len(v))}
+	case []types.Float16:
+		return planpb.Type{Id: int32(types.T_array_float16), Width: int32(len(v))}
+	case []int8:
+		return planpb.Type{Id: int32(types.T_array_int8), Width: int32(len(v))}
+	case nil:
+		oid = types.T_text
+	default:
+		oid = types.T_text
+	}
+	return planpb.Type{Id: int32(oid)}
 }
 
 func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {

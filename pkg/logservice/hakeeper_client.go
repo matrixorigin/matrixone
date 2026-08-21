@@ -399,7 +399,7 @@ func validateHAKeeperClientContext(ctx context.Context) error {
 	if _, ok := ctx.Deadline(); !ok {
 		return moerr.NewInvalidInput(ctx, "HAKeeper client context deadline not set")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func newManagedHAKeeperClient(
@@ -419,14 +419,17 @@ func newManagedHAKeeperClient(
 		clientOptions:  GetClientOptions(ctx),
 	}
 	mc.mu.client = c
-	mc.mu.allocIDByKey = make(map[string]*allocID)
+	mc.allocMu.allocIDByKey = make(map[string]*allocID)
 	return mc, nil
 }
 
-// allocID contains nextID and lastID.
+// allocID owns one local ID batch and coordinates its refill. A waiter never
+// holds mu while waiting for HAKeeper, so its own context remains effective.
 type allocID struct {
+	sync.Mutex
 	nextID uint64
 	lastID uint64
+	refill chan struct{}
 }
 
 type managedHAKeeperClient struct {
@@ -438,13 +441,16 @@ type managedHAKeeperClient struct {
 	backendOptions []morpc.BackendOption
 	clientOptions  []morpc.ClientOption
 
+	// allocMu protects only the keyed-state map. Each allocID protects its own
+	// batch, so one key's refill cannot stop cached allocations for another key.
+	allocMu struct {
+		sync.RWMutex
+		allocIDByKey map[string]*allocID
+	}
+	sharedAllocID allocID
+
 	mu struct {
 		sync.RWMutex
-		// allocIDByKey is used to alloc IDs by different key.
-		allocIDByKey map[string]*allocID
-		// sharedAllocID is used to alloc global IDs.
-		sharedAllocID allocID
-
 		client *hakeeperClient
 	}
 }
@@ -566,57 +572,22 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 	if err := validateHAKeeperClientContext(ctx); err != nil {
 		return 0, err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	batchSize := c.cfg.AllocateIDBatch
-	for {
-		if c.mu.sharedAllocID.nextID != 0 &&
-			c.mu.sharedAllocID.nextID <= c.mu.sharedAllocID.lastID {
-			v := c.mu.sharedAllocID.nextID
-			c.mu.sharedAllocID.nextID++
-			if v == 0 {
-				logutil.Error("id should not be 0",
-					zap.Uint64("nextID", c.mu.sharedAllocID.nextID),
-					zap.Uint64("lastID", c.mu.sharedAllocID.lastID))
-			}
-			return v, nil
-		}
-
-		if err := c.prepareClientLocked(ctx); err != nil {
-			if c.isRetryableError(err) {
-				if err := c.waitRetryLocked(ctx); err != nil {
-					return 0, err
-				}
-				continue
-			}
-			return 0, err
-		}
-		firstID, err := sendCNAllocateIDFunc(c.mu.client, ctx, "", batchSize)
-
-		if err != nil {
-			if shouldResetHAKeeperClient(err) {
-				c.resetClientLocked()
-			}
-			if c.isRetryableError(err) {
-				if err := c.waitRetryLocked(ctx); err != nil {
-					return 0, err
-				}
-				continue
-			}
-			logutil.Error("failed to allocate id",
-				zap.Error(err),
-				zap.Uint64("batch", c.cfg.AllocateIDBatch),
-				zap.Uint64("nextID", c.mu.sharedAllocID.nextID),
-				zap.Uint64("lastID", c.mu.sharedAllocID.lastID),
-			)
-			return 0, err
-		}
-
-		c.mu.sharedAllocID.nextID = firstID + 1
-		c.mu.sharedAllocID.lastID = firstID + batchSize - 1
-		return firstID, err
+	id, err := c.allocateID(ctx, "", batchSize, &c.sharedAllocID)
+	if err != nil {
+		c.sharedAllocID.Lock()
+		nextID := c.sharedAllocID.nextID
+		lastID := c.sharedAllocID.lastID
+		c.sharedAllocID.Unlock()
+		logutil.Error("failed to allocate id",
+			zap.Error(err),
+			zap.Uint64("batch", c.cfg.AllocateIDBatch),
+			zap.Uint64("nextID", nextID),
+			zap.Uint64("lastID", lastID),
+		)
+		return 0, err
 	}
+	return id, nil
 }
 
 // AllocateIDByKey implements the basicHAKeeperClient interface.
@@ -645,47 +616,111 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 		return 0, moerr.NewInvalidInput(ctx, "batch size must be greater than zero")
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	return c.allocateID(ctx, key, batchSize, c.getAllocID(key))
+}
 
+func (c *managedHAKeeperClient) getAllocID(key string) *allocID {
+	c.allocMu.RLock()
+	ids := c.allocMu.allocIDByKey[key]
+	c.allocMu.RUnlock()
+	if ids != nil {
+		return ids
+	}
+
+	c.allocMu.Lock()
+	defer c.allocMu.Unlock()
+	if c.allocMu.allocIDByKey == nil {
+		c.allocMu.allocIDByKey = make(map[string]*allocID)
+	}
+	ids = c.allocMu.allocIDByKey[key]
+	if ids == nil {
+		ids = &allocID{}
+		c.allocMu.allocIDByKey[key] = ids
+	}
+	return ids
+}
+
+func (c *managedHAKeeperClient) allocateID(
+	ctx context.Context,
+	key string,
+	batchSize uint64,
+	ids *allocID,
+) (uint64, error) {
 	for {
-		allocIDs, ok := c.mu.allocIDByKey[key]
-		if !ok {
-			allocIDs = &allocID{nextID: 0, lastID: 0}
-			c.mu.allocIDByKey[key] = allocIDs
-		}
-
-		if allocIDs.nextID != 0 && allocIDs.nextID <= allocIDs.lastID {
-			v := allocIDs.nextID
-			allocIDs.nextID++
-			return v, nil
-		}
-
-		if err := c.prepareClientLocked(ctx); err != nil {
-			if c.isRetryableError(err) {
-				if err := c.waitRetryLocked(ctx); err != nil {
-					return 0, err
-				}
-				continue
-			}
+		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		firstID, err := sendCNAllocateIDFunc(c.mu.client, ctx, key, batchSize)
+
+		ids.Lock()
+		if ids.nextID != 0 && ids.nextID <= ids.lastID {
+			id := ids.nextID
+			ids.nextID++
+			ids.Unlock()
+			return id, nil
+		}
+		if ids.refill != nil {
+			refill := ids.refill
+			ids.Unlock()
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-refill:
+				continue
+			}
+		}
+
+		refill := make(chan struct{})
+		ids.refill = refill
+		ids.Unlock()
+
+		// The elected refiller owns this transition. It performs discovery and
+		// RPC without an allocation lock, then publishes the batch and wakes all
+		// waiters exactly once on either success or failure.
+		firstID, err := c.allocateIDBatch(ctx, key, batchSize)
+		ids.Lock()
+		if err == nil {
+			ids.nextID = firstID + 1
+			ids.lastID = firstID + batchSize - 1
+		}
+		ids.refill = nil
+		close(refill)
+		ids.Unlock()
+		return firstID, err
+	}
+}
+
+func (c *managedHAKeeperClient) allocateIDBatch(
+	ctx context.Context,
+	key string,
+	batchSize uint64,
+) (uint64, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		client, err := c.getPreparedClient(ctx)
 		if err != nil {
-			if shouldResetHAKeeperClient(err) {
-				c.resetClientLocked()
-			}
 			if c.isRetryableError(err) {
-				if err := c.waitRetryLocked(ctx); err != nil {
+				if err := c.waitRetry(ctx); err != nil {
 					return 0, err
 				}
 				continue
 			}
 			return 0, err
 		}
-
-		allocIDs.nextID = firstID + 1
-		allocIDs.lastID = firstID + batchSize - 1
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		firstID, err := sendCNAllocateIDFunc(client, ctx, key, batchSize)
+		if shouldResetHAKeeperClient(err) {
+			c.resetClientIfCurrent(client)
+		}
+		if c.isRetryableError(err) {
+			if err := c.waitRetry(ctx); err != nil {
+				return 0, err
+			}
+			continue
+		}
 		return firstID, err
 	}
 }
@@ -1223,6 +1258,12 @@ func (c *managedHAKeeperClient) resetClientIfCurrent(client *hakeeperClient) {
 func (c *managedHAKeeperClient) getPreparedClient(ctx context.Context) (*hakeeperClient, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// The context may have expired while this caller waited for another client
+	// preparation or reset. Do not pass a stale deadline into MORPC: besides
+	// being useless, that error can be mistaken for a broken shared transport.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := c.prepareClientLocked(ctx); err != nil {
 		return nil, err
 	}

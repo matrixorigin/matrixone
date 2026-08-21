@@ -388,7 +388,10 @@ ut: config cgo thirdparties
 ifeq ($(UNAME_S),darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
-	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
+	# The race suite is split into light, exclusive, heavy, and plan shards.
+	# Keep the outer budget above the per-package timeout so an expanded main
+	# branch cannot be killed while later shards are still making progress.
+	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 ###############################################################################
@@ -1274,7 +1277,7 @@ fmt:
 .PHONY: install-static-check-tools
 install-static-check-tools:
 	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
-	@go install github.com/matrixorigin/linter/cmd/molint@latest
+	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check

@@ -68,7 +68,8 @@ func TestNulls(t *testing.T) {
 	np.AddMany([]uint64{1, 2, 3})
 	require.Equal(t, 3, np.Count())
 	np.RemoveRange(1, 3)
-	require.Equal(t, 0, np.Count())
+	require.Equal(t, 1, np.Count())
+	require.True(t, np.Contains(3))
 
 	np.AddMany([]uint64{1, 2, 3})
 	np.Filter([]int64{0})
@@ -88,6 +89,26 @@ func TestNulls(t *testing.T) {
 	require.Equal(t, np.ToArray(), nq.ToArray())
 
 	np.Reset()
+}
+
+func TestRemoveRangeSameWordBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		length int
+		start  uint64
+	}{
+		{name: "one word", length: 64, start: 52},
+		{name: "aggregate chunk boundary", length: 8192, start: 8180},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			np := newBm(tc.length)
+			np.AddRange(0, uint64(tc.length))
+			np.RemoveRange(tc.start, uint64(tc.length))
+			require.Equal(t, int(tc.start), np.Count())
+			require.True(t, np.Contains(tc.start-1))
+			require.False(t, np.Contains(tc.start))
+		})
+	}
 }
 
 func BenchmarkAdd(b *testing.B) {
@@ -319,6 +340,28 @@ func TestBitmapRemapMaskOrdered(t *testing.T) {
 	value.AddMany([]uint64{1, 63, 64, 127, 129})
 	value.RemapMaskOrdered(selection, true)
 	require.Equal(t, int64(130), value.Len())
+	require.Equal(t, 2, value.Count())
+	require.True(t, value.Contains(62))
+	require.True(t, value.Contains(125))
+}
+
+func TestBitmapRemapMaskOrderedWithOffset(t *testing.T) {
+	selection := newBm(129)
+	selection.AddMany([]uint64{0, 62, 128})
+
+	var value Bitmap
+	value.InitWithSize(130)
+	value.AddMany([]uint64{1, 63, 64, 127, 129})
+	value.RemapMaskOrderedWithOffset(selection, false, 1)
+	require.Equal(t, int64(3), value.Len())
+	require.Equal(t, 3, value.Count())
+	require.True(t, value.Contains(0))
+	require.True(t, value.Contains(1))
+	require.True(t, value.Contains(2))
+
+	value.InitWithSize(130)
+	value.AddMany([]uint64{1, 63, 64, 127, 129})
+	value.RemapMaskOrderedWithOffset(selection, true, 1)
 	require.Equal(t, 2, value.Count())
 	require.True(t, value.Contains(62))
 	require.True(t, value.Contains(125))

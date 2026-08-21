@@ -806,6 +806,12 @@ func alterCopyPkColumnValueUnchanged(oldCol, newCol *plan.ColDef) bool {
 	if oldCol == nil || newCol == nil {
 		return false
 	}
+	// Generated keys are recomputed by the copy INSERT and can change when a
+	// dependency changes even if the generated column's own type is unchanged.
+	// Source-side prechecks therefore cannot prove target-key uniqueness.
+	if oldCol.GetGeneratedCol() != nil || newCol.GetGeneratedCol() != nil {
+		return false
+	}
 	oldTyp := oldCol.GetTyp()
 	newTyp := newCol.GetTyp()
 	return oldTyp.GetId() == newTyp.GetId() &&
@@ -832,6 +838,14 @@ func getAlterCopyPkPrecheck(qry *plan.AlterTable) (pkCols []string, checkNotNull
 		oldCol := plan2.FindColumn(qry.GetTableDef().GetCols(), colName)
 		newCol := plan2.FindColumn(qry.CopyTableDef.GetCols(), colName)
 		if !alterCopyPkColumnValueUnchanged(oldCol, newCol) {
+			return nil, false
+		}
+		// ChangeTblColIdMap is the compiler-side ownership proof that the target
+		// key is populated from this old column. Without it, a same-name DROP/ADD
+		// may populate every target row from one default value; checking the old
+		// column for duplicates would then say nothing about the copied key.
+		mappedCol, ok := qry.ChangeTblColIdMap[oldCol.ColId]
+		if !ok || mappedCol == nil || !strings.EqualFold(mappedCol.Name, newCol.Name) {
 			return nil, false
 		}
 		if !oldCol.GetNotNull() && !oldCol.GetTyp().NotNullable {
@@ -2367,7 +2381,11 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
-		async, err := catalog.IsIndexAsync(oriIdxTblNames.IndexAlgoParams)
+		// IsAsync is the canonical resolution: identity-always-async
+		// (HNSW/CAGRA/IVF-PQ), fulltext VERSION=2, or the per-index async param.
+		// Used for both the whole-index skip below and the per-hidden-table
+		// SkipWhenAsync skip further down.
+		async, err := indexplugin.IsAsync(oriIdxTblNames.IndexAlgo, oriIdxTblNames.IndexAlgoParams)
 		if err != nil {
 			return err
 		}
@@ -2377,8 +2395,7 @@ func cloneUnaffectedIndexes(
 		// policies:
 		//   - SkipWholeIndex: skip the entire index when async. Algorithms that
 		//     leave every hidden table empty at CREATE and rebuild all of them
-		//     via CDC from ts=0 (HNSW / CAGRA / IVF-PQ / fulltext). HNSW is
-		//     AlwaysAsync; the others gate on the per-index async param.
+		//     via CDC from ts=0 (HNSW / CAGRA / IVF-PQ / fulltext).
 		//   - DeleteBeforeClone + SkipWhenAsync (per hidden table): IVF-FLAT is
 		//     the only case today. All three hidden tables get DELETE'd (the
 		//     CREATE on the temp table already seeded them), entries are
@@ -2388,15 +2405,12 @@ func cloneUnaffectedIndexes(
 		var cloneBehavior catalogplugin.AlterTableCloneBehavior
 		if !oriIdxTblNames.Unique {
 			if p, ok := indexplugin.Get(oriIdxTblNames.IndexAlgo); ok {
-				d := p.Catalog().SyncDescriptor()
 				cloneBehavior = p.Catalog().AlterTableCloneBehavior()
 				// Whole-index skip is an EXPLICIT policy (SkipWholeIndex), not
 				// inferred from UsesCDC — a CDC algorithm can still need its model
 				// tables cloned (IVF-FLAT clones metadata + centroids and only
 				// CDC-rebuilds entries via the per-hidden-table policy below).
-				// HNSW is AlwaysAsync; CAGRA / IVF-PQ / fulltext gate on the
-				// per-index async param.
-				if (d.AlwaysAsync || async) && cloneBehavior.SkipWholeIndex {
+				if async && cloneBehavior.SkipWholeIndex {
 					logutil.Infof("cloneUnaffectedIndex: skip whole async index %v\n", oriIdxTblNames)
 					continue
 				}

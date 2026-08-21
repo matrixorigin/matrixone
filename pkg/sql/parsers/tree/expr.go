@@ -345,6 +345,15 @@ func (node *ComparisonExpr) Accept(v Visitor) (Expr, bool) {
 		return node, false
 	}
 	node.Right = tmpNode
+
+	// ESCAPE is an expression and may itself reference a column.
+	if node.Escape != nil {
+		tmpNode, ok = node.Escape.Accept(v)
+		if !ok {
+			return node, false
+		}
+		node.Escape = tmpNode
+	}
 	return v.Exit(node)
 }
 
@@ -951,6 +960,10 @@ type FuncExpr struct {
 	WindowSpec *WindowSpec
 
 	OrderBy OrderBy
+	// WithinGroup marks an ORDER BY clause that belongs to an ordered-set
+	// aggregate. OrderBy is also used for GROUP_CONCAT's function-local
+	// ordering, so the marker keeps the two syntaxes distinct.
+	WithinGroup bool
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
@@ -988,7 +1001,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		// The parser stores GROUP_CONCAT's separator as the final expression so
 		// binders can consume it uniformly. It is not a concatenated argument.
 		node.Exprs[:len(node.Exprs)-1].Format(ctx)
-		if node.OrderBy != nil {
+		if node.OrderBy != nil && !node.WithinGroup {
 			ctx.WriteByte(' ')
 			node.OrderBy.Format(ctx)
 		}
@@ -999,12 +1012,17 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	} else {
 		formatFuncExprs(ctx, node)
 
-		if node.OrderBy != nil {
+		if node.OrderBy != nil && !node.WithinGroup {
 			node.OrderBy.Format(ctx)
 		}
 	}
 
 	ctx.WriteByte(')')
+	if node.WithinGroup && node.OrderBy != nil {
+		ctx.WriteString(" within group (")
+		node.OrderBy.Format(ctx)
+		ctx.WriteByte(')')
+	}
 
 	if node.WindowSpec != nil {
 		ctx.WriteString(" ")
@@ -1115,6 +1133,16 @@ func (node *FuncExpr) Accept(v Visitor) (Expr, bool) {
 			return node, false
 		}
 		node.Exprs[i] = tmpNode
+	}
+	for _, order := range node.OrderBy {
+		if order == nil || order.Expr == nil {
+			continue
+		}
+		tmpNode, ok := order.Expr.Accept(v)
+		if !ok {
+			return node, false
+		}
+		order.Expr = tmpNode
 	}
 	return v.Exit(node)
 }
@@ -1503,11 +1531,16 @@ func (node *CaseExpr) Accept(v Visitor) (Expr, bool) {
 	}
 	node = newNode.(*CaseExpr)
 
-	tmpNode, ok := node.Expr.Accept(v)
-	if !ok {
-		return node, false
+	var tmpNode Expr
+	var ok bool
+	// Expr is absent for a searched CASE expression.
+	if node.Expr != nil {
+		tmpNode, ok = node.Expr.Accept(v)
+		if !ok {
+			return node, false
+		}
+		node.Expr = tmpNode
 	}
-	node.Expr = tmpNode
 
 	for _, when := range node.Whens {
 		tmpNode, ok = when.Cond.Accept(v)
@@ -1523,11 +1556,14 @@ func (node *CaseExpr) Accept(v Visitor) (Expr, bool) {
 		when.Val = tmpNode
 	}
 
-	tmpNode, ok = node.Else.Accept(v)
-	if !ok {
-		return node, false
+	// ELSE is optional; omitting it is equivalent to ELSE NULL during binding.
+	if node.Else != nil {
+		tmpNode, ok = node.Else.Accept(v)
+		if !ok {
+			return node, false
+		}
+		node.Else = tmpNode
 	}
-	node.Else = tmpNode
 
 	return v.Exit(node)
 }
@@ -1763,7 +1799,11 @@ func (node *ParamExpr) Format(ctx *FmtCtx) {
 
 // Accept implements NodeChecker Accept interface.
 func (node *ParamExpr) Accept(v Visitor) (Expr, bool) {
-	panic("unimplement ParamExpr Accept")
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	return v.Exit(newNode)
 }
 
 func NewParamExpr(offset int) *ParamExpr {
@@ -1815,19 +1855,41 @@ func (s SampleExpr) String() string {
 }
 
 func (s SampleExpr) Format(ctx *FmtCtx) {
-	if s.typ == SampleRows {
-		ctx.WriteString(fmt.Sprintf("sample %d rows", s.n))
+	ctx.WriteString("sample(")
+	if s.isStar {
+		ctx.WriteByte('*')
 	} else {
-		ctx.WriteString(fmt.Sprintf("sample %.1f percent", s.k))
+		s.columns.Format(ctx)
 	}
+	ctx.WriteString(", ")
+	if s.typ == SampleRows {
+		ctx.WriteString(fmt.Sprintf("%d rows", s.n))
+		if s.level == SampleUsingRow {
+			ctx.WriteString(", 'row'")
+		}
+	} else {
+		ctx.WriteString(fmt.Sprintf("%.1f percent", s.k))
+	}
+	ctx.WriteByte(')')
 }
 
-func (s SampleExpr) Accept(v Visitor) (node Expr, ok bool) {
-	newNode, skipChildren := v.Enter(node)
+func (s *SampleExpr) Accept(v Visitor) (node Expr, ok bool) {
+	newNode, skipChildren := v.Enter(s)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	return v.Exit(node)
+	s = newNode.(*SampleExpr)
+	for i, column := range s.columns {
+		if column == nil {
+			continue
+		}
+		newColumn, ok := column.Accept(v)
+		if !ok {
+			return s, false
+		}
+		s.columns[i] = newColumn
+	}
+	return v.Exit(s)
 }
 
 func (s SampleExpr) Valid() error {
@@ -1846,6 +1908,17 @@ func (s SampleExpr) Valid() error {
 
 func (s SampleExpr) GetColumns() (columns Exprs, isStar bool) {
 	return s.columns, s.isStar
+}
+
+// SetColumns changes the sampled expressions while preserving the sampling
+// mode and limit.  It is used by view-definition rewriting to replace
+// SAMPLE(*) with the columns visible when the view is created.
+func (s *SampleExpr) SetColumns(columns Exprs, isStar bool) {
+	if s == nil {
+		return
+	}
+	s.columns = columns
+	s.isStar = isStar
 }
 
 func (s SampleExpr) GetSampleDetail() (isSampleRows bool, usingRow bool, n int32, k float64) {
@@ -1915,6 +1988,11 @@ const (
 	FULLTEXT_NL_QUERY_EXPANSION
 	FULLTEXT_BOOLEAN
 	FULLTEXT_QUERY_EXPANSION
+	// FULLTEXT_BM25 — IN BM25 MODE: ranked bag-of-words retrieval on a fulltext2
+	// index (each token an OR term, no positional phrase), so it works on a
+	// POSITION_FREE index. Distinct from FullTextMatchExpr.IsBm25 (the BM25() verb
+	// of the standalone bm25 index).
+	FULLTEXT_BM25
 )
 
 type FullTextMatchExpr struct {
@@ -1940,6 +2018,8 @@ func (node *FullTextSearchType) ToString() string {
 		return "IN BOOLEAN MODE"
 	case FULLTEXT_QUERY_EXPANSION:
 		return "WITH QUERY EXPANSION"
+	case FULLTEXT_BM25:
+		return "IN BM25 MODE"
 
 	default:
 		return "Unknown FullSearchType"
@@ -1948,7 +2028,37 @@ func (node *FullTextSearchType) ToString() string {
 
 // Accept implements NodeChecker Accept interface.
 func (node *FullTextMatchExpr) Accept(v Visitor) (Expr, bool) {
-	panic("unimplement FullTextMatchExpr Accept")
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	node = newNode.(*FullTextMatchExpr)
+
+	// MATCH stores its column expressions in KeyPart rather than Expr fields, so
+	// they must be traversed explicitly for generic AST rewrites.
+	for _, keyPart := range node.KeyParts {
+		if keyPart.ColName != nil {
+			tmpNode, ok := keyPart.ColName.Accept(v)
+			if !ok {
+				return node, false
+			}
+			keyPart.ColName = tmpNode.(*UnresolvedName)
+		}
+		if keyPart.Expr != nil {
+			tmpNode, ok := keyPart.Expr.Accept(v)
+			if !ok {
+				return node, false
+			}
+			keyPart.Expr = tmpNode
+		}
+	}
+
+	tmpNode, ok := node.Pattern.Accept(v)
+	if !ok {
+		return node, false
+	}
+	node.Pattern = tmpNode
+	return v.Exit(node)
 }
 
 func (node *FullTextMatchExpr) Valid() error {

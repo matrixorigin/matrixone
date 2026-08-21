@@ -44,7 +44,7 @@ func isSyncMaintainedIrregularIndex(idxDef *plan.IndexDef) bool {
 	if p.Catalog().SyncDescriptor().AlwaysAsync {
 		return false
 	}
-	async, _ := catalog.IsIndexAsync(idxDef.IndexAlgoParams)
+	async, _ := catalog.IndexParamAsync(idxDef.IndexAlgoParams)
 	return !async
 }
 
@@ -153,6 +153,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 		upPlanCtx := updatePlanCtxs[i]
 		upPlanCtx.beginIdx = beginIdx
 		upPlanCtx.sourceStep = sourceStep
+		upPlanCtx.ignoreCheckConstraint = stmt.Ignore
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)

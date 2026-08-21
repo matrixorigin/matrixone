@@ -33,23 +33,23 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 	}
 	// A joined lifecycle/accounting failure is not a capacity rejection. Keep
 	// it intact so cancellation and cleanup bugs cannot masquerade as OOM.
-	if errors.Is(err, process.ErrHashBuildBudgetClosed) ||
-		errors.Is(err, process.ErrHashBuildBudgetInvalid) ||
-		errors.Is(err, process.ErrHashBuildCeilingMissing) {
+	if errors.Is(err, process.ErrExecutionResourceClosed) ||
+		errors.Is(err, process.ErrExecutionResourceInvalid) ||
+		errors.Is(err, process.ErrExecutionMemoryCeilingMissing) {
 		return err
 	}
 
-	var budgetErr *process.HashBuildBudgetError
-	if !errors.As(err, &budgetErr) || budgetErr.Kind != process.HashBuildBudgetErrorAdmission {
+	var budgetErr *process.ExecutionResourceError
+	if !errors.As(err, &budgetErr) || budgetErr.Kind != process.ExecutionResourceErrorAdmission {
 		switch {
 		case mpool.AllocationFailureReasonOf(err) ==
 			mpool.AllocationFailureCapacity &&
 			!mpool.IsMPoolCapacityFailure(err):
 			return moerr.NewResourceExhaustedf(ctx,
 				"hash build memory budget exceeded; reduce join build width or query concurrency, increase processLimitationSize, or lower join_spill_mem for an eligible shuffle join")
-		case errors.Is(err, process.ErrHashBuildBudgetAdmission):
+		case errors.Is(err, process.ErrExecutionResourceAdmission):
 			return moerr.NewResourceExhaustedf(ctx,
-				"hash build resource budget exceeded; inspect hash-build budget metrics and resource limits")
+				"hash build resource budget exceeded; inspect execution-resource metrics and resource limits")
 		default:
 			return err
 		}
@@ -61,20 +61,20 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 		}
 		return moerr.NewResourceExhaustedf(
 			ctx,
-			"hash build resource budget exceeded; inspect hash-build budget metrics and resource limits",
+			"hash build resource budget exceeded; inspect execution-resource metrics and resource limits",
 		)
 	}
 
 	reason := terminalBudgetReason(budgetErr.Message)
 	var resource, action string
 	switch budgetErr.Component {
-	case process.HashBuildBudgetComponentMemory:
+	case process.ExecutionResourceComponentMemory:
 		resource = "memory"
 		action = "reduce join build width or query concurrency, increase processLimitationSize, or lower join_spill_mem for an eligible shuffle join; automatic spill can still exhaust recovery headroom for wide or skewed partitions"
-	case process.HashBuildBudgetComponentSpillDisk:
+	case process.ExecutionResourceComponentSpillDisk:
 		resource = "spill disk"
 		action = "free spill storage or increase processLimitationSpillSize"
-	case process.HashBuildBudgetComponentSpillFD:
+	case process.ExecutionResourceComponentSpillFD:
 		resource = "spill file descriptor"
 		action = "reduce concurrent spill work or raise the CN open-file limit"
 	default:
@@ -83,7 +83,7 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 		}
 		return moerr.NewResourceExhaustedf(
 			ctx,
-			"hash build resource budget exceeded; inspect hash-build budget metrics and resource limits",
+			"hash build resource budget exceeded; inspect execution-resource metrics and resource limits",
 		)
 	}
 	if reason != "" {
@@ -105,7 +105,7 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 
 func terminalBudgetReason(message string) string {
 	message = strings.TrimSpace(message)
-	sentinel := process.ErrHashBuildBudgetAdmission.Error()
+	sentinel := process.ErrExecutionResourceAdmission.Error()
 	if message == sentinel || strings.HasPrefix(message, sentinel+": requested=") {
 		return ""
 	}

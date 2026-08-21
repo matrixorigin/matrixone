@@ -40,10 +40,265 @@ from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(linear)
 order by pump, _wstart;
 
+# A maximal run of k missing buckets is divided into k+1 equal steps. All rows
+# use one logical series key; no table-partition capability is involved.
+create table linear_readings(series_id int, ts datetime, value int);
+insert into linear_readings values
+    (1, '2026-03-01 00:00:00', 100),
+    (1, '2026-03-01 00:03:00', 130),
+    (1, '2026-03-01 00:04:00', 140);
+
+select _wstart, sum(value) as value_sum
+from linear_readings
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by _wstart;
+
+drop table linear_readings;
+
+# Decimal256 is a planner-reachable LINEAR aggregate type. Exercise it through
+# the SQL boundary so one-gap and multi-gap execution cannot diverge by type.
+create table linear_decimal256(series_id int, ts datetime, value decimal(65,0));
+insert into linear_decimal256 values
+    (1, '2026-03-02 00:00:00', 100),
+    (1, '2026-03-02 00:03:00', 130);
+
+select _wstart, max(value) as value_max
+from linear_decimal256
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by _wstart;
+
+drop table linear_decimal256;
+
 # Existing FILL(NULL) must not generate absent buckets.
 select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) fill(null)
 order by pump, _wstart;
+
+set time_zone = '+00:00';
+create table hf_readings(
+    device_id bigint,
+    event_ts timestamp(6),
+    event_dt datetime(6),
+    value int
+);
+insert into hf_readings values
+    (1, '2026-08-12 10:00:00.000100', '2026-08-12 10:00:00.000100', 10),
+    (1, '2026-08-12 10:00:00.000900', '2026-08-12 10:00:00.000900', 20),
+    (1, '2026-08-12 10:00:00.001100', '2026-08-12 10:00:00.001100', 30),
+    (2, '2026-08-12 10:00:00.000150', '2026-08-12 10:00:00.000150', 40),
+    (2, '2026-08-12 10:00:00.001250', '2026-08-12 10:00:00.001250', 60);
+
+select device_id, _wstart, _wend, count(*) as row_count, avg(value) as avg_value
+from hf_readings
+group by device_id interval(event_ts, 1000, microsecond)
+order by device_id, _wstart;
+
+select device_id, _wstart, _wend, count(*) as row_count, avg(value) as avg_value
+from hf_readings
+where device_id = 1
+group by device_id interval(event_ts, 1000, microsecond) sliding(500, microsecond)
+order by device_id, _wstart;
+
+select device_id, _wstart, _wend, sum(value) as value_sum
+from hf_readings
+where device_id = 2
+group by device_id interval(event_dt, 500, microsecond) gapfill(partition) fill(value, -1)
+order by device_id, _wstart;
+
+create table hf_scale_boundaries(
+    id int,
+    ts0 datetime,
+    ts3 datetime(3),
+    ts6 datetime(6)
+);
+insert into hf_scale_boundaries values
+    (1, '2026-08-12 10:00:00', '2026-08-12 10:00:00.123', '2026-08-12 10:00:00.123456');
+
+select 'dt0' as scale_case, _wstart, _wend, timestampdiff(microsecond, _wstart, _wend) as width_us
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts0, 1, microsecond)
+order by _wstart;
+
+select 'dt3' as scale_case, _wstart, _wend, timestampdiff(microsecond, _wstart, _wend) as width_us
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts3, 1, microsecond)
+order by _wstart;
+
+select 'dt6' as scale_case, _wstart, _wend, timestampdiff(microsecond, _wstart, _wend) as width_us
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts6, 1, microsecond)
+order by _wstart;
+
+create table hf_scale_materialized as
+select _wstart, _wend, count(*) as row_count
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts0, 1, microsecond);
+
+select column_name, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'hf_scale_materialized'
+  and column_name in ('_wstart', '_wend')
+order by ordinal_position;
+
+drop table hf_scale_materialized;
+drop table hf_scale_boundaries;
+drop table hf_readings;
+set time_zone = 'SYSTEM';
+
+# Regression for #26985: simple half-open predicates define the full GAPFILL
+# domain, including leading/trailing buckets for every observed partition.
+create table bounded_readings(device varchar(8), event_ts datetime, value int);
+insert into bounded_readings values
+    ('d1', '2026-01-01 00:02:10', 20),
+    ('d1', '2026-01-01 00:04:20', 40),
+    ('d2', '2026-01-01 00:01:30', 7);
+
+select device, _wstart, _wend, sum(value) as value_sum
+from bounded_readings
+where event_ts >= '2026-01-01 00:00:00'
+  and event_ts <  '2026-01-01 00:06:00'
+group by device interval(event_ts, 1, minute) gapfill(partition) fill(value, 0)
+order by device, _wstart;
+
+# The same inferred domain must generate a stable grid when the filter returns
+# no rows and no partition key has to be discovered from the input.
+select _wstart, _wend, sum(value) as value_sum
+from bounded_readings
+where event_ts >= '2026-01-02 00:00:00'
+  and event_ts <  '2026-01-02 00:03:00'
+interval(event_ts, 1, minute) gapfill(partition) fill(null)
+order by _wstart;
+
+drop table bounded_readings;
+
+# Regression for #26786: a post-flush GAPFILL generation must not repeat the
+# boundary window. Keep the assertion aggregated so the case does not emit
+# thousands of detail rows.
+create table boundary_readings(pump varchar(8), ts datetime, value int);
+insert into boundary_readings values
+    ('p8193', '2026-01-01 00:00:00', 1),
+    ('p8193', '2026-01-06 16:33:00', 2),
+    ('p8194', '2026-02-01 00:00:00', 3),
+    ('p8194', '2026-02-06 16:34:00', 4);
+
+select pump, count(*) as row_count, count(distinct _wstart) as distinct_windows
+from (
+    select pump, _wstart, sum(value) as value_sum
+    from boundary_readings
+    group by pump interval(ts, 1, minute) gapfill(partition)
+) as windows
+group by pump
+order by pump;
+
+select pump, count(*) as row_count, count(distinct _wstart) as distinct_windows
+from (
+    select pump, _wstart, sum(value) as value_sum
+    from boundary_readings
+    group by pump interval(ts, 1, minute) gapfill(partition) fill(next)
+) as windows
+group by pump
+order by pump;
+
+drop table boundary_readings;
+
+set time_zone = '+08:00';
+
+create table boundary_type_dt(k int, event_ts datetime, value int);
+insert into boundary_type_dt values (1, '2026-01-01 00:00:01', 1);
+
+select _wstart, count(*) as c
+from boundary_type_dt
+group by k interval(event_ts, 1, minute);
+
+select min(ws), max(ws)
+from (
+    select _wstart as ws, count(*) as c
+    from boundary_type_dt
+    group by k interval(event_ts, 1, minute)
+) as x;
+
+create table boundary_type_rollup_dt as
+select _wstart as ws, count(*) as c
+from boundary_type_dt
+group by k interval(event_ts, 1, minute);
+
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'boundary_type_rollup_dt'
+and column_name in ('ws', 'c')
+order by ordinal_position;
+
+select ws from boundary_type_rollup_dt;
+
+create table boundary_type_date(k int, event_d date, value int);
+insert into boundary_type_date values (1, '2026-01-01', 1);
+
+select _wstart, _wend, count(*) as c
+from boundary_type_date
+group by k interval(event_d, 1, minute);
+
+select min(ws), max(ws)
+from (
+    select _wstart as ws, count(*) as c
+    from boundary_type_date
+    group by k interval(event_d, 1, minute)
+) as x;
+
+create table boundary_type_rollup_date as
+select _wstart as ws, _wend as we, count(*) as c
+from boundary_type_date
+group by k interval(event_d, 1, minute);
+
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'boundary_type_rollup_date'
+and column_name in ('ws', 'we', 'c')
+order by ordinal_position;
+
+select ws, we from boundary_type_rollup_date;
+
+create table boundary_type_ts(k int, event_ts timestamp, value int);
+insert into boundary_type_ts values (1, '2026-01-01 00:00:01', 1);
+
+set time_zone = '+08:00';
+create table gapfill_timezone_ts(k int, event_ts timestamp, value int);
+insert into gapfill_timezone_ts values
+	(1, '2026-01-01 10:00:01', 1),
+	(1, '2026-01-03 10:00:01', 3);
+
+select _wstart, _wend, sum(value) as value_sum
+from gapfill_timezone_ts
+group by k interval(event_ts, 1, day) gapfill(partition)
+order by _wstart;
+
+select _wstart, sum(value) as value_sum
+from gapfill_timezone_ts
+group by k interval(event_ts, 1, day) gapfill(partition) fill(value, 99)
+order by _wstart;
+
+select _wstart, _wend, sum(value) as value_sum
+from gapfill_timezone_ts
+group by k interval(event_ts, 1, day)
+order by _wstart;
+
+drop table gapfill_timezone_ts;
+
+create table boundary_type_rollup_ts as
+select _wstart as ws, count(*) as c
+from boundary_type_ts
+group by k interval(event_ts, 1, minute);
+
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'boundary_type_rollup_ts'
+and column_name in ('ws', 'c')
+order by ordinal_position;
+
+set time_zone = '+00:00';
 
 drop database time_window_gapfill_bvt;

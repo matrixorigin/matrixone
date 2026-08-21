@@ -274,6 +274,86 @@ func TestAvgDistinct(t *testing.T) {
 	testSumAvg(t, makeAvgDistinctExec, newExpectedSumAvg(6, 6, 6, 126000))
 }
 
+func TestWindowSlidingSumCapability(t *testing.T) {
+	mp := mpool.MustNewZero()
+	tests := []struct {
+		name     string
+		aggID    int64
+		distinct bool
+		typ      types.Type
+		want     bool
+	}{
+		{name: "int32 sum", aggID: AggIdOfSum, typ: types.T_int32.ToType(), want: true},
+		{name: "int64 sum", aggID: AggIdOfSum, typ: types.T_int64.ToType(), want: true},
+		{name: "decimal64 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal64, 18, 2), want: true},
+		{name: "narrow decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 20, 2)},
+		{name: "wide decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 38, 2)},
+		{name: "float sum", aggID: AggIdOfSum, typ: types.T_float64.ToType()},
+		{name: "avg", aggID: AggIdOfAvg, typ: types.T_int32.ToType()},
+		{name: "distinct sum", aggID: AggIdOfSum, distinct: true, typ: types.T_int32.ToType()},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exec, err := MakeAgg(mp, test.aggID, test.distinct, test.typ)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.Equal(t, test.want, SupportsWindowSliding(exec))
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestWindowSlidingSumRemoveRestoresNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_int32.ToType()
+	input := testutil.NewInt32Vector(2, typ, mp, false, []bool{false, true}, []int32{7, 0})
+	defer input.Free(mp)
+
+	exec, err := MakeAgg(mp, AggIdOfSum, false, typ)
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	require.True(t, SupportsWindowSliding(exec))
+
+	// Removing a NULL must leave the running state alone; removing the last
+	// non-NULL row must restore SUM's empty-frame NULL result.
+	require.NoError(t, AddWindowRow(exec, 0, []*vector.Vector{input}))
+	require.NoError(t, AddWindowRow(exec, 1, []*vector.Vector{input}))
+	require.NoError(t, RemoveWindowRow(exec, 1, []*vector.Vector{input}))
+	require.NoError(t, RemoveWindowRow(exec, 0, []*vector.Vector{input}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	defer results[0].Free(mp)
+	require.True(t, results[0].IsNull(0))
+	require.Equal(t, int64(0), vector.MustFixedColNoTypeCheck[int64](results[0])[0])
+}
+
+func TestWindowSlidingSumConstantInputAndEmptyRemoval(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_int32.ToType()
+	input, err := vector.NewConstFixed(typ, int32(7), 2, mp)
+	require.NoError(t, err)
+	defer input.Free(mp)
+
+	exec, err := MakeAgg(mp, AggIdOfSum, false, typ)
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+
+	// A constant vector stores only row zero. Sliding add/remove must normalize
+	// the logical row index and restore the empty-frame NULL state afterwards.
+	require.NoError(t, AddWindowRow(exec, 1, []*vector.Vector{input}))
+	require.NoError(t, RemoveWindowRow(exec, 1, []*vector.Vector{input}))
+	require.Error(t, RemoveWindowRow(exec, 1, []*vector.Vector{input}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	defer results[0].Free(mp)
+	require.True(t, results[0].IsNull(0))
+}
+
 func TestSumAvgBulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.T_int64.ToType()

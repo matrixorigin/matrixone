@@ -731,12 +731,35 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	return
 }
 
-func (entry *TableEntry) DropObjectEntry(id *types.Objectid, txn txnif.AsyncTxn, isTombstone bool) (deleted *ObjectEntry, err error) {
+func (entry *TableEntry) DropObjectEntry(
+	id *types.Objectid,
+	txn txnif.AsyncTxn,
+	isTombstone bool,
+) (deleted *ObjectEntry, err error) {
+	return entry.dropObjectEntry(id, txn, isTombstone, false)
+}
+
+func (entry *TableEntry) DropObjectEntryByCN(
+	id *types.Objectid,
+	txn txnif.AsyncTxn,
+	isTombstone bool,
+) (deleted *ObjectEntry, err error) {
+	// Mark provenance before publishing the D entry into the object list. A
+	// concurrent scanner must never observe a committed CN drop without it.
+	return entry.dropObjectEntry(id, txn, isTombstone, true)
+}
+
+func (entry *TableEntry) dropObjectEntry(
+	id *types.Objectid,
+	txn txnif.AsyncTxn,
+	isTombstone bool,
+	deleteByCN bool,
+) (deleted *ObjectEntry, err error) {
 	objects := entry.dataObjects
 	if isTombstone {
 		objects = entry.tombstoneObjects
 	}
-	obj, isNewNode, err := objects.DropObjectByID(id, txn)
+	obj, isNewNode, err := objects.dropObjectByID(id, txn, deleteByCN)
 	if err == nil && isNewNode {
 		deleted = obj
 	}
@@ -898,6 +921,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			Hints:             hints,
 			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
 			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
+			DefaultCharset:    newSchema.Extra.DefaultCharset,
 			Checks:            checks,
 		}
 

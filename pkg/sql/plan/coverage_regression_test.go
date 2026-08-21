@@ -58,8 +58,10 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeOffsetCompensationUsesCompensat
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Equal(t, uint64(15), tableFuncNode.Limit.GetLit().GetU64Val())
-	require.Equal(t, uint64(15), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
+	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	// residual filter present → over-fetch display: FilteredPostModeLimit(3) = 15.
+	require.Equal(t, uint64(15), tableFuncNode.IndexReaderParam.GetOverFetchLimit())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterCompensatesOffset(t *testing.T) {
@@ -91,7 +93,7 @@ func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterCompensatesOffset(t 
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Equal(t, uint64(3), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.NotNil(t, tableFuncNode.IndexReaderParam.GetDistRange())
 	require.NotNil(t, tableFuncNode.IndexReaderParam.GetDistRange().GetUpperBound())
@@ -177,6 +179,40 @@ func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
 	require.Contains(t, strings.Join(alterCtx.UpdateSqls, "\n"), "set algo_params")
 	require.Equal(t, []string{"headline", "note"}, copyTable.Indexes[0].IncludedColumns)
 	require.NotContains(t, copyTable.Indexes[0].IndexAlgoParams, "include_columns")
+}
+
+func TestChangeColumnRewritesCheckOriginSQL(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	origin := makeAlterCoverageTableDef()
+	origin.Checks = []*planpb.CheckDef{
+		{
+			Name:      "chk_title",
+			OriginSql: "`title` <> 'title' AND `note` <> 'title'",
+		},
+	}
+	copyTable := DeepCopyTableDef(origin, true)
+	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
+	alterPlan := &planpb.AlterTable{
+		Database:     origin.DbName,
+		TableDef:     origin,
+		CopyTableDef: copyTable,
+	}
+	spec := mustParseAlterTableChangeColumnClause(
+		t,
+		mock.CurrentContext(),
+		"alter table t1 change column title headline varchar(128)",
+	)
+
+	_, err := ChangeColumn(mock.CurrentContext(), alterPlan, spec, alterCtx)
+	require.NoError(t, err)
+	require.Equal(t,
+		"`headline` != 'title' and `note` != 'title'",
+		copyTable.Checks[0].OriginSql,
+	)
+	require.Equal(t,
+		"`title` <> 'title' AND `note` <> 'title'",
+		origin.Checks[0].OriginSql,
+	)
 }
 
 func TestChangeColumnRenamesPrefixLengthMetadata(t *testing.T) {
@@ -603,6 +639,32 @@ func TestUpdateRenameColumnInTableDefRejectsDuplicateTargetName(t *testing.T) {
 	require.Contains(t, err.Error(), "Duplicate column name")
 }
 
+func TestUpdateRenameColumnInTableDefRewritesCheckOriginSQL(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := makeAlterCoverageTableDef()
+	tableDef.Checks = []*planpb.CheckDef{
+		{
+			Name:      "chk_title",
+			OriginSql: "`title` <> 'title' AND `note` <> 'title'",
+		},
+	}
+
+	_, err := updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[2],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("title"),
+			NewColumnName: tree.NewUnresolvedColName("headline"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t,
+		"`headline` != 'title' and `note` != 'title'",
+		tableDef.Checks[0].OriginSql,
+	)
+}
+
 func TestAlterColumnSetDefaultUpdatesCopiedColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	origin := makeAlterCoverageTableDef()
@@ -708,20 +770,65 @@ func TestOrderByColumnRejectsUnknownColumn(t *testing.T) {
 
 func TestSkipUniqueIdxDedupMatchesSameUniqueDefinition(t *testing.T) {
 	oldTable := &TableDef{
+		Cols: []*ColDef{
+			{Name: "title", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 64}},
+			{Name: "note", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 64}},
+		},
 		Indexes: []*planpb.IndexDef{
 			{IndexName: "uk_title", Unique: true, Parts: []string{"title"}},
 			{IndexName: "idx_note", Unique: false, Parts: []string{"note"}},
 		},
 	}
 	newTable := &TableDef{
+		Cols: DeepCopyColDefList(oldTable.Cols),
 		Indexes: []*planpb.IndexDef{
 			{IndexName: "uk_title", Unique: true, Parts: []string{"title"}},
 			{IndexName: "uk_note", Unique: true, Parts: []string{"note"}},
 		},
 	}
 
-	skip := skipUniqueIdxDedup(oldTable, newTable)
+	identitySources := map[string]selectExpr{
+		"title": {sexprType: exprColumnName, sexprStr: "title"},
+		"note":  {sexprType: exprColumnName, sexprStr: "note"},
+	}
+	skip := skipUniqueIdxDedup(oldTable, newTable, identitySources)
 	require.Equal(t, map[string]bool{"uk_title": true}, skip)
+
+	// Reusing a unique-index name and column name after DROP/ADD does not
+	// preserve the source value: the target column is populated by its default.
+	replacedSources := map[string]selectExpr{
+		"note": {sexprType: exprColumnName, sexprStr: "note"},
+	}
+	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable, replacedSources))
+
+	newTable.Cols[0].Typ.Width = 8
+	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable, identitySources))
+
+	newTable.Cols[0] = DeepCopyColDef(oldTable.Cols[0])
+	newTable.Cols[0].GeneratedCol = &planpb.GeneratedCol{IsStored: true}
+	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable, identitySources))
+}
+
+func TestSkipPkDedupRequiresValuePreservingKeyColumns(t *testing.T) {
+	oldTable := &TableDef{
+		Cols: []*ColDef{
+			{Name: "v", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 6, Scale: 2}},
+		},
+		Pkey: &planpb.PrimaryKeyDef{PkeyColName: "v", Names: []string{"v"}},
+	}
+	newTable := DeepCopyTableDef(oldTable, true)
+	identitySources := map[string]selectExpr{
+		"v": {sexprType: exprColumnName, sexprStr: "v"},
+	}
+	require.True(t, skipPkDedup(oldTable, newTable, identitySources))
+	require.False(t, skipPkDedup(oldTable, newTable, nil))
+
+	newTable.Cols[0].Typ.Scale = 1
+	require.False(t, skipPkDedup(oldTable, newTable, identitySources))
+
+	newTable = DeepCopyTableDef(oldTable, true)
+	newTable.Cols[0].GeneratedCol = &planpb.GeneratedCol{IsStored: true}
+	require.False(t, skipPkDedup(oldTable, newTable, identitySources))
 }
 
 func makeAlterCoverageTableDef() *TableDef {

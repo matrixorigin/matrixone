@@ -76,7 +76,8 @@ const defaultSaltReadTimeout = time.Millisecond * 200
 
 const charsetBinary = 0x3f
 const charsetVarchar = 0x21
-const charsetVarcharMaxBytesPerCharacter = 3
+const utf8MaxBytesPerCharacter = 3
+const utf8mb4MaxBytesPerCharacter = 4
 const boolColumnLength = 1
 
 func init() {
@@ -367,7 +368,7 @@ func (mp *MysqlProtocolImpl) GetBool(id PropertyID) bool {
 }
 
 func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
-	n := bat.Vecs[0].Length()
+	n := bat.RowCount()
 	//TODO: remove this MRS here
 	//Create a new temporary result set per pipeline thread.
 	mrs := MysqlResultSet{}
@@ -2097,6 +2098,10 @@ func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMess
 	if mp.ses != nil {
 		mp.ses.appendErrorDiagnostic(errorCode, errorMessage)
 	}
+	return mp.sendErrPacketWithoutDiagnostic(errorCode, sqlState, errorMessage)
+}
+
+func (mp *MysqlProtocolImpl) sendErrPacketWithoutDiagnostic(errorCode uint16, sqlState, errorMessage string) error {
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
 }
@@ -2141,7 +2146,19 @@ func setColLength(column *MysqlColumn, width int32) {
 	column.length = column.columnType.GetLength(width)
 }
 
-func setColFlag(column *MysqlColumn) {
+func setColFlag(column *MysqlColumn, col *planPb.ColDef) {
+	if col == nil {
+		return
+	}
+	if col.NotNull || col.Typ.NotNullable {
+		column.flag |= uint16(defines.NOT_NULL_FLAG)
+	}
+	if col.Primary {
+		column.flag |= uint16(defines.PRI_KEY_FLAG)
+	}
+	if col.Unique {
+		column.flag |= uint16(defines.UNIQUE_KEY_FLAG)
+	}
 	if column.auto_incr {
 		column.flag |= uint16(defines.AUTO_INCREMENT_FLAG)
 	}
@@ -2454,7 +2471,8 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				}
 			}
 
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for binary values, including legacy vectors
+		// described as MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
@@ -2715,7 +2733,8 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 					}
 				}
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for binary values, including legacy vectors
+		// described as MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
@@ -2976,7 +2995,8 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for legacy binary vectors described as
+		// MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR:
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
@@ -3294,7 +3314,8 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for legacy binary vectors described as
+		// MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR:
 			typ := colSlices.GetType(i)
 			switch typ.Oid {

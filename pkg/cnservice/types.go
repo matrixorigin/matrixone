@@ -48,6 +48,8 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -99,6 +101,35 @@ const (
 	// 1 for trace ETLMerge
 	ReservedTasks = 2
 )
+
+// SiriusConfig enables the explicit /*+ SIDECAR */ Substrait/Flight path.
+// Certificate files are deliberately separate for the two mTLS directions:
+// CN -> Flight and sidecar -> CN read resolver.
+type SiriusConfig struct {
+	Enabled bool `toml:"enabled"`
+	// BenchmarkNoGC enables the one-to-one CN/sidecar benchmark adapter. It
+	// must only be used together with TN GCCfg.DisableGC=true; normal Sirius
+	// startup keeps requiring durable GC-protected lease dependencies.
+	BenchmarkNoGC bool `toml:"benchmark-no-gc"`
+	// benchmarkGCDisabled is set by the top-level launcher after it verifies
+	// the paired TN configuration. It is intentionally not user-configurable.
+	benchmarkGCDisabled    bool
+	FlightAddress          string        `toml:"flight-address"`
+	FlightServerName       string        `toml:"flight-server-name"`
+	FlightClientCertPath   string        `toml:"flight-client-cert-path"`
+	FlightClientKeyPath    string        `toml:"flight-client-key-path"`
+	FlightServerCAPath     string        `toml:"flight-server-ca-path"`
+	ResolverAddress        string        `toml:"resolver-address"`
+	ResolverServerCertPath string        `toml:"resolver-server-cert-path"`
+	ResolverServerKeyPath  string        `toml:"resolver-server-key-path"`
+	ResolverClientCAPath   string        `toml:"resolver-client-ca-path"`
+	ResolverClientCertPath string        `toml:"resolver-client-cert-path"`
+	DataDir                string        `toml:"data-dir"`
+	MaxBatchBytes          uint64        `toml:"max-batch-bytes"`
+	RequestTimeout         toml.Duration `toml:"request-timeout"`
+	CleanupTimeout         toml.Duration `toml:"cleanup-timeout"`
+	LeaseTTL               toml.Duration `toml:"lease-ttl"`
+}
 
 // Config cn service
 type Config struct {
@@ -165,6 +196,8 @@ type Config struct {
 
 	// Frontend parameters for the frontend
 	Frontend config.FrontendParameters `toml:"frontend"`
+
+	Sirius SiriusConfig `toml:"sirius"`
 
 	// HAKeeper configuration
 	HAKeeper struct {
@@ -469,6 +502,9 @@ func (c *Config) Validate() error {
 	if c.LogtailUpdateWorkerFactor == 0 {
 		c.LogtailUpdateWorkerFactor = 4
 	}
+	if err := c.Sirius.validate(); err != nil {
+		return err
+	}
 
 	if !metadata.ValidStateString(c.InitWorkState) {
 		c.InitWorkState = metadata.WorkState_Working.String()
@@ -483,6 +519,51 @@ func (c *Config) Validate() error {
 		moruntime.EnablePipelineStreamReuse,
 		!c.Pipeline.DisableStreamReuse,
 	)
+	return nil
+}
+
+func (c *SiriusConfig) validate() error {
+	if c == nil {
+		return nil
+	}
+	if c.BenchmarkNoGC && !c.Enabled {
+		return moerr.NewBadConfigNoCtx("Sirius benchmark-no-gc requires Sirius enabled")
+	}
+	if !c.Enabled {
+		return nil
+	}
+	if c.MaxBatchBytes == 0 {
+		c.MaxBatchBytes = 64 << 20
+	}
+	if c.RequestTimeout.Duration == 0 {
+		c.RequestTimeout.Duration = 15 * time.Minute
+	}
+	if c.CleanupTimeout.Duration == 0 {
+		c.CleanupTimeout.Duration = 30 * time.Second
+	}
+	if c.MaxBatchBytes > 512<<20 || c.RequestTimeout.Duration <= 0 || c.CleanupTimeout.Duration <= 0 ||
+		c.RequestTimeout.Duration > time.Duration(1<<63-1)-c.CleanupTimeout.Duration {
+		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
+	}
+	minimumLeaseTTL := c.RequestTimeout.Duration + c.CleanupTimeout.Duration
+	if c.LeaseTTL.Duration == 0 {
+		c.LeaseTTL.Duration = minimumLeaseTTL
+	}
+	if c.LeaseTTL.Duration < minimumLeaseTTL || c.LeaseTTL.Duration > substrait.MaxLeaseTTL {
+		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
+	}
+	for _, setting := range []struct{ name, value string }{
+		{"flight-address", c.FlightAddress}, {"flight-server-name", c.FlightServerName},
+		{"flight-client-cert-path", c.FlightClientCertPath}, {"flight-client-key-path", c.FlightClientKeyPath},
+		{"flight-server-ca-path", c.FlightServerCAPath}, {"resolver-address", c.ResolverAddress},
+		{"resolver-server-cert-path", c.ResolverServerCertPath}, {"resolver-server-key-path", c.ResolverServerKeyPath},
+		{"resolver-client-ca-path", c.ResolverClientCAPath}, {"resolver-client-cert-path", c.ResolverClientCertPath},
+		{"data-dir", c.DataDir},
+	} {
+		if setting.value == "" {
+			return moerr.NewBadConfigNoCtx("missing Sirius " + setting.name)
+		}
+	}
 	return nil
 }
 
@@ -705,6 +786,7 @@ type service struct {
 	beforeBootstrapClose func()
 	incrservice          incrservice.AutoIncrementService
 	txnTraceService      trace.Service
+	siriusRuntime        *compile.SiriusRuntime
 
 	stopper                *stopper.Stopper
 	controlChannelsOnce    sync.Once
@@ -744,6 +826,8 @@ type service struct {
 	options struct {
 		bootstrapOptions []bootstrap.Option
 		traceDataPath    string
+		siriusLeases     *substrait.LeaseManager
+		siriusAuditor    substrait.ResolveAuditRecorder
 	}
 
 	// pipelines record running pipelines in the service, used for monitoring.

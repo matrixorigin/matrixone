@@ -100,6 +100,11 @@ func TestCagraSearchTypeMismatch(t *testing.T) {
 
 	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
 	s.Indexes = []*CagraModel[float32, float32]{idx}
+	// Build the MultiIndex so Search proceeds past the `MultiIndex == nil` early
+	// return and actually reaches the query-type guard under test (mirrors
+	// TestIvfpqSearchTypeMismatch). Without this, Search returns an empty result
+	// with nil error and the type mismatch is never exercised.
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
 
@@ -230,4 +235,9 @@ func TestCagraSearchLoad(t *testing.T) {
 
 	s.Destroy()
 	require.Empty(t, s.Indexes)
+}
+
+// TestSearchIntoUnsupported covers the SearchInto stub (cagra has not migrated to SearchOutput).
+func TestSearchIntoUnsupported(t *testing.T) {
+	require.ErrorContains(t, (&CagraSearch[float32, float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
 }

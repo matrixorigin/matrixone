@@ -23,8 +23,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,6 +70,12 @@ func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
 		{name: "sys", id: 0, db: rootDB, roundCount: 3},
 		{name: "tenant", id: tenantID, db: tenantDB, roundCount: 1},
 	}
+	if testing.Short() {
+		// Each round covers the same three concurrent deletion contracts. Keep
+		// one system-account sample in CI and retain the full repetition for
+		// explicit stress runs.
+		accounts[0].roundCount = 1
+	}
 	base := strings.ToLower(testutils.GetDatabaseName(t))
 	for _, account := range accounts {
 		t.Run(account.name, func(t *testing.T) {
@@ -73,8 +83,8 @@ func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
 				t.Run(fmt.Sprintf("plain_drop_table_round_%d", round), func(t *testing.T) {
 					dbName := fmt.Sprintf("%s_%s_plain_%d", base, account.name, round)
 					defer execSQLMaybe(t, ctx, account.db, fmt.Sprintf("drop database if exists `%s`", dbName))
-					createSiblingBranches(t, ctx, account.db, dbName)
-					tableIDs := queryIssue26095TableIDs(t, ctx, rootDB, account.id, dbName, "b%")
+					createSiblingBranches(t, ctx, account.db, dbName, cn, account.id)
+					tableIDs := queryIssue26095TableIDs(t, ctx, cn, account.id, dbName, "b%")
 					requireIssue26095ReclaimPending(t, ctx, rootDB, tableIDs)
 
 					statements := make([]string, 4)
@@ -89,8 +99,8 @@ func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
 				t.Run(fmt.Sprintf("branch_delete_table_round_%d", round), func(t *testing.T) {
 					dbName := fmt.Sprintf("%s_%s_branch_%d", base, account.name, round)
 					defer execSQLMaybe(t, ctx, account.db, fmt.Sprintf("drop database if exists `%s`", dbName))
-					createSiblingBranches(t, ctx, account.db, dbName)
-					tableIDs := queryIssue26095TableIDs(t, ctx, rootDB, account.id, dbName, "b%")
+					createSiblingBranches(t, ctx, account.db, dbName, cn, account.id)
+					tableIDs := queryIssue26095TableIDs(t, ctx, cn, account.id, dbName, "b%")
 					requireIssue26095ReclaimPending(t, ctx, rootDB, tableIDs)
 
 					statements := make([]string, 4)
@@ -114,9 +124,11 @@ func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
 					execSQLRequire(t, ctx, account.db, fmt.Sprintf("create table `%s`.`t2` (id bigint primary key)", source))
 					execSQLRequire(t, ctx, account.db, fmt.Sprintf("data branch create database `%s` from `%s`", left, source))
 					execSQLRequire(t, ctx, account.db, fmt.Sprintf("data branch create database `%s` from `%s`", right, source))
+					waitIssue26095BranchTables(t, account.id, cn, left, "t1", "t2")
+					waitIssue26095BranchTables(t, account.id, cn, right, "t1", "t2")
 					tableIDs := append(
-						queryIssue26095TableIDs(t, ctx, rootDB, account.id, left, "t%"),
-						queryIssue26095TableIDs(t, ctx, rootDB, account.id, right, "t%")...,
+						queryIssue26095TableIDs(t, ctx, cn, account.id, left, "t%"),
+						queryIssue26095TableIDs(t, ctx, cn, account.id, right, "t%")...,
 					)
 					requireIssue26095ReclaimPending(t, ctx, rootDB, tableIDs)
 
@@ -161,7 +173,14 @@ func queryIssue26095CurrentAccountID(t *testing.T, ctx context.Context, db *sql.
 	return accountID
 }
 
-func createSiblingBranches(t *testing.T, ctx context.Context, db *sql.DB, dbName string) {
+func createSiblingBranches(
+	t *testing.T,
+	ctx context.Context,
+	db *sql.DB,
+	dbName string,
+	cn embed.ServiceOperator,
+	accountID uint32,
+) {
 	t.Helper()
 	execSQLRequire(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
 	execSQLRequire(t, ctx, db, fmt.Sprintf("create table `%s`.`root_t` (id int primary key)", dbName))
@@ -171,32 +190,52 @@ func createSiblingBranches(t *testing.T, ctx context.Context, db *sql.DB, dbName
 			dbName, i, dbName,
 		))
 	}
+	waitIssue26095BranchTables(t, accountID, cn, dbName, "b0", "b1", "b2", "b3")
+}
+
+func waitIssue26095BranchTables(
+	t *testing.T,
+	accountID uint32,
+	cn embed.ServiceOperator,
+	dbName string,
+	tableNames ...string,
+) {
+	t.Helper()
+	testutils.WaitDatabaseCreatedWithAccount(t, int32(accountID), dbName, cn)
+	for _, tableName := range tableNames {
+		testutils.WaitTableCreatedWithAccount(t, int32(accountID), dbName, tableName, cn)
+	}
 }
 
 func queryIssue26095TableIDs(
 	t *testing.T,
 	ctx context.Context,
-	db *sql.DB,
+	cn embed.ServiceOperator,
 	accountID uint32,
 	dbName string,
 	tablePattern string,
 ) []uint64 {
 	t.Helper()
-	rows, err := db.QueryContext(ctx,
-		"select rel_id from mo_catalog.mo_tables "+
-			"where account_id = ? and reldatabase = ? and relname like ? order by rel_id",
+	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+	query := fmt.Sprintf(
+		"select rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s' and relname like '%s' order by rel_id",
 		accountID, dbName, tablePattern,
 	)
+	result, err := exec.Exec(
+		defines.AttachAccountId(ctx, accountID),
+		query,
+		executor.Options{}.
+			WithAccountID(accountID).
+			WithWaitCommittedLogApplied(),
+	)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer result.Close()
 
 	var tableIDs []uint64
-	for rows.Next() {
-		var tableID uint64
-		require.NoError(t, rows.Scan(&tableID))
-		tableIDs = append(tableIDs, tableID)
-	}
-	require.NoError(t, rows.Err())
+	result.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		tableIDs = append(tableIDs, executor.GetFixedRows[uint64](cols[0])...)
+		return true
+	})
 	require.NotEmpty(t, tableIDs)
 	return tableIDs
 }

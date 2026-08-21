@@ -22,8 +22,8 @@ test_db    CREATE DATABASE `test_db`
 Table    Create Table
 test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
 /* cloud_nonuser */ show create view test_view;
-View    Create View    character_set_client    collation_connection
-test_view     create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
+➤ View[12,6,0]  ¦  Create View[12,84,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+test_view  ¦  create view `test_view` as select `test_table`.`col1` as `col1`, `test_table`.`col2` as `col2` from `test_table`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 /* cloud_nonuser */ show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 /* cloud_nonuser */ show procedure status;
@@ -44,10 +44,10 @@ test_table
 test_view
 /* cloud_nonuser */ show collation like 'utf8mb4_general_ci';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 /* cloud_nonuser */ show collation like 'utf8mb4_general_ci%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 /* cloud_nonuser */ show index from test_table;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 /* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
