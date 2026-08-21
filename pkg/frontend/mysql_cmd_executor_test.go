@@ -4122,6 +4122,88 @@ func TestEstimatePreparedCursorBatchBytesIncludesArrayDisplay(t *testing.T) {
 	require.GreaterOrEqual(t, estimated, displayBytes)
 }
 
+func TestEstimatePreparedCursorMaterializedBytesArrayAndDecimalFamilies(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	arrayCases := []struct {
+		name string
+		make func(*vector.Vector) error
+	}{
+		{name: "float32", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []float32{1.25, 2.5}, false, mp)
+		}},
+		{name: "float64", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []float64{1.25, 2.5}, false, mp)
+		}},
+		{name: "bf16", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []types.BF16{1, 2}, false, mp)
+		}},
+		{name: "float16", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []types.Float16{1, 2}, false, mp)
+		}},
+		{name: "int8", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []int8{1, 2}, false, mp)
+		}},
+	}
+	for _, tc := range arrayCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var oid types.T
+			switch tc.name {
+			case "float32":
+				oid = types.T_array_float32
+			case "float64":
+				oid = types.T_array_float64
+			case "bf16":
+				oid = types.T_array_bf16
+			case "float16":
+				oid = types.T_array_float16
+			case "int8":
+				oid = types.T_array_int8
+			}
+			vec := vector.NewVec(oid.ToType())
+			require.NoError(t, tc.make(vec))
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+			estimated, err := estimatePreparedCursorMaterializedBytes(bat)
+			require.NoError(t, err)
+			require.Positive(t, estimated)
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		text string
+	}{
+		{name: "decimal64", typ: types.New(types.T_decimal64, 18, 2), text: "12.34"},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 4), text: "1234.5678"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ)
+			switch tc.typ.Oid {
+			case types.T_decimal64:
+				value, err := types.ParseDecimal64(tc.text, tc.typ.Width, tc.typ.Scale)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			case types.T_decimal128:
+				value, err := types.ParseDecimal128(tc.text, tc.typ.Width, tc.typ.Scale)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+			estimated, err := estimatePreparedCursorMaterializedBytes(bat)
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, estimated, uint64(len(tc.text)+32))
+		})
+	}
+}
+
 func TestPreparedCursorDecimal256MaterializationBoundAndRollback(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
