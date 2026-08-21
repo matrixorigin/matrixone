@@ -40,6 +40,12 @@ type Cache[K comparable, V any] struct {
 	prepareSet func(ctx context.Context, key K, value V, size int64, seq uint64) func(inserted bool)
 	postSet    func(ctx context.Context, key K, value V, size int64, seq uint64)
 	postGet    func(ctx context.Context, key K, value V, size int64)
+	// prepareEvict runs before Delete or capacity eviction makes membership
+	// externally invisible, while the item is still protected by its shard
+	// lock. It returns cleanup that runs after cache locks are released. Replace
+	// does not invoke it because membership remains live. The callback and its
+	// returned cleanup must not call back into this Cache, block, or panic.
+	prepareEvict func(key K, value V, size int64, seq uint64) func()
 	// postEvict is called after an item is evicted from the cache.
 	// It must be safe for concurrent invocation from multiple goroutines.
 	postEvict func(ctx context.Context, key K, value V, size int64, seq uint64)
@@ -117,7 +123,7 @@ func New[K comparable, V any](
 	postGet func(ctx context.Context, key K, value V, size int64),
 	postEvict func(ctx context.Context, key K, value V, size int64, seq uint64),
 ) *Cache[K, V] {
-	return NewWithPrepareSet(capacity, keyShardFunc, nil, postSet, postGet, postEvict)
+	return newCache(capacity, keyShardFunc, nil, postSet, postGet, nil, postEvict)
 }
 
 func NewWithPrepareSet[K comparable, V any](
@@ -126,6 +132,34 @@ func NewWithPrepareSet[K comparable, V any](
 	prepareSet func(ctx context.Context, key K, value V, size int64, seq uint64) func(inserted bool),
 	postSet func(ctx context.Context, key K, value V, size int64, seq uint64),
 	postGet func(ctx context.Context, key K, value V, size int64),
+	postEvict func(ctx context.Context, key K, value V, size int64, seq uint64),
+) *Cache[K, V] {
+	return newCache(capacity, keyShardFunc, prepareSet, postSet, postGet, nil, postEvict)
+}
+
+// NewWithPrepareEvict is New with a membership-removal linearization hook.
+// prepareEvict runs for Delete and capacity eviction before the item becomes
+// externally invisible, and returns cleanup that runs exactly once after the
+// removal and all internal cache locks have been released. Replace only
+// releases the old value and deliberately does not invoke prepareEvict.
+func NewWithPrepareEvict[K comparable, V any](
+	capacity fscache.CapacityFunc,
+	keyShardFunc func(K) uint64,
+	postSet func(ctx context.Context, key K, value V, size int64, seq uint64),
+	postGet func(ctx context.Context, key K, value V, size int64),
+	prepareEvict func(key K, value V, size int64, seq uint64) func(),
+	postEvict func(ctx context.Context, key K, value V, size int64, seq uint64),
+) *Cache[K, V] {
+	return newCache(capacity, keyShardFunc, nil, postSet, postGet, prepareEvict, postEvict)
+}
+
+func newCache[K comparable, V any](
+	capacity fscache.CapacityFunc,
+	keyShardFunc func(K) uint64,
+	prepareSet func(ctx context.Context, key K, value V, size int64, seq uint64) func(inserted bool),
+	postSet func(ctx context.Context, key K, value V, size int64, seq uint64),
+	postGet func(ctx context.Context, key K, value V, size int64),
+	prepareEvict func(key K, value V, size int64, seq uint64) func(),
 	postEvict func(ctx context.Context, key K, value V, size int64, seq uint64),
 ) *Cache[K, V] {
 	ret := &Cache[K, V]{
@@ -142,6 +176,7 @@ func NewWithPrepareSet[K comparable, V any](
 		prepareSet:   prepareSet,
 		postSet:      postSet,
 		postGet:      postGet,
+		prepareEvict: prepareEvict,
 		postEvict:    postEvict,
 	}
 	for i := range ret.shards {
@@ -326,7 +361,7 @@ func (c *Cache[K, V]) evictForAdmissionLocked(target int64, pending *[]_PendingP
 			}
 			return false
 		}
-		if c.postEvict != nil {
+		if c.hasEvictCallbacks() {
 			*pending = append(*pending, pe)
 		}
 	}
@@ -491,7 +526,7 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 		return
 	}
 	delete(shard.values, key)
-	pe, evicted := purgeItemValue(item)
+	pe, evicted := c.purgeItemValue(item)
 	shard.Unlock()
 	c.postEvictItem(ctx, pe, evicted)
 	// we do not update queues here, to reduce cost
@@ -536,10 +571,11 @@ func (c *Cache[K, V]) Replace(ctx context.Context, key K, value V, size int64) b
 
 // _PendingPostEvict holds evicted item data for calling postEvict outside the queueLock.
 type _PendingPostEvict[K comparable, V any] struct {
-	key   K
-	value V
-	size  int64
-	seq   uint64
+	key         K
+	value       V
+	size        int64
+	seq         uint64
+	finishEvict func()
 }
 
 func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut int64) {
@@ -574,13 +610,7 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut in
 			defer func() { done <- target }()
 		}
 		// Execute postEvict callbacks outside the queueLock.
-		if c.postEvict != nil {
-			for i := range pendingPostEvicts {
-				c.postEvictItem(ctx, pendingPostEvicts[i], true)
-				// Release reference so GC can reclaim memory incrementally.
-				pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
-			}
-		}
+		c.runPendingPostEvicts(ctx, pendingPostEvicts)
 	}()
 	for {
 		c.helpEnqueue()
@@ -714,7 +744,7 @@ func (c *Cache[K, V]) evictBatch(capacityCut *int64, includeAsyncDebt bool) (pen
 		evicted = true
 		pendingCount++
 		pendingBytes += pe.size
-		if c.postEvict != nil {
+		if c.hasEvictCallbacks() {
 			pending = append(pending, pe)
 		}
 		if pendingCount >= pressureEvictBatchItems || pendingBytes >= pressureEvictBatchBytes {
@@ -724,12 +754,27 @@ func (c *Cache[K, V]) evictBatch(capacityCut *int64, includeAsyncDebt bool) (pen
 }
 
 func (c *Cache[K, V]) runPendingPostEvicts(ctx context.Context, pendingPostEvicts []_PendingPostEvict[K, V]) {
-	if c.postEvict == nil {
+	if !c.hasEvictCallbacks() {
 		return
 	}
-	for i := range pendingPostEvicts {
-		c.postEvictItem(ctx, pendingPostEvicts[i], true)
-		pendingPostEvicts[i] = _PendingPostEvict[K, V]{}
+	next := 0
+	defer func() {
+		// If a postEvict callback panics, release every remaining prepareEvict
+		// owner before propagating the panic. The item that panicked was cleared
+		// before invocation and postEvictItem already finished its own owner.
+		for ; next < len(pendingPostEvicts); next++ {
+			pe := pendingPostEvicts[next]
+			pendingPostEvicts[next] = _PendingPostEvict[K, V]{}
+			if pe.finishEvict != nil {
+				pe.finishEvict()
+			}
+		}
+	}()
+	for next < len(pendingPostEvicts) {
+		pe := pendingPostEvicts[next]
+		pendingPostEvicts[next] = _PendingPostEvict[K, V]{}
+		next++
+		c.postEvictItem(ctx, pe, true)
 	}
 }
 
@@ -804,12 +849,22 @@ func (c *Cache[K, V]) enqueueGhost(item *_CacheItem[K, V]) (pe _PendingPostEvict
 
 	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
 	shard.Lock()
-	pe, evicted = purgeItemValue(item)
+	pe, evicted = c.purgeItemValue(item)
 	shard.Unlock()
 	return
 }
 
-func purgeItemValue[K comparable, V any](item *_CacheItem[K, V]) (pe _PendingPostEvict[K, V], evicted bool) {
+func (c *Cache[K, V]) purgeItemValue(item *_CacheItem[K, V]) (pe _PendingPostEvict[K, V], evicted bool) {
+	pe, evicted = purgeItemValue(item)
+	if evicted && c.prepareEvict != nil {
+		pe.finishEvict = c.prepareEvict(pe.key, pe.value, pe.size, pe.seq)
+	}
+	return
+}
+
+func purgeItemValue[K comparable, V any](
+	item *_CacheItem[K, V],
+) (pe _PendingPostEvict[K, V], evicted bool) {
 	if !item.valueOK {
 		return
 	}
@@ -828,10 +883,19 @@ func purgeItemValue[K comparable, V any](item *_CacheItem[K, V]) (pe _PendingPos
 }
 
 func (c *Cache[K, V]) postEvictItem(ctx context.Context, pe _PendingPostEvict[K, V], evicted bool) {
-	if !evicted || c.postEvict == nil {
+	if !evicted {
 		return
 	}
-	c.postEvict(ctx, pe.key, pe.value, pe.size, pe.seq)
+	if pe.finishEvict != nil {
+		defer pe.finishEvict()
+	}
+	if c.postEvict != nil {
+		c.postEvict(ctx, pe.key, pe.value, pe.size, pe.seq)
+	}
+}
+
+func (c *Cache[K, V]) hasEvictCallbacks() bool {
+	return c.prepareEvict != nil || c.postEvict != nil
 }
 
 func (c *Cache[K, V]) evictGhost() {

@@ -60,6 +60,18 @@ type notifyingDiskCacheLocker struct {
 	unlocked chan struct{}
 }
 
+type blockingDiskCacheWriter struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *blockingDiskCacheWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	return len(p), nil
+}
+
 func (l *notifyingDiskCacheLocker) Unlock() {
 	l.Mutex.Unlock()
 	l.unlocked <- struct{}{}
@@ -385,6 +397,103 @@ func TestDiskCacheEvictionTransfersToPlainPathOwner(t *testing.T) {
 	releaseOnce()
 	_, err = os.Stat(diskPath)
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestDiskCacheOpenReaderCannotReindexEvictedPath(t *testing.T) {
+	tests := []struct {
+		name  string
+		evict func(context.Context, *DiskCache, string)
+	}{
+		{
+			name: "Delete",
+			evict: func(ctx context.Context, cache *DiskCache, diskPath string) {
+				cache.cache.Delete(ctx, diskPath)
+			},
+		},
+		{
+			name: "ForceEvict",
+			evict: func(ctx context.Context, cache *DiskCache, _ string) {
+				cache.cache.ForceEvictWithWait(ctx, cache.cache.Used())
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cache := newLifecycleTestDiskCache(t)
+			ctx := context.Background()
+			require.NoError(t, cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader("ab")), nil
+			}))
+
+			diskPath := cache.pathForFile("foo")
+			writer := &blockingDiskCacheWriter{
+				started: make(chan struct{}),
+				release: make(chan struct{}),
+			}
+			releaseWriter := sync.OnceFunc(func() { close(writer.release) })
+			t.Cleanup(releaseWriter)
+			vector := &IOVector{
+				FilePath: "foo",
+				Entries: []IOEntry{
+					{Offset: 0, Size: 1, WriterForRead: writer},
+					{Offset: 1, Size: 1},
+				},
+			}
+			readDone := make(chan error, 1)
+			go func() { readDone <- cache.Read(ctx, vector) }()
+
+			select {
+			case <-writer.started:
+			case <-time.After(diskCacheLifecycleTestTimeout):
+				t.Fatal("disk-cache reader did not open the full-file cache entry")
+			}
+			test.evict(ctx, cache, diskPath)
+			require.False(t, cache.cache.Contains(diskPath))
+			_, err := os.Stat(diskPath)
+			require.ErrorIs(t, err, os.ErrNotExist)
+
+			releaseWriter()
+			select {
+			case err := <-readDone:
+				require.NoError(t, err)
+			case <-time.After(diskCacheLifecycleTestTimeout):
+				t.Fatal("disk-cache reader did not finish after eviction")
+			}
+			require.True(t, vector.Entries[0].done)
+			require.True(t, vector.Entries[1].done)
+			require.Equal(t, []byte("b"), vector.Entries[1].Data)
+			require.False(t, cache.cache.Contains(diskPath))
+			_, err = os.Stat(diskPath)
+			require.ErrorIs(t, err, os.ErrNotExist)
+			cache.updatingPaths.L.Lock()
+			activeReadGenerations := len(cache.updatingPaths.readGenerations)
+			cache.updatingPaths.L.Unlock()
+			require.Zero(t, activeReadGenerations)
+		})
+	}
+}
+
+func TestDiskCacheCurrentReaderReindexesUntrackedPath(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	ctx := context.Background()
+	diskPath := cache.pathForFile("foo")
+	require.NoError(t, os.WriteFile(diskPath, []byte("ab"), 0o644))
+	require.False(t, cache.cache.Contains(diskPath))
+
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Offset: 1, Size: 1}},
+	}
+	require.NoError(t, cache.Read(ctx, vector))
+	require.True(t, vector.Entries[0].done)
+	require.Equal(t, []byte("b"), vector.Entries[0].Data)
+	require.True(t, cache.cache.Contains(diskPath))
+	_, err := os.Stat(diskPath)
+	require.NoError(t, err)
+	cache.updatingPaths.L.Lock()
+	activeReadGenerations := len(cache.updatingPaths.readGenerations)
+	cache.updatingPaths.L.Unlock()
+	require.Zero(t, activeReadGenerations)
 }
 
 func TestDiskCacheCompletedOwnerCannotReleaseNextGeneration(t *testing.T) {
