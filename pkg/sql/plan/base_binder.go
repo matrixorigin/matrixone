@@ -1516,7 +1516,13 @@ func (b *baseBinder) bindNumericExprWithContextMode(
 	// ("5" -> 53), whereas an arithmetic expression such as @v + 0 must enter
 	// the numeric context below.  Do not let the target-type propagation turn
 	// the former into a value-dependent numeric cast.
-	if outer != nil && isDirectUserVariableExpr(astExpr) {
+	defaultType := makeTypeByPlan2Type(b.defaultValueBindType())
+	outerType := types.Type{}
+	if outer != nil {
+		outerType = makeTypeByPlan2Type(*outer)
+	}
+	if outer != nil && (defaultType.IsNumeric() || defaultType.Oid == types.T_bit || outerType.Oid == types.T_bit) &&
+		isDirectUserVariableExpr(astExpr) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
 		defer func() { b.numericParamType = paramType }()
@@ -1560,8 +1566,14 @@ func isDirectUserVariableExpr(expr tree.Expr) bool {
 		}
 		expr = paren.Expr
 	}
-	variable, ok := expr.(*tree.VarExpr)
-	return ok && !variable.System
+	switch value := expr.(type) {
+	case *tree.VarExpr:
+		return !value.System
+	case *tree.ParamExpr:
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *baseBinder) bindNumericExprWithoutNewContext(astExpr tree.Expr, depth int32) (*Expr, error) {
@@ -1575,8 +1587,11 @@ func (b *baseBinder) bindNumericExprWithCurrentContext(astExpr tree.Expr, depth 
 	if unary, ok := astExpr.(*tree.UnaryExpr); ok {
 		return b.bindUnaryExprWithCurrentContext(unary, depth)
 	}
-	if function, ok := astExpr.(*tree.FuncExpr); ok && numericAstFunctionName(function) == "mod" {
-		return b.bindFuncExprImplByAstExpr("mod", function.Exprs, depth)
+	if function, ok := astExpr.(*tree.FuncExpr); ok {
+		name := numericAstFunctionName(function)
+		if name == "mod" || name == "sleep" {
+			return b.bindFuncExprImplByAstExpr(name, function.Exprs, depth)
+		}
 	}
 	return b.impl.BindExpr(astExpr, depth, false)
 }
@@ -3214,6 +3229,12 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+	}
+	if strings.EqualFold(funcName, "sleep") && b.numericParamType == nil &&
+		b.builder != nil && b.builder.isPrepareStatement {
+		typ := types.T_float64.ToType()
+		target := makePlan2Type(&typ)
+		return b.bindNumericExprWithContext(astExpr, depth, &target)
 	}
 	if supportsGenericNumericFunctionContext(strings.ToLower(funcName)) &&
 		mysqlSpecialTypeInExprs(b, astExpr.Exprs) {

@@ -708,15 +708,14 @@ func initExecuteStmtParamWithResolver(
 
 func binaryProtocolPrepareParamKind(
 	mysqlType defines.MysqlType,
-	unsigned bool,
+	_ bool,
 	value []byte,
 ) vector.PrepareParamKind {
 	switch mysqlType {
 	case defines.MYSQL_TYPE_TINY:
-		// database/sql encodes bool as unsigned TINY 0/1. Preserve that source
-		// identity for JSON and BOOL consumers; signed TINY and every other
-		// unsigned value remain ordinary integers.
-		if unsigned && (bytes.Equal(value, []byte("0")) || bytes.Equal(value, []byte("1"))) {
+		// database/sql encodes bool as TINY 0/1 without a distinct protocol type.
+		// Preserve that compatibility identity for JSON and BOOL consumers.
+		if bytes.Equal(value, []byte("0")) || bytes.Equal(value, []byte("1")) {
 			return vector.PrepareParamBoolean
 		}
 		return vector.PrepareParamInteger
@@ -1059,9 +1058,11 @@ func preparedParamBindingTypes(
 		if i < len(kinds) {
 			kind = kinds[i]
 		}
-		bindingType := preparedParamBindingType(kind, value)
-		if !commonDependent {
-			bindingType = preparedParamResultBindingType(kind, value, paramTypes, i)
+		bindingType := preparedParamResultBindingType(kind, value, paramTypes, i)
+		if executionDependent && commonDependent {
+			bindingType = preparedParamExecutionBindingType(kind, value, paramTypes, i)
+		} else if commonDependent {
+			bindingType = preparedParamBindingType(kind, value)
 		}
 		if bindingType.Oid == types.T_any {
 			continue
@@ -1072,6 +1073,19 @@ func preparedParamBindingTypes(
 		bindingTypes[i] = bindingType
 	}
 	return bindingTypes
+}
+
+func preparedParamExecutionBindingType(
+	kind vector.PrepareParamKind, value []byte, paramTypes []byte, pos int,
+) types.Type {
+	if kind != vector.PrepareParamNone {
+		return preparedParamResultBindingType(kind, value, paramTypes, pos)
+	}
+	width, scale, full, exponent := preparedNumericTextDomain(value)
+	if full && width <= 76 {
+		return preparedResultDecimalType(max(width, 1), scale)
+	}
+	return preparedDecimalBindingType(width, scale, full, exponent)
 }
 
 func preparedParamResultBindingType(
@@ -1126,6 +1140,10 @@ func preparedParamBindingTypesEqualAtDependencies(
 		}
 		if i < len(right) {
 			rightType = right[i]
+		}
+		if executionDependent && (leftType.Oid == 0 && isStablePreparedDecimalBinding(rightType) ||
+			rightType.Oid == 0 && isStablePreparedDecimalBinding(leftType)) {
+			return false
 		}
 		if !preparedParamBindingCategoryEqual(leftType, rightType) {
 			return false

@@ -53,6 +53,13 @@ func (r *preparedParamCommonTypeDependencyRule) visit(expr *Expr) {
 		}
 	case *planpb.Expr_F:
 		functionID, _ := function.DecodeOverloadID(impl.F.Func.Obj)
+		name := strings.ToLower(impl.F.Func.GetObjName())
+		if supportsGenericNumericFunctionContext(name) || name == "sleep" {
+			for _, arg := range impl.F.Args {
+				r.collectAllParams(arg)
+				r.collectAllExecutionParams(arg)
+			}
+		}
 		if functionID == function.COALESCE || functionID == function.GREATEST || functionID == function.LEAST {
 			for _, arg := range impl.F.Args {
 				r.collectDirectParams(arg)
@@ -85,6 +92,34 @@ func (r *preparedParamCommonTypeDependencyRule) visit(expr *Expr) {
 			if frame.End != nil {
 				r.visit(frame.End.Val)
 			}
+		}
+	}
+}
+
+func (r *preparedParamCommonTypeDependencyRule) collectAllParams(expr *Expr) {
+	r.collectParams(expr, r.positions)
+}
+
+func (r *preparedParamCommonTypeDependencyRule) collectAllExecutionParams(expr *Expr) {
+	r.collectParams(expr, r.executionPositions)
+}
+
+func (r *preparedParamCommonTypeDependencyRule) collectParams(expr *Expr, positions map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil {
+		positions[param.Pos] = struct{}{}
+		return
+	}
+	switch impl := expr.Expr.(type) {
+	case *planpb.Expr_F:
+		for _, arg := range impl.F.Args {
+			r.collectParams(arg, positions)
+		}
+	case *planpb.Expr_List:
+		for _, item := range impl.List.List {
+			r.collectParams(item, positions)
 		}
 	}
 }

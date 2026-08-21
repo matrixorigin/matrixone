@@ -306,8 +306,8 @@ func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 		value      string
 		want       vector.PrepareParamKind
 	}{
-		{defines.MYSQL_TYPE_TINY, false, "0", vector.PrepareParamInteger},
-		{defines.MYSQL_TYPE_TINY, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_TINY, false, "0", vector.PrepareParamBoolean},
+		{defines.MYSQL_TYPE_TINY, false, "1", vector.PrepareParamBoolean},
 		{defines.MYSQL_TYPE_TINY, true, "1", vector.PrepareParamBoolean},
 		{defines.MYSQL_TYPE_TINY, false, "2", vector.PrepareParamInteger},
 		{defines.MYSQL_TYPE_TINY, false, "-1", vector.PrepareParamInteger},
