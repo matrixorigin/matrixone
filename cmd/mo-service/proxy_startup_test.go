@@ -66,6 +66,28 @@ func TestRunProxyAfterFileServiceInitialization(t *testing.T) {
 	require.True(t, started)
 }
 
+func TestInitServiceFileServicesPropagatesCreatorError(t *testing.T) {
+	permanent := errors.New("storage unavailable")
+	cfg := &Config{
+		ServiceType: metadata.ServiceType_PROXY.String(),
+		FileServices: []fileservice.Config{{
+			Name:    defines.LocalFileServiceName,
+			Backend: "MEM",
+		}},
+	}
+
+	_, err := initServiceFileServices(
+		context.Background(),
+		metadata.ServiceType_PROXY,
+		cfg,
+		stopper.NewStopper("proxy-file-service-error"),
+		func(context.Context, fileservice.Config, []*perfcounter.CounterSet) (fileservice.FileService, error) {
+			return nil, permanent
+		},
+	)
+	require.ErrorIs(t, err, permanent)
+}
+
 func TestRunObservabilityTaskTreatsProxyStopAsCancellation(t *testing.T) {
 	for _, stage := range []string{"trace", "metric"} {
 		t.Run(stage, func(t *testing.T) {
