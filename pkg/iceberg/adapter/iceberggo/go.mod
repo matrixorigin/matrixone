@@ -9,6 +9,7 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/BurntSushi/toml v1.2.1 // indirect
 	github.com/DataDog/zstd v1.5.0 // indirect
 	github.com/FastFilter/xorfilter v0.5.1 // indirect
 	github.com/KimMachineGun/automemlimit v0.6.0 // indirect
@@ -19,7 +20,6 @@ require (
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.34 // indirect
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible // indirect
 	github.com/aliyun/credentials-go v1.3.10 // indirect
-	github.com/andres-erbsen/clock v0.0.0-20160526145045-9e14626cd129 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da // indirect
 	github.com/aws/aws-sdk-go v1.55.5 // indirect
@@ -154,7 +154,6 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/ratelimit v0.2.0 // indirect
 	go.uber.org/zap v1.24.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect

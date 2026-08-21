@@ -87,7 +87,11 @@ go_test_embedded() {
 }
 
 go_test_adapter() {
-  (cd "${ROOT_DIR}/pkg/iceberg/adapter/iceberggo" && run go test -tags iceberggo -count=1 ./...)
+  (
+    cd "${ROOT_DIR}/pkg/iceberg/adapter/iceberggo"
+    run go mod tidy -diff
+    run go test -tags iceberggo -count=1 ./...
+  )
 }
 
 go_test_golden() {
