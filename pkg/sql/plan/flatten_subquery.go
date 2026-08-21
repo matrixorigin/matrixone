@@ -26,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-var (
-	constTrue = &plan.Expr{
+func makeConstTrue() *plan.Expr {
+	return &plan.Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &plan.Literal{
 				Value: &plan.Literal_Bval{
@@ -40,8 +40,10 @@ var (
 			NotNullable: true,
 		},
 	}
+}
 
-	constFalse = &plan.Expr{
+func makeConstFalse() *plan.Expr {
+	return &plan.Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &plan.Literal{
 				Value: &plan.Literal_Bval{
@@ -54,7 +56,7 @@ var (
 			NotNullable: true,
 		},
 	}
-)
+}
 
 func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
 	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, false)
@@ -333,10 +335,10 @@ func (builder *QueryBuilder) flattenSubquery(
 			return nodeID, newProj, nil
 
 		case plan.SubqueryRef_EXISTS:
-			return nodeID, constTrue, nil
+			return nodeID, makeConstTrue(), nil
 
 		case plan.SubqueryRef_NOT_EXISTS:
-			return nodeID, constFalse, nil
+			return nodeID, makeConstFalse(), nil
 
 		case plan.SubqueryRef_IN:
 			newExpr, err := builder.generateRowComparison("=", subquery.Child, subCtx, true)
@@ -420,7 +422,7 @@ func (builder *QueryBuilder) flattenSubquery(
 
 		if scalarExistential {
 			if len(joinPreds) == 0 {
-				joinPreds = append(joinPreds, constTrue)
+				joinPreds = append(joinPreds, makeConstTrue())
 			}
 			var retExpr *plan.Expr
 			nodeID, retExpr, err = builder.insertMarkJoin(nodeID, subID, joinPreds, nil, false, ctx)
@@ -535,7 +537,7 @@ func (builder *QueryBuilder) flattenSubquery(
 	case plan.SubqueryRef_EXISTS:
 		// Uncorrelated subquery
 		if len(joinPreds) == 0 {
-			joinPreds = append(joinPreds, constTrue)
+			joinPreds = append(joinPreds, makeConstTrue())
 		}
 
 		var markExpr *plan.Expr
@@ -549,7 +551,7 @@ func (builder *QueryBuilder) flattenSubquery(
 	case plan.SubqueryRef_NOT_EXISTS:
 		// Uncorrelated subquery
 		if len(joinPreds) == 0 {
-			joinPreds = append(joinPreds, constTrue)
+			joinPreds = append(joinPreds, makeConstTrue())
 		}
 
 		var markExpr *plan.Expr
@@ -674,7 +676,7 @@ func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
 			}
 
 			outerResult, _ := decreaseDepth(DeepCopyExpr(ctx.projects[0]))
-			marker := DeepCopyExpr(constTrue)
+			marker := makeConstTrue()
 			node.ProjectList = []*plan.Expr{marker}
 			ctx.projects = []*plan.Expr{marker}
 			node.Limit = nil

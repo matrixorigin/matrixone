@@ -436,6 +436,9 @@ func (s *service) Start() (err error) {
 
 	s.task.runnerReady.Store(true)
 	s.startTaskRunner()
+	if err = s.startViewMetadataRecovery(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -563,9 +566,14 @@ func (s *service) closeBootstrapService() error {
 	s.bootstrapMu.Lock()
 	defer s.bootstrapMu.Unlock()
 	if s.bootstrapService == nil {
+		s.viewMetadataBootstrap.Store(nil)
 		return nil
 	}
 	service := s.bootstrapService
+	if service.IsFinalVersionReady() {
+		s.viewMetadataReady.Store(true)
+	}
+	s.viewMetadataBootstrap.Store(nil)
 	s.bootstrapService = nil
 	return service.Close()
 }
@@ -1260,6 +1268,7 @@ func (s *service) bootstrap() error {
 			s.options.bootstrapOptions...,
 		)
 	}
+	s.viewMetadataBootstrap.Store(&bootstrapReadiness{service: s.bootstrapService})
 
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseBootstrap)
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
@@ -1283,7 +1292,8 @@ func (s *service) bootstrap() error {
 			}
 			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseBootstrap2)
 			defer cancel()
-			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
+			err := s.bootstrapService.BootstrapUpgrade(ctx)
+			if err != nil {
 				if err != context.Canceled {
 					err = moerr.AttachCause(ctx, err)
 					runtime.DefaultRuntime().Logger().Error("bootstrap system automatic upgrade failed by: ", zap.Error(err))

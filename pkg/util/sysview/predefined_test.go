@@ -113,6 +113,32 @@ func TestInformationSchemaColumnsDDL_HidesInternalColumns(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaColumnsDDLRequiresCurrentViewMetadata(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(), InformationSchemaColumnsDDL, 1)
+	assert.NoError(t, err)
+	assert.Len(t, statements, 1)
+	defer statements[0].Free()
+
+	assert.Contains(t, InformationSchemaColumnsDDL, "vr.status='CURRENT'")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"vr.status='CURRENT') and (not exists")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"(not exists (select 1 from mo_catalog.mo_view_refresh vr")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"not exists (select 1 from mo_catalog.mo_view_dependencies vd")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"ga.source_relation_kind not in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')")
+	assert.Equal(t, 2, strings.Count(InformationSchemaColumnsDDL,
+		"gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0"))
+	assert.Equal(t, 2, strings.Count(InformationSchemaColumnsDDL,
+		"gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')"))
+	assert.NotContains(t, InformationSchemaColumnsDDL, "mo_view_meta_enabled")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"mt.reldatabase in ('information_schema','mo_catalog','mo_debug','mo_task','mysql','system','system_metrics')")
+}
+
 func TestInformationSchemaKeyColumnUsageDDL_ProjectsForeignKeyMappings(t *testing.T) {
 	assert.True(t, strings.HasPrefix(InformationSchemaKeyColumnUsageDDL, "CREATE VIEW information_schema.KEY_COLUMN_USAGE AS"))
 	for _, column := range []string{

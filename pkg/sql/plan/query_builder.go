@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -10395,6 +10396,25 @@ func (builder *QueryBuilder) bindView(
 	obj *ObjectRef,
 	schema, table string,
 ) (nodeID int32, err error) {
+	// A historical snapshot already provides the View TableDef from that
+	// catalog version. Its relation ID is not expected to have a lifecycle row
+	// in the current catalog, so only current-catalog CTAS needs this gate.
+	if builder.deriveViewMetadata && !IsSnapshotValid(snapshot) {
+		ownerAccountID, accountErr := builder.compCtx.GetAccountId()
+		if accountErr != nil {
+			return 0, accountErr
+		}
+		if obj.PubInfo != nil {
+			ownerAccountID = uint32(obj.PubInfo.TenantId)
+		}
+		if checker, ok := builder.compCtx.(interface {
+			EnsureViewMetadataCurrent(string, string, uint32, uint64) error
+		}); ok {
+			if err = checker.EnsureViewMetadataCurrent(schema, table, ownerAccountID, tableDef.TblId); err != nil {
+				return 0, err
+			}
+		}
+	}
 	viewDefString := tableDef.ViewSql.View
 	if viewDefString == "" {
 		return 0, nil
@@ -10445,6 +10465,18 @@ func (builder *QueryBuilder) bindView(
 	defaultDatabase := viewData.DefaultDatabase
 	if obj.PubInfo != nil {
 		defaultDatabase = obj.SubscriptionName
+		subscription := builder.compCtx.GetQueryingSubscription()
+		if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
+			subscription = &SubscriptionMeta{
+				AccountId: obj.PubInfo.TenantId,
+				DbName:    viewData.DefaultDatabase,
+				SubName:   obj.SubscriptionName,
+				Tables:    pubsub.TableAll,
+			}
+		}
+		previousSubscription := builder.compCtx.GetQueryingSubscription()
+		builder.compCtx.SetQueryingSubscription(subscription)
+		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
 	viewCtx.defaultDatabase = defaultDatabase
 	viewKey := objectkey.Encode(schema, table)
@@ -11276,6 +11308,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, NoAlias, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_VIEW_DEPENDENCIES {
+					viewDependenciesFilter := util.BuildViewMetadataDependenciesFilter(uint64(currentAccountID))
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(viewDependenciesFilter, NoAlias, ctx)
 					if err != nil {
 						return 0, err
 					}

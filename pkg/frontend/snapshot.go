@@ -34,6 +34,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type tableType string
@@ -108,6 +110,8 @@ var (
 		catalog.MOUpgradeTable:       systemCatalogRestoreSkip,
 		catalog.MOUpgradeTenantTable: systemCatalogRestoreSkip,
 		catalog.MOAutoIncrTable:      systemCatalogRestoreSkip,
+		catalog.MO_VIEW_DEPENDENCIES: systemCatalogRestoreSkip,
+		catalog.MO_VIEW_REFRESH:      systemCatalogRestoreSkip,
 
 		"mo_user":                       systemCatalogRestoreCopy,
 		"mo_role":                       systemCatalogRestoreCopy,
@@ -647,6 +651,32 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 				string(stmt.Name),
 			)
 		}
+		var viewMetadataEnabled bool
+		if viewMetadataEnabled, err = prepareViewMetadataMutation(ctx, bh, ses.GetService()); err != nil {
+			return err
+		}
+		if viewMetadataEnabled {
+			var record *snapshotRecord
+			if record, err = getSnapshotByName(ctx, bh, string(stmt.Name)); err != nil {
+				return err
+			}
+			var boundSnapshot *pbplan.Snapshot
+			if boundSnapshot, err = planSnapshotFromRecord(ctx, record); err != nil {
+				return err
+			}
+			var snapshotData []byte
+			if snapshotData, err = json.Marshal(boundSnapshot); err != nil {
+				return err
+			}
+			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+			if err = bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+				return err
+			}
+			if err = bh.Exec(process.WithSystemCTELimits(systemCtx), compile.SnapshotViewMetadataInvalidationSQL(
+				string(snapshotData), uint64(time.Now().UnixNano()))); err != nil {
+				return err
+			}
+		}
 		sql = getSqlForDropSnapshot(string(stmt.Name))
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -685,6 +715,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	defer func() {
 		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	// Serialize catalog restore with View metadata recovery before either path
+	// locks a target View. The gate row belongs to a preserved catalog table, so
+	// it remains stable while relation identities are rebuilt.
+	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return stats, err
+	}
 
 	// check snapshot
 	snapshot, err := getSnapshotByName(ctx, bh, snapshotName)
@@ -705,6 +741,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	restoreAccount, toAccountId, err = getFromAccountIdAndToAccountId(ctx, ses, bh, stmt, *snapshot)
 	if err != nil {
 		return stats, err
+	}
+	if stmt.Level == tree.RESTORELEVELACCOUNT {
+		if err = invalidateAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
+			return stats, err
+		}
 	}
 
 	// restore cluster
@@ -845,6 +886,14 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT {
 		if err = restoreSystemCatalogsAfterObjects(ctx, ses.GetService(), bh, snapshot.ts, restoreAccount, toAccountId); err != nil {
+			return stats, err
+		}
+		if err = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
+			return stats, err
+		}
+	}
+	if stmt.Level == tree.RESTORELEVELACCOUNT && toAccountId == catalog.System_Account {
+		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
 			return stats, err
 		}
 	}
@@ -1429,6 +1478,12 @@ func dropClusterTable(
 
 	for _, tblInfo := range tableInfos {
 		if toAccountId == 0 && tblInfo.typ == clusterTable {
+			if tblInfo.tblName == catalog.MO_VIEW_DEPENDENCIES || tblInfo.tblName == catalog.MO_VIEW_REFRESH {
+				if err = bh.Exec(ctx, fmt.Sprintf("delete from %s.%s", moCatalog, tblInfo.tblName)); err != nil {
+					return
+				}
+				continue
+			}
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
 			if err = bh.Exec(ctx, dropTableIfExistsSQL(moCatalog, tblInfo.tblName)); err != nil {
 				return
@@ -2023,7 +2078,12 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 		return
 	}
 
+	return planSnapshotFromRecord(ctx, record)
+}
+
+func planSnapshotFromRecord(ctx context.Context, record *snapshotRecord) (*pbplan.Snapshot, error) {
 	var accountId uint32
+	var err error
 	// cluster level record has no accountName, so accountId is 0
 	if len(record.accountName) != 0 {
 		if record.level == tree.RESTORELEVELACCOUNT.String() {
@@ -2031,7 +2091,7 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 		} else {
 			accountId, err = defines.GetAccountId(ctx)
 			if err != nil {
-				return
+				return nil, err
 			}
 		}
 	}
@@ -3077,6 +3137,9 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 	}
+	if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -3132,7 +3195,104 @@ func restoreToAccountUsingCluster(
 	if err != nil {
 		return err
 	}
+	if err = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
+		return err
+	}
+	if toAccountId == catalog.System_Account {
+		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
+			return err
+		}
+	}
 	return err
+}
+
+func seedMissingViewMetadataAfterCatalogReset(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+) error {
+	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
+	if err != nil || !enabled {
+		return err
+	}
+	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
+	return bh.Exec(systemCtx, compile.SeedMissingViewMetadataSQL(uint64(time.Now().UnixNano())))
+}
+
+func invalidateAccountViewMetadata(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
+	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
+	if err != nil || !enabled {
+		return err
+	}
+	return invalidateAccountViewMetadataEnabled(ctx, bh, accountID)
+}
+
+func invalidateAccountViewMetadataEnabled(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return err
+	}
+	return bh.Exec(process.WithSystemCTELimits(systemCtx),
+		compile.AccountViewMetadataInvalidationSQL(accountID, uint64(time.Now().UnixNano())))
+}
+
+func reconcileAccountViewMetadata(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
+	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
+	if err != nil || !enabled {
+		return err
+	}
+	return reconcileAccountViewMetadataEnabled(ctx, bh, accountID)
+}
+
+func reconcileAccountViewMetadataEnabled(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
+	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
+	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return err
+	}
+	for _, sql := range compile.ReconcileAccountViewMetadataSQL(accountID, uint64(time.Now().UnixNano())) {
+		if err := bh.Exec(systemCtx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func prepareViewMetadataMutation(
+	ctx context.Context,
+	bh BackgroundExec,
+	serviceID string,
+) (bool, error) {
+	if compile.ViewMetadataRefreshEnabled(serviceID) {
+		return true, nil
+	}
+	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
+	for _, sql := range compile.ViewMetadataRequireRevalidationSQL() {
+		if err := bh.Exec(systemCtx, sql); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, account accountRecord) (err error) {

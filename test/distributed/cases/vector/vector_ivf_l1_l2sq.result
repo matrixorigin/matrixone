@@ -101,7 +101,7 @@ t  ¦  CREATE TABLE `t` (
   `a` int NOT NULL,
   `v` vecf32(4) DEFAULT NULL,
   PRIMARY KEY (`a`),
-  KEY `ti_l2sq` USING ivfflat (`v`) lists = 2  op_type 'vector_l2sq_ops' 
+  KEY `ti_l2sq` USING ivfflat (`v`) lists = 2  op_type 'vector_l2sq_ops'
 )
 alter table t drop index ti_l2sq;
 create index ti_l2 using ivfflat on t(v) lists=2 op_type 'vector_l2_ops';

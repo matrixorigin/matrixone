@@ -186,7 +186,7 @@ func (s *service) Bootstrap(ctx context.Context) error {
 
 	if ok, err := s.checkAlreadyBootstrappedWithRetry(ctx); ok {
 		s.logger.Info("mo already bootstrapped")
-		return nil
+		return s.refreshFinalVersionReadiness(ctx)
 	} else if err != nil {
 		return err
 	}
@@ -216,7 +216,10 @@ func (s *service) Bootstrap(ctx context.Context) error {
 			s.logger.Info("waiting bootstrap completed",
 				zap.Bool("result", ok),
 				zap.Error(err))
-			return err
+			if err != nil {
+				return err
+			}
+			return s.refreshFinalVersionReadiness(ctx)
 		}
 	}
 }
@@ -427,6 +430,42 @@ func (s *service) completeBootstrap() {
 	}
 
 	s.logger.Info("successfully completed bootstrap")
+	s.upgrade.finalVersionCompleted.Store(true)
+}
+
+func (s *service) refreshFinalVersionReadiness(ctx context.Context) error {
+	final := s.getFinalVersionHandle().Metadata()
+	result, err := s.exec.Exec(ctx, fmt.Sprintf(
+		"select state from %s.%s where version = '%s' and version_offset = %d",
+		catalog.MO_CATALOG, catalog.MOVersionTable, final.Version, final.VersionOffset),
+		executor.Options{}.
+			WithMinCommittedTS(s.now()).
+			WithWaitCommittedLogApplied().
+			WithAccountID(catalog.System_Account))
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+	ready := false
+	rowsSeen := 0
+	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
+		for row := range rows {
+			rowsSeen++
+			if rowsSeen > 1 {
+				return false
+			}
+			ready = vector.GetFixedAtWithTypeCheck[int32](columns[0], row) == versions.StateReady
+		}
+		return rowsSeen <= 1
+	})
+	if rowsSeen > 1 {
+		return moerr.NewInternalErrorf(ctx,
+			"duplicate final catalog version %s offset %d", final.Version, final.VersionOffset)
+	}
+	if ready {
+		s.upgrade.finalVersionCompleted.Store(true)
+	}
+	return nil
 }
 
 func (s *service) now() timestamp.Timestamp {

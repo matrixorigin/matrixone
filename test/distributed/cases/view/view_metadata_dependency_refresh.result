@@ -1,0 +1,256 @@
+DROP DATABASE IF EXISTS view_metadata_refresh;
+CREATE DATABASE view_metadata_refresh;
+USE view_metadata_refresh;
+CREATE TABLE source_table (
+id INT NOT NULL,
+code VARCHAR(12) DEFAULT 'seed',
+amount DECIMAL(10,2) DEFAULT 1.25,
+state ENUM('new','ready') DEFAULT 'new',
+flags SET('a','b') DEFAULT 'a'
+);
+CREATE VIEW direct_view AS
+SELECT id, code AS code_alias, amount, state, flags, amount * 2 AS doubled
+FROM source_table;
+CREATE VIEW chain_view (renamed_code, derived_amount) AS
+SELECT code_alias, doubled FROM direct_view;
+CREATE TABLE identity_before AS
+SELECT relname, rel_id, rel_logical_id, creator, owner,
+cast(json_extract(viewdef, '$.Stmt') AS VARCHAR(6000)) AS view_sql,
+cast(json_extract(viewdef, '$.DefaultDatabase') AS VARCHAR(6000)) AS default_database,
+cast(json_extract(viewdef, '$.sql_mode') AS VARCHAR(6000)) AS sql_mode,
+cast(json_extract(viewdef, '$.security_type') AS VARCHAR(6000)) AS security_type
+FROM mo_catalog.mo_tables
+WHERE reldatabase = 'view_metadata_refresh'
+AND relname IN ('direct_view','chain_view');
+ALTER TABLE source_table
+MODIFY code VARCHAR(48) DEFAULT 'wider',
+MODIFY amount DECIMAL(18,4) NOT NULL DEFAULT 2.5000,
+MODIFY state ENUM('new','ready','done') DEFAULT 'ready',
+MODIFY flags SET('a','b','c') DEFAULT 'b';
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('direct_view','chain_view')
+AND status = 'CURRENT';
+count(*)
+2
+DESC direct_view;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO        NULL
+code_alias    VARCHAR(48)    YES        wider
+amount    DECIMAL(18,4)    NO        2.5000
+state    ENUM('new','ready','done')    YES        ready
+flags    SET('a','b','c')    YES        b
+doubled    DECIMAL(38,4)    NO        NULL
+DESC chain_view;
+Field    Type    Null    Key    Default    Extra    Comment
+renamed_code    VARCHAR(48)    YES        wider
+derived_amount    DECIMAL(38,4)    NO        NULL
+SELECT table_name, column_name, column_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = 'view_metadata_refresh'
+AND table_name IN ('direct_view','chain_view')
+ORDER BY table_name, ordinal_position;
+table_name    column_name    column_type    is_nullable    column_default
+chain_view    renamed_code    VARCHAR(48)    YES    'wider'
+chain_view    derived_amount    DECIMAL(38,4)    NO    NULL
+direct_view    id    INT(32)    NO    NULL
+direct_view    code_alias    VARCHAR(48)    YES    'wider'
+direct_view    amount    DECIMAL(18,4)    NO    2.5000
+direct_view    state    ENUM('new','ready','done')    YES    'ready'
+direct_view    flags    SET('a','b','c')    YES    'b'
+direct_view    doubled    DECIMAL(38,4)    NO    NULL
+CREATE TABLE copied_from_view AS SELECT * FROM direct_view;
+DESC copied_from_view;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO        NULL
+code_alias    VARCHAR(48)    YES        NULL
+amount    DECIMAL(18,4)    NO        0.0000
+state    ENUM('new','ready','done')    YES        NULL
+flags    SET('a','b','c')    YES        NULL
+doubled    DECIMAL(38,4)    NO        NULL
+INSERT INTO copied_from_view (id, doubled) VALUES (1, 0);
+SELECT id, code_alias, amount, state, flags FROM copied_from_view;
+id    code_alias    amount    state    flags
+1    NULL    0.0000    NULL    NULL
+ALTER TABLE source_table ALGORITHM=COPY,
+MODIFY code VARCHAR(80) DEFAULT 'copied',
+MODIFY amount DECIMAL(22,6) NOT NULL DEFAULT 3.750000;
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('direct_view','chain_view')
+AND status = 'CURRENT';
+count(*)
+2
+DESC direct_view;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO        NULL
+code_alias    VARCHAR(80)    YES        copied
+amount    DECIMAL(22,6)    NO        3.750000
+state    ENUM('new','ready','done')    YES        ready
+flags    SET('a','b','c')    YES        b
+doubled    DECIMAL(38,6)    NO        NULL
+DESC chain_view;
+Field    Type    Null    Key    Default    Extra    Comment
+renamed_code    VARCHAR(80)    YES        copied
+derived_amount    DECIMAL(38,6)    NO        NULL
+BEGIN;
+ALTER TABLE source_table ALGORITHM=COPY,
+MODIFY code VARCHAR(96) DEFAULT 'first';
+ALTER TABLE source_table ALGORITHM=COPY,
+MODIFY code VARCHAR(112) DEFAULT 'final';
+COMMIT;
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('direct_view','chain_view')
+AND status = 'CURRENT';
+count(*)
+2
+DESC direct_view;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO        NULL
+code_alias    VARCHAR(112)    YES        final
+amount    DECIMAL(22,6)    NO        3.750000
+state    ENUM('new','ready','done')    YES        ready
+flags    SET('a','b','c')    YES        b
+doubled    DECIMAL(38,6)    NO        NULL
+DESC chain_view;
+Field    Type    Null    Key    Default    Extra    Comment
+renamed_code    VARCHAR(112)    YES        final
+derived_amount    DECIMAL(38,6)    NO        NULL
+SELECT count(*) = 2 AS generations_current
+FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('direct_view','chain_view')
+AND status = 'CURRENT'
+AND target_generation = completed_generation;
+generations_current
+1
+SELECT count(*) = 2 AS identity_preserved
+FROM identity_before b JOIN mo_catalog.mo_tables t
+ON t.reldatabase = 'view_metadata_refresh' AND t.relname = b.relname
+AND t.rel_id = b.rel_id AND t.rel_logical_id = b.rel_logical_id
+AND t.creator = b.creator AND t.owner = b.owner
+AND cast(json_extract(if(t.viewdef = '', '{}', t.viewdef), '$.Stmt') AS VARCHAR(6000)) = b.view_sql
+AND cast(json_extract(if(t.viewdef = '', '{}', t.viewdef), '$.DefaultDatabase') AS VARCHAR(6000)) = b.default_database
+AND cast(json_extract(if(t.viewdef = '', '{}', t.viewdef), '$.sql_mode') AS VARCHAR(6000)) = b.sql_mode
+AND cast(json_extract(if(t.viewdef = '', '{}', t.viewdef), '$.security_type') AS VARCHAR(6000)) = b.security_type;
+identity_preserved
+1
+SHOW CREATE VIEW direct_view;
+View    Create View    character_set_client    collation_connection
+direct_view    CREATE VIEW direct_view AS\nSELECT id, code AS code_alias, amount, state, flags, amount * 2 AS doubled\nFROM source_table;    utf8mb4    utf8mb4_general_ci
+SHOW CREATE VIEW chain_view;
+View    Create View    character_set_client    collation_connection
+chain_view    CREATE VIEW chain_view (renamed_code, derived_amount) AS\nSELECT code_alias, doubled FROM direct_view;    utf8mb4    utf8mb4_general_ci
+CREATE TABLE left_source (id INT NOT NULL);
+CREATE TABLE right_source (id INT NOT NULL);
+INSERT INTO left_source VALUES (1);
+INSERT INTO right_source VALUES (2);
+CREATE VIEW outer_join_view AS
+SELECT l.id, r.id AS rid FROM left_source l LEFT JOIN right_source r ON l.id = r.id;
+ALTER TABLE right_source MODIFY id BIGINT NOT NULL;
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name = 'outer_join_view'
+AND status = 'CURRENT';
+count(*)
+1
+CREATE TABLE copied_outer_join AS SELECT * FROM outer_join_view;
+SELECT count(*) FROM copied_outer_join WHERE rid IS NULL;
+count(*)
+1
+CREATE TABLE invalid_left (a INT);
+CREATE TABLE invalid_right (a INT);
+CREATE VIEW invalid_direct AS
+SELECT invalid_left.a, invalid_right.a AS b FROM invalid_left LEFT JOIN invalid_right USING(a);
+CREATE VIEW invalid_downstream AS SELECT a FROM invalid_direct;
+ALTER TABLE invalid_left CHANGE a renamed_a BIGINT;
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('invalid_direct','invalid_downstream')
+AND status = 'INVALID' AND failure_code = 1;
+count(*)
+2
+SELECT target_relation_name, status, failure_code
+FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('invalid_direct','invalid_downstream')
+ORDER BY target_relation_name;
+target_relation_name    status    failure_code
+invalid_direct    INVALID    1
+invalid_downstream    INVALID    1
+DROP TABLE invalid_left;
+CREATE TABLE invalid_left (c1 INT, c2 INT);
+SHOW CREATE TABLE invalid_left;
+Table    Create Table
+invalid_left    CREATE TABLE `invalid_left` (\n  `c1` int DEFAULT NULL,\n  `c2` int DEFAULT NULL\n)
+CREATE TABLE restored_source (a INT);
+CREATE VIEW restored_direct AS SELECT a FROM restored_source;
+CREATE VIEW restored_downstream AS SELECT a FROM restored_direct;
+DROP SNAPSHOT IF EXISTS view_metadata_before_widening;
+CREATE SNAPSHOT view_metadata_before_widening FOR ACCOUNT;
+ALTER TABLE restored_source MODIFY a BIGINT;
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('restored_direct','restored_downstream')
+AND status = 'CURRENT';
+count(*)
+2
+DESC restored_downstream;
+Field    Type    Null    Key    Default    Extra    Comment
+a    BIGINT(64)    YES        NULL
+RESTORE TABLE view_metadata_refresh.restored_source{SNAPSHOT='view_metadata_before_widening'};
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('restored_direct','restored_downstream')
+AND status = 'CURRENT';
+count(*)
+2
+DESC restored_direct;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        NULL
+DESC restored_downstream;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        NULL
+CREATE VIEW snapshot_direct AS
+SELECT a FROM restored_source{SNAPSHOT='view_metadata_before_widening'};
+CREATE VIEW snapshot_downstream AS SELECT a FROM snapshot_direct;
+CREATE TABLE copied_snapshot_view AS SELECT * FROM snapshot_downstream;
+DESC copied_snapshot_view;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        NULL
+DROP SNAPSHOT view_metadata_before_widening;
+SELECT count(*) = 2 AS snapshot_closure_invalidated
+FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('snapshot_direct','snapshot_downstream')
+AND status <> 'CURRENT';
+snapshot_closure_invalidated
+1
+CREATE TABLE removed_source (a INT);
+CREATE VIEW removed_direct AS SELECT a FROM removed_source;
+CREATE VIEW removed_downstream AS SELECT a FROM removed_direct;
+DROP TABLE removed_source;
+SELECT count(*) = 2 AS removal_closure_invalidated
+FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('removed_direct','removed_downstream')
+AND status <> 'CURRENT';
+removal_closure_invalidated
+1
+CREATE TABLE cte_limited_source (a INT);
+CREATE VIEW cte_limited_direct AS SELECT a FROM cte_limited_source;
+CREATE VIEW cte_limited_downstream AS SELECT a FROM cte_limited_direct;
+SET cte_max_recursion_depth = 0;
+SET cte_max_memory_bytes = 1;
+DROP TABLE cte_limited_source;
+SELECT count(*) = 2 AS system_cte_limits_used
+FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('cte_limited_direct','cte_limited_downstream')
+AND status <> 'CURRENT';
+system_cte_limits_used
+1
+SET cte_max_recursion_depth = DEFAULT;
+SET cte_max_memory_bytes = DEFAULT;
+DROP DATABASE view_metadata_refresh;
