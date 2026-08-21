@@ -1361,6 +1361,23 @@ func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {
 	require.False(t, c.supportsRemotePartitionTopN(), "rollback must select the legacy partition path")
 }
 
+func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	service := proc.GetService()
+	rt := runtime.ServiceRuntime(service)
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
+	require.False(t, supportsMultiSourceISCP(service))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion23)
+	require.True(t, supportsMultiSourceISCP(service))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
+	require.False(t, supportsMultiSourceISCP(service),
+		"rollback must reject multi-source jobs before contacting old CNs")
+}
+
 func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 	newNode := func() *plan.Node {
 		return &plan.Node{
