@@ -28,17 +28,17 @@ class ConfigTest {
     private static Config load(String json) throws IOException {
         File file = File.createTempFile("jstfu", ".json");
         file.deleteOnExit();
-        Files.writeString(file.toPath(), json);
+        Files.write(file.toPath(), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         return Config.load(file);
     }
 
     @Test
     void loadsValidConfig() throws Exception {
-        Config config = load("""
-                {"port": 4444, "datasource": [
-                  {"name": "j", "type": "jdbc", "connectionstring": "jdbc:mysql://h", "user": "u", "password": "p", "sql": "select 1 where ${FILTER}"},
-                  {"name": "f", "type": "file", "path": "/tmp/x.csv"}
-                ]}""");
+        Config config = load("{\"port\": 4444, \"datasource\": ["
+                + "{\"name\": \"j\", \"type\": \"jdbc\", \"connectionstring\": \"jdbc:mysql://h\","
+                + " \"user\": \"u\", \"password\": \"p\", \"sql\": \"select 1 where ${FILTER}\"},"
+                + "{\"name\": \"f\", \"type\": \"file\", \"path\": \"/tmp/x.csv\"}"
+                + "]}");
         assertEquals(4444, config.port);
         assertEquals(Config.DEFAULT_CHUNK_SIZE, config.chunkSize);
         assertEquals(2, config.datasource.size());
@@ -56,10 +56,9 @@ class ConfigTest {
         assertThrows(Exception.class, () -> load(
                 "{\"port\": 1, \"datasource\": [{\"name\": \"a\", \"type\": \"jdbc\", \"connectionstring\": \"c\"}]}"));
         // duplicate names
-        assertThrows(Exception.class, () -> load("""
-                {"port": 1, "datasource": [
-                  {"name": "a", "type": "file", "path": "/x"},
-                  {"name": "a", "type": "file", "path": "/y"}
-                ]}"""));
+        assertThrows(Exception.class, () -> load("{\"port\": 1, \"datasource\": ["
+                + "{\"name\": \"a\", \"type\": \"file\", \"path\": \"/x\"},"
+                + "{\"name\": \"a\", \"type\": \"file\", \"path\": \"/y\"}"
+                + "]}"));
     }
 }

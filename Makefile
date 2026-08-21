@@ -364,7 +364,8 @@ mo-tool: config cgo thirdparties
 
 # Build the jstfu datastream gRPC server (xtool/jstfu/target/jstfu.jar), the
 # reference server for ENGINE = DATASTREAM external tables.  Requires a JDK
-# (17+) and Maven; set MVN to a specific mvn binary if it is not on PATH.
+# and Maven; set MVN to a specific mvn binary if it is not on PATH.  The jar
+# targets Java 8 bytecode so it runs on the BVT tester image's JDK 8.
 MVN ?= mvn
 .PHONY: jstfu
 jstfu:

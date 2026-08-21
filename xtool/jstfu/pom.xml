@@ -18,7 +18,10 @@
   <description>MatrixOne datastream external table gRPC server</description>
 
   <properties>
-    <maven.compiler.release>17</maven.compiler.release>
+    <!-- Java 8 bytecode: the jar must run on the JDK 8 of the BVT tester
+         docker image (matrixorigin/tester:go1.26.4-jdk8).  All dependencies
+         below still ship Java-8-compatible bytecode. -->
+    <maven.compiler.release>8</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <grpc.version>1.68.1</grpc.version>
     <protobuf.version>3.25.5</protobuf.version>

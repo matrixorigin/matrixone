@@ -41,7 +41,7 @@ class FileSourceTest {
         for (byte[] c : chunks) {
             out.write(c);
         }
-        return out.toString(StandardCharsets.UTF_8);
+        return new String(out.toByteArray(), StandardCharsets.UTF_8);
     }
 
     @Test

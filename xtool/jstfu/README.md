@@ -10,11 +10,14 @@ both Go and Java).
 ## Build
 
 ```
-make jstfu            # from the repo root; needs JDK 17+ and Maven
+make jstfu            # from the repo root; needs a JDK and Maven
 # or: MVN=/path/to/mvn make jstfu
 ```
 
-Produces the self-contained fat jar `xtool/jstfu/target/jstfu.jar`.
+Produces the self-contained fat jar `xtool/jstfu/target/jstfu.jar`.  The jar
+targets **Java 8 bytecode** so it runs on the JDK 8 of the BVT tester docker
+image (`matrixorigin/tester:go1.26.4-jdk8`); building works on any modern JDK
+(`--release 8`).
 
 ## Run
 
