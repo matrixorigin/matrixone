@@ -466,6 +466,13 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	if snapshotTbl == nil {
 		return moerr.NewErrStaleReadNoCtx(h.currentPSTo.ToString(), h.currentPSFrom.ToString())
 	}
+	return h.swapCurrentHandleToSnapshotStateRangeWithTable(ctx, snapshotTbl)
+}
+
+func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRangeWithTable(
+	ctx context.Context,
+	snapshotTbl *txnTable,
+) (err error) {
 	state, err := snapshotTbl.getPartitionState(ctx)
 	if err != nil {
 		return err
