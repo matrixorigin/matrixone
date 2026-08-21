@@ -8108,7 +8108,13 @@ func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	}
 	// this sql always return one stmt
 	ctx := opt.CurrentContext()
-	return BuildPlan(ctx, stmts[0], false)
+	stmt := stmts[0]
+	// BuildPlan materializes the plan and does not retain the parser AST. Free
+	// it as soon as the plan has been built; runOneStmt is used by thousands of
+	// planner tests and retaining every AST until the package test exits can
+	// exhaust the coverage runner's memory budget.
+	defer stmt.Free()
+	return BuildPlan(ctx, stmt, false)
 }
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJSON bool, toFile bool) {
