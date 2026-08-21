@@ -237,7 +237,7 @@ func materializedViewRowsFromBatch(bat *AtomicBatch, insert bool) ([]materialize
 	for iter.Next() {
 		item := iter.Item()
 		values := make([]any, len(item.Src.Vecs))
-		if err := extractRowFromEveryVector(context.Background(), item.Src, item.Offset, values); err != nil {
+		if err := extractRowFromEveryVector(context.Background(), item.Src, item.Offset, values, ReprSQLString); err != nil {
 			return nil, err
 		}
 		if !insert {
