@@ -1463,6 +1463,16 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		if cannotFold || !foldInExpr {
 			return expr, nil
 		}
+		requiresStringProvenance, err := plan.RequiresMORPCVersion23StringProvenance(exprList)
+		if err != nil {
+			return nil, err
+		}
+		if requiresStringProvenance {
+			// LiteralVec uses the stable Vector wire format, which cannot carry
+			// per-item runtime string domains. Keep the literal list executable
+			// and visible to the remote protocol capability analysis.
+			return expr, nil
+		}
 		isSerialized := rule.ContainsSerializedLiteral(exprList)
 
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -1561,6 +1571,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if c == nil {
 		return expr, nil
 	}
+	rule.PreserveFoldedLiteralStringDomain(expr, c)
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
