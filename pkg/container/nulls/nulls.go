@@ -74,20 +74,29 @@ func Or(nsp, m, r *Nulls) {
 	}
 	// A result vector may own an externally allocated bitmap sized for its
 	// visible row count, while a reused source vector can retain a longer
-	// logical bitmap from its backing batch. Rows beyond the result's logical
-	// length are not part of this operation and must not force external storage
-	// growth. Keep the destination length unchanged while copying the visible
-	// prefix in that case.
-	if r != nil && r.np.HasExternalStorage() &&
-		(nsp.np.Len() > r.np.Len() || m.np.Len() > r.np.Len()) {
-		limit := uint64(r.np.Len())
-		if nsp != r {
-			orLimited(nsp, r, limit)
+	// logical bitmap from its backing batch. If the destination storage can
+	// represent the source bitmap, restore its logical length and use the
+	// normal OR path. This matters after Reset: the external storage remains,
+	// but the logical length is zero even though the next result may have rows.
+	// Only use a bounded copy when the source would exceed the destination's
+	// external capacity, where growing the bitmap would panic.
+	if r != nil && r.np.HasExternalStorage() {
+		sourceLen := max(nsp.np.Len(), m.np.Len())
+		if sourceLen > r.np.Len() {
+			capacity := int64(r.np.ExternalStorageCapacity()) * 64
+			if sourceLen <= capacity {
+				r.np.TryExpandWithSize(int(sourceLen))
+			} else {
+				limit := uint64(r.np.Len())
+				if nsp != r {
+					orLimited(nsp, r, limit)
+				}
+				if m != r {
+					orLimited(m, r, limit)
+				}
+				return
+			}
 		}
-		if m != r {
-			orLimited(m, r, limit)
-		}
-		return
 	}
 
 	if !nsp.EmptyByFlag() {
