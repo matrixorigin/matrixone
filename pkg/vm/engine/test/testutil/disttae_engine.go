@@ -255,7 +255,12 @@ func (de *TestDisttaeEngine) NewTxnOperator(
 }
 
 func (de *TestDisttaeEngine) waitLogtail(ctx context.Context) error {
-	ts := de.Now()
+	return de.WaitLogtailAt(ctx, de.Now())
+}
+
+// WaitLogtailAt waits until the push client has applied logtail through target.
+func (de *TestDisttaeEngine) WaitLogtailAt(ctx context.Context, target timestamp.Timestamp) error {
+	ts := target
 	ticker := time.NewTicker(time.Millisecond * 10)
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*60, moerr.CauseWaitLogtail)
 	defer cancel()
@@ -413,6 +418,14 @@ func (de *TestDisttaeEngine) SubscribeTable(
 	}
 
 	return
+}
+
+// WaitLogtail waits until the push client has applied all logtail entries
+// visible at the current engine timestamp. Tests that inspect partition state
+// immediately after subscribing a table must use this barrier to avoid racing
+// asynchronous logtail replay.
+func (de *TestDisttaeEngine) WaitLogtail(ctx context.Context) error {
+	return de.waitLogtail(ctx)
 }
 
 func (de *TestDisttaeEngine) GetPartitionStateStats(

@@ -935,6 +935,11 @@ func TestChangesHandle6(t *testing.T) {
 
 	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
 	require.Nil(t, err)
+	// The flush transaction can publish its commit timestamp just after the
+	// subscription timestamp is sampled. Give the TN timestamp stream a small
+	// window to advance before waiting for the replay watermark.
+	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, disttaeEngine.WaitLogtailAt(ctx, taeHandler.GetDB().TxnMgr.Now().ToTimestamp()))
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator
 
