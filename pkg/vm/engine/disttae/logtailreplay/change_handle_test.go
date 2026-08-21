@@ -260,6 +260,21 @@ func TestQuickNextHandlesExpectedEOB(t *testing.T) {
 		require.Nil(t, tombstone)
 		data.Clean(mp)
 	})
+
+	t.Run("data error", func(t *testing.T) {
+		expected := moerr.NewInternalErrorNoCtx("test quick next error")
+		_, _, err := ch.quickNextWith(
+			context.Background(), mp,
+			func(context.Context, **batch.Batch, *mpool.MPool) error {
+				return expected
+			},
+			func(context.Context, **batch.Batch, *mpool.MPool) error {
+				t.Fatalf("tombstone reader must not be called")
+				return nil
+			},
+		)
+		require.ErrorIs(t, err, expected)
+	})
 }
 
 func TestNextFiltersUsingLogicalPrimaryKeyIndex(t *testing.T) {
