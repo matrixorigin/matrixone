@@ -1406,10 +1406,19 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 			}
 			if limitExpr != nil {
 				limitNode := &plan.Node{Limit: limitExpr}
-				if statementHasSQLCalcFoundRows(c.stmt) && c.foundRowsOwnerNode == nil {
-					c.foundRowsOwnerNode = limitNode
+				drainForFoundRows := false
+				if statementHasSQLCalcFoundRows(c.stmt) {
+					if c.foundRowsOwnerNode == nil {
+						c.foundRowsOwnerNode = limitNode
+					} else {
+						// An explicit top-level OFFSET remains the owner of the
+						// pre-offset count. The dynamic prepared session limit is
+						// above it, so it must drain without publishing; otherwise
+						// it stops before the OFFSET observes EOF.
+						drainForFoundRows = true
+					}
 				}
-				rs = c.compileLimit(limitNode, []*Scope{rs})[0]
+				rs = c.compileLimitWithFoundRowsDrain(limitNode, []*Scope{rs}, drainForFoundRows)[0]
 			}
 		}
 
@@ -5638,16 +5647,24 @@ func (c *Compile) compileOffset(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(node *plan.Node, ss []*Scope) []*Scope {
-	if c.ownsFoundRows(node) {
-		// Keep the only counting Limit on the coordinator. Installing Limits on
-		// producer scopes would publish partial counts from local workers and
-		// would also require SQL_CALC_FOUND_ROWS state on remote CN processes.
-		// Merging the complete producer streams first gives the final Limit one
-		// deterministic owner for both draining and publishing the total count.
+	return c.compileLimitWithFoundRowsDrain(node, ss, false)
+}
+
+func (c *Compile) compileLimitWithFoundRowsDrain(node *plan.Node, ss []*Scope, drainOnly bool) []*Scope {
+	if c.ownsFoundRows(node) || drainOnly {
+		// Keep FOUND_ROWS-aware Limits on the coordinator. Installing them on
+		// producer scopes would either publish partial counts from local workers
+		// or stop a producer before the downstream owner observes EOF. Merging the
+		// complete producer streams first gives draining and publication one
+		// deterministic coordinator path.
 		ss = c.mergeShuffleScopesIfNeeded(ss, false)
 		rs := c.newMergeScope(ss)
 		arg := constructLimit(node)
-		arg.WithFoundRows(true)
+		if c.ownsFoundRows(node) {
+			arg.WithFoundRows(true)
+		} else {
+			arg.WithFoundRowsDrain(true)
+		}
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false

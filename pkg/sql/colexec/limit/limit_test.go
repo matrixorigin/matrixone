@@ -238,6 +238,66 @@ func TestNestedLimitDoesNotPublishFoundRows(t *testing.T) {
 	arg.Release()
 }
 
+func TestFoundRowsDrainOnlyConsumesInputWithoutPublishing(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.BeginFoundRowsStatement(true)
+
+	first := colexec.MakeMockBatchs(proc.Mp())
+	second := colexec.MakeMockBatchs(proc.Mp())
+	arg := NewArgument().
+		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1)).
+		WithFoundRowsDrain(true)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, vm.ExecNext, result.Status)
+
+	for result.Batch != nil {
+		result, err = arg.Call(proc)
+		require.NoError(t, err)
+	}
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.False(t, proc.FoundRowsRecorded())
+	require.False(t, arg.IsFoundRowsOwner())
+	require.True(t, arg.DrainsForFoundRows())
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+}
+
+func TestSQLCalcFoundRowsZeroLimitStillDrainsInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.BeginFoundRowsStatement(true)
+
+	first := colexec.MakeMockBatchs(proc.Mp())
+	second := colexec.MakeMockBatchs(proc.Mp())
+	arg := NewArgument().
+		WithLimit(plan2.MakePlan2Uint64ConstExprWithType(0)).
+		WithFoundRows(true)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Equal(t, uint64(first.RowCount()+second.RowCount()), proc.GetFoundRows())
+	require.True(t, proc.FoundRowsRecorded())
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+}
+
 func TestSQLCalcFoundRowsDrainsEmptyAndLastBatch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

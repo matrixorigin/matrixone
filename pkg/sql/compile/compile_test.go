@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	offsetop "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 
@@ -415,6 +416,73 @@ func TestSQLCalcFoundRowsOwnsPreparedSQLSelectLimit(t *testing.T) {
 	}))
 	require.True(t, foundOwner)
 	require.NotSame(t, nestedLimit, c.foundRowsOwnerNode)
+	freeLazyUnionAllTestScope(c, result[0])
+}
+
+func TestPreparedSQLSelectLimitDrainsAboveFoundRowsOffsetOwner(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	proc := c.proc
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return uint64(1), nil
+		}
+		return nil, nil
+	})
+
+	stmts, err := mysql.Parse(proc.Ctx,
+		"select sql_calc_found_rows id from t order by id offset 2", 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	c.stmt = stmts[0]
+	c.isPrepare = true
+
+	offsetNode := &plan.Node{
+		NodeId:   0,
+		NodeType: plan.Node_SORT,
+		Offset:   plan2.MakePlan2Uint64ConstExprWithType(2),
+	}
+	query := &plan.Query{
+		StmtType:            plan.Query_SELECT,
+		ApplySqlSelectLimit: true,
+		Steps:               []int32{0},
+		Nodes:               []*plan.Node{offsetNode},
+	}
+	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(query)
+	require.Same(t, offsetNode, c.foundRowsOwnerNode)
+
+	input := newLazyUnionAllLeaf(c, nil)
+	withOffset := c.compileOffset(offsetNode, []*Scope{input})
+	result, err := c.compileSteps(query, withOffset, 0)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Same(t, offsetNode, c.foundRowsOwnerNode)
+
+	var dynamicLimit *limitop.Limit
+	var countingOffset *offsetop.Offset
+	var inspectScopes func([]*Scope)
+	inspectScopes = func(scopes []*Scope) {
+		for _, scope := range scopes {
+			_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+				switch arg := op.(type) {
+				case *limitop.Limit:
+					dynamicLimit = arg
+				case *offsetop.Offset:
+					countingOffset = arg
+				}
+				return nil
+			})
+			inspectScopes(scope.PreScopes)
+		}
+	}
+	inspectScopes(result)
+
+	require.NotNil(t, dynamicLimit)
+	require.False(t, dynamicLimit.IsFoundRowsOwner())
+	require.True(t, dynamicLimit.DrainsForFoundRows())
+	require.NotNil(t, countingOffset)
+	require.True(t, countingOffset.IsFoundRowsOwner())
+
 	freeLazyUnionAllTestScope(c, result[0])
 }
 

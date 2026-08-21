@@ -274,6 +274,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op := limit.NewArgument()
 		op.LimitExpr = t.LimitExpr
 		op.WithFoundRows(t.IsFoundRowsOwner())
+		op.WithFoundRowsDrain(t.DrainsForFoundRows())
 		op.SetInfo(&info)
 		return op
 

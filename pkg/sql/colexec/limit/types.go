@@ -33,9 +33,10 @@ type container struct {
 	draining      bool
 }
 type Limit struct {
-	ctr           container
-	LimitExpr     *plan.Expr
-	calcFoundRows bool
+	ctr                    container
+	LimitExpr              *plan.Expr
+	calcFoundRows          bool
+	drainInputForFoundRows bool
 
 	vm.OperatorBase
 }
@@ -72,11 +73,24 @@ func (limit *Limit) WithLimit(limitExpr *plan.Expr) *Limit {
 
 func (limit *Limit) WithFoundRows(enabled bool) *Limit {
 	limit.calcFoundRows = enabled
+	limit.drainInputForFoundRows = enabled
+	return limit
+}
+
+// WithFoundRowsDrain keeps consuming the input after the output limit is
+// reached without making this operator the owner that publishes FOUND_ROWS.
+// It is used by a final dynamic sql_select_limit above an OFFSET owner.
+func (limit *Limit) WithFoundRowsDrain(enabled bool) *Limit {
+	limit.drainInputForFoundRows = enabled
 	return limit
 }
 
 func (limit *Limit) IsFoundRowsOwner() bool {
 	return limit.calcFoundRows
+}
+
+func (limit *Limit) DrainsForFoundRows() bool {
+	return limit.drainInputForFoundRows
 }
 
 func (limit *Limit) Release() {

@@ -160,6 +160,41 @@ select found_rows() as after_nested_session_limit_second;
 after_nested_session_limit_second
 5
 deallocate prepare ps_nested_session_limit;
+prepare ps_offset_session_limit from 'select sql_calc_found_rows id from t where id <= 5 order by id offset 2';
+execute ps_offset_session_limit;
+id
+3
+select found_rows() as after_offset_session_limit_first;
+after_offset_session_limit_first
+5
+execute ps_offset_session_limit;
+id
+3
+select found_rows() as after_offset_session_limit_second;
+after_offset_session_limit_second
+5
+set sql_select_limit = 0;
+execute ps_offset_session_limit;
+select found_rows() as after_offset_session_limit_zero limit 1;
+after_offset_session_limit_zero
+5
+set sql_select_limit = 18446744073709551615;
+execute ps_offset_session_limit;
+id
+3
+4
+5
+select found_rows() as after_offset_session_limit_unlimited;
+after_offset_session_limit_unlimited
+5
+set sql_select_limit = 1;
+execute ps_offset_session_limit;
+id
+3
+select found_rows() as after_offset_session_limit_restored;
+after_offset_session_limit_restored
+5
+deallocate prepare ps_offset_session_limit;
 set sql_select_limit = 18446744073709551615;
 select id from t order by id limit 2;
 id

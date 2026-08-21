@@ -64,11 +64,12 @@ func (limit *Limit) Prepare(proc *process.Process) error {
 
 // Call returning only the first n tuples from its input
 func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
-	if limit.calcFoundRows && proc.IsSqlCalcFoundRows() && limit.ctr.draining {
+	drainForFoundRows := limit.drainInputForFoundRows && proc.IsSqlCalcFoundRows()
+	if drainForFoundRows && limit.ctr.draining {
 		return limit.drainForFoundRows(proc)
 	}
 	if limit.ctr.seen >= limit.ctr.limit {
-		if limit.calcFoundRows && proc.IsSqlCalcFoundRows() {
+		if drainForFoundRows {
 			limit.ctr.draining = true
 			return limit.drainForFoundRows(proc)
 		}
@@ -110,7 +111,7 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		limit.ctr.buf.SetRowCount(bat.RowCount())
 		batch.SetLength(limit.ctr.buf, int(limit.ctr.limit-limit.ctr.seen))
 		result.Batch = limit.ctr.buf
-		if limit.calcFoundRows && proc.IsSqlCalcFoundRows() {
+		if drainForFoundRows {
 			limit.ctr.draining = true
 			result.Status = vm.ExecNext
 		} else {
@@ -128,14 +129,14 @@ func (limit *Limit) drainForFoundRows(proc *process.Process) (vm.CallResult, err
 			return result, err
 		}
 		if result.Batch == nil {
-			if !proc.FoundRowsRecorded() {
+			if limit.calcFoundRows && !proc.FoundRowsRecorded() {
 				proc.SetFoundRows(limit.ctr.seen)
 			}
 			result.Status = vm.ExecStop
 			return result, nil
 		}
 		if result.Batch.Last() {
-			if !proc.FoundRowsRecorded() {
+			if limit.calcFoundRows && !proc.FoundRowsRecorded() {
 				proc.SetFoundRows(limit.ctr.seen)
 			}
 			return result, nil
