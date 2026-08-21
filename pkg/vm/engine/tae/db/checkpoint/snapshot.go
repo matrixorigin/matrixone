@@ -225,6 +225,12 @@ func filterSnapshotEntries(entries []*CheckpointEntry, snapshot *types.TS) []*Ch
 	// Sort by end timestamp. nil entries are given a deterministic position
 	// (sorted first) so the comparator is a valid strict weak ordering; treating
 	// nil as equal to every entry would make incomparability non-transitive.
+	//
+	// Checkpoint GC publishes a compacted checkpoint before deleting the
+	// incrementals it replaces. The compacted checkpoint and the last replaced
+	// incremental therefore have the same end during that window. Put the old
+	// entry first so the compacted checkpoint is consumed as the replacement,
+	// followed by incrementals newer than that shared end.
 	slices.SortFunc(entries, func(a, b *CheckpointEntry) int {
 		if a == nil || b == nil {
 			if a == b {
@@ -235,7 +241,16 @@ func filterSnapshotEntries(entries []*CheckpointEntry, snapshot *types.TS) []*Ch
 			}
 			return 1
 		}
-		return a.end.Compare(&b.end)
+		if cmp := a.end.Compare(&b.end); cmp != 0 {
+			return cmp
+		}
+		if a.entryType == ET_Compacted && b.entryType != ET_Compacted {
+			return 1
+		}
+		if a.entryType != ET_Compacted && b.entryType == ET_Compacted {
+			return -1
+		}
+		return 0
 	})
 
 	if snapshot != nil && snapshot.Equal(&maxGlobalEnd) {

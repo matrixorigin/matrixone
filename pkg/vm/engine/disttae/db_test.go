@@ -214,6 +214,8 @@ func TestSnapshotCheckpointsCanServe(t *testing.T) {
 	t6 := t5.Next()
 	t10 := types.BuildTS(10, 0)
 	t20 := types.BuildTS(20, 0)
+	t30 := types.BuildTS(30, 0)
+	t40 := types.BuildTS(40, 0)
 
 	tests := []struct {
 		name    string
@@ -233,6 +235,7 @@ func TestSnapshotCheckpointsCanServe(t *testing.T) {
 		{name: "predecessor retained before global", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t0, t6, checkpoint.ET_Global), newEntry(t6, t20, checkpoint.ET_Incremental)}, ts: t10, want: true},
 		{name: "global compacted continuation", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Global), newEntry(t0, t10, checkpoint.ET_Compacted), newEntry(t10, t20, checkpoint.ET_Incremental)}, ts: t10, want: true},
 		{name: "predecessor global compacted continuation", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t0, t6, checkpoint.ET_Global), newEntry(t0, t10, checkpoint.ET_Compacted), newEntry(t10, t20, checkpoint.ET_Incremental)}, ts: t10, want: true},
+		{name: "tied end incremental before compacted continuation", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Global), newEntry(t5, t10, checkpoint.ET_Incremental), newEntry(t10.Next(), t20, checkpoint.ET_Incremental), newEntry(t0, t20, checkpoint.ET_Compacted), newEntry(t20.Next(), t40, checkpoint.ET_Incremental)}, ts: t30, want: true},
 		{name: "compacted continuation after complete incremental prefix", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t0, t20, checkpoint.ET_Compacted)}, ts: t10, want: true},
 		{name: "multiple predecessors before global", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t6, t10, checkpoint.ET_Incremental), newEntry(t0, t20, checkpoint.ET_Global)}, ts: t10},
 		{name: "non-leading compacted supplies authoritative base", entries: []*checkpoint.CheckpointEntry{newEntry(t5, t10, checkpoint.ET_Incremental), newEntry(t0, t20, checkpoint.ET_Compacted)}, ts: t10, want: true},
