@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,6 +39,11 @@ const (
 	diskCacheWriteRecoveryLogKey  = "disk-cache-write-recovery"
 	diskCacheWriteErrorLogPeriod  = time.Minute
 )
+
+var eventDiskCacheAsyncCallbackPanic = logutil.Event{
+	Name:    "fileservice.disk-cache.async-callback-panic",
+	Message: "disk cache async callback panicked",
+}
 
 type diskCacheAsyncUpdate struct {
 	filePath     string
@@ -446,10 +453,41 @@ func (d *DiskCache) scheduleAsyncUpdateCallbacks(job *diskCacheAsyncUpdate) {
 		defer close(done)
 		defer d.releaseAsyncUpdateResources(job)
 		<-previous
-		for _, fn := range job.callbacks {
-			fn(job.filePath, job.entry)
+		for i, fn := range job.callbacks {
+			d.runAsyncUpdateCallback(job, i, fn)
 		}
 	}()
+}
+
+// runAsyncUpdateCallback is the panic boundary for callbacks moved from the
+// Update caller onto a DiskCache-owned goroutine. One broken observer must not
+// terminate the CN or skip later callbacks in the ordered chain.
+func (d *DiskCache) runAsyncUpdateCallback(
+	job *diskCacheAsyncUpdate,
+	index int,
+	fn OnDiskCacheWrittenFunc,
+) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			metric.FSDiskCacheAsyncCallbackPanicCounter.Inc()
+			eventDiskCacheAsyncCallbackPanic.ErrorLazy(func() []zap.Field {
+				fields := []zap.Field{
+					zap.String("panic-type", fmt.Sprintf("%T", recovered)),
+					zap.ByteString("stack", debug.Stack()),
+					zap.String("file-path", job.filePath),
+					zap.String("disk-path", job.diskPath),
+					zap.Int("callback-index", index),
+				}
+				// Do not call Error, String, MarshalJSON, or any other method on
+				// a callback-owned panic value while handling the panic.
+				if message, ok := recovered.(string); ok {
+					fields = append(fields, zap.String("panic", message))
+				}
+				return fields
+			})
+		}
+	}()
+	fn(job.filePath, job.entry)
 }
 
 func (d *DiskCache) releaseAsyncUpdateResources(job *diskCacheAsyncUpdate) {

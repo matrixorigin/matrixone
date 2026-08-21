@@ -27,11 +27,13 @@ import (
 	"testing"
 	"time"
 
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,6 +41,12 @@ import (
 // guard for a broken transition, so leave enough room for a loaded race/CI
 // worker to schedule the goroutine that owns the release edge.
 const diskCacheLifecycleTestTimeout = 5 * time.Second
+
+type panickingDiskCacheCallbackPanicValue struct{}
+
+func (panickingDiskCacheCallbackPanicValue) String() string {
+	panic("panic value String must not run")
+}
 
 func newLifecycleTestDiskCache(t *testing.T) *DiskCache {
 	t.Helper()
@@ -617,6 +625,62 @@ func TestDiskCacheAsyncCallbackCanReenterCompletionMethods(t *testing.T) {
 			}, diskCacheLifecycleTestTimeout, time.Millisecond)
 		})
 	}
+}
+
+func TestDiskCacheAsyncCallbackPanicIsContained(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	cache.fileSync = func(*os.File) error { return nil }
+	panicCountBefore := promtestutil.ToFloat64(metric.FSDiskCacheAsyncCallbackPanicCounter)
+
+	var callbackOrder []string
+	record := func(value string) {
+		callbackOrder = append(callbackOrder, value)
+	}
+	firstCtx := OnDiskCacheWritten(context.Background(), func(string, IOEntry) {
+		record("panicking callback")
+		panic("injected async disk-cache callback panic")
+	})
+	firstCtx = OnDiskCacheWritten(firstCtx, func(string, IOEntry) {
+		record("same update after panic")
+		panic(panickingDiskCacheCallbackPanicValue{})
+	})
+	firstCtx = OnDiskCacheWritten(firstCtx, func(string, IOEntry) {
+		record("same update after unformattable panic")
+	})
+	nextUpdateDone := make(chan struct{})
+	secondCtx := OnDiskCacheWritten(context.Background(), func(string, IOEntry) {
+		record("next update after panic")
+		close(nextUpdateDone)
+	})
+
+	require.NoError(t, cache.Update(firstCtx, &IOVector{
+		FilePath: "first",
+		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+	}, true))
+	require.NoError(t, cache.Update(secondCtx, &IOVector{
+		FilePath: "second",
+		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
+	}, true))
+	select {
+	case <-nextUpdateDone:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("callback panic stopped the ordered callback chain")
+	}
+	require.Equal(t, []string{
+		"panicking callback",
+		"same update after panic",
+		"same update after unformattable panic",
+		"next update after panic",
+	}, callbackOrder)
+	require.Equal(t, panicCountBefore+2,
+		promtestutil.ToFloat64(metric.FSDiskCacheAsyncCallbackPanicCounter))
+	require.Eventually(t, func() bool {
+		cache.async.mu.Lock()
+		defer cache.async.mu.Unlock()
+		return len(cache.async.mu.pending) == 0 &&
+			len(cache.async.slots) == 0 &&
+			cache.async.mu.pendingBytes == 0
+	}, diskCacheLifecycleTestTimeout, time.Millisecond)
 }
 
 func TestDiskCacheAsyncCallbacksRemainOrderedAndBounded(t *testing.T) {

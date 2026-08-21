@@ -28,7 +28,8 @@ type DiskCacheCallbacks struct {
 // OnDiskCacheWrittenFunc runs after a cache entry is published. Async disk-cache
 // callbacks preserve submission order but are outside the Flush and Close
 // completion barriers; their retained entry data remains charged to async
-// admission until the callback returns.
+// admission until the callback returns. A panic is logged and counted at the
+// async goroutine boundary; later callbacks in the ordered chain still run.
 type OnDiskCacheWrittenFunc = func(
 	filePath string,
 	entry IOEntry,
