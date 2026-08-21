@@ -1,0 +1,31 @@
+drop table if exists t_approx_percentile_boundary;
+create table t_approx_percentile_boundary(grp int, v int, p double, s varchar(10));
+insert into t_approx_percentile_boundary values
+(1, 1, 0.5, '1'),
+(1, 3, 0.5, '3'),
+(1, 5, 0.5, '5'),
+(2, null, 0.5, null);
+select cast(approx_percentile(v, 0) as decimal(10, 2)),
+cast(approx_percentile(v, 0.5) as decimal(10, 2)),
+cast(approx_percentile(v, 1) as decimal(10, 2))
+from t_approx_percentile_boundary where grp = 1;
+cast(approx_percentile(v, 0) as decimal(10, 2))    cast(approx_percentile(v, 0.5) as decimal(10, 2))    cast(approx_percentile(v, 1) as decimal(10, 2))
+1.00    3.00    5.00
+select approx_percentile(v, 0.5) is null from t_approx_percentile_boundary where grp = 2;
+approx_percentile(v, 0.5) is null
+1
+create table t_approx_percentile_empty(v int);
+select approx_percentile(v, 0.5) is null from t_approx_percentile_empty;
+approx_percentile(v, 0.5) is null
+1
+drop table t_approx_percentile_empty;
+select approx_percentile(v, p) from t_approx_percentile_boundary where grp = 1;
+invalid input: percentile argument of approx_percentile must be a non-null constant
+select approx_percentile(v, null) from t_approx_percentile_boundary where grp = 1;
+invalid input: percentile argument of approx_percentile must be a non-null constant
+select approx_percentile(s, 0.5) from t_approx_percentile_boundary where grp = 1;
+invalid argument aggregate function approx_percentile, bad value [VARCHAR DECIMAL64]
+select 'AFTER_APPROX_PERCENTILE_ERRORS';
+AFTER_APPROX_PERCENTILE_ERRORS
+AFTER_APPROX_PERCENTILE_ERRORS
+drop table t_approx_percentile_boundary;

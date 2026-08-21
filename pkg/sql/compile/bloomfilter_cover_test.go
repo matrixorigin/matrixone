@@ -51,75 +51,7 @@ func (e *membershipFilterCaptureEngine) BuildBlockReaders(
 	return []engine.Reader{new(readutil.EmptyReader)}, nil
 }
 
-func TestBuildReadersPassesMembershipFilter(t *testing.T) {
-	t.Run("from source", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3}
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                   mockRel,
-				MembershipFilterBytes: expectedMembershipFilter,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("from context", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{7, 8, 9}
-		proc.Ctx = context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                   mockRel,
-				MembershipFilterBytes: nil, // Trigger else if
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
-	})
-}
-
 func TestRemoteBuildReadersScopesMembershipFilterToIndexTable(t *testing.T) {
-	ivfFilter := []byte{1, 2, 3}
 	fulltextFilter := []byte{4, 5, 6}
 	tests := []struct {
 		name     string
@@ -129,14 +61,6 @@ func TestRemoteBuildReadersScopesMembershipFilterToIndexTable(t *testing.T) {
 		{
 			name:     "ordinary table ignores unrelated filters",
 			tableDef: &plan.TableDef{Name: "t"},
-		},
-		{
-			name: "IVF entries use IVF filter",
-			tableDef: &plan.TableDef{
-				Name:      "__mo_index_secondary_ivf_entries",
-				TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-			},
-			expected: ivfFilter,
 		},
 		{
 			name: "fulltext table uses fulltext filter",
@@ -151,7 +75,6 @@ func TestRemoteBuildReadersScopesMembershipFilterToIndexTable(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			proc.Ctx = context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, ivfFilter)
 			proc.Ctx = context.WithValue(proc.Ctx, defines.FulltextMembershipFilter{}, fulltextFilter)
 			capture := new(membershipFilterCaptureEngine)
 			scope := &Scope{
