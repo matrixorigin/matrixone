@@ -128,25 +128,21 @@ func visibleAppendableRows(
 		return nil, err
 	}
 	commitVec := bat.Vecs[commitPos]
-	var aborts []bool
+	var aborts ioutil.TombstoneAbortColumn
 	if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok && int(abortPos) < len(bat.Vecs) {
 		abortVec := bat.Vecs[abortPos]
-		if !abortVec.IsConstNull() {
-			if abortVec.GetType().Oid != types.T_bool || abortVec.Length() != rowCount {
-				return nil, moerr.NewInvalidInputNoCtx("appendable tombstone has invalid abort column")
+		if abortVec.GetType().Oid != types.T_any {
+			var err error
+			aborts, err = ioutil.ValidateTombstoneAbortColumn(rowCount, abortVec)
+			if err != nil {
+				return nil, err
 			}
-			for row := 0; row < rowCount; row++ {
-				if abortVec.IsNull(uint64(row)) {
-					return nil, moerr.NewInvalidInputNoCtxf("appendable tombstone abort row %d is null", row)
-				}
-			}
-			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
 		}
 	}
 	rows := make([]int64, 0, rowCount)
 	for row := 0; row < rowCount; row++ {
 		commitTS := vector.GetFixedAtNoTypeCheck[types.TS](commitVec, row)
-		if (aborts != nil && aborts[row]) || (ts != nil && commitTS.GT(ts)) {
+		if (aborts.IsPresent() && aborts.At(row)) || (ts != nil && commitTS.GT(ts)) {
 			continue
 		}
 		rows = append(rows, int64(row))

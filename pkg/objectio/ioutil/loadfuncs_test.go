@@ -151,6 +151,63 @@ func TestAppendableVisibilityFiltersAbortFromMaterializeAndSearch(t *testing.T) 
 	require.Equal(t, []int64{0}, sels, "cached search must return only live visible rows")
 }
 
+func TestReadDeletesBroadcastsConstantAbort(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(objectio.RowidType)
+	input.Vecs[1] = vector.NewVec(objectio.TSType)
+	input.Vecs[2], _ = vector.NewConstFixed(types.T_bool.ToType(), false, 3, mp)
+	defer input.Clean(mp)
+	for row := 0; row < 3; row++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.NewRowid(blockID, uint32(row)), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(5, 0), false, mp))
+	}
+	input.SetRowCount(3)
+	writer := ConstructWriter(0, []uint16{objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}, -1, false, false, fs)
+	writer.SetAppendable()
+	require.NoError(t, func() error { _, err := writer.WriteBatch(input); return err }())
+	_, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	location := stats.ObjectLocation()
+
+	cache := containers.NewVectors(3)
+	_, release, err := ReadDeletes(ctx, location, fs, false, cache, nil)
+	require.NoError(t, err)
+	defer release()
+	aborts, err := ValidateTombstoneAbortColumn(3, &cache[2])
+	require.NoError(t, err)
+	require.True(t, aborts.IsPresent())
+	require.False(t, aborts.At(1))
+}
+
+func TestValidateTombstoneAbortColumnRejectsMalformed(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	wrongType := vector.NewVec(types.T_int8.ToType())
+	defer wrongType.Free(mp)
+	require.NoError(t, func() error { return vector.AppendFixed(wrongType, int8(1), false, mp) }())
+	_, err := ValidateTombstoneAbortColumn(1, wrongType)
+	require.Error(t, err)
+
+	short := vector.NewVec(types.T_bool.ToType())
+	defer short.Free(mp)
+	require.NoError(t, func() error { return vector.AppendFixed(short, true, false, mp) }())
+	_, err = ValidateTombstoneAbortColumn(2, short)
+	require.Error(t, err)
+
+	null := vector.NewVec(types.T_bool.ToType())
+	defer null.Free(mp)
+	require.NoError(t, func() error { return vector.AppendFixed(null, false, true, mp) }())
+	_, err = ValidateTombstoneAbortColumn(1, null)
+	require.Error(t, err)
+}
+
 func (d *releaseTrackingData) Slice(length int) fscache.Data {
 	d.Data = d.Data.Slice(length)
 	return d

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -178,9 +179,12 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 		// data. Keep their commitTS-only layout, preserve the original physical
 		// row coordinates, and encode rollback holes as uncommitted rows so old
 		// readers filter them by commit timestamp.
-		aborts := vector.MustFixedColWithTypeCheck[bool](abort.GetDownstreamVector())
-		for row, aborted := range aborts {
-			if aborted {
+		aborts, abortErr := ioutil.ValidateTombstoneAbortColumn(int(to-from), abort.GetDownstreamVector())
+		if abortErr != nil {
+			return abortErr
+		}
+		for row := 0; row < int(to-from); row++ {
+			if aborts.IsPresent() && aborts.At(row) {
 				commitTSVec.Update(row, txnif.UncommitTS, false)
 			}
 		}
@@ -409,10 +413,13 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](
 		node.data.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector())
 	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
-	aborts := vector.MustFixedColWithTypeCheck[bool](abort.GetDownstreamVector())
+	aborts, abortErr := ioutil.ValidateTombstoneAbortColumn(int(maxRow-minRow), abort.GetDownstreamVector())
+	if abortErr != nil {
+		return abortErr
+	}
 	pkVec := node.data.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
 	for i := minRow; i < maxRow; i++ {
-		if aborts[i-minRow] {
+		if aborts.IsPresent() && aborts.At(int(i-minRow)) {
 			continue
 		}
 		if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 {

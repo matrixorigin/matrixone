@@ -153,13 +153,19 @@ func LoadPersistedColumnData(
 	}
 	if tsForAppendable != nil {
 		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[commitTSIdx].GetDownstreamVector())
-		abortVec := vecs[abortIdx]
-		var aborts []bool
-		if !abortVec.IsConstNull() {
-			aborts = vector.MustFixedColNoTypeCheck[bool](abortVec.GetDownstreamVector())
+		aborts, abortErr := ioutil.ValidateTombstoneAbortColumn(
+			len(commits), vecs[abortIdx].GetDownstreamVector(),
+		)
+		if abortErr != nil {
+			for _, vec := range vecs {
+				if vec != nil {
+					vec.Close()
+				}
+			}
+			return nil, deletes, nil, abortErr
 		}
 		for i := range commits {
-			if commits[i].GT(tsForAppendable) || (aborts != nil && aborts[i]) {
+			if commits[i].GT(tsForAppendable) || (aborts.IsPresent() && aborts.At(i)) {
 				if deletes == nil {
 					deletes = nulls.NewWithSize(int(location.Rows()))
 				}

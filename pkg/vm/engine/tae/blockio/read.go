@@ -550,18 +550,19 @@ func BlockDataReadBackup(
 	}
 
 	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[commitPos])
-	var aborts []bool
+	var aborts ioutil.TombstoneAbortColumn
 	if abortPos >= 0 {
-		abortVec := loaded.Vecs[abortPos]
-		if !abortVec.IsConstNull() {
-			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+		var err error
+		aborts, err = ioutil.ValidateTombstoneAbortColumn(len(commitTSs), loaded.Vecs[abortPos])
+		if err != nil {
+			return nil, 0, err
 		}
 	}
 	visibleRows := make([]int64, 0, len(commitTSs))
 	for row, commitTS := range commitTSs {
 		if (!ts.IsEmpty() && commitTS.GT(&ts)) ||
 			commitTS.Equal(&txnif.UncommitTS) ||
-			(aborts != nil && aborts[row]) ||
+			(aborts.IsPresent() && aborts.At(row)) ||
 			tombstones.Contains(uint64(row)) {
 			continue
 		}
@@ -1592,12 +1593,12 @@ func readBlockData(
 		t0 := time.Now()
 		abortVec := &cacheVectors2[len(cols)-1]
 		commits := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors2[len(cols)-2])
-		var aborts []bool
-		if !abortVec.IsConstNull() {
-			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+		aborts, err2 := ioutil.ValidateTombstoneAbortColumn(len(commits), abortVec)
+		if err2 != nil {
+			return objectio.Bitmap{}, err2
 		}
 		for i := 0; i < len(commits); i++ {
-			if commits[i].GT(&ts) || (aborts != nil && aborts[i]) {
+			if commits[i].GT(&ts) || (aborts.IsPresent() && aborts.At(i)) {
 				deletes.Add(uint64(i))
 			}
 		}

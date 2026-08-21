@@ -620,15 +620,17 @@ func (sm *SnapshotMeta) updateTableInfo(
 		dbs := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[3])
 		accounts := vector.MustFixedColWithTypeCheck[uint32](objectBat.Vecs[11])
 		creates := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[commitPos])
-		var aborts []bool
+		var aborts ioutil.TombstoneAbortColumn
 		if abortPos, ok := specialLayout.Resolve(objectio.SEQNUM_ABORT); ok {
 			abortVec := objectBat.Vecs[abortPos]
-			if !abortVec.IsConstNull() {
-				aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+			var abortErr error
+			aborts, abortErr = ioutil.ValidateTombstoneAbortColumn(objectBat.Vecs[0].Length(), abortVec)
+			if abortErr != nil {
+				return abortErr
 			}
 		}
 		for i := 0; i < len(tids); i++ {
-			if aborts != nil && aborts[i] {
+			if aborts.IsPresent() && aborts.At(i) {
 				continue
 			}
 			createAt := creates[i]
@@ -739,16 +741,18 @@ func (sm *SnapshotMeta) updateTableInfo(
 			return moerr.NewInternalError(ctx, "snapshot tombstone object has no commit timestamp")
 		}
 		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[commitPos])
-		var aborts []bool
+		var aborts ioutil.TombstoneAbortColumn
 		if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
 			abortVec := objectBat.Vecs[abortPos]
-			if !abortVec.IsConstNull() {
-				aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+			var abortErr error
+			aborts, abortErr = ioutil.ValidateTombstoneAbortColumn(objectBat.Vecs[0].Length(), abortVec)
+			if abortErr != nil {
+				return abortErr
 			}
 		}
 		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](objectBat.Vecs[0])
 		for i := 0; i < len(commitTSs); i++ {
-			if aborts != nil && aborts[i] {
+			if aborts.IsPresent() && aborts.At(i) {
 				continue
 			}
 			pk, _, _, _ := types.DecodeTuple(objectBat.Vecs[1].GetRawBytesAt(i))

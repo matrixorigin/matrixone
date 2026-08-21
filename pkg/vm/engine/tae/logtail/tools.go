@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -186,16 +187,20 @@ func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
 			commitTSPos = i
 		}
 	}
-	var aborts []bool
-	if abortPos != -1 && !src.Vecs[abortPos].IsConstNull() {
-		aborts = vector.MustFixedColWithTypeCheck[bool](src.Vecs[abortPos].GetDownstreamVector())
+	var aborts ioutil.TombstoneAbortColumn
+	if abortPos != -1 {
+		var err error
+		aborts, err = ioutil.ValidateTombstoneAbortColumn(src.Length(), src.Vecs[abortPos].GetDownstreamVector())
+		if err != nil {
+			panic(err)
+		}
 	}
 	var commitTSs []types.TS
 	if commitTSPos != -1 && !src.Vecs[commitTSPos].IsConstNull() {
 		commitTSs = vector.MustFixedColWithTypeCheck[types.TS](src.Vecs[commitTSPos].GetDownstreamVector())
 	}
 	for row := 0; row < src.Length(); row++ {
-		if (row < len(aborts) && aborts[row]) ||
+		if (aborts.IsPresent() && aborts.At(row)) ||
 			(row < len(commitTSs) && commitTSs[row].Equal(&txnif.UncommitTS)) {
 			src.Delete(row)
 		}

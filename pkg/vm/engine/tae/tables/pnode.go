@@ -305,14 +305,15 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		var commitTSs []types.TS
 		if !persistedByCN {
 			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2].GetDownstreamVector())
-			abortVec := vecs[3]
-			var aborts []bool
-			if !abortVec.IsConstNull() {
-				aborts = vector.MustFixedColWithTypeCheck[bool](abortVec.GetDownstreamVector())
+			aborts, abortErr := ioutil.ValidateTombstoneAbortColumn(
+				len(commitTSs), vecs[3].GetDownstreamVector(),
+			)
+			if abortErr != nil {
+				return abortErr
 			}
 			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 			for i := 0; i < len(commitTSs); i++ {
-				if aborts != nil && aborts[i] {
+				if aborts.IsPresent() && aborts.At(i) {
 					continue
 				}
 				commitTS := commitTSs[i]

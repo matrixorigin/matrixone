@@ -2818,25 +2818,21 @@ func updatePersistedTombstoneBatch(
 		return moerr.NewInternalErrorNoCtx("invalid persisted tombstone special columns")
 	}
 	commits := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
-	var abortVec *vector.Vector
-	var aborts []bool
+	var aborts ioutil.TombstoneAbortColumn
 	if hasAbort {
-		abortVec = bat.Vecs[abortPos]
-		if abortVec.IsConstNull() {
-			return moerr.NewInternalErrorNoCtx("persisted tombstone abort column is null")
-		}
-		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
-		if len(aborts) != len(commits) {
-			return moerr.NewInternalErrorNoCtx("persisted tombstone abort column length mismatch")
+		var err error
+		aborts, err = ioutil.ValidateTombstoneAbortColumn(len(commits), bat.Vecs[abortPos])
+		if err != nil {
+			return err
 		}
 	}
 	deletes := make([]int64, 0)
 	for i, ts := range commits {
-		if commitTSVec.IsNull(uint64(i)) || (aborts != nil && abortVec.IsNull(uint64(i))) {
+		if commitTSVec.IsNull(uint64(i)) {
 			return moerr.NewInternalErrorNoCtx("persisted tombstone special column contains null")
 		}
 		_, skip := skipTS[ts]
-		if (aborts != nil && aborts[i]) || ts.LT(&start) || ts.GT(&end) || skip {
+		if (aborts.IsPresent() && aborts.At(i)) || ts.LT(&start) || ts.GT(&end) || skip {
 			deletes = append(deletes, int64(i))
 		}
 	}
@@ -2968,19 +2964,20 @@ func updatePersistedDataBatch(
 		}
 	}
 	commits := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
-	var aborts []bool
+	var aborts ioutil.TombstoneAbortColumn
 	if abortVec != nil {
-		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
-		if len(aborts) != len(commits) {
-			return moerr.NewInternalErrorNoCtx("persisted appendable object abort column length mismatch")
+		var err error
+		aborts, err = ioutil.ValidateTombstoneAbortColumn(len(commits), abortVec)
+		if err != nil {
+			return err
 		}
 	}
 	deletes := make([]int64, 0)
 	for i, ts := range commits {
-		if commitTSVec.IsNull(uint64(i)) || (aborts != nil && abortVec.IsNull(uint64(i))) {
+		if commitTSVec.IsNull(uint64(i)) {
 			return moerr.NewInternalErrorNoCtx("persisted appendable object special column contains null")
 		}
-		if (aborts != nil && aborts[i]) || ts.LT(&start) || ts.GT(&end) {
+		if (aborts.IsPresent() && aborts.At(i)) || ts.LT(&start) || ts.GT(&end) {
 			deletes = append(deletes, int64(i))
 		}
 	}
