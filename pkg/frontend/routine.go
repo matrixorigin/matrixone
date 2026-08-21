@@ -597,6 +597,17 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
+	prepareStmts := ses.GetPrepareStmts()
+	for _, st := range prepareStmts {
+		// COM_STMT_SEND_LONG_DATA has no protocol response and its parameter
+		// buffers are not part of the migration payload. Reject the snapshot at
+		// the authoritative session owner instead of relying on the proxy to
+		// infer SQL PREPARE/DEALLOCATE lifecycle changes from COM_QUERY text.
+		if st.hasPendingLongData() {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+	}
+	resp.PreparedStmtLongDataChecked = true
 	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {
 		// Typed snapshots can only be replayed by a v22 target when the proxy's
 		// raw COM_QUERY history did not observe every assignment (for example,
@@ -639,7 +650,7 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 		resp.SystemVariables = systemVars
 		resp.SystemVariablesExported = systemVarsExported
 	}
-	for _, st := range ses.GetPrepareStmts() {
+	for _, st := range prepareStmts {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
 			Name:       st.Name,
 			SQL:        st.Sql,
@@ -653,7 +664,9 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 }
 
 func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionResponse) error {
-	return rt.resetSessionWithContext(rt.getCancelRoutineCtx(), baseServiceID, resp)
+	return rt.resetSessionWithAdmission(
+		rt.getCancelRoutineCtx(), baseServiceID, resp, false,
+	)
 }
 
 func (rt *Routine) resetSessionWithContext(
@@ -661,7 +674,26 @@ func (rt *Routine) resetSessionWithContext(
 	baseServiceID string,
 	resp *query.ResetSessionResponse,
 ) error {
-	operationCtx, ok := rt.mc.tryBeginOperationWithContext(ctx)
+	return rt.resetSessionWithAdmission(ctx, baseServiceID, resp, true)
+}
+
+func (rt *Routine) resetSessionWithAdmission(
+	ctx context.Context,
+	baseServiceID string,
+	resp *query.ResetSessionResponse,
+	waitForRequest bool,
+) error {
+	var operationCtx context.Context
+	var ok bool
+	if waitForRequest {
+		// ResetSession is sent after Proxy has sealed the client generation, so
+		// waiting here lets an already-running request finish before the old
+		// session is replaced. The QueryService caller supplies the bounded
+		// context; the no-context helper above intentionally remains fail-fast.
+		operationCtx, ok = rt.mc.beginOperationAfterRequestWithContext(ctx)
+	} else {
+		operationCtx, ok = rt.mc.tryBeginOperationWithContext(ctx)
+	}
 	if !ok {
 		if ctx != nil {
 			if cause := context.Cause(ctx); cause != nil {

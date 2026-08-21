@@ -842,6 +842,22 @@ func releaseRetainedOrderRefs(colRefCnt map[[2]int32]int, refs [][2]int32) {
 }
 
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
+	return builder.remapAllColRefsForConsumer(
+		nodeID, step, colRefCnt, colRefBool, sinkColRef, false)
+}
+
+// remapAllColRefsForConsumer carries physical consumer capabilities down one
+// logical edge. The capability deliberately defaults to false at every other
+// recursive call, so projections, alternate aggregates, grouping, and plan
+// rewrites cannot accidentally inherit compressed multiplicity support.
+func (builder *QueryBuilder) remapAllColRefsForConsumer(
+	nodeID int32,
+	step int32,
+	colRefCnt map[[2]int32]int,
+	colRefBool map[[2]int32]bool,
+	sinkColRef map[[2]int32]int,
+	acceptsCompressedRowCount bool,
+) (*ColRefRemapping, error) {
 	node := builder.qry.Nodes[nodeID]
 
 	remapping := &ColRefRemapping{
@@ -1275,6 +1291,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_JOIN:
+		node.EmitCompressedRowCount = false
 		node.SpillMem = builder.joinSpillMem
 
 		var markOperandNotNullable [][]bool
@@ -1480,7 +1497,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		if len(node.ProjectList) == 0 && len(leftRemapping.localToGlobal) > 0 {
+		if len(node.ProjectList) == 0 && acceptsCompressedRowCount &&
+			isRowCountOnlyInnerEquiJoin(node) {
+			node.EmitCompressedRowCount = true
+		} else if len(node.ProjectList) == 0 && len(leftRemapping.localToGlobal) > 0 {
 			globalRef := leftRemapping.localToGlobal[0]
 			remapping.addColRef(globalRef)
 
@@ -1584,7 +1604,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		childRemapping, err := builder.remapAllColRefsForConsumer(
+			node.Children[0], step, colRefCnt, colRefBool, sinkColRef,
+			isSingleCountStarConsumer(node))
 		releaseRetainedOrderRefs(colRefCnt, retainedOrderRefs)
 		if err != nil {
 			return nil, err
@@ -3217,6 +3239,45 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	return remapping, nil
 }
 
+// isRowCountOnlyInnerEquiJoin reports the join shape whose executor can carry
+// multiplicity in a zero-column batch.  Keep this deliberately narrower than
+// IsEquiJoin2: one residual predicate would require materialized candidate
+// rows, and outer/semi/anti joins have different row-preservation semantics.
+func isRowCountOnlyInnerEquiJoin(node *plan.Node) bool {
+	if node == nil || node.JoinType != plan.Node_INNER {
+		return false
+	}
+	conditions := splitPlanConjunctions(node.OnList)
+	if len(conditions) == 0 {
+		return false
+	}
+	for _, condition := range conditions {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
+			return false
+		}
+		left, right := HasColExpr(fn.Args[0], -1), HasColExpr(fn.Args[1], -1)
+		if !((left == 0 && right == 1) || (left == 1 && right == 0)) {
+			return false
+		}
+	}
+	return true
+}
+
+// isSingleCountStarConsumer is the only downstream shape that can consume a
+// join's complete multiplicity without materializing or chunking its rows.
+// Keep this check on the unpruned aggregate list so a multi-aggregate query
+// cannot acquire the capability merely because an outer projection drops one
+// of its results later.
+func isSingleCountStarConsumer(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_AGG ||
+		len(node.GroupBy) != 0 || len(node.AggList) != 1 {
+		return false
+	}
+	agg := node.AggList[0].GetF()
+	return agg != nil && agg.Func != nil && agg.Func.ObjName == "starcount"
+}
+
 func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBool map[[2]int32]bool) {
 	node := builder.qry.Nodes[nodeID]
 
@@ -4688,6 +4749,11 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	ctx.queryBlockOwner = ctx
+	if ctx.bindingRecurStmt() && ctx.cteState.recursiveRefQueryBlock == nil {
+		ctx.cteState.recursiveRefQueryBlock = ctx
+	}
+
 	if stmt.RewriteOption != nil {
 		ctx.remapOption = stmt.RewriteOption
 	}
@@ -7363,7 +7429,12 @@ func (builder *QueryBuilder) bindSelectClause(
 				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
 					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 						if c.U64Val == 0 {
-							builder.isSkipResolveTableDef = true
+							// View metadata generation needs the complete catalog identity
+							// exposed by Resolve so it can persist reverse dependencies.
+							// Keep the mo_columns-only shortcut for ordinary LIMIT 0 queries.
+							if _, capturingViewDependencies := builder.compCtx.(viewDependencyScope); !capturingViewDependencies {
+								builder.isSkipResolveTableDef = true
+							}
 						}
 					}
 				}
@@ -7735,7 +7806,14 @@ func (builder *QueryBuilder) bindHaving(
 		havingBinder.bindingHaving = false
 	}()
 	ctx.binder = havingBinder
-	return splitAndBindCondition(clause.Expr, AliasAfterColumn, ctx)
+	expandAlias := AliasAfterColumn
+	if builder.mysqlFullGroupByCompat && !ctx.aggregateQueryForFullGroupBy() {
+		// Defer unqualified-name resolution to HavingBinder. It must distinguish
+		// a visible output name from an anonymous expression that merely happens
+		// to be equal to a SELECT expression.
+		expandAlias = NoAlias
+	}
+	return splitAndBindCondition(clause.Expr, expandAlias, ctx)
 }
 
 func (builder *QueryBuilder) bindProjection(
@@ -10221,7 +10299,6 @@ func (builder *QueryBuilder) bindView(
 	viewCtx := NewBindContext(builder, nil)
 	viewCtx.restoreViewMySQLSpecialTypes = true
 	viewCtx.snapshot = snapshot
-	viewCtx.lower = ctx.lower
 
 	viewData := ViewData{}
 	err = json.Unmarshal([]byte(viewDefString), &viewData)
@@ -10233,7 +10310,13 @@ func (builder *QueryBuilder) bindView(
 	if viewData.SQLMode != nil {
 		parserSQLMode = *viewData.SQLMode
 	}
-	originStmts, err := mysql.ParseWithSQLMode(builder.GetContext(), viewData.Stmt, ctx.lower, parserSQLMode)
+	viewLowerCaseTableNames := ctx.lower
+	if viewData.LowerCaseTableNames != nil {
+		viewLowerCaseTableNames = *viewData.LowerCaseTableNames
+	}
+	viewCtx.lower = viewLowerCaseTableNames
+	originStmts, err := mysql.ParseWithSQLMode(
+		builder.GetContext(), viewData.Stmt, viewLowerCaseTableNames, parserSQLMode)
 	defer func() {
 		for _, s := range originStmts {
 			s.Free()
@@ -10296,6 +10379,10 @@ func (builder *QueryBuilder) bindView(
 		builder.isForUpdate = savedIsForUpdate
 	}()
 
+	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
+		capture.enterNestedView()
+		defer capture.leaveNestedView()
+	}
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -10305,7 +10392,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	viewCtx.markViewCTASDefaultBoundary()
+	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -10689,11 +10776,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 						return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
 					}
 				}
-				// Only the CTE currently being expanded is backed by the
-				// recursive scan. Other CTEs visible from the declaration scope
-				// must still be bound as their own producers.
-				if ctx.bindingRecurStmt() && cteRef == ctx.cteState.cte {
-					nodeID = ctx.cteState.recScanNodeId
+				// An outer recursive CTE can remain active while a nested recursive
+				// CTE replaces the current state. Find the state that owns this
+				// exact CTE before deciding whether to reuse its recursive scan.
+				if recursiveState, active := ctx.activeRecursiveCteState(cteRef); active {
+					if ctx.queryBlockOwner != recursiveState.recursiveRefQueryBlock {
+						return 0, moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
+					}
+					nodeID = recursiveState.recScanNodeId
 					return
 				}
 
@@ -10825,6 +10915,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, err
 		}
 
+		// Compiler contexts return immutable catalog metadata. Own the planner
+		// shell and column slice, which are replaced locally, without copying the
+		// immutable column definitions, indexes, constraints, or expressions.
+		tableDef = CloneTableDefForPlan(tableDef, true)
 		tableDef.Name2ColIndex = map[string]int32{}
 		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)
 		for i := 0; i < len(tableDef.Cols); i++ {
@@ -10906,9 +11000,19 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		} else if tableDef.TableType == catalog.SystemSourceRel {
 			return 0, moerr.NewNotSupportedf(builder.GetContext(), "source table %s.%s", schema, table)
 		} else if tableDef.TableType == catalog.SystemViewRel {
-			if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
-				if dbOfView == schema && nameOfView == table {
-					return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+			// CREATE OR REPLACE VIEW and ALTER VIEW change the current catalog
+			// object. A same-named View resolved from an explicit historical
+			// snapshot belongs to a different catalog domain and is a valid source.
+			if !builder.isHistoricalSnapshot(snapshot) {
+				if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
+					lowerCaseTableNames := ctx.lower
+					databaseMatches := tree.NewCStr(dbOfView, lowerCaseTableNames).Compare() ==
+						tree.NewCStr(schema, lowerCaseTableNames).Compare()
+					viewMatches := tree.NewCStr(nameOfView, lowerCaseTableNames).Compare() ==
+						tree.NewCStr(table, lowerCaseTableNames).Compare()
+					if databaseMatches && viewMatches {
+						return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+					}
 				}
 			}
 
@@ -11179,7 +11283,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		plan.Node_SINK_SCAN,
 		plan.Node_RECURSIVE_SCAN,
 	}
-	lower := builder.compCtx.GetLowerCaseTableNames()
+	lower := ctx.lower
 	if node.NodeType == plan.Node_SINK_SCAN && alias.Alias != "" && len(node.BindingTags) > 0 && len(ctx.bindings) == 1 {
 		candidate := ctx.bindingByTag[node.BindingTags[0]]
 		if ctx.bindings[0] == candidate {
@@ -11854,26 +11958,10 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			}
 
 			tsNano := ts.UTC().UnixNano()
-			if tsNano <= 0 {
-				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+			if err = builder.validateTimestampHint(tsNano, lit.Sval, true); err != nil {
 				return
 			}
-
-			if time.Now().UTC().UnixNano()-tsNano <= options.DefaultGCTTL.Nanoseconds() && 0 <= time.Now().UTC().UnixNano()-tsNano {
-				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
-			} else {
-				var valid bool
-				if valid, err = builder.compCtx.CheckTimeStampValid(tsNano); err != nil {
-					return
-				}
-
-				if !valid {
-					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", lit.Sval)
-					return
-				}
-
-				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
-			}
+			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
 		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 			snapshot, err = builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
 			if err != nil && strings.Contains(err.Error(), "find 0 snapshot records") {
@@ -11884,8 +11972,7 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			// try human-readable datetime first, fall back to debug timestamp format
 			if ts, err2 := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval); err2 == nil {
 				tsNano := ts.UTC().UnixNano()
-				if tsNano <= 0 {
-					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+				if err = builder.validateTimestampHint(tsNano, lit.Sval, false); err != nil {
 					return
 				}
 				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
@@ -11894,11 +11981,17 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
 					return
 				}
+				if err = builder.validateTimestampHint(ts.PhysicalTime, lit.Sval, false); err != nil {
+					return
+				}
 				snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 			}
 		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
 			var ts int64
 			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {
+				return
+			}
+			if err = builder.validateTimestampHint(ts, lit.Sval, false); err != nil {
 				return
 			}
 			tStamp := &timestamp.Timestamp{PhysicalTime: ts}
@@ -11909,14 +12002,12 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 		}
 	case *plan.Literal_I64Val:
 		if tsExpr.Type == tree.ATTIMESTAMPTIME {
-			if lit.I64Val <= 0 {
-				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
+			if err = builder.validateTimestampHint(lit.I64Val, lit.I64Val, true); err != nil {
 				return
 			}
 			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
 		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
-			if lit.I64Val <= 0 {
-				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
+			if err = builder.validateTimestampHint(lit.I64Val, lit.I64Val, false); err != nil {
 				return
 			}
 			if bgSnapshot := builder.compCtx.GetSnapshot(); builder.isRestoreByTs {
@@ -11935,6 +12026,33 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 	}
 
 	return
+}
+
+// validateTimestampHint rejects timestamps that cannot identify historical state.
+// Raw MO_TS and AS OF TIMESTAMP are also used by internal PITR and restore paths,
+// while only the TIMESTAMP hint has an existing catalog-snapshot requirement.
+func (builder *QueryBuilder) validateTimestampHint(ts int64, value any, requireCatalogSnapshot bool) error {
+	if ts <= 0 {
+		return moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", value)
+	}
+
+	if !requireCatalogSnapshot {
+		return nil
+	}
+
+	age := time.Now().UTC().UnixNano() - ts
+	if age >= 0 && age <= options.DefaultGCTTL.Nanoseconds() {
+		return nil
+	}
+
+	valid, err := builder.compCtx.CheckTimeStampValid(ts)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", value)
+	}
+	return nil
 }
 
 func (builder *QueryBuilder) applyIcebergRefToScan(scan *plan.IcebergScan, ref *tree.IcebergRefSpec) error {
@@ -12027,6 +12145,24 @@ func IsSnapshotValid(snapshot *Snapshot) bool {
 	}
 
 	return true
+}
+
+// isHistoricalSnapshot reports whether relation resolution will switch from
+// the current transaction to the requested snapshot transaction.
+func (builder *QueryBuilder) isHistoricalSnapshot(snapshot *Snapshot) bool {
+	if !IsSnapshotValid(snapshot) {
+		return false
+	}
+
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return false
+	}
+	return snapshot.TS.Less(txnOp.Txn().SnapshotTS)
 }
 
 // getPartitionColNameFromExpr tries to extract the first column name from a partition expression
