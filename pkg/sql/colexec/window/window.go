@@ -1439,6 +1439,7 @@ func (ctr *container) timestampCivilOrderIndex(
 
 	var previous types.Datetime
 	var previousTimestamp types.Timestamp
+	var previousOffset types.Datetime
 	havePrevious := false
 	spanStart := -1
 	transition := 0
@@ -1461,6 +1462,13 @@ func (ctr *container) timestampCivilOrderIndex(
 		if spanStart < 0 {
 			spanStart = i
 		}
+		// Keep a sampled offset proof alongside the ZoneBounds-derived
+		// transition list. ZoneBounds handles sparse and recurring transitions,
+		// while an actual offset decrease between adjacent materialized rows is
+		// an independent, no-extra-scan confirmation that this input crosses a
+		// fold. In particular, it must not be lost when the civil samples happen
+		// to increase or compare equal on opposite sides of the repeated hour.
+		offset := civil - types.Datetime(col[i])
 		crossedFold := false
 		if havePrevious {
 			if !desc {
@@ -1474,12 +1482,20 @@ func (ctr *container) timestampCivilOrderIndex(
 					transition--
 				}
 			}
+			if (!desc && offset < previousOffset) || (desc && offset > previousOffset) {
+				crossedFold = true
+				index.hasFold = true
+			}
 		}
-		if havePrevious && (crossedFold || (!desc && civil < previous) || (desc && civil > previous)) {
+		civilReversed := havePrevious && ((!desc && civil < previous) || (desc && civil > previous))
+		if civilReversed {
+			index.hasFold = true
+		}
+		if havePrevious && (crossedFold || civilReversed) {
 			index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: i})
 			spanStart = i
 		}
-		previous, previousTimestamp, havePrevious = civil, col[i], true
+		previous, previousTimestamp, previousOffset, havePrevious = civil, col[i], offset, true
 	}
 	if spanStart >= 0 {
 		index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: end})
