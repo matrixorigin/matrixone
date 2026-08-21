@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -228,6 +229,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.CanSkipProbe = t.CanSkipProbe
+		op.EmitCompressedRowCount = t.EmitCompressedRowCount
 		op.IsShuffle = t.IsShuffle
 		if !t.IsShuffle {
 			mailbox := dupCtx.hashJoinMailboxes[t]
@@ -604,19 +606,24 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.TableFunction = table_function.NewArgument()
-		op.TableFunction.FuncName = t.TableFunction.FuncName
-		op.TableFunction.Args = t.TableFunction.Args
-		op.TableFunction.Rets = t.TableFunction.Rets
-		op.TableFunction.Attrs = t.TableFunction.Attrs
-		op.TableFunction.Params = t.TableFunction.Params
-		op.TableFunction.IsSingle = t.TableFunction.IsSingle
-		op.TableFunction.Limit = t.TableFunction.Limit
-		op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
-		op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
-		op.TableFunction.FulltextSourceRef = t.TableFunction.FulltextSourceRef
-		op.TableFunction.FulltextIndexRef = t.TableFunction.FulltextIndexRef
-		op.TableFunction.SetInfo(&info)
+		op.VectorIndexScan = plan2.DeepCopyVectorIndexScan(t.VectorIndexScan)
+		op.VectorAttrs = slices.Clone(t.VectorAttrs)
+		op.TxnOffset = t.TxnOffset
+		if t.TableFunction != nil {
+			op.TableFunction = table_function.NewArgument()
+			op.TableFunction.FuncName = t.TableFunction.FuncName
+			op.TableFunction.Args = t.TableFunction.Args
+			op.TableFunction.Rets = t.TableFunction.Rets
+			op.TableFunction.Attrs = t.TableFunction.Attrs
+			op.TableFunction.Params = t.TableFunction.Params
+			op.TableFunction.IsSingle = t.TableFunction.IsSingle
+			op.TableFunction.Limit = t.TableFunction.Limit
+			op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
+			op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
+			op.TableFunction.FulltextSourceRef = t.TableFunction.FulltextSourceRef
+			op.TableFunction.FulltextIndexRef = t.TableFunction.FulltextIndexRef
+			op.TableFunction.SetInfo(&info)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.MultiUpdate:
@@ -1430,6 +1437,7 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
 	arg.CanSkipProbe = node.JoinType == plan.Node_SEMI && !node.IsRightJoin && left.NodeType == plan.Node_TABLE_SCAN
+	arg.EmitCompressedRowCount = node.EmitCompressedRowCount
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	arg.SpillThreshold = node.SpillMem
 
@@ -2387,7 +2395,15 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	arg.TableFunction = constructTableFunction(right, nil)
+	if right.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		arg.VectorIndexScan = plan2.DeepCopyVectorIndexScan(right.VectorIndexScan)
+		arg.VectorAttrs = make([]string, len(right.TableDef.Cols))
+		for i, col := range right.TableDef.Cols {
+			arg.VectorAttrs[i] = col.GetOriginCaseName()
+		}
+	} else {
+		arg.TableFunction = constructTableFunction(right, nil)
+	}
 	return arg
 }
 

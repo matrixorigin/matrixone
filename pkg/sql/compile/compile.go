@@ -78,6 +78,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -93,7 +94,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
-	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -307,6 +307,12 @@ func (c *Compile) bindPlanSnapshotForCompile() {
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 	scope.TxnOffset = txnOffset
+	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if applyOp, ok := op.(*apply.Apply); ok {
+			applyOp.TxnOffset = txnOffset
+		}
+		return nil
+	})
 	for i := range scope.PreScopes {
 		UpdateScopeTxnOffset(scope.PreScopes[i], txnOffset)
 	}
@@ -646,6 +652,19 @@ func normalizeScopeRunError(
 	// attach the cause after observing DeadlineExceeded.
 	if queryCtx != nil {
 		if queryErr := queryCtx.Err(); queryErr != nil {
+			// A remote-run query context belongs to one RPC fragment. StopSending
+			// cancels it as internal teardown when another fragment has finished or
+			// failed. Do not let that generic cancellation mask a substantive child
+			// result collected while the remote fragment is draining; the origin
+			// query context still owns user cancellation and deadline classification.
+			if remoteRun, _ := queryCtx.Value(defines.RemoteRunContext{}).(bool); remoteRun &&
+				isScopeCancellationFrom(err, queryErr) {
+				if cause := context.Cause(pipelineCtx); cause != nil &&
+					!isScopeCancellationError(cause) {
+					return cause, true
+				}
+				return nil, true
+			}
 			if errors.Is(queryErr, context.DeadlineExceeded) {
 				return queryErr, true
 			}
@@ -1640,6 +1659,16 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if node.Limit != nil {
 			ss = c.compileLimit(node, ss)
 		}
+		return ss, nil
+	case plan.Node_VECTOR_INDEX_SCAN:
+		c.appendMetaTables(node.ObjRef)
+
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
+		ss, err = c.compileVectorIndexScan(node)
+		if err != nil {
+			return nil, err
+		}
+		ss = c.compileTableScanFiltersAndProjection(node, ss)
 		return ss, nil
 	case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_PROJECT:
 		childDemand := streamingUnionAllDemand(node, outerUnionAllDemand)
@@ -3802,68 +3831,6 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 	return ss, nil
 }
 
-func shouldDispatchIvfSearchMultiCN(
-	node *plan.Node,
-	execType plan2.ExecType,
-	cnList engine.Nodes,
-	workspace client.Workspace,
-) bool {
-	// Runtime-filter messages are broadcast on the current CN's message board.
-	// Keep their consumer local; its entries reader can still fan out after the
-	// table function turns the message into a serializable membership payload.
-	return plan2.IsIvfSearchEntriesInternalScan(node) &&
-		len(node.GetRuntimeFilterProbeList()) == 0 &&
-		execType == plan2.ExecTypeAP_MULTICN &&
-		len(cnList) > 1 &&
-		(workspace == nil || workspace.Readonly()) &&
-		(node.GetStats() == nil || !node.GetStats().GetForceOneCN())
-}
-
-func partitionedIndexReaderParam(param *plan.IndexReaderParam, cncnt, cnidx int32) *plan.IndexReaderParam {
-	ret := plan2.DeepCopyIndexReaderParam(param)
-	if ret == nil {
-		ret = &plan.IndexReaderParam{}
-	}
-	ret.PartitionCnCnt = cncnt
-	ret.PartitionCnIdx = cnidx
-	return ret
-}
-
-func (c *Compile) compileIvfSearchParallel(node *plan.Node) ([]*Scope, error) {
-	var workspace client.Workspace
-	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
-		workspace = txnOp.GetWorkspace()
-	}
-	if !shouldDispatchIvfSearchMultiCN(node, c.execType, c.cnList, workspace) {
-		return c.compileSingleTableFunction(node)
-	}
-
-	currentFirstFlag := c.anal.isFirst
-	ss := make([]*Scope, 0, len(c.cnList))
-	cncnt := int32(len(c.cnList))
-	for i := range c.cnList {
-		ds := newScope(Remote)
-		ds.NodeInfo = engine.Node{
-			Id:    c.cnList[i].Id,
-			Addr:  c.cnList[i].Addr,
-			Mcpu:  1,
-			CNCNT: cncnt,
-			CNIDX: int32(i),
-		}
-		ds.DataSource = &Source{isConst: true, node: node}
-		ds.Proc = c.proc.NewNoContextChildProc(0)
-		ds.IsTbFunc = true
-
-		op := constructTableFunction(node, c.pn.GetQuery())
-		op.IndexReaderParam = partitionedIndexReaderParam(node.IndexReaderParam, ds.NodeInfo.CNCNT, ds.NodeInfo.CNIDX)
-		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ds.setRootOperator(op)
-		ss = append(ss, ds)
-	}
-	c.anal.isFirst = false
-	return ss, nil
-}
-
 func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 
@@ -3883,8 +3850,6 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 				return c.compileSingleTableFunction(node)
 			}
 			return c.compileGenerateSeriesParallel(node, ss, parallelSize, canOpt, offset, step)
-		case ivfflatplan.IVFFLATSearchFuncName:
-			return c.compileIvfSearchParallel(node)
 		default:
 			return c.compileSingleTableFunction(node)
 		}
@@ -3966,6 +3931,57 @@ func (c *Compile) compileTableScanWithNode(node *plan.Node, engNode engine.Node,
 	return s, nil
 }
 
+func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
+	var nodes engine.Nodes
+	var workspace client.Workspace
+	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
+		workspace = txnOp.GetWorkspace()
+	}
+	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
+		(workspace == nil || workspace.Readonly()) &&
+		(node.Stats == nil || !node.Stats.ForceOneCN) {
+		nodes = make(engine.Nodes, len(c.cnList))
+		for i := range c.cnList {
+			nodes[i] = engine.Node{
+				Id:    c.cnList[i].Id,
+				Addr:  c.cnList[i].Addr,
+				Mcpu:  1,
+				CNCNT: int32(len(c.cnList)),
+				CNIDX: int32(i),
+			}
+		}
+	} else {
+		local := getEngineNode(c)
+		local.Mcpu = 1
+		local.CNCNT = 1
+		local.CNIDX = 0
+		nodes = engine.Nodes{local}
+	}
+	currentFirstFlag := c.anal.isFirst
+	ss := make([]*Scope, 0, len(nodes))
+	for i := range nodes {
+		// One adaptive reader owns one centroid cursor and one bounded top-k.
+		// Parallelism is expressed by independent CN partitions, not duplicate
+		// readers over the same partition.
+		nodes[i].Mcpu = 1
+		nodeCopy := plan2.DeepCopyNode(node)
+		s := newScope(Remote)
+		s.NodeInfo = nodes[i]
+		s.TxnOffset = c.TxnOffset
+		s.DataSource = &Source{
+			node:                    nodeCopy,
+			vectorIndexScanTemplate: plan2.DeepCopyVectorIndexScan(nodeCopy.VectorIndexScan),
+		}
+		op := constructTableScan(nodeCopy)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		s.setRootOperator(op)
+		s.Proc = c.proc.NewNoContextChildProc(0)
+		ss = append(ss, s)
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
 func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator, context.Context, error) {
 	var err error
 	var txnOp client.TxnOperator
@@ -4008,6 +4024,43 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	}
 	logCatalogSnapshotScan("compile.table-scan.txn", node, ctx, txnOp)
 	return txnOp, ctx, nil
+}
+
+// normalizeVectorIndexScanSnapshot closes the two representations of a
+// vector scan's snapshot before the generic datasource transaction selection
+// runs.  The node-level snapshot is the compiler contract; the nested copy is
+// the self-contained identity consumed by the index reader.  Keep a fallback
+// from the nested field for plans produced before the node-level field was
+// populated, then make independent copies so later expression folding or
+// remote-scope cloning cannot mutate either representation.
+func normalizeVectorIndexScanSnapshot(node *plan.Node) {
+	if node == nil || node.VectorIndexScan == nil {
+		return
+	}
+	snapshot := node.ScanSnapshot
+	if snapshot == nil {
+		snapshot = node.VectorIndexScan.ScanSnapshot
+	}
+	if snapshot == nil {
+		return
+	}
+	node.ScanSnapshot = plan2.DeepCopySnapshot(snapshot)
+	node.VectorIndexScan.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
+}
+
+func prepareVectorIndexScanForExecution(source *Source, proc *process.Process) (*plan.VectorIndexScan, error) {
+	if source == nil || source.node == nil || source.node.VectorIndexScan == nil {
+		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
+	}
+	if source.vectorIndexScanTemplate == nil {
+		source.vectorIndexScanTemplate = plan2.DeepCopyVectorIndexScan(source.node.VectorIndexScan)
+	}
+	spec, err := vectorscan.PrepareScalar(source.vectorIndexScanTemplate, proc)
+	if err != nil {
+		return nil, err
+	}
+	source.node.VectorIndexScan = spec
+	return spec, nil
 }
 
 func (c *Compile) compileTableScanDataSource(s *Scope) error {
@@ -4089,6 +4142,36 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.IndexReaderParam = node.IndexReaderParam
 	s.DataSource.RecvMsgList = node.RecvMsgList
 
+	return nil
+}
+
+func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
+	node := s.DataSource.node
+	if node == nil || node.VectorIndexScan == nil {
+		return moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
+	}
+
+	_, err := prepareVectorIndexScanForExecution(s.DataSource, c.proc)
+	if err != nil {
+		return err
+	}
+	normalizeVectorIndexScanSnapshot(node)
+	txnOp, _, err := c.getCompileTableScanDataSourceTxn(s)
+	if err != nil {
+		return err
+	}
+
+	attrs := make([]string, len(node.TableDef.Cols))
+	for i, col := range node.TableDef.Cols {
+		attrs[i] = col.GetOriginCaseName()
+	}
+	s.DataSource.Attributes = attrs
+	s.DataSource.TableDef = node.TableDef
+	s.DataSource.RelationName = node.TableDef.Name
+	s.DataSource.SchemaName = node.ObjRef.SchemaName
+	s.DataSource.AccountId = node.ObjRef.GetPubInfo()
+	s.DataSource.RuntimeFilterSpecs = node.RuntimeFilterProbeList
+	s.DataSource.Timestamp = txnOp.Txn().SnapshotTS
 	return nil
 }
 
@@ -5113,7 +5196,8 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_CROSSAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.CROSS, c.proc)
-			if op.TableFunction.IsSingle {
+			op.TxnOffset = c.TxnOffset
+			if op.TableFunction != nil && op.TableFunction.IsSingle {
 				rs[i].NodeInfo.Mcpu = 1
 			}
 			op.SetIdx(c.anal.curNodeIdx)
@@ -5122,6 +5206,7 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_OUTERAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.OUTER, c.proc)
+			op.TxnOffset = c.TxnOffset
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 		}
@@ -5674,6 +5759,19 @@ func supportsRemoteRightDedupInputKeysUnique(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion21
+}
+
+func supportsRemoteCrossDomainStringLiterals(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion23
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {

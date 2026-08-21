@@ -276,7 +276,7 @@ type InSp struct{}
 
 // IvfMembershipFilter carries doc_id membership-filter bytes (tagged docfilter
 // payload) for the ivf entries scan in the internal SQL executor.
-// This key is set on context when invoking internal SQL from ivf_search.
+// This key is used by the legacy IVF internal-SQL maintenance/search adapter.
 type IvfMembershipFilter struct{}
 
 // FulltextMembershipFilter carries doc_id membership-filter bytes (tagged
@@ -285,7 +285,7 @@ type IvfMembershipFilter struct{}
 type FulltextMembershipFilter struct{}
 
 // IvfReaderParam carries DistRange for ivf entries scan in internal SQL executor.
-// This key is set on context when invoking internal SQL from ivf_search.
+// This key is used by the legacy IVF internal-SQL maintenance/search adapter.
 type IvfReaderParam struct{}
 
 // RemoteRunContext marks a pipeline executing through remote-run RPC.

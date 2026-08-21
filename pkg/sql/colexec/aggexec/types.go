@@ -209,6 +209,42 @@ func MergePreservesSource(exec AggFuncExec) bool {
 	return ok
 }
 
+// windowSlidingAggregator is implemented by aggregates that can remove the
+// oldest row from a one-group running state. It is intentionally narrower
+// than AggFuncExec: only aggregates with an exact inverse for the supported
+// argument type may opt in.
+type windowSlidingAggregator interface {
+	windowSlidingSupported() bool
+	addWindowRow(row int, vectors []*vector.Vector) error
+	removeWindowRow(row int, vectors []*vector.Vector) error
+}
+
+// SupportsWindowSliding reports whether exec can maintain a bounded window by
+// adding the entering row and removing the leaving row. Callers must use a
+// one-group executor and advance the frame monotonically.
+func SupportsWindowSliding(exec AggFuncExec) bool {
+	sliding, ok := exec.(windowSlidingAggregator)
+	return ok && sliding.windowSlidingSupported()
+}
+
+// AddWindowRow adds one row to a one-group sliding aggregate.
+func AddWindowRow(exec AggFuncExec, row int, vectors []*vector.Vector) error {
+	sliding, ok := exec.(windowSlidingAggregator)
+	if !ok || !sliding.windowSlidingSupported() {
+		return moerr.NewInternalErrorNoCtx("aggregate does not support sliding windows")
+	}
+	return sliding.addWindowRow(row, vectors)
+}
+
+// RemoveWindowRow removes one row from a one-group sliding aggregate.
+func RemoveWindowRow(exec AggFuncExec, row int, vectors []*vector.Vector) error {
+	sliding, ok := exec.(windowSlidingAggregator)
+	if !ok || !sliding.windowSlidingSupported() {
+		return moerr.NewInternalErrorNoCtx("aggregate does not support sliding windows")
+	}
+	return sliding.removeWindowRow(row, vectors)
+}
+
 // GroupAggFuncExec is the complete contract required by Group. Keeping this
 // separate from AggFuncExec lets window executors retain the common aggregate
 // API without making Group rediscover its stronger allocation, preflight,
@@ -649,6 +685,9 @@ func (ag *AggFuncExecExpression) UnmarshalFromReader(r io.Reader) error {
 		}
 		expr := &plan.Expr{}
 		if err := proto.Unmarshal(bs, expr); err != nil {
+			return err
+		}
+		if err := expr.ValidateStringLiteralForms(); err != nil {
 			return err
 		}
 		ag.argExpressions = append(ag.argExpressions, expr)

@@ -132,6 +132,13 @@ func getPrepareStmtName(stmtID uint32) string {
 	return string(b)
 }
 
+// GetPrepareStmtName returns the session name for a binary-protocol prepared
+// statement. The proxy uses the same identity when carrying a forwarded
+// COM_STMT_CLOSE through connection migration.
+func GetPrepareStmtName(stmtID uint32) string {
+	return getPrepareStmtName(stmtID)
+}
+
 func parsePrepareStmtID(s string) uint32 {
 	if strings.HasPrefix(s, prefixPrepareStmtName) {
 		ss := strings.Split(s, "_")

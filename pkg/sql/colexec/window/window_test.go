@@ -216,6 +216,37 @@ func TestCumulativeWindowCancellationReleasesState(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestBoundedSlidingWindowCancellationReleasesState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = cancellationCheckInterval * 2
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = 1
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(31)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+
+	// Cancel after the sliding state has both added entering rows and removed
+	// expired rows, then verify the error path releases both aggregate owners.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
+	err := arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, arg.ctr.batAggs)
+	require.Nil(t, arg.ctr.runningAgg)
+
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowCallHonorsPreCancellation(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	ctx, cancel := context.WithCancel(proc.Ctx)
@@ -576,6 +607,38 @@ func TestWindowPreparedCumulativeBoundUsesRuntimeValue(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPreparedBoundedSlidingSumUsesRuntimeValue(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  makePreparedRowsBoundExpr(t, 0),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := makeWindowWithFrame(planned)
+	bat := makeInt32Batch(proc.Mp(), []int32{10, 20, 30, 40})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+	params := setWindowPrepareParams(t, proc, stringPtr("1"))
+
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, boundedSlidingRowsFrame(arg.ctr.runtimeFrames[0]))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 30, 50, 70},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowPrepareFrameBoundsFeedValueConsumers(t *testing.T) {
 	tests := []struct {
 		name string
@@ -705,6 +768,31 @@ func TestCumulativeRowsFrameEligibility(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want,
 				cumulativeRowsFrame(test.frame, test.partitions, test.rows))
+		})
+	}
+}
+
+func TestBoundedSlidingRowsFrameEligibility(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame *plan.FrameClause
+		want  bool
+	}{
+		{name: "finite preceding", frame: makeFiniteCumulativeFrame(31), want: true},
+		{name: "zero preceding", frame: makeFiniteCumulativeFrame(0), want: true},
+		{name: "unbounded", frame: makeCumulativeFrame()},
+		{name: "current row start", frame: makeCurrentRowFrame()},
+		{name: "following end", frame: makeFullFrame()},
+		{name: "range", frame: &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: makeFiniteCumulativeFrame(1).Start.Val},
+			End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, boundedSlidingRowsFrame(test.frame))
 		})
 	}
 }
@@ -1513,6 +1601,201 @@ func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
 	require.Equal(t, []int64{1, 3, 10, 30},
 		vector.MustFixedColWithTypeCheck[int64](result))
 	require.Nil(t, ctr.runningAgg)
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := colexec.DefaultBatchSize*2 + 17
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = 1
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1024)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	require.Len(t, resultValues, rows)
+	for _, row := range []int{0, 1023, 1024, colexec.DefaultBatchSize - 1, colexec.DefaultBatchSize, rows - 1} {
+		require.Equal(t, int64(min(row+1, 1025)), resultValues[row], "row %d", row)
+	}
+	require.Nil(t, arg.ctr.runningAgg)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumRejectsNonSequentialOutput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3})
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
+	require.NoError(t, err)
+	first.Free(proc.Mp())
+	require.NotNil(t, ctr.runningAgg)
+
+	// A retained sliding state is valid only for the immediately following
+	// output range; skipping a row must fail and release that state.
+	_, err = ctr.processAggregateFuncRange(0, arg, proc, 2, 3)
+	require.ErrorContains(t, err, "sliding window output is not sequential")
+	require.Nil(t, ctr.runningAgg)
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumResetsAtPartitionBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3, 4, 10, 20, 30, 40})
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		ps:      []int64{0, 4},
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3, 5, 7, 10, 30, 50, 70},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	require.Nil(t, ctr.runningAgg)
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumPreservesNullSemantics(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 0, 4}, []uint64{1, 2}, proc.Mp())
+	bat.SetRowCount(4)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 1, 0, 4},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	require.False(t, result.IsNull(0))
+	require.False(t, result.IsNull(1))
+	require.True(t, result.IsNull(2))
+	require.False(t, result.IsNull(3))
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumSupportsInt64Arguments(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.NewInt64Vector(
+		4, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{1, 2, 3, 4})
+	bat.SetRowCount(4)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedSumAggExpr(t, 0, types.T_int64.ToType())},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []types.Decimal128{
+		types.Decimal128FromInt64(1),
+		types.Decimal128FromInt64(3),
+		types.Decimal128FromInt64(5),
+		types.Decimal128FromInt64(7),
+	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.New(types.T_decimal64, 18, 2)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.NewDecimal64Vector(
+		5, typ, proc.Mp(), false,
+		[]bool{false, true, true, false, false},
+		[]types.Decimal64{100, 0, 0, types.Decimal64(300).Minus(), 400})
+	bat.SetRowCount(5)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedSumAggExpr(t, 0, typ)},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []types.Decimal128{
+		types.Decimal128FromInt64(100),
+		types.Decimal128FromInt64(100),
+		{},
+		types.Decimal128FromInt64(-300),
+		types.Decimal128FromInt64(100),
+	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+	require.False(t, result.IsNull(0))
+	require.False(t, result.IsNull(1))
+	require.True(t, result.IsNull(2))
+	require.False(t, result.IsNull(3))
+	require.False(t, result.IsNull(4))
 
 	result.Free(proc.Mp())
 	bat.Clean(proc.Mp())

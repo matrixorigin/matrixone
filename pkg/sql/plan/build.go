@@ -1195,7 +1195,7 @@ func resultColumnRefsMatchByName(left, right *plan.ColRef) bool {
 
 func isResultColumnSourceNode(nodeType plan.Node_NodeType) bool {
 	switch nodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		return true
 	default:
 		return false

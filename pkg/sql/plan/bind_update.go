@@ -30,6 +30,12 @@ import (
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+// maxSequentialUpdateProjectionExprs bounds the explicitly materialized row
+// images used to preserve MySQL's left-to-right single-table UPDATE semantics.
+// Without this bound a full-width UPDATE could create a quadratic number of
+// projection expressions during planning.
+const maxSequentialUpdateProjectionExprs = 1 << 18
+
 func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 	alias string,
 	tableDef *plan.TableDef,
@@ -74,6 +80,170 @@ func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 		return nil, nil
 	}
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+}
+
+// appendSequentialSingleTableUpdateAssignments materializes the current row in
+// a chain of projection nodes. Each assignment reads the preceding projection,
+// while the second half of every projection retains the original row for
+// indexes, constraints, and foreign-key maintenance.
+func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	tableDef *plan.TableDef,
+	alias string,
+	assignments []UpdateAssignment,
+	ignore bool,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (int32, *plan.Node, int32, error) {
+	if len(selectNode.ProjectList) != len(tableDef.Cols) {
+		return 0, nil, 0, moerr.NewInternalError(builder.GetContext(), "invalid single-table UPDATE assignment projection")
+	}
+
+	columnCount := len(tableDef.Cols)
+	if !withinSequentialUpdateProjectionLimit(columnCount, len(assignments)) {
+		return 0, nil, 0, moerr.NewInvalidInputf(
+			builder.GetContext(),
+			"single-table UPDATE has too many sequential assignments for its table width",
+		)
+	}
+
+	// The initial SELECT projects the original row. Preserve one copy for OLD
+	// values, then carry it through every assignment projection unchanged.
+	for pos := 0; pos < columnCount; pos++ {
+		selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[pos]))
+	}
+	for pos, col := range tableDef.Cols {
+		oldColName2Idx[alias+"."+col.Name] = int32(pos)
+	}
+
+	currentProjectList := selectNode.ProjectList
+	currentNodeID := lastNodeID
+	currentNode := selectNode
+	currentTag := selectNodeTag
+	for _, assignment := range assignments {
+		colName := assignment.Column
+		astExpr := assignment.Expr
+
+		columnIndex, ok := tableDef.Name2ColIndex[colName]
+		if !ok {
+			return 0, nil, 0, moerr.NewInternalErrorf(builder.GetContext(), "update column %s not found", colName)
+		}
+		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(
+			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList,
+		)
+		if isNumericAssignmentTarget(tableDef.Cols[columnIndex].Typ) {
+			target := tableDef.Cols[columnIndex].Typ
+			rhsBinder.numericTargetType = &target
+		}
+		rhs, err := rhsBinder.BindExpr(astExpr, 0, true)
+		if err != nil {
+			return 0, nil, 0, err
+		}
+		currentNodeID, rhs, err = builder.flattenSubqueries(currentNodeID, rhs, rhsBindCtx)
+		if err != nil {
+			return 0, nil, 0, err
+		}
+
+		column := tableDef.Cols[columnIndex]
+		if isDefaultValExpr(rhs) {
+			rhs, err = getDefaultExpr(builder.GetContext(), column)
+			if err != nil {
+				return 0, nil, 0, err
+			}
+		}
+		if isEnumPlanType(&column.Typ) {
+			rhs, err = funcCastForEnumType(builder.GetContext(), rhs, column.Typ)
+		} else if isSetPlanType(&column.Typ) {
+			rhs, err = funcCastForSetType(builder.GetContext(), rhs, column.Typ)
+		} else if isGeometryPlanType(&column.Typ) {
+			rhs, err = funcCastForGeometryType(builder.GetContext(), rhs, column.Typ)
+		} else {
+			rhs, err = builder.forceProjectedAssignmentCastExpr(rhs, rhs, column.Typ, ignore)
+		}
+		if err != nil {
+			return 0, nil, 0, err
+		}
+
+		nextTag := builder.genNewBindTag()
+		nextProjectList := make([]*plan.Expr, len(currentProjectList))
+		for pos, expr := range currentProjectList {
+			nextProjectList[pos] = &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: currentTag,
+					ColPos: int32(pos),
+				}},
+			}
+		}
+		nextProjectList[columnIndex] = rhs
+		currentNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{currentNodeID},
+			ProjectList: nextProjectList,
+			BindingTags: []int32{nextTag},
+		}, rhsBindCtx)
+		currentNode = builder.qry.Nodes[currentNodeID]
+		currentProjectList = nextProjectList
+		currentTag = nextTag
+
+		oldColName2Idx[alias+"."+colName] = int32(columnCount) + columnIndex
+		newColName2Idx[alias+"."+colName] = columnIndex
+	}
+
+	return currentNodeID, currentNode, currentTag, nil
+}
+
+func withinSequentialUpdateProjectionLimit(columnCount, assignmentCount int) bool {
+	// One complete OLD/current image is materialized before the assignment
+	// projections, then one complete image for every assignment.
+	return int64(columnCount)*(int64(assignmentCount)+1)*2 <= maxSequentialUpdateProjectionExprs
+}
+
+// newSequentialUpdateProjectionBinder binds one RHS against the row image
+// produced by the previous projection. Unlike UpdateBinder (which is specific
+// to ON DUPLICATE KEY UPDATE), ProjectionBinder preserves normal UPDATE
+// namespace checks, scalar-subquery support, and numeric target context.
+func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
+	parent *BindContext,
+	nodeID int32,
+	tag int32,
+	tableDef *plan.TableDef,
+	alias string,
+	currentProjectList []*plan.Expr,
+) (*BindContext, *ProjectionBinder) {
+	ctx := NewBindContext(builder, parent)
+	cols := make([]string, len(tableDef.Cols))
+	hidden := make([]bool, len(tableDef.Cols))
+	types := make([]*plan.Type, len(tableDef.Cols))
+	defaults := make([]string, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		cols[i] = col.Name
+		hidden[i] = col.Hidden
+		// Bind against the physical representation exposed by the preceding
+		// projection, not the table's storage type. In particular, an untouched
+		// ENUM/SET column is already a VARCHAR display vector at this boundary;
+		// declaring it as ENUM/SET would add a second index-to-value conversion.
+		types[i] = DeepCopyType(&currentProjectList[i].Typ)
+		if col.Default != nil {
+			defaults[i] = col.Default.OriginString
+		}
+		builder.nameByColRef[[2]int32{tag, int32(i)}] = alias + "." + col.Name
+	}
+	binding := NewBinding(tag, nodeID, tableDef.DbName, alias, tableDef.TblId, cols, hidden, types, false, defaults)
+	ctx.bindings = append(ctx.bindings, binding)
+	ctx.bindingByTag[tag] = binding
+	ctx.bindingByTable[alias] = binding
+	for _, col := range cols {
+		ctx.bindingByCol[col] = binding
+	}
+	ctx.bindingTree = &BindingTreeNode{binding: binding}
+	havingBinder := NewHavingBinder(builder, ctx)
+	binder := NewProjectionBinder(builder, ctx, havingBinder)
+	ctx.binder = binder
+	return ctx, binder
 }
 
 func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext) (int32, error) {
@@ -123,6 +293,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	colOffsets := make([]int32, len(dmlCtx.aliases))
 	updateNumericTargets := make(map[int32]Type)
 	inlineIrregularIndexes := make([][]*plan.IndexDef, len(dmlCtx.aliases))
+	// MySQL guarantees left-to-right evaluation only for single-table UPDATE.
+	// Keep the existing simultaneous projection path for multi-target and UPDATE
+	// FROM statements, whose assignment order is not guaranteed by MySQL.
+	sequentialAssignments := len(dmlCtx.tableDefs) == 1 &&
+		len(dmlCtx.updateAssignments) == 1 && len(dmlCtx.updateAssignments[0]) > 1 &&
+		stmt.From == nil
+	sequentialExprs := make([][]UpdateAssignment, len(dmlCtx.aliases))
 
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -165,7 +342,19 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
-		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
+		updateAssignments := dmlCtx.updateAssignments[i]
+		if !sequentialAssignments {
+			updateAssignments = make([]UpdateAssignment, 0, len(dmlCtx.updateCol2Expr[i]))
+			for colName := range dmlCtx.updateCol2Expr[i] {
+				updateAssignments = append(updateAssignments, UpdateAssignment{
+					Column: colName,
+					Expr:   dmlCtx.updateCol2Expr[i][colName],
+				})
+			}
+		}
+		for _, assignment := range updateAssignments {
+			colName := assignment.Column
+			updateExpr := assignment.Expr
 			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
 			isGenCol := false
 			for _, colDef := range tableDef.Cols {
@@ -208,6 +397,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						updateAutoIncrCols[i] = true
 					}
 				}
+			}
+
+			if sequentialAssignments {
+				sequentialExprs[i] = append(sequentialExprs[i], UpdateAssignment{
+					Column: colName,
+					Expr:   updateExpr,
+				})
+				continue
 			}
 
 			oldPos := oldColName2Idx[alias+"."+colName]
@@ -258,6 +455,23 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectNodeTag := selectNode.BindingTags[0]
+	if sequentialAssignments {
+		lastNodeID, selectNode, selectNodeTag, err = builder.appendSequentialSingleTableUpdateAssignments(
+			bindCtx,
+			lastNodeID,
+			selectNode,
+			selectNodeTag,
+			dmlCtx.tableDefs[0],
+			dmlCtx.aliases[0],
+			sequentialExprs[0],
+			stmt.Ignore,
+			oldColName2Idx,
+			newColName2Idx,
+		)
+		if err != nil {
+			return 0, err
+		}
+	}
 	updatedTargetCount := 0
 	for i := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) > 0 {

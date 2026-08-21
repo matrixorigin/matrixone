@@ -32,6 +32,7 @@ import (
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -309,6 +311,9 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		return nil
 	}
 
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		return c.compileVectorIndexScanDataSource(s)
+	}
 	return c.compileTableScanDataSource(s)
 }
 
@@ -932,7 +937,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		Node:              s.DataSource.node,
 		CNCNT:             s.NodeInfo.CNCNT,
 		CNIDX:             s.NodeInfo.CNIDX,
-		ShuffleByObjectID: plan2.IsIvfSearchEntriesInternalScan(s.DataSource.node),
+		ShuffleByObjectID: false,
 		Init:              false,
 	}
 	if !s.IsRemote { // this is local CN
@@ -978,15 +983,13 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 }
 
 func localRangesPolicy(node *plan.Node, cnidx int32) engine.DataCollectPolicy {
-	if plan2.IsIvfSearchEntriesInternalScan(node) && cnidx > 0 {
-		return engine.Policy_CollectCommittedPersistedData
-	}
 	return engine.Policy_CollectAllData
 }
 
 type receivedRuntimeFilter struct {
 	spec *plan.RuntimeFilterSpec
 	expr *plan.Expr
+	data []byte
 }
 
 func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool, error) {
@@ -1015,6 +1018,13 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 				case message.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
 					runtimeFilters = append(runtimeFilters, receivedRuntimeFilter{spec: spec, expr: inExpr})
+				case message.RuntimeFilter_UNIQUEJOINKEYS:
+					if spec.UseMembershipFilter {
+						runtimeFilters = append(runtimeFilters, receivedRuntimeFilter{
+							spec: spec,
+							data: append([]byte(nil), msg.Data...),
+						})
+					}
 
 					// TODO: implement BETWEEN expression
 				}
@@ -1574,6 +1584,12 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err != nil {
 		return
 	}
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		if emptyScan {
+			return []engine.Reader{new(readutil.EmptyReader)}, nil
+		}
+		return s.buildVectorIndexReaders(runtimeFilterList)
+	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
 			emptyScan = true
@@ -1605,12 +1621,6 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		hint := engine.FilterHint{}
 		if tableDef := s.DataSource.TableDef; tableDef != nil {
 			switch {
-			case tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries:
-				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
-				if len(hint.MembershipFilterBytes) == 0 {
-					hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(
-						defines.IvfMembershipFilter{}).([]byte)
-				}
 			case catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name):
 				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
 				if len(hint.MembershipFilterBytes) == 0 {
@@ -1640,17 +1650,6 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 		hint := engine.FilterHint{}
-		// Pass runtime membership filter bytes to reader via FilterHint (only for ivf entries table).
-		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
-			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.MembershipFilterBytes) > 0 {
-				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
-			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.MembershipFilterBytes = bf
-				}
-			}
-		}
 		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
@@ -1725,16 +1724,6 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
 		hint := engine.FilterHint{}
-		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
-			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.MembershipFilterBytes) > 0 {
-				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
-			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.MembershipFilterBytes = bf
-				}
-			}
-		}
 		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
 			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
@@ -1784,6 +1773,64 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		readers = newReaders
 	}
 	return
+}
+
+func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) ([]engine.Reader, error) {
+	node := s.DataSource.node
+	spec := node.GetVectorIndexScan()
+	if spec == nil || spec.GetIndex() == nil {
+		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing index metadata")
+	}
+	p, ok := indexplugin.Get(spec.GetIndex().GetIndexAlgo())
+	if !ok {
+		return nil, moerr.NewNotSupportedNoCtxf("vector index algorithm %q is not registered", spec.GetIndex().GetIndexAlgo())
+	}
+	searcher, ok := p.(indexplugin.SearchPlugin)
+	if !ok {
+		return nil, moerr.NewNotSupportedNoCtxf("vector index algorithm %q has no scan reader", spec.GetIndex().GetIndexAlgo())
+	}
+
+	membership, hasMembership := vectorScanMembershipFilter(runtimeFilters)
+	currentSnapshot := timestamp.Timestamp{}
+	if s.Proc != nil && s.Proc.GetTxnOperator() != nil {
+		currentSnapshot = s.Proc.GetTxnOperator().Txn().SnapshotTS
+	}
+	identity, err := vectorscan.Identity(
+		spec, currentSnapshot,
+		s.TxnOffset, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
+	if err != nil {
+		return nil, err
+	}
+	req, hasQuery, err := vectorscan.RequestFromScalar(spec, identity, membership, hasMembership)
+	if err != nil {
+		return nil, err
+	}
+	if !hasQuery {
+		return []engine.Reader{new(readutil.EmptyReader)}, nil
+	}
+	reader, err := searcher.Search().NewReader(s.Proc, spec, req)
+	if err != nil {
+		return nil, err
+	}
+	return []engine.Reader{reader}, nil
+}
+
+func vectorScanMembershipFilter(runtimeFilters []receivedRuntimeFilter) ([]byte, bool) {
+	for _, runtimeFilter := range runtimeFilters {
+		hasMembership := runtimeFilter.spec != nil && runtimeFilter.spec.UseMembershipFilter
+		if len(runtimeFilter.data) > 0 {
+			return append([]byte(nil), runtimeFilter.data...), hasMembership
+		}
+		fn := runtimeFilter.expr.GetF()
+		if fn == nil || len(fn.Args) != 2 || fn.Args[1].GetVec() == nil {
+			if hasMembership {
+				return nil, true
+			}
+			continue
+		}
+		return append([]byte(nil), fn.Args[1].GetVec().GetData()...), hasMembership
+	}
+	return nil, false
 }
 
 func (s Scope) TypeName() string {
