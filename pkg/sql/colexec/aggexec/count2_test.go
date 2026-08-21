@@ -175,43 +175,75 @@ func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
 }
 
 func TestCountDistinctSignedZeroDoesNotAllocatePerRow(t *testing.T) {
-	newInput := func(mp *mpool.MPool) (*vector.Vector, []uint64) {
-		values := testutil.NewFloat64Vector(2, types.T_float64.ToType(), mp, false, nil, []float64{math.Copysign(0, -1), 0.0})
-		return values, []uint64{1, 1}
+	tests := []struct {
+		name   string
+		values func(*mpool.MPool) []*vector.Vector
+	}{
+		{
+			name: "float32",
+			values: func(mp *mpool.MPool) []*vector.Vector {
+				return []*vector.Vector{testutil.NewFloat32Vector(
+					2, types.T_float32.ToType(), mp, false, nil,
+					[]float32{float32(math.Copysign(0, -1)), 0.0})}
+			},
+		},
+		{
+			name: "float64",
+			values: func(mp *mpool.MPool) []*vector.Vector {
+				return []*vector.Vector{testutil.NewFloat64Vector(
+					2, types.T_float64.ToType(), mp, false, nil,
+					[]float64{math.Copysign(0, -1), 0.0})}
+			},
+		},
+		{
+			name: "multi_column",
+			values: func(mp *mpool.MPool) []*vector.Vector {
+				return []*vector.Vector{
+					testutil.NewFloat64Vector(2, types.T_float64.ToType(), mp, false, nil,
+						[]float64{math.Copysign(0, -1), 0.0}),
+					testutil.NewInt64Vector(2, types.T_int64.ToType(), mp, false, nil, []int64{7, 7}),
+				}
+			},
+		},
 	}
 
-	t.Run("preflight", func(t *testing.T) {
-		mp := mpool.MustNewZero()
-		values, groups := newInput(mp)
-		defer values.Free(mp)
-		vectors := []*vector.Vector{values}
-		exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()})
-		require.NoError(t, exec.GroupGrow(1))
-		defer exec.Free()
-		preflight := exec.(BatchCapacityPreflight)
-		require.NoError(t, preflight.PreflightBatchFill(0, groups, vectors))
-		allocs := testing.AllocsPerRun(100, func() {
-			require.NoError(t, preflight.PreflightBatchFill(0, groups, vectors))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, phase := range []string{"preflight", "batch_fill"} {
+				t.Run(phase, func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					vectors := tc.values(mp)
+					groups := []uint64{1, 1}
+					defer func() {
+						for _, vec := range vectors {
+							vec.Free(mp)
+						}
+					}()
+					argTypes := make([]types.Type, len(vectors))
+					for i, vec := range vectors {
+						argTypes[i] = *vec.GetType()
+					}
+					exec := newCountColumnExec(mp, AggIdOfCountColumn, true, argTypes)
+					require.NoError(t, exec.GroupGrow(1))
+					defer exec.Free()
+					preflight := exec.(BatchCapacityPreflight)
+					require.NoError(t, preflight.PreflightBatchFill(0, groups, vectors))
+					if phase == "preflight" {
+						allocs := testing.AllocsPerRun(100, func() {
+							require.NoError(t, preflight.PreflightBatchFill(0, groups, vectors))
+						})
+						require.Zero(t, allocs)
+						return
+					}
+					require.NoError(t, exec.BatchFill(0, groups, vectors))
+					allocs := testing.AllocsPerRun(100, func() {
+						require.NoError(t, exec.BatchFill(0, groups, vectors))
+					})
+					require.Zero(t, allocs)
+				})
+			}
 		})
-		require.Zero(t, allocs)
-	})
-
-	t.Run("batch_fill", func(t *testing.T) {
-		mp := mpool.MustNewZero()
-		values, groups := newInput(mp)
-		defer values.Free(mp)
-		vectors := []*vector.Vector{values}
-		exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()})
-		require.NoError(t, exec.GroupGrow(1))
-		defer exec.Free()
-		preflight := exec.(BatchCapacityPreflight)
-		require.NoError(t, preflight.PreflightBatchFill(0, groups, vectors))
-		require.NoError(t, exec.BatchFill(0, groups, vectors))
-		allocs := testing.AllocsPerRun(100, func() {
-			require.NoError(t, exec.BatchFill(0, groups, vectors))
-		})
-		require.Zero(t, allocs)
-	})
+	}
 }
 
 // TestCountMultiColumnDistinct tests COUNT(DISTINCT col1, col2) with multiple args.
