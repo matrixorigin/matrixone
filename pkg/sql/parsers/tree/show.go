@@ -647,7 +647,7 @@ type ShowTableNumber struct {
 }
 
 func (node *ShowTableNumber) Format(ctx *FmtCtx) {
-	ctx.WriteString("show table number")
+	ctx.WriteString("show table_number")
 	if node.DbName != "" {
 		ctx.WriteString(" from ")
 		ctx.WriteString(node.DbName)
