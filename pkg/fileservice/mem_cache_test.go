@@ -1379,6 +1379,7 @@ func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 			}},
 		}
 		assert.NoError(t, cache.Update(ctx, vec, false))
+		vec.Release()
 	}
 
 	assert.Equal(t, 2*unit, cache.cache.EvictToTargetWithWait(ctx, 2*unit))
@@ -1387,12 +1388,16 @@ func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 	key1 := fscache.CacheKey{Path: "foo", Offset: 1, Sz: 1}
 	key2 := fscache.CacheKey{Path: "foo", Offset: 2, Sz: 1}
 	key3 := fscache.CacheKey{Path: "foo", Offset: 3, Sz: 1}
-	_, ok := cache.cache.Get(ctx, key0)
-	assert.False(t, ok)
-	_, ok = cache.cache.Get(ctx, key1)
-	assert.True(t, ok)
-	_, ok = cache.cache.Get(ctx, key2)
-	assert.True(t, ok)
+	hasCacheData := func(key fscache.CacheKey) bool {
+		data, ok := cache.cache.Get(ctx, key)
+		if ok {
+			data.Release()
+		}
+		return ok
+	}
+	assert.False(t, hasCacheData(key0))
+	assert.True(t, hasCacheData(key1))
+	assert.True(t, hasCacheData(key2))
 
 	SetMemoryCachePressureTargetPercent(50, time.Now().Add(time.Minute))
 
@@ -1407,8 +1412,7 @@ func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 	assert.NoError(t, cache.Update(ctx, coldVec, false))
 	coldVec.Release()
 	assert.Equal(t, 2*unit, cache.cache.Used())
-	_, ok = cache.cache.Get(ctx, key3)
-	assert.False(t, ok)
+	assert.False(t, hasCacheData(key3))
 
 	ghostVec := &IOVector{
 		FilePath: "foo",
@@ -1421,10 +1425,8 @@ func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 	assert.NoError(t, cache.Update(ctx, ghostVec, false))
 	ghostVec.Release()
 	assert.Equal(t, 2*unit, cache.cache.Used())
-	_, ok = cache.cache.Get(ctx, key0)
-	assert.True(t, ok)
-	_, ok = cache.cache.Get(ctx, key1)
-	assert.False(t, ok)
+	assert.True(t, hasCacheData(key0))
+	assert.False(t, hasCacheData(key1))
 }
 
 func TestMemoryCachePressureAdmissionExpires(t *testing.T) {

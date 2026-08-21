@@ -110,6 +110,7 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			IgnoreAffectedRows:    ctx.IgnoreAffectedRows,
 			DedupByTargetRowId:    ctx.DedupByTargetRowId,
 			TargetUpdateCtxIdx:    ctx.TargetUpdateCtxIdx,
+			AffectedRowsCols:      slices.Clone(ctx.AffectedRowsCols),
 		}
 	}
 
@@ -1071,6 +1072,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			IsBin:        item.Lit.GetIsBin(),
 			Src:          DeepCopyExpr(item.Lit.Src),
 			IsSerialized: item.Lit.GetIsSerialized(),
+			LiteralForm:  item.Lit.GetLiteralForm(),
 		}
 
 		switch c := item.Lit.Value.(type) {
