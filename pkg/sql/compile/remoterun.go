@@ -168,6 +168,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteUpdateChangedRowsPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -932,13 +935,19 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *multi_update.MultiUpdate:
 		targetAware := false
+		changedRows := false
 		for _, muCtx := range t.MultiUpdateCtx {
 			if muCtx.DedupByTargetRowID || muCtx.TargetUpdateCtxIdx != 0 {
 				targetAware = true
-				break
+			}
+			if muCtx.ChangedRowsCol != nil {
+				changedRows = true
 			}
 		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, targetAware); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteUpdateChangedRowsProtocol(proc, changedRows); err != nil {
 			return ctxId, nil, err
 		}
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -1620,6 +1629,18 @@ func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware 
 	return nil
 }
 
+func validateRemoteUpdateChangedRowsProtocol(proc *process.Process, changedRows bool) error {
+	if !changedRows {
+		return nil
+	}
+	if proc == nil || !supportsRemoteUpdateChangedRows(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"UPDATE changed-row counting requires MORPC protocol version 24",
+		)
+	}
+	return nil
+}
+
 func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inputKeysUnique bool) error {
 	if !inputKeysUnique {
 		return nil
@@ -1696,6 +1717,30 @@ func validateRemoteTargetAwareUpdatePipelineProtocol(
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteTargetAwareUpdatePipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteUpdateChangedRowsPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
+			for _, updateCtx := range multiUpdate.UpdateCtxList {
+				if updateCtx.ChangedRowsCol != nil {
+					return validateRemoteUpdateChangedRowsProtocol(proc, true)
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteUpdateChangedRowsPipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}
