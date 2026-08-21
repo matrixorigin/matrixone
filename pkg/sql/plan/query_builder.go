@@ -11068,9 +11068,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 						return 0, err
 					}
 					externType = plan.ExternType_MONGODB_TB
-					if builder.isPrepareStatement {
-						return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
-					}
 				} else {
 					cfg, isDataStream, err := IsDataStreamTableDef(builder.GetContext(), tableDef)
 					if err != nil {

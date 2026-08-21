@@ -88,6 +88,13 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMongoDBE2EScalar(mock, "1")
+	prepared := mock.ExpectPrepare("select count")
+	prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+		sqlmock.NewRows([]string{"count(*)"}).AddRow("3"))
+	prepared.ExpectQuery().WithArgs(int64(19)).WillReturnRows(
+		sqlmock.NewRows([]string{"count(*)"}).AddRow("2"))
+	prepared.ExpectQuery().WithArgs(int64(29)).WillReturnRows(
+		sqlmock.NewRows([]string{"count(*)"}).AddRow("1"))
 	expectMongoDBE2EScalar(mock, "1")
 	mock.ExpectQuery("select payload_1").WillReturnError(errors.New("MongoDB decoded batch byte limit exceeded"))
 	// A pre-canceled context is rejected by database/sql before it reaches the
@@ -132,6 +139,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"fixed-binary-padding",
 		"scan-projection-pushdown-null-conversion",
 		"insert-select-primary-key-target",
+		"prepared-scan-binding-reuse-recovery-metadata",
 		"low-precision-temporal-residual",
 		"decoded-vector-budget-enforced",
 		"multi-batch-cancel-recovery",
