@@ -51,6 +51,30 @@ id
 select found_rows() as after_cte_limit;
 after_cte_limit
 4
+select sql_calc_found_rows *
+from (select id from t order by id limit 5) d;
+id
+1
+2
+3
+4
+5
+select found_rows() as after_derived_only_limit;
+after_derived_only_limit
+5
+with d as (select id from t order by id limit 7)
+select sql_calc_found_rows * from d;
+id
+1
+2
+3
+4
+5
+6
+7
+select found_rows() as after_cte_only_limit;
+after_cte_only_limit
+7
 prepare ps_found_rows from 'select sql_calc_found_rows id from t order by id limit 1';
 execute ps_found_rows;
 id
@@ -102,6 +126,12 @@ id
 select found_rows() as after_sql_select_limit;
 after_sql_select_limit
 3
+select sql_calc_found_rows * from (select id from t order by id limit 5) d;
+id
+1
+select found_rows() as after_nested_sql_select_limit;
+after_nested_sql_select_limit
+5
 prepare ps_session_limit from 'select sql_calc_found_rows id from t where id <= 3 order by id';
 execute ps_session_limit;
 id
@@ -116,6 +146,20 @@ select found_rows() as after_prepared_sql_select_limit_second;
 after_prepared_sql_select_limit_second
 3
 deallocate prepare ps_session_limit;
+prepare ps_nested_session_limit from 'select sql_calc_found_rows * from (select id from t order by id limit 5) d';
+execute ps_nested_session_limit;
+id
+1
+select found_rows() as after_nested_session_limit_first;
+after_nested_session_limit_first
+5
+execute ps_nested_session_limit;
+id
+1
+select found_rows() as after_nested_session_limit_second;
+after_nested_session_limit_second
+5
+deallocate prepare ps_nested_session_limit;
 set sql_select_limit = 18446744073709551615;
 select id from t order by id limit 2;
 id
