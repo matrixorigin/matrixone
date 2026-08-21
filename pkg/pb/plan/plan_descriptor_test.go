@@ -81,3 +81,42 @@ func TestPlanDescriptorContainsAsofFields(t *testing.T) {
 	}
 	t.Fatal("plan descriptor missing Node.asof_right_col = 85")
 }
+
+func TestGeneratedPlanDescriptorContainsAsofContract(t *testing.T) {
+	b, _ := (&Node{}).Descriptor()
+	file := decodePlanDescriptor(t, b)
+	var node *descriptor.DescriptorProto
+	for _, message := range file.GetMessageType() {
+		if message.GetName() == "Node" {
+			node = message
+			break
+		}
+	}
+	if node == nil {
+		t.Fatal("generated descriptor missing Node")
+	}
+	for _, field := range node.GetField() {
+		if field.GetName() == "asof_right_col" && field.GetNumber() == 85 {
+			return
+		}
+	}
+	t.Fatal("generated Node descriptor missing asof_right_col = 85")
+}
+
+func decodePlanDescriptor(t *testing.T, b []byte) *descriptor.FileDescriptorProto {
+	t.Helper()
+	r, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file descriptor.FileDescriptorProto
+	if err := proto.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	return &file
+}

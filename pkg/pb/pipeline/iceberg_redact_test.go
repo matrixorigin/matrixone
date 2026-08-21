@@ -70,6 +70,40 @@ func TestHashJoinDescriptorContainsAsofRightCol(t *testing.T) {
 	t.Fatal("pipeline descriptor missing HashJoin.asof_right_col = 17")
 }
 
+func TestGeneratedHashJoinDescriptorContainsAsofRightCol(t *testing.T) {
+	b, _ := (&HashJoin{}).Descriptor()
+	file := decodePipelineFileDescriptorBytes(t, b)
+	for _, message := range file.GetMessageType() {
+		if message.GetName() != "HashJoin" {
+			continue
+		}
+		for _, field := range message.GetField() {
+			if field.GetName() == "asof_right_col" && field.GetNumber() == 17 {
+				return
+			}
+		}
+	}
+	t.Fatal("generated HashJoin descriptor missing asof_right_col = 17")
+}
+
+func decodePipelineFileDescriptorBytes(t *testing.T, compressed []byte) *descriptor.FileDescriptorProto {
+	t.Helper()
+	reader, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file descriptor.FileDescriptorProto
+	if err := proto.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	return &file
+}
+
 func decodePipelineFileDescriptor(t *testing.T) *descriptor.FileDescriptorProto {
 	t.Helper()
 	compressed := proto.FileDescriptor("pipeline.proto")
