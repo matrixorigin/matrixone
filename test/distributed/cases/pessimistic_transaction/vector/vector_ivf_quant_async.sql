@@ -11,7 +11,7 @@
 -- about the other three consumers.
 --
 -- The queries are `ORDER BY l2_distance(v, q) LIMIT k` with NO secondary sort key,
--- so the ivfflat index pushdown fires (the ivf_search table function), actually
+-- so the ivfflat index pushdown fires (the VECTOR_INDEX_SCAN), actually
 -- exercising the quantized re-rank. Two well-separated clusters [1..5]/[50..54]
 -- and cluster-center query points keep every top-k distance distinct (no ties),
 -- so the result is deterministic without a tiebreaker.
