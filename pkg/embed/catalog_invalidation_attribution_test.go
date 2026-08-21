@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -102,19 +103,60 @@ type catalogAttributionReportV2 struct {
 func requireCatalogAttributionBuild(t *testing.T, expected string) {
 	t.Helper()
 	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		t.Fatal("catalog attribution requires VCS-attested build information")
+	if ok {
+		settings := make(map[string]string, len(info.Settings))
+		for _, setting := range info.Settings {
+			settings[setting.Key] = setting.Value
+		}
+		if revision := settings["vcs.revision"]; revision != "" {
+			if revision != expected {
+				t.Fatalf("measurement SHA %s does not match executed build revision %q", expected, revision)
+			}
+			if settings["vcs.modified"] == "true" {
+				t.Fatal("catalog attribution requires a clean VCS-attested build")
+			}
+			return
+		}
 	}
-	settings := make(map[string]string, len(info.Settings))
-	for _, setting := range info.Settings {
-		settings[setting.Key] = setting.Value
+	// Some CGo test-link modes omit Go's VCS build settings. In that mode use
+	// the exact clean checkout that owns the running test package as the
+	// equivalent attestation, rejecting both ref drift and dirty source.
+	root := findCatalogAttributionRepoRoot(t)
+	revision, err := outputCatalogAttributionGit(root, "rev-parse", "HEAD")
+	if err != nil || revision != expected {
+		t.Fatalf("measurement SHA %s does not match clean checkout revision %q", expected, revision)
 	}
-	if settings["vcs.revision"] != expected {
-		t.Fatalf("measurement SHA %s does not match executed build revision %q", expected, settings["vcs.revision"])
+	status, err := outputCatalogAttributionGit(root, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		t.Fatalf("cannot verify clean measurement checkout: %v", err)
 	}
-	if settings["vcs.modified"] == "true" {
-		t.Fatal("catalog attribution requires a clean VCS-attested build")
+	if status != "" {
+		t.Fatalf("catalog attribution requires a clean checkout, got %q", status)
 	}
+}
+
+func findCatalogAttributionRepoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get measurement working directory: %v", err)
+	}
+	for {
+		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && (info.IsDir() || info.Mode().IsRegular()) {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("measurement checkout root is not discoverable")
+		}
+		dir = parent
+	}
+}
+
+func outputCatalogAttributionGit(root string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+	output, err := cmd.Output()
+	return strings.TrimSpace(string(output)), err
 }
 
 func TestCatalogInvalidationAttributionMultiCN(t *testing.T) {
