@@ -53,6 +53,21 @@ import (
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 var _ plan2.ViewDependencyIdentityResolver = &TxnCompilerContext{}
 
+// resolveUdfInCallerTxnKey asks ResolveUdf to use the transaction that is
+// compiling the statement. Clone restores function metadata and dependent
+// views atomically, so view binding must be able to read those uncommitted
+// catalog rows. Ordinary compilation keeps its independent read transaction.
+type resolveUdfInCallerTxnKey struct{}
+
+func withResolveUdfInCallerTxn(ctx context.Context) context.Context {
+	return context.WithValue(ctx, resolveUdfInCallerTxnKey{}, true)
+}
+
+func resolvesUdfInCallerTxn(ctx context.Context) bool {
+	value, _ := ctx.Value(resolveUdfInCallerTxnKey{}).(bool)
+	return value
+}
+
 type TxnCompilerContext struct {
 	dbName               string
 	buildAlterView       bool
@@ -717,12 +732,16 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	useCallerTxn := resolvesUdfInCallerTxn(ctx)
+	var bh BackgroundExec
+	if useCallerTxn {
+		bh = ses.GetShareTxnBackgroundExec(ctx, false)
+	} else {
+		bh = ses.GetBackgroundExec(ctx)
+	}
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin;")
 	defer func() {
-		err = finishTxn(ctx, bh, err)
 		if execResultArrayHasData(erArray) {
 			if matchNum < 1 {
 				err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("No matching function for call to %s(%s)", name, argTypeStr)))
@@ -731,13 +750,19 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			}
 		}
 	}()
-	if err != nil {
-		return nil, err
+	if !useCallerTxn {
+		err = bh.Exec(ctx, "begin;")
+		defer func() {
+			err = finishTxn(ctx, bh, err)
+		}()
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	queryCtx, sql := udfCatalogLookup(ctx, tcc.GetSnapshot(), name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
+	err = bh.Exec(queryCtx, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -859,6 +884,33 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	} else {
 		return nil, moerr.NewNotSupportedf(ctx, "function or operator '%s'", name)
 	}
+}
+
+// udfCatalogLookup keeps UDF resolution aligned with the compiler context's
+// relation lookup. View dependency sorting installs a snapshot on that context
+// before it plans views, so function metadata must use the same timestamp and
+// tenant even though ResolveUdf reads it through a background executor.
+func udfCatalogLookup(
+	ctx context.Context,
+	snapshot *plan2.Snapshot,
+	name string,
+	database string,
+) (context.Context, string) {
+	catalogTable := "mo_catalog.mo_user_defined_function"
+	if snapshot != nil {
+		if snapshot.TS != nil {
+			catalogTable += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+		if snapshot.Tenant != nil {
+			ctx = defines.AttachAccountId(ctx, snapshot.Tenant.TenantID)
+		}
+	}
+	return ctx, fmt.Sprintf(
+		`select args, body, language, rettype, db, modified_time, sql_mode from %s where name = "%s" and db = "%s";`,
+		catalogTable,
+		name,
+		database,
+	)
 }
 
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (varValue interface{}, err error) {

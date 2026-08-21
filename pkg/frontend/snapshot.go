@@ -1725,6 +1725,19 @@ func recreateTable(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 	}
+	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+		curAccountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		sourceSnapshot := fmt.Sprintf(" {MO_TS = %d}", snapshotTs)
+		if curAccountID != toAccountId {
+			sourceSnapshot = fmt.Sprintf(" {SNAPSHOT = %s}", escapeSQLString(snapshotName))
+		}
+		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+			ctx, bh, sourceSnapshot, curAccountID, toAccountId,
+		)
+	}
 	if isSequence(tblInfo) {
 		curAccountID, accountErr := defines.GetAccountId(ctx)
 		if accountErr != nil {
