@@ -7103,6 +7103,7 @@ func mysqlDecimalPrefixUnderflows(prefix string, scale int32) bool {
 		mantissaStart++
 	}
 	decimalPos, digitPos, firstNonZero := int64(0), int64(0), int64(-1)
+	firstNonZeroDigit := byte(0)
 	seenDecimal := false
 	for j := mantissaStart; j < exponentAt; j++ {
 		if prefix[j] == '.' {
@@ -7112,6 +7113,7 @@ func mysqlDecimalPrefixUnderflows(prefix string, scale int32) bool {
 		}
 		if prefix[j] != '0' && firstNonZero < 0 {
 			firstNonZero = digitPos
+			firstNonZeroDigit = prefix[j]
 		}
 		digitPos++
 	}
@@ -7126,10 +7128,11 @@ func mysqlDecimalPrefixUnderflows(prefix string, scale int32) bool {
 		return false
 	}
 	i++
-	// Once the magnitude exceeds the target scale plus all mantissa digits,
-	// rounding to the target DECIMAL scale is necessarily zero. Keep the scan
-	// bounded so an arbitrarily long exponent cannot create proportional work.
-	limit := int64(scale) + decimalPos - firstNonZero - 1
+	// Values strictly below half of the target ULP round to zero. At exactly
+	// scale+1 fractional digits, 4 rounds to zero while 5-9 must reach the
+	// normal parser for half-up rounding. Keep the scan bounded so an
+	// arbitrarily large exponent cannot create proportional work.
+	limit := int64(scale) + decimalPos - firstNonZero
 	magnitude := int64(0)
 	for ; i < len(prefix); i++ {
 		if magnitude > limit {
@@ -7137,7 +7140,7 @@ func mysqlDecimalPrefixUnderflows(prefix string, scale int32) bool {
 		}
 		magnitude = magnitude*10 + int64(prefix[i]-'0')
 	}
-	return magnitude > limit
+	return magnitude > limit || magnitude == limit && firstNonZeroDigit < '5'
 }
 
 func mysqlDecimalPrefixOverflows(prefix string, width, scale int32) bool {

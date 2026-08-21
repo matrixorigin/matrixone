@@ -4838,6 +4838,40 @@ func TestMySQLDecimalPrefixExtremeExponents(t *testing.T) {
 	require.Less(t, time.Since(started), 250*time.Millisecond)
 }
 
+func TestMySQLDecimalPrefixHalfUpUnderflowBoundary(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "4e-3", want: "0.00"},
+		{input: "5e-3", want: "0.01"},
+		{input: "6e-3", want: "0.01"},
+		{input: "-4e-3", want: "0.00"},
+		{input: "-5e-3", want: "-0.01"},
+		{input: "-6e-3", want: "-0.01"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			want64, err := types.ParseDecimal64(test.want, 18, 2)
+			require.NoError(t, err)
+			got64, err := parseMySQLDecimal64Prefix(test.input, 18, 2)
+			require.NoError(t, err)
+			require.Equal(t, want64, got64)
+
+			want128, err := types.ParseDecimal128(test.want, 38, 2)
+			require.NoError(t, err)
+			got128, err := parseMySQLDecimal128Prefix(test.input, 38, 2)
+			require.NoError(t, err)
+			require.Equal(t, want128, got128)
+
+			want256, err := types.ParseDecimal256(test.want, 65, 2)
+			require.NoError(t, err)
+			got256, err := parseMySQLDecimal256Prefix(test.input, 65, 2)
+			require.NoError(t, err)
+			require.Equal(t, want256, got256)
+		})
+	}
+}
+
 func TestParseStringToFloatWithBitSize(t *testing.T) {
 	t.Run("mysql_default_range_handling", func(t *testing.T) {
 		got32, err := parseStringToFloatWithBitSize("1e100", 32, SQLCompatibilityMySQL)
