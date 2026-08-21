@@ -90,39 +90,3 @@ func (r *DeviceReservation) Release() {
 func ReservedDeviceMemory(deviceID int) uint64 {
 	return uint64(C.gpu_device_memory_reserved(C.int(deviceID)))
 }
-
-// DeviceReservations is a set of claims across the devices one build spans.
-type DeviceReservations []*DeviceReservation
-
-// Release drops every claim in the set.
-func (rs DeviceReservations) Release() {
-	for _, r := range rs {
-		r.Release()
-	}
-}
-
-// ReserveBuildMemory claims a build's planned device bytes across the devices
-// it will actually land on, and rolls the whole set back if any single device
-// refuses — a partially reserved build would hold budget it can never use.
-//
-// perDeviceBytes maps physical device id to the bytes that device will hold.
-// Callers compute it from the distribution mode: REPLICATED gives every device
-// a full copy, SHARDED splits, SINGLE names one device.
-func ReserveBuildMemory(perDeviceBytes map[int]uint64) (DeviceReservations, error) {
-	if len(perDeviceBytes) == 0 {
-		return nil, nil
-	}
-	out := make(DeviceReservations, 0, len(perDeviceBytes))
-	for dev, want := range perDeviceBytes {
-		if want == 0 {
-			continue
-		}
-		r, err := ReserveDeviceMemory(dev, want)
-		if err != nil {
-			out.Release()
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, nil
-}

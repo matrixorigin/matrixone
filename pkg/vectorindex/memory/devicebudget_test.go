@@ -173,41 +173,6 @@ func TestDeviceBuildBytes(t *testing.T) {
 	})
 }
 
-// TestDeviceBuildPeakBytes pins the governor policy: a build claims the peak of
-// its non-overlapping phases. The training-dominant case is the regression --
-// claiming resident-only there under-claims by exactly the gap a concurrent
-// allocation can then take.
-func TestDeviceBuildPeakBytes(t *testing.T) {
-	// Resident-dominant: narrow vector, small train fraction.
-	require.Equal(t, uint64(1000), DeviceBuildPeakBytes(1000, 200))
-	// Training-dominant: wide vector, generous kmeans_train_percent, narrow PQ
-	// codes. Claiming 1000 here is the defect; the build really peaks at 5000.
-	require.Equal(t, uint64(5000), DeviceBuildPeakBytes(1000, 5000))
-	// Equal phases.
-	require.Equal(t, uint64(700), DeviceBuildPeakBytes(700, 700))
-	// A missing trainset figure must not erase the resident claim.
-	require.Equal(t, uint64(900), DeviceBuildPeakBytes(900, 0))
-	// Nor the reverse: a build that streams everything still claims its trainset.
-	require.Equal(t, uint64(400), DeviceBuildPeakBytes(0, 400))
-	require.Zero(t, DeviceBuildPeakBytes(0, 0))
-}
-
-// TestDeviceBuildPeakBytesFlowsThroughDistribution checks the peak is attributed
-// per device the same way the resident figure is: divided when sharded, charged
-// in full to every device when replicated.
-func TestDeviceBuildPeakBytesFlowsThroughDistribution(t *testing.T) {
-	devices := []int{0, 1}
-	peak := DeviceBuildPeakBytes(1000, 4000) // training dominates
-
-	sharded := DeviceBuildBytes(vectorindex.DistributionMode_SHARDED, devices, peak)
-	require.Equal(t, uint64(2000), sharded[0])
-	require.Equal(t, uint64(2000), sharded[1])
-
-	replicated := DeviceBuildBytes(vectorindex.DistributionMode_REPLICATED, devices, peak)
-	require.Equal(t, uint64(4000), replicated[0])
-	require.Equal(t, uint64(4000), replicated[1])
-}
-
 // fakeRowsFitting mirrors cuvs.RowsFittingFreeMem EXACTLY, including the two
 // details that matter: the budget is 60% of free, and the result is CLAMPED to a
 // minimum of 1 (helper.cpp rows_fitting_gpu_mem). A fake without that clamp lets

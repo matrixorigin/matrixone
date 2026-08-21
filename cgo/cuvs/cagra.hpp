@@ -588,6 +588,13 @@ public:
         }
     }
 
+    // Bytes the device upload below is about to take. Sized from the host view
+    // actually being uploaded, so it is per-shard correct without the caller
+    // having to know which distribution mode it is in.
+    static size_t upload_bytes(int64_t rows, int64_t dim) {
+        return static_cast<size_t>(rows) * static_cast<size_t>(dim) * sizeof(T);
+    }
+
     void build_internal(raft_handle_wrapper_t& handle) {
         cuvs::neighbors::cagra::index_params index_params;
         index_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
@@ -624,8 +631,27 @@ public:
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
                 // cuVS 26.06+: upload to device_padded_dataset first, then build with view.
-                local_padded = std::shared_ptr<padded_dataset_t>(
-                    cuvs::neighbors::make_device_padded_dataset(*res, dataset_host).release());
+                {
+                    // Claim ONLY the upload, and drop the claim as soon as it lands.
+                    //
+                    // A claim exists to cover the window a live cudaMemGetInfo cannot
+                    // see: bytes decided on but not yet taken. The moment the upload
+                    // returns, those bytes ARE visible, so holding the claim any longer
+                    // counts them twice -- once in the ledger, once in the freed-memory
+                    // figure that already dropped -- and every concurrent load is
+                    // refused over memory that is only spoken for once.
+                    //
+                    // In particular this does NOT wrap cuvs::cagra::build below. That
+                    // call allocates its graph and workspace promptly and visibly, then
+                    // COMPUTES for minutes; a claim spanning it would hold the whole
+                    // build's worth of budget for the whole build, which is what the Go
+                    // side used to do.
+                    auto upload_claim = matrixone::device_memory_governor::reserve(
+                        upload_bytes(dataset_host.extent(0), dataset_host.extent(1)),
+                        "cagra::build upload");
+                    local_padded = std::shared_ptr<padded_dataset_t>(
+                        cuvs::neighbors::make_device_padded_dataset(*res, dataset_host).release());
+                }
                 local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
                     *res, index_params, local_padded->as_dataset_view()));
             }
@@ -676,8 +702,27 @@ public:
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
                 // cuVS 26.06+: upload to device_padded_dataset first, then build with view.
-                local_padded = std::shared_ptr<padded_dataset_t>(
-                    cuvs::neighbors::make_device_padded_dataset(*res, dataset_host).release());
+                {
+                    // Claim ONLY the upload, and drop the claim as soon as it lands.
+                    //
+                    // A claim exists to cover the window a live cudaMemGetInfo cannot
+                    // see: bytes decided on but not yet taken. The moment the upload
+                    // returns, those bytes ARE visible, so holding the claim any longer
+                    // counts them twice -- once in the ledger, once in the freed-memory
+                    // figure that already dropped -- and every concurrent load is
+                    // refused over memory that is only spoken for once.
+                    //
+                    // In particular this does NOT wrap cuvs::cagra::build below. That
+                    // call allocates its graph and workspace promptly and visibly, then
+                    // COMPUTES for minutes; a claim spanning it would hold the whole
+                    // build's worth of budget for the whole build, which is what the Go
+                    // side used to do.
+                    auto upload_claim = matrixone::device_memory_governor::reserve(
+                        upload_bytes(dataset_host.extent(0), dataset_host.extent(1)),
+                        "cagra::build upload");
+                    local_padded = std::shared_ptr<padded_dataset_t>(
+                        cuvs::neighbors::make_device_padded_dataset(*res, dataset_host).release());
+                }
                 local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
                     *res, index_params, local_padded->as_dataset_view()));
             }
@@ -706,8 +751,27 @@ public:
             std::shared_ptr<padded_dataset_t> new_padded;
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
-                new_padded = std::shared_ptr<padded_dataset_t>(
-                    cuvs::neighbors::make_device_padded_dataset(*res, dataset_host).release());
+                {
+                    // Claim ONLY the upload, and drop the claim as soon as it lands.
+                    //
+                    // A claim exists to cover the window a live cudaMemGetInfo cannot
+                    // see: bytes decided on but not yet taken. The moment the upload
+                    // returns, those bytes ARE visible, so holding the claim any longer
+                    // counts them twice -- once in the ledger, once in the freed-memory
+                    // figure that already dropped -- and every concurrent load is
+                    // refused over memory that is only spoken for once.
+                    //
+                    // In particular this does NOT wrap cuvs::cagra::build below. That
+                    // call allocates its graph and workspace promptly and visibly, then
+                    // COMPUTES for minutes; a claim spanning it would hold the whole
+                    // build's worth of budget for the whole build, which is what the Go
+                    // side used to do.
+                    auto upload_claim = matrixone::device_memory_governor::reserve(
+                        upload_bytes(dataset_host.extent(0), dataset_host.extent(1)),
+                        "cagra::build upload");
+                    new_padded = std::shared_ptr<padded_dataset_t>(
+                        cuvs::neighbors::make_device_padded_dataset(*res, dataset_host).release());
+                }
                 new_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
                     *res, index_params, new_padded->as_dataset_view()));
             }

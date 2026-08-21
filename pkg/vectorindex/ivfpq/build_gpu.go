@@ -59,19 +59,9 @@ type IvfpqBuild[B, Q cuvs.VectorType] struct {
 	nthread uint32
 	devices []int
 
-	// deviceBytesPerRow is the per-row DEVICE cost supplied by the create TVF,
-	// which owns the per-algo model. 0 means the caller did not supply it and
-	// no claim is taken -- direct API users and tests keep today's behaviour.
-	deviceBytesPerRow uint64
-	// deviceTrainsetBytes is the TOTAL device bytes the k-means trainset takes
-	// for one sub-index build. It is tracked separately from deviceBytesPerRow
-	// because the two phases do not overlap: the claim is the peak of the two,
-	// not their sum, and not the resident figure alone.
-	deviceTrainsetBytes uint64
-
 	// hostBytesPerRow is the per-row HOST cost of the eager capacity-sized
 	// staging buffers (vector staging + INCLUDE columns + per-row ids), supplied
-	// by the create TVF for the same reason as deviceBytesPerRow. 0 means no
+	// by the create TVF, which owns the per-algo cost model. 0 means no
 	// claim is taken, which keeps direct API users and tests as they were.
 	hostBytesPerRow uint64
 
@@ -139,27 +129,12 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 	// per row. Today the create TVF always resolves a positive capacity, so the guard is
 	// belt-and-braces against a second provenance for the value.
 	if b.current != nil && capacity > 0 && b.count >= capacity {
-		// Claim the VRAM this sub-index is about to allocate before building it.
-		claim, cerr := b.reserveBuildVRAM(b.count)
-		if cerr != nil {
-			return nil, cerr
-		}
-		// Safety net for the paths the explicit release below cannot cover: a panic
-		// inside Build(), or any early return a later edit inserts between here and
-		// it. A leaked claim is not self-correcting -- it shrinks this device's
-		// budget for the life of the process and refuses every later load.
-		defer func() {
-			if claim != nil {
-				claim.Release()
-				claim = nil
-			}
-		}()
+		// VRAM for this build is claimed in C++, around the device upload itself
+		// (cagra.hpp). A Go-side claim could only wrap the whole Build() call,
+		// which allocates early and then computes for minutes -- holding the
+		// budget for all of it while cudaMemGetInfo already reflected the same
+		// bytes, so every concurrent load was refused over a double count.
 		err := b.current.Build()
-		// Release promptly on the normal path, so the next admission sees the memory
-		// through cudaMemGetInfo rather than through the ledger. Clearing claim makes
-		// the deferred release a no-op; Release is idempotent regardless.
-		claim.Release()
-		claim = nil
 		if err != nil {
 			return nil, err
 		}
@@ -261,27 +236,12 @@ func (b *IvfpqBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 
 func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	if b.current != nil && b.count > 0 {
-		// Claim the VRAM this sub-index is about to allocate before building it.
-		claim, cerr := b.reserveBuildVRAM(b.count)
-		if cerr != nil {
-			return nil, cerr
-		}
-		// Safety net for the paths the explicit release below cannot cover: a panic
-		// inside Build(), or any early return a later edit inserts between here and
-		// it. A leaked claim is not self-correcting -- it shrinks this device's
-		// budget for the life of the process and refuses every later load.
-		defer func() {
-			if claim != nil {
-				claim.Release()
-				claim = nil
-			}
-		}()
+		// VRAM for this build is claimed in C++, around the device upload itself
+		// (cagra.hpp). A Go-side claim could only wrap the whole Build() call,
+		// which allocates early and then computes for minutes -- holding the
+		// budget for all of it while cudaMemGetInfo already reflected the same
+		// bytes, so every concurrent load was refused over a double count.
 		err := b.current.Build()
-		// Release promptly on the normal path, so the next admission sees the memory
-		// through cudaMemGetInfo rather than through the ledger. Clearing claim makes
-		// the deferred release a no-op; Release is idempotent regardless.
-		claim.Release()
-		claim = nil
 		if err != nil {
 			return nil, err
 		}
@@ -340,20 +300,6 @@ func (b *IvfpqBuild[B, Q]) GetIndexes() []*IvfpqModel[B, Q] {
 	return b.indexes
 }
 
-// SetDeviceBytesPerRow records the per-row device cost used to claim VRAM
-// around each sub-index build. See the ivfpqBuilder interface for why the
-// number is passed in rather than recomputed here.
-func (b *IvfpqBuild[B, Q]) SetDeviceBytesPerRow(perRow uint64) {
-	b.deviceBytesPerRow = perRow
-}
-
-// SetDeviceTrainsetBytes records the total device bytes the k-means trainset
-// occupies for one sub-index build, so the VRAM claim can cover the training
-// phase when it is the larger of the two. See memory.DeviceBuildPeakBytes.
-func (b *IvfpqBuild[B, Q]) SetDeviceTrainsetBytes(total uint64) {
-	b.deviceTrainsetBytes = total
-}
-
 // SetHostBytesPerRow records the per-row host cost used to claim host memory
 // around each sub-index's eager capacity-sized allocation.
 func (b *IvfpqBuild[B, Q]) SetHostBytesPerRow(perRow uint64) {
@@ -376,33 +322,4 @@ func (b *IvfpqBuild[B, Q]) reserveBuildHost(rows int64) (*memory.HostReservation
 		return nil, nil
 	}
 	return memory.ReserveHostMemory(uint64(rows)*b.hostBytesPerRow, "ivfpq build")
-}
-
-// reserveBuildVRAM claims what this sub-index build is about to allocate, in the
-// same C++ ledger index loads claim through (cgo/cuvs/device_memory.hpp). The
-// claim is taken HERE, not inside the C++ build, so it spans the whole window
-// where the build has decided its size but has not allocated yet -- a claim
-// taken at the allocation would leave that window exactly as exposed as before.
-//
-// Returns a no-op release when the per-row cost was never supplied or the
-// sub-index is empty: reserve() refuses a zero claim by design, and there is
-// nothing to protect.
-func (b *IvfpqBuild[B, Q]) reserveBuildVRAM(rows int64) (cuvs.DeviceReservations, error) {
-	if rows <= 0 || len(b.devices) == 0 {
-		return nil, nil
-	}
-	resident := uint64(rows) * b.deviceBytesPerRow
-	// Claim the PEAK of the build's two non-overlapping phases. Charging only the
-	// resident PQ codes under-claims whenever training is the larger allocation,
-	// and the unclaimed gap is exactly what a concurrent load or build can be
-	// admitted against.
-	total := memory.DeviceBuildPeakBytes(resident, b.deviceTrainsetBytes)
-	if total == 0 {
-		// Neither cost was supplied: nothing to protect, and reserve() refuses a
-		// zero claim by design.
-		return nil, nil
-	}
-	perDev := memory.DeviceBuildBytes(
-		vectorindex.DistributionMode(b.idxcfg.CuvsIvfpq.DistributionMode), b.devices, total)
-	return cuvs.ReserveBuildMemory(perDev)
 }

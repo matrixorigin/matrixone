@@ -62,12 +62,6 @@ type cagraBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
-	// SetDeviceBytesPerRow hands the builder the per-row DEVICE cost this file
-	// already computed for capacity planning, so each sub-index build can claim
-	// rows*perRow in the C++ governor and a concurrent index load cannot spend
-	// the same free VRAM. Passing the number rather than recomputing it keeps a
-	// single definition of a per-algo model that is easy to get wrong.
-	SetDeviceBytesPerRow(perRow uint64)
 	// SetHostBytesPerRow hands the builder the per-row HOST cost computed above,
 	// so each sub-index can claim its eager capacity-sized host allocation
 	// against the per-CN ledger before InitEmpty spends it.
@@ -518,13 +512,6 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return err
 		}
 
-		// Hand the builder the per-row DEVICE cost computed above, so each
-		// sub-index build claims rows*perRow in the C++ governor -- the same
-		// ledger index loads claim through. Passing the number rather than
-		// recomputing it in the builder keeps one definition of a per-algo
-		// model that is easy to get wrong (IVF-PQ charges PQ codes, not the
-		// dataset, and budgets the trainset as max(train, index)).
-		u.builder.SetDeviceBytesPerRow(perRow)
 		// hostPerRow was computed for the capacity decision above; hand the same
 		// number to the builder so admission and the capacity model agree.
 		u.builder.SetHostBytesPerRow(hostPerRow)

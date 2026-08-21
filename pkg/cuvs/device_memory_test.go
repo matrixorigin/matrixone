@@ -17,7 +17,6 @@
 package cuvs
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -58,55 +57,4 @@ func TestReserveDeviceMemoryRefusesImpossible(t *testing.T) {
 	_, err := ReserveDeviceMemory(0, 1<<62)
 	require.Error(t, err)
 	requireLedgerEmpty(t, "refused impossible claim")
-}
-
-func TestReserveBuildMemoryRollsBackOnRefusal(t *testing.T) {
-	// A build spanning several devices must not keep the claims it did win when
-	// one device refuses: a partially reserved build holds budget it can never
-	// use, and nothing would ever release it.
-	requireLedgerEmpty(t, "start")
-	// Both entries name device 0: an impossible SIZE forces the rollback without
-	// depending on how many GPUs the host has. Naming a nonexistent device would
-	// make this pass or fail by machine, and would leave cudaErrorInvalidDevice
-	// latched in the CUDA context for whatever test runs next.
-	_, err := ReserveBuildMemory(map[int]uint64{
-		0: 1 << 62, // impossible: forces the rollback path
-	})
-	require.Error(t, err)
-	requireLedgerEmpty(t, "rolled-back multi-device reservation")
-}
-
-func TestReserveBuildMemoryConcurrent(t *testing.T) {
-	requireLedgerEmpty(t, "start")
-	const n = 8
-	const each = 16 << 20
-
-	var wg sync.WaitGroup
-	claims := make([]DeviceReservations, n)
-	errs := make([]error, n)
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func(i int) {
-			defer wg.Done()
-			claims[i], errs[i] = ReserveBuildMemory(map[int]uint64{0: each})
-		}(i)
-	}
-	wg.Wait()
-	for i := range claims {
-		c := claims[i]
-		t.Cleanup(c.Release)
-	}
-
-	admitted := 0
-	for i := range errs {
-		if errs[i] == nil {
-			admitted++
-		}
-	}
-	require.Positive(t, admitted, "at least one concurrent build claim must win")
-
-	for _, c := range claims {
-		c.Release()
-	}
-	requireLedgerEmpty(t, "concurrent build claims")
 }
