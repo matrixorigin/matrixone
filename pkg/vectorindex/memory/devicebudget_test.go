@@ -208,14 +208,21 @@ func TestDeviceBuildPeakBytesFlowsThroughDistribution(t *testing.T) {
 	require.Equal(t, uint64(4000), replicated[1])
 }
 
-// fakeRowsFitting reports how many objects of perRow bytes fit in `free`, using
-// the same shape as cuvs.RowsFittingFreeMem.
+// fakeRowsFitting mirrors cuvs.RowsFittingFreeMem EXACTLY, including the two
+// details that matter: the budget is 60% of free, and the result is CLAMPED to a
+// minimum of 1 (helper.cpp rows_fitting_gpu_mem). A fake without that clamp lets
+// a "did anything fit?" predicate pass in tests while being always-true against
+// real hardware -- which is precisely the bug this fake now reproduces.
 func fakeRowsFitting(free uint64) DeviceRowsFittingFunc {
 	return func(device int, perRow uint64) (int64, uint64, error) {
 		if perRow == 0 {
 			return 0, free, nil
 		}
-		return int64(free / perRow), free, nil
+		rows := int64(free / 10 * 6 / perRow)
+		if rows < 1 {
+			rows = 1
+		}
+		return rows, free, nil
 	}
 }
 
@@ -225,11 +232,11 @@ func fakeRowsFitting(free uint64) DeviceRowsFittingFunc {
 func TestDeviceLoadFits(t *testing.T) {
 	devices := []int{0}
 
-	// Aggregate fits: no refusal.
+	// 1000 free -> a 600-byte budget.
 	require.NoError(t, DeviceLoadFits(
-		vectorindex.DistributionMode_SINGLE_GPU, devices, 900, fakeRowsFitting(1000)))
+		vectorindex.DistributionMode_SINGLE_GPU, devices, 500, fakeRowsFitting(1000)))
 
-	// Aggregate does not fit, even though each of the 30 sub-indexes would.
+	// Aggregate does not fit, even though each individual sub-index would.
 	err := DeviceLoadFits(
 		vectorindex.DistributionMode_SINGLE_GPU, devices, 3000, fakeRowsFitting(1000))
 	require.Error(t, err)
@@ -237,20 +244,21 @@ func TestDeviceLoadFits(t *testing.T) {
 	require.Contains(t, err.Error(), "built successfully",
 		"the message must say the build was fine, or the operator looks in the wrong place")
 
-	// Exactly at the limit is admitted.
+	// Exactly at the budget is admitted; one byte over is not.
 	require.NoError(t, DeviceLoadFits(
-		vectorindex.DistributionMode_SINGLE_GPU, devices, 1000, fakeRowsFitting(1000)))
+		vectorindex.DistributionMode_SINGLE_GPU, devices, 600, fakeRowsFitting(1000)))
+	require.Error(t, DeviceLoadFits(
+		vectorindex.DistributionMode_SINGLE_GPU, devices, 601, fakeRowsFitting(1000)))
 }
 
 func TestDeviceLoadFitsAttribution(t *testing.T) {
 	devices := []int{0, 1}
-	// SHARDED halves the aggregate per device, so 1500 total fits two 1000-byte
-	// devices even though it would not fit one.
+	// Budget is 600 per device. SHARDED halves the aggregate, so 1000 total is 500
+	// per device and fits; REPLICATED charges each device the whole 1000 and does not.
 	require.NoError(t, DeviceLoadFits(
-		vectorindex.DistributionMode_SHARDED, devices, 1500, fakeRowsFitting(1000)))
-	// REPLICATED charges every device the whole thing, so the same total does not.
+		vectorindex.DistributionMode_SHARDED, devices, 1000, fakeRowsFitting(1000)))
 	require.Error(t, DeviceLoadFits(
-		vectorindex.DistributionMode_REPLICATED, devices, 1500, fakeRowsFitting(1000)))
+		vectorindex.DistributionMode_REPLICATED, devices, 1000, fakeRowsFitting(1000)))
 }
 
 func TestDeviceLoadFitsDegenerateInputs(t *testing.T) {

@@ -178,24 +178,30 @@ func DeviceLoadFits(
 		if need == 0 {
 			continue
 		}
-		// "How many objects of size `need` fit" answers "does one fit" without a
-		// second budget rule: rowsFitting already applies the same fraction of
-		// free VRAM that every other admission on this path uses.
-		fits, free, err := rowsFitting(dev, need)
+		// Ask how many ONE-BYTE rows fit: that answer IS the byte budget, computed
+		// by the same code every other admission on this path uses, so the 60%
+		// fraction is not duplicated here.
+		//
+		// Do NOT instead ask whether `need` rows-of-need-bytes fit and test for 0.
+		// rows_fitting_gpu_mem clamps its result to a minimum of 1 (helper.cpp), so
+		// it never reports "does not fit" and any predicate built on it is silently
+		// always-true. That mistake shipped once and was caught only by running this
+		// against a real device.
+		budgetBytes, free, err := rowsFitting(dev, 1)
 		if err != nil {
 			// Never guess. An unmeasurable device is exactly the condition that
 			// made the previous version admit a load it could not complete.
 			return moerr.NewInternalErrorNoCtxf(
 				"vector index load: cannot measure device %d to admit %d bytes: %v", dev, need, err)
 		}
-		if fits < 1 {
+		if budgetBytes < 0 || need > uint64(budgetBytes) {
 			return moerr.NewInternalErrorNoCtxf(
 				"vector index load: this index needs %d bytes resident on device %d to be "+
-					"searched (%d bytes free), because a query reads every sub-index at once. "+
-					"The index built successfully -- rotation bounds each build, not the search. "+
-					"Rebuild with a narrower storage type (QUANTIZATION), index fewer rows, or "+
-					"use a GPU with more memory",
-				need, dev, free)
+					"searched, but only %d bytes may be claimed (%d bytes free), because a query "+
+					"reads every sub-index at once. The index built successfully -- rotation "+
+					"bounds each build, not the search. Rebuild with a narrower storage type "+
+					"(QUANTIZATION), index fewer rows, or use a GPU with more memory",
+				need, dev, budgetBytes, free)
 		}
 	}
 	return nil
