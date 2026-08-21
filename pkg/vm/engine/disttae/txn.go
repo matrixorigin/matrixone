@@ -2640,6 +2640,20 @@ func (txn *Transaction) getCachedTable(
 	return txn.getCachedTableByKey(ctx, k, k)
 }
 
+func (txn *Transaction) finishCatalogReload(key tableKey, outcome cache.CatalogInvalidationOutcome) {
+	invalidations := txn.catalogInvalidations.Load()
+	if invalidations == nil {
+		return
+	}
+	started, ok := invalidations.LoadAndDelete(key)
+	if !ok {
+		return
+	}
+	if catalogCache := txn.engine.GetLatestCatalogCache(); catalogCache != nil {
+		catalogCache.RecordRCTableCacheReload(time.Since(started.(time.Time)), outcome)
+	}
+}
+
 func (txn *Transaction) getCachedTableByKey(
 	_ context.Context,
 	k tableKey,

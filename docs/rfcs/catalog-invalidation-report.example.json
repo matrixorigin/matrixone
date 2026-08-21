@@ -32,12 +32,18 @@
   "events": {},
   "prepared_plan_rebuild": {
     "count": 0,
+    "successes": 0,
+    "errors": 0,
+    "misses": 0,
     "p50_ns": 0,
     "p95_ns": 0,
     "p99_ns": 0
   },
   "rc_table_cache_reload": {
     "count": 0,
+    "successes": 0,
+    "errors": 0,
+    "misses": 0,
     "p50_ns": 0,
     "p95_ns": 0,
     "p99_ns": 0

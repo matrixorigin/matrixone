@@ -92,9 +92,22 @@ type catalogInvalidationCounters struct {
 }
 
 type catalogLatencyHistogram struct {
-	count  uint64
-	bucket [13]uint64
+	count   uint64
+	success uint64
+	error   uint64
+	miss    uint64
+	bucket  [13]uint64
 }
+
+// CatalogInvalidationOutcome describes the terminal result of a consumer
+// rebuild/reload attempt in the attribution report.
+type CatalogInvalidationOutcome uint8
+
+const (
+	CatalogInvalidationSuccess CatalogInvalidationOutcome = iota
+	CatalogInvalidationError
+	CatalogInvalidationMiss
+)
 
 // The histogram is deliberately bounded. The last bucket is an overflow
 // bucket, so a long-running attribution process cannot retain one sample per
@@ -115,7 +128,19 @@ var catalogLatencyBounds = [...]time.Duration{
 }
 
 func (h *catalogLatencyHistogram) observe(d time.Duration) {
+	h.record(d, CatalogInvalidationSuccess)
+}
+
+func (h *catalogLatencyHistogram) record(d time.Duration, outcome CatalogInvalidationOutcome) {
 	h.count++
+	switch outcome {
+	case CatalogInvalidationSuccess:
+		h.success++
+	case CatalogInvalidationError:
+		h.error++
+	case CatalogInvalidationMiss:
+		h.miss++
+	}
 	for i, bound := range catalogLatencyBounds {
 		if d <= bound {
 			h.bucket[i]++
@@ -304,15 +329,19 @@ func (a *catalogInvalidationAttribution) recordDecision(
 	a.counters[consumer] = c
 }
 
-func (a *catalogInvalidationAttribution) recordPreparedRebuild(d time.Duration) {
+func (a *catalogInvalidationAttribution) recordPreparedRebuild(d time.Duration, success bool) {
 	a.mu.Lock()
-	a.preparedRebuilds.observe(d)
+	outcome := CatalogInvalidationError
+	if success {
+		outcome = CatalogInvalidationSuccess
+	}
+	a.preparedRebuilds.record(d, outcome)
 	a.mu.Unlock()
 }
 
-func (a *catalogInvalidationAttribution) recordRCTableCacheReload(d time.Duration) {
+func (a *catalogInvalidationAttribution) recordRCTableCacheReload(d time.Duration, outcome CatalogInvalidationOutcome) {
 	a.mu.Lock()
-	a.rcCacheReloads.observe(d)
+	a.rcCacheReloads.record(d, outcome)
 	a.mu.Unlock()
 }
 
@@ -340,10 +369,13 @@ type CatalogInvalidationReportMetadata struct {
 
 // CatalogInvalidationLatency is the bounded latency view used in the report.
 type CatalogInvalidationLatency struct {
-	Count uint64 `json:"count"`
-	P50NS int64  `json:"p50_ns"`
-	P95NS int64  `json:"p95_ns"`
-	P99NS int64  `json:"p99_ns"`
+	Count   uint64 `json:"count"`
+	Success uint64 `json:"successes"`
+	Error   uint64 `json:"errors"`
+	Miss    uint64 `json:"misses"`
+	P50NS   int64  `json:"p50_ns"`
+	P95NS   int64  `json:"p95_ns"`
+	P99NS   int64  `json:"p99_ns"`
 }
 
 // CatalogInvalidationShadow is a bounded-state summary of the precise shadow
@@ -371,10 +403,8 @@ type CatalogInvalidationReport struct {
 
 func histogramReport(h catalogLatencyHistogram) CatalogInvalidationLatency {
 	return CatalogInvalidationLatency{
-		Count: h.count,
-		P50NS: h.quantile(0.50),
-		P95NS: h.quantile(0.95),
-		P99NS: h.quantile(0.99),
+		Count: h.count, Success: h.success, Error: h.error, Miss: h.miss,
+		P50NS: h.quantile(0.50), P95NS: h.quantile(0.95), P99NS: h.quantile(0.99),
 	}
 }
 
@@ -451,15 +481,15 @@ func (cc *CatalogCache) CatalogInvalidationAttributionEnabled() bool {
 	return cc.attribution != nil
 }
 
-func (cc *CatalogCache) RecordPreparedPlanRebuild(d time.Duration) {
+func (cc *CatalogCache) RecordPreparedPlanRebuild(d time.Duration, success bool) {
 	if cc.attribution != nil {
-		cc.attribution.recordPreparedRebuild(d)
+		cc.attribution.recordPreparedRebuild(d, success)
 	}
 }
 
-func (cc *CatalogCache) RecordRCTableCacheReload(d time.Duration) {
+func (cc *CatalogCache) RecordRCTableCacheReload(d time.Duration, outcome CatalogInvalidationOutcome) {
 	if cc.attribution != nil {
-		cc.attribution.recordRCTableCacheReload(d)
+		cc.attribution.recordRCTableCacheReload(d, outcome)
 	}
 }
 

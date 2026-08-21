@@ -864,11 +864,11 @@ func initExecuteStmtParamWithResolverInSession(
 	if needRebuild {
 		rebuildStart := time.Now()
 		newPlan, err := rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
+		if schemaChanged && catalogCache != nil {
+			catalogCache.RecordPreparedPlanRebuild(time.Since(rebuildStart), err == nil)
+		}
 		if err != nil {
 			return nil, nil, nil, "", false, err
-		}
-		if schemaChanged && catalogCache != nil {
-			catalogCache.RecordPreparedPlanRebuild(time.Since(rebuildStart))
 		}
 		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		newPreparePlan := newPlan.GetDcl().GetPrepare()
