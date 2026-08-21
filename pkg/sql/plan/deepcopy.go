@@ -302,7 +302,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DirectView:             node.DirectView,
 		RankOption:             DeepCopyRankOption(node.RankOption),
 		WindowIdx:              node.WindowIdx,
-		ScanSnapshot:           DeepCopySnapshot(node.ScanSnapshot),
 		RecursiveCte:           node.RecursiveCte,
 		ApplyType:              node.ApplyType,
 		PostDmlCtx:             DeepCopyPostDmlCtx(node.PostDmlCtx),
