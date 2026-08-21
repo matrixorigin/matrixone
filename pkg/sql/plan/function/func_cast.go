@@ -1205,7 +1205,7 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 		return decimal256ToDecimal256(s, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
-		return strToDecimal256(s, rs, length, selectList, mode == castModeExplicit)
+		return strToDecimal256(s, rs, length, selectList, mode)
 	default:
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), toType))
 	}
@@ -2659,10 +2659,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return strToDecimal64(source, rs, length, selectList, explicit)
+		return strToDecimal64(source, rs, length, selectList, mode)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return strToDecimal128(source, rs, length, selectList, explicit)
+		return strToDecimal128(source, rs, length, selectList, mode)
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return strToBool(source, rs, length, selectList)
@@ -6411,6 +6411,17 @@ func parseStringToFloat(s string, mode SQLCompatibilityMode) (float64, error) {
 	return parseStringToFloatWithBitSize(s, 64, mode)
 }
 
+// ParsePreparedStringToFloat64 applies the same compatibility contract as an
+// implicit string-to-DOUBLE cast to a prepared parameter whose plan has
+// already stabilized in the DOUBLE result domain.
+func ParsePreparedStringToFloat64(s string, matrixOneNative bool) (float64, error) {
+	mode := SQLCompatibilityMySQL
+	if matrixOneNative {
+		mode = SQLCompatibilityMatrixOne
+	}
+	return parseStringToFloat(s, mode)
+}
+
 func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityMode) (float64, error) {
 	if isExtensionFloatCandidate(s) || mode == SQLCompatibilityMatrixOne {
 		return parseStrictFloatStringWithBitSize(s, bitSize)
@@ -6575,6 +6586,13 @@ func scanDecimalFloatPrefix(s string) (prefix string, negative bool, ok bool) {
 	return s[prefixStart:prefixEnd], negative, true
 }
 
+// GetNumericStringPrefix returns the numeric prefix that MySQL uses when a
+// character string participates in a numeric comparison.
+func GetNumericStringPrefix(s string) (string, bool) {
+	prefix, _, ok := scanDecimalFloatPrefix(s)
+	return prefix, ok
+}
+
 func skipASCIISpace(s string, i int) int {
 	for i < len(s) {
 		switch s[i] {
@@ -6702,6 +6720,12 @@ func parseSignedExplicitCastString(s string, bitSize int) (int64, error) {
 	return int64(unsigned), nil
 }
 
+// ParsePreparedStringToInt64 applies the ordinary SQL string-to-BIGINT cast
+// contract when a stable prepared plan exposes an integer ParamRef.
+func ParsePreparedStringToInt64(s string) (int64, error) {
+	return parseSignedExplicitCastString(s, 64)
+}
+
 func parseUnsignedExplicitCastString(s string, bitSize int) (uint64, error) {
 	parseInput := explicitIntegerCastInput(s)
 	value, err := parseUnsignedCastString(parseInput, bitSize)
@@ -6726,6 +6750,12 @@ func parseUnsignedExplicitCastString(s string, bitSize int) (uint64, error) {
 		return new(big.Int).Sub(modulus, big.NewInt(1)).Uint64(), nil
 	}
 	return magnitude.Uint64(), nil
+}
+
+// ParsePreparedStringToUint64 applies the ordinary SQL string-to-UNSIGNED
+// BIGINT cast contract when a stable prepared plan exposes an integer ParamRef.
+func ParsePreparedStringToUint64(s string) (uint64, error) {
+	return parseUnsignedExplicitCastString(s, 64)
 }
 
 func strToUnsigned[T constraints.Unsigned](
@@ -6857,13 +6887,30 @@ func strToFloatWithProc[T constraints.Float](
 func strToDecimal64(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList,
-	explicit ...bool,
+	mode castMode,
 ) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
+	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
+		v, null := from.GetStrValue(0)
+		var result types.Decimal64
+		var err error
+		if !null {
+			result, err = parseMySQLDecimal64Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+		}
+		for i = 0; i < l; i++ {
+			if err = to.Append(result, null); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -6873,10 +6920,12 @@ func strToDecimal64(
 		} else {
 			s := convertByteSliceToString(v)
 			if !isb {
-				isExplicit := len(explicit) > 0 && explicit[0]
+				isExplicit := mode == castModeExplicit
 				var result types.Decimal64
 				var err error
-				if isExplicit {
+				if totype.Charset == 255 {
+					result, err = parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
+				} else if isExplicit {
 					result, err = parseExplicitDecimal64CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal64CastString(s, totype.Width, totype.Scale)
@@ -6966,6 +7015,187 @@ func parseDecimal64CastString(s string, width, scale int32) (types.Decimal64, er
 	return result, nil
 }
 
+func mysqlDecimalPrefix(s string) string {
+	i := 0
+	for i < len(s) {
+		switch s[i] {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			i++
+		default:
+			goto sign
+		}
+	}
+sign:
+	start := i
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
+	digits := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+		digits++
+	}
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return "0"
+	}
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		exponentStart := i
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		exponentDigits := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == exponentDigits {
+			i = exponentStart
+		}
+	}
+	prefix := s[start:i]
+	if exponentAt := strings.IndexByte(prefix, 'E'); exponentAt >= 0 {
+		prefix = prefix[:exponentAt] + "e" + prefix[exponentAt+1:]
+	}
+	return prefix
+}
+
+func canonicalizeMySQLDecimalPrefix(prefix string) string {
+	if prefix == "" {
+		return prefix
+	}
+	signEnd := 0
+	if prefix[0] == '+' || prefix[0] == '-' {
+		signEnd = 1
+	}
+	integralEnd := len(prefix)
+	if decimalAt := strings.IndexByte(prefix[signEnd:], '.'); decimalAt >= 0 {
+		integralEnd = signEnd + decimalAt
+	} else if exponentAt := strings.IndexByte(prefix[signEnd:], 'e'); exponentAt >= 0 {
+		integralEnd = signEnd + exponentAt
+	}
+	first := signEnd
+	for first < integralEnd && prefix[first] == '0' {
+		first++
+	}
+	if first == signEnd {
+		return prefix
+	}
+	if first == integralEnd {
+		return prefix[:signEnd] + "0" + prefix[integralEnd:]
+	}
+	return prefix[:signEnd] + prefix[first:]
+}
+
+func mysqlDecimalPrefixUnderflows(prefix string, scale int32) bool {
+	exponentAt := strings.IndexByte(prefix, 'e')
+	if exponentAt < 0 || exponentAt+1 >= len(prefix) {
+		return false
+	}
+	mantissaStart := 0
+	if prefix[0] == '+' || prefix[0] == '-' {
+		mantissaStart++
+	}
+	decimalPos, digitPos, firstNonZero := int64(0), int64(0), int64(-1)
+	seenDecimal := false
+	for j := mantissaStart; j < exponentAt; j++ {
+		if prefix[j] == '.' {
+			decimalPos = digitPos
+			seenDecimal = true
+			continue
+		}
+		if prefix[j] != '0' && firstNonZero < 0 {
+			firstNonZero = digitPos
+		}
+		digitPos++
+	}
+	if !seenDecimal {
+		decimalPos = digitPos
+	}
+	if firstNonZero < 0 {
+		return true
+	}
+	i := exponentAt + 1
+	if prefix[i] != '-' {
+		return false
+	}
+	i++
+	// Once the magnitude exceeds the target scale plus all mantissa digits,
+	// rounding to the target DECIMAL scale is necessarily zero. Keep the scan
+	// bounded so an arbitrarily long exponent cannot create proportional work.
+	limit := int64(scale) + decimalPos - firstNonZero - 1
+	magnitude := int64(0)
+	for ; i < len(prefix); i++ {
+		if magnitude > limit {
+			return true
+		}
+		magnitude = magnitude*10 + int64(prefix[i]-'0')
+	}
+	return magnitude > limit
+}
+
+func parseMySQLDecimal64Prefix(s string, width, scale int32) (types.Decimal64, error) {
+	prefix := canonicalizeMySQLDecimalPrefix(mysqlDecimalPrefix(s))
+	result, err := types.ParseDecimal64(prefix, width, scale)
+	if err == nil {
+		return result, nil
+	}
+	if mysqlDecimalPrefixUnderflows(prefix, scale) {
+		return 0, nil
+	}
+	return clampDecimal64Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+}
+
+func parseMySQLDecimal128Prefix(s string, width, scale int32) (types.Decimal128, error) {
+	prefix := canonicalizeMySQLDecimalPrefix(mysqlDecimalPrefix(s))
+	result, err := types.ParseDecimal128(prefix, width, scale)
+	if err == nil {
+		return result, nil
+	}
+	if mysqlDecimalPrefixUnderflows(prefix, scale) {
+		return types.Decimal128{}, nil
+	}
+	return clampDecimal128Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+}
+
+func parseMySQLDecimal256Prefix(s string, width, scale int32) (types.Decimal256, error) {
+	prefix := canonicalizeMySQLDecimalPrefix(mysqlDecimalPrefix(s))
+	result, err := types.ParseDecimal256(prefix, width, scale)
+	if err == nil {
+		return result, nil
+	}
+	if mysqlDecimalPrefixUnderflows(prefix, scale) {
+		return types.Decimal256{}, nil
+	}
+	if width > 65 {
+		// MySQL first converts an overflowing numeric prefix in its 65-digit
+		// DECIMAL input domain, then adopts the wider common-expression scale.
+		// Clamping directly in the Decimal256 result domain would incorrectly
+		// fill the newly introduced fractional digits with nines.
+		inputIntegralWidth := min(width-scale, int32(65))
+		if inputIntegralWidth <= 0 {
+			return clampDecimal256Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+		}
+		result, clampErr := clampDecimal256Value(
+			len(prefix) > 0 && prefix[0] == '-', inputIntegralWidth, 0)
+		if clampErr != nil {
+			return types.Decimal256{}, clampErr
+		}
+		result, scaleErr := result.Scale(scale)
+		if scaleErr != nil {
+			return types.Decimal256{}, scaleErr
+		}
+		return result, nil
+	}
+	return clampDecimal256Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+}
+
 func parseDecimal128CastString(s string, width, scale int32) (types.Decimal128, error) {
 	token, err := parseCastNumericToken(s)
 	if err != nil {
@@ -7052,13 +7282,30 @@ func parseExplicitDecimal256CastString(s string, width, scale int32) (types.Deci
 func strToDecimal128(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList,
-	explicit ...bool,
+	mode castMode,
 ) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
+	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
+		v, null := from.GetStrValue(0)
+		var result types.Decimal128
+		var err error
+		if !null {
+			result, err = parseMySQLDecimal128Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+		}
+		for i = 0; i < l; i++ {
+			if err = to.Append(result, null); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -7068,10 +7315,12 @@ func strToDecimal128(
 		} else {
 			s := convertByteSliceToString(v)
 			if !isb {
-				isExplicit := len(explicit) > 0 && explicit[0]
+				isExplicit := mode == castModeExplicit
 				var result types.Decimal128
 				var err error
-				if isExplicit {
+				if totype.Charset == 255 {
+					result, err = parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
+				} else if isExplicit {
 					result, err = parseExplicitDecimal128CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal128CastString(s, totype.Width, totype.Scale)
@@ -7135,13 +7384,30 @@ func clampDecimal128CastString(s string, width, scale int32) (types.Decimal128, 
 func strToDecimal256(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList,
-	explicit ...bool,
+	mode castMode,
 ) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Decimal256
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
+	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
+		v, null := from.GetStrValue(0)
+		var result types.Decimal256
+		var err error
+		if !null {
+			result, err = parseMySQLDecimal256Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+		}
+		for i = 0; i < l; i++ {
+			if err = to.Append(result, null); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -7151,10 +7417,12 @@ func strToDecimal256(
 		} else {
 			s := convertByteSliceToString(v)
 			if !isb {
-				isExplicit := len(explicit) > 0 && explicit[0]
+				isExplicit := mode == castModeExplicit
 				var result types.Decimal256
 				var err error
-				if isExplicit {
+				if totype.Charset == 255 {
+					result, err = parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
+				} else if isExplicit {
 					result, err = parseExplicitDecimal256CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal256CastString(s, totype.Width, totype.Scale)
@@ -7185,7 +7453,7 @@ func strToDecimal256(
 }
 
 func clampDecimal256Value(negative bool, width, scale int32) (types.Decimal256, error) {
-	if width <= 0 || scale < 0 || scale > width || width > 65 {
+	if width <= 0 || scale < 0 || scale > width || width > 76 {
 		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("invalid Decimal256(%d,%d)", width, scale)
 	}
 	digits := strings.Repeat("9", int(width))
