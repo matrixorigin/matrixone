@@ -53,6 +53,8 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 		execIssue27088VolatileSQL(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
 		execIssue27088VolatileSQL(t, ctx, conn, "create table volatile_rows (id int)")
 		execIssue27088VolatileSQL(t, ctx, conn, "insert into volatile_rows values (1)")
+		execIssue27088VolatileSQL(t, ctx, conn, "create table volatile_rhs (id int)")
+		execIssue27088VolatileSQL(t, ctx, conn, "insert into volatile_rhs values (1)")
 
 		for _, test := range []struct {
 			name  string
@@ -168,6 +170,38 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 				"select currval('volatile_scalar')").Scan(&current))
 			require.Equal(t, int64(2), current)
 			require.Equal(t, 1, got)
+		})
+
+		t.Run("join does not fan out volatile predicate", func(t *testing.T) {
+			execIssue27088VolatileSQL(t, ctx, conn, "drop sequence if exists volatile_scalar")
+			execIssue27088VolatileSQL(t, ctx, conn,
+				"create sequence volatile_scalar increment 1 start with 1 no cycle")
+
+			var got int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from volatile_rows join volatile_rhs "+
+					"on nextval('volatile_scalar') not in ('0', '2')").Scan(&got))
+			var current int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select currval('volatile_scalar')").Scan(&current))
+			require.Equal(t, int64(1), current)
+			require.Equal(t, 1, got)
+		})
+
+		t.Run("tuple candidate casts share stable source", func(t *testing.T) {
+			execIssue27088VolatileSQL(t, ctx, conn, "drop sequence if exists volatile_scalar")
+			execIssue27088VolatileSQL(t, ctx, conn,
+				"create sequence volatile_scalar increment 1 start with 1 no cycle")
+
+			var got int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select (nextval('volatile_scalar'), id) in "+
+					"(('1', 99), (cast(2 as decimal(10, 1)), 1)) from volatile_rows").Scan(&got))
+			var current int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select currval('volatile_scalar')").Scan(&current))
+			require.Equal(t, int64(1), current)
+			require.Equal(t, 0, got)
 		})
 	})
 }

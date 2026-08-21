@@ -2635,7 +2635,7 @@ func mysqlSpecialTypeNumericLiteral(expr tree.Expr) bool {
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
 	candidates := make([]*plan.Expr, 0, len(rightTuple.Exprs))
-	leftMemoIDs := make([]int32, len(leftTuple.Exprs))
+	leftMemoIDs := make([][]int32, len(leftTuple.Exprs))
 
 	for _, rightVal := range rightTuple.Exprs {
 		rightTupleVal, ok := unwrapParenExpr(rightVal).(*tree.Tuple)
@@ -2654,11 +2654,7 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 			}
 			if eqFunc := eqExpr.GetF(); eqFunc != nil && len(eqFunc.Args) == 2 &&
 				containsVolatileFunction(eqFunc.Args[0]) && b.ctx != nil {
-				if leftMemoIDs[i] == 0 {
-					b.ctx.volatileExprMemoID--
-					leftMemoIDs[i] = b.ctx.volatileExprMemoID
-				}
-				eqFunc.Args[0].AuxId = leftMemoIDs[i]
+				b.markTupleVolatileSources(eqFunc.Args[0], &leftMemoIDs[i])
 			}
 			equalities = append(equalities, eqExpr)
 		}
@@ -2679,6 +2675,52 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 		return BindFuncExprImplByPlanExpr(b.GetContext(), "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32) {
+	sources := make([]*plan.Expr, 0, 1)
+	collectVolatileFunctionSources(expr, &sources)
+	if len(sources) == 0 {
+		// Unknown expression forms stay conservative and preserve the prior
+		// whole-operand behavior.
+		sources = append(sources, expr)
+	}
+	for len(*memoIDs) < len(sources) {
+		b.ctx.volatileExprMemoID--
+		*memoIDs = append(*memoIDs, b.ctx.volatileExprMemoID)
+	}
+	for i, source := range sources {
+		source.AuxId = (*memoIDs)[i]
+	}
+}
+
+func collectVolatileFunctionSources(expr *plan.Expr, sources *[]*plan.Expr) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		*sources = append(*sources, expr)
+	case *plan.Expr_F:
+		if e.F == nil {
+			return
+		}
+		if e.F.Func != nil {
+			overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+			if ok && overload.CannotFold() {
+				*sources = append(*sources, expr)
+			}
+		}
+		for _, arg := range e.F.Args {
+			collectVolatileFunctionSources(arg, sources)
+		}
+	case *plan.Expr_List:
+		if e.List != nil {
+			for _, item := range e.List.List {
+				collectVolatileFunctionSources(item, sources)
+			}
+		}
+	}
 }
 
 // combinePlanExprsBalanced preserves the input order while building a

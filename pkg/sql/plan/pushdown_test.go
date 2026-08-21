@@ -15,15 +15,45 @@
 package plan
 
 import (
+	"context"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInnerJoinDoesNotDuplicateVolatileFilter(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	randExpr := &plan.Expr{
+		Typ: Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: randFn.GetEncodedOverloadID(), ObjName: "rand"},
+		}},
+	}
+	filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "<", []*plan.Expr{
+		randExpr, makePlan2Float64ConstExprWithType(0.5),
+	})
+	require.NoError(t, err)
+	builder.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{Outcnt: 1}},
+		{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{Outcnt: 1}},
+		{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER, Children: []int32{0, 1}},
+	}
+
+	nodeID, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filter}, false)
+	require.Equal(t, int32(2), nodeID)
+	require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+	require.Empty(t, builder.qry.Nodes[0].FilterList)
+	require.Empty(t, builder.qry.Nodes[1].FilterList)
+}
 
 func TestAssertIsFilterPushdownBoundary(t *testing.T) {
 	ctx := NewMockCompilerContext(true)

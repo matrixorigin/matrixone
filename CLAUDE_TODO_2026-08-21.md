@@ -97,3 +97,18 @@ sequence 上运行，不依赖随机数、sleep、执行顺序或概率重试。
 
 按 review-comment 例外直接实施。完成后重新运行 focused regressions、`pkg/sql/plan`、`pkg/sql/colexec`、
 `pkg/tests/issues`、build、vet 与 diff-check，再执行完整 self-review 后普通 push；不 force push、不擅自回复或 resolve 线程。
+
+### 第二轮 P1：JOIN fan-out 与 tuple 候选特定 cast
+
+- JOIN 不变量：同一 volatile predicate occurrence 不能被复制到两个独立 executor root。对 `JoinSideNone` 的 INNER JOIN
+  谓词，只有 scan-invariant 表达式才可双边下推；含 volatile 函数时保留在 JOIN 上层一次性执行。依赖单侧列的谓词仍按原
+  side 下推，普通无列常量仍保持原优化。
+- JOIN 反例：两张单行表的 `ON nextval('s') NOT IN ('0','2')` 当前得到 `count=0,currval=2`；正确为
+  `count=1,currval=1`。增加公共 SQL 回归及 pushdown 白盒，证明 volatile `JoinSideNone` 不 fan-out。
+- Tuple 不变量：同一 memo ID 的每个 occurrence 必须具有相同物理类型/结构。候选项可施加不同比较 cast，因此 identity
+  必须标记候选无关的原始左值子树，不能标记候选特定 cast 根。
+- Tuple 反例：`(nextval('s'), id) IN (('1',99),(CAST(2 AS DECIMAL(10,1)),1))` 当前把首个 8-byte memo vector
+  复用为 DECIMAL vector 并 panic。修复将沿候选特定 cast 向内定位稳定的原始 volatile 左值，再复用 identity；增加
+  类型异构 tuple SQL 回归，并以结果与 `currval` 为独立 oracle。
+
+本轮开始前已 merge 最新 `mo/main` `dd040ad691`。按 review-comment 例外直接修复，完成后重新执行全部最终门禁。

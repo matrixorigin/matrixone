@@ -373,6 +373,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				if filter.GetLit().GetBval() {
 					break
 				}
+				if ContainsVolatileFunction(filter) {
+					cantPushdown = append(cantPushdown, filter)
+					continue
+				}
 
 				switch node.JoinType {
 				case plan.Node_INNER:
