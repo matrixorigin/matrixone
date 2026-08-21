@@ -70,12 +70,12 @@ type container struct {
 
 	runtimeFrames []*plan.FrameClause
 
-	// timestampCivilOrder records whether a sorted TIMESTAMP partition becomes
-	// non-monotonic after conversion to the session civil time. It is scoped to
-	// one materialized input generation and is cleared before order vectors are
-	// reused for the next input batch.
-	timestampCivilOrder map[timestampCivilOrderKey]bool
-	timestampRangeRows  []int
+	// timestampCivilOrder caches the monotonic civil-time spans of a sorted
+	// TIMESTAMP partition. It is scoped to one materialized input generation
+	// and is cleared before order vectors are reused for the next input batch.
+	// A fold query can then binary-search each span instead of rescanning the
+	// partition for every frame row.
+	timestampCivilOrder map[timestampCivilOrderKey]*timestampCivilOrderIndex
 }
 
 type timestampCivilOrderKey struct {
@@ -83,6 +83,21 @@ type timestampCivilOrderKey struct {
 	loc        *time.Location
 	start, end int
 	desc       bool
+}
+
+type timestampCivilOrderIndex struct {
+	hasFold bool
+	spans   []timestampCivilOrderSpan
+}
+
+type timestampCivilOrderSpan struct {
+	start, end int
+}
+
+// timestampRangeSelection preserves window order while allowing a civil-time
+// frame to consist of several disjoint instant-sorted spans around a fold.
+type timestampRangeSelection struct {
+	spans []timestampCivilOrderSpan
 }
 
 type Window struct {
@@ -160,7 +175,6 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.cleanOutput(proc.Mp())
 	ctr.runtimeFrames = nil
 	ctr.timestampCivilOrder = nil
-	ctr.timestampRangeRows = nil
 	// Free aggregators before the batch so an error exit from Call (which skips
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
@@ -185,7 +199,6 @@ func (ctr *container) resetParam() {
 	ctr.os = nil
 	ctr.runtimeFrames = nil
 	ctr.timestampCivilOrder = nil
-	ctr.timestampRangeRows = nil
 }
 
 // cleanOutput releases the batch returned by the previous Call. Input-column

@@ -17,6 +17,7 @@ package window
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -3228,6 +3229,23 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	selectionRows := func(left, right int, selection *timestampRangeSelection) []int {
+		if selection == nil {
+			rows := make([]int, 0, right-left)
+			for row := left; row < right; row++ {
+				rows = append(rows, row)
+			}
+			return rows
+		}
+		var rows []int
+		for _, span := range selection.spans {
+			for row := span.start; row < span.end; row++ {
+				rows = append(rows, row)
+			}
+		}
+		return rows
+	}
+
 	for _, test := range []struct {
 		name     string
 		desc     bool
@@ -3312,14 +3330,9 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 				desc:      []bool{test.desc},
 				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
 			}
-			left, right, rows, err := ctr.buildIntervalRows(proc, test.rowIdx, 0, vec.Length(), test.frame)
+			left, right, selection, err := ctr.buildIntervalRows(proc, test.rowIdx, 0, vec.Length(), test.frame)
 			require.NoError(t, err)
-			if rows == nil {
-				for i := left; i < right; i++ {
-					rows = append(rows, i)
-				}
-			}
-			require.Equal(t, test.wantRows, rows)
+			require.Equal(t, test.wantRows, selectionRows(left, right, selection))
 		})
 	}
 }
@@ -3374,9 +3387,9 @@ func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *t
 		"2024-11-03 11:00:00.000000", "2024-11-03 11:30:00.000000",
 	})
 	materialized := ctr.orderVecs[0].Vec[0]
-	_, _, rows, err := ctr.buildIntervalRows(proc, 4, 0, materialized.Length(), frame)
+	_, _, selection, err := ctr.buildIntervalRows(proc, 4, 0, materialized.Length(), frame)
 	require.NoError(t, err)
-	require.Nil(t, rows)
+	require.Nil(t, selection)
 
 	// evalOrderVector keeps the same materialized vector but replaces its data.
 	// The second batch crosses the New York fall-back fold, so the cache must be
@@ -3388,9 +3401,52 @@ func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *t
 		"2024-11-03 07:00:00.000000", "2024-11-03 07:30:00.000000",
 	})
 	require.Same(t, materialized, ctr.orderVecs[0].Vec[0])
-	_, _, rows, err = ctr.buildIntervalRows(proc, 4, 0, materialized.Length(), frame)
+	_, _, selection, err = ctr.buildIntervalRows(proc, 4, 0, materialized.Length(), frame)
 	require.NoError(t, err)
+	require.NotNil(t, selection)
+	var rows []int
+	for _, span := range selection.spans {
+		for row := span.start; row < span.end; row++ {
+			rows = append(rows, row)
+		}
+	}
 	require.Equal(t, []int{0, 1, 3, 4}, rows)
+}
+
+func TestWindowTimestampRangeFoldIndexHonorsCancellation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = newYork
+
+	const rows = cancellationCheckInterval * 2
+	start, err := types.ParseTimestamp(time.UTC, "2024-11-03 04:00:00.000000", 6)
+	require.NoError(t, err)
+	values := make([]types.Timestamp, rows)
+	for i := range values {
+		values[i] = start + types.Timestamp(int64(i)*60*types.MicroSecsPerSec)
+	}
+	vec := vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+	defer vec.Free(mp)
+
+	ctr := &container{orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}}}
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	// The index checks at row 0 and then every cancellationCheckInterval rows.
+	// Cancel on the second check to prove that a long initial span build can be
+	// interrupted rather than only rejecting an already-canceled invocation.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
+	_, _, _, err = ctr.buildIntervalRows(proc, rows-1, 0, rows, frame)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
@@ -3535,6 +3591,68 @@ func TestWindowTimestampRangeFoldValueMembership(t *testing.T) {
 				require.True(t, result.IsNull(uint64(result.Length()-1)))
 			}
 			result.Free(mp)
+		})
+	}
+}
+
+// BenchmarkWindowTimestampRangeFoldUnboundedValue guards the value-function
+// path that used to rescan a folded partition for every output row. Each size
+// crosses the New York fall-back transition; the production first_value path
+// must reuse its civil-time spans and only binary-search them per frame.
+func BenchmarkWindowTimestampRangeFoldUnboundedValue(b *testing.B) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(b, err)
+	start, err := types.ParseTimestamp(time.UTC, "2024-11-03 04:00:00.000000", 6)
+	require.NoError(b, err)
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+
+	for _, size := range []int{1000, 2000, 4000} {
+		b.Run(fmt.Sprintf("rows=%d", size), func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(b, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(b, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			timestamps := make([]types.Timestamp, size)
+			for i := range timestamps {
+				timestamps[i] = start + types.Timestamp(int64(i)*60*types.MicroSecsPerSec)
+			}
+			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(b, vector.AppendFixedList(orderVec, timestamps, nil, mp))
+			defer orderVec.Free(mp)
+
+			values := make([]int32, size)
+			for i := range values {
+				values[i] = int32(i)
+			}
+			valueVec := testutil.MakeInt32Vector(values, nil, mp)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = valueVec
+			bat.SetRowCount(size)
+			defer bat.Clean(mp)
+
+			spec := makeValueWindowSpecWithName("first_value", int32(types.T_int32))
+			spec.GetW().Frame = frame
+			arg := &Window{WinSpecList: []*plan.Expr{spec}}
+			ctr := &container{
+				bat:       bat,
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{valueVec}}},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				result, runErr := ctr.processValueFuncRange(0, arg, proc, 0, size)
+				require.NoError(b, runErr)
+				result.Free(mp)
+			}
 		})
 	}
 }
