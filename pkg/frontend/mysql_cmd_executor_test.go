@@ -4558,6 +4558,14 @@ func Test_statement_type(t *testing.T) {
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetTransaction{}), convey.ShouldBeFalse)
 		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			ses:  &backSession{},
+			stmt: &tree.CreateSequence{},
+		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			ses:  &backSession{},
+			stmt: &tree.DropSequence{},
+		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
 			stmt: &tree.SetVar{},
 			txnOpt: FeTxnOption{
 				activeTxnAtStartKnown: true,
