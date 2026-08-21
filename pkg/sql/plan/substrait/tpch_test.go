@@ -48,7 +48,7 @@ func TestExportCanonicalTPCHPlans(t *testing.T) {
 				if read == nil || read.TableDef == nil || read.ObjRef == nil {
 					continue
 				}
-				read.ObjRef.Db = 7
+				read.TableDef.DbId = 7
 				read.TableDef.TblId = 42
 				read.ObjRef.Obj = 42
 			}
