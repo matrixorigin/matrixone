@@ -382,12 +382,24 @@ func TestSQLCalcFoundRowsOwnsPreparedSQLSelectLimit(t *testing.T) {
 	c.stmt = sqlCalcFoundRowsTestStatement()
 	c.isPrepare = true
 	input := newLazyUnionAllLeaf(c, nil)
+	nestedLimit := &plan.Node{
+		NodeId:   1,
+		NodeType: plan.Node_PROJECT,
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(5),
+	}
 	query := &plan.Query{
 		StmtType:            plan.Query_SELECT,
 		ApplySqlSelectLimit: true,
 		Steps:               []int32{0},
-		Nodes:               []*plan.Node{{NodeId: 0, NodeType: plan.Node_PROJECT}},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_PROJECT, Children: []int32{1}},
+			nestedLimit,
+		},
 	}
+	// The nested LIMIT must not block the dynamic top-level sql_select_limit
+	// added below for each prepared execution.
+	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(query)
+	require.Nil(t, c.foundRowsOwnerNode)
 
 	result, err := c.compileSteps(query, []*Scope{input}, 0)
 	require.NoError(t, err)
@@ -402,6 +414,7 @@ func TestSQLCalcFoundRowsOwnsPreparedSQLSelectLimit(t *testing.T) {
 		return nil
 	}))
 	require.True(t, foundOwner)
+	require.NotSame(t, nestedLimit, c.foundRowsOwnerNode)
 	freeLazyUnionAllTestScope(c, result[0])
 }
 

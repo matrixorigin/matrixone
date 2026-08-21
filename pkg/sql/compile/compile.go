@@ -1242,10 +1242,7 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
-	c.foundRowsOwnerNode = nil
-	if statementHasSQLCalcFoundRows(c.stmt) && len(qry.Steps) > 0 {
-		c.foundRowsOwnerNode = findFoundRowsOwnerNode(qry, qry.Steps[len(qry.Steps)-1])
-	}
+	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
 	c.compiledRightSingleNodes = nil
 	defer func() {
 		c.compiledRightSingleNodes = nil
@@ -2049,6 +2046,32 @@ func (c *Compile) canUseLiteralLimitZeroFastPath(node *plan.Node) bool {
 
 func (c *Compile) ownsFoundRows(node *plan.Node) bool {
 	return statementHasSQLCalcFoundRows(c.stmt) && node != nil && node == c.foundRowsOwnerNode
+}
+
+// selectFoundRowsOwnerNode designates only pagination that belongs to the
+// statement's final result. An explicit top-level LIMIT/OFFSET is identified
+// from the AST before looking through projection wrappers. A finite ordinary
+// sql_select_limit is identified by the exact node materialized by Compile.
+// Prepared sql_select_limit remains dynamic and is assigned later by
+// compileSteps. Nested semantic pagination must never become the owner.
+func (c *Compile) selectFoundRowsOwnerNode(qry *plan.Query) *plan.Node {
+	if c == nil || qry == nil || !statementHasSQLCalcFoundRows(c.stmt) || len(qry.Steps) == 0 {
+		return nil
+	}
+
+	rootID := qry.Steps[len(qry.Steps)-1]
+	if rootID < 0 || int(rootID) >= len(qry.Nodes) {
+		return nil
+	}
+	if statementHasSQLCalcFoundRowsPagination(c.stmt) {
+		return findFoundRowsOwnerNode(qry, rootID)
+	}
+
+	root := qry.Nodes[rootID]
+	if root != nil && root == c.materializedSQLSelectLimitOwner {
+		return root
+	}
+	return nil
 }
 
 func findFoundRowsOwnerNode(qry *plan.Query, rootID int32) *plan.Node {

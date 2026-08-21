@@ -36,6 +36,17 @@ with d as (select id from t order by id limit 7)
 select sql_calc_found_rows * from d where id <= 4 limit 1;
 select found_rows() as after_cte_limit;
 
+-- Pagination confined to a derived table or CTE bounds the outer result. It
+-- must not be mistaken for final-result pagination when the outer SELECT has
+-- no explicit LIMIT/OFFSET.
+select sql_calc_found_rows *
+from (select id from t order by id limit 5) d;
+select found_rows() as after_derived_only_limit;
+
+with d as (select id from t order by id limit 7)
+select sql_calc_found_rows * from d;
+select found_rows() as after_cte_only_limit;
+
 -- A cached prepared pipeline must initialize FOUND_ROWS state on every execute.
 prepare ps_found_rows from 'select sql_calc_found_rows id from t order by id limit 1';
 execute ps_found_rows;
@@ -68,12 +79,23 @@ select found_rows(), id from t where id <= 3 order by id;
 set sql_select_limit = 1;
 select sql_calc_found_rows id from t where id <= 3 order by id;
 select found_rows() as after_sql_select_limit;
+select sql_calc_found_rows * from (select id from t order by id limit 5) d;
+select found_rows() as after_nested_sql_select_limit;
 prepare ps_session_limit from 'select sql_calc_found_rows id from t where id <= 3 order by id';
 execute ps_session_limit;
 select found_rows() as after_prepared_sql_select_limit;
 execute ps_session_limit;
 select found_rows() as after_prepared_sql_select_limit_second;
 deallocate prepare ps_session_limit;
+
+-- Repeated prepared execution must let the dynamic final session limit own
+-- counting even when the statement also contains nested semantic pagination.
+prepare ps_nested_session_limit from 'select sql_calc_found_rows * from (select id from t order by id limit 5) d';
+execute ps_nested_session_limit;
+select found_rows() as after_nested_session_limit_first;
+execute ps_nested_session_limit;
+select found_rows() as after_nested_session_limit_second;
+deallocate prepare ps_nested_session_limit;
 set sql_select_limit = 18446744073709551615;
 
 select id from t order by id limit 2;

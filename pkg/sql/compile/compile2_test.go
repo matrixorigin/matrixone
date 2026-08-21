@@ -66,6 +66,38 @@ func TestStatementHasSQLCalcFoundRows(t *testing.T) {
 	require.False(t, selectStatementHasSQLCalcFoundRows(&tree.SelectClause{}))
 }
 
+func TestStatementHasSQLCalcFoundRowsPagination(t *testing.T) {
+	count := func(value int64) *tree.Limit {
+		return &tree.Limit{Count: tree.NewNumVal(value, "1", false, tree.P_int64)}
+	}
+	offset := &tree.Limit{Offset: tree.NewNumVal(int64(1), "1", false, tree.P_int64)}
+	withFoundRows := func() *tree.Select {
+		return sqlCalcFoundRowsTestStatement()
+	}
+
+	tests := []struct {
+		name string
+		stmt tree.Statement
+		want bool
+	}{
+		{name: "no final pagination", stmt: withFoundRows(), want: false},
+		{name: "direct limit", stmt: func() *tree.Select { stmt := withFoundRows(); stmt.Limit = count(1); return stmt }(), want: true},
+		{name: "direct offset", stmt: func() *tree.Select { stmt := withFoundRows(); stmt.Limit = offset; return stmt }(), want: true},
+		{name: "outer parenthesized limit", stmt: &tree.Select{Select: &tree.ParenSelect{Select: withFoundRows()}, Limit: count(1)}, want: true},
+		{name: "inner parenthesized limit", stmt: &tree.Select{Select: &tree.ParenSelect{Select: func() *tree.Select { stmt := withFoundRows(); stmt.Limit = count(1); return stmt }()}}, want: true},
+		{name: "outer union limit", stmt: &tree.Select{Select: &tree.UnionClause{Left: withFoundRows(), Right: &tree.ValuesClause{}}, Limit: count(1)}, want: true},
+		{name: "right union pagination is not final SQL calc pagination", stmt: &tree.Select{Select: &tree.UnionClause{Left: withFoundRows(), Right: &tree.Select{Select: &tree.SelectClause{}, Limit: count(1)}}}, want: false},
+		{name: "plain select limit", stmt: &tree.Select{Select: &tree.SelectClause{}, Limit: count(1)}, want: false},
+		{name: "non select", stmt: &tree.ValuesStatement{}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, statementHasSQLCalcFoundRowsPagination(tt.stmt))
+		})
+	}
+}
+
 func TestSQLCalcFoundRowsDisablesLiteralLimitZeroFastPath(t *testing.T) {
 	c := newLazyUnionAllTestCompile(t)
 	node := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(0)}
@@ -100,11 +132,16 @@ func TestFindFoundRowsOwnerBelowResultProjection(t *testing.T) {
 
 	stmt := sqlCalcFoundRowsTestStatement()
 	stmt.Limit = &tree.Limit{Count: tree.NewNumVal(int64(2), "2", false, tree.P_int64)}
+	c := &Compile{stmt: stmt}
 	require.True(t, statementHasSQLCalcFoundRowsPagination(stmt))
 	require.Same(t, outerLimit, findFoundRowsOwnerNode(query, query.Steps[0]))
+	require.Same(t, outerLimit, c.selectFoundRowsOwnerNode(query))
 
 	stmt.Limit = nil
 	require.False(t, statementHasSQLCalcFoundRowsPagination(stmt))
+	// Without top-level pagination, the same plan shape represents pagination
+	// owned by a derived table or CTE and must not publish the outer count.
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
 }
 
 func TestFindFoundRowsOwnerPrefersOuterPagination(t *testing.T) {
@@ -129,7 +166,11 @@ func TestFindFoundRowsOwnerPrefersOuterPagination(t *testing.T) {
 		Steps: []int32{3},
 	}
 
+	stmt := sqlCalcFoundRowsTestStatement()
+	stmt.Limit = &tree.Limit{Count: tree.NewNumVal(int64(1), "1", false, tree.P_int64)}
+	c := &Compile{stmt: stmt}
 	require.Same(t, outerLimit, findFoundRowsOwnerNode(query, query.Steps[0]))
+	require.Same(t, outerLimit, c.selectFoundRowsOwnerNode(query))
 }
 
 func TestFindFoundRowsOwnerIncludesMaterializedSQLSelectLimit(t *testing.T) {
@@ -139,8 +180,45 @@ func TestFindFoundRowsOwnerIncludesMaterializedSQLSelectLimit(t *testing.T) {
 	}
 	query := &plan.Query{Nodes: []*plan.Node{root}, Steps: []int32{0}}
 
-	require.True(t, statementHasSQLCalcFoundRows(sqlCalcFoundRowsTestStatement()))
-	require.Same(t, root, findFoundRowsOwnerNode(query, query.Steps[0]))
+	c := &Compile{
+		stmt:                            sqlCalcFoundRowsTestStatement(),
+		materializedSQLSelectLimitOwner: root,
+	}
+	require.True(t, statementHasSQLCalcFoundRows(c.stmt))
+	require.Same(t, root, c.selectFoundRowsOwnerNode(query))
+
+	// A LIMIT already present in the plan is not enough to infer that it is the
+	// implicit top-level session limit. Only the exact materialized node owns it.
+	c.materializedSQLSelectLimitOwner = nil
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
+	c.materializedSQLSelectLimitOwner = &plan.Node{Limit: root.Limit}
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
+}
+
+func TestSelectFoundRowsOwnerRejectsNestedOnlyPagination(t *testing.T) {
+	nestedLimit := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{0},
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(5),
+	}
+	root := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{1}}
+	query := &plan.Query{
+		Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN},
+			nestedLimit,
+			root,
+		},
+		Steps: []int32{2},
+	}
+	c := &Compile{stmt: sqlCalcFoundRowsTestStatement()}
+
+	require.Same(t, nestedLimit, findFoundRowsOwnerNode(query, query.Steps[0]))
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
+
+	query.Steps[0] = -1
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
+	query.Steps[0] = int32(len(query.Nodes))
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
 }
 
 func TestSQLCalcFoundRowsLimitHasSingleCoordinatorOwner(t *testing.T) {

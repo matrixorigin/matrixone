@@ -201,9 +201,16 @@ func (c *Compile) Compile(
 	// but before Sirius can export the logical plan. This preserves optimizer
 	// estimates while ensuring both native and offloaded execution see the same
 	// finite top-level LIMIT.
+	c.materializedSQLSelectLimitOwner = nil
+	defer func() {
+		c.materializedSQLSelectLimitOwner = nil
+	}()
 	materialization, materializeErr := c.materializeSQLSelectLimit(queryPlan)
 	if materializeErr != nil {
 		return materializeErr
+	}
+	if statementHasSQLCalcFoundRows(c.stmt) {
+		c.materializedSQLSelectLimitOwner = materialization.root
 	}
 	if materialization.query != nil {
 		defer materialization.restore()
