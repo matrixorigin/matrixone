@@ -92,4 +92,18 @@ func TestOrExternalResultBoundaryCases(t *testing.T) {
 		require.True(t, dst.Contains(6))
 		require.EqualValues(t, 8, dst.GetBitmap().Len())
 	})
+
+	t.Run("reset external destination reuses available capacity", func(t *testing.T) {
+		dst := NewWithSize(8)
+		dst.Add(6)
+		dst.GetBitmap().InstallExternalStorage(make([]uint64, 1))
+		dst.Reset()
+
+		src := NewWithSize(3)
+		src.Add(1)
+		Or(dst, src, dst)
+
+		require.True(t, dst.Contains(1))
+		require.EqualValues(t, 3, dst.GetBitmap().Len())
+	})
 }
