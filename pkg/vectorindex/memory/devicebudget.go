@@ -143,3 +143,60 @@ func DeviceBuildPeakBytes(residentTotal, trainsetTotal uint64) uint64 {
 	}
 	return residentTotal
 }
+
+// DeviceLoadFits refuses a set of sub-indexes BEFORE any of them is loaded, when
+// their aggregate resident footprint cannot be held.
+//
+// A build is deliberately allowed to rotate into N sub-indexes that no single
+// device could hold at once: the build only ever materialises one at a time. A
+// SEARCH is the opposite -- it reaches every list of every sub-index, so all N
+// have to be resident together. Per-load admission alone cannot express that:
+// each individual load fits, so the loader admits the early sub-indexes, spends
+// the budget on them, and is refused on a later one. The query then fails having
+// already paid for most of the memory, and the operator sees a refusal naming a
+// sub-index rather than the real problem, which is the total.
+//
+// Checking the sum first turns that into one refusal, before anything is
+// allocated, that names the aggregate. It does NOT reserve: the per-deserialize
+// claims in device_memory.hpp still do the actual admission, and taking a claim
+// here as well would double-count the same bytes and refuse loads that fit.
+// This is a pre-flight check, so a peer that allocates between the check and the
+// loads is still caught -- by those per-load claims, one layer down.
+//
+// totalBytes is the aggregate on-disk size of every sub-index to be loaded; the
+// packed tar is a good proxy for the resident footprint because it holds exactly
+// what gets materialised (PQ codes / dataset, graph, ids, bitset, filter blobs).
+// Attribution follows the distribution mode, as everywhere else.
+func DeviceLoadFits(
+	mode vectorindex.DistributionMode, devices []int, totalBytes uint64,
+	rowsFitting DeviceRowsFittingFunc,
+) error {
+	if totalBytes == 0 || len(devices) == 0 || rowsFitting == nil {
+		return nil
+	}
+	for dev, need := range DeviceBuildBytes(mode, DeviceDistinct(devices), totalBytes) {
+		if need == 0 {
+			continue
+		}
+		// "How many objects of size `need` fit" answers "does one fit" without a
+		// second budget rule: rowsFitting already applies the same fraction of
+		// free VRAM that every other admission on this path uses.
+		fits, free, err := rowsFitting(dev, need)
+		if err != nil {
+			// Never guess. An unmeasurable device is exactly the condition that
+			// made the previous version admit a load it could not complete.
+			return moerr.NewInternalErrorNoCtxf(
+				"vector index load: cannot measure device %d to admit %d bytes: %v", dev, need, err)
+		}
+		if fits < 1 {
+			return moerr.NewInternalErrorNoCtxf(
+				"vector index load: this index needs %d bytes resident on device %d to be "+
+					"searched (%d bytes free), because a query reads every sub-index at once. "+
+					"The index built successfully -- rotation bounds each build, not the search. "+
+					"Rebuild with a narrower storage type (QUANTIZATION), index fewer rows, or "+
+					"use a GPU with more memory",
+				need, dev, free)
+		}
+	}
+	return nil
+}

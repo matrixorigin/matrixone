@@ -175,35 +175,6 @@ func planCapacity(
 	if tail := srcRowCount % capacity; threshold > 0 && tail > 0 && tail < threshold {
 		plan.CdcCutoff = srcRowCount - tail
 	}
-
-	// AGGREGATE SEARCHABILITY.
-	//
-	// Splitting into sub-indexes bounds what one BUILD allocates; it does not
-	// bound what a SEARCH holds. A query reaches every list of every sub-index,
-	// so both search implementations load and RETAIN all of them: the resident
-	// demand at query time is the whole indexed row count, not one capacity.
-	//
-	// Without this check a build whose aggregate exceeds the device budget is
-	// accepted and reported as successful, and the failure surfaces later and
-	// somewhere else -- the first cold query loads the early sub-indexes and is
-	// refused admission on a later one, so a CREATE INDEX that "worked" yields an
-	// index that can never answer a query. Refusing at CREATE time reports the
-	// problem where the operator can still act on it.
-	//
-	// Only the rows that actually land in sub-indexes count: anything past
-	// CdcCutoff is served by brute force and is not resident. rowsFit <= 0 means
-	// device memory could not be measured, and an unmeasured device must not
-	// manufacture a refusal -- that path is already bounded by the host.
-	if rowsFit > 0 && plan.CdcCutoff > rowsFit {
-		return capacityPlan{}, moerr.NewInvalidInputNoCtxf(
-			"%s: %d rows need to be resident to search this index, but device memory holds "+
-				"only %d; splitting into %d sub-indexes bounds each build, not the search, "+
-				"which loads every sub-index at once. CREATE INDEX would succeed and the first "+
-				"query would fail. Use a narrower storage type (QUANTIZATION), index fewer rows, "+
-				"or provide a GPU with more memory",
-			algo, plan.CdcCutoff, rowsFit, plan.NumSubIdx)
-	}
-
 	return plan, nil
 }
 

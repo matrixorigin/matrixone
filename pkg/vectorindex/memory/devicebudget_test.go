@@ -16,6 +16,7 @@ package memory
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -205,4 +206,68 @@ func TestDeviceBuildPeakBytesFlowsThroughDistribution(t *testing.T) {
 	replicated := DeviceBuildBytes(vectorindex.DistributionMode_REPLICATED, devices, peak)
 	require.Equal(t, uint64(4000), replicated[0])
 	require.Equal(t, uint64(4000), replicated[1])
+}
+
+// fakeRowsFitting reports how many objects of perRow bytes fit in `free`, using
+// the same shape as cuvs.RowsFittingFreeMem.
+func fakeRowsFitting(free uint64) DeviceRowsFittingFunc {
+	return func(device int, perRow uint64) (int64, uint64, error) {
+		if perRow == 0 {
+			return 0, free, nil
+		}
+		return int64(free / perRow), free, nil
+	}
+}
+
+// TestDeviceLoadFits is the review's counterexample: a build rotated into
+// sub-indexes that each load fine but cannot be resident together. The refusal
+// must happen BEFORE the first load, and must name the aggregate.
+func TestDeviceLoadFits(t *testing.T) {
+	devices := []int{0}
+
+	// Aggregate fits: no refusal.
+	require.NoError(t, DeviceLoadFits(
+		vectorindex.DistributionMode_SINGLE_GPU, devices, 900, fakeRowsFitting(1000)))
+
+	// Aggregate does not fit, even though each of the 30 sub-indexes would.
+	err := DeviceLoadFits(
+		vectorindex.DistributionMode_SINGLE_GPU, devices, 3000, fakeRowsFitting(1000))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "resident on device 0")
+	require.Contains(t, err.Error(), "built successfully",
+		"the message must say the build was fine, or the operator looks in the wrong place")
+
+	// Exactly at the limit is admitted.
+	require.NoError(t, DeviceLoadFits(
+		vectorindex.DistributionMode_SINGLE_GPU, devices, 1000, fakeRowsFitting(1000)))
+}
+
+func TestDeviceLoadFitsAttribution(t *testing.T) {
+	devices := []int{0, 1}
+	// SHARDED halves the aggregate per device, so 1500 total fits two 1000-byte
+	// devices even though it would not fit one.
+	require.NoError(t, DeviceLoadFits(
+		vectorindex.DistributionMode_SHARDED, devices, 1500, fakeRowsFitting(1000)))
+	// REPLICATED charges every device the whole thing, so the same total does not.
+	require.Error(t, DeviceLoadFits(
+		vectorindex.DistributionMode_REPLICATED, devices, 1500, fakeRowsFitting(1000)))
+}
+
+func TestDeviceLoadFitsDegenerateInputs(t *testing.T) {
+	devices := []int{0}
+	// Nothing to load, no devices, or no measuring function: not this gate's call
+	// to refuse. A zero total in particular means the sizes were unknown, and the
+	// per-load claims remain the real admission.
+	require.NoError(t, DeviceLoadFits(vectorindex.DistributionMode_SINGLE_GPU, devices, 0, fakeRowsFitting(10)))
+	require.NoError(t, DeviceLoadFits(vectorindex.DistributionMode_SINGLE_GPU, nil, 100, fakeRowsFitting(10)))
+	require.NoError(t, DeviceLoadFits(vectorindex.DistributionMode_SINGLE_GPU, devices, 100, nil))
+
+	// A device that cannot be measured must fail loudly: admitting an unmeasured
+	// load is what produced the partial-load failure in the first place.
+	boom := func(device int, perRow uint64) (int64, uint64, error) {
+		return 0, 0, moerr.NewInternalErrorNoCtx("cudaMemGetInfo failed")
+	}
+	err := DeviceLoadFits(vectorindex.DistributionMode_SINGLE_GPU, devices, 100, boom)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot measure device 0")
 }
