@@ -535,6 +535,15 @@ func recreateTableFromTS(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 	}
+	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+			ctx,
+			bh,
+			fmt.Sprintf(" {MO_TS = %d}", snapshotTs),
+			restoreAccount,
+			toAccountId,
+		)
+	}
 	if isSequence(tblInfo) {
 		return restoreSequence(
 			ctx,
