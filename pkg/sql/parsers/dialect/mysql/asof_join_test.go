@@ -72,6 +72,7 @@ func TestAsofLegacyUnquotedJoinControls(t *testing.T) {
 		"select * from asof join u on asof.k = u.k",
 		"select * from t asof join u on asof.k = u.k",
 		"select * from (select 1 as k) asof join (select 1 as k) u on asof.k = u.k",
+		"select * from t asof join u on t.k = u.k and u.tolerance = 1",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)

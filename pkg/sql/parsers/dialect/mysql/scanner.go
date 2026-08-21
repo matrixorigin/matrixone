@@ -997,58 +997,141 @@ func (s *Scanner) asofLegacyIdentifierAhead(start, joinPos int) bool {
 		return false
 	}
 	clause := s.buf[on:]
-	if !strings.Contains(clause, "<") && !strings.Contains(clause, ">") && !hasSQLWord(clause, "tolerance") {
+	if !hasSQLPunct(clause, '<', '>') && !hasAsofToleranceClause(clause) {
 		return true
 	}
 	// A qualified `asof.*` reference belongs to a legacy implicit alias unless
 	// the right table factor itself uses asof as its effective alias.
-	rightFactor := strings.ToLower(s.buf[joinPos:on])
-	if hasQualifiedAsofRef(clause) && !strings.Contains(rightFactor, "asof") {
+	rightFactor := s.buf[joinPos:on]
+	if hasQualifiedAsofRef(clause) && !hasAsofToken(rightFactor) {
 		return true
 	}
 	return false
 }
 
 func (s *Scanner) findAsofOnClause(pos int) int {
-	for i := s.skipBlankAndCommentsFrom(pos); i < len(s.buf); {
-		if hasKeywordAt(s.buf, i, "on") {
-			return i
+	var on int = -1
+	scanSQLFragment(s.buf[pos:], func(word string, start, end int, quoted bool) bool {
+		if !quoted && word == "on" {
+			on = pos + start
+			return true
 		}
-		if isUnquotedIdentifierLetterAt(s.buf, i) {
+		return false
+	}, nil)
+	return on
+}
+
+func hasQualifiedAsofRef(sql string) bool {
+	return scanSQLFragment(sql, func(word string, start, end int, quoted bool) bool {
+		if !strings.EqualFold(word, "asof") {
+			return false
+		}
+		next := end
+		for next < len(sql) && (sql[next] == ' ' || sql[next] == '\t' || sql[next] == '\r' || sql[next] == '\n') {
+			next++
+		}
+		return next < len(sql) && sql[next] == '.'
+	}, nil)
+}
+
+func hasAsofToken(sql string) bool {
+	return scanSQLFragment(sql, func(word string, _, _ int, _ bool) bool {
+		return strings.EqualFold(word, "asof")
+	}, nil)
+}
+
+func hasAsofToleranceClause(sql string) bool {
+	seenTolerance := false
+	return scanSQLFragment(sql, func(word string, _, _ int, quoted bool) bool {
+		if quoted {
+			return false
+		}
+		if word == "tolerance" {
+			seenTolerance = true
+			return false
+		}
+		return seenTolerance && word == "interval"
+	}, nil)
+}
+
+func hasSQLPunct(sql string, punctuation ...byte) bool {
+	wanted := make(map[byte]struct{}, len(punctuation))
+	for _, ch := range punctuation {
+		wanted[ch] = struct{}{}
+	}
+	return scanSQLFragment(sql, nil, func(ch byte) bool {
+		_, ok := wanted[ch]
+		return ok
+	})
+}
+
+// scanSQLFragment is the one lexical helper used by contextual ASOF checks.
+// It deliberately skips strings, quoted identifiers, and all MySQL comment
+// forms so the decision never depends on text inside a literal/comment.
+func scanSQLFragment(sql string, wordFn func(string, int, int, bool) bool, punctFn func(byte) bool) bool {
+	for i := 0; i < len(sql); {
+		if strings.HasPrefix(sql[i:], "/*") {
+			end := strings.Index(sql[i+2:], "*/")
+			if end < 0 {
+				return false
+			}
+			i += end + 4
+			continue
+		}
+		if sql[i] == '#' || strings.HasPrefix(sql[i:], "//") ||
+			(strings.HasPrefix(sql[i:], "--") && (i+2 == len(sql) || isMySQLDashCommentBlank(sql[i+2]))) {
+			i = skipLineCommentFrom(sql, i)
+			continue
+		}
+		if sql[i] == '\'' || sql[i] == '"' {
+			quote := sql[i]
 			i++
-			for i < len(s.buf) && (isUnquotedIdentifierLetterAt(s.buf, i) || isDigit(uint16(s.buf[i])) || s.buf[i] == '_') {
+			for i < len(sql) {
+				if sql[i] == '\\' {
+					i += 2
+					continue
+				}
+				if sql[i] == quote {
+					if i+1 < len(sql) && sql[i+1] == quote {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
 				i++
 			}
 			continue
 		}
-		i++
-	}
-	return -1
-}
-
-func hasQualifiedAsofRef(sql string) bool {
-	for i := 0; i+5 < len(sql); i++ {
-		if strings.EqualFold(sql[i:i+4], "asof") && sql[i+4] == '.' {
-			return (i == 0 || !isUnquotedIdentifierLetterAt(sql, i-1))
-		}
-		if i+6 < len(sql) && sql[i] == '`' && strings.EqualFold(sql[i+1:i+5], "asof") && sql[i+5] == '`' && sql[i+6] == '.' {
-			return true
-		}
-	}
-	return false
-}
-
-func hasSQLWord(sql, word string) bool {
-	for i := 0; i+len(word) <= len(sql); i++ {
-		if !strings.EqualFold(sql[i:i+len(word)], word) {
+		if sql[i] == '`' {
+			start := i + 1
+			i = start
+			for i < len(sql) && sql[i] != '`' {
+				i++
+			}
+			if wordFn != nil && i < len(sql) && wordFn(sql[start:i], start-1, i+1, true) {
+				return true
+			}
+			if i < len(sql) {
+				i++
+			}
 			continue
 		}
-		leftOK := i == 0 || !isUnquotedIdentifierLetterAt(sql, i-1)
-		right := i + len(word)
-		rightOK := right == len(sql) || !isUnquotedIdentifierLetterAt(sql, right)
-		if leftOK && rightOK {
+		if isUnquotedIdentifierLetterAt(sql, i) {
+			start := i
+			i++
+			for i < len(sql) && (isUnquotedIdentifierLetterAt(sql, i) || isDigit(uint16(sql[i])) || sql[i] == '_') {
+				i++
+			}
+			if wordFn != nil && wordFn(strings.ToLower(sql[start:i]), start, i, false) {
+				return true
+			}
+			continue
+		}
+		if punctFn != nil && punctFn(sql[i]) {
 			return true
 		}
+		i++
 	}
 	return false
 }
