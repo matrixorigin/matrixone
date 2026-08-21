@@ -381,6 +381,84 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
+	t.Run("prepared MongoDB scan failures", func(t *testing.T) {
+		t.Run("prepare", func(t *testing.T) {
+			db, mock := newMongoDBE2ESQLMock(t)
+			mock.ExpectPrepare("select count").WillReturnError(errors.New("prepare failed"))
+			require.ErrorContains(t, verifyPreparedMongoDBScan(t.Context(), db), "prepare MongoDB scan")
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		for _, tc := range []struct {
+			name  string
+			setup func(*sqlmock.ExpectedPrepare)
+			want  string
+		}{
+			{
+				name: "execute",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnError(errors.New("execute failed"))
+				},
+				want: "execute prepared MongoDB scan",
+			},
+			{
+				name: "metadata",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"value"}).AddRow("3"))
+				},
+				want: "result metadata mismatch",
+			},
+			{
+				name: "empty result",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}))
+				},
+				want: "returned no rows",
+			},
+			{
+				name: "row error",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow("3").RowError(0, errors.New("read failed")))
+				},
+				want: "read prepared MongoDB result",
+			},
+			{
+				name: "scan",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow(nil))
+				},
+				want: "scan prepared MongoDB result",
+			},
+			{
+				name: "value mismatch",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow("2"))
+				},
+				want: "expected \"3\", got \"2\"",
+			},
+			{
+				name: "multiple aggregate rows",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow("3").AddRow("3"))
+				},
+				want: "aggregate returned more than one row",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				db, mock := newMongoDBE2ESQLMock(t)
+				tc.setup(mock.ExpectPrepare("select count"))
+				require.ErrorContains(t, verifyPreparedMongoDBScan(t.Context(), db), tc.want)
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	})
+
 	t.Run("redaction and report", func(t *testing.T) {
 		require.Equal(t, "<redacted MongoDB DDL>", redact("CREDENTIAL_SECRET_REF='secret'"))
 		require.Equal(t, "select 1", redact("select 1"))
