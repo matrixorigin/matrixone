@@ -395,6 +395,9 @@ func (c *Converter) appendValue(
 		} else {
 			return errConversion
 		}
+		if target == types.T_binary {
+			return c.appendBinary(vec, data, column.Width, mp, budget)
+		}
 		return c.appendBytes(vec, data, column.Width, mp, budget)
 	case types.T_json:
 		// Relaxed Extended JSON maps BSON values that have a native JSON
@@ -439,6 +442,30 @@ func relaxedExtJSONValue(value bson.RawValue) ([]byte, error) {
 		return nil, errConversion
 	}
 	return wrapper.Value, nil
+}
+
+func (c *Converter) appendBinary(
+	vec *vector.Vector,
+	value []byte,
+	width int32,
+	mp *mpool.MPool,
+	budget *decodedBatchBudget,
+) error {
+	if width <= 0 {
+		return c.appendBytes(vec, value, width, mp, budget)
+	}
+	if int32(len(value)) > width || int64(width) > c.maxValueBytes {
+		return errConversion
+	}
+	if err := budget.reserve(int64(width)); err != nil {
+		return err
+	}
+	if int32(len(value)) == width {
+		return vector.AppendBytes(vec, value, false, mp)
+	}
+	padded := make([]byte, width)
+	copy(padded, value)
+	return vector.AppendBytes(vec, padded, false, mp)
 }
 
 func (c *Converter) appendBytes(

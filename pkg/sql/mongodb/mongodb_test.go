@@ -1058,6 +1058,48 @@ func TestConverterDecimalBinaryAndInternalJSONEncoding(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConverterBinaryPreservesFixedLengthPadding(t *testing.T) {
+	converter, err := NewConverter(t.Context(), []ColumnMapping{
+		{Name: "fixed", Path: "value", TypeID: int32(types.T_binary), Width: 4},
+		{Name: "variable", Path: "value", TypeID: int32(types.T_varbinary), Width: 4},
+	}, 1024)
+	require.NoError(t, err)
+
+	values := [][]byte{
+		{},
+		{0x61},
+		{0x61, 0x20},
+		{0x61, 0x20, 0x20},
+		{0x41},
+		{0x01, 0x02, 0x03, 0x04},
+	}
+	wantFixed := [][]byte{
+		{0x00, 0x00, 0x00, 0x00},
+		{0x61, 0x00, 0x00, 0x00},
+		{0x61, 0x20, 0x00, 0x00},
+		{0x61, 0x20, 0x20, 0x00},
+		{0x41, 0x00, 0x00, 0x00},
+		{0x01, 0x02, 0x03, 0x04},
+	}
+	mp := mpool.MustNewZero()
+	bat := converter.NewBatch()
+	for _, value := range values {
+		raw, marshalErr := bson.Marshal(bson.D{{Key: "value", Value: bson.Binary{Data: value}}})
+		require.NoError(t, marshalErr)
+		require.NoError(t, converter.AppendDocument(t.Context(), bat, raw, mp))
+	}
+	for row := range values {
+		require.Equal(t, wantFixed[row], bat.Vecs[0].GetBytesAt(row))
+		require.Equal(t, values[row], bat.Vecs[1].GetBytesAt(row))
+	}
+	overlong, err := bson.Marshal(bson.D{{Key: "value", Value: bson.Binary{Data: []byte{1, 2, 3, 4, 5}}}})
+	require.NoError(t, err)
+	require.ErrorContains(t, converter.AppendDocument(t.Context(), bat, overlong, mp), "cannot be converted")
+	require.Equal(t, len(values), bat.RowCount())
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestConverterJSONValues(t *testing.T) {
 	decimal, err := bson.ParseDecimal128("123.456")
 	require.NoError(t, err)
