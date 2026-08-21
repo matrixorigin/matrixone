@@ -111,6 +111,18 @@ func TestJoinDoesNotPushDownVolatileFilter(t *testing.T) {
 		require.Empty(t, builder.qry.Nodes[0].FilterList)
 		require.Empty(t, builder.qry.Nodes[1].FilterList)
 	})
+
+	t.Run("function scan bypass", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		builder, leftTag, _ := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+		builder.qry.Nodes[1].NodeType = plan.Node_FUNCTION_SCAN
+		filter := makeVolatileJoinFilter(t, ctx, &leftTag)
+
+		_, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filter}, false)
+		require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+		require.Empty(t, builder.qry.Nodes[0].FilterList)
+		require.Empty(t, builder.qry.Nodes[1].FilterList)
+	})
 }
 
 func TestAssertIsFilterPushdownBoundary(t *testing.T) {
