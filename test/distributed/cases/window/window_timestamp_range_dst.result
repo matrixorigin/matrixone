@@ -59,7 +59,7 @@ range between interval 1 hour preceding and current row
 from fall_back
 order by id;
 id    s
-1    10
+1    30
 2    30
 3    60
 set time_zone = '+00:00';
