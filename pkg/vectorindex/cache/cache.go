@@ -83,6 +83,21 @@ type VectorIndexSearchIf interface {
 	Destroy()
 }
 
+// cacheInvalidationAware is an optional lifecycle hook. It is intentionally
+// not part of VectorIndexSearchIf so existing vector algorithms keep their
+// contract unchanged; FULLTEXT2 uses it to classify the next load miss.
+type cacheInvalidationAware interface {
+	OnCacheInvalidated(reason string)
+}
+
+type loadWaiterAware interface {
+	SetLoadWaiters(int64)
+}
+
+type loadObservationFinisher interface {
+	FinishLoadObservation()
+}
+
 // StaleChecker is an OPTIONAL capability an algo's search impl may implement (currently
 // fulltext2). It reports whether the loaded index has fallen behind the persisted index —
 // e.g. a CDC append / REBUILD applied on ANOTHER CN, which the local process-scoped Remove
@@ -109,22 +124,30 @@ type StaleChecker interface {
 
 // base VectorIndex Search structure for VectorIndexSearchIf (see HnswSearch)
 type VectorIndexSearch struct {
-	Mutex      sync.RWMutex
-	ExpireAt   atomic.Int64
-	LastUpdate atomic.Int64
-	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
-	Algo       VectorIndexSearchIf
-	Cond       *sync.Cond  // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
-	stale      atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
+	Mutex       sync.RWMutex
+	ExpireAt    atomic.Int64
+	LastUpdate  atomic.Int64
+	Status      atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
+	Algo        VectorIndexSearchIf
+	Cond        *sync.Cond // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
+	loadWaiters atomic.Int64
+	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
 }
 
 func (s *VectorIndexSearch) Destroy() {
+	s.DestroyWithReason("")
+}
+
+func (s *VectorIndexSearch) DestroyWithReason(reason string) {
 	s.Mutex.Lock()
 	defer func() {
 		s.Mutex.Unlock()
 		s.Cond.Broadcast()
 	}()
+	if aware, ok := s.Algo.(cacheInvalidationAware); ok && reason != "" {
+		aware.OnCacheInvalidated(reason)
+	}
 	s.Algo.Destroy()
 	// destroyed
 	s.Status.Store(STATUS_DESTROYED)
@@ -138,6 +161,12 @@ func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 	}()
 
 	err := s.Algo.Load(sqlproc)
+	if aware, ok := s.Algo.(loadWaiterAware); ok {
+		aware.SetLoadWaiters(s.loadWaiters.Load())
+	}
+	if finisher, ok := s.Algo.(loadObservationFinisher); ok {
+		finisher.FinishLoadObservation()
+	}
 	if err != nil {
 		// load error
 		s.Status.Store(STATUS_ERROR)
@@ -178,10 +207,19 @@ func (s *VectorIndexSearch) extend(update bool) {
 
 func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 
+	preloadWaiter := s.Status.Load() == STATUS_NOT_INIT
+	if preloadWaiter {
+		s.loadWaiters.Add(1)
+	}
 	s.Cond.L.Lock()
 	defer s.Cond.L.Unlock()
+	if preloadWaiter {
+		s.loadWaiters.Add(-1)
+	}
 	for s.Status.Load() == 0 {
+		s.loadWaiters.Add(1)
 		s.Cond.Wait()
+		s.loadWaiters.Add(-1)
 	}
 
 	// entry may be removed already
@@ -205,10 +243,19 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 // SearchInto mirrors Search but routes to the box-free SearchInto (caller-owned out
 // SearchResult). Same shared-read-lock / status discipline.
 func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	preloadWaiter := s.Status.Load() == STATUS_NOT_INIT
+	if preloadWaiter {
+		s.loadWaiters.Add(1)
+	}
 	s.Cond.L.Lock()
 	defer s.Cond.L.Unlock()
+	if preloadWaiter {
+		s.loadWaiters.Add(-1)
+	}
 	for s.Status.Load() == 0 {
+		s.loadWaiters.Add(1)
 		s.Cond.Wait()
+		s.loadWaiters.Add(-1)
 	}
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
@@ -305,7 +352,11 @@ func (c *VectorIndexCache) HouseKeeping() {
 		value, loaded := c.IndexMap.LoadAndDelete(k)
 		if loaded {
 			algo := value.(*VectorIndexSearch)
-			algo.Destroy()
+			reason := "ttl_expired"
+			if algo.stale.Load() {
+				reason = "generation_changed"
+			}
+			algo.DestroyWithReason(reason)
 			algo = nil
 			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", k)
 		}
@@ -366,7 +417,7 @@ func (c *VectorIndexCache) Destroy() {
 	c.IndexMap.Range(func(key, value any) bool {
 		c.IndexMap.Delete(key)
 		algo := value.(*VectorIndexSearch)
-		algo.Destroy()
+		algo.DestroyWithReason("process_shutdown")
 		algo = nil
 		return true
 	})
@@ -436,10 +487,16 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 // coherence is handled by the pull-based freshness check (StaleChecker/IsStale via
 // HouseKeeping), which evicts a remote CN's warm-but-stale entry on its own.
 func (c *VectorIndexCache) Remove(key string) {
+	c.RemoveWithReason(key, "")
+}
+
+// RemoveWithReason is the internal reason-aware variant used by FULLTEXT2.
+// The empty reason preserves the historical behavior for all other algorithms.
+func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	value, loaded := c.IndexMap.LoadAndDelete(key)
 	if loaded {
 		algo := value.(*VectorIndexSearch)
-		algo.Destroy()
+		algo.DestroyWithReason(reason)
 		algo = nil
 	}
 }
