@@ -502,6 +502,12 @@ func validateCatalogAttributionSamples(nodes []catalogAttributionNode, scenarios
 	}
 	var prepared, rc uint64
 	for _, node := range nodes {
+		for _, consumer := range []string{"prepared_plan", "rc_table_cache"} {
+			counter, ok := node.Report.Consumers[consumer]
+			if !ok || counter.StableChecks == 0 || counter.InconclusiveChecks != 0 {
+				return fmt.Errorf("node %s consumer %s lacks stable observations", node.ServiceID, consumer)
+			}
+		}
 		prepared += node.Report.PreparedPlanRebuild.Count
 		rc += node.Report.RCTableCacheReload.Count
 	}
