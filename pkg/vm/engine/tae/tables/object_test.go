@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -214,6 +215,11 @@ func TestGetActiveRow(t *testing.T) {
 	err := idx.BatchUpsert(vec.GetDownstreamVector(), 0)
 	assert.NoError(t, err)
 	blk.node.Load().MustMNode().pkIndex = idx
+
+	// An append that has not reached its prepare-queue slot is not a valid PK
+	// owner for point lookup or snapshot dedup.
+	an2.Prepare = txnif.UncommitTS
+	require.ErrorIs(t, mnode.checkConflictLocked(nil)(1), index.ErrNotFound)
 }
 
 func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
@@ -456,4 +462,40 @@ func TestAppendableDuplicatedRowsTimestampWindow(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
+	schema := catalog.MockSchema(2, 0)
+	mnode := &memoryNode{writeSchema: schema}
+
+	makeBatch := func(value int32) *containers.Batch {
+		bat := containers.BuildBatch(
+			schema.AllNames(), schema.AllTypes(),
+			containers.Options{Allocator: common.DefaultAllocator},
+		)
+		for i, vec := range bat.Vecs {
+			if i == 0 {
+				vec.Append(value, false)
+			} else {
+				vec.Append(nil, true)
+			}
+		}
+		return bat
+	}
+
+	later := makeBatch(3)
+	defer later.Close()
+	require.NoError(t, mnode.ApplyAppendAtLocked(later, 2))
+	first := makeBatch(1)
+	defer first.Close()
+	require.NoError(t, mnode.ApplyAppendAtLocked(first, 0))
+	second := makeBatch(2)
+	defer second.Close()
+	require.NoError(t, mnode.ApplyAppendAtLocked(second, 1))
+
+	vec := mnode.data.Vecs[0]
+	require.Equal(t, 3, vec.Length())
+	require.Equal(t, int32(1), vec.Get(0))
+	require.Equal(t, int32(2), vec.Get(1))
+	require.Equal(t, int32(3), vec.Get(2))
 }

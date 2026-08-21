@@ -42,9 +42,13 @@ type ObjectAppender interface {
 	PrepareAppend(isMergeCompact bool, rows uint32,
 		txn txnif.AsyncTxn) (
 		node txnif.AppendNode, created bool, n uint32, err error)
+	ReserveAppend(offset, rows uint32)
 	ApplyAppend(bat *containers.Batch,
 		txn txnif.AsyncTxn,
 	) (int, error)
+	ApplyAppendAt(bat *containers.Batch, offset uint32,
+		txn txnif.AsyncTxn,
+	) error
 	IsAppendable() bool
 	ReplayAppend(bat *containers.Batch,
 		txn txnif.AsyncTxn) (int, error)
@@ -54,7 +58,7 @@ type ObjectAppender interface {
 
 type ObjectReplayer interface {
 	OnReplayAppend(node txnif.AppendNode) (err error)
-	OnReplayAppendPayload(bat *containers.Batch) (err error)
+	OnReplayAppendPayload(bat *containers.Batch, offset uint32) (err error)
 }
 
 type Object interface {
