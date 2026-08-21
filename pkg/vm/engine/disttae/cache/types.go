@@ -73,6 +73,7 @@ type CatalogCache struct {
 		sync.RWMutex
 		ts timestamp.Timestamp
 	}
+	attribution *catalogInvalidationAttribution
 	//tables and database is safe to be read concurrently.
 	tables    *tableCache
 	databases *databaseCache

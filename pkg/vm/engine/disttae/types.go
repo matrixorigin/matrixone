@@ -393,6 +393,9 @@ type Transaction struct {
 
 	// use to cache opened snapshot tables by current txn.
 	tableCache *sync.Map
+	// catalogInvalidations records the start of an opt-in RC table-cache
+	// reload. It is nil unless the attribution experiment is enabled.
+	catalogInvalidations atomic.Pointer[sync.Map]
 
 	// used to keep updated tables in the current txn
 	tableOps            *tableOpsChain

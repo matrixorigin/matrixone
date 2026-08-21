@@ -2656,15 +2656,31 @@ func (txn *Transaction) getCachedTableByKey(
 
 		catalogCache := txn.engine.GetLatestCatalogCache()
 		tblKey := &cache.TableChangeQuery{
-			AccountId:  k.accountId,
-			DatabaseId: k.databaseId,
-			Name:       k.name,
-			Version:    tbl.origin.version,
-			TableId:    tbl.origin.tableId,
-			Ts:         tbl.origin.lastTS,
+			AccountId:    k.accountId,
+			DatabaseId:   k.databaseId,
+			DatabaseName: k.dbName,
+			Name:         k.name,
+			Version:      tbl.origin.version,
+			TableId:      tbl.origin.tableId,
+			Ts:           tbl.origin.lastTS,
 		}
-		if catalogCache.HasNewerVersion(tblKey) {
-			txn.tableCache.Delete(genTableKey(k.accountId, k.name, k.databaseId, k.dbName))
+		if catalogCache.HasNewerVersionFor(tblKey, cache.CatalogInvalidationConsumerRCTableCache) {
+			cacheKey := genTableKey(k.accountId, k.name, k.databaseId, k.dbName)
+			txn.tableCache.Delete(cacheKey)
+			if catalogCache.CatalogInvalidationAttributionEnabled() {
+				invalidations := txn.catalogInvalidations.Load()
+				if invalidations == nil {
+					candidate := new(sync.Map)
+					if txn.catalogInvalidations.CompareAndSwap(nil, candidate) {
+						invalidations = candidate
+					} else {
+						invalidations = txn.catalogInvalidations.Load()
+					}
+				}
+				if invalidations != nil {
+					invalidations.Store(cacheKey, time.Now())
+				}
+			}
 			return nil
 		}
 	}
@@ -2892,6 +2908,7 @@ func (txn *Transaction) delTransaction() {
 	txn.assertWorkspaceAccountingLocked()
 
 	txn.tableCache = nil
+	txn.catalogInvalidations.Store(nil)
 	txn.tableOps = nil
 	txn.databaseOps = nil
 

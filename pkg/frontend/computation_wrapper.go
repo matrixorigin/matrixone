@@ -610,7 +610,7 @@ func CheckTableDefChange(catalogCache *cache.CatalogCache, tblKey *cache.TableCh
 	if catalogCache == nil {
 		return false
 	}
-	return catalogCache.HasNewerVersion(tblKey)
+	return catalogCache.HasNewerVersionFor(tblKey, cache.CatalogInvalidationConsumerPreparedPlan)
 }
 
 func preparePlanNeedsRebuild(schemaChanged, modeMismatch, protocolMismatch bool) bool {
@@ -789,6 +789,7 @@ func initExecuteStmtParamWithResolverInSession(
 	currentDDLVersion := owner.getDDLVersion()
 	change := prepareStmt.tempTableVersion != currentTempTableVersion ||
 		prepareStmt.ddlVersion != currentDDLVersion
+	schemaChanged := false
 	var preparedMetadataTS timestamp.Timestamp
 	if catalogCache != nil {
 		preparedMetadataTS = catalogCache.GetPreparedMetadataTS()
@@ -829,6 +830,7 @@ func initExecuteStmtParamWithResolverInSession(
 
 		if CheckTableDefChange(catalogCache, tblKey) {
 			change = true
+			schemaChanged = true
 			break
 		}
 	}
@@ -860,9 +862,13 @@ func initExecuteStmtParamWithResolverInSession(
 	// Rebuild the plan when catalog schema, session temporary-table name
 	// resolution, FK-check state, protocol, or compatibility mode changed.
 	if needRebuild {
+		rebuildStart := time.Now()
 		newPlan, err := rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
 		if err != nil {
 			return nil, nil, nil, "", false, err
+		}
+		if schemaChanged && catalogCache != nil {
+			catalogCache.RecordPreparedPlanRebuild(time.Since(rebuildStart))
 		}
 		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		newPreparePlan := newPlan.GetDcl().GetPrepare()

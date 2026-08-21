@@ -142,9 +142,15 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 		txn.engine,
 	)
 	if err != nil {
+		if invalidations := txn.catalogInvalidations.Load(); invalidations != nil {
+			invalidations.Delete(key)
+		}
 		return nil, err
 	}
 	if item == nil {
+		if invalidations := txn.catalogInvalidations.Load(); invalidations != nil {
+			invalidations.Delete(key)
+		}
 		return nil, nil
 	}
 
@@ -158,6 +164,11 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 	}
 
 	db.getTxn().tableCache.Store(key, tbl)
+	if invalidations := txn.catalogInvalidations.Load(); invalidations != nil {
+		if started, ok := invalidations.LoadAndDelete(key); ok {
+			txn.engine.GetLatestCatalogCache().RecordRCTableCacheReload(time.Since(started.(time.Time)))
+		}
+	}
 	return tbl, nil
 }
 
