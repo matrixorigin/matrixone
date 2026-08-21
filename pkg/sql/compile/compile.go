@@ -81,6 +81,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -2461,6 +2462,10 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		return nil, err
 	}
 
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_DATASTREAM_TB) {
+		return c.compileDatastreamScan(node, strictSqlMode)
+	}
+
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_ICEBERG_TB) {
 		access, err := c.checkIcebergScanAccess(node)
 		if err != nil {
@@ -2534,6 +2539,43 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	} else {
 		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode)
 	}
+}
+
+// compileDatastreamScan builds the single-scope pipeline for a datastream
+// external table: deparse the pushable filter conjuncts into the pushdown
+// hint, optionally drop them from local rechecking (recheck=false), and run
+// the external operator with a DataStreamReader.  node is the compile-owned
+// deep copy, so trimming its FilterList only affects this pipeline's
+// downstream restrict.
+func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	ds := node.ExternScan.GetDatastreamScan()
+	if ds == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "datastream external table is missing scan metadata")
+	}
+	pushedText, pushed := sqldatastream.DeparseFilters(node.FilterList, c.proc.GetSessionInfo().TimeZone)
+	ds.PushedFilter = pushedText
+	if !ds.Recheck && pushedText != "" {
+		// recheck=false trusts the server for exactly the conjuncts that were
+		// pushed; conjuncts the deparser could not express always stay local.
+		kept := make([]*plan.Expr, 0, len(node.FilterList))
+		for i, expr := range node.FilterList {
+			if !pushed[i] {
+				kept = append(kept, expr)
+			}
+		}
+		node.FilterList = kept
+	}
+
+	param := external.DatastreamExternParam()
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
 }
 
 func (c *Compile) hydrateMongoScan(node *plan.Node) error {
