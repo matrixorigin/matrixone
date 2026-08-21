@@ -117,7 +117,8 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 				return err
 			}
 		}
-		cache.Cache.Remove(storeDef.IndexTableName)
+		fulltext2.NewFulltext2Search(cfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
+		cache.Cache.RemoveWithReason(storeDef.IndexTableName, string(fulltext2.LoadMissRebuild))
 	}
 	// buildFromSource clears the prior tag=0 bases (idempotent) and rebuilds them.
 	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {
@@ -404,9 +405,21 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	return merged, nil
 }
 
-// HandleDropIndex — no algorithm-specific cleanup beyond the generic hidden-table
-// deletion the SQL layer performs.
-func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) error {
+// HandleDropIndex clears any pooled immutable generations as well as the
+// generic cache entry. The cache entry may already be absent after TTL
+// eviction, while its base pool is intentionally retained for a later warm
+// load; DROP must not leave that storage mapping behind.
+func (Hooks) HandleDropIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	if ctx == nil {
+		return nil
+	}
+	storeDef, ok := indexDefs[catalog.FullText2Index_TblType_Storage]
+	if !ok || storeDef == nil || storeDef.IndexTableName == "" {
+		return nil
+	}
+	cfg := fulltext2.TableConfig{DbName: ctx.QryDatabase(), IndexTable: storeDef.IndexTableName}
+	fulltext2.NewFulltext2Search(cfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
+	cache.Cache.RemoveWithReason(storeDef.IndexTableName, string(fulltext2.LoadMissRebuild))
 	return nil
 }
 
