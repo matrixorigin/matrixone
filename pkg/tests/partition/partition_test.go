@@ -167,7 +167,7 @@ func runPartitionClusterTestWithReuse(
 				// The shared test cluster runs one TN and three CNs on the same
 				// CI worker. Keep the test-only RPC deadline above transient
 				// scheduling stalls without changing production defaults.
-				embed.WithHAKeeperHeartbeatTimeout(15 * time.Second),
+				embed.WithHAKeeperHeartbeatTimeout(9 * time.Second),
 			},
 			options...,
 		)
