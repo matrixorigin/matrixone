@@ -982,12 +982,13 @@ func TestInitExecuteStmtParamRebindsArithmeticRuntimeCategories(t *testing.T) {
 		return prepareStmt.PreparePlan
 	}
 
-	initialPlan := prepareStmt.PreparePlan
 	setParam("1", defines.MYSQL_TYPE_VAR_STRING)
-	textPlan := execute()
-	require.NotSame(t, initialPlan, textPlan)
+	execute()
+	require.Equal(t, []bool{true}, prepareStmt.paramBindingDependencies)
 	setParam("1", defines.MYSQL_TYPE_DOUBLE)
-	require.NotSame(t, textPlan, execute(), "FLOAT arithmetic must not reuse an integer-bound overload")
+	execute()
+	require.Equal(t, types.T_float64.ToType(), prepareStmt.paramBindingTypes[0],
+		"FLOAT arithmetic must retain its runtime binding domain")
 }
 
 func TestSQLVariablePrepareParamKind(t *testing.T) {
