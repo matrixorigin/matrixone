@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // GetMOCluster get mo cluster from process level runtime
@@ -187,6 +188,16 @@ func WithDisableRefresh() Option {
 	}
 }
 
+// WithGlobalSysVarRoutingFilter makes the cluster snapshot suitable for SQL
+// routing by excluding CNs that have not applied the durable global-system-
+// variable watermark. It must not be enabled for the process-wide discovery
+// view used by lockservice and other internal components.
+func WithGlobalSysVarRoutingFilter() Option {
+	return func(c *cluster) {
+		c.options.globalSysVarRoutingFilter = true
+	}
+}
+
 type cluster struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
@@ -207,11 +218,13 @@ type cluster struct {
 	// Correctness: readyOnce.Do guarantees that ready.Store(true) happens before
 	// close(readyC), so if readyC is closed (i.e., <-readyC returns), ready is
 	// guaranteed to be true. If ready.Load() returns false, we fall back to channel wait.
-	ready       atomic.Bool
-	services    atomic.Pointer[services]
-	regexpCache *regexpCache
-	options     struct {
-		disableRefresh bool
+	ready                atomic.Bool
+	services             atomic.Pointer[services]
+	globalSysVarCommitTS atomic.Pointer[timestamp.Timestamp]
+	regexpCache          *regexpCache
+	options              struct {
+		disableRefresh            bool
+		globalSysVarRoutingFilter bool
 	}
 }
 
@@ -526,6 +539,17 @@ func (c *cluster) refreshWithContext(ctx context.Context) error {
 
 	new := &services{}
 	for _, cn := range details.CNStores {
+		if c.options.globalSysVarRoutingFilter &&
+			!details.GlobalSysVarCommitTS.IsEmpty() &&
+			cn.GlobalSysVarCommitTS.Less(details.GlobalSysVarCommitTS) {
+			if c.logger.Enabled(zap.DebugLevel) {
+				c.logger.Debug("cn service fenced by global sysvar watermark",
+					zap.String("cn", cn.UUID),
+					zap.String("required", details.GlobalSysVarCommitTS.DebugString()),
+					zap.String("applied", cn.GlobalSysVarCommitTS.DebugString()))
+			}
+			continue
+		}
 		v := newCNService(cn)
 		new.addCN([]metadata.CNService{v})
 		if c.logger.Enabled(zap.DebugLevel) {
@@ -549,11 +573,39 @@ func (c *cluster) refreshWithContext(ctx context.Context) error {
 		new.tn = new.tn[:1]
 	}
 	c.services.Store(new)
+	c.publishGlobalSysVarCommitTS(details.GlobalSysVarCommitTS)
 	c.readyOnce.Do(func() {
 		c.ready.Store(true)
 		close(c.readyC)
 	})
 	return nil
+}
+
+func (c *cluster) publishGlobalSysVarCommitTS(ts timestamp.Timestamp) {
+	if ts.IsEmpty() {
+		return
+	}
+	for {
+		current := c.globalSysVarCommitTS.Load()
+		if current != nil && current.GreaterEq(ts) {
+			return
+		}
+		next := ts
+		if c.globalSysVarCommitTS.CompareAndSwap(current, &next) {
+			return
+		}
+	}
+}
+
+// GlobalSysVarCommitTS returns the durable routing watermark represented by
+// service's currently published CN snapshot.
+func GlobalSysVarCommitTS(service MOCluster) timestamp.Timestamp {
+	if c, ok := service.(*cluster); ok {
+		if ts := c.globalSysVarCommitTS.Load(); ts != nil {
+			return *ts
+		}
+	}
+	return timestamp.Timestamp{}
 }
 
 func (c *cluster) acquireRefresh(ctx context.Context) error {

@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
@@ -1066,6 +1068,34 @@ func (l *store) updateCNWorkState(ctx context.Context, workState pb.CNWorkState)
 	}
 }
 
+func (l *store) updateGlobalSysVarCommitTS(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+) error {
+	cmd := hakeeper.GetUpdateGlobalSysVarCommitTSCmd(ts)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if _, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("failed to propose global sysvar commit timestamp",
+			zap.Error(err))
+		return handleNotHAKeeperError(ctx, err)
+	}
+	return nil
+}
+
+func (l *store) updateGlobalSysVarState(
+	ctx context.Context, update pb.GlobalSysVarUpdate,
+) (uint64, error) {
+	cmd := hakeeper.GetUpdateGlobalSysVarStateCmd(update)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		l.runtime.Logger().Error("failed to propose global sysvar state",
+			zap.Error(err))
+		return 0, handleNotHAKeeperError(ctx, err)
+	}
+	return result.Value, nil
+}
+
 func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
 	state, err := l.getCheckerState()
 	if err != nil {
@@ -1437,6 +1467,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		Replicas:                 make([]pb.LogReplicaInfo, 0),
 		Locality:                 l.cfg.getLocality(),
 		CommandDeliverySupported: true,
+		ProtocolVersion:          defines.MORPCLatestVersion,
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,

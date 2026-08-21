@@ -22,9 +22,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/version"
 )
@@ -72,14 +75,175 @@ func (s *service) heartbeatTask(ctx context.Context) {
 }
 
 func (s *service) controlTask(ctx context.Context) {
-	s.commandPollWakeup = make(chan struct{}, 1)
+	s.initControlChannels()
 	commandDone := make(chan struct{})
+	watermarkDone := make(chan struct{})
+	reconcilerDone := make(chan struct{})
 	go func() {
 		defer close(commandDone)
 		s.commandTask(ctx)
 	}()
+	go func() {
+		defer close(watermarkDone)
+		s.globalSysVarWatermarkTask(ctx)
+	}()
+	go func() {
+		defer close(reconcilerDone)
+		s.globalSysVarOutboxTask(ctx)
+	}()
 	s.heartbeatTask(ctx)
 	<-commandDone
+	<-watermarkDone
+	<-reconcilerDone
+}
+
+func (s *service) globalSysVarOutboxTask(ctx context.Context) {
+	ticker := time.NewTicker(s.cfg.HAKeeper.HeatbeatInterval.Duration)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := frontend.ReconcileGlobalSysVarOutbox(ctx, s.cfg.UUID); err != nil {
+				s.logger.Warn("failed to reconcile global system variable outbox", zap.Error(err))
+			}
+		}
+	}
+}
+
+func (s *service) initControlChannels() {
+	s.controlChannelsOnce.Do(func() {
+		if s.commandPollWakeup == nil {
+			s.commandPollWakeup = make(chan struct{}, 1)
+		}
+		if s.globalSysVarWakeup == nil {
+			s.globalSysVarWakeup = make(chan struct{}, 1)
+		}
+		if s.globalSysVarAppliedC == nil {
+			s.globalSysVarAppliedC = make(chan struct{}, 1)
+		}
+	})
+}
+
+func (s *service) observeGlobalSysVarCommitTS(ts timestamp.Timestamp) {
+	if ts.IsEmpty() {
+		return
+	}
+	for {
+		current := s.globalSysVarDesired.Load()
+		if current != nil && current.GreaterEq(ts) {
+			return
+		}
+		next := ts
+		if s.globalSysVarDesired.CompareAndSwap(current, &next) {
+			select {
+			case s.globalSysVarWakeup <- struct{}{}:
+			default:
+			}
+			return
+		}
+	}
+}
+
+func (s *service) publishGlobalSysVarCommitTS(ts timestamp.Timestamp) {
+	for {
+		current := s.globalSysVarApplied.Load()
+		if current != nil && current.GreaterEq(ts) {
+			return
+		}
+		next := ts
+		if s.globalSysVarApplied.CompareAndSwap(current, &next) {
+			select {
+			case s.globalSysVarAppliedC <- struct{}{}:
+			default:
+			}
+			return
+		}
+	}
+}
+
+func (s *service) renewServingLease() {
+	duration := s.cfg.HAKeeper.HeatbeatInterval.Duration +
+		s.cfg.HAKeeper.HeatbeatTimeout.Duration
+	deadline := time.Now().Add(duration)
+	s.servingLeaseDeadline.Store(&deadline)
+}
+
+func (s *service) revokeServingLease() {
+	s.servingLeaseDeadline.Store(nil)
+}
+
+func (s *service) globalSysVarCaughtUp() bool {
+	desired := s.globalSysVarDesired.Load()
+	if desired == nil || desired.IsEmpty() {
+		return true
+	}
+	applied := s.globalSysVarApplied.Load()
+	return applied != nil && applied.GreaterEq(*desired)
+}
+
+// CanAcceptNewConnections implements frontend.SQLConnectionAdmissionController.
+func (s *service) CanAcceptNewConnections() bool {
+	deadline := s.servingLeaseDeadline.Load()
+	return deadline != nil && time.Now().Before(*deadline) && s.globalSysVarCaughtUp()
+}
+
+func (s *service) waitGlobalSysVarAdmission(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.hakeeperConnected:
+	}
+	for !s.globalSysVarCaughtUp() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.globalSysVarAppliedC:
+		}
+	}
+	return nil
+}
+
+func (s *service) globalSysVarWatermarkTask(ctx context.Context) {
+	retry := time.NewTimer(time.Hour)
+	if !retry.Stop() {
+		<-retry.C
+	}
+	defer retry.Stop()
+	var retryC <-chan time.Time
+	for {
+		desired := s.globalSysVarDesired.Load()
+		applied := s.globalSysVarApplied.Load()
+		if desired != nil && (applied == nil || applied.Less(*desired)) {
+			if err := s._txnClient.SyncLatestCommitTSWithContext(ctx, *desired); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				s.logger.Error("failed to apply global sysvar commit timestamp", zap.Error(err))
+				retry.Reset(100 * time.Millisecond)
+				retryC = retry.C
+			} else {
+				s.publishGlobalSysVarCommitTS(*desired)
+				retryC = nil
+				continue
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.globalSysVarWakeup:
+			if retryC != nil && !retry.Stop() {
+				select {
+				case <-retry.C:
+				default:
+				}
+			}
+			retryC = nil
+		case <-retryC:
+			retryC = nil
+		}
+	}
 }
 
 func (s *service) commandTask(ctx context.Context) {
@@ -202,6 +366,13 @@ func (s *service) heartbeat(ctx context.Context) {
 		CommitID:                    version.CommitID,
 		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
 		CommandDeliveryAckSupported: true,
+		GlobalSysVarGeneration:      s.globalSysVarGeneration,
+		ProtocolVersion:             defines.MORPCLatestVersion,
+		GlobalSysVarProgressTimeoutNanos: int64(
+			s.cfg.HAKeeper.HeatbeatInterval.Duration + s.cfg.HAKeeper.HeatbeatTimeout.Duration),
+	}
+	if applied := s.globalSysVarApplied.Load(); applied != nil {
+		hb.GlobalSysVarCommitTS = *applied
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
@@ -213,6 +384,7 @@ func (s *service) heartbeat(ctx context.Context) {
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	s.heartbeatInFlight.Store(false)
 	if err != nil {
+		s.revokeServingLease()
 		s.commandPollNeeded.Store(true)
 		s.notifyCommandPoll()
 		err = moerr.AttachCause(ctx2, err)
@@ -221,12 +393,24 @@ func (s *service) heartbeat(ctx context.Context) {
 		return
 	}
 	if ctx2.Err() != nil {
+		s.revokeServingLease()
 		s.commandPollNeeded.Store(true)
 		s.notifyCommandPoll()
 		return
 	}
+	if cb.GlobalSysVarMinProtocolVersion > defines.MORPCLatestVersion {
+		s.revokeServingLease()
+		s.logger.Error("CN protocol is below activated global sysvar minimum",
+			zap.Int64("current", defines.MORPCLatestVersion),
+			zap.Int64("minimum", cb.GlobalSysVarMinProtocolVersion))
+		return
+	}
 	s.commandPollNeeded.Store(false)
 	s.notifyCommandPoll()
+
+	s.config.DecrCount()
+	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
+	s.renewServingLease()
 
 	select {
 	case <-s.hakeeperConnected:
@@ -234,11 +418,10 @@ func (s *service) heartbeat(ctx context.Context) {
 		s.initTaskServiceHolder()
 		close(s.hakeeperConnected)
 	}
-	s.config.DecrCount()
-	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
 }
 
 func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {
+	s.observeGlobalSysVarCommitTS(batch.GlobalSysVarCommitTS)
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
 	s.handleCommandBatchLocked(batch)
@@ -286,6 +469,7 @@ func (s *service) handleHeartbeatResponse(
 	sentAck uint64,
 	batch logservicepb.CommandBatch,
 ) {
+	s.observeGlobalSysVarCommitTS(batch.GlobalSysVarCommitTS)
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
 	if sentAck != 0 && sentAck == s.lastCommandBatchID &&

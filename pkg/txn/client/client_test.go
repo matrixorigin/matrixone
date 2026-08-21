@@ -1912,6 +1912,50 @@ func TestCloseCancelsAdmittedSnapshotWait(t *testing.T) {
 	)
 }
 
+func TestSyncLatestCommitTSWithContextCancelsTimestampWait(t *testing.T) {
+	waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			ctx, cancel := context.WithCancel(context.Background())
+			errC := make(chan error, 1)
+			ts := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+			go func() {
+				errC <- tc.SyncLatestCommitTSWithContext(ctx, ts)
+			}()
+
+			select {
+			case <-waiter.entered:
+			case <-time.After(time.Second):
+				t.Fatal("commit timestamp sync did not enter the logtail wait")
+			}
+			cancel()
+			require.ErrorIs(t, <-errC, context.Canceled)
+			require.Equal(t, ts, tc.GetLatestCommitTS())
+			require.Zero(t, tc.GetSyncLatestCommitTSTimes())
+		},
+		WithTimestampWaiter(waiter),
+	)
+}
+
+func TestSyncLatestCommitTSWithContextWaitsForVisibility(t *testing.T) {
+	RunTxnTests(
+		func(tc TxnClient, _ rpc.TxnSender) {
+			ts := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+			require.NoError(t, tc.SyncLatestCommitTSWithContext(nil, ts))
+			require.Equal(t, ts, tc.GetLatestCommitTS())
+			require.Equal(t, uint64(1), tc.GetSyncLatestCommitTSTimes())
+
+			canceledCtx, cancel := context.WithCancel(context.Background())
+			cancel()
+			require.ErrorIs(t, tc.SyncLatestCommitTSWithContext(
+				canceledCtx, timestamp.Timestamp{PhysicalTime: 200}), context.Canceled)
+			require.Equal(t, ts, tc.GetLatestCommitTS())
+			require.Equal(t, uint64(1), tc.GetSyncLatestCommitTSTimes())
+		},
+		WithTimestampWaiter(immediateTimestampWaiter{}),
+	)
+}
+
 func TestCloseCancelsRealTimestampWait(t *testing.T) {
 	tw := NewTimestampWaiter(runtime.DefaultRuntime().Logger()).(*timestampWaiter)
 	defer tw.Close()

@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -66,6 +67,36 @@ import (
 
 var dummyBadRequestErr = moerr.NewInternalError(context.TODO(), "bad request")
 var dummyErr = moerr.NewInternalError(context.TODO(), "dummy error")
+
+func TestHandleSyncCommitPropagatesCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	ts := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	entered := make(chan struct{})
+	txnClient.EXPECT().SyncLatestCommitTSWithContext(gomock.Any(), ts).
+		DoAndReturn(func(ctx context.Context, _ timestamp.Timestamp) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	s := &service{_txnClient: txnClient}
+	go func() {
+		done <- s.handleSyncCommit(ctx, &query.Request{
+			SycnCommit: &query.SyncCommitRequest{LatestCommitTS: ts},
+		}, &query.Response{}, nil)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not enter the transaction client wait")
+	}
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
 
 func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 	exec := &iscp.ISCPTaskExecutor{}

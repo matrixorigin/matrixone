@@ -1605,7 +1605,9 @@ const (
 
 	insertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, "%s", "%s", "%s", %v);`
 
-	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s' and system_variables = true;`
+	updateSystemVariableValueFormat       = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s' and system_variables = true;`
+	lockGlobalSystemVariableAccountFormat = `select account_id from mo_catalog.mo_account where account_id = %d for update;`
+	getGlobalSystemVariableEpochFormat    = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true and variable_name = '%s' for update;`
 
 	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
 
@@ -2257,6 +2259,16 @@ func getSqlForInsertSysVarWithAccount(accountId uint64, accountName string, varN
 // getSqlForUpdateSysVarValue returns a SQL query to update the value of a system variable for a given account.
 func getSqlForUpdateSysVarValue(varValue string, accountId uint64, varName string) string {
 	return fmt.Sprintf(updateSystemVariableValueFormat, varValue, accountId, varName)
+}
+
+const globalSystemVariableEpochName = "__mo_global_system_variable_epoch"
+
+func getSqlForLockGlobalSystemVariableAccount(accountID uint64) string {
+	return fmt.Sprintf(lockGlobalSystemVariableAccountFormat, accountID)
+}
+
+func getSqlForGlobalSystemVariableEpoch(accountID uint64) string {
+	return fmt.Sprintf(getGlobalSystemVariableEpochFormat, accountID, globalSystemVariableEpochName)
 }
 
 func getSqlForupdateConfigurationByDbNameAndAccountName(ctx context.Context, varValue, accountName, dbName, varName string) (string, error) {
@@ -12024,7 +12036,8 @@ func doSetGlobalSystemVariables(
 	ses *Session,
 	varNames []string,
 	varValue interface{},
-) (err error) {
+	generation uint64,
+) (epoch uint64, err error) {
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
 	bh := ses.GetBackgroundExec(ctx)
@@ -12036,6 +12049,57 @@ func doSetGlobalSystemVariables(
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+
+	// Serialize the durable account epoch across CNs. The epoch row is updated
+	// in the same catalog transaction as the sysvar value, so it is both a
+	// monotonic cache version and a replayable fence intent after a process
+	// crash between catalog COMMIT and the HAKeeper publication.
+	if err = bh.Exec(ctx, getSqlForLockGlobalSystemVariableAccount(accountId)); err != nil {
+		return
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, getSqlForGlobalSystemVariableEpoch(accountId)); err != nil {
+		return
+	}
+	epochExists := false
+	if erArray, resultErr := getResultSet(ctx, bh); resultErr != nil {
+		err = resultErr
+		return
+	} else if execResultArrayHasData(erArray) {
+		epochExists = true
+		var value string
+		if value, err = erArray[0].GetString(ctx, 0, 0); err != nil {
+			return
+		}
+		if epoch, err = strconv.ParseUint(value, 10, 64); err != nil {
+			return 0, moerr.NewInternalErrorf(ctx,
+				"invalid global system variable epoch %q", value)
+		}
+	}
+	// The HAKeeper generation is allocated before this transaction and is
+	// persisted atomically with the value.  It is therefore both the cache
+	// epoch and a durable outbox record that an independent CN can consume
+	// after the committing frontend disappears.
+	if generation == 0 {
+		if epoch == math.MaxUint64 {
+			return 0, moerr.NewInternalError(ctx, "global system variable epoch exhausted")
+		}
+		generation = epoch + 1
+	} else if generation <= epoch {
+		return 0, moerr.NewInternalErrorf(ctx,
+			"invalid global system variable generation %d after epoch %d", generation, epoch)
+	}
+	epoch = generation
+	if epochExists {
+		err = bh.Exec(ctx, getSqlForUpdateSysVarValue(
+			strconv.FormatUint(epoch, 10), accountId, globalSystemVariableEpochName))
+	} else {
+		err = bh.Exec(ctx, getSqlForInsertSysVarWithAccount(
+			accountId, accountName, globalSystemVariableEpochName, strconv.FormatUint(epoch, 10)))
+	}
+	if err != nil {
+		return
+	}
 
 	for _, varName := range varNames {
 		varName = strings.ToLower(varName)

@@ -39,6 +39,7 @@ func TestCNStateUpdate(t *testing.T) {
 		ServiceAddress:              "addr-a",
 		Role:                        metadata.CNRole_AP,
 		CommandDeliveryAckSupported: true,
+		ProtocolVersion:             14,
 	}
 	tick1 := uint64(100)
 
@@ -51,6 +52,7 @@ func TestCNStateUpdate(t *testing.T) {
 		Labels:                      map[string]metadata.LabelList{},
 		UpTime:                      state.Stores[hb1.UUID].UpTime,
 		CommandDeliveryAckSupported: true,
+		ProtocolVersion:             14,
 	})
 
 	hb2 := CNStoreHeartbeat{UUID: "cn-b", ServiceAddress: "addr-b", Role: metadata.CNRole_TP}
@@ -159,6 +161,7 @@ func TestLogStateUpdateStores(t *testing.T) {
 		ServiceAddress:           "addr-a",
 		GossipAddress:            "gossip-a",
 		CommandDeliverySupported: true,
+		ProtocolVersion:          14,
 		Replicas: []LogReplicaInfo{{
 			LogShardInfo: LogShardInfo{
 				ShardID:  1,
@@ -179,6 +182,7 @@ func TestLogStateUpdateStores(t *testing.T) {
 		GossipAddress:            hb1.GossipAddress,
 		Replicas:                 hb1.Replicas,
 		CommandDeliverySupported: true,
+		ProtocolVersion:          14,
 	})
 
 	hb2 := LogStoreHeartbeat{
@@ -628,16 +632,18 @@ func TestProxyStateUpdate(t *testing.T) {
 	state := ProxyState{Stores: map[string]ProxyStore{}}
 
 	hb1 := ProxyHeartbeat{
-		UUID:          "proxy-1",
-		ListenAddress: "addr-a",
+		UUID:            "proxy-1",
+		ListenAddress:   "addr-a",
+		ProtocolVersion: 14,
 	}
 	tick1 := uint64(100)
 
 	state.Update(hb1, tick1)
 	assert.Equal(t, state.Stores[hb1.UUID], ProxyStore{
-		UUID:          hb1.UUID,
-		Tick:          tick1,
-		ListenAddress: hb1.ListenAddress,
+		UUID:            hb1.UUID,
+		Tick:            tick1,
+		ListenAddress:   hb1.ListenAddress,
+		ProtocolVersion: 14,
 	})
 
 	hb2 := ProxyHeartbeat{

@@ -22,6 +22,7 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/logservice";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 import "metadata.proto";
+import "timestamp.proto";
 
 option (gogoproto.goproto_enum_prefix_all) = false;
 option (gogoproto.sizer_all) = false;
@@ -57,6 +58,10 @@ message CNStore {
   int64 UpTime = 14;
   string          ShardServiceAddress = 15;
   string CommitID = 16;
+  timestamp.Timestamp GlobalSysVarCommitTS = 17 [(gogoproto.nullable) = false];
+  string GlobalSysVarGeneration = 18;
+  int64 ProtocolVersion = 19;
+  int64 GlobalSysVarProgressTimeoutNanos = 20;
 }
 
 message TNStore {
@@ -88,6 +93,7 @@ message LogStore {
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
   ConfigData ConfigData = 6;
   Locality Locality = 7 [(gogoproto.nullable) = false];
+  int64 ProtocolVersion = 8;
 }
 
 // LogShardInfo contains information a log shard.
@@ -149,6 +155,12 @@ message CNStoreHeartbeat {
   // service. It is meaningful only when CommandDeliveryAckSupported is true.
   uint64          AckedCommandBatchID = 16;
   bool            CommandDeliveryAckSupported = 17;
+  // GlobalSysVarCommitTS is the latest global-system-variable watermark whose
+  // logtail has been applied locally.
+  timestamp.Timestamp GlobalSysVarCommitTS = 18 [(gogoproto.nullable) = false];
+  string GlobalSysVarGeneration = 19;
+  int64 ProtocolVersion = 20;
+  int64 GlobalSysVarProgressTimeoutNanos = 21;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -183,6 +195,7 @@ message LogStoreHeartbeat {
   // acknowledged delivery protocol only after every HAKeeper replica has
   // upgraded.
   bool CommandDeliverySupported = 9;
+  int64 ProtocolVersion = 10;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -273,6 +286,8 @@ enum MethodType {
   READ_LSN = 27;
   UPDATE_LEASEHOLDER_ID = 28;
   GET_SCHEDULE_COMMANDS = 29;
+  UPDATE_GLOBAL_SYS_VAR_COMMIT_TS = 30;
+  UPDATE_GLOBAL_SYS_VAR_STATE = 31;
 };
 
 enum RecordType {
@@ -355,6 +370,8 @@ message Request {
   Locality NonVotingLocality     = 15;
   CheckHealth CheckHealth        = 16;
   ScheduleCommandQuery ScheduleCommandQuery = 17;
+  timestamp.Timestamp GlobalSysVarCommitTS = 18 [(gogoproto.nullable) = false];
+  GlobalSysVarUpdate GlobalSysVarUpdate = 19;
 };
 
 message LogResponse {
@@ -381,7 +398,21 @@ message Response {
   ShardInfoQueryResult ShardInfo = 10;
   AllocateIDResponse AllocateID  = 11;
   CheckerState CheckerState      = 12;
+  uint64 GlobalSysVarGeneration  = 13;
 };
+
+enum GlobalSysVarUpdateType {
+  BeginGlobalSysVarUpdate = 0;
+  CompleteGlobalSysVarUpdate = 1;
+}
+
+message GlobalSysVarUpdate {
+  GlobalSysVarUpdateType Type = 1;
+  uint64 MembershipRevision = 2;
+  uint64 Generation = 3;
+  timestamp.Timestamp CommitTS = 4 [(gogoproto.nullable) = false];
+  int64 MinProtocolVersion = 5;
+}
 
 message LogRecordResponse {
   repeated LogRecord Records = 1 [(gogoproto.nullable) = false];
@@ -417,6 +448,8 @@ enum HAKeeperUpdateType {
   RestoreIDWatermarkUpdate = 18;
   CompleteLogServiceRecoveryUpdate = 19;
   EnableCommandDeliveryUpdate = 20;
+  UpdateGlobalSysVarCommitTS = 21;
+  UpdateGlobalSysVarState = 22;
 }
 
 // HAKeeperState state transition diagram
@@ -607,6 +640,9 @@ message CommandBatch {
   // fingerprints. A non-empty acknowledged batch must contain one valid ID per
   // command before it is exposed to CN/TN services.
   repeated ScheduleCommandID CommandIDs = 4 [(gogoproto.nullable) = false];
+  // GlobalSysVarCommitTS is the desired cluster-wide visibility watermark.
+  timestamp.Timestamp GlobalSysVarCommitTS = 5 [(gogoproto.nullable) = false];
+  int64 GlobalSysVarMinProtocolVersion = 6;
 }
 
 // CNStoreInfo contains information on a CN store.
@@ -632,12 +668,22 @@ message CNStoreInfo {
   // non-destructive acknowledged schedule-command protocol. It is copied
   // from CNStoreHeartbeat so HAKeeper can gate activation and admission.
   bool CommandDeliveryAckSupported = 18;
+  timestamp.Timestamp GlobalSysVarCommitTS = 19 [(gogoproto.nullable) = false];
+  string GlobalSysVarGeneration = 20;
+  int64 ProtocolVersion = 21;
+  int64 GlobalSysVarProgressTimeoutNanos = 22;
 }
 
 // CNState contains all CN details known to the HAKeeper.
 message CNState {
   // Stores is keyed by CN store UUID. 
   map<string, CNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
+  // GlobalSysVarCommitTS is the durable admission watermark for routable CNs.
+  timestamp.Timestamp GlobalSysVarCommitTS = 2 [(gogoproto.nullable) = false];
+  int64 GlobalSysVarMinProtocolVersion = 3;
+  uint64 GlobalSysVarMembershipRevision = 4;
+  uint64 GlobalSysVarPendingGeneration = 5;
+  uint64 GlobalSysVarCompletedGeneration = 6;
 }
 
 
@@ -677,6 +723,11 @@ message ProxyStore {
   uint64 Tick = 2;
   string ListenAddress = 3;
   ConfigData ConfigData = 4;
+  timestamp.Timestamp GlobalSysVarCommitTS = 5 [(gogoproto.nullable) = false];
+  string GlobalSysVarGeneration = 6;
+  NodeState State = 7;
+  int64 ProtocolVersion = 8;
+  int64 GlobalSysVarProgressTimeoutNanos = 9;
 }
 
 message ProxyState {
@@ -687,6 +738,10 @@ message ProxyHeartbeat {
   string UUID = 1;
   string ListenAddress = 2;
   ConfigData ConfigData = 3;
+  timestamp.Timestamp GlobalSysVarCommitTS = 4 [(gogoproto.nullable) = false];
+  string GlobalSysVarGeneration = 5;
+  int64 ProtocolVersion = 6;
+  int64 GlobalSysVarProgressTimeoutNanos = 7;
 };
 
 message ClusterDetails {
@@ -695,6 +750,11 @@ message ClusterDetails {
   repeated LogStore LogStores   = 3 [(gogoproto.nullable) = false];
   repeated ProxyStore ProxyStores = 4 [(gogoproto.nullable) = false];
   repeated DeletedStore DeletedStores = 5 [(gogoproto.nullable) = false];
+  timestamp.Timestamp GlobalSysVarCommitTS = 6 [(gogoproto.nullable) = false];
+  int64 GlobalSysVarMinProtocolVersion = 7;
+  uint64 GlobalSysVarMembershipRevision = 8;
+  uint64 GlobalSysVarPendingGeneration = 9;
+  uint64 GlobalSysVarCompletedGeneration = 10;
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It
@@ -733,6 +793,7 @@ message LogStoreInfo {
   ConfigData ConfigData = 7;
   Locality Locality = 8 [(gogoproto.nullable) = false];
   bool CommandDeliverySupported = 9;
+  int64 ProtocolVersion = 10;
 }
 
 message LogState {

@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 type countingErrorRPCClient struct {
@@ -2339,6 +2340,57 @@ func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {
 		info, ok1 = state.CNState.Stores[s.ID()]
 		assert.True(t, ok1)
 		require.Equal(t, metadata.WorkState_Working, info.WorkState)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestHAKeeperClientGlobalSysVarCommitWatermark(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		client, err := NewCNHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, client.Close()) }()
+		fenceClient, ok := client.(GlobalSysVarHAKeeperClient)
+		require.True(t, ok)
+
+		commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+		require.NoError(t, fenceClient.UpdateGlobalSysVarCommitTS(ctx, commitTS))
+		batch, err := client.SendCNHeartbeat(ctx, pb.CNStoreHeartbeat{
+			UUID:                 s.ID(),
+			SQLAddress:           "sql-address",
+			GlobalSysVarCommitTS: commitTS,
+			ServiceAddress:       "service-address",
+			QueryAddress:         "query-address",
+			LockServiceAddress:   "lock-address",
+			ShardServiceAddress:  "shard-address",
+			TaskServiceCreated:   true,
+			GossipAddress:        "gossip-address",
+			GossipJoined:         true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, commitTS, batch.GlobalSysVarCommitTS)
+		proxyClient, err := NewProxyHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, proxyClient.Close()) }()
+		_, err = proxyClient.SendProxyHeartbeat(ctx, pb.ProxyHeartbeat{
+			UUID:                   "proxy-1",
+			ListenAddress:          "proxy-address",
+			GlobalSysVarCommitTS:   commitTS,
+			GlobalSysVarGeneration: "proxy-generation",
+		})
+		require.NoError(t, err)
+
+		details, err := client.GetClusterDetails(ctx)
+		require.NoError(t, err)
+		require.Equal(t, commitTS, details.GlobalSysVarCommitTS)
+		require.Len(t, details.CNStores, 1)
+		require.Equal(t, commitTS, details.CNStores[0].GlobalSysVarCommitTS)
+		require.Len(t, details.ProxyStores, 1)
+		require.Equal(t, commitTS, details.ProxyStores[0].GlobalSysVarCommitTS)
 	}
 	runServiceTest(t, true, true, fn)
 }

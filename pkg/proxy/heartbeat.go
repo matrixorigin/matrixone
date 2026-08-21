@@ -20,7 +20,9 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -48,14 +50,91 @@ func (s *Server) heartbeat(ctx context.Context) {
 func (s *Server) doHeartbeat(ctx context.Context) {
 	ctx, cancel := context.WithTimeoutCause(ctx, s.config.HAKeeper.HeartbeatTimeout.Duration, moerr.CauseDoHeartbeat)
 	defer cancel()
-	_, err := s.haKeeperClient.SendProxyHeartbeat(ctx, pb.ProxyHeartbeat{
-		UUID:          s.config.UUID,
-		ListenAddress: s.config.ListenAddress,
-		ConfigData:    s.configData.GetData(),
-	})
-	if err != nil {
+	if err := s.sendHeartbeat(ctx); err != nil {
 		err = moerr.AttachCause(ctx, err)
 		s.runtime.Logger().Error("failed to send heartbeat", zap.Error(err))
 	}
+}
+
+func (s *Server) renewServingLease() {
+	duration := s.config.HAKeeper.HeartbeatInterval.Duration +
+		s.config.HAKeeper.HeartbeatTimeout.Duration
+	deadline := time.Now().Add(duration)
+	s.servingLeaseDeadline.Store(&deadline)
+}
+
+func (s *Server) revokeServingLease() {
+	s.servingLeaseDeadline.Store(nil)
+}
+
+func (s *Server) canAcceptNewConnections() bool {
+	deadline := s.servingLeaseDeadline.Load()
+	return deadline != nil && time.Now().Before(*deadline)
+}
+
+func (s *Server) sendHeartbeat(ctx context.Context) error {
+	hb := pb.ProxyHeartbeat{
+		UUID:                   s.config.UUID,
+		ListenAddress:          s.config.ListenAddress,
+		ConfigData:             s.configData.GetData(),
+		GlobalSysVarGeneration: s.globalSysVarGeneration,
+		ProtocolVersion:        defines.MORPCLatestVersion,
+		GlobalSysVarProgressTimeoutNanos: int64(
+			s.config.HAKeeper.HeartbeatInterval.Duration + s.config.HAKeeper.HeartbeatTimeout.Duration),
+	}
+	if s.handler != nil {
+		hb.GlobalSysVarCommitTS = clusterservice.GlobalSysVarCommitTS(s.handler.moCluster)
+	}
+	cb, err := s.haKeeperClient.SendProxyHeartbeat(ctx, hb)
 	s.configData.DecrCount()
+	if err != nil {
+		s.revokeServingLease()
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		s.revokeServingLease()
+		return err
+	}
+	if cb.GlobalSysVarMinProtocolVersion > defines.MORPCLatestVersion {
+		s.revokeServingLease()
+		return moerr.NewInternalErrorf(ctx,
+			"proxy protocol version %d is below activated minimum %d",
+			defines.MORPCLatestVersion, cb.GlobalSysVarMinProtocolVersion)
+	}
+	if hb.GlobalSysVarCommitTS.Less(cb.GlobalSysVarCommitTS) {
+		s.revokeServingLease()
+		refresher, ok := s.handler.moCluster.(clusterservice.AuthoritativeRefresher)
+		if !ok {
+			return moerr.NewInternalError(ctx,
+				"proxy cluster service does not support authoritative refresh")
+		}
+		if err := refresher.Refresh(ctx); err != nil {
+			return err
+		}
+		hb.GlobalSysVarCommitTS = clusterservice.GlobalSysVarCommitTS(s.handler.moCluster)
+		hb.ConfigData = s.configData.GetData()
+		_, err = s.haKeeperClient.SendProxyHeartbeat(ctx, hb)
+		s.configData.DecrCount()
+		if err != nil {
+			return err
+		}
+		if hb.GlobalSysVarCommitTS.Less(cb.GlobalSysVarCommitTS) {
+			return moerr.NewInternalError(ctx,
+				"proxy authoritative refresh did not reach global sysvar watermark")
+		}
+	}
+	s.renewServingLease()
+	return nil
+}
+
+func (s *Server) initializeGlobalSysVarRouteBarrier(ctx context.Context) error {
+	refresher, ok := s.handler.moCluster.(clusterservice.AuthoritativeRefresher)
+	if !ok {
+		return moerr.NewInternalError(ctx,
+			"proxy cluster service does not support authoritative refresh")
+	}
+	if err := refresher.Refresh(ctx); err != nil {
+		return err
+	}
+	return s.sendHeartbeat(ctx)
 }

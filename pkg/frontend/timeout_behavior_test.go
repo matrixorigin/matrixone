@@ -47,6 +47,11 @@ func stubGlobalSysVarPersistence(t *testing.T, vars ...sysVarSet) *backgroundExe
 	bh.sql2result["begin;"] = nil
 	bh.sql2result["commit;"] = nil
 	bh.sql2result["rollback;"] = nil
+	bh.sql2result[getSqlForLockGlobalSystemVariableAccount(sysAccountID)] = nil
+	bh.sql2result[getSqlForGlobalSystemVariableEpoch(sysAccountID)] =
+		newMrsForSystemVariableNameOfAccount([][]interface{}{})
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, globalSystemVariableEpochName, "1")] = nil
 
 	for _, v := range vars {
 		bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, v.name)] = newMrsForSystemVariableNameOfAccount([][]interface{}{})

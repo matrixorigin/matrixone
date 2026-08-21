@@ -81,6 +81,9 @@ type MOServer struct {
 	pu        *config.ParameterUnit
 	listeners []net.Listener
 	service   string
+	// canAcceptNewConnections is an optional fail-closed admission check owned
+	// by the CN control plane. Existing sessions are unaffected.
+	canAcceptNewConnections func() bool
 }
 
 // Server interface is for mock MOServer
@@ -105,6 +108,14 @@ type BaseService interface {
 	GetFinalVersion() string
 	// UpgradeTenant used to upgrade tenant
 	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error
+}
+
+// SQLConnectionAdmissionController lets a CN fail-close new direct SQL
+// connections while its control-plane lease or durable visibility fence is not
+// valid, without expanding the BaseService contract implemented by tests and
+// embedders.
+type SQLConnectionAdmissionController interface {
+	CanAcceptNewConnections() bool
 }
 
 func (mo *MOServer) GetRoutineManager() *RoutineManager {
@@ -226,6 +237,10 @@ func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 			return
 		}
 		tempDelay = 0
+		if mo.canAcceptNewConnections != nil && !mo.canAcceptNewConnections() {
+			_ = conn.Close()
+			continue
+		}
 
 		go mo.handleConn(ctx, conn)
 	}
@@ -688,6 +703,9 @@ func NewMOServer(
 		pu:      pu,
 		handler: rm.Handler,
 		service: service,
+	}
+	if admission, ok := baseService.(SQLConnectionAdmissionController); ok {
+		mo.canAcceptNewConnections = admission.CanAcceptNewConnections
 	}
 	listenerTcp, err := net.Listen("tcp", addr)
 	if err != nil {

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 func TestClusterReady(t *testing.T) {
@@ -309,12 +310,20 @@ func runClusterTest(
 	refreshInterval time.Duration,
 	fn func(*testHAKeeperClient, *cluster),
 ) {
+	runClusterTestWithOptions(refreshInterval, fn)
+}
+
+func runClusterTestWithOptions(
+	refreshInterval time.Duration,
+	fn func(*testHAKeeperClient, *cluster),
+	opts ...Option,
+) {
 	sid := ""
 	runtime.RunTest(
 		sid,
 		func(rt runtime.Runtime) {
 			hc := &testHAKeeperClient{}
-			c := NewMOCluster(sid, hc, refreshInterval)
+			c := NewMOCluster(sid, hc, refreshInterval, opts...)
 			defer c.Close()
 			fn(hc, c.(*cluster))
 		},
@@ -347,6 +356,63 @@ func (c *testHAKeeperClient) addTN(tick uint64, serviceIDs ...string) {
 			Tick: tick,
 		})
 	}
+}
+
+func TestClusterGlobalSysVarWatermarkFilteringIsRoutingOnly(t *testing.T) {
+	runClusterTestWithOptions(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+			hc.Lock()
+			hc.value = logpb.ClusterDetails{
+				GlobalSysVarCommitTS: commitTS,
+				CNStores: []logpb.CNStore{
+					{UUID: "cn-a", WorkState: metadata.WorkState_Working, GlobalSysVarCommitTS: commitTS},
+					{UUID: "cn-b", WorkState: metadata.WorkState_Working},
+				},
+			}
+			hc.Unlock()
+
+			c.ForceRefresh(true)
+			require.Equal(t, []string{"cn-a"}, routableCNIDs(c))
+
+			hc.Lock()
+			hc.value.CNStores[1].GlobalSysVarCommitTS = commitTS
+			hc.Unlock()
+			c.ForceRefresh(true)
+			require.ElementsMatch(t, []string{"cn-a", "cn-b"}, routableCNIDs(c))
+		},
+		WithGlobalSysVarRoutingFilter(),
+	)
+
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+			hc.Lock()
+			hc.value = logpb.ClusterDetails{
+				GlobalSysVarCommitTS: commitTS,
+				CNStores: []logpb.CNStore{
+					{UUID: "cn-a", WorkState: metadata.WorkState_Working, GlobalSysVarCommitTS: commitTS},
+					{UUID: "cn-b", WorkState: metadata.WorkState_Working},
+				},
+			}
+			hc.Unlock()
+
+			c.ForceRefresh(true)
+			require.ElementsMatch(t, []string{"cn-a", "cn-b"}, routableCNIDs(c),
+				"general service discovery must not be filtered by SQL routing admission")
+		},
+	)
+}
+
+func routableCNIDs(c *cluster) []string {
+	var ids []string
+	c.GetCNService(NewSelector(), func(cn metadata.CNService) bool {
+		ids = append(ids, cn.ServiceID)
+		return true
+	})
+	return ids
 }
 
 func TestNewTNServicePreservesAutoIncrEpochFenceCapability(t *testing.T) {

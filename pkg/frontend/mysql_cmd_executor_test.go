@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -965,6 +966,7 @@ func TestHandleSetGlobalTransaction(t *testing.T) {
 	ctx := context.Background()
 	bh := &backgroundExecTest{}
 	bh.init()
+	prepareGlobalSysVarEpochForTest(bh)
 	bh.sql2result["begin;"] = nil
 	bh.sql2result["commit;"] = nil
 	bh.sql2result["rollback;"] = nil
@@ -1100,6 +1102,7 @@ func TestGlobalTransactionIsolationSeedsNewSessionTxnMeta(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		prepareGlobalSysVarEpochForTest(bh)
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
@@ -2266,8 +2269,12 @@ func TestShowGlobalVariablesRefreshesGlobalSysVarCache(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
 	sql := getSqlForGetSystemVariablesWithAccount(sysAccountID)
+	ses.gSysVars.mu.Lock()
+	catalogEpoch := ses.gSysVars.catalogEpoch
+	ses.gSysVars.mu.Unlock()
 	bh.sql2result[sql] = newMrsForGlobalSystemVariables([][]interface{}{
 		{"long_query_time", "1.1"},
+		{globalSystemVariableEpochName, strconv.FormatUint(catalogEpoch, 10)},
 	})
 
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)

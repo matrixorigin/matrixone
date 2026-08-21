@@ -2315,7 +2315,10 @@ func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, retryC
 	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount)
 }
 
-func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gSysVars map[string]interface{}, err error) {
+func (ses *Session) getGlobalSysVars(
+	ctx context.Context,
+	bh BackgroundExec,
+) (gSysVars map[string]interface{}, catalogEpoch uint64, err error) {
 	var execResults []ExecResult
 
 	tenantInfo := ses.GetTenantInfo()
@@ -2356,6 +2359,14 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 				return
 			}
 			varName = strings.ToLower(varName)
+			if varName == globalSystemVariableEpochName {
+				catalogEpoch, err = strconv.ParseUint(varValue, 10, 64)
+				if err != nil {
+					err = moerr.NewInternalErrorf(
+						tenantCtx, "invalid global system variable epoch %q", varValue)
+				}
+				continue
+			}
 
 			// overwrite with the values from table `mo_mysql_compatibility`
 			if sv, ok := gSysVarsDefs[varName]; ok {
@@ -2391,7 +2402,7 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 		normalized, _, normalizeErr := normalizeTxnIsolationSystemValue(
 			tenantCtx, ses.service, catalogIsolationValue)
 		if normalizeErr != nil {
-			return nil, normalizeErr
+			return nil, 0, normalizeErr
 		}
 		gSysVars[transactionIsolationSystemVariable] = normalized
 		gSysVars[transactionIsolationSystemVariableAlias] = normalized
@@ -2572,6 +2583,12 @@ func (ses *Session) getCleanupContext() context.Context {
 	return context.Background()
 }
 
+var initializeCachedSessionSystemVariables = func(ctx context.Context, ses *Session) error {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	return ses.InitSystemVariables(ctx, bh)
+}
+
 // reset resets the ses instance and copy some fields of prev, then
 // close the prev.
 func (ses *Session) reset(ctx context.Context, prev *Session) error {
@@ -2637,6 +2654,17 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	if ctx != nil {
 		if cause := context.Cause(ctx); cause != nil {
 			return cause
+		}
+	}
+	// A cached backend connection represents a brand-new external login after
+	// ResetSession. It does not run the normal CN authentication path again, so
+	// initialize its account snapshot before Proxy can hand the connection to
+	// the new client. Roll back the old transaction first: it may itself hold a
+	// catalog lock needed by this read, and waiting before rollback would form a
+	// self-deadlock. On failure the speculative session is discarded.
+	if prev.gSysVars != nil {
+		if err := initializeCachedSessionSystemVariables(ctx, ses); err != nil {
+			return err
 		}
 	}
 	// close the previous session.

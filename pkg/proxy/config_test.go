@@ -65,6 +65,14 @@ func TestValidate(t *testing.T) {
 		name: "empty",
 		cfg:  Config{},
 	}, {
+		name: "long heartbeat timeout remains compatible",
+		cfg: func() Config {
+			var cfg Config
+			cfg.HAKeeper.HeartbeatInterval.Duration = time.Second
+			cfg.HAKeeper.HeartbeatTimeout.Duration = 15 * time.Second
+			return cfg
+		}(),
+	}, {
 		name: "negative client handshake timeout",
 		cfg: Config{
 			ClientHandshakeTimeout: toml.Duration{Duration: -time.Second},

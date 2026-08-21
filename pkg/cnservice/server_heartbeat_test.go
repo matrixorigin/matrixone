@@ -21,13 +21,142 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
+
+func TestGlobalSysVarWatermarkTaskAppliesLatestObservedCommit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	first := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	latest := timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 2}
+	firstEntered := make(chan struct{})
+	firstRelease := make(chan struct{})
+	txnClient.EXPECT().SyncLatestCommitTSWithContext(gomock.Any(), first).
+		DoAndReturn(func(context.Context, timestamp.Timestamp) error {
+			close(firstEntered)
+			<-firstRelease
+			return nil
+		})
+	txnClient.EXPECT().SyncLatestCommitTSWithContext(gomock.Any(), latest).Return(nil)
+
+	s := &service{
+		_txnClient:         txnClient,
+		globalSysVarWakeup: make(chan struct{}, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.globalSysVarWatermarkTask(ctx)
+	}()
+
+	s.observeGlobalSysVarCommitTS(first)
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("watermark worker did not start the first visibility wait")
+	}
+	s.observeGlobalSysVarCommitTS(latest)
+	close(firstRelease)
+	require.Eventually(t, func() bool {
+		applied := s.globalSysVarApplied.Load()
+		return applied != nil && applied.Equal(latest)
+	}, time.Second, time.Millisecond)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("watermark worker did not stop after cancellation")
+	}
+}
+
+func TestGlobalSysVarWatermarkTaskCancelsVisibilityWait(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	ts := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	entered := make(chan struct{})
+	txnClient.EXPECT().SyncLatestCommitTSWithContext(gomock.Any(), ts).
+		DoAndReturn(func(ctx context.Context, _ timestamp.Timestamp) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+
+	svc := &service{
+		_txnClient:         txnClient,
+		globalSysVarWakeup: make(chan struct{}, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		svc.globalSysVarWatermarkTask(ctx)
+	}()
+	svc.observeGlobalSysVarCommitTS(ts)
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("watermark worker did not enter the visibility wait")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("watermark worker outlived its service context")
+	}
+	require.Nil(t, svc.globalSysVarApplied.Load())
+}
+
+func TestCNGlobalSysVarAdmissionWaitsForAppliedWatermark(t *testing.T) {
+	desired := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	connected := make(chan struct{})
+	close(connected)
+	s := &service{
+		hakeeperConnected:    connected,
+		globalSysVarAppliedC: make(chan struct{}, 1),
+	}
+	s.globalSysVarDesired.Store(&desired)
+	deadline := time.Now().Add(time.Minute)
+	s.servingLeaseDeadline.Store(&deadline)
+	require.False(t, s.CanAcceptNewConnections(),
+		"a CN must not admit direct SQL while the durable watermark is behind")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.waitGlobalSysVarAdmission(context.Background())
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("startup admission returned before watermark apply: %v", err)
+	default:
+	}
+
+	s.publishGlobalSysVarCommitTS(desired)
+	require.NoError(t, <-done)
+	require.True(t, s.CanAcceptNewConnections())
+	deadline = time.Now().Add(-time.Nanosecond)
+	s.servingLeaseDeadline.Store(&deadline)
+	require.False(t, s.CanAcceptNewConnections(),
+		"an expired control-plane lease must fail-close direct SQL admission")
+}
+
+func TestCNGlobalSysVarAdmissionHonorsContext(t *testing.T) {
+	s := &service{hakeeperConnected: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, s.waitGlobalSysVarAdmission(ctx), context.Canceled)
+}
 
 type blockingCNHeartbeatCommandClient struct {
 	*testHAKClient
@@ -43,6 +172,7 @@ type canceledCNResponseClient struct {
 	*testHAKClient
 	heartbeatEntered chan struct{}
 	pollEntered      chan struct{}
+	heartbeat        pb.CNStoreHeartbeat
 }
 
 type lateCNCommandClient struct {
@@ -94,8 +224,9 @@ func (h *observingTaskHolder) Create(pb.CreateTaskService) error {
 
 func (c *canceledCNResponseClient) SendCNHeartbeat(
 	ctx context.Context,
-	_ pb.CNStoreHeartbeat,
+	hb pb.CNStoreHeartbeat,
 ) (pb.CommandBatch, error) {
+	c.heartbeat = hb
 	select {
 	case <-c.heartbeatEntered:
 	default:
@@ -480,6 +611,8 @@ func TestCNHeartbeatDropsResponseAfterRequestDeadline(t *testing.T) {
 	// A nil hakeeperConnected channel would panic if the successful-looking
 	// late response escaped the per-request deadline guard.
 	service.heartbeat(context.Background())
+	require.Equal(t, defines.MORPCLatestVersion,
+		service._hakeeperClient.(*canceledCNResponseClient).heartbeat.ProtocolVersion)
 }
 
 func TestCNCommandGenerationRolloverDoesNotReplayInheritedCommands(t *testing.T) {

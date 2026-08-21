@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 var (
@@ -426,6 +427,27 @@ func GetUpdateNonVotingLocality(locality pb.Locality) []byte {
 	return cmd
 }
 
+// GetUpdateGlobalSysVarCommitTSCmd advances the durable CN admission fence.
+func GetUpdateGlobalSysVarCommitTSCmd(ts timestamp.Timestamp) []byte {
+	cmd := make([]byte, headerSize+ts.ProtoSize())
+	binaryEnc.PutUint32(cmd, uint32(pb.UpdateGlobalSysVarCommitTS))
+	if _, err := ts.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+// GetUpdateGlobalSysVarStateCmd encodes a durable global-system-variable
+// activation/publication state transition.
+func GetUpdateGlobalSysVarStateCmd(update pb.GlobalSysVarUpdate) []byte {
+	cmd := make([]byte, headerSize+update.ProtoSize())
+	binaryEnc.PutUint32(cmd, uint32(pb.UpdateGlobalSysVarState))
+	if _, err := update.MarshalTo(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
 func getHeartbeatCmd(data []byte, tag pb.HAKeeperUpdateType) []byte {
 	cmd := make([]byte, headerSize+len(data))
 	binaryEnc.PutUint32(cmd, uint32(tag))
@@ -792,6 +814,21 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 	return s.getCommandBatchFiltered(uuid, false)
 }
 
+func (s *stateMachine) commandBatchResult(batch pb.CommandBatch) sm.Result {
+	batch.GlobalSysVarCommitTS = s.state.CNState.GlobalSysVarCommitTS
+	batch.GlobalSysVarMinProtocolVersion = s.state.CNState.GlobalSysVarMinProtocolVersion
+	if len(batch.Commands) == 0 && len(batch.CommandIDs) == 0 &&
+		batch.BatchID == 0 && batch.GlobalSysVarCommitTS.IsEmpty() &&
+		batch.GlobalSysVarMinProtocolVersion == 0 {
+		return sm.Result{}
+	}
+	data, err := batch.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	return sm.Result{Data: data}
+}
+
 func (s *stateMachine) getCommandBatchFiltered(
 	uuid string,
 	filterHAKeeperAdmissions bool,
@@ -839,13 +876,9 @@ func (s *stateMachine) getCommandBatchFiltered(
 
 		batch.Commands = deliver
 		batch.CommandIDs = deliverIDs
-		data, err := batch.Marshal()
-		if err != nil {
-			panic(err)
-		}
-		return sm.Result{Data: data}
+		return s.commandBatchResult(batch)
 	}
-	return sm.Result{}
+	return s.commandBatchResult(pb.CommandBatch{})
 
 }
 
@@ -898,7 +931,7 @@ func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) boo
 func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result {
 	batch, ok := s.state.ScheduleCommands[uuid]
 	if !ok {
-		return sm.Result{}
+		return s.commandBatchResult(pb.CommandBatch{})
 	}
 	if ensureScheduleCommandIDs(&batch, s.state.Index) {
 		// A snapshot produced before delivery IDs were introduced can still
@@ -919,17 +952,13 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 		}
 		if len(pending) == 0 {
 			delete(s.state.ScheduleCommands, uuid)
-			return sm.Result{}
+			return s.commandBatchResult(pb.CommandBatch{})
 		}
 		batch.Commands = pending
 		batch.CommandIDs = pendingIDs
 		s.state.ScheduleCommands[uuid] = batch
 	}
-	data, err := batch.Marshal()
-	if err != nil {
-		panic(err)
-	}
-	return sm.Result{Data: data}
+	return s.commandBatchResult(batch)
 }
 
 // bootstrapReplicaCommandStatus returns whether a bootstrap command must be
@@ -984,7 +1013,14 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	s.state.CNState.GlobalSysVarMembershipRevision++
 	s.state.CNState.Update(hb, s.state.Tick)
+	if minVersion := s.state.CNState.GlobalSysVarMinProtocolVersion; minVersion > 0 && hb.ProtocolVersion < minVersion {
+		return s.commandBatchResult(pb.CommandBatch{Commands: []pb.ScheduleCommand{{
+			UUID: hb.UUID, ServiceType: pb.CNService,
+			ShutdownStore: &pb.ShutdownStore{StoreID: hb.UUID},
+		}}})
+	}
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryCNReady == nil {
 			s.state.CommandDeliveryCNReady = make(map[string]bool)
@@ -1037,7 +1073,14 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	s.state.CNState.GlobalSysVarMembershipRevision++
 	s.state.LogState.Update(hb, s.state.Tick)
+	if minVersion := s.state.CNState.GlobalSysVarMinProtocolVersion; minVersion > 0 && hb.ProtocolVersion < minVersion {
+		return s.commandBatchResult(pb.CommandBatch{Commands: []pb.ScheduleCommand{{
+			UUID: hb.UUID, ServiceType: pb.LogService,
+			ShutdownStore: &pb.ShutdownStore{StoreID: hb.UUID},
+		}}})
+	}
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryReady == nil {
 			s.state.CommandDeliveryReady = make(map[string]bool)
@@ -1350,6 +1393,7 @@ func (s *stateMachine) handleProxyHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
+	s.state.CNState.GlobalSysVarMembershipRevision++
 	s.state.ProxyState.Update(hb, s.state.Tick)
 	return s.getCommandBatch(hb.UUID)
 }
@@ -1601,6 +1645,39 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleCompleteLogServiceRecoveryCmd(), nil
 	case pb.EnableCommandDeliveryUpdate:
 		return s.handleEnableCommandDelivery(cmd), nil
+	case pb.UpdateGlobalSysVarCommitTS:
+		var ts timestamp.Timestamp
+		if err := ts.Unmarshal(cmd[headerSize:]); err != nil {
+			panic(err)
+		}
+		s.state.CNState.UpdateGlobalSysVarCommitTS(ts)
+		return sm.Result{}, nil
+	case pb.UpdateGlobalSysVarState:
+		var update pb.GlobalSysVarUpdate
+		if err := update.Unmarshal(cmd[headerSize:]); err != nil {
+			panic(err)
+		}
+		switch update.Type {
+		case pb.BeginGlobalSysVarUpdate:
+			if update.MembershipRevision != s.state.CNState.GlobalSysVarMembershipRevision {
+				return sm.Result{}, nil
+			}
+			if s.state.CNState.GlobalSysVarPendingGeneration >
+				s.state.CNState.GlobalSysVarCompletedGeneration {
+				return sm.Result{}, nil
+			}
+			generation := s.state.CNState.BeginGlobalSysVarUpdate(update.MinProtocolVersion)
+			return sm.Result{Value: generation}, nil
+		case pb.CompleteGlobalSysVarUpdate:
+			if update.Generation == 0 ||
+				update.Generation > s.state.CNState.GlobalSysVarPendingGeneration {
+				return sm.Result{}, nil
+			}
+			s.state.CNState.CompleteGlobalSysVarUpdate(update.Generation, update.CommitTS)
+			return sm.Result{Value: update.Generation}, nil
+		default:
+			panic("unknown global sysvar update type")
+		}
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1660,39 +1737,53 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 		if !ok {
 			panic("deep copy failed")
 		}
+		result.GlobalSysVarCommitTS = s.state.CNState.GlobalSysVarCommitTS
 		return result
 	}
-	return &pb.CommandBatch{}
+	return &pb.CommandBatch{GlobalSysVarCommitTS: s.state.CNState.GlobalSysVarCommitTS}
 }
 
 func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails {
 	cfg.Fill()
 	cd := &pb.ClusterDetails{
-		CNStores:    make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
-		TNStores:    make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
-		LogStores:   make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
-		ProxyStores: make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
+		CNStores:                        make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
+		TNStores:                        make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
+		LogStores:                       make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
+		ProxyStores:                     make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
+		GlobalSysVarCommitTS:            s.state.CNState.GlobalSysVarCommitTS,
+		GlobalSysVarMinProtocolVersion:  s.state.CNState.GlobalSysVarMinProtocolVersion,
+		GlobalSysVarMembershipRevision:  s.state.CNState.GlobalSysVarMembershipRevision,
+		GlobalSysVarPendingGeneration:   s.state.CNState.GlobalSysVarPendingGeneration,
+		GlobalSysVarCompletedGeneration: s.state.CNState.GlobalSysVarCompletedGeneration,
 	}
 	for uuid, info := range s.state.CNState.Stores {
+		if s.state.CNState.GlobalSysVarMinProtocolVersion > 0 &&
+			info.ProtocolVersion < s.state.CNState.GlobalSysVarMinProtocolVersion {
+			continue
+		}
 		state := pb.NormalState
 		if cfg.CNStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
 		}
 		n := pb.CNStore{
-			UUID:                uuid,
-			Tick:                info.Tick,
-			ServiceAddress:      info.ServiceAddress,
-			SQLAddress:          info.SQLAddress,
-			LockServiceAddress:  info.LockServiceAddress,
-			ShardServiceAddress: info.ShardServiceAddress,
-			State:               state,
-			WorkState:           info.WorkState,
-			Labels:              info.Labels,
-			QueryAddress:        info.QueryAddress,
-			ConfigData:          info.ConfigData,
-			Resource:            info.Resource,
-			UpTime:              info.UpTime,
-			CommitID:            info.CommitID,
+			UUID:                             uuid,
+			Tick:                             info.Tick,
+			ServiceAddress:                   info.ServiceAddress,
+			SQLAddress:                       info.SQLAddress,
+			LockServiceAddress:               info.LockServiceAddress,
+			ShardServiceAddress:              info.ShardServiceAddress,
+			State:                            state,
+			WorkState:                        info.WorkState,
+			Labels:                           info.Labels,
+			QueryAddress:                     info.QueryAddress,
+			ConfigData:                       info.ConfigData,
+			Resource:                         info.Resource,
+			UpTime:                           info.UpTime,
+			CommitID:                         info.CommitID,
+			GlobalSysVarCommitTS:             info.GlobalSysVarCommitTS,
+			GlobalSysVarGeneration:           info.GlobalSysVarGeneration,
+			ProtocolVersion:                  info.ProtocolVersion,
+			GlobalSysVarProgressTimeoutNanos: info.GlobalSysVarProgressTimeoutNanos,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
@@ -1717,27 +1808,45 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		cd.TNStores = append(cd.TNStores, n)
 	}
 	for uuid, info := range s.state.LogState.Stores {
+		if s.state.CNState.GlobalSysVarMinProtocolVersion > 0 &&
+			info.ProtocolVersion < s.state.CNState.GlobalSysVarMinProtocolVersion {
+			continue
+		}
 		state := pb.NormalState
 		if cfg.LogStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
 		}
 		n := pb.LogStore{
-			UUID:           uuid,
-			Tick:           info.Tick,
-			State:          state,
-			ServiceAddress: info.ServiceAddress,
-			Replicas:       info.Replicas,
-			ConfigData:     info.ConfigData,
-			Locality:       info.Locality,
+			UUID:            uuid,
+			Tick:            info.Tick,
+			State:           state,
+			ServiceAddress:  info.ServiceAddress,
+			Replicas:        info.Replicas,
+			ConfigData:      info.ConfigData,
+			Locality:        info.Locality,
+			ProtocolVersion: info.ProtocolVersion,
 		}
 		cd.LogStores = append(cd.LogStores, n)
 	}
 	for uuid, info := range s.state.ProxyState.Stores {
+		if s.state.CNState.GlobalSysVarMinProtocolVersion > 0 &&
+			info.ProtocolVersion < s.state.CNState.GlobalSysVarMinProtocolVersion {
+			continue
+		}
+		state := pb.NormalState
+		if cfg.ProxyStoreExpired(info.Tick, s.state.Tick) {
+			state = pb.TimeoutState
+		}
 		cd.ProxyStores = append(cd.ProxyStores, pb.ProxyStore{
-			UUID:          uuid,
-			Tick:          info.Tick,
-			ListenAddress: info.ListenAddress,
-			ConfigData:    info.ConfigData,
+			UUID:                             uuid,
+			Tick:                             info.Tick,
+			ListenAddress:                    info.ListenAddress,
+			ConfigData:                       info.ConfigData,
+			GlobalSysVarCommitTS:             info.GlobalSysVarCommitTS,
+			GlobalSysVarGeneration:           info.GlobalSysVarGeneration,
+			State:                            state,
+			ProtocolVersion:                  info.ProtocolVersion,
+			GlobalSysVarProgressTimeoutNanos: info.GlobalSysVarProgressTimeoutNanos,
 		})
 	}
 	for _, store := range s.state.DeletedStores {

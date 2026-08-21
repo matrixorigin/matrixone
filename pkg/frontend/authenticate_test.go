@@ -678,7 +678,6 @@ func Test_initUser(t *testing.T) {
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
-
 		ses := newSes(nil, ctrl)
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
@@ -10384,6 +10383,22 @@ func TestGetGlobalSysVar(t *testing.T) {
 }
 
 func TestSetGlobalSysVar(t *testing.T) {
+	GSysVarsMgr.Lock()
+	originalGlobalVars, hadOriginalGlobalVars := GSysVarsMgr.accountsGlobalSysVarsMap[sysAccountID]
+	if hadOriginalGlobalVars {
+		originalGlobalVars = originalGlobalVars.Clone()
+	}
+	GSysVarsMgr.Unlock()
+	t.Cleanup(func() {
+		GSysVarsMgr.Lock()
+		defer GSysVarsMgr.Unlock()
+		if hadOriginalGlobalVars {
+			GSysVarsMgr.accountsGlobalSysVarsMap[sysAccountID] = originalGlobalVars
+		} else {
+			delete(GSysVarsMgr.accountsGlobalSysVarsMap, sysAccountID)
+		}
+	})
+
 	convey.Convey("set global system variable succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -10398,6 +10413,11 @@ func TestSetGlobalSysVar(t *testing.T) {
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
+		bh.sql2result[getSqlForLockGlobalSystemVariableAccount(sysAccountID)] = nil
+		bh.sql2result[getSqlForGlobalSystemVariableEpoch(sysAccountID)] =
+			newMrsForSystemVariableNameOfAccount([][]interface{}{})
+		bh.sql2result[getSqlForInsertSysVarWithAccount(
+			sysAccountID, sysAccountName, globalSystemVariableEpochName, "1")] = nil
 		sql := getSqlForGetSysVarWithAccount(sysAccountID, "autocommit")
 		mrs := newMrsForSystemVariableNameOfAccount([][]interface{}{})
 		bh.sql2result[sql] = mrs
@@ -11959,6 +11979,14 @@ func (bt *backgroundExecTest) ClearExecResultBatches() {
 func (bt *backgroundExecTest) init() {
 	bt.sql2result = make(map[string]ExecResult)
 	bt.sql2err = make(map[string]error)
+}
+
+func prepareGlobalSysVarEpochForTest(bt *backgroundExecTest) {
+	bt.sql2result[getSqlForLockGlobalSystemVariableAccount(sysAccountID)] = nil
+	bt.sql2result[getSqlForGlobalSystemVariableEpoch(sysAccountID)] =
+		newMrsForSystemVariableNameOfAccount([][]interface{}{})
+	bt.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, globalSystemVariableEpochName, "1")] = nil
 }
 
 func (bt *backgroundExecTest) Close() {

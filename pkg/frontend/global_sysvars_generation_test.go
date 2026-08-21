@@ -126,3 +126,34 @@ func TestGlobalSysVarsRefreshDoesNotAdvanceMutationGeneration(t *testing.T) {
 	value := globalVars.Get(PasswordHistory)
 	require.Equal(t, int64(0), value)
 }
+
+func TestGlobalSysVarsCatalogEpochRejectsReversePublication(t *testing.T) {
+	globalVars := SystemVariables{
+		mp: map[string]interface{}{PasswordHistory: int64(0)},
+	}
+	generation := globalVars.getMutationGeneration()
+
+	globalVars.replaceIfCatalogEpoch(2, generation, map[string]interface{}{
+		PasswordHistory: int64(5),
+	})
+	globalVars.replaceIfCatalogEpoch(1, generation, map[string]interface{}{
+		PasswordHistory: int64(0),
+	})
+
+	require.Equal(t, uint64(2), globalVars.catalogEpoch)
+	require.Equal(t, int64(5), globalVars.Get(PasswordHistory),
+		"a late catalog read from an older commit must not roll the cache back")
+}
+
+func TestGlobalSysVarsCatalogEpochOrdersConcurrentSetPublication(t *testing.T) {
+	globalVars := SystemVariables{
+		mp: map[string]interface{}{PasswordHistory: int64(0)},
+	}
+
+	globalVars.setAtCatalogEpoch(PasswordHistory, int64(6), 2)
+	globalVars.setAtCatalogEpoch(PasswordHistory, int64(5), 1)
+
+	require.Equal(t, uint64(2), globalVars.catalogEpoch)
+	require.Equal(t, int64(6), globalVars.Get(PasswordHistory),
+		"local completion order must not override catalog commit order")
+}

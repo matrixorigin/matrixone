@@ -946,6 +946,7 @@ func receiveLegacyMigrationActionResult(t *testing.T, result <-chan error) error
 }
 
 func TestRoutineManagerResetSessionWaitsForRequestAfterResponseWrite(t *testing.T) {
+	stubCachedSessionSystemVariables(t)
 	const connID = uint32(1009)
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)

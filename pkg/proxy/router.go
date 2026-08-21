@@ -137,6 +137,20 @@ type cacheReuseChecker interface {
 	CanReuseCachedCN(cn *CNServer, client clientInfo) bool
 }
 
+// authoritativeRouteCandidateResolver resolves an external recommendation
+// against the router's current SQL-admission snapshot. A recommendation is a
+// hint, not membership authority: labels, work state and the global-sysvar
+// watermark must all come from MOCluster.
+type authoritativeRouteCandidateResolver interface {
+	resolveRouteCandidate(
+		sid string,
+		client clientInfo,
+		filter func(string) bool,
+		serviceID string,
+		sqlAddress string,
+	) (*CNServer, bool)
+}
+
 // RefreshableRouter is a router that can be refreshed to get latest route strategy
 type RefreshableRouter interface {
 	Router
@@ -331,6 +345,22 @@ func (r *router) routeCandidates(sid string, c clientInfo, filter func(string) b
 		cns = r.selectForCommonTenant(sid, c, filter)
 	}
 	return cns
+}
+
+func (r *router) resolveRouteCandidate(
+	sid string,
+	c clientInfo,
+	filter func(string) bool,
+	serviceID string,
+	sqlAddress string,
+) (*CNServer, bool) {
+	for _, cn := range r.routeCandidates(sid, c, filter) {
+		if cn.uuid == serviceID && cn.addr == sqlAddress {
+			cn.hash = c.hash
+			return cn, true
+		}
+	}
+	return nil, false
 }
 
 // Route implements the Router interface.

@@ -16,21 +16,35 @@ package proxy
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
 var _ logservice.ProxyHAKeeperClient = new(testHAClient)
 
 type testHAClient struct {
+}
+
+type watermarkHAClient struct {
+	*testHAClient
+	sync.Mutex
+	details    pb.ClusterDetails
+	heartbeat  pb.ProxyHeartbeat
+	heartbeats []pb.ProxyHeartbeat
+	desired    timestamp.Timestamp
 }
 
 func (tclient *testHAClient) Close() error {
@@ -97,6 +111,23 @@ func (tclient *testHAClient) SendProxyHeartbeat(ctx context.Context, hb pb.Proxy
 	return pb.CommandBatch{}, moerr.NewInternalErrorNoCtx("return err")
 }
 
+func (client *watermarkHAClient) GetClusterDetails(context.Context) (pb.ClusterDetails, error) {
+	client.Lock()
+	defer client.Unlock()
+	return client.details, nil
+}
+
+func (client *watermarkHAClient) SendProxyHeartbeat(
+	_ context.Context,
+	hb pb.ProxyHeartbeat,
+) (pb.CommandBatch, error) {
+	client.Lock()
+	defer client.Unlock()
+	client.heartbeat = hb
+	client.heartbeats = append(client.heartbeats, hb)
+	return pb.CommandBatch{GlobalSysVarCommitTS: client.desired}, nil
+}
+
 func TestServer_doHeartbeat(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
@@ -108,6 +139,102 @@ func TestServer_doHeartbeat(t *testing.T) {
 		runtime:        runtime.ServiceRuntime(""),
 	}
 	ser.doHeartbeat(ctx)
+}
+
+func TestServerInitialRouteBarrierAcknowledgesPublishedWatermark(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	client := &watermarkHAClient{
+		testHAClient: &testHAClient{},
+		details:      pb.ClusterDetails{GlobalSysVarCommitTS: commitTS},
+	}
+	cluster := clusterservice.NewMOCluster("", client, time.Hour)
+	defer cluster.Close()
+	server := &Server{
+		haKeeperClient:         client,
+		configData:             util.NewConfigData(nil),
+		runtime:                runtime.ServiceRuntime(""),
+		globalSysVarGeneration: "proxy-generation",
+		handler:                &handler{moCluster: cluster},
+	}
+	server.config.UUID = "proxy-1"
+	server.config.HAKeeper.HeartbeatInterval.Duration = time.Second
+	server.config.HAKeeper.HeartbeatTimeout.Duration = time.Second
+	require.NoError(t, server.initializeGlobalSysVarRouteBarrier(context.Background()))
+	require.True(t, server.canAcceptNewConnections())
+
+	client.Lock()
+	hb := client.heartbeat
+	client.Unlock()
+	require.Equal(t, commitTS, hb.GlobalSysVarCommitTS)
+	require.Equal(t, "proxy-generation", hb.GlobalSysVarGeneration)
+	require.Equal(t, defines.MORPCLatestVersion, hb.ProtocolVersion)
+}
+
+func TestProxyHeartbeatRefreshesDesiredWatermarkWithoutPeriodicTick(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	commitTS := timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 3}
+	client := &watermarkHAClient{
+		testHAClient: &testHAClient{},
+		details:      pb.ClusterDetails{GlobalSysVarCommitTS: commitTS},
+		desired:      commitTS,
+	}
+	cluster := clusterservice.NewMOCluster("", client, time.Minute)
+	defer cluster.Close()
+	server := &Server{
+		haKeeperClient: client,
+		configData:     util.NewConfigData(nil),
+		runtime:        runtime.ServiceRuntime(""),
+		handler:        &handler{moCluster: cluster},
+	}
+	server.config.UUID = "proxy-1"
+	server.config.HAKeeper.HeartbeatInterval.Duration = time.Second
+	server.config.HAKeeper.HeartbeatTimeout.Duration = 15 * time.Second
+
+	require.NoError(t, server.sendHeartbeat(context.Background()))
+	require.True(t, server.canAcceptNewConnections())
+	client.Lock()
+	heartbeats := append([]pb.ProxyHeartbeat(nil), client.heartbeats...)
+	client.Unlock()
+	require.Len(t, heartbeats, 2)
+	require.True(t, heartbeats[0].GlobalSysVarCommitTS.IsEmpty())
+	require.Equal(t, commitTS, heartbeats[1].GlobalSysVarCommitTS)
+}
+
+func TestProxyServingLeaseExpiresAndHeartbeatFailureRevokesIt(t *testing.T) {
+	server := &Server{
+		haKeeperClient: &testHAClient{},
+		configData:     util.NewConfigData(nil),
+		runtime:        runtime.ServiceRuntime(""),
+	}
+	server.config.HAKeeper.HeartbeatInterval.Duration = time.Second
+	server.config.HAKeeper.HeartbeatTimeout.Duration = time.Second
+	deadline := time.Now().Add(time.Minute)
+	server.servingLeaseDeadline.Store(&deadline)
+	require.True(t, server.canAcceptNewConnections())
+	server.doHeartbeat(context.Background())
+	require.False(t, server.canAcceptNewConnections(),
+		"a failed HAKeeper heartbeat must immediately fail-close Proxy admission")
+
+	deadline = time.Now().Add(-time.Nanosecond)
+	server.servingLeaseDeadline.Store(&deadline)
+	require.False(t, server.canAcceptNewConnections())
+}
+
+func TestProxyHeartbeatDoesNotRenewLeaseAfterCallerCancellation(t *testing.T) {
+	client := &watermarkHAClient{testHAClient: &testHAClient{}}
+	server := &Server{
+		haKeeperClient: client,
+		configData:     util.NewConfigData(nil),
+	}
+	server.config.HAKeeper.HeartbeatInterval.Duration = time.Second
+	server.config.HAKeeper.HeartbeatTimeout.Duration = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, server.sendHeartbeat(ctx), context.Canceled)
+	require.False(t, server.canAcceptNewConnections())
 }
 
 func TestServer_NewServer(t *testing.T) {
