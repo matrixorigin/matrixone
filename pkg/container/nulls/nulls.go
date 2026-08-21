@@ -78,15 +78,15 @@ func Or(nsp, m, r *Nulls) {
 	// represent the source bitmap, restore its logical length and use the
 	// normal OR path. This matters after Reset: the external storage remains,
 	// but the logical length is zero even though the next result may have rows.
-	// Only use a bounded copy when the source would exceed the destination's
-	// external capacity, where growing the bitmap would panic.
+	// A non-reset destination must retain its caller-provided visible row
+	// count, even when the backing storage has spare capacity.
 	if r != nil && r.np.HasExternalStorage() {
 		sourceLen := max(nsp.np.Len(), m.np.Len())
 		if sourceLen > r.np.Len() {
-			capacity := int64(r.np.ExternalStorageCapacity()) * 64
-			if sourceLen <= capacity {
-				r.np.TryExpandWithSize(int(sourceLen))
-			} else {
+			// A non-zero destination length is the caller's visible row
+			// bound. Never replace it with the larger physical capacity: a
+			// reused vector may retain spare words from a previous batch.
+			if r.np.Len() > 0 {
 				limit := uint64(r.np.Len())
 				if nsp != r {
 					orLimited(nsp, r, limit)
@@ -94,6 +94,16 @@ func Or(nsp, m, r *Nulls) {
 				if m != r {
 					orLimited(m, r, limit)
 				}
+				return
+			}
+
+			// Reset external storage keeps capacity but clears logical
+			// length. In this one case the source length is the only
+			// available visible-row bound; grow only when that source fits.
+			capacity := int64(r.np.ExternalStorageCapacity()) * 64
+			if sourceLen <= capacity {
+				r.np.TryExpandWithSize(int(sourceLen))
+			} else {
 				return
 			}
 		}
