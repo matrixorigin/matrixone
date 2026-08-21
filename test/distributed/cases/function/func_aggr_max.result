@@ -409,7 +409,8 @@ select max(a) as b from t1 having b=1;
 ➤ b[4,32,0]  𝄀
 1
 select a from t1 having a=1;
-SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+a
+1
 drop table t1;
 CREATE TABLE t1 (a int primary key);
 INSERT INTO t1 VALUES (1),(2),(3),(4);

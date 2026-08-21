@@ -597,6 +597,17 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
+	prepareStmts := ses.GetPrepareStmts()
+	for _, st := range prepareStmts {
+		// COM_STMT_SEND_LONG_DATA has no protocol response and its parameter
+		// buffers are not part of the migration payload. Reject the snapshot at
+		// the authoritative session owner instead of relying on the proxy to
+		// infer SQL PREPARE/DEALLOCATE lifecycle changes from COM_QUERY text.
+		if st.hasPendingLongData() {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+	}
+	resp.PreparedStmtLongDataChecked = true
 	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {
 		// Typed snapshots can only be replayed by a v22 target when the proxy's
 		// raw COM_QUERY history did not observe every assignment (for example,
@@ -639,7 +650,7 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 		resp.SystemVariables = systemVars
 		resp.SystemVariablesExported = systemVarsExported
 	}
-	for _, st := range ses.GetPrepareStmts() {
+	for _, st := range prepareStmts {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
 			Name:       st.Name,
 			SQL:        st.Sql,

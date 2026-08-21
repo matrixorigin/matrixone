@@ -296,6 +296,7 @@ type TxnStore interface {
 	CreateObjectWithOpt(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (handle.Object, error)
 	CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (handle.Object, error)
 	SoftDeleteObject(isTombstone bool, id *common.ID) error
+	SoftDeleteObjectByCN(isTombstone bool, id *common.ID) error
 
 	AddTxnEntry(TxnEntry)
 
