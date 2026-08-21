@@ -562,7 +562,7 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwarePipeline))
 	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 23")
+	require.ErrorContains(t, err, "requires MORPC protocol version 24")
 	affectedRowsPipeline := &pipeline.Pipeline{
 		InstructionList: []*pipeline.Instruction{{
 			Op: int32(vm.MultiUpdate),
@@ -575,32 +575,40 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	}
 	require.ErrorContains(t,
 		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
-		"requires MORPC protocol version 23")
+		"requires MORPC protocol version 24")
 	combinedPipeline := &pipeline.Pipeline{
 		InstructionList: append(targetAwarePipeline.Children[0].InstructionList, affectedRowsPipeline.InstructionList...),
 	}
 	require.ErrorContains(t,
 		validateRemoteTargetAwareUpdatePipelineProtocol(proc, combinedPipeline),
-		"requires MORPC protocol version 23",
-		"a preceding v20-compatible operator must not hide a later v23 field")
+		"requires MORPC protocol version 24",
+		"a preceding v20-compatible operator must not hide a later v24 field")
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
 	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 23",
+	require.ErrorContains(t, err, "requires MORPC protocol version 24",
 		"v21 is reserved for RIGHT DEDUP and must not accept affected-row selectors")
 	require.ErrorContains(t,
 		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
-		"requires MORPC protocol version 23")
+		"requires MORPC protocol version 24")
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
 	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 23",
+	require.ErrorContains(t, err, "requires MORPC protocol version 24",
 		"v22 is reserved for typed user variables and must not accept affected-row selectors")
 	require.ErrorContains(t,
 		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
-		"requires MORPC protocol version 23")
+		"requires MORPC protocol version 24")
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 24",
+		"v23 is reserved for explicit-text provenance and must not accept affected-row selectors")
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
+		"requires MORPC protocol version 24")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion24)
 	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
 	require.NoError(t, err)
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline))
@@ -659,6 +667,111 @@ func TestRightDedupInputUniqueRemoteProtocolValidation(t *testing.T) {
 	require.True(t, instruction.RightDedupJoin.InputKeysUnique)
 	require.NoError(t,
 		validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, uniquePipeline))
+}
+
+func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	makeScope := func(typ types.Type, form planpb.StringLiteralForm) *Scope {
+		literal := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(typ.Oid), Charset: uint32(typ.Charset)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Sval{Sval: "selected"}, LiteralForm: form,
+			}},
+		}
+		return &Scope{
+			Magic:  Remote,
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0},
+				Nodes: []*planpb.Node{{NodeId: 0, ProjectList: []*planpb.Expr{literal}}},
+			}}},
+		}
+	}
+	makeDynamicScope := func() *Scope {
+		boolColumn := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		textColumn := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+		binaryType := planpb.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)}
+		binaryColumn := &planpb.Expr{Typ: binaryType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}}
+		implicitCast := &planpb.Expr{Typ: binaryType, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "cast"}, Args: []*planpb.Expr{textColumn},
+		}}}
+		dynamic := &planpb.Expr{Typ: binaryType, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "if"}, Args: []*planpb.Expr{boolColumn, implicitCast, binaryColumn},
+		}}}
+		return &Scope{
+			Magic: Remote, Proc: proc, RootOp: value_scan.NewArgument(),
+			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, ProjectList: []*planpb.Expr{dynamic}}},
+			}}},
+		}
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
+	_, _, _, _, err := prepareRemoteRunSendingData(
+		"", makeScope(types.T_varbinary.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
+		proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
+	_, _, _, _, err = prepareRemoteRunSendingData("", makeDynamicScope(), proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
+
+	compatibleData, _, _, _, err := prepareRemoteRunSendingData(
+		"", makeScope(types.T_varchar.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
+		proc, nil, uuid.Nil)
+	require.NoError(t, err, "same-domain ordinary TEXT remains compatible with version 21")
+	compatibleScope, err := decodeScope(compatibleData, proc, true, nil)
+	require.NoError(t, err)
+	compatibleScope.release()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	_, _, _, _, err = prepareRemoteRunSendingData(
+		"", makeScope(types.T_varbinary.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
+		proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23",
+		"version 22 predates cross-domain literal provenance")
+	_, _, _, _, err = prepareRemoteRunSendingData("", makeDynamicScope(), proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23",
+		"version 22 predates runtime string provenance")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	dynamicData, _, _, _, err := prepareRemoteRunSendingData("", makeDynamicScope(), proc, nil, uuid.Nil)
+	require.NoError(t, err, "version 23 accepts dynamic selected-value provenance")
+	dynamicScope, err := decodeScope(dynamicData, proc, true, nil)
+	require.NoError(t, err)
+	dynamicScope.release()
+	scopeData, _, _, _, err := prepareRemoteRunSendingData(
+		"", makeScope(types.T_varbinary.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
+		proc, nil, uuid.Nil)
+	require.NoError(t, err)
+	restored, err := decodeScope(scopeData, proc, true, nil)
+	require.NoError(t, err)
+	defer restored.release()
+	wirePipeline := &pipeline.Pipeline{}
+	require.NoError(t, wirePipeline.Unmarshal(scopeData))
+	require.Equal(t, planpb.StringLiteralForm_STRING_LITERAL_TEXT,
+		wirePipeline.Qry.GetQuery().Nodes[0].ProjectList[0].GetLit().LiteralForm)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	_, err = decodeScope(scopeData, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
+	_, err = decodeScope(dynamicData, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {

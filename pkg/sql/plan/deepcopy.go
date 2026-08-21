@@ -1072,6 +1072,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			IsBin:        item.Lit.GetIsBin(),
 			Src:          DeepCopyExpr(item.Lit.Src),
 			IsSerialized: item.Lit.GetIsSerialized(),
+			LiteralForm:  item.Lit.GetLiteralForm(),
 		}
 
 		switch c := item.Lit.Value.(type) {

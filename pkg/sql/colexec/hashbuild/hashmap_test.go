@@ -722,7 +722,7 @@ func TestPreparedParamExpressionExecutorRemainsConst(t *testing.T) {
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.True(t, result.IsConst())
-			require.Equal(t, 1, result.Length())
+			require.Equal(t, input.RowCount(), result.Length())
 		})
 	}
 }

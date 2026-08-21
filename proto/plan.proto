@@ -41,6 +41,14 @@ message msgHeader {
   int32 msg_type = 2;
 }
 
+enum StringLiteralForm {
+  STRING_LITERAL_NONE = 0;
+  STRING_LITERAL_TEXT = 1;
+  STRING_LITERAL_BINARY_INTRODUCER = 2;
+  STRING_LITERAL_HEX = 3;
+  STRING_LITERAL_BIT = 4;
+}
+
 // Literal: if a literal value can be reprensented by int64 or
 // double, use that, otherwise store a string representation.
 message Literal {
@@ -76,6 +84,9 @@ message Literal {
   // Keep that diagnostic provenance separate from isBin, which has execution
   // semantics for SQL hex and bit literals.
   bool is_serialized = 27;
+  // literal_form records binder-visible syntax independently from isBin and
+  // the resolved SQL string domain. Zero keeps old serialized plans valid.
+  StringLiteralForm literal_form = 28;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
