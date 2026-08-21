@@ -164,6 +164,7 @@ func sqlTaskInt64(v any) int64 {
     referenceOnRecord *tree.ReferenceOnRecord
     sqlTaskSchedule *tree.SQLTaskSchedule
     int64Val int64
+    lifecyclePolicy tree.LifecyclePolicy
 
     select *tree.Select
     selectStatement tree.SelectStatement
@@ -612,13 +613,13 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt create_iceberg_catalog_stmt create_mongodb_connection_stmt
 %type <statement> pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt create_sql_task_stmt drop_sql_task_stmt alter_sql_task_stmt show_sql_tasks_stmt show_sql_task_runs_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt show_iceberg_stmt show_mongodb_connections_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt show_iceberg_stmt show_mongodb_connections_stmt show_lifecycle_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt lifecycle_data_stmt
 %type <merge> merge_no_with_stmt
 %type <mergeClauses> merge_when_list
 %type <mergeClause> merge_when_clause
@@ -759,6 +760,8 @@ func sqlTaskInt64(v any) int64 {
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
 %type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
+%type <lifecyclePolicy> lifecycle_policy
+%type <int64Val> lifecycle_purge_opt
 %type <renameTableOptions> rename_table_list
 %type <renameTableOption> rename_option
 %type <alterPartitionOption> alter_partition_option partition_option
@@ -965,6 +968,10 @@ func sqlTaskInt64(v any) int64 {
 // declarations so adding them does not renumber the existing generated lexer
 // constants and downstream serialized plans.
 %token <str> WITHIN PERCENTILE_CONT PERCENTILE_DISC
+
+// TAE Object Lifecycle. Keep new tokens after every pre-existing token so
+// existing token IDs remain stable across a rolling upgrade.
+%token <str> LIFECYCLE ARCHIVE ELIGIBLE DATASET DATASETS PURGE UNSET JOBS RESTORES
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -1111,6 +1118,7 @@ normal_stmt:
 |   resume_ccpr_subscription_stmt
 |   pause_ccpr_subscription_stmt
 |   branch_stmt
+|   lifecycle_data_stmt
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING backup_type_opt backup_timestamp_opt
@@ -4253,6 +4261,70 @@ alter_option:
     {
         $$ = tree.NewTableOptionCharset($1)
     }
+|   SET LIFECYCLE '(' lifecycle_policy ')'
+    {
+        $$ = tree.NewAlterOptionLifecycle(tree.LifecycleOperationSet, $4)
+    }
+|   PAUSE LIFECYCLE
+    {
+        $$ = tree.NewAlterOptionLifecycle(tree.LifecycleOperationPause, tree.LifecyclePolicy{})
+    }
+|   RESUME LIFECYCLE
+    {
+        $$ = tree.NewAlterOptionLifecycle(tree.LifecycleOperationResume, tree.LifecyclePolicy{})
+    }
+|   UNSET LIFECYCLE
+    {
+        $$ = tree.NewAlterOptionLifecycle(tree.LifecycleOperationUnset, tree.LifecyclePolicy{})
+    }
+
+lifecycle_policy:
+    COLUMN ident ',' EXPIRE AFTER INTERVAL INTEGRAL DAY ',' ACTION DELETE
+    {
+        days := sqlTaskInt64($7)
+        if days <= 0 || uint64(days) > uint64(^uint32(0)) {
+            yylex.Error("Lifecycle EXPIRE AFTER must be a positive DAY interval")
+            goto ret1
+        }
+        $$ = tree.LifecyclePolicy{
+            Column: tree.Identifier($2.Compare()),
+            ExpireAfterDays: uint32(days),
+            Action: tree.LifecycleActionDelete,
+        }
+    }
+|   COLUMN ident ',' EXPIRE AFTER INTERVAL INTEGRAL DAY ',' ACTION ARCHIVE ',' STAGE ident lifecycle_purge_opt
+    {
+        expireDays := sqlTaskInt64($7)
+        purgeDays := $15
+        if expireDays <= 0 || uint64(expireDays) > uint64(^uint32(0)) {
+            yylex.Error("Lifecycle EXPIRE AFTER must be a positive DAY interval")
+            goto ret1
+        }
+        if purgeDays >= 0 && (purgeDays <= expireDays || uint64(purgeDays) > uint64(^uint32(0))) {
+            yylex.Error("Lifecycle PURGE ELIGIBLE AFTER must be greater than EXPIRE AFTER")
+            goto ret1
+        }
+        $$ = tree.LifecyclePolicy{
+            Column: tree.Identifier($2.Compare()),
+            ExpireAfterDays: uint32(expireDays),
+            Action: tree.LifecycleActionArchive,
+            Stage: tree.Identifier($14.Compare()),
+            HasStage: true,
+            HasPurgeAfter: purgeDays >= 0,
+        }
+        if purgeDays >= 0 {
+            $$.PurgeAfterDays = uint32(purgeDays)
+        }
+    }
+
+lifecycle_purge_opt:
+    {
+        $$ = -1
+    }
+|   ',' PURGE ELIGIBLE AFTER INTERVAL INTEGRAL DAY
+    {
+        $$ = sqlTaskInt64($6)
+    }
 
 rename_type:
     {
@@ -4813,6 +4885,39 @@ show_stmt:
 |   show_sql_task_runs_stmt
 |   show_iceberg_stmt
 |   show_mongodb_connections_stmt
+|   show_lifecycle_stmt
+
+show_lifecycle_stmt:
+    SHOW LIFECYCLE FOR TABLE table_name
+    {
+        $$ = &tree.ShowLifecycle{Kind: tree.ShowLifecycleBinding, Table: $5}
+    }
+|   SHOW LIFECYCLE JOBS limit_opt
+    {
+        $$ = &tree.ShowLifecycle{Kind: tree.ShowLifecycleJobs, Page: $4}
+    }
+|   SHOW LIFECYCLE DATASETS FOR TABLE table_name limit_opt
+    {
+        $$ = &tree.ShowLifecycle{Kind: tree.ShowLifecycleDatasets, Table: $6, Page: $7}
+    }
+|   SHOW LIFECYCLE RESTORES limit_opt
+    {
+        $$ = &tree.ShowLifecycle{Kind: tree.ShowLifecycleRestores, Page: $4}
+    }
+
+lifecycle_data_stmt:
+    RESTORE ARCHIVE DATASET STRING TO TABLE table_name
+    {
+        $$ = &tree.RestoreArchiveDataset{DatasetID: $4, Target: $7}
+    }
+|   PURGE ARCHIVE DATASET STRING
+    {
+        $$ = &tree.PurgeArchiveDataset{DatasetID: $4}
+    }
+|   RESTORE ARCHIVE TABLE table_name BETWEEN STRING AND STRING TO TABLE table_name
+    {
+        $$ = &tree.RestoreArchiveRange{Source: $4, From: $6, To: $8, Target: $11}
+    }
 
 show_sql_tasks_stmt:
     SHOW TASKS
@@ -15518,6 +15623,15 @@ non_reserved_keyword:
 |   EXPANSION
 |   EXTENDED
 |   EXPIRE
+|   ARCHIVE
+|   DATASET
+|   DATASETS
+|   ELIGIBLE
+|   LIFECYCLE
+|   JOBS
+|   RESTORES
+|   PURGE
+|   UNSET
 |   ERRORS
 |   ENFORCED
 |	ENABLE

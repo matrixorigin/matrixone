@@ -23,6 +23,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -35,6 +36,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
+
+func TestSQLExecutorCompilerContextReservesLifecycleRestoreStagingForFrontend(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Base.IsFrontend = true
+	ctx := &compilerContext{
+		ctx:  context.Background(),
+		proc: proc,
+	}
+	_, _, err := ctx.Resolve(
+		"history",
+		catalog.LifecycleRestoreTableNamePrefix+
+			"0123456789abcdef0123456789abcdef",
+		nil,
+	)
+	require.ErrorContains(t, err, "Lifecycle Restore staging")
+
+	proc.Base.IsFrontend = false
+	_, _, err = ctx.Resolve(
+		"",
+		catalog.LifecycleRestoreTableNamePrefix+
+			"0123456789abcdef0123456789abcdef",
+		nil,
+	)
+	require.NoError(t, err)
+}
 
 func TestInternalExecutorCommittedLogWaitHonorsCallerCancellation(t *testing.T) {
 	ctrl := gomock.NewController(t)

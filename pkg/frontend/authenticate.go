@@ -23,6 +23,7 @@ import (
 	"io"
 	"math"
 	"math/bits"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -257,6 +258,35 @@ func (ti *TenantInfo) IsNameOfAdminRoles(name string) bool {
 	} else {
 		return n == accountAdminRoleName
 	}
+}
+
+// lifecycleStatementRequiresAccountAdmin identifies the Phase 1 Lifecycle
+// operations that expose account-wide archive metadata or external storage.
+// It is an additional admission check: the statement keeps its ordinary
+// database/table privilege checks as well.
+func lifecycleStatementRequiresAccountAdmin(stmt tree.Statement) bool {
+	switch statement := stmt.(type) {
+	case *tree.ShowLifecycle, *tree.RestoreArchiveDataset, *tree.RestoreArchiveRange,
+		*tree.PurgeArchiveDataset:
+		return true
+	case *tree.AlterTable:
+		option, ok := lifecycleOptionFromAlterTable(statement)
+		return ok &&
+			option.Operation == tree.LifecycleOperationSet &&
+			option.Policy.Action == tree.LifecycleActionArchive
+	default:
+		return false
+	}
+}
+
+func lifecycleAccountAdminMayExecute(
+	tenant *TenantInfo,
+	stmt tree.Statement,
+) bool {
+	if !lifecycleStatementRequiresAccountAdmin(stmt) {
+		return true
+	}
+	return tenant != nil && tenant.IsAdminRole()
 }
 
 func (ti *TenantInfo) SetUseSecondaryRole(v bool) {
@@ -960,58 +990,70 @@ var (
 		catalog.MO_PITR:              {},
 		catalog.MOPartitionMetadata:  {},
 		catalog.MOPartitionTables:    {},
+		// Cleanup Roots are system-owned external-side-effect metadata. They
+		// intentionally survive tenant deletion so the Lifecycle sweeper can
+		// reclaim Archive/TAE staging asynchronously. New CNs classify the name
+		// as system-only so DROP ACCOUNT does not treat owner_account_id as
+		// tenant storage. The physical Cluster type and account_id=0 keep Root
+		// rows invisible and immutable to tenants during old-CN rolling upgrades.
+		catalog.MO_LIFECYCLE_CLEANUP_ROOTS: {},
 	}
 	// predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":                   0,
-		"mo_tables":                     0,
-		"mo_columns":                    0,
-		"mo_account":                    0,
-		"mo_user":                       0,
-		"mo_role":                       0,
-		"mo_user_grant":                 0,
-		"mo_role_grant":                 0,
-		"mo_role_privs":                 0,
-		"mo_user_defined_function":      0,
-		"mo_stored_procedure":           0,
-		"mo_mysql_compatibility_mode":   0,
-		catalog.MOAutoIncrTable:         0,
-		"mo_indexes":                    0,
-		"mo_table_partitions":           0,
-		"mo_pubs":                       0,
-		"mo_stages":                     0,
-		"mo_sessions":                   0,
-		"mo_configurations":             0,
-		"mo_locks":                      0,
-		"mo_variables":                  0,
-		"mo_transactions":               0,
-		"mo_cache":                      0,
-		"mo_foreign_keys":               0,
-		"mo_snapshots":                  0,
-		"mo_subs":                       0,
-		"mo_shards":                     0,
-		"mo_shards_metadata":            0,
-		"mo_cdc_task":                   0,
-		"mo_cdc_watermark":              0,
-		catalog.MO_TABLE_STATS:          0,
-		catalog.MO_ACCOUNT_LOCK:         0,
-		catalog.MO_MERGE_SETTINGS:       0,
-		catalog.MO_ISCP_LOG:             0,
-		catalog.MO_INDEX_UPDATE:         0,
-		catalog.MO_BRANCH_METADATA:      0,
-		catalog.MO_FEATURE_LIMIT:        0,
-		catalog.MO_FEATURE_REGISTRY:     0,
-		catalog.MO_ROLE_RULE:            0,
-		icebergsql.TableCatalogs:        0,
-		icebergsql.TablePrincipalMap:    0,
-		icebergsql.TableResidencyPolicy: 0,
-		icebergsql.TableTables:          0,
-		icebergsql.TableRefs:            0,
-		icebergsql.TablePublishJobs:     0,
-		icebergsql.TableOrphanFiles:     0,
-		icebergsql.TableMaintenanceJobs: 0,
-		mongodb.TableConnections:        0,
-		mongodb.TableMappings:           0,
+		"mo_database":                         0,
+		"mo_tables":                           0,
+		"mo_columns":                          0,
+		"mo_account":                          0,
+		"mo_user":                             0,
+		"mo_role":                             0,
+		"mo_user_grant":                       0,
+		"mo_role_grant":                       0,
+		"mo_role_privs":                       0,
+		"mo_user_defined_function":            0,
+		"mo_stored_procedure":                 0,
+		"mo_mysql_compatibility_mode":         0,
+		catalog.MOAutoIncrTable:               0,
+		"mo_indexes":                          0,
+		"mo_table_partitions":                 0,
+		"mo_pubs":                             0,
+		"mo_stages":                           0,
+		"mo_sessions":                         0,
+		"mo_configurations":                   0,
+		"mo_locks":                            0,
+		"mo_variables":                        0,
+		"mo_transactions":                     0,
+		"mo_cache":                            0,
+		"mo_foreign_keys":                     0,
+		"mo_snapshots":                        0,
+		"mo_subs":                             0,
+		"mo_shards":                           0,
+		"mo_shards_metadata":                  0,
+		"mo_cdc_task":                         0,
+		"mo_cdc_watermark":                    0,
+		catalog.MO_TABLE_STATS:                0,
+		catalog.MO_ACCOUNT_LOCK:               0,
+		catalog.MO_MERGE_SETTINGS:             0,
+		catalog.MO_ISCP_LOG:                   0,
+		catalog.MO_INDEX_UPDATE:               0,
+		catalog.MO_BRANCH_METADATA:            0,
+		catalog.MO_FEATURE_LIMIT:              0,
+		catalog.MO_FEATURE_REGISTRY:           0,
+		catalog.MO_ROLE_RULE:                  0,
+		catalog.MO_LIFECYCLE_BINDINGS:         0,
+		catalog.MO_LIFECYCLE_DATASETS:         0,
+		catalog.MO_LIFECYCLE_TTL_RECEIPTS:     0,
+		catalog.MO_LIFECYCLE_RESTORE_ATTEMPTS: 0,
+		catalog.MO_LIFECYCLE_RESTORE_CHUNKS:   0,
+		icebergsql.TableCatalogs:              0,
+		icebergsql.TablePrincipalMap:          0,
+		icebergsql.TableResidencyPolicy:       0,
+		icebergsql.TableTables:                0,
+		icebergsql.TableRefs:                  0,
+		icebergsql.TablePublishJobs:           0,
+		icebergsql.TableOrphanFiles:           0,
+		icebergsql.TableMaintenanceJobs:       0,
+		mongodb.TableConnections:              0,
+		mongodb.TableMappings:                 0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1062,6 +1104,11 @@ var (
 		MoCatalogFeatureRegistryDDL,
 		MoCatalogFeatureRegistryInitData,
 		MoCatalogMoRoleRuleDDL,
+		catalog.MoLifecycleBindingsDDL,
+		catalog.MoLifecycleDatasetsDDL,
+		catalog.MoLifecycleTTLReceiptsDDL,
+		catalog.MoLifecycleRestoreAttemptsDDL,
+		catalog.MoLifecycleRestoreChunksDDL,
 		icebergsql.CatalogsDDL,
 		icebergsql.PrincipalMapDDL,
 		icebergsql.ResidencyPolicyDDL,
@@ -1076,6 +1123,11 @@ var (
 
 	// drop tables for the tenant
 	dropSqls = []string{
+		`drop table if exists mo_catalog.mo_lifecycle_restore_chunks;`,
+		`drop table if exists mo_catalog.mo_lifecycle_restore_attempts;`,
+		`drop table if exists mo_catalog.mo_lifecycle_ttl_receipts;`,
+		`drop table if exists mo_catalog.mo_lifecycle_datasets;`,
+		`drop table if exists mo_catalog.mo_lifecycle_bindings;`,
 		`drop table if exists mo_catalog.mo_user;`,
 		`drop table if exists mo_catalog.mo_role;`,
 		`drop table if exists mo_catalog.mo_user_grant;`,
@@ -3897,6 +3949,17 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 			return err
 		}
 	} else {
+		if as.UrlOption.Exist ||
+			as.CredentialsOption.Exist ||
+			as.StatusOption.Exist {
+			if err = rejectReferencedLifecycleStageMutation(
+				ctx,
+				bh,
+				string(as.Name),
+			); err != nil {
+				return err
+			}
+		}
 		if as.UrlOption.Exist {
 			if !(strings.HasPrefix(as.UrlOption.Url, stage.STAGE_PROTOCOL+"://") ||
 				strings.HasPrefix(as.UrlOption.Url, stage.S3_PROTOCOL+"://") ||
@@ -3973,6 +4036,13 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 			return err
 		}
 	} else {
+		if err = rejectReferencedLifecycleStageMutation(
+			ctx,
+			bh,
+			string(ds.Name),
+		); err != nil {
+			return err
+		}
 		sql = getSqlForDropStage(string(ds.Name))
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -3983,6 +4053,38 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err err
 }
 
 func doRemoveStageFiles(ctx context.Context, ses *Session, rs *tree.RemoveStageFiles) error {
+	return doRemoveStageFilesWithLifecycleFence(
+		ctx,
+		ses,
+		rs,
+		func(stageName string, mutation func() error) (err error) {
+			background := ses.GetBackgroundExec(ctx)
+			defer background.Close()
+			if err = background.Exec(ctx, "begin;"); err != nil {
+				return err
+			}
+			defer func() {
+				err = finishTxn(ctx, background, err)
+			}()
+			if err = rejectReferencedLifecycleStageMutation(
+				ctx,
+				background,
+				stageName,
+			); err != nil {
+				return err
+			}
+			err = mutation()
+			return err
+		},
+	)
+}
+
+func doRemoveStageFilesWithLifecycleFence(
+	ctx context.Context,
+	ses *Session,
+	rs *tree.RemoveStageFiles,
+	withLifecycleFence func(string, func() error) error,
+) error {
 	if err := doCheckRole(ctx, ses); err != nil {
 		return err
 	}
@@ -3990,9 +4092,29 @@ func doRemoveStageFiles(ctx context.Context, ses *Session, rs *tree.RemoveStageF
 	if !strings.HasPrefix(rs.Path, stage.STAGE_PROTOCOL+"://") {
 		return moerr.NewBadConfig(ctx, "URL protocol only supports stage://")
 	}
-
-	_, err := stageutil.DeleteStageFiles(ctx, ses.proc, rs.Path, rs.IfExists)
-	return err
+	stageURL, err := url.Parse(rs.Path)
+	if err != nil {
+		return err
+	}
+	stageName, _, _, err := stage.ParseStageUrl(stageURL)
+	if err != nil {
+		return err
+	}
+	// REMOVE is a rare Stage control operation. Reject it while the Stage owns
+	// Lifecycle payloads; otherwise a wildcard REMOVE can bypass DROP/ALTER
+	// STAGE fencing and make a published Dataset unrestorable.
+	if withLifecycleFence == nil {
+		return moerr.NewInternalError(ctx, "Lifecycle Stage reference check is unavailable")
+	}
+	return withLifecycleFence(stageName, func() error {
+		_, deleteErr := stageutil.DeleteStageFiles(
+			ctx,
+			ses.proc,
+			rs.Path,
+			rs.IfExists,
+		)
+		return deleteErr
+	})
 }
 
 type dropAccount struct {
@@ -6347,6 +6469,26 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			clusterTableOperation = clusterTableCreate
 		}
 		dbName = string(st.Table.SchemaName)
+	case *tree.RestoreArchiveDataset:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		needMatchedRole = true
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Target)
+		if st.Target != nil {
+			dbName = string(st.Target.SchemaName)
+		}
+	case *tree.RestoreArchiveRange:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		needMatchedRole = true
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Target)
+		if st.Target != nil {
+			dbName = string(st.Target.SchemaName)
+		}
+	case *tree.PurgeArchiveDataset:
+		typs = append(typs, PrivilegeTypeAccountAll)
 	case *tree.CreateView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -6567,6 +6709,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.ShowRules, *tree.CheckTableStmt, *tree.ShowProfileStmt,
+		*tree.ShowLifecycle,
 		*tree.AnalyzeStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone

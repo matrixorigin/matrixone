@@ -156,6 +156,19 @@ var (
 		catalog.MO_SNAPSHOTS: systemCatalogRestoreSkip,
 		catalog.MO_PITR:      systemCatalogRestoreSkip,
 
+		// Lifecycle control-plane state is intentionally not restored by a
+		// Snapshot/PITR catalog copy. A historical Binding refers to an old
+		// physical-table identity, while a Cleanup Root can still name external
+		// Archive/TAE staging. The restored active table data remains governed by
+		// ordinary Object MVCC and GC; a Lifecycle policy must be configured again
+		// in the target environment.
+		catalog.MO_LIFECYCLE_BINDINGS:         systemCatalogRestoreSkip,
+		catalog.MO_LIFECYCLE_DATASETS:         systemCatalogRestoreSkip,
+		catalog.MO_LIFECYCLE_TTL_RECEIPTS:     systemCatalogRestoreSkip,
+		catalog.MO_LIFECYCLE_RESTORE_ATTEMPTS: systemCatalogRestoreSkip,
+		catalog.MO_LIFECYCLE_RESTORE_CHUNKS:   systemCatalogRestoreSkip,
+		catalog.MO_LIFECYCLE_CLEANUP_ROOTS:    systemCatalogRestoreSkip,
+
 		catalog.MOPartitionMetadata: systemCatalogRestoreSkip,
 		catalog.MOPartitionTables:   systemCatalogRestoreSkip,
 
@@ -701,6 +714,52 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return stats, err
 	}
 
+	// Snapshot/PITR protect active TAE Objects through the existing MVCC/GC
+	// path, so creation is compatible with Lifecycle. Phase 1 does not restore
+	// Archive Dataset/Root metadata or external payload, however; reject that
+	// unsupported restore combination before any table/account mutation.
+	if stmt.Level == tree.RESTORELEVELCLUSTER {
+		if err = rejectLifecycleArchiveClusterRestore(
+			ctx,
+			ses,
+			bh,
+			snapshotName,
+			snapshot.ts,
+			"RESTORE SNAPSHOT",
+		); err != nil {
+			return stats, err
+		}
+	} else if !(snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0) {
+		sourceAccountID := ses.GetTenantInfo().GetTenantID()
+		if stmt.Level == tree.RESTORELEVELACCOUNT {
+			sourceAccountID = uint32(snapshot.objId)
+		} else if snapshot.accountName != "" {
+			if sourceAccountID, err = getAccountIdByTS(
+				ctx,
+				bh,
+				snapshot.accountName,
+				snapshot.ts,
+			); err != nil {
+				return stats, err
+			}
+		}
+		if err = rejectLifecycleArchiveRestoreScope(
+			ctx,
+			bh,
+			lifecycleArchiveRestoreScope{
+				level:             stmt.Level,
+				accountID:         sourceAccountID,
+				databaseName:      dbName,
+				tableName:         tblName,
+				snapshotTS:        snapshot.ts,
+				rejectTTLBindings: stmt.Level == tree.RESTORELEVELACCOUNT,
+			},
+			"RESTORE SNAPSHOT",
+		); err != nil {
+			return stats, err
+		}
+	}
+
 	// default restore to src account
 	restoreAccount, toAccountId, err = getFromAccountIdAndToAccountId(ctx, ses, bh, stmt, *snapshot)
 	if err != nil {
@@ -728,6 +787,21 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 		return
+	}
+
+	if err = rejectLifecycleArchiveRestoreScope(
+		ctx,
+		bh,
+		lifecycleArchiveRestoreScope{
+			level:             stmt.Level,
+			accountID:         toAccountId,
+			databaseName:      dbName,
+			tableName:         tblName,
+			rejectTTLBindings: stmt.Level == tree.RESTORELEVELACCOUNT,
+		},
+		"RESTORE SNAPSHOT",
+	); err != nil {
+		return stats, err
 	}
 
 	// drop foreign key related tables first
@@ -2230,6 +2304,13 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 		quoteSQLStringLiteral(catalog.SystemPartitionRel),
 		accountClause,
 	)
+	// Lifecycle Restore staging tables are ordinary persistent TAE tables so a
+	// crashed Restore can resume. They are nevertheless internal implementation
+	// objects and must not become Clone/Data Branch/bulk-Restore sources.
+	whereClause += fmt.Sprintf(
+		" and not regexp_like(lower(relname), %s)",
+		quoteSQLStringLiteral(catalog.LifecycleRestoreTableSQLRegexpPattern),
+	)
 	if dbName == moCatalog {
 		indexTablePattern := quoteSQLLikePattern(catalog.IndexTableNamePrefix)
 		whereClause += fmt.Sprintf(
@@ -3077,8 +3158,37 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 	}
+	// Cleanup Roots deliberately do not cross a logical Cluster Restore: a
+	// copied Root could still address Archive payload or TAE staging owned by
+	// the source cluster. Recreate only the current, empty system table so the
+	// Coordinator remains operable after the catalog restore.
+	if err = ensureLifecycleClusterTablesAfterRestore(ctx, bh); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func ensureLifecycleClusterTablesAfterRestore(ctx context.Context, bh BackgroundExec) error {
+	for _, sql := range lifecycleClusterRestoreBootstrapSQLs() {
+		if err := bh.Exec(ctx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func lifecycleClusterRestoreBootstrapSQLs() []string {
+	sqls := make([]string, 0, len(catalog.LifecycleClusterTableDefinitions))
+	for _, definition := range catalog.LifecycleClusterTableDefinitions {
+		sqls = append(sqls, strings.Replace(
+			definition.DDL,
+			"create cluster table ",
+			"create cluster table if not exists ",
+			1,
+		))
+	}
+	return sqls
 }
 
 func restoreToAccountUsingCluster(
@@ -3101,6 +3211,19 @@ func restoreToAccountUsingCluster(
 	var ar *accountRecord
 	ar, err = getAccountRecordByTs(ctx, ses, bh, snapshotName, snapshotTs, srcAccount)
 	if err != nil {
+		return err
+	}
+	if err = rejectLifecycleArchiveRestoreScope(
+		ctx,
+		bh,
+		lifecycleArchiveRestoreScope{
+			level:             tree.RESTORELEVELACCOUNT,
+			accountID:         uint32(ar.accountId),
+			snapshotTS:        snapshotTs,
+			rejectTTLBindings: true,
+		},
+		"RESTORE SNAPSHOT",
+	); err != nil {
 		return err
 	}
 
@@ -3126,6 +3249,18 @@ func restoreToAccountUsingCluster(
 			}
 			isNeedToCleanToDatabase = false
 		}
+	}
+	if err = rejectLifecycleArchiveRestoreScope(
+		ctx,
+		bh,
+		lifecycleArchiveRestoreScope{
+			level:             tree.RESTORELEVELACCOUNT,
+			accountID:         toAccountId,
+			rejectTTLBindings: true,
+		},
+		"RESTORE SNAPSHOT",
+	); err != nil {
+		return err
 	}
 
 	err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, *ar, uint64(toAccountId), nil, isRestoreToCluster, isNeedToCleanToDatabase)

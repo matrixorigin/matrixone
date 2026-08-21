@@ -632,6 +632,18 @@ func TestGetTableForDumpErrors(t *testing.T) {
 	ses.SetDatabaseName("tpch")
 	eng := mock_frontend.NewMockEngine(ctrl)
 	ses.txnHandler.storage = eng
+	_, _, _, err = getTableForDump(
+		context.Background(),
+		ses,
+		tree.NewTableName(
+			catalog.LifecycleRestoreTableNamePrefix+
+				"0123456789abcdef0123456789abcdef",
+			tree.ObjectNamePrefix{},
+			nil,
+		),
+	)
+	require.ErrorContains(t, err, "Lifecycle Restore staging")
+
 	eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(nil, errors.New("database failed"))
 	_, _, _, err = getTableForDump(context.Background(), ses, tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil))
 	require.Error(t, err)

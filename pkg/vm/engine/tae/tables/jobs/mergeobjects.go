@@ -15,6 +15,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"slices"
@@ -536,6 +537,66 @@ func HandleMergeEntryInTxn(
 	rt *dbutils.Runtime,
 	isTombstone bool,
 ) (createdObjs []*catalog.ObjectEntry, err error) {
+	return handleMergeEntryInTxn(
+		ctx,
+		txn,
+		taskName,
+		entry,
+		transferTable,
+		rt,
+		isTombstone,
+		nil,
+	)
+}
+
+type lifecycleMergeOptions struct {
+	sourceSnapshot       types.TS
+	finalPrepareDeadline time.Time
+	maxDeltaRows         uint64
+	maxDeltaBytes        uint64
+	maxDeltaBlocks       uint32
+}
+
+func HandleLifecycleMergeEntryInTxn(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	taskName string,
+	entry *api.MergeCommitEntry,
+	transferTable *mergesort.TransferTable,
+	rt *dbutils.Runtime,
+	sourceSnapshot types.TS,
+	finalPrepareDeadline time.Time,
+	maxDeltaRows, maxDeltaBytes uint64,
+	maxDeltaBlocks uint32,
+) (createdObjs []*catalog.ObjectEntry, err error) {
+	return handleMergeEntryInTxn(
+		ctx,
+		txn,
+		taskName,
+		entry,
+		transferTable,
+		rt,
+		false,
+		&lifecycleMergeOptions{
+			sourceSnapshot:       sourceSnapshot,
+			finalPrepareDeadline: finalPrepareDeadline,
+			maxDeltaRows:         maxDeltaRows,
+			maxDeltaBytes:        maxDeltaBytes,
+			maxDeltaBlocks:       maxDeltaBlocks,
+		},
+	)
+}
+
+func handleMergeEntryInTxn(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	taskName string,
+	entry *api.MergeCommitEntry,
+	transferTable *mergesort.TransferTable,
+	rt *dbutils.Runtime,
+	isTombstone bool,
+	lifecycleOptions *lifecycleMergeOptions,
+) (createdObjs []*catalog.ObjectEntry, err error) {
 	transferTableOwned := true
 	defer func() {
 		if err != nil && transferTableOwned && transferTable != nil {
@@ -566,6 +627,16 @@ func HandleMergeEntryInTxn(
 				logutil.Infof("[MERGE-EOB] LockMerge %v %v", objID.ShortStringEx(), err)
 			}
 			return nil, err
+		}
+		if lifecycleOptions != nil {
+			meta, ok := obj.GetMeta().(*catalog.ObjectEntry)
+			if !ok || meta == nil ||
+				!bytes.Equal(meta.GetObjectStats()[:], drop[:]) {
+				return nil, moerr.NewTxnWWConflictNoCtx(
+					entry.TblId,
+					"Lifecycle Rewrite exact source ObjectStats changed",
+				)
+			}
 		}
 		mergedObjs = append(mergedObjs, obj.GetMeta().(*catalog.ObjectEntry))
 		if err = rel.SoftDeleteObject(objID, isTombstone); err != nil {
@@ -606,17 +677,36 @@ func HandleMergeEntryInTxn(
 		createdObjs = append(createdObjs, obj.GetMeta().(*catalog.ObjectEntry))
 	}
 
-	txnEntry, err := txnentries.NewMergeObjectsEntry(
-		ctx,
-		txn,
-		taskName,
-		rel,
-		mergedObjs,
-		createdObjs,
-		transferTable,
-		isTombstone,
-		rt,
-	)
+	var txnEntry txnif.TxnEntry
+	if lifecycleOptions == nil {
+		txnEntry, err = txnentries.NewMergeObjectsEntry(
+			ctx,
+			txn,
+			taskName,
+			rel,
+			mergedObjs,
+			createdObjs,
+			transferTable,
+			isTombstone,
+			rt,
+		)
+	} else {
+		txnEntry, err = txnentries.NewLifecycleRewriteObjectsEntry(
+			ctx,
+			txn,
+			taskName,
+			rel,
+			mergedObjs,
+			createdObjs,
+			transferTable,
+			lifecycleOptions.sourceSnapshot,
+			lifecycleOptions.finalPrepareDeadline,
+			lifecycleOptions.maxDeltaRows,
+			lifecycleOptions.maxDeltaBytes,
+			lifecycleOptions.maxDeltaBlocks,
+			rt,
+		)
+	}
 	// NewMergeObjectsEntry owns transferTable even when its preparation fails:
 	// its error path rolls the transfer state back before returning.
 	transferTableOwned = false
@@ -628,14 +718,22 @@ func HandleMergeEntryInTxn(
 		if err = txn.LogTxnEntry(
 			entry.DbId, entry.TblId, txnEntry, nil, ids,
 		); err != nil {
-			txnEntry.RollbackTransferState()
+			if mergeEntry, ok := txnEntry.(interface {
+				RollbackTransferState()
+			}); ok {
+				mergeEntry.RollbackTransferState()
+			}
 			return nil, err
 		}
 	} else {
 		if err = txn.LogTxnEntry(
 			entry.DbId, entry.TblId, txnEntry, ids, nil,
 		); err != nil {
-			txnEntry.RollbackTransferState()
+			if mergeEntry, ok := txnEntry.(interface {
+				RollbackTransferState()
+			}); ok {
+				mergeEntry.RollbackTransferState()
+			}
 			return nil, err
 		}
 	}
