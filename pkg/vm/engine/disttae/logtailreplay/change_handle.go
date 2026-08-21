@@ -2080,10 +2080,21 @@ func (p *ChangeHandler) decideNextHandle() int {
 	return NextChangeHandle_Data
 }
 func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, err error) {
+	return p.quickNextWith(ctx, mp, p.dataHandle.QuickNext, p.tombstoneHandle.QuickNext)
+}
+
+type quickNextFunc func(context.Context, **batch.Batch, *mpool.MPool) error
+
+func (p *ChangeHandler) quickNextWith(
+	ctx context.Context,
+	mp *mpool.MPool,
+	dataNext quickNextFunc,
+	tombstoneNext quickNextFunc,
+) (data, tombstone *batch.Batch, err error) {
 	for {
 		dataEnd := false
 		tombstoneEnd := false
-		err = p.dataHandle.QuickNext(ctx, &data, mp)
+		err = dataNext(ctx, &data, mp)
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			dataEnd = true
 			err = nil
@@ -2096,7 +2107,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if err != nil {
 			return
 		}
-		err = p.tombstoneHandle.QuickNext(ctx, &tombstone, mp)
+		err = tombstoneNext(ctx, &tombstone, mp)
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			tombstoneEnd = true
 			err = nil

@@ -220,6 +220,48 @@ func TestQuickNextFiltersUsingLogicalPrimaryKeyIndex(t *testing.T) {
 	data.Clean(mp)
 }
 
+func TestQuickNextHandlesExpectedEOB(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ch := &ChangeHandler{primaryIdx: 1}
+
+	t.Run("data EOB", func(t *testing.T) {
+		data, tombstone, err := ch.quickNextWith(
+			context.Background(), mp,
+			func(context.Context, **batch.Batch, *mpool.MPool) error {
+				return moerr.GetOkExpectedEOB()
+			},
+			func(context.Context, **batch.Batch, *mpool.MPool) error {
+				t.Fatalf("tombstone reader must not be called")
+				return nil
+			},
+		)
+		require.NoError(t, err)
+		require.Nil(t, data)
+		require.Nil(t, tombstone)
+	})
+
+	t.Run("tombstone EOB", func(t *testing.T) {
+		data, tombstone, err := ch.quickNextWith(
+			context.Background(), mp,
+			func(_ context.Context, bat **batch.Batch, pool *mpool.MPool) error {
+				*bat = batch.NewWithSize(1)
+				(*bat).Vecs[0] = vector.NewVec(types.T_int32.ToType())
+				require.NoError(t, vector.AppendFixed((*bat).Vecs[0], int32(1), false, pool))
+				(*bat).SetRowCount(1)
+				return nil
+			},
+			func(context.Context, **batch.Batch, *mpool.MPool) error {
+				return moerr.GetOkExpectedEOB()
+			},
+		)
+		require.NoError(t, err)
+		require.NotNil(t, data)
+		require.Nil(t, tombstone)
+		data.Clean(mp)
+	})
+}
+
 func TestNextFiltersUsingLogicalPrimaryKeyIndex(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
