@@ -138,5 +138,29 @@ id    s
 7     23
 8     15
 drop table fall_back_fold;
+create table fall_back_sparse(id int primary key, ts timestamp(6), v int);
+insert into fall_back_sparse values
+(1, '2024-11-03 05:00:00.000000', 1),
+(2, '2024-11-03 06:30:00.000000', 10);
+select id, sum(v) over (
+order by ts
+range between current row and interval 30 minute following
+) as s from fall_back_sparse order by id;
+id    s
+1     11
+2     10
+drop table fall_back_sparse;
+create table fall_back_equal(id int primary key, ts timestamp(6), v int);
+insert into fall_back_equal values
+(1, '2024-11-03 05:30:00.000000', 1),
+(2, '2024-11-03 06:30:00.000000', 10);
+select id, sum(v) over (
+order by ts
+range between current row and current row
+) as s from fall_back_equal order by id;
+id    s
+1     11
+2     11
+drop table fall_back_equal;
 set time_zone = @old_time_zone_window_timestamp_range_dst;
 drop database window_timestamp_range_dst;
