@@ -35,7 +35,9 @@ func indexNameKey(name string) string {
 	return tree.NewCStr(name, 1).Compare()
 }
 
-func indexNamesEqual(left, right string) bool {
+// IndexNamesEqual compares index identifiers using the canonical parser
+// normalization shared by index creation, duplicate detection, and lookup.
+func IndexNamesEqual(left, right string) bool {
 	return indexNameKey(left) == indexNameKey(right)
 }
 
@@ -99,7 +101,7 @@ func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueI
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if indexNamesEqual(constrName, "PRIMARY") {
+		if IndexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
@@ -119,7 +121,7 @@ func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if indexNamesEqual(constrName, "PRIMARY") {
+		if IndexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
@@ -139,7 +141,7 @@ func setEmptyFullTextIndexName(namesMap map[string]bool, indexConstr *tree.FullT
 		colName := indexConstr.KeyParts[0].ColName.ColName()
 		constrName := colName
 		i := 2
-		if indexNamesEqual(constrName, "PRIMARY") {
+		if IndexNamesEqual(constrName, "PRIMARY") {
 			constrName = fmt.Sprintf("%s_%d", constrName, 2)
 			i = 3
 		}
