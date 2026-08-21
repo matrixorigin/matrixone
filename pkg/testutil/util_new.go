@@ -93,8 +93,10 @@ func ensureAutoIncrService(sid string) {
 		rt = runtime.DefaultRuntime()
 		runtime.SetupServiceBasedRuntime(sid, rt)
 	}
-	if _, ok := rt.GetGlobalVariables(runtime.AutoIncrementService); ok {
-		return
+	if v, ok := rt.GetGlobalVariables(runtime.AutoIncrementService); ok && v != nil {
+		if _, ok := v.(incrservice.AutoIncrementService); ok {
+			return
+		}
 	}
 	SetupAutoIncrService(sid)
 }
