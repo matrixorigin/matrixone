@@ -51,6 +51,8 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 			_, _ = db.ExecContext(cleanupCtx, fmt.Sprintf("drop database if exists `%s`", dbName))
 		}()
 		execIssue27088VolatileSQL(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
+		execIssue27088VolatileSQL(t, ctx, conn, "create table volatile_rows (id int)")
+		execIssue27088VolatileSQL(t, ctx, conn, "insert into volatile_rows values (1)")
 
 		for _, test := range []struct {
 			name  string
@@ -67,7 +69,10 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 				if test.notIn {
 					operator = "not in"
 				}
-				want := test.notIn
+				want := 0
+				if test.notIn {
+					want = 1
+				}
 
 				var query string
 				var args []any
@@ -81,7 +86,8 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 					execIssue27088VolatileSQL(t, ctx, conn,
 						"create sequence volatile_tuple_b increment 1 start with 10 no cycle")
 					query = fmt.Sprintf(
-						"select (nextval('volatile_tuple_a'), nextval('volatile_tuple_b')) %s ((?, ?), (?, ?))",
+						"select count(*) from volatile_rows where "+
+							"(nextval('volatile_tuple_a'), nextval('volatile_tuple_b')) %s ((?, ?), (?, ?))",
 						operator)
 					args = []any{"1", "9", "2", "11"}
 				} else {
@@ -89,16 +95,16 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 						"drop sequence if exists volatile_scalar")
 					execIssue27088VolatileSQL(t, ctx, conn,
 						"create sequence volatile_scalar increment 1 start with 1 no cycle")
-					query = fmt.Sprintf("select nextval('volatile_scalar') %s (?, ?)", operator)
+					query = fmt.Sprintf(
+						"select count(*) from volatile_rows where nextval('volatile_scalar') %s (?, ?)", operator)
 					args = []any{"0", "2"}
 				}
 
 				stmt, err := conn.PrepareContext(ctx, query)
 				require.NoError(t, err)
 				defer stmt.Close()
-				var got bool
+				var got int
 				require.NoError(t, stmt.QueryRowContext(ctx, args...).Scan(&got))
-				require.Equal(t, want, got)
 
 				if test.tuple {
 					var currentA, currentB int64
@@ -113,6 +119,7 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 						"select currval('volatile_scalar')").Scan(&current))
 					require.Equal(t, int64(1), current)
 				}
+				require.Equal(t, want, got)
 			})
 		}
 	})

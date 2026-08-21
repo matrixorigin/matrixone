@@ -14,8 +14,8 @@
   volatile 元素必须拥有独立 identity。binder 将 mixed-type `IN`/`NOT IN` 展开为多个比较时不能改变该契约。
 - 最小反例：`nextval` 左值被每个展开分支重新执行，使 sequence 推进多次，并使第二个候选观察到新值，最终翻转
   `IN`/`NOT IN` 的布尔结果。
-- 公共路径：MySQL binary COM_STMT（`interpolateParams=false`）触发运行时参数类型绑定、mixed-type IN 展开、
-  colexec memo executor 与结果返回。
+- 公共路径：MySQL binary COM_STMT（`interpolateParams=false`）在单行表的 `WHERE` 中触发运行时参数类型绑定、
+  mixed-type IN 展开、scan/filter AuxId 处理、colexec memo executor 与结果返回。
 - 独立 oracle：同时检查查询布尔值与 `currval`。前者证明 SQL 语义，后者精确证明不可逆副作用只发生一次。
 
 ## 精简测试矩阵
@@ -51,6 +51,19 @@ sequence 上运行，不依赖随机数、sleep、执行顺序或概率重试。
    无并发共享证据时不额外制造无意义的 race 压测；若审计发现可信并发路径，再执行自适应 race 门禁。
 7. 所有验证证据必须晚于最后一次 merge/语义修改并取得真实退出码。随后检查 status、完整 diff 与 staged diff，提交并普通
    push 到 `origin/issue-27088-volatile-main`，禁止 force push。
+
+## 自审发现与补充方案
+
+- 将专项回归从无表投影加强为单行表 `WHERE` 后，当前修复的 `scalar NOT IN` 仍失败：结果由 true 翻转为 false，且
+  `currval` 为 2。其余 scalar `IN`、tuple `IN`、tuple `NOT IN` 均通过。
+- 进一步用计划内 memo identity 取证后确认：`NOT IN` 展开的两个比较都正确保留 `AuxId=-1`，但 optimizer 将外层
+  `AND` 拆成两个独立 `FilterList` 根表达式。每个根分别创建 memo build context，因此同一 identity 仍各执行一次。
+  先前怀疑的存储侧重复求值已被反证，相关实验修改不保留。
+- 最小修复：`splitPlanConjunction` 在 `AND` 两侧共享同一负 AuxId 时不跨该边界拆分，保证这些 occurrence 留在同一
+  expression root；不共享 identity 的普通 `AND` 仍按原逻辑拆分。嵌套场景只保留必要的最小子树，不阻止无关 conjunct
+  继续拆分/下推。
+- 增加 plan 层白盒回归，覆盖 shared identity 不拆分、不同 identity 正常拆分、外层无关 conjunct 仍可拆分；专项黑盒
+  四例继续作为最终语义 oracle。修改后重新执行全部 owning tests、build、vet、diff-check 与 self-review，旧绿灯不复用。
 
 ## Draft PR
 
