@@ -517,7 +517,11 @@ func (rm *RoutineManager) MigrateConnectionFromWithContext(
 }
 
 func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {
-	return rm.ResetSessionWithContext(rm.ctx, req, resp)
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
+	}
+	return routine.resetSession(rm.baseService.ID(), resp)
 }
 
 func (rm *RoutineManager) ResetSessionWithContext(
