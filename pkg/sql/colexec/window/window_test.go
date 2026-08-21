@@ -3324,6 +3324,75 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 	}
 }
 
+func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = newYork
+
+	source := vector.NewVec(types.T_timestamp.ToType())
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = source
+	defer input.Clean(mp)
+
+	order, err := colexec.MakeEvalVector(proc, []*plan.Expr{newColExprWithType(0, types.T_timestamp.ToType())})
+	require.NoError(t, err)
+	ctr := &container{orderVecs: []colexec.ExprEvalVector{order}}
+	defer ctr.freeExes()
+	defer ctr.freeVector(mp)
+
+	frame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	appendBatch := func(values []string) {
+		source.CleanOnlyData()
+		for _, value := range values {
+			ts, parseErr := types.ParseTimestamp(time.UTC, value, 6)
+			require.NoError(t, parseErr)
+			require.NoError(t, vector.AppendFixed(source, ts, false, mp))
+		}
+		input.SetRowCount(source.Length())
+		require.NoError(t, ctr.evalOrderVector(input, proc))
+	}
+
+	// The first materialization has no fold and caches that fact against the
+	// reusable order-vector pointer.
+	appendBatch([]string{
+		"2024-11-03 08:00:00.000000", "2024-11-03 08:30:00.000000",
+		"2024-11-03 09:00:00.000000", "2024-11-03 09:30:00.000000",
+		"2024-11-03 10:00:00.000000", "2024-11-03 10:30:00.000000",
+		"2024-11-03 11:00:00.000000", "2024-11-03 11:30:00.000000",
+	})
+	materialized := ctr.orderVecs[0].Vec[0]
+	_, _, rows, err := ctr.buildIntervalRows(proc, 4, 0, materialized.Length(), frame)
+	require.NoError(t, err)
+	require.Nil(t, rows)
+
+	// evalOrderVector keeps the same materialized vector but replaces its data.
+	// The second batch crosses the New York fall-back fold, so the cache must be
+	// rebuilt and return its non-contiguous civil-time membership.
+	appendBatch([]string{
+		"2024-11-03 05:00:00.000000", "2024-11-03 05:30:00.000000",
+		"2024-11-03 05:59:00.000000", "2024-11-03 06:00:00.000000",
+		"2024-11-03 06:30:00.000000", "2024-11-03 06:59:00.000000",
+		"2024-11-03 07:00:00.000000", "2024-11-03 07:30:00.000000",
+	})
+	require.Same(t, materialized, ctr.orderVecs[0].Vec[0])
+	_, _, rows, err = ctr.buildIntervalRows(proc, 4, 0, materialized.Length(), frame)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 3, 4}, rows)
+}
+
 func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
