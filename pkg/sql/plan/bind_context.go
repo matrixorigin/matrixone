@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -58,6 +59,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bc.lower = parent.lower
 		bc.defaultDatabase = parent.defaultDatabase
 		bc.cteName = parent.cteName
+		bc.queryBlockOwner = parent.queryBlockOwner
 		if parent.bindingCte() {
 			bc.cteByName = parent.cteByName
 			bc.cteState = parent.cteState
@@ -157,6 +159,16 @@ func (bc *BindContext) cteInBinding(name string) bool {
 		cur = cur.parent
 	}
 	return false
+}
+
+func (bc *BindContext) activeRecursiveCteState(cte *CTERef) (CteBindState, bool) {
+	for cur := bc; cur != nil; cur = cur.parent {
+		state := cur.cteState
+		if state.cte == cte && state.cteBindType == CteBindTypeRecurStmt {
+			return state, true
+		}
+	}
+	return CteBindState{}, false
 }
 
 func (bc *BindContext) viewInBinding(schema, name string, view *tree.CreateView) bool {
@@ -620,7 +632,16 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 					return astExpr, nil
 				}
 			}
-
+			if expandAlias == NoAlias {
+				if havingBinder, ok := bc.binder.(*HavingBinder); ok &&
+					havingBinder.builder.mysqlFullGroupByCompat &&
+					!bc.aggregateQueryForFullGroupBy() {
+					// Keep the original unqualified name for HavingBinder. It
+					// resolves output aliases and implicit output names before
+					// falling back to the source-column visibility checks.
+					return astExpr, nil
+				}
+			}
 			if binding, ok := bc.bindingByCol[col]; ok {
 				if binding != nil {
 					if list := bc.outerUsingCols[col]; len(list) >= 2 {
@@ -635,6 +656,15 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 			}
 
 			if expandAlias == AliasAfterColumn {
+				if _, ok := bc.binder.(*HavingBinder); ok {
+					projected, found, ambiguous := bc.havingOutputExpr(col)
+					if ambiguous {
+						return nil, ambiguousHavingColumn(bc.binder.GetContext(), col)
+					}
+					if found {
+						return projected, nil
+					}
+				}
 				if selectItem, ok := bc.aliasMap[col]; ok {
 					if selectItem.astExpr != nil {
 						return selectItem.astExpr, nil
@@ -693,6 +723,172 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 	}
 
 	return astExpr, err
+}
+
+// havingOutputExpr resolves an unqualified name against the query block's
+// visible SELECT outputs. Explicit aliases and implicit output names share one
+// candidate set: an explicit alias does not hide a separately projected column
+// with the same output name. Only direct column projections (optionally
+// wrapped in a no-op unary plus or parentheses) acquire an implicit name;
+// anonymous expressions must not make their source columns HAVING-visible. The
+// third return value reports duplicate output names with different expressions,
+// which are ambiguous rather than silently last-wins.
+func (bc *BindContext) havingOutputExpr(name string) (tree.Expr, bool, bool) {
+	var selected tree.Expr
+	found := false
+	for _, field := range bc.projectByAst {
+		outputName, ok := havingImplicitOutputName(field)
+		if !ok || !strings.EqualFold(outputName, name) {
+			continue
+		}
+		if !found {
+			selected = field.ast
+			found = true
+			continue
+		}
+		if !bc.sameHavingOutputExpr(selected, field.ast) {
+			return nil, true, true
+		}
+	}
+	return selected, found, false
+}
+
+// unwrapHavingNoopExpr removes the wrappers that do not change a projected
+// output's direct-column identity. Keep this narrower than a general AST
+// simplifier: only parentheses and unary plus are no-ops here. In particular,
+// an expression such as a+1 must remain anonymous to HAVING.
+func unwrapHavingNoopExpr(ast tree.Expr) tree.Expr {
+	for {
+		switch expr := ast.(type) {
+		case *tree.ParenExpr:
+			ast = expr.Expr
+		case *tree.UnaryExpr:
+			if expr.Op != tree.UNARY_PLUS {
+				return ast
+			}
+			ast = expr.Expr
+		default:
+			return ast
+		}
+	}
+}
+
+func havingDirectColumnExpr(ast tree.Expr) (*tree.UnresolvedName, bool) {
+	column, ok := unwrapHavingNoopExpr(ast).(*tree.UnresolvedName)
+	if !ok || column.Star {
+		return nil, false
+	}
+	return column, true
+}
+
+// havingImplicitOutputName returns the name exposed by a SELECT field when it
+// has no explicit alias. MySQL treats unary plus as a no-op for this purpose,
+// so SELECT +column and SELECT ++column retain column's implicit output name.
+// Other expressions remain anonymous and must not make their source columns
+// visible to HAVING.
+func havingImplicitOutputName(field SelectField) (string, bool) {
+	if field.aliasName != "" {
+		return field.aliasName, true
+	}
+	column, ok := havingDirectColumnExpr(field.ast)
+	if !ok {
+		return "", false
+	}
+	return column.ColName(), true
+}
+
+func (bc *BindContext) sameHavingOutputExpr(left, right tree.Expr) bool {
+	leftColumn, leftIsColumn := havingDirectColumnExpr(left)
+	rightColumn, rightIsColumn := havingDirectColumnExpr(right)
+	if leftIsColumn && rightIsColumn {
+		return sameHavingColumnReference(bc, leftColumn, rightColumn)
+	}
+	return semanticAstKey(unwrapHavingNoopExpr(left)) == semanticAstKey(unwrapHavingNoopExpr(right))
+}
+
+// havingProjectedColumnExpr resolves a qualified HAVING column only when the
+// same source column is itself a SELECT output. An expression such as
+// "a + 1 AS x" does not make the qualified source reference "t.a" visible.
+func (bc *BindContext) havingProjectedColumnExpr(ref *tree.UnresolvedName) (tree.Expr, bool, bool) {
+	if ref.NumParts == 1 {
+		// An existing nil entry records an ambiguous unqualified source name.
+		// Do not let the spelling fallback below select one projected table's
+		// column and silently hide that ambiguity.
+		if binding, ok := bc.bindingByCol[ref.ColName()]; ok && binding == nil {
+			return nil, false, false
+		}
+	}
+
+	var selected tree.Expr
+	var selectedColumn *tree.UnresolvedName
+	found := false
+	for _, field := range bc.projectByAst {
+		column, ok := havingDirectColumnExpr(field.ast)
+		if !ok || !sameHavingColumnReference(bc, column, ref) {
+			continue
+		}
+		if !found {
+			selected = field.ast
+			selectedColumn = column
+			found = true
+			continue
+		}
+		if !sameHavingColumnReference(bc, selectedColumn, column) {
+			return nil, true, true
+		}
+	}
+	return selected, found, false
+}
+
+// sameHavingColumnReference compares source-column identity rather than the
+// spelling of optional qualifiers. A projected column may be qualified by the
+// planner with its table name while HAVING repeats it with the database name
+// (or vice versa); both references must resolve to the same binding and column.
+func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedName) bool {
+	if ctx != nil {
+		leftBinding, leftPos, leftOK := resolveHavingColumnIdentity(ctx, left)
+		rightBinding, rightPos, rightOK := resolveHavingColumnIdentity(ctx, right)
+		if leftOK && rightOK {
+			return leftBinding.tag == rightBinding.tag && leftPos == rightPos
+		}
+	}
+
+	// Keep a conservative spelling fallback for contexts where a source
+	// binding is unavailable (for example a partially built UNION context).
+	// An omitted qualifier is optional, but two explicit, different qualifiers
+	// must not be treated as the same column.
+	return strings.EqualFold(left.ColName(), right.ColName()) &&
+		(left.TblName() == "" || right.TblName() == "" ||
+			strings.EqualFold(left.TblName(), right.TblName())) &&
+		(left.DbName() == "" || right.DbName() == "" ||
+			strings.EqualFold(left.DbName(), right.DbName()))
+}
+
+func resolveHavingColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding, int32, bool) {
+	if ctx == nil || ref == nil || ref.Star || ref.NumParts == 0 {
+		return nil, 0, false
+	}
+
+	var binding *Binding
+	if ref.TblName() == "" {
+		binding = ctx.bindingByCol[ref.ColName()]
+	} else {
+		// Match baseBindColRef: a table name is the primary lookup key, while
+		// the database-qualified key is used by remapped contexts.
+		binding = ctx.bindingByTable[ref.TblName()]
+		if binding == nil && ref.DbName() != "" {
+			binding = ctx.bindingByTable[ref.DbName()+"."+ref.TblName()]
+		}
+	}
+	if binding == nil {
+		return nil, 0, false
+	}
+
+	colPos := binding.FindColumn(ref.ColName())
+	if colPos < 0 {
+		return nil, 0, false
+	}
+	return binding, colPos, true
 }
 
 // makeCoalesceUsingExprFromList builds an AST coalesce(t1.col, t2.col, ...)
