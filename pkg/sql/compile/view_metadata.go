@@ -80,7 +80,7 @@ type viewRefreshIdentityKey struct {
 	logicalID  uint64
 }
 
-func viewMetadataRefreshEnabled(string) bool {
+var viewMetadataRefreshEnabled = func(string) bool {
 	return false
 }
 

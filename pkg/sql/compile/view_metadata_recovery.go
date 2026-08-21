@@ -43,7 +43,9 @@ const viewRefreshStatusInvalid = catalog.ViewRefreshStatusInvalid
 const viewRefreshStatusDiscovering = catalog.ViewRefreshStatusDiscovering
 
 const viewMetadataRecoveryPageSize = 32
-const viewMetadataSynchronousRefreshBudget = 0
+
+var viewMetadataSynchronousRefreshBudget = 0
+
 const viewMetadataClosureWritePageSize = 16
 const viewMetadataRecoveryCallTimeout = 30 * time.Second
 
