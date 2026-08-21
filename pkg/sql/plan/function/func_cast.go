@@ -7140,38 +7140,96 @@ func mysqlDecimalPrefixUnderflows(prefix string, scale int32) bool {
 	return magnitude > limit
 }
 
+func mysqlDecimalPrefixOverflows(prefix string, width, scale int32) bool {
+	exponentAt := strings.IndexByte(prefix, 'e')
+	if exponentAt < 0 || exponentAt+1 >= len(prefix) {
+		return false
+	}
+	mantissaStart := 0
+	if prefix[0] == '+' || prefix[0] == '-' {
+		mantissaStart++
+	}
+	decimalPos, digitPos, firstNonZero := int64(0), int64(0), int64(-1)
+	seenDecimal := false
+	for i := mantissaStart; i < exponentAt; i++ {
+		if prefix[i] == '.' {
+			decimalPos = digitPos
+			seenDecimal = true
+			continue
+		}
+		if prefix[i] != '0' && firstNonZero < 0 {
+			firstNonZero = digitPos
+		}
+		digitPos++
+	}
+	if firstNonZero < 0 {
+		return false
+	}
+	if !seenDecimal {
+		decimalPos = digitPos
+	}
+	i := exponentAt + 1
+	if prefix[i] == '-' {
+		return false
+	}
+	if prefix[i] == '+' {
+		i++
+	}
+	// A positive exponent may add at most the remaining integral digits in
+	// the target DECIMAL. Stop as soon as it exceeds that small bound instead
+	// of accumulating into the parser's int32 exponent or scaling by its value.
+	limit := int64(width-scale) - (decimalPos - firstNonZero)
+	if limit < 0 {
+		return true
+	}
+	magnitude := int64(0)
+	for ; i < len(prefix); i++ {
+		if magnitude > limit {
+			return true
+		}
+		magnitude = magnitude*10 + int64(prefix[i]-'0')
+	}
+	return magnitude > limit
+}
+
 func parseMySQLDecimal64Prefix(s string, width, scale int32) (types.Decimal64, error) {
 	prefix := canonicalizeMySQLDecimalPrefix(mysqlDecimalPrefix(s))
+	if mysqlDecimalPrefixUnderflows(prefix, scale) {
+		return 0, nil
+	}
+	if mysqlDecimalPrefixOverflows(prefix, width, scale) {
+		return clampDecimal64Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+	}
 	result, err := types.ParseDecimal64(prefix, width, scale)
 	if err == nil {
 		return result, nil
-	}
-	if mysqlDecimalPrefixUnderflows(prefix, scale) {
-		return 0, nil
 	}
 	return clampDecimal64Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
 }
 
 func parseMySQLDecimal128Prefix(s string, width, scale int32) (types.Decimal128, error) {
 	prefix := canonicalizeMySQLDecimalPrefix(mysqlDecimalPrefix(s))
+	if mysqlDecimalPrefixUnderflows(prefix, scale) {
+		return types.Decimal128{}, nil
+	}
+	if mysqlDecimalPrefixOverflows(prefix, width, scale) {
+		return clampDecimal128Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
+	}
 	result, err := types.ParseDecimal128(prefix, width, scale)
 	if err == nil {
 		return result, nil
-	}
-	if mysqlDecimalPrefixUnderflows(prefix, scale) {
-		return types.Decimal128{}, nil
 	}
 	return clampDecimal128Value(len(prefix) > 0 && prefix[0] == '-', width, scale)
 }
 
 func parseMySQLDecimal256Prefix(s string, width, scale int32) (types.Decimal256, error) {
 	prefix := canonicalizeMySQLDecimalPrefix(mysqlDecimalPrefix(s))
+	if mysqlDecimalPrefixUnderflows(prefix, scale) {
+		return types.Decimal256{}, nil
+	}
 	result, err := types.ParseDecimal256(prefix, width, scale)
 	if err == nil {
 		return result, nil
-	}
-	if mysqlDecimalPrefixUnderflows(prefix, scale) {
-		return types.Decimal256{}, nil
 	}
 	if width > 65 {
 		// MySQL first converts an overflowing numeric prefix in its 65-digit

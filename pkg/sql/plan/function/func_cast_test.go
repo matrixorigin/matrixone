@@ -4769,6 +4769,75 @@ func TestMySQLDecimalPrefix(t *testing.T) {
 	}
 }
 
+func TestMySQLDecimalPrefixExtremeExponents(t *testing.T) {
+	const (
+		positiveOverflow  = "1e2147483648tail"
+		negativeUnderflow = "1e-2147483648tail"
+		zeroMantissa      = "0e2147483648tail"
+	)
+	started := time.Now()
+	require.False(t, mysqlDecimalPrefixOverflows("1", 18, 6))
+	require.False(t, mysqlDecimalPrefixOverflows("1e-1", 18, 6))
+	require.False(t, mysqlDecimalPrefixOverflows("1.25e+1", 18, 6))
+	require.True(t, mysqlDecimalPrefixOverflows("1234567890123e0", 18, 6))
+
+	max64, err := clampDecimal64Value(false, 18, 6)
+	require.NoError(t, err)
+	min64, err := clampDecimal64Value(true, 18, 6)
+	require.NoError(t, err)
+	for input, want := range map[string]types.Decimal64{
+		positiveOverflow:       max64,
+		"-" + positiveOverflow: min64,
+		"9999999999999999999":  max64,
+		negativeUnderflow:      0,
+		zeroMantissa:           0,
+		"1.25":                 1250000,
+	} {
+		got, parseErr := parseMySQLDecimal64Prefix(input, 18, 6)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+
+	max128, err := clampDecimal128Value(false, 38, 6)
+	require.NoError(t, err)
+	min128, err := clampDecimal128Value(true, 38, 6)
+	require.NoError(t, err)
+	normal128, err := types.ParseDecimal128("1.25", 38, 6)
+	require.NoError(t, err)
+	for input, want := range map[string]types.Decimal128{
+		positiveOverflow:        max128,
+		"-" + positiveOverflow:  min128,
+		strings.Repeat("9", 39): max128,
+		negativeUnderflow:       {},
+		zeroMantissa:            {},
+		"1.25":                  normal128,
+	} {
+		got, parseErr := parseMySQLDecimal128Prefix(input, 38, 6)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+
+	max256, err := clampDecimal256Value(false, 65, 30)
+	require.NoError(t, err)
+	min256, err := clampDecimal256Value(true, 65, 30)
+	require.NoError(t, err)
+	for input, want := range map[string]types.Decimal256{
+		positiveOverflow:       max256,
+		"-" + positiveOverflow: min256,
+		negativeUnderflow:      {},
+		zeroMantissa:           {},
+	} {
+		got, parseErr := parseMySQLDecimal256Prefix(input, 65, 30)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+
+	// The old Decimal64/128 path scaled by the wrapped exponent and took about
+	// one second for this matrix. The bounded prefix scan should finish with a
+	// large margin even on a loaded CI worker.
+	require.Less(t, time.Since(started), 250*time.Millisecond)
+}
+
 func TestParseStringToFloatWithBitSize(t *testing.T) {
 	t.Run("mysql_default_range_handling", func(t *testing.T) {
 		got32, err := parseStringToFloatWithBitSize("1e100", 32, SQLCompatibilityMySQL)
