@@ -888,6 +888,12 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 			}
 			return ID, keywordName
 		}
+		if lower == "asof" {
+			if s.asofJoinPhraseAhead(start, s.Pos) {
+				return keywordID, keywordName
+			}
+			return ID, keywordName
+		}
 		if lower == "offset" && !s.offsetClauseAhead() {
 			return ID, keywordName
 		}
@@ -918,6 +924,96 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		return ID, keywordName
 	}
 	return ID, keywordName
+}
+
+func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
+	// ASOF is a contextual modifier, but its meaning must not depend on column
+	// spelling, qualification, comments, or expression shape. An unquoted
+	// `asof` immediately followed by JOIN (optionally LEFT/OUTER) is ASOF JOIN;
+	// an identifier in this position must be quoted or use explicit `AS asof`.
+	prev := s.previousSignificantPos(start - 1)
+	raw := start - 1
+	for raw >= 0 && (s.buf[raw] == ' ' || s.buf[raw] == '\t' || s.buf[raw] == '\r' || s.buf[raw] == '\n') {
+		raw--
+	}
+	if raw >= 0 && s.buf[raw] == '`' {
+		prev = raw
+	}
+	end := prev + 1
+	for prev >= 0 && (isLetter(uint16(s.buf[prev])) || isDigit(uint16(s.buf[prev])) || s.buf[prev] == '_') {
+		prev--
+	}
+	if end > prev+1 && strings.EqualFold(s.buf[prev+1:end], "as") {
+		return false
+	}
+	pos = s.skipBlankAndCommentsFrom(pos)
+	// The unquoted ASOF JOIN spelling is intentionally unambiguous. Legacy
+	// aliases use explicit AS or a quoted identifier, which avoids looking at
+	// the later ON/USING clause and guarantees incomplete ASOF plans reach the
+	// planner's contract validation.
+	if hasKeywordAt(s.buf, pos, "join") {
+		return true
+	}
+	if !hasKeywordAt(s.buf, pos, "left") {
+		return false
+	}
+	pos = s.skipBlankAndCommentsFrom(pos + len("left"))
+	if hasKeywordAt(s.buf, pos, "join") {
+		return true
+	}
+	if !hasKeywordAt(s.buf, pos, "outer") {
+		return false
+	}
+	pos = s.skipBlankAndCommentsFrom(pos + len("outer"))
+	return hasKeywordAt(s.buf, pos, "join")
+}
+
+func (s *Scanner) previousSignificantPos(pos int) int {
+	quote, comment := byte(0), byte(0)
+	escaped, last := false, -1
+	for i := 0; i <= pos; i++ {
+		if comment != 0 {
+			if comment == 'b' && i > 0 && s.buf[i-1] == '*' && s.buf[i] == '/' {
+				comment = 0
+			}
+			if comment != 'b' && s.buf[i] == '\n' {
+				comment = 0
+			}
+			continue
+		}
+		ch := s.buf[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' || ch == '`' {
+			quote = ch
+			continue
+		}
+		if ch == '#' || strings.HasPrefix(s.buf[i:], "//") || (strings.HasPrefix(s.buf[i:], "--") && (i+2 == len(s.buf) || isMySQLDashCommentBlank(s.buf[i+2]))) {
+			comment = 'l'
+			continue
+		}
+		if strings.HasPrefix(s.buf[i:], "/*") {
+			comment = 'b'
+			i++
+			continue
+		}
+		if ch != ' ' && ch != '\n' && ch != '\r' && ch != '\t' {
+			last = i
+		}
+	}
+	return last
 }
 
 // offsetClauseAhead distinguishes the query clause from OFFSET used as an

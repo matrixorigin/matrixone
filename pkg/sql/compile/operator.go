@@ -1436,10 +1436,17 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.EqConds = constructJoinConditions(eqConds, proc)
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
+	// ASOF groups rows by equality keys only.  A table primary key may also
+	// contain the temporal column, so it does not prove that an equality-key
+	// group contains a single row.
+	if node.JoinType == plan.Node_ASOF || node.JoinType == plan.Node_ASOF_LEFT {
+		arg.HashOnPK = false
+	}
 	arg.CanSkipProbe = node.JoinType == plan.Node_SEMI && !node.IsRightJoin && left.NodeType == plan.Node_TABLE_SCAN
 	arg.EmitCompressedRowCount = node.EmitCompressedRowCount
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	arg.SpillThreshold = node.SpillMem
+	arg.AsofRightCol = node.AsofRightCol
 
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {

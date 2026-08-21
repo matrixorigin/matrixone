@@ -379,7 +379,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
 					rightPushdown = append(rightPushdown, filter)
 
-				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
+				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK,
+					plan.Node_ASOF, plan.Node_ASOF_LEFT:
 					leftPushdown = append(leftPushdown, filter)
 
 				default:
@@ -462,7 +463,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				}
 			}
 
-		case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
+		case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE,
+			plan.Node_ASOF, plan.Node_ASOF_LEFT:
 			if len(node.OnList) > 0 {
 				var newOnList []*plan.Expr
 
@@ -487,7 +489,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		case plan.Node_RIGHT, plan.Node_ANTI:
 			//right join can deduce new predicate only from right side to left
 			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
-		case plan.Node_LEFT, plan.Node_SINGLE:
+		case plan.Node_LEFT, plan.Node_SINGLE, plan.Node_ASOF, plan.Node_ASOF_LEFT:
 			//left join can deduce new predicate only from left side to right
 			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
 		}

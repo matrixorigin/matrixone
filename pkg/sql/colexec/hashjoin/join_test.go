@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -164,6 +165,36 @@ func TestString(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
+
+	for _, test := range []struct {
+		joinType plan.Node_JoinType
+		want     string
+	}{
+		{joinType: plan.Node_ASOF, want: ": asof join "},
+		{joinType: plan.Node_ASOF_LEFT, want: ": asof left join "},
+	} {
+		buf.Reset()
+		arg := NewArgument()
+		arg.JoinType = test.joinType
+		arg.String(buf)
+		require.Contains(t, buf.String(), test.want)
+		arg.Release()
+	}
+}
+
+func TestAsofPhysicalContractValidation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	arg := NewArgument()
+	arg.JoinType = plan.Node_ASOF
+	require.ErrorContains(t, arg.Prepare(proc), "invalid ASOF join physical contract")
+	arg.Release()
+
+	for _, typ := range []types.T{types.T_date, types.T_datetime, types.T_timestamp, types.T_time} {
+		require.True(t, isAsofTemporalType(typ))
+	}
+	require.False(t, isAsofTemporalType(types.T_int64))
 }
 
 func TestJoin(t *testing.T) {
@@ -1199,6 +1230,203 @@ func makeInt32Batch(proc *process.Process, values []int32) *batch.Batch {
 	return bat
 }
 
+func TestAsofLeftJoinEndToEnd(t *testing.T) {
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	tc := newTestCase(t,
+		[]bool{false, true},
+		[]types.Type{keyType, keyType},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 1)},
+		[][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}},
+	)
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	}()
+
+	tc.arg.JoinType = plan.Node_ASOF_LEFT
+	tc.arg.LeftTypes = []types.Type{keyType, timeType}
+	tc.arg.RightTypes = []types.Type{keyType, timeType}
+	tc.arg.AsofRightCol = 1
+	tc.arg.NonEqCond = makeAsofCondition(t, timeType, ">=")
+
+	probe := makeAsofBatch(tc.proc, []int32{1, 2, 3}, []string{
+		"2026-01-01 10:00:00", "2026-01-01 07:00:00", "2026-01-01 10:00:00",
+	})
+	build := makeAsofBatch(tc.proc, []int32{1, 1, 1, 2}, []string{
+		"2026-01-01 11:00:00", "2026-01-01 07:00:00", "2026-01-01 09:00:00", "2026-01-01 08:00:00",
+	})
+	resetChildrenWithBatch(tc.arg, probe)
+	resetHashBuildChildrenWithBatch(tc.barg, build)
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 3, result.Batch.RowCount())
+	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	rightTimes := vector.MustFixedColWithTypeCheck[types.Timestamp](result.Batch.Vecs[1])
+	want, err := types.ParseTimestamp(time.Local, "2026-01-01 09:00:00", 6)
+	require.NoError(t, err)
+	require.Equal(t, want, rightTimes[0])
+	require.False(t, result.Batch.Vecs[1].GetNulls().Contains(0))
+	require.True(t, result.Batch.Vecs[1].GetNulls().Contains(1))
+	require.True(t, result.Batch.Vecs[1].GetNulls().Contains(2))
+}
+
+func makeAsofBatch(proc *process.Process, keys []int32, timestamps []string) *batch.Batch {
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	bat.Vecs[1] = testutil.NewTimestampVector(len(timestamps), types.T_timestamp.ToType(), proc.Mp(), false, nil, timestamps)
+	bat.SetRowCount(len(keys))
+	return bat
+}
+
+func makeAsofCondition(t *testing.T, timeType types.Type, operator string) *plan.Expr {
+	leftTime := newExpr(1, timeType)
+	leftTime.GetCol().RelPos = 0
+	rightTime := newExpr(1, timeType)
+	rightTime.GetCol().RelPos = 1
+	fn, err := function.GetFunctionByName(context.Background(), operator, []types.Type{timeType, timeType})
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: operator},
+			Args: []*plan.Expr{leftTime, rightTime},
+		}},
+	}
+}
+
+func TestFindAsofPredecessor(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	arg := &HashJoin{
+		JoinType:     plan.Node_ASOF_LEFT,
+		LeftTypes:    []types.Type{keyType, timeType},
+		RightTypes:   []types.Type{keyType, timeType},
+		EqConds:      [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}},
+		NonEqCond:    makeAsofCondition(t, timeType, ">="),
+		AsofRightCol: 1,
+	}
+	installTestAllocation(t, arg)
+	require.NoError(t, arg.Prepare(proc))
+
+	left := batch.NewWithSize(2)
+	left.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	left.Vecs[1] = testutil.NewTimestampVector(1, timeType, proc.Mp(), false, nil,
+		[]string{"2026-01-01 10:00:00"})
+	left.SetRowCount(1)
+	right := batch.NewWithSize(2)
+	right.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
+	right.Vecs[1] = testutil.NewTimestampVector(3, timeType, proc.Mp(), false, nil,
+		[]string{"2026-01-01 11:00:00", "2026-01-01 07:00:00", "2026-01-01 09:00:00"})
+	right.SetRowCount(3)
+
+	arg.ctr.leftBat = left
+	arg.ctr.rightBats = []*batch.Batch{right}
+	arg.ctr.joinBats[0], arg.ctr.cfs1 = colexec.NewJoinBatch(left, proc.Mp())
+	arg.ctr.joinBats[1], arg.ctr.cfs2 = colexec.NewJoinBatch(right, proc.Mp())
+	best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 0, []int32{0, 1, 2})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, int32(2), best)
+
+	// Equal-timestamp ties follow the materialized build order for this map.
+	right.Vecs[1].CleanOnlyData()
+	require.NoError(t, vector.AppendFixedList(right.Vecs[1], []types.Timestamp{9, 9}, nil, proc.Mp()))
+	right.SetRowCount(2)
+	best, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 0, []int32{0, 1})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, int32(0), best)
+	_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 0, []int32{0, 1})
+	require.NoError(t, err)
+	require.True(t, found)
+
+	arg.ctr.leftBat = nil
+	arg.ctr.rightBats = nil
+	arg.Free(proc, false, nil)
+	left.Clean(proc.Mp())
+	right.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestAsofIndexMetadataGrowsAmortizedAndCleans(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	arg := &HashJoin{
+		JoinType:     plan.Node_ASOF_LEFT,
+		LeftTypes:    []types.Type{keyType, timeType},
+		RightTypes:   []types.Type{keyType, timeType},
+		EqConds:      [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}},
+		NonEqCond:    makeAsofCondition(t, timeType, ">="),
+		AsofRightCol: 1,
+	}
+	installTestAllocation(t, arg)
+	require.NoError(t, arg.Prepare(proc))
+	left := batch.NewWithSize(2)
+	left.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	left.Vecs[1] = testutil.NewTimestampVector(1, timeType, proc.Mp(), false, nil, []string{"2026-01-01 10:00:00"})
+	left.SetRowCount(1)
+	right := batch.NewWithSize(2)
+	right.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	right.Vecs[1] = testutil.NewTimestampVector(2, timeType, proc.Mp(), false, nil, []string{"2026-01-01 09:00:00", "2026-01-01 08:00:00"})
+	right.SetRowCount(2)
+	arg.ctr.leftBat = left
+	arg.ctr.rightBats = []*batch.Batch{right}
+	arg.ctr.joinBats[0], arg.ctr.cfs1 = colexec.NewJoinBatch(left, proc.Mp())
+	arg.ctr.joinBats[1], arg.ctr.cfs2 = colexec.NewJoinBatch(right, proc.Mp())
+	// Probe in reverse order so insertion is not an append-shaped workload.
+	// The index must use bounded-amortized placement rather than shifting all
+	// previously seen groups for each first touch.
+	for group := uint64(64); group > 0; group-- {
+		_, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, group, []int32{0, 1})
+		require.NoError(t, err)
+		require.True(t, found)
+	}
+	require.Equal(t, 64, arg.ctr.asofIndexCount)
+	require.GreaterOrEqual(t, cap(arg.ctr.asofIndexes), arg.ctr.asofIndexCount)
+	arg.ctr.leftBat = nil
+	arg.ctr.rightBats = nil
+	arg.Free(proc, false, nil)
+	left.Clean(proc.Mp())
+	right.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestAsofTemporalMetadataFindsNestedAndCommutedPredicate(t *testing.T) {
+	timeType := types.T_timestamp.ToType()
+	left := newExpr(1, timeType)
+	left.GetCol().RelPos = 0
+	right := newExpr(1, timeType)
+	right.GetCol().RelPos = 1
+	commuted := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "<"}, Args: []*plan.Expr{right, left},
+	}}}
+	tolerance := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: ">="}, Args: []*plan.Expr{right, left},
+	}}}
+	nested := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "and"}, Args: []*plan.Expr{commuted, tolerance},
+	}}}
+	col, strict := asofTemporalMetadata(nested)
+	require.Equal(t, 1, col)
+	require.True(t, strict)
+}
+
 /*
 	func BenchmarkJoin(b *testing.B) {
 		for i := 0; i < b.N; i++ {
@@ -1384,6 +1612,14 @@ func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch)
 func TestHashJoinTypeName(t *testing.T) {
 	arg := NewArgument()
 	require.Equal(t, "hash_join", arg.TypeName())
+	arg.Release()
+}
+
+func TestAsofNeedsBuildBatches(t *testing.T) {
+	arg := NewArgument()
+	arg.JoinType = plan.Node_ASOF
+	require.True(t, arg.NeedBuildBatches())
+	require.True(t, arg.IsAsof())
 	arg.Release()
 }
 

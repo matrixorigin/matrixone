@@ -249,6 +249,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		Children:        slices.Clone(node.Children),
 		JoinType:        node.JoinType,
 		IsRightJoin:     node.IsRightJoin,
+		AsofRightCol:    node.AsofRightCol,
 		BindingTags:     slices.Clone(node.BindingTags),
 		Limit:           DeepCopyExpr(node.Limit),
 		Offset:          DeepCopyExpr(node.Offset),

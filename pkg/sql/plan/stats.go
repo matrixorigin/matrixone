@@ -1160,7 +1160,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Selectivity = selectivity_out
 			node.Stats.BlockNum = leftStats.BlockNum
 
-		case plan.Node_LEFT:
+		case plan.Node_LEFT, plan.Node_ASOF, plan.Node_ASOF_LEFT:
 			node.Stats.Outcnt = leftStats.Outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
@@ -1937,6 +1937,11 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			node.IsRightJoin = true
 		}
 
+	case plan.Node_ASOF, plan.Node_ASOF_LEFT:
+		// ASOF is directional: the left input is always the event/probe side and
+		// the right input is always the historical/build side.
+		node.IsRightJoin = false
+
 	case plan.Node_DEDUP:
 		if node.OnDuplicateAction != plan.Node_FAIL || node.DedupJoinCtx != nil {
 			node.IsRightJoin = false
@@ -1947,7 +1952,8 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		}
 	}
 
-	if builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
+	if node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT &&
+		builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 	}
 }

@@ -66,6 +66,10 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	"within":            "contextual keyword: scanner returns WITHIN only for WITHIN GROUP, otherwise ID",
 }
 
+var contextualKeywordPolicy = map[string]string{
+	"asof": "scanner returns ASOF only in the ASOF JOIN phrase",
+}
+
 func TestNewKeywordsHaveExplicitIdentifierPolicy(t *testing.T) {
 	identTokens := mysqlIdentifierTokens(t)
 	mysqlReserved := mysqlKeywordReservedStatus(t)
@@ -93,6 +97,9 @@ func TestNewKeywordsHaveExplicitIdentifierPolicy(t *testing.T) {
 		}
 		if _, ok := legacyKeywordPolicyExceptions[word]; ok {
 			delete(remainingLegacy, word)
+			continue
+		}
+		if _, ok := contextualKeywordPolicy[word]; ok {
 			continue
 		}
 		violations = append(violations, fmt.Sprintf("%s -> %s", word, tokenName))

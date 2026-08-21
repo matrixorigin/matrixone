@@ -640,6 +640,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *limit.Limit:
 		in.Limit = t.LimitExpr
 	case *hashjoin.HashJoin:
+		if err := validateRemoteJoinProtocol(proc, t.JoinType); err != nil {
+			return ctxId, nil, err
+		}
 		relList, colList := getRelColList(t.ResultCols)
 		in.HashJoin = &pipeline.HashJoin{
 			JoinType:               t.JoinType,
@@ -658,6 +661,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			NonEqCond:              t.NonEqCond,
 			JoinMapTag:             t.JoinMapTag,
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			AsofRightCol:           t.AsofRightCol,
 		}
 		in.SpillMem = t.SpillThreshold
 	case *loopjoin.LoopJoin:
@@ -879,7 +883,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:             t.JoinMapTag,
 			ShuffleIdx:             t.ShuffleIdx,
 			OnDuplicateAction:      t.OnDuplicateAction,
-			InputKeysUnique:        t.InputKeysUnique,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
 			DelColIdx:              t.DelColIdx,
@@ -887,6 +890,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RightTypes:             convertToPlanTypes(t.RightTypes),
 			UpdateColIdxList:       t.UpdateColIdxList,
 			UpdateColExprList:      t.UpdateColExprList,
+			InputKeysUnique:        t.InputKeysUnique,
 		}
 		in.SpillMem = t.SpillThreshold
 	case *apply.Apply:
@@ -1181,6 +1185,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
 		arg.SpillThreshold = opr.SpillMem
+		arg.AsofRightCol = t.AsofRightCol
 		op = arg
 	case vm.Limit:
 		op = limit.NewArgument().WithLimit(opr.Limit)
@@ -1417,12 +1422,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.OnDuplicateAction = t.OnDuplicateAction
-		arg.InputKeysUnique = t.InputKeysUnique
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.InputKeysUnique = t.InputKeysUnique
 		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Apply:
@@ -1585,6 +1590,18 @@ func validateRemoteAggregateProtocol(
 	return nil
 }
 
+func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinType) error {
+	if joinType != plan.Node_ASOF && joinType != plan.Node_ASOF_LEFT {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAsofJoin(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"native ASOF join remote execution requires MORPC protocol version 23",
+		)
+	}
+	return nil
+}
+
 func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware bool) error {
 	if !targetAware {
 		return nil
@@ -1609,18 +1626,13 @@ func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inpu
 	return nil
 }
 
-func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
+func validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil {
 		return nil
 	}
 	for _, instruction := range p.InstructionList {
 		if rightDedup := instruction.GetRightDedupJoin(); rightDedup != nil {
-			if err := validateRemoteRightDedupInputKeysUniqueProtocol(
-				proc, rightDedup.InputKeysUnique,
-			); err != nil {
+			if err := validateRemoteRightDedupInputKeysUniqueProtocol(proc, rightDedup.InputKeysUnique); err != nil {
 				return err
 			}
 		}
@@ -1633,10 +1645,7 @@ func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	return nil
 }
 
-func validateRemoteTargetAwareUpdatePipelineProtocol(
-	proc *process.Process,
-	p *pipeline.Pipeline,
-) error {
+func validateRemoteTargetAwareUpdatePipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil {
 		return nil
 	}

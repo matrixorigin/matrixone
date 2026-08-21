@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -49,6 +50,7 @@ const (
 )
 
 const hashJoinAllocationSiteMatchedRows mpool.AllocationSite = 80
+const hashJoinAllocationSiteAsofIndex mpool.AllocationSite = 106
 
 const (
 	hashJoinAllocationSiteResultData mpool.AllocationSite = iota + 102
@@ -92,6 +94,9 @@ type container struct {
 	probeLeftAnti          bool
 	probeMark              bool
 	buildHasNullKey        bool
+	asofCompare            compare.Compare
+	asofIndexes            []asofIndex
+	asofIndexCount         int
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -116,6 +121,16 @@ type container struct {
 	spillEngine       *spillutil.SpillEngine
 	spillThreshold    int64
 	probeBucketActive bool // true while reading probe batches from a bucket
+}
+
+// asofIndex keeps the equality-group key and its accounted temporal ordering
+// in one accounted slice.  Keeping the metadata in the same mpool-owned
+// backing storage prevents the per-group map/slice headers from escaping the
+// query allocation account.
+type asofIndex struct {
+	key      uint64
+	values   []int32
+	occupied bool
 }
 
 type HashJoin struct {
@@ -146,6 +161,7 @@ type HashJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	SpillThreshold     int64
+	AsofRightCol       int32
 	allocationAccount  *mpool.AllocationAccount
 	resultAllocation   *vector.AllocationAccountSelection
 	// recursiveProbe is derived from the operator tree during Prepare. An empty
@@ -194,6 +210,7 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
+		hashJoin.ctr.asofIndexCount != 0 ||
 		len(hashJoin.ctr.eqCondExecs) != 0 ||
 		hashJoin.ctr.nonEqCondExec != nil ||
 		hashJoin.ctr.rightRowsMatched != nil ||
@@ -213,6 +230,9 @@ func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
 }
 
 func (hashJoin *HashJoin) NeedBuildBatches() bool {
+	if hashJoin.IsAsof() {
+		return true
+	}
 	if hashJoin.NonEqCond != nil {
 		return true
 	}
@@ -266,6 +286,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 		hashJoin.Mailbox.SealAndDrain(proc.Mp())
 	}
 	ctr.cleanBucketBatches(proc)
+	ctr.cleanAsofIndexes(proc)
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
@@ -279,6 +300,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.bitmapSynced = false
 	ctr.probeMark = false
 	ctr.buildHasNullKey = false
+	ctr.asofCompare = nil
 	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch
@@ -292,11 +314,23 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
+	ctr.cleanAsofIndexes(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanBucketBatches(proc)
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
+}
+
+func (ctr *container) cleanAsofIndexes(proc *process.Process) {
+	if proc != nil {
+		for _, index := range ctr.asofIndexes {
+			mpool.FreeSlice(proc.Mp(), index.values)
+		}
+		mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
+	}
+	ctr.asofIndexes = nil
+	ctr.asofIndexCount = 0
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {
@@ -358,7 +392,11 @@ func (hashJoin *HashJoin) IsInner() bool {
 }
 
 func (hashJoin *HashJoin) IsLeftOuter() bool {
-	return hashJoin.JoinType == plan.Node_LEFT
+	return hashJoin.JoinType == plan.Node_LEFT || hashJoin.JoinType == plan.Node_ASOF_LEFT
+}
+
+func (hashJoin *HashJoin) IsAsof() bool {
+	return hashJoin.JoinType == plan.Node_ASOF || hashJoin.JoinType == plan.Node_ASOF_LEFT
 }
 
 func (hashJoin *HashJoin) IsRightOuter() bool {

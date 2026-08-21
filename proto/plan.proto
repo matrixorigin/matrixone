@@ -909,6 +909,8 @@ message Node {
     INDEX = 8;
     L2 = 9;
     DEDUP = 10;
+    ASOF = 11;
+    ASOF_LEFT = 12;
   }
 
   enum AggMode {
@@ -1126,6 +1128,10 @@ message Node {
 
   // VECTOR_INDEX_SCAN only: typed vector-index access-path description.
   VectorIndexScan vector_index_scan = 85;
+
+  // ASOF/ASOF_LEFT only: right input column used to choose the latest
+  // qualifying predecessor after equality-key lookup.
+  int32 asof_right_col = 86;
 }
 
 message SnapshotExtraInfo {

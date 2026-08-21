@@ -16,10 +16,13 @@ package hashjoin
 
 import (
 	"bytes"
+	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,6 +66,10 @@ func (hashJoin *HashJoin) String(buf *bytes.Buffer) {
 		buf.WriteString(": hash mark join ")
 	case plan.Node_OUTER:
 		buf.WriteString(": full outer join ")
+	case plan.Node_ASOF:
+		buf.WriteString(": asof join ")
+	case plan.Node_ASOF_LEFT:
+		buf.WriteString(": asof left join ")
 	}
 }
 
@@ -71,6 +78,18 @@ func (hashJoin *HashJoin) OpType() vm.OpType {
 }
 
 func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
+	if hashJoin.IsAsof() {
+		if hashJoin.NonEqCond == nil || len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 ||
+			len(hashJoin.EqConds[0]) != len(hashJoin.EqConds[1]) || hashJoin.HashOnPK ||
+			hashJoin.AsofRightCol < 0 || int(hashJoin.AsofRightCol) >= len(hashJoin.RightTypes) ||
+			!isAsofTemporalType(hashJoin.RightTypes[hashJoin.AsofRightCol].Oid) {
+			return moerr.NewInternalError(proc.Ctx, "invalid ASOF join physical contract")
+		}
+		hashJoin.ctr.asofCompare = compare.New(hashJoin.RightTypes[hashJoin.AsofRightCol], false, false)
+		if hashJoin.ctr.asofCompare == nil {
+			return moerr.NewInternalError(proc.Ctx, "unsupported ASOF timestamp type")
+		}
+	}
 	if hashJoin.IsMark() {
 		if err := hashJoin.validateMarkJoin(proc); err != nil {
 			return err
@@ -135,6 +154,15 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	return err
+}
+
+func isAsofTemporalType(typeID types.T) bool {
+	switch typeID {
+	case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
+		return true
+	default:
+		return false
+	}
 }
 
 func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
@@ -481,6 +509,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		return
 	}
 	ctr.rightBats = ctr.mp.GetBatches()
+	ctr.cleanAsofIndexes(proc)
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
 	ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 
@@ -542,6 +571,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 					if res == spillutil.BucketReady {
 						ctr.mp = jm
 						ctr.rightBats = jm.GetBatches()
+						ctr.cleanAsofIndexes(proc)
 						ctr.rightRowCnt = jm.GetRowCount()
 						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
@@ -672,6 +702,41 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					return nil
 				}
 
+				continue
+			}
+
+			if hashJoin.IsAsof() {
+				candidates := []int32{int32(idx)}
+				if !ctr.probeHashOnPK {
+					candidates = ctr.mp.GetSels(uint64(idx))
+				}
+				best, found, findErr := ctr.findAsofPredecessor(hashJoin, proc, row, uint64(idx), candidates)
+				if findErr != nil {
+					return findErr
+				}
+				if found {
+					bestBatch := int64(best / colexec.DefaultBatchSize)
+					bestRow := int64(best % colexec.DefaultBatchSize)
+					if err = ctr.appendOneMatch(hashJoin, proc, row, bestBatch, bestRow); err != nil {
+						return err
+					}
+					resRowCnt++
+				} else if ctr.probeEmitUnmatched {
+					if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+						return err
+					}
+					resRowCnt++
+				}
+				if ctr.vsIdx < len(ctr.vs) {
+					ctr.probeState = psBatchRow
+				} else {
+					ctr.probeState = psNextBatch
+				}
+				if resRowCnt >= colexec.DefaultBatchSize {
+					ctr.resBat.AddRowCount(resRowCnt)
+					result.Batch = ctr.resBat
+					return nil
+				}
 				continue
 			}
 
@@ -859,6 +924,209 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			}
 		}
 	}
+}
+
+func (ctr *container) findAsofPredecessor(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	leftRow int64,
+	groupKey uint64,
+	candidates []int32,
+) (best int32, found bool, err error) {
+	if len(candidates) == 0 {
+		return -1, false, nil
+	}
+	// Singleton groups do not benefit from an index. Avoid retaining map and
+	// slice headers for the overwhelmingly common high-cardinality case.
+	if len(candidates) == 1 {
+		candidate := candidates[0]
+		batchIdx := int64(candidate / colexec.DefaultBatchSize)
+		rowIdx := int64(candidate % colexec.DefaultBatchSize)
+		leftCol, strict := asofTemporalMetadata(hashJoin.NonEqCond)
+		if leftCol < 0 || leftCol >= len(ctr.leftBat.Vecs) {
+			return -1, false, moerr.NewInternalErrorNoCtx("ASOF left temporal column is out of range")
+		}
+		ctr.asofCompare.Set(0, ctr.rightBats[batchIdx].Vecs[hashJoin.AsofRightCol])
+		ctr.asofCompare.Set(1, ctr.leftBat.Vecs[leftCol])
+		cmp := ctr.asofCompare.Compare(0, 1, rowIdx, leftRow)
+		if (strict && cmp >= 0) || (!strict && cmp > 0) {
+			return -1, false, nil
+		}
+		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
+		return candidate, qualified, evalErr
+	}
+	if len(ctr.asofIndexes) == 0 {
+		indexes, allocErr := mpool.MakeSliceAccounted[asofIndex](8, proc.Mp(), hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex)
+		if allocErr != nil {
+			return -1, false, allocErr
+		}
+		ctr.asofIndexes = indexes
+	}
+	indexPos := ctr.findAsofIndexSlot(groupKey)
+	ok := ctr.asofIndexes[indexPos].occupied
+	var ordered []int32
+	if ok {
+		ordered = ctr.asofIndexes[indexPos].values
+	}
+	if ok && len(ordered) != len(candidates) {
+		// A build bucket with a changed row set cannot reuse the previous
+		// ordering. This also protects prepared/test reuse from stale ordinals.
+		mpool.FreeSlice(proc.Mp(), ordered)
+		ctr.asofIndexes[indexPos].values = nil
+		ctr.asofIndexes[indexPos].occupied = false
+		ctr.asofIndexCount--
+		ok = false
+	}
+	if !ok {
+		var err error
+		ordered, err = mpool.MakeSliceAccounted[int32](
+			len(candidates), proc.Mp(), hashJoin.allocationAccount,
+			mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex,
+		)
+		if err != nil {
+			return -1, false, err
+		}
+		copy(ordered, candidates)
+		// Equal timestamps are arbitrary by the ASOF contract; choosing the
+		// lowest materialized row ordinal makes the result repeatable for one
+		// materialized build map without promising producer-arrival ordering.
+		sort.Slice(ordered, func(i, j int) bool {
+			left := ordered[i]
+			right := ordered[j]
+			lb, lr := int64(left/colexec.DefaultBatchSize), int64(left%colexec.DefaultBatchSize)
+			rb, rr := int64(right/colexec.DefaultBatchSize), int64(right%colexec.DefaultBatchSize)
+			lv := ctr.rightBats[lb].Vecs[hashJoin.AsofRightCol]
+			rv := ctr.rightBats[rb].Vecs[hashJoin.AsofRightCol]
+			ctr.asofCompare.Set(0, lv)
+			ctr.asofCompare.Set(1, rv)
+			cmp := ctr.asofCompare.Compare(0, 1, lr, rr)
+			if cmp != 0 {
+				return cmp < 0
+			}
+			return left > right
+		})
+		if !ok {
+			if ctr.asofIndexCount+1 > len(ctr.asofIndexes)*3/4 {
+				capacity := len(ctr.asofIndexes) * 2
+				if capacity == 0 {
+					capacity = 8
+				}
+				newIndexes, allocErr := mpool.MakeSliceAccounted[asofIndex](capacity, proc.Mp(), hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex)
+				if allocErr != nil {
+					mpool.FreeSlice(proc.Mp(), ordered)
+					return -1, false, allocErr
+				}
+				for _, old := range ctr.asofIndexes {
+					if !old.occupied {
+						continue
+					}
+					i := hashAsofIndex(old.key, len(newIndexes))
+					for newIndexes[i].occupied {
+						i = (i + 1) % len(newIndexes)
+					}
+					newIndexes[i] = old
+				}
+				mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
+				ctr.asofIndexes = newIndexes
+				indexPos = ctr.findAsofIndexSlot(groupKey)
+			}
+			ctr.asofIndexes[indexPos] = asofIndex{key: groupKey, values: ordered, occupied: true}
+			ctr.asofIndexCount++
+		}
+	}
+
+	leftCol, strict := asofTemporalMetadata(hashJoin.NonEqCond)
+	if leftCol < 0 || leftCol >= len(ctr.leftBat.Vecs) {
+		return -1, false, moerr.NewInternalErrorNoCtx("ASOF left temporal column is out of range")
+	}
+	leftVec := ctr.leftBat.Vecs[leftCol]
+	ctr.asofCompare.Set(1, leftVec)
+	pos := sort.Search(len(ordered), func(i int) bool {
+		candidate := ordered[i]
+		batchIdx := int64(candidate / colexec.DefaultBatchSize)
+		rowIdx := int64(candidate % colexec.DefaultBatchSize)
+		ctr.asofCompare.Set(0, ctr.rightBats[batchIdx].Vecs[hashJoin.AsofRightCol])
+		cmp := ctr.asofCompare.Compare(0, 1, rowIdx, leftRow)
+		if strict {
+			return cmp >= 0
+		}
+		return cmp > 0
+	})
+	if pos == 0 {
+		return -1, false, nil
+	}
+	candidate := ordered[pos-1]
+	batchIdx := int64(candidate / colexec.DefaultBatchSize)
+	rowIdx := int64(candidate % colexec.DefaultBatchSize)
+	qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
+	if evalErr != nil {
+		return -1, false, evalErr
+	}
+	return candidate, qualified, nil
+}
+
+func hashAsofIndex(key uint64, size int) int {
+	// Mix the equality hash before reducing it to keep sequential keys from
+	// clustering in the open-addressed table.
+	key ^= key >> 33
+	key *= 0xff51afd7ed558ccd
+	key ^= key >> 33
+	return int(key % uint64(size))
+}
+
+func (ctr *container) findAsofIndexSlot(key uint64) int {
+	if len(ctr.asofIndexes) == 0 {
+		return 0
+	}
+	i := hashAsofIndex(key, len(ctr.asofIndexes))
+	for {
+		if !ctr.asofIndexes[i].occupied || ctr.asofIndexes[i].key == key {
+			return i
+		}
+		i = (i + 1) % len(ctr.asofIndexes)
+	}
+}
+
+func asofTemporalMetadata(expr *plan.Expr) (leftCol int, strict bool) {
+	leftCol = -1
+	if expr == nil {
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func == nil {
+			for _, arg := range fn.Args {
+				if col, isStrict := asofTemporalMetadata(arg); col >= 0 {
+					return col, isStrict
+				}
+			}
+			return
+		}
+		if strings.EqualFold(fn.Func.ObjName, "and") {
+			for _, arg := range fn.Args {
+				if col, isStrict := asofTemporalMetadata(arg); col >= 0 {
+					return col, isStrict
+				}
+			}
+			return
+		}
+		if len(fn.Args) == 2 {
+			left, right := fn.Args[0].GetCol(), fn.Args[1].GetCol()
+			if left != nil && right != nil {
+				if left.RelPos == 0 && right.RelPos == 1 && (fn.Func.ObjName == ">" || fn.Func.ObjName == ">=") {
+					return int(left.ColPos), fn.Func.ObjName == ">"
+				}
+				if left.RelPos == 1 && right.RelPos == 0 && (fn.Func.ObjName == "<" || fn.Func.ObjName == "<=") {
+					return int(right.ColPos), fn.Func.ObjName == "<"
+				}
+			}
+		}
+		for _, arg := range fn.Args {
+			if col, isStrict := asofTemporalMetadata(arg); col >= 0 {
+				return col, isStrict
+			}
+		}
+	}
+	return
 }
 
 func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
