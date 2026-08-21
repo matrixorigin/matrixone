@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"iter"
 	"log"
 	"net"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,6 +88,76 @@ func TestInitServiceFileServicesPropagatesCreatorError(t *testing.T) {
 		},
 	)
 	require.ErrorIs(t, err, permanent)
+}
+
+type listErrorFileService struct {
+	fileservice.FileService
+	err error
+}
+
+func (f *listErrorFileService) List(context.Context, string) iter.Seq2[*fileservice.DirEntry, error] {
+	return func(yield func(*fileservice.DirEntry, error) bool) {
+		yield(nil, f.err)
+	}
+}
+
+func TestInitServiceFileServicesPublishesETLAfterSpillCleanup(t *testing.T) {
+	configs := []fileservice.Config{
+		{Name: defines.LocalFileServiceName, Backend: "MEM"},
+		{Name: defines.SharedFileServiceName, Backend: "MEM"},
+		{Name: defines.ETLFileServiceName, Backend: "MEM"},
+		{Name: defines.TmpFileServiceName, Backend: "MEM"},
+	}
+	cfg := &Config{
+		ServiceType:  metadata.ServiceType_PROXY.String(),
+		ProxyConfig:  proxy.Config{UUID: "proxy-spill-list-error"},
+		FileServices: configs,
+	}
+	cfg.Observability.DisableMetric = true
+	cfg.Observability.DisableTrace = true
+	previousEtlFS := globalEtlFS
+	previousServiceType := globalServiceType
+	previousNodeID := globalNodeId
+	globalEtlFS = nil
+	globalServiceType = ""
+	globalNodeId = ""
+	t.Cleanup(func() {
+		globalEtlFS = previousEtlFS
+		globalServiceType = previousServiceType
+		globalNodeId = previousNodeID
+	})
+
+	listErr := errors.New("spill listing failed")
+	_, err := initServiceFileServices(
+		context.Background(),
+		metadata.ServiceType_PROXY,
+		cfg,
+		stopper.NewStopper("proxy-spill-list-error"),
+		func(ctx context.Context, fsCfg fileservice.Config, counters []*perfcounter.CounterSet) (fileservice.FileService, error) {
+			if fsCfg.Name == defines.LocalFileServiceName {
+				local, err := fileservice.NewMemoryFS(fsCfg.Name, fileservice.CacheConfig{}, counters)
+				if err != nil {
+					return nil, err
+				}
+				return &listErrorFileService{FileService: local, err: listErr}, nil
+			}
+			return fileservice.NewFileService(ctx, fsCfg, counters)
+		},
+	)
+	require.ErrorIs(t, err, listErr)
+	require.Nil(t, globalEtlFS)
+	for _, fsCfg := range configs {
+		_, published := perfcounter.Named.Load(perfcounter.NameForFileService(
+			metadata.ServiceType_PROXY.String(),
+			cfg.ProxyConfig.UUID,
+			fsCfg.Name,
+		))
+		require.Falsef(t, published, "counter %s remains published", fsCfg.Name)
+	}
+	_, published := perfcounter.Named.Load(perfcounter.NameForNode(
+		metadata.ServiceType_PROXY.String(), cfg.ProxyConfig.UUID,
+	))
+	require.False(t, published)
 }
 
 func TestRunObservabilityTaskTreatsProxyStopAsCancellation(t *testing.T) {

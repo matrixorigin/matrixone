@@ -349,6 +349,7 @@ func (c *Config) createFileServiceWithCreator(
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 	counterSets := make([]*perfcounter.CounterSet, 0, len(c.FileServices))
+	counterSetNames := make([]string, 0, len(c.FileServices)*2)
 	completed := false
 	defer func() {
 		if completed {
@@ -356,6 +357,9 @@ func (c *Config) createFileServiceWithCreator(
 		}
 		for _, service := range services {
 			service.Close(context.Background())
+		}
+		for _, name := range counterSetNames {
+			perfcounter.Named.Delete(name)
 		}
 	}()
 
@@ -420,12 +424,12 @@ func (c *Config) createFileServiceWithCreator(
 			service.Name(),
 		)
 		perfcounter.Named.Store(counterSetName, counterSet)
+		counterSetNames = append(counterSetNames, counterSetName)
 
 		if service.Name() == defines.SharedFileServiceName {
-			perfcounter.Named.Store(
-				perfcounter.NameForNode(serviceType.String(), nodeUUID),
-				counterSet,
-			)
+			nodeCounterSetName := perfcounter.NameForNode(serviceType.String(), nodeUUID)
+			perfcounter.Named.Store(nodeCounterSetName, counterSet)
+			counterSetNames = append(counterSetNames, nodeCounterSetName)
 		}
 	}
 

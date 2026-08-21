@@ -53,43 +53,7 @@ func IsRetryableError(err error) bool {
 		}
 	}
 
-	var minioErr minio.ErrorResponse
-	if errors.As(err, &minioErr) {
-		statusCode := minioErr.StatusCode
-		if statusCode == http.StatusRequestTimeout ||
-			statusCode == http.StatusTooManyRequests ||
-			statusCode >= http.StatusInternalServerError {
-			return true
-		}
-	}
-
 	str := err.Error()
-	// MinIO's broad network classifier treats endpoint protocol mismatches as
-	// host-down, although its request retryer correctly rejects both cases.
-	if strings.Contains(str, "server gave HTTP response to HTTPS client") ||
-		strings.Contains(str, "Client sent an HTTP request to an HTTPS server") {
-		return false
-	}
-
-	// MinIO wraps an EOF returned by its HTTP transport in a url.Error whose
-	// inner error has no typed sentinel. Use the SDK's canonical classifier for
-	// that case, but keep certificate verification failures fail-fast.
-	var certificateErr *tls.CertificateVerificationError
-	if errors.As(err, &certificateErr) {
-		return false
-	}
-	if minio.IsNetworkOrHostDown(err, false) {
-		return true
-	}
-
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
-		return true
-	}
-
-	if errors.Is(err, syscall.ECONNREFUSED) {
-		return true
-	}
 
 	// unexpected EOF
 	if errors.Is(err, io.ErrUnexpectedEOF) {
@@ -126,6 +90,55 @@ func IsRetryableError(err error) bool {
 	}
 
 	return false
+}
+
+// IsRetryableStartupError extends the steady-state file-service retry policy
+// with failures that are transient while a service endpoint is coming up.
+// Startup callers use this policy; regular file-service operations keep their
+// existing bounded retry behavior and fail fast on an unreachable endpoint.
+func IsRetryableStartupError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsRetryableError(err) {
+		return true
+	}
+
+	var minioErr minio.ErrorResponse
+	if errors.As(err, &minioErr) {
+		statusCode := minioErr.StatusCode
+		if statusCode == http.StatusRequestTimeout ||
+			statusCode == http.StatusTooManyRequests ||
+			statusCode >= http.StatusInternalServerError {
+			return true
+		}
+	}
+
+	str := err.Error()
+	// MinIO's broad network classifier treats endpoint protocol mismatches as
+	// host-down, although its request retryer correctly rejects both cases.
+	if strings.Contains(str, "server gave HTTP response to HTTPS client") ||
+		strings.Contains(str, "Client sent an HTTP request to an HTTPS server") {
+		return false
+	}
+
+	// MinIO wraps an EOF returned by its HTTP transport in a url.Error whose
+	// inner error has no typed sentinel. Use the SDK's canonical classifier for
+	// that case, but keep certificate verification failures fail-fast.
+	var certificateErr *tls.CertificateVerificationError
+	if errors.As(err, &certificateErr) {
+		return false
+	}
+	if minio.IsNetworkOrHostDown(err, false) {
+		return true
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+
+	return errors.Is(err, syscall.ECONNREFUSED)
 }
 
 type errorStr string

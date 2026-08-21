@@ -35,7 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIsRetryableErrorTypedStartupFailures(t *testing.T) {
+func TestIsRetryableStartupErrorTypedFailures(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -77,12 +77,18 @@ func TestIsRetryableErrorTypedStartupFailures(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, IsRetryableError(test.err))
+			require.Equal(t, test.want, IsRetryableStartupError(test.err))
 		})
 	}
 }
 
-func TestIsRetryableErrorRejectsMinioProtocolMismatch(t *testing.T) {
+func TestIsRetryableErrorRejectsStartupOnlyConnectionRefused(t *testing.T) {
+	err := fmt.Errorf("dial minio: %w", syscall.ECONNREFUSED)
+	require.False(t, IsRetryableError(err))
+	require.True(t, IsRetryableStartupError(err))
+}
+
+func TestIsRetryableStartupErrorRejectsMinioProtocolMismatch(t *testing.T) {
 	tests := []struct {
 		name     string
 		server   func() *httptest.Server
@@ -133,7 +139,7 @@ func TestIsRetryableErrorRejectsMinioProtocolMismatch(t *testing.T) {
 				},
 			}, nil)
 			require.Error(t, err)
-			require.False(t, IsRetryableError(err), "protocol mismatch must fail fast: %v", err)
+			require.False(t, IsRetryableStartupError(err), "protocol mismatch must fail fast: %v", err)
 		})
 	}
 }

@@ -278,10 +278,11 @@ func initServiceFileServices(
 	stopper *stopper.Stopper,
 	creator fileServiceCreator,
 ) (*fileservice.FileServices, error) {
+	nodeUUID := cfg.mustGetServiceUUID()
 	fs, err := cfg.createFileServiceWithCreator(
 		ctx,
 		st,
-		cfg.mustGetServiceUUID(),
+		nodeUUID,
 		creator,
 	)
 	if err != nil {
@@ -291,6 +292,12 @@ func initServiceFileServices(
 	defer func() {
 		if !completed {
 			fs.Close(context.Background())
+			for _, fsCfg := range cfg.FileServices {
+				perfcounter.Named.Delete(perfcounter.NameForFileService(
+					st.String(), nodeUUID, fsCfg.Name,
+				))
+			}
+			perfcounter.Named.Delete(perfcounter.NameForNode(st.String(), nodeUUID))
 		}
 	}()
 
@@ -298,20 +305,18 @@ func initServiceFileServices(
 	if err != nil {
 		return nil, err
 	}
-	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, cfg.mustGetServiceUUID()); err != nil {
+	if err := clearSpillFiles(ctx, fs); err != nil {
 		return nil, err
 	}
-
-	if err := clearSpillFiles(ctx, fs); err != nil {
+	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, nodeUUID); err != nil {
 		return nil, err
 	}
 
 	if globalEtlFS == nil {
 		globalEtlFS = etlFS
 		globalServiceType = st.String()
-		globalNodeId = cfg.mustGetServiceUUID()
+		globalNodeId = nodeUUID
 	}
-
 	completed = true
 	return fs, nil
 }
@@ -576,7 +581,7 @@ func createProxyFileServiceWithRetry(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		if !fileservice.IsRetryableError(err) {
+		if !fileservice.IsRetryableStartupError(err) {
 			return nil, err
 		}
 
