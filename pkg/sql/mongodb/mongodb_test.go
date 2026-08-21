@@ -1053,7 +1053,7 @@ func TestConverterDecimalBinaryAndInternalJSONEncoding(t *testing.T) {
 	require.NoError(t, converter.AppendDocument(ctx, bat, raw, mp))
 	require.Equal(t, "123.456", vector.GetFixedAtNoTypeCheck[types.Decimal128](bat.Vecs[0], 0).Format(3))
 	require.Equal(t, []byte{1, 2, 3}, bat.Vecs[1].GetBytesAt(0))
-	require.JSONEq(t, `{"nested":[{"$numberInt":"1"},"two"]}`, types.DecodeJson(bat.Vecs[2].GetBytesAt(0)).String())
+	require.JSONEq(t, `{"nested":[1,"two"]}`, types.DecodeJson(bat.Vecs[2].GetBytesAt(0)).String())
 	bat.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }
@@ -1073,16 +1073,19 @@ func TestConverterJSONValues(t *testing.T) {
 	}{
 		{name: "string", value: "text", wantJSON: `"text"`},
 		{name: "empty string", value: "", wantJSON: `""`},
-		{name: "int32", value: int32(32), wantJSON: `{"$numberInt":"32"}`},
-		{name: "int64", value: int64(64), wantJSON: `{"$numberLong":"64"}`},
-		{name: "double", value: 1.5, wantJSON: `{"$numberDouble":"1.5"}`},
+		{name: "int32", value: int32(32), wantJSON: `32`},
+		{name: "int64", value: int64(64), wantJSON: `64`},
+		{name: "int64 max", value: int64(math.MaxInt64), wantJSON: `9223372036854775807`},
+		{name: "double", value: 1.5, wantJSON: `1.5`},
+		{name: "non-finite double", value: math.Inf(1), wantJSON: `{"$numberDouble":"Infinity"}`},
 		{name: "decimal128", value: decimal, wantJSON: `{"$numberDecimal":"123.456"}`},
 		{name: "bool", value: true, wantJSON: `true`},
-		{name: "date", value: instant, wantJSON: fmt.Sprintf(`{"$date":{"$numberLong":"%d"}}`, instant.UnixMilli())},
+		{name: "date", value: instant, wantJSON: `{"$date":"2026-08-18T09:10:11.123Z"}`},
+		{name: "date before epoch", value: bson.DateTime(-1), wantJSON: `{"$date":{"$numberLong":"-1"}}`},
 		{name: "binary", value: bson.Binary{Data: []byte{1, 2, 3}}, wantJSON: `{"$binary":{"base64":"AQID","subType":"00"}}`},
 		{name: "objectID", value: objectID, wantJSON: fmt.Sprintf(`{"$oid":"%s"}`, objectID.Hex())},
-		{name: "document", value: bson.D{{Key: "nested", Value: int32(1)}}, wantJSON: `{"nested":{"$numberInt":"1"}}`},
-		{name: "array", value: bson.A{int32(1), "two"}, wantJSON: `[{"$numberInt":"1"},"two"]`},
+		{name: "document", value: bson.D{{Key: "nested", Value: int32(1)}}, wantJSON: `{"nested":1}`},
+		{name: "array", value: bson.A{int32(1), "two"}, wantJSON: `[1,"two"]`},
 		{name: "null", value: nil, wantNull: true},
 		{name: "missing", missing: true, wantNull: true},
 	}

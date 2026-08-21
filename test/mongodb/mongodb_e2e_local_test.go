@@ -72,6 +72,8 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 		"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
 	expectMongoDBE2EScalar(mock, `"text"`)
+	expectMongoDBE2EScalar(mock, "2")
+	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, "5")
 	fixtureRows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
 	for _, row := range manifest.Rows {
@@ -121,7 +123,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"secret-backed-ddl",
 		"show-connections-admin-metadata-redaction",
 		"show-create-redaction-roundtrip",
-		"json-scalar-conversion",
+		"json-relaxed-extended-conversion",
 		"scan-projection-pushdown-null-conversion",
 		"low-precision-temporal-residual",
 		"decoded-vector-budget-enforced",
