@@ -110,6 +110,35 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 		data.Clean(mp)
 		tombstone.Clean(mp)
 	})
+
+	t.Run("rowid-prefixed data still uses logical primary index", func(t *testing.T) {
+		blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+		data := batch.NewWithSize(4)
+		data.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		data.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		data.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+		data.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(data.Vecs[0], objectio.NewRowid(blockID, 0), false, mp))
+		require.NoError(t, vector.AppendFixed(data.Vecs[1], int32(7), false, mp))
+		require.NoError(t, vector.AppendFixed(data.Vecs[2], int32(1), false, mp))
+		require.NoError(t, vector.AppendFixed(data.Vecs[3], types.BuildTS(10, 0), false, mp))
+		data.SetRowCount(1)
+
+		tombstone := batch.NewWithSize(3)
+		tombstone.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		tombstone.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		tombstone.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(tombstone.Vecs[0], objectio.NewRowid(blockID, 1), false, mp))
+		require.NoError(t, vector.AppendFixed(tombstone.Vecs[1], int32(1), false, mp))
+		require.NoError(t, vector.AppendFixed(tombstone.Vecs[2], types.BuildTS(20, 0), false, mp))
+		tombstone.SetRowCount(1)
+
+		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
+		require.Zero(t, data.RowCount())
+		require.Zero(t, tombstone.RowCount())
+		data.Clean(mp)
+		tombstone.Clean(mp)
+	})
 }
 
 func TestBatchHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
