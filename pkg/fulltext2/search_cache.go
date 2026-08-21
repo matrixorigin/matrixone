@@ -16,7 +16,9 @@ package fulltext2
 
 import (
 	"context"
+	"errors"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
@@ -74,11 +76,15 @@ type Fulltext2Search struct {
 	// MAX(metadata.timestamp) (REBUILD/MERGE), loadedTail = MAX(tag=1 CdcTail chunk_id) (CDC
 	// append). cnUUID/accountID are the durable handles to re-query in the background.
 	// genValid is false when capture failed / no resolver (unit tests) → IsStale is a no-op.
-	cnUUID     string
-	accountID  uint32
-	loadedTs   int64
-	loadedTail int64
-	genValid   bool
+	cnUUID         string
+	accountID      uint32
+	loadedTs       int64
+	loadedTail     int64
+	genValid       bool
+	loadWaiters    atomic.Int64
+	pendingTrace   *loadTrace
+	pendingLoadErr error
+	pendingCancel  bool
 }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -93,19 +99,50 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // tag=1 CdcTail delta frames (+ delete set), assembled into a queryable Index with
 // global stats and per-pk liveness. An index created on an empty table has no tag=0
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
-func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
+func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
+	reason := takeLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable))
+	if reason == "" {
+		reason = LoadMissProcessStart
+	}
+	trace := newLoadTrace(s.cfg.IndexTable, reason)
+	canceled := false
+	defer func() {
+		if err != nil {
+			canceled = errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+		}
+		s.pendingTrace = trace
+		s.pendingLoadErr = err
+		s.pendingCancel = canceled
+	}()
 	// Fail fast on the QUERY path if the bases' per-doc metadata won't fit the heap
 	// budget, rather than OOM-killing the CN (which takes down every query on the node).
 	// This guard is on Load, NOT LoadAllBases, so CompactSegments (MERGE) — the remedy —
 	// stays exempt and can still load the bases to reclaim dead docs.
+	var budgetStart time.Time
+	if trace != nil {
+		budgetStart = time.Now()
+	}
 	if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
+		if trace != nil {
+			trace.addInternalSQL(time.Since(budgetStart))
+		}
 		return err
 	}
-	bases, err := LoadAllBases(sqlproc, s.cfg)
+	if trace != nil {
+		trace.addInternalSQL(time.Since(budgetStart))
+	}
+	var loadedTs, loadedTail int64
+	var genErr error
+	if trace != nil {
+		generationStart := time.Now()
+		loadedTs, loadedTail, genErr = LoadGeneration(sqlproc, s.cfg)
+		trace.addInternalSQL(time.Since(generationStart))
+	}
+	bases, err := loadAllBasesUncached(sqlproc, s.cfg, trace)
 	if err != nil {
 		return err
 	}
-	tails, deletes, err := LoadTailSegments(sqlproc, s.cfg)
+	tails, deletes, err := loadTailSegments(sqlproc, s.cfg, trace)
 	if err != nil {
 		freeSegs(bases) // munmap the base segments on a tail-load error (don't leak the mappings)
 		return err
@@ -113,6 +150,9 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
+	if genErr == nil {
+		trace.setGeneration(loadedTs, loadedTail)
+	}
 
 	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
 	// captured generation matches the loaded snapshot exactly. On any capture failure genValid
@@ -120,11 +160,44 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	// retry capture) rather than pinning it in cache forever — see IsStale.
 	s.cnUUID = sqlproc.GetService()
 	if acc, e := sqlproc.GetAccountID(); e == nil {
+		var genStart time.Time
+		if trace != nil {
+			genStart = time.Now()
+		}
 		if ts, tail, e2 := LoadGeneration(sqlproc, s.cfg); e2 == nil {
 			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
+			if trace != nil {
+				trace.addInternalSQL(time.Since(genStart))
+			}
 		}
 	}
 	return nil
+}
+
+// OnCacheInvalidated records the reason for the next cache miss without
+// changing the historical cache eviction behavior.
+func (s *Fulltext2Search) OnCacheInvalidated(reason string) {
+	invalidateLoadGeneration(s.cfg, LoadMissReason(reason))
+}
+
+// SetLoadWaiters samples the cache's existing load waiters for diagnostics.
+func (s *Fulltext2Search) SetLoadWaiters(n int64) {
+	s.loadWaiters.Store(n)
+}
+
+// FinishLoadObservation ends the load event exactly once after the cache has
+// sampled its shared waiters.
+func (s *Fulltext2Search) FinishLoadObservation() {
+	trace := s.pendingTrace
+	if trace == nil {
+		return
+	}
+	s.pendingTrace = nil
+	err := s.pendingLoadErr
+	canceled := s.pendingCancel
+	s.pendingLoadErr = nil
+	s.pendingCancel = false
+	trace.finish(err, canceled, s.loadWaiters.Load())
 }
 
 // IsStale reports whether the underlying index has changed since this entry was loaded, by
@@ -382,6 +455,7 @@ func (s *Fulltext2Search) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt 
 // are views into those mappings), then drops it. The cache holds the write lock
 // around this, so no search is in flight.
 func (s *Fulltext2Search) Destroy() {
+	s.FinishLoadObservation()
 	s.idx.Free()
 	s.idx = nil
 	s.loaded = false

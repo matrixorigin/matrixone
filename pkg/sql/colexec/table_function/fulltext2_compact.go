@@ -124,7 +124,8 @@ func (u *fulltext2CompactState) end(tf *TableFunction, proc *process.Process) er
 	// The tag=0 base changed (tail folded into a fresh merged base) — evict any cached
 	// search index so the next query reloads the merged base instead of the stale one
 	// held until the TTL.
-	veccache.Cache.Remove(u.tblcfg.IndexTable)
+	fulltext2.NewFulltext2Search(u.tblcfg).OnCacheInvalidated(string(fulltext2.LoadMissMerge))
+	veccache.Cache.RemoveWithReason(u.tblcfg.IndexTable, string(fulltext2.LoadMissMerge))
 	return nil
 }
 
