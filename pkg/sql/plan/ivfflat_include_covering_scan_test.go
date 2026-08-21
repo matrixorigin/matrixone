@@ -40,7 +40,7 @@ func TestBuildIvfSearchColDefsIncludesCoveringColumnsWithoutMutatingBase(t *test
 	}
 
 	colDefs := buildIvfSearchColDefs([]string{"title", "rank"}, original)
-	require.Len(t, ivfflatplan.IVFFLATSearchColDefs, 2)
+	require.Len(t, ivfflatplan.IVFFLATScanColDefs, 2)
 	require.Len(t, colDefs, 4)
 	require.Equal(t, "pkid", colDefs[0].Name)
 	require.Equal(t, "score", colDefs[1].Name)
@@ -165,7 +165,7 @@ func TestApplyIndicesForSortUsingIvfflatBuildsDynamicColsForOptimizerPath(t *tes
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
 
-	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
+	require.Equal(t, plan.Node_VECTOR_INDEX_SCAN, tableFuncNode.NodeType)
 	require.Len(t, tableFuncNode.TableDef.Cols, 3)
 	require.Equal(t, "pkid", tableFuncNode.TableDef.Cols[0].Name)
 	require.Equal(t, "score", tableFuncNode.TableDef.Cols[1].Name)
