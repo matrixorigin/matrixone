@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 13)
+	require.Len(t, tenantUpgEntries, 17)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -89,10 +89,48 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.MODIFY_VIEW, hideInternalColumns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, hideInternalColumns.UpgSql)
 	require.Contains(t, strings.ToLower(hideInternalColumns.PreSql), "drop view if exists information_schema.columns")
+	userDefinedFunctions := tenantUpgEntries[13]
+	require.Equal(t, versions.DROP_INDEX, userDefinedFunctions.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctions.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctions.TableName)
+	require.Contains(t, strings.ToLower(userDefinedFunctions.UpgSql), "drop index name")
+	userDefinedFunctionArgumentTypes := tenantUpgEntries[14]
+	require.Equal(t, versions.ADD_COLUMN, userDefinedFunctionArgumentTypes.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionArgumentTypes.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctionArgumentTypes.TableName)
+	require.Contains(t, strings.ToLower(userDefinedFunctionArgumentTypes.UpgSql), "arg_types")
+	require.Contains(t, userDefinedFunctionArgumentTypes.UpgSql, "varchar(65535)")
+	userDefinedFunctionBackfill := tenantUpgEntries[15]
+	require.Equal(t, versions.MODIFY_METADATA, userDefinedFunctionBackfill.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionBackfill.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctionBackfill.TableName)
+	require.Equal(t,
+		"update mo_catalog.mo_user_defined_function set arg_types = "+catalog.UserDefinedFunctionArgumentTypesSQL,
+		userDefinedFunctionBackfill.UpgSql,
+	)
+	userDefinedFunctionSignatureIndex := tenantUpgEntries[16]
+	require.Equal(t, versions.ADD_INDEX, userDefinedFunctionSignatureIndex.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionSignatureIndex.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctionSignatureIndex.TableName)
+	require.Contains(t, strings.ToLower(userDefinedFunctionSignatureIndex.UpgSql), "unique index name_db_arg_types")
+}
+
+func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *testing.T) {
+	entry := backfillUserDefinedFunctionArgumentTypes()
+	txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		require.Contains(t, sql, "length(")
+		require.Contains(t, sql, "> 65535")
+		return newShowCreateTableResult(t, "function", "create table function (id int)"), nil
+	})
+
+	finished, err := entry.CheckFunc(txn, 1)
+	require.False(t, finished)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "catalog limit")
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 13)
+	require.Len(t, tenantUpgEntries, 17)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]

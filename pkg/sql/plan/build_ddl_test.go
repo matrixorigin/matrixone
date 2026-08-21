@@ -4157,6 +4157,23 @@ func TestBuildMongoDBExternalTableRejectsForeignKeys(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err.Error())
 }
 
+func TestBuildMongoDBExternalTableRejectsAutoIncrementBeforeCatalogDDL(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_auto_increment (
+			id BIGINT AUTO_INCREMENT MONGODB_PATH '_id'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`)
+	require.ErrorContains(t, err, "MongoDB external table does not support AUTO_INCREMENT column 'id'")
+	require.Nil(t, logicPlan, "validation must fail before a catalog DDL plan can be emitted")
+}
+
 func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	ctx := mock.CurrentContext().(*MockCompilerContext)

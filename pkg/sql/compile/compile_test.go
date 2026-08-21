@@ -992,6 +992,11 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 	externalCause := moerr.NewInternalErrorNoCtx("client canceled query")
 	externalCauseCtx, cancelExternalCause := context.WithCancelCause(context.Background())
 	cancelExternalCause(externalCause)
+	remoteQueryCtx, cancelRemoteQuery := context.WithCancel(
+		context.WithValue(context.Background(), defines.RemoteRunContext{}, true))
+	remotePipelineCtx, cancelRemotePipeline := context.WithCancelCause(remoteQueryCtx)
+	cancelRemoteQuery()
+	defer cancelRemotePipeline(nil)
 
 	tests := []struct {
 		name      string
@@ -1012,6 +1017,8 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "remote fragment stop remains secondary", current: scopeRunResult{err: queryInterrupted, ctx: remotePipelineCtx, queryCtx: remoteQueryCtx}},
+		{name: "remote fragment stop does not mask producer error", current: scopeRunResult{err: queryInterrupted, ctx: remotePipelineCtx, queryCtx: remoteQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx, queryCtx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
 		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
 		{name: "query deadline classification survives custom timeout cause", current: scopeRunResult{err: context.DeadlineExceeded, ctx: pipelineDeadlineCauseCtx, queryCtx: queryDeadlineCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
@@ -1023,7 +1030,9 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := preferPrimaryScopeResult(tt.current, tt.candidate)
 			got, _ = got.resolveCancelCause()
-			if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
+			if tt.want == nil {
+				require.NoError(t, got.err)
+			} else if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
 				require.ErrorIs(t, got.err, tt.want)
 			} else {
 				require.Same(t, tt.want, got.err)
