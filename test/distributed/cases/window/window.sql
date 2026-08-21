@@ -1741,6 +1741,22 @@ select id,
 from t_window_23107 limit 10;
 drop table t_window_23107;
 
+-- Regression for issue #27352: a normal finite PRECEDING frame is maintained
+-- incrementally, and a reused prepared statement observes each runtime bound.
+create table t_window_27352(id int primary key, v int);
+insert into t_window_27352 values (1, 10), (2, null), (3, 30), (4, 40), (5, null);
+prepare window_27352 from 'select id,
+       sum(coalesce(v, 0)) over (
+         order by id rows between ? preceding and current row
+       ) as sliding_sum
+from t_window_27352 order by id';
+set @window_bound = 2;
+execute window_27352 using @window_bound;
+set @window_bound = 1;
+execute window_27352 using @window_bound;
+deallocate prepare window_27352;
+drop table t_window_27352;
+
 drop table t_desc;
 drop database test_range_desc;
 
