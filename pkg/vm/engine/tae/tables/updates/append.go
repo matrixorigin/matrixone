@@ -43,8 +43,9 @@ func CompareAppendNode(e, o *AppendNode) int {
 func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *AppendMVCCHandle) *AppendNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: ts,
-			End:   ts,
+			Start:   ts,
+			Prepare: ts,
+			End:     ts,
 		},
 		maxRow: maxRow,
 		mvcc:   mvcc,
@@ -59,7 +60,7 @@ func NewAppendNode(
 	var startTs, ts types.TS
 	if txn != nil {
 		startTs = txn.GetStartTS()
-		ts = txn.GetPrepareTS()
+		ts = txnif.UncommitTS
 	}
 	n := &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
@@ -128,6 +129,9 @@ func (node *AppendNode) PrepareCommit() error {
 	node.mvcc.Lock()
 	defer node.mvcc.Unlock()
 	_, err := node.TxnMVCCNode.PrepareCommit()
+	if err == nil {
+		node.mvcc.reorderPrepareLocked(node)
+	}
 	return err
 }
 
@@ -240,11 +244,12 @@ func (node *AppendNode) ReadFromVersion(
 func (node *AppendNode) PrepareRollback() (err error) {
 	node.mvcc.Lock()
 	defer node.mvcc.Unlock()
-	// Append data and its PK index entry are installed before commit. Keep the
-	// MVCC owner for that physical range and mark it aborted; removing the node
-	// would leave the rows ownerless and makes a later flush unable to persist
-	// the rollback hole.
-	return node.TxnMVCCNode.PrepareRollback()
+	err = node.TxnMVCCNode.PrepareRollback()
+	if err == nil && node.GetTxn() != nil {
+		node.Prepare = node.GetTxn().GetPrepareTS()
+		node.mvcc.reorderPrepareLocked(node)
+	}
+	return
 }
 func (node *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewAppendCmd(id, node)

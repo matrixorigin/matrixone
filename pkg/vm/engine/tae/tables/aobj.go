@@ -17,7 +17,6 @@ package tables
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,6 +40,7 @@ type aobject struct {
 	*baseObject
 	frozen     atomic.Bool
 	freezelock sync.Mutex
+	reserved   atomic.Uint32
 }
 
 func newAObject(
@@ -62,6 +62,8 @@ func newAObject(
 		node.Ref()
 		obj.node.Store(node)
 	}
+	rows, _ := obj.Rows()
+	obj.reserved.Store(uint32(rows))
 	return obj
 }
 
@@ -196,20 +198,8 @@ func (obj *aobject) GetDuplicatedRows(
 	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		fn := func() (minv, maxv int32, err error) {
-			obj.RUnlock()
-			defer obj.RLock()
-			if maxv, err = obj.GetMaxRowByTS(to); err != nil {
-				return
-			}
-			// GetMaxRowByTS returns an exclusive row endpoint. Include appends
-			// at from by looking up the endpoint immediately before it.
-			lowerTS := from
-			if !lowerTS.IsEmpty() {
-				lowerTS = lowerTS.Prev()
-			}
-			minv, err = obj.GetMaxRowByTS(lowerTS)
-			return
+		fn := func() (index.RowSelection, error) {
+			return obj.appendMVCC.GetRowSelectionAfterLocked(from, to), nil
 		}
 		return node.GetDuplicatedRows(
 			ctx,
@@ -234,36 +224,6 @@ func (obj *aobject) GetDuplicatedRows(
 	}
 }
 
-func (obj *aobject) GetMaxRowByTS(ts types.TS) (int32, error) {
-	if ts.IsEmpty() {
-		return -1, nil
-	}
-	maxTS := types.MaxTs()
-	if ts.EQ(&maxTS) {
-		return math.MaxInt32, nil
-	}
-	node := obj.PinNode()
-	defer node.Unref()
-	if !node.IsPersisted() {
-		obj.RLock()
-		defer obj.RUnlock()
-		return int32(obj.appendMVCC.GetMaxRowByTSLocked(ts)), nil
-	} else {
-		vec, err := obj.LoadPersistedCommitTS(0)
-		if err != nil {
-			return 0, err
-		}
-		defer vec.Close()
-		tsVec := vector.MustFixedColNoTypeCheck[types.TS](
-			vec.GetDownstreamVector())
-		for i := range tsVec {
-			if tsVec[i].GT(&ts) {
-				return int32(i), nil
-			}
-		}
-		return int32(vec.Length()), nil
-	}
-}
 func (obj *aobject) ApplyDebugBatch(bat *containers.Batch, txn txnif.AsyncTxn) (ans []txnif.TxnEntry, err error) {
 	node := obj.PinNode()
 	defer node.Unref()
@@ -338,15 +298,27 @@ func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	defer obj.Unlock()
 	an := node.(*updates.AppendNode)
 	obj.appendMVCC.OnReplayAppendNode(an)
+	if max := an.GetMaxRow(); max > obj.reserved.Load() {
+		obj.reserved.Store(max)
+	}
 	return
 }
 
-func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch) (err error) {
+func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch, offset uint32) (err error) {
+	// MakeAppender returns a lightweight view and does not acquire an object
+	// reference.  Replay owns the appender only for this call, so acquire the
+	// matching reference before Close releases it.
+	obj.Ref()
 	appender, err := obj.MakeAppender()
 	if err != nil {
+		obj.Unref()
 		return
 	}
-	_, err = appender.ReplayAppend(bat, nil)
+	defer appender.Close()
+	err = appender.ApplyAppendAt(bat, offset, nil)
+	if err == nil {
+		obj.meta.Load().GetTable().AddRows(uint64(bat.Length()))
+	}
 	return
 }
 

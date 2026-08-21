@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,12 +71,12 @@ func TestMutationControllerAppend(t *testing.T) {
 
 	st := time.Now()
 	for i, qts := range queries {
-		row, ok, _, _ := mc.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(qts))
+		selection, ok, _ := mc.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(qts))
 		if i == 0 {
 			assert.False(t, ok)
 		} else {
 			assert.True(t, ok)
-			assert.Equal(t, uint32(i)*rowsPerNode, row)
+			assert.Equal(t, uint32(i)*rowsPerNode, selection.MaxRow)
 		}
 	}
 	t.Logf("%s -- %d ops", time.Since(st), len(queries))
@@ -116,26 +117,26 @@ func TestGetVisibleRow(t *testing.T) {
 	an4.Aborted = true
 
 	// ts=1 maxrow=1, holes={}
-	maxrow, visible, holes, err := n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(1, 0)))
+	selection, visible, err := n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(1, 0)))
 	assert.NoError(t, err)
-	assert.Equal(t, uint32(1), maxrow)
+	assert.Equal(t, uint32(1), selection.MaxRow)
 	assert.True(t, visible)
-	assert.Equal(t, 0, holes.GetCardinality())
+	assert.True(t, selection.Holes == nil || selection.Holes.IsEmpty())
 
 	// ts=4 maxrow=3, holes={1}
-	maxrow, visible, holes, err = n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(4, 0)))
+	selection, visible, err = n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(4, 0)))
 	assert.NoError(t, err)
-	assert.Equal(t, uint32(3), maxrow)
+	assert.Equal(t, uint32(3), selection.MaxRow)
 	assert.True(t, visible)
-	assert.Equal(t, 1, holes.GetCardinality())
-	assert.True(t, holes.Contains(1))
+	assert.Equal(t, 1, selection.Holes.GetCardinality())
+	assert.True(t, selection.Holes.Contains(1))
 
 	// ts=5 maxrow=3, holes={}
-	maxrow, visible, holes, err = n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(5, 0)))
+	selection, visible, err = n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(5, 0)))
 	assert.NoError(t, err)
-	assert.Equal(t, uint32(3), maxrow)
+	assert.Equal(t, uint32(3), selection.MaxRow)
 	assert.True(t, visible)
-	assert.Equal(t, 0, holes.GetCardinality())
+	assert.True(t, selection.Holes == nil || selection.Holes.IsEmpty())
 
 }
 
@@ -156,4 +157,52 @@ func TestPrepareRollbackKeepsAppendRangeAsHole(t *testing.T) {
 	require.True(t, node.IsAborted())
 	require.Same(t, node, handle.GetAppendNodeByRowLocked(3))
 	require.Equal(t, uint32(5), handle.GetTotalRow())
+}
+
+func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	h := NewAppendMVCCHandle(obj)
+
+	txn1, txn2 := mockTxn(), mockTxn()
+	n1, _ := h.AddAppendNodeLocked(txn1, 0, 10)
+	n2, _ := h.AddAppendNodeLocked(txn2, 10, 20)
+	assert.Equal(t, txnif.UncommitTS, n1.GetPrepare())
+	assert.Equal(t, txnif.UncommitTS, n2.GetPrepare())
+
+	txn2.PrepareTS = types.BuildTS(2, 0)
+	assert.NoError(t, n2.PrepareCommit())
+	txn1.PrepareTS = types.BuildTS(3, 0)
+	assert.NoError(t, n1.PrepareCommit())
+	assert.Same(t, n2, h.appends.MVCC[0])
+	assert.Same(t, n1, h.appends.MVCC[1])
+	assert.Same(t, n1, h.rows[0])
+	assert.Same(t, n2, h.rows[1])
+	assert.Same(t, n1, h.GetAppendNodeByRowLocked(5))
+	assert.Same(t, n2, h.GetAppendNodeByRowLocked(15))
+}
+
+func TestAppendMVCCRollbackKeepsPhysicalHole(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	h := NewAppendMVCCHandle(obj)
+	txn := mockTxn()
+	node, _ := h.AddAppendNodeLocked(txn, 0, 4)
+	txn.PrepareTS = types.BuildTS(2, 0)
+	assert.NoError(t, node.PrepareRollback())
+	assert.True(t, node.IsAborted())
+	assert.Same(t, node, h.GetAppendNodeByRowLocked(2))
+	assert.Equal(t, uint32(4), h.GetTotalRow())
 }

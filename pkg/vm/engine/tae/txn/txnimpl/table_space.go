@@ -43,18 +43,72 @@ type tableSpace struct {
 	//index for primary key
 	index TableIndex
 	//nodes contains anode and node.
-	node        *anode
-	table       *txnTable
-	rows        uint32
-	appends     []*appendCtx
-	tableHandle data.TableHandle
-	nobj        handle.Object
+	node         *anode
+	table        *txnTable
+	rows         uint32
+	appends      []*appendCtx
+	applied      int
+	preparedRows uint32
+	frozenRows   uint32
+	frozenInfos  int
+	tableHandle  data.TableHandle
+	nobj         handle.Object
 
-	stats    []objectio.ObjectStats
-	statsMap map[objectio.ObjectNameShort]struct{}
+	stats         []objectio.ObjectStats
+	statsMap      map[objectio.ObjectNameShort]struct{}
+	preparedStats int
 
 	// for tombstone table space
 	objs []*objectio.ObjectId
+}
+
+func (space *tableSpace) FreezeApply() error {
+	if err := space.PrepareApply(); err != nil {
+		return err
+	}
+	if err := space.ApplyAppend(); err != nil {
+		return err
+	}
+	space.frozenRows = space.preparedRows
+	if space.node != nil {
+		space.frozenInfos = len(space.node.appends)
+	}
+	return nil
+}
+
+// ReapplyFrozen overwrites the stable destinations allocated during Freeze.
+// Transfer may replace and compact tombstone workspace rows, but it preserves
+// their cardinality, so the ordinal mapping remains valid.
+func (space *tableSpace) ReapplyFrozen() (err error) {
+	if space.node == nil || space.frozenRows == 0 {
+		return nil
+	}
+	infos := space.node.appends
+	if len(infos) > space.frozenInfos {
+		infos = infos[:space.frozenInfos]
+	}
+	for _, info := range infos {
+		if info.srcOff >= space.frozenRows {
+			break
+		}
+		length := info.srcLen
+		if info.srcOff+length > space.frozenRows {
+			length = space.frozenRows - info.srcOff
+		}
+		bat, _ := space.node.Window(info.srcOff, info.srcOff+length)
+		tableData := space.table.entry.GetTableData()
+		// Use a short-lived handle so patching a known destination cannot make
+		// the allocator's handle point back to an older object.
+		patchHandle := tableData.GetHandle(space.isTombstone)
+		driver := patchHandle.SetAppender(&info.dest)
+		err = driver.ApplyAppendAt(bat, info.destOff, space.table.store.txn)
+		driver.Close()
+		bat.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newTableSpace(table *txnTable, isTombstone bool) *tableSpace {
@@ -107,28 +161,24 @@ func (tbl *txnTable) NeedRollback() bool {
 // ApplyAppend applies all the anodes into appendable blocks
 // and un-reference the appendable blocks which had been referenced when PrepareApply.
 func (space *tableSpace) ApplyAppend() (err error) {
-	var destOff int
-	defer func() {
-		// Close All unclosed Appends:un-reference the appendable block.
-		space.CloseAppends()
-	}()
-	for _, ctx := range space.appends {
+	for space.applied < len(space.appends) {
+		ctx := space.appends[space.applied]
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
-		defer bat.Close()
-		if destOff, err = ctx.driver.ApplyAppend(
-			bat,
-			space.table.store.txn); err != nil {
+		if err = ctx.driver.ApplyAppendAt(
+			bat, ctx.dest, space.table.store.txn); err != nil {
+			bat.Close()
 			return
 		}
+		bat.Close()
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(
 			ctx.start,
 			ctx.count,
-			uint32(destOff),
+			ctx.dest,
 			ctx.count, id)
-	}
-	if space.tableHandle != nil {
-		space.table.entry.GetTableData().ApplyHandle(space.tableHandle, space.isTombstone)
+		ctx.driver.Close()
+		ctx.driver = nil
+		space.applied++
 	}
 	return
 }
@@ -141,11 +191,13 @@ func (space *tableSpace) PrepareApply() (err error) {
 		}
 	}()
 	if space.node != nil {
-		if err = space.prepareApplyNode(space.node); err != nil {
+		if err = space.prepareApplyANode(space.node, space.preparedRows); err != nil {
 			return
 		}
+		space.preparedRows = space.node.Rows()
 	}
-	for _, stats := range space.stats {
+	for ; space.preparedStats < len(space.stats); space.preparedStats++ {
+		stats := space.stats[space.preparedStats]
 		if err = space.prepareApplyObjectStats(stats); err != nil {
 			return
 		}
@@ -153,31 +205,54 @@ func (space *tableSpace) PrepareApply() (err error) {
 	return
 }
 
-func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) error {
-	node.Compact()
-	tableData := space.table.entry.GetTableData()
-	if space.tableHandle == nil {
-		space.tableHandle = tableData.GetHandle(space.isTombstone)
+func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) (err error) {
+	if startOffset == 0 {
+		node.Compact()
 	}
+	tableData := space.table.entry.GetTableData()
 	appended := startOffset
 	var vec containers.Vector
 	if startOffset == 0 {
 		vec = space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+		defer func() {
+			if err != nil {
+				vec.Close()
+			}
+		}()
 	} else {
 		vec = node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx]
 	}
 	for appended < node.Rows() {
+		// Only object selection and row reservation are serialized per table.
+		// Rowid construction, txn bookkeeping, and payload application remain
+		// concurrent across transactions.
+		tableData.LockAppend()
+		if space.tableHandle == nil {
+			space.tableHandle = tableData.GetHandle(space.isTombstone)
+		}
 		appender, err := space.tableHandle.GetAppender()
+		if moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound) {
+			// A txn-local handle can still point to an object another txn has
+			// filled. GetAppender clears that stale cache; retry once to resolve
+			// the catalog's current appendable object before creating a new one.
+			appender, err = space.tableHandle.GetAppender()
+		}
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound) {
 			objH, err2 := space.table.CreateObject(space.isTombstone)
 			if err2 != nil {
+				tableData.UnlockAppend()
 				return err2
 			}
 			appender = space.tableHandle.SetAppender(objH.Fingerprint())
 			// logutil.Info("CreateObject", zap.String("objH", appender.GetID().ObjectString()), zap.String("txn", node.GetTxn().String()))
 			objH.Close()
+		} else if err != nil {
+			tableData.UnlockAppend()
+			return err
 		}
 		if !appender.IsSameColumns(space.table.GetLocalSchema(space.isTombstone)) {
+			appender.Close()
+			tableData.UnlockAppend()
 			return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 		}
 
@@ -188,9 +263,11 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 		if appender.CheckFreeze() {
 			// freezed, try to find another ablock
 			appender.UnlockFreeze()
+			appenderDesc := appender.PPString()
 			// Unref the appender, otherwise it can't be PrepareCompact(ed) successfully
 			appender.Close()
-			logutil.Info("LockFreeze", zap.String("appender", appender.PPString()))
+			tableData.UnlockAppend()
+			logutil.Info("LockFreeze", zap.String("appender", appenderDesc))
 			continue
 		}
 
@@ -203,14 +280,33 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 			space.table.store.txn)
 		if err != nil {
 			appender.UnlockFreeze()
+			appender.Close()
+			tableData.UnlockAppend()
 			return err
 		}
+		destOff := anode.GetMaxRow() - toAppend
+		appender.ReserveAppend(destOff, toAppend)
 		appender.UnlockFreeze()
+		tableData.UnlockAppend()
 		/// ------- Attach AppendNode Successfully -----
+		ctx := &appendCtx{
+			driver: appender,
+			node:   node,
+			anode:  anode,
+			start:  appended,
+			count:  toAppend,
+			dest:   destOff,
+		}
+		space.appends = append(space.appends, ctx)
+		if created {
+			space.table.txnEntries.Append(anode)
+			if err = space.table.store.IncreateWriteCnt("prepare apply anode"); err != nil {
+				return err
+			}
+		}
 
 		objID := appender.GetMeta().(*catalog.ObjectEntry).ID()
 		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
-		defer col.Close()
 		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
@@ -219,29 +315,18 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 			toAppend,
 			col.GetAllocator(),
 		); err != nil {
+			col.Close()
 			return err
 		}
 		if err = vec.ExtendVec(col.GetDownstreamVector()); err != nil {
+			col.Close()
 			return err
 		}
-		ctx := &appendCtx{
-			driver: appender,
-			node:   node,
-			anode:  anode,
-			start:  appended,
-			count:  toAppend,
-		}
-		if created {
-			if err = space.table.store.IncreateWriteCnt("prepare apply anode"); err != nil {
-				return err
-			}
-			space.table.txnEntries.Append(anode)
-		}
+		col.Close()
 		id := appender.GetID()
 		space.table.store.warChecker.Insert(appender.GetMeta().(*catalog.ObjectEntry))
 		space.table.store.txn.GetMemo().AddObject(space.table.entry.GetDB().ID,
 			id.TableID, id.ObjectID(), space.isTombstone)
-		space.appends = append(space.appends, ctx)
 		// logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
 		// 	id.String(), toAppend, appended, len(space.appends))
 		appended += toAppend

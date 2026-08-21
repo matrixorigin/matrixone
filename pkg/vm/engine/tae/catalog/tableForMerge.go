@@ -98,10 +98,6 @@ func (catalog *Catalog) getMergeNotifier() MergeNotifierOnCatalog {
 	return notifier.(MergeNotifierOnCatalog)
 }
 
-func (catalog *Catalog) getMergeNotifier() MergeNotifierOnCatalog {
-	return catalog.mergeNotifier
-}
-
 func (catalog *Catalog) InitSource() iter.Seq[MergeTable] {
 	return func(yield func(MergeTable) bool) {
 		p := new(LoopProcessor)

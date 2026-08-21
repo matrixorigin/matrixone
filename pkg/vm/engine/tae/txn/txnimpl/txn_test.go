@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
@@ -640,6 +641,172 @@ func TestAppend(t *testing.T) {
 	assert.Equal(t, 3*int(brows), int(tbl.dataTable.tableSpace.Rows()))
 	assert.Equal(t, 3*int(brows), int(tbl.dataTable.tableSpace.index.Count()))
 	assert.NoError(t, txn.Commit(context.Background()))
+}
+
+func TestConcurrentFreezeAppendReservations(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Extra.BlockMaxRows = 10000
+	setup, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := setup.CreateDatabase("db", "", "")
+	require.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	tableEntry := rel.GetMeta().(*catalog.TableEntry)
+	require.NoError(t, setup.Commit(ctx))
+
+	const txnCount = 8
+	const rowsPerTxn = 16
+	allRows := catalog.MockBatch(schema, txnCount*rowsPerTxn)
+	defer allRows.Close()
+	batches := allRows.Split(txnCount)
+	txns := make([]txnif.AsyncTxn, txnCount)
+	for i := range txns {
+		txns[i], err = mgr.StartTxn(nil)
+		require.NoError(t, err)
+		txnDB, err := txns[i].GetDatabase("db")
+		require.NoError(t, err)
+		txnRel, err := txnDB.GetRelationByName(schema.Name)
+		require.NoError(t, err)
+		require.NoError(t, txnRel.Append(ctx, batches[i]))
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, txnCount)
+	var wg sync.WaitGroup
+	for _, txn := range txns {
+		wg.Add(1)
+		go func(txn txnif.AsyncTxn) {
+			defer wg.Done()
+			<-start
+			errs <- txn.Commit(ctx)
+		}(txn)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Equal(t, uint64(txnCount*rowsPerTxn), tableEntry.GetRows())
+
+	readTxn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	readDB, err := readTxn.GetDatabase("db")
+	require.NoError(t, err)
+	readRel, err := readDB.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	pkIdx := schema.GetSingleSortKeyIdx()
+	for row := 0; row < allRows.Length(); row++ {
+		pk := allRows.Vecs[pkIdx].Get(row)
+		value, isNull, err := readRel.GetValueByFilter(ctx, handle.NewEQFilter(pk), pkIdx)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, pk, value)
+	}
+	require.NoError(t, readTxn.Commit(ctx))
+}
+
+func TestConcurrentDedupSamePK(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Extra.BlockMaxRows = 10000
+	setup, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := setup.CreateDatabase("db", "", "")
+	require.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	tableEntry := rel.GetMeta().(*catalog.TableEntry)
+	require.NoError(t, setup.Commit(ctx))
+
+	const txnCount = 16
+	txns := make([]txnif.AsyncTxn, txnCount)
+	batches := make([]*containers.Batch, txnCount)
+	for i := range txns {
+		txns[i], err = mgr.StartTxn(nil)
+		require.NoError(t, err)
+		txnDB, err := txns[i].GetDatabase("db")
+		require.NoError(t, err)
+		txnRel, err := txnDB.GetRelationByName(schema.Name)
+		require.NoError(t, err)
+		// Offset zero makes every batch contain the same primary key.
+		batches[i] = containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
+		require.NoError(t, txnRel.Append(ctx, batches[i]))
+	}
+	defer func() {
+		for _, bat := range batches {
+			bat.Close()
+		}
+	}()
+
+	start := make(chan struct{})
+	errs := make(chan error, txnCount)
+	var wg sync.WaitGroup
+	for _, txn := range txns {
+		wg.Add(1)
+		go func(txn txnif.AsyncTxn) {
+			defer wg.Done()
+			<-start
+			errs <- txn.Commit(ctx)
+		}(txn)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	failures := 0
+	duplicates := 0
+	wwConflicts := 0
+	otherFailures := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+		} else {
+			failures++
+			switch {
+			case moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry):
+				duplicates++
+			case moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict):
+				wwConflicts++
+			default:
+				otherFailures++
+				t.Logf("unexpected commit error: %v", err)
+			}
+		}
+	}
+	t.Logf(
+		"same-PK concurrent commit: successes=%d failures=%d duplicates=%d ww-conflicts=%d other=%d rows=%d",
+		successes, failures, duplicates, wwConflicts, otherFailures, tableEntry.GetRows(),
+	)
+	it := tableEntry.MakeDataObjectIt()
+	defer it.Release()
+	for ok := it.First(); ok; ok = it.Next() {
+		obj := it.Item()
+		rows, err := obj.GetObjectData().Rows()
+		require.NoError(t, err)
+		t.Logf("data object: id=%s physical-rows=%d", obj.ID().String(), rows)
+	}
+	t.Logf("data object count: %d", tableEntry.ObjectCnt(false))
+	require.Equal(t, 1, successes)
+	require.Equal(t, txnCount-1, failures)
+	require.Equal(t, uint64(1), tableEntry.GetRows())
 }
 
 func TestIndex(t *testing.T) {
@@ -1645,7 +1812,6 @@ func TestReplayAppendNodeCreateTS(t *testing.T) {
 	node.TxnMVCCNode.End = types.TS{}
 	assert.Equal(t, prepareTS, replayAppendNodeCreateTS(node))
 }
-
 // dedupRangeObjectData observes the real incremental object traversal without I/O.
 type dedupRangeObjectData struct {
 	containsObjectData

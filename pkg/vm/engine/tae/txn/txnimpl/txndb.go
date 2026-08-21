@@ -526,6 +526,11 @@ func (db *txnDB) Freeze(ctx context.Context) (err error) {
 		}
 		v2.TxnTNAppendDeduplicateDurationHistogram.Observe(time.Since(now).Seconds())
 	}
+	for _, table := range db.tables {
+		if err = table.FreezeAppend(); err != nil {
+			return err
+		}
+	}
 	return
 }
 
@@ -544,6 +549,9 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 			txnif.PrePreparePhase,
 			table.store.rt.Now(),
 		); err != nil {
+			return
+		}
+		if err = table.ReapplyTransferredTombstones(); err != nil {
 			return
 		}
 	}
