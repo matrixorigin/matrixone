@@ -1,26 +1,26 @@
 {
   "schema_version": 2,
-  "matrixone_sha": "cd90980a180edb03d3700d6845e875c827a57005",
+  "matrixone_sha": "badab14cb6d05060663fdfb691f3da19975b09c1",
   "config": "pkg/embed:1log-1tn-2cn;exact-authoritative",
-  "window_start_utc": "2026-08-21T09:30:16.249184Z",
-  "window_end_utc": "2026-08-21T09:30:40.532024Z",
+  "window_start_utc": "2026-08-21T09:40:27.170844Z",
+  "window_end_utc": "2026-08-21T09:40:55.430467Z",
   "integrity": "complete",
   "nodes": [
     {
-      "service_id": "0-cn-17001",
+      "service_id": "0-cn-20001",
       "report": {
         "schema_version": 2,
         "enabled": true,
         "metadata": {
-          "matrixone_sha": "cd90980a180edb03d3700d6845e875c827a57005",
+          "matrixone_sha": "badab14cb6d05060663fdfb691f3da19975b09c1",
           "config": "pkg/embed:1log-1tn-2cn;exact-authoritative",
-          "window": "2026-08-21T09:30:16.249184Z/2026-08-21T09:30:40.532024Z",
+          "window": "2026-08-21T09:40:27.170844Z/2026-08-21T09:40:55.430467Z",
           "integrity": "complete"
         },
         "consumers": {
           "prepared_plan": {
-            "checks": 256,
-            "stable_checks": 256,
+            "checks": 268,
+            "stable_checks": 268,
             "inconclusive_checks": 0,
             "invalidations": 255,
             "bucket_invalidations": 255,
@@ -31,23 +31,23 @@
             "precise_false_negatives": 0
           },
           "rc_table_cache": {
-            "checks": 6349,
-            "stable_checks": 6349,
+            "checks": 6499,
+            "stable_checks": 6499,
             "inconclusive_checks": 0,
             "invalidations": 128,
-            "bucket_invalidations": 128,
+            "bucket_invalidations": 132,
             "precise_invalidations": 128,
-            "bucket_false_positives": 0,
+            "bucket_false_positives": 4,
             "bucket_false_negatives": 0,
             "precise_false_positives": 0,
             "precise_false_negatives": 0
           }
         },
         "events": {
-          "database_delete": 1,
-          "database_insert": 8,
-          "table_delete": 387,
-          "table_upsert": 551
+          "database_delete": 3,
+          "database_insert": 10,
+          "table_delete": 394,
+          "table_upsert": 558
         },
         "prepared_plan_rebuild": {
           "count": 255,
@@ -55,8 +55,8 @@
           "errors": 0,
           "misses": 0,
           "p50_ns": 250000,
-          "p95_ns": 250000,
-          "p99_ns": 500000,
+          "p95_ns": 1000000,
+          "p99_ns": 1000000,
           "buckets": [
             {
               "upper_bound_ns": 1000,
@@ -80,23 +80,23 @@
             },
             {
               "upper_bound_ns": 100000,
-              "count": 85
+              "count": 43
             },
             {
               "upper_bound_ns": 250000,
-              "count": 162
+              "count": 159
             },
             {
               "upper_bound_ns": 500000,
-              "count": 6
+              "count": 37
             },
             {
               "upper_bound_ns": 1000000,
-              "count": 2
+              "count": 14
             },
             {
               "upper_bound_ns": 5000000,
-              "count": 0
+              "count": 2
             },
             {
               "upper_bound_ns": 10000000,
@@ -117,8 +117,8 @@
           "successes": 128,
           "errors": 0,
           "misses": 0,
-          "p50_ns": 5000,
-          "p95_ns": 10000,
+          "p50_ns": 10000,
+          "p95_ns": 25000,
           "p99_ns": 25000,
           "buckets": [
             {
@@ -127,19 +127,19 @@
             },
             {
               "upper_bound_ns": 5000,
-              "count": 117
+              "count": 52
             },
             {
               "upper_bound_ns": 10000,
-              "count": 7
+              "count": 54
             },
             {
               "upper_bound_ns": 25000,
-              "count": 4
+              "count": 20
             },
             {
               "upper_bound_ns": 50000,
-              "count": 0
+              "count": 2
             },
             {
               "upper_bound_ns": 100000,
@@ -177,55 +177,55 @@
         },
         "shadow": {
           "accounts": 1,
-          "database_entries": 8,
-          "table_entries": 170,
+          "database_entries": 9,
+          "table_entries": 178,
           "overflow": false,
-          "estimated_retained_bytes": 12694
+          "estimated_retained_bytes": 13290
         }
       }
     },
     {
-      "service_id": "1-cn-17001",
+      "service_id": "1-cn-20001",
       "report": {
         "schema_version": 2,
         "enabled": true,
         "metadata": {
-          "matrixone_sha": "cd90980a180edb03d3700d6845e875c827a57005",
+          "matrixone_sha": "badab14cb6d05060663fdfb691f3da19975b09c1",
           "config": "pkg/embed:1log-1tn-2cn;exact-authoritative",
-          "window": "2026-08-21T09:30:16.249184Z/2026-08-21T09:30:40.532024Z",
+          "window": "2026-08-21T09:40:27.170844Z/2026-08-21T09:40:55.430467Z",
           "integrity": "complete"
         },
         "consumers": {
           "prepared_plan": {
-            "checks": 24,
-            "stable_checks": 24,
+            "checks": 20,
+            "stable_checks": 20,
             "inconclusive_checks": 0,
             "invalidations": 0,
-            "bucket_invalidations": 0,
+            "bucket_invalidations": 4,
             "precise_invalidations": 0,
-            "bucket_false_positives": 0,
+            "bucket_false_positives": 4,
             "bucket_false_negatives": 0,
             "precise_false_positives": 0,
             "precise_false_negatives": 0
           },
           "rc_table_cache": {
-            "checks": 80147,
-            "stable_checks": 80147,
+            "checks": 80993,
+            "stable_checks": 80993,
             "inconclusive_checks": 0,
             "invalidations": 0,
-            "bucket_invalidations": 13,
+            "bucket_invalidations": 28,
             "precise_invalidations": 0,
-            "bucket_false_positives": 13,
+            "bucket_false_positives": 28,
             "bucket_false_negatives": 0,
             "precise_false_positives": 0,
             "precise_false_negatives": 0
           }
         },
         "events": {
-          "database_delete": 1,
-          "database_insert": 8,
-          "table_delete": 387,
-          "table_upsert": 551
+          "database_delete": 3,
+          "database_insert": 10,
+          "table_delete": 394,
+          "table_upsert": 558
         },
         "prepared_plan_rebuild": {
           "count": 0,
@@ -355,10 +355,10 @@
         },
         "shadow": {
           "accounts": 1,
-          "database_entries": 8,
-          "table_entries": 170,
+          "database_entries": 9,
+          "table_entries": 178,
           "overflow": false,
-          "estimated_retained_bytes": 12694
+          "estimated_retained_bytes": 13290
         }
       }
     }
@@ -389,6 +389,46 @@
       "ddl_cn": "cn-1",
       "stable_terminal_samples": 128,
       "status": "completed"
+    },
+    {
+      "name": "no_change",
+      "ddl_type": "none",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "none",
+      "stable_terminal_samples": 1,
+      "status": "completed"
+    },
+    {
+      "name": "truncate",
+      "ddl_type": "truncate",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "stable_terminal_samples": 1,
+      "status": "completed"
+    },
+    {
+      "name": "rename",
+      "ddl_type": "rename",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "stable_terminal_samples": 1,
+      "status": "completed"
+    },
+    {
+      "name": "table_drop_recreate",
+      "ddl_type": "drop-recreate",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "stable_terminal_samples": 1,
+      "status": "completed"
+    },
+    {
+      "name": "database_drop_recreate",
+      "ddl_type": "database-drop-recreate",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "stable_terminal_samples": 1,
+      "status": "completed"
     }
   ],
   "prepared_plan_rebuild": {
@@ -397,8 +437,8 @@
     "errors": 0,
     "misses": 0,
     "p50_ns": 250000,
-    "p95_ns": 250000,
-    "p99_ns": 500000,
+    "p95_ns": 1000000,
+    "p99_ns": 1000000,
     "buckets": [
       {
         "upper_bound_ns": 1000,
@@ -422,23 +462,23 @@
       },
       {
         "upper_bound_ns": 100000,
-        "count": 85
+        "count": 43
       },
       {
         "upper_bound_ns": 250000,
-        "count": 162
+        "count": 159
       },
       {
         "upper_bound_ns": 500000,
-        "count": 6
+        "count": 37
       },
       {
         "upper_bound_ns": 1000000,
-        "count": 2
+        "count": 14
       },
       {
         "upper_bound_ns": 5000000,
-        "count": 0
+        "count": 2
       },
       {
         "upper_bound_ns": 10000000,
@@ -459,8 +499,8 @@
     "successes": 128,
     "errors": 0,
     "misses": 0,
-    "p50_ns": 5000,
-    "p95_ns": 10000,
+    "p50_ns": 10000,
+    "p95_ns": 25000,
     "p99_ns": 25000,
     "buckets": [
       {
@@ -469,19 +509,19 @@
       },
       {
         "upper_bound_ns": 5000,
-        "count": 117
+        "count": 52
       },
       {
         "upper_bound_ns": 10000,
-        "count": 7
+        "count": 54
       },
       {
         "upper_bound_ns": 25000,
-        "count": 4
+        "count": 20
       },
       {
         "upper_bound_ns": 50000,
-        "count": 0
+        "count": 2
       },
       {
         "upper_bound_ns": 100000,
@@ -519,18 +559,18 @@
   },
   "decision_totals": {
     "prepared_plan.bucket_false_negatives": 0,
-    "prepared_plan.bucket_false_positives": 0,
-    "prepared_plan.checks": 280,
+    "prepared_plan.bucket_false_positives": 4,
+    "prepared_plan.checks": 288,
     "prepared_plan.inconclusive_checks": 0,
     "prepared_plan.precise_false_negatives": 0,
     "prepared_plan.precise_false_positives": 0,
-    "prepared_plan.stable_checks": 280,
+    "prepared_plan.stable_checks": 288,
     "rc_table_cache.bucket_false_negatives": 0,
-    "rc_table_cache.bucket_false_positives": 13,
-    "rc_table_cache.checks": 86496,
+    "rc_table_cache.bucket_false_positives": 32,
+    "rc_table_cache.checks": 87492,
     "rc_table_cache.inconclusive_checks": 0,
     "rc_table_cache.precise_false_negatives": 0,
     "rc_table_cache.precise_false_positives": 0,
-    "rc_table_cache.stable_checks": 86496
+    "rc_table_cache.stable_checks": 87492
   }
 }

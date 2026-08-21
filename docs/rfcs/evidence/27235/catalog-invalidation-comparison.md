@@ -2,7 +2,7 @@
 
 Status: evidence-only; no production candidate selected
 
-Measurement head: `cd90980a180edb03d3700d6845e875c827a57005`
+Measurement head: `badab14cb6d05060663fdfb691f3da19975b09c1`
 Base: `5735684d69c9b171c4d7a5ebee3ebcc539ffc8cc`
 Harness: `pkg/embed`, one Log, one TN, two CNs
 
@@ -15,7 +15,9 @@ terminal samples each:
 
 - binary and text prepared statements across CN0/CN1 DDL;
 - RC table-cache reload across CN0/CN1 DDL;
-- same-account unrelated DDL opportunities.
+- same-account unrelated DDL opportunities;
+- no-change, TRUNCATE, RENAME, table drop/recreate, and database
+  drop/recreate lifecycle scenarios.
 
 The aggregate latency counters contain 255 successful prepared-plan rebuilds
 and 128 successful RC table-cache reloads. There are no terminal errors or
@@ -28,7 +30,7 @@ Across both CN reports, stable checks had zero inconclusive observations and:
 | Oracle | Stable FN | Stable FP | Overflow |
 | --- | ---: | ---: | --- |
 | precise shadow | 0 | 0 | false |
-| 4096-account bucket | 0 | 13 | false |
+| 4096-account bucket | 0 | 36 | false |
 
 The bucket false positives are measured mechanism evidence, not a production
 budget. The bucket remains measurement-only until Catalog, frontend, and
