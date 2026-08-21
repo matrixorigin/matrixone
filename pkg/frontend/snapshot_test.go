@@ -77,6 +77,12 @@ func TestGetFkDepsFromTableInfos(t *testing.T) {
 			typ:       view,
 			createSql: "create view `d`.`v` as select 1",
 		},
+		{
+			dbName:    "d",
+			tblName:   "seq",
+			relKind:   catalog.SystemSequenceRel,
+			createSql: "create sequence `d`.`seq` as bigint no cycle",
+		},
 	}
 
 	deps, err := getFkDepsFromTableInfos(context.Background(), tableInfos)
@@ -84,6 +90,374 @@ func TestGetFkDepsFromTableInfos(t *testing.T) {
 	require.Equal(t, []string{genKey("d", "parent")}, deps[genKey("d", "child")])
 	require.Equal(t, []string{genKey("d", "self_ref")}, deps[genKey("d", "self_ref")])
 	require.NotContains(t, deps, genKey("d", "v"))
+	require.NotContains(t, deps, genKey("d", "seq"))
+}
+
+func TestSequenceRestoreMetadataAndOrdering(t *testing.T) {
+	t.Run("table enumeration includes sequences", func(t *testing.T) {
+		whereClause := buildTableInfoListWhereClause("db1", "", uint32(sysAccountID))
+		require.NotContains(t, whereClause,
+			fmt.Sprintf("relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel)))
+		require.Contains(t, whereClause, "relkind not in")
+		require.Contains(t, whereClause,
+			fmt.Sprintf("relkind != %s", quoteSQLStringLiteral(catalog.SystemPartitionRel)))
+	})
+
+	t.Run("sequence DDL is reconstructed from historical type and state", func(t *testing.T) {
+		const snapshotTS = int64(12345)
+		var queries []string
+		query := func(_ context.Context, sql string, _ ...uint64) ([][]string, error) {
+			queries = append(queries, sql)
+			if strings.Contains(sql, "mo_catalog.mo_columns") {
+				return [][]string{{"BIGINT UNSIGNED"}}, nil
+			}
+			return [][]string{{"1", "18446744073709551615", "11", "3", "1"}}, nil
+		}
+
+		createSQL, err := getCreateSequenceSQL(
+			context.Background(), snapshotTS, "db-name", "seq-name", query)
+		require.NoError(t, err)
+		require.Equal(t,
+			"create sequence `db-name`.`seq-name` as BIGINT UNSIGNED increment by 3 minvalue 1 maxvalue 18446744073709551615 start with 11 cycle",
+			createSQL)
+		require.Len(t, queries, 2)
+		require.Contains(t, queries[0], "mo_catalog.mo_columns {MO_TS = 12345}")
+		require.Contains(t, queries[1], "from `db-name`.`seq-name` {MO_TS = 12345}")
+	})
+
+	t.Run("sequences are restored before tables and views", func(t *testing.T) {
+		ordinary := &tableInfo{tblName: "ordinary", relKind: catalog.SystemOrdinaryRel}
+		sequence := &tableInfo{tblName: "sequence", relKind: catalog.SystemSequenceRel}
+		viewInfo := &tableInfo{tblName: "view", relKind: catalog.SystemViewRel}
+
+		ordered, err := fillTableCreateSQLsForRestore(
+			"", "test", []*tableInfo{ordinary, sequence, viewInfo},
+			func(tblInfo *tableInfo) (string, error) { return tblInfo.tblName, nil })
+		require.NoError(t, err)
+		require.Equal(t, []*tableInfo{sequence, ordinary, viewInfo}, ordered)
+	})
+}
+
+func TestGetCreateSequenceSQLErrors(t *testing.T) {
+	ctx := context.Background()
+	wantErr := moerr.NewInternalErrorNoCtx("query failed")
+
+	t.Run("type query error", func(t *testing.T) {
+		_, err := getCreateSequenceSQL(ctx, 42, "db1", "seq1",
+			func(context.Context, string, ...uint64) ([][]string, error) {
+				return nil, wantErr
+			})
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("missing type metadata", func(t *testing.T) {
+		_, err := getCreateSequenceSQL(ctx, 42, "db1", "seq1",
+			func(context.Context, string, ...uint64) ([][]string, error) {
+				return nil, nil
+			})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("state query error", func(t *testing.T) {
+		queryCount := 0
+		_, err := getCreateSequenceSQL(ctx, 42, "db1", "seq1",
+			func(context.Context, string, ...uint64) ([][]string, error) {
+				queryCount++
+				if queryCount == 1 {
+					return [][]string{{"BIGINT"}}, nil
+				}
+				return nil, wantErr
+			})
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("missing state metadata", func(t *testing.T) {
+		queryCount := 0
+		_, err := getCreateSequenceSQL(ctx, 42, "db1", "seq1",
+			func(context.Context, string, ...uint64) ([][]string, error) {
+				queryCount++
+				if queryCount == 1 {
+					return [][]string{{"BIGINT"}}, nil
+				}
+				return nil, nil
+			})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("invalid cycle state", func(t *testing.T) {
+		queryCount := 0
+		_, err := getCreateSequenceSQL(ctx, 42, "db1", "seq1",
+			func(context.Context, string, ...uint64) ([][]string, error) {
+				queryCount++
+				if queryCount == 1 {
+					return [][]string{{"BIGINT"}}, nil
+				}
+				return [][]string{{"1", "100", "7", "3", "invalid"}}, nil
+			})
+		require.ErrorContains(t, err, "invalid cycle state")
+	})
+}
+
+func setCurrentRestoreObject(
+	bh *backgroundExecTest,
+	dbName string,
+	tblName string,
+	accountID uint32,
+	relKind string,
+) string {
+	sql := buildTableInfoListSQL(dbName, tblName, 0, accountID)
+	var rows [][]interface{}
+	if relKind != "" {
+		typ := "BASE TABLE"
+		if relKind == catalog.SystemViewRel {
+			typ = "VIEW"
+		}
+		rows = [][]interface{}{{tblName, typ, relKind, ""}}
+	}
+	bh.sql2result[sql] = newMrsForRestoreStringRows(
+		[]string{"relname", "table_type", "relkind", "viewdef"}, rows)
+	return sql
+}
+
+func TestRestoreSequenceState(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(10))
+	const createSQL = "create sequence `dst-db`.`seq` as BIGINT increment by 3 minvalue 1 maxvalue 100 start with 7 no cycle"
+	currentObjectSQL := buildTableInfoListSQL("dst-db", "seq", 0, 20)
+
+	t.Run("copies the exact historical state", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		setCurrentRestoreObject(bh, "dst-db", "seq", 20, catalog.SystemSequenceRel)
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{
+			currentObjectSQL,
+			"drop sequence if exists `dst-db`.`seq`",
+			createSQL,
+			"delete from `dst-db`.`seq` where true",
+			"insert into `dst-db`.`seq` select * from `src-db`.`seq` {MO_TS = 12345}",
+		}, bh.executedSQLs)
+	})
+
+	t.Run("creates when the destination object is absent", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		setCurrentRestoreObject(bh, "dst-db", "seq", 20, "")
+
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{
+			currentObjectSQL,
+			createSQL,
+			"delete from `dst-db`.`seq` where true",
+			"insert into `dst-db`.`seq` select * from `src-db`.`seq` {MO_TS = 12345}",
+		}, bh.executedSQLs)
+	})
+
+	t.Run("stops when reading the destination object fails", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := moerr.NewInternalErrorNoCtx("lookup failed")
+		bh.sql2err[currentObjectSQL] = wantErr
+
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{currentObjectSQL}, bh.executedSQLs)
+	})
+
+	t.Run("rejects ambiguous destination metadata", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[currentObjectSQL] = newMrsForRestoreStringRows(
+			[]string{"relname", "table_type", "relkind", "viewdef"},
+			[][]interface{}{
+				{"seq", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+				{"seq", "VIEW", catalog.SystemViewRel, ""},
+			})
+
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.ErrorContains(t, err, "found 2 current objects named dst-db.seq during restore")
+		require.Equal(t, []string{currentObjectSQL}, bh.executedSQLs)
+	})
+
+	t.Run("stops before copying state when creation fails", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		setCurrentRestoreObject(bh, "dst-db", "seq", 20, catalog.SystemSequenceRel)
+		wantErr := moerr.NewInternalErrorNoCtx("create failed")
+		bh.sql2err[createSQL] = wantErr
+
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{
+			currentObjectSQL,
+			"drop sequence if exists `dst-db`.`seq`",
+			createSQL,
+		}, bh.executedSQLs)
+	})
+
+	t.Run("stops when dropping the destination fails", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		setCurrentRestoreObject(bh, "dst-db", "seq", 20, catalog.SystemSequenceRel)
+		dropSQL := "drop sequence if exists `dst-db`.`seq`"
+		wantErr := moerr.NewInternalErrorNoCtx("drop failed")
+		bh.sql2err[dropSQL] = wantErr
+
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{currentObjectSQL, dropSQL}, bh.executedSQLs)
+	})
+
+	t.Run("stops before copying state when delete fails", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		setCurrentRestoreObject(bh, "dst-db", "seq", 20, catalog.SystemSequenceRel)
+		deleteSQL := "delete from `dst-db`.`seq` where true"
+		wantErr := moerr.NewInternalErrorNoCtx("delete failed")
+		bh.sql2err[deleteSQL] = wantErr
+
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{
+			currentObjectSQL,
+			"drop sequence if exists `dst-db`.`seq`",
+			createSQL,
+			deleteSQL,
+		}, bh.executedSQLs)
+	})
+
+	t.Run("returns the historical state copy error", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		setCurrentRestoreObject(bh, "dst-db", "seq", 20, catalog.SystemSequenceRel)
+		copySQL := "insert into `dst-db`.`seq` select * from `src-db`.`seq` {MO_TS = 12345}"
+		wantErr := moerr.NewInternalErrorNoCtx("copy failed")
+		bh.sql2err[copySQL] = wantErr
+
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{
+			currentObjectSQL,
+			"drop sequence if exists `dst-db`.`seq`",
+			createSQL,
+			"delete from `dst-db`.`seq` where true",
+			copySQL,
+		}, bh.executedSQLs)
+	})
+}
+
+func TestSequenceRestoreEntryPoints(t *testing.T) {
+	const (
+		snapshotTS = int64(12345)
+		createSQL  = "create sequence `db1`.`seq1` as BIGINT increment by 3 minvalue 1 maxvalue 100 start with 7 no cycle"
+	)
+	sequence := &tableInfo{
+		dbName:    "db1",
+		tblName:   "seq1",
+		relKind:   catalog.SystemSequenceRel,
+		createSql: createSQL,
+	}
+	accountCtx := defines.AttachAccountId(context.Background(), uint32(10))
+
+	tests := []struct {
+		name        string
+		toAccountID uint32
+		currentKind string
+		wantDropSQL string
+		run         func(BackgroundExec) error
+	}{
+		{
+			name:        "same-account snapshot restore replaces a table",
+			toAccountID: 10,
+			currentKind: catalog.SystemOrdinaryRel,
+			wantDropSQL: "drop table if exists `db1`.`seq1`",
+			run: func(bh BackgroundExec) error {
+				return recreateTable(accountCtx, "", bh, "snapshot1", sequence, 10, snapshotTS)
+			},
+		},
+		{
+			name:        "PITR restore replaces a view",
+			toAccountID: 10,
+			currentKind: catalog.SystemViewRel,
+			wantDropSQL: "drop view if exists `db1`.`seq1`",
+			run: func(bh BackgroundExec) error {
+				return reCreateTableWithPitr(accountCtx, "", bh, "pitr1", snapshotTS, sequence)
+			},
+		},
+		{
+			name:        "cross-account snapshot restore replaces a sequence",
+			toAccountID: 20,
+			currentKind: catalog.SystemSequenceRel,
+			wantDropSQL: "drop sequence if exists `db1`.`seq1`",
+			run: func(bh BackgroundExec) error {
+				return recreateTableFromTS(context.Background(), "", bh, sequence, snapshotTS, 10, 20)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			currentObjectSQL := setCurrentRestoreObject(
+				bh, "db1", "seq1", tc.toAccountID, tc.currentKind)
+
+			require.NoError(t, tc.run(bh))
+			require.Equal(t, []string{
+				currentObjectSQL,
+				tc.wantDropSQL,
+				createSQL,
+				"delete from `db1`.`seq1` where true",
+				"insert into `db1`.`seq1` select * from `db1`.`seq1` {MO_TS = 12345}",
+			}, bh.executedSQLs)
+		})
+	}
+
+	t.Run("account identity is required", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		err := recreateTable(context.Background(), "", bh, "snapshot1", sequence, 10, snapshotTS)
+		require.Error(t, err)
+		require.Empty(t, bh.executedSQLs)
+
+		err = reCreateTableWithPitr(context.Background(), "", bh, "pitr1", snapshotTS, sequence)
+		require.Error(t, err)
+		require.Empty(t, bh.executedSQLs)
+	})
 }
 
 func TestMongoDBMappingsFollowExternalTableRestoreSkipPolicy(t *testing.T) {

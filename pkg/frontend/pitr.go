@@ -1523,6 +1523,24 @@ func reCreateTableWithPitr(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
 	}
+	if isSequence(tblInfo) {
+		accountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreSequence(
+			ctx,
+			bh,
+			tblInfo.createSql,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			ts,
+			accountID,
+			accountID,
+		)
+	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
@@ -1596,6 +1614,17 @@ func getTableInfoWithPitr(
 		pitrName,
 		tableInfos,
 		func(tblInfo *tableInfo) (string, error) {
+			if isSequence(tblInfo) {
+				return getCreateSequenceSQL(
+					ctx,
+					ts,
+					tblInfo.dbName,
+					tblInfo.tblName,
+					func(queryCtx context.Context, sql string, colIndices ...uint64) ([][]string, error) {
+						return getStringColsList(queryCtx, bh, sql, colIndices...)
+					},
+				)
+			}
 			return getCreateTableSqlWithTs(ctx, bh, ts, tblInfo.dbName, tblInfo.tblName)
 		},
 	)

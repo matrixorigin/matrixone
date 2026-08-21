@@ -162,7 +162,7 @@ func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Pl
 		return false, nil
 	}
 	accountID, err := defines.GetAccountId(ctx)
-	if err != nil || accountID == 0 {
+	if err != nil {
 		return false, nil
 	}
 	statementID := c.proc.GetStmtProfile().GetStmtId()

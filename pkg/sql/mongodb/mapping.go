@@ -108,6 +108,9 @@ func ParseTableMappingSpec(
 		if !strings.EqualFold(column.Name.ColName(), planned.Name) {
 			return TableMappingSpec{}, moerr.NewInternalError(ctx, "MongoDB parsed and planned column order diverged")
 		}
+		if planned.GeneratedCol != nil {
+			return TableMappingSpec{}, moerr.NewNotSupportedf(ctx, "MongoDB external table does not support generated column '%s'", planned.Name)
+		}
 		path := planned.Name
 		conversion := mapping.Conversion
 		seenPath := false
