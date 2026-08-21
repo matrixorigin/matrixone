@@ -212,12 +212,14 @@ func filterSnapshotEntries(entries []*CheckpointEntry, snapshot *types.TS) []*Ch
 		return entries
 	}
 
-	// Find the maximum global end timestamp
+	// Find the maximum global end timestamp.
 	var maxGlobalEnd types.TS
+	hasGlobal := false
 	for _, entry := range entries {
 		if entry != nil && entry.entryType == ET_Global {
-			if entry.end.GT(&maxGlobalEnd) {
+			if !hasGlobal || entry.end.GT(&maxGlobalEnd) {
 				maxGlobalEnd = entry.end
+				hasGlobal = true
 			}
 		}
 	}
@@ -253,30 +255,51 @@ func filterSnapshotEntries(entries []*CheckpointEntry, snapshot *types.TS) []*Ch
 		return 0
 	})
 
-	if snapshot != nil && snapshot.Equal(&maxGlobalEnd) {
-		// Find the global checkpoint with end == maxGlobalEnd
-		for i := range entries {
-			// nil entries sort first (see the comparator above), so guard the
-			// dereference here rather than assume a non-nil invariant.
-			if entries[i] != nil &&
-				entries[i].end.Equal(&maxGlobalEnd) &&
-				entries[i].entryType == ET_Global {
-				// Return only the global checkpoint, since snapshot ts == gckp.end
-				return []*CheckpointEntry{entries[i]}
-			}
-		}
-	}
-	// Find the appropriate truncation point
-	for i := range entries {
-		if entries[i] == nil {
-			continue
-		}
-		p := maxGlobalEnd.Prev()
-		if entries[i].end.Equal(&p) || (entries[i].end.Equal(&maxGlobalEnd) &&
-			entries[i].entryType == ET_Global) {
-			return entries[i:]
-		}
+	if !hasGlobal {
+		return entries
 	}
 
-	return entries
+	// Locate the latest global after sorting. nil entries sort first (see the
+	// comparator above), so guard the dereference here rather than assume a
+	// non-nil invariant.
+	globalIndex := -1
+	for i := range entries {
+		if entries[i] != nil &&
+			entries[i].end.Equal(&maxGlobalEnd) &&
+			entries[i].entryType == ET_Global {
+			globalIndex = i
+			break
+		}
+	}
+	if globalIndex == -1 {
+		return entries
+	}
+
+	if snapshot != nil && snapshot.Equal(&maxGlobalEnd) {
+		// Return only the global checkpoint, since snapshot ts == gckp.end.
+		return []*CheckpointEntry{entries[globalIndex]}
+	}
+
+	// Keep at most one immediate predecessor before the latest global. During
+	// checkpoint GC publication the replaced incremental and its compacted
+	// replacement can both end at global.end.Prev(). Returning both would make
+	// the global have two predecessors, which is not a consumable snapshot chain.
+	// Tied entries are sorted incremental-first above, so retain the producer's
+	// original incremental predecessor and skip the redundant compacted metadata.
+	predecessorEnd := maxGlobalEnd.Prev()
+	predecessorIndex := -1
+	for i := 0; i < globalIndex; i++ {
+		if entries[i] != nil &&
+			entries[i].entryType != ET_Global &&
+			entries[i].end.Equal(&predecessorEnd) {
+			predecessorIndex = i
+			break
+		}
+	}
+	if predecessorIndex == -1 {
+		return entries[globalIndex:]
+	}
+
+	entries[globalIndex-1] = entries[predecessorIndex]
+	return entries[globalIndex-1:]
 }

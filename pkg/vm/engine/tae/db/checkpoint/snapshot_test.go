@@ -288,6 +288,70 @@ func TestFilterSnapshotEntries(t *testing.T) {
 		require.Equal(t, compactedEnd, result[3].end)
 		require.Equal(t, ET_Incremental, result[4].entryType)
 	})
+
+	t.Run("TiedPredecessorsBeforeGlobal", func(t *testing.T) {
+		predecessorEnd := types.BuildTS(300, 0)
+		globalEnd := predecessorEnd.Next()
+		entries := []*CheckpointEntry{
+			// Checkpoint GC publishes compacted metadata before removing the
+			// incremental metadata it replaces.
+			{
+				start:     types.TS{},
+				end:       predecessorEnd,
+				entryType: ET_Compacted,
+			},
+			{
+				start:     types.BuildTS(200, 0),
+				end:       predecessorEnd,
+				entryType: ET_Incremental,
+			},
+			{
+				start:     types.TS{},
+				end:       globalEnd,
+				entryType: ET_Global,
+			},
+			{
+				start:     globalEnd,
+				end:       types.BuildTS(400, 0),
+				entryType: ET_Incremental,
+			},
+		}
+
+		result := filterSnapshotEntries(entries, &types.TS{})
+		require.Len(t, result, 3)
+		require.Equal(t, ET_Incremental, result[0].entryType)
+		require.Equal(t, predecessorEnd, result[0].end)
+		require.Equal(t, ET_Global, result[1].entryType)
+		require.Equal(t, ET_Incremental, result[2].entryType)
+	})
+
+	t.Run("CompactedPredecessorBeforeGlobal", func(t *testing.T) {
+		predecessorEnd := types.BuildTS(300, 0)
+		globalEnd := predecessorEnd.Next()
+		entries := []*CheckpointEntry{
+			{
+				start:     types.TS{},
+				end:       predecessorEnd,
+				entryType: ET_Compacted,
+			},
+			{
+				start:     types.TS{},
+				end:       globalEnd,
+				entryType: ET_Global,
+			},
+			{
+				start:     globalEnd,
+				end:       types.BuildTS(400, 0),
+				entryType: ET_Incremental,
+			},
+		}
+
+		result := filterSnapshotEntries(entries, &types.TS{})
+		require.Len(t, result, 3)
+		require.Equal(t, ET_Compacted, result[0].entryType)
+		require.Equal(t, ET_Global, result[1].entryType)
+		require.Equal(t, ET_Incremental, result[2].entryType)
+	})
 }
 
 func createMockCheckpointEntry(start, end int64) *CheckpointEntry {
