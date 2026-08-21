@@ -1,0 +1,163 @@
+DROP DATABASE IF EXISTS insert_set_operation;
+CREATE DATABASE insert_set_operation;
+USE insert_set_operation;
+CREATE TABLE source_left(i INT, s VARCHAR(10));
+CREATE TABLE source_right(i INT, s VARCHAR(10));
+CREATE TABLE destination(i BIGINT, s VARCHAR(20));
+INSERT INTO source_left VALUES
+(1, 'a'), (1, 'a'), (2, 'b'), (3, 'c'), (NULL, 'n');
+INSERT INTO source_right VALUES
+(1, 'a'), (1, 'a'), (1, 'a'), (2, 'b'), (4, 'd'), (NULL, 'n'), (NULL, 'n');
+INSERT INTO destination(i, s)
+SELECT i, s FROM source_left
+UNION ALL
+SELECT i, s FROM source_right;
+SELECT i, s, COUNT(*) AS duplicate_count
+FROM destination
+GROUP BY i, s
+ORDER BY i IS NOT NULL, i, s;
+➤ i[-5,64,0]  ¦  s[12,20,0]  ¦  duplicate_count[-5,64,0]  𝄀
+null  ¦  n  ¦  3  𝄀
+1  ¦  a  ¦  5  𝄀
+2  ¦  b  ¦  2  𝄀
+3  ¦  c  ¦  1  𝄀
+4  ¦  d  ¦  1
+TRUNCATE TABLE destination;
+INSERT INTO destination(i, s)
+SELECT i, s FROM source_left
+UNION DISTINCT
+SELECT i, s FROM source_right;
+SELECT COUNT(*) AS total_count, COUNT(i) AS nonnull_count FROM destination;
+➤ total_count[-5,64,0]  ¦  nonnull_count[-5,64,0]  𝄀
+5  ¦  4
+SELECT i, s FROM destination ORDER BY i IS NOT NULL, i, s;
+➤ i[-5,64,0]  ¦  s[12,20,0]  𝄀
+null  ¦  n  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+3  ¦  c  𝄀
+4  ¦  d
+TRUNCATE TABLE destination;
+INSERT INTO destination(i, s)
+SELECT i, s FROM source_left
+INTERSECT
+SELECT i, s FROM source_right;
+SELECT i, s FROM destination ORDER BY i IS NOT NULL, i, s;
+➤ i[-5,64,0]  ¦  s[12,20,0]  𝄀
+null  ¦  n  𝄀
+1  ¦  a  𝄀
+2  ¦  b
+TRUNCATE TABLE destination;
+INSERT INTO destination(i, s)
+SELECT i, s FROM source_left
+INTERSECT ALL
+SELECT i, s FROM source_right;
+SELECT i, s, COUNT(*) AS duplicate_count
+FROM destination
+GROUP BY i, s
+ORDER BY i IS NOT NULL, i, s;
+➤ i[-5,64,0]  ¦  s[12,20,0]  ¦  duplicate_count[-5,64,0]  𝄀
+null  ¦  n  ¦  1  𝄀
+1  ¦  a  ¦  2  𝄀
+2  ¦  b  ¦  1
+TRUNCATE TABLE destination;
+INSERT INTO destination(i, s)
+SELECT i, s FROM source_left
+EXCEPT
+SELECT i, s FROM source_right;
+SELECT i, s FROM destination ORDER BY i IS NOT NULL, i, s;
+➤ i[-5,64,0]  ¦  s[12,20,0]  𝄀
+3  ¦  c
+TRUNCATE TABLE destination;
+INSERT INTO destination(i, s)
+SELECT i, s FROM source_left
+MINUS
+SELECT i, s FROM source_right;
+SELECT i, s FROM destination ORDER BY i IS NOT NULL, i, s;
+➤ i[-5,64,0]  ¦  s[12,20,0]  𝄀
+3  ¦  c
+TRUNCATE TABLE destination;
+INSERT INTO destination(i, s)
+SELECT i, s FROM source_left
+UNION ALL
+SELECT i, s FROM source_right
+ORDER BY i, s
+LIMIT 3;
+SELECT i, s, COUNT(*) AS duplicate_count
+FROM destination
+GROUP BY i, s
+ORDER BY i IS NOT NULL, i, s;
+➤ i[-5,64,0]  ¦  s[12,20,0]  ¦  duplicate_count[-5,64,0]  𝄀
+null  ¦  n  ¦  3
+TRUNCATE TABLE destination;
+INSERT INTO destination(i, s)
+(SELECT i, s FROM source_left
+UNION ALL
+SELECT i, s FROM source_right);
+SELECT COUNT(*) AS parenthesized_count FROM destination;
+➤ parenthesized_count[-5,64,0]  𝄀
+12
+TRUNCATE TABLE destination;
+WITH source_cte AS (
+SELECT i, s FROM source_left WHERE i <= 2
+)
+INSERT INTO destination(i, s)
+SELECT i, s FROM source_cte
+UNION ALL
+SELECT i, s FROM source_right WHERE i = 4;
+SELECT i, s, COUNT(*) AS duplicate_count
+FROM destination
+GROUP BY i, s
+ORDER BY i, s;
+➤ i[-5,64,0]  ¦  s[12,20,0]  ¦  duplicate_count[-5,64,0]  𝄀
+1  ¦  a  ¦  2  𝄀
+2  ¦  b  ¦  1  𝄀
+4  ¦  d  ¦  1
+CREATE TABLE ctas_control AS
+SELECT i, s FROM source_left
+UNION
+SELECT i, s FROM source_right;
+SELECT COUNT(*) AS ctas_count, COUNT(i) AS ctas_nonnull_count FROM ctas_control;
+➤ ctas_count[-5,64,0]  ¦  ctas_nonnull_count[-5,64,0]  𝄀
+5  ¦  4
+CREATE TABLE coercion_destination(
+id BIGINT,
+amount DECIMAL(10, 2),
+label VARCHAR(20)
+);
+INSERT INTO coercion_destination(id, amount, label)
+SELECT CAST(1 AS SMALLINT), CAST(1.25 AS DECIMAL(5, 2)), 'left'
+UNION ALL
+SELECT 2, 2, 'right';
+SELECT id, amount, label FROM coercion_destination ORDER BY id;
+➤ id[-5,64,0]  ¦  amount[3,10,2]  ¦  label[12,20,0]  𝄀
+1  ¦  1.25  ¦  left  𝄀
+2  ¦  2.00  ¦  right
+TRUNCATE TABLE destination;
+INSERT INTO destination(i, s)
+SELECT i, s FROM source_left
+UNION ALL
+SELECT i FROM source_right;
+SQL parser error: SELECT statements have different number of columns
+SELECT COUNT(*) AS branch_width_failure_count FROM destination;
+➤ branch_width_failure_count[-5,64,0]  𝄀
+0
+TRUNCATE TABLE destination;
+INSERT INTO destination(i, s)
+SELECT i FROM source_left
+UNION ALL
+SELECT i FROM source_right;
+invalid input: insert values does not match the number of columns
+SELECT COUNT(*) AS target_width_failure_count FROM destination;
+➤ target_width_failure_count[-5,64,0]  𝄀
+0
+CREATE TABLE integer_destination(i INT);
+INSERT INTO integer_destination
+SELECT i FROM source_left
+UNION ALL
+SELECT CAST('not-an-integer' AS INT) FROM source_right;
+invalid argument cast to int, bad value not-an-integer
+SELECT COUNT(*) AS conversion_failure_count FROM integer_destination;
+➤ conversion_failure_count[-5,64,0]  𝄀
+0
+DROP DATABASE insert_set_operation;

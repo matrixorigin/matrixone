@@ -599,13 +599,17 @@ func makePlan2Float32ConstExprWithType(v float32) *plan.Expr {
 
 func makePlan2StringConstExpr(v string, isBin ...bool) *plan.Expr_Lit {
 	c := &plan.Expr_Lit{Lit: &plan.Literal{
-		Isnull: false,
+		Isnull:      false,
+		LiteralForm: plan.StringLiteralForm_STRING_LITERAL_TEXT,
 		Value: &plan.Literal_Sval{
 			Sval: v,
 		},
 	}}
 	if len(isBin) > 0 {
 		c.Lit.IsBin = isBin[0]
+		if isBin[0] {
+			c.Lit.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_HEX
+		}
 	}
 	return c
 }
@@ -636,7 +640,7 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 }
 
 func makePlan2VarBinaryConstExprWithType(v string) *plan.Expr {
-	return &plan.Expr{
+	expr := &plan.Expr{
 		Expr: makePlan2StringConstExpr(v, false),
 		Typ: plan.Type{
 			Id:          int32(types.T_varbinary),
@@ -644,6 +648,8 @@ func makePlan2VarBinaryConstExprWithType(v string) *plan.Expr {
 			Width:       int32(len(v)),
 		},
 	}
+	expr.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_NONE
+	return expr
 }
 
 func makePlan2NullTextConstExpr(v string) *plan.Expr_Lit {
