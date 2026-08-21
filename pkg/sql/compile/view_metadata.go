@@ -754,7 +754,7 @@ func SnapshotViewMetadataInvalidationSQL(
 ) string {
 	predicate := fmt.Sprintf("d.snapshot_data='%s'", sqlquote.EscapeString(snapshotData))
 	if invalidateTimestampBindings {
-		predicate += fmt.Sprintf(" or (d.snapshot_name='' and "+
+		predicate += fmt.Sprintf(" or (json_extract(d.snapshot_data,'$.ExtraInfo.Name') is null and "+
 			"cast(json_unquote(json_extract(d.snapshot_data,'$.TS.PhysicalTime')) as bigint)=%d)", snapshotTS)
 	}
 	return viewMetadataClosureInvalidationSQL(predicate, generation)

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -370,8 +371,24 @@ func TestBindingLifecycleInvalidationSQLUsesPersistedIdentity(t *testing.T) {
 		`{"ExtraInfo":{"Name":"odd snapshot"}}`, 123, true, 7)
 	require.Contains(t, snapshotSQL,
 		`d.snapshot_data='{"ExtraInfo":{"Name":"odd snapshot"}}'`)
-	require.Contains(t, snapshotSQL, "d.snapshot_name='' and cast(json_unquote(json_extract("+
-		"d.snapshot_data,'$.TS.PhysicalTime')) as bigint)=123")
+	require.Contains(t, snapshotSQL,
+		"json_extract(d.snapshot_data,'$.ExtraInfo.Name') is null and cast(json_unquote(json_extract("+
+			"d.snapshot_data,'$.TS.PhysicalTime')) as bigint)=123")
+	require.NotContains(t, snapshotSQL, "d.snapshot_name")
+	require.Contains(t, catalog.MoViewDependenciesColumns, "snapshot_data")
+	require.Contains(t, catalog.MoViewDependenciesDDL, "snapshot_data text")
+	require.NotContains(t, catalog.MoViewDependenciesDDL, "snapshot_name")
+	dependencyColumns := make(map[string]struct{})
+	for _, column := range strings.Split(catalog.MoViewDependenciesColumns, ",") {
+		dependencyColumns[column] = struct{}{}
+	}
+	for _, match := range regexp.MustCompile(`\bd\.([a-z_]+)\b`).FindAllStringSubmatch(snapshotSQL, -1) {
+		require.Contains(t, dependencyColumns, match[1], "generated dependency column %s", match[1])
+	}
+	ddlStatements, err := mysql.Parse(context.Background(), catalog.MoViewDependenciesDDL, 1)
+	require.NoError(t, err)
+	require.Len(t, ddlStatements, 1)
+	ddlStatements[0].Free()
 	preservedTimestampSQL := SnapshotViewMetadataInvalidationSQL(
 		`{"ExtraInfo":{"Name":"odd snapshot"}}`, 123, false, 7)
 	require.NotContains(t, preservedTimestampSQL, "$.TS.PhysicalTime")
