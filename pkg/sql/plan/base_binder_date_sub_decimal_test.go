@@ -407,6 +407,7 @@ func TestResetDateFunctionArgsDoesNotFoldVarcharColumn(t *testing.T) {
 	ctx := context.Background()
 	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
 	varcharColumn := makeVarcharColumnExpr(0, 0)
+	require.True(t, varcharColumn.Typ.NotNullable)
 
 	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(varcharColumn, "SECOND"))
 	require.NoError(t, err)
@@ -420,6 +421,8 @@ func TestResetDateFunctionArgsDoesNotFoldVarcharColumn(t *testing.T) {
 	require.Len(t, normalizeExpr.Args, 2)
 	require.Equal(t, varcharColumn, normalizeExpr.Args[0])
 	require.Equal(t, int64(types.Second), extractInt64Value(normalizeExpr.Args[1]))
+	require.False(t, args[1].Typ.NotNullable,
+		"to_interval can return NULL for an invalid non-NULL VARCHAR value")
 
 	intervalType := extractInt64Value(args[2])
 	require.Equal(t, int64(types.Second), intervalType)
