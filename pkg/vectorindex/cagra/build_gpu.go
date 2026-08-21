@@ -63,8 +63,19 @@ type CagraBuild[B, Q cuvs.VectorType] struct {
 	// which owns the per-algo model. 0 means the caller did not supply it and
 	// no claim is taken -- direct API users and tests keep today's behaviour.
 	deviceBytesPerRow uint64
-	count             int64    // vectors in current sub-index
-	idBuf             [1]int64 // reusable buffer for AddRow to avoid per-call heap allocation
+
+	// hostBytesPerRow is the per-row HOST cost of the eager capacity-sized
+	// staging buffers (vector staging + INCLUDE columns + per-row ids), supplied
+	// by the create TVF for the same reason as deviceBytesPerRow. 0 means no
+	// claim is taken, which keeps direct API users and tests as they were.
+	hostBytesPerRow uint64
+	// hostClaim covers the CURRENT sub-index's host buffers. Exactly one
+	// sub-index is being filled at a time, so one claim tracks the whole
+	// resident host footprint of this builder.
+	hostClaim *memory.HostReservation
+
+	count int64    // vectors in current sub-index
+	idBuf [1]int64 // reusable buffer for AddRow to avoid per-call heap allocation
 
 	// (B, Q) routing tags computed once at construction. bIsHalf: the base
 	// type is f16. qIsHalf: the storage type is f16 (so a half base goes
@@ -165,12 +176,35 @@ func (b *CagraBuild[B, Q]) getOrCreateCurrent() (*CagraModel[B, Q], error) {
 		b.count = 0
 		// Pack to a temp tar and release the GPU/host residency now. ToSql() calls
 		// saveToFile again later, which is a no-op once Index == nil.
-		if err := full.saveToFile(); err != nil {
-			return nil, err
+		serr := full.saveToFile()
+		// saveToFile drops this sub-index's GPU/host residency, so the host claim
+		// is returned here rather than at build end -- otherwise a rotating build
+		// would hold every sub-index's host budget at once. On failure the build
+		// aborts and Destroy releases anyway; Release is idempotent.
+		b.releaseHostClaim()
+		if serr != nil {
+			return nil, serr
 		}
 	}
 
 	if b.current == nil {
+		// Claim the host memory BEFORE anything allocates it. InitEmpty's native
+		// constructor resizes host_ids to capacity, and SetFilterColumns resizes
+		// every INCLUDE column to capacity * elem_size, so by the time either
+		// returns the memory is already spent.
+		hostClaim, herr := b.reserveBuildHost(capacity)
+		if herr != nil {
+			return nil, herr
+		}
+		// Roll back on EVERY exit that does not hand the claim to b.hostClaim,
+		// including a panic out of the C++ constructor.
+		committed := false
+		defer func() {
+			if !committed {
+				hostClaim.Release()
+			}
+		}()
+
 		key := b.createKey(len(b.indexes))
 		m, err := NewCagraModelForBuild[B, Q](key, b.idxcfg, b.nthread, b.devices)
 		if err != nil {
@@ -189,6 +223,8 @@ func (b *CagraBuild[B, Q]) getOrCreateCurrent() (*CagraModel[B, Q], error) {
 		m.TmpDir = b.tmpDir
 		b.current = m
 		b.count = 0
+		b.hostClaim = hostClaim
+		committed = true
 	}
 
 	return b.current, nil
@@ -302,6 +338,9 @@ func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 // Destroy frees all GPU memory and removes any temporary files.
 func (b *CagraBuild[B, Q]) Destroy() error {
 	var errs error
+	// Return the host claim first: it must leave the ledger even if a Destroy
+	// below fails, or an aborted build would strand the budget for the CN's life.
+	b.releaseHostClaim()
 	if b.current != nil {
 		if err := b.current.Destroy(); err != nil {
 			errs = errors.Join(errs, err)
@@ -335,6 +374,37 @@ func (b *CagraBuild[B, Q]) GetIndexes() []*CagraModel[B, Q] {
 // number is passed in rather than recomputed here.
 func (b *CagraBuild[B, Q]) SetDeviceBytesPerRow(perRow uint64) {
 	b.deviceBytesPerRow = perRow
+}
+
+// SetHostBytesPerRow records the per-row host cost used to claim host memory
+// around each sub-index's eager capacity-sized allocation.
+func (b *CagraBuild[B, Q]) SetHostBytesPerRow(perRow uint64) {
+	b.hostBytesPerRow = perRow
+}
+
+// reserveBuildHost claims the host memory this sub-index is about to allocate
+// eagerly. HostRowsFitting only answers "does it fit" from a snapshot, which two
+// concurrent CREATE INDEX statements both pass before either allocates; the
+// claim is what makes that decision exclusive. It is taken BEFORE InitEmpty,
+// whose native constructor performs the capacity-sized resize.
+//
+// Returns a no-op when the per-row cost was never supplied or the capacity is
+// zero: ReserveHostMemory refuses a zero claim by design and there is nothing
+// to protect.
+func (b *CagraBuild[B, Q]) reserveBuildHost(rows int64) (*memory.HostReservation, error) {
+	if b.hostBytesPerRow == 0 || rows <= 0 {
+		return nil, nil
+	}
+	return memory.ReserveHostMemory(uint64(rows)*b.hostBytesPerRow, "cagra build")
+}
+
+// releaseHostClaim returns the current sub-index's host claim. Safe to call when
+// no claim is held; Release itself is idempotent.
+func (b *CagraBuild[B, Q]) releaseHostClaim() {
+	if b.hostClaim != nil {
+		b.hostClaim.Release()
+		b.hostClaim = nil
+	}
 }
 
 // reserveBuildVRAM claims what this sub-index build is about to allocate, in the

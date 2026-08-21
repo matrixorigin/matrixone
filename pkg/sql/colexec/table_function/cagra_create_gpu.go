@@ -68,6 +68,10 @@ type cagraBuilder interface {
 	// the same free VRAM. Passing the number rather than recomputing it keeps a
 	// single definition of a per-algo model that is easy to get wrong.
 	SetDeviceBytesPerRow(perRow uint64)
+	// SetHostBytesPerRow hands the builder the per-row HOST cost computed above,
+	// so each sub-index can claim its eager capacity-sized host allocation
+	// against the per-CN ledger before InitEmpty spends it.
+	SetHostBytesPerRow(perRow uint64)
 	ToInsertSql(ts int64) ([]string, error)
 	Destroy() error
 }
@@ -521,6 +525,9 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// model that is easy to get wrong (IVF-PQ charges PQ codes, not the
 		// dataset, and budgets the trainset as max(train, index)).
 		u.builder.SetDeviceBytesPerRow(perRow)
+		// hostPerRow was computed for the capacity decision above; hand the same
+		// number to the builder so admission and the capacity model agree.
+		u.builder.SetHostBytesPerRow(hostPerRow)
 
 		// ---- pre-filter (INCLUDE columns) setup ----
 		// u.filterCols was already resolved above (before memory.HostRowsFitting)
