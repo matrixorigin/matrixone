@@ -488,19 +488,19 @@ func (ctr *container) processAggregateFuncRange(
 			partitionStart, partitionEnd = buildPartitionInterval(ctr.ps, j, n)
 		}
 
-		left, right, rows, err := ctr.buildIntervalRows(
+		left, right, selection, err := ctr.buildIntervalRows(
 			proc, j, partitionStart, partitionEnd, frame)
 		if err != nil {
 			return nil, err
 		}
-		if rows == nil && (right < partitionStart || left > partitionEnd || left >= right) {
+		if selection == nil && (right < partitionStart || left > partitionEnd || left >= right) {
 			continue
 		}
 		left = max(left, partitionStart)
 		right = min(right, partitionEnd)
 
 		group := j - outputStart
-		if rows == nil {
+		if selection == nil {
 			for k := left; k < right; k++ {
 				if err = checkCanceled(proc, k-left); err != nil {
 					return nil, err
@@ -510,12 +510,16 @@ func (ctr *container) processAggregateFuncRange(
 				}
 			}
 		} else {
-			for k, frameRow := range rows {
-				if err = checkCanceled(proc, k); err != nil {
-					return nil, err
-				}
-				if err = ctr.batAggs[idx].Fill(group, frameRow, ctr.aggVecs[idx].Vec); err != nil {
-					return nil, err
+			iteration := 0
+			for _, span := range selection.spans {
+				for frameRow := span.start; frameRow < span.end; frameRow++ {
+					if err = checkCanceled(proc, iteration); err != nil {
+						return nil, err
+					}
+					iteration++
+					if err = ctr.batAggs[idx].Fill(group, frameRow, ctr.aggVecs[idx].Vec); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
@@ -1059,7 +1063,7 @@ func (ctr *container) processValueFuncRange(
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, rows, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
+			left, right, selection, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -1069,12 +1073,12 @@ func (ctr *container) processValueFuncRange(
 			if right > end {
 				right = end
 			}
-			if rows != nil {
-				if len(rows) == 0 {
+			if selection != nil {
+				if len(selection.spans) == 0 {
 					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 						return nil, err
 					}
-				} else if err := localResult.UnionOne(srcVec, int64(rows[0]), proc.Mp()); err != nil {
+				} else if err := localResult.UnionOne(srcVec, int64(selection.spans[0].start), proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
@@ -1099,7 +1103,7 @@ func (ctr *container) processValueFuncRange(
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, rows, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
+			left, right, selection, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -1109,12 +1113,12 @@ func (ctr *container) processValueFuncRange(
 			if right > end {
 				right = end
 			}
-			if rows != nil {
-				if len(rows) == 0 {
+			if selection != nil {
+				if len(selection.spans) == 0 {
 					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 						return nil, err
 					}
-				} else if err := localResult.UnionOne(srcVec, int64(rows[len(rows)-1]), proc.Mp()); err != nil {
+				} else if err := localResult.UnionOne(srcVec, int64(selection.spans[len(selection.spans)-1].end-1), proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
@@ -1164,7 +1168,7 @@ func (ctr *container) processValueFuncRange(
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, rows, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
+			left, right, selection, err := ctr.buildIntervalRows(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -1174,12 +1178,13 @@ func (ctr *container) processValueFuncRange(
 			if right > end {
 				right = end
 			}
-			if rows != nil {
-				if nthVal > int64(len(rows)) {
+			if selection != nil {
+				frameRow, ok := selection.nth(int(nthVal))
+				if !ok {
 					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 						return nil, err
 					}
-				} else if err := localResult.UnionOne(srcVec, int64(rows[nthVal-1]), proc.Mp()); err != nil {
+				} else if err := localResult.UnionOne(srcVec, int64(frameRow), proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
@@ -1289,13 +1294,13 @@ func (ctr *container) buildInterval(proc *process.Process, rowIdx, start, end in
 
 // buildIntervalRows retains the fast contiguous interval representation for
 // ordinary RANGE frames. A TIMESTAMP frame whose session-civil bounds cross a
-// fall-back fold instead returns its qualifying rows in window order: local
+// fall-back fold instead returns its qualifying spans in window order: local
 // civil membership can then be split into multiple instant-sorted spans.
 func (ctr *container) buildIntervalRows(
 	proc *process.Process,
 	rowIdx, start, end int,
 	frame *plan.FrameClause,
-) (left, right int, rows []int, err error) {
+) (left, right int, selection *timestampRangeSelection, err error) {
 	left, right, err = ctr.buildInterval(proc, rowIdx, start, end, frame)
 	if err != nil || frame.Type != plan.FrameClause_RANGE || len(ctr.orderVecs) == 0 {
 		return left, right, nil, err
@@ -1303,19 +1308,23 @@ func (ctr *container) buildIntervalRows(
 
 	vec := ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0]
 	loc := windowSessionLocation(proc)
-	rows, err = ctr.timestampRangeSelection(loc, rowIdx, start, end, vec, frame)
-	return left, right, rows, err
+	selection, err = ctr.timestampRangeSelection(proc, loc, rowIdx, start, end, vec, frame)
+	return left, right, selection, err
 }
 
 func (ctr *container) timestampRangeSelection(
+	proc *process.Process,
 	loc *time.Location,
 	rowIdx, start, end int,
 	vec *vector.Vector,
 	frame *plan.FrameClause,
-) ([]int, error) {
-	if vec.GetType().Oid != types.T_timestamp || vec.GetNulls().Contains(uint64(rowIdx)) ||
-		!ctr.timestampCivilOrderHasFold(loc, start, end, vec, ctr.rangeDescending()) {
+) (*timestampRangeSelection, error) {
+	if vec.GetType().Oid != types.T_timestamp || vec.GetNulls().Contains(uint64(rowIdx)) {
 		return nil, nil
+	}
+	index, err := ctr.timestampCivilOrderIndex(proc, loc, start, end, vec, ctr.rangeDescending())
+	if err != nil || !index.hasFold {
+		return nil, err
 	}
 
 	desc := ctr.rangeDescending()
@@ -1365,56 +1374,156 @@ func (ctr *container) timestampRangeSelection(
 		return nil, nil
 	}
 
-	col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
-	rows := ctr.timestampRangeRows[:0]
-	for i := start; i < end; i++ {
-		if vec.GetNulls().Contains(uint64(i)) {
-			continue
-		}
-		civil := col[i].ToDatetime(loc)
-		if (!hasLow || low <= civil) && (!hasHigh || civil <= high) {
-			rows = append(rows, i)
+	selection := &timestampRangeSelection{}
+	for _, span := range index.spans {
+		left, right := timestampCivilSpanBounds(vec, loc, span, desc, low, hasLow, high, hasHigh)
+		if left < right {
+			selection.spans = append(selection.spans, timestampCivilOrderSpan{start: left, end: right})
 		}
 	}
-	ctr.timestampRangeRows = rows
-	return rows, nil
+	return selection, nil
 }
 
 func (ctr *container) rangeDescending() bool {
 	return len(ctr.desc) > 0 && ctr.desc[len(ctr.desc)-1]
 }
 
-func (ctr *container) timestampCivilOrderHasFold(
+func (ctr *container) timestampCivilOrderIndex(
+	proc *process.Process,
 	loc *time.Location,
 	start, end int,
 	vec *vector.Vector,
 	desc bool,
-) bool {
+) (*timestampCivilOrderIndex, error) {
 	key := timestampCivilOrderKey{vec: vec, loc: loc, start: start, end: end, desc: desc}
-	if fold, ok := ctr.timestampCivilOrder[key]; ok {
-		return fold
+	if index, ok := ctr.timestampCivilOrder[key]; ok {
+		return index, nil
 	}
 	if ctr.timestampCivilOrder == nil {
-		ctr.timestampCivilOrder = make(map[timestampCivilOrderKey]bool)
+		ctr.timestampCivilOrder = make(map[timestampCivilOrderKey]*timestampCivilOrderIndex)
 	}
 
+	index := &timestampCivilOrderIndex{}
 	col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 	var previous types.Datetime
 	havePrevious := false
-	fold := false
+	spanStart := -1
 	for i := start; i < end; i++ {
+		if err := checkCanceled(proc, i-start); err != nil {
+			return nil, err
+		}
 		if vec.GetNulls().Contains(uint64(i)) {
+			if spanStart >= 0 {
+				index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: i})
+				spanStart = -1
+			}
+			havePrevious = false
 			continue
 		}
 		civil := col[i].ToDatetime(loc)
+		if spanStart < 0 {
+			spanStart = i
+		}
 		if havePrevious && ((!desc && civil < previous) || (desc && civil > previous)) {
-			fold = true
-			break
+			index.hasFold = true
+			index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: i})
+			spanStart = i
 		}
 		previous, havePrevious = civil, true
 	}
-	ctr.timestampCivilOrder[key] = fold
-	return fold
+	if spanStart >= 0 {
+		index.spans = append(index.spans, timestampCivilOrderSpan{start: spanStart, end: end})
+	}
+	ctr.timestampCivilOrder[key] = index
+	return index, nil
+}
+
+func (selection *timestampRangeSelection) nth(n int) (int, bool) {
+	for _, span := range selection.spans {
+		if n <= span.end-span.start {
+			return span.start + n - 1, true
+		}
+		n -= span.end - span.start
+	}
+	return 0, false
+}
+
+func timestampCivilSpanBounds(
+	vec *vector.Vector,
+	loc *time.Location,
+	span timestampCivilOrderSpan,
+	desc bool,
+	low types.Datetime,
+	hasLow bool,
+	high types.Datetime,
+	hasHigh bool,
+) (int, int) {
+	col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
+	left, right := span.start, span.end
+	if !desc {
+		if hasLow {
+			left = timestampCivilLowerBound(col, loc, span.start, span.end, low)
+		}
+		if hasHigh {
+			right = timestampCivilUpperBound(col, loc, left, span.end, high)
+		}
+		return left, right
+	}
+	if hasHigh {
+		left = timestampCivilDescendingLowerBound(col, loc, span.start, span.end, high)
+	}
+	if hasLow {
+		right = timestampCivilDescendingUpperBound(col, loc, left, span.end, low)
+	}
+	return left, right
+}
+
+func timestampCivilLowerBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) < target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampCivilUpperBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) <= target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampCivilDescendingLowerBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) > target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
+}
+
+func timestampCivilDescendingUpperBound(col []types.Timestamp, loc *time.Location, left, right int, target types.Datetime) int {
+	for left < right {
+		mid := left + (right-left)/2
+		if col[mid].ToDatetime(loc) >= target {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+	return left
 }
 
 func timestampRangeCivilBoundary(
