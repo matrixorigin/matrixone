@@ -874,7 +874,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 	}
 
 	switch node.NodeType {
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -2861,8 +2861,12 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		right := builder.qry.Nodes[node.Children[1]]
 		rightTag := right.BindingTags[0]
+		rightArgs := right.TblFuncExprList
+		if right.NodeType == plan.Node_VECTOR_INDEX_SCAN && right.VectorIndexScan != nil {
+			rightArgs = []*plan.Expr{right.VectorIndexScan.QueryVector, right.VectorIndexScan.CandidateLimit}
+		}
 
-		for _, expr := range right.TblFuncExprList {
+		for _, expr := range rightArgs {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
@@ -2914,7 +2918,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			})
 		}
 
-		for idx, expr := range right.TblFuncExprList {
+		for idx, expr := range rightArgs {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
 			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
@@ -3473,6 +3477,19 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		// Seed base-relation statistics so the early vector access-path builder
+		// can cost the hidden entries work before replacing the source scan.
+		ReCalcNodeStats(rootID, builder, true, false, true)
+		// Vector access paths must participate in the global cost/join/distribution
+		// passes. Build only those paths here; regular/fulltext index rewrites keep
+		// their established late placement below.
+		builder.prepareSpecialIndexGuards(rootID)
+		earlyIndexColMap := make(map[[2]int32]*plan.Expr)
+		rootID, err = builder.applyVectorIndicesEarly(rootID, colRefCnt, earlyIndexColMap)
+		builder.resetSpecialIndexGuards()
+		if err != nil {
+			return nil, err
+		}
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.determineBuildAndProbeSide(rootID, true)
 		determineHashOnPK(rootID, builder)
@@ -11810,7 +11827,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	id := tbl.Id()
 
 	// Plugin-registered table functions (hnsw_create / hnsw_search /
-	// ivf_create / ivf_search / cagra_create / cagra_search /
+	// ivf_create / cagra_create / cagra_search /
 	// ivfpq_create / ivfpq_search) live under
 	// pkg/vectorindex/<algo>/plugin/plan/tablefunc.go. The plugin
 	// registers each builder via planplugin.RegisterTableFunc at init
@@ -11971,7 +11988,7 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 
 func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 	switch node.NodeType {
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		if onlyContainsTag(expr, node.BindingTags[0]) {
 			return true
 		}

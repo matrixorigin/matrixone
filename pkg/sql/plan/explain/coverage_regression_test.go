@@ -55,31 +55,7 @@ func TestExplainBackgroundQueryHelpersFallbackToNodeScan(t *testing.T) {
 	require.Equal(t, fallbackSQL, backgroundQuerySQL(fallbackQuery))
 }
 
-func TestFindIvfSearchOutputRowsAndTruncateSummaryList(t *testing.T) {
-	query := &plan.Query{
-		Nodes: []*plan.Node{
-			{
-				NodeId:      0,
-				NodeType:    plan.Node_FUNCTION_SCAN,
-				TableDef:    &plan.TableDef{TblFunc: &plan.TableFunction{Name: "other_func"}},
-				AnalyzeInfo: &plan.AnalyzeInfo{OutputRows: 1},
-			},
-			{
-				NodeId:      1,
-				NodeType:    plan.Node_FUNCTION_SCAN,
-				TableDef:    &plan.TableDef{TblFunc: &plan.TableFunction{Name: "ivf_search"}},
-				AnalyzeInfo: &plan.AnalyzeInfo{OutputRows: 6},
-			},
-		},
-	}
-
-	rows, ok := findIvfSearchOutputRows(query)
-	require.True(t, ok)
-	require.EqualValues(t, 6, rows)
-
-	_, ok = findIvfSearchOutputRows(nil)
-	require.False(t, ok)
-
+func TestTruncateSummaryList(t *testing.T) {
 	require.Equal(t, "1, 2, 3", truncateSummaryList([]string{"1", "2", "3"}, 4))
 	require.Equal(t, "1, 2, 3, 4, ...", truncateSummaryList([]string{"1", "2", "3", "4", "5"}, 4))
 }
