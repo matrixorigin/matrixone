@@ -1527,7 +1527,11 @@ func generateConstExpressionExecutor(
 		case *plan.Literal_I16Val:
 			vec, err = newExpressionConstFixed(constI16Type, int16(val.I16Val), 1, proc.Mp(), selection)
 		case *plan.Literal_I32Val:
-			vec, err = newExpressionConstFixed(constI32Type, val.I32Val, 1, proc.Mp(), selection)
+			if typ.Oid == types.T_year {
+				vec, err = newExpressionConstFixed(typ, types.MoYear(val.I32Val), 1, proc.Mp(), selection)
+			} else {
+				vec, err = newExpressionConstFixed(constI32Type, val.I32Val, 1, proc.Mp(), selection)
+			}
 		case *plan.Literal_I64Val:
 			vec, err = newExpressionConstFixed(constI64Type, val.I64Val, 1, proc.Mp(), selection)
 		case *plan.Literal_U8Val:

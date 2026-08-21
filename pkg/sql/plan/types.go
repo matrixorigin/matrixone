@@ -519,9 +519,10 @@ type cteOccurrence struct {
 }
 
 type CteBindState struct {
-	cte           *CTERef
-	cteBindType   int
-	recScanNodeId int32
+	cte                    *CTERef
+	cteBindType            int
+	recScanNodeId          int32
+	recursiveRefQueryBlock *BindContext
 }
 
 func (state CteBindState) masked(name string) bool {
@@ -706,6 +707,10 @@ type BindContext struct {
 	bindingTree *BindingTreeNode
 
 	parent *BindContext
+	// queryBlockOwner identifies the SELECT that owns this context. Structural
+	// contexts created while binding one FROM clause inherit the owner, while a
+	// nested SELECT replaces it when bindSelect starts.
+	queryBlockOwner *BindContext
 	// aggregateInputParent is set on a subquery context when that subquery is
 	// bound as an aggregate argument of its parent query. Correlations back to
 	// this parent are per-row aggregate inputs, not bare aggregate-query output
@@ -866,9 +871,10 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg     bool
-	rollupHaving  bool
-	bindingHaving bool
+	insideAgg             bool
+	bindingProjectedAlias bool
+	rollupHaving          bool
+	bindingHaving         bool
 }
 
 type ProjectionBinder struct {
