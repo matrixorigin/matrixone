@@ -687,6 +687,7 @@ message UpdateCtx {
   bool ignore_affected_rows = 13;
   bool dedup_by_target_row_id = 14;
   int32 target_update_ctx_idx = 15;
+  ColRef changed_rows_col = 16;
 }
 
 message InsertCtx {

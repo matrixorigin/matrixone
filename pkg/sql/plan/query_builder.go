@@ -2983,6 +2983,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			for _, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
 			}
+			if updateCtx.ChangedRowsCol != nil {
+				colRefCnt[[2]int32{updateCtx.ChangedRowsCol.RelPos, updateCtx.ChangedRowsCol.ColPos}]++
+			}
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -3012,6 +3015,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			for i, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
 				err := builder.remapSingleColRef(&updateCtx.PartitionCols[i], childRemapping.globalToLocal, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if updateCtx.ChangedRowsCol != nil {
+				col := updateCtx.ChangedRowsCol
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				err := builder.remapSingleColRef(col, childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
 					return nil, err
 				}

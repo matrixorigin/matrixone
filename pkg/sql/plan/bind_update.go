@@ -76,6 +76,61 @@ func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
 }
 
+func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
+	alias string,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (*plan.Expr, error) {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil || !proc.Base.SessionInfo.CountUpdateChangedRows {
+		return nil, nil
+	}
+
+	updatedCols := make([]string, 0)
+	prefix := alias + "."
+	for qualifiedName := range newColName2Idx {
+		if strings.HasPrefix(qualifiedName, prefix) {
+			updatedCols = append(updatedCols, qualifiedName)
+		}
+	}
+	sort.Strings(updatedCols)
+
+	var allEqual *plan.Expr
+	for _, qualifiedName := range updatedCols {
+		oldPos, ok := oldColName2Idx[qualifiedName]
+		if !ok {
+			continue
+		}
+		newPos := newColName2Idx[qualifiedName]
+		oldExpr := &plan.Expr{
+			Typ:  selectNode.ProjectList[oldPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: oldPos}},
+		}
+		newExpr := &plan.Expr{
+			Typ:  selectNode.ProjectList[newPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: newPos}},
+		}
+		equal, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldExpr, newExpr})
+		if err != nil {
+			return nil, err
+		}
+		if allEqual == nil {
+			allEqual = equal
+		} else {
+			allEqual, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allEqual, equal})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if allEqual == nil {
+		return nil, nil
+	}
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allEqual})
+}
+
 func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext) (int32, error) {
 	if err := validateUpdateWindowFunctions(builder.compCtx, stmt); err != nil {
 		return 0, err
@@ -1371,6 +1426,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				}},
 			})
 		}
+		changedRowsExpr, err := builder.makeUpdateChangedRowsExpr(
+			alias, selectNode, selectNodeTag, oldColName2Idx, newColName2Idx)
+		if err != nil {
+			return 0, err
+		}
 
 		updateCtx := &plan.UpdateCtx{
 			ObjRef:     dmlCtx.objRefs[i],
@@ -1386,6 +1446,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					ColPos: oldPkPos,
 				},
 			},
+		}
+		if changedRowsExpr != nil {
+			changedRowsPos := int32(len(finalProjList))
+			finalProjList = append(finalProjList, changedRowsExpr)
+			updateCtx.ChangedRowsCol = &plan.ColRef{RelPos: finalProjTag, ColPos: changedRowsPos}
 		}
 		if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
 			partitionColName := getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)

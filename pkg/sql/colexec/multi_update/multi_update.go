@@ -353,7 +353,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 			// For REPLACE INTO, we need to count INSERT rows based on the actual action
 			// Always count INSERT rows for main table, regardless of update.ctr.action
-			if tableType == UpdateMainTable {
+			if tableType == UpdateMainTable && !hasChangedRowsCol(update.MultiUpdateCtx) {
 				update.addAffectedRowsFunc(rowCounts[i])
 			}
 
@@ -511,6 +511,11 @@ func filterTargetRows(
 	}
 
 	physicalSelections := make([]int64, 0, filtered.RowCount())
+	duplicateAffectedRows := uint64(0)
+	var changed []bool
+	if updateCtx.ChangedRowsCol != nil {
+		changed = vector.MustFixedColWithTypeCheck[bool](filtered.Vecs[*updateCtx.ChangedRowsCol])
+	}
 	iterator := seen.NewIterator()
 	for offset := 0; offset < filtered.RowCount(); offset += hashmap.UnitLimit {
 		count := min(hashmap.UnitLimit, filtered.RowCount()-offset)
@@ -529,13 +534,14 @@ func filterTargetRows(
 			if zValues[i] != 0 && value > nextGroup {
 				nextGroup++
 				physicalSelections = append(physicalSelections, int64(offset+i))
+			} else if updateCtx.ChangedRowsCol == nil || changed[offset+i] {
+				duplicateAffectedRows++
 			}
 		}
 	}
-	duplicateRows := uint64(filtered.RowCount() - len(physicalSelections))
 	filtered.Shrink(physicalSelections, false)
 	filtered.SetRowCount(len(physicalSelections))
-	return filtered, true, duplicateRows, nil
+	return filtered, true, duplicateAffectedRows, nil
 }
 
 func (update *MultiUpdate) prepareSeenTargetRows(proc *process.Process) error {

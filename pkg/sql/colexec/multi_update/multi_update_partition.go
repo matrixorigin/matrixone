@@ -614,6 +614,7 @@ func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 		IgnoreAffectedRows: ctx.IgnoreAffectedRows,
 		DedupByTargetRowID: ctx.DedupByTargetRowID,
 		TargetUpdateCtxIdx: ctx.TargetUpdateCtxIdx,
+		ChangedRowsCol:     ctx.ChangedRowsCol,
 		TargetTableID:      ctx.TargetTableID,
 	}
 	objRef := *ctx.ObjRef

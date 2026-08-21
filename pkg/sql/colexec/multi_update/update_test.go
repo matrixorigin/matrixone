@@ -253,7 +253,7 @@ func TestFilterTargetRowsDedupsRepeatedRowIDsWithinOneChunk(t *testing.T) {
 	mp := proc.Mp()
 	rowIDA := types.BuildTestRowid(1, 1)
 	rowIDB := types.BuildTestRowid(1, 2)
-	bat := batch.NewWithSize(4)
+	bat := batch.NewWithSize(5)
 	bat.Vecs[0] = testutil.MakeRowIdVector(
 		[]types.Rowid{rowIDA, rowIDA, rowIDB, rowIDA}, nil, mp)
 	bat.Vecs[1] = testutil.NewInt64Vector(
@@ -262,21 +262,25 @@ func TestFilterTargetRowsDedupsRepeatedRowIDsWithinOneChunk(t *testing.T) {
 		4, types.T_int32.ToType(), mp, false, nil, []int32{10, 11, 20, 12})
 	bat.Vecs[3] = testutil.NewBoolVector(
 		4, types.T_bool.ToType(), mp, false, nil, []bool{true, true, true, true})
+	bat.Vecs[4] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, false, true, true})
 	bat.SetRowCount(4)
 	defer bat.Clean(mp)
 
 	seen, err := hashmap.NewStrHashMap(false, mp)
 	require.NoError(t, err)
 	defer seen.Free()
+	changedRowsCol := 4
 	filtered, owned, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
 		TableDef:           &plan.TableDef{TblId: 42},
 		DedupByTargetRowID: true,
 		DeleteCols:         []int{0, 2, 1, 3},
+		ChangedRowsCol:     &changedRowsCol,
 	}, bat, seen)
 	require.NoError(t, err)
 	require.True(t, owned)
 	defer filtered.Clean(mp)
-	require.Equal(t, uint64(2), duplicateRows)
+	require.Equal(t, uint64(1), duplicateRows)
 	require.Equal(t, []int32{10, 20}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[2]))
 }
 

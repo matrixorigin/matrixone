@@ -111,6 +111,10 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			DedupByTargetRowId:    ctx.DedupByTargetRowId,
 			TargetUpdateCtxIdx:    ctx.TargetUpdateCtxIdx,
 		}
+		if ctx.ChangedRowsCol != nil {
+			changedRowsCol := *ctx.ChangedRowsCol
+			result[i].ChangedRowsCol = &changedRowsCol
+		}
 	}
 
 	return result

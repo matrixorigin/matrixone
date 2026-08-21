@@ -4865,6 +4865,14 @@ func executeStmt(ses *Session,
 }
 
 // execute query
+func countUpdateChangedRows(ses *Session) bool {
+	if ses.GetIsInternal() || ses.IsBackgroundSession() {
+		return false
+	}
+	resper, ok := ses.GetResponser().(*MysqlResp)
+	return ok && resper.GetU32(CAPABILITY)&CLIENT_FOUND_ROWS == 0
+}
+
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
@@ -4916,19 +4924,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.Base.SessionInfo = process.SessionInfo{
-		User:                ses.GetUserName(),
-		Host:                pu.SV.Host,
-		ConnectionID:        uint64(resper.GetU32(CONNID)),
-		Database:            ses.GetDatabaseName(),
-		Version:             makeServerVersion(pu, version),
-		TimeZone:            ses.GetTimeZone(),
-		StorageEngine:       pu.StorageEngine,
-		LastInsertID:        ses.GetLastInsertID(),
-		SqlHelper:           ses.GetSqlHelper(),
-		Buf:                 ses.GetBuffer(),
-		LogLevel:            zapcore.InfoLevel, //TODO: need set by session level config
-		SessionId:           ses.GetSessId(),
-		ApplySQLSelectLimit: !ses.GetIsInternal() && !ses.IsBackgroundSession() && !ses.IsDerivedStmt(),
+		User:                   ses.GetUserName(),
+		Host:                   pu.SV.Host,
+		ConnectionID:           uint64(resper.GetU32(CONNID)),
+		Database:               ses.GetDatabaseName(),
+		Version:                makeServerVersion(pu, version),
+		TimeZone:               ses.GetTimeZone(),
+		StorageEngine:          pu.StorageEngine,
+		LastInsertID:           ses.GetLastInsertID(),
+		SqlHelper:              ses.GetSqlHelper(),
+		Buf:                    ses.GetBuffer(),
+		LogLevel:               zapcore.InfoLevel, //TODO: need set by session level config
+		SessionId:              ses.GetSessId(),
+		ApplySQLSelectLimit:    !ses.GetIsInternal() && !ses.IsBackgroundSession() && !ses.IsDerivedStmt(),
+		CountUpdateChangedRows: countUpdateChangedRows(ses),
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	// Carry the previous statement's affected rows into this proc so the

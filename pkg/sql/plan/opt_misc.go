@@ -53,6 +53,9 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 		increaseRefCntForColRefList(updateCtx.InsertCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.DeleteCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.PartitionCols, 2, colRefCnt)
+		if updateCtx.ChangedRowsCol != nil {
+			colRefCnt[[2]int32{updateCtx.ChangedRowsCol.RelPos, updateCtx.ChangedRowsCol.ColPos}] += 2
+		}
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
@@ -338,6 +341,11 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 		replaceColumnsForColRefList(updateCtx.InsertCols, projMap)
 		replaceColumnsForColRefList(updateCtx.DeleteCols, projMap)
 		replaceColumnsForColRefList(updateCtx.PartitionCols, projMap)
+		if updateCtx.ChangedRowsCol != nil {
+			cols := []plan.ColRef{*updateCtx.ChangedRowsCol}
+			replaceColumnsForColRefList(cols, projMap)
+			*updateCtx.ChangedRowsCol = cols[0]
+		}
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
@@ -620,6 +628,9 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 		increaseTagCntForColRefList(updateCtx.InsertCols, 2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.DeleteCols, 2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.PartitionCols, 2, tagCnt)
+		if updateCtx.ChangedRowsCol != nil {
+			tagCnt[updateCtx.ChangedRowsCol.RelPos] += 2
+		}
 	}
 
 	for i, childID := range node.Children {
@@ -665,6 +676,9 @@ END:
 		increaseTagCntForColRefList(updateCtx.InsertCols, -2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.DeleteCols, -2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.PartitionCols, -2, tagCnt)
+		if updateCtx.ChangedRowsCol != nil {
+			tagCnt[updateCtx.ChangedRowsCol.RelPos] -= 2
+		}
 	}
 
 	return nodeID
