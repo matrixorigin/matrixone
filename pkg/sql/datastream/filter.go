@@ -67,11 +67,12 @@ func deparseExpr(expr *plan.Expr, loc *time.Location) (string, bool) {
 
 func deparseColRef(col *plan.ColRef) (string, bool) {
 	name := col.Name
-	// bound scan-column names may carry a "table.column" prefix
-	if idx := strings.LastIndex(name, "."); idx >= 0 {
-		name = name[idx+1:]
-	}
-	if name == "" || strings.ContainsRune(name, '`') {
+	// Scan-level filter ColRefs carry bare column names.  A dotted name is
+	// ambiguous: it could be a "table.column" qualifier or a column literally
+	// named "a.b" (MO permits those), and guessing wrong would make the
+	// server filter a different column — over-filtering that no recheck can
+	// repair.  Refuse to push such conjuncts instead of guessing.
+	if name == "" || strings.ContainsAny(name, ".`") {
 		return "", false
 	}
 	return "`" + name + "`", true

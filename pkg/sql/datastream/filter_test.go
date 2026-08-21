@@ -67,11 +67,14 @@ func TestDeparseFilters(t *testing.T) {
 		{"or", fn("or", fn("=", col("a"), i64(1)), fn("=", col("a"), i64(2))), "((`a` = 1) OR (`a` = 2))"},
 		{"not", fn("not", fn("=", col("a"), i64(1))), "(NOT (`a` = 1))"},
 		{"in", fn("in", col("a"), list(i64(1), i64(2), i64(3))), "(`a` IN (1, 2, 3))"},
+		{"dotted-col-not-pushed", fn("=", col("a.b"), i64(1)), ""},
 		{"between", fn("between", col("a"), i64(1), i64(5)), "(`a` BETWEEN 1 AND 5)"},
 		{"isnull", fn("isnull", col("a")), "(`a` IS NULL)"},
 		{"isnotnull", fn("isnotnull", col("a")), "(`a` IS NOT NULL)"},
 		{"like", fn("like", col("s"), str("ab%")), "(`s` LIKE 'ab%')"},
-		{"qualified-col", fn("=", col("t1.a"), i64(1)), "(`a` = 1)"},
+		// a dotted name could be a qualifier OR a column literally named
+		// "t1.a" (MO permits those); pushing a guess could over-filter
+		{"qualified-col-not-pushed", fn("=", col("t1.a"), i64(1)), ""},
 		{"escape-quote", fn("=", col("s"), str("o'brien\\x")), "(`s` = 'o\\'brien\\\\x')"},
 
 		// not pushable
