@@ -62,6 +62,13 @@ func TestIrregularIndexAffectedByUpdate(t *testing.T) {
 	}
 }
 
+func TestSequentialUpdateProjectionLimit(t *testing.T) {
+	require.True(t, withinSequentialUpdateProjectionLimit(3, 3))
+	require.True(t, withinSequentialUpdateProjectionLimit(4096, 31))
+	require.False(t, withinSequentialUpdateProjectionLimit(4096, 32))
+	require.False(t, withinSequentialUpdateProjectionLimit(4096, 4096))
+}
+
 func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 	newTableDef := func(indexes ...*IndexDef) *TableDef {
 		return &TableDef{

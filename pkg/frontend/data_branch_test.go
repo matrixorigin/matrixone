@@ -70,6 +70,34 @@ func TestDataBranchColumnClassification(t *testing.T) {
 	))
 }
 
+func TestDataBranchGeneratedColumnsTreatLegacyNoneAsOrdinaryText(t *testing.T) {
+	makeGenerated := func(typ types.Type, form plan.StringLiteralForm) *plan.GeneratedCol {
+		return &plan.GeneratedCol{IsStored: true, Expr: &plan.Expr{
+			Typ: plan.Type{Id: int32(typ.Oid), Charset: uint32(typ.Charset)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value:       &plan.Literal_Sval{Sval: "x"},
+				LiteralForm: form,
+			}},
+		}}
+	}
+	require.True(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_NONE),
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
+	))
+	require.False(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(types.T_varbinary.ToType(), plan.StringLiteralForm_STRING_LITERAL_NONE),
+		makeGenerated(types.T_varbinary.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
+	))
+	require.False(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_HEX),
+	))
+	require.False(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm(99)),
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm(99)),
+	))
+}
+
 func TestPrepareDataBranchWorkerValidatesBeforeAllocation(t *testing.T) {
 	t.Run("invalid diff projection", func(t *testing.T) {
 		tblStuff := tableStuff{}

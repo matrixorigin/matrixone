@@ -122,9 +122,8 @@ func (exec *maxByExec) fillRow(
 		candidateWins(vectors, rows, state.vecs, int(y), exec.argTypes) {
 		return exec.copyWinner(x, state.vecs, int(y), vectors, rows)
 	}
-	if candidateEquals(vectors, rows, state.vecs, int(y), exec.argTypes) &&
-		vectors[0].GetBinaryStringMetadataAt(rows[0]) {
-		return state.vecs[0].SetIsBinaryStringAt(int(y), true, exec.mp)
+	if candidateEquals(vectors, rows, state.vecs, int(y), exec.argTypes) {
+		return mergeEqualRuntimeStringDomain(state.vecs[0], int(y), vectors[0], rows[0], exec.mp)
 	}
 	return nil
 }
@@ -157,9 +156,8 @@ func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64)
 			if err := exec.copyWinner(x1, current, int(y1), candidate, rows); err != nil {
 				return err
 			}
-		} else if candidateEquals(candidate, rows, current, int(y1), exec.argTypes) &&
-			candidate[0].GetBinaryStringMetadataAt(rows[0]) {
-			if err := current[0].SetIsBinaryStringAt(int(y1), true, exec.mp); err != nil {
+		} else if candidateEquals(candidate, rows, current, int(y1), exec.argTypes) {
+			if err := mergeEqualRuntimeStringDomain(current[0], int(y1), candidate[0], rows[0], exec.mp); err != nil {
 				return err
 			}
 		}
