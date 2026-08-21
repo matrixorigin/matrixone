@@ -335,6 +335,12 @@ func (v *Vector) physicalMetadataRowCount() int {
 	if v == nil {
 		return 0
 	}
+	// SetLength(0) deliberately retains an active const's physical row-zero
+	// provenance for later reuse. Copies must reserve that retained extent even
+	// though the vector currently exposes no logical rows.
+	if v.length == 0 && v.IsConst() && v.binaryStringRowsActive {
+		return 1
+	}
 	return v.physicalMetadataRowCountForLength(v.length)
 }
 
@@ -2785,6 +2791,11 @@ func (v *Vector) copyBinaryStringTo(dst *Vector, mp *mpool.MPool) error {
 	dst.textStringRows.InitWith(v.textStringRows)
 	dst.binaryString = true
 	dst.binaryStringRowsActive = true
+	if dst.IsConst() && dst.length == 0 {
+		// Preserve the retained physical row-zero metadata for a reusable empty
+		// const. There are no logical rows to normalize yet.
+		return nil
+	}
 	dst.normalizeBinaryStringRows()
 	return nil
 }

@@ -426,6 +426,70 @@ func TestMinMaxEqualValuesPreserveExplicitText(t *testing.T) {
 	}
 }
 
+func TestMinMaxEqualValuesMergeEffectiveStringDomains(t *testing.T) {
+	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
+		for _, textFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("agg_%d_text_first_%t", id, textFirst), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				input := vector.NewVec(types.T_varbinary.ToType())
+				require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+				require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+				textRow := 1
+				if textFirst {
+					textRow = 0
+				}
+				require.NoError(t, input.SetRuntimeStringDomainAtWithMP(textRow, types.RuntimeStringText, mp))
+				agg := makeMinMaxExec(mp, id, id == AggIdOfMin, types.T_varbinary.ToType())
+				require.NoError(t, agg.GroupGrow(1))
+				require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+				results, err := agg.Flush()
+				require.NoError(t, err)
+				require.Equal(t, types.RuntimeStringInherit, results[0].GetRuntimeStringDomainAt(0))
+				results[0].Free(mp)
+				agg.Free()
+				input.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
+func TestMinMaxEqualPartialMergeUsesEffectiveStringDomains(t *testing.T) {
+	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
+		for _, textLeft := range []bool{false, true} {
+			t.Run(fmt.Sprintf("agg_%d_text_left_%t", id, textLeft), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				makeState := func(domain types.RuntimeStringDomain) AggFuncExec {
+					input := vector.NewVec(types.T_varbinary.ToType())
+					require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+					if domain != types.RuntimeStringInherit {
+						require.NoError(t, input.SetRuntimeStringDomainWithMP(domain, mp))
+					}
+					agg := makeMinMaxExec(mp, id, id == AggIdOfMin, types.T_varbinary.ToType())
+					require.NoError(t, agg.GroupGrow(1))
+					require.NoError(t, agg.Fill(0, 0, []*vector.Vector{input}))
+					input.Free(mp)
+					return agg
+				}
+				leftDomain, rightDomain := types.RuntimeStringInherit, types.RuntimeStringText
+				if textLeft {
+					leftDomain, rightDomain = rightDomain, leftDomain
+				}
+				left := makeState(leftDomain)
+				right := makeState(rightDomain)
+				require.NoError(t, left.Merge(right, 0, 0))
+				results, err := left.Flush()
+				require.NoError(t, err)
+				require.Equal(t, types.RuntimeStringInherit, results[0].GetRuntimeStringDomainAt(0))
+				results[0].Free(mp)
+				left.Free()
+				right.Free()
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
 func TestMinEqualMergePreservesExplicitText(t *testing.T) {
 	mp := mpool.MustNewZero()
 	makeState := func() AggFuncExec {
