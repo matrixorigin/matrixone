@@ -337,7 +337,12 @@ func TestAccountedMedianRetainsOrdinaryInputWithoutSavedArgumentIndex(t *testing
 		mpool.ErrAllocationAccountInvariant)
 	require.ErrorIs(t, exec.GroupGrow(2),
 		mpool.ErrAllocationAccountInvariant)
+	require.NoError(t, exec.PreAllocateGroups(1))
+	require.Len(t, median.groups, 1)
 	require.NoError(t, exec.GroupGrow(1))
+	group, err := median.denseGroupIndex(0, 0)
+	require.NoError(t, err)
+	require.Zero(t, group)
 	require.Nil(t, median.accounted.state[0].argSkl)
 	require.Empty(t, median.accounted.state[0].argbuf)
 
@@ -368,6 +373,10 @@ func TestAccountedMedianRetainsOrdinaryInputWithoutSavedArgumentIndex(t *testing
 	var spill bytes.Buffer
 	require.Error(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
 		0, []int32{0, 0}, io.Discard))
+	require.Error(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
+		-1, []int32{0}, io.Discard))
+	require.Error(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
+		0, []int32{-1}, io.Discard))
 	require.NoError(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
 		0, []int32{0}, &spill))
 	retainedBytes := 0
@@ -394,6 +403,25 @@ func TestAccountedMedianRetainsOrdinaryInputWithoutSavedArgumentIndex(t *testing
 	require.NoError(t, types.WriteInt32(&invalidSpill, 2))
 	require.Error(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
 		bytes.NewReader(invalidSpill.Bytes()), mp))
+	require.Error(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+		bytes.NewReader(nil), mp))
+	var truncatedHeader bytes.Buffer
+	require.NoError(t, types.WriteUint64(&truncatedHeader, spillMagicNumber))
+	require.Error(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+		bytes.NewReader(truncatedHeader.Bytes()), mp))
+	require.NoError(t, types.WriteInt32(&truncatedHeader, 1))
+	require.Error(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+		bytes.NewReader(truncatedHeader.Bytes()), mp))
+	var invalidHeader bytes.Buffer
+	require.NoError(t, types.WriteUint64(&invalidHeader, 0))
+	require.Error(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+		bytes.NewReader(invalidHeader.Bytes()), mp))
+	require.Error(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+		bytes.NewReader(spill.Bytes()[:spill.Len()-1]), mp))
+	invalidTrailer := append([]byte(nil), spill.Bytes()...)
+	copy(invalidTrailer[len(invalidTrailer)-8:], make([]byte, 8))
+	require.Error(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+		bytes.NewReader(invalidTrailer), mp))
 	require.NoError(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
 		bytes.NewReader(spill.Bytes()), mp))
 	require.Equal(t, rows, restoredMedian.groups[0].Length())
@@ -493,17 +521,29 @@ func TestAccountedMedianDirectFillAndMergeMethods(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, account, allocation := newTestAggregateAllocation(t)
 
-	leftExec, err := MakeAgg(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	leftExec, err := MakeSingleGroupAgg(
+		mp, AggIdOfMedian, false, nil, nil, types.T_int64.ToType())
 	require.NoError(t, err)
-	rightExec, err := MakeAgg(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	rightExec, err := MakeSingleGroupAgg(
+		mp, AggIdOfMedian, false, nil, nil, types.T_int64.ToType())
 	require.NoError(t, err)
 	leftOwner := leftExec.(AllocationAccountOwner)
 	rightOwner := rightExec.(AllocationAccountOwner)
 	require.NoError(t, leftOwner.SetAllocationAccount(allocation))
 	require.NoError(t, rightOwner.SetAllocationAccount(allocation))
 	SyncAggregatorsToChunkSize([]AggFuncExec{leftExec, rightExec}, AggBatchSize)
-	require.NoError(t, leftExec.GroupGrow(2))
-	require.NoError(t, rightExec.GroupGrow(3))
+	require.ErrorIs(t, leftExec.GroupGrow(-1), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, leftExec.PreAllocateGroups(-1), mpool.ErrAllocationAccountInvalid)
+	leftMedian := leftExec.(*medianColumnNumericExec[int64])
+	_, err = leftMedian.denseGroupIndex(-1, 0)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.ErrorIs(t, leftMedian.prepareDenseGroups(-1),
+		mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, leftExec.GroupGrow(1))
+	require.NoError(t, rightExec.GroupGrow(1))
+	require.NoError(t, leftExec.(BatchCapacityPreflight).PreflightBatchMerge(
+		rightExec, 0, []uint64{1}))
+	require.NoError(t, leftExec.BatchMerge(rightExec, 0, []uint64{1}))
 
 	// BulkFill must split a large direct input into bounded work units while
 	// preserving one logical group. Fill must retain scalar-broadcast semantics
@@ -518,52 +558,130 @@ func TestAccountedMedianDirectFillAndMergeMethods(t *testing.T) {
 		types.T_int64.ToType(), int64(99), 4, mp)
 	require.NoError(t, err)
 	require.NoError(t, rightExec.(BatchCapacityPreflight).PreflightBatchFill(
-		0, []uint64{1, 2}, []*vector.Vector{constant}))
+		0, []uint64{1, 1}, []*vector.Vector{constant}))
 	require.NoError(t, rightExec.BatchFill(
-		0, []uint64{1, 2}, []*vector.Vector{constant}))
-	require.NoError(t, rightExec.Fill(1, 3, []*vector.Vector{constant}))
+		0, []uint64{1, 1}, []*vector.Vector{constant}))
+	require.NoError(t, rightExec.Fill(0, 3, []*vector.Vector{constant}))
 	nullable := vector.NewVec(types.T_int64.ToType())
 	require.NoError(t, vector.AppendFixedList(
 		nullable, []int64{7, 0}, []bool{false, true}, mp))
+	require.ErrorIs(t, leftExec.(BatchCapacityPreflight).PreflightBatchFill(
+		0, []uint64{2}, []*vector.Vector{nullable}),
+		mpool.ErrAllocationAccountInvariant)
+	require.ErrorIs(t, leftExec.BatchFill(
+		0, []uint64{2}, []*vector.Vector{nullable}),
+		mpool.ErrAllocationAccountInvariant)
 	require.NoError(t, leftExec.(BatchCapacityPreflight).PreflightBatchFill(
-		0, []uint64{1, 2}, []*vector.Vector{nullable}))
+		0, []uint64{1, 1}, []*vector.Vector{nullable}))
 	require.NoError(t, leftExec.BatchFill(
-		0, []uint64{1, 2}, []*vector.Vector{nullable}))
+		0, []uint64{1, 1}, []*vector.Vector{nullable}))
+	unmatched := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{125, 777})
+	require.NoError(t, leftExec.(BatchCapacityPreflight).PreflightBatchFill(
+		0, []uint64{1, GroupNotMatched}, []*vector.Vector{unmatched}))
+	require.NoError(t, leftExec.BatchFill(
+		0, []uint64{1, GroupNotMatched}, []*vector.Vector{unmatched}))
 	require.ErrorIs(t, leftExec.BatchFill(
 		-1, []uint64{1}, []*vector.Vector{nullable}),
 		mpool.ErrAllocationAccountInvalid)
 
 	// Exercise both direct Merge and the scheduler's preflight + BatchMerge
 	// pair. The not-matched entry must not publish or copy a group.
-	require.NoError(t, leftExec.Merge(rightExec, 1, 1))
+	require.NoError(t, leftExec.Merge(rightExec, 0, 0))
 	require.NoError(t, leftExec.(BatchCapacityPreflight).PreflightBatchMerge(
-		rightExec, 0, []uint64{1, 2}))
+		rightExec, 0, []uint64{1}))
 	require.NoError(t, leftExec.BatchMerge(
-		rightExec, 0, []uint64{1, 2}))
+		rightExec, 0, []uint64{1}))
 	require.NoError(t, leftExec.(BatchCapacityPreflight).PreflightBatchMerge(
 		rightExec, 0, []uint64{GroupNotMatched}))
 	require.NoError(t, leftExec.BatchMerge(
 		rightExec, 0, []uint64{GroupNotMatched}))
-	require.NoError(t, leftExec.(BatchCapacityPreflight).PreflightBatchMerge(
-		rightExec, 2, []uint64{1}))
-	require.NoError(t, leftExec.BatchMerge(rightExec, 2, []uint64{1}))
+	require.ErrorIs(t, leftExec.(BatchCapacityPreflight).PreflightBatchMerge(
+		rightExec, -1, []uint64{1}), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, leftExec.BatchMerge(
+		rightExec, -1, []uint64{1}), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, leftExec.(BatchCapacityPreflight).PreflightBatchMerge(
+		rightExec, 0, []uint64{2}), mpool.ErrAllocationAccountInvariant)
+	require.ErrorIs(t, leftExec.BatchMerge(
+		rightExec, 0, []uint64{2}), mpool.ErrAllocationAccountInvariant)
 	require.Positive(t, leftExec.Size())
 
 	result, err := leftExec.Flush()
 	require.NoError(t, err)
-	require.Equal(t, 128.0,
+	require.Equal(t, 125.0,
 		vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
-	require.Equal(t, 99.0,
-		vector.GetFixedAtNoTypeCheck[float64](result[0], 1))
 
 	result[0].Free(mp)
 	bulk.Free(mp)
 	constant.Free(mp)
 	nullable.Free(mp)
+	unmatched.Free(mp)
 	leftExec.Free()
 	rightExec.Free()
 	require.NoError(t, leftOwner.ClearAllocationAccount(allocation))
 	require.NoError(t, rightOwner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestSingleGroupMedianRejectsGroupedStateMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	dense, err := MakeSingleGroupAgg(
+		mp, AggIdOfMedian, false, allocation, nil, types.T_int64.ToType())
+	require.NoError(t, err)
+	grouped, err := MakeGroupAgg(
+		mp, AggIdOfMedian, false, allocation, nil, types.T_int64.ToType())
+	require.NoError(t, err)
+	require.NoError(t, dense.GroupGrow(1))
+	require.NoError(t, grouped.GroupGrow(1))
+
+	require.ErrorIs(t, dense.Merge(grouped, 0, 0),
+		mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, dense.(BatchCapacityPreflight).PreflightBatchMerge(
+		grouped, 0, []uint64{1}), mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, dense.BatchMerge(grouped, 0, []uint64{1}),
+		mpool.ErrAllocationAccountMismatch)
+
+	dense.Free()
+	grouped.Free()
+	require.NoError(t, dense.ClearAllocationAccount(allocation))
+	require.NoError(t, grouped.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestSingleGroupMedianChunkIntermediateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	source, err := MakeSingleGroupAgg(
+		mp, AggIdOfMedian, false, allocation, nil, types.T_int64.ToType())
+	require.NoError(t, err)
+	target, err := MakeSingleGroupAgg(
+		mp, AggIdOfMedian, false, allocation, nil, types.T_int64.ToType())
+	require.NoError(t, err)
+	SyncAggregatorsToChunkSize([]AggFuncExec{source, target}, 1)
+	require.NoError(t, source.GroupGrow(1))
+
+	input := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{9, 1, 5})
+	groups := []uint64{1, 1, 1}
+	require.NoError(t, source.(BatchCapacityPreflight).PreflightBatchFill(
+		0, groups, []*vector.Vector{input}))
+	require.NoError(t, source.BatchFill(0, groups, []*vector.Vector{input}))
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResultOfChunk(0, &encoded))
+	require.NoError(t, target.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 5.0,
+		vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
+	result[0].Free(mp)
+	input.Free(mp)
+	source.Free()
+	target.Free()
+	require.NoError(t, source.ClearAllocationAccount(allocation))
+	require.NoError(t, target.ClearAllocationAccount(allocation))
 	finishTestAggregateAllocation(t, registry, account)
 	require.Zero(t, mp.CurrNB())
 }
@@ -851,11 +969,18 @@ func TestMedianStableIntermediateCompatibilityAcrossAllocationModes(t *testing.T
 				t.Run(direction.name, func(t *testing.T) {
 					mp := mpool.MustNewZero()
 					registry, account, allocation := newTestAggregateAllocation(t)
-					source, err := MakeAgg(
-						mp, AggIdOfMedian, distinct, types.T_int64.ToType())
+					makeExec := func(accounted bool) (AggFuncExec, error) {
+						if accounted && !distinct {
+							return MakeSingleGroupAgg(
+								mp, AggIdOfMedian, false, nil, nil,
+								types.T_int64.ToType())
+						}
+						return MakeAgg(
+							mp, AggIdOfMedian, distinct, types.T_int64.ToType())
+					}
+					source, err := makeExec(direction.accountedSource)
 					require.NoError(t, err)
-					target, err := MakeAgg(
-						mp, AggIdOfMedian, distinct, types.T_int64.ToType())
+					target, err := makeExec(!direction.accountedSource)
 					require.NoError(t, err)
 					var accounted AggFuncExec
 					if direction.accountedSource {
@@ -867,10 +992,17 @@ func TestMedianStableIntermediateCompatibilityAcrossAllocationModes(t *testing.T
 					require.NoError(t, owner.SetAllocationAccount(allocation))
 					SyncAggregatorsToChunkSize([]AggFuncExec{source, target}, AggBatchSize)
 
-					require.NoError(t, source.GroupGrow(2))
+					groupCount := 2
+					groups := []uint64{1, 1, 1, 1, 2, 2}
+					flags := [][]uint8{{1, 1}}
+					if !distinct {
+						groupCount = 1
+						groups = []uint64{1, 1, 1, 1, 1, 1}
+						flags = [][]uint8{{1}}
+					}
+					require.NoError(t, source.GroupGrow(groupCount))
 					input := buildFixedVec(t, mp, types.T_int64.ToType(),
 						[]int64{9, 1, 5, 5, 2, 8})
-					groups := []uint64{1, 1, 1, 1, 2, 2}
 					if direction.accountedSource {
 						require.NoError(t, source.(BatchCapacityPreflight).PreflightBatchFill(
 							0, groups, []*vector.Vector{input}))
@@ -879,15 +1011,17 @@ func TestMedianStableIntermediateCompatibilityAcrossAllocationModes(t *testing.T
 						0, groups, []*vector.Vector{input}))
 					var encoded bytes.Buffer
 					require.NoError(t, source.SaveIntermediateResult(
-						2, [][]uint8{{1, 1}}, &encoded))
+						int64(groupCount), flags, &encoded))
 					require.NoError(t, target.UnmarshalFromReader(
 						bytes.NewReader(encoded.Bytes()), mp))
 					results, err := target.Flush()
 					require.NoError(t, err)
 					require.Equal(t, 5.0,
 						vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
-					require.Equal(t, 5.0,
-						vector.GetFixedAtNoTypeCheck[float64](results[0], 1))
+					if distinct {
+						require.Equal(t, 5.0,
+							vector.GetFixedAtNoTypeCheck[float64](results[0], 1))
+					}
 
 					for _, result := range results {
 						result.Free(mp)

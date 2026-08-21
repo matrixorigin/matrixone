@@ -104,25 +104,7 @@ func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
 func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 	if exec.accounted != nil {
 		if exec.usesDenseAccountedState() {
-			if more < 0 {
-				return mpool.ErrAllocationAccountInvalid
-			}
-			active := exec.accounted.GetNumGroups()
-			if active > len(exec.groups) || more > math.MaxInt-active || active+more > 1 {
-				return mpool.ErrAllocationAccountInvariant
-			}
-			oldLength := len(exec.groups)
-			if err := exec.prepareDenseGroups(active + more); err != nil {
-				return err
-			}
-			if err := exec.accounted.GroupGrow(more); err != nil {
-				for _, group := range exec.groups[oldLength:] {
-					group.Free(exec.mp)
-				}
-				exec.groups = exec.groups[:oldLength]
-				return err
-			}
-			return nil
+			return exec.growDenseGroups(more, false)
 		}
 		return exec.accounted.GroupGrow(more)
 	}
@@ -147,25 +129,7 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
 	if exec.accounted != nil {
 		if exec.usesDenseAccountedState() {
-			if more < 0 {
-				return mpool.ErrAllocationAccountInvalid
-			}
-			active := exec.accounted.GetNumGroups()
-			if active > len(exec.groups) || more > math.MaxInt-active || active+more > 1 {
-				return mpool.ErrAllocationAccountInvariant
-			}
-			oldLength := len(exec.groups)
-			if err := exec.prepareDenseGroups(active + more); err != nil {
-				return err
-			}
-			if err := exec.accounted.PreAllocateGroups(more); err != nil {
-				for _, group := range exec.groups[oldLength:] {
-					group.Free(exec.mp)
-				}
-				exec.groups = exec.groups[:oldLength]
-				return err
-			}
-			return nil
+			return exec.growDenseGroups(more, true)
 		}
 		return exec.accounted.PreAllocateGroups(more)
 	}
@@ -177,6 +141,37 @@ func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
 		exec.groups = exec.groups[:oldLength]
 	}
 	return exec.ret.preExtend(more)
+}
+
+func (exec *medianColumnExecSelf[T, R]) growDenseGroups(
+	more int,
+	preallocate bool,
+) error {
+	if more < 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	active := exec.accounted.GetNumGroups()
+	if active > len(exec.groups) || more > math.MaxInt-active || active+more > 1 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	oldLength := len(exec.groups)
+	if err := exec.prepareDenseGroups(active + more); err != nil {
+		return err
+	}
+	var err error
+	if preallocate {
+		err = exec.accounted.PreAllocateGroups(more)
+	} else {
+		err = exec.accounted.GroupGrow(more)
+	}
+	if err == nil {
+		return nil
+	}
+	for _, group := range exec.groups[oldLength:] {
+		group.Free(exec.mp)
+	}
+	exec.groups = exec.groups[:oldLength]
+	return err
 }
 
 // prepareDenseGroups materializes the sole holder needed by an H0 preflight.
@@ -818,58 +813,6 @@ func (exec *medianColumnExecSelf[T, R]) rebuildDistinctHash() error {
 	return nil
 }
 
-const denseMedianPreflightSlots = 2 * hashmap.UnitLimit
-
-func denseMedianSlot(group uint64) int {
-	// Fibonacci hashing keeps adjacent group ids from clustering while the
-	// power-of-two table makes probing cheap.
-	return int((group * 11400714819323198485) & (denseMedianPreflightSlots - 1))
-}
-
-func addDenseMedianNeed(
-	keys *[denseMedianPreflightSlots]uint64,
-	counts *[denseMedianPreflightSlots]int,
-	group uint64,
-	rows int,
-) error {
-	if group == GroupNotMatched || rows == 0 {
-		return nil
-	}
-	for slot := denseMedianSlot(group); ; slot = (slot + 1) & (denseMedianPreflightSlots - 1) {
-		if keys[slot] == 0 {
-			keys[slot] = group
-			counts[slot] = rows
-			return nil
-		}
-		if keys[slot] == group {
-			if counts[slot] > math.MaxInt-rows {
-				return mpool.ErrAllocationAllocatorLimit
-			}
-			counts[slot] += rows
-			return nil
-		}
-	}
-}
-
-func (exec *medianColumnExecSelf[T, R]) applyDenseMedianNeeds(
-	keys *[denseMedianPreflightSlots]uint64,
-	counts *[denseMedianPreflightSlots]int,
-) error {
-	for slot, group := range keys {
-		if group == 0 {
-			continue
-		}
-		index := group - 1
-		if index >= uint64(len(exec.groups)) || exec.groups[index] == nil {
-			return mpool.ErrAllocationAccountInvariant
-		}
-		if err := exec.groups[index].PreExtend(counts[slot], exec.mp); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (exec *medianColumnExecSelf[T, R]) preflightDenseBatchFill(
 	offset int,
 	groups []uint64,
@@ -882,15 +825,16 @@ func (exec *medianColumnExecSelf[T, R]) preflightDenseBatchFill(
 	if err := validatePreflightVectors(vectors, offset, len(groups)); err != nil {
 		return err
 	}
-	var firstGroup uint64
-	firstCount := 0
-	mixedGroups := false
+	if len(exec.groups) != 1 || exec.groups[0] == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	rows := 0
 	plainInput := !vectors[0].IsConst() && !vectors[0].HasNull()
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
 		}
-		if group > uint64(len(exec.groups)) {
+		if group != 1 {
 			return mpool.ErrAllocationAccountInvariant
 		}
 		if !plainInput {
@@ -902,47 +846,9 @@ func (exec *medianColumnExecSelf[T, R]) preflightDenseBatchFill(
 				continue
 			}
 		}
-		if firstGroup == 0 {
-			firstGroup = group
-		}
-		if group == firstGroup {
-			firstCount++
-		} else {
-			mixedGroups = true
-		}
+		rows++
 	}
-	if !mixedGroups {
-		if firstGroup == 0 {
-			return nil
-		}
-		return exec.groups[firstGroup-1].PreExtend(firstCount, exec.mp)
-	}
-	return exec.preflightDenseBatchFillMixed(offset, groups, vectors[0])
-}
-
-func (exec *medianColumnExecSelf[T, R]) preflightDenseBatchFillMixed(
-	offset int,
-	groups []uint64,
-	input *vector.Vector,
-) error {
-	var keys [denseMedianPreflightSlots]uint64
-	var counts [denseMedianPreflightSlots]int
-	for i, group := range groups {
-		if group == GroupNotMatched {
-			continue
-		}
-		row := offset + i
-		if input.IsConst() {
-			row = 0
-		}
-		if input.IsNull(uint64(row)) {
-			continue
-		}
-		if err := addDenseMedianNeed(&keys, &counts, group, 1); err != nil {
-			return err
-		}
-	}
-	return exec.applyDenseMedianNeeds(&keys, &counts)
+	return exec.groups[0].PreExtend(rows, exec.mp)
 }
 
 func (exec *medianColumnExecSelf[T, R]) denseBatchFill(
@@ -962,6 +868,9 @@ func (exec *medianColumnExecSelf[T, R]) denseBatchFill(
 		}
 		group := groups[0]
 		if group != GroupNotMatched {
+			if group != 1 || len(exec.groups) != 1 || exec.groups[0] == nil {
+				return mpool.ErrAllocationAccountInvariant
+			}
 			allSame := true
 			for _, candidate := range groups[1:] {
 				if candidate != group {
@@ -970,12 +879,8 @@ func (exec *medianColumnExecSelf[T, R]) denseBatchFill(
 				}
 			}
 			if allSame {
-				index := group - 1
-				if index >= uint64(len(exec.groups)) || exec.groups[index] == nil {
-					return mpool.ErrAllocationAccountInvariant
-				}
 				return appendMedianValues(
-					exec.groups[index], values[offset:offset+len(groups)], exec.mp)
+					exec.groups[0], values[offset:offset+len(groups)], exec.mp)
 			}
 		}
 	}
@@ -990,11 +895,10 @@ func (exec *medianColumnExecSelf[T, R]) denseBatchFill(
 		if vectors[0].IsNull(uint64(row)) {
 			continue
 		}
-		index := group - 1
-		if index >= uint64(len(exec.groups)) || exec.groups[index] == nil {
+		if group != 1 || len(exec.groups) != 1 || exec.groups[0] == nil {
 			return mpool.ErrAllocationAccountInvariant
 		}
-		if err := appendMedianValue(exec.groups[index], values[row], exec.mp); err != nil {
+		if err := appendMedianValue(exec.groups[0], values[row], exec.mp); err != nil {
 			return err
 		}
 	}
@@ -1011,55 +915,31 @@ func (exec *medianColumnExecSelf[T, R]) preflightDenseBatchMerge(
 		len(groups) > hashmap.UnitLimit || offset > len(next.groups)-len(groups) {
 		return mpool.ErrAllocationAccountInvalid
 	}
-	var firstGroup uint64
-	firstCount := 0
-	mixedGroups := false
+	if len(exec.groups) != 1 || exec.groups[0] == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	rows := 0
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
 		}
-		if group > uint64(len(exec.groups)) {
+		if group != 1 {
 			return mpool.ErrAllocationAccountInvariant
 		}
-		rows := next.groups[offset+i].Length()
-		if rows == 0 {
+		incomingGroup := next.groups[offset+i]
+		if incomingGroup == nil {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		incoming := incomingGroup.Length()
+		if incoming == 0 {
 			continue
 		}
-		if firstGroup == 0 {
-			firstGroup = group
+		if rows > math.MaxInt-incoming {
+			return mpool.ErrAllocationAllocatorLimit
 		}
-		if group == firstGroup {
-			if firstCount > math.MaxInt-rows {
-				return mpool.ErrAllocationAllocatorLimit
-			}
-			firstCount += rows
-		} else {
-			mixedGroups = true
-		}
+		rows += incoming
 	}
-	if !mixedGroups {
-		if firstGroup == 0 {
-			return nil
-		}
-		return exec.groups[firstGroup-1].PreExtend(firstCount, exec.mp)
-	}
-	return exec.preflightDenseBatchMergeMixed(next, offset, groups)
-}
-
-func (exec *medianColumnExecSelf[T, R]) preflightDenseBatchMergeMixed(
-	next *medianColumnExecSelf[T, R],
-	offset int,
-	groups []uint64,
-) error {
-	var keys [denseMedianPreflightSlots]uint64
-	var counts [denseMedianPreflightSlots]int
-	for i, group := range groups {
-		if err := addDenseMedianNeed(
-			&keys, &counts, group, next.groups[offset+i].Length()); err != nil {
-			return err
-		}
-	}
-	return exec.applyDenseMedianNeeds(&keys, &counts)
+	return exec.groups[0].PreExtend(rows, exec.mp)
 }
 
 func (exec *medianColumnExecSelf[T, R]) denseBatchMerge(
@@ -1073,14 +953,17 @@ func (exec *medianColumnExecSelf[T, R]) denseBatchMerge(
 		return mpool.ErrAllocationAccountInvalid
 	}
 	for i, group := range groups {
-		if group == GroupNotMatched || next.groups[offset+i].Length() == 0 {
-			continue
-		}
-		index := group - 1
-		if index >= uint64(len(exec.groups)) || exec.groups[index] == nil {
+		incoming := next.groups[offset+i]
+		if incoming == nil {
 			return mpool.ErrAllocationAccountInvariant
 		}
-		if err := exec.groups[index].Union(next.groups[offset+i], exec.mp); err != nil {
+		if group == GroupNotMatched || incoming.Length() == 0 {
+			continue
+		}
+		if group != 1 || len(exec.groups) != 1 || exec.groups[0] == nil {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if err := exec.groups[0].Union(incoming, exec.mp); err != nil {
 			return err
 		}
 	}
