@@ -540,7 +540,6 @@ func dataBranchCreateDatabase(
 		authStats statistic.StatsArray
 	)
 	stats.Reset()
-
 	if bh, deferred, err = getBackExecutor(
 		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
 	); err != nil {

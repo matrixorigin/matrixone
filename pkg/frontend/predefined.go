@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 )
 
@@ -95,11 +96,12 @@ var (
 				primary key(role_id, obj_type, obj_id, privilege_id, privilege_level)
 			)`
 
-	MoCatalogMoUserDefinedFunctionDDL = `create table mo_catalog.mo_user_defined_function (
+	MoCatalogMoUserDefinedFunctionDDL = fmt.Sprintf(`create table mo_catalog.mo_user_defined_function (
 				function_id int auto_increment,
-				name     varchar(100) unique key,
+				name     varchar(100),
 				owner  int unsigned,
 				args     json,
+				arg_types varchar(%d) not null default '',
 				retType  varchar(20),
 				body     text,
 				language varchar(20),
@@ -114,8 +116,9 @@ var (
 				collation_connection varchar(64),
 				database_collation varchar(64),
 				sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT',
-				primary key(function_id)
-			)`
+				primary key(function_id),
+				unique key name_db_arg_types(name, db, arg_types)
+			)`, types.MaxStringSize)
 
 	MoCatalogMoMysqlCompatibilityModeDDL = `create table mo_catalog.mo_mysql_compatibility_mode (
 				configuration_id int auto_increment,
