@@ -1667,6 +1667,10 @@ func makePartitionTopNOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 }
 
 func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (err error) {
+	// Eval reuses ctr.orderVecs' backing vectors by replacing their data below.
+	// Fold detection is derived from that data, so entries keyed by a vector
+	// pointer must never survive into the next materialized input batch.
+	ctr.timestampCivilOrder = nil
 	input := []*batch.Batch{bat}
 
 	for i := range ctr.orderVecs {

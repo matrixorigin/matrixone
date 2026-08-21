@@ -72,7 +72,8 @@ type container struct {
 
 	// timestampCivilOrder records whether a sorted TIMESTAMP partition becomes
 	// non-monotonic after conversion to the session civil time. It is scoped to
-	// the materialized input generation and is cleared by resetParam.
+	// one materialized input generation and is cleared before order vectors are
+	// reused for the next input batch.
 	timestampCivilOrder map[timestampCivilOrderKey]bool
 	timestampRangeRows  []int
 }
