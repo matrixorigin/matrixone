@@ -585,16 +585,15 @@ func (c *cluster) copyServices() *services {
 
 func newCNService(cn logpb.CNStore) metadata.CNService {
 	return metadata.CNService{
-		ServiceID:                    cn.UUID,
-		PipelineServiceAddress:       cn.ServiceAddress,
-		SQLAddress:                   cn.SQLAddress,
-		LockServiceAddress:           cn.LockServiceAddress,
-		ShardServiceAddress:          cn.ShardServiceAddress,
-		WorkState:                    cn.WorkState,
-		Labels:                       cn.Labels,
-		QueryAddress:                 cn.QueryAddress,
-		CommitID:                     cn.CommitID,
-		ViewMetadataRefreshSupported: cn.ViewMetadataRefreshSupported,
+		ServiceID:              cn.UUID,
+		PipelineServiceAddress: cn.ServiceAddress,
+		SQLAddress:             cn.SQLAddress,
+		LockServiceAddress:     cn.LockServiceAddress,
+		ShardServiceAddress:    cn.ShardServiceAddress,
+		WorkState:              cn.WorkState,
+		Labels:                 cn.Labels,
+		QueryAddress:           cn.QueryAddress,
+		CommitID:               cn.CommitID,
 		// why set this cfg, cc https://github.com/matrixorigin/matrixone/issues/16537
 		// should be used in getCNList
 		CPUTotal: cn.Resource.CPUTotal,

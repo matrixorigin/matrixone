@@ -11843,7 +11843,6 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 	runtime := moruntime.ServiceRuntime(ses.GetService())
 	readyCluster := &mockMOCluster{cnServices: []metadata.CNService{{
 		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
-		ViewMetadataRefreshSupported: true,
 	}}}
 	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
 	runtime.SetGlobalVariables(moruntime.ClusterService, readyCluster)

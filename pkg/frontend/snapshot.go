@@ -3029,6 +3029,14 @@ func invalidateAccountViewMetadata(
 	if err != nil || !enabled {
 		return err
 	}
+	return invalidateAccountViewMetadataEnabled(ctx, bh, accountID)
+}
+
+func invalidateAccountViewMetadataEnabled(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
 		return err
@@ -3047,6 +3055,14 @@ func reconcileAccountViewMetadata(
 	if err != nil || !enabled {
 		return err
 	}
+	return reconcileAccountViewMetadataEnabled(ctx, bh, accountID)
+}
+
+func reconcileAccountViewMetadataEnabled(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
 	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
 	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
 		return err

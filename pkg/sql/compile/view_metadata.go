@@ -23,7 +23,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -81,15 +80,15 @@ type viewRefreshIdentityKey struct {
 	logicalID  uint64
 }
 
-func viewMetadataRefreshEnabled(serviceID string) bool {
-	return clusterservice.AllKnownCNsSupportViewMetadataRefresh(serviceID)
+func viewMetadataRefreshEnabled(string) bool {
+	return false
 }
 
-// ViewMetadataRefreshEnabled reports whether every live CN has observed the
-// catalog version which owns the View metadata lifecycle tables. Frontend
-// binding-lifecycle DDL uses the same barrier before issuing invalidation SQL.
-func ViewMetadataRefreshEnabled(serviceID string) bool {
-	return viewMetadataRefreshEnabled(serviceID)
+// ViewMetadataRefreshEnabled is intentionally false in this inactive lifecycle
+// layer. A later prerequisite owns the durable membership epoch and admission
+// fence; only the subsequent activation layer may replace this gate.
+func ViewMetadataRefreshEnabled(string) bool {
+	return false
 }
 
 // viewMetadataRefreshAvailable closes the capability-disabled window before a

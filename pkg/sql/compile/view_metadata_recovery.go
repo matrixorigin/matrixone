@@ -81,14 +81,14 @@ func viewMetadataRequireRevalidationSQL() []string {
 
 // ViewMetadataRequireRevalidationSQL returns the statements that atomically
 // fence a lifecycle-unaware mutation. Frontend catalog mutations execute these
-// statements in their existing transaction when the capability barrier is
-// closed, matching Compile.viewMetadataRefreshAvailable.
+// statements in their existing transaction while this lifecycle layer remains
+// inactive, matching Compile.viewMetadataRefreshAvailable.
 func ViewMetadataRequireRevalidationSQL() []string {
 	return viewMetadataRequireRevalidationSQL()
 }
 
 // RequireViewMetadataRevalidation durably records that lifecycle DDL may be
-// skipped while the cluster capability barrier is closed.
+// skipped while lifecycle activation is unavailable.
 func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor) error {
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
 	defer cancel()
@@ -189,7 +189,7 @@ func seedViewMetadataRevalidationPage(txn executor.TxnExecutor) (complete bool, 
 }
 
 // StartViewMetadataRevalidation starts one durable bounded pass over every
-// CURRENT user View after the rolling-upgrade capability barrier reopens.
+// CURRENT user View after a later activation layer opens the lifecycle gate.
 func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor, workerID string) error {
 	_ = workerID
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)

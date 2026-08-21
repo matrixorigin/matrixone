@@ -30,14 +30,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -111,27 +109,8 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
-	runtime := moruntime.ServiceRuntime(ses.GetService())
-	cluster := &mockMOCluster{cnServices: []metadata.CNService{{
-		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
-		ViewMetadataRefreshSupported: true,
-	}}}
-	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
-	runtime.SetGlobalVariables(moruntime.ClusterService, cluster)
-	t.Cleanup(func() {
-		if hadOldCluster {
-			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
-		} else {
-			runtime.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
-		}
-	})
 
 	t.Run("capability disabled", func(t *testing.T) {
-		disabled := &mockMOCluster{cnServices: []metadata.CNService{{
-			ServiceID: "old-cn", WorkState: metadata.WorkState_Working,
-		}}}
-		runtime.SetGlobalVariables(moruntime.ClusterService, disabled)
-		defer runtime.SetGlobalVariables(moruntime.ClusterService, cluster)
 		bh := &backgroundExecTest{}
 		bh.init()
 		require.NoError(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42))
@@ -144,7 +123,7 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 	t.Run("success", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
-		require.NoError(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42))
+		require.NoError(t, invalidateAccountViewMetadataEnabled(context.Background(), bh, 42))
 		require.Len(t, bh.executedSQLs, 2)
 		require.Equal(t, []uint32{catalog.System_Account, catalog.System_Account}, bh.executionAccountIDs)
 		require.Equal(t, []bool{false, true}, bh.systemCTELimits)
@@ -157,7 +136,7 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		bh.init()
 		testErr := moerr.NewInternalErrorNoCtx("gate failed")
 		bh.sql2err[catalog.ViewMetadataLifecycleGateSQL] = testErr
-		require.ErrorIs(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42), testErr)
+		require.ErrorIs(t, invalidateAccountViewMetadataEnabled(context.Background(), bh, 42), testErr)
 		require.Len(t, bh.executedSQLs, 1)
 	})
 
@@ -168,7 +147,7 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		// The generation is time-derived, so fail the second statement after the gate.
 		bh.sql2err[catalog.ViewMetadataLifecycleGateSQL] = nil
 		bhFailure := &failSecondBackgroundExec{backgroundExecTest: bh, err: testErr}
-		require.ErrorIs(t, invalidateAccountViewMetadata(context.Background(), ses, bhFailure, 42), testErr)
+		require.ErrorIs(t, invalidateAccountViewMetadataEnabled(context.Background(), bhFailure, 42), testErr)
 	})
 }
 
@@ -176,19 +155,6 @@ func TestPrepareViewMetadataMutationCatalogCompatibilityAndFailures(t *testing.T
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
-	runtime := moruntime.ServiceRuntime(ses.GetService())
-	disabled := &mockMOCluster{cnServices: []metadata.CNService{{
-		ServiceID: "old-cn", WorkState: metadata.WorkState_Working,
-	}}}
-	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
-	runtime.SetGlobalVariables(moruntime.ClusterService, disabled)
-	t.Cleanup(func() {
-		if hadOldCluster {
-			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
-		} else {
-			runtime.CompareAndDeleteGlobalVariables(moruntime.ClusterService, disabled)
-		}
-	})
 	statements := compile.ViewMetadataRequireRevalidationSQL()
 
 	t.Run("typed missing table remains compatible", func(t *testing.T) {
@@ -217,20 +183,6 @@ func TestPublicationInvalidationPersistsMarkerWhenCapabilityIsClosed(t *testing.
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
-	runtime := moruntime.ServiceRuntime(ses.GetService())
-	disabled := &mockMOCluster{cnServices: []metadata.CNService{{
-		ServiceID: "old-cn", WorkState: metadata.WorkState_Working,
-	}}}
-	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
-	runtime.SetGlobalVariables(moruntime.ClusterService, disabled)
-	t.Cleanup(func() {
-		if hadOldCluster {
-			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
-		} else {
-			runtime.CompareAndDeleteGlobalVariables(moruntime.ClusterService, disabled)
-		}
-	})
-
 	bh := &backgroundExecTest{}
 	bh.init()
 	require.NoError(t, invalidatePublicationViewMetadata(context.Background(), bh, ses.GetService(),
@@ -245,24 +197,9 @@ func TestReconcileAccountViewMetadataUsesSystemContext(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
-	runtime := moruntime.ServiceRuntime(ses.GetService())
-	cluster := &mockMOCluster{cnServices: []metadata.CNService{{
-		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
-		ViewMetadataRefreshSupported: true,
-	}}}
-	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
-	runtime.SetGlobalVariables(moruntime.ClusterService, cluster)
-	t.Cleanup(func() {
-		if hadOldCluster {
-			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
-		} else {
-			runtime.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
-		}
-	})
-
 	bh := &backgroundExecTest{}
 	bh.init()
-	require.NoError(t, reconcileAccountViewMetadata(context.Background(), ses, bh, 42))
+	require.NoError(t, reconcileAccountViewMetadataEnabled(context.Background(), bh, 42))
 	require.Len(t, bh.executedSQLs, 4)
 	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
 	require.Contains(t, bh.executedSQLs[1], "delete from mo_catalog.mo_view_dependencies")

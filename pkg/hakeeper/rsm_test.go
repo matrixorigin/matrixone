@@ -194,9 +194,8 @@ func TestHandleCNHeartbeat(t *testing.T) {
 	assert.NoError(t, err)
 
 	hb := pb.CNStoreHeartbeat{
-		UUID:                         "uuid1",
-		CommitID:                     "c123",
-		ViewMetadataRefreshSupported: true,
+		UUID:     "uuid1",
+		CommitID: "c123",
 	}
 	data, err := hb.Marshal()
 	require.NoError(t, err)
@@ -209,7 +208,6 @@ func TestHandleCNHeartbeat(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, uint64(3), cninfo.Tick)
 	assert.Equal(t, hb.CommitID, cninfo.CommitID)
-	assert.True(t, cninfo.ViewMetadataRefreshSupported)
 }
 
 func TestGetIDCmd(t *testing.T) {
@@ -429,9 +427,8 @@ func TestClusterDetailsQuery(t *testing.T) {
 		Stores: make(map[string]pb.CNStoreInfo),
 	}
 	tsm.state.CNState.Stores["uuid1"] = pb.CNStoreInfo{
-		Tick:                         1,
-		ServiceAddress:               "addr1",
-		ViewMetadataRefreshSupported: true,
+		Tick:           1,
+		ServiceAddress: "addr1",
 	}
 	tsm.state.CNState.Stores["uuid2"] = pb.CNStoreInfo{
 		Tick:           2,
@@ -519,10 +516,9 @@ func TestClusterDetailsQuery(t *testing.T) {
 		},
 		CNStores: []pb.CNStore{
 			{
-				UUID:                         "uuid1",
-				Tick:                         1,
-				ServiceAddress:               "addr1",
-				ViewMetadataRefreshSupported: true,
+				UUID:           "uuid1",
+				Tick:           1,
+				ServiceAddress: "addr1",
 			},
 			{
 				UUID:           "uuid2",

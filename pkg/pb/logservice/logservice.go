@@ -156,7 +156,6 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.Resource = hb.Resource
 	storeInfo.CommitID = hb.CommitID
 	storeInfo.CommandDeliveryAckSupported = hb.CommandDeliveryAckSupported
-	storeInfo.ViewMetadataRefreshSupported = hb.ViewMetadataRefreshSupported
 	s.Stores[hb.UUID] = storeInfo
 }
 
