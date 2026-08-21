@@ -95,6 +95,7 @@ func TestAsofJoinProducesAsofAst(t *testing.T) {
 		"select * from l asof join r on lk = r.rk and r.effective_ts <= event_ts",
 		"select * from l asof join r on lk = rk and event_ts >= effective_ts",
 		"select * from l asof join r on lk = rk and a >= b",
+		"select * from l asof join r on lk = rk and revision >= baseline",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
