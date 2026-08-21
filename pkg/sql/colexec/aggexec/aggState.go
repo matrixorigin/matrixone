@@ -22,7 +22,6 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1831,24 +1830,66 @@ func (ae *aggExec) freeStandby() {
 	ae.standby = nil
 }
 
-// canonicalDistinctArgumentBytes returns the comparison key payload used by
-// saved-argument DISTINCT aggregates. The saved payload is also replayed into
-// the aggregate state, so do not apply broader FLOAT32 scale normalization
-// here: only signed zero needs canonicalization for SQL equality.
-func canonicalDistinctArgumentBytes(vec *vector.Vector, row int) []byte {
+// canonicalDistinctArgumentSize reports the fixed-width key size for a signed
+// zero. The caller writes the canonical all-zero payload into its existing
+// accounted scratch buffer, avoiding a temporary slice and heap allocation.
+func canonicalDistinctArgumentSize(vec *vector.Vector, row int) (int, bool) {
 	switch vec.GetType().Oid {
 	case types.T_float32:
 		if vector.MustFixedColNoTypeCheck[float32](vec)[row] == 0 {
-			zero := keycodec.NewFloat32Codec(0).CanonicalBytes(0)
-			return zero[:]
+			return 4, true
 		}
 	case types.T_float64:
 		if vector.MustFixedColNoTypeCheck[float64](vec)[row] == 0 {
-			zero := keycodec.CanonicalFloat64Bytes(0)
-			return zero[:]
+			return 8, true
 		}
 	}
-	return vec.GetRawBytesAt(row)
+	return 0, false
+}
+
+// copyCanonicalDistinctArgument copies one DISTINCT payload into dst. Signed
+// zero is represented by the native-endian all-zero payload used by the
+// resident aggregate key, while all other values retain their raw bytes.
+func copyCanonicalDistinctArgument(dst []byte, vec *vector.Vector, row int) int {
+	if size, ok := canonicalDistinctArgumentSize(vec, row); ok {
+		clear(dst[:size])
+		return size
+	}
+	return copy(dst, vec.GetRawBytesAt(row))
+}
+
+func distinctArgumentRowsEqual(vec *vector.Vector, left, right int) bool {
+	leftZero := false
+	if _, ok := canonicalDistinctArgumentSize(vec, left); ok {
+		leftZero = true
+	}
+	rightZero := false
+	if _, ok := canonicalDistinctArgumentSize(vec, right); ok {
+		rightZero = true
+	}
+	if leftZero || rightZero {
+		return leftZero && rightZero
+	}
+	return bytes.Equal(vec.GetRawBytesAt(left), vec.GetRawBytesAt(right))
+}
+
+func (ag *aggState) fillDistinctVectorArg(
+	mp *mpool.MPool,
+	y uint16,
+	vec *vector.Vector,
+	row int,
+) error {
+	val := vec.GetRawBytesAt(row)
+	if size, ok := canonicalDistinctArgumentSize(vec, row); ok {
+		val = val[:size]
+	}
+	k, err := ag.resizeArgScratch(mp, kAggArgPrefixSz+len(val))
+	if err != nil {
+		return err
+	}
+	binary.BigEndian.PutUint16(k[:kAggArgPrefixSz], y)
+	copyCanonicalDistinctArgument(k[kAggArgPrefixSz:], vec, row)
+	return ag.insertPreparedArg(mp, y, k, true)
 }
 
 func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
@@ -1869,10 +1910,13 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				continue
 			}
 			x, y := ae.getXY(group - 1)
-			bs := vectors[0].GetRawBytesAt(row)
 			if distinct {
-				bs = canonicalDistinctArgumentBytes(vectors[0], row)
+				if err := ae.state[x].fillDistinctVectorArg(ae.mp, y, vectors[0], row); err != nil {
+					return err
+				}
+				continue
 			}
+			bs := vectors[0].GetRawBytesAt(row)
 			if err := ae.state[x].fillArg(ae.mp, y, bs, distinct); err != nil {
 				return err
 			}
@@ -1907,9 +1951,6 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				return err
 			}
 			raw := vec.GetRawBytesAt(row)
-			if distinct {
-				raw = canonicalDistinctArgumentBytes(vec, row)
-			}
 			if uint64(len(raw)) > math.MaxUint32 ||
 				len(raw) > math.MaxInt-totalSize-4 {
 				return mpool.ErrAllocationAllocatorLimit
@@ -1942,12 +1983,13 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				return err
 			}
 			raw := vec.GetRawBytesAt(row)
-			if distinct {
-				raw = canonicalDistinctArgumentBytes(vec, row)
-			}
 			binary.BigEndian.PutUint32(key[off:], uint32(len(raw)))
 			off += 4
-			copy(key[off:], raw)
+			if distinct {
+				copyCanonicalDistinctArgument(key[off:], vec, row)
+			} else {
+				copy(key[off:], raw)
+			}
 			off += len(raw)
 		}
 		if err := state.insertPreparedArg(ae.mp, y, key, distinct); err != nil {

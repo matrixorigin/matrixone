@@ -174,6 +174,46 @@ func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestCountDistinctSignedZeroDoesNotAllocatePerRow(t *testing.T) {
+	newInput := func(mp *mpool.MPool) (*vector.Vector, []uint64) {
+		values := testutil.NewFloat64Vector(2, types.T_float64.ToType(), mp, false, nil, []float64{math.Copysign(0, -1), 0.0})
+		return values, []uint64{1, 1}
+	}
+
+	t.Run("preflight", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		values, groups := newInput(mp)
+		defer values.Free(mp)
+		vectors := []*vector.Vector{values}
+		exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()})
+		require.NoError(t, exec.GroupGrow(1))
+		defer exec.Free()
+		preflight := exec.(BatchCapacityPreflight)
+		require.NoError(t, preflight.PreflightBatchFill(0, groups, vectors))
+		allocs := testing.AllocsPerRun(100, func() {
+			require.NoError(t, preflight.PreflightBatchFill(0, groups, vectors))
+		})
+		require.Zero(t, allocs)
+	})
+
+	t.Run("batch_fill", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		values, groups := newInput(mp)
+		defer values.Free(mp)
+		vectors := []*vector.Vector{values}
+		exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()})
+		require.NoError(t, exec.GroupGrow(1))
+		defer exec.Free()
+		preflight := exec.(BatchCapacityPreflight)
+		require.NoError(t, preflight.PreflightBatchFill(0, groups, vectors))
+		require.NoError(t, exec.BatchFill(0, groups, vectors))
+		allocs := testing.AllocsPerRun(100, func() {
+			require.NoError(t, exec.BatchFill(0, groups, vectors))
+		})
+		require.Zero(t, allocs)
+	})
+}
+
 // TestCountMultiColumnDistinct tests COUNT(DISTINCT col1, col2) with multiple args.
 // This verifies the fix for issue #25284.
 func TestCountMultiColumnDistinct(t *testing.T) {
