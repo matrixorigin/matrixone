@@ -319,7 +319,7 @@ alter table ddl_order_first add column added int first;
 set @ddl_first_after = (select watermark from change_watermark() w);
 insert into ddl_order_first values (7, 1, 99);
 select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_first');
-mo_ctl(dn, flush, table_changes_db.ddl_order_first)
+➤ mo_ctl(dn, flush, table_changes_db.ddl_order_first)[12,65535,0]  𝄀
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 set @ddl_first_until = (select watermark from change_watermark() w);
 select change_type, added, id, payload
@@ -331,7 +331,7 @@ alter table ddl_order_after add column added int after id;
 set @ddl_after_after = (select watermark from change_watermark() w);
 insert into ddl_order_after values (1, 7, 99, 100);
 select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_after');
-mo_ctl(dn, flush, table_changes_db.ddl_order_after)
+➤ mo_ctl(dn, flush, table_changes_db.ddl_order_after)[12,65535,0]  𝄀
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 set @ddl_after_until = (select watermark from change_watermark() w);
 select change_type, id, added, payload, tail
@@ -343,7 +343,7 @@ alter table ddl_order_drop drop column payload;
 set @ddl_drop_after = (select watermark from change_watermark() w);
 insert into ddl_order_drop values (2, 100);
 select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_drop');
-mo_ctl(dn, flush, table_changes_db.ddl_order_drop)
+➤ mo_ctl(dn, flush, table_changes_db.ddl_order_drop)[12,65535,0]  𝄀
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 set @ddl_drop_until = (select watermark from change_watermark() w);
 select change_type, id, tail
