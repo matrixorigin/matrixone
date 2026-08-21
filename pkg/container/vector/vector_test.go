@@ -1286,6 +1286,47 @@ func TestShrinkByMask(t *testing.T) {
 	}
 }
 
+func TestShrinkByMaskKeepsNullsAlignedWithOffset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var mask bitmap.Bitmap
+	mask.InitWithSize(3)
+	mask.AddMany([]uint64{0, 2})
+
+	t.Run("negate", func(t *testing.T) {
+		vec := NewVec(types.T_int32.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, AppendFixedList(
+			vec,
+			[]int32{10, 11, 12, 13, 14, 15, 16, 17},
+			[]bool{false, false, false, true, false, true, false, false},
+			mp,
+		))
+		vec.GetGrouping().Add(3, 4)
+
+		vec.ShrinkByMask(&mask, true, 2)
+		require.Equal(t, []int32{10, 11, 0, 0, 16, 17}, MustFixedColWithTypeCheck[int32](vec))
+		require.Equal(t, []uint64{2, 3}, vec.GetNulls().ToArray())
+		require.Equal(t, []uint64{2}, vec.GetGrouping().ToArray())
+	})
+
+	t.Run("select", func(t *testing.T) {
+		vec := NewVec(types.T_int32.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, AppendFixedList(
+			vec,
+			[]int32{10, 11, 12, 13, 14, 15, 16, 17},
+			[]bool{false, false, true, false, false, false, false, false},
+			mp,
+		))
+		vec.GetGrouping().Add(2, 4)
+
+		vec.ShrinkByMask(&mask, false, 2)
+		require.Equal(t, []int32{0, 14}, MustFixedColWithTypeCheck[int32](vec))
+		require.Equal(t, []uint64{0}, vec.GetNulls().ToArray())
+		require.Equal(t, []uint64{0, 1}, vec.GetGrouping().ToArray())
+	})
+}
+
 func TestShuffle(t *testing.T) {
 	mp := mpool.MustNewZero()
 

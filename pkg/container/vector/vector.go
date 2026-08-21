@@ -8156,8 +8156,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 			vs[idx] = vs[itr.Next()+offset]
 			idx++
 		}
-		nulls.FilterByMaskInPlace(&v.gsp, sels, false)
-		nulls.FilterByMaskInPlace(&v.nsp, sels, false)
+		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, false, offset)
+		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, false, offset)
 		v.length = length
 	} else if length > 0 {
 		sel := itr.Next() + offset
@@ -8176,8 +8176,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 				sel = itr.Next() + offset
 			}
 		}
-		nulls.FilterByMaskInPlace(&v.gsp, sels, true)
-		nulls.FilterByMaskInPlace(&v.nsp, sels, true)
+		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, true, offset)
+		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, true, offset)
 		v.length -= length
 	}
 }
