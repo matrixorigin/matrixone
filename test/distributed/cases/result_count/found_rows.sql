@@ -131,6 +131,17 @@ select id from t order by id limit 2;
 create table status_does_not_replace_found_rows(id int);
 select found_rows() as after_status;
 
+-- SET expression evaluation runs an internal derived SELECT. Neither a
+-- literal expression nor a scalar-subquery expression may replace the last
+-- user-visible result-set count.
+select sql_calc_found_rows id from t where id <= 5 order by id limit 1;
+set @found_rows_literal = 1;
+select found_rows() as after_set_literal;
+
+select sql_calc_found_rows id from t where id <= 5 order by id limit 1;
+set @found_rows_subquery = (select 1);
+select found_rows() as after_set_subquery;
+
 select id from t order by id limit 2;
 -- @regex("does not exist",true)
 select * from missing_found_rows_table;
