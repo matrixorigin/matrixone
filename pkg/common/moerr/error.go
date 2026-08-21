@@ -113,7 +113,8 @@ const (
 	ErrFtMatchingKeyNotFound uint16 = 20327
 	// Keep ErrCantChangeTxn and the upstream fulltext error code stable; this code is
 	// allocated separately for SELECT ... INTO statements returning multiple rows.
-	ErrTooManyRows uint16 = 20328
+	ErrTooManyRows            uint16 = 20328
+	ErrMultiUpdateKeyConflict uint16 = 20329
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -454,7 +455,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
 	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
-	ErrFtMatchingKeyNotFound: {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
+	ErrFtMatchingKeyNotFound:  {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
+	ErrMultiUpdateKeyConflict: {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1132,6 +1134,10 @@ func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	noReportCtx := errutil.ContextWithNoReport(ctx, true)
 	return newError(noReportCtx, ErrUnsupportedDML, msg)
+}
+
+func NewMultiUpdateKeyConflict(ctx context.Context, first, second string) *Error {
+	return newError(ctx, ErrMultiUpdateKeyConflict, first, second)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
