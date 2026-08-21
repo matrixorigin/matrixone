@@ -323,7 +323,7 @@ func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, err
 }
 
 func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
-	return loadAllBasesUncached(sqlproc, cfg, trace)
+	return loadAllBasesWithPool(sqlproc, cfg, trace)
 }
 
 func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
@@ -363,7 +363,70 @@ func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *l
 }
 
 func loadAllBasesWithPool(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
-	return loadAllBasesUncached(sqlproc, cfg, trace)
+	idSQL := fmt.Sprintf("SELECT %s FROM %s",
+		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	var sqlStart time.Time
+	if trace != nil {
+		sqlStart = time.Now()
+	}
+	res, err := runSql(sqlproc, idSQL)
+	if trace != nil {
+		trace.addInternalSQL(time.Since(sqlStart))
+	}
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, bat := range res.Batches {
+		if bat == nil {
+			continue
+		}
+		for i := 0; i < bat.RowCount(); i++ {
+			ids = append(ids, bat.Vecs[0].GetStringAt(i))
+		}
+	}
+	res.Close()
+
+	bases := make([]*Segment, 0, len(ids))
+	used := make(map[baseKey]struct{}, len(ids))
+	for _, id := range ids {
+		var metaStart time.Time
+		if trace != nil {
+			metaStart = time.Now()
+		}
+		checksum, filesize, recency, found, lerr := readMetadata(sqlproc, cfg, id)
+		if trace != nil {
+			trace.addInternalSQL(time.Since(metaStart))
+		}
+		if lerr != nil {
+			freeSegs(bases)
+			return nil, lerr
+		}
+		if !found {
+			freeSegs(bases)
+			return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s metadata not found", id))
+		}
+		if filesize <= 0 {
+			freeSegs(bases)
+			return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s has empty filesize", id))
+		}
+		key := baseKey{index: cfg.DbName + "." + cfg.IndexTable, id: id, checksum: checksum, filesize: filesize}
+		m, lerr := loadedBasePool.acquire(key, func() (*Segment, error) {
+			return loadFromStorageMetadata(sqlproc, cfg, id, checksum, filesize, recency, trace)
+		}, recency)
+		if lerr != nil {
+			// Free the segments already mapped this call before bailing: each owns an
+			// mmap (+ a linked /tmp spill file on the fallback path), so returning without
+			// freeing leaks them, and a retrying caller (query reload / MERGE) accumulates
+			// both. Mirrors LoadTailSegments' freeSegs(bases) on its own error path.
+			freeSegs(bases)
+			return nil, lerr
+		}
+		bases = append(bases, m)
+		used[key] = struct{}{}
+	}
+	loadedBasePool.commit(cfg.DbName+"."+cfg.IndexTable, used)
+	return bases, nil
 }
 
 // LoadFromStorage reads an index id's metadata + chunks, verifies the checksum,
