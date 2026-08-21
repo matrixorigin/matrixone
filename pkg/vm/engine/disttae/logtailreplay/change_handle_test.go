@@ -63,6 +63,47 @@ func TestChangesHandlerRangePrimaryIndex(t *testing.T) {
 	})
 }
 
+func TestChangesHandlerLegacyPrimaryIndexDefaults(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	start := types.BuildTS(10, 0)
+	end := types.BuildTS(20, 0)
+	state := NewPartitionState("", false, 42, false)
+	state.start = start
+	state.end = end
+
+	h, err := NewChangesHandler(context.Background(), state, start, end, false, 16, 3, mp, nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, h.primarySeqnum)
+	require.Equal(t, 3, h.primaryIdx)
+	require.NoError(t, h.Close())
+
+	constructors := []func() (*ChangeHandler, error){
+		func() (*ChangeHandler, error) {
+			return NewChangesHandlerWithCheckpointEntries(
+				context.Background(), 42, "", nil, start, end, false, 16, 3, mp, nil,
+			)
+		},
+		func() (*ChangeHandler, error) {
+			return NewChangesHandlerWithCheckpointRange(
+				context.Background(), 42, "", nil, start, end, false, 16, 3, mp, nil,
+			)
+		},
+		func() (*ChangeHandler, error) {
+			return NewChangesHandlerWithCheckpointRangeRecovery(
+				context.Background(), 42, "", nil, start, end, false, 16, 3, mp, nil,
+			)
+		},
+	}
+	for _, constructor := range constructors {
+		h, err := constructor()
+		require.NoError(t, err)
+		require.Equal(t, 3, h.primarySeqnum)
+		require.Equal(t, 3, h.primaryIdx)
+		require.NoError(t, h.Close())
+	}
+}
+
 func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
