@@ -15,18 +15,13 @@
 package plan
 
 import (
-	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -175,7 +170,7 @@ func findIvfTableFunctionNode(builder *QueryBuilder, nodeID int32) *plan.Node {
 		return nil
 	}
 	node := builder.qry.Nodes[nodeID]
-	if node.NodeType == plan.Node_FUNCTION_SCAN {
+	if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
 		return node
 	}
 	for _, childID := range node.Children {
@@ -237,79 +232,17 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeDoesNotAutoUseIncludeOptimizati
 
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
+	require.Equal(t, plan.Node_VECTOR_INDEX_SCAN, tableFuncNode.NodeType)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Nil(t, tableFuncNode.Limit)
-	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Equal(t, uint64(12), tableFuncNode.IndexReaderParam.GetOverFetchLimit())
-	require.Len(t, tableFuncNode.TblFuncExprList, 2)
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
+	require.Zero(t, tableFuncNode.VectorIndexScan.FirstRoundLimit)
+	require.Zero(t, tableFuncNode.VectorIndexScan.BucketExpandStep)
 
 	require.Len(t, scanNode.FilterList, 2)
 	require.Equal(t, "category", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
 	require.Equal(t, "note", scanNode.FilterList[1].GetF().Args[0].GetCol().Name)
-}
-
-// A prepared (non-literal) LIMIT with a residual post-filter cannot be
-// over-fetched at plan time, so the ivf_search TVF is flagged to over-fetch at
-// EXECUTE and the raw parameter is pushed as the limit (#26878). A literal LIMIT
-// keeps being over-fetched at plan time (covered above: pushes 12, flag off).
-func TestApplyIndicesForSortUsingIvfflat_PreparedLimitFlagsPostFilterOverFetch(t *testing.T) {
-	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
-
-	scanTag := scanNode.BindingTags[0]
-	scanNode.FilterList = []*plan.Expr{
-		{
-			Typ: plan.Type{Id: int32(types.T_bool)},
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: ">="},
-					Args: []*plan.Expr{
-						{Typ: scanNode.TableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 3, Name: "category"}}},
-						MakePlan2Int32ConstExprWithType(20),
-					},
-				},
-			},
-		},
-		{
-			Typ: plan.Type{Id: int32(types.T_bool)},
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "="},
-					Args: []*plan.Expr{
-						{Typ: scanNode.TableDef.Cols[4].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 4, Name: "note"}}},
-						makePlan2StringConstExprWithType("n2"),
-					},
-				},
-			},
-		},
-	}
-
-	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2, 4)
-	// Replace the literal LIMIT 2 with a prepared LIMIT ? parameter marker.
-	paramLimit := &plan.Expr{
-		Typ:  plan.Type{Id: int32(types.T_uint64)},
-		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
-	}
-	vecCtx.limit = paramLimit
-	vecCtx.resultLimit = DeepCopyExpr(paramLimit)
-
-	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
-	require.NoError(t, err)
-
-	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
-	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
-	require.NotNil(t, tableFuncNode)
-
-	var cfg vectorindex.IndexTableConfig
-	require.NoError(t, json.Unmarshal([]byte(tableFuncNode.TblFuncExprList[0].GetLit().GetSval()), &cfg))
-	require.True(t, cfg.PostFilterOverFetch, "prepared LIMIT ? + residual filter must flag over-fetch")
-
-	// node.Limit is dropped so no plan-level top truncates the over-fetched
-	// candidates before the JOIN; the raw parameter travels on IndexReaderParam.Limit
-	// (a TVF-only channel), where the TVF resolves and over-fetches it at EXECUTE.
-	require.Nil(t, tableFuncNode.Limit, "node.Limit must be dropped for the prepared over-fetch case")
-	require.NotNil(t, tableFuncNode.IndexReaderParam.GetLimit(), "raw k must be carried on IndexReaderParam.Limit")
-	require.Nil(t, tableFuncNode.IndexReaderParam.GetLimit().GetLit(), "IndexReaderParam.Limit is the raw parameter, not a literal")
 }
 
 func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidualFilter(t *testing.T) {
@@ -355,17 +288,23 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidual
 
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
+	require.Equal(t, plan.Node_VECTOR_INDEX_SCAN, tableFuncNode.NodeType)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Nil(t, tableFuncNode.Limit)
-	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Len(t, tableFuncNode.TblFuncExprList, 5)
-	assert.Contains(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval(), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
-	assert.Equal(t, uint64(0), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
-	assert.Equal(t, uint64(0), tableFuncNode.TblFuncExprList[4].GetLit().GetU64Val())
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Len(t, tableFuncNode.VectorIndexScan.PreFilters, 1)
+	assert.Equal(t, int32(5), tableFuncNode.VectorIndexScan.PreFilters[0].GetF().Args[0].GetCol().ColPos)
+	assert.Equal(t, catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category", tableFuncNode.VectorIndexScan.PreFilters[0].GetF().Args[0].GetCol().Name)
+	assert.Zero(t, tableFuncNode.VectorIndexScan.FirstRoundLimit)
+	assert.Zero(t, tableFuncNode.VectorIndexScan.BucketExpandStep)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
+	for _, node := range builder.qry.Nodes {
+		if node != nil && len(node.RuntimeFilterBuildList) > 0 {
+			require.Equal(t, plan.Node_SEMI, node.JoinType)
+		}
+	}
 
 	require.Len(t, scanNode.FilterList, 1)
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
@@ -396,9 +335,10 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeResidualOnlyUsesSingleRoundP
 
 	tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Nil(t, tableFuncNode.Limit)
-	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Len(t, tableFuncNode.TblFuncExprList, 2)
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
+	require.Zero(t, tableFuncNode.VectorIndexScan.FirstRoundLimit)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
@@ -406,7 +346,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeResidualOnlyUsesSingleRoundP
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
 }
 
-func TestApplyIndicesForSortUsingIvfflat_OldProtocolKeepsRelationalPlan(t *testing.T) {
+func TestApplyIndicesForSortUsingIvfflat_ProtocolVersionDoesNotGateScan(t *testing.T) {
 	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
 	scanTag := scanNode.BindingTags[0]
@@ -438,12 +378,11 @@ func TestApplyIndicesForSortUsingIvfflat_OldProtocolKeepsRelationalPlan(t *testi
 
 	vecCtx := newIvfIncludeModeVectorSortContext(
 		scanNode, scanNodeID, "include", 0, 2, 4)
-	nodeCount := len(builder.qry.Nodes)
 	gotNodeID, err := builder.applyIndicesForSortUsingIvfflat(
 		scanNodeID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, scanNodeID, gotNodeID)
-	require.Len(t, builder.qry.Nodes, nodeCount)
+	require.NotNil(t, findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0]))
 	require.Len(t, scanNode.FilterList, 1)
 	require.Equal(t, "note", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
 }
@@ -479,9 +418,9 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeDoesNotAutoUseIncludePushdown(t 
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Nil(t, tableFuncNode.Limit)
-	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Len(t, tableFuncNode.TblFuncExprList, 2)
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 }
@@ -502,9 +441,9 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersUsesCandidateWindo
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Nil(t, tableFuncNode.Limit)
-	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Len(t, tableFuncNode.TblFuncExprList, 2)
+	require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
 	require.Empty(t, tableFuncNode.RuntimeFilterProbeList)
 	require.False(t, tableFuncNode.Stats.GetForceOneCN())
 }
@@ -556,9 +495,9 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Nil(t, tableFuncNode.Limit)
-	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Len(t, tableFuncNode.TblFuncExprList, 2)
+	require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
 }
@@ -586,10 +525,9 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutMetadataFallsBackToPo
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Nil(t, tableFuncNode.Limit)
-	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Len(t, tableFuncNode.TblFuncExprList, 5)
-	assert.Empty(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval())
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
 }
 
 func TestApplyIndicesForSortUsingIvfflat_IncludeModeIndexOnlyPushdownOverfetchesFirstRound(t *testing.T) {
@@ -620,12 +558,11 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeIndexOnlyPushdownOverfetches
 	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
 
 	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
-	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
-	require.Nil(t, tableFuncNode.Limit)
-	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Len(t, tableFuncNode.TblFuncExprList, 5)
-	assert.Contains(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval(), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
-	assert.Equal(t, uint64(12), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
+	require.Equal(t, plan.Node_VECTOR_INDEX_SCAN, tableFuncNode.NodeType)
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(2), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Len(t, tableFuncNode.VectorIndexScan.PreFilters, 1)
+	assert.Equal(t, uint64(12), tableFuncNode.VectorIndexScan.FirstRoundLimit.GetLit().GetU64Val())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffsetCompensatedK(t *testing.T) {
@@ -657,13 +594,12 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffset
 	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
 
 	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
-	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
-	require.Nil(t, tableFuncNode.Limit)
-	require.Equal(t, uint64(5), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Len(t, tableFuncNode.TblFuncExprList, 5)
-	assert.Contains(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval(), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
-	assert.Equal(t, uint64(25), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
-	assert.Equal(t, uint64(10), tableFuncNode.TblFuncExprList[4].GetLit().GetU64Val())
+	require.Equal(t, plan.Node_VECTOR_INDEX_SCAN, tableFuncNode.NodeType)
+	require.Equal(t, uint64(5), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(5), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Len(t, tableFuncNode.VectorIndexScan.PreFilters, 1)
+	assert.Equal(t, uint64(25), tableFuncNode.VectorIndexScan.FirstRoundLimit.GetLit().GetU64Val())
+	assert.Equal(t, uint32(10), tableFuncNode.VectorIndexScan.BucketExpandStep)
 }
 
 func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersDoesNotDoubleCountOffset(t *testing.T) {
@@ -679,194 +615,10 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersDoesNotDoubleC
 	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
 
 	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
-	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
-	require.Nil(t, tableFuncNode.Limit)
-	require.Equal(t, uint64(5), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Len(t, tableFuncNode.TblFuncExprList, 5)
-	assert.Empty(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval())
-	assert.Equal(t, uint64(5), tableFuncNode.TblFuncExprList[3].GetLit().GetU64Val())
-	assert.Equal(t, uint64(10), tableFuncNode.TblFuncExprList[4].GetLit().GetU64Val())
-}
-
-func TestSerializeFiltersToSQL_DoesNotPushMixedOR(t *testing.T) {
-	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
-	scanTag := scanNode.BindingTags[0]
-
-	orExpr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_bool)},
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{ObjName: "or"},
-				Args: []*plan.Expr{
-					{
-						Typ: plan.Type{Id: int32(types.T_bool)},
-						Expr: &plan.Expr_F{
-							F: &plan.Function{
-								Func: &plan.ObjectRef{ObjName: "="},
-								Args: []*plan.Expr{
-									{Typ: scanNode.TableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 3, Name: "category"}}},
-									MakePlan2Int32ConstExprWithType(20),
-								},
-							},
-						},
-					},
-					{
-						Typ: plan.Type{Id: int32(types.T_bool)},
-						Expr: &plan.Expr_F{
-							F: &plan.Function{
-								Func: &plan.ObjectRef{ObjName: "="},
-								Args: []*plan.Expr{
-									{Typ: scanNode.TableDef.Cols[4].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 4, Name: "note"}}},
-									makePlan2StringConstExprWithType("n2"),
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	sql, pushdown, remaining, err := serializeFiltersToSQL([]*plan.Expr{orExpr}, scanNode, []string{"title", "category"}, 1, time.UTC)
-	require.NoError(t, err)
-	assert.Empty(t, sql)
-	assert.Empty(t, pushdown)
-	require.Len(t, remaining, 1)
-}
-
-func TestSerializeFiltersToSQL_FormatsFunctionsCastAndArithmetic(t *testing.T) {
-	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
-	scanTag := scanNode.BindingTags[0]
-
-	lowerTitleFilter := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_bool)},
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{ObjName: "="},
-				Args: []*plan.Expr{
-					{
-						Typ: plan.Type{Id: int32(types.T_varchar)},
-						Expr: &plan.Expr_F{
-							F: &plan.Function{
-								Func: &plan.ObjectRef{ObjName: "lower"},
-								Args: []*plan.Expr{
-									{Typ: scanNode.TableDef.Cols[2].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 2, Name: "title"}}},
-								},
-							},
-						},
-					},
-					makePlan2StringConstExprWithType("beta"),
-				},
-			},
-		},
-	}
-
-	castCategoryFilter := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_bool)},
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{ObjName: ">="},
-				Args: []*plan.Expr{
-					{
-						Typ: plan.Type{Id: int32(types.T_int64)},
-						Expr: &plan.Expr_F{
-							F: &plan.Function{
-								Func: &plan.ObjectRef{ObjName: "cast"},
-								Args: []*plan.Expr{
-									{Typ: scanNode.TableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 3, Name: "category"}}},
-									{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
-								},
-							},
-						},
-					},
-					makePlan2Int64ConstExprWithType(20),
-				},
-			},
-		},
-	}
-
-	arithmeticFilter := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_bool)},
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{ObjName: ">="},
-				Args: []*plan.Expr{
-					{
-						Typ: plan.Type{Id: int32(types.T_int32)},
-						Expr: &plan.Expr_F{
-							F: &plan.Function{
-								Func: &plan.ObjectRef{ObjName: "+"},
-								Args: []*plan.Expr{
-									{Typ: scanNode.TableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 3, Name: "category"}}},
-									MakePlan2Int32ConstExprWithType(1),
-								},
-							},
-						},
-					},
-					MakePlan2Int32ConstExprWithType(21),
-				},
-			},
-		},
-	}
-
-	sql, pushdown, remaining, err := serializeFiltersToSQL(
-		[]*plan.Expr{lowerTitleFilter, castCategoryFilter, arithmeticFilter},
-		scanNode,
-		[]string{"title", "category"},
-		1,
-		time.UTC,
-	)
-	require.NoError(t, err)
-	require.Len(t, pushdown, 3)
-	assert.Empty(t, remaining)
-	assert.Contains(t, sql, `lower(`)
-	assert.Contains(t, sql, catalog.SystemSI_IVFFLAT_IncludeColPrefix+"title")
-	assert.Contains(t, sql, `"beta"`)
-	assert.Contains(t, sql, `cast(`)
-	assert.Contains(t, sql, `as bigint`)
-	assert.Contains(t, sql, catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
-	assert.Contains(t, sql, `+ 1`)
-	assert.Contains(t, sql, `>= 21`)
-}
-
-func TestIvfLiteralToAST_QuotesStringSafely(t *testing.T) {
-	cases := []struct {
-		name string
-		lit  *plan.Literal
-		want string
-	}{
-		{
-			name: "single quote and backslash",
-			lit:  &plan.Literal{Value: &plan.Literal_Sval{Sval: `O'Reilly\docs`}},
-			want: "\"O'Reilly\\\\\\\\docs\"",
-		},
-		{
-			name: "empty string",
-			lit:  &plan.Literal{Value: &plan.Literal_Sval{Sval: ""}},
-			want: `""`,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ast, err := ivfLiteralToAST(tc.lit, plan.Type{Id: int32(types.T_varchar)}, time.UTC)
-			require.NoError(t, err)
-			sql := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteString(true))
-			require.Equal(t, tc.want, sql)
-		})
-	}
-}
-
-func TestCanDoIndexOnlyScan_CompositePrimaryKeyIsConservative(t *testing.T) {
-	tableDef := &plan.TableDef{
-		Pkey: &plan.PrimaryKeyDef{
-			PkeyColName: catalog.CPrimaryKeyColName,
-			Names:       []string{"id1", "id2"},
-		},
-	}
-
-	requiredCols := map[string]struct{}{
-		"id1": {},
-	}
-	assert.False(t, canDoIndexOnlyScan(requiredCols, tableDef, []string{"title"}))
+	require.Equal(t, plan.Node_VECTOR_INDEX_SCAN, tableFuncNode.NodeType)
+	require.Equal(t, uint64(5), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(5), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.Empty(t, tableFuncNode.VectorIndexScan.PreFilters)
+	assert.Equal(t, uint64(5), tableFuncNode.VectorIndexScan.FirstRoundLimit.GetLit().GetU64Val())
+	assert.Equal(t, uint32(10), tableFuncNode.VectorIndexScan.BucketExpandStep)
 }

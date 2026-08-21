@@ -1505,6 +1505,19 @@ func reCreateTableWithPitr(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
 	}
+	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+		accountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+			ctx,
+			bh,
+			fmt.Sprintf(" {MO_TS = %d}", ts),
+			accountID,
+			accountID,
+		)
+	}
 	if isSequence(tblInfo) {
 		accountID, accountErr := defines.GetAccountId(ctx)
 		if accountErr != nil {

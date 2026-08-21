@@ -1,0 +1,40 @@
+set experimental_ivf_index = 1;
+set probe_limit = 5;
+drop snapshot if exists vector_ivf_scan_snapshot;
+drop database if exists vector_ivf_snapshot;
+create database vector_ivf_snapshot;
+use vector_ivf_snapshot;
+create table t (id bigint primary key, v vecf32(2));
+insert into t values (1, '[1,1]'), (2, '[10,10]');
+create index idx_snapshot using ivfflat on t(v) lists=1 op_type 'vector_l2_ops';
+create snapshot vector_ivf_scan_snapshot for account;
+insert into t values (3, '[0.1,0.1]');
+select id from t order by l2_distance(v, '[0,0]') limit 1;
+➤ id[-5,64,0]  𝄀
+3
+explain select id from t {snapshot = 'vector_ivf_scan_snapshot'}
+order by l2_distance(v, '[0,0]') limit 1;
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Vector Index Scan on idx_snapshot [l2_distance]  𝄀
+              Vector Index: idx_snapshot, Metric: l2_distance, Candidate Limit: 1, NProbe: 5
+select id from t {snapshot = 'vector_ivf_scan_snapshot'}
+order by l2_distance(v, '[0,0]') limit 1;
+➤ id[-5,64,0]  𝄀
+1
+begin;
+insert into t values (4, '[0.01,0.01]');
+select id from t {MO_TS = 9223372036854775807}
+order by l2_distance(v, '[0,0]') limit 1;
+➤ id[-5,64,0]  𝄀
+4
+rollback;
+select id from t order by l2_distance(v, '[0,0]') limit 1;
+➤ id[-5,64,0]  𝄀
+3
+drop snapshot vector_ivf_scan_snapshot;
+drop database vector_ivf_snapshot;
