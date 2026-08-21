@@ -1,0 +1,12 @@
+starting jstfu on :4444 (resources=/home/fengttt/m/matrixone/test/distributed/resources, mo=127.0.0.1:6001)
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::objectFieldOffset has been called by io.grpc.netty.shaded.io.netty.util.internal.PlatformDependent0$4 (file:/home/fengttt/m/matrixone/xtool/jstfu/target/jstfu.jar)
+WARNING: Please consider reporting this to the maintainers of class io.grpc.netty.shaded.io.netty.util.internal.PlatformDependent0$4
+WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::loadLibrary has been called by io.grpc.netty.shaded.io.netty.util.internal.NativeLibraryUtil in an unnamed module (file:/home/fengttt/m/matrixone/xtool/jstfu/target/jstfu.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+Aug 21, 2026 1:15:36 PM io.matrixone.jstfu.Main main
+INFO: jstfu listening on port 4444 with 9 datasource(s)
