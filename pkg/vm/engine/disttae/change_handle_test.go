@@ -87,6 +87,16 @@ func TestPartitionChangesHandleNextWithSnapshotRecovery_UsesBufferedBatch(t *tes
 	require.Empty(t, handle.bufferedBatches)
 }
 
+func TestPartitionChangesHandleCollectChangesContext(t *testing.T) {
+	ctx := context.Background()
+	require.False(t, engine.CollectChangesPreserveAllVersionsFromContext(
+		(&PartitionChangesHandle{}).collectChangesContext(ctx),
+	))
+	require.True(t, engine.CollectChangesPreserveAllVersionsFromContext(
+		(&PartitionChangesHandle{preserveAllVersions: true}).collectChangesContext(ctx),
+	))
+}
+
 type stubChangesHandle struct {
 	closed bool
 }

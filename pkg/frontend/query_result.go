@@ -315,6 +315,9 @@ func saveMeta(ctx context.Context, ses *Session) error {
 	if err != nil {
 		return err
 	}
+	// objectWriterV1 serializes the batch into writer-owned buffers during Write,
+	// so saveMeta retains ownership of this temporary batch on every return path.
+	defer metaBat.Clean(ses.pool)
 	metaPath := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.GetStmtId()).String())
 	metaWriter, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, metaPath, fs)
 	if err != nil {

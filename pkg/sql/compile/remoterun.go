@@ -938,13 +938,17 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *multi_update.MultiUpdate:
 		targetAware := false
+		affectedRowsSelectors := false
 		for _, muCtx := range t.MultiUpdateCtx {
 			if muCtx.DedupByTargetRowID || muCtx.TargetUpdateCtxIdx != 0 {
 				targetAware = true
-				break
 			}
+			affectedRowsSelectors = affectedRowsSelectors || len(muCtx.AffectedRowsCols) > 0
 		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, targetAware); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteAffectedRowsSelectorsProtocol(proc, affectedRowsSelectors); err != nil {
 			return ctxId, nil, err
 		}
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -958,6 +962,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				CountDeleteAffectRows: t.CountDeleteAffectRows,
 				DedupByTargetRowId:    muCtx.DedupByTargetRowID,
 				TargetUpdateCtxIdx:    int32(muCtx.TargetUpdateCtxIdx),
+				AffectedRowsCols:      make([]plan.ColRef, len(muCtx.AffectedRowsCols)),
+			}
+			for j, pos := range muCtx.AffectedRowsCols {
+				updateCtxList[i].AffectedRowsCols[j].ColPos = int32(pos)
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1494,6 +1502,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				DedupByTargetRowID: muCtx.DedupByTargetRowId,
 				TargetUpdateCtxIdx: int(muCtx.TargetUpdateCtxIdx),
 				TargetTableID:      muCtx.TableDef.TblId,
+				AffectedRowsCols:   make([]int, len(muCtx.AffectedRowsCols)),
+			}
+			for j, pos := range muCtx.AffectedRowsCols {
+				arg.MultiUpdateCtx[i].AffectedRowsCols[j] = int(pos.ColPos)
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
@@ -1637,7 +1649,7 @@ func validateRemoteStatementLastInsertIDProtocol(proc *process.Process, hasAutoC
 	}
 	if proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"remote auto-increment PRE_INSERT requires MORPC protocol version 24",
+			"remote auto-increment PRE_INSERT requires MORPC protocol version 25",
 		)
 	}
 	return nil
@@ -1708,6 +1720,18 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 	return nil
 }
 
+func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAffectedRowsSelectors(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"per-target affected-row selector metadata requires MORPC protocol version 24",
+		)
+	}
+	return nil
+}
+
 func validateRemoteTargetAwareUpdatePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -1717,12 +1741,21 @@ func validateRemoteTargetAwareUpdatePipelineProtocol(
 	}
 	for _, instruction := range p.InstructionList {
 		if preInsert := instruction.GetPreInsert(); preInsert != nil && preInsert.HasTargetSelector {
-			return validateRemoteTargetAwareUpdateProtocol(proc, true)
+			if err := validateRemoteTargetAwareUpdateProtocol(proc, true); err != nil {
+				return err
+			}
 		}
 		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
 			for _, updateCtx := range multiUpdate.UpdateCtxList {
 				if updateCtx.DedupByTargetRowId || updateCtx.TargetUpdateCtxIdx != 0 {
-					return validateRemoteTargetAwareUpdateProtocol(proc, true)
+					if err := validateRemoteTargetAwareUpdateProtocol(proc, true); err != nil {
+						return err
+					}
+				}
+				if len(updateCtx.AffectedRowsCols) > 0 {
+					if err := validateRemoteAffectedRowsSelectorsProtocol(proc, true); err != nil {
+						return err
+					}
 				}
 			}
 		}
