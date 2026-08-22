@@ -37,6 +37,13 @@ func TestMockCompilerContextReusesProcess(t *testing.T) {
 	}
 }
 
+func TestCopiedMockCompilerContextReusesProcess(t *testing.T) {
+	original := NewEmptyCompilerContext()
+	copied := *original
+
+	require.Same(t, original.GetProcess(), copied.GetProcess())
+}
+
 func assertMockCompilerContextReusesProcess(t *testing.T, ctx *MockCompilerContext) {
 	const workers = 16
 

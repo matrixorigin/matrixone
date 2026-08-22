@@ -69,7 +69,7 @@ type mockProcessHolder struct {
 	proc *process.Process
 }
 
-var mockProcessHolderMu sync.Mutex
+var mockProcessHolderMu sync.RWMutex
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
 	return 1
@@ -2026,13 +2026,18 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 	// avoids rebuilding file services and runtime state at every GetProcess
 	// call. The holder is a pointer so copied mock contexts share the same
 	// Process without copying synchronization primitives.
-	mockProcessHolderMu.Lock()
+	mockProcessHolderMu.RLock()
 	holder := m.processHolder
+	mockProcessHolderMu.RUnlock()
 	if holder == nil {
-		holder = &mockProcessHolder{}
-		m.processHolder = holder
+		mockProcessHolderMu.Lock()
+		holder = m.processHolder
+		if holder == nil {
+			holder = &mockProcessHolder{}
+			m.processHolder = holder
+		}
+		mockProcessHolderMu.Unlock()
 	}
-	mockProcessHolderMu.Unlock()
 	holder.once.Do(func() {
 		holder.proc = testutil.NewProc(nil)
 		moruntime.ServiceRuntime(holder.proc.GetService()).SetGlobalVariables(
