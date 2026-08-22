@@ -615,7 +615,7 @@ func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 				}
 			}
 			if !hasMutation || childTableID == parentTableDef.TblId {
-				// Self-referencing actions already take the established legacy route.
+				// Self-referencing actions are rejected by the modern planner below.
 				continue
 			}
 
@@ -714,7 +714,7 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 				if skipSelfReferencingActions {
 					continue
 				}
-				return 0, 0, newLegacyUpdatePlannerRouteError(
+				return 0, 0, newRejectedUpdatePlannerRouteError(
 					updateRouteReasonForeignKey,
 					moerr.NewUnsupportedDML(
 						builder.GetContext(),
@@ -771,7 +771,7 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	mutationByChild := make(map[uint64]struct{}, len(mutations))
 	for _, mutation := range mutations {
 		if _, exists := mutationByChild[mutation.childTableDef.TblId]; exists {
-			return 0, 0, newLegacyUpdatePlannerRouteError(
+			return 0, 0, newRejectedUpdatePlannerRouteError(
 				updateRouteReasonForeignKey,
 				moerr.NewUnsupportedDML(
 					builder.GetContext(),
@@ -1110,7 +1110,7 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 		return err
 	}
 	if childTableDef.TblId == parentTableDef.TblId {
-		return newLegacyUpdatePlannerRouteError(
+		return newRejectedUpdatePlannerRouteError(
 			updateRouteReasonForeignKey,
 			moerr.NewUnsupportedDML(builder.GetContext(), "self-referencing parent foreign key action"),
 		)
@@ -1140,7 +1140,7 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 	}
 	for _, childColID := range affectedFK.fk.Cols {
 		if _, ok := primaryNames[childColIDToName[childColID]]; ok {
-			return newLegacyUpdatePlannerRouteError(
+			return newRejectedUpdatePlannerRouteError(
 				updateRouteReasonForeignKey,
 				moerr.NewUnsupportedDML(
 					builder.GetContext(),

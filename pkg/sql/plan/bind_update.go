@@ -38,6 +38,14 @@ import (
 // projection expressions during planning.
 const maxSequentialUpdateProjectionExprs = 1 << 18
 
+func isDefaultValExpr(e *Expr) bool {
+	if ce, ok := e.Expr.(*plan.Expr_Lit); ok {
+		_, isDefVal := ce.Lit.Value.(*plan.Literal_Defaultval)
+		return isDefVal
+	}
+	return false
+}
+
 func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 	alias string,
 	tableDef *plan.TableDef,
@@ -273,33 +281,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		return 0, err
 	}
 	updatedTargetCount := 0
-	physicalTargetCounts := make(map[uint64]int)
-	hasRepeatedPhysicalTarget := false
 	for i := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) > 0 {
 			updatedTargetCount++
-			tableID := dmlCtx.tableDefs[i].TblId
-			physicalTargetCounts[tableID]++
-			hasRepeatedPhysicalTarget = hasRepeatedPhysicalTarget || physicalTargetCounts[tableID] > 1
 		}
 	}
-	defer func() {
-		if err == nil || !hasRepeatedPhysicalTarget {
-			return
-		}
-		route, reason, routedErr := classifyUpdatePlannerError(err)
-		if route == updatePlannerLegacy {
-			err = newUpdatePlannerRouteError(updatePlannerRejected, reason, routedErr)
-		}
-	}()
 	if err = validateRepeatedPhysicalTargetPrimaryKeyUpdate(builder.GetContext(), dmlCtx); err != nil {
 		return 0, err
-	}
-	routeUnsupported := func(reason updatePlannerRouteReason, routeErr error) error {
-		if hasRepeatedPhysicalTarget {
-			return newUpdatePlannerRouteError(updatePlannerRejected, reason, routeErr)
-		}
-		return newLegacyUpdatePlannerRouteError(reason, routeErr)
 	}
 	if stmt.HasReturning() {
 		if len(dmlCtx.tableDefs) != 1 {
@@ -324,7 +312,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	// MySQL guarantees left-to-right evaluation only for single-table UPDATE.
 	// Keep the existing simultaneous projection path for multi-target and UPDATE
 	// FROM statements, whose assignment order is not guaranteed by MySQL.
-	sequentialAssignments := len(dmlCtx.tableDefs) == 1 &&
+	sequentialAssignments := !updateHasMultipleSourceTables(stmt) && len(dmlCtx.tableDefs) == 1 &&
 		len(dmlCtx.updateAssignments) == 1 && len(dmlCtx.updateAssignments[0]) > 1 &&
 		stmt.From == nil
 	sequentialExprs := make([][]UpdateAssignment, len(dmlCtx.aliases))
@@ -350,8 +338,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 		}
 
-		var legacyIrregularRoute bool
-		inlineIrregularIndexes[i], legacyIrregularRoute, err = classifyIrregularIndexesForUpdate(
+		var unsupportedIrregularRoute bool
+		inlineIrregularIndexes[i], unsupportedIrregularRoute, err = classifyIrregularIndexesForUpdate(
 			builder.GetContext(), tableDef, dmlCtx.updateCol2Expr[i])
 		if err != nil {
 			if stmt.HasReturning() {
@@ -361,8 +349,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 			return 0, err
 		}
-		if legacyIrregularRoute {
-			return 0, routeUnsupported(
+		if unsupportedIrregularRoute {
+			return 0, newRejectedUpdatePlannerRouteError(
 				updateRouteReasonIrregularIndex,
 				moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
 			)
@@ -550,7 +538,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 	}
-	guardTargetAssignmentEvaluation := isMultiTargetUpdate || len(dmlCtx.aliases) > updatedTargetCount
+	hasReadOnlyUpdateSource := dmlCtx.hasReadOnlySource || len(dmlCtx.aliases) > updatedTargetCount
+	guardTargetAssignmentEvaluation := isMultiTargetUpdate || hasReadOnlyUpdateSource
 
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -698,7 +687,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
-	if !isMultiTargetUpdate && len(dmlCtx.aliases) > updatedTargetCount {
+	if !isMultiTargetUpdate && hasReadOnlyUpdateSource {
 		for i, alias := range dmlCtx.aliases {
 			if len(dmlCtx.updateCol2Expr[i]) == 0 {
 				continue
@@ -4364,8 +4353,8 @@ func irregularIndexAffectedByUpdate(
 // classifyIrregularIndexesForUpdate separates synchronous inline maintenance
 // from CDC-only indexes using plugin metadata. MASTER has no plugin, but shares
 // the modern synchronous maintenance pipeline with the plugin-backed indexes.
-// The bool return preserves the legacy route only for an affected irregular
-// algorithm that has not migrated to either mechanism. MASTER indexes delete
+// The bool return reports an affected irregular algorithm that has not migrated
+// to either mechanism. MASTER indexes delete
 // by the old source PK and rebuild from the final row image, so changing the
 // base-table PK is handled by the same maintenance pipeline. Plugin-backed
 // synchronous full-text/vector indexes retain their existing PK-update
@@ -4374,7 +4363,7 @@ func classifyIrregularIndexesForUpdate(
 	ctx context.Context,
 	tableDef *plan.TableDef,
 	updateCols map[string]tree.Expr,
-) (inline []*plan.IndexDef, legacyRoute bool, err error) {
+) (inline []*plan.IndexDef, unsupported bool, err error) {
 	if tableDef == nil || len(updateCols) == 0 {
 		return nil, false, nil
 	}

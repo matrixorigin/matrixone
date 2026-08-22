@@ -220,6 +220,30 @@ update parent_generated_unique set id = 2 where id = 1;
 select * from parent_generated_unique order by id;
 select * from child_generated_unique order by id;
 
+create table self_update_cascade (
+    id int primary key,
+    parent_id int,
+    constraint fk_self_update_cascade foreign key (parent_id)
+        references self_update_cascade(id) on update cascade
+);
+insert into self_update_cascade values (1, null), (2, 1);
+update self_update_cascade set id = 11 where id = 1;
+select * from self_update_cascade order by id;
+
+create table parent_child_pk_action (
+    id int primary key
+);
+create table child_pk_action (
+    parent_id int primary key,
+    constraint fk_child_pk_action foreign key (parent_id)
+        references parent_child_pk_action(id) on update cascade
+);
+insert into parent_child_pk_action values (1);
+insert into child_pk_action values (1);
+update parent_child_pk_action set id = 2 where id = 1;
+select * from parent_child_pk_action order by id;
+select * from child_pk_action order by parent_id;
+
 set foreign_key_checks = 0;
 create table update_preinsert_index (
     a int not null auto_increment primary key,
@@ -281,6 +305,9 @@ drop table parent_nonunique_prefix;
 
 drop table child_generated_unique;
 drop table parent_generated_unique;
+drop table child_pk_action;
+drop table parent_child_pk_action;
+drop table self_update_cascade;
 drop table child_dual_fk;
 drop table parent_dual_b;
 drop table parent_dual_a;

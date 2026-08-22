@@ -46,8 +46,12 @@ func returningFallbackFeature(err error, fallback string) string {
 }
 
 func returningUpdatePlannerFeature(err error) string {
-	route, reason, _ := classifyUpdatePlannerError(err)
-	if route == updatePlannerRejected && reason == updateRouteReasonIrregularIndex {
+	route, reason, routedErr := classifyUpdatePlannerError(err)
+	if route == updatePlannerRejected && reason == updateRouteReasonIrregularIndex &&
+		routedErr != nil && strings.Contains(
+		routedErr.Error(),
+		"update primary key on a table with a synchronous full-text/vector index",
+	) {
 		return "primary-key UPDATE on synchronous full-text/vector index"
 	}
 	return ""
