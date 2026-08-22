@@ -85,6 +85,9 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows)
 	expectMongoDBE2EScalar(mock, "3")
 	expectMongoDBE2EScalar(mock, "3")
+	mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, "1")
 	mock.ExpectQuery("select payload_1").WillReturnError(errors.New("MongoDB decoded batch byte limit exceeded"))
 	// A pre-canceled context is rejected by database/sql before it reaches the
@@ -128,6 +131,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"json-relaxed-extended-conversion",
 		"fixed-binary-padding",
 		"scan-projection-pushdown-null-conversion",
+		"insert-select-primary-key-target",
 		"low-precision-temporal-residual",
 		"decoded-vector-budget-enforced",
 		"multi-batch-cancel-recovery",
@@ -174,6 +178,65 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 
 			err = run(t.Context(), db, "127.0.0.1:27017", &report{})
 			require.ErrorContains(t, err, "relaxed JSON query failed")
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestMongoDBPrimaryKeyInsertSelect(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(sqlmock.Sqlmock)
+		wantErr string
+	}{
+		{
+			name: "create target fails",
+			prepare: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("create table mongodb_ci.events_insert_target").
+					WillReturnError(errors.New("catalog unavailable"))
+			},
+			wantErr: "create primary-key insert target: catalog unavailable",
+		},
+		{
+			name: "insert select fails",
+			prepare: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("insert into mongodb_ci.events_insert_target").
+					WillReturnError(errors.New("source scan failed"))
+			},
+			wantErr: "insert-select into primary-key target: source scan failed",
+		},
+		{
+			name: "inserted row count is validated",
+			prepare: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("select count\\(\\*\\) from mongodb_ci.events_insert_target").
+					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow("0"))
+			},
+			wantErr: "expected \"1\"",
+		},
+		{
+			name: "single source row is inserted",
+			prepare: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("select count\\(\\*\\) from mongodb_ci.events_insert_target").
+					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow("1"))
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock := newMongoDBE2ESQLMock(t)
+			test.prepare(mock)
+			err := verifyPrimaryKeyInsertSelect(t.Context(), db)
+			if test.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, test.wantErr)
+			}
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}

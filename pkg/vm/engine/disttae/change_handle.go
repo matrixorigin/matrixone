@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
-	"sync"
 )
 
 const DefaultLoadParallism = 20
@@ -81,9 +81,10 @@ func (tbl *txnTable) CollectChanges(
 }
 
 type queuedChangeBatch struct {
-	data      *batch.Batch
-	tombstone *batch.Batch
-	hint      engine.ChangesHandle_Hint
+	data          *batch.Batch
+	tombstone     *batch.Batch
+	hint          engine.ChangesHandle_Hint
+	reservedBytes int64
 }
 
 type PartitionChangesHandle struct {
@@ -106,6 +107,8 @@ type PartitionChangesHandle struct {
 
 	bufferedBatches     []queuedChangeBatch
 	currentRangeDrained bool
+	visibleResources    engine.VisibleStateRecoveryResources
+	visibleStartRel     engine.Relation
 }
 
 func NewPartitionChangesHandle(
@@ -129,6 +132,15 @@ func NewPartitionChangesHandle(
 		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
 		mp:                  mp,
 		fs:                  tbl.getTxn().engine.fs,
+	}
+	if snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
+		handle.visibleResources = engine.VisibleStateRecoveryResourcesFromContext(ctx)
+		handle.visibleStartRel = engine.VisibleStateStartRelationFromContext(ctx)
+		if handle.visibleResources == nil {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"visible-state snapshot recovery requires bounded resources",
+			)
+		}
 	}
 	end, err := handle.getNextChangeHandle(ctx)
 	if err != nil {
@@ -187,7 +199,12 @@ func (h *PartitionChangesHandle) nextWithSnapshotRecovery(ctx context.Context, m
 	for {
 		if len(h.bufferedBatches) > 0 {
 			next := h.bufferedBatches[0]
+			h.bufferedBatches[0] = queuedChangeBatch{}
 			h.bufferedBatches = h.bufferedBatches[1:]
+			if len(h.bufferedBatches) == 0 {
+				h.bufferedBatches = nil
+			}
+			h.releaseBufferedReservation(next.reservedBytes)
 			return next.data, next.tombstone, next.hint, nil
 		}
 		if h.currentRangeDrained {
@@ -208,11 +225,17 @@ func (h *PartitionChangesHandle) nextWithSnapshotRecovery(ctx context.Context, m
 }
 
 // bufferCurrentRange eagerly consumes the current sub-range into memory so
-// that a mid-iteration FileNotFound can discard partial output and rebuild
-// the same range via SnapshotStateRange recovery.
+// that a mid-iteration object loss or non-evaluable compacted object can
+// discard partial output and rebuild the same range without mixing semantics.
 func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpool.MPool) (err error) {
+	if h.visibleResources == nil {
+		return moerr.NewInternalErrorNoCtx(
+			"visible-state snapshot recovery requires bounded resources",
+		)
+	}
 	var queued []queuedChangeBatch
 	snapshotStateRangeTried := false
+	visibleStateTried := false
 	cleanQueued := func() {
 		for i := range queued {
 			if queued[i].data != nil {
@@ -221,18 +244,19 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 			if queued[i].tombstone != nil {
 				queued[i].tombstone.Clean(mp)
 			}
+			h.releaseBufferedReservation(queued[i].reservedBytes)
 		}
+		queued = nil
 	}
 	for {
 		data, tombstone, hint, nextErr := h.currentChangeHandle.Next(ctx, mp)
 		if nextErr != nil {
-			if moerr.IsMoErrCode(nextErr, moerr.ErrFileNotFound) {
-				// A late FileNotFound means the replay handle for this sub-range is
-				// no longer trustworthy. Drop buffered output for the whole range,
-				// then rebuild from the end-snapshot partition state with
-				// delete-chain object rewrite.
+			if isVisibleStateRecoveryError(nextErr) {
+				// The replay handle for this sub-range is no longer trustworthy.
+				// Drop buffered output for the whole range, then rebuild from the
+				// end-snapshot state or, when row timestamps are unavailable, the
+				// exact boundary snapshots.
 				cleanQueued()
-				queued = nil
 				if !snapshotStateRangeTried {
 					snapshotStateRangeTried = true
 					swapErr := h.swapCurrentHandleToSnapshotStateRange(ctx)
@@ -245,8 +269,24 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 						zap.String("to", h.currentPSTo.ToString()),
 						zap.Error(swapErr),
 					)
+					if !isVisibleStateRecoveryError(swapErr) {
+						return swapErr
+					}
 				}
-				cleanQueued()
+				if !visibleStateTried {
+					visibleStateTried = true
+					swapErr := h.swapCurrentHandleToVisibleState(ctx)
+					if swapErr == nil {
+						continue
+					}
+					logutil.Error("ChangesHandle-VisibleState rebuild failed",
+						zap.Uint64("table-id", h.tbl.tableId),
+						zap.String("from", h.currentPSFrom.ToString()),
+						zap.String("to", h.currentPSTo.ToString()),
+						zap.Error(swapErr),
+					)
+					return swapErr
+				}
 				return nextErr
 			}
 			cleanQueued()
@@ -257,11 +297,40 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 			h.currentRangeDrained = true
 			return nil
 		}
+		reservedBytes := bufferedChangeBatchBytes(data, tombstone)
+		if err = h.visibleResources.ReserveBuffer(reservedBytes); err != nil {
+			if data != nil {
+				data.Clean(mp)
+			}
+			if tombstone != nil {
+				tombstone.Clean(mp)
+			}
+			cleanQueued()
+			return err
+		}
 		queued = append(queued, queuedChangeBatch{
-			data:      data,
-			tombstone: tombstone,
-			hint:      hint,
+			data: data, tombstone: tombstone, hint: hint,
+			reservedBytes: reservedBytes,
 		})
+	}
+}
+
+const bufferedChangeBatchOverhead = int64(256)
+
+func bufferedChangeBatchBytes(data, tombstone *batch.Batch) int64 {
+	bytes := bufferedChangeBatchOverhead
+	if data != nil {
+		bytes += int64(data.Size())
+	}
+	if tombstone != nil {
+		bytes += int64(tombstone.Size())
+	}
+	return bytes
+}
+
+func (h *PartitionChangesHandle) releaseBufferedReservation(bytes int64) {
+	if bytes > 0 && h.visibleResources != nil {
+		h.visibleResources.ReleaseBuffer(bytes)
 	}
 }
 
@@ -363,15 +432,34 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		)
 		h.handleIdx++
 		snapshotRangeStart := time.Now()
-		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
-			logutil.Error("ChangesHandle-SnapshotStateRange init failed",
+		var visibleStateStart time.Time
+		usedVisibleState, err := initializeVisibleStateRange(
+			func() error {
+				return h.swapCurrentHandleToSnapshotStateRange(ctx)
+			},
+			func(snapshotErr error) error {
+				logutil.Warn("ChangesHandle-SnapshotStateRange init failed, rebuilding exact visible-state delta",
+					zap.Uint64("table-id", h.tbl.tableId),
+					zap.String("from", h.currentPSFrom.ToString()),
+					zap.String("to", h.currentPSTo.ToString()),
+					zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
+					zap.Error(snapshotErr),
+				)
+				visibleStateStart = time.Now()
+				return h.swapCurrentHandleToVisibleState(ctx)
+			},
+		)
+		if err != nil {
+			return false, err
+		}
+		if usedVisibleState {
+			logutil.Info("ChangesHandle-VisibleState-Ready",
 				zap.Uint64("table-id", h.tbl.tableId),
 				zap.String("from", h.currentPSFrom.ToString()),
 				zap.String("to", h.currentPSTo.ToString()),
-				zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
-				zap.Error(err),
+				zap.Duration("duration", time.Since(visibleStateStart)),
 			)
-			return false, err
+			return false, nil
 		}
 		logutil.Info("ChangesHandle-SnapshotStateRange-Ready",
 			zap.Uint64("table-id", h.tbl.tableId),
@@ -437,6 +525,28 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	return false, nil
 }
 
+func isVisibleStateRecoveryError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
+		logtailreplay.IsCommitTSBlockNotEvaluable(err)
+}
+
+// initializeVisibleStateRange keeps constructor-time and iteration-time
+// recovery consistent: loss of physical history and non-evaluable compacted
+// metadata both select the exact boundary-state reader. Other initialization
+// failures remain visible to the caller.
+func initializeVisibleStateRange(
+	initSnapshotRange func() error,
+	initVisibleState func(snapshotErr error) error,
+) (usedVisibleState bool, err error) {
+	if err = initSnapshotRange(); err == nil {
+		return false, nil
+	}
+	if !isVisibleStateRecoveryError(err) {
+		return false, err
+	}
+	return true, initVisibleState(err)
+}
+
 func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx context.Context) (err error) {
 	ctx = h.collectChangesContext(ctx)
 	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
@@ -470,6 +580,34 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	return err
 }
 
+func (h *PartitionChangesHandle) swapCurrentHandleToVisibleState(ctx context.Context) (err error) {
+	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
+		return nil
+	}
+	if err = h.closeCurrentChangeHandle(); err != nil {
+		return err
+	}
+	h.currentChangeHandle, err = NewVisibleStateChangesHandle(
+		ctx,
+		h.tbl,
+		h.currentPSFrom,
+		h.currentPSTo,
+		h.skipDeletes,
+		objectio.BlockMaxRows,
+		h.mp,
+		h.visibleResources,
+		h.visibleStateStartRelation(),
+	)
+	return err
+}
+
+func (h *PartitionChangesHandle) visibleStateStartRelation() engine.Relation {
+	if h.currentPSFrom.EQ(&h.fromTs) {
+		return h.visibleStartRel
+	}
+	return nil
+}
+
 func (h *PartitionChangesHandle) getTxnTableAt(ctx context.Context, at types.TS) (*txnTable, error) {
 	_, _, rel, err := h.tbl.eng.GetRelationById(
 		ctx,
@@ -501,6 +639,7 @@ func (h *PartitionChangesHandle) Close() error {
 		if h.bufferedBatches[i].tombstone != nil {
 			h.bufferedBatches[i].tombstone.Clean(h.mp)
 		}
+		h.releaseBufferedReservation(h.bufferedBatches[i].reservedBytes)
 	}
 	h.bufferedBatches = nil
 	return h.closeCurrentChangeHandle()
