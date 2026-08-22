@@ -1,0 +1,53 @@
+drop database if exists sql_tvf_test;
+create database sql_tvf_test;
+use sql_tvf_test;
+create table t(id int, name varchar(50), score int);
+insert into t values (1,'alice',90),(2,'bob',NULL),(3,'carol',75),(4,'d,e',60),(5,'q"x',NULL);
+set @h = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/sql_tvf_test"}');
+select * from sql_tvf('select id,name,score from t order by id', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) x;
+➤ id[-5,64,0]  ¦  name[12,536870911,0]  ¦  score[-5,64,0]  𝄀
+1  ¦  alice  ¦  90  𝄀
+2  ¦  bob  ¦  null  𝄀
+3  ¦  carol  ¦  75  𝄀
+4  ¦  d,e  ¦  60  𝄀
+5  ¦  q"x  ¦  null
+select count(*) as null_scores from sql_tvf('select id,name,score from t', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) x where x.score is null;
+➤ null_scores[-5,64,0]  𝄀
+2
+select x.id, x.score from sql_tvf('select id,name,score from t order by id', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) x where x.score is not null order by x.id;
+➤ id[-5,64,0]  ¦  score[-5,64,0]  𝄀
+1  ¦  90  𝄀
+3  ¦  75  𝄀
+4  ¦  60
+select count(*) as c from sql_tvf('select id,name,score from t', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) x where x.id > 2;
+➤ c[-5,64,0]  𝄀
+3
+select a.id, b.name from
+sql_tvf('select id,name,score from t', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) a
+join sql_tvf('select id,name,score from t', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) b
+on a.id = b.id where a.id in (1,4) order by a.id;
+➤ id[-5,64,0]  ¦  name[12,536870911,0]  𝄀
+1  ¦  alice  𝄀
+4  ¦  d,e
+select * from sql_tvf('select id,name from t order by id', NULL, @h) x;
+➤ result[-1,2147483647,0]  𝄀
+["1", "alice"]  𝄀
+["2", "bob"]  𝄀
+["3", "carol"]  𝄀
+["4", "d,e"]  𝄀
+["5", "q\"x"]
+set @sql_tvf_config = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/sql_tvf_test"}';
+select count(*) as c from sql_tvf('select * from t') x;
+➤ c[-5,64,0]  𝄀
+5
+select sql_tvf_connect('{"driver":"nope","dsn":"x"}');
+invalid input: sql_tvf: unsupported driver "nope" (supported: mysql, postgres)
+select sql_tvf_disconnect(@h) as disconnected;
+➤ disconnected[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h) as disconnected_again;
+➤ disconnected_again[-7,1,0]  𝄀
+0
+select count(*) from sql_tvf('select 1', '{"cols":[{"name":"x","type":"int64"}]}', 'sql:deadbeefdeadbeef') x;
+invalid input: foreigntvf: connection handle "sql:deadbeefdeadbeef" not found or disconnected; check the conn argument
+drop database sql_tvf_test;
