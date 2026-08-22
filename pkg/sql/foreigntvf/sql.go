@@ -50,21 +50,36 @@ type SqlConn struct {
 
 var _ Conn = (*SqlConn)(nil)
 
-func connectSQL(ctx context.Context, configJSON string) (Conn, error) {
+// parseSQLConfig validates the {"driver","dsn"} JSON shape without dialing and
+// returns the registered database/sql driver name and the DSN.
+func parseSQLConfig(ctx context.Context, configJSON string) (driver, dsn string, err error) {
 	var sc sqlConfig
 	if err := json.Unmarshal([]byte(configJSON), &sc); err != nil {
-		return nil, moerr.NewInvalidInputf(ctx, "sql_tvf: invalid config: %v", err)
+		return "", "", moerr.NewInvalidInputf(ctx, "sql_tvf: invalid config: %v", err)
 	}
 	driver, ok := driverAliases[sc.Driver]
 	if !ok {
-		return nil, moerr.NewInvalidInputf(ctx, "sql_tvf: unsupported driver %q (supported: mysql, postgres)", sc.Driver)
+		return "", "", moerr.NewInvalidInputf(ctx, "sql_tvf: unsupported driver %q (supported: mysql, postgres)", sc.Driver)
 	}
 	if sc.DSN == "" {
-		return nil, moerr.NewInvalidInput(ctx, "sql_tvf: config is missing a dsn")
+		return "", "", moerr.NewInvalidInput(ctx, "sql_tvf: config is missing a dsn")
 	}
-	db, err := sql.Open(driver, sc.DSN)
+	return driver, sc.DSN, nil
+}
+
+func validateSQLConfig(ctx context.Context, configJSON string) error {
+	_, _, err := parseSQLConfig(ctx, configJSON)
+	return err
+}
+
+func connectSQL(ctx context.Context, configJSON string) (Conn, error) {
+	driver, dsn, err := parseSQLConfig(ctx, configJSON)
 	if err != nil {
-		return nil, moerr.NewInvalidInputf(ctx, "sql_tvf: cannot open %s connection: %v", sc.Driver, err)
+		return nil, err
+	}
+	db, err := sql.Open(driver, dsn)
+	if err != nil {
+		return nil, moerr.NewInvalidInputf(ctx, "sql_tvf: cannot open %s connection: %v", driver, err)
 	}
 	// A single-instance TVF needs only a small pool; keep the foreign server
 	// footprint minimal.
@@ -72,7 +87,7 @@ func connectSQL(ctx context.Context, configJSON string) (Conn, error) {
 	db.SetMaxIdleConns(2)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, moerr.NewInternalErrorf(ctx, "sql_tvf: cannot connect to %s: %v", sc.Driver, err)
+		return nil, moerr.NewInternalErrorf(ctx, "sql_tvf: cannot connect to %s: %v", driver, err)
 	}
 	return &SqlConn{db: db}, nil
 }

@@ -66,6 +66,20 @@ func MakeHandle(kind Kind, configJSON string) string {
 	return string(kind) + ":" + hex.EncodeToString(sum[:8])
 }
 
+// ValidateConfig checks the JSON shape of a connection config without dialing
+// anything. Used at CREATE EXTERNAL TABLE time (docs/cn/esql_sql_exttab.md §4:
+// no DDL-time connectivity check, only option/config syntax).
+func ValidateConfig(ctx context.Context, kind Kind, configJSON string) error {
+	switch kind {
+	case KindESQL:
+		return validateESQLConfig(ctx, configJSON)
+	case KindSQL:
+		return validateSQLConfig(ctx, configJSON)
+	default:
+		return moerr.NewInternalErrorf(ctx, "foreigntvf: unknown connection kind %q", kind)
+	}
+}
+
 // Connect opens a new connection of the given kind from a JSON config string.
 func Connect(ctx context.Context, kind Kind, configJSON string) (Conn, error) {
 	switch kind {

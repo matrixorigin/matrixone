@@ -172,6 +172,10 @@ run_e2e() {
   else
     export LD_LIBRARY_PATH="$ROOT_DIR/cgo:$ROOT_DIR/thirdparties/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   fi
+  # The ENGINE = ESQL external-table cases reference their connection config as
+  # 'env:MO_ESQL_E2E_CFG', resolved from the CN process environment at scan
+  # time — so the secret-bearing JSON must be in mo-service's environment.
+  export MO_ESQL_E2E_CFG="{\"addresses\":[\"http://127.0.0.1:$ES_PORT\"],\"username\":\"elastic\",\"password\":\"$ES_PASSWORD\"}"
   "$ROOT_DIR/mo-service" -launch "$TMP_DIR/mo-config/launch.toml" >"$TMP_DIR/mo-service.log" 2>&1 &
   MO_PID=$!
   MO_PORT="$(wait_mo_port)"

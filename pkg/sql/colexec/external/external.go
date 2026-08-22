@@ -87,7 +87,11 @@ func (external *External) Prepare(proc *process.Process) error {
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
 
 	if param.Extern == nil {
-		if param.DatastreamScan != nil {
+		if param.ForeignScan != nil {
+			// Same rationale as datastream below: no file-backed ExternParam,
+			// CreateSql is the foreign envelope, not JSON.
+			param.Extern = ForeignExternParam(param.ForeignScan.Kind)
+		} else if param.DatastreamScan != nil {
 			// A datastream scan has no file-backed ExternParam; its CreateSql is
 			// the datastream envelope, not JSON.  Rebuild the synthetic param
 			// (remote-run decode arrives here with Extern == nil).
@@ -154,6 +158,8 @@ func (external *External) Prepare(proc *process.Process) error {
 
 	// Create reader (single dispatch point)
 	switch {
+	case param.ForeignScan != nil:
+		external.reader = NewForeignScanReader(param)
 	case param.DatastreamScan != nil:
 		external.reader = NewDataStreamReader(param)
 	case param.Extern.ExternType == int32(plan.ExternType_RESULT_SCAN):
@@ -327,10 +333,17 @@ func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
 	if colPos < 0 || colPos >= len(node.TableDef.Cols) || colPos != len(node.TableDef.Cols)-1 {
 		return false
 	}
-	if node.TableDef.Cols[colPos].Name != catalog.ExternalFilePath {
-		return false
+	// Two hidden trailing columns exist: __mo_filepath on ordinary external
+	// tables and __mo_query on ESQL/SQL foreign tables. Either one is the
+	// "file-level" column of its scan (the query text plays the file-name
+	// role for foreign tables).
+	switch node.TableDef.Cols[colPos].Name {
+	case catalog.ExternalFilePath:
+		return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
+	case catalog.ExternalQuery:
+		return node.TableDef.Cols[colPos].ColId == catalog.ExternalQueryColId
 	}
-	return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
+	return false
 }
 
 func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
@@ -436,7 +449,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name
-		if i == num-1 && bat.Attrs[i] == catalog.ExternalFilePath {
+		if i == num-1 && catalog.ContainExternalHidenCol(bat.Attrs[i]) {
 			typ := types.T_varchar.ToType()
 			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)
 			if err != nil {

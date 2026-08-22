@@ -45,6 +45,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreigntvf"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -2329,6 +2331,33 @@ func buildCreateTable(
 		properties := []*plan.Property{
 			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
 			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqldatastream.BuildCreateSQLEnvelope(cfg)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
+	} else if stmt.ForeignParam != nil {
+		cfg, err := foreignext.ParseTableOptions(ctx.GetContext(), stmt.ForeignParam)
+		if err != nil {
+			return nil, err
+		}
+		// Validate the JSON shape of an inline config without dialing (env:
+		// references and the session-variable fallback are resolved at scan
+		// time on the CN, so there is nothing to validate here for them).
+		if cfg.ConfigJSON != "" && !strings.HasPrefix(cfg.ConfigJSON, "env:") {
+			if err := foreigntvf.ValidateConfig(ctx.GetContext(), foreigntvf.Kind(cfg.Kind), cfg.ConfigJSON); err != nil {
+				return nil, err
+			}
+		}
+		// Like MongoDB/datastream, the durable typed feature bit is the
+		// discriminator that cannot be injected through the user-controlled
+		// rel_createsql JSON of a generic external table.
+		createTable.TableDef.FeatureFlag |= features.ForeignExternal
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: foreignext.BuildCreateSQLEnvelope(cfg)},
 		}
 		createTable.TableDef.TableType = catalog.SystemExternalRel
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{

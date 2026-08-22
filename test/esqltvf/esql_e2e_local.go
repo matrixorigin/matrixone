@@ -161,6 +161,83 @@ func run(ctx context.Context, db *sql.DB, esEndpoint, esUser, esPassword string,
 	}
 	r.Cases = append(r.Cases, "esql_tvf_disconnect")
 
+	return runExternalTable(ctx, db, cfgStr, r)
+}
+
+// runExternalTable exercises CREATE EXTERNAL TABLE ... ENGINE = ESQL over the
+// same seeded index: schema-typed rows, IN of two ES|QL queries, a local
+// predicate on a declared column, and config via env: (the harness exports
+// MO_ESQL_E2E_CFG into the mo-service process) and via @esql_tvf_config.
+func runExternalTable(ctx context.Context, db *sql.DB, cfgStr string, r *report) error {
+	stmts := []string{
+		"drop database if exists esql_ext",
+		"create database esql_ext",
+		"use esql_ext",
+		// config comes from the environment of the CN process (env:NAME),
+		// so no secret is inlined in the DDL.
+		"create external table emp (name varchar(100), dept varchar(50), salary bigint) engine = esql with ('config' = 'env:MO_ESQL_E2E_CFG')",
+	}
+	for _, stmt := range stmts {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("exttab setup %q: %w", stmt, err)
+		}
+	}
+	r.Cases = append(r.Cases, "exttab-create-env-config")
+
+	const keep = " | KEEP name, dept, salary"
+	q1 := "FROM employees" + keep + " | LIMIT 100"
+
+	// schema-typed rows: all 5.
+	if err := expectScalar(ctx, db,
+		"select count(*) from emp where __mo_query = '"+sqlEscape(q1)+"'", "5"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "exttab-count-all")
+
+	// local predicate on a declared column.
+	if err := expectScalar(ctx, db,
+		"select count(*) from emp where __mo_query = '"+sqlEscape(q1)+"' and salary > 100000", "2"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "exttab-local-predicate")
+
+	// null maps to SQL NULL.
+	if err := expectScalar(ctx, db,
+		"select count(*) from emp where __mo_query = '"+sqlEscape(q1)+"' and salary is null", "1"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "exttab-null")
+
+	// IN of two ES|QL queries: rows from both, tagged by __mo_query.
+	qEng := "FROM employees | WHERE dept == \"eng\"" + keep
+	qSales := "FROM employees | WHERE dept == \"sales\"" + keep
+	if err := expectScalar(ctx, db,
+		"select count(*) from emp where __mo_query in ('"+sqlEscape(qEng)+"', '"+sqlEscape(qSales)+"')", "4"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db,
+		"select count(distinct __mo_query) from emp where __mo_query in ('"+sqlEscape(qEng)+"', '"+sqlEscape(qSales)+"')", "2"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "exttab-in-two-queries")
+
+	// config via @esql_tvf_config on a table created without a config option.
+	if _, err := db.ExecContext(ctx,
+		"create external table emp_sess (name varchar(100), dept varchar(50), salary bigint) engine = esql"); err != nil {
+		return fmt.Errorf("exttab sess create: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "set @esql_tvf_config = '"+sqlEscape(cfgStr)+"'"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db,
+		"select count(*) from emp_sess where __mo_query = '"+sqlEscape(q1)+"'", "5"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "exttab-session-config")
+
+	if _, err := db.ExecContext(ctx, "drop database esql_ext"); err != nil {
+		return err
+	}
 	return nil
 }
 

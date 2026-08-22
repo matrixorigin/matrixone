@@ -47,6 +47,14 @@ const (
 	// remapping, unlike TbColToDataCol's original file-field indexes.
 	ExternalFilePathColId = ^uint64(0)
 
+	// ExternalQuery is the hidden column of ESQL/SQL foreign external tables
+	// (ENGINE = ESQL|SQL). The query text plays the role the file name plays
+	// for __mo_filepath: `__mo_query = '<text>'` predicates select what is sent
+	// to the foreign source, and every returned row carries the text of the
+	// query that produced it. See docs/cn/esql_sql_exttab.md.
+	ExternalQuery      = "__mo_query"
+	ExternalQueryColId = ^uint64(0) - 1
+
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 	// TableTailAttr are attrs in table tail
@@ -105,7 +113,7 @@ var InternalTableNames = map[string]int8{
 }
 
 func ContainExternalHidenCol(col string) bool {
-	return col == ExternalFilePath
+	return col == ExternalFilePath || col == ExternalQuery
 }
 
 func IsHiddenTable(name string) bool {

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -752,6 +753,16 @@ func constructCreateTableSQL(
 			}
 			return createStr, stmt, err
 		}
+		if fCfg, found, parseErr := IsForeignTableDef(ctx.GetContext(), tableDef); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatForeignTableOptionsForShowCreate(fCfg, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
 
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
@@ -1367,6 +1378,43 @@ func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config, sqlMode
 		builder.WriteString("'")
 	}
 	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, sqlMode string) string {
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = ")
+	builder.WriteString(strings.ToUpper(cfg.Kind))
+	options := make([]struct{ key, value string }, 0, 2)
+	if cfg.ConfigJSON != "" {
+		value := cfg.ConfigJSON
+		// An inline config carries credentials (ES password, DSN password):
+		// SHOW CREATE output is widely visible, so it is redacted. A table
+		// restored from SHOW CREATE (snapshot/PITR replay) must have its
+		// 'config' re-supplied. An "env:NAME" reference is not a secret and
+		// is emitted verbatim (the recommended production form).
+		if !strings.HasPrefix(value, "env:") {
+			value = "<redacted>"
+		}
+		options = append(options, struct{ key, value string }{"config", value})
+	}
+	if cfg.DefaultQuery != "" {
+		options = append(options, struct{ key, value string }{"query", cfg.DefaultQuery})
+	}
+	if len(options) > 0 {
+		builder.WriteString(" WITH (")
+		for i, option := range options {
+			if i > 0 {
+				builder.WriteString(", ")
+			}
+			builder.WriteString("\"")
+			builder.WriteString(option.key)
+			builder.WriteString("\" = '")
+			builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+			builder.WriteString("'")
+		}
+		builder.WriteString(")")
+	}
 	return builder.String()
 }
 

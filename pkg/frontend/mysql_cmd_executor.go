@@ -339,9 +339,11 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 		return tree.String(statement, dialect.MYSQL)
 	case *tree.CreateTable:
 		// A datastream external table's WITH options may carry an 'apikey'
-		// secret; re-rendering the AST redacts it (DataStreamOption.Format),
-		// so the raw CREATE text never reaches statement logging.
-		if stmt.DataStreamParam != nil {
+		// secret, and an ESQL/SQL foreign table's inline 'config' carries
+		// credentials; re-rendering the AST redacts them
+		// (DataStreamOption.Format / ForeignTableOption.Format), so the raw
+		// CREATE text never reaches statement logging.
+		if stmt.DataStreamParam != nil || stmt.ForeignParam != nil {
 			return tree.String(statement, dialect.MYSQL)
 		}
 		return text

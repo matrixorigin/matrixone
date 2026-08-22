@@ -37,6 +37,19 @@ type EsqlConn struct {
 
 var _ Conn = (*EsqlConn)(nil)
 
+// validateESQLConfig checks the elasticsearch.Config JSON shape without
+// creating a client or dialing.
+func validateESQLConfig(ctx context.Context, configJSON string) error {
+	var cfg elasticsearch.Config
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		return moerr.NewInvalidInputf(ctx, "esql: invalid elasticsearch config: %v", err)
+	}
+	if len(cfg.Addresses) == 0 && cfg.CloudID == "" {
+		return moerr.NewInvalidInput(ctx, "esql: elasticsearch config needs addresses or a cloud_id")
+	}
+	return nil
+}
+
 // connectESQL parses configJSON as an elasticsearch.Config, builds a client,
 // and verifies connectivity so connect() fails fast with a clear error.
 func connectESQL(ctx context.Context, configJSON string) (Conn, error) {

@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -11063,6 +11064,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			var icebergEnv sqliceberg.CreateSQLEnvelope
 			var mongoEnv sqlmongodb.CreateSQLEnvelope
 			var datastreamCfg sqldatastream.Config
+			var foreignCfg foreignext.Config
 			if env, found, err := sqliceberg.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
 				return 0, err
 			} else if found {
@@ -11090,6 +11092,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					if isDataStream {
 						datastreamCfg = cfg
 						externType = plan.ExternType_DATASTREAM_TB
+					} else {
+						fcfg, isForeign, err := IsForeignTableDef(builder.GetContext(), tableDef)
+						if err != nil {
+							return 0, err
+						}
+						if isForeign {
+							foreignCfg = fcfg
+							externType = plan.ExternType_FOREIGN_TB
+						}
 					}
 				}
 			}
@@ -11127,6 +11138,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Recheck: datastreamCfg.Recheck,
 					ApiKey:  datastreamCfg.APIKey,
 				}
+			} else if externType == plan.ExternType_FOREIGN_TB {
+				externScan.ForeignScan = &plan.ForeignScan{
+					Kind:         foreignCfg.Kind,
+					Config:       foreignCfg.ConfigJSON,
+					DefaultQuery: foreignCfg.DefaultQuery,
+				}
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 			}
@@ -11134,6 +11151,23 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				col := &ColDef{
 					ColId: catalog.ExternalFilePathColId,
 					Name:  catalog.ExternalFilePath,
+					Typ: plan.Type{
+						Id:      int32(types.T_varchar),
+						Width:   types.MaxVarcharLen,
+						Table:   table,
+						Charset: uint32(types.CharsetUTF8),
+					},
+				}
+				tableDef.Cols = append(tableDef.Cols, col)
+			} else if externType == plan.ExternType_FOREIGN_TB {
+				// The hidden query-text column: `__mo_query = '<text>'`
+				// predicates select what is sent to the foreign source, and
+				// each returned row carries the text that produced it. Must
+				// stay the LAST column (the query-level filter classifier
+				// requires it).
+				col := &ColDef{
+					ColId: catalog.ExternalQueryColId,
+					Name:  catalog.ExternalQuery,
 					Typ: plan.Type{
 						Id:      int32(types.T_varchar),
 						Width:   types.MaxVarcharLen,

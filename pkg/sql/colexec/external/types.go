@@ -92,9 +92,12 @@ type ExParamConst struct {
 	// DatastreamScan marks this scan as a datastream external table read and
 	// carries the gRPC endpoint plus the pushed-down filter text.
 	DatastreamScan *plan.DataStreamScan
-	Ctx            context.Context
-	Extern         *tree.ExternParam
-	ClusterTable   *plan.ClusterTable
+	// ForeignScan marks this scan as an ESQL/SQL foreign external table read
+	// and carries the connection config reference and default query.
+	ForeignScan  *plan.ForeignScan
+	Ctx          context.Context
+	Extern       *tree.ExternParam
+	ClusterTable *plan.ClusterTable
 }
 
 type ExParam struct {
