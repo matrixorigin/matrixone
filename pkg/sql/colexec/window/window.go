@@ -1302,7 +1302,7 @@ func (ctr *container) buildIntervalRows(
 	frame *plan.FrameClause,
 ) (left, right int, selection *timestampRangeSelection, err error) {
 	left, right, err = ctr.buildInterval(proc, rowIdx, start, end, frame)
-	if err != nil || frame.Type != plan.FrameClause_RANGE || len(ctr.orderVecs) == 0 {
+	if err != nil || frame.Type != plan.FrameClause_RANGE || len(ctr.orderVecs) != 1 {
 		return left, right, nil, err
 	}
 
