@@ -984,7 +984,7 @@ create table test.table02 as select * from table01;
 show create table table02;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 table02  ¦  CREATE TABLE `table02` (
-  `id` int NOT NULL AUTO_INCREMENT,
+  `id` int NOT NULL,
   `col1` varchar(255) NOT NULL,
   `col2` int DEFAULT NULL,
   `col3` decimal(10,2) DEFAULT NULL,
@@ -1016,7 +1016,7 @@ alter table table02 add column newcolumn int after col3, drop column col4;
 show create table table02;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 table02  ¦  CREATE TABLE `table02` (
-  `id` int NOT NULL AUTO_INCREMENT,
+  `id` int NOT NULL,
   `col1` varchar(255) NOT NULL,
   `col2` int DEFAULT NULL,
   `col3` decimal(10,2) DEFAULT NULL,
