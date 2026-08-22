@@ -333,6 +333,14 @@ func TestDatastreamThroughMatrixOne(t *testing.T) {
 	// filter pushdown: the file source ignores the hint, recheck repairs it
 	require.Equal(t, 2, countRows(
 		"select count(*) from datastream_e2e.ext_file where col2 > '2021-01-01 00:00:00' and col1 < 5"))
+	// pushdown-liveness canary: with recheck=false on the file source, a
+	// successfully deparsed+pushed conjunct is trimmed locally, so the full
+	// file comes back (5).  If deparsing silently broke, the conjunct would
+	// stay local and this would return 2 — the jdbc equivalence checks below
+	// cannot distinguish those cases, this one can.
+	createExternal("ext_file_nr", "file_t", false)
+	require.Equal(t, 5, countRows(
+		"select count(*) from datastream_e2e.ext_file_nr where col1 > 3"))
 	// jdbc applies ${FILTER} server-side; both recheck settings agree
 	require.Equal(t, 3, countRows(
 		"select count(*) from datastream_e2e.ext_jdbc where col2 > '2021-01-01 00:00:00'"))
@@ -346,7 +354,8 @@ func TestDatastreamThroughMatrixOne(t *testing.T) {
 
 	// error surfaces: unknown datasource
 	createExternal("ext_missing", "no_such_source", true)
-	_, err := db.Query("select count(*) from datastream_e2e.ext_missing")
+	var ignored int
+	err := db.QueryRow("select count(*) from datastream_e2e.ext_missing").Scan(&ignored)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no datasource named")
 

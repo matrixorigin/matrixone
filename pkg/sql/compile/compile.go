@@ -2539,7 +2539,7 @@ func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]
 	if ds == nil {
 		return nil, moerr.NewInvalidInput(c.proc.Ctx, "datastream external table is missing scan metadata")
 	}
-	pushedText, pushed := sqldatastream.DeparseFilters(node.FilterList, c.proc.GetSessionInfo().TimeZone)
+	pushedText, pushed := sqldatastream.DeparseFilters(node.FilterList, node.TableDef.Cols, c.proc.GetSessionInfo().TimeZone)
 	ds.PushedFilter = pushedText
 	if !ds.Recheck && pushedText != "" {
 		// recheck=false trusts the server for exactly the conjuncts that were

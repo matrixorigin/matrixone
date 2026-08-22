@@ -10,3 +10,800 @@ WARNING: Restricted methods will be blocked in a future release unless native ac
 
 Aug 21, 2026 1:15:36 PM io.matrixone.jstfu.Main main
 INFO: jstfu listening on port 4444 with 9 datasource(s)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=file_numbers filter=
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=file_numbers filter=(`col2` > '2021-01-01 00:00:00')
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=file_numbers filter=(`col4` IS NULL)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_numbers filter=
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_numbers' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_numbers filter=(`col1` BETWEEN 2 AND 4)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_numbers' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_numbers filter=(`col2` > '2021-01-01 00:00:00') AND (`col3` <> 'delta')
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_numbers' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_numbers filter=(`col1` > 2)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_numbers' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_numbers filter=
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_numbers' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_numbers filter=(`col1` <= 2)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_numbers' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_numbers filter=(`col1` > 2)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_numbers' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=no_such_source filter=
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=bad_file filter=
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'bad_file' failed
+java.io.FileNotFoundException: /nonexistent/jstfu/bvt.csv (No such file or directory)
+	at java.base/java.io.FileInputStream.open0(Native Method)
+	at java.base/java.io.FileInputStream.open(FileInputStream.java:185)
+	at java.base/java.io.FileInputStream.<init>(FileInputStream.java:139)
+	at java.base/java.io.FileInputStream.<init>(FileInputStream.java:109)
+	at io.matrixone.jstfu.source.FileSource.stream(FileSource.java:40)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_bad_sql filter=
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_bad_sql' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=file_parallel filter=
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=file_rawlog filter=
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=file_parallel filter=(`col1` < 100)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=file_parallel filter=(`col1` < 100)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` < 100)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` < 100)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` >= 100) AND (`col1` < 300)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` >= 100) AND (`col1` < 300)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` >= 100) AND (`col1` < 300)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` >= 100) AND (`col1` < 300)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=((`col1` < 50) OR (`col1` >= 9950))
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=((`col1` < 50) OR (`col1` >= 9950))
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=((`col1` < 100) OR (`col1` >= 9900)) AND (`col1` <> 0)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=((`col1` < 100) OR (`col1` >= 9900)) AND (`col1` <> 0)
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:12 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(((`col1` < 10) AND (`col1` > 5)) OR ((`col1` > 9990) AND (`col1` < 9995)))
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(((`col1` < 10) AND (`col1` > 5)) OR ((`col1` > 9990) AND (`col1` < 9995)))
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` BETWEEN 4000 AND 4200)
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` BETWEEN 4000 AND 4200)
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(NOT (`col1` < 9990))
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(NOT (`col1` < 9990))
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` < 100)
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` < 100)
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_rawlog filter=(`level` = 'info') AND (`timestamp` > '2022-11-01 11:11:24')
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_rawlog' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_rawlog filter=(`level` = 'info') AND (`timestamp` > '2022-11-01 11:11:24')
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_rawlog' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_rawlog filter=((`level` = 'error') OR (`level` = 'warn'))
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_rawlog' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_rawlog filter=((`level` = 'error') OR (`level` = 'warn'))
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_rawlog' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_rawlog filter=(`span_name` IS NOT NULL) AND (`duration` > 0)
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_rawlog' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_rawlog filter=(`span_name` IS NOT NULL) AND (`duration` > 0)
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_rawlog' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_rawlog filter=((`timestamp` IS NULL) OR ((`level` = 'debug') AND (`caller` LIKE 'export%')))
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_rawlog' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_rawlog filter=((`timestamp` IS NULL) OR ((`level` = 'debug') AND (`caller` LIKE 'export%')))
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_rawlog' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=((`col1` < 2500) OR (`col1` >= 7500))
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+INFO: read table=jdbc_parallel filter=(`col1` >= 2500) AND (`col1` < 7500)
+Aug 21, 2026 4:58:13 PM io.matrixone.jstfu.DataStreamService read
+WARNING: datasource 'jdbc_parallel' failed
+java.sql.SQLSyntaxErrorException: Unknown database datastream_bvt2
+	at com.mysql.cj.jdbc.exceptions.SQLError.createSQLException(SQLError.java:112)
+	at com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(SQLExceptionsMapping.java:113)
+	at com.mysql.cj.jdbc.StatementImpl.executeQuery(StatementImpl.java:1286)
+	at io.matrixone.jstfu.source.JdbcSource.stream(JdbcSource.java:63)
+	at io.matrixone.jstfu.DataStreamService.read(DataStreamService.java:59)
+	at io.matrixone.datastream.v1.DataStreamGrpc$MethodHandlers.invoke(DataStreamGrpc.java:221)
+	at io.grpc.stub.ServerCalls$UnaryServerCallHandler$UnaryServerCallListener.onHalfClose(ServerCalls.java:182)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.halfClosed(ServerCallImpl.java:356)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1HalfClosed.runInContext(ServerImpl.java:861)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+

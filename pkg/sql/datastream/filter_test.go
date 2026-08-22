@@ -23,8 +23,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testCols mimics a scan's TableDef.Cols; deparsing resolves columns by
+// ColPos, so col() records the position and sets a qualified display name
+// (as scan-node ColRefs carry in practice) to prove Name is never parsed.
+var testCols = []*plan.ColDef{
+	{Name: "a"},
+	{Name: "b"},
+	{Name: "s"},
+	{Name: "col1"},
+	{Name: "col2"},
+	{Name: "d"},
+	{Name: "ts"},
+	{Name: "n"},
+	{Name: "a.b"},    // MO permits dotted column names
+	{Name: "wei`rd"}, // and backticks
+	{Name: "ghost", Hidden: true},
+}
+
 func col(name string) *plan.Expr {
-	return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: name}}}
+	for i, def := range testCols {
+		if def.Name == name {
+			return &plan.Expr{Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{ColPos: int32(i), Name: "t1." + name},
+			}}
+		}
+	}
+	// unknown name: out-of-range position, must not be pushed
+	return &plan.Expr{Expr: &plan.Expr_Col{
+		Col: &plan.ColRef{ColPos: int32(len(testCols) + 7), Name: name},
+	}}
 }
 
 func i64(v int64) *plan.Expr {
@@ -67,28 +94,29 @@ func TestDeparseFilters(t *testing.T) {
 		{"or", fn("or", fn("=", col("a"), i64(1)), fn("=", col("a"), i64(2))), "((`a` = 1) OR (`a` = 2))"},
 		{"not", fn("not", fn("=", col("a"), i64(1))), "(NOT (`a` = 1))"},
 		{"in", fn("in", col("a"), list(i64(1), i64(2), i64(3))), "(`a` IN (1, 2, 3))"},
-		{"dotted-col-not-pushed", fn("=", col("a.b"), i64(1)), ""},
 		{"between", fn("between", col("a"), i64(1), i64(5)), "(`a` BETWEEN 1 AND 5)"},
 		{"isnull", fn("isnull", col("a")), "(`a` IS NULL)"},
 		{"isnotnull", fn("isnotnull", col("a")), "(`a` IS NOT NULL)"},
 		{"like", fn("like", col("s"), str("ab%")), "(`s` LIKE 'ab%')"},
-		// a dotted name could be a qualifier OR a column literally named
-		// "t1.a" (MO permits those); pushing a guess could over-filter
-		{"qualified-col-not-pushed", fn("=", col("t1.a"), i64(1)), ""},
 		{"escape-quote", fn("=", col("s"), str("o'brien\\x")), "(`s` = 'o\\'brien\\\\x')"},
+		// names resolved by position, never parsed from the display name:
+		// a column literally named "a.b" pushes with its real identifier
+		{"dotted-col-name", fn("=", col("a.b"), i64(1)), "(`a.b` = 1)"},
+		{"backtick-col-name", fn("=", col("wei`rd"), i64(1)), "(`wei``rd` = 1)"},
 
 		// not pushable
 		{"func-call", fn("abs", col("a")), ""},
 		{"cast-arg", fn("=", fn("cast", col("a")), i64(1)), ""},
 		{"param", fn("=", col("a"), &plan.Expr{Expr: &plan.Expr_P{}}), ""},
 		{"in-nonlist", fn("in", col("a"), i64(1)), ""},
-		{"backtick-col", fn("=", col("a`b"), i64(1)), ""},
+		{"colpos-out-of-range", fn("=", col("no_such_col"), i64(1)), ""},
+		{"hidden-col", fn("=", col("ghost"), i64(1)), ""},
 		{"nonprintable-str", fn("=", col("s"), str("a\x01b")), ""},
 		{"nil", nil, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			text, pushed := DeparseFilters([]*plan.Expr{tc.expr}, time.UTC)
+			text, pushed := DeparseFilters([]*plan.Expr{tc.expr}, testCols, time.UTC)
 			if tc.want == "" {
 				require.False(t, pushed[0])
 				require.Equal(t, "", text)
@@ -106,7 +134,7 @@ func TestDeparseFiltersMixedConjuncts(t *testing.T) {
 		fn("abs", col("a")), // not pushable
 		fn("<", col("b"), i64(9)),
 	}
-	text, pushed := DeparseFilters(exprs, time.UTC)
+	text, pushed := DeparseFilters(exprs, testCols, time.UTC)
 	require.Equal(t, "(`a` > 1) AND (`b` < 9)", text)
 	require.Equal(t, []bool{true, false, true}, pushed)
 }
@@ -138,28 +166,28 @@ func TestDeparseLiteralKinds(t *testing.T) {
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Timestampval{Timestampval: int64(dt.ToTimestamp(loc))}}},
 	}
 
-	text, pushed := DeparseFilters([]*plan.Expr{fn("=", col("d"), dtExpr)}, loc)
+	text, pushed := DeparseFilters([]*plan.Expr{fn("=", col("d"), dtExpr)}, testCols, loc)
 	require.True(t, pushed[0])
 	require.Equal(t, "(`d` = '2021-01-02 03:04:05')", text)
 
-	text, pushed = DeparseFilters([]*plan.Expr{fn("=", col("d"), dateExpr)}, loc)
+	text, pushed = DeparseFilters([]*plan.Expr{fn("=", col("d"), dateExpr)}, testCols, loc)
 	require.True(t, pushed[0])
 	require.Equal(t, "(`d` = '2021-01-02')", text)
 
-	text, pushed = DeparseFilters([]*plan.Expr{fn("=", col("b"), boolExpr)}, loc)
+	text, pushed = DeparseFilters([]*plan.Expr{fn("=", col("b"), boolExpr)}, testCols, loc)
 	require.True(t, pushed[0])
 	require.Equal(t, "(`b` = TRUE)", text)
 
-	text, pushed = DeparseFilters([]*plan.Expr{fn("=", col("ts"), tsExpr)}, loc)
+	text, pushed = DeparseFilters([]*plan.Expr{fn("=", col("ts"), tsExpr)}, testCols, loc)
 	require.True(t, pushed[0])
 	require.Equal(t, "(`ts` = '2021-01-02 03:04:05')", text)
 
 	// timestamp without a session location is not pushable
-	_, pushed = DeparseFilters([]*plan.Expr{fn("=", col("ts"), tsExpr)}, nil)
+	_, pushed = DeparseFilters([]*plan.Expr{fn("=", col("ts"), tsExpr)}, testCols, nil)
 	require.False(t, pushed[0])
 
 	// IS NULL via literal null comparison stays pushable as text
-	text, pushed = DeparseFilters([]*plan.Expr{fn("=", col("n"), nullExpr)}, loc)
+	text, pushed = DeparseFilters([]*plan.Expr{fn("=", col("n"), nullExpr)}, testCols, loc)
 	require.True(t, pushed[0])
 	require.Equal(t, "(`n` = NULL)", text)
 }

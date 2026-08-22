@@ -32,16 +32,20 @@ import (
 // IN, BETWEEN, IS [NOT] NULL, LIKE).  Anything else — functions, casts,
 // parameters, subqueries — keeps that conjunct local.
 //
-// loc is the session time zone used to render timestamp literals; when nil,
-// conjuncts containing timestamp literals are not pushed.
+// cols is the scan's TableDef.Cols; column references are resolved by
+// ColPos, never by parsing the display name (which is "table.column"
+// qualified at the scan node, and MO permits column names that themselves
+// contain dots).  loc is the session time zone used to render timestamp
+// literals; when nil, conjuncts containing timestamp literals are not
+// pushed.
 //
 // The returned pushed slice is index-aligned with exprs and reports which
 // conjuncts made it into the returned filter text (joined with AND).
-func DeparseFilters(exprs []*plan.Expr, loc *time.Location) (filter string, pushed []bool) {
+func DeparseFilters(exprs []*plan.Expr, cols []*plan.ColDef, loc *time.Location) (filter string, pushed []bool) {
 	pushed = make([]bool, len(exprs))
 	var parts []string
 	for i, expr := range exprs {
-		if text, ok := deparseExpr(expr, loc); ok {
+		if text, ok := deparseExpr(expr, cols, loc); ok {
 			parts = append(parts, text)
 			pushed[i] = true
 		}
@@ -49,33 +53,37 @@ func DeparseFilters(exprs []*plan.Expr, loc *time.Location) (filter string, push
 	return strings.Join(parts, " AND "), pushed
 }
 
-func deparseExpr(expr *plan.Expr, loc *time.Location) (string, bool) {
+func deparseExpr(expr *plan.Expr, cols []*plan.ColDef, loc *time.Location) (string, bool) {
 	if expr == nil {
 		return "", false
 	}
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		return deparseColRef(impl.Col)
+		return deparseColRef(impl.Col, cols)
 	case *plan.Expr_Lit:
 		return deparseLiteral(expr, impl.Lit, loc)
 	case *plan.Expr_F:
-		return deparseFunc(expr.GetF(), loc)
+		return deparseFunc(expr.GetF(), cols, loc)
 	default:
 		return "", false
 	}
 }
 
-func deparseColRef(col *plan.ColRef) (string, bool) {
-	name := col.Name
-	// Scan-level filter ColRefs carry bare column names.  A dotted name is
-	// ambiguous: it could be a "table.column" qualifier or a column literally
-	// named "a.b" (MO permits those), and guessing wrong would make the
-	// server filter a different column — over-filtering that no recheck can
-	// repair.  Refuse to push such conjuncts instead of guessing.
-	if name == "" || strings.ContainsAny(name, ".`") {
+func deparseColRef(col *plan.ColRef, cols []*plan.ColDef) (string, bool) {
+	// ColPos indexes the scan's TableDef.Cols (the same convention the
+	// external scan's file-level filter uses).  The display Name is not
+	// trustworthy for identifier surgery: at the scan node it is
+	// "table.column" qualified, while a column may also literally be named
+	// "a.b" — resolving by position sidesteps the ambiguity entirely.
+	pos := int(col.ColPos)
+	if pos < 0 || pos >= len(cols) || cols[pos] == nil || cols[pos].Hidden {
 		return "", false
 	}
-	return "`" + name + "`", true
+	name := cols[pos].GetOriginCaseName()
+	if name == "" {
+		return "", false
+	}
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`", true
 }
 
 func deparseLiteral(expr *plan.Expr, lit *plan.Literal, loc *time.Location) (string, bool) {
@@ -136,7 +144,7 @@ func deparseLiteral(expr *plan.Expr, lit *plan.Literal, loc *time.Location) (str
 	}
 }
 
-func deparseFunc(fn *plan.Function, loc *time.Location) (string, bool) {
+func deparseFunc(fn *plan.Function, cols []*plan.ColDef, loc *time.Location) (string, bool) {
 	if fn == nil || fn.Func == nil {
 		return "", false
 	}
@@ -152,7 +160,7 @@ func deparseFunc(fn *plan.Function, loc *time.Location) (string, bool) {
 		}
 		parts := make([]string, 0, len(fn.Args))
 		for _, arg := range fn.Args {
-			text, ok := deparseExpr(arg, loc)
+			text, ok := deparseExpr(arg, cols, loc)
 			if !ok {
 				return "", false
 			}
@@ -163,7 +171,7 @@ func deparseFunc(fn *plan.Function, loc *time.Location) (string, bool) {
 		if len(fn.Args) != 1 {
 			return "", false
 		}
-		text, ok := deparseExpr(fn.Args[0], loc)
+		text, ok := deparseExpr(fn.Args[0], cols, loc)
 		if !ok {
 			return "", false
 		}
@@ -172,11 +180,11 @@ func deparseFunc(fn *plan.Function, loc *time.Location) (string, bool) {
 		if len(fn.Args) != 2 {
 			return "", false
 		}
-		left, ok := deparseExpr(fn.Args[0], loc)
+		left, ok := deparseExpr(fn.Args[0], cols, loc)
 		if !ok {
 			return "", false
 		}
-		right, ok := deparseExpr(fn.Args[1], loc)
+		right, ok := deparseExpr(fn.Args[1], cols, loc)
 		if !ok {
 			return "", false
 		}
@@ -189,7 +197,7 @@ func deparseFunc(fn *plan.Function, loc *time.Location) (string, bool) {
 		if len(fn.Args) != 2 {
 			return "", false
 		}
-		left, ok := deparseExpr(fn.Args[0], loc)
+		left, ok := deparseExpr(fn.Args[0], cols, loc)
 		if !ok {
 			return "", false
 		}
@@ -199,7 +207,7 @@ func deparseFunc(fn *plan.Function, loc *time.Location) (string, bool) {
 		}
 		items := make([]string, 0, len(list.List.List))
 		for _, item := range list.List.List {
-			text, itemOK := deparseExpr(item, loc)
+			text, itemOK := deparseExpr(item, cols, loc)
 			if !itemOK {
 				return "", false
 			}
@@ -214,15 +222,15 @@ func deparseFunc(fn *plan.Function, loc *time.Location) (string, bool) {
 		if len(fn.Args) != 3 {
 			return "", false
 		}
-		target, ok := deparseExpr(fn.Args[0], loc)
+		target, ok := deparseExpr(fn.Args[0], cols, loc)
 		if !ok {
 			return "", false
 		}
-		low, ok := deparseExpr(fn.Args[1], loc)
+		low, ok := deparseExpr(fn.Args[1], cols, loc)
 		if !ok {
 			return "", false
 		}
-		high, ok := deparseExpr(fn.Args[2], loc)
+		high, ok := deparseExpr(fn.Args[2], cols, loc)
 		if !ok {
 			return "", false
 		}
@@ -231,7 +239,7 @@ func deparseFunc(fn *plan.Function, loc *time.Location) (string, bool) {
 		if len(fn.Args) != 1 {
 			return "", false
 		}
-		text, ok := deparseExpr(fn.Args[0], loc)
+		text, ok := deparseExpr(fn.Args[0], cols, loc)
 		if !ok {
 			return "", false
 		}
@@ -240,7 +248,7 @@ func deparseFunc(fn *plan.Function, loc *time.Location) (string, bool) {
 		if len(fn.Args) != 1 {
 			return "", false
 		}
-		text, ok := deparseExpr(fn.Args[0], loc)
+		text, ok := deparseExpr(fn.Args[0], cols, loc)
 		if !ok {
 			return "", false
 		}
