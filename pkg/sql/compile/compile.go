@@ -6682,7 +6682,7 @@ func supportsRemoteAffectedRowsSelectors(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion25
+	return ok && protocolVersion >= defines.MORPCVersion24
 }
 
 func supportsRemoteCrossDomainStringLiterals(service string) bool {
