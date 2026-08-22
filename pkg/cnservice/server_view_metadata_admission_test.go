@@ -34,12 +34,15 @@ import (
 
 type admissionCNHAKeeperClient struct {
 	logservice.CNHAKeeperClient
-	id  uint64
-	key string
+	id          uint64
+	key         string
+	deadline    time.Time
+	hasDeadline bool
 }
 
-func (c *admissionCNHAKeeperClient) AllocateIDByKey(_ context.Context, key string) (uint64, error) {
+func (c *admissionCNHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	c.key = key
+	c.deadline, c.hasDeadline = ctx.Deadline()
 	return c.id, nil
 }
 
@@ -47,13 +50,18 @@ func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {
 	serviceID := "cn-admission-generation-lifecycle"
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
 	client := &admissionCNHAKeeperClient{id: 17}
+	cfg := &Config{UUID: serviceID}
+	cfg.HAKeeper.DiscoveryTimeout.Duration = 5 * time.Second
 	s := &service{
-		cfg:             &Config{UUID: serviceID},
+		cfg:             cfg,
 		_hakeeperClient: client,
 	}
 
 	require.NoError(t, s.initViewMetadataAdmission(context.Background()))
 	require.Equal(t, viewMetadataAdmissionGenerationKey, client.key)
+	require.True(t, client.hasDeadline)
+	require.Positive(t, time.Until(client.deadline))
+	require.LessOrEqual(t, time.Until(client.deadline), 5*time.Second)
 	require.Equal(t, uint64(17), s.viewMetadataAdmissionGeneration)
 	value, ok := runtime.ServiceRuntime(serviceID).GetGlobalVariables(
 		compile.ViewMetadataEpochFenceRuntimeKey)

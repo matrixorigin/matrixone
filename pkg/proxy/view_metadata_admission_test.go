@@ -30,12 +30,15 @@ import (
 
 type admissionProxyHAKeeperClient struct {
 	logservice.ProxyHAKeeperClient
-	id  uint64
-	key string
+	id          uint64
+	key         string
+	deadline    time.Time
+	hasDeadline bool
 }
 
-func (c *admissionProxyHAKeeperClient) AllocateIDByKey(_ context.Context, key string) (uint64, error) {
+func (c *admissionProxyHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	c.key = key
+	c.deadline, c.hasDeadline = ctx.Deadline()
 	return c.id, nil
 }
 
@@ -51,8 +54,12 @@ func (c *admissionRefreshFailureCluster) Refresh(context.Context) error {
 func TestProxyAdmissionGenerationInitialization(t *testing.T) {
 	client := &admissionProxyHAKeeperClient{id: 18}
 	s := &Server{haKeeperClient: client}
+	s.config.HAKeeper.HeartbeatTimeout.Duration = 5 * time.Second
 	require.NoError(t, s.initViewMetadataAdmission(context.Background()))
 	require.Equal(t, proxyViewMetadataAdmissionGenerationKey, client.key)
+	require.True(t, client.hasDeadline)
+	require.Positive(t, time.Until(client.deadline))
+	require.LessOrEqual(t, time.Until(client.deadline), 5*time.Second)
 	require.Equal(t, uint64(18), s.viewMetadataAdmissionGeneration)
 	require.NotNil(t, s.viewMetadataAdmissionUpdated)
 }

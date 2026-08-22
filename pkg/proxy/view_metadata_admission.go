@@ -28,9 +28,15 @@ import (
 const proxyViewMetadataAdmissionGenerationKey = "view-metadata-admission-generation"
 
 func (s *Server) initViewMetadataAdmission(ctx context.Context) error {
-	generation, err := s.haKeeperClient.AllocateIDByKey(ctx, proxyViewMetadataAdmissionGenerationKey)
+	timeout := s.config.HAKeeper.HeartbeatTimeout.Duration
+	if timeout <= 0 {
+		timeout = defaultHeartbeatTimeout
+	}
+	allocateCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseAllocateID)
+	defer cancel()
+	generation, err := s.haKeeperClient.AllocateIDByKey(allocateCtx, proxyViewMetadataAdmissionGenerationKey)
 	if err != nil {
-		return err
+		return moerr.AttachCause(allocateCtx, err)
 	}
 	if generation == 0 {
 		return moerr.NewInternalErrorNoCtx("HAKeeper returned zero proxy view metadata admission generation")

@@ -32,9 +32,15 @@ func (s *service) initViewMetadataAdmission(ctx context.Context) error {
 	s.viewMetadataEpochFence = compile.NewViewMetadataEpochFence()
 	s.viewMetadataAdmissionUpdated = make(chan struct{}, 1)
 
-	generation, err := s._hakeeperClient.AllocateIDByKey(ctx, viewMetadataAdmissionGenerationKey)
+	timeout := s.cfg.HAKeeper.DiscoveryTimeout.Duration
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	allocateCtx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseAllocateID)
+	defer cancel()
+	generation, err := s._hakeeperClient.AllocateIDByKey(allocateCtx, viewMetadataAdmissionGenerationKey)
 	if err != nil {
-		return err
+		return moerr.AttachCause(allocateCtx, err)
 	}
 	if generation == 0 {
 		return moerr.NewInternalErrorNoCtx("HAKeeper returned zero view metadata admission generation")
