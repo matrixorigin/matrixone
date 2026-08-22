@@ -1311,6 +1311,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			}
 		}
 		nullAbility := ctasExprCanBeNull(expr)
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			nullAbility = nullAbility || provenance.Source.Metadata.NullAbility
+		}
 		defaultDef := &plan.Default{NullAbility: nullAbility}
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			switch provenance.CTASDefaultPolicy {
@@ -2041,10 +2044,11 @@ func buildCreateTable(
 		if err != nil {
 			return nil, err
 		}
+		previousSubscription := ctx.GetQueryingSubscription()
 		if sub != nil {
 			ctx.SetQueryingSubscription(sub)
 			defer func() {
-				ctx.SetQueryingSubscription(nil)
+				ctx.SetQueryingSubscription(previousSubscription)
 			}()
 		}
 
@@ -2106,6 +2110,9 @@ func buildCreateTable(
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
 		likeSkeletonDef := normalizeLegacyTextCollationForCreateLike(tableDef)
+		if sub != nil {
+			ctx.SetQueryingSubscription(previousSubscription)
+		}
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
 			likeSkeletonDef,
@@ -2113,11 +2120,15 @@ func buildCreateTable(
 			true,
 			cloneStmt,
 			recoveredLegacyChecks,
+			sub,
 		)
 		if err != nil {
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
+			// The subscription binding belongs to the LIKE source only. The
+			// rewritten statement names the local target, so plan it with the
+			// caller's subscription context instead of the publisher binding.
 			// ConstructCreateTableSQL emits a bare `CREATE TABLE ...` without the
 			// IF NOT EXISTS clause, so propagate the original flag. Otherwise
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
