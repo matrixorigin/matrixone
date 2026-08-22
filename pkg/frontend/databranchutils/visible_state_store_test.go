@@ -76,6 +76,54 @@ func TestVisibleStateStoreRejectsUnspillableEntryAtCapacity(t *testing.T) {
 	require.Zero(t, limitedAllocatorUsed(allocator))
 }
 
+func TestVisibleStateStoreBoundaryErrors(t *testing.T) {
+	allocator := newLimitedAllocator(256)
+	store, err := NewVisibleStateStore(allocator)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, store.Close())
+		require.Zero(t, limitedAllocatorUsed(allocator))
+	})
+
+	require.NoError(t, store.PutBatch(nil))
+	value, ok, err := store.Pop([]byte("missing"))
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Nil(t, value)
+
+	err = store.PutBatch([]engine.VisibleStateEntry{{Value: []byte("value")}})
+	require.ErrorContains(t, err, "non-empty key")
+
+	require.NoError(t, store.PutBatch([]engine.VisibleStateEntry{{
+		Key: []byte("key"), Value: []byte("value"),
+	}}))
+	callbackErr := moerr.NewInternalErrorNoCtx("drain callback failed")
+	drained, err := store.Drain(1, func(_, _ []byte) error {
+		return callbackErr
+	})
+	require.Zero(t, drained)
+	require.Same(t, callbackErr, err)
+
+	drained, err = store.Drain(0, func(_, _ []byte) error {
+		require.FailNow(t, "zero-sized drain invoked callback")
+		return nil
+	})
+	require.NoError(t, err)
+	require.Zero(t, drained)
+
+	require.NoError(t, store.Close())
+	require.Zero(t, limitedAllocatorUsed(allocator))
+	require.Zero(t, store.Len())
+	require.NoError(t, store.Close())
+
+	err = store.PutBatch([]engine.VisibleStateEntry{{Key: []byte("closed")}})
+	require.ErrorContains(t, err, "store is closed")
+	_, _, err = store.Pop([]byte("closed"))
+	require.ErrorContains(t, err, "store is closed")
+	_, err = store.Drain(1, func(_, _ []byte) error { return nil })
+	require.ErrorContains(t, err, "store is closed")
+}
+
 func limitedAllocatorUsed(allocator *limitedAllocator) uint64 {
 	allocator.mu.Lock()
 	defer allocator.mu.Unlock()
