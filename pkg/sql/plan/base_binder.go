@@ -21,6 +21,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -4625,6 +4626,8 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 	switch {
 	case returnType.Oid == types.T_varchar:
 		changed = adjustControlFlowVarcharMetadata(args, argTypes, valueIndexes, returnType)
+	case returnType.Oid == types.T_varbinary:
+		changed = adjustControlFlowBinaryMetadata(args, argTypes, valueIndexes, returnType)
 	case returnType.Oid.IsDecimal():
 		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
 	}
@@ -4641,6 +4644,12 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 	if returnType.Oid == types.T_varchar {
 		for _, idx := range valueIndexes {
 			argsCastType[idx] = conservativeReturnType
+		}
+		return
+	}
+	if returnType.Oid == types.T_varbinary {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = *returnType
 		}
 		return
 	}
@@ -4739,6 +4748,64 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 		return changed
 	}
 	return false
+}
+
+// adjustControlFlowBinaryMetadata narrows a binary/character conditional
+// result only when every character branch is a known literal. MatrixOne's
+// textual type metadata currently uses its canonical utf8mb4 connection/view
+// charset; unlike MySQL, the planner does not carry a latin1/utf8mb3 session
+// charset through this expression. Keep the four-byte UTF-8 capacity here so
+// the binary result metadata agrees with that public charset policy and does
+// not understate ASCII or multibyte character branches. If charset-specific
+// planner metadata is added later, this bound must be derived from it.
+func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	const maxUTF8MB4BytesPerCharacter = int32(utf8.UTFMax)
+
+	hasBinary := false
+	hasCharacter := false
+	width := int32(0)
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) || controlFlowNullExpr(args[idx]) {
+			continue
+		}
+		typ := argTypes[idx]
+		switch typ.Oid {
+		case types.T_binary, types.T_varbinary:
+			hasBinary = true
+			if typ.Width > width {
+				width = typ.Width
+			}
+		case types.T_char, types.T_varchar:
+			hasCharacter = true
+			lit := args[idx].GetLit()
+			if lit == nil || lit.Isnull {
+				return false
+			}
+			value, ok := lit.Value.(*plan.Literal_Sval)
+			if !ok {
+				return false
+			}
+			candidate := int32(0)
+			if typ.Width > 0 && typ.Width <= types.MaxVarBinaryLen/maxUTF8MB4BytesPerCharacter {
+				candidate = typ.Width * maxUTF8MB4BytesPerCharacter
+			} else if typ.Width > 0 {
+				candidate = types.MaxVarBinaryLen
+			}
+			if byteWidth := int32(len(value.Sval)); byteWidth > candidate {
+				candidate = byteWidth
+			}
+			if candidate > width {
+				width = candidate
+			}
+		default:
+			return false
+		}
+	}
+	if !hasBinary || !hasCharacter || width <= 0 || width >= returnType.Width {
+		return false
+	}
+	returnType.Width = width
+	return true
 }
 
 func controlFlowNullExpr(expr *Expr) bool {

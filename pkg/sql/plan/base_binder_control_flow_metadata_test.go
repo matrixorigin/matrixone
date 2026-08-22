@@ -387,7 +387,7 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.False(t, expr.Typ.NotNullable)
 	})
 
-	t.Run("case binary character keeps binary metadata", func(t *testing.T) {
+	t.Run("case binary character uses literal byte metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "case", []*planpb.Expr{
 			makePlan2BoolConstExprWithType(true),
 			makePlan2VarBinaryConstExprWithType("a"),
@@ -399,7 +399,7 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.True(t, expr.Typ.NotNullable)
 	})
 
-	t.Run("if binary character keeps binary metadata", func(t *testing.T) {
+	t.Run("if binary character uses literal byte metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
 			makePlan2BoolConstExprWithType(true),
 			makePlan2VarBinaryConstExprWithType("a"),
@@ -409,6 +409,17 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
 		require.Equal(t, int32(8), expr.Typ.Width)
 		require.True(t, expr.Typ.NotNullable)
+	})
+
+	t.Run("binary character column keeps conservative capacity", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+			makePlan2BoolConstExprWithType(true),
+			makePlan2VarBinaryConstExprWithType("a"),
+			{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 2}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
+		require.Equal(t, int32(8), expr.Typ.Width)
 	})
 }
 
@@ -475,6 +486,30 @@ func TestBuildControlFlowUTF8MB4BinaryWidth(t *testing.T) {
 			require.Len(t, projectList, 1)
 			require.Equal(t, int32(types.T_varbinary), projectList[0].Typ.Id)
 			require.Equal(t, int32(4), projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestBuildControlFlowBinaryCharacterLiteralWidth(t *testing.T) {
+	for _, test := range []struct {
+		sql   string
+		width int32
+	}{
+		{sql: `select case when 1 then _binary 'a' else 'bc' end as c`, width: 8},
+		{sql: `select if(1, _binary 'a', 'bc') as c`, width: 8},
+		{sql: `select case when 1 then _binary 'a' else '中文' end as c`, width: 8},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_varbinary), projectList[0].Typ.Id)
+			require.Equal(t, test.width, projectList[0].Typ.Width)
 		})
 	}
 }
