@@ -359,6 +359,7 @@ func (u *fulltext2CreateState) end(tf *TableFunction, proc *process.Process) err
 	// A fresh tag=0 was written (CREATE build, or a REBUILD reusing this TVF) — evict
 	// any cached search index so the next query reloads the new base(s) instead of the
 	// stale one held until the TTL. Local to this CN's cache.
-	veccache.Cache.Remove(u.tblcfg.IndexTable)
+	fulltext2.NewFulltext2Search(u.tblcfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
+	veccache.Cache.RemoveWithReason(u.tblcfg.IndexTable, string(fulltext2.LoadMissRebuild))
 	return nil
 }
