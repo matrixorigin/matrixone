@@ -89,9 +89,12 @@ type ExParamConst struct {
 	NeedRowOrdinal              bool
 	IcebergDeleteMaxMemoryBytes int64
 	IcebergDeleteSpillEnabled   bool
-	Ctx                         context.Context
-	Extern                      *tree.ExternParam
-	ClusterTable                *plan.ClusterTable
+	// DatastreamScan marks this scan as a datastream external table read and
+	// carries the gRPC endpoint plus the pushed-down filter text.
+	DatastreamScan *plan.DataStreamScan
+	Ctx            context.Context
+	Extern         *tree.ExternParam
+	ClusterTable   *plan.ClusterTable
 }
 
 type ExParam struct {

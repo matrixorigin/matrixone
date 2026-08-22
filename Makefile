@@ -362,6 +362,19 @@ mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
 	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
+# Build the jstfu datastream gRPC server (xtool/jstfu/target/jstfu.jar), the
+# reference server for ENGINE = DATASTREAM external tables.  Requires only a
+# JDK: the build uses the committed Maven wrapper (xtool/jstfu/mvnw), which
+# bootstraps its own Maven, so a missing system `mvn` does NOT silently skip
+# the build.  Override with MVN=/path/to/mvn to use a preinstalled Maven.  The
+# jar targets Java 8 bytecode so it runs on the BVT tester image's JDK 8.
+MVN ?= ./mvnw
+.PHONY: jstfu
+jstfu:
+	$(info [Build jstfu datastream server])
+	@cd xtool/jstfu && $(MVN) -q -B -DskipTests package
+	@echo "built xtool/jstfu/target/jstfu.jar"
+
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug
