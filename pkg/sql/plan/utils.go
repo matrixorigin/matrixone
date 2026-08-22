@@ -4033,6 +4033,13 @@ func preparedRuntimeSetOperationCommonType(
 	leftType, rightType types.Type,
 	numericConsumer bool,
 ) (types.Type, error) {
+	if leftType.Eq(rightType) && !(numericConsumer && leftType.Oid.IsMySQLString()) {
+		// Hidden DML columns such as ROWID already have one physical layout and
+		// are not valid COALESCE arguments. Cross-domain inference is unnecessary
+		// when both branches agree exactly. Equal strings remain an exception when
+		// their output is positively consumed as a number: both still need DOUBLE.
+		return leftType, nil
+	}
 	if leftType.IsNumeric() && rightType.IsNumeric() {
 		if common, ok := function.InferNumericParameterType(
 			[]types.Type{leftType, rightType}, nil); ok {

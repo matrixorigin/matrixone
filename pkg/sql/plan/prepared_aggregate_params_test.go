@@ -401,6 +401,17 @@ func TestPreparedRuntimeUnionLineage(t *testing.T) {
 }
 
 func TestPreparedRuntimeUnionMixedDomainsSharePhysicalType(t *testing.T) {
+	rowIDType := types.T_Rowid.ToType()
+	common, err := preparedRuntimeSetOperationCommonType(
+		context.Background(), rowIDType, rowIDType, false)
+	require.NoError(t, err)
+	require.True(t, rowIDType.Eq(common))
+	stringType := types.T_varchar.ToType()
+	common, err = preparedRuntimeSetOperationCommonType(
+		context.Background(), stringType, stringType, true)
+	require.NoError(t, err)
+	require.Equal(t, types.T_float64, common.Oid)
+
 	for _, params := range [][]any{
 		{
 			ParamValue{Value: "2.5", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true},
