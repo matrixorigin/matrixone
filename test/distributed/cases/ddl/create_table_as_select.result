@@ -984,7 +984,7 @@ create table test.table02 as select * from table01;
 show create table table02;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 table02  ¦  CREATE TABLE `table02` (
-  `id` int NOT NULL AUTO_INCREMENT,
+  `id` int NOT NULL,
   `col1` varchar(255) NOT NULL,
   `col2` int DEFAULT NULL,
   `col3` decimal(10,2) DEFAULT NULL,
@@ -1016,7 +1016,7 @@ alter table table02 add column newcolumn int after col3, drop column col4;
 show create table table02;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 table02  ¦  CREATE TABLE `table02` (
-  `id` int NOT NULL AUTO_INCREMENT,
+  `id` int NOT NULL,
   `col1` varchar(255) NOT NULL,
   `col2` int DEFAULT NULL,
   `col3` decimal(10,2) DEFAULT NULL,
@@ -1031,7 +1031,7 @@ table02  ¦  CREATE TABLE `table02` (
 alter table table02 modify column newcolumn bigint;
 desc table02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦  auto_increment  ¦    𝄀
+id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 col1  ¦  VARCHAR(255)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col3  ¦  DECIMAL(10,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -2165,5 +2165,22 @@ scalar_view_ctas  ¦  scalar_rv  ¦  YES  𝄀
 view_full  ¦  l_id  ¦  YES  𝄀
 view_full  ¦  lv  ¦  YES  𝄀
 view_full  ¦  r_id  ¦  YES  𝄀
-view_full  ¦  rv  ¦  YES
+view_full  ¦  rv  ¦  YES  𝄀
 drop database ctas_null_extension_26828;
+drop database if exists ctas_auto_increment_24436;
+create database ctas_auto_increment_24436;
+use ctas_auto_increment_24436;
+create table source_ai (id int primary key auto_increment, payload varchar(20));
+insert into source_ai(payload) values ('one'), ('two');
+create table target_ctas as select id, payload from source_ai;
+select count(*) from information_schema.columns
+where table_schema = database() and table_name = 'source_ai'
+and column_name = 'id' and extra = 'auto_increment';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from information_schema.columns
+where table_schema = database() and table_name = 'target_ctas'
+and column_name = 'id' and extra = 'auto_increment';
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database ctas_auto_increment_24436;

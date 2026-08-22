@@ -1310,6 +1310,10 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
+		// CTAS creates a new table from the query result.  A source column's
+		// AUTO_INCREMENT attribute is not part of that result schema and must
+		// not be copied to the new table.
+		typ.AutoIncr = false
 		nullAbility := ctasExprCanBeNull(expr)
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			nullAbility = nullAbility || provenance.Source.Metadata.NullAbility
