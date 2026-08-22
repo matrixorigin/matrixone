@@ -206,3 +206,26 @@ func TestBuildPlanAnnotatesJoinDistinctRewriteAggregate(t *testing.T) {
 	require.NotNil(t, inner)
 	require.Equal(t, []int32{0, 2}, inner.GroupByHashKey)
 }
+
+func TestBuildPlanAnnotatesJoinPromotedCharDistinctRewriteAggregate(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select e.empno, e.ename, count(distinct "+
+			"coalesce(cast(d.dname as char(8)), cast(d.loc as varchar(8)))) "+
+			"from constraint_test.emp e left join constraint_test.dept d on e.deptno = d.deptno "+
+			"group by e.empno, e.ename",
+	)
+	require.NoError(t, err)
+
+	var inner *pbplan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == pbplan.Node_AGG && len(node.GroupBy) == 4 {
+			inner = node
+			break
+		}
+	}
+	require.NotNil(t, inner)
+	require.Equal(t, []int32{0, 3}, inner.GroupByHashKey)
+	require.True(t, isCastOverload(inner.GroupBy[3], 3))
+}

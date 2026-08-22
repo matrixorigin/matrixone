@@ -415,10 +415,13 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 	})
 
 	t.Run("IntersectAll", func(t *testing.T) {
-		restored := roundTrip(t, &intersectall.IntersectAll{})
+		keyExpr := plan.MakePlan2Int64ConstExprWithType(7)
+		original := &intersectall.IntersectAll{KeyExprs: []*planpb.Expr{keyExpr}}
+		restored := roundTrip(t, original)
 		defer restored.Release()
 		require.IsType(t, &intersectall.IntersectAll{}, restored)
 		require.Equal(t, vm.IntersectAll, restored.OpType())
+		require.Equal(t, original.KeyExprs, restored.(*intersectall.IntersectAll).KeyExprs)
 	})
 
 	t.Run("Order", func(t *testing.T) {

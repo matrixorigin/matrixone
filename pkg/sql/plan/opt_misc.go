@@ -33,6 +33,7 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
 	increaseRefCntForExprList(node.FilterList, 1, colRefCnt)
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
+	increaseRefCntForExprList(node.PhysicalEqualityKeyList, 1, colRefCnt)
 	increaseRefCntForExprList(node.AggList, 1, colRefCnt)
 	increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
 
@@ -304,6 +305,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.OnList, projMap)
 	replaceColumnsForExprList(node.FilterList, projMap)
 	replaceColumnsForExprList(node.GroupBy, projMap)
+	replaceColumnsForExprList(node.PhysicalEqualityKeyList, projMap)
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
 	replaceColumnsForExprList(node.TimeWindowPartitionBy, projMap)
@@ -941,6 +943,17 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 
 	node.NodeType = plan.Node_AGG
 	node.GroupBy = project.ProjectList
+	if len(node.PhysicalEqualityKeyList) > 0 {
+		visibleCount := len(node.GroupBy)
+		node.ProjectList = make([]*plan.Expr, visibleCount)
+		for i, expr := range project.ProjectList {
+			node.ProjectList[i] = GetColExpr(expr.Typ, -1, int32(i))
+		}
+		for i, key := range node.PhysicalEqualityKeyList {
+			node.GroupBy = append(node.GroupBy, DeepCopyExpr(key))
+			node.GroupByHashKey = append(node.GroupByHashKey, int32(visibleCount+i))
+		}
+	}
 	node.BindingTags = project.BindingTags
 	node.BindingTags = append(node.BindingTags, builder.genNewBindTag())
 	node.Children[0] = project.Children[0]

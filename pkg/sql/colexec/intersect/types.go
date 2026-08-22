@@ -19,6 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,7 +34,8 @@ const (
 )
 
 type Intersect struct {
-	ctr container
+	ctr      container
+	KeyExprs []*plan.Expr
 
 	vm.OperatorBase
 }
@@ -81,12 +84,15 @@ type container struct {
 
 	// Result batch of intersec column execute operator
 	buf *batch.Batch
+
+	keyEvaluator colexec.SetOperationKeyEvaluator
 }
 
 func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersect.ctr
 	ctr.state = build
 	ctr.cleanHashMap()
+	ctr.keyEvaluator.Reset()
 	ctr.putCnts(proc)
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
@@ -96,6 +102,7 @@ func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, er
 func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &intersect.ctr
 	ctr.cleanHashMap()
+	ctr.keyEvaluator.Free()
 	ctr.putCnts(proc)
 	if ctr.buf != nil {
 		ctr.buf.Clean(proc.Mp())

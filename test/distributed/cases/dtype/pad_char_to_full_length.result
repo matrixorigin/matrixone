@@ -1,0 +1,513 @@
+drop table if exists pad_char_to_full_length_t;
+set @saved_sql_mode = @@sql_mode;
+set sql_mode = '';
+create table pad_char_to_full_length_t (
+c char(8),
+unicode_c char(4),
+v varchar(8),
+short_c char(4)
+);
+insert into pad_char_to_full_length_t values ('MO', '你好', 'MO', 'MO');
+drop table if exists pad_char_set8;
+drop table if exists pad_char_set4;
+drop table if exists pad_char_set_v8;
+drop table if exists pad_char_set_text;
+drop table if exists pad_char_promoted;
+drop table if exists pad_char_window;
+create table pad_char_set8 (c char(8));
+create table pad_char_set4 (c char(4));
+create table pad_char_set_v8 (c varchar(8));
+create table pad_char_set_text (c text);
+create table pad_char_promoted (id int, c char(8), v varchar(8));
+create table pad_char_window (id int, c char(8), v varchar(8));
+insert into pad_char_set8 values ('MO');
+insert into pad_char_set4 values ('MO');
+insert into pad_char_set_v8 values ('MO');
+insert into pad_char_set_text values ('MO');
+insert into pad_char_promoted values (1, 'MO', null), (2, null, 'MO');
+insert into pad_char_window values (1, 'MO', null), (2, null, 'MO'), (3, null, 'X');
+select char_length(c), length(c), hex(c), concat('>', c, '<'),
+char_length(unicode_c), length(unicode_c), hex(unicode_c),
+char_length(v), length(v), hex(v)
+from pad_char_to_full_length_t;
+➤ char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  ¦  concat(>, c, <)[12,65535,0]  ¦  char_length(unicode_c)[-5,64,0]  ¦  length(unicode_c)[-5,64,0]  ¦  hex(unicode_c)[12,65535,0]  ¦  char_length(v)[-5,64,0]  ¦  length(v)[-5,64,0]  ¦  hex(v)[12,65535,0]  𝄀
+2  ¦  2  ¦  4D4F  ¦  >MO<  ¦  2  ¦  6  ¦  E4BDA0E5A5BD  ¦  2  ¦  2  ¦  4D4F
+select cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
+from pad_char_to_full_length_t;
+➤ cast(c as varchar(8))[12,8,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,65535,0]  𝄀
+MO  ¦  2  ¦  4D4F
+select count(*) from pad_char_to_full_length_t where length(c) = 2;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t where c = 'MO';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t where c >= 'MO' and c <= 'MO';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t where c between 'MO' and 'MO';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t where c in ('MO', 'XX');
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t as lhs
+join pad_char_to_full_length_t as rhs on lhs.c = rhs.v;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t as lhs
+join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set4) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set4) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_v8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_v8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select length(c), hex(c) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+2  ¦  4D4F
+select count(*) from (select c from pad_char_set_v8 union select c from pad_char_set8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_v8 minus select c from pad_char_set8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select length(c), hex(c) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+2  ¦  4D4F
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_text) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_text) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_text) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from (select c from pad_char_set_text union select c from pad_char_set8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_text intersect select c from pad_char_set8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_text minus select c from pad_char_set8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from pad_char_promoted where coalesce(c, v) = 'MO';
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select distinct coalesce(c, v) from pad_char_promoted) d;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select coalesce(c, v) from pad_char_promoted group by coalesce(c, v)) g;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v)) from pad_char_promoted;
+➤ count(distinct coalesce(c, v))[-5,64,0]  𝄀
+1
+select count(distinct 1) from pad_char_promoted group by coalesce(c, v);
+➤ count(distinct 1)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v)) from pad_char_promoted group by coalesce(c, v);
+➤ count(distinct coalesce(c, v))[-5,64,0]  𝄀
+1
+select count(*) from (
+select coalesce(c, v) from pad_char_promoted
+union select c from pad_char_set_v8
+) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select coalesce(c, v) from pad_char_promoted
+intersect select c from pad_char_set_v8
+) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select coalesce(c, v) from pad_char_promoted
+minus select c from pad_char_set_v8
+) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from pad_char_promoted where if(c is null, v, c) = 'MO';
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from pad_char_promoted where case when c is null then v else c end = 'MO';
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (
+select distinct x from (select coalesce(c, v) as x from pad_char_promoted) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select x from (select coalesce(c, v) as x from pad_char_promoted) d group by x
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select x from (select coalesce(c, v) as x from pad_char_promoted) d
+union select c from pad_char_set_v8
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+with d as (select coalesce(c, v) as x from pad_char_promoted)
+select count(*) from (select distinct x from d) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select coalesce(c, v) as x from pad_char_promoted
+union all select c from pad_char_set_v8
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
+where x in ('MO', 'XX');
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
+where x not in ('MO', 'XX');
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(y) from (
+select distinct y from (
+select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
+) d
+) q;
+➤ count(y)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select any_value(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select min(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max_by(coalesce(c, v), id, id) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max_by_non_null(coalesce(c, v), id, id) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v), 1) from pad_char_promoted;
+➤ count(distinct coalesce(c, v), 1)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v)), sum(id) from pad_char_promoted;
+➤ count(distinct coalesce(c, v))[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+1  ¦  3
+select group_concat(distinct coalesce(c, v) order by id) from pad_char_promoted;
+➤ group_concat(distinct coalesce(c, v) order by id separator ,)[12,0,0]  𝄀
+MO
+select id,
+count(*) over (partition by coalesce(c, v)),
+dense_rank() over (order by coalesce(c, v))
+from pad_char_promoted order by id;
+➤ id[4,32,0]  ¦  count(*) over (partition by coalesce(c, v))[-5,64,0]  ¦  dense_rank() over (order by coalesce(c, v))[-5,64,0]  𝄀
+1  ¦  2  ¦  1  𝄀
+2  ¦  2  ¦  1
+select id,
+strcmp(coalesce(c, v), 'MO'),
+field(coalesce(c, v), 'MO', 'XX'),
+least(coalesce(c, v), 'MO'),
+greatest(coalesce(c, v), 'MO')
+from pad_char_promoted order by id;
+➤ id[4,32,0]  ¦  strcmp(coalesce(c, v), MO)[-6,8,0]  ¦  field(coalesce(c, v), MO, XX)[-5,64,0]  ¦  least(coalesce(c, v), MO)[12,65535,0]  ¦  greatest(coalesce(c, v), MO)[12,65535,0]  𝄀
+1  ¦  0  ¦  1  ¦  MO  ¦  MO  𝄀
+2  ¦  0  ¦  1  ¦  MO  ¦  MO
+prepare pad_char_stmt from
+'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
+cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
+from pad_char_to_full_length_t';
+set sql_mode = 'PAD_CHAR_TO_FULL_LENGTH';
+select char_length(c), length(c), hex(c), concat('>', c, '<'),
+char_length(unicode_c), length(unicode_c), hex(unicode_c),
+char_length(v), length(v), hex(v)
+from pad_char_to_full_length_t;
+➤ char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  ¦  concat(>, c, <)[12,65535,0]  ¦  char_length(unicode_c)[-5,64,0]  ¦  length(unicode_c)[-5,64,0]  ¦  hex(unicode_c)[12,65535,0]  ¦  char_length(v)[-5,64,0]  ¦  length(v)[-5,64,0]  ¦  hex(v)[12,65535,0]  𝄀
+8  ¦  8  ¦  4D4F202020202020  ¦  >MO      <  ¦  4  ¦  8  ¦  E4BDA0E5A5BD2020  ¦  2  ¦  2  ¦  4D4F
+select cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
+from pad_char_to_full_length_t;
+➤ cast(c as varchar(8))[12,8,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,65535,0]  𝄀
+MO        ¦  8  ¦  4D4F202020202020
+select count(*) from pad_char_to_full_length_t where length(c) = 8;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t where c = 'MO';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t where c >= 'MO' and c <= 'MO';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t where c between 'MO' and 'MO';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t where c in ('MO', 'XX');
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t as lhs
+join pad_char_to_full_length_t as rhs on lhs.c = rhs.v;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from pad_char_to_full_length_t as lhs
+join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set4) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set4) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_v8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_v8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select length(c), hex(c) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+8  ¦  4D4F202020202020
+select count(*) from (select c from pad_char_set_v8 union select c from pad_char_set8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_v8 minus select c from pad_char_set8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select length(c), hex(c) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+2  ¦  4D4F
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_text) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_text) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_text) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from (select c from pad_char_set_text union select c from pad_char_set8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_text intersect select c from pad_char_set8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_text minus select c from pad_char_set8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from pad_char_promoted where coalesce(c, v) = 'MO';
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select distinct coalesce(c, v) from pad_char_promoted) d;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select coalesce(c, v) from pad_char_promoted group by coalesce(c, v)) g;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v)) from pad_char_promoted;
+➤ count(distinct coalesce(c, v))[-5,64,0]  𝄀
+1
+select count(distinct 1) from pad_char_promoted group by coalesce(c, v);
+➤ count(distinct 1)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v)) from pad_char_promoted group by coalesce(c, v);
+➤ count(distinct coalesce(c, v))[-5,64,0]  𝄀
+1
+select count(*) from (
+select coalesce(c, v) from pad_char_promoted
+union select c from pad_char_set_v8
+) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select coalesce(c, v) from pad_char_promoted
+intersect select c from pad_char_set_v8
+) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select coalesce(c, v) from pad_char_promoted
+minus select c from pad_char_set_v8
+) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from pad_char_promoted where if(c is null, v, c) = 'MO';
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from pad_char_promoted where case when c is null then v else c end = 'MO';
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (
+select distinct x from (select coalesce(c, v) as x from pad_char_promoted) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select x from (select coalesce(c, v) as x from pad_char_promoted) d group by x
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select x from (select coalesce(c, v) as x from pad_char_promoted) d
+union select c from pad_char_set_v8
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+with d as (select coalesce(c, v) as x from pad_char_promoted)
+select count(*) from (select distinct x from d) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select coalesce(c, v) as x from pad_char_promoted
+union all select c from pad_char_set_v8
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
+where x in ('MO', 'XX');
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
+where x not in ('MO', 'XX');
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(y) from (
+select distinct y from (
+select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
+) d
+) q;
+➤ count(y)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select any_value(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select min(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max_by(coalesce(c, v), id, id) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max_by_non_null(coalesce(c, v), id, id) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v), 1) from pad_char_promoted;
+➤ count(distinct coalesce(c, v), 1)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v)), sum(id) from pad_char_promoted;
+➤ count(distinct coalesce(c, v))[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+1  ¦  3
+select group_concat(distinct coalesce(c, v) order by id) from pad_char_promoted;
+➤ group_concat(distinct coalesce(c, v) order by id separator ,)[12,0,0]  𝄀
+MO
+select id,
+count(*) over (partition by coalesce(c, v)),
+dense_rank() over (order by coalesce(c, v))
+from pad_char_promoted order by id;
+➤ id[4,32,0]  ¦  count(*) over (partition by coalesce(c, v))[-5,64,0]  ¦  dense_rank() over (order by coalesce(c, v))[-5,64,0]  𝄀
+1  ¦  2  ¦  1  𝄀
+2  ¦  2  ¦  1
+select id,
+strcmp(coalesce(c, v), 'MO'),
+field(coalesce(c, v), 'MO', 'XX'),
+least(coalesce(c, v), 'MO'),
+greatest(coalesce(c, v), 'MO')
+from pad_char_promoted order by id;
+➤ id[4,32,0]  ¦  strcmp(coalesce(c, v), MO)[-6,8,0]  ¦  field(coalesce(c, v), MO, XX)[-5,64,0]  ¦  least(coalesce(c, v), MO)[12,65535,0]  ¦  greatest(coalesce(c, v), MO)[12,65535,0]  𝄀
+1  ¦  0  ¦  1  ¦  MO  ¦  MO  𝄀
+2  ¦  0  ¦  1  ¦  MO  ¦  MO
+select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+8  ¦  4D4F202020202020
+select length(c), hex(c) from (select c from pad_char_set4 union select c from pad_char_set8) u;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+8  ¦  4D4F202020202020
+execute pad_char_stmt;
+➤ c[1,8,0]  ¦  char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  ¦  concat(>, c, <)[12,65535,0]  ¦  cast(c as varchar(8))[12,8,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,65535,0]  𝄀
+MO        ¦  8  ¦  8  ¦  4D4F202020202020  ¦  >MO      <  ¦  MO        ¦  8  ¦  4D4F202020202020
+set sql_mode = '';
+execute pad_char_stmt;
+➤ c[1,8,0]  ¦  char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  ¦  concat(>, c, <)[12,65535,0]  ¦  cast(c as varchar(8))[12,8,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,65535,0]  𝄀
+MO  ¦  2  ¦  2  ¦  4D4F  ¦  >MO<  ¦  MO  ¦  2  ¦  4D4F
+deallocate prepare pad_char_stmt;
+set sql_mode = @saved_sql_mode;
+drop table pad_char_to_full_length_t;
+drop table pad_char_set8;
+drop table pad_char_set4;
+drop table pad_char_set_v8;
+drop table pad_char_set_text;
+drop table pad_char_promoted;
+drop table pad_char_window;

@@ -34,6 +34,9 @@ message Type {
   string table = 6;
   string enumvalues = 7;
   uint32 charset = 8;
+  // Internal semantic marker for VARCHAR/TEXT values that can carry
+  // representation-only CHAR padding through a transparent query boundary.
+  bool pad_space = 9;
 }
 
 message msgHeader {
@@ -1138,6 +1141,11 @@ message Node {
 
   // VECTOR_INDEX_SCAN only: typed vector-index access-path description.
   VectorIndexScan vector_index_scan = 85;
+
+  // Physical equality expressions used by set operations and DISTINCT to
+  // compare rows without changing the user-visible projected representation.
+  // Empty preserves the legacy behavior of hashing every projected column.
+  repeated Expr physical_equality_key_list = 86;
 }
 
 message SnapshotExtraInfo {

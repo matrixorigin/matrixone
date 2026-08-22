@@ -4497,15 +4497,33 @@ func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) [
 		gn.GroupBy[i] = plan2.DeepCopyExpr(node.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
+	if len(node.PhysicalEqualityKeyList) > 0 {
+		visibleCount := len(gn.GroupBy)
+		for i, expr := range node.PhysicalEqualityKeyList {
+			key := plan2.DeepCopyExpr(expr)
+			key.Typ.NotNullable = false
+			gn.GroupBy = append(gn.GroupBy, key)
+			gn.GroupByHashKey = append(gn.GroupByHashKey, int32(visibleCount+i))
+		}
+	}
 	currentFirstFlag := c.anal.isFirst
 	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
+	if len(node.PhysicalEqualityKeyList) > 0 {
+		op.ProjectList = make([]*plan.Expr, len(node.ProjectList))
+		for i, expr := range node.ProjectList {
+			op.ProjectList[i] = &plan.Expr{
+				Typ:  expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(i)}},
+			}
+		}
+	}
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(op)
 	c.anal.isFirst = false
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	rs := c.newScopeListOnSingleWorkerStage(2, 1)
 	rs[0].PreScopes = append(rs[0].PreScopes, left[0], right[0])
 
@@ -4526,16 +4544,19 @@ func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, node
 	switch nodeType {
 	case plan.Node_MINUS:
 		arg := minus.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT_ALL:
 		arg := intersectall.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
@@ -4546,7 +4567,7 @@ func (c *Compile) compileTpMinusAndIntersect(left []*Scope, right []*Scope, node
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
-		return c.compileTpMinusAndIntersect(left, right, nodeType)
+		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
 	rs := c.newScopeListOnSingleWorkerStage(2, int(node.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, node)
@@ -4560,6 +4581,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			merge0.WithPartial(0, 1)
 			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := minus.NewArgument()
+			arg.KeyExprs = node.PhysicalEqualityKeyList
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
@@ -4570,6 +4592,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			merge0.WithPartial(0, 1)
 			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := intersect.NewArgument()
+			arg.KeyExprs = node.PhysicalEqualityKeyList
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
@@ -4580,6 +4603,7 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			merge0.WithPartial(0, 1)
 			merge1 := merge.NewArgument().WithPartial(1, 2)
 			arg := intersectall.NewArgument()
+			arg.KeyExprs = node.PhysicalEqualityKeyList
 			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
@@ -5852,6 +5876,19 @@ func supportsRemoteCrossDomainStringLiterals(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion23
+}
+
+func supportsRemotePadSpaceSemantics(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion25
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {

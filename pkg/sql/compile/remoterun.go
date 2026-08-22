@@ -90,6 +90,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateRemotePadSpacePipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -169,6 +172,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -728,9 +734,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
-	// we reused ANTI to store the information here because of the lack of related structure.
-	case *intersect.Intersect, *minus.Minus, *intersectall.IntersectAll:
-		in.SetOp = &pipeline.SetOp{}
+	case *intersect.Intersect:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *minus.Minus:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *intersectall.IntersectAll:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *merge.Merge:
 		in.Merge = &pipeline.Merge{
 			SinkScan: t.SinkScan,
@@ -1269,11 +1278,23 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
-		op = intersect.NewArgument()
+		arg := intersect.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.IntersectAll:
-		op = intersectall.NewArgument()
+		arg := intersectall.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Minus:
-		op = minus.NewArgument()
+		arg := minus.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Connector:
 		t := opr.GetConnect()
 		op = connector.NewArgument().
@@ -1726,6 +1747,28 @@ func validateRemoteTargetAwareUpdatePipelineProtocol(
 		if err := validateRemoteTargetAwareUpdatePipelineProtocol(proc, child); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateRemotePadSpacePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	modeEnabled, err := process.ResolvePadCharToFullLength(proc)
+	if err != nil {
+		return err
+	}
+	if !modeEnabled && !pipelineContainsPadSpaceCast(p) {
+		return nil
+	}
+	if proc == nil || !supportsRemotePadSpaceSemantics(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"PAD SPACE remote execution requires MORPC protocol version 25",
+		)
 	}
 	return nil
 }

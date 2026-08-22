@@ -260,17 +260,19 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		GroupBy:         DeepCopyExprList(node.GroupBy),
 		GroupingFlag:    slices.Clone(node.GroupingFlag),
 		GroupByHashKey:  slices.Clone(node.GroupByHashKey),
-		AggList:         DeepCopyExprList(node.AggList),
-		OrderBy:         DeepCopyOrderBySpecList(node.OrderBy),
-		Interval:        DeepCopyExpr(node.Interval),
-		Sliding:         DeepCopyExpr(node.Sliding),
-		Timestamp:       DeepCopyExpr(node.Timestamp),
-		WEnd:            DeepCopyExpr(node.WEnd),
-		FillType:        node.FillType,
-		FillVal:         DeepCopyExprList(node.FillVal),
-		GapFillMode:     node.GapFillMode,
-		GapFillStart:    DeepCopyExpr(node.GapFillStart),
-		GapFillEnd:      DeepCopyExpr(node.GapFillEnd),
+		PhysicalEqualityKeyList: DeepCopyExprList(
+			node.PhysicalEqualityKeyList),
+		AggList:      DeepCopyExprList(node.AggList),
+		OrderBy:      DeepCopyOrderBySpecList(node.OrderBy),
+		Interval:     DeepCopyExpr(node.Interval),
+		Sliding:      DeepCopyExpr(node.Sliding),
+		Timestamp:    DeepCopyExpr(node.Timestamp),
+		WEnd:         DeepCopyExpr(node.WEnd),
+		FillType:     node.FillType,
+		FillVal:      DeepCopyExprList(node.FillVal),
+		GapFillMode:  node.GapFillMode,
+		GapFillStart: DeepCopyExpr(node.GapFillStart),
+		GapFillEnd:   DeepCopyExpr(node.GapFillEnd),
 
 		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
 		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
@@ -483,6 +485,7 @@ func DeepCopyType(typ *plan.Type) *plan.Type {
 		Table:       typ.Table,
 		Enumvalues:  typ.Enumvalues,
 		Charset:     typ.Charset,
+		PadSpace:    typ.PadSpace,
 	}
 }
 

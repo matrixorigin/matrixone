@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -4144,7 +4145,8 @@ func TestQueryBuilder_appendDistinctOrderProjectionNode(t *testing.T) {
 	inputID := builder.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN}, bindCtx)
 	projectID, err := builder.appendProjectionNode(bindCtx, inputID, false)
 	require.NoError(t, err)
-	distinctID := builder.appendDistinctNode(bindCtx, projectID)
+	distinctID, err := builder.appendDistinctNode(bindCtx, projectID)
+	require.NoError(t, err)
 	orderProjectID, orderTag, err := builder.appendDistinctOrderProjectionNode(bindCtx, distinctID, boundOrderBys)
 	require.NoError(t, err)
 	require.NotEqual(t, bindCtx.projectTag, orderTag)
@@ -4243,6 +4245,476 @@ func TestQueryBuilder_buildSetOperationOrderByNull(t *testing.T) {
 			require.NotNil(t, sortNodes[0].OrderBy[0].Expr.GetCol())
 		})
 	}
+}
+
+func TestSetOperationMixedCharVarcharUsesSeparatePadSpaceKey(t *testing.T) {
+	cases := []struct {
+		name     string
+		sql      string
+		nodeType plan.Node_NodeType
+		wantKey  bool
+	}{
+		{
+			name:     "mixed union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as varchar(8))",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "mixed intersect",
+			sql:      "select cast('MO' as char(8)) intersect select cast('MO' as varchar(8))",
+			nodeType: plan.Node_INTERSECT,
+			wantKey:  true,
+		},
+		{
+			name:     "mixed minus",
+			sql:      "select cast('MO' as char(8)) minus select cast('MO' as varchar(8))",
+			nodeType: plan.Node_MINUS,
+			wantKey:  true,
+		},
+		{
+			name:     "reversed mixed union",
+			sql:      "select cast('MO' as varchar(8)) union select cast('MO' as char(8))",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "mixed char text union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as text)",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "promoted char union",
+			sql:      "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation union select cast(r_name as varchar(8)) from region",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "derived promoted char union",
+			sql:      "select x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d union select cast(r_name as varchar(8)) from region",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "varchar control",
+			sql:      "select cast('MO ' as varchar(8)) union select cast('MO' as varchar(8))",
+			nodeType: plan.Node_UNION,
+			wantKey:  false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var setNode *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == tc.nodeType {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.NotNil(t, setNode.ProjectList[0].GetCol())
+			if !tc.wantKey {
+				require.Empty(t, setNode.PhysicalEqualityKeyList)
+				return
+			}
+
+			require.Len(t, setNode.PhysicalEqualityKeyList, 1)
+			keyFn := setNode.PhysicalEqualityKeyList[0].GetF()
+			require.NotNil(t, keyFn)
+			require.Equal(t, "cast", keyFn.Func.ObjName)
+			_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+			require.Equal(t, int32(3), overloadID)
+		})
+	}
+}
+
+func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		wantKey bool
+	}{
+		{
+			name:    "coalesce char varchar",
+			sql:     "select distinct coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation",
+			wantKey: true,
+		},
+		{
+			name:    "coalesce varchar control",
+			sql:     "select distinct coalesce(cast(n_name as varchar(8)), cast(n_comment as varchar(8))) from nation",
+			wantKey: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			if !tc.wantKey {
+				require.Empty(t, distinctAgg.GroupByHashKey)
+				return
+			}
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+			keyFn := distinctAgg.GroupBy[1].GetF()
+			require.NotNil(t, keyFn)
+			_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+			require.Equal(t, int32(3), overloadID)
+		})
+	}
+}
+
+func TestDistinctPromotedCharKeepsPadSpaceKeyAcrossDerivedTable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "derived table",
+			sql:  "select distinct x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d",
+		},
+		{
+			name: "cte",
+			sql:  "with d as (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) select distinct x from d",
+		},
+		{
+			name: "union all",
+			sql:  "select distinct x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation union all select cast(r_name as varchar(8)) from region) d",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 && len(node.GroupByHashKey) > 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
+func TestPromotedCharPadSpaceMetadataCrossesTransparentBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "derived table",
+			sql:  "select x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d",
+		},
+		{
+			name: "cte",
+			sql:  "with d as (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) select x from d",
+		},
+		{
+			name: "union all",
+			sql:  "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation union all select cast(r_name as varchar(8)) from region",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+			root := logicPlan.GetQuery().Nodes[logicPlan.GetQuery().Steps[0]]
+			require.NotEmpty(t, root.ProjectList)
+			require.True(t, root.ProjectList[0].Typ.PadSpace)
+		})
+	}
+}
+
+func TestWindowValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name       string
+		windowExpr string
+		wantKey    bool
+	}{
+		{name: "lag", windowExpr: "lag(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "lead", windowExpr: "lead(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "first value", windowExpr: "first_value(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "last value", windowExpr: "last_value(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "nth value", windowExpr: "nth_value(" + value + ", 1) over (order by n_nationkey)", wantKey: true},
+		{
+			name:       "varchar control",
+			windowExpr: "lag(cast(n_name as varchar(8))) over (order by n_nationkey)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(
+				NewMockOptimizer(true),
+				t,
+				"select distinct y from (select "+tc.windowExpr+" as y from nation) d",
+			)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			if !tc.wantKey {
+				require.Empty(t, distinctAgg.GroupByHashKey)
+				return
+			}
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
+func TestAggregateValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name string
+		expr string
+	}{
+		{name: "any value", expr: "any_value(" + value + ")"},
+		{name: "min", expr: "min(" + value + ")"},
+		{name: "max", expr: "max(" + value + ")"},
+		{name: "max by", expr: "max_by(" + value + ", n_nationkey, n_nationkey)"},
+		{name: "max by non null", expr: "max_by_non_null(" + value + ", n_nationkey, n_nationkey)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(
+				NewMockOptimizer(true),
+				t,
+				"select distinct x from (select "+tc.expr+
+					" as x from nation group by n_regionkey) d",
+			)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
+func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "direct",
+			sql:  "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))), count(*) from nation group by coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",
+		},
+		{
+			name: "derived table",
+			sql:  "select x, count(*) from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d group by x",
+		},
+		{
+			name: "cte",
+			sql:  "with d as (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) select x, count(*) from d group by x",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var aggregate *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 && len(node.GroupByHashKey) > 0 {
+					aggregate = node
+					break
+				}
+			}
+			require.NotNil(t, aggregate)
+			require.Len(t, aggregate.GroupBy, 2)
+			require.Equal(t, []int32{1}, aggregate.GroupByHashKey)
+			keyFn := aggregate.GroupBy[1].GetF()
+			require.NotNil(t, keyFn)
+			_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+			require.Equal(t, int32(3), overloadID)
+		})
+	}
+}
+
+func TestDistinctAggregatePromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name        string
+		sql         string
+		wantGroupBy int
+		wantHashKey []int32
+		castPos     []int
+	}{
+		{
+			name:        "count distinct",
+			sql:         "select count(distinct " + value + ") from nation",
+			wantGroupBy: 2,
+			wantHashKey: []int32{1},
+			castPos:     []int{1},
+		},
+		{
+			name:        "promoted group and count distinct",
+			sql:         "select " + value + ", count(distinct n_regionkey) from nation group by " + value,
+			wantGroupBy: 3,
+			wantHashKey: []int32{1, 2},
+			castPos:     []int{1},
+		},
+		{
+			name:        "promoted group and promoted count distinct",
+			sql:         "select " + value + ", count(distinct " + value + ") from nation group by " + value,
+			wantGroupBy: 4,
+			wantHashKey: []int32{1, 3},
+			castPos:     []int{1, 3},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var innerAggregate *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 && len(node.GroupByHashKey) > 0 {
+					innerAggregate = node
+					break
+				}
+			}
+			require.NotNil(t, innerAggregate)
+			require.Len(t, innerAggregate.GroupBy, tc.wantGroupBy)
+			require.Equal(t, tc.wantHashKey, innerAggregate.GroupByHashKey)
+			for _, pos := range tc.castPos {
+				keyFn := innerAggregate.GroupBy[pos].GetF()
+				require.NotNil(t, keyFn)
+				_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+				require.Equal(t, int32(3), overloadID)
+			}
+		})
+	}
+}
+
+func TestDistinctAggregatePromotedCharUsesCanonicalArgumentsWhenNotRewritten(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, sql := range []string{
+		"select count(distinct " + value + ", 1) from nation",
+		"select group_concat(distinct " + value + ") from nation",
+	} {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.NoError(t, err)
+
+		var aggregate *plan.Node
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 {
+				aggregate = node
+				break
+			}
+		}
+		require.NotNil(t, aggregate)
+		var hasCanonicalArgument bool
+		for _, arg := range aggregate.AggList[0].GetF().Args {
+			if isCastOverload(arg, 2) {
+				hasCanonicalArgument = true
+				break
+			}
+		}
+		require.True(t, hasCanonicalArgument, sql)
+	}
+}
+
+func TestDistinctAggregatePromotedCharCanonicalizesWhenRewriteIsSkipped(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"select count(distinct "+value+"), sum(n_regionkey) from nation")
+	require.NoError(t, err)
+
+	var countDistinct *plan.Expr
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_AGG || len(node.AggList) != 2 {
+			continue
+		}
+		for _, agg := range node.AggList {
+			if f := agg.GetF(); f != nil && f.Func.ObjName == "count" {
+				countDistinct = agg
+				break
+			}
+		}
+	}
+	require.NotNil(t, countDistinct)
+	require.Len(t, countDistinct.GetF().Args, 1)
+	require.True(t, isCastOverload(countDistinct.GetF().Args[0], 2))
+}
+
+func TestDistinctAggregatePromotedCharCanonicalizesWhenGroupingSetsSkipRewrite(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"select n_regionkey, count(distinct "+value+
+			") from nation group by rollup(n_regionkey)")
+	require.NoError(t, err)
+
+	var countDistinct *plan.Expr
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_AGG || len(node.GroupingFlag) == 0 {
+			continue
+		}
+		for _, agg := range node.AggList {
+			if f := agg.GetF(); f != nil && f.Func.ObjName == "count" {
+				countDistinct = agg
+				break
+			}
+		}
+	}
+	require.NotNil(t, countDistinct)
+	require.Len(t, countDistinct.GetF().Args, 1)
+	require.True(t, isCastOverload(countDistinct.GetF().Args[0], 2))
+}
+
+func TestWindowPadSpaceKeysUseCanonicalArguments(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"select count(*) over (partition by "+value+"), "+
+			"dense_rank() over (order by "+value+") from nation")
+	require.NoError(t, err)
+
+	var partition *plan.Node
+	var rankedWindow *plan.WindowSpec
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PARTITION && len(node.OrderBy) == 1 {
+			partition = node
+		}
+		if node.NodeType == plan.Node_WINDOW {
+			for _, item := range node.WinSpecList {
+				if window := item.GetW(); window != nil && window.Name == "dense_rank" {
+					rankedWindow = window
+				}
+			}
+		}
+	}
+	require.NotNil(t, partition)
+	require.True(t, isCastOverload(partition.OrderBy[0].Expr, 2))
+	require.NotNil(t, rankedWindow)
+	require.Len(t, rankedWindow.OrderBy, 1)
+	require.True(t, isCastOverload(rankedWindow.OrderBy[0].Expr, 2))
 }
 
 func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
@@ -5052,7 +5524,8 @@ func TestQueryBuilder_appendDistinctNode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(0), nodeID)
 
-	nodeID = builder.appendDistinctNode(bindCtx, nodeID)
+	nodeID, err = builder.appendDistinctNode(bindCtx, nodeID)
+	require.NoError(t, err)
 	require.Equal(t, int32(1), nodeID)
 
 	distinctNode := builder.qry.Nodes[1]

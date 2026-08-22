@@ -279,6 +279,13 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		if err = rejectWindowResultDependency(b.GetContext(), expr, ctx.windowTag); err != nil {
 			return nil, err
 		}
+		// Partition membership is an equality boundary.  Normalize only the
+		// key expression so value-returning window functions still expose the
+		// original padded representation.
+		expr, err = appendPadSpaceComparisonCastIfNeeded(b.GetContext(), expr)
+		if err != nil {
+			return nil, err
+		}
 		w.PartitionBy = append(w.PartitionBy, expr)
 	}
 
@@ -306,6 +313,13 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 				if err != nil {
 					return nil, err
 				}
+			}
+			// Window peer groups and rank ordering use this expression as a key.
+			// Apply the same semantic key normalization after any storage-order
+			// rewrite, without touching the window function result itself.
+			expr, err = appendPadSpaceComparisonCastIfNeeded(b.GetContext(), expr)
+			if err != nil {
+				return nil, err
 			}
 
 			orderBy := &plan.OrderBySpec{

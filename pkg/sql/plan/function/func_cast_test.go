@@ -3050,7 +3050,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false, castModeNormal)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3131,7 +3131,7 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false)
+			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false, castModeNormal)
 			if tt.wantErr {
 				require.Error(t, err)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
@@ -3141,6 +3141,81 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			get, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
 			require.False(t, null)
 			require.Equal(t, tt.want, string(get))
+		})
+	}
+}
+
+func TestStrToStrNormalizesOnlyPhysicalEqualityCasts(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	for _, test := range []struct {
+		name     string
+		fromType types.Type
+		toType   types.Type
+		mode     castMode
+		want     string
+	}{
+		{name: "ordinary varchar cast preserves padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeNormal, want: "MO      "},
+		{name: "comparison varchar cast drops padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
+		{name: "comparison promoted varchar key drops padding", fromType: types.New(types.T_varchar, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
+		{name: "set-operation varchar key drops padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeSetOperation, want: "MO"},
+		{name: "comparison char cast preserves padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_char, 8, 0), mode: castModeComparison, want: "MO      "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := testutil.MakeVarcharVector([]string{"MO      "}, nil, mp)
+			input.SetType(test.fromType)
+			defer input.Free(mp)
+			from := vector.GenerateFunctionStrParameter(input)
+			result := vector.NewFunctionResultWrapper(test.toType, mp).(*vector.FunctionResult[types.Varlena])
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, strToStr(context.Background(), nil, from, result, 1, test.toType, false, false, false, test.mode))
+
+			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+			require.False(t, null)
+			require.Equal(t, test.want, string(got))
+		})
+	}
+}
+
+func TestSetOperationCharCastPadsToCommonWidthOnlyWhenEnabled(t *testing.T) {
+	char4 := types.New(types.T_char, 4, 0)
+	char8 := types.New(types.T_char, 8, 0)
+
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+		want    []string
+	}{
+		{
+			name:    "pad char to full length",
+			sqlMode: "PAD_CHAR_TO_FULL_LENGTH",
+			want:    []string{"MO      ", "你好      "},
+		},
+		{
+			name:    "default mode preserves physical width",
+			sqlMode: "",
+			want:    []string{"MO  ", "你好  "},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				require.Equal(t, "sql_mode", name)
+				return tc.sqlMode, nil
+			})
+
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(char4, []string{"MO  ", "你好  "}, nil),
+					NewFunctionTestInput(char8, []string{}, nil),
+				},
+				NewFunctionTestResult(char8, false, tc.want, nil),
+				NewSetOperationCast,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
 		})
 	}
 }
@@ -3230,7 +3305,7 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	err := to.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false)
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false, castModeNormal)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }

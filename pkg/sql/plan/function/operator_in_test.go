@@ -56,6 +56,53 @@ func TestOperatorNotInNullableListUsesThreeValuedLogic(t *testing.T) {
 	require.True(t, ok, errInfo)
 }
 
+func TestOperatorCharInUsesPadSpaceKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	charType := types.New(types.T_char, 8, 0)
+
+	for _, test := range []struct {
+		name string
+		fn   fEvalFn
+		want []bool
+	}{
+		{name: "in", fn: newOpOperatorStrIn().operatorIn, want: []bool{true, false}},
+		{name: "not in", fn: newOpOperatorStrIn().operatorNotIn, want: []bool{false, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(charType, []string{"MO      ", "NO      "}, nil),
+					NewFunctionTestInput(charType, []string{"MO"}, nil),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.want, nil),
+				test.fn,
+			)
+
+			ok, errInfo := tc.Run()
+			require.True(t, ok, errInfo)
+		})
+	}
+}
+
+func TestOperatorCharBetweenUsesPadSpaceOrdering(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	charType := types.New(types.T_char, 8, 0)
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(charType, []string{"MO      ", "NZ      "}, nil),
+			NewFunctionTestInput(charType, []string{"MO", "MO"}, nil),
+			NewFunctionTestInput(charType, []string{"MO", "MZ"}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, nil),
+		betweenImpl,
+	)
+
+	ok, errInfo := tc.Run()
+	require.True(t, ok, errInfo)
+}
+
 func TestOperatorFixedInConstListUsesThreeValuedLogic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
