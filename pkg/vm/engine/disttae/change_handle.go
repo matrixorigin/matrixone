@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -277,32 +276,7 @@ func (h *PartitionChangesHandle) loadCheckpointEntries(
 ) {
 	ctxWithDeadline, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	response, err := RequestSnapshotRead(ctxWithDeadline, h.tbl, &from)
-	if err != nil {
-		return nil, types.MaxTs(), types.TS{}, err
-	}
-	minTS = types.MaxTs()
-	maxTS = types.TS{}
-	resp, ok := response.(*cmd_util.SnapshotReadResp)
-	if !ok || !resp.Succeed || len(resp.Entries) == 0 {
-		return nil, minTS, maxTS, nil
-	}
-	checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
-	for _, entry := range resp.Entries {
-		logutil.Debug("ChangesHandle-Split-CheckpointEntry", zap.String("entry", entry.String()))
-		start := types.TimestampToTS(*entry.Start)
-		end := types.TimestampToTS(*entry.End)
-		if start.LT(&minTS) {
-			minTS = start
-		}
-		if end.GT(&maxTS) {
-			maxTS = end
-		}
-		checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entry.EntryType))
-		checkpointEntry.SetLocation(entry.Location1, entry.Location2)
-		checkpointEntries = append(checkpointEntries, checkpointEntry)
-	}
-	return checkpointEntries, minTS, maxTS, nil
+	return requestSnapshotCheckpointEntries(ctxWithDeadline, h.tbl, &from)
 }
 
 func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end bool, err error) {

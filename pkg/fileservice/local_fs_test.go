@@ -438,6 +438,7 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 		nil,
 	)
 	assert.Nil(t, err)
+	defer fs.Close(ctx)
 
 	// prepare data
 	datas := make([][]byte, 0, n)
