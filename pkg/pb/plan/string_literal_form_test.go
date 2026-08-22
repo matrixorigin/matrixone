@@ -119,6 +119,43 @@ func TestRequiresMORPCVersion23StringLiterals(t *testing.T) {
 	}
 }
 
+func TestRequiresMORPCVersion25NumericPrefix(t *testing.T) {
+	prefixCast := &Expr{
+		Typ: Type{Id: 14, Charset: 255},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*Expr{{
+				Typ:  Type{Id: 61},
+				Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: "12.5tail"}}},
+			}},
+		}},
+	}
+	ordinaryCast := &Expr{
+		Typ: Type{Id: 14},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: prefixCast.GetF().Args,
+		}},
+	}
+
+	required, err := RequiresMORPCVersion25NumericPrefix(&struct{ Expr *Expr }{Expr: prefixCast})
+	require.NoError(t, err)
+	require.True(t, required)
+	nested := &Expr{
+		Typ: Type{Id: 14},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "coalesce"},
+			Args: []*Expr{ordinaryCast, prefixCast},
+		}},
+	}
+	required, err = RequiresMORPCVersion25NumericPrefix(&struct{ Expr *Expr }{Expr: nested})
+	require.NoError(t, err)
+	require.True(t, required)
+	required, err = RequiresMORPCVersion25NumericPrefix(&struct{ Expr *Expr }{Expr: ordinaryCast})
+	require.NoError(t, err)
+	require.False(t, required)
+}
+
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
 	textType := Type{Id: 61}
 	binaryType := Type{Id: 65}

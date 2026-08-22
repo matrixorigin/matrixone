@@ -218,8 +218,12 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
-	require.Equal(t, plan2.ParamValue{Value: "AB\x00\x00", IsBin: true}, cw.paramVals[0])
-	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false}, cw.paramVals[1])
+	require.Equal(t, plan2.ParamValue{
+		Value: "AB\x00\x00", IsBin: true, EnableNumericPrefix: true,
+	}, cw.paramVals[0])
+	require.Equal(t, plan2.ParamValue{
+		Value: "text", IsBin: false, EnableNumericPrefix: true,
+	}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
@@ -302,6 +306,31 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 		require.Equal(t, vector.PrepareParamNone, cw.proc.GetPrepareParamKind(i),
 			"parameter %d retained stale numeric metadata", i)
 	}
+}
+
+func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 112, "select ?")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, nil, true, cw.proc.Mp()))
+	cw.proc.SetPrepareParamsWithMeta(
+		params,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+
+	values, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0})
+	require.NoError(t, err)
+	require.Equal(t, []any{plan2.ParamValue{
+		IsBinaryProtocol:    true,
+		PrepareParamKind:    vector.PrepareParamDecimal,
+		EnableNumericPrefix: true,
+	}}, values)
 }
 
 func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
@@ -434,6 +463,126 @@ func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
 	require.Equal(t, value, vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0))
 	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
 	require.Equal(t, int32(types.T_text), originalProjectNode.ProjectList[0].Typ.Id)
+}
+
+func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 111, "select ?")
+	defer prepareStmt.Close()
+	decimalType := types.New(types.T_decimal64, 10, 2)
+	decimalPeer, parseErr := types.ParseDecimal64("1.25", decimalType.Width, decimalType.Scale)
+	require.NoError(t, parseErr)
+	commonExpr, bindErr := plan2.BindFuncExprImplByPlanExpr(context.Background(), "coalesce", []*plan.Expr{
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		},
+		{
+			Typ: plan.Type{Id: int32(decimalType.Oid), Width: decimalType.Width, Scale: decimalType.Scale},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: int64(decimalPeer)}},
+			}},
+		},
+	})
+	require.NoError(t, bindErr)
+	manualPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Headings: []string{"coalesce"},
+		Nodes: []*plan.Node{{
+			NodeType:    plan.Node_VALUE_SCAN,
+			ProjectList: []*plan.Expr{commonExpr},
+		}},
+	}}, IsPrepare: true}
+	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
+	cw.plan = manualPlan
+
+	require.NoError(t, ses.SetUserDefinedVar("numeric_text", "12.5tail", ""))
+	execCtx.input.isBinaryProtExecute = false
+	execPlan := &plan.Execute{
+		Name: prepareStmt.Name,
+		Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "numeric_text"}}}},
+	}
+	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	writer.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return nil, errors.New("SQL EXECUTE must not build binary-protocol column definitions")
+	}
+
+	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	require.Nil(t, retComp,
+		"the prepare-time compile cannot execute a common-type-specialized plan: plan=%s params=%#v",
+		runtimePlan.String(), cw.paramVals)
+	require.Same(t, sentinel, prepareStmt.compile, "specialization must not replace the cached compile")
+	require.NotSame(t, originalPlan, runtimePlan)
+	require.Len(t, cw.paramVals, 1)
+	paramValue, ok := cw.paramVals[0].(plan2.ParamValue)
+	require.True(t, ok)
+	require.False(t, paramValue.IsBinaryProtocol)
+	require.True(t, paramValue.EnableNumericPrefix)
+
+	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	project := projectNode.ProjectList[0]
+	require.True(t, types.T(project.Typ.Id).IsDecimal(), project.String())
+	requiresV25, scanErr := plan.RequiresMORPCVersion25NumericPrefix(project)
+	require.NoError(t, scanErr)
+	require.True(t, requiresV25, project.String())
+
+	executor, execErr := colexec.NewExpressionExecutor(cw.proc, project)
+	require.NoError(t, execErr)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	vec, evalErr := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, evalErr)
+	require.Equal(t, types.T_decimal64, vec.GetType().Oid)
+	want, parseErr := types.ParseDecimal64("12.50", project.Typ.Width, project.Typ.Scale)
+	require.NoError(t, parseErr)
+	require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0))
+
+	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
+	requiresV25, scanErr = plan.RequiresMORPCVersion25NumericPrefix(originalProjectNode.ProjectList[0])
+	require.NoError(t, scanErr)
+	require.False(t, requiresV25)
+}
+
+func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
+	ctx := context.Background()
+	floatType := types.T_float32.ToType()
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+		{
+			Typ:  plan.Type{Id: int32(floatType.Oid)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		},
+	})
+	require.NoError(t, err)
+	original := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType:   plan.Node_VALUE_SCAN,
+			FilterList: []*plan.Expr{predicate},
+		}},
+	}}, IsPrepare: true}
+
+	runtimePlan, specialized, applied, err := specializePreparedExecutionPlan(ctx, original, []any{
+		plan2.ParamValue{
+			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+		},
+	}, false)
+	require.NoError(t, err)
+	require.False(t, specialized)
+	require.False(t, applied)
+	require.Same(t, original, runtimePlan, "ineligible SQL EXECUTE must not deep-copy the cached plan")
 }
 
 func TestSQLVariablePrepareParamKind(t *testing.T) {
@@ -640,9 +789,13 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		vector.PrepareParamNone,
 	}, paramKinds)
 	require.Equal(t, []any{
-		plan2.ParamValue{Value: int64(10), IsBin: false, PrepareParamKind: vector.PrepareParamInteger},
-		plan2.ParamValue{Value: int64(20), IsBin: false, PrepareParamKind: vector.PrepareParamInteger},
-		plan2.ParamValue{Value: "session-binary", IsBin: true},
+		plan2.ParamValue{
+			Value: int64(10), IsBin: false, PrepareParamKind: vector.PrepareParamInteger, EnableNumericPrefix: true,
+		},
+		plan2.ParamValue{
+			Value: int64(20), IsBin: false, PrepareParamKind: vector.PrepareParamInteger, EnableNumericPrefix: true,
+		},
+		plan2.ParamValue{Value: "session-binary", IsBin: true, EnableNumericPrefix: true},
 	}, paramVals)
 	require.Equal(t, "10", params.GetStringAt(0))
 	require.Equal(t, "20", params.GetStringAt(1))
@@ -1124,6 +1277,8 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
 		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
 		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
+		{name: "numeric prefix upgrade", from: defines.MORPCVersion24, to: defines.MORPCVersion25},
+		{name: "numeric prefix rollback", from: defines.MORPCVersion25, to: defines.MORPCVersion24},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)

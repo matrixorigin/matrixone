@@ -19,6 +19,8 @@ import (
 	"context"
 	"reflect"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -410,6 +412,165 @@ type ResetParamRefRule struct {
 	// path used by FillValuesOfParamsInPlan callers.  COM_STMT values use the
 	// per-position map above instead of this broad fallback.
 	inferTextParamTypes bool
+	// numericPrefixParamPositions is populated only after the deployment-wide
+	// protocol reaches the version that understands Charset=255 numeric-prefix
+	// casts. The map remains per-position to keep unrelated text parameters in
+	// their ordinary string domains.
+	numericPrefixParamPositions map[int]bool
+	numericPrefixParamKinds     map[int]types.StringConversionKind
+	// numericPrefixDependent records rewritten expressions whose value domain
+	// was selected from an execute-time numeric-prefix parameter. The dependency
+	// propagates through binder-inserted casts so enclosing consumers can remove
+	// provisional prepare-time coercions and bind against the runtime domain.
+	numericPrefixDependent map[*plan.Expr]bool
+}
+
+// PreparedPlanNeedsNumericPrefixSpecialization reports whether a prepared plan
+// contains an eligible parameter in a decimal-aware common-type context. It is
+// a read-only O(plan expressions) eligibility check used before DeepCopyPlan on
+// SQL EXECUTE; COM_STMT keeps its broader runtime-type specialization path.
+func PreparedPlanNeedsNumericPrefixSpecialization(preparePlan *Plan, paramVals []any) bool {
+	if preparePlan == nil || len(paramVals) == 0 {
+		return false
+	}
+	positions := make(map[int]bool)
+	for i, value := range paramVals {
+		param, ok := value.(ParamValue)
+		if !ok || !param.EnableNumericPrefix {
+			continue
+		}
+		positions[i] = true
+	}
+	if len(positions) == 0 {
+		return false
+	}
+
+	required := false
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		if !required {
+			required = preparedExprNeedsNumericPrefixSpecialization(expr, positions)
+		}
+		return nil
+	})
+	return required
+}
+
+func preparedExprNeedsNumericPrefixSpecialization(
+	expr *plan.Expr,
+	positions map[int]bool,
+) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		// SQL EXECUTE is admitted only when the prepared expression already
+		// contains a static DECIMAL peer. A DECIMAL user-variable category alone
+		// must not pull an ordinary FLOAT comparison into runtime specialization.
+		// COM_STMT bypasses this eligibility scan and still uses runtime kinds
+		// while performing the actual rewrite.
+		if preparedNumericPrefixPositionContext(
+			exprImpl.F.Func.GetObjName(), exprImpl.F.Args, positions) {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if preparedExprNeedsNumericPrefixSpecialization(arg, positions) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			if preparedExprNeedsNumericPrefixSpecialization(item, positions) {
+				return true
+			}
+		}
+	case *plan.Expr_Lit:
+		return preparedExprNeedsNumericPrefixSpecialization(exprImpl.Lit.Src, positions)
+	case *plan.Expr_Sub:
+		return preparedExprNeedsNumericPrefixSpecialization(exprImpl.Sub.Child, positions)
+	case *plan.Expr_W:
+		window := exprImpl.W
+		if preparedExprNeedsNumericPrefixSpecialization(window.WindowFunc, positions) {
+			return true
+		}
+		for _, item := range window.PartitionBy {
+			if preparedExprNeedsNumericPrefixSpecialization(item, positions) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && preparedExprNeedsNumericPrefixSpecialization(order.Expr, positions) {
+				return true
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil && preparedExprNeedsNumericPrefixSpecialization(
+				window.Frame.Start.Val, positions) {
+				return true
+			}
+			if window.Frame.End != nil && preparedExprNeedsNumericPrefixSpecialization(
+				window.Frame.End.Val, positions) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedNumericPrefixPositionContext(
+	name string,
+	args []*plan.Expr,
+	positions map[int]bool,
+) bool {
+	switch name {
+	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
+	default:
+		return false
+	}
+
+	hasEligibleParam := false
+	hasDecimalPeer := false
+	hasCommonValueBoundary := false
+	numericArgCount := len(args)
+	if name == "in_range" && numericArgCount > 3 {
+		numericArgCount = 3
+	}
+	for i, arg := range args {
+		if i >= numericArgCount || arg == nil {
+			continue
+		}
+		pos, directEligible := preparedParamPosition(arg)
+		directEligible = directEligible && positions[pos]
+		source := unwrapPreparedImplicitCast(arg, directEligible)
+		if directEligible {
+			hasEligibleParam = true
+			continue
+		}
+		if source == nil {
+			continue
+		}
+		if list := source.GetList(); list != nil {
+			for _, item := range list.List {
+				itemPos, itemEligible := preparedParamPosition(item)
+				itemEligible = itemEligible && positions[itemPos]
+				item = unwrapPreparedImplicitCast(item, itemEligible)
+				if itemEligible {
+					hasEligibleParam = true
+				} else if item != nil && types.T(item.Typ.Id).IsDecimal() {
+					hasDecimalPeer = true
+				}
+			}
+			continue
+		}
+		if types.T(source.Typ.Id).IsDecimal() {
+			hasDecimalPeer = true
+		}
+		if isPreparedCommonValueFunction(name) &&
+			!preparedNumericCommonOperandType(types.T(source.Typ.Id)) {
+			hasCommonValueBoundary = true
+		}
+	}
+	return hasEligibleParam && hasDecimalPeer && !hasCommonValueBoundary
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -449,6 +610,21 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	return rewritten, nil
 }
 
+func (rule *ResetParamRefRule) markNumericPrefixDependent(exprs ...*plan.Expr) {
+	if rule.numericPrefixDependent == nil {
+		rule.numericPrefixDependent = make(map[*plan.Expr]bool)
+	}
+	for _, expr := range exprs {
+		if expr != nil {
+			rule.numericPrefixDependent[expr] = true
+		}
+	}
+}
+
+func (rule *ResetParamRefRule) isNumericPrefixDependent(expr *plan.Expr) bool {
+	return expr != nil && rule.numericPrefixDependent[expr]
+}
+
 func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
@@ -471,7 +647,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 		needResetFunction := false
 		compareArgTypes := false
+		numericPrefixDependent := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
+		numericPrefixArgs := make([]bool, len(exprImpl.F.Args))
+		numericPrefixKinds := make([]types.StringConversionKind, len(exprImpl.F.Args))
+		numericPrefixListArgs := make([][]bool, len(exprImpl.F.Args))
+		numericPrefixListKinds := make([][]types.StringConversionKind, len(exprImpl.F.Args))
 		for i, arg := range exprImpl.F.Args {
 			originalArgTyp := plan.Type{}
 			originalArgFuncObj := int64(0)
@@ -480,7 +661,27 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				originalArgFuncObj = preparedExprFunctionObj(arg)
 			}
 			implicitParamCast := isImplicitPreparedParamCast(arg)
-			paramPos, hasParamPos := implicitPreparedParamPosition(arg)
+			paramPos, hasParamPos := 0, false
+			if implicitParamCast {
+				paramPos, hasParamPos = implicitPreparedParamPosition(arg)
+			}
+			if directParam := arg.GetP(); directParam != nil {
+				paramPos, hasParamPos = int(directParam.Pos), directParam.Pos >= 0
+			}
+			if hasParamPos && rule.numericPrefixParamPositions[paramPos] {
+				numericPrefixArgs[i] = true
+				numericPrefixKinds[i] = rule.numericPrefixParamKinds[paramPos]
+			}
+			if list := arg.GetList(); list != nil {
+				numericPrefixListArgs[i] = make([]bool, len(list.List))
+				numericPrefixListKinds[i] = make([]types.StringConversionKind, len(list.List))
+				for itemIndex, item := range list.List {
+					if itemPos, ok := preparedParamPosition(item); ok && rule.numericPrefixParamPositions[itemPos] {
+						numericPrefixListArgs[i][itemIndex] = true
+						numericPrefixListKinds[i][itemIndex] = rule.numericPrefixParamKinds[itemPos]
+					}
+				}
+			}
 			if _, ok := arg.Expr.(*plan.Expr_P); ok && exprImpl.F.Func.GetObjName() != "cast" {
 				needResetFunction = true
 				compareArgTypes = true
@@ -499,6 +700,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
+			if rule.isNumericPrefixDependent(rewrittenArg) {
+				numericPrefixDependent = true
+				if unwrapped, changed := unwrapNumericPrefixDependentImplicitCast(rewrittenArg); changed {
+					boundArgs[i] = unwrapped
+					needResetFunction = true
+					compareArgTypes = true
+				}
+			}
 			if preparedExprBindingChanged(originalArgTyp, originalArgFuncObj, rewrittenArg) {
 				// A nested typed function may have changed overload/result domain
 				// after its parameter was rebound.  The enclosing function was
@@ -520,6 +729,37 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 		}
+		if numericPrefixDependent {
+			for i, arg := range boundArgs {
+				// A nested runtime common-type result invalidates provisional
+				// prepare-time casts on every sibling, not only on the dependent
+				// child. Rebind the enclosing consumer from numeric source domains
+				// so a DECIMAL peer is not left behind a FLOAT cast selected while
+				// the parameter marker was still TEXT.
+				unwrapped := unwrapPreparedImplicitCast(arg, false)
+				if unwrapped != arg {
+					boundArgs[i] = unwrapped
+					needResetFunction = true
+					compareArgTypes = true
+				}
+			}
+		}
+		if contextualArgs, changed, contextualErr := rule.preparedNumericPrefixArgs(
+			exprImpl.F.Func.GetObjName(), boundArgs,
+			numericPrefixArgs, numericPrefixKinds, numericPrefixListArgs, numericPrefixListKinds,
+		); contextualErr != nil {
+			return nil, contextualErr
+		} else if changed {
+			boundArgs = contextualArgs
+			needResetFunction = true
+			compareArgTypes = true
+			numericPrefixDependent = true
+			// A comparison can retain the same overload and outer argument
+			// types while its parameter is replaced by a numeric-prefix cast.
+			// The execution must still use this rewritten plan copy instead of
+			// falling back to the cached prepare-time template.
+			rule.specialized = true
+		}
 
 		// reset function
 		if needResetFunction {
@@ -539,11 +779,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
 				rule.specialized = true
 			}
+			if numericPrefixDependent && !isExplicitPreparedCast(e) {
+				rule.markNumericPrefixDependent(e, rewritten)
+			}
 			return rewritten, nil
+		}
+		if numericPrefixDependent && !isExplicitPreparedCast(e) {
+			rule.markNumericPrefixDependent(e)
 		}
 		return e, nil
 	case *plan.Expr_W:
-		return applyWindowExpr(e, rule.ApplyExpr)
+		rewritten, err := applyWindowExpr(e, rule.ApplyExpr)
+		if err == nil && windowHasNumericPrefixDependency(rewritten.GetW(), rule.isNumericPrefixDependent) {
+			rule.markNumericPrefixDependent(e, rewritten)
+		}
+		return rewritten, err
 	case *plan.Expr_P:
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
@@ -558,21 +808,495 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if param != nil && param.Typ.Id != int32(types.T_text) {
 			typ = param.Typ
 		}
-		return &plan.Expr{
+		rewritten := &plan.Expr{
 			Typ:  typ,
 			Expr: param.Expr,
-		}, nil
+		}
+		if rule.numericPrefixParamPositions[int(exprImpl.P.Pos)] {
+			rule.markNumericPrefixDependent(e, rewritten)
+		}
+		return rewritten, nil
 	case *plan.Expr_List:
+		dependent := false
 		for i, arg := range exprImpl.List.List {
 			exprImpl.List.List[i], err = rule.ApplyExpr(arg)
 			if err != nil {
 				return nil, err
 			}
+			dependent = dependent || rule.isNumericPrefixDependent(exprImpl.List.List[i])
+		}
+		if dependent {
+			rule.markNumericPrefixDependent(e)
 		}
 		return e, nil
 	default:
 		return e, nil
 	}
+}
+
+func (rule *ResetParamRefRule) preparedNumericPrefixArgs(
+	name string,
+	args []*plan.Expr,
+	prefixArgs []bool,
+	prefixKinds []types.StringConversionKind,
+	prefixListArgs [][]bool,
+	prefixListKinds [][]types.StringConversionKind,
+) ([]*plan.Expr, bool, error) {
+	if !preparedNumericPrefixContext(
+		name, args, prefixArgs, prefixKinds, prefixListArgs, prefixListKinds,
+	) {
+		return args, false, nil
+	}
+
+	numericArgCount := len(args)
+	if name == "in_range" && numericArgCount > 3 {
+		numericArgCount = 3
+	}
+	sources := make([]*plan.Expr, len(args))
+	for i, arg := range args {
+		eligibleArg := i < len(prefixArgs) && prefixArgs[i]
+		sources[i] = unwrapPreparedImplicitCast(arg, eligibleArg)
+	}
+
+	changed := false
+	for i := 0; i < numericArgCount; i++ {
+		if sources[i] == nil {
+			continue
+		}
+		if list := sources[i].GetList(); list != nil {
+			for itemIndex, item := range list.List {
+				originalItem := item
+				eligible := i < len(prefixListArgs) && itemIndex < len(prefixListArgs[i]) &&
+					prefixListArgs[i][itemIndex]
+				item = unwrapPreparedImplicitCast(item, eligible)
+				if !eligible {
+					list.List[itemIndex] = item
+					changed = changed || item != originalItem
+					continue
+				}
+				kind := types.StringConversionString
+				if i < len(prefixListKinds) && itemIndex < len(prefixListKinds[i]) {
+					kind = prefixListKinds[i][itemIndex]
+				}
+				cast, castChanged, err := rule.preparedNumericPrefixCast(item, kind)
+				if err != nil {
+					return nil, false, err
+				}
+				list.List[itemIndex] = cast
+				changed = changed || castChanged || item != originalItem
+			}
+			continue
+		}
+		if i >= len(prefixArgs) || !prefixArgs[i] || sources[i] == nil ||
+			!types.T(sources[i].Typ.Id).IsMySQLString() {
+			continue
+		}
+		kind := types.StringConversionString
+		if i < len(prefixKinds) {
+			kind = prefixKinds[i]
+		}
+		cast, castChanged, err := rule.preparedNumericPrefixCast(sources[i], kind)
+		if err != nil {
+			return nil, false, err
+		}
+		sources[i] = cast
+		changed = changed || castChanged
+	}
+	normalized, commonTypeChanged, err := rule.normalizePreparedNumericCommonArgs(name, sources)
+	if err != nil {
+		return nil, false, err
+	}
+	sources = normalized
+	changed = changed || commonTypeChanged
+	if !changed {
+		return args, false, nil
+	}
+	return sources, true, nil
+}
+
+func preparedNumericPrefixContext(
+	name string,
+	args []*plan.Expr,
+	prefixArgs []bool,
+	prefixKinds []types.StringConversionKind,
+	prefixListArgs [][]bool,
+	prefixListKinds [][]types.StringConversionKind,
+) bool {
+	switch name {
+	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
+	default:
+		return false
+	}
+
+	sources := make([]*plan.Expr, len(args))
+	hasEligibleParam := false
+	hasDecimalPeer := false
+	hasCommonValueBoundary := false
+	numericArgCount := len(args)
+	if name == "in_range" && numericArgCount > 3 {
+		numericArgCount = 3
+	}
+	for i, arg := range args {
+		eligibleArg := i < len(prefixArgs) && prefixArgs[i]
+		sources[i] = unwrapPreparedImplicitCast(arg, eligibleArg)
+		if i >= numericArgCount {
+			continue
+		}
+		if eligibleArg {
+			hasEligibleParam = true
+			if (sources[i] != nil && types.T(sources[i].Typ.Id).IsDecimal()) ||
+				(i < len(prefixKinds) && prefixKinds[i] == types.StringConversionDecimal) {
+				hasDecimalPeer = true
+			}
+			continue
+		}
+		if sources[i] == nil {
+			continue
+		}
+		if list := sources[i].GetList(); list != nil {
+			for itemIndex, item := range list.List {
+				eligible := i < len(prefixListArgs) && itemIndex < len(prefixListArgs[i]) &&
+					prefixListArgs[i][itemIndex]
+				item = unwrapPreparedImplicitCast(item, eligible)
+				if eligible {
+					hasEligibleParam = true
+					if (item != nil && types.T(item.Typ.Id).IsDecimal()) ||
+						(i < len(prefixListKinds) && itemIndex < len(prefixListKinds[i]) &&
+							prefixListKinds[i][itemIndex] == types.StringConversionDecimal) {
+						hasDecimalPeer = true
+					}
+				} else if item != nil && types.T(item.Typ.Id).IsDecimal() {
+					hasDecimalPeer = true
+				}
+			}
+			continue
+		}
+		if types.T(sources[i].Typ.Id).IsDecimal() {
+			hasDecimalPeer = true
+		}
+		if isPreparedCommonValueFunction(name) &&
+			!preparedNumericCommonOperandType(types.T(sources[i].Typ.Id)) {
+			hasCommonValueBoundary = true
+		}
+	}
+	if !hasEligibleParam || !hasDecimalPeer || hasCommonValueBoundary {
+		return false
+	}
+	return true
+}
+
+func isPreparedCommonValueFunction(name string) bool {
+	return name == "coalesce" || name == "greatest" || name == "least"
+}
+
+func preparedNumericCommonOperandType(oid types.T) bool {
+	return oid == types.T_any || oid == types.T_bool || oid == types.T_bit || oid == types.T_year ||
+		oid.IsInteger() || oid.IsFloat() || oid.IsDecimal()
+}
+
+func (rule *ResetParamRefRule) normalizePreparedNumericCommonArgs(
+	name string,
+	args []*plan.Expr,
+) ([]*plan.Expr, bool, error) {
+	numericArgCount := len(args)
+	if name == "in_range" && numericArgCount > 3 {
+		numericArgCount = 3
+	}
+	operands := make([]*plan.Expr, 0, numericArgCount)
+	for i := 0; i < numericArgCount; i++ {
+		if args[i] == nil {
+			return args, false, nil
+		}
+		if list := args[i].GetList(); list != nil {
+			operands = append(operands, list.List...)
+			continue
+		}
+		operands = append(operands, args[i])
+	}
+	target, ok := preparedNumericCommonType(operands)
+	if !ok {
+		return args, false, nil
+	}
+
+	changed := false
+	for i := 0; i < numericArgCount; i++ {
+		if list := args[i].GetList(); list != nil {
+			for itemIndex, item := range list.List {
+				cast, castChanged, err := castPreparedNumericCommonExpr(rule.ctx, item, target)
+				if err != nil {
+					return nil, false, err
+				}
+				list.List[itemIndex] = cast
+				changed = changed || castChanged
+			}
+			continue
+		}
+		cast, castChanged, err := castPreparedNumericCommonExpr(rule.ctx, args[i], target)
+		if err != nil {
+			return nil, false, err
+		}
+		args[i] = cast
+		changed = changed || castChanged
+	}
+	return args, changed, nil
+}
+
+func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
+	hasDecimal := false
+	hasFloat := false
+	maxIntegralWidth := int32(0)
+	maxScale := int32(0)
+	for _, operand := range operands {
+		if operand == nil {
+			return types.Type{}, false
+		}
+		typ := makeTypeByPlan2Expr(operand)
+		switch {
+		case typ.Oid == types.T_any:
+			continue
+		case typ.Oid.IsFloat():
+			hasFloat = true
+		case typ.Oid.IsDecimal():
+			hasDecimal = true
+			width := typ.Width
+			if width <= 0 {
+				width = typ.Oid.ToType().Width
+			}
+			scale := typ.Scale
+			if scale < 0 {
+				scale = 0
+			}
+			maxIntegralWidth = max(maxIntegralWidth, max(width-scale, int32(0)))
+			maxScale = max(maxScale, scale)
+		case typ.Oid.IsInteger(), typ.Oid == types.T_bit, typ.Oid == types.T_bool, typ.Oid == types.T_year:
+			maxIntegralWidth = max(maxIntegralWidth, preparedIntegerIntegralWidth(typ.Oid))
+		default:
+			return types.Type{}, false
+		}
+	}
+	if !hasDecimal {
+		return types.Type{}, false
+	}
+	if hasFloat {
+		return types.T_float64.ToType(), true
+	}
+	width := maxIntegralWidth + maxScale
+	if width < 1 {
+		width = 1
+	}
+	switch {
+	case width <= types.T_decimal64.ToType().Width:
+		return types.New(types.T_decimal64, width, maxScale), true
+	case width <= types.T_decimal128.ToType().Width:
+		return types.New(types.T_decimal128, width, maxScale), true
+	case width <= types.T_decimal256.ToType().Width:
+		return types.New(types.T_decimal256, width, maxScale), true
+	default:
+		return types.T_float64.ToType(), true
+	}
+}
+
+func preparedIntegerIntegralWidth(oid types.T) int32 {
+	switch oid {
+	case types.T_bool:
+		return 1
+	case types.T_bit, types.T_uint64:
+		return 20
+	case types.T_year:
+		return 4
+	case types.T_int8, types.T_uint8:
+		return 3
+	case types.T_int16, types.T_uint16:
+		return 5
+	case types.T_int32, types.T_uint32:
+		return 10
+	case types.T_int64:
+		return 19
+	default:
+		return 0
+	}
+}
+
+func castPreparedNumericCommonExpr(
+	ctx context.Context,
+	expr *plan.Expr,
+	target types.Type,
+) (*plan.Expr, bool, error) {
+	if expr == nil {
+		return nil, false, nil
+	}
+	source := makeTypeByPlan2Expr(expr)
+	if source.Oid == types.T_bool {
+		bridge := types.T_uint8.ToType()
+		var err error
+		expr, err = makePlan2CastExpr(ctx, expr, makePlan2Type(&bridge))
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	before := expr.Typ
+	cast, err := makePlan2CastExpr(ctx, expr, makePlan2Type(&target))
+	if err != nil {
+		return nil, false, err
+	}
+	return cast, cast != expr || !reflect.DeepEqual(before, cast.Typ), nil
+}
+
+func (rule *ResetParamRefRule) preparedNumericPrefixCast(
+	expr *plan.Expr,
+	kind types.StringConversionKind,
+) (*plan.Expr, bool, error) {
+	if expr == nil {
+		return expr, false, nil
+	}
+	literal := expr.GetLit()
+	if types.T(expr.Typ.Id) == types.T_bool && literal != nil && !literal.Isnull {
+		value := uint8(0)
+		if literal.GetBval() {
+			value = 1
+		}
+		return makePlan2Uint8ConstExprWithType(value), true, nil
+	}
+	if !types.T(expr.Typ.Id).IsMySQLString() {
+		return expr, false, nil
+	}
+	if literal == nil {
+		return expr, false, nil
+	}
+	if !literal.Isnull {
+		var runtimeType types.Type
+		switch kind {
+		case types.StringConversionBoolean:
+			value, err := strconv.ParseBool(strings.TrimSpace(literal.GetSval()))
+			if err == nil {
+				if value {
+					return makePlan2Uint8ConstExprWithType(1), true, nil
+				}
+				return makePlan2Uint8ConstExprWithType(0), true, nil
+			}
+		case types.StringConversionInteger:
+			if inferred, ok := PreparedRuntimeTypeFromString(literal.GetSval()); ok && inferred.Oid.IsInteger() {
+				runtimeType = inferred
+			}
+		case types.StringConversionFloat:
+			runtimeType = types.T_float64.ToType()
+		case types.StringConversionDecimal:
+			runtimeType = PreparedNumericPrefixTypeFromString(literal.GetSval())
+		}
+		if runtimeType.Oid != types.T_any {
+			materialized, err := preparedRuntimeParamExpr(rule.ctx, literal.GetSval(), literal.IsBin, runtimeType)
+			return materialized, err == nil, err
+		}
+	}
+	target := types.New(types.T_decimal64, 1, 0)
+	if !literal.Isnull {
+		target = PreparedNumericPrefixTypeFromString(literal.GetSval())
+	}
+	if target.IsDecimal() {
+		target.Charset = 255
+	}
+	cast, err := makePlan2CastExpr(rule.ctx, expr, makePlan2Type(&target))
+	return cast, err == nil, err
+}
+
+func preparedParamPosition(expr *plan.Expr) (int, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		return int(param.Pos), true
+	}
+	if !isImplicitPreparedParamCast(expr) {
+		return 0, false
+	}
+	return implicitPreparedParamPosition(expr)
+}
+
+func unwrapPreparedImplicitCast(expr *plan.Expr, eligible bool) *plan.Expr {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			return expr
+		}
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			return expr
+		}
+		if !eligible {
+			source := makeTypeByPlan2Expr(fn.Args[0])
+			// Prepare-time binding can provisionally coerce a numeric peer to
+			// TEXT or FLOAT because the marker is still TEXT. Recover the peer's
+			// semantic source domain before deriving the execute-time common type.
+			// Preserve the opposite string-to-numeric direction: decimal literals
+			// are represented by exactly such an implicit cast.
+			if !preparedNumericCommonOperandType(source.Oid) {
+				return expr
+			}
+		}
+		expr = fn.Args[0]
+	}
+	return nil
+}
+
+func unwrapNumericPrefixDependentImplicitCast(expr *plan.Expr) (*plan.Expr, bool) {
+	current := expr
+	changed := false
+	for current != nil {
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			break
+		}
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			break
+		}
+		current = fn.Args[0]
+		changed = true
+	}
+	return current, changed
+}
+
+func isExplicitPreparedCast(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" {
+		return false
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	return overload != 0
+}
+
+func windowHasNumericPrefixDependency(
+	window *plan.WindowSpec,
+	dependent func(*plan.Expr) bool,
+) bool {
+	if window == nil {
+		return false
+	}
+	if dependent(window.WindowFunc) {
+		return true
+	}
+	for _, expr := range window.PartitionBy {
+		if dependent(expr) {
+			return true
+		}
+	}
+	for _, order := range window.OrderBy {
+		if order != nil && dependent(order.Expr) {
+			return true
+		}
+	}
+	if window.Frame != nil {
+		if window.Frame.Start != nil && dependent(window.Frame.Start.Val) {
+			return true
+		}
+		if window.Frame.End != nil && dependent(window.Frame.End.Val) {
+			return true
+		}
+	}
+	return false
 }
 
 func preparedExprFunctionObj(expr *plan.Expr) int64 {
@@ -621,24 +1345,40 @@ func functionBindingChanged(
 // resolution around a parameter marker. Explicit CAST(? AS ...) uses a
 // separate cast overload and must remain authoritative.
 func isImplicitPreparedParamCast(expr *plan.Expr) bool {
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 || fn.Args[0].GetP() == nil {
-		return false
-	}
-	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-	return overload == 0
+	_, ok := implicitPreparedParam(expr)
+	return ok
 }
 
 func implicitPreparedParamPosition(expr *plan.Expr) (int, bool) {
-	fn := expr.GetF()
-	if fn == nil || len(fn.Args) == 0 {
-		return 0, false
-	}
-	param := fn.Args[0].GetP()
-	if param == nil || param.Pos < 0 {
+	param, ok := implicitPreparedParam(expr)
+	if !ok {
 		return 0, false
 	}
 	return int(param.Pos), true
+}
+
+// implicitPreparedParam follows only binder-inserted cast overloads. IN list
+// normalization can legitimately stack several of them around a marker; an
+// explicit CAST in any layer remains a hard boundary.
+func implicitPreparedParam(expr *plan.Expr) (*plan.ParamRef, bool) {
+	current := expr
+	seenCast := false
+	for current != nil {
+		if param := current.GetP(); param != nil {
+			return param, seenCast && param.Pos >= 0
+		}
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			return nil, false
+		}
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			return nil, false
+		}
+		seenCast = true
+		current = fn.Args[0]
+	}
+	return nil, false
 }
 
 // unwrapImplicitPreparedParamCast strips a provisional overload cast only when
