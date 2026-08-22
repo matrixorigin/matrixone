@@ -2165,7 +2165,7 @@ scalar_view_ctas  ¦  scalar_rv  ¦  YES  𝄀
 view_full  ¦  l_id  ¦  YES  𝄀
 view_full  ¦  lv  ¦  YES  𝄀
 view_full  ¦  r_id  ¦  YES  𝄀
-view_full  ¦  rv  ¦  YES
+view_full  ¦  rv  ¦  YES  𝄀
 drop database ctas_null_extension_26828;
 drop database if exists ctas_auto_increment_24436;
 create database ctas_auto_increment_24436;
@@ -2175,12 +2175,12 @@ insert into source_ai(payload) values ('one'), ('two');
 create table target_ctas as select id, payload from source_ai;
 select count(*) from information_schema.columns
 where table_schema = database() and table_name = 'source_ai'
-and column_name = 'id' and extra = 'auto_increment';
+  and column_name = 'id' and extra = 'auto_increment';
 ➤ count(*)[-5,64,0]  𝄀
 1
 select count(*) from information_schema.columns
 where table_schema = database() and table_name = 'target_ctas'
-and column_name = 'id' and extra = 'auto_increment';
+  and column_name = 'id' and extra = 'auto_increment';
 ➤ count(*)[-5,64,0]  𝄀
 0
 drop database ctas_auto_increment_24436;
