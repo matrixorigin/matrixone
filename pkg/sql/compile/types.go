@@ -325,6 +325,14 @@ type Compile struct {
 	schedulingAttempt     schedule.TraceAttemptID
 	// ast
 	stmt tree.Statement
+	// foundRowsOwnerNode is the final result node allowed to publish the
+	// SQL_CALC_FOUND_ROWS count. Nested LIMIT/OFFSET nodes are not owners.
+	foundRowsOwnerNode *plan.Node
+	// materializedSQLSelectLimitOwner is the exact final-result node on which
+	// materializeSQLSelectLimit temporarily installed the session row cap.
+	// Keeping its identity avoids inferring top-level ownership from arbitrary
+	// LIMIT/OFFSET nodes introduced by nested queries or optimizer rewrites.
+	materializedSQLSelectLimitOwner *plan.Node
 
 	counterSet *perfcounter.CounterSet
 

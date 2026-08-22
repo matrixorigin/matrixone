@@ -273,6 +273,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*limit.Limit)
 		op := limit.NewArgument()
 		op.LimitExpr = t.LimitExpr
+		op.WithFoundRows(t.IsFoundRowsOwner())
+		op.WithFoundRowsDrain(t.DrainsForFoundRows())
 		op.SetInfo(&info)
 		return op
 
@@ -280,6 +282,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*offset.Offset)
 		op := offset.NewArgument()
 		op.OffsetExpr = t.OffsetExpr
+		op.WithFoundRows(t.IsFoundRowsOwner())
 		op.SetInfo(&info)
 		return op
 	case vm.Order:

@@ -75,9 +75,11 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 		paginationLimit, paginationOffset = sortNode.Limit, sortNode.Offset
 	}
 	internalLimit, internalOffset := paginationLimit, paginationOffset
-	if sortNode != nil {
+	if sortNode != nil || builder.sqlCalcFoundRows {
 		// The fulltext function returns relevance order. It is not safe to
 		// truncate that stream before an explicit sort on another expression.
+		// SQL_CALC_FOUND_ROWS likewise needs the complete stream before its
+		// top-level pagination owner runs on the coordinator.
 		internalLimit, internalOffset = nil, nil
 	}
 
@@ -188,12 +190,16 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			})
 		}
 
+		sortLimit, sortOffset := paginationLimit, paginationOffset
+		if builder.sqlCalcFoundRows {
+			sortLimit, sortOffset = nil, nil
+		}
 		sortByID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_SORT,
 			Children: []int32{idxID},
 			OrderBy:  orderByScore,
-			Limit:    DeepCopyExpr(paginationLimit),
-			Offset:   DeepCopyExpr(paginationOffset),
+			Limit:    DeepCopyExpr(sortLimit),
+			Offset:   DeepCopyExpr(sortOffset),
 			SpillMem: builder.sortSpillMem,
 		}, ctx)
 
@@ -416,10 +422,8 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// top-relevance candidates: `where sc < 0.05 limit 1` would cap the stream to its single
 	// highest-scoring document and then reject it, returning nothing while qualifying rows sit
 	// just below the cap.
-	var limitExpr *plan.Expr
-	if len(scanNode.FilterList) == 0 && len(wrappedMatchFilters) == 0 && len(ft_filters) == 1 {
-		limitExpr, _ = buildCandidateLimit(paginationLimit, paginationOffset)
-	}
+	limitExpr := builder.buildFullTextCandidateLimit(
+		scanNode, wrappedMatchFilters, ft_filters, paginationLimit, paginationOffset)
 
 	// buildFullTextIndexScan
 	var last_node_id int32
@@ -906,6 +910,21 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, served, nil
 }
 
+func (builder *QueryBuilder) buildFullTextCandidateLimit(
+	scanNode *plan.Node,
+	wrappedMatchFilters []*plan.Expr,
+	fullTextFilters []*plan.Expr,
+	paginationLimit *plan.Expr,
+	paginationOffset *plan.Expr,
+) *plan.Expr {
+	if builder.sqlCalcFoundRows || scanNode == nil || len(scanNode.FilterList) != 0 ||
+		len(wrappedMatchFilters) != 0 || len(fullTextFilters) != 1 {
+		return nil
+	}
+	limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
+	return limit
+}
+
 // tryApplyCoveredFulltext2 implements the covered fast path (Phase 6): a fully-covered
 // projection over a SINGLE fulltext2 index WITH include columns drops the base-table JOIN
 // and reads pk/score/include-cols straight from the fulltext2_search TVF. It returns
@@ -1097,12 +1116,16 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 		sortNode.Limit = DeepCopyExpr(paginationLimit)
 		sortNode.Offset = DeepCopyExpr(paginationOffset)
 	} else {
+		sortLimit, sortOffset := paginationLimit, paginationOffset
+		if builder.sqlCalcFoundRows {
+			sortLimit, sortOffset = nil, nil
+		}
 		sortByID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_SORT,
 			Children: []int32{ftnodeID},
 			OrderBy:  scoreOrderBy,
-			Limit:    DeepCopyExpr(paginationLimit),
-			Offset:   DeepCopyExpr(paginationOffset),
+			Limit:    DeepCopyExpr(sortLimit),
+			Offset:   DeepCopyExpr(sortOffset),
 			SpillMem: builder.sortSpillMem,
 		}, ctx)
 		projNode.Children[0] = sortByID

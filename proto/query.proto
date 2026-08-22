@@ -576,6 +576,7 @@ message MigrateConnFromResponse {
   // True only when the exporting CN verified that no prepared statement owns
   // COM_STMT_SEND_LONG_DATA buffers omitted from the migration payload.
   bool PreparedStmtLongDataChecked = 14;
+  uint64 FoundRows = 15;
 }
 
 message MigrateConnToRequest {
@@ -594,6 +595,7 @@ message MigrateConnToRequest {
   // next migration hop.
   bool UserDefinedVarsReplayable = 11;
   bool SystemVariablesReplayable = 12;
+  uint64 FoundRows = 13;
 }
 
 message MigrateUserDefinedVar {

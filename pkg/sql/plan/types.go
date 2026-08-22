@@ -404,6 +404,9 @@ type QueryBuilder struct {
 	sortSpillMem int64
 
 	optimizerHints *OptimizerHints
+	// sqlCalcFoundRows disables limit pushdown that would otherwise stop a
+	// source before the complete result count can be observed.
+	sqlCalcFoundRows bool
 
 	// optimizationHistory records key optimization steps for debugging remap errors
 	// Only records when optimizations actually change the plan structure

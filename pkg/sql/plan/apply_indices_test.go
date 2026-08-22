@@ -636,6 +636,20 @@ func TestIndexHintOrderScopeSelectsCoveringIndexWithoutFilter(t *testing.T) {
 	require.NotEqual(t, "idx_a", findFirstIndexScanName(queryPlan))
 }
 
+func TestForceIndexForOrderSQLCalcFoundRowsSkipsOrderedLimit(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t,
+		"select sql_calc_found_rows a from index_hint_t force index for order by(idx_a) where a = 1 order by a limit 1")
+	require.NoError(t, err)
+	indexScan := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "idx_a", indexScan.IndexScanInfo.IndexName)
+	require.NotEmpty(t, indexScan.OrderBy)
+	require.Nil(t, indexScan.IndexReaderParam)
+}
+
 func TestIndexHintOrderScopeKeepsFloatSortLogical(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -5201,6 +5215,31 @@ func TestFullTextCandidateLimitIncludesOffset(t *testing.T) {
 	require.Nil(t, scan.Offset)
 }
 
+func TestFullTextCandidateLimitSQLCalcFoundRowsKeepsCompleteStream(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+	builder.sqlCalcFoundRows = true
+	scan := builder.qry.Nodes[leftScanID]
+	scan.Limit = makePlan2Uint64ConstExprWithType(10)
+	scan.Offset = makePlan2Uint64ConstExprWithType(5)
+
+	newID, changed, err := builder.applyFullTextFiltersForScanInJoin(
+		joinID,
+		scan,
+		map[[2]int32]int{},
+		map[[2]int32]*planpb.Expr{},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	functions := collectFullTextFunctionScans(builder, newID)
+	require.Len(t, functions, 1)
+	require.Nil(t, functions[0].Limit,
+		"the full-text TVF must not truncate candidates before FOUND_ROWS counting")
+	require.Equal(t, uint64(10), builder.qry.Nodes[newID].Limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(5), builder.qry.Nodes[newID].Offset.GetLit().GetU64Val())
+	require.Nil(t, scan.Limit)
+	require.Nil(t, scan.Offset)
+}
+
 func TestFullTextDoesNotLimitIndependentIntersectionInputs(t *testing.T) {
 	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
 	scan := builder.qry.Nodes[leftScanID]
@@ -5916,6 +5955,39 @@ func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrder(t *testi
 	assert.Equal(t, int32(100), hiddenKeyProjectCol.RelPos)
 	assert.Equal(t, int32(0), hiddenKeyProjectCol.ColPos)
 	assert.Equal(t, "id", builder.nameByColRef[[2]int32{200, 1}])
+}
+
+func TestApplyIndicesForProjectSQLCalcFoundRowsSkipsOrderedLimit(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexProjectBuilder(
+		t,
+		2,
+		GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 100, 1),
+		planpb.OrderBySpec_DESC,
+	)
+	builder.sqlCalcFoundRows = true
+
+	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[2]
+	require.Len(t, scanNode.OrderBy, 1)
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Nil(t, scanNode.IndexReaderParam)
+}
+
+func TestHandleMessageFromTopToScanSQLCalcFoundRowsSkipsOrderedLimit(t *testing.T) {
+	builder, rootNodeID := makeTestRegularIndexMessageBuilder(t, 2, 1, planpb.OrderBySpec_DESC)
+	builder.sqlCalcFoundRows = true
+
+	builder.handleMessageFromTopToScan(rootNodeID)
+
+	scanNode := builder.qry.Nodes[0]
+	sortNode := builder.qry.Nodes[1]
+	require.Len(t, sortNode.SendMsgList, 1)
+	require.Len(t, scanNode.RecvMsgList, 1)
+	require.Len(t, scanNode.OrderBy, 1)
+	require.Nil(t, scanNode.IndexReaderParam)
 }
 
 func TestApplyIndicesForProjectPushesTopValueThroughRegularIndexPKOrderAsc(t *testing.T) {

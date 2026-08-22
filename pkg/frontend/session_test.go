@@ -703,6 +703,7 @@ func TestSession_Migrate(t *testing.T) {
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
 			DB:                      "d1",
 			LastAffectedRows:        7,
+			FoundRows:               11,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{
 				{
@@ -738,6 +739,8 @@ func TestSession_Migrate(t *testing.T) {
 		}
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
+		assert.Equal(t, uint64(11), s.GetLastFoundRows())
+		assert.Equal(t, uint64(11), s.GetProc().GetFoundRows())
 
 		execCtx := defines.AttachAccountId(context.Background(), sysAccountID)
 		ec := &ExecCtx{reqCtx: execCtx, ses: s}

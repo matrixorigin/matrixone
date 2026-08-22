@@ -1,0 +1,246 @@
+drop database if exists found_rows_regression;
+create database found_rows_regression;
+use found_rows_regression;
+create table t(id bigint);
+insert into t select result from generate_series(1, 100000, 1) g;
+select sql_calc_found_rows id from t where id <= 3 order by id;
+id
+1
+2
+3
+select found_rows() as calc_without_limit;
+calc_without_limit
+3
+select sql_calc_found_rows id from t limit 0;
+id
+select found_rows() as after_zero;
+after_zero
+100000
+select sql_calc_found_rows id from t order by id limit 2;
+id
+1
+2
+select found_rows() as after_parallel;
+after_parallel
+100000
+select sql_calc_found_rows id from t order by id limit 2 offset 10;
+id
+11
+12
+select found_rows() as after_offset;
+after_offset
+100000
+select sql_calc_found_rows id from t where id < 0 limit 1;
+id
+select found_rows() as after_empty;
+after_empty
+0
+select sql_calc_found_rows *
+from (select id from t order by id limit 5) d
+where id <= 3
+limit 1;
+id
+1
+select found_rows() as after_derived_limit;
+after_derived_limit
+3
+with d as (select id from t order by id limit 7)
+select sql_calc_found_rows * from d where id <= 4 limit 1;
+id
+1
+select found_rows() as after_cte_limit;
+after_cte_limit
+4
+select sql_calc_found_rows *
+from (select id from t order by id limit 5) d;
+id
+1
+2
+3
+4
+5
+select found_rows() as after_derived_only_limit;
+after_derived_only_limit
+5
+with d as (select id from t order by id limit 7)
+select sql_calc_found_rows * from d;
+id
+1
+2
+3
+4
+5
+6
+7
+select found_rows() as after_cte_only_limit;
+after_cte_only_limit
+7
+prepare ps_found_rows from 'select sql_calc_found_rows id from t order by id limit 1';
+execute ps_found_rows;
+id
+1
+select found_rows() as after_prepared_first;
+after_prepared_first
+100000
+execute ps_found_rows;
+id
+1
+select found_rows() as after_prepared_second;
+after_prepared_second
+100000
+deallocate prepare ps_found_rows;
+prepare ps_nested_found_rows from 'select sql_calc_found_rows * from (select id from t order by id limit 5) d where id <= 3 limit 1';
+execute ps_nested_found_rows;
+id
+1
+select found_rows() as after_nested_prepared_first;
+after_nested_prepared_first
+3
+execute ps_nested_found_rows;
+id
+1
+select found_rows() as after_nested_prepared_second;
+after_nested_prepared_second
+3
+deallocate prepare ps_nested_found_rows;
+create table indexed_t(id bigint primary key, grp int, index idx_grp(grp));
+insert into indexed_t values (1, 1), (2, 1), (3, 1), (4, 2);
+select sql_calc_found_rows id from indexed_t where grp = 1 order by id limit 1;
+id
+1
+select found_rows() as after_ordered_index;
+after_ordered_index
+3
+select sql_calc_found_rows id from t where id <= 3 limit 1;
+id
+1
+select found_rows(), id from t where id <= 3 order by id;
+found_rows()	id
+3	1
+3	2
+3	3
+set sql_select_limit = 1;
+select sql_calc_found_rows id from t where id <= 3 order by id;
+id
+1
+select found_rows() as after_sql_select_limit;
+after_sql_select_limit
+3
+select sql_calc_found_rows * from (select id from t order by id limit 5) d;
+id
+1
+select found_rows() as after_nested_sql_select_limit;
+after_nested_sql_select_limit
+5
+prepare ps_session_limit from 'select sql_calc_found_rows id from t where id <= 3 order by id';
+execute ps_session_limit;
+id
+1
+select found_rows() as after_prepared_sql_select_limit;
+after_prepared_sql_select_limit
+3
+execute ps_session_limit;
+id
+1
+select found_rows() as after_prepared_sql_select_limit_second;
+after_prepared_sql_select_limit_second
+3
+deallocate prepare ps_session_limit;
+prepare ps_nested_session_limit from 'select sql_calc_found_rows * from (select id from t order by id limit 5) d';
+execute ps_nested_session_limit;
+id
+1
+select found_rows() as after_nested_session_limit_first;
+after_nested_session_limit_first
+5
+execute ps_nested_session_limit;
+id
+1
+select found_rows() as after_nested_session_limit_second;
+after_nested_session_limit_second
+5
+deallocate prepare ps_nested_session_limit;
+prepare ps_offset_session_limit from 'select sql_calc_found_rows id from t where id <= 5 order by id offset 2';
+execute ps_offset_session_limit;
+id
+3
+select found_rows() as after_offset_session_limit_first;
+after_offset_session_limit_first
+5
+execute ps_offset_session_limit;
+id
+3
+select found_rows() as after_offset_session_limit_second;
+after_offset_session_limit_second
+5
+set sql_select_limit = 0;
+execute ps_offset_session_limit;
+select found_rows() as after_offset_session_limit_zero limit 1;
+after_offset_session_limit_zero
+5
+set sql_select_limit = 18446744073709551615;
+execute ps_offset_session_limit;
+id
+3
+4
+5
+select found_rows() as after_offset_session_limit_unlimited;
+after_offset_session_limit_unlimited
+5
+set sql_select_limit = 1;
+execute ps_offset_session_limit;
+id
+3
+select found_rows() as after_offset_session_limit_restored;
+after_offset_session_limit_restored
+5
+deallocate prepare ps_offset_session_limit;
+set sql_select_limit = 18446744073709551615;
+select id from t order by id limit 2;
+id
+1
+2
+select found_rows() as after_plain;
+after_plain
+2
+select id from t where id <= 3 order by id;
+id
+1
+2
+3
+select found_rows() as plain_without_limit;
+plain_without_limit
+3
+select id from t order by id limit 2;
+id
+1
+2
+create table status_does_not_replace_found_rows(id int);
+select found_rows() as after_status;
+after_status
+2
+select sql_calc_found_rows id from t where id <= 5 order by id limit 1;
+id
+1
+set @found_rows_literal = 1;
+select found_rows() as after_set_literal;
+after_set_literal
+5
+select sql_calc_found_rows id from t where id <= 5 order by id limit 1;
+id
+1
+set @found_rows_subquery = (select 1);
+select found_rows() as after_set_subquery;
+after_set_subquery
+5
+select id from t order by id limit 2;
+id
+1
+2
+select * from missing_found_rows_table;
+-- @regex("does not exist", true)
+SQL parser error: table "missing_found_rows_table" does not exist
+select found_rows() as after_error;
+after_error
+2
+drop database found_rows_regression;
