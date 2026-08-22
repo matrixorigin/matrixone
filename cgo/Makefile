@@ -70,14 +70,14 @@ endif
 
 all: $(TARGET_LIB) libmo.a
 
-$(TARGET_LIB): Makefile $(LIB_PREREQS)
+$(TARGET_LIB): $(LIB_PREREQS)
 ifeq ($(MO_CL_CUDA),1)
-	$(CC) -o $@ $(OBJS) $(CUDA_OBJS) cuvs/*.o $(LDFLAGS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(CUDA_OBJS) cuvs/*.o
 else
-	$(CC) -o $@ $(OBJS) $(LDFLAGS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJS)
 endif
 
-libmo.a: Makefile $(LIB_PREREQS)
+libmo.a: $(LIB_PREREQS)
 ifeq ($(MO_CL_CUDA),1)
 	ar -rcs $@ $(OBJS) $(CUDA_OBJS) cuvs/*.o
 else

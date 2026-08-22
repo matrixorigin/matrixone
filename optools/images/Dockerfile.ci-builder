@@ -49,20 +49,17 @@ RUN make build
 
 # Warm the UT compile flavors without running any test: -exec /bin/true
 # replaces test-binary execution and -vet=off keeps vet findings out of the
-# nightly warm (PR CI runs vet itself). cgo/lib.go is the single source of
-# truth for libmo's native dependency closure, matching optools/run_ut.sh and
-# the deterministic CGo wrapper. The absolute paths only key the few cgo
-# packages, which PR runners recompile anyway — everything else is
-# content-addressed and hits the cache from any workspace path. Soft-fail on
-# purpose: a partial warm still speeds PR CI up, and PR CI never depends on
-# these layers for correctness.
+# nightly warm (PR CI runs vet itself). The CGO_* values mirror
+# optools/run_ut.sh; their absolute paths only key the few cgo packages,
+# which PR runners recompile anyway — everything else is content-addressed
+# and hits the cache from any workspace path. Soft-fail on purpose: a
+# partial warm still speeds PR CI up, and PR CI never depends on these
+# layers for correctness.
 #
 # Flavor 1: race + matrixone_test, as optools/run_ut.sh compiles for the UT
 # job in ci.yaml.
-RUN cgo_native_ldflags="$(go list -mod=readonly -f '{{join .CgoLDFLAGS " "}}' ./cgo)" && \
-    test -n "${cgo_native_ldflags}" && \
-    if CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
-      CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo ${cgo_native_ldflags}" \
+RUN if CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
+      CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
       go test -mod=readonly -short -race -tags matrixone_test -vet=off -exec /bin/true ./...; then \
       echo "warm-race=ok" >> /mo-prebuilt/warm-status; \
     else \
@@ -73,12 +70,10 @@ RUN cgo_native_ldflags="$(go list -mod=readonly -f '{{join .CgoLDFLAGS " "}}' ./
 # Flavor 2: covermode=set with the full coverpkg list, exactly as
 # coverage-ut.yaml compiles (the coverpkg value is part of the compile key,
 # so the package-list filter must match that workflow verbatim).
-RUN cgo_native_ldflags="$(go list -mod=readonly -f '{{join .CgoLDFLAGS " "}}' ./cgo)" && \
-    test -n "${cgo_native_ldflags}" && \
-    if cover_scope=$(go list -mod=readonly ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog') && \
+RUN if cover_scope=$(go list -mod=readonly ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog') && \
       cover_pkgs=$(printf '%s\n' "${cover_scope}" | paste -sd, -) && \
       CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
-      CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo ${cgo_native_ldflags}" \
+      CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
       go test -mod=readonly -short -tags matrixone_test -vet=off -exec /bin/true \
         -covermode=set -coverpkg="${cover_pkgs}" ${cover_scope}; then \
       echo "warm-coverage=ok" >> /mo-prebuilt/warm-status; \
