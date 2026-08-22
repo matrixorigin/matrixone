@@ -610,7 +610,7 @@ func CheckTableDefChange(catalogCache *cache.CatalogCache, tblKey *cache.TableCh
 	if catalogCache == nil {
 		return false
 	}
-	return catalogCache.HasNewerVersion(tblKey)
+	return catalogCache.HasNewerVersionFor(tblKey, cache.CatalogInvalidationConsumerPreparedPlan)
 }
 
 func preparePlanNeedsRebuild(schemaChanged, modeMismatch, protocolMismatch bool) bool {
@@ -789,6 +789,7 @@ func initExecuteStmtParamWithResolverInSession(
 	currentDDLVersion := owner.getDDLVersion()
 	change := prepareStmt.tempTableVersion != currentTempTableVersion ||
 		prepareStmt.ddlVersion != currentDDLVersion
+	schemaChanged := false
 	var preparedMetadataTS timestamp.Timestamp
 	if catalogCache != nil {
 		preparedMetadataTS = catalogCache.GetPreparedMetadataTS()
@@ -818,17 +819,19 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		accountId := prepareSchemaAccountID(owner.GetAccountId(), obj)
 		tblKey := &cache.TableChangeQuery{
-			AccountId:    accountId,
-			DatabaseId:   uint64(obj.Db),
-			DatabaseName: obj.SchemaName,
-			Name:         obj.ObjName,
-			Version:      uint32(obj.Server),
-			TableId:      uint64(obj.Obj),
-			Ts:           prepareStmt.Ts,
+			AccountId:          accountId,
+			DatabaseId:         uint64(obj.Db),
+			DatabaseName:       obj.SchemaName,
+			ShadowDatabaseName: obj.SchemaName,
+			Name:               obj.ObjName,
+			Version:            uint32(obj.Server),
+			TableId:            uint64(obj.Obj),
+			Ts:                 prepareStmt.Ts,
 		}
 
 		if CheckTableDefChange(catalogCache, tblKey) {
 			change = true
+			schemaChanged = true
 			break
 		}
 	}
@@ -856,10 +859,22 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
 	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive
+	var catalogRebuildStart time.Time
+	var catalogRebuildPending bool
+	catalogRebuildSuccess := false
+	defer func() {
+		if catalogRebuildPending && catalogCache != nil {
+			catalogCache.RecordPreparedPlanRebuild(time.Since(catalogRebuildStart), catalogRebuildSuccess)
+		}
+	}()
 
 	// Rebuild the plan when catalog schema, session temporary-table name
 	// resolution, FK-check state, protocol, or compatibility mode changed.
 	if needRebuild {
+		if schemaChanged && catalogCache != nil {
+			catalogRebuildStart = time.Now()
+			catalogRebuildPending = true
+		}
 		newPlan, err := rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
 		if err != nil {
 			return nil, nil, nil, "", false, err
@@ -1056,6 +1071,9 @@ func initExecuteStmtParamWithResolverInSession(
 	executionStmt, owned, err := freshPreparedCloneStatement(reqCtx, prepareStmt)
 	if err != nil {
 		return nil, nil, nil, "", false, err
+	}
+	if catalogRebuildPending {
+		catalogRebuildSuccess = true
 	}
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
 }

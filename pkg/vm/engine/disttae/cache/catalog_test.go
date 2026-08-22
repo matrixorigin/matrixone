@@ -389,11 +389,16 @@ func TestDatabaseCache(t *testing.T) {
 func TestTableInsert(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()
+	cc.EnableCatalogInvalidationAttribution()
 	bat := newTestTableBatch(mp)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
 	names := vector.InefficientMustStrCol(bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
+	databaseNames := vector.InefficientMustStrCol(bat.GetVector(catalog.MO_TABLES_RELDATABASE_IDX + MO_OFF))
+	ids := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(catalog.MO_TABLES_REL_ID_IDX + MO_OFF))
 	databaseIds := vector.MustFixedColWithTypeCheck[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
+	versions := vector.MustFixedColWithTypeCheck[uint32](bat.GetVector(catalog.MO_TABLES_VERSION_IDX + MO_OFF))
+	originalTimestamp := timestamps[0]
 
 	cstrs := vector.MustFixedColWithTypeCheck[types.Varlena](bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
 	partitioned := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
@@ -434,6 +439,12 @@ func TestTableInsert(t *testing.T) {
 		delBat.Vecs[2] = bat.Vecs[catalog.MO_TABLES_CPKEY_IDX+MO_OFF]
 		cc.DeleteTable(delBat)
 	}
+	deleteQuery := &TableChangeQuery{
+		AccountId: accounts[0], DatabaseId: databaseIds[0], DatabaseName: databaseNames[0],
+		Name: names[0], TableId: ids[0], Version: versions[0], Ts: originalTimestamp.ToTimestamp(),
+	}
+	require.True(t, cc.hasNewerVersion(deleteQuery))
+	require.True(t, cc.attribution.preciseDecision(deleteQuery), "DeleteTable tombstone must retain database identity")
 
 	{ // set the query time
 		for i := range timestamps {

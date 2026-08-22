@@ -55,7 +55,19 @@ func NewCatalog() *CatalogCache {
 			end   types.TS
 		}{start: types.MaxTs()},
 	}
+	if catalogInvalidationAttributionEnabledFromEnv() {
+		cc.attribution = newCatalogInvalidationAttribution()
+	}
 	return cc
+}
+
+// EnableCatalogInvalidationAttribution enables the opt-in experiment for a
+// catalog created by a unit or integration harness. Production callers should
+// use MO_CATALOG_INVALIDATION_ATTRIBUTION=1 at process initialization.
+func (cc *CatalogCache) EnableCatalogInvalidationAttribution() {
+	if cc.attribution == nil {
+		cc.attribution = newCatalogInvalidationAttribution()
+	}
 }
 
 func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
@@ -101,6 +113,11 @@ type GCReport struct {
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 	cc.gcMu.Lock()
 	defer cc.gcMu.Unlock()
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 
 	/*
 							GC
@@ -407,22 +424,33 @@ func (cc *CatalogCache) GetPreparedMetadataTS() timestamp.Timestamp {
 }
 
 func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
+	return cc.hasNewerVersion(qry)
+}
+
+// HasNewerVersionFor keeps the exact production decision while recording
+// bucket and precise-shadow decisions when attribution is explicitly enabled.
+func (cc *CatalogCache) HasNewerVersionFor(qry *TableChangeQuery, consumer CatalogInvalidationConsumer) bool {
+	if cc.attribution == nil {
+		return cc.hasNewerVersion(qry)
+	}
+	startGeneration, startActive := cc.attribution.mutationSnapshot()
+	exact := cc.hasNewerVersion(qry)
+	shadowQuery := *qry
+	if shadowQuery.ShadowDatabaseName != "" {
+		shadowQuery.DatabaseName = shadowQuery.ShadowDatabaseName
+	}
+	bucket := cc.bucketHasNewerVersion(&shadowQuery)
+	precise := cc.attribution.preciseDecision(&shadowQuery)
+	endGeneration, endActive := cc.attribution.mutationSnapshot()
+	stable := startActive == 0 && endActive == 0 && startGeneration == endGeneration
+	cc.attribution.recordDecision(consumer, exact, bucket, precise, stable)
+	return exact
+}
+
+func (cc *CatalogCache) hasNewerVersion(qry *TableChangeQuery) bool {
 	var find bool
 	if qry.DatabaseName != "" {
-		key := &DatabaseItem{
-			AccountId: qry.AccountId,
-			Name:      qry.DatabaseName,
-			Ts:        types.MaxTs().ToTimestamp(),
-		}
-		cc.databases.data.Ascend(key, func(item *DatabaseItem) bool {
-			if item.AccountId != qry.AccountId || item.Name != qry.DatabaseName {
-				return false
-			}
-			if item.Ts.Greater(qry.Ts) && (item.deleted || item.Id != qry.DatabaseId) {
-				find = true
-			}
-			return false
-		})
+		find = cc.hasNewerDatabase(qry)
 		if find {
 			return true
 		}
@@ -440,12 +468,36 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		return false
 	}
 
+	return cc.hasNewerTable(qry)
+}
+
+func (cc *CatalogCache) hasNewerDatabase(qry *TableChangeQuery) bool {
+	key := &DatabaseItem{
+		AccountId: qry.AccountId,
+		Name:      qry.DatabaseName,
+		Ts:        types.MaxTs().ToTimestamp(),
+	}
+	var find bool
+	cc.databases.data.Ascend(key, func(item *DatabaseItem) bool {
+		if item.AccountId != qry.AccountId || item.Name != qry.DatabaseName {
+			return false
+		}
+		if item.Ts.Greater(qry.Ts) && (item.deleted || item.Id != qry.DatabaseId) {
+			find = true
+		}
+		return false
+	})
+	return find
+}
+
+func (cc *CatalogCache) hasNewerTable(qry *TableChangeQuery) bool {
 	key := &TableItem{
 		AccountId:  qry.AccountId,
 		DatabaseId: qry.DatabaseId,
 		Name:       qry.Name,
 		Ts:         types.MaxTs().ToTimestamp(), // get the latest version
 	}
+	var find bool
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
 		if item.AccountId != qry.AccountId || item.DatabaseId != qry.DatabaseId || item.Name != qry.Name {
 			return false
@@ -459,6 +511,25 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		return false
 	})
 	return find
+}
+
+func (cc *CatalogCache) bucketHasNewerVersion(qry *TableChangeQuery) bool {
+	if qry.DatabaseName != "" && cc.hasNewerDatabase(qry) {
+		return true
+	}
+	if qry.Name == "" {
+		if qry.DatabaseId == 0 {
+			cc.tableChange.RLock()
+			latest := cc.tableChange.byAccount[tableChangeBucket(qry.AccountId)]
+			cc.tableChange.RUnlock()
+			return latest.Greater(qry.Ts)
+		}
+		return false
+	}
+	cc.tableChange.RLock()
+	latest := cc.tableChange.byAccount[tableChangeBucket(qry.AccountId)]
+	cc.tableChange.RUnlock()
+	return latest.Greater(qry.Ts)
 }
 
 func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
@@ -483,6 +554,11 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 	cc.tableChange.Lock()
 	defer cc.tableChange.Unlock()
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 
 	cpks := bat.GetVector(MO_OFF + 0)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
@@ -490,13 +566,14 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 		pk := cpks.GetBytesAt(i)
 		cc.tables.cpkeyIndex.Ascend(&TableItem{CPKey: pk, Ts: ts.ToTimestamp()}, func(item *TableItem) bool {
 			newItem := &TableItem{
-				deleted:    true,
-				Id:         item.Id,
-				Name:       item.Name,
-				CPKey:      append([]byte{}, item.CPKey...),
-				AccountId:  item.AccountId,
-				DatabaseId: item.DatabaseId,
-				Ts:         ts.ToTimestamp(),
+				deleted:      true,
+				Id:           item.Id,
+				Name:         item.Name,
+				DatabaseName: item.DatabaseName,
+				CPKey:        append([]byte{}, item.CPKey...),
+				AccountId:    item.AccountId,
+				DatabaseId:   item.DatabaseId,
+				Ts:           ts.ToTimestamp(),
 			}
 			cc.setTableItemLocked(newItem, false)
 			return false
@@ -505,6 +582,11 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 	cpks := bat.GetVector(MO_OFF + 0)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
@@ -522,6 +604,9 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 				Ts:        ts.ToTimestamp(),
 			}
 			cc.databases.data.Set(newItem)
+			if cc.attribution != nil {
+				cc.attribution.observeDatabase(newItem.AccountId, newItem.Name, newItem.Id, newItem.Ts, true)
+			}
 			return false
 		})
 	}
@@ -576,6 +661,11 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	cc.tableChange.Lock()
 	defer cc.tableChange.Unlock()
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 
 	ParseTablesBatchAnd(bat, func(item *TableItem) {
 		cc.setTableItemLocked(item, true)
@@ -585,6 +675,11 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 func (cc *CatalogCache) setTableItem(item *TableItem, updateCPKey bool) {
 	cc.tableChange.Lock()
 	defer cc.tableChange.Unlock()
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 
 	cc.setTableItemLocked(item, updateCPKey)
 }
@@ -597,6 +692,12 @@ func (cc *CatalogCache) setTableItemLocked(item *TableItem, updateCPKey bool) {
 	bucket := tableChangeBucket(item.AccountId)
 	if latest := cc.tableChange.byAccount[bucket]; item.Ts.Greater(latest) {
 		cc.tableChange.byAccount[bucket] = item.Ts
+	}
+	if cc.attribution != nil {
+		cc.attribution.observeTable(
+			item.AccountId, item.DatabaseId, item.DatabaseName, item.Name,
+			item.Id, item.Version, item.Ts, item.deleted,
+		)
 	}
 }
 
@@ -701,9 +802,17 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 }
 
 func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
+	var endMutation func()
+	if cc.attribution != nil {
+		endMutation = cc.attribution.beginMutation()
+		defer endMutation()
+	}
 	ParseDatabaseBatchAnd(bat, func(item *DatabaseItem) {
 		cc.databases.data.Set(item)
 		cc.databases.cpkeyIndex.Set(item)
+		if cc.attribution != nil {
+			cc.attribution.observeDatabase(item.AccountId, item.Name, item.Id, item.Ts, false)
+		}
 	})
 }
 

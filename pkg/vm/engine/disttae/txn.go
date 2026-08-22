@@ -2640,6 +2640,20 @@ func (txn *Transaction) getCachedTable(
 	return txn.getCachedTableByKey(ctx, k, k)
 }
 
+func (txn *Transaction) finishCatalogReload(key tableKey, outcome cache.CatalogInvalidationOutcome) {
+	invalidations := txn.catalogInvalidations.Load()
+	if invalidations == nil {
+		return
+	}
+	started, ok := invalidations.LoadAndDelete(key)
+	if !ok {
+		return
+	}
+	if catalogCache := txn.engine.GetLatestCatalogCache(); catalogCache != nil {
+		catalogCache.RecordRCTableCacheReload(time.Since(started.(time.Time)), outcome)
+	}
+}
+
 func (txn *Transaction) getCachedTableByKey(
 	_ context.Context,
 	k tableKey,
@@ -2656,15 +2670,31 @@ func (txn *Transaction) getCachedTableByKey(
 
 		catalogCache := txn.engine.GetLatestCatalogCache()
 		tblKey := &cache.TableChangeQuery{
-			AccountId:  k.accountId,
-			DatabaseId: k.databaseId,
-			Name:       k.name,
-			Version:    tbl.origin.version,
-			TableId:    tbl.origin.tableId,
-			Ts:         tbl.origin.lastTS,
+			AccountId:          k.accountId,
+			DatabaseId:         k.databaseId,
+			ShadowDatabaseName: k.dbName,
+			Name:               k.name,
+			Version:            tbl.origin.version,
+			TableId:            tbl.origin.tableId,
+			Ts:                 tbl.origin.lastTS,
 		}
-		if catalogCache.HasNewerVersion(tblKey) {
-			txn.tableCache.Delete(genTableKey(k.accountId, k.name, k.databaseId, k.dbName))
+		if catalogCache.HasNewerVersionFor(tblKey, cache.CatalogInvalidationConsumerRCTableCache) {
+			cacheKey := genTableKey(k.accountId, k.name, k.databaseId, k.dbName)
+			txn.tableCache.Delete(cacheKey)
+			if catalogCache.CatalogInvalidationAttributionEnabled() {
+				invalidations := txn.catalogInvalidations.Load()
+				if invalidations == nil {
+					candidate := new(sync.Map)
+					if txn.catalogInvalidations.CompareAndSwap(nil, candidate) {
+						invalidations = candidate
+					} else {
+						invalidations = txn.catalogInvalidations.Load()
+					}
+				}
+				if invalidations != nil {
+					invalidations.Store(cacheKey, time.Now())
+				}
+			}
 			return nil
 		}
 	}
@@ -2892,6 +2922,20 @@ func (txn *Transaction) delTransaction() {
 	txn.assertWorkspaceAccountingLocked()
 
 	txn.tableCache = nil
+	// An invalidated RC cache entry may survive until transaction teardown when
+	// relation reload is abandoned by rollback/cancellation. Close every
+	// pending attribution window exactly once before dropping the map; the
+	// production cache lifecycle remains unchanged when attribution is off.
+	if invalidations := txn.catalogInvalidations.Load(); invalidations != nil {
+		invalidations.Range(func(key, _ any) bool {
+			tableKey, ok := key.(tableKey)
+			if ok {
+				txn.finishCatalogReload(tableKey, cache.CatalogInvalidationError)
+			}
+			return true
+		})
+	}
+	txn.catalogInvalidations.Store(nil)
 	txn.tableOps = nil
 	txn.databaseOps = nil
 

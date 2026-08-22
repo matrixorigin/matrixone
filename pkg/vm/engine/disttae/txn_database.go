@@ -142,9 +142,11 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 		txn.engine,
 	)
 	if err != nil {
+		txn.finishCatalogReload(key, cache.CatalogInvalidationError)
 		return nil, err
 	}
 	if item == nil {
+		txn.finishCatalogReload(key, cache.CatalogInvalidationMiss)
 		return nil, nil
 	}
 
@@ -154,10 +156,12 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 		*item,
 	)
 	if err != nil {
+		txn.finishCatalogReload(key, cache.CatalogInvalidationError)
 		return nil, err
 	}
 
 	db.getTxn().tableCache.Store(key, tbl)
+	txn.finishCatalogReload(key, cache.CatalogInvalidationSuccess)
 	return tbl, nil
 }
 

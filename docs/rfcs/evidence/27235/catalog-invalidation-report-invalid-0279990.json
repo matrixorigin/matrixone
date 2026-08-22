@@ -1,0 +1,577 @@
+{
+  "schema_version": 2,
+  "matrixone_sha": "8c147612cb0723e1cd90638aa0ab21503a4ab1a2",
+  "config": "pkg/embed:1log-1tn-2cn;exact-authoritative",
+  "window_start_utc": "2026-08-21T09:43:32.650385Z",
+  "window_end_utc": "2026-08-21T09:43:59.030503Z",
+  "integrity": "invalidated",
+  "invalidated_reason": "Superseded after semantic review found RC exact-query drift, missing DeleteTable database identity, global-only scenario evidence, early prepared terminal recording, and unbound measurement SHA.",
+  "nodes": [
+    {
+      "service_id": "0-cn-21001",
+      "report": {
+        "schema_version": 2,
+        "enabled": true,
+        "metadata": {
+          "matrixone_sha": "8c147612cb0723e1cd90638aa0ab21503a4ab1a2",
+          "config": "pkg/embed:1log-1tn-2cn;exact-authoritative",
+          "window": "2026-08-21T09:43:32.650385Z/2026-08-21T09:43:59.030503Z",
+          "integrity": "complete"
+        },
+        "consumers": {
+          "prepared_plan": {
+            "checks": 268,
+            "stable_checks": 268,
+            "inconclusive_checks": 0,
+            "invalidations": 255,
+            "bucket_invalidations": 255,
+            "precise_invalidations": 255,
+            "bucket_false_positives": 0,
+            "bucket_false_negatives": 0,
+            "precise_false_positives": 0,
+            "precise_false_negatives": 0
+          },
+          "rc_table_cache": {
+            "checks": 6534,
+            "stable_checks": 6534,
+            "inconclusive_checks": 0,
+            "invalidations": 128,
+            "bucket_invalidations": 128,
+            "precise_invalidations": 128,
+            "bucket_false_positives": 0,
+            "bucket_false_negatives": 0,
+            "precise_false_positives": 0,
+            "precise_false_negatives": 0
+          }
+        },
+        "events": {
+          "database_delete": 3,
+          "database_insert": 10,
+          "table_delete": 394,
+          "table_upsert": 558
+        },
+        "prepared_plan_rebuild": {
+          "count": 255,
+          "successes": 255,
+          "errors": 0,
+          "misses": 0,
+          "p50_ns": 250000,
+          "p95_ns": 500000,
+          "p99_ns": 500000,
+          "buckets": [
+            {
+              "upper_bound_ns": 1000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 25000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 50000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000,
+              "count": 74
+            },
+            {
+              "upper_bound_ns": 250000,
+              "count": 162
+            },
+            {
+              "upper_bound_ns": 500000,
+              "count": 18
+            },
+            {
+              "upper_bound_ns": 1000000,
+              "count": 1
+            },
+            {
+              "upper_bound_ns": 5000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": -1,
+              "count": 0
+            }
+          ]
+        },
+        "rc_table_cache_reload": {
+          "count": 128,
+          "successes": 128,
+          "errors": 0,
+          "misses": 0,
+          "p50_ns": 5000,
+          "p95_ns": 10000,
+          "p99_ns": 10000,
+          "buckets": [
+            {
+              "upper_bound_ns": 1000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000,
+              "count": 110
+            },
+            {
+              "upper_bound_ns": 10000,
+              "count": 16
+            },
+            {
+              "upper_bound_ns": 25000,
+              "count": 2
+            },
+            {
+              "upper_bound_ns": 50000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 250000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 500000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 1000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": -1,
+              "count": 0
+            }
+          ]
+        },
+        "shadow": {
+          "accounts": 1,
+          "database_entries": 9,
+          "table_entries": 178,
+          "overflow": false,
+          "estimated_retained_bytes": 13290
+        }
+      }
+    },
+    {
+      "service_id": "1-cn-21001",
+      "report": {
+        "schema_version": 2,
+        "enabled": true,
+        "metadata": {
+          "matrixone_sha": "8c147612cb0723e1cd90638aa0ab21503a4ab1a2",
+          "config": "pkg/embed:1log-1tn-2cn;exact-authoritative",
+          "window": "2026-08-21T09:43:32.650385Z/2026-08-21T09:43:59.030503Z",
+          "integrity": "complete"
+        },
+        "consumers": {
+          "prepared_plan": {
+            "checks": 12,
+            "stable_checks": 12,
+            "inconclusive_checks": 0,
+            "invalidations": 0,
+            "bucket_invalidations": 0,
+            "precise_invalidations": 0,
+            "bucket_false_positives": 0,
+            "bucket_false_negatives": 0,
+            "precise_false_positives": 0,
+            "precise_false_negatives": 0
+          },
+          "rc_table_cache": {
+            "checks": 80890,
+            "stable_checks": 80890,
+            "inconclusive_checks": 0,
+            "invalidations": 0,
+            "bucket_invalidations": 6,
+            "precise_invalidations": 0,
+            "bucket_false_positives": 6,
+            "bucket_false_negatives": 0,
+            "precise_false_positives": 0,
+            "precise_false_negatives": 0
+          }
+        },
+        "events": {
+          "database_delete": 3,
+          "database_insert": 10,
+          "table_delete": 394,
+          "table_upsert": 558
+        },
+        "prepared_plan_rebuild": {
+          "count": 0,
+          "successes": 0,
+          "errors": 0,
+          "misses": 0,
+          "p50_ns": 0,
+          "p95_ns": 0,
+          "p99_ns": 0,
+          "buckets": [
+            {
+              "upper_bound_ns": 1000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 25000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 50000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 250000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 500000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 1000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": -1,
+              "count": 0
+            }
+          ]
+        },
+        "rc_table_cache_reload": {
+          "count": 0,
+          "successes": 0,
+          "errors": 0,
+          "misses": 0,
+          "p50_ns": 0,
+          "p95_ns": 0,
+          "p99_ns": 0,
+          "buckets": [
+            {
+              "upper_bound_ns": 1000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 25000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 50000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 250000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 500000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 1000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 5000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 10000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": 100000000,
+              "count": 0
+            },
+            {
+              "upper_bound_ns": -1,
+              "count": 0
+            }
+          ]
+        },
+        "shadow": {
+          "accounts": 1,
+          "database_entries": 9,
+          "table_entries": 178,
+          "overflow": false,
+          "estimated_retained_bytes": 13290
+        }
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "prepared_schema_rebuild",
+      "ddl_type": "alter",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "protocol": "binary-and-text-prepare",
+      "stable_terminal_samples": 128,
+      "status": "completed"
+    },
+    {
+      "name": "rc_table_cache_reload",
+      "ddl_type": "alter",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "protocol": "read-committed",
+      "stable_terminal_samples": 128,
+      "status": "completed"
+    },
+    {
+      "name": "same_account_unrelated_ddl",
+      "ddl_type": "alter-unrelated",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "stable_terminal_samples": 128,
+      "status": "completed"
+    },
+    {
+      "name": "no_change",
+      "ddl_type": "none",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "none",
+      "stable_terminal_samples": 1,
+      "status": "completed"
+    },
+    {
+      "name": "truncate",
+      "ddl_type": "truncate",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "stable_terminal_samples": 1,
+      "status": "completed"
+    },
+    {
+      "name": "rename",
+      "ddl_type": "rename",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "stable_terminal_samples": 1,
+      "status": "completed"
+    },
+    {
+      "name": "table_drop_recreate",
+      "ddl_type": "drop-recreate",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "stable_terminal_samples": 1,
+      "status": "completed"
+    },
+    {
+      "name": "database_drop_recreate",
+      "ddl_type": "database-drop-recreate",
+      "consumer_cn": "cn-0",
+      "ddl_cn": "cn-1",
+      "stable_terminal_samples": 1,
+      "status": "completed"
+    }
+  ],
+  "prepared_plan_rebuild": {
+    "count": 255,
+    "successes": 255,
+    "errors": 0,
+    "misses": 0,
+    "p50_ns": 250000,
+    "p95_ns": 500000,
+    "p99_ns": 500000,
+    "buckets": [
+      {
+        "upper_bound_ns": 1000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 5000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 10000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 25000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 50000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 100000,
+        "count": 74
+      },
+      {
+        "upper_bound_ns": 250000,
+        "count": 162
+      },
+      {
+        "upper_bound_ns": 500000,
+        "count": 18
+      },
+      {
+        "upper_bound_ns": 1000000,
+        "count": 1
+      },
+      {
+        "upper_bound_ns": 5000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 10000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 100000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": -1,
+        "count": 0
+      }
+    ]
+  },
+  "rc_table_cache_reload": {
+    "count": 128,
+    "successes": 128,
+    "errors": 0,
+    "misses": 0,
+    "p50_ns": 5000,
+    "p95_ns": 10000,
+    "p99_ns": 10000,
+    "buckets": [
+      {
+        "upper_bound_ns": 1000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 5000,
+        "count": 110
+      },
+      {
+        "upper_bound_ns": 10000,
+        "count": 16
+      },
+      {
+        "upper_bound_ns": 25000,
+        "count": 2
+      },
+      {
+        "upper_bound_ns": 50000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 100000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 250000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 500000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 1000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 5000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 10000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": 100000000,
+        "count": 0
+      },
+      {
+        "upper_bound_ns": -1,
+        "count": 0
+      }
+    ]
+  },
+  "decision_totals": {
+    "prepared_plan.bucket_false_negatives": 0,
+    "prepared_plan.bucket_false_positives": 0,
+    "prepared_plan.checks": 280,
+    "prepared_plan.inconclusive_checks": 0,
+    "prepared_plan.precise_false_negatives": 0,
+    "prepared_plan.precise_false_positives": 0,
+    "prepared_plan.stable_checks": 280,
+    "rc_table_cache.bucket_false_negatives": 0,
+    "rc_table_cache.bucket_false_positives": 6,
+    "rc_table_cache.checks": 87424,
+    "rc_table_cache.inconclusive_checks": 0,
+    "rc_table_cache.precise_false_negatives": 0,
+    "rc_table_cache.precise_false_positives": 0,
+    "rc_table_cache.stable_checks": 87424
+  }
+}
