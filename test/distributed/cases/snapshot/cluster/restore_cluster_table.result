@@ -462,6 +462,8 @@ mo_user_defined_function
 mo_user_grant
 mo_variables
 mo_version
+mo_view_dependencies
+mo_view_refresh
 t1
 t3
 drop database t1;
@@ -590,6 +592,8 @@ mo_user_defined_function
 mo_user_grant
 mo_variables
 mo_version
+mo_view_dependencies
+mo_view_refresh
 t1
 drop table if exists t1;
 drop table if exists t3;

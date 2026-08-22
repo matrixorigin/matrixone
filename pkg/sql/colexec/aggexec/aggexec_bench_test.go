@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -752,4 +753,122 @@ func TestDecimal256Overflow(t *testing.T) {
 		}
 	}
 	exec.Free()
+}
+
+func BenchmarkAccountedMedianRetainedInput(b *testing.B) {
+	const rows = 64 << 10
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < rows; i++ {
+		if err := vector.AppendFixed(input, int64(rows-i), false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	defer input.Free(mp)
+	vectors := []*vector.Vector{input}
+	groups := make([]uint64, hashmap.UnitLimit)
+	for i := range groups {
+		groups[i] = 1
+	}
+
+	for _, tc := range []struct {
+		name          string
+		accounted     bool
+		indexedLegacy bool
+		finalize      bool
+	}{
+		{name: "pre-accounting-ingest"},
+		{name: "append-only-ingest", accounted: true},
+		{name: "indexed-baseline", accounted: true, indexedLegacy: true},
+		{name: "pre-accounting-end-to-end", finalize: true},
+		{name: "append-only-end-to-end", accounted: true, finalize: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+			if err != nil {
+				b.Fatal(err)
+			}
+			account, err := registry.Open(128 << 20)
+			if err != nil {
+				b.Fatal(err)
+			}
+			allocation, err := NewAllocationAccount(
+				account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+					VectorData: 1, VectorArea: 2, VectorNulls: 3,
+					VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.SetBytes(rows * 8)
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				var agg AggFuncExec
+				var err error
+				if tc.accounted {
+					agg, err = MakeSingleGroupAgg(
+						mp, AggIdOfMedian, false, nil, nil, types.T_int64.ToType())
+				} else {
+					agg, err = MakeAgg(
+						mp, AggIdOfMedian, false, types.T_int64.ToType())
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+				median := agg.(*medianColumnNumericExec[int64])
+				owner := agg.(AllocationAccountOwner)
+				if tc.accounted {
+					if err = owner.SetAllocationAccount(allocation); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if tc.indexedLegacy {
+					// Recreate the pre-fix resident representation for an
+					// evidence-only A/B benchmark. Production never toggles it.
+					median.accounted.saveArg = true
+				}
+				SyncAggregatorsToChunkSize([]AggFuncExec{agg}, AggBatchSize)
+				if err = agg.GroupGrow(1); err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				for offset := 0; offset < rows; offset += hashmap.UnitLimit {
+					if tc.accounted {
+						if err = agg.(BatchCapacityPreflight).PreflightBatchFill(
+							offset, groups, vectors); err != nil {
+							b.Fatal(err)
+						}
+					}
+					if err = agg.BatchFill(
+						offset, groups, vectors); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if tc.finalize {
+					results, flushErr := agg.Flush()
+					if flushErr != nil {
+						b.Fatal(flushErr)
+					}
+					for _, result := range results {
+						result.Free(mp)
+					}
+				}
+				b.StopTimer()
+				agg.Free()
+				if tc.accounted {
+					if err = owner.ClearAllocationAccount(allocation); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			if account.Snapshot().Used != 0 {
+				b.Fatalf("account retains %d bytes", account.Snapshot().Used)
+			}
+			account.Seal()
+			if _, err = registry.Finalize(account); err != nil {
+				b.Fatal(err)
+			}
+		})
+	}
 }

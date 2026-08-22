@@ -1490,8 +1490,17 @@ func (ctr *container) makeAggListWithAllocation(
 				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
 			)
 		}
-		if ctr.legacyTextMinMax {
+		singleGroup := ctr.mtyp == H0
+		if ctr.legacyTextMinMax && singleGroup {
+			aggList[i], err = aggexec.MakeSingleGroupAggWithLegacyTextMinMax(
+				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), allocation,
+				agExpr.GetExtraInformation(), typs...)
+		} else if ctr.legacyTextMinMax {
 			aggList[i], err = aggexec.MakeGroupAggWithLegacyTextMinMax(
+				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), allocation,
+				agExpr.GetExtraInformation(), typs...)
+		} else if singleGroup {
+			aggList[i], err = aggexec.MakeSingleGroupAgg(
 				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), allocation,
 				agExpr.GetExtraInformation(), typs...)
 		} else {
