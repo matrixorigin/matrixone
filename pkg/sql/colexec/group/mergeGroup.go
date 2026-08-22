@@ -414,7 +414,7 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 			if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
 				vec.HasStringSourceMetadata() && !stringSourceWireEnabled(proc) {
 				return moerr.NewInvalidStateNoCtx(
-					"aggregate string source metadata requires MORPCVersion25")
+					"aggregate string source metadata requires MORPCVersion26")
 			}
 			if err := validateDecodedAggregateGroupCount(
 				ctr.spillAggList[i], bat.RowCount()); err != nil {

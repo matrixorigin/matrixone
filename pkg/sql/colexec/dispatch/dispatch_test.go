@@ -216,7 +216,7 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	defer decodedWithoutSources.Clean(proc.Mp())
 	require.NoError(t, decodedWithoutSources.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
 	require.False(t, decodedWithoutSources.Vecs[0].HasStringSourceMetadata())
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion25)
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion26)
 	buf.Reset()
 	encoded, err = marshalRemoteBatch(proc, dynamic, buf)
 	require.NoError(t, err)

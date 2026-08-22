@@ -353,7 +353,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 			// For REPLACE INTO, we need to count INSERT rows based on the actual action
 			// Always count INSERT rows for main table, regardless of update.ctr.action
-			if tableType == UpdateMainTable {
+			if tableType == UpdateMainTable && !hasChangedRowsCol(update.MultiUpdateCtx) {
 				update.addAffectedRowsFunc(rowCounts[i])
 			}
 
@@ -493,8 +493,15 @@ func filterTargetRows(
 			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
 		}
 	}
+	if updateCtx.ChangedRowsCol != nil {
+		changedCol := *updateCtx.ChangedRowsCol
+		if changedCol < 0 || changedCol >= len(input.Vecs) ||
+			input.Vecs[changedCol].GetType().Oid != types.T_bool {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid UPDATE changed-row column")
+		}
+	}
 	selections := make([]int64, 0, input.RowCount())
-	var semanticAffectedRows uint64
+	var matchedSemanticAffectedRows uint64
 	for i := 0; i < input.RowCount(); i++ {
 		if rowIDNulls.Contains(uint64(i)) ||
 			rowNumberNulls.Contains(uint64(i)) ||
@@ -515,7 +522,7 @@ func filterTargetRows(
 			continue
 		}
 		selections = append(selections, int64(i))
-		semanticAffectedRows += uint64(activeCount)
+		matchedSemanticAffectedRows += uint64(activeCount)
 	}
 
 	// The input can carry a build-side allocation account whose lifetime ends
@@ -528,7 +535,13 @@ func filterTargetRows(
 	filtered.Shrink(selections, false)
 	filtered.SetRowCount(len(selections))
 	if seen == nil || filtered.RowCount() == 0 {
-		return filtered, true, semanticAffectedRows - uint64(filtered.RowCount()), nil
+		semanticAffectedRows := matchedSemanticAffectedRows
+		if updateCtx.ChangedRowsCol != nil {
+			semanticAffectedRows = countSemanticAffectedRows(updateCtx, filtered, activeCols)
+		}
+		physicalAffectedRows := insertAffectedRows(updateCtx, filtered)
+		additionalAffectedRows := semanticAffectedRows - physicalAffectedRows
+		return filtered, true, additionalAffectedRows, nil
 	}
 
 	physicalSelections := make([]int64, 0, filtered.RowCount())
@@ -555,7 +568,43 @@ func filterTargetRows(
 	}
 	filtered.Shrink(physicalSelections, false)
 	filtered.SetRowCount(len(physicalSelections))
-	return filtered, true, semanticAffectedRows - uint64(len(physicalSelections)), nil
+	semanticAffectedRows := matchedSemanticAffectedRows
+	if updateCtx.ChangedRowsCol != nil {
+		semanticAffectedRows = countSemanticAffectedRows(updateCtx, filtered, activeCols)
+	}
+	physicalAffectedRows := insertAffectedRows(updateCtx, filtered)
+	additionalAffectedRows := semanticAffectedRows - physicalAffectedRows
+	return filtered, true, additionalAffectedRows, nil
+}
+
+func countSemanticAffectedRows(updateCtx *MultiUpdateCtx, input *batch.Batch, activeCols []int) uint64 {
+	activeVecs := make([]*vector.Vector, len(activeCols))
+	for i, col := range activeCols {
+		activeVecs[i] = input.Vecs[col]
+	}
+	var changedVec *vector.Vector
+	if updateCtx.ChangedRowsCol != nil {
+		changedVec = input.Vecs[*updateCtx.ChangedRowsCol]
+	}
+
+	var affectedRows uint64
+	for row := 0; row < input.RowCount(); row++ {
+		activeCount := 1
+		if len(activeVecs) > 0 {
+			activeCount = 0
+			for _, activeVec := range activeVecs {
+				if !activeVec.IsNull(uint64(row)) &&
+					vector.GetFixedAtNoTypeCheck[bool](activeVec, row) {
+					activeCount++
+				}
+			}
+		}
+		if changedVec == nil || (!changedVec.IsNull(uint64(row)) &&
+			vector.GetFixedAtNoTypeCheck[bool](changedVec, row)) {
+			affectedRows += uint64(activeCount)
+		}
+	}
+	return affectedRows
 }
 
 func (update *MultiUpdate) prepareSeenTargetRows(proc *process.Process) error {
