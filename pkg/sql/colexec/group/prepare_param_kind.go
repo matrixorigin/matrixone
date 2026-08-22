@@ -508,9 +508,11 @@ func saveAggregateChunkForProtocol(
 	}
 	protocolWriter, ok := agg.(aggregateStringSourceProtocolWriter)
 	if !ok {
-		if vec := agg.PrepareParamKindVectorForChunk(chunk); vec != nil && vec.HasStringSourceMetadata() {
-			return moerr.NewInternalErrorNoCtx(
-				"aggregate cannot omit string source for an older peer")
+		if accessor, ok := agg.(aggexec.PrepareParamKindStateAccessor); ok {
+			if vec := accessor.PrepareParamKindVectorForChunk(chunk); vec != nil && vec.HasStringSourceMetadata() {
+				return moerr.NewInternalErrorNoCtx(
+					"aggregate cannot omit string source for an older peer")
+			}
 		}
 		return agg.SaveIntermediateResultOfChunk(chunk, writer)
 	}

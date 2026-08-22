@@ -77,6 +77,7 @@ type SubscriptionMeta = plan.SubscriptionMeta
 type Snapshot = plan.Snapshot
 type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
+type DataStreamScan = plan.DataStreamScan
 
 const ViewSnapshotKeySuffix = "@ts="
 const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
