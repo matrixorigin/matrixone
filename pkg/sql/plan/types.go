@@ -354,6 +354,7 @@ type QueryBuilder struct {
 	indexHintOwnerByNode        map[int32]int32
 	preserveSinkProjection      map[int32]struct{}
 	preserveLockProjection      map[int32]struct{}
+	preserveFilterProjection    map[int32]struct{}
 	preservePreInsertProjection map[int32]struct{}
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
