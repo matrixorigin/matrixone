@@ -4468,6 +4468,27 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCTASDoesNotCopyAutoIncrement(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["nation"].Cols[0].Typ.AutoIncr = true
+
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"create table copied as select n_nationkey as id from nation",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.Len(t, cols, 1)
+	require.Equal(t, "id", cols[0].Name)
+	require.False(t, cols[0].Typ.AutoIncr)
+}
+
 func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
 	tests := []struct {
 		name        string
