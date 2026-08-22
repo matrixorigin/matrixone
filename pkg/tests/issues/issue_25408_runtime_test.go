@@ -240,26 +240,96 @@ func TestIssue25408PreparedRuntimeNumericRebind(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.Equal(t, []string{"3.5", "4.5"}, unionValues)
 
-		queryStrings := func(query string) []string {
-			t.Helper()
+		queryStrings := func(testingT *testing.T, query string) []string {
+			testingT.Helper()
 			queryRows, queryErr := conn.QueryContext(ctx, query)
-			require.NoError(t, queryErr)
+			require.NoError(testingT, queryErr)
 			defer queryRows.Close()
 			var values []string
 			for queryRows.Next() {
 				var value string
-				require.NoError(t, queryRows.Scan(&value))
+				require.NoError(testingT, queryRows.Scan(&value))
 				values = append(values, value)
 			}
-			require.NoError(t, queryRows.Err())
+			require.NoError(testingT, queryRows.Err())
 			return values
+		}
+		setOperationCases := []struct {
+			name          string
+			preparedSQL   string
+			directSQL     string
+			textArguments string
+			binaryArgs    []any
+			want          []string
+		}{
+			{
+				name:          "union_distinct",
+				preparedSQL:   "select x + 1 from (select ? as x union select ? as x) u order by x",
+				directSQL:     "select x + 1 from (select '02' as x union select 2 as x) u order by x",
+				textArguments: "set @runtime_set_left = '02', @runtime_set_right = 2",
+				binaryArgs:    []any{"02", int64(2)},
+				want:          []string{"3", "3"},
+			},
+			{
+				name:          "intersect",
+				preparedSQL:   "select x + 1 from (select ? as x intersect select ? as x) u order by x",
+				directSQL:     "select x + 1 from (select '02' as x intersect select 2 as x) u order by x",
+				textArguments: "set @runtime_set_left = '02', @runtime_set_right = 2",
+				binaryArgs:    []any{"02", int64(2)},
+				want:          nil,
+			},
+			{
+				name:          "minus",
+				preparedSQL:   "select x + 1 from (select ? as x minus select ? as x) u order by x",
+				directSQL:     "select x + 1 from (select '02' as x minus select 2 as x) u order by x",
+				textArguments: "set @runtime_set_left = '02', @runtime_set_right = 2",
+				binaryArgs:    []any{"02", int64(2)},
+				want:          []string{"3"},
+			},
+			{
+				name:          "union_all_order",
+				preparedSQL:   "select x + 1 from (select ? as x union all select ? as x) u order by x",
+				directSQL:     "select x + 1 from (select '10' as x union all select 2 as x) u order by x",
+				textArguments: "set @runtime_set_left = '10', @runtime_set_right = 2",
+				binaryArgs:    []any{"10", int64(2)},
+				want:          []string{"11", "3"},
+			},
+		}
+		for _, testCase := range setOperationCases {
+			t.Run("sql_prepare_set_operation_"+testCase.name, func(t *testing.T) {
+				require.Equal(t, testCase.want, queryStrings(t, testCase.directSQL))
+				stmtName := "runtime_set_" + testCase.name
+				mustExec(t, ctx, conn, fmt.Sprintf("prepare %s from '%s'", stmtName, testCase.preparedSQL))
+				defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare "+stmtName) }()
+				mustExec(t, ctx, conn, testCase.textArguments)
+				require.Equal(t, testCase.want, queryStrings(t,
+					fmt.Sprintf("execute %s using @runtime_set_left, @runtime_set_right", stmtName)))
+			})
+		}
+		for _, testCase := range setOperationCases {
+			t.Run("binary_prepare_set_operation_"+testCase.name, func(t *testing.T) {
+				stmt, prepareErr := conn.PrepareContext(ctx, testCase.preparedSQL)
+				require.NoError(t, prepareErr)
+				defer stmt.Close()
+				queryRows, queryErr := stmt.QueryContext(ctx, testCase.binaryArgs...)
+				require.NoError(t, queryErr)
+				defer queryRows.Close()
+				var values []string
+				for queryRows.Next() {
+					var value string
+					require.NoError(t, queryRows.Scan(&value))
+					values = append(values, value)
+				}
+				require.NoError(t, queryRows.Err())
+				require.Equal(t, testCase.want, values)
+			})
 		}
 		for _, assignment := range []string{
 			"set @runtime_left = '2.5', @runtime_right = 3",
 			"set @runtime_left = 2.5, @runtime_right = '3'",
 		} {
 			mustExec(t, ctx, conn, assignment)
-			got := queryStrings("execute runtime_union using @runtime_left, @runtime_right")
+			got := queryStrings(t, "execute runtime_union using @runtime_left, @runtime_right")
 			require.Equal(t, []string{"3.5", "4"}, got)
 		}
 

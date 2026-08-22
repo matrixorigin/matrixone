@@ -400,17 +400,17 @@ func TestPreparedRuntimeUnionLineage(t *testing.T) {
 	require.True(t, foundUnion)
 }
 
-func TestPreparedRuntimeUnionMixedDomainsSharePhysicalType(t *testing.T) {
+func TestPreparedRuntimeSetOperationSemanticBoundary(t *testing.T) {
 	rowIDType := types.T_Rowid.ToType()
 	common, err := preparedRuntimeSetOperationCommonType(
-		context.Background(), rowIDType, rowIDType, false)
+		context.Background(), rowIDType, rowIDType)
 	require.NoError(t, err)
 	require.True(t, rowIDType.Eq(common))
 	stringType := types.T_varchar.ToType()
 	common, err = preparedRuntimeSetOperationCommonType(
-		context.Background(), stringType, stringType, true)
+		context.Background(), stringType, stringType)
 	require.NoError(t, err)
-	require.Equal(t, types.T_float64, common.Oid)
+	require.Equal(t, types.T_varchar, common.Oid)
 
 	for _, params := range [][]any{
 		{
@@ -428,17 +428,20 @@ func TestPreparedRuntimeUnionMixedDomainsSharePhysicalType(t *testing.T) {
 			context.Background(), prepare.Plan, params)
 		require.NoError(t, err)
 		require.True(t, specialized)
+		query := filled.GetQuery()
+		root := query.Nodes[query.Steps[len(query.Steps)-1]]
+		require.Equal(t, int32(types.T_float64), root.ProjectList[0].Typ.Id)
 
 		var foundUnion bool
-		for _, node := range filled.GetQuery().Nodes {
+		for _, node := range query.Nodes {
 			if node.NodeType != planpb.Node_UNION_ALL {
 				continue
 			}
 			foundUnion = true
-			require.Equal(t, int32(types.T_float64), node.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(types.T_varchar), node.ProjectList[0].Typ.Id)
 			for _, childID := range node.Children {
 				require.Equal(t, node.ProjectList[0].Typ.Id,
-					filled.GetQuery().Nodes[childID].ProjectList[0].Typ.Id)
+					query.Nodes[childID].ProjectList[0].Typ.Id)
 			}
 		}
 		require.True(t, foundUnion)
