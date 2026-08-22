@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -39,6 +40,90 @@ type scriptedReader struct {
 	readErr    error
 	closeCount int
 }
+
+type testVisibleStateStore struct {
+	rows     map[string][]byte
+	putErr   error
+	closeErr error
+	closed   bool
+}
+
+func newTestVisibleStateStore() *testVisibleStateStore {
+	return &testVisibleStateStore{rows: make(map[string][]byte)}
+}
+
+func (s *testVisibleStateStore) PutBatch(entries []engine.VisibleStateEntry) error {
+	if s.putErr != nil {
+		return s.putErr
+	}
+	for _, entry := range entries {
+		s.rows[string(entry.Key)] = append([]byte(nil), entry.Value...)
+	}
+	return nil
+}
+
+func (s *testVisibleStateStore) Pop(key []byte) ([]byte, bool, error) {
+	value, ok := s.rows[string(key)]
+	if !ok {
+		return nil, false, nil
+	}
+	delete(s.rows, string(key))
+	return append([]byte(nil), value...), true, nil
+}
+
+func (s *testVisibleStateStore) Drain(max int, fn func(key, value []byte) error) (int, error) {
+	keys := make([]string, 0, len(s.rows))
+	for key := range s.rows {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > max {
+		keys = keys[:max]
+	}
+	for _, key := range keys {
+		value := s.rows[key]
+		delete(s.rows, key)
+		if err := fn([]byte(key), value); err != nil {
+			return 0, err
+		}
+	}
+	return len(keys), nil
+}
+
+func (s *testVisibleStateStore) Len() int64 { return int64(len(s.rows)) }
+
+func (s *testVisibleStateStore) Close() error {
+	s.closed = true
+	s.rows = nil
+	return s.closeErr
+}
+
+type testVisibleStateResources struct {
+	store      *testVisibleStateStore
+	reserveErr error
+	failAt     int
+	reserveCnt int
+	reserved   int64
+}
+
+func newTestVisibleStateResources() *testVisibleStateResources {
+	return &testVisibleStateResources{store: newTestVisibleStateStore()}
+}
+
+func (r *testVisibleStateResources) NewVisibleStateStore() (engine.VisibleStateStore, error) {
+	return r.store, nil
+}
+
+func (r *testVisibleStateResources) ReserveBuffer(bytes int64) error {
+	r.reserveCnt++
+	if r.reserveErr != nil && (r.failAt == 0 || r.reserveCnt == r.failAt) {
+		return r.reserveErr
+	}
+	r.reserved += bytes
+	return nil
+}
+
+func (r *testVisibleStateResources) ReleaseBuffer(bytes int64) { r.reserved -= bytes }
 
 func (r *scriptedReader) Close() error {
 	r.closeCount++
@@ -102,17 +187,19 @@ func TestNewVisibleStateChangesHandle(t *testing.T) {
 	})
 	beforeReader := &scriptedReader{batches: []*batch.Batch{before}}
 	afterReader := &scriptedReader{batches: []*batch.Batch{after}}
+	tableDef := makeVisibleStateTableDef(true, true)
+	resources := newTestVisibleStateResources()
 
 	gomock.InOrder(
-		txnOp.EXPECT().CloneSnapshotOp(start.Prev().ToTimestamp()).Return(txnOp),
-		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("", "", beforeRel, nil),
+		txnOp.EXPECT().CloneSnapshotOp(end.ToTimestamp()).Return(txnOp),
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("", "", afterRel, nil),
+		beforeRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef),
+		afterRel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef),
 		beforeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil),
 		beforeRel.EXPECT().BuildReaders(
 			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
 			gomock.Eq(engine.TombstoneApplyPolicy(engine.Policy_CheckCommittedOnly)), engine.FilterHint{},
 		).Return([]engine.Reader{beforeReader}, nil),
-		txnOp.EXPECT().CloneSnapshotOp(end.ToTimestamp()).Return(txnOp),
-		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("", "", afterRel, nil),
 		afterRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil),
 		afterRel.EXPECT().BuildReaders(
 			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
@@ -121,14 +208,15 @@ func TestNewVisibleStateChangesHandle(t *testing.T) {
 	)
 
 	ctx := engine.WithRetainRowID(context.Background(), true)
-	h, err := NewVisibleStateChangesHandle(ctx, tbl, start, end, false, 16, mp)
+	h, err := NewVisibleStateChangesHandle(ctx, tbl, start, end, false, 16, mp, resources, beforeRel)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, h.Close())
 		require.Equal(t, 1, afterReader.closeCount)
 	})
 	require.Equal(t, 1, beforeReader.closeCount)
-	require.Equal(t, []string{catalog.Row_ID, "id", "v"}, h.scanAttrs)
+	require.Equal(t, []string{catalog.Row_ID, "id", "v"}, h.beforeScan.attrs)
+	require.Equal(t, []string{catalog.Row_ID, "id", "v"}, h.afterScan.attrs)
 	require.Equal(t, []string{"id", "v"}, h.dataAttrs)
 
 	data, tombstone, hint, err := h.Next(ctx, mp)
@@ -147,32 +235,32 @@ func TestNewVisibleStateChangesHandleRejectsInvalidInputs(t *testing.T) {
 	})
 
 	validEnd := types.BuildTS(10, 0)
-	_, err := NewVisibleStateChangesHandle(context.Background(), nil, types.TS{}, types.TS{}, false, 1, mp)
+	resources := newTestVisibleStateResources()
+	_, err := NewVisibleStateChangesHandle(context.Background(), nil, types.TS{}, types.TS{}, false, 1, mp, resources, nil)
 	require.ErrorContains(t, err, "invalid timestamp")
 
-	_, err = NewVisibleStateChangesHandle(context.Background(), nil, types.BuildTS(11, 0), validEnd, false, 1, mp)
+	_, err = NewVisibleStateChangesHandle(context.Background(), nil, types.BuildTS(11, 0), validEnd, false, 1, mp, resources, nil)
 	require.ErrorContains(t, err, "invalid timestamp")
 
-	_, err = NewVisibleStateChangesHandle(context.Background(), nil, types.TS{}, validEnd, false, 1, nil)
-	require.ErrorContains(t, err, "non-nil mpool")
-
-	_, err = NewVisibleStateChangesHandle(context.Background(), nil, types.TS{}, validEnd, false, 1, mp)
+	_, err = NewVisibleStateChangesHandle(context.Background(), nil, types.TS{}, validEnd, false, 1, nil, resources, nil)
 	require.ErrorContains(t, err, "requires a table")
 
-	missingPK := &txnTable{tableDef: makeVisibleStateTableDef(false, true)}
-	_, err = NewVisibleStateChangesHandle(context.Background(), missingPK, types.TS{}, validEnd, false, 1, mp)
+	_, err = NewVisibleStateChangesHandle(context.Background(), &txnTable{}, types.TS{}, validEnd, false, 1, mp, nil, nil)
+	require.ErrorContains(t, err, "bounded recovery resources")
+
+	h := &VisibleStateChangesHandle{
+		beforeScan: visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
+		afterScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
+	}
+	err = h.initSchema(nil, makeVisibleStateTableDef(false, true))
 	require.ErrorContains(t, err, "primary key column not found")
 
-	missingRowID := &txnTable{tableDef: makeVisibleStateTableDef(true, false)}
-	_, err = NewVisibleStateChangesHandle(
-		engine.WithRetainRowID(context.Background(), true),
-		missingRowID,
-		types.TS{},
-		validEnd,
-		false,
-		1,
-		mp,
-	)
+	h = &VisibleStateChangesHandle{
+		retainRowID: true,
+		beforeScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
+		afterScan:   visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
+	}
+	err = h.initSchema(nil, makeVisibleStateTableDef(true, false))
 	require.ErrorContains(t, err, "rowid column not found")
 }
 
@@ -182,31 +270,15 @@ func TestVisibleStateChangesHandleNextChunksAndSkipsDeletes(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	})
 
-	h := &VisibleStateChangesHandle{
-		end:           types.BuildTS(30, 0),
-		skipDeletes:   true,
-		coarseMaxRow:  1,
-		mp:            mp,
-		scanAttrs:     []string{"id", "v"},
-		scanTypes:     []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
-		dataScanIdxes: []int{0, 1},
-		dataAttrs:     []string{"id", "v"},
-		dataTypes:     []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
-		pkScanIdx:     0,
-		pkType:        types.T_int32.ToType(),
-		beforeRows:    make(map[string]visibleStateRow),
-	}
+	h := newInt32VisibleStateHandle(mp, true, 1)
 	before := makeInt32Batch(t, mp, [][2]int32{{1, 10}, {2, 20}})
 	after := makeInt32Batch(t, mp, [][2]int32{{1, 11}, {3, 30}})
 	t.Cleanup(func() {
 		before.Clean(mp)
 		after.Clean(mp)
 	})
-	for row := 0; row < before.RowCount(); row++ {
-		pkBytes, rowBytes := h.encodeSnapshotRow(before, row)
-		h.beforeRows[string(pkBytes)] = visibleStateRow{pk: pkBytes, row: rowBytes}
-	}
-	h.afterReaders = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
+	putVisibleStateBatch(t, h, before, &h.beforeScan)
+	h.afterScan.readers = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
 	t.Cleanup(func() {
 		require.NoError(t, h.Close())
 	})
@@ -236,20 +308,8 @@ func TestVisibleStateChangesHandleNextReaderError(t *testing.T) {
 	})
 
 	wantErr := errors.New("snapshot read failed")
-	h := &VisibleStateChangesHandle{
-		end:           types.BuildTS(40, 0),
-		coarseMaxRow:  1,
-		mp:            mp,
-		scanAttrs:     []string{"id"},
-		scanTypes:     []types.Type{types.T_int32.ToType()},
-		dataScanIdxes: []int{0},
-		dataAttrs:     []string{"id"},
-		dataTypes:     []types.Type{types.T_int32.ToType()},
-		pkScanIdx:     0,
-		pkType:        types.T_int32.ToType(),
-		beforeRows:    make(map[string]visibleStateRow),
-		afterReaders:  []engine.Reader{&scriptedReader{readErr: wantErr}},
-	}
+	h := newInt32VisibleStateHandle(mp, false, 1)
+	h.afterScan.readers = []engine.Reader{&scriptedReader{readErr: wantErr}}
 	t.Cleanup(func() {
 		require.NoError(t, h.Close())
 	})
@@ -270,9 +330,9 @@ func TestVisibleStateChangesHandleBuildSnapshotReadersErrors(t *testing.T) {
 		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, tbl.tableId).Return("", "", nil, wantErr)
 
 		h := &VisibleStateChangesHandle{tbl: tbl}
-		readers, err := h.buildSnapshotReaders(context.Background(), at)
+		rel, err := h.getRelationAt(context.Background(), at)
 		require.ErrorIs(t, err, wantErr)
-		require.Nil(t, readers)
+		require.Nil(t, rel)
 	})
 
 	t.Run("nil relation", func(t *testing.T) {
@@ -281,30 +341,26 @@ func TestVisibleStateChangesHandleBuildSnapshotReadersErrors(t *testing.T) {
 		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, tbl.tableId).Return("", "", nil, nil)
 
 		h := &VisibleStateChangesHandle{tbl: tbl}
-		readers, err := h.buildSnapshotReaders(context.Background(), at)
-		require.ErrorContains(t, err, "resolved to nil")
-		require.Nil(t, readers)
+		got, err := h.getRelationAt(context.Background(), at)
+		require.NoError(t, err)
+		require.Nil(t, got)
 	})
 
 	t.Run("ranges", func(t *testing.T) {
-		tbl, txnOp, eng := newVisibleStateMockTable(t)
+		tbl, _, _ := newVisibleStateMockTable(t)
 		rel := mock_frontend.NewMockRelation(gomock.NewController(t))
-		txnOp.EXPECT().CloneSnapshotOp(at.ToTimestamp()).Return(txnOp)
-		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, tbl.tableId).Return("", "", rel, nil)
 		rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, wantErr)
 
 		h := &VisibleStateChangesHandle{tbl: tbl}
-		readers, err := h.buildSnapshotReaders(context.Background(), at)
+		readers, err := h.buildSnapshotReaders(context.Background(), rel)
 		require.ErrorIs(t, err, wantErr)
 		require.Nil(t, readers)
 	})
 
 	t.Run("partial readers", func(t *testing.T) {
-		tbl, txnOp, eng := newVisibleStateMockTable(t)
+		tbl, _, _ := newVisibleStateMockTable(t)
 		rel := mock_frontend.NewMockRelation(gomock.NewController(t))
 		partial := &scriptedReader{}
-		txnOp.EXPECT().CloneSnapshotOp(at.ToTimestamp()).Return(txnOp)
-		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, tbl.tableId).Return("", "", rel, nil)
 		rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil)
 		rel.EXPECT().BuildReaders(
 			gomock.Any(), gomock.Any(), nil, gomock.Any(), 1, 0, false,
@@ -312,7 +368,7 @@ func TestVisibleStateChangesHandleBuildSnapshotReadersErrors(t *testing.T) {
 		).Return([]engine.Reader{partial}, wantErr)
 
 		h := &VisibleStateChangesHandle{tbl: tbl}
-		readers, err := h.buildSnapshotReaders(context.Background(), at)
+		readers, err := h.buildSnapshotReaders(context.Background(), rel)
 		require.ErrorIs(t, err, wantErr)
 		require.Nil(t, readers)
 		require.Equal(t, 1, partial.closeCount)
@@ -331,7 +387,7 @@ func TestVisibleStateChangesHandleRejectsInvalidRowIDs(t *testing.T) {
 		t.Cleanup(func() {
 			after.Clean(mp)
 		})
-		h.afterReaders = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
+		h.afterScan.readers = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
 		t.Cleanup(func() {
 			require.NoError(t, h.Close())
 		})
@@ -345,7 +401,9 @@ func TestVisibleStateChangesHandleRejectsInvalidRowIDs(t *testing.T) {
 	t.Run("delete has invalid rowid", func(t *testing.T) {
 		h := newRetainedRowIDChangesHandle(mp)
 		pk := types.EncodeValue(int32(1), types.T_int32)
-		h.beforeRows[string(pk)] = visibleStateRow{pk: pk, rowID: []byte{1}}
+		require.NoError(t, h.beforeRows.PutBatch([]engine.VisibleStateEntry{{
+			Key: pk, Value: encodeVisibleStateRow([]byte{1}, nil),
+		}}))
 		t.Cleanup(func() {
 			require.NoError(t, h.Close())
 		})
@@ -363,36 +421,21 @@ func TestVisibleStateChangesHandleNext(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	})
 
-	h := &VisibleStateChangesHandle{
-		end:           types.BuildTS(10, 0),
-		coarseMaxRow:  16,
-		mp:            mp,
-		scanAttrs:     []string{"a", "b"},
-		scanTypes:     []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
-		dataScanIdxes: []int{0, 1},
-		dataAttrs:     []string{"a", "b"},
-		dataTypes:     []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
-		pkScanIdx:     0,
-		pkType:        types.T_int32.ToType(),
-		beforeRows:    make(map[string]visibleStateRow),
-	}
+	h := newInt32VisibleStateHandle(mp, false, 16)
 
 	before := makeInt32Batch(t, mp, [][2]int32{
 		{1, 10},
 		{2, 20},
 	})
 	defer before.Clean(mp)
-	for row := 0; row < before.RowCount(); row++ {
-		pkBytes, rowBytes := h.encodeSnapshotRow(before, row)
-		h.beforeRows[string(pkBytes)] = visibleStateRow{pk: pkBytes, row: rowBytes}
-	}
+	putVisibleStateBatch(t, h, before, &h.beforeScan)
 
 	after := makeInt32Batch(t, mp, [][2]int32{
 		{1, 11},
 		{3, 30},
 	})
 	defer after.Clean(mp)
-	h.afterReaders = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
+	h.afterScan.readers = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
 
 	data, tombstone, hint, err := h.Next(context.Background(), mp)
 	require.NoError(t, err)
@@ -421,22 +464,8 @@ func TestVisibleStateChangesHandleIgnoresCompactionRowIDRewrite(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	})
 
-	h := &VisibleStateChangesHandle{
-		end:           types.BuildTS(20, 0),
-		coarseMaxRow:  16,
-		mp:            mp,
-		scanAttrs:     []string{"__mo_rowid", "id", "v"},
-		scanTypes:     []types.Type{types.T_Rowid.ToType(), types.T_int32.ToType(), types.T_int32.ToType()},
-		dataScanIdxes: []int{1, 2},
-		dataAttrs:     []string{"id", "v"},
-		dataTypes:     []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
-		pkScanIdx:     1,
-		pkType:        types.T_int32.ToType(),
-		rowIDScanIdx:  0,
-		rowIDType:     types.T_Rowid.ToType(),
-		retainRowID:   true,
-		beforeRows:    make(map[string]visibleStateRow),
-	}
+	h := newRetainedRowIDChangesHandle(mp)
+	h.end = types.BuildTS(20, 0)
 
 	beforeRowIDs := []types.Rowid{
 		types.BuildTestRowid(1, 1),
@@ -449,14 +478,7 @@ func TestVisibleStateChangesHandleIgnoresCompactionRowIDRewrite(t *testing.T) {
 		{4, 40},
 	})
 	defer before.Clean(mp)
-	for row := 0; row < before.RowCount(); row++ {
-		pkBytes, rowBytes := h.encodeSnapshotRow(before, row)
-		h.beforeRows[string(pkBytes)] = visibleStateRow{
-			pk:    pkBytes,
-			rowID: h.encodeValue(before.Vecs[h.rowIDScanIdx], row),
-			row:   rowBytes,
-		}
-	}
+	putVisibleStateBatch(t, h, before, &h.beforeScan)
 
 	afterRowIDs := []types.Rowid{
 		types.BuildTestRowid(2, 1),
@@ -469,7 +491,7 @@ func TestVisibleStateChangesHandleIgnoresCompactionRowIDRewrite(t *testing.T) {
 		{3, 30}, // insert
 	})
 	defer after.Clean(mp)
-	h.afterReaders = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
+	h.afterScan.readers = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
 
 	data, tombstone, hint, err := h.Next(context.Background(), mp)
 	require.NoError(t, err)
@@ -491,6 +513,51 @@ func TestVisibleStateChangesHandleIgnoresCompactionRowIDRewrite(t *testing.T) {
 	require.Equal(t, []types.TS{h.end, h.end}, vector.MustFixedColWithTypeCheck[types.TS](tombstone.Vecs[2]))
 }
 
+func TestVisibleStateChangesHandleProjectsHistoricalSchema(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+
+	beforeDef := makeVisibleStateTableDef(true, true)
+	afterDef := makeVisibleStateTableDef(true, true)
+	afterDef.Cols = append(afterDef.Cols[:2], append([]*pbplan.ColDef{{
+		Name: "branch_only", Typ: pbplan.Type{Id: int32(types.T_int32)}, Seqnum: 2,
+	}}, afterDef.Cols[2:]...)...)
+
+	h := &VisibleStateChangesHandle{
+		end: types.BuildTS(70, 0), coarseMaxRow: 16, mp: mp,
+		beforeScan: visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
+		afterScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
+		beforeRows: newTestVisibleStateStore(),
+	}
+	require.NoError(t, h.initSchema(beforeDef, afterDef))
+	require.Equal(t, []string{catalog.Row_ID, "id", "v"}, h.beforeScan.attrs)
+	require.Equal(t, []int{1, 2}, h.beforeScan.compareIdxes)
+	require.Equal(t, []int{1, 3}, h.afterScan.compareIdxes)
+
+	before := makeVisibleStateBatch(t, mp,
+		[]types.Rowid{types.BuildTestRowid(1, 1), types.BuildTestRowid(1, 2)},
+		[][2]int32{{1, 10}, {2, 20}},
+	)
+	after := makeSchemaEvolutionBatch(t, mp, [][3]int32{{1, 7, 10}, {2, 7, 21}})
+	t.Cleanup(func() {
+		before.Clean(mp)
+		after.Clean(mp)
+	})
+	putVisibleStateBatch(t, h, before, &h.beforeScan)
+	h.afterScan.readers = []engine.Reader{&scriptedReader{batches: []*batch.Batch{after}}}
+	t.Cleanup(func() { require.NoError(t, h.Close()) })
+
+	data, tombstone, _, err := h.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "branch_only", "v", objectio.DefaultCommitTS_Attr}, data.Attrs)
+	require.Equal(t, []int32{2}, vector.MustFixedColWithTypeCheck[int32](data.Vecs[0]))
+	require.Equal(t, []int32{7}, vector.MustFixedColWithTypeCheck[int32](data.Vecs[1]))
+	require.Equal(t, []int32{21}, vector.MustFixedColWithTypeCheck[int32](data.Vecs[2]))
+	require.Equal(t, []int32{2}, vector.MustFixedColWithTypeCheck[int32](tombstone.Vecs[0]))
+	data.Clean(mp)
+	tombstone.Clean(mp)
+}
+
 func TestVisibleStateChangesHandleCloseNilReceiver(t *testing.T) {
 	var h *VisibleStateChangesHandle
 	require.NotPanics(t, func() {
@@ -501,9 +568,8 @@ func TestVisibleStateChangesHandleCloseNilReceiver(t *testing.T) {
 func TestVisibleStateChangesHandleCloseNilMPoolAndTypedNilReader(t *testing.T) {
 	var nilReader *scriptedReader
 	h := &VisibleStateChangesHandle{
-		mp:             nil,
-		beforeRows:     map[string]visibleStateRow{"before": {}},
-		pendingDeletes: []visibleStateRow{{pk: []byte("pending")}},
+		mp:         nil,
+		beforeRows: newTestVisibleStateStore(),
 		currentAfter: func() *batch.Batch {
 			bat := batch.NewWithSize(1)
 			bat.SetAttributes([]string{"a"})
@@ -511,16 +577,13 @@ func TestVisibleStateChangesHandleCloseNilMPoolAndTypedNilReader(t *testing.T) {
 			bat.SetRowCount(0)
 			return bat
 		}(),
-		afterReaders: []engine.Reader{
-			nilReader,
-		},
+		afterScan: visibleStateSnapshotScan{readers: []engine.Reader{nilReader}},
 	}
 	require.NotPanics(t, func() {
 		_ = h.Close()
 	})
 	require.Nil(t, h.currentAfter)
 	require.Nil(t, h.beforeRows)
-	require.Nil(t, h.pendingDeletes)
 }
 
 func makeInt32Batch(t *testing.T, mp *mpool.MPool, rows [][2]int32) *batch.Batch {
@@ -561,17 +624,36 @@ func makeVisibleStateBatch(
 	return bat
 }
 
+func makeSchemaEvolutionBatch(t *testing.T, mp *mpool.MPool, rows [][3]int32) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(4)
+	bat.SetAttributes([]string{catalog.Row_ID, "id", "branch_only", "v"})
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_int32.ToType())
+	for i, row := range rows {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTestRowid(2, int64(i+1)), false, mp))
+		for col := range row {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[col+1], row[col], false, mp))
+		}
+	}
+	bat.SetRowCount(len(rows))
+	return bat
+}
+
 func makeVisibleStateTableDef(includePK, includeRowID bool) *pbplan.TableDef {
 	cols := make([]*pbplan.ColDef, 0, 3)
 	if includeRowID {
 		cols = append(cols, &pbplan.ColDef{
-			Name: catalog.Row_ID,
-			Typ:  pbplan.Type{Id: int32(types.T_Rowid)},
+			Name:   catalog.Row_ID,
+			Typ:    pbplan.Type{Id: int32(types.T_Rowid)},
+			Seqnum: objectio.SEQNUM_ROWID,
 		})
 	}
 	cols = append(cols,
-		&pbplan.ColDef{Name: "id", Typ: pbplan.Type{Id: int32(types.T_int32)}},
-		&pbplan.ColDef{Name: "v", Typ: pbplan.Type{Id: int32(types.T_int32)}},
+		&pbplan.ColDef{Name: "id", Typ: pbplan.Type{Id: int32(types.T_int32)}, Seqnum: 0},
+		&pbplan.ColDef{Name: "v", Typ: pbplan.Type{Id: int32(types.T_int32)}, Seqnum: 1},
 	)
 	tblDef := &pbplan.TableDef{Cols: cols}
 	if includePK {
@@ -599,21 +681,57 @@ func newVisibleStateMockTable(
 
 func newRetainedRowIDChangesHandle(mp *mpool.MPool) *VisibleStateChangesHandle {
 	return &VisibleStateChangesHandle{
-		end:           types.BuildTS(60, 0),
-		coarseMaxRow:  16,
-		mp:            mp,
-		scanAttrs:     []string{catalog.Row_ID, "id", "v"},
-		scanTypes:     []types.Type{types.T_Rowid.ToType(), types.T_int32.ToType(), types.T_int32.ToType()},
+		end:          types.BuildTS(60, 0),
+		coarseMaxRow: 16,
+		mp:           mp,
+		beforeScan: visibleStateSnapshotScan{
+			attrs:        []string{catalog.Row_ID, "id", "v"},
+			types:        []types.Type{types.T_Rowid.ToType(), types.T_int32.ToType(), types.T_int32.ToType()},
+			compareIdxes: []int{1, 2}, pkIdx: 1, rowIDIdx: 0,
+		},
+		afterScan: visibleStateSnapshotScan{
+			attrs:        []string{catalog.Row_ID, "id", "v"},
+			types:        []types.Type{types.T_Rowid.ToType(), types.T_int32.ToType(), types.T_int32.ToType()},
+			compareIdxes: []int{1, 2}, pkIdx: 1, rowIDIdx: 0,
+		},
 		dataScanIdxes: []int{1, 2},
 		dataAttrs:     []string{"id", "v"},
 		dataTypes:     []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
-		pkScanIdx:     1,
 		pkType:        types.T_int32.ToType(),
-		rowIDScanIdx:  0,
 		rowIDType:     types.T_Rowid.ToType(),
 		retainRowID:   true,
-		beforeRows:    make(map[string]visibleStateRow),
+		beforeRows:    newTestVisibleStateStore(),
 	}
+}
+
+func newInt32VisibleStateHandle(mp *mpool.MPool, skipDeletes bool, maxRows uint32) *VisibleStateChangesHandle {
+	scan := visibleStateSnapshotScan{
+		attrs:        []string{"a", "b"},
+		types:        []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		compareIdxes: []int{0, 1}, pkIdx: 0, rowIDIdx: -1,
+	}
+	return &VisibleStateChangesHandle{
+		end: types.BuildTS(30, 0), skipDeletes: skipDeletes,
+		coarseMaxRow: maxRows, mp: mp,
+		beforeScan: scan, afterScan: scan,
+		dataScanIdxes: []int{0, 1}, dataAttrs: []string{"a", "b"},
+		dataTypes: []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		pkType:    types.T_int32.ToType(), beforeRows: newTestVisibleStateStore(),
+	}
+}
+
+func putVisibleStateBatch(t *testing.T, h *VisibleStateChangesHandle, bat *batch.Batch, scan *visibleStateSnapshotScan) {
+	t.Helper()
+	entries := make([]engine.VisibleStateEntry, bat.RowCount())
+	for row := 0; row < bat.RowCount(); row++ {
+		pk, encoded := h.encodeSnapshotRow(bat, row, scan)
+		var rowID []byte
+		if h.retainRowID {
+			rowID = h.encodeValue(bat.Vecs[scan.rowIDIdx], row)
+		}
+		entries[row] = engine.VisibleStateEntry{Key: pk, Value: encodeVisibleStateRow(rowID, encoded)}
+	}
+	require.NoError(t, h.beforeRows.PutBatch(entries))
 }
 
 func makeNullableRowIDBatch(t *testing.T, mp *mpool.MPool, rowIDIsNull bool) *batch.Batch {
