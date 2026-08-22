@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/prashantv/gostub"
@@ -135,7 +136,7 @@ func TestCollectObjectListFromCheckpointStaleRead(t *testing.T) {
 						End:       &t3Timestamp,
 						Location1: []byte("fake_location1"),
 						Location2: []byte("fake_location2"),
-						EntryType: 0,
+						EntryType: int32(checkpoint.ET_Incremental),
 						Version:   1,
 					},
 				}
