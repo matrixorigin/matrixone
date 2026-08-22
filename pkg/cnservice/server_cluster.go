@@ -106,7 +106,7 @@ func (s *service) clusterSnapshotContainsSelf(ctx context.Context) (bool, error)
 		admission := reader.GetViewMetadataAdmission()
 		requireGeneration = admission.Preparing || admission.Enabled
 	}
-	err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+	err := clusterservice.GetCNServiceRawWithContext(
 		ctx,
 		s.moCluster,
 		clusterservice.NewServiceIDSelector(s.cfg.UUID),

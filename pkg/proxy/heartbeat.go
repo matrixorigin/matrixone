@@ -28,6 +28,11 @@ func (s *Server) heartbeat(ctx context.Context) {
 	if s.config.HAKeeper.HeartbeatInterval.Duration == 0 {
 		panic("invalid heartbeat interval")
 	}
+	// Startup admission must not depend on waiting for the first ticker edge.
+	s.doHeartbeat(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	ticker := time.NewTicker(s.config.HAKeeper.HeartbeatInterval.Duration)
 	defer ticker.Stop()
 	for {

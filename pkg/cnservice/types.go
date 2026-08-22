@@ -784,6 +784,7 @@ type service struct {
 	heartbeatInFlight               atomic.Bool
 	commandPollNeeded               atomic.Bool
 	commandPollWakeup               chan struct{}
+	heartbeatWakeup                 chan struct{}
 	commandMu                       sync.Mutex
 	lastCommandBatchID              uint64
 	ackedCommandBatchID             atomic.Uint64
@@ -797,6 +798,7 @@ type service struct {
 	viewMetadataAdmissionUpdated    chan struct{}
 	viewMetadataCatalogFenceMu      sync.Mutex
 	viewMetadataCatalogFenceReady   atomic.Bool
+	viewMetadataIngressReady        atomic.Bool
 	aicm                            *defines.AutoIncrCacheManager
 	lifecycleMu                     sync.Mutex
 	lifecycle                       serviceLifecycleState

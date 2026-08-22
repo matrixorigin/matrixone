@@ -69,6 +69,8 @@ type Server struct {
 	viewMetadataObservedEpoch       atomic.Uint64
 	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
 	viewMetadataAdmissionUpdated    chan struct{}
+	viewMetadataAdmissionContext    context.Context
+	viewMetadataAdmissionCancel     context.CancelFunc
 	test                            bool
 }
 
@@ -76,6 +78,9 @@ type Server struct {
 //
 // NB: runtime must be included in opts.
 func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	config.FillDefault()
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -90,6 +95,13 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		config:     config,
 		counterSet: newCounterSet(),
 	}
+	s.viewMetadataAdmissionContext, s.viewMetadataAdmissionCancel = context.WithCancel(ctx)
+	initialized := false
+	defer func() {
+		if !initialized {
+			s.viewMetadataAdmissionCancel()
+		}
+	}()
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -171,6 +183,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		return nil, err
 	}
 	s.app = app
+	initialized = true
 	return s, nil
 }
 
@@ -242,7 +255,7 @@ func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) erro
 
 // Start starts the proxy server.
 func (s *Server) Start() error {
-	if err := s.waitForViewMetadataAdmission(); err != nil {
+	if err := s.waitForViewMetadataAdmission(s.viewMetadataAdmissionContext); err != nil {
 		return err
 	}
 	err := s.app.Start()
@@ -256,6 +269,9 @@ func (s *Server) Start() error {
 
 // Close closes the proxy server.
 func (s *Server) Close() error {
+	if s.viewMetadataAdmissionCancel != nil {
+		s.viewMetadataAdmissionCancel()
+	}
 	_ = s.handler.Close()
 	s.stopper.Stop()
 	stats.Unregister(statsFamilyName)

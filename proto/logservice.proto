@@ -161,6 +161,9 @@ message CNStoreHeartbeat {
   // reports false/zero and therefore remains lifecycle-unaware.
   bool            ViewMetadataRefreshSupported = 22;
   uint64          ViewMetadataRevalidatedEpoch = 23;
+  // ViewMetadataIngressReady is published only after every public CN ingress
+  // listener has started successfully. Admission alone is not routability.
+  bool            ViewMetadataIngressReady = 24;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -639,6 +642,9 @@ message ViewMetadataAdmission {
   uint64 CatalogFencedEpoch = 5;
   uint64 Generation = 6;
   bool Ready = 7;
+  // Admitted authorizes a CN heartbeat sender to finish local startup. Ready
+  // is stronger: it also requires the CN's public ingress to be prepared.
+  bool Admitted = 8;
 }
 
 // ViewMetadataAdmissionTargets makes timeout-based phase-two/reconciliation
@@ -680,6 +686,7 @@ message CNStoreInfo {
   bool ViewMetadataRefreshSupported = 23;
   uint64 ViewMetadataRevalidatedEpoch = 24;
   bool ViewMetadataAdmissionReady = 25;
+  bool ViewMetadataIngressReady = 26;
 }
 
 // CNState contains all CN details known to the HAKeeper.

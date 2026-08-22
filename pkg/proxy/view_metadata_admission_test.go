@@ -115,7 +115,7 @@ func TestProxyAdmissionWaitsForAuthoritativeResponse(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- s.waitForViewMetadataAdmission()
+		done <- s.waitForViewMetadataAdmission(context.Background())
 	}()
 	time.Sleep(20 * time.Millisecond)
 	select {
@@ -126,6 +126,24 @@ func TestProxyAdmissionWaitsForAuthoritativeResponse(t *testing.T) {
 
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), nil))
 	require.NoError(t, <-done)
+}
+
+func TestProxyAdmissionTimeoutTracksHeartbeatConfiguration(t *testing.T) {
+	s := &Server{}
+	s.config.HAKeeper.HeartbeatInterval.Duration = 31 * time.Second
+	s.config.HAKeeper.HeartbeatTimeout.Duration = 3 * time.Second
+	require.Equal(t, 34*time.Second, s.viewMetadataAdmissionTimeout())
+}
+
+func TestProxyAdmissionWaitHonorsCallerCancellation(t *testing.T) {
+	s := &Server{
+		config:                          Config{UUID: "proxy-canceled-wait"},
+		viewMetadataAdmissionGeneration: 12,
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, s.waitForViewMetadataAdmission(ctx), context.Canceled)
 }
 
 func TestProxyAdmissionDoesNotAckFailedMembershipRefresh(t *testing.T) {

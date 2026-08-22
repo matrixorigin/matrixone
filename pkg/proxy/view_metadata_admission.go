@@ -61,7 +61,7 @@ func (s *Server) applyViewMetadataAdmission(
 		return nil
 	}
 	if snapshot == nil {
-		s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Ready: true})
+		s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Ready: true, Admitted: true})
 		s.notifyViewMetadataAdmissionUpdated()
 		return nil
 	}
@@ -101,11 +101,14 @@ func (s *Server) applyViewMetadataAdmission(
 	return nil
 }
 
-func (s *Server) waitForViewMetadataAdmission() error {
+func (s *Server) waitForViewMetadataAdmission(parent context.Context) error {
 	if s.viewMetadataAdmissionGeneration == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, s.viewMetadataAdmissionTimeout())
 	defer cancel()
 	for {
 		snapshot := s.viewMetadataAdmission.Load()
@@ -125,12 +128,27 @@ func (s *Server) waitForViewMetadataAdmission() error {
 		}
 		select {
 		case <-ctx.Done():
-			return moerr.NewInternalErrorf(
-				context.Background(),
-				"Proxy %s was not admitted before startup deadline: %v",
-				s.config.UUID,
-				ctx.Err())
+			return context.Cause(ctx)
 		case <-s.viewMetadataAdmissionUpdated:
 		}
 	}
+}
+
+// viewMetadataAdmissionTimeout covers one immediate heartbeat and one complete
+// retry after the configured interval. It therefore scales with valid long
+// heartbeat intervals instead of imposing an unrelated fixed startup limit.
+func (s *Server) viewMetadataAdmissionTimeout() time.Duration {
+	interval := s.config.HAKeeper.HeartbeatInterval.Duration
+	if interval <= 0 {
+		interval = defaultHeartbeatInterval
+	}
+	rpcTimeout := s.config.HAKeeper.HeartbeatTimeout.Duration
+	if rpcTimeout <= 0 {
+		rpcTimeout = defaultHeartbeatTimeout
+	}
+	retryWindow := max(interval, rpcTimeout)
+	if retryWindow > time.Duration(1<<63-1)-rpcTimeout {
+		return time.Duration(1<<63 - 1)
+	}
+	return retryWindow + rpcTimeout
 }

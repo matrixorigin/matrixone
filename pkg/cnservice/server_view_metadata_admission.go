@@ -82,7 +82,7 @@ func (s *service) applyViewMetadataAdmission(
 		return nil
 	}
 	if snapshot == nil {
-		s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Ready: true})
+		s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Ready: true, Admitted: true})
 		s.notifyViewMetadataAdmissionUpdated()
 		return nil
 	}
@@ -165,7 +165,7 @@ func (s *service) waitForViewMetadataAdmission() error {
 		if err := s.fenceViewMetadataCatalog(ctx, snapshot); err != nil {
 			return moerr.AttachCause(ctx, err)
 		}
-		if snapshot != nil && snapshot.Ready {
+		if snapshot != nil && snapshot.Admitted {
 			return nil
 		}
 

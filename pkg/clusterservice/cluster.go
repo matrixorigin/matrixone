@@ -82,10 +82,9 @@ func GetMOClusterWithContext(ctx context.Context, service string) (MOCluster, er
 	}
 }
 
-// GetCNServiceWithoutWorkingStateWithContext is the context-aware snapshot
-// counterpart of MOCluster.GetCNServiceWithoutWorkingState. The built-in
-// cluster can cancel its startup wait; external implementations retain their
-// existing synchronous contract and are checked before and after the call.
+// GetCNServiceWithoutWorkingStateWithContext is the admission-aware,
+// context-aware snapshot counterpart of MOCluster.GetCNServiceWithoutWorkingState.
+// It ignores WorkState, but never exposes a CN that is not globally routable.
 func GetCNServiceWithoutWorkingStateWithContext(
 	ctx context.Context,
 	service MOCluster,
@@ -110,7 +109,8 @@ func GetCNServiceWithoutWorkingStateWithContext(
 		}
 		services := builtIn.services.Load()
 		for _, cn := range services.cn {
-			if selector.filterCN(cn) && !apply(cn) {
+			if viewMetadataAdmissionAllowsCN(services, cn) &&
+				selector.filterCN(cn) && !apply(cn) {
 				break
 			}
 		}
@@ -118,6 +118,46 @@ func GetCNServiceWithoutWorkingStateWithContext(
 	}
 
 	service.GetCNServiceWithoutWorkingState(selector, apply)
+	return ctx.Err()
+}
+
+// GetCNServiceRawWithContext returns the unadmitted built-in inventory. It is
+// intentionally narrow: a CN uses it only to prove that its own heartbeat
+// generation reached the authoritative snapshot before finishing bootstrap.
+func GetCNServiceRawWithContext(
+	ctx context.Context,
+	service MOCluster,
+	selector Selector,
+	apply func(metadata.CNService) bool,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if service == nil {
+		return moerr.NewInternalErrorNoCtx("mocluster service is not initialized")
+	}
+	builtIn, ok := service.(*cluster)
+	if !ok {
+		// External implementations cannot expose the built-in snapshot directly.
+		// This helper is used only by CN-local bootstrap, so retain their existing
+		// synchronous inventory contract and cancellation checks.
+		service.GetCNServiceWithoutWorkingState(selector, apply)
+		return ctx.Err()
+	}
+	if err := builtIn.waitReadyWithContext(ctx); err != nil {
+		return err
+	}
+	if selector.regexpCache == nil && builtIn.regexpCache != nil {
+		selector.regexpCache = builtIn.regexpCache
+	}
+	for _, cn := range builtIn.services.Load().cn {
+		if selector.filterCN(cn) && !apply(cn) {
+			break
+		}
+	}
 	return ctx.Err()
 }
 
@@ -280,8 +320,7 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
-		if (s.viewMetadataAdmission.Preparing || s.viewMetadataAdmission.Enabled) &&
-			!cn.ViewMetadataAdmissionReady {
+		if !viewMetadataAdmissionAllowsCN(s, cn) {
 			continue
 		}
 		// If the all field is false, the work state of CN service MUST be
@@ -308,12 +347,17 @@ func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(
 	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
-		if selector.filterCN(cn) {
+		if viewMetadataAdmissionAllowsCN(s, cn) && selector.filterCN(cn) {
 			if !apply(cn) {
 				return
 			}
 		}
 	}
+}
+
+func viewMetadataAdmissionAllowsCN(s *services, cn metadata.CNService) bool {
+	return !(s.viewMetadataAdmission.Preparing || s.viewMetadataAdmission.Enabled) ||
+		cn.ViewMetadataAdmissionReady
 }
 
 func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService) bool) {

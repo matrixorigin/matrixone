@@ -95,10 +95,12 @@ func TestCNViewMetadataAdmissionFencesCatalogBeforeReady(t *testing.T) {
 		Epoch:                3,
 		RevalidationRequired: true,
 		Generation:           7,
-		Ready:                true,
+		Admitted:             true,
 	})
 
 	require.NoError(t, s.waitForViewMetadataAdmission())
+	require.False(t, s.viewMetadataIngressReady.Load(),
+		"admission alone must not publish CN ingress")
 	require.Equal(t, uint64(3), s.viewMetadataEpochFence.Epoch())
 	require.Equal(t, uint64(3), s.viewMetadataCatalogFencedEpoch.Load())
 	require.Positive(t, statements.Load())

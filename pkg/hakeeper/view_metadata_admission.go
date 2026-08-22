@@ -86,6 +86,27 @@ func (s *stateMachine) viewMetadataAdmissionActive() bool {
 	return s.state.ViewMetadataAdmissionPreparing || s.state.ViewMetadataAdmissionEnabled
 }
 
+func (s *stateMachine) cnViewMetadataAdmitted(store pb.CNStoreInfo) bool {
+	if !s.viewMetadataAdmissionActive() {
+		return true
+	}
+	if !store.ViewMetadataAdmissionSupported ||
+		store.ViewMetadataAdmissionGeneration == 0 ||
+		store.ViewMetadataObservedEpoch < s.state.ViewMetadataAdmissionEpoch {
+		return false
+	}
+	return !s.state.ViewMetadataRevalidationRequired ||
+		s.state.ViewMetadataCatalogFencedEpoch >= s.state.ViewMetadataAdmissionEpoch ||
+		store.ViewMetadataCatalogFencedEpoch >= s.state.ViewMetadataAdmissionEpoch
+}
+
+func (s *stateMachine) proxyViewMetadataAdmitted(store pb.ProxyStore) bool {
+	return !s.viewMetadataAdmissionActive() ||
+		(store.ViewMetadataAdmissionSupported &&
+			store.ViewMetadataAdmissionGeneration != 0 &&
+			store.ViewMetadataObservedEpoch >= s.state.ViewMetadataAdmissionEpoch)
+}
+
 func (s *stateMachine) resetViewMetadataAdmissionBarrier() {
 	for uuid, store := range s.state.LogState.Stores {
 		store.ViewMetadataAdmissionSupported = false
@@ -94,7 +115,7 @@ func (s *stateMachine) resetViewMetadataAdmissionBarrier() {
 	for uuid, store := range s.state.CNState.Stores {
 		// These stores were already serving before phase one. Keep them active
 		// during preparation, but discard every pre-barrier capability/epoch ack.
-		store.ViewMetadataAdmissionReady = true
+		store.ViewMetadataAdmissionReady = store.ViewMetadataIngressReady
 		store.ViewMetadataAdmissionSupported = false
 		store.ViewMetadataObservedEpoch = 0
 		store.ViewMetadataCatalogFencedEpoch = 0
@@ -164,9 +185,7 @@ func (s *stateMachine) tryPromoteViewMetadataAdmissions(
 
 	pending := false
 	for uuid, store := range s.state.CNState.Stores {
-		if store.ViewMetadataAdmissionSupported &&
-			store.ViewMetadataAdmissionGeneration != 0 &&
-			store.ViewMetadataObservedEpoch >= s.state.ViewMetadataAdmissionEpoch {
+		if s.cnViewMetadataAdmitted(store) && store.ViewMetadataIngressReady {
 			store.ViewMetadataAdmissionReady = true
 			s.state.CNState.Stores[uuid] = store
 		} else if store.ViewMetadataAdmissionSupported &&
@@ -182,9 +201,7 @@ func (s *stateMachine) tryPromoteViewMetadataAdmissions(
 		}
 	}
 	for uuid, store := range s.state.ProxyState.Stores {
-		if store.ViewMetadataAdmissionSupported &&
-			store.ViewMetadataAdmissionGeneration != 0 &&
-			store.ViewMetadataObservedEpoch >= s.state.ViewMetadataAdmissionEpoch {
+		if s.proxyViewMetadataAdmitted(store) {
 			store.ViewMetadataAdmissionReady = true
 			s.state.ProxyState.Stores[uuid] = store
 		} else if store.ViewMetadataAdmissionSupported &&
@@ -298,8 +315,7 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 	for uuid, store := range s.state.CNState.Stores {
 		store.ViewMetadataAdmissionReady = false
 		if !commandDeliveryStoreExpired(store.Tick, s.state.Tick, targets.CNStoreTimeoutTicks) &&
-			store.ViewMetadataAdmissionSupported &&
-			store.ViewMetadataObservedEpoch >= s.state.ViewMetadataAdmissionEpoch {
+			s.cnViewMetadataAdmitted(store) && store.ViewMetadataIngressReady {
 			store.ViewMetadataAdmissionReady = true
 		}
 		s.state.CNState.Stores[uuid] = store
@@ -337,6 +353,9 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 		return true
 	}
 	if newGeneration {
+		store.ViewMetadataAdmissionReady = false
+	}
+	if !hb.ViewMetadataIngressReady {
 		store.ViewMetadataAdmissionReady = false
 	}
 	if !hb.ViewMetadataAdmissionSupported || hb.ViewMetadataAdmissionGeneration == 0 {
@@ -418,15 +437,18 @@ func (s *stateMachine) viewMetadataAdmissionSnapshot(uuid string, proxy bool) *p
 		RevalidationRequired: s.state.ViewMetadataRevalidationRequired,
 		CatalogFencedEpoch:   s.state.ViewMetadataCatalogFencedEpoch,
 		Ready:                !s.viewMetadataAdmissionActive(),
+		Admitted:             !s.viewMetadataAdmissionActive(),
 	}
 	if proxy {
 		if store, ok := s.state.ProxyState.Stores[uuid]; ok {
 			snapshot.Generation = store.ViewMetadataAdmissionGeneration
 			snapshot.Ready = store.ViewMetadataAdmissionReady
+			snapshot.Admitted = s.proxyViewMetadataAdmitted(store)
 		}
 	} else if store, ok := s.state.CNState.Stores[uuid]; ok {
 		snapshot.Generation = store.ViewMetadataAdmissionGeneration
 		snapshot.Ready = store.ViewMetadataAdmissionReady
+		snapshot.Admitted = s.cnViewMetadataAdmitted(store)
 	}
 	return snapshot
 }

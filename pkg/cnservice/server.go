@@ -446,6 +446,13 @@ func (s *service) Start() (err error) {
 		return err
 	}
 
+	// Admission authorizes local initialization; it does not make this CN
+	// routable. Publish ingress readiness only after every remote entry point is
+	// listening. A failed heartbeat leaves the CN safely pending and the normal
+	// heartbeat loop will retry without tearing down already-live listeners.
+	s.viewMetadataIngressReady.Store(true)
+	s.notifyHeartbeat()
+
 	s.task.runnerReady.Store(true)
 	s.startTaskRunner()
 	return nil

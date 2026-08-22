@@ -148,7 +148,7 @@ func TestClusterForceRefresh(t *testing.T) {
 		})
 }
 
-func TestClusterAdmissionSnapshotFiltersOnlyRegularInventory(t *testing.T) {
+func TestClusterAdmissionSnapshotFiltersEveryPublicInventory(t *testing.T) {
 	runClusterTest(
 		time.Hour,
 		func(hc *testHAKeeperClient, c *cluster) {
@@ -181,11 +181,19 @@ func TestClusterAdmissionSnapshotFiltersOnlyRegularInventory(t *testing.T) {
 			})
 			require.Equal(t, []string{"ready"}, regular)
 
-			var raw []string
+			var withoutWorkState []string
 			c.GetCNServiceWithoutWorkingState(NewSelector(), func(service metadata.CNService) bool {
-				raw = append(raw, service.ServiceID)
+				withoutWorkState = append(withoutWorkState, service.ServiceID)
 				return true
 			})
+			require.Equal(t, []string{"ready"}, withoutWorkState)
+
+			var raw []string
+			require.NoError(t, GetCNServiceRawWithContext(
+				context.Background(), c, NewSelector(), func(service metadata.CNService) bool {
+					raw = append(raw, service.ServiceID)
+					return true
+				}))
 			require.ElementsMatch(t, []string{"ready", "pending"}, raw)
 
 			admission := c.GetViewMetadataAdmission()

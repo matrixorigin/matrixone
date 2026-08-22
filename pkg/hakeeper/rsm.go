@@ -1348,6 +1348,8 @@ func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
 		}
 	}
 	s.state.DeletedStores = s.state.DeletedStores[pos:]
+	delete(s.state.ViewMetadataAdmissionCNReady, uuid)
+	delete(s.state.ViewMetadataAdmissionCNTargets, uuid)
 	if store, ok := s.state.CNState.Stores[uuid]; ok {
 		delete(s.state.CNState.Stores, uuid)
 		var addr string
@@ -1368,6 +1370,8 @@ func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
 
 func (s *stateMachine) handleDeleteProxyCmd(uuid string) sm.Result {
 	delete(s.state.ProxyState.Stores, uuid)
+	delete(s.state.ViewMetadataAdmissionProxyReady, uuid)
+	delete(s.state.ViewMetadataAdmissionProxyTargets, uuid)
 	return sm.Result{}
 }
 
