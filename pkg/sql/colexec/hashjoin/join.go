@@ -921,6 +921,13 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 		if err := marker.PreExtendNulls(rowCnt, proc.Mp()); err != nil {
 			return err
 		}
+		// AppendMultiFixed only grows the NULL bitmap when a NULL value is
+		// appended.  The marker currently contains all FALSE values, so its
+		// bitmap can still have a zero logical length even though the result
+		// vector has rowCnt rows.  Establish the visible result range before
+		// merging probe-side NULLs; otherwise a bounded external bitmap treats
+		// every probe NULL as outside the destination and silently drops it.
+		marker.GetNulls().GetBitmap().TryExpandWithSize(rowCnt)
 		nulls.Or(marker.GetNulls(), vec.GetNulls(), marker.GetNulls())
 	}
 	return nil
