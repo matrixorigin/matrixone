@@ -401,7 +401,7 @@ nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦  2  ¦  null  ¦  null  𝄀
 coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
 greatest_date  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
 select * from v_flow_metadata_safe;
-➤ if_str_num[12,2,0]  ¦  if_unsigned_signed[3,21,0]  ¦  case_date_dt[93,64,0]  ¦  case_binary_char[12,8,0]  ¦  ifnull_decimal[3,2,1]  ¦  nullif_mixed[12,2,0]  ¦  coalesce_str_num[12,2,0]  ¦  greatest_date[91,64,0]  𝄀
+➤ if_str_num[12,2,0]  ¦  if_unsigned_signed[3,21,0]  ¦  case_date_dt[93,64,0]  ¦  case_binary_char[-3,8,0]  ¦  ifnull_decimal[3,2,1]  ¦  nullif_mixed[12,2,0]  ¦  coalesce_str_num[12,2,0]  ¦  greatest_date[91,64,0]  𝄀
 2  ¦  1  ¦  2024-01-01 00:00:00  ¦  a  ¦  9.5  ¦  null  ¦  8  ¦  2024-01-02
 drop view v_flow_metadata_safe;
 drop view if exists v_case_temporal_else;
@@ -419,7 +419,7 @@ create view v_if_binary_char as
 select if(1, _binary 'a', 'bc') as if_binary_char;
 desc v_if_binary_char;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-if_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦
+if_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
 select hex(if_binary_char) as if_binary_char_hex from v_if_binary_char;
 ➤ if_binary_char_hex[12,65535,0]  𝄀
 61
@@ -508,7 +508,7 @@ create view v_case_binary_utf8 as
 select case when 1 then _binary 'a' else '中文' end as case_binary_utf8;
 desc v_case_binary_utf8;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-case_binary_utf8  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦
+case_binary_utf8  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
 select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
 ➤ case_utf8_hex[12,65535,0]  𝄀
 E4B8ADE69687
