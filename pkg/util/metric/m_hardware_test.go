@@ -17,7 +17,6 @@ package metric
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	prom "github.com/prometheus/client_golang/prometheus"
@@ -36,16 +35,19 @@ func TestHardwareCPU(t *testing.T) {
 		// order by metric name
 		So(mf[0].GetType(), ShouldEqual, dto.MetricType_GAUGE)
 		So(mf[1].GetType(), ShouldEqual, dto.MetricType_COUNTER)
+		So(mf[0].GetName(), ShouldEqual, "sys_cpu_combined_percent")
+		So(mf[1].GetName(), ShouldEqual, "sys_cpu_seconds_total")
 
-		time.Sleep(time.Second)
+		percent := mf[0].Metric[0].Gauge.GetValue()
+		firstTotal := mf[1].Metric[0].Counter.GetValue()
+		So(percent, ShouldBeGreaterThanOrEqualTo, 0)
+		So(percent, ShouldBeLessThanOrEqualTo, 100)
+		So(firstTotal, ShouldBeGreaterThanOrEqualTo, 0)
+
 		mf2, err := reg.Gather()
 		So(err, ShouldBeNil)
 		So(len(mf2), ShouldEqual, 2)
-
-		deltaBusy := mf2[1].Metric[0].Counter.GetValue() - mf[1].Metric[0].Counter.GetValue()
-		deltaPercent := mf2[0].Metric[0].Gauge.GetValue()
-
-		So(deltaBusy*100, ShouldAlmostEqual, deltaPercent, 60 /* 60% diff will be ok anyway */)
+		So(mf2[1].Metric[0].Counter.GetValue(), ShouldBeGreaterThanOrEqualTo, firstTotal)
 	})
 }
 

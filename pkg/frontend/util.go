@@ -264,7 +264,17 @@ func getExprValueWithPrepareMeta(
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
 	}
-	defer tempExecCtx.Close()
+	defer func() {
+		// The synthetic SELECT is executed through doComQuery, which points the
+		// session compiler context at tempExecCtx.  Restore the caller's context
+		// before the next statement in a multi-statement packet is planned;
+		// tempExecCtx.Close clears its request context and would otherwise leave
+		// a nil context/process behind.
+		tempExecCtx.Close()
+		if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+			tcc.SetExecCtx(execCtx)
+		}
+	}()
 	err = executeStmtInSameSession(
 		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {
