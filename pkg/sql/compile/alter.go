@@ -2009,11 +2009,13 @@ func (c *Compile) alterPartitionTables(
 
 func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup) (err error) {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	oldRelationID := qry.GetTableDef().GetTblId()
+	oldLogicalID := qry.GetTableDef().GetLogicalId()
 
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		// COPY ALTER transfers mo_foreign_keys around the source-table drop,
 		// so its catalog statements are executed inside AlterTableCopy.
-		return s.alterTableCopy(c, cleanup)
+		err = s.alterTableCopy(c, cleanup)
 	} else {
 		err = s.alterTableInplace(c, cleanup)
 	}
@@ -2021,7 +2023,7 @@ func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup
 		return err
 	}
 
-	if !plan2.IsFkBannedDatabase(qry.Database) {
+	if qry.AlgorithmType != plan.AlterTable_COPY && !plan2.IsFkBannedDatabase(qry.Database) {
 		//update the mo_foreign_keys
 		for _, sql := range qry.UpdateFkSqls {
 			err = c.runSql(sql)
@@ -2030,7 +2032,33 @@ func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup
 			}
 		}
 	}
-	return err
+	databaseName := qry.Database
+	if databaseName == "" {
+		databaseName = c.db
+	}
+	if qry.AlgorithmType != plan.AlterTable_COPY {
+		changesViewMetadata := false
+		var renamedTo string
+		for _, action := range qry.Actions {
+			if action.GetAlterReplaceDef() != nil {
+				changesViewMetadata = true
+				break
+			}
+			if rename := action.GetAlterName(); rename != nil {
+				renamedTo = rename.NewName
+			}
+		}
+		if renamedTo != "" && c.proc.Base.IsFrontend {
+			return c.enqueueViewsAfterRelationRemoval(
+				databaseName, qry.GetTableDef().GetName(), qry.GetTableDef().GetDbId(),
+				oldRelationID, oldLogicalID)
+		}
+		if !changesViewMetadata {
+			return nil
+		}
+	}
+	return c.refreshViewsAfterRelationMutation(
+		databaseName, qry.GetTableDef().GetName(), oldRelationID, oldLogicalID)
 }
 
 func (s *Scope) RenameTable(c *Compile) (err error) {

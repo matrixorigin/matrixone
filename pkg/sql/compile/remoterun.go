@@ -93,6 +93,17 @@ func encodeScope(s *Scope) ([]byte, error) {
 	return p.Marshal()
 }
 
+func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
+	p, err := fillPipeline(s)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	return p.Marshal()
+}
+
 func icebergPlanningStatsToPipeline(stats process.ParquetProfileStats) *pipeline.IcebergPlanningStats {
 	if stats.Empty() {
 		return nil
@@ -151,12 +162,17 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
+		return nil, err
 	}
 	ctx := &scopeContext{
 		parent: nil,
@@ -293,16 +309,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
 			RecvMsgList:            s.DataSource.RecvMsgList,
-		}
-		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
-			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.MembershipFilterBytes) > 0 {
-				p.DataSource.MembershipFilter = s.DataSource.MembershipFilterBytes
-			} else if bfVal := s.Proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					p.DataSource.MembershipFilter = bf
-				}
-			}
 		}
 		// Fulltext index table: attach FulltextMembershipFilter from context.
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
@@ -656,6 +662,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsRightJoin:            t.IsRightJoin,
 			HashOnPk:               t.HashOnPK,
 			CanSkipProbe:           t.CanSkipProbe,
+			EmitCompressedRowCount: t.EmitCompressedRowCount,
 			IsShuffle:              t.IsShuffle,
 			ShuffleIdx:             t.ShuffleIdx,
 			RelList:                relList,
@@ -794,6 +801,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IcebergPlanningStats:        icebergPlanningStatsToPipeline(t.Es.IcebergPlanningStats),
 			IcebergDeleteMaxMemoryBytes: t.Es.IcebergDeleteMaxMemoryBytes,
 			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
+			DatastreamScan:              t.Es.DatastreamScan,
 		}
 		in.ProjectList = t.ProjectList
 	case *mongoscan.MongoScan:
@@ -901,32 +909,41 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *apply.Apply:
 		relList, colList := getRelColList(t.Result)
 		in.Apply = &pipeline.Apply{
-			ApplyType: int32(t.ApplyType),
-			RelList:   relList,
-			ColList:   colList,
-			Types:     convertToPlanTypes(t.Typs),
+			ApplyType:       int32(t.ApplyType),
+			RelList:         relList,
+			ColList:         colList,
+			Types:           convertToPlanTypes(t.Typs),
+			VectorIndexScan: t.VectorIndexScan,
+			VectorAttrs:     t.VectorAttrs,
+			TxnOffset:       int64(t.TxnOffset),
 		}
-		in.TableFunction = &pipeline.TableFunction{
-			Attrs:                  t.TableFunction.Attrs,
-			Rets:                   t.TableFunction.Rets,
-			Args:                   t.TableFunction.Args,
-			Params:                 t.TableFunction.Params,
-			Name:                   t.TableFunction.FuncName,
-			IsSingle:               t.TableFunction.IsSingle,
-			IndexReaderParam:       t.TableFunction.IndexReaderParam,
-			RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
-			FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
-			FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
+		if t.TableFunction != nil {
+			in.TableFunction = &pipeline.TableFunction{
+				Attrs:                  t.TableFunction.Attrs,
+				Rets:                   t.TableFunction.Rets,
+				Args:                   t.TableFunction.Args,
+				Params:                 t.TableFunction.Params,
+				Name:                   t.TableFunction.FuncName,
+				IsSingle:               t.TableFunction.IsSingle,
+				IndexReaderParam:       t.TableFunction.IndexReaderParam,
+				RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
+				FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
+				FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
+			}
 		}
 	case *multi_update.MultiUpdate:
 		targetAware := false
+		affectedRowsSelectors := false
 		for _, muCtx := range t.MultiUpdateCtx {
 			if muCtx.DedupByTargetRowID || muCtx.TargetUpdateCtxIdx != 0 {
 				targetAware = true
-				break
 			}
+			affectedRowsSelectors = affectedRowsSelectors || len(muCtx.AffectedRowsCols) > 0
 		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, targetAware); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteAffectedRowsSelectorsProtocol(proc, affectedRowsSelectors); err != nil {
 			return ctxId, nil, err
 		}
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -940,6 +957,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				CountDeleteAffectRows: t.CountDeleteAffectRows,
 				DedupByTargetRowId:    muCtx.DedupByTargetRowID,
 				TargetUpdateCtxIdx:    int32(muCtx.TargetUpdateCtxIdx),
+				AffectedRowsCols:      make([]plan.ColRef, len(muCtx.AffectedRowsCols)),
+			}
+			for j, pos := range muCtx.AffectedRowsCols {
+				updateCtxList[i].AffectedRowsCols[j].ColPos = int32(pos)
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1180,6 +1201,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.CanSkipProbe = t.CanSkipProbe
+		arg.EmitCompressedRowCount = t.EmitCompressedRowCount
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
@@ -1326,6 +1348,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					IcebergPlanningStats:        icebergPlanningStatsFromPipeline(t.IcebergPlanningStats),
 					IcebergDeleteMaxMemoryBytes: t.IcebergDeleteMaxMemoryBytes,
 					IcebergDeleteSpillEnabled:   t.IcebergDeleteSpillEnabled,
+					DatastreamScan:              t.DatastreamScan,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
@@ -1434,17 +1457,22 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ApplyType = int(t.ApplyType)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.TableFunction = table_function.NewArgument()
-		arg.TableFunction.Attrs = opr.TableFunction.Attrs
-		arg.TableFunction.Rets = opr.TableFunction.Rets
-		arg.TableFunction.Args = opr.TableFunction.Args
-		arg.TableFunction.FuncName = opr.TableFunction.Name
-		arg.TableFunction.Params = opr.TableFunction.Params
-		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
-		arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
-		arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
-		arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
-		arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
+		arg.VectorIndexScan = t.VectorIndexScan
+		arg.VectorAttrs = t.VectorAttrs
+		arg.TxnOffset = int(t.TxnOffset)
+		if opr.TableFunction != nil {
+			arg.TableFunction = table_function.NewArgument()
+			arg.TableFunction.Attrs = opr.TableFunction.Attrs
+			arg.TableFunction.Rets = opr.TableFunction.Rets
+			arg.TableFunction.Args = opr.TableFunction.Args
+			arg.TableFunction.FuncName = opr.TableFunction.Name
+			arg.TableFunction.Params = opr.TableFunction.Params
+			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
+			arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
+			arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+			arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
+			arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
+		}
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()
@@ -1470,6 +1498,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				DedupByTargetRowID: muCtx.DedupByTargetRowId,
 				TargetUpdateCtxIdx: int(muCtx.TargetUpdateCtxIdx),
 				TargetTableID:      muCtx.TableDef.TblId,
+				AffectedRowsCols:   make([]int, len(muCtx.AffectedRowsCols)),
+			}
+			for j, pos := range muCtx.AffectedRowsCols {
+				arg.MultiUpdateCtx[i].AffectedRowsCols[j] = int(pos.ColPos)
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
@@ -1607,6 +1639,25 @@ func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inpu
 	return nil
 }
 
+func validateRemoteStringProvenancePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	requiresVersion23, err := plan.RequiresMORPCVersion23StringProvenance(p)
+	if err != nil {
+		return err
+	}
+	if !requiresVersion23 {
+		return nil
+	}
+	if proc == nil || !supportsRemoteCrossDomainStringLiterals(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"cross-domain string provenance requires MORPC protocol version 23",
+		)
+	}
+	return nil
+}
+
 func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -1631,6 +1682,18 @@ func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	return nil
 }
 
+func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAffectedRowsSelectors(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"per-target affected-row selector metadata requires MORPC protocol version 24",
+		)
+	}
+	return nil
+}
+
 func validateRemoteTargetAwareUpdatePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -1640,12 +1703,21 @@ func validateRemoteTargetAwareUpdatePipelineProtocol(
 	}
 	for _, instruction := range p.InstructionList {
 		if preInsert := instruction.GetPreInsert(); preInsert != nil && preInsert.HasTargetSelector {
-			return validateRemoteTargetAwareUpdateProtocol(proc, true)
+			if err := validateRemoteTargetAwareUpdateProtocol(proc, true); err != nil {
+				return err
+			}
 		}
 		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
 			for _, updateCtx := range multiUpdate.UpdateCtxList {
 				if updateCtx.DedupByTargetRowId || updateCtx.TargetUpdateCtxIdx != 0 {
-					return validateRemoteTargetAwareUpdateProtocol(proc, true)
+					if err := validateRemoteTargetAwareUpdateProtocol(proc, true); err != nil {
+						return err
+					}
+				}
+				if len(updateCtx.AffectedRowsCols) > 0 {
+					if err := validateRemoteAffectedRowsSelectorsProtocol(proc, true); err != nil {
+						return err
+					}
 				}
 			}
 		}

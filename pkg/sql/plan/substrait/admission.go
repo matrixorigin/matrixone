@@ -943,7 +943,7 @@ func AdmitReads(ctx context.Context, r AdmissionRequest) (*AdmittedReads, error)
 	if !r.ReadOnly || r.PriorWrites {
 		return nil, NotEligible(EligibilityTransaction, "transaction is not an admissible read-only snapshot")
 	}
-	if r.AccountID == 0 || len(r.QueryID) == 0 || len(r.SnapshotTS) != 12 || len(r.AuthorizedClientSPKIHash) != sha256.Size {
+	if len(r.QueryID) == 0 || len(r.SnapshotTS) != 12 || len(r.AuthorizedClientSPKIHash) != sha256.Size {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid admission identity")
 	}
 	if r.TTL <= 0 || r.TTL > MaxLeaseTTL {

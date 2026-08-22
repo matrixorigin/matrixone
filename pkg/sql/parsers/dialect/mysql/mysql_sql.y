@@ -117,6 +117,9 @@ func sqlTaskInt64(v any) int64 {
     mongodbOption *tree.MongoDBOption
     mongodbOptions tree.MongoDBOptions
     mongodbTableParam *tree.MongoDBTableParam
+    datastreamOption *tree.DataStreamOption
+    datastreamOptions tree.DataStreamOptions
+    datastreamTableParam *tree.DataStreamTableParam
 
     functionName *tree.FunctionName
     funcArg tree.FunctionArg
@@ -593,6 +596,7 @@ func sqlTaskInt64(v any) int64 {
 // Iceberg
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
+%token <str> DATASTREAM
 
 // ROLLUP
 %token <str> GROUPING SETS CUBE ROLLUP 
@@ -748,6 +752,10 @@ func sqlTaskInt64(v any) int64 {
 %type <mongodbOptions> mongodb_option_list_opt mongodb_option_list
 %type <mongodbOption> mongodb_option
 %type <str> mongodb_option_key mongodb_option_value
+%type <datastreamTableParam> datastream_table_param
+%type <datastreamOptions> datastream_option_list_opt datastream_option_list
+%type <datastreamOption> datastream_option
+%type <str> datastream_option_key datastream_option_value
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -5629,7 +5637,7 @@ drop_table_stmt:
     }
 
 drop_view_stmt:
-    DROP VIEW exists_opt table_name_list
+    DROP VIEW exists_opt table_name_list drop_table_opt
     {
         var ifExists = $3
         var names = $4
@@ -10198,6 +10206,15 @@ create_table_stmt:
         t.MongoDBParam = $9
         $$ = t
     }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' datastream_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.DataStreamParam = $9
+        $$ = t
+    }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name iceberg_table_param
     {
         t := tree.NewCreateTable()
@@ -11018,6 +11035,57 @@ mongodb_option_key:
     }
 
 mongodb_option_value:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
+datastream_table_param:
+    ENGINE equal_opt DATASTREAM datastream_option_list_opt
+    {
+        $$ = tree.NewDataStreamTableParam($4)
+    }
+
+datastream_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' datastream_option_list ')'
+    {
+        $$ = $3
+    }
+
+datastream_option_list:
+    datastream_option
+    {
+        $$ = tree.DataStreamOptions{$1}
+    }
+|   datastream_option_list ',' datastream_option
+    {
+        $$ = append($1, $3)
+    }
+
+datastream_option:
+    datastream_option_key '=' datastream_option_value
+    {
+        $$ = tree.NewDataStreamOption(tree.Identifier($1), $3)
+    }
+
+datastream_option_key:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
+    }
+
+datastream_option_value:
     ident
     {
         $$ = $1.Compare()
@@ -14819,7 +14887,7 @@ char_type:
             },
         }
     }
-|   TEXT
+|   TEXT length_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -14828,6 +14896,7 @@ char_type:
                 FamilyString: $1,
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_TEXT),
+                DisplayWith: $2,
             },
         }
     }
@@ -14867,7 +14936,7 @@ char_type:
             },
         }
     }
-|   BLOB
+|   BLOB length_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -14876,6 +14945,7 @@ char_type:
                 FamilyString: $1,
                 Locale: &locale,
                 Oid:    uint32(defines.MYSQL_TYPE_BLOB),
+                DisplayWith: $2,
             },
         }
     }
@@ -15552,6 +15622,7 @@ non_reserved_keyword:
 |   MONGODB
 |   MONGODB_PATH
 |   MONGODB_CONVERT
+|   DATASTREAM
 |   CONNECTIONS
 |   INTERMEDIATE_GRAPH_DEGREE
 |   ISOLATION

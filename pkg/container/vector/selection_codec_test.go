@@ -207,6 +207,27 @@ func TestSelectedRowsCodecPreservesBinaryStringProvenance(t *testing.T) {
 	require.False(t, uniform.HasBinaryStringRows())
 }
 
+func TestSelectedRowsCodecPreservesUniformExplicitText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varbinary.ToType())
+	destination := NewVec(types.T_varbinary.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendBytesList(source, [][]byte{[]byte("a"), []byte("b")}, nil, mp))
+	require.NoError(t, source.SetSelectedValueBinaryStringRowsWithMP([]bool{false, false}, mp))
+
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 1}))
+	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 2, mp))
+	for row := 0; row < destination.Length(); row++ {
+		require.Equal(t, types.RuntimeStringText, destination.GetRuntimeStringDomainAt(row))
+		require.False(t, destination.GetIsBinaryStringAt(row))
+	}
+}
+
 func TestSelectedRowsCodecRejectsInvalidOrTruncatedRecords(t *testing.T) {
 	mp := mpool.MustNewZero()
 	destination := NewOffHeapVecWithType(types.T_int64.ToType())
@@ -278,14 +299,6 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 				require.NoError(t, buf.WriteByte(0xff))
 			},
 			want: "parameter kind",
-		},
-		{
-			name: "invalid-binary-mode",
-			payload: func(buf *bytes.Buffer) {
-				require.NoError(t, types.WriteInt32(buf, 1))
-				require.NoError(t, buf.WriteByte(3<<selectedRowsBinaryShift))
-			},
-			want: "metadata",
 		},
 		{
 			name: "undeclared-row-flag",

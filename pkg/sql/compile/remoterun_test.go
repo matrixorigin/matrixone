@@ -402,6 +402,18 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.Equal(t, original.VectorOpType, restoredProductL2.VectorOpType)
 	})
 
+	t.Run("HashJoinCompressedRowCountContract", func(t *testing.T) {
+		original := &hashjoin.HashJoin{
+			EqConds:                [][]*planpb.Expr{{}, {}},
+			EmitCompressedRowCount: true,
+		}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredHashJoin, ok := restored.(*hashjoin.HashJoin)
+		require.True(t, ok)
+		require.True(t, restoredHashJoin.EmitCompressedRowCount)
+	})
+
 	t.Run("IntersectAll", func(t *testing.T) {
 		restored := roundTrip(t, &intersectall.IntersectAll{})
 		defer restored.Release()
@@ -496,6 +508,11 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 			TargetUpdateCtxIdx: 1,
 		}},
 	}
+	affectedRowsMultiUpdate := &multi_update.MultiUpdate{
+		MultiUpdateCtx: []*multi_update.MultiUpdateCtx{{
+			AffectedRowsCols: []int{9, 10},
+		}},
+	}
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, nil))
@@ -544,6 +561,58 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	_, _, err = convertToPipelineInstruction(targetIndexedMultiUpdate, proc, ctx, 1)
 	require.NoError(t, err)
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwarePipeline))
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 24")
+	affectedRowsPipeline := &pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.MultiUpdate),
+			MultiUpdate: &pipeline.MultiUpdate{
+				UpdateCtxList: []*planpb.UpdateCtx{{
+					AffectedRowsCols: []planpb.ColRef{{ColPos: 9}, {ColPos: 10}},
+				}},
+			},
+		}},
+	}
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
+		"requires MORPC protocol version 24")
+	combinedPipeline := &pipeline.Pipeline{
+		InstructionList: append(targetAwarePipeline.Children[0].InstructionList, affectedRowsPipeline.InstructionList...),
+	}
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, combinedPipeline),
+		"requires MORPC protocol version 24",
+		"a preceding v20-compatible operator must not hide a later v24 field")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 24",
+		"v21 is reserved for RIGHT DEDUP and must not accept affected-row selectors")
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
+		"requires MORPC protocol version 24")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 24",
+		"v22 is reserved for typed user variables and must not accept affected-row selectors")
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
+		"requires MORPC protocol version 24")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 24",
+		"v23 is reserved for explicit-text provenance and must not accept affected-row selectors")
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
+		"requires MORPC protocol version 24")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion24)
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.NoError(t, err)
+	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline))
+	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, combinedPipeline))
 }
 
 func TestRightDedupInputUniqueRemoteProtocolValidation(t *testing.T) {
@@ -598,6 +667,111 @@ func TestRightDedupInputUniqueRemoteProtocolValidation(t *testing.T) {
 	require.True(t, instruction.RightDedupJoin.InputKeysUnique)
 	require.NoError(t,
 		validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, uniquePipeline))
+}
+
+func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	makeScope := func(typ types.Type, form planpb.StringLiteralForm) *Scope {
+		literal := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(typ.Oid), Charset: uint32(typ.Charset)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Sval{Sval: "selected"}, LiteralForm: form,
+			}},
+		}
+		return &Scope{
+			Magic:  Remote,
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0},
+				Nodes: []*planpb.Node{{NodeId: 0, ProjectList: []*planpb.Expr{literal}}},
+			}}},
+		}
+	}
+	makeDynamicScope := func() *Scope {
+		boolColumn := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		textColumn := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+		binaryType := planpb.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)}
+		binaryColumn := &planpb.Expr{Typ: binaryType,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}}
+		implicitCast := &planpb.Expr{Typ: binaryType, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "cast"}, Args: []*planpb.Expr{textColumn},
+		}}}
+		dynamic := &planpb.Expr{Typ: binaryType, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "if"}, Args: []*planpb.Expr{boolColumn, implicitCast, binaryColumn},
+		}}}
+		return &Scope{
+			Magic: Remote, Proc: proc, RootOp: value_scan.NewArgument(),
+			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, ProjectList: []*planpb.Expr{dynamic}}},
+			}}},
+		}
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
+	_, _, _, _, err := prepareRemoteRunSendingData(
+		"", makeScope(types.T_varbinary.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
+		proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
+	_, _, _, _, err = prepareRemoteRunSendingData("", makeDynamicScope(), proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
+
+	compatibleData, _, _, _, err := prepareRemoteRunSendingData(
+		"", makeScope(types.T_varchar.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
+		proc, nil, uuid.Nil)
+	require.NoError(t, err, "same-domain ordinary TEXT remains compatible with version 21")
+	compatibleScope, err := decodeScope(compatibleData, proc, true, nil)
+	require.NoError(t, err)
+	compatibleScope.release()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	_, _, _, _, err = prepareRemoteRunSendingData(
+		"", makeScope(types.T_varbinary.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
+		proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23",
+		"version 22 predates cross-domain literal provenance")
+	_, _, _, _, err = prepareRemoteRunSendingData("", makeDynamicScope(), proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23",
+		"version 22 predates runtime string provenance")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	dynamicData, _, _, _, err := prepareRemoteRunSendingData("", makeDynamicScope(), proc, nil, uuid.Nil)
+	require.NoError(t, err, "version 23 accepts dynamic selected-value provenance")
+	dynamicScope, err := decodeScope(dynamicData, proc, true, nil)
+	require.NoError(t, err)
+	dynamicScope.release()
+	scopeData, _, _, _, err := prepareRemoteRunSendingData(
+		"", makeScope(types.T_varbinary.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT),
+		proc, nil, uuid.Nil)
+	require.NoError(t, err)
+	restored, err := decodeScope(scopeData, proc, true, nil)
+	require.NoError(t, err)
+	defer restored.release()
+	wirePipeline := &pipeline.Pipeline{}
+	require.NoError(t, wirePipeline.Unmarshal(scopeData))
+	require.Equal(t, planpb.StringLiteralForm_STRING_LITERAL_TEXT,
+		wirePipeline.Qry.GetQuery().Nodes[0].ProjectList[0].GetLit().LiteralForm)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	_, err = decodeScope(scopeData, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
+	_, err = decodeScope(dynamicData, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
@@ -954,7 +1128,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	t.Run("TableFunction_IndexReaderParam", func(t *testing.T) {
 		limit := plan.MakePlan2Int64ConstExprWithType(17)
 		op := &table_function.TableFunction{
-			FuncName: "ivf_search",
+			FuncName: "unnest",
 			FulltextSourceRef: &planpb.ObjectRef{
 				SchemaName: "publisher", ObjName: "source", SubscriptionName: "subscriber_alias",
 				PubInfo: &planpb.PubInfo{TenantId: 42},
@@ -1055,9 +1229,36 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, indexRef, restoredOp.TableFunction.FulltextIndexRef)
 	})
 
+	t.Run("Apply_VectorIndexScan", func(t *testing.T) {
+		op := apply.NewArgument()
+		op.VectorAttrs = []string{"pkid", "score"}
+		op.TxnOffset = 19
+		op.VectorIndexScan = &planpb.VectorIndexScan{
+			Index:            &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
+			DistanceFunction: "l2_distance",
+			CandidateLimit:   plan.MakePlan2Uint64ConstExprWithType(8),
+		}
+
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Nil(t, pipeInstr.TableFunction)
+		data, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		var decoded pipeline.Instruction
+		require.NoError(t, decoded.Unmarshal(data))
+
+		restored, err := convertToVmOperator(&decoded, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*apply.Apply)
+		require.Equal(t, op.VectorAttrs, restoredOp.VectorAttrs)
+		require.Equal(t, "idx", restoredOp.VectorIndexScan.GetIndex().GetIndexName())
+		require.Equal(t, uint64(8), restoredOp.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+		require.Equal(t, 19, restoredOp.TxnOffset)
+	})
+
 	t.Run("TableFunction_Limit", func(t *testing.T) {
 		op := table_function.NewArgument()
-		op.FuncName = "ivf_search"
+		op.FuncName = "unnest"
 		op.Limit = plan.MakePlan2Uint64ConstExprWithType(4)
 		op.RuntimeFilterSpecs = []*planpb.RuntimeFilterSpec{
 			{Tag: 9, UseMembershipFilter: true},
@@ -1099,6 +1300,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 					InsertPkColIdx:     1,
 					DedupByTargetRowID: true,
 					TargetUpdateCtxIdx: 0,
+					AffectedRowsCols:   []int{9, 10},
 				},
 			},
 			Action: multi_update.UpdateWriteTable,
@@ -1116,6 +1318,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, 1, restoredOp.MultiUpdateCtx[0].InsertPkColIdx)
 		require.True(t, restoredOp.MultiUpdateCtx[0].DedupByTargetRowID)
 		require.Equal(t, 0, restoredOp.MultiUpdateCtx[0].TargetUpdateCtxIdx)
+		require.Equal(t, []int{9, 10}, restoredOp.MultiUpdateCtx[0].AffectedRowsCols)
 		require.True(t, restoredOp.IsRemote)
 		require.False(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must stay false when the source op did not set it")
@@ -3489,7 +3692,7 @@ func TestPrepareRemoteRunSendingDataKeepsConnectorChildTableFunctionParams(t *te
 	proc.Base.SessionInfo.TimeZone = time.UTC
 
 	tf := &table_function.TableFunction{
-		FuncName: "ivf_search",
+		FuncName: "unnest",
 		RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
 			{Tag: 42},
 		},

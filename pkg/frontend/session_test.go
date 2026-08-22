@@ -884,6 +884,20 @@ func TestSession_Migrate(t *testing.T) {
 		require.ErrorContains(t, err, "requires protocol version 22")
 		_, getErr := target.GetUserDefinedVar("ts0")
 		require.ErrorContains(t, getErr, "does not exist")
+
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
+		err = Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			DB:                      "d1",
+			UserDefinedVarsExported: true,
+			UserDefinedVars: []*query.MigrateUserDefinedVar{{
+				Name:  "ts0",
+				Value: plan2.MakePlan2StringConstExprWithType("stable-value"),
+			}},
+		})
+		require.NoError(t, err, "typed variable migration remains available at version 22")
+		value, getErr := target.GetUserDefinedVar("ts0")
+		require.NoError(t, getErr)
+		require.Equal(t, "stable-value", value.Value)
 	})
 
 	t.Run("typed system variables preserve side effects", func(t *testing.T) {

@@ -961,6 +961,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	defer func() {
 		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
+	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return stats, err
+	}
 
 	// check if the pitr exists
 	tenantInfo := ses.GetTenantInfo()
@@ -1060,6 +1063,10 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				}
 			}
 
+			if rtnErr = invalidateAccountViewMetadata(ctx, ses, bh, toAccountId); rtnErr != nil {
+				return rtnErr
+			}
+
 			// check account exists or not
 			ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 			rtnErr = restoreAccountUsingClusterSnapshotToNew(
@@ -1075,6 +1082,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				isNeedToCleanToDatabase,
 			)
 			if rtnErr != nil {
+				return rtnErr
+			}
+			if rtnErr = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); rtnErr != nil {
 				return rtnErr
 			}
 
@@ -1102,6 +1112,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 	if !accountExist {
 		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
+	}
+	if restoreLevel == tree.RESTORELEVELACCOUNT {
+		if err = invalidateAccountViewMetadata(ctx, ses, bh, tenantInfo.TenantID); err != nil {
+			return stats, err
+		}
 	}
 
 	//drop foreign key related tables first
@@ -1193,6 +1208,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			tenantInfo.GetTenantID(),
 			tenantInfo.GetTenantID(),
 		); err != nil {
+			return
+		}
+		if err = reconcileAccountViewMetadata(ctx, ses, bh, tenantInfo.GetTenantID()); err != nil {
 			return
 		}
 	}
@@ -1505,6 +1523,37 @@ func reCreateTableWithPitr(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
 	}
+	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+		accountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+			ctx,
+			bh,
+			fmt.Sprintf(" {MO_TS = %d}", ts),
+			accountID,
+			accountID,
+		)
+	}
+	if isSequence(tblInfo) {
+		accountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		return restoreSequence(
+			ctx,
+			bh,
+			tblInfo.createSql,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			ts,
+			accountID,
+			accountID,
+		)
+	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: '%v' at timestamp %d", pitrName, tblInfo.tblName, ts))
 
@@ -1578,6 +1627,17 @@ func getTableInfoWithPitr(
 		pitrName,
 		tableInfos,
 		func(tblInfo *tableInfo) (string, error) {
+			if isSequence(tblInfo) {
+				return getCreateSequenceSQL(
+					ctx,
+					ts,
+					tblInfo.dbName,
+					tblInfo.tblName,
+					func(queryCtx context.Context, sql string, colIndices ...uint64) ([][]string, error) {
+						return getStringColsList(queryCtx, bh, sql, colIndices...)
+					},
+				)
+			}
 			return getCreateTableSqlWithTs(ctx, bh, ts, tblInfo.dbName, tblInfo.tblName)
 		},
 	)

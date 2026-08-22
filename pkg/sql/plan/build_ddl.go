@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -1310,6 +1311,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			}
 		}
 		nullAbility := ctasExprCanBeNull(expr)
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			nullAbility = nullAbility || provenance.Source.Metadata.NullAbility
+		}
 		defaultDef := &plan.Default{NullAbility: nullAbility}
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			switch provenance.CTASDefaultPolicy {
@@ -1471,6 +1475,11 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
+	}
+
+	if stmt.Replace && !stmt.IfNotExists {
+		ctx.SetBuildingAlterView(true, createView.Database, string(viewName))
+		defer ctx.SetBuildingAlterView(false, "", "")
 	}
 
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
@@ -2035,10 +2044,11 @@ func buildCreateTable(
 		if err != nil {
 			return nil, err
 		}
+		previousSubscription := ctx.GetQueryingSubscription()
 		if sub != nil {
 			ctx.SetQueryingSubscription(sub)
 			defer func() {
-				ctx.SetQueryingSubscription(nil)
+				ctx.SetQueryingSubscription(previousSubscription)
 			}()
 		}
 
@@ -2100,6 +2110,9 @@ func buildCreateTable(
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
 		likeSkeletonDef := normalizeLegacyTextCollationForCreateLike(tableDef)
+		if sub != nil {
+			ctx.SetQueryingSubscription(previousSubscription)
+		}
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
 			likeSkeletonDef,
@@ -2107,11 +2120,15 @@ func buildCreateTable(
 			true,
 			cloneStmt,
 			recoveredLegacyChecks,
+			sub,
 		)
 		if err != nil {
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
+			// The subscription binding belongs to the LIKE source only. The
+			// rewritten statement names the local target, so plan it with the
+			// caller's subscription context instead of the publisher binding.
 			// ConstructCreateTableSQL emits a bare `CREATE TABLE ...` without the
 			// IF NOT EXISTS clause, so propagate the original flag. Otherwise
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
@@ -2300,6 +2317,25 @@ func buildCreateTable(
 				Properties: &plan.PropertiesDef{Properties: properties},
 			},
 		})
+	} else if stmt.DataStreamParam != nil {
+		cfg, err := sqldatastream.ParseTableOptions(ctx.GetContext(), stmt.DataStreamParam)
+		if err != nil {
+			return nil, err
+		}
+		// Like MongoDB, the durable typed feature bit is the discriminator that
+		// cannot be injected through the user-controlled rel_createsql JSON of a
+		// generic external table.
+		createTable.TableDef.FeatureFlag |= features.DataStreamExternal
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqldatastream.BuildCreateSQLEnvelope(cfg)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
@@ -2480,6 +2516,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
+			return err
+		}
+	}
+	if stmt.MongoDBParam != nil {
+		if err := rejectMongoDBExternalTableOnUpdate(ctx.GetContext(), stmt); err != nil {
 			return err
 		}
 	}
@@ -2783,6 +2824,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		case *tree.ForeignKey:
+			if stmt.MongoDBParam != nil {
+				return moerr.NewNotSupported(
+					ctx.GetContext(),
+					"FOREIGN KEY constraints on MongoDB external tables",
+				)
+			}
 			if createTable.Temporary {
 				return moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
 			}
@@ -4937,6 +4984,23 @@ func rejectExternalTableInlineIndexes(ctx context.Context, stmt *tree.CreateTabl
 			}
 		case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
 			return moerr.NewInvalidInput(ctx, "cannot create index on external table")
+		}
+	}
+	return nil
+}
+
+func rejectMongoDBExternalTableOnUpdate(ctx context.Context, stmt *tree.CreateTable) error {
+	for _, item := range stmt.Defs {
+		column, ok := item.(*tree.ColumnTableDef)
+		if !ok {
+			continue
+		}
+		for _, attribute := range column.Attributes {
+			if _, ok := attribute.(*tree.AttributeOnUpdate); ok {
+				return moerr.NewNotSupportedf(ctx,
+					"MongoDB external table column '%s' does not support ON UPDATE",
+					column.Name.ColNameOrigin())
+			}
 		}
 	}
 	return nil

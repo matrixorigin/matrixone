@@ -64,6 +64,20 @@ func countStarAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
 }
 
+func countStarLiteralAgg() aggexec.AggFuncExecExpression {
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfCountStar,
+		false,
+		[]*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 1},
+			}},
+		}},
+		nil,
+	)
+}
+
 func countPreparedParamAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfCountColumn,
@@ -507,6 +521,18 @@ func setPrepareParamKindProtocolVersion(t *testing.T, proc *process.Process, ver
 	t.Cleanup(func() {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 	})
+}
+
+func TestExplicitTextWireRequiresMORPCVersion23(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion22)
+	require.False(t, explicitTextWireEnabled(proc),
+		"version 22 predates aggregate explicit-text provenance")
+
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	require.True(t, explicitTextWireEnabled(proc))
 }
 
 func mergePreparedMinPartial(
@@ -1069,10 +1095,10 @@ func TestMergeGroupRejectsInvalidPrepareParamKindTrailer(t *testing.T) {
 		{
 			name: "unsupported version",
 			mutate: func(extra []byte, trailerOffset int) []byte {
-				extra[trailerOffset+3] = 4
+				extra[trailerOffset+3] = 5
 				return extra
 			},
-			wantErr: "unsupported aggregate prepared parameter trailer version 4",
+			wantErr: "unsupported aggregate prepared parameter trailer version 5",
 		},
 		{
 			name: "aggregate count mismatch",
@@ -1269,6 +1295,27 @@ func TestGroupNoGroupBy(t *testing.T) {
 	g.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestGroupNoGroupByCountStarConsumesCompressedRowCount(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	const rows = colexec.DefaultBatchSize * 1024
+	input := batch.NewWithSize(0)
+	input.SetRowCount(rows)
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countStarLiteralAgg()})
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	results := collectBatches(t, g, proc)
+	require.Len(t, results, 1)
+	require.Equal(t, int64(rows),
+		vector.MustFixedColNoTypeCheck[int64](results[0].Vecs[0])[0])
+
+	g.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestPreparedCountParamUsesInputRowCount(t *testing.T) {

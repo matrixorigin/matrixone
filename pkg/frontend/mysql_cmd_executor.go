@@ -132,6 +132,13 @@ func getPrepareStmtName(stmtID uint32) string {
 	return string(b)
 }
 
+// GetPrepareStmtName returns the session name for a binary-protocol prepared
+// statement. The proxy uses the same identity when carrying a forwarded
+// COM_STMT_CLOSE through connection migration.
+func GetPrepareStmtName(stmtID uint32) string {
+	return getPrepareStmtName(stmtID)
+}
+
 func parsePrepareStmtID(s string) uint32 {
 	if strings.HasPrefix(s, prefixPrepareStmtName) {
 		ss := strings.Split(s, "_")
@@ -326,10 +333,18 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 func redactStatementTextForLogging(statement tree.Statement, text string) string {
-	switch statement.(type) {
+	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
 		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
 		return tree.String(statement, dialect.MYSQL)
+	case *tree.CreateTable:
+		// A datastream external table's WITH options may carry an 'apikey'
+		// secret; re-rendering the AST redacts it (DataStreamOption.Format),
+		// so the raw CREATE text never reaches statement logging.
+		if stmt.DataStreamParam != nil {
+			return tree.String(statement, dialect.MYSQL)
+		}
+		return text
 	default:
 		return text
 	}
@@ -3326,8 +3341,18 @@ func buildPlanWithPrepareMode(
 		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
-	// NOTE: The context used by buildPlan comes from the CompilerContext object
+	// NOTE: The context used by buildPlan comes from the CompilerContext object.
+	// A nested expression evaluation can temporarily replace that context with
+	// an ExecCtx which is closed before a later statement in the same packet is
+	// planned.  Keep planning and the tracing helpers on the current request
+	// context instead of passing nil to context.WithValue.
 	planContext := ctx.GetContext()
+	if planContext == nil {
+		planContext = reqCtx
+	}
+	if planContext == nil {
+		planContext = context.Background()
+	}
 	stats := statistic.StatsInfoFromContext(planContext)
 	stats.PlanStart()
 

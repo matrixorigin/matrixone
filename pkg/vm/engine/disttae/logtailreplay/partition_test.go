@@ -17,7 +17,38 @@ package logtailreplay
 import (
 	"context"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
+
+func TestConsumeSnapCkpsWithPredecessorBeforeGlobal(t *testing.T) {
+	predecessorEnd := types.BuildTS(300, 0)
+	globalEnd := predecessorEnd.Next()
+	continuationEnd := types.BuildTS(400, 0)
+	entries := []*checkpoint.CheckpointEntry{
+		checkpoint.NewCheckpointEntry(
+			"", types.BuildTS(200, 0), predecessorEnd, checkpoint.ET_Incremental,
+		),
+		checkpoint.NewCheckpointEntry(
+			"", types.TS{}, globalEnd, checkpoint.ET_Global,
+		),
+		checkpoint.NewCheckpointEntry(
+			"", globalEnd, continuationEnd, checkpoint.ET_Incremental,
+		),
+	}
+
+	partition := NewPartition("", nil, 0, 0, 42, nil)
+	require.NoError(t, partition.ConsumeSnapCkps(
+		context.Background(), entries,
+		func(*checkpoint.CheckpointEntry, *PartitionState) error { return nil },
+	))
+	start, end := partition.Snapshot().GetDuration()
+	require.Equal(t, globalEnd, start)
+	require.Equal(t, continuationEnd, end)
+}
 
 func BenchmarkPartitonConsumeCheckpoint(b *testing.B) {
 	partition := NewPartition("", nil, 0, 0, 42, nil)

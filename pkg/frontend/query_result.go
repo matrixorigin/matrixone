@@ -314,6 +314,9 @@ func saveMeta(ctx context.Context, ses *Session) error {
 	if err != nil {
 		return err
 	}
+	// objectWriterV1 serializes the batch into writer-owned buffers during Write,
+	// so saveMeta retains ownership of this temporary batch on every return path.
+	defer metaBat.Clean(ses.pool)
 	metaPath := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.GetStmtId()).String())
 	metaWriter, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, metaPath, fs)
 	if err != nil {
@@ -594,6 +597,12 @@ func getTablesFromPlan(p *plan.Plan) string {
 func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, error) {
 	var err error
 	bat := batch.NewWithSize(len(catalog.MetaColTypes))
+	completed := false
+	defer func() {
+		if !completed {
+			bat.Clean(mp)
+		}
+	}()
 	bat.SetAttributes(catalog.MetaColNames)
 	for i, t := range catalog.MetaColTypes {
 		bat.Vecs[i] = vector.NewVec(t)
@@ -646,6 +655,7 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	if err = vector.AppendFixed(bat.Vecs[catalog.QUERY_ROW_COUNT_IDX], m.QueryRowCount, false, mp); err != nil {
 		return nil, err
 	}
+	completed = true
 	return bat, nil
 }
 

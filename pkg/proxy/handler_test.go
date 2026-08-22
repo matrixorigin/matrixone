@@ -555,8 +555,7 @@ func TestHandler_handleTunnelErrKillsBackendForTrackedInFlightClientRequest(t *t
 	killCalled := 0
 	closeCalled := 0
 	tun := &tunnel{}
-	// Exercise the explicit request-in-flight marker without relying on the
-	// c2s/s2c lastCmdTime heuristic.
+	// Exercise the explicit request-in-flight marker.
 	tun.trackClientRequest(makeSimplePacket("select 1"))
 	tun.mu.sc = &killCurrentServerConn{
 		cn: &CNServer{connID: 11, uuid: "cn-new"},
@@ -953,11 +952,8 @@ func TestHandler_handleTunnelErrSkipsConnCacheCleanupAfterAbortKillFailure(t *te
 }
 
 func markTunnelInFlight(tun *tunnel) {
-	now := time.Now()
 	tun.mu.csp = &pipe{}
 	tun.mu.scp = &pipe{}
-	tun.mu.csp.mu.lastCmdTime = now
-	tun.mu.scp.mu.lastCmdTime = now.Add(-time.Second)
 	tun.trackClientRequest(makeSimplePacket("select 1"))
 }
 

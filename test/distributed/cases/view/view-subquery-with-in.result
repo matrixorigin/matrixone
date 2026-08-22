@@ -399,19 +399,21 @@ a
 1
 2
 select a from t2 having a in (select a from t1);
-SQL syntax error: column "t2.a" must appear in the GROUP BY clause or be used in an aggregate function
+a
+1
+2
 create view v1 as select a from t2 where a in (select a from t1);
 create view v2 as select a from t2 having a in (select a from t1);
-SQL syntax error: column "t2.a" must appear in the GROUP BY clause or be used in an aggregate function
 select * from v1;
 a
 1
 2
 select * from v2;
-SQL parser error: table "v2" does not exist
+a
+1
+2
 drop view v1;
 drop view v2;
-invalid view 'view-subquery-with-in.v2'
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (oref int, grp int, ie int) ;

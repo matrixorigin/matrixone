@@ -30,11 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -842,6 +844,22 @@ func releaseRetainedOrderRefs(colRefCnt map[[2]int32]int, refs [][2]int32) {
 }
 
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
+	return builder.remapAllColRefsForConsumer(
+		nodeID, step, colRefCnt, colRefBool, sinkColRef, false)
+}
+
+// remapAllColRefsForConsumer carries physical consumer capabilities down one
+// logical edge. The capability deliberately defaults to false at every other
+// recursive call, so projections, alternate aggregates, grouping, and plan
+// rewrites cannot accidentally inherit compressed multiplicity support.
+func (builder *QueryBuilder) remapAllColRefsForConsumer(
+	nodeID int32,
+	step int32,
+	colRefCnt map[[2]int32]int,
+	colRefBool map[[2]int32]bool,
+	sinkColRef map[[2]int32]int,
+	acceptsCompressedRowCount bool,
+) (*ColRefRemapping, error) {
 	node := builder.qry.Nodes[nodeID]
 
 	remapping := &ColRefRemapping{
@@ -858,7 +876,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	}
 
 	switch node.NodeType {
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -1275,6 +1293,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_JOIN:
+		node.EmitCompressedRowCount = false
 		node.SpillMem = builder.joinSpillMem
 
 		var markOperandNotNullable [][]bool
@@ -1480,7 +1499,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		if len(node.ProjectList) == 0 && len(leftRemapping.localToGlobal) > 0 {
+		if len(node.ProjectList) == 0 && acceptsCompressedRowCount &&
+			isRowCountOnlyInnerEquiJoin(node) {
+			node.EmitCompressedRowCount = true
+		} else if len(node.ProjectList) == 0 && len(leftRemapping.localToGlobal) > 0 {
 			globalRef := leftRemapping.localToGlobal[0]
 			remapping.addColRef(globalRef)
 
@@ -1584,7 +1606,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		childRemapping, err := builder.remapAllColRefsForConsumer(
+			node.Children[0], step, colRefCnt, colRefBool, sinkColRef,
+			isSingleCountStarConsumer(node))
 		releaseRetainedOrderRefs(colRefCnt, retainedOrderRefs)
 		if err != nil {
 			return nil, err
@@ -2839,8 +2863,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		right := builder.qry.Nodes[node.Children[1]]
 		rightTag := right.BindingTags[0]
+		rightArgs := right.TblFuncExprList
+		if right.NodeType == plan.Node_VECTOR_INDEX_SCAN && right.VectorIndexScan != nil {
+			rightArgs = []*plan.Expr{right.VectorIndexScan.QueryVector, right.VectorIndexScan.CandidateLimit}
+		}
 
-		for _, expr := range right.TblFuncExprList {
+		for _, expr := range rightArgs {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
@@ -2892,7 +2920,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
-		for idx, expr := range right.TblFuncExprList {
+		for idx, expr := range rightArgs {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
 			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
@@ -2961,6 +2989,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			for _, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
 			}
+
+			for _, col := range updateCtx.AffectedRowsCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+			}
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -2990,6 +3022,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			for i, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
 				err := builder.remapSingleColRef(&updateCtx.PartitionCols[i], childRemapping.globalToLocal, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			for i, col := range updateCtx.AffectedRowsCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				err := builder.remapSingleColRef(&updateCtx.AffectedRowsCols[i], childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
 					return nil, err
 				}
@@ -3033,6 +3073,71 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_PRE_INSERT:
+		if node.PreInsertCtx.IsNewUpdate && len(node.BindingTags) == 1 && len(node.ProjectList) > 0 {
+			outputTag := node.BindingTags[0]
+			selectorPositions := [3]int32{-1, -1, -1}
+			if node.PreInsertCtx.HasTargetSelector {
+				selectorPositions = [3]int32{
+					node.PreInsertCtx.TargetRowNumberCol,
+					node.PreInsertCtx.TargetActiveCol,
+					node.PreInsertCtx.TargetRowIdCol,
+				}
+				for _, pos := range selectorPositions {
+					if pos < 0 || int(pos) >= len(node.ProjectList) {
+						return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector")
+					}
+				}
+			}
+
+			// UPDATE PRE_INSERT uses ColOffset to mutate the target table's columns
+			// in place. Preserve the complete positional projection across a chain
+			// of AUTO_INCREMENT targets so pruning cannot move another target (or
+			// row_id) into that fixed slice.
+			neededOutputs := make([]int32, 0, len(node.ProjectList))
+			for pos, expr := range node.ProjectList {
+				neededOutputs = append(neededOutputs, int32(pos))
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+
+			childRemapping, err := builder.remapAllColRefs(
+				node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+			if err != nil {
+				return nil, err
+			}
+			childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+			newProjectList := make([]*plan.Expr, 0, len(neededOutputs))
+			selectorOutputPos := [3]int32{-1, -1, -1}
+			remapInfo.tip = "PreInsertUpdateProjection"
+			for outputPos, needed := range neededOutputs {
+				expr := node.ProjectList[needed]
+				increaseRefCnt(expr, -1, colRefCnt)
+				remapInfo.srcExprIdx = int(needed)
+				if err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo); err != nil {
+					return nil, err
+				}
+				refreshExprNullabilityFromInputs(expr, childProjList)
+				remapping.addColRef([2]int32{outputTag, needed})
+				newProjectList = append(newProjectList, expr)
+				for selectorIdx, selectorPos := range selectorPositions {
+					if needed == selectorPos {
+						selectorOutputPos[selectorIdx] = int32(outputPos)
+					}
+				}
+			}
+			node.ProjectList = newProjectList
+			if node.PreInsertCtx.HasTargetSelector {
+				for _, pos := range selectorOutputPos {
+					if pos < 0 {
+						return nil, moerr.NewInternalError(builder.GetContext(), "PRE_INSERT target selector was pruned")
+					}
+				}
+				node.PreInsertCtx.TargetRowNumberCol = selectorOutputPos[0]
+				node.PreInsertCtx.TargetActiveCol = selectorOutputPos[1]
+				node.PreInsertCtx.TargetRowIdCol = selectorOutputPos[2]
+			}
+			break
+		}
+
 		var selectorRefs [3][2]int32
 		if node.PreInsertCtx.HasTargetSelector {
 			selectorInput := builder.qry.Nodes[node.Children[0]]
@@ -3217,6 +3322,45 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	return remapping, nil
 }
 
+// isRowCountOnlyInnerEquiJoin reports the join shape whose executor can carry
+// multiplicity in a zero-column batch.  Keep this deliberately narrower than
+// IsEquiJoin2: one residual predicate would require materialized candidate
+// rows, and outer/semi/anti joins have different row-preservation semantics.
+func isRowCountOnlyInnerEquiJoin(node *plan.Node) bool {
+	if node == nil || node.JoinType != plan.Node_INNER {
+		return false
+	}
+	conditions := splitPlanConjunctions(node.OnList)
+	if len(conditions) == 0 {
+		return false
+	}
+	for _, condition := range conditions {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
+			return false
+		}
+		left, right := HasColExpr(fn.Args[0], -1), HasColExpr(fn.Args[1], -1)
+		if !((left == 0 && right == 1) || (left == 1 && right == 0)) {
+			return false
+		}
+	}
+	return true
+}
+
+// isSingleCountStarConsumer is the only downstream shape that can consume a
+// join's complete multiplicity without materializing or chunking its rows.
+// Keep this check on the unpruned aggregate list so a multi-aggregate query
+// cannot acquire the capability merely because an outer projection drops one
+// of its results later.
+func isSingleCountStarConsumer(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_AGG ||
+		len(node.GroupBy) != 0 || len(node.AggList) != 1 {
+		return false
+	}
+	agg := node.AggList[0].GetF()
+	return agg != nil && agg.Func != nil && agg.Func.ObjName == "starcount"
+}
+
 func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBool map[[2]int32]bool) {
 	node := builder.qry.Nodes[nodeID]
 
@@ -3318,10 +3462,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 	builder.parseOptimizeHints()
 	for i, rootID := range builder.qry.Steps {
+		if err = builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
+		if err = builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		builder.annotatePartitionTopN(rootID)
 		builder.pushdownLimitToTableScan(rootID)
 		builder.determineGroupByHashKeys(rootID)
@@ -3329,6 +3479,19 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		// Seed base-relation statistics so the early vector access-path builder
+		// can cost the hidden entries work before replacing the source scan.
+		ReCalcNodeStats(rootID, builder, true, false, true)
+		// Vector access paths must participate in the global cost/join/distribution
+		// passes. Build only those paths here; regular/fulltext index rewrites keep
+		// their established late placement below.
+		builder.prepareSpecialIndexGuards(rootID)
+		earlyIndexColMap := make(map[[2]int32]*plan.Expr)
+		rootID, err = builder.applyVectorIndicesEarly(rootID, colRefCnt, earlyIndexColMap)
+		builder.resetSpecialIndexGuards()
+		if err != nil {
+			return nil, err
+		}
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.determineBuildAndProbeSide(rootID, true)
 		determineHashOnPK(rootID, builder)
@@ -3340,6 +3503,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.determineJoinOrder(rootID)
+		if err = builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		colMap := make(map[[2]int32]int)
 		colGroup := make([]int, 0)
 		builder.removeRedundantJoinCond(rootID, colMap, colGroup)
@@ -4688,6 +4854,11 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	ctx.queryBlockOwner = ctx
+	if ctx.bindingRecurStmt() && ctx.cteState.recursiveRefQueryBlock == nil {
+		ctx.cteState.recursiveRefQueryBlock = ctx
+	}
+
 	if stmt.RewriteOption != nil {
 		ctx.remapOption = stmt.RewriteOption
 	}
@@ -7740,7 +7911,14 @@ func (builder *QueryBuilder) bindHaving(
 		havingBinder.bindingHaving = false
 	}()
 	ctx.binder = havingBinder
-	return splitAndBindCondition(clause.Expr, AliasAfterColumn, ctx)
+	expandAlias := AliasAfterColumn
+	if builder.mysqlFullGroupByCompat && !ctx.aggregateQueryForFullGroupBy() {
+		// Defer unqualified-name resolution to HavingBinder. It must distinguish
+		// a visible output name from an anonymous expression that merely happens
+		// to be equal to a SELECT expression.
+		expandAlias = NoAlias
+	}
+	return splitAndBindCondition(clause.Expr, expandAlias, ctx)
 }
 
 func (builder *QueryBuilder) bindProjection(
@@ -10269,6 +10447,18 @@ func (builder *QueryBuilder) bindView(
 	defaultDatabase := viewData.DefaultDatabase
 	if obj.PubInfo != nil {
 		defaultDatabase = obj.SubscriptionName
+		subscription := builder.compCtx.GetQueryingSubscription()
+		if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
+			subscription = &SubscriptionMeta{
+				AccountId: obj.PubInfo.TenantId,
+				DbName:    viewData.DefaultDatabase,
+				SubName:   obj.SubscriptionName,
+				Tables:    pubsub.TableAll,
+			}
+		}
+		previousSubscription := builder.compCtx.GetQueryingSubscription()
+		builder.compCtx.SetQueryingSubscription(subscription)
+		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
 	viewCtx.defaultDatabase = defaultDatabase
 	viewKey := objectkey.Encode(schema, table)
@@ -10703,11 +10893,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 						return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
 					}
 				}
-				// Only the CTE currently being expanded is backed by the
-				// recursive scan. Other CTEs visible from the declaration scope
-				// must still be bound as their own producers.
-				if ctx.bindingRecurStmt() && cteRef == ctx.cteState.cte {
-					nodeID = ctx.cteState.recScanNodeId
+				// An outer recursive CTE can remain active while a nested recursive
+				// CTE replaces the current state. Find the state that owns this
+				// exact CTE before deciding whether to reuse its recursive scan.
+				if recursiveState, active := ctx.activeRecursiveCteState(cteRef); active {
+					if ctx.queryBlockOwner != recursiveState.recursiveRefQueryBlock {
+						return 0, moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
+					}
+					nodeID = recursiveState.recScanNodeId
 					return
 				}
 
@@ -10858,6 +11051,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			externType := plan.ExternType_EXTERNAL_TB
 			var icebergEnv sqliceberg.CreateSQLEnvelope
 			var mongoEnv sqlmongodb.CreateSQLEnvelope
+			var datastreamCfg sqldatastream.Config
 			if env, found, err := sqliceberg.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
 				return 0, err
 			} else if found {
@@ -10876,6 +11070,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					externType = plan.ExternType_MONGODB_TB
 					if builder.isPrepareStatement {
 						return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+					}
+				} else {
+					cfg, isDataStream, err := IsDataStreamTableDef(builder.GetContext(), tableDef)
+					if err != nil {
+						return 0, err
+					}
+					if isDataStream {
+						datastreamCfg = cfg
+						externType = plan.ExternType_DATASTREAM_TB
 					}
 				}
 			}
@@ -10905,6 +11108,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					ProjectedPaths: projectedMongoPaths(mongoEnv.Columns),
 					MaxParallelism: 1,
 				}
+			} else if externType == plan.ExternType_DATASTREAM_TB {
+				externScan.DatastreamScan = &plan.DataStreamScan{
+					Server:  datastreamCfg.Server,
+					Port:    datastreamCfg.Port,
+					Table:   datastreamCfg.Table,
+					Recheck: datastreamCfg.Recheck,
+					ApiKey:  datastreamCfg.APIKey,
+				}
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 			}
@@ -10924,9 +11135,19 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		} else if tableDef.TableType == catalog.SystemSourceRel {
 			return 0, moerr.NewNotSupportedf(builder.GetContext(), "source table %s.%s", schema, table)
 		} else if tableDef.TableType == catalog.SystemViewRel {
-			if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
-				if dbOfView == schema && nameOfView == table {
-					return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+			// CREATE OR REPLACE VIEW and ALTER VIEW change the current catalog
+			// object. A same-named View resolved from an explicit historical
+			// snapshot belongs to a different catalog domain and is a valid source.
+			if !builder.isHistoricalSnapshot(snapshot) {
+				if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
+					lowerCaseTableNames := ctx.lower
+					databaseMatches := tree.NewCStr(dbOfView, lowerCaseTableNames).Compare() ==
+						tree.NewCStr(schema, lowerCaseTableNames).Compare()
+					viewMatches := tree.NewCStr(nameOfView, lowerCaseTableNames).Compare() ==
+						tree.NewCStr(table, lowerCaseTableNames).Compare()
+					if databaseMatches && viewMatches {
+						return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+					}
 				}
 			}
 
@@ -11638,7 +11859,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	id := tbl.Id()
 
 	// Plugin-registered table functions (hnsw_create / hnsw_search /
-	// ivf_create / ivf_search / cagra_create / cagra_search /
+	// ivf_create / cagra_create / cagra_search /
 	// ivfpq_create / ivfpq_search) live under
 	// pkg/vectorindex/<algo>/plugin/plan/tablefunc.go. The plugin
 	// registers each builder via planplugin.RegisterTableFunc at init
@@ -11741,6 +11962,19 @@ func (builder *QueryBuilder) GetContext() context.Context {
 	return builder.compCtx.GetContext()
 }
 
+func (builder *QueryBuilder) checkPlanningCanceled() error {
+	ctx := builder.GetContext()
+	select {
+	case <-ctx.Done():
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+
 // parseRankOption parses rank options from a map of option key-value pairs.
 // It extracts the "mode" option case-insensitively and validates it.
 // Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
@@ -11786,7 +12020,7 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 
 func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 	switch node.NodeType {
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		if onlyContainsTag(expr, node.BindingTags[0]) {
 			return true
 		}
@@ -11872,26 +12106,10 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			}
 
 			tsNano := ts.UTC().UnixNano()
-			if tsNano <= 0 {
-				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+			if err = builder.validateTimestampHint(tsNano, lit.Sval, true); err != nil {
 				return
 			}
-
-			if time.Now().UTC().UnixNano()-tsNano <= options.DefaultGCTTL.Nanoseconds() && 0 <= time.Now().UTC().UnixNano()-tsNano {
-				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
-			} else {
-				var valid bool
-				if valid, err = builder.compCtx.CheckTimeStampValid(tsNano); err != nil {
-					return
-				}
-
-				if !valid {
-					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", lit.Sval)
-					return
-				}
-
-				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
-			}
+			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
 		} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 			snapshot, err = builder.compCtx.ResolveSnapshotWithSnapshotName(lit.Sval)
 			if err != nil && strings.Contains(err.Error(), "find 0 snapshot records") {
@@ -11902,8 +12120,7 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 			// try human-readable datetime first, fall back to debug timestamp format
 			if ts, err2 := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval); err2 == nil {
 				tsNano := ts.UTC().UnixNano()
-				if tsNano <= 0 {
-					err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
+				if err = builder.validateTimestampHint(tsNano, lit.Sval, false); err != nil {
 					return
 				}
 				snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: tsNano}, Tenant: tenant}
@@ -11912,11 +12129,17 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				if ts, err = timestamp.ParseTimestamp(lit.Sval); err != nil {
 					return
 				}
+				if err = builder.validateTimestampHint(ts.PhysicalTime, lit.Sval, false); err != nil {
+					return
+				}
 				snapshot = &Snapshot{TS: &ts, Tenant: tenant}
 			}
 		} else if tsExpr.Type == tree.ASOFTIMESTAMP {
 			var ts int64
 			if ts, err = doResolveTimeStamp(lit.Sval); err != nil {
+				return
+			}
+			if err = builder.validateTimestampHint(ts, lit.Sval, false); err != nil {
 				return
 			}
 			tStamp := &timestamp.Timestamp{PhysicalTime: ts}
@@ -11927,14 +12150,12 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 		}
 	case *plan.Literal_I64Val:
 		if tsExpr.Type == tree.ATTIMESTAMPTIME {
-			if lit.I64Val <= 0 {
-				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
+			if err = builder.validateTimestampHint(lit.I64Val, lit.I64Val, true); err != nil {
 				return
 			}
 			snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: lit.I64Val}, Tenant: tenant}
 		} else if tsExpr.Type == tree.ATMOTIMESTAMP {
-			if lit.I64Val <= 0 {
-				err = moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
+			if err = builder.validateTimestampHint(lit.I64Val, lit.I64Val, false); err != nil {
 				return
 			}
 			if bgSnapshot := builder.compCtx.GetSnapshot(); builder.isRestoreByTs {
@@ -11953,6 +12174,33 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 	}
 
 	return
+}
+
+// validateTimestampHint rejects timestamps that cannot identify historical state.
+// Raw MO_TS and AS OF TIMESTAMP are also used by internal PITR and restore paths,
+// while only the TIMESTAMP hint has an existing catalog-snapshot requirement.
+func (builder *QueryBuilder) validateTimestampHint(ts int64, value any, requireCatalogSnapshot bool) error {
+	if ts <= 0 {
+		return moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", value)
+	}
+
+	if !requireCatalogSnapshot {
+		return nil
+	}
+
+	age := time.Now().UTC().UnixNano() - ts
+	if age >= 0 && age <= options.DefaultGCTTL.Nanoseconds() {
+		return nil
+	}
+
+	valid, err := builder.compCtx.CheckTimeStampValid(ts)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", value)
+	}
+	return nil
 }
 
 func (builder *QueryBuilder) applyIcebergRefToScan(scan *plan.IcebergScan, ref *tree.IcebergRefSpec) error {
@@ -12045,6 +12293,24 @@ func IsSnapshotValid(snapshot *Snapshot) bool {
 	}
 
 	return true
+}
+
+// isHistoricalSnapshot reports whether relation resolution will switch from
+// the current transaction to the requested snapshot transaction.
+func (builder *QueryBuilder) isHistoricalSnapshot(snapshot *Snapshot) bool {
+	if !IsSnapshotValid(snapshot) {
+		return false
+	}
+
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return false
+	}
+	return snapshot.TS.Less(txnOp.Txn().SnapshotTS)
 }
 
 // getPartitionColNameFromExpr tries to extract the first column name from a partition expression

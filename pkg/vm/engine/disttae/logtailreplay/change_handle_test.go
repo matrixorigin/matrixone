@@ -447,7 +447,7 @@ func TestAObjectHandleShouldReadBlock_NonEvaluablePlanFallback(t *testing.T) {
 		require.True(t, ok)
 	})
 
-	t.Run("strict non evaluable returns file not found", func(t *testing.T) {
+	t.Run("strict non evaluable returns distinct error", func(t *testing.T) {
 		handle := &AObjectHandle{
 			p: &baseHandle{changesHandle: &ChangeHandler{
 				enableCommitTSBlockPrune: true,
@@ -465,7 +465,8 @@ func TestAObjectHandleShouldReadBlock_NonEvaluablePlanFallback(t *testing.T) {
 		ok, err := handle.shouldReadBlock(context.Background(), obj, 0)
 		require.False(t, ok)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+		require.True(t, IsCommitTSBlockNotEvaluable(err))
+		require.False(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 	})
 }
 
@@ -1831,7 +1832,8 @@ func TestShouldReadBlock(t *testing.T) {
 		ch.strictCommitTSBlockPrune = true
 		ok, err := h.shouldReadBlock(context.Background(), obj, 0)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+		require.True(t, IsCommitTSBlockNotEvaluable(err))
+		require.False(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 		require.False(t, ok)
 		delete(h.blockPlans, key)
 		ch.strictCommitTSBlockPrune = false

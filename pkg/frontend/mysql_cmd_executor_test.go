@@ -3192,6 +3192,10 @@ func TestPrepareReplacementRemovesPreviousStatementBeforeTxnCheck(t *testing.T) 
 	}
 }
 
+func TestGetPrepareStmtName(t *testing.T) {
+	require.Equal(t, "__mo_stmt_id_42", GetPrepareStmtName(42))
+}
+
 func TestHandlePrepareStmtNameContainingFrom(t *testing.T) {
 	setSessionAlloc("", NewLeakCheckAllocator())
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
@@ -4029,6 +4033,14 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsParameterModificationStatement(&tree.SetTransaction{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetTransaction{}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			ses:  &backSession{},
+			stmt: &tree.CreateSequence{},
+		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			ses:  &backSession{},
+			stmt: &tree.DropSequence{},
+		}), convey.ShouldBeFalse)
 		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
 			stmt: &tree.SetVar{},
 			txnOpt: FeTxnOption{
@@ -5014,8 +5026,10 @@ func TestBuildPlanWithPrepareModeAllowsMissingCompilerProcess(t *testing.T) {
 
 	compCtx := plan.NewEmptyCompilerContext()
 	compCtx.GetProcessFunc = func() *process.Process { return nil }
+	compCtx.SetContext(nil)
 	_, err = buildPlanWithPrepareMode(ctx, nil, compCtx, stmt, false)
 	require.NoError(t, err)
+	require.NotNil(t, compCtx.GetContext())
 }
 
 func TestPreparedSetExpressionPlanKeepsGlobalParserOrdinal(t *testing.T) {

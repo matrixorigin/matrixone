@@ -264,6 +264,18 @@ func legacyLikeColumnsCompatible(target, source *planpb.ColDef) bool {
 		types.T(sourceClone.Typ.Id) == types.T_text && sourceClone.Typ.Width == types.MaxTinyTextLen {
 		sourceClone.Typ.Width = 0
 	}
+	for _, column := range []*planpb.ColDef{targetClone, sourceClone} {
+		if column.Default != nil && column.Default.Expr != nil {
+			if err := column.Default.Expr.NormalizeTextLiteralFormsForCompatibility(); err != nil {
+				return false
+			}
+		}
+		if column.OnUpdate != nil && column.OnUpdate.Expr != nil {
+			if err := column.OnUpdate.Expr.NormalizeTextLiteralFormsForCompatibility(); err != nil {
+				return false
+			}
+		}
+	}
 	return proto.Equal(targetClone, sourceClone)
 }
 

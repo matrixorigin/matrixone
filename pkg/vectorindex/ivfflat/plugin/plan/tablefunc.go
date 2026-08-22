@@ -22,9 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-// IVF-FLAT table-function plumbing — the build*/search* node constructors
-// invoked when the planner sees `ivf_create(...)` / `ivf_search(...)` in
-// SQL. Lifted from pkg/sql/plan/ivfflat.go (Phase 4g, now deleted).
+// IVF-FLAT build table-function plumbing invoked when the planner sees
+// `ivf_create(...)` in SQL. Query search is an optimizer-visible
+// VECTOR_INDEX_SCAN and is deliberately not registered as a table function.
 //
 // The plugin's init() registers these with planplugin.RegisterTableFunc;
 // pkg/sql/plan/query_builder.go's table-function dispatch falls through
@@ -32,7 +32,6 @@ import (
 
 const (
 	IVFFLATCreateFuncName = "ivf_create"
-	IVFFLATSearchFuncName = "ivf_search"
 )
 
 var (
@@ -47,11 +46,9 @@ var (
 		},
 	}
 
-	// IVFFLATSearchColDefs is the (pkid, score) schema the ivf_search
-	// table function returns. Exported so the ApplyForSort body in
-	// plan.go can reference it. pkid type gets rewritten at plan time
-	// to the parent table's actual PK type.
-	IVFFLATSearchColDefs = []*plan.ColDef{
+	// IVFFLATScanColDefs is the (pkid, score) schema of VECTOR_INDEX_SCAN.
+	// The pkid type is rewritten at plan time to the source table's PK type.
+	IVFFLATScanColDefs = []*plan.ColDef{
 		{
 			Name: "pkid",
 			Typ: plan.Type{
@@ -72,7 +69,6 @@ var (
 
 func init() {
 	planplugin.RegisterTableFunc(IVFFLATCreateFuncName, buildIvfflatCreate)
-	planplugin.RegisterTableFunc(IVFFLATSearchFuncName, buildIvfflatSearch)
 }
 
 // buildIvfflatCreate constructs a FUNCTION_SCAN node for `ivf_create`.
@@ -113,43 +109,8 @@ func buildIvfflatCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx 
 	return pb.AppendNode(node, ctx), nil
 }
 
-// buildIvfflatSearch constructs a FUNCTION_SCAN node for `ivf_search`.
-// arg list: [param, IndexTableConfig (JSON), search_vec].
-//
-// Lifted from (*QueryBuilder).buildIvfSearch.
-func buildIvfflatSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) != 3 {
-		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS != 3).")
-	}
-
-	colDefs := planplugin.DeepCopyColDefList(IVFFLATSearchColDefs)
-	params, err := getIvfflatTblFuncParams(pb, tbl.Func)
-	if err != nil {
-		return 0, err
-	}
-	// remove the first argument and put it to Param
-	exprs = exprs[1:]
-
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
-		TableDef: &plan.TableDef{
-			TableType: "func_table",
-			TblFunc: &plan.TableFunction{
-				Name:  IVFFLATSearchFuncName,
-				Param: []byte(params),
-			},
-			Cols: colDefs,
-		},
-		BindingTags:     []int32{pb.GenNewBindTag()},
-		TblFuncExprList: exprs,
-		Children:        children,
-	}
-	return pb.AppendNode(node, ctx), nil
-}
-
 // getIvfflatTblFuncParams extracts the first argument (a string literal)
-// from the user's `ivf_create(...)` / `ivf_search(...)` call.
+// from the internal `ivf_create(...)` call.
 func getIvfflatTblFuncParams(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (string, error) {
 	if _, ok := fn.Exprs[0].(*tree.NumVal); ok {
 		return fn.Exprs[0].String(), nil
