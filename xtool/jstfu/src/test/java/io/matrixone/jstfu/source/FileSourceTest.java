@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FileSourceTest {
 
-    private static List<byte[]> chunk(String content, int chunkSize) throws IOException {
+    private static List<byte[]> chunk(String content, int chunkSize) throws Exception {
         List<byte[]> chunks = new ArrayList<>();
         FileSource.chunkStream(
                 new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)), chunkSize, chunks::add);

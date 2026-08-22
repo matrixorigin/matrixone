@@ -30,7 +30,10 @@ import java.sql.Timestamp;
  *
  * <p>Security note: the substitution is textual by design — the filter comes
  * from the MatrixOne scan operator, but the SQL runs with the configured
- * credentials, so deploy this server only for trusted MO instances.</p>
+ * credentials. The server binds to loopback by default (see {@link Config})
+ * so it is not reachable off-box out of the box; before binding it to a
+ * routable interface, put an authenticating trust boundary in front, since a
+ * direct client could inject arbitrary SQL through {@code ${FILTER}}.</p>
  */
 public class JdbcSource implements DataSource {
     static final String FILTER_PLACEHOLDER = "${FILTER}";
@@ -49,10 +52,13 @@ public class JdbcSource implements DataSource {
     }
 
     @Override
-    public void stream(String filter, ChunkSink sink) throws Exception {
+    public void stream(String filter, StreamContext ctx) throws Exception {
         String sql = substituteFilter(config.sql, filter);
         try (Connection conn = DriverManager.getConnection(config.connectionString, config.user, config.password);
              Statement stmt = conn.createStatement()) {
+            // register early so a cancelled MO query closes the connection even
+            // while blocked in executeQuery/next, releasing the JDBC work
+            ctx.registerForClose(conn);
             // MySQL-protocol streaming mode: rows are fetched as they are read
             // instead of materializing the full result set in memory.
             try {
@@ -63,9 +69,12 @@ public class JdbcSource implements DataSource {
             try (ResultSet rs = stmt.executeQuery(sql)) {
                 ResultSetMetaData meta = rs.getMetaData();
                 int columns = meta.getColumnCount();
-                CsvChunker chunker = new CsvChunker(chunkSize, sink);
+                CsvChunker chunker = new CsvChunker(chunkSize, ctx);
                 String[] values = new String[columns];
                 while (rs.next()) {
+                    if (ctx.isCancelled()) {
+                        return;
+                    }
                     for (int i = 0; i < columns; i++) {
                         values[i] = formatValue(rs.getObject(i + 1));
                     }
@@ -76,7 +85,7 @@ public class JdbcSource implements DataSource {
         }
     }
 
-    static String formatValue(Object value) {
+    static String formatValue(Object value) throws java.sql.SQLException {
         if (value == null) {
             return null;
         }
@@ -84,9 +93,16 @@ public class JdbcSource implements DataSource {
             return formatTimestamp((Timestamp) value);
         }
         if (value instanceof byte[]) {
-            // raw bytes pass through byte-for-byte (MO reads binary columns
-            // from the raw field content)
-            return new String((byte[]) value, java.nio.charset.StandardCharsets.ISO_8859_1);
+            // Binary values cannot round-trip byte-for-byte through this
+            // UTF-8 CSV stream: any encoding-then-decoding step (e.g. Latin-1
+            // -> UTF-8) reshapes bytes >= 0x80, silently corrupting
+            // BINARY/VARBINARY/BLOB before MO reads them. Fail loudly instead
+            // of corrupting; byte-exact binary columns are out of scope for
+            // the v1 CSV bridge (declare them as text or convert them in the
+            // configured SQL, e.g. HEX(col)).
+            throw new java.sql.SQLDataException(
+                    "jstfu jdbc datasource cannot stream a binary column byte-for-byte "
+                            + "over CSV; project it as text (e.g. HEX(col)) in the configured SQL");
         }
         return String.valueOf(value);
     }

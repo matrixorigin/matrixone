@@ -46,6 +46,16 @@ public class Config {
     @JsonProperty("port")
     public int port;
 
+    // Bind address. Defaults to loopback so a datastream server is not exposed
+    // on the network out of the box: the ${FILTER} text is substituted into
+    // SQL and requests are unauthenticated, so an off-box client that reached
+    // the port could run arbitrary configured-credential SQL. Co-located MO
+    // (compose sidecar shares the CN netns; launch runs on the same host)
+    // reaches it on 127.0.0.1. Set "0.0.0.0" (or a specific NIC) only behind a
+    // network trust boundary you control.
+    @JsonProperty("host")
+    public String host = "127.0.0.1";
+
     @JsonProperty("chunksize")
     public int chunkSize = DEFAULT_CHUNK_SIZE;
 
@@ -86,6 +96,9 @@ public class Config {
     void validate() {
         if (port <= 0 || port > 65535) {
             throw new IllegalArgumentException("config: port must be in (0, 65535], got " + port);
+        }
+        if (host == null || host.isEmpty()) {
+            throw new IllegalArgumentException("config: host must not be empty");
         }
         if (chunkSize <= 0) {
             throw new IllegalArgumentException("config: chunksize must be positive, got " + chunkSize);

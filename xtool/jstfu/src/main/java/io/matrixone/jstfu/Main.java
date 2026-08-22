@@ -15,12 +15,13 @@
 package io.matrixone.jstfu;
 
 import io.grpc.Server;
-import io.grpc.ServerBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.matrixone.jstfu.source.DataSource;
 import io.matrixone.jstfu.source.FileSource;
 import io.matrixone.jstfu.source.JdbcSource;
 
 import java.io.File;
+import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Logger;
@@ -55,13 +56,19 @@ public class Main {
             }
         }
 
-        Server server = ServerBuilder.forPort(config.port)
-                .addService(new DataStreamService(sources))
+        DataStreamService service = new DataStreamService(sources);
+        Server server = NettyServerBuilder
+                .forAddress(new InetSocketAddress(config.host, config.port))
+                .addService(service)
                 .build()
                 .start();
-        log.info("jstfu listening on port " + config.port + " with " + sources.size() + " datasource(s)");
+        log.info("jstfu listening on " + config.host + ":" + config.port
+                + " with " + sources.size() + " datasource(s)");
 
-        Runtime.getRuntime().addShutdownHook(new Thread(server::shutdown));
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            server.shutdown();
+            service.shutdown();
+        }));
         server.awaitTermination();
     }
 }

@@ -72,14 +72,16 @@ func TestCompileDatastreamScan(t *testing.T) {
 		return c
 	}
 
-	// recheck=true: the pushed text is only a hint, the local filter list is
-	// untouched
+	// recheck=true (safe default): NOTHING is pushed to the server (a pushed
+	// predicate is not provably superset-preserving across engines), and the
+	// full local filter list is retained so MO filters correctly under any
+	// server semantics
 	c := newCompile()
 	node := datastreamTestNode(true)
 	scopes, err := c.compileDatastreamScan(node, true)
 	require.NoError(t, err)
 	require.Len(t, scopes, 1)
-	require.Equal(t, "(`a` < 5)", node.ExternScan.DatastreamScan.PushedFilter)
+	require.Equal(t, "", node.ExternScan.DatastreamScan.PushedFilter)
 	require.Len(t, node.FilterList, 2)
 	op, ok := scopes[0].RootOp.(*external.External)
 	require.True(t, ok)

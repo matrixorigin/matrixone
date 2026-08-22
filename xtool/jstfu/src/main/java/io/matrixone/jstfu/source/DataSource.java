@@ -14,21 +14,36 @@
 
 package io.matrixone.jstfu.source;
 
-import java.io.IOException;
-
 /** A named datasource that can stream its content as CSV chunks. */
 public interface DataSource {
     /**
-     * Stream the content as CSV chunks into {@code sink}.  Every chunk must
+     * Stream the content as CSV chunks into {@code ctx}.  Every chunk must
      * contain only complete records (no record spans two chunks).
      *
      * @param filter pushdown hint as MySQL-dialect SQL text, "" if none; a
      *               source that cannot evaluate it must ignore it
+     * @param ctx    receives chunks (with backpressure), reports cancellation,
+     *               and registers resources to close on cancel
      */
-    void stream(String filter, ChunkSink sink) throws Exception;
+    void stream(String filter, StreamContext ctx) throws Exception;
 
-    /** Receives complete-record CSV chunks. */
-    interface ChunkSink {
-        void chunk(byte[] data) throws IOException;
+    /** Sink for complete-record CSV chunks. */
+    @FunctionalInterface
+    interface ChunkWriter {
+        void write(byte[] data) throws Exception;
+    }
+
+    /**
+     * Per-request streaming context.  {@code write} applies consumer flow
+     * control (it blocks until the gRPC stream is ready, so a slow MO consumer
+     * bounds jstfu's buffering instead of OOMing it) and throws once the call
+     * is cancelled.  A source must also register any long-lived resource
+     * (JDBC connection, file stream) so a cancelled MO query closes it even
+     * while blocked in {@code getConnection}/{@code executeQuery}/{@code next}.
+     */
+    interface StreamContext extends ChunkWriter {
+        boolean isCancelled();
+
+        void registerForClose(AutoCloseable resource);
     }
 }

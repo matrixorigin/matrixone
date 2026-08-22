@@ -74,12 +74,38 @@ ENGINE = DATASTREAM WITH (
 SELECT * FROM t WHERE col2 > '2020-11-11 00:00:00';
 ```
 
-The WHERE conjuncts that can be expressed as plain SQL text (comparisons,
-AND/OR/NOT, IN, BETWEEN, IS [NOT] NULL, LIKE over columns and literals) are
-pushed to the server as a hint.  With `recheck = 'true'` (default) MO
-re-applies every filter locally, so a server that ignores the hint is still
-correct.  `recheck = 'false'` skips local re-evaluation for exactly the
-conjuncts that were pushed.
+`recheck` is the pushdown authority switch:
+
+- `recheck = 'true'` (default, **safe**): no filter is pushed. The server
+  returns the full datasource and MO applies every predicate locally, so the
+  result is correct regardless of the server's collation, time-zone, or
+  coercion semantics. A pushed predicate is not provably superset-preserving
+  across engines — a case-insensitive source evaluating `s <> 'a'` drops both
+  `'a'` and `'A'`, but MO wants to keep `'A'`, and local recheck can only
+  remove over-returned rows, never restore dropped ones — so the safe default
+  never lets the server narrow.
+- `recheck = 'false'` (**opt-in**): the WHERE conjuncts that deparse to plain
+  SQL text (comparisons, AND/OR/NOT, IN, BETWEEN, IS [NOT] NULL, LIKE over
+  columns and literals) are pushed and applied server-side, and MO skips
+  local re-evaluation for exactly those conjuncts. Use this only when the
+  source's predicate semantics match MO's for the pushed columns (e.g. a
+  jdbc bridge to another MySQL-compatible engine with matching collation);
+  it trades the correctness guarantee above for reduced data transfer.
+
+## Security
+
+The server binds to **127.0.0.1** by default (`host` in the config): the
+`${FILTER}` text is substituted into SQL and requests are unauthenticated, so
+an off-box client that reached the port could run arbitrary SQL with the
+configured credentials. Co-located MO reaches it on loopback (the compose
+sidecar shares the CN network namespace; a launch deployment runs on the same
+host). Set `host` to `0.0.0.0` or a specific NIC only behind an authenticating
+trust boundary you control.
+
+Binary columns (`BINARY`/`VARBINARY`/`BLOB`) are out of scope for the v1 CSV
+bridge — they cannot round-trip byte-for-byte through a UTF-8 CSV stream, so
+the jdbc source rejects them rather than corrupting; project them as text
+(e.g. `HEX(col)`) in the configured SQL.
 
 ## Tests
 

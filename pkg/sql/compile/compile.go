@@ -2539,18 +2539,33 @@ func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]
 	if ds == nil {
 		return nil, moerr.NewInvalidInput(c.proc.Ctx, "datastream external table is missing scan metadata")
 	}
-	pushedText, pushed := sqldatastream.DeparseFilters(node.FilterList, node.TableDef.Cols, c.proc.GetSessionInfo().TimeZone)
-	ds.PushedFilter = pushedText
-	if !ds.Recheck && pushedText != "" {
-		// recheck=false trusts the server for exactly the conjuncts that were
-		// pushed; conjuncts the deparser could not express always stay local.
-		kept := make([]*plan.Expr, 0, len(node.FilterList))
-		for i, expr := range node.FilterList {
-			if !pushed[i] {
-				kept = append(kept, expr)
+	// The pushed filter can only be sent to the server when the user has
+	// opted into trusting the server's predicate semantics (recheck=false).
+	//
+	// A pushed predicate is NOT provably superset-preserving across engines:
+	// the server may drop a row MO would keep under a different collation,
+	// time zone, or coercion (e.g. a case-insensitive source evaluating
+	// `s <> 'a'` drops both 'a' and 'A', but MO distinguishes them and wants
+	// the 'A' row). Local recheck can only *remove* over-returned rows, never
+	// restore ones the source already filtered out — so pushing in the
+	// recheck=true default would under-return. Therefore recheck=true (the
+	// safe default) sends no narrowing filter: the server returns the full
+	// datasource and MO applies every predicate locally, which is correct
+	// under any server semantics. recheck=false trusts the server for exactly
+	// the conjuncts that were pushed; conjuncts the deparser could not express
+	// always stay local.
+	if !ds.Recheck {
+		pushedText, pushed := sqldatastream.DeparseFilters(node.FilterList, node.TableDef.Cols, c.proc.GetSessionInfo().TimeZone)
+		ds.PushedFilter = pushedText
+		if pushedText != "" {
+			kept := make([]*plan.Expr, 0, len(node.FilterList))
+			for i, expr := range node.FilterList {
+				if !pushed[i] {
+					kept = append(kept, expr)
+				}
 			}
+			node.FilterList = kept
 		}
-		node.FilterList = kept
 	}
 
 	param := external.DatastreamExternParam()

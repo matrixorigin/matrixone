@@ -36,13 +36,15 @@ public class FileSource implements DataSource {
     }
 
     @Override
-    public void stream(String filter, ChunkSink sink) throws Exception {
+    public void stream(String filter, StreamContext ctx) throws Exception {
         try (InputStream in = new BufferedInputStream(new FileInputStream(path))) {
-            chunkStream(in, chunkSize, sink);
+            // a cancelled MO query closes the stream, unblocking a large read
+            ctx.registerForClose(in);
+            chunkStream(in, chunkSize, ctx);
         }
     }
 
-    static void chunkStream(InputStream in, int chunkSize, ChunkSink sink) throws IOException {
+    static void chunkStream(InputStream in, int chunkSize, ChunkWriter sink) throws Exception {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         boolean inQuotes = false;
         boolean escaped = false;
@@ -62,7 +64,7 @@ public class FileSource implements DataSource {
                     break;
                 case '\n':
                     if (!inQuotes && buffer.size() >= chunkSize) {
-                        sink.chunk(buffer.toByteArray());
+                        sink.write(buffer.toByteArray());
                         buffer.reset();
                     }
                     break;
@@ -73,7 +75,7 @@ public class FileSource implements DataSource {
             throw new IOException("file ends inside a quoted CSV field");
         }
         if (buffer.size() > 0) {
-            sink.chunk(buffer.toByteArray());
+            sink.write(buffer.toByteArray());
         }
     }
 }

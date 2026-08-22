@@ -26,6 +26,7 @@
 !test/mongodb/test_compare_results.py
 *.sh
 !etc/launch-minio-local/tier-b/seed-nyc-tlc-iceberg.sh
+!optools/jstfu_bvt.sh
 bin/
 y.go
 *.output

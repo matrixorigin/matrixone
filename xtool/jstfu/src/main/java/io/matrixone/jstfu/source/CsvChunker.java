@@ -27,15 +27,15 @@ import java.nio.charset.StandardCharsets;
 public class CsvChunker {
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
     private final int chunkSize;
-    private final DataSource.ChunkSink sink;
+    private final DataSource.ChunkWriter sink;
 
-    public CsvChunker(int chunkSize, DataSource.ChunkSink sink) {
+    public CsvChunker(int chunkSize, DataSource.ChunkWriter sink) {
         this.chunkSize = chunkSize;
         this.sink = sink;
     }
 
     /** Append one record; values may be null (encoded as \N). */
-    public void addRow(String[] values) throws IOException {
+    public void addRow(String[] values) throws Exception {
         StringBuilder record = new StringBuilder();
         for (int i = 0; i < values.length; i++) {
             if (i > 0) {
@@ -51,13 +51,13 @@ public class CsvChunker {
     }
 
     /** Flush any buffered records as a final chunk. */
-    public void finish() throws IOException {
+    public void finish() throws Exception {
         flush();
     }
 
-    private void flush() throws IOException {
+    private void flush() throws Exception {
         if (buffer.size() > 0) {
-            sink.chunk(buffer.toByteArray());
+            sink.write(buffer.toByteArray());
             buffer.reset();
         }
     }

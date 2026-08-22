@@ -25,23 +25,54 @@ import io.matrixone.datastream.v1.ReadRequest;
 import io.matrixone.datastream.v1.ReadResponse;
 import io.matrixone.jstfu.source.DataSource;
 
-import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/** gRPC service: looks up the datasource by name and streams its chunks. */
+/**
+ * gRPC service: looks up the datasource by name and streams its chunks.
+ *
+ * <p>The source is drained on a worker thread so the call's readiness and
+ * cancellation callbacks (which run on the gRPC executor) can drive it: the
+ * worker blocks in {@link StreamCtx#write} until the client stream is ready
+ * (bounded buffering) and stops promptly on cancel, which also closes the
+ * source's registered resources and interrupts the worker so a JDBC read
+ * blocked in the driver is released rather than leaked.</p>
+ */
 public class DataStreamService extends DataStreamGrpc.DataStreamImplBase {
     private static final Logger log = Logger.getLogger(DataStreamService.class.getName());
 
     private final Map<String, DataSource> sources;
+    private final ExecutorService workers;
 
     public DataStreamService(Map<String, DataSource> sources) {
         this.sources = sources;
+        this.workers = Executors.newCachedThreadPool(r -> {
+            Thread t = new Thread(r, "jstfu-read");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    /** Stops the worker pool; call on server shutdown. */
+    public void shutdown() {
+        workers.shutdownNow();
+    }
+
+    private static final class StreamCancelledException extends RuntimeException {
     }
 
     @Override
     public void read(ReadRequest request, StreamObserver<ReadResponse> responseObserver) {
+        @SuppressWarnings("unchecked")
         ServerCallStreamObserver<ReadResponse> observer =
                 (ServerCallStreamObserver<ReadResponse>) responseObserver;
         String table = request.getTable();
@@ -55,23 +86,66 @@ public class DataStreamService extends DataStreamGrpc.DataStreamImplBase {
             return;
         }
 
-        try {
-            source.stream(request.getFilter(), data -> {
-                if (observer.isCancelled()) {
-                    throw new IOException("client cancelled the stream");
-                }
-                observer.onNext(ReadResponse.newBuilder()
-                        .setChunk(Chunk.newBuilder().setData(ByteString.copyFrom(data)))
-                        .build());
-            });
-            observer.onCompleted();
-        } catch (Exception e) {
-            log.log(Level.WARNING, "datasource '" + table + "' failed", e);
-            if (!observer.isCancelled()) {
-                observer.onNext(errorResponse(ErrorCode.ERROR_DATASOURCE_ERROR,
-                        String.valueOf(e.getMessage())));
-                observer.onCompleted();
+        final Object readyLock = new Object();
+        final AtomicBoolean cancelled = new AtomicBoolean(false);
+        final List<AutoCloseable> closeables = Collections.synchronizedList(new ArrayList<>());
+        final AtomicReference<Future<?>> workerFuture = new AtomicReference<>();
+
+        observer.setOnReadyHandler(() -> {
+            synchronized (readyLock) {
+                readyLock.notifyAll();
             }
+        });
+        observer.setOnCancelHandler(() -> {
+            cancelled.set(true);
+            synchronized (readyLock) {
+                readyLock.notifyAll();
+            }
+            closeAll(closeables);
+            Future<?> f = workerFuture.get();
+            if (f != null) {
+                f.cancel(true);
+            }
+        });
+
+        StreamCtx ctx = new StreamCtx(observer, readyLock, cancelled, closeables);
+
+        workerFuture.set(workers.submit(() -> {
+            try {
+                source.stream(request.getFilter(), ctx);
+                if (!cancelled.get()) {
+                    observer.onCompleted();
+                }
+            } catch (StreamCancelledException | InterruptedException e) {
+                // cancelled: the client is gone, nothing to send
+            } catch (Exception e) {
+                if (cancelled.get()) {
+                    return;
+                }
+                log.log(Level.WARNING, "datasource '" + table + "' failed", e);
+                try {
+                    observer.onNext(errorResponse(ErrorCode.ERROR_DATASOURCE_ERROR,
+                            String.valueOf(e.getMessage())));
+                    observer.onCompleted();
+                } catch (RuntimeException ignore) {
+                    // stream already torn down
+                }
+            } finally {
+                closeAll(closeables);
+            }
+        }));
+    }
+
+    private static void closeAll(List<AutoCloseable> closeables) {
+        synchronized (closeables) {
+            for (AutoCloseable c : closeables) {
+                try {
+                    c.close();
+                } catch (Exception ignore) {
+                    // best-effort teardown
+                }
+            }
+            closeables.clear();
         }
     }
 
@@ -79,5 +153,46 @@ public class DataStreamService extends DataStreamGrpc.DataStreamImplBase {
         return ReadResponse.newBuilder()
                 .setError(Error.newBuilder().setCode(code).setMessage(message))
                 .build();
+    }
+
+    /** Backpressure- and cancellation-aware chunk sink for one call. */
+    private static final class StreamCtx implements DataSource.StreamContext {
+        private final ServerCallStreamObserver<ReadResponse> observer;
+        private final Object readyLock;
+        private final AtomicBoolean cancelled;
+        private final List<AutoCloseable> closeables;
+
+        StreamCtx(ServerCallStreamObserver<ReadResponse> observer, Object readyLock,
+                AtomicBoolean cancelled, List<AutoCloseable> closeables) {
+            this.observer = observer;
+            this.readyLock = readyLock;
+            this.cancelled = cancelled;
+            this.closeables = closeables;
+        }
+
+        @Override
+        public void write(byte[] data) throws InterruptedException {
+            synchronized (readyLock) {
+                while (!observer.isReady() && !cancelled.get()) {
+                    readyLock.wait();
+                }
+            }
+            if (cancelled.get()) {
+                throw new StreamCancelledException();
+            }
+            observer.onNext(ReadResponse.newBuilder()
+                    .setChunk(Chunk.newBuilder().setData(ByteString.copyFrom(data)))
+                    .build());
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return cancelled.get();
+        }
+
+        @Override
+        public void registerForClose(AutoCloseable resource) {
+            closeables.add(resource);
+        }
     }
 }

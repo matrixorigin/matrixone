@@ -16,10 +16,12 @@ package io.matrixone.jstfu.source;
 
 import org.junit.jupiter.api.Test;
 
+import java.sql.SQLDataException;
 import java.sql.Timestamp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class JdbcSourceTest {
 
@@ -34,7 +36,7 @@ class JdbcSourceTest {
     }
 
     @Test
-    void formatsValues() {
+    void formatsValues() throws Exception {
         assertNull(JdbcSource.formatValue(null));
         assertEquals("42", JdbcSource.formatValue(42));
         assertEquals("x", JdbcSource.formatValue("x"));
@@ -42,5 +44,13 @@ class JdbcSourceTest {
                 JdbcSource.formatValue(Timestamp.valueOf("2021-01-02 03:04:05")));
         assertEquals("2021-01-02 03:04:05.123000",
                 JdbcSource.formatValue(Timestamp.valueOf("2021-01-02 03:04:05.123")));
+    }
+
+    @Test
+    void rejectsBinaryColumnsRatherThanCorrupting() {
+        // a byte >= 0x80 could not round-trip byte-for-byte through the UTF-8
+        // CSV stream; fail loudly instead of silently corrupting
+        assertThrows(SQLDataException.class,
+                () -> JdbcSource.formatValue(new byte[]{(byte) 0xff, 0x00, (byte) 0x80}));
     }
 }
