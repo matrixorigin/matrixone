@@ -152,6 +152,11 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	}
 	r.Cases = append(r.Cases, "scan-projection-pushdown-null-conversion")
 
+	if err := verifyPrimaryKeyInsertSelect(ctx, db); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "insert-select-primary-key-target")
+
 	// BSON DateTime preserves milliseconds, while DATETIME(0) truncates them.
 	// The source predicate must therefore remain residual-only: an exact MongoDB
 	// equality on 10:00:05.000 would incorrectly exclude this .100 source row.
@@ -291,6 +296,20 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	}
 	r.Cases = append(r.Cases, "connection-disable-enable")
 	return nil
+}
+
+func verifyPrimaryKeyInsertSelect(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx,
+		"create table mongodb_ci.events_insert_target(mongo_id char(24) primary key, device_id varchar(20), site_id varchar(10), ts datetime(3), measurement double, source_batch varchar(50))"); err != nil {
+		return fmt.Errorf("create primary-key insert target: %w", err)
+	}
+	insertCtx, cancelInsert := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelInsert()
+	if _, err := db.ExecContext(insertCtx,
+		"insert into mongodb_ci.events_insert_target select mongo_id,device_id,site_id,ts,measurement,source_batch from mongodb_ci.events where mongo_id='66a7b7000000000000000001'"); err != nil {
+		return fmt.Errorf("insert-select into primary-key target: %w", err)
+	}
+	return expectScalar(ctx, db, "select count(*) from mongodb_ci.events_insert_target", "1")
 }
 
 func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn string) error {
