@@ -18,13 +18,13 @@ insert into child_single values (30, 1, 'a');
 delete from child_single where id = 30;
 update child_single set parent_id = 3 where id = 10;
 select * from child_single order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,32,0]  𝄀
 10  ¦  3  ¦  b  𝄀
 20  ¦  2  ¦  null
 update child_single set parent_id = 99 where id = 10;
 Cannot add or update a child row: a foreign key constraint fails
 select * from child_single order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,32,0]  𝄀
 10  ¦  3  ¦  b  𝄀
 20  ¦  2  ¦  null
 set foreign_key_checks = 0;
@@ -35,14 +35,14 @@ update child_single set note = 'orphan' where id = 10;
 insert into child_single values (30, 1, 'orphan');
 Duplicate entry 'orphan' for key 'note'
 select * from child_single order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,32,0]  𝄀
 10  ¦  99  ¦  orphan  𝄀
 20  ¦  2  ¦  null
 update child_single set parent_id = 1 where id = 10;
 update child_single set parent_id = case id when 10 then 2 else 98 end;
 Cannot add or update a child row: a foreign key constraint fails
 select * from child_single order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,32,0]  𝄀
 10  ¦  1  ¦  orphan  𝄀
 20  ¦  2  ¦  null
 create table parent_composite (
@@ -89,7 +89,7 @@ set foreign_key_checks = 1;
 update self_ref set parent_id = 99 where id = 2;
 Cannot add or update a child row: a foreign key constraint fails
 select * from self_ref order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  name[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  name[12,32,0]  𝄀
 1  ¦  1  ¦  root  𝄀
 2  ¦  2  ¦  changed
 create table parent_restrict (
@@ -136,14 +136,14 @@ select * from parent_cascade order by id;
 2  𝄀
 11
 select * from child_cascade order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,32,0]  𝄀
 10  ¦  11  ¦  a  𝄀
 20  ¦  11  ¦  b  𝄀
 30  ¦  2  ¦  c
 update child_cascade set note = 'd' where id = 10;
 insert into child_cascade values (40, 11, 'a');
 select * from child_cascade order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,32,0]  𝄀
 10  ¦  11  ¦  d  𝄀
 20  ¦  11  ¦  b  𝄀
 30  ¦  2  ¦  c  𝄀
@@ -212,7 +212,7 @@ select row_count();
 ➤ row_count()[-5,64,0]  𝄀
 1
 select * from child_cascade order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,32,0]  𝄀
 10  ¦  111  ¦  d  𝄀
 20  ¦  111  ¦  b  𝄀
 30  ¦  2  ¦  c  𝄀
@@ -229,7 +229,7 @@ select * from parent_cascade order by id;
 22  𝄀
 111
 select * from child_cascade order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  note[12,32,0]  𝄀
 10  ¦  111  ¦  d  𝄀
 20  ¦  111  ¦  b  𝄀
 30  ¦  2  ¦  c  𝄀
@@ -281,6 +281,84 @@ select * from child_generated_unique order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  u[4,32,0]  𝄀
 10  ¦  1  ¦  1  𝄀
 20  ¦  12  ¦  2
+create table update_generated_chain (
+id int primary key,
+base_value int,
+g1 int generated always as (id + base_value) stored,
+g2 int generated always as (g1 * 2) stored,
+key idx_generated_chain_g2(g2)
+);
+insert into update_generated_chain(id, base_value) values (1, 2);
+update update_generated_chain set id = 10, base_value = 5 where id = 1;
+select id, base_value, g1, g2 from update_generated_chain order by id;
+➤ id[4,32,0]  ¦  base_value[4,32,0]  ¦  g1[4,32,0]  ¦  g2[4,32,0]  𝄀
+10  ¦  5  ¦  15  ¦  30
+select id, base_value, g1, g2 from update_generated_chain
+force index(idx_generated_chain_g2) where g2 = 30;
+➤ id[4,32,0]  ¦  base_value[4,32,0]  ¦  g1[4,32,0]  ¦  g2[4,32,0]  𝄀
+10  ¦  5  ¦  15  ¦  30
+create table self_update_cascade (
+id int primary key,
+parent_id int,
+key idx_self_update_parent(parent_id),
+constraint fk_self_update_cascade foreign key (parent_id)
+references self_update_cascade(id) on update cascade
+);
+insert into self_update_cascade values (1, null), (2, 1), (3, 2), (4, 2);
+update self_update_cascade set id = 11 where id = 1;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+select * from self_update_cascade force index(idx_self_update_parent) order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+2  ¦  11  𝄀
+3  ¦  2  𝄀
+4  ¦  2  𝄀
+11  ¦  null
+update self_update_cascade set id = id + 10 where id in (2, 3);
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+2
+select * from self_update_cascade force index(idx_self_update_parent) order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+4  ¦  12  𝄀
+11  ¦  null  𝄀
+12  ¦  11  𝄀
+13  ¦  12
+update self_update_cascade set id = id where id = 11;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+create table parent_child_pk_action (
+id int primary key
+);
+create table child_pk_action (
+parent_id int,
+seq int,
+payload int,
+primary key (parent_id, seq),
+key idx_child_pk_payload(payload),
+constraint fk_child_pk_action foreign key (parent_id)
+references parent_child_pk_action(id) on update cascade
+);
+insert into parent_child_pk_action values (1);
+insert into child_pk_action values (1, 1, 10), (1, 2, 20);
+update parent_child_pk_action set id = 2 where id = 1;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+select * from parent_child_pk_action order by id;
+➤ id[4,32,0]  𝄀
+2
+select * from child_pk_action order by parent_id, seq;
+➤ parent_id[4,32,0]  ¦  seq[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20
+select * from child_pk_action force index(idx_child_pk_payload)
+where payload in (10, 20) order by payload;
+➤ parent_id[4,32,0]  ¦  seq[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  1  ¦  10  𝄀
+2  ¦  2  ¦  20
 set foreign_key_checks = 0;
 create table update_preinsert_index (
 a int not null auto_increment primary key,
@@ -348,6 +426,10 @@ drop table child_nonunique_prefix;
 drop table parent_nonunique_prefix;
 drop table child_generated_unique;
 drop table parent_generated_unique;
+drop table update_generated_chain;
+drop table child_pk_action;
+drop table parent_child_pk_action;
+drop table self_update_cascade;
 drop table child_dual_fk;
 drop table parent_dual_b;
 drop table parent_dual_a;

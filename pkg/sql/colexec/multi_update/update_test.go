@@ -327,6 +327,38 @@ func TestFilterTargetRowsCountsActiveAliasesWithoutRepeatingPhysicalWrites(t *te
 	require.Equal(t, uint64(1), additionalAffectedRows)
 }
 
+func TestFilterTargetRowsCountsSelectorsWithoutDroppingCascadeRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.NewInt32Vector(
+		4, types.T_int32.ToType(), mp, false, nil, []int32{10, 20, 30, 40},
+	)
+	bat.Vecs[1] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, false, true, false},
+	)
+	bat.Vecs[2] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, true, false, true},
+	)
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	changedRowsCol := 2
+	updateCtx := &MultiUpdateCtx{
+		AffectedRowsCols: []int{1},
+		ChangedRowsCol:   &changedRowsCol,
+	}
+	filtered, clean, semanticAffectedRows, err := filterTargetRows(proc, updateCtx, bat, nil)
+	require.NoError(t, err)
+	require.False(t, clean)
+	require.Same(t, bat, filtered)
+	require.Equal(t, 4, filtered.RowCount(), "cascade rows remain in the physical write batch")
+	require.Equal(t, uint64(1), semanticAffectedRows,
+		"only explicit roots whose final row image changed contribute")
+	require.Zero(t, physicalInsertAffectedRows(updateCtx, uint64(filtered.RowCount())))
+}
+
 func TestS3WriterRefreshSelectorState(t *testing.T) {
 	update := &MultiUpdate{
 		ctr: container{seenTargetRows: map[uint64]*hashmap.StrHashMap{}},

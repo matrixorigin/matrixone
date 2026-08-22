@@ -459,6 +459,10 @@ func filterTargetRows(
 	seen *hashmap.StrHashMap,
 ) (*batch.Batch, bool, uint64, error) {
 	if !updateCtx.DedupByTargetRowID {
+		if len(updateCtx.AffectedRowsCols) > 0 {
+			affectedRows, err := countAffectedRowsBySelectors(proc, updateCtx, input)
+			return input, false, affectedRows, err
+		}
 		return input, false, 0, nil
 	}
 	if len(updateCtx.DeleteCols) < 3 ||
@@ -605,6 +609,47 @@ func countSemanticAffectedRows(updateCtx *MultiUpdateCtx, input *batch.Batch, ac
 		}
 	}
 	return affectedRows
+}
+
+func countAffectedRowsBySelectors(
+	proc *process.Process,
+	updateCtx *MultiUpdateCtx,
+	input *batch.Batch,
+) (uint64, error) {
+	activeVecs := make([]*vector.Vector, len(updateCtx.AffectedRowsCols))
+	for i, col := range updateCtx.AffectedRowsCols {
+		if col < 0 || col >= len(input.Vecs) {
+			return 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector columns")
+		}
+		activeVecs[i] = input.Vecs[col]
+		if activeVecs[i].GetType().Oid != types.T_bool {
+			return 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
+		}
+	}
+	var changedVec *vector.Vector
+	if updateCtx.ChangedRowsCol != nil {
+		changedCol := *updateCtx.ChangedRowsCol
+		if changedCol < 0 || changedCol >= len(input.Vecs) ||
+			input.Vecs[changedCol].GetType().Oid != types.T_bool {
+			return 0, moerr.NewInternalError(proc.Ctx, "invalid UPDATE changed-row column")
+		}
+		changedVec = input.Vecs[changedCol]
+	}
+
+	var affectedRows uint64
+	for row := 0; row < input.RowCount(); row++ {
+		if changedVec != nil && (changedVec.IsNull(uint64(row)) ||
+			!vector.GetFixedAtNoTypeCheck[bool](changedVec, row)) {
+			continue
+		}
+		for _, activeVec := range activeVecs {
+			if !activeVec.IsNull(uint64(row)) &&
+				vector.GetFixedAtNoTypeCheck[bool](activeVec, row) {
+				affectedRows++
+			}
+		}
+	}
+	return affectedRows, nil
 }
 
 func (update *MultiUpdate) prepareSeenTargetRows(proc *process.Process) error {

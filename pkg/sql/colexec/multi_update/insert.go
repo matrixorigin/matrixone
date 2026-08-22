@@ -142,7 +142,8 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 		return err
 	}
 	tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
-	update.addInsertAffectRows(tableType, uint64(newRowCount))
+	update.addInsertAffectRows(
+		tableType, physicalInsertAffectedRows(updateCtx, uint64(newRowCount)))
 	source := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).Source
 
 	crs := analyzer.GetOpCounterSet()
@@ -230,7 +231,14 @@ func (update *MultiUpdate) insert_table(
 
 	affectedRows := uint64(writeBatch.RowCount())
 	if info.tableType == UpdateMainTable && update.ctr.action == actionUpdate {
-		affectedRows = update.insertAffectedRows(updateCtx, inputBatch)
+		if len(updateCtx.AffectedRowsCols) > 0 {
+			// The shared self-action stream was counted by its explicit-root
+			// selectors in filterTargetRows. Its physical rows must still be
+			// written, but must not be counted again here.
+			affectedRows = 0
+		} else {
+			affectedRows = update.insertAffectedRows(updateCtx, inputBatch)
+		}
 	}
 	update.addInsertAffectRows(info.tableType, affectedRows)
 
@@ -346,7 +354,8 @@ func (update *MultiUpdate) check_null_and_insert_table(
 	if newRowCount > 0 {
 		insertBatch.SetRowCount(newRowCount)
 		tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
-		update.addInsertAffectRows(tableType, uint64(newRowCount))
+		update.addInsertAffectRows(
+			tableType, physicalInsertAffectedRows(updateCtx, uint64(newRowCount)))
 		source := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).Source
 
 		crs := analyzer.GetOpCounterSet()

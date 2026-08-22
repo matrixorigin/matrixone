@@ -3007,36 +3007,6 @@ func TestUpdateIgnoreUsesAssignmentIgnoreCast(t *testing.T) {
 	)
 }
 
-func TestLegacyUpdateIgnoreUsesAssignmentIgnoreCast(t *testing.T) {
-	newBuilder := func() (*QueryBuilder, []*dmlPlanCtx) {
-		builder := NewQueryBuilder(plan.Query_UPDATE, NewMockCompilerContext(true), false, true)
-		builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
-			ProjectList: []*plan.Expr{{
-				Typ:  plan.Type{Id: int32(types.T_text)},
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
-			}},
-		})
-		return builder, []*dmlPlanCtx{{
-			tableDef: &plan.TableDef{Cols: []*plan.ColDef{{
-				Name: "c",
-				Typ:  plan.Type{Id: int32(types.T_varchar), Width: 3},
-			}}},
-			updateColLength: 1,
-			updateColPosMap: map[string]int{
-				"c": 0,
-			},
-		}}
-	}
-
-	builder, planContexts := newBuilder()
-	require.NoError(t, rewriteUpdateQueryLastNode(builder, planContexts, 0, true))
-	require.Equal(t, "cast_ignore", builder.qry.Nodes[0].ProjectList[0].GetF().GetFunc().GetObjName())
-
-	builder, planContexts = newBuilder()
-	require.NoError(t, rewriteUpdateQueryLastNode(builder, planContexts, 0, false))
-	require.Equal(t, "cast_assign", builder.qry.Nodes[0].ProjectList[0].GetF().GetFunc().GetObjName())
-}
-
 func TestUpdateRecomputesCompositeClusterByKey(t *testing.T) {
 	testCases := []struct {
 		name             string
@@ -3594,151 +3564,152 @@ func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T
 	}
 }
 
-func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
+func TestModernMultiTargetGeneratedColumnsKeepTargetContexts(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
 	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp, dept SET emp.job = dept.loc, dept.loc = emp.job WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback multi-target update with generated columns: %v", err)
-	}
-	query := logicPlan.GetQuery()
-
-	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["emp"].Cols)+2)
-	assertFallbackUpdateProjectLength(t, query, len(mock.ctxt.tables["dept"].Cols)+2)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"dept", "emp"}, modernBaseUpdateContextNames(logicPlan.GetQuery()))
 }
 
-// TestUpdateFallbackProjectLayoutDeterministic guards the per-target column-block
-// order of the fallback UPDATE planner. A multi-column SET must produce a
-// byte-identical project layout on every build; before the fix, ranging the
-// updateKeys map (column -> expr) appended the update expressions to the project
-// list in random order across runs. A fresh optimizer per iteration rebuilds the
-// maps, and Go randomizes map iteration, so a regression here fails reliably.
-func TestUpdateFallbackProjectLayoutDeterministic(t *testing.T) {
-	// Multi-target (emp, dept) exercises the table-block order; the two plain
-	// (non-indexed) update columns on emp (mgr, sal) exercise the per-target
-	// column order. Both were Go-map-ordered before the fix.
+// TestModernMultiTargetUpdateContextLayoutDeterministic guards the stable
+// per-target physical write layout. A fresh optimizer per iteration rebuilds
+// assignment maps, so accidental map-order dependence remains observable.
+func TestModernMultiTargetUpdateContextLayoutDeterministic(t *testing.T) {
 	const sql = "UPDATE emp, dept SET emp.mgr = 1, emp.sal = 2, dept.loc = 'x' WHERE emp.deptno = dept.deptno"
 	var want []string
 	for iter := 0; iter < 16; iter++ {
 		mock := NewMockOptimizer(true)
-		forceLegacyMultiTargetUpdateRoute(mock)
 		logicPlan, err := runOneStmt(mock, t, sql)
-		if err != nil {
-			t.Fatalf("build fallback update (iter %d): %v", iter, err)
-		}
-		got := fallbackUpdateProjectLayout(logicPlan.GetQuery())
-		if len(got) == 0 {
-			t.Fatalf("iter %d: no fallback update project node found", iter)
-		}
+		require.NoError(t, err, "iteration %d", iter)
+		got := modernUpdateContextLayout(logicPlan.GetQuery())
+		require.NotEmpty(t, got, "iteration %d", iter)
 		if iter == 0 {
 			want = got
 			continue
 		}
 		assert.Equal(t, want, got,
-			"fallback UPDATE project layout must be deterministic across builds (iter %d)", iter)
+			"modern UPDATE context layout must be deterministic across builds (iter %d)", iter)
 	}
 }
 
-// fallbackUpdateProjectLayout returns a stable signature of every fallback UPDATE
-// project node (a PROJECT over a SINK_SCAN): the ordered string form of each
-// project expression. query.Nodes is built in a deterministic index order, so
-// any cross-build difference reflects nondeterministic plan construction.
-func fallbackUpdateProjectLayout(query *Query) []string {
+func modernBaseUpdateContextNames(query *Query) []string {
+	var names []string
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_MULTI_UPDATE {
+			continue
+		}
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx.TableDef != nil &&
+				(updateCtx.TableDef.Name == "emp" || updateCtx.TableDef.Name == "dept") {
+				names = append(names, updateCtx.TableDef.Name)
+			}
+		}
+	}
+	return names
+}
+
+func modernUpdateContextLayout(query *Query) []string {
 	var layout []string
 	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 {
+		if node.NodeType != plan.Node_MULTI_UPDATE {
 			continue
 		}
-		if query.Nodes[node.Children[0]].NodeType != plan.Node_SINK_SCAN {
-			continue
-		}
-		for _, e := range node.ProjectList {
-			layout = append(layout, e.String())
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx.TableDef == nil {
+				continue
+			}
+			layout = append(layout, fmt.Sprintf(
+				"%s:insert=%v:delete=%v:partition=%v:target=%d",
+				updateCtx.TableDef.Name,
+				updateCtx.InsertCols,
+				updateCtx.DeleteCols,
+				updateCtx.PartitionCols,
+				updateCtx.TargetUpdateCtxIdx,
+			))
 		}
 	}
 	return layout
 }
 
-func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
+func TestModernMultiTargetGeneratedColumnsUseDefault(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
 	setMockDefaultExpr(t, mock, "emp", "job", "job-default")
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp, dept SET emp.job = DEFAULT, dept.loc = 'default-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column over DEFAULT: %v", err)
-	}
-
-	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "default-marker")
-	if !nodeContainsStringLiteral(node, "job-default") {
-		t.Fatalf("generated column should use expanded DEFAULT expression, got %v", node.ProjectList)
-	}
+	require.NoError(t, err)
+	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "job-default"))
+	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "default-marker"))
 }
 
-func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
+func TestModernMultiTargetGeneratedColumnsUseOnUpdate(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
 	setMockOnUpdateExpr(t, mock, "emp", "job", "job-on-update")
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'on-update-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column over ON UPDATE: %v", err)
-	}
-
-	node := requireFallbackSourceProjectNode(t, logicPlan.GetQuery(),
-		len(mock.ctxt.tables["emp"].Cols)+2+len(mock.ctxt.tables["dept"].Cols)+1, "on-update-marker")
-	if !nodeContainsStringLiteral(node, "job-on-update") {
-		t.Fatalf("generated column should use ON UPDATE expression, got %v", node.ProjectList)
-	}
+	require.NoError(t, err)
+	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "job-on-update"))
+	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "on-update-marker"))
 }
 
-func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
+func TestModernMultiTargetGeneratedColumnChainBuildsCompleteContexts(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
 	setMockGeneratedColumn(t, mock, "emp", "mgr", "empno")
 	setMockGeneratedColumn(t, mock, "emp", "deptno", "mgr")
+	emp := mock.ctxt.tables["emp"]
+	var empnoPos, mgrPos, deptnoPos int32
+	for pos, col := range emp.Cols {
+		switch col.Name {
+		case "empno":
+			empnoPos = int32(pos)
+		case "mgr":
+			mgrPos = int32(pos)
+		case "deptno":
+			deptnoPos = int32(pos)
+		}
+	}
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column chain: %v", err)
-	}
-
+	require.NoError(t, err)
 	query := logicPlan.GetQuery()
-	assertFallbackUpdateAggDedupWithAnyValue(t, query)
+	require.ElementsMatch(t, []string{"dept", "emp"}, modernBaseUpdateContextNames(logicPlan.GetQuery()))
+	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "chain-marker"))
 
-	// Verify the generated-column chain without depending on the order of the
-	// appended update/recompute slots (that order is sensitive to map iteration
-	// and was a source of flakiness). emp contributes len(emp.Cols) base columns
-	// followed by its appended update + recomputed-generated expressions; both
-	// generated columns (mgr, deptno) must be freshly recomputed down to empno,
-	// so within that appended region none may reference the stale mgr column and
-	// exactly two must reference empno.
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	deptCols := len(mock.ctxt.tables["dept"].Cols)
-	node := requireFallbackSourceProjectNode(t, query, empCols+3+deptCols+1, "chain-marker")
-	empnoRefs := 0
-	for pos := empCols; pos < empCols+3; pos++ {
-		e := node.ProjectList[pos]
-		if exprContainsColName(e, "mgr") {
-			t.Fatalf("generated column chain must use freshly recomputed empno, not stale mgr; appended pos %d = %s", pos, e.String())
+	var chainNodeID int32 = -1
+	for nodeID, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) <= int(deptnoPos) {
+			continue
 		}
-		if exprContainsColName(e, "empno") {
-			empnoRefs++
+		mgrRewrite := node.ProjectList[mgrPos].GetF()
+		deptnoRewrite := node.ProjectList[deptnoPos].GetF()
+		if mgrRewrite == nil || mgrRewrite.Func.GetObjName() != "if" || len(mgrRewrite.Args) != 3 ||
+			deptnoRewrite == nil || deptnoRewrite.Func.GetObjName() != "if" || len(deptnoRewrite.Args) != 3 {
+			continue
 		}
+		freshMgr := mgrRewrite.Args[1]
+		if freshMgr.GetCol() == nil || freshMgr.GetCol().ColPos != empnoPos {
+			continue
+		}
+		// deptno is generated from mgr. Its active-row branch must consume the
+		// complete freshly recomputed mgr row image, not the stale input column.
+		require.Equal(t, node.ProjectList[mgrPos], deptnoRewrite.Args[1])
+		chainNodeID = int32(nodeID)
+		break
 	}
-	if empnoRefs != 2 {
-		t.Fatalf("expected both generated columns (mgr, deptno) freshly recomputed to empno, got %d empno refs in emp appended region", empnoRefs)
-	}
+	require.NotEqual(t, int32(-1), chainNodeID,
+		"the modern plan must preserve the two-layer generated-column row-image dependency")
+	require.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_MULTI_UPDATE && len(node.Children) == 1 &&
+			planNodeDependsOn(query, node.Children[0], chainNodeID, make(map[int32]struct{}))
+	}), "the generated-column chain must feed the physical MULTI_UPDATE")
 }
 
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
@@ -3895,27 +3866,16 @@ func setMockEmpDeptForeignKeyAction(
 	deptTable.RefChildTbls = []uint64{empTable.TblId}
 }
 
-func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {
+func TestModernMultiTargetNonFirstTableGeneratedColumn(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
 	// Generate dname from loc on the second table (dept).
 	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'non-first-gen' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback multi-table update with non-first table generated column: %v", err)
-	}
-	query := logicPlan.GetQuery()
-
-	// The source project should contain emp cols (9) + SET comm (1) + dept cols (4) + SET loc (1) + generated dname (1) = 16.
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	deptCols := len(mock.ctxt.tables["dept"].Cols)
-	expectedLen := empCols + 1 + deptCols + 1 + 1 // emp SET + dept SET + dname generated
-	node := requireFallbackSourceProjectNode(t, query, expectedLen, "non-first-gen")
-	if !nodeContainsStringLiteral(node, "non-first-gen") {
-		t.Fatalf("generated column on non-first table should contain the SET value, got %v", node.ProjectList)
-	}
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"dept", "emp"}, modernBaseUpdateContextNames(logicPlan.GetQuery()))
+	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "non-first-gen"))
 }
 
 func TestMultiTargetUpdateGeneratedColumnGuardUsesProjectInput(t *testing.T) {
@@ -3928,32 +3888,17 @@ func TestMultiTargetUpdateGeneratedColumnGuardUsesProjectInput(t *testing.T) {
 	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "modern-gen"))
 }
 
-func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
+func TestModernMultiTargetGeneratedColumnChainSurvivesOptimize(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	forceLegacyMultiTargetUpdateRoute(mock)
 	// Chain: sal depends on comm, comm is a SET column.
 	// After optimization and rewrite, sal's generated expr should use the SET value of comm.
 	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-opt-marker' WHERE emp.deptno = dept.deptno")
-	if err != nil {
-		t.Fatalf("build fallback update with generated column after optimization: %v", err)
-	}
-
-	// emp cols (9) + SET comm (1) + generated sal (1) + dept cols (4) + SET loc (1) = 16
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	deptCols := len(mock.ctxt.tables["dept"].Cols)
-	expectedLen := empCols + 2 + deptCols + 1
-	// Position of generated sal: after emp cols (9) + SET comm (1) = index 10
-	generatedExpr := requireFallbackSourceProjectExpr(t, logicPlan.GetQuery(), expectedLen,
-		empCols+1, "chain-opt-marker")
-	if generatedExpr == nil {
-		t.Fatal("generated column position after optimization should not be nil")
-	}
-	// The generated expr should be a non-nil expression (DeepCopy of the SET value).
-	// We don't check the exact contents since substituteColRefsInExpr deep-copies,
-	// but we verify the expression exists at the expected position.
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"dept", "emp"}, modernBaseUpdateContextNames(logicPlan.GetQuery()))
+	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "chain-opt-marker"))
 }
 
 func TestUpdateGeneratedColumnDerivedTableSourceOnFKTable(t *testing.T) {
@@ -4022,23 +3967,6 @@ func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, genera
 	}
 }
 
-func forceLegacyMultiTargetUpdateRoute(mock *MockOptimizer) {
-	for _, tableName := range []string{"emp", "dept"} {
-		tableDef := mock.ctxt.tables[tableName]
-		parts := make([]string, 0, len(tableDef.Cols))
-		for _, col := range tableDef.Cols {
-			parts = append(parts, col.Name)
-		}
-		tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
-			IndexName:      "force_legacy_update_route",
-			IndexTableName: "force_legacy_update_route_entries",
-			IndexAlgo:      "unsupported_sync_index",
-			Parts:          parts,
-			TableExist:     true,
-		})
-	}
-}
-
 func setMockDefaultExpr(t *testing.T, mock *MockOptimizer, tableName, colName, value string) {
 	col := requireMockColumn(t, mock, tableName, colName)
 	col.Default = &plan.Default{
@@ -4084,49 +4012,6 @@ func makeStringConstExpr(typ plan.Type, value string) *plan.Expr {
 			},
 		},
 	}
-}
-
-func requireFallbackSourceProjectNode(t *testing.T, query *Query, projectLen int, marker string) *Node {
-	for _, node := range query.Nodes {
-		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
-			continue
-		}
-		return node
-	}
-	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
-	return nil
-}
-
-func requireFallbackSourceProjectExpr(t *testing.T, query *Query, projectLen int, pos int, marker string) *plan.Expr {
-	for _, node := range query.Nodes {
-		if !isFallbackSourceProjectNode(query, node, projectLen, marker) {
-			continue
-		}
-		if pos >= len(node.ProjectList) {
-			continue
-		}
-		return node.ProjectList[pos]
-	}
-	t.Fatalf("missing fallback source project with length %d and marker %q", projectLen, marker)
-	return nil
-}
-
-func isFallbackSourceProjectNode(query *Query, node *Node, projectLen int, marker string) bool {
-	if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen {
-		return false
-	}
-	if len(node.Children) == 1 {
-		childIdx := node.Children[0]
-		if childIdx >= 0 && childIdx < int32(len(query.Nodes)) && query.Nodes[childIdx].NodeType == plan.Node_SINK_SCAN {
-			return false
-		}
-	}
-	for _, expr := range node.ProjectList {
-		if exprContainsStringLiteral(expr, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func hasUpdateFromDedupAnyValueAgg(query *Query, groupByLen int) bool {
@@ -4245,49 +4130,6 @@ func queryContainsExpr(query *Query, accept func(*plan.Expr) bool) bool {
 		}
 	}
 	return false
-}
-
-func nodeContainsStringLiteral(node *Node, value string) bool {
-	for _, expr := range node.ProjectList {
-		if exprContainsStringLiteral(expr, value) {
-			return true
-		}
-	}
-	return false
-}
-
-func assertFallbackUpdateProjectLength(t *testing.T, query *Query, projectLen int) {
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != projectLen || len(node.Children) != 1 {
-			continue
-		}
-		child := query.Nodes[node.Children[0]]
-		if child.NodeType != plan.Node_SINK_SCAN {
-			continue
-		}
-		return
-	}
-	t.Fatalf("missing fallback update project with length %d", projectLen)
-}
-
-func assertFallbackUpdateAggDedupWithAnyValue(t *testing.T, query *Query) {
-	foundAgg := false
-	foundAnyValue := false
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_AGG {
-			continue
-		}
-		foundAgg = true
-		for _, expr := range node.AggList {
-			if exprContainsFuncName(expr, "any_value") {
-				foundAnyValue = true
-				break
-			}
-		}
-	}
-	if !foundAgg || !foundAnyValue {
-		t.Fatalf("fallback update should build agg dedup path with any_value, foundAgg=%v foundAnyValue=%v", foundAgg, foundAnyValue)
-	}
 }
 
 func exprContainsFuncName(expr *plan.Expr, name string) bool {
@@ -5103,7 +4945,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		assertPlanShape(t, query, plan.Node_FILTER, "coalesce")
 	})
 
-	t.Run("joined update fallback", func(t *testing.T) {
+	t.Run("joined update", func(t *testing.T) {
 		query := build("UPDATE emp e JOIN dept d ON e.deptno = d.deptno SET e.deptno = e.deptno + 1")
 		hasCheckAssert := false
 		for _, node := range query.Nodes {
@@ -5117,7 +4959,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 			}
 		}
 		require.True(t, hasCheckAssert,
-			"legacy joined-UPDATE route must validate each target's final row image")
+			"joined UPDATE must validate each target's final row image")
 	})
 
 	t.Run("joined update does not validate read-only source", func(t *testing.T) {
@@ -5586,47 +5428,57 @@ func TestDeleteSelfReferCascadeAcrossForeignKeys(t *testing.T) {
 	requireRecursiveCTESources(t, query)
 }
 
-func TestUpdateSelfReferCascade(t *testing.T) {
-	mock := NewMockOptimizer(true)
-
-	logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref_cascade SET id = 10 WHERE id = 1")
-	require.NoError(t, err)
-	query := logicPlan.GetQuery()
-	require.NotNil(t, query)
-	assert.True(t, query.GetHasForeignKeyAction(),
-		"self-referencing UPDATE CASCADE must build the child-key update")
-	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
-		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT
-	}), "statement roots must fold root-to-root cascade values into their main update source")
-	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
-		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI
-	}), "the separate cascade update must exclude the complete statement root set")
-	materializedSinks := 0
-	for _, node := range query.Nodes {
-		if node.NodeType == plan.Node_SINK && node.ExtraOptions == materialized.CTESinkOption {
-			materializedSinks++
+func TestUpdateSelfReferCascadeUsesModernPlan(t *testing.T) {
+	for _, sql := range []string{
+		"UPDATE self_ref_cascade SET id = 10 WHERE id = 1",
+		"UPDATE self_ref_cascade SET id = id + 10 WHERE id IN (1, 2)",
+	} {
+		mock := NewMockOptimizer(true)
+		mock.CurrentContext().GetProcess().Base.SessionInfo.CountUpdateChangedRows = true
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.NotNil(t, query)
+		require.True(t, query.GetHasForeignKeyAction())
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, plan.Node_MULTI_UPDATE),
+			"the root UPDATE and self-referencing CASCADE must share one physical writer")
+		foundAffectedRowsSelector := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_MULTI_UPDATE {
+				continue
+			}
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef != nil && updateCtx.TableDef.Name == "self_ref_cascade" {
+					require.Len(t, updateCtx.AffectedRowsCols, 1,
+						"self-cascade rows must not inflate SQL affected-row accounting")
+					require.NotNil(t, updateCtx.ChangedRowsCol,
+						"default UPDATE semantics must count only changed explicit roots")
+					foundAffectedRowsSelector = true
+				}
+			}
 		}
+		require.True(t, foundAffectedRowsSelector)
+		joinTypes := make([]plan.Node_JoinType, 0)
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_JOIN {
+				joinTypes = append(joinTypes, node.JoinType)
+			}
+		}
+		require.True(t,
+			slices.Contains(joinTypes, plan.Node_LEFT) || slices.Contains(joinTypes, plan.Node_RIGHT),
+			"root-to-root cascades must be folded into the statement-owned row image")
+		require.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+			return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI
+		}), "the cascade branch must exclude statement-owned rows before the streams are merged")
+		require.True(t, queryHasNodeType(query, plan.Node_UNION_ALL),
+			"root and non-root cascade rows must feed the same MULTI_UPDATE stream")
+		require.Equal(t, 0, countUpdateFkPlanNodes(query, plan.Node_PRE_INSERT_UK))
+		require.Equal(t, 0, countUpdateFkPlanNodes(query, plan.Node_PRE_INSERT_SK))
+		require.GreaterOrEqual(t, len(slices.DeleteFunc(slices.Clone(query.Nodes), func(node *plan.Node) bool {
+			return node.NodeType != plan.Node_SINK || node.ExtraOptions != materialized.CTESinkOption
+		})), 2, "both the root fold and the shared cascade transition source must be materialized")
+		requireQueryStepDependenciesAcyclic(t, query)
 	}
-	assert.GreaterOrEqual(t, materializedSinks, 1,
-		"root-to-root lookup must use drain-safe materialized fanout")
-	requireQueryStepDependenciesAcyclic(t, query)
-}
-
-func TestUpdateSelfReferCascadeBetweenStatementRoots(t *testing.T) {
-	mock := NewMockOptimizer(true)
-
-	logicPlan, err := runOneStmt(mock, t,
-		"UPDATE self_ref_cascade SET id = id + 10 WHERE id IN (1, 2)")
-	require.NoError(t, err)
-	query := logicPlan.GetQuery()
-	require.NotNil(t, query)
-	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
-		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT
-	}), "a root that references another root must receive the parent's new key in the main source")
-	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
-		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI
-	}), "cascade child ownership must be disjoint from every statement root")
-	requireQueryStepDependenciesAcyclic(t, query)
 }
 
 func requireQueryStepDependenciesAcyclic(t *testing.T, query *plan.Query) {

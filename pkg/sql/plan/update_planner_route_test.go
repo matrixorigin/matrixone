@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -89,7 +90,7 @@ func TestUpdateTargetScanProtectionSurvivesSpecialGuardSuspension(t *testing.T) 
 func TestClassifyUpdatePlannerError(t *testing.T) {
 	ctx := context.Background()
 	baseErr := moerr.NewUnsupportedDML(ctx, "multi-table update")
-	typedErr := newLegacyUpdatePlannerRouteError(
+	typedErr := newRejectedUpdatePlannerRouteError(
 		updateRouteReasonMultiTarget,
 		baseErr,
 	)
@@ -104,9 +105,9 @@ func TestClassifyUpdatePlannerError(t *testing.T) {
 		wantErr    error
 	}{
 		{
-			name:       "typed legacy route",
+			name:       "typed rejected route",
 			err:        typedErr,
-			wantRoute:  updatePlannerLegacy,
+			wantRoute:  updatePlannerRejected,
 			wantReason: updateRouteReasonMultiTarget,
 			wantErr:    baseErr,
 		},
@@ -158,12 +159,12 @@ func TestClassifyUpdateTableResolutionError(t *testing.T) {
 		wantText   string
 	}{
 		{
-			name: "foreign key enters temporary legacy allowlist",
+			name: "foreign key sentinel is rejected",
 			err: moerr.NewUnsupportedDML(
 				ctx.GetContext(),
 				foreignKeyUnsupportedDMLCause,
 			),
-			wantRoute:  updatePlannerLegacy,
+			wantRoute:  updatePlannerRejected,
 			wantReason: updateRouteReasonForeignKey,
 			wantText:   foreignKeyUnsupportedDMLMsg,
 		},
@@ -292,6 +293,146 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			require.Equal(t, test.wantReason, reason, "bind error: %v", err)
 		})
 	}
+}
+
+func TestModernUpdatePlansAvoidPreInsertKeyStaging(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		prepare  func(*MockOptimizer)
+		bindOnly bool
+	}{
+		{
+			name: "single target with unique key",
+			sql:  "UPDATE dept SET dname = 'x' WHERE deptno = 1",
+		},
+		{
+			name: "multi target",
+			sql: "UPDATE emp JOIN dept ON emp.deptno = dept.deptno " +
+				"SET emp.ename = 'x', dept.dname = 'y'",
+		},
+		{
+			name: "foreign key child",
+			sql:  "UPDATE emp SET deptno = 2 WHERE empno = 1",
+			prepare: func(mock *MockOptimizer) {
+				setMockEmpDeptForeignKeyAction(
+					t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_CASCADE,
+				)
+			},
+		},
+		{
+			name: "foreign key parent cascade",
+			sql:  "UPDATE dept SET deptno = 2 WHERE deptno = 1",
+			prepare: func(mock *MockOptimizer) {
+				setMockEmpDeptForeignKeyAction(
+					t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_CASCADE,
+				)
+			},
+		},
+		{
+			name:     "synchronous irregular index",
+			sql:      "UPDATE nation SET n_comment = 'x' WHERE n_nationkey = 1",
+			bindOnly: true,
+			prepare: func(mock *MockOptimizer) {
+				mock.ctxt.tables["nation"].Indexes = []*planpb.IndexDef{{
+					IndexName:          "idx",
+					IndexTableName:     "idx_entries",
+					IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+					IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					Parts:              []string{"n_comment"},
+					TableExist:         true,
+				}}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			if test.prepare != nil {
+				test.prepare(mock)
+			}
+
+			var query *planpb.Query
+			if test.bindOnly {
+				stmt, err := parsers.ParseOne(
+					mock.CurrentContext().GetContext(), dialect.MYSQL, test.sql, 1,
+				)
+				require.NoError(t, err)
+				defer stmt.Free()
+				builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+				_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+				require.NoError(t, err)
+				query = builder.qry
+			} else {
+				logicPlan, err := runOneStmt(mock, t, test.sql)
+				require.NoError(t, err)
+				query = logicPlan.GetQuery()
+			}
+			require.NotNil(t, query)
+			require.GreaterOrEqual(t, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE), 1)
+			require.Zero(t, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT_UK))
+			require.Zero(t, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT_SK))
+		})
+	}
+}
+
+func TestModernUpdateAllowsReadOnlyTableListSources(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "comma derived source",
+			sql: "UPDATE emp, (SELECT deptno FROM dept) src " +
+				"SET emp.sal = src.deptno WHERE emp.deptno = src.deptno",
+		},
+		{
+			name: "joined derived source",
+			sql: "UPDATE emp JOIN (SELECT deptno FROM dept) src ON emp.deptno = src.deptno " +
+				"SET emp.sal = src.deptno",
+		},
+		{
+			name: "joined CTE source",
+			sql: "WITH src AS (SELECT deptno FROM dept) " +
+				"UPDATE src JOIN emp ON src.deptno = emp.deptno SET emp.sal = src.deptno",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+			require.Zero(t, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT_UK))
+			require.Zero(t, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT_SK))
+		})
+	}
+}
+
+func TestReadOnlyUpdateSourcesStayOutsideGenericDMLTargets(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	stmt, err := parsers.ParseOne(
+		mock.CurrentContext().GetContext(), dialect.MYSQL,
+		"UPDATE nation, (SELECT deptno FROM dept) src SET nation.n_comment = 'x'", 1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	update := stmt.(*tree.Update)
+	dmlCtx := NewDMLContext()
+	require.NoError(t, dmlCtx.ResolveUpdateTables(mock.CurrentContext(), update))
+	require.True(t, dmlCtx.hasReadOnlySource)
+	require.Equal(t, []string{"nation"}, dmlCtx.aliases)
+	require.ErrorContains(t, NewDMLContext().ResolveTables(
+		mock.CurrentContext(), update.Tables, update.With, nil, false,
+	), "unsupported table type")
+
+	_, err = runOneStmt(mock, t,
+		"WITH src AS (SELECT deptno FROM dept) UPDATE src SET deptno = 1")
+	require.ErrorContains(t, err, "not updatable")
 }
 
 func TestBindUpdateRejectsOverlappingForeignKeyMutationTargets(t *testing.T) {
@@ -605,7 +746,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.False(t, hasParentScan)
 	})
 
-	t.Run("nullable unique update on child table avoids legacy preinsert", func(t *testing.T) {
+	t.Run("nullable unique update on child table avoids separate preinsert", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
 		logicPlan, err := runOneStmt(mock, t, "UPDATE emp SET ename = 'x'")
@@ -1002,6 +1143,62 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		})
 	}
 
+	t.Run("cascade changing child primary key uses modern multi update", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
+		emp := mock.ctxt.tables["emp"]
+		emp.Pkey = &planpb.PrimaryKeyDef{
+			Names:       []string{"deptno"},
+			PkeyColName: "deptno",
+		}
+
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(), dialect.MYSQL,
+			"UPDATE dept SET deptno = 2", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.NoError(t, err)
+		require.True(t, builder.qry.GetHasForeignKeyAction())
+		require.GreaterOrEqual(t, countUpdateFkPlanNodes(builder.qry, planpb.Node_MULTI_UPDATE), 2)
+		require.True(t, slices.ContainsFunc(builder.qry.Nodes, func(node *planpb.Node) bool {
+			if node.NodeType != planpb.Node_MULTI_UPDATE {
+				return false
+			}
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef != nil && updateCtx.TableDef.TblId == emp.TblId {
+					return len(updateCtx.InsertCols) > 0 && len(updateCtx.DeleteCols) >= 2
+				}
+			}
+			return false
+		}), "the child primary-key transition must be owned by a modern MULTI_UPDATE context")
+	})
+
+	t.Run("multiple actions targeting one child are rejected", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
+		emp := mock.ctxt.tables["emp"]
+		duplicate := *emp.Fkeys[0]
+		duplicate.Name = "fk_emp_dept_duplicate"
+		duplicate.Cols = []uint64{emp.Cols[3].ColId}
+		emp.Fkeys = append(emp.Fkeys, &duplicate)
+
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(), dialect.MYSQL,
+			"UPDATE dept SET deptno = 2", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.ErrorContains(t, err, "multiple parent foreign key actions targeting the same child table")
+		route, reason, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerRejected, route)
+		require.Equal(t, updateRouteReasonForeignKey, reason)
+	})
+
 	for _, test := range []struct {
 		name        string
 		action      planpb.ForeignKeyDef_RefAction
@@ -1213,25 +1410,27 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		require.True(t, updateFkPlanContainsFunc(query, "isnull"))
 	})
 
-	t.Run("self cascade uses typed legacy validation", func(t *testing.T) {
+	t.Run("self cascade uses modern single-writer plan", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareSelfRef(mock)
 		mock.ctxt.tables["self_ref"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
-		stmt, err := parsers.ParseOne(
-			mock.CurrentContext().GetContext(),
-			dialect.MYSQL,
-			"UPDATE self_ref SET id = 2",
-			1,
-		)
+		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET id = 2")
 		require.NoError(t, err)
-		defer stmt.Free()
-
-		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.Error(t, err)
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonForeignKey, reason)
+		query := logicPlan.GetQuery()
+		require.True(t, query.GetHasForeignKeyAction())
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.True(t, queryHasNodeType(query, planpb.Node_UNION_ALL))
+		require.True(t, slices.ContainsFunc(query.Nodes, func(node *planpb.Node) bool {
+			if node.NodeType != planpb.Node_MULTI_UPDATE {
+				return false
+			}
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef != nil && updateCtx.TableDef.Name == "self_ref" {
+					return len(updateCtx.AffectedRowsCols) == 1
+				}
+			}
+			return false
+		}), "the self action must preserve direct-target affected-row accounting")
 	})
 
 	t.Run("disabled checks omit self detect sql", func(t *testing.T) {
