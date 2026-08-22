@@ -15,14 +15,12 @@
 package databranchutils
 
 import (
-	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-var errVisibleStateDrainFull = errors.New("visible-state drain batch is full")
+var errVisibleStateDrainFull = moerr.NewInternalErrorNoCtx("visible-state drain batch is full")
 
 type branchHashmapVisibleStateStore struct {
 	hashmap    *branchHashmap
@@ -125,7 +123,7 @@ func (s *branchHashmapVisibleStateStore) Drain(
 			return nil
 		})
 		shard.endIteration()
-		if errors.Is(err, errVisibleStateDrainFull) {
+		if err == errVisibleStateDrainFull {
 			return drained, nil
 		}
 		if err != nil {
