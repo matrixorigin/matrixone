@@ -227,6 +227,22 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 			require.Equal(t, 0, got)
 		})
 
+		t.Run("project alias filter evaluates volatile expression once", func(t *testing.T) {
+			execIssue27088VolatileSQL(t, ctx, conn, "drop sequence if exists volatile_scalar")
+			execIssue27088VolatileSQL(t, ctx, conn,
+				"create sequence volatile_scalar increment 1 start with 1 no cycle")
+
+			var got int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select x from (select nextval('volatile_scalar') as x from volatile_rows) d "+
+					"where x in ('1', '3')").Scan(&got))
+			var current int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select currval('volatile_scalar')").Scan(&current))
+			require.Equal(t, int64(1), current)
+			require.Equal(t, int64(1), got)
+		})
+
 		t.Run("tuple candidate casts share stable source", func(t *testing.T) {
 			execIssue27088VolatileSQL(t, ctx, conn, "drop sequence if exists volatile_scalar")
 			execIssue27088VolatileSQL(t, ctx, conn,

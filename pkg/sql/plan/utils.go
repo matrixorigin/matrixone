@@ -354,6 +354,36 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 	return expr
 }
 
+func replaceColRefsIntroducesVolatile(expr *plan.Expr, tag int32, projects []*plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if replaceColRefsIntroducesVolatile(arg, tag, projects) {
+				return true
+			}
+		}
+	case *plan.Expr_Col:
+		colRef := exprImpl.Col
+		return colRef.RelPos == tag && ContainsVolatileFunction(projects[colRef.ColPos])
+	case *plan.Expr_W:
+		if replaceColRefsIntroducesVolatile(exprImpl.W.WindowFunc, tag, projects) {
+			return true
+		}
+		for _, arg := range exprImpl.W.PartitionBy {
+			if replaceColRefsIntroducesVolatile(arg, tag, projects) {
+				return true
+			}
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if replaceColRefsIntroducesVolatile(order.Expr, tag, projects) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:

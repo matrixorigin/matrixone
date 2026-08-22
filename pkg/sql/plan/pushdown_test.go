@@ -168,6 +168,68 @@ func TestVolatileFilterStopsAtPlanBoundary(t *testing.T) {
 	}
 }
 
+func TestProjectDoesNotPushDownFilterRewrittenWithVolatileExpression(t *testing.T) {
+	t.Run("volatile projection", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+		childTag := builder.GenNewBindTag()
+		projectTag := builder.GenNewBindTag()
+		projectExpr := makeVolatileJoinFilter(t, ctx, nil)
+		filter := &plan.Expr{
+			Typ:  Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: projectTag, ColPos: 0}},
+		}
+		builder.qry.Nodes = []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{childTag}, Stats: &plan.Stats{Outcnt: 1}},
+			{
+				NodeType:    plan.Node_PROJECT,
+				BindingTags: []int32{projectTag},
+				Children:    []int32{0},
+				ProjectList: []*plan.Expr{projectExpr},
+			},
+		}
+
+		rewritten := replaceColRefs(DeepCopyExpr(filter), projectTag, builder.qry.Nodes[1].ProjectList)
+		require.False(t, ContainsVolatileFunction(filter))
+		require.True(t, ContainsVolatileFunction(rewritten))
+
+		nodeID, cantPushdown := builder.pushdownFilters(1, []*plan.Expr{filter}, false)
+		require.Equal(t, int32(1), nodeID)
+		require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+		require.Empty(t, builder.qry.Nodes[0].FilterList)
+	})
+
+	t.Run("deterministic projection", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+		childTag := builder.GenNewBindTag()
+		projectTag := builder.GenNewBindTag()
+		projectExpr := &plan.Expr{
+			Typ:  Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: childTag, ColPos: 0}},
+		}
+		filter := &plan.Expr{
+			Typ:  Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: projectTag, ColPos: 0}},
+		}
+		builder.qry.Nodes = []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{childTag}, Stats: &plan.Stats{Outcnt: 1}},
+			{
+				NodeType:    plan.Node_PROJECT,
+				BindingTags: []int32{projectTag},
+				Children:    []int32{0},
+				ProjectList: []*plan.Expr{projectExpr},
+			},
+		}
+
+		nodeID, cantPushdown := builder.pushdownFilters(1, []*plan.Expr{filter}, false)
+		require.Equal(t, int32(1), nodeID)
+		require.Empty(t, cantPushdown)
+		require.Len(t, builder.qry.Nodes[0].FilterList, 1)
+		require.Equal(t, childTag, builder.qry.Nodes[0].FilterList[0].GetCol().RelPos)
+	})
+}
+
 func TestAssertIsFilterPushdownBoundary(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, false, false)

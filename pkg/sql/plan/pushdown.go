@@ -626,7 +626,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		projectTag := node.BindingTags[0]
 
 		for _, filter := range filters {
-			canPushdown = append(canPushdown, replaceColRefs(filter, projectTag, node.ProjectList))
+			introducesVolatile := replaceColRefsIntroducesVolatile(filter, projectTag, node.ProjectList)
+			rewritten := replaceColRefs(DeepCopyExpr(filter), projectTag, node.ProjectList)
+			if introducesVolatile {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
+			canPushdown = append(canPushdown, rewritten)
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
