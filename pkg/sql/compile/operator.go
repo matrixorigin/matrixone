@@ -2563,7 +2563,13 @@ func constructTableClone(
 			dstCreateTable = createTable
 			dstTblDef = createTable.TableDef
 			sameColumnIDSpace = false
-			metaCopy.Ctx.RequestedAutoIncrOffset = createTable.TableDef.AutoIncrOffset
+			// The source carries an explicit schema lower bound (for example,
+			// ALTER TABLE ... AUTO_INCREMENT), while the destination can carry
+			// a session-requested lower bound. A fresh clone must honor both.
+			metaCopy.Ctx.RequestedAutoIncrOffset = max(
+				clonePlan.SrcTableDef.AutoIncrOffset,
+				createTable.TableDef.AutoIncrOffset,
+			)
 		}
 	}
 	dstAutoIncrNames := mapCloneAutoIncrColumns(clonePlan.SrcTableDef, dstTblDef, sameColumnIDSpace)
@@ -2636,7 +2642,12 @@ func constructTableClone(
 				colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
 				offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 				for i := 0; i < rows; i++ {
-					if dstName, ok := dstAutoIncrNames[colIdxes[i]]; ok {
+					colIdx := colIdxes[i]
+					// A fresh clone has a new allocator. Its visible columns are
+					// reconstructed from copied rows and schema lower bounds instead
+					// of inheriting the source allocator's reserved batch upper bound.
+					if dstName, ok := dstAutoIncrNames[colIdx]; ok &&
+						(sameColumnIDSpace || clonePlan.SrcTableDef.Cols[colIdx].Hidden) {
 						autoIncrOffsets[dstName] = offsets[i]
 					}
 				}
