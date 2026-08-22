@@ -42,7 +42,11 @@ LOG="$G_TS-$TEST_TYPE.log"
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
-PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
+# The plan race binary retains substantial planner state while a shard runs.
+# Coverage runners have a 14 GiB cgroup, so keep each process below that
+# lifetime peak by splitting the full plan suite into smaller sequential
+# shards. The binary is still compiled only once and every test is retained.
+PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"16"}
 # Two shards cut the measured engine/test race runtime roughly in half while
 # keeping the default heavy-stage memory/process budget bounded.
 ENGINE_RACE_SHARDS=2
