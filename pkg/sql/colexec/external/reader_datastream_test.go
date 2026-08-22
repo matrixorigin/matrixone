@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	datastream "github.com/matrixorigin/matrixone/pkg/datastream/v1"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -107,6 +108,37 @@ func newDatastreamTestParam(t *testing.T, host string, port int32, filter string
 	}
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	return param, proc, bat
+}
+
+// TestExternalPrepareDatastreamDispatch drives the operator's Prepare with a
+// datastream scan: the synthetic INLINE ExternParam must be rebuilt when
+// Extern is nil (the remote-run decode path) and the reader dispatch must
+// select the DataStreamReader.
+func TestExternalPrepareDatastreamDispatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	cols := []*plan.ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+	}
+	op := NewArgument().WithEs(&ExternalParam{
+		ExParamConst: ExParamConst{
+			Attrs: []plan.ExternAttr{{ColName: "a", ColIndex: 0, ColFieldIndex: 0}},
+			Cols:  cols,
+			DatastreamScan: &plan.DataStreamScan{
+				Server: "127.0.0.1", Port: 4444, Table: "src", Recheck: true,
+			},
+		},
+		ExParam: ExParam{Fileparam: new(ExFileparam)},
+	})
+	require.NoError(t, op.Prepare(proc))
+	defer op.Free(proc, false, nil)
+
+	_, isDatastream := op.reader.(*DataStreamReader)
+	require.True(t, isDatastream)
+	require.NotNil(t, op.Es.Extern)
+	require.Equal(t, tree.INLINE, op.Es.Extern.ScanType)
+	require.Equal(t, tree.CSV, op.Es.Extern.Format)
+	require.Equal(t, int32(plan.ExternType_DATASTREAM_TB), op.Es.Extern.ExternType)
+	require.Equal(t, 1, op.Es.Fileparam.FileCnt)
 }
 
 func TestDataStreamReaderHappyPath(t *testing.T) {

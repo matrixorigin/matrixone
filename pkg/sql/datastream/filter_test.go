@@ -191,3 +191,96 @@ func TestDeparseLiteralKinds(t *testing.T) {
 	require.True(t, pushed[0])
 	require.Equal(t, "(`n` = NULL)", text)
 }
+
+func litExpr(typ types.T, v *plan.Literal) *plan.Expr {
+	return &plan.Expr{Typ: plan.Type{Id: int32(typ)}, Expr: &plan.Expr_Lit{Lit: v}}
+}
+
+func TestDeparseAllNumericLiteralKinds(t *testing.T) {
+	tv, err := types.ParseTime("12:34:56", 0)
+	require.NoError(t, err)
+	cases := []struct {
+		name string
+		expr *plan.Expr
+		want string
+	}{
+		{"i8", litExpr(types.T_int8, &plan.Literal{Value: &plan.Literal_I8Val{I8Val: -8}}), "(`a` = -8)"},
+		{"i16", litExpr(types.T_int16, &plan.Literal{Value: &plan.Literal_I16Val{I16Val: -16}}), "(`a` = -16)"},
+		{"i32", litExpr(types.T_int32, &plan.Literal{Value: &plan.Literal_I32Val{I32Val: -32}}), "(`a` = -32)"},
+		{"u8", litExpr(types.T_uint8, &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 8}}), "(`a` = 8)"},
+		{"u16", litExpr(types.T_uint16, &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 16}}), "(`a` = 16)"},
+		{"u32", litExpr(types.T_uint32, &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 32}}), "(`a` = 32)"},
+		{"u64", litExpr(types.T_uint64, &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 64}}), "(`a` = 64)"},
+		{"f32", litExpr(types.T_float32, &plan.Literal{Value: &plan.Literal_Fval{Fval: 1.5}}), "(`a` = 1.5)"},
+		{"f64", litExpr(types.T_float64, &plan.Literal{Value: &plan.Literal_Dval{Dval: 2.25}}), "(`a` = 2.25)"},
+		{"bool-false", litExpr(types.T_bool, &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}), "(`a` = FALSE)"},
+		{"time", &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_time)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Timeval{Timeval: int64(tv)}}},
+		}, "(`a` = '12:34:56')"},
+		{"decimal64", &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_decimal64), Scale: 2},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: 12345}}}},
+		}, "(`a` = 123.45)"},
+		{"decimal128", &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_decimal128), Scale: 1},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: 15, B: 0}}}},
+		}, "(`a` = 1.5)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text, pushed := DeparseFilters([]*plan.Expr{fn("=", col("a"), tc.expr)}, testCols, time.UTC)
+			require.True(t, pushed[0])
+			require.Equal(t, tc.want, text)
+		})
+	}
+
+	// unsupported literal kind falls through the default arm
+	enum := litExpr(types.T_enum, &plan.Literal{Value: &plan.Literal_EnumVal{EnumVal: 1}})
+	_, pushed := DeparseFilters([]*plan.Expr{fn("=", col("a"), enum)}, testCols, time.UTC)
+	require.False(t, pushed[0])
+}
+
+func TestDeparseGuardBranches(t *testing.T) {
+	bad := fn("abs", col("a")) // never deparsable
+	notPushable := []*plan.Expr{
+		{Expr: &plan.Expr_F{F: nil}},                       // nil function
+		{Expr: &plan.Expr_F{F: &plan.Function{Func: nil}}}, // nil func ref
+		fn("and", col("a")),                                // and/or arity < 2
+		fn("and", fn("=", col("a"), i64(1)), bad),          // and-arg fails
+		fn("or", bad, fn("=", col("a"), i64(1))),           // or-arg fails
+		fn("not"),                                          // not arity
+		fn("not", bad),                                     // not-arg fails
+		fn("="),                                            // comparison arity
+		fn("=", bad, i64(1)),                               // left fails
+		fn("=", col("a"), bad),                             // right fails
+		fn("in", col("a")),                                 // in arity
+		fn("in", bad, list(i64(1))),                        // in-left fails
+		fn("in", col("a"), list()),                         // empty in-list
+		fn("in", col("a"), list(bad)),                      // in-item fails
+		fn("between", col("a"), i64(1)),                    // between arity
+		fn("between", bad, i64(1), i64(2)),                 // between target fails
+		fn("between", col("a"), bad, i64(2)),               // between low fails
+		fn("between", col("a"), i64(1), bad),               // between high fails
+		fn("isnull"),                                       // isnull arity
+		fn("isnull", bad),                                  // isnull arg fails
+		fn("isnotnull"),                                    // isnotnull arity
+		fn("isnotnull", bad),                               // isnotnull arg fails
+	}
+	for i, expr := range notPushable {
+		text, pushed := DeparseFilters([]*plan.Expr{expr}, testCols, time.UTC)
+		require.False(t, pushed[0], "case %d must not push", i)
+		require.Equal(t, "", text, "case %d", i)
+	}
+
+	// empty column name in the defs is refused
+	_, pushed := DeparseFilters(
+		[]*plan.Expr{fn("=", &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}, i64(1))},
+		[]*plan.ColDef{{Name: ""}}, time.UTC)
+	require.False(t, pushed[0])
+	// nil ColDef entry is refused
+	_, pushed = DeparseFilters(
+		[]*plan.Expr{fn("=", &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}, i64(1))},
+		[]*plan.ColDef{nil}, time.UTC)
+	require.False(t, pushed[0])
+}
