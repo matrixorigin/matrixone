@@ -410,6 +410,13 @@ func ValidateStringLiteralFormsInOwner(owner any) error {
 	return validateStringLiteralFormsInOwner(owner)
 }
 
+// VisitExpressionsInOwner calls visitor once for every expression root nested
+// in owner. The visitor owns traversal inside each Expr; the reflective walk
+// deliberately stops at *Expr so expression subtrees are not visited twice.
+func VisitExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+	return walkExpressionsInOwner(owner, visitor)
+}
+
 // validateStringLiteralFormsInOwner validates every expression nested in a
 // decoded plan without coupling this boundary check to every plan node shape.
 func validateStringLiteralFormsInOwner(owner any) error {

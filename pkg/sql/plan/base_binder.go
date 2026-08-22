@@ -4073,9 +4073,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					continue
 				}
 				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
-					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
-					if err != nil {
-						return nil, err
+					inExpr := rightVal
+					// Keep the partition-IN coercion path unchanged. Ordinary IN can
+					// retain an already same-typed constant cast; casting UUID to UUID
+					// is both redundant and unsupported.
+					if partitionIn || !makeTypeByPlan2Expr(rightVal).Eq(typLeft) {
+						inExpr, err = appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+						if err != nil {
+							return nil, err
+						}
 					}
 					inExprList = append(inExprList, inExpr)
 				} else {

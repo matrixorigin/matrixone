@@ -211,3 +211,86 @@ prepared 参数在缓存计划中以 TEXT 作为传输表示。当前执行期 s
 - 已完成 `mo-self-review` 和 unhappy-path Q1-Q3 审计：execution plan copy 与 cached plan/compile
   所有权分离；无新增等待关系；扫描和公共域推导均为输入规模 O(n)，无跨执行累积。
 - 用户已用 `pr` 明确授权提交、正常 push，并以 issue #27088 创建 Draft PR。
+
+## PR #27483 review finding 整改（exact head `e385e1fb01`）
+
+### 已确认问题与不变量
+
+1. **SQL EXECUTE eligibility**：SQL user variable 只有在参数实际到达 DECIMAL-aware common-type
+   consumer 时才能进入运行时计划特化。FLOAT comparison、`COUNT(?)`、普通字符串和 NULL 必须完全
+   沿用既有 SQL EXECUTE 参数域；不符合资格时不得先 `DeepCopyPlan` 再丢弃。
+2. **consumer closure**：numeric-prefix 依赖不能在 `COALESCE/GREATEST/LEAST` 的返回类型或其外层
+   prepare-time 隐式 cast 处丢失。依赖应穿过 binder 插入的 cast 并触发外层 comparison/IN/BETWEEN
+   重绑；用户显式 CAST 是硬边界。
+3. **compile retry 等价性**：definition-change retry 的 fresh logical plan 必须重新应用本次执行的
+   `ParamValue`（值、NULL、runtime category、numeric-prefix capability），再进入 compile。retry 前后
+   的执行语义必须等价，且 cached prepared template 不被修改。
+4. **same-type constant**：row-dependent same-type expression 仍不能冒充 constant，但显式 cast 的
+   literal UUID 已经是目标类型，必须保留原有 IN/OR/BETWEEN 绑定路径。
+5. **热路径成本**：COM_STMT 保留既有执行时特化；SQL EXECUTE 先以只读 O(plan expressions) 扫描
+   eligibility，只有命中 numeric-prefix common-type dependency 才分配完整 plan copy。
+
+### 最小设计
+
+- 在 planner 暴露只读 `PreparedPlanNeedsNumericPrefixSpecialization`：按 parameter position 和目标
+  consumer 扫描完整 plan expression envelope，只判断是否存在“eligible parameter + DECIMAL peer”，
+  不改写 cached plan、不复制 plan。
+- frontend 用统一 helper 执行 eligibility → `FillValuesOfParamsInPlanWithSpecialization`；初次执行和
+  definition-change retry 复用同一 helper。retry callback 捕获本次 `ParamValue` slice 的稳定副本，
+  只在该 compile 的执行/retry generation 内存活。
+- `ResetParamRefRule` 记录 rewritten expression 的 numeric-prefix dependency；父节点遇到依赖子树外
+  的 binder-inserted cast 时移除该 provisional cast 后重绑，遇到 explicit cast 则停止传播。
+- `checkNoNeedCast` 增加窄的 explicit constant-cast 判断：cast source 必须是 constant，拒绝 column、
+  parameter 和 volatile source；不恢复宽泛的 same-type shortcut。
+
+### 反例矩阵
+
+| 不变量 | 公开/内部见证 | Oracle | unfixed 结果 |
+|---|---|---|---|
+| 非 DECIMAL SQL EXECUTE 不特化 | FLOAT `= ?`；`COUNT(?)` value→NULL | 1 行；count 1→0；plan copy hook 不触发 | 0 行；NULL 后仍为 1 |
+| nested common-type 闭包精确 | `coalesce(?, d) = DECIMAL(38,10)`，SQL PREPARE + COM_STMT | suffix/native DECIMAL 不误等；NULL 只命中真实 DECIMAL 行 | suffix/native 返回全部；NULL 返回多行 |
+| retry 保留本轮域 | fresh prepare plan → retry specialization | retry plan 含相同 numeric-prefix cast/运行时 domain；模板无变化 | retry plan 退回 ParamRef/prepare-time 域 |
+| UUID constant cast 保持可绑定 | UUID PK 的 IN/OR 与 BETWEEN/OR | exact rows，无 `[UUID UUID]` cast error | binder 报 invalid argument |
+| eligibility 无深拷贝 | 普通 SQL EXECUTE/DECIMAL-aware SQL EXECUTE 对照 | 前者复用原 plan，后者产生 isolated copy | 两者都复制 |
+
+### 实施与验证步骤
+
+1. 先补上述 black-box 与 typed white-box 回归，并在 `e385e1fb01` 记录预修复失败签名。
+2. 实现只读 eligibility、nested dependency 传播、retry 重特化和 UUID constant-cast 窄修复。
+3. 对 FLOAT/NULL、nested DECIMAL、UUID、retry、COM_STMT/SQL PREPARE 逐项跑 focused tests；再跑
+   diff-derived owning packages 的 `GOWORK=off` list/build/vet/full CGo tests 和 changed-code coverage。
+4. 使用 `mo-self-review` 与 unhappy-path Q1-Q3 审计 cached template / execution copy / retry callback
+   所有权、generation 边界和每次 EXECUTE 的分配成本；零 blocker 后直接 commit 并正常 push。
+
+本节属于 review comment / CI failure 修复，按仓库流程记录后直接实施和 push，无需再次等待 review
+checkpoint。
+
+### 整改实施记录
+
+- 预修复黑盒在 `e385e1fb01` 稳定复现四类签名：nested COALESCE 在 COM_STMT 与 SQL PREPARE
+  均把 suffix 参数误判为全部四行；SQL EXECUTE FLOAT 返回空行；UUID IN/OR 报
+  `invalid argument operator cast, bad value [UUID UUID]`。NULL 用例随后由独立运行确认存在额外命中。
+- SQL EXECUTE 现先执行只读 eligibility 扫描；只有参数实际到达带静态 DECIMAL peer 的公共类型
+  consumer 才复制并特化计划。FLOAT、COUNT/NULL 等不合格路径返回原计划指针；COM_STMT 保持既有
+  全运行时类型特化契约。
+- execute-time visitor 现传播 numeric-prefix dependency，移除外层 binder 临时隐式 cast 后重绑；
+  用户显式 cast 继续作为传播边界。prepared/generic constant fold 均保留参数化父表达式下的精确
+  explicit DECIMAL source，避免重绑前先损失到 FLOAT。
+- definition-change callback 捕获当前执行参数 slice 的稳定副本；fresh plan 构建后复用相同
+  eligibility/特化 helper。缓存 compile 每轮 Reset 前刷新 callback，避免上一轮值或 prepare-time
+  参数域泄漏到当前 retry generation。
+- binary NULL 以带 position/protocol/capability/category 的 `ParamValue` 表示；显式 UUID literal cast
+  仅在 source 为常量时恢复 same-type fast path，普通 IN 不再追加非法 UUID-to-UUID cast，partition-IN
+  仍保持原 coercion 路径。
+
+### 整改验证记录（合并最新 main 前）
+
+- 新增 typed tests 覆盖 SQL eligibility/FLOAT 控制组、NULL protocol provenance、nested outer
+  comparison、definition-change retry 重特化、prepared exact-source fold 与 UUID same-type constant。
+- `pkg/defines`、`pkg/pb/plan`、`pkg/sql/plan/rule`、`pkg/sql/plan/function`、`pkg/sql/plan`、
+  `pkg/frontend` 全量 CGo owning-package tests 通过。
+- 嵌入式单 CN `TestIssue27088PreparedDecimalCommonType` 通过，覆盖用户报告的 FLOAT/NULL、
+  COM_STMT + SQL PREPARE nested COALESCE、native DECIMAL、suffix、NULL 和 UUID IN/OR/BETWEEN 行集。
+- `pkg/sql/compile` 全包仅失败 3 个 Parquet 空文件 fanout 用例，签名与前次已确认的基线失败一致；
+  本轮未修改 `scope.go/scope_test.go`，将在合并最新 `main` 后再次确认基线归因。
+- `gofmt`、`git diff --check` 通过；最终 list/build/vet、race、自审和 post-merge 黑盒结果在 push 前补记。

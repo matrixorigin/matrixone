@@ -484,6 +484,29 @@ func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
 	}, makePlan2Type(&target))
 	require.NoError(t, err)
 	require.False(t, checkNoNeedCast(target, target, columnCast))
+
+	uuidType := types.T_uuid.ToType()
+	uuidCast, err := appendExplicitCastBeforeExpr(
+		ctx,
+		makePlan2StringConstExprWithType("00000000-0000-0000-0000-000000000001", false),
+		makePlan2Type(&uuidType),
+	)
+	require.NoError(t, err)
+	require.True(t, checkNoNeedCast(uuidType, uuidType, uuidCast), uuidCast.String())
+	secondUUIDCast, err := appendExplicitCastBeforeExpr(
+		ctx,
+		makePlan2StringConstExprWithType("00000000-0000-0000-0000-000000000002", false),
+		makePlan2Type(&uuidType),
+	)
+	require.NoError(t, err)
+	uuidColumn := &plan.Expr{
+		Typ:  makePlan2Type(&uuidType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}},
+	}
+	_, err = BindFuncExprImplByPlanExpr(ctx, "in", []*plan.Expr{uuidColumn, {
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{uuidCast, secondUUIDCast}}},
+	}})
+	require.NoError(t, err, "same-type UUID constants must not receive a redundant UUID-to-UUID cast")
 }
 
 func TestPreparedDecimalSyntaxHelpers(t *testing.T) {

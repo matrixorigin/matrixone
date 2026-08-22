@@ -418,6 +418,159 @@ type ResetParamRefRule struct {
 	// their ordinary string domains.
 	numericPrefixParamPositions map[int]bool
 	numericPrefixParamKinds     map[int]types.StringConversionKind
+	// numericPrefixDependent records rewritten expressions whose value domain
+	// was selected from an execute-time numeric-prefix parameter. The dependency
+	// propagates through binder-inserted casts so enclosing consumers can remove
+	// provisional prepare-time coercions and bind against the runtime domain.
+	numericPrefixDependent map[*plan.Expr]bool
+}
+
+// PreparedPlanNeedsNumericPrefixSpecialization reports whether a prepared plan
+// contains an eligible parameter in a decimal-aware common-type context. It is
+// a read-only O(plan expressions) eligibility check used before DeepCopyPlan on
+// SQL EXECUTE; COM_STMT keeps its broader runtime-type specialization path.
+func PreparedPlanNeedsNumericPrefixSpecialization(preparePlan *Plan, paramVals []any) bool {
+	if preparePlan == nil || len(paramVals) == 0 {
+		return false
+	}
+	positions := make(map[int]bool)
+	for i, value := range paramVals {
+		param, ok := value.(ParamValue)
+		if !ok || !param.EnableNumericPrefix {
+			continue
+		}
+		positions[i] = true
+	}
+	if len(positions) == 0 {
+		return false
+	}
+
+	required := false
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		if !required {
+			required = preparedExprNeedsNumericPrefixSpecialization(expr, positions)
+		}
+		return nil
+	})
+	return required
+}
+
+func preparedExprNeedsNumericPrefixSpecialization(
+	expr *plan.Expr,
+	positions map[int]bool,
+) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		// SQL EXECUTE is admitted only when the prepared expression already
+		// contains a static DECIMAL peer. A DECIMAL user-variable category alone
+		// must not pull an ordinary FLOAT comparison into runtime specialization.
+		// COM_STMT bypasses this eligibility scan and still uses runtime kinds
+		// while performing the actual rewrite.
+		if preparedNumericPrefixPositionContext(
+			exprImpl.F.Func.GetObjName(), exprImpl.F.Args, positions) {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if preparedExprNeedsNumericPrefixSpecialization(arg, positions) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			if preparedExprNeedsNumericPrefixSpecialization(item, positions) {
+				return true
+			}
+		}
+	case *plan.Expr_Lit:
+		return preparedExprNeedsNumericPrefixSpecialization(exprImpl.Lit.Src, positions)
+	case *plan.Expr_Sub:
+		return preparedExprNeedsNumericPrefixSpecialization(exprImpl.Sub.Child, positions)
+	case *plan.Expr_W:
+		window := exprImpl.W
+		if preparedExprNeedsNumericPrefixSpecialization(window.WindowFunc, positions) {
+			return true
+		}
+		for _, item := range window.PartitionBy {
+			if preparedExprNeedsNumericPrefixSpecialization(item, positions) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && preparedExprNeedsNumericPrefixSpecialization(order.Expr, positions) {
+				return true
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil && preparedExprNeedsNumericPrefixSpecialization(
+				window.Frame.Start.Val, positions) {
+				return true
+			}
+			if window.Frame.End != nil && preparedExprNeedsNumericPrefixSpecialization(
+				window.Frame.End.Val, positions) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedNumericPrefixPositionContext(
+	name string,
+	args []*plan.Expr,
+	positions map[int]bool,
+) bool {
+	switch name {
+	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
+	default:
+		return false
+	}
+
+	hasEligibleParam := false
+	hasDecimalPeer := false
+	hasCommonValueBoundary := false
+	numericArgCount := len(args)
+	if name == "in_range" && numericArgCount > 3 {
+		numericArgCount = 3
+	}
+	for i, arg := range args {
+		if i >= numericArgCount || arg == nil {
+			continue
+		}
+		pos, directEligible := preparedParamPosition(arg)
+		directEligible = directEligible && positions[pos]
+		source := unwrapPreparedImplicitCast(arg, directEligible)
+		if directEligible {
+			hasEligibleParam = true
+			continue
+		}
+		if source == nil {
+			continue
+		}
+		if list := source.GetList(); list != nil {
+			for _, item := range list.List {
+				itemPos, itemEligible := preparedParamPosition(item)
+				itemEligible = itemEligible && positions[itemPos]
+				item = unwrapPreparedImplicitCast(item, itemEligible)
+				if itemEligible {
+					hasEligibleParam = true
+				} else if item != nil && types.T(item.Typ.Id).IsDecimal() {
+					hasDecimalPeer = true
+				}
+			}
+			continue
+		}
+		if types.T(source.Typ.Id).IsDecimal() {
+			hasDecimalPeer = true
+		}
+		if isPreparedCommonValueFunction(name) &&
+			!preparedNumericCommonOperandType(types.T(source.Typ.Id)) {
+			hasCommonValueBoundary = true
+		}
+	}
+	return hasEligibleParam && hasDecimalPeer && !hasCommonValueBoundary
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -457,6 +610,21 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	return rewritten, nil
 }
 
+func (rule *ResetParamRefRule) markNumericPrefixDependent(exprs ...*plan.Expr) {
+	if rule.numericPrefixDependent == nil {
+		rule.numericPrefixDependent = make(map[*plan.Expr]bool)
+	}
+	for _, expr := range exprs {
+		if expr != nil {
+			rule.numericPrefixDependent[expr] = true
+		}
+	}
+}
+
+func (rule *ResetParamRefRule) isNumericPrefixDependent(expr *plan.Expr) bool {
+	return expr != nil && rule.numericPrefixDependent[expr]
+}
+
 func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
@@ -479,6 +647,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 		needResetFunction := false
 		compareArgTypes := false
+		numericPrefixDependent := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
 		numericPrefixArgs := make([]bool, len(exprImpl.F.Args))
 		numericPrefixKinds := make([]types.StringConversionKind, len(exprImpl.F.Args))
@@ -531,6 +700,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
+			if rule.isNumericPrefixDependent(rewrittenArg) {
+				numericPrefixDependent = true
+				if unwrapped, changed := unwrapNumericPrefixDependentImplicitCast(rewrittenArg); changed {
+					boundArgs[i] = unwrapped
+					needResetFunction = true
+					compareArgTypes = true
+				}
+			}
 			if preparedExprBindingChanged(originalArgTyp, originalArgFuncObj, rewrittenArg) {
 				// A nested typed function may have changed overload/result domain
 				// after its parameter was rebound.  The enclosing function was
@@ -552,6 +729,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 		}
+		if numericPrefixDependent {
+			for i, arg := range boundArgs {
+				// A nested runtime common-type result invalidates provisional
+				// prepare-time casts on every sibling, not only on the dependent
+				// child. Rebind the enclosing consumer from numeric source domains
+				// so a DECIMAL peer is not left behind a FLOAT cast selected while
+				// the parameter marker was still TEXT.
+				unwrapped := unwrapPreparedImplicitCast(arg, false)
+				if unwrapped != arg {
+					boundArgs[i] = unwrapped
+					needResetFunction = true
+					compareArgTypes = true
+				}
+			}
+		}
 		if contextualArgs, changed, contextualErr := rule.preparedNumericPrefixArgs(
 			exprImpl.F.Func.GetObjName(), boundArgs,
 			numericPrefixArgs, numericPrefixKinds, numericPrefixListArgs, numericPrefixListKinds,
@@ -561,6 +753,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			boundArgs = contextualArgs
 			needResetFunction = true
 			compareArgTypes = true
+			numericPrefixDependent = true
 			// A comparison can retain the same overload and outer argument
 			// types while its parameter is replaced by a numeric-prefix cast.
 			// The execution must still use this rewritten plan copy instead of
@@ -586,11 +779,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
 				rule.specialized = true
 			}
+			if numericPrefixDependent && !isExplicitPreparedCast(e) {
+				rule.markNumericPrefixDependent(e, rewritten)
+			}
 			return rewritten, nil
+		}
+		if numericPrefixDependent && !isExplicitPreparedCast(e) {
+			rule.markNumericPrefixDependent(e)
 		}
 		return e, nil
 	case *plan.Expr_W:
-		return applyWindowExpr(e, rule.ApplyExpr)
+		rewritten, err := applyWindowExpr(e, rule.ApplyExpr)
+		if err == nil && windowHasNumericPrefixDependency(rewritten.GetW(), rule.isNumericPrefixDependent) {
+			rule.markNumericPrefixDependent(e, rewritten)
+		}
+		return rewritten, err
 	case *plan.Expr_P:
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
@@ -605,16 +808,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if param != nil && param.Typ.Id != int32(types.T_text) {
 			typ = param.Typ
 		}
-		return &plan.Expr{
+		rewritten := &plan.Expr{
 			Typ:  typ,
 			Expr: param.Expr,
-		}, nil
+		}
+		if rule.numericPrefixParamPositions[int(exprImpl.P.Pos)] {
+			rule.markNumericPrefixDependent(e, rewritten)
+		}
+		return rewritten, nil
 	case *plan.Expr_List:
+		dependent := false
 		for i, arg := range exprImpl.List.List {
 			exprImpl.List.List[i], err = rule.ApplyExpr(arg)
 			if err != nil {
 				return nil, err
 			}
+			dependent = dependent || rule.isNumericPrefixDependent(exprImpl.List.List[i])
+		}
+		if dependent {
+			rule.markNumericPrefixDependent(e)
 		}
 		return e, nil
 	default:
@@ -630,65 +842,20 @@ func (rule *ResetParamRefRule) preparedNumericPrefixArgs(
 	prefixListArgs [][]bool,
 	prefixListKinds [][]types.StringConversionKind,
 ) ([]*plan.Expr, bool, error) {
-	switch name {
-	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
-	default:
+	if !preparedNumericPrefixContext(
+		name, args, prefixArgs, prefixKinds, prefixListArgs, prefixListKinds,
+	) {
 		return args, false, nil
 	}
 
-	sources := make([]*plan.Expr, len(args))
-	hasEligibleParam := false
-	hasDecimalPeer := false
-	hasCommonValueBoundary := false
 	numericArgCount := len(args)
 	if name == "in_range" && numericArgCount > 3 {
 		numericArgCount = 3
 	}
+	sources := make([]*plan.Expr, len(args))
 	for i, arg := range args {
 		eligibleArg := i < len(prefixArgs) && prefixArgs[i]
 		sources[i] = unwrapPreparedImplicitCast(arg, eligibleArg)
-		if i >= numericArgCount {
-			continue
-		}
-		if eligibleArg {
-			hasEligibleParam = true
-			if (sources[i] != nil && types.T(sources[i].Typ.Id).IsDecimal()) ||
-				(i < len(prefixKinds) && prefixKinds[i] == types.StringConversionDecimal) {
-				hasDecimalPeer = true
-			}
-			continue
-		}
-		if sources[i] == nil {
-			continue
-		}
-		if list := sources[i].GetList(); list != nil {
-			for itemIndex, item := range list.List {
-				eligible := i < len(prefixListArgs) && itemIndex < len(prefixListArgs[i]) &&
-					prefixListArgs[i][itemIndex]
-				item = unwrapPreparedImplicitCast(item, eligible)
-				if eligible {
-					hasEligibleParam = true
-					if (item != nil && types.T(item.Typ.Id).IsDecimal()) ||
-						(i < len(prefixListKinds) && itemIndex < len(prefixListKinds[i]) &&
-							prefixListKinds[i][itemIndex] == types.StringConversionDecimal) {
-						hasDecimalPeer = true
-					}
-				} else if item != nil && types.T(item.Typ.Id).IsDecimal() {
-					hasDecimalPeer = true
-				}
-			}
-			continue
-		}
-		if types.T(sources[i].Typ.Id).IsDecimal() {
-			hasDecimalPeer = true
-		}
-		if isPreparedCommonValueFunction(name) &&
-			!preparedNumericCommonOperandType(types.T(sources[i].Typ.Id)) {
-			hasCommonValueBoundary = true
-		}
-	}
-	if !hasEligibleParam || !hasDecimalPeer || hasCommonValueBoundary {
-		return args, false, nil
 	}
 
 	changed := false
@@ -745,6 +912,77 @@ func (rule *ResetParamRefRule) preparedNumericPrefixArgs(
 		return args, false, nil
 	}
 	return sources, true, nil
+}
+
+func preparedNumericPrefixContext(
+	name string,
+	args []*plan.Expr,
+	prefixArgs []bool,
+	prefixKinds []types.StringConversionKind,
+	prefixListArgs [][]bool,
+	prefixListKinds [][]types.StringConversionKind,
+) bool {
+	switch name {
+	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
+	default:
+		return false
+	}
+
+	sources := make([]*plan.Expr, len(args))
+	hasEligibleParam := false
+	hasDecimalPeer := false
+	hasCommonValueBoundary := false
+	numericArgCount := len(args)
+	if name == "in_range" && numericArgCount > 3 {
+		numericArgCount = 3
+	}
+	for i, arg := range args {
+		eligibleArg := i < len(prefixArgs) && prefixArgs[i]
+		sources[i] = unwrapPreparedImplicitCast(arg, eligibleArg)
+		if i >= numericArgCount {
+			continue
+		}
+		if eligibleArg {
+			hasEligibleParam = true
+			if (sources[i] != nil && types.T(sources[i].Typ.Id).IsDecimal()) ||
+				(i < len(prefixKinds) && prefixKinds[i] == types.StringConversionDecimal) {
+				hasDecimalPeer = true
+			}
+			continue
+		}
+		if sources[i] == nil {
+			continue
+		}
+		if list := sources[i].GetList(); list != nil {
+			for itemIndex, item := range list.List {
+				eligible := i < len(prefixListArgs) && itemIndex < len(prefixListArgs[i]) &&
+					prefixListArgs[i][itemIndex]
+				item = unwrapPreparedImplicitCast(item, eligible)
+				if eligible {
+					hasEligibleParam = true
+					if (item != nil && types.T(item.Typ.Id).IsDecimal()) ||
+						(i < len(prefixListKinds) && itemIndex < len(prefixListKinds[i]) &&
+							prefixListKinds[i][itemIndex] == types.StringConversionDecimal) {
+						hasDecimalPeer = true
+					}
+				} else if item != nil && types.T(item.Typ.Id).IsDecimal() {
+					hasDecimalPeer = true
+				}
+			}
+			continue
+		}
+		if types.T(sources[i].Typ.Id).IsDecimal() {
+			hasDecimalPeer = true
+		}
+		if isPreparedCommonValueFunction(name) &&
+			!preparedNumericCommonOperandType(types.T(sources[i].Typ.Id)) {
+			hasCommonValueBoundary = true
+		}
+	}
+	if !hasEligibleParam || !hasDecimalPeer || hasCommonValueBoundary {
+		return false
+	}
+	return true
 }
 
 func isPreparedCommonValueFunction(name string) bool {
@@ -998,6 +1236,67 @@ func unwrapPreparedImplicitCast(expr *plan.Expr, eligible bool) *plan.Expr {
 		expr = fn.Args[0]
 	}
 	return nil
+}
+
+func unwrapNumericPrefixDependentImplicitCast(expr *plan.Expr) (*plan.Expr, bool) {
+	current := expr
+	changed := false
+	for current != nil {
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			break
+		}
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			break
+		}
+		current = fn.Args[0]
+		changed = true
+	}
+	return current, changed
+}
+
+func isExplicitPreparedCast(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" {
+		return false
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	return overload != 0
+}
+
+func windowHasNumericPrefixDependency(
+	window *plan.WindowSpec,
+	dependent func(*plan.Expr) bool,
+) bool {
+	if window == nil {
+		return false
+	}
+	if dependent(window.WindowFunc) {
+		return true
+	}
+	for _, expr := range window.PartitionBy {
+		if dependent(expr) {
+			return true
+		}
+	}
+	for _, order := range window.OrderBy {
+		if order != nil && dependent(order.Expr) {
+			return true
+		}
+	}
+	if window.Frame != nil {
+		if window.Frame.Start != nil && dependent(window.Frame.Start.Val) {
+			return true
+		}
+		if window.Frame.End != nil && dependent(window.Frame.End.Val) {
+			return true
+		}
+	}
+	return false
 }
 
 func preparedExprFunctionObj(expr *plan.Expr) int64 {

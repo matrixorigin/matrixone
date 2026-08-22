@@ -1441,6 +1441,18 @@ func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, erro
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
+	return constantFoldWithPreparedExactSource(
+		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr))
+}
+
+func constantFoldWithPreparedExactSource(
+	bat *batch.Batch,
+	expr *plan.Expr,
+	proc *process.Process,
+	varAndParamIsConst bool,
+	foldInExpr bool,
+	preservePreparedExactSource bool,
+) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
 		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
 	}
@@ -1450,7 +1462,8 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		exprList := elist.List
 		cannotFold := false
 		for i := range exprList {
-			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst, foldInExpr)
+			foldExpr, err := constantFoldWithPreparedExactSource(
+				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource)
 			if err != nil {
 				return nil, err
 			}
@@ -1518,9 +1531,16 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if f.IsRealTimeRelated() && !varAndParamIsConst {
 		return expr, nil
 	}
+	if preservePreparedExactSource && rule.IsImplicitFloatCastOfExplicitDecimalConstant(expr) {
+		// Statistics and binder helpers use this generic folder before the
+		// prepare optimizer runs. Preserve the same exact source boundary here,
+		// otherwise the later prepared-only fold cannot recover lost digits.
+		return expr, nil
+	}
 	isVec := false
 	for i := range fn.Args {
-		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr)
+		foldExpr, errFold := constantFoldWithPreparedExactSource(
+			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource)
 		if errFold != nil {
 			return nil, errFold
 		}
@@ -1776,7 +1796,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 	// casts. When their domain already equals the IN left side, they are safe to
 	// keep in the typed list just like a direct literal. Do not extend this to
 	// row-dependent expressions merely because their declared types match.
-	if constT.Eq(columnT) && rule.IsConstant(constExpr, false) {
+	if constT.Eq(columnT) && (rule.IsConstant(constExpr, false) || isCastOfConstant(constExpr)) {
 		return true
 	}
 
@@ -1929,6 +1949,21 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 		return false
 	}
 
+}
+
+// isCastOfConstant preserves same-type casts whose source is a constant even
+// when the cast function itself is intentionally non-foldable (for example a
+// VARCHAR literal explicitly cast to UUID). A row-dependent source still takes
+// the regular cast path.
+func isCastOfConstant(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return false
+	}
+	return rule.IsConstant(fn.Args[0], false) || isCastOfConstant(fn.Args[0])
 }
 
 // parseHiveOptionKV handles hive_partitioning / hive_partition_columns keys in

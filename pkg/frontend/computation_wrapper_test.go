@@ -308,6 +308,31 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 	}
 }
 
+func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 112, "select ?")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, nil, true, cw.proc.Mp()))
+	cw.proc.SetPrepareParamsWithMeta(
+		params,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+
+	values, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0})
+	require.NoError(t, err)
+	require.Equal(t, []any{plan2.ParamValue{
+		IsBinaryProtocol:    true,
+		PrepareParamKind:    vector.PrepareParamDecimal,
+		EnableNumericPrefix: true,
+	}}, values)
+}
+
 func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 105, "select ?")
 	defer func() {
@@ -524,6 +549,40 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	requiresV25, scanErr = plan.RequiresMORPCVersion25NumericPrefix(originalProjectNode.ProjectList[0])
 	require.NoError(t, scanErr)
 	require.False(t, requiresV25)
+}
+
+func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
+	ctx := context.Background()
+	floatType := types.T_float32.ToType()
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+		{
+			Typ:  plan.Type{Id: int32(floatType.Oid)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		},
+	})
+	require.NoError(t, err)
+	original := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType:   plan.Node_VALUE_SCAN,
+			FilterList: []*plan.Expr{predicate},
+		}},
+	}}, IsPrepare: true}
+
+	runtimePlan, specialized, applied, err := specializePreparedExecutionPlan(ctx, original, []any{
+		plan2.ParamValue{
+			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+		},
+	}, false)
+	require.NoError(t, err)
+	require.False(t, specialized)
+	require.False(t, applied)
+	require.Same(t, original, runtimePlan, "ineligible SQL EXECUTE must not deep-copy the cached plan")
 }
 
 func TestSQLVariablePrepareParamKind(t *testing.T) {

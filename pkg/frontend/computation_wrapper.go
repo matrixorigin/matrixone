@@ -436,6 +436,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if cwft.hasPreparedSchedulingSQLMode {
 				schedulingSQLMode = &cwft.preparedSchedulingSQLMode
 			}
+			preparedRetry := newPreparedExecutionRetry(
+				cwft.paramVals,
+				execCtx.input != nil && execCtx.input.isBinaryProtExecute,
+			)
 			cwft.compile, err = createCompile(
 				execCtx,
 				cwft.ses,
@@ -448,6 +452,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				fill,
 				false,
 				&cwft.schedulingTrace,
+				preparedRetry,
 			)
 			if err != nil {
 				return nil, err
@@ -456,6 +461,15 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		} else {
 			// retComp
 			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
+			retComp.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
+				cwft.ses,
+				cwft.stmt,
+				execCtx.input.isPreparedExpr(),
+				newPreparedExecutionRetry(
+					cwft.paramVals,
+					execCtx.input != nil && execCtx.input.isBinaryProtExecute,
+				),
+			))
 			// originSQL is the prepared statement text here; the wrapper carries
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
@@ -491,6 +505,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			fill,
 			false,
 			&cwft.schedulingTrace,
+			nil,
 		)
 		if err != nil {
 			return nil, err
@@ -923,7 +938,7 @@ func initExecuteStmtParamWithResolverInSession(
 				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
-				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil)
+				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil, nil)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 						return nil, nil, nil, "", false, err
@@ -990,40 +1005,30 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, originSQL, false, err
 	}
 
-	// Parameter markers are kept in the cached plan so ordinary prepared
-	// executions can reuse it. The actual SQL-EXECUTE or COM_STMT value may
-	// nevertheless change the parameter domain, which affects overloaded
-	// function selection. Specialize an isolated copy after the values and
-	// protocol types are available; never mutate PrepareStmt.PreparePlan or its
-	// cached compile.
-	runtimeSpecialized := false
 	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
-	if len(cwft.paramVals) > 0 && executionPlan != nil &&
-		(executionPlan.GetQuery() != nil || executionPlan.GetDdl() != nil) {
-		runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
-			reqCtx, executionPlan, cwft.paramVals)
-		if err != nil {
-			return nil, nil, nil, originSQL, false, err
-		}
-		// DDL plans still need their parameter literals materialized even when
-		// no overload/result-domain specialization was required.  Query plans
-		// can stay on the cached parameterized plan in that case.
-		if runtimePlan != nil && (specialized || (binaryExecute && executionPlan.GetDdl() != nil)) {
-			executionPlan = runtimePlan
-			runtimeSpecialized = specialized
-			if binaryExecute {
-				columns := getPreparedResultColumnsFor(
-					prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes))
-				resper := execCtx.resper
-				if executionSes.IsBackgroundSession() {
-					resper = owner.GetResponser()
-				}
-				colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
-				if metadataErr != nil {
-					return nil, nil, nil, originSQL, false, metadataErr
-				}
-				execCtx.prepareColDef = colDefData
+	// COM_STMT values retain the existing runtime-type specialization contract.
+	// SQL EXECUTE first proves that a parameter reaches a decimal-aware
+	// common-type consumer; ordinary FLOAT, NULL, aggregate, and string paths
+	// keep the cached prepare-time plan without allocating a complete copy.
+	runtimePlan, runtimeSpecialized, runtimePlanApplied, err := specializePreparedExecutionPlan(
+		reqCtx, executionPlan, cwft.paramVals, binaryExecute)
+	if err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
+	if runtimePlanApplied {
+		executionPlan = runtimePlan
+		if binaryExecute {
+			columns := getPreparedResultColumnsFor(
+				prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes))
+			resper := execCtx.resper
+			if executionSes.IsBackgroundSession() {
+				resper = owner.GetResponser()
 			}
+			colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+			if metadataErr != nil {
+				return nil, nil, nil, originSQL, false, metadataErr
+			}
+			execCtx.prepareColDef = colDefData
 		}
 	}
 	// A cached prepared Compile already owns a materialized worker topology.
@@ -1059,6 +1064,53 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
+}
+
+func specializePreparedExecutionPlan(
+	ctx context.Context,
+	executionPlan *plan2.Plan,
+	paramVals []any,
+	binaryExecute bool,
+) (*plan2.Plan, bool, bool, error) {
+	if len(paramVals) == 0 || executionPlan == nil ||
+		(executionPlan.GetQuery() == nil && executionPlan.GetDdl() == nil) {
+		return executionPlan, false, false, nil
+	}
+	if !binaryExecute && !plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals) {
+		return executionPlan, false, false, nil
+	}
+
+	runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
+		ctx, executionPlan, paramVals)
+	if err != nil {
+		return nil, false, false, err
+	}
+	// Binary DDL plans need literal materialization even when no overload or
+	// result domain changed. Query plans use the copy only when specialization
+	// changed execution semantics.
+	if runtimePlan != nil && (specialized || (binaryExecute && executionPlan.GetDdl() != nil)) {
+		return runtimePlan, specialized, true, nil
+	}
+	return executionPlan, false, false, nil
+}
+
+// preparedExecutionRetry is an immutable snapshot of the execution-time
+// binding needed when Compile rebuilds a plan after a definition change. The
+// slice must not alias TxnComputationWrapper.paramVals because that field is
+// replaced on the next execution of the cached prepared statement.
+type preparedExecutionRetry struct {
+	paramVals     []any
+	binaryExecute bool
+}
+
+func newPreparedExecutionRetry(paramVals []any, binaryExecute bool) *preparedExecutionRetry {
+	if len(paramVals) == 0 {
+		return nil
+	}
+	return &preparedExecutionRetry{
+		paramVals:     append([]any(nil), paramVals...),
+		binaryExecute: binaryExecute,
+	}
 }
 
 func normalizePreparedPaginationBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
@@ -1203,19 +1255,25 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 	}
 	values := make([]any, params.Length())
 	for i := range values {
+		paramValue := plan2.ParamValue{
+			IsBin:               proc.GetPrepareParamIsBin(i),
+			IsBinaryProtocol:    true,
+			PrepareParamKind:    proc.GetPrepareParamKind(i),
+			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion25,
+		}
 		if params.IsNull(uint64(i)) {
+			// NULL has no runtime value type, but it must retain its parameter
+			// position, protocol source, and negotiated capabilities. A bare nil
+			// would make execute-time common-type rebinding forget that this is the
+			// same eligible marker used by a preceding non-NULL execution.
+			values[i] = paramValue
 			continue
 		}
 		raw, err := proc.GetPrepareParamsAt(i)
 		if err != nil {
 			return nil, err
 		}
-		paramValue := plan2.ParamValue{
-			Value:               string(raw),
-			IsBin:               proc.GetPrepareParamIsBin(i),
-			PrepareParamKind:    proc.GetPrepareParamKind(i),
-			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion25,
-		}
+		paramValue.Value = string(raw)
 		if i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
 			isUnsigned := paramTypes[i*2+1]&0x80 != 0
@@ -1238,7 +1296,6 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 		// declared MySQL type is VAR_STRING. Keep this provenance separate from
 		// RuntimeType so text values can safely participate in numeric overload
 		// inference without changing direct string result metadata.
-		paramValue.IsBinaryProtocol = true
 		values[i] = paramValue
 	}
 	return values, nil
@@ -1342,6 +1399,7 @@ func createCompile(
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 	isPrepare bool,
 	schedulingTrace *schedule.TraceRecorder,
+	preparedRetry *preparedExecutionRetry,
 ) (retCompile *compile.Compile, err error) {
 
 	addr := currentCNPipelineAddress(ses)
@@ -1416,10 +1474,8 @@ func createCompile(
 	}
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
 	forcePrepare := execCtx.input.isPreparedExpr()
-	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
-		return buildPlanForCompileRetry(
-			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
-	})
+	retCompile.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
+		ses, stmt, forcePrepare, preparedRetry))
 
 	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(execCtx, ses, stmt, fill))
 	if err != nil {
@@ -1472,6 +1528,7 @@ func buildPlanForCompileRetry(
 	compilerContext plan2.CompilerContext,
 	stmt tree.Statement,
 	forcePrepare bool,
+	preparedRetry *preparedExecutionRetry,
 ) (*plan2.Plan, error) {
 	// No permission verification is required when retry execute buildPlan.
 	retryPlan, err := buildPlanWithPrepareMode(
@@ -1485,7 +1542,33 @@ func buildPlanForCompileRetry(
 	if retryPlan.IsPrepare && !forcePrepare {
 		_, _, err = plan2.ResetPreparePlan(compilerContext, retryPlan)
 	}
-	return retryPlan, err
+	if err != nil {
+		return nil, err
+	}
+	if preparedRetry == nil {
+		return retryPlan, nil
+	}
+	runtimePlan, _, applied, err := specializePreparedExecutionPlan(
+		ctx, retryPlan, preparedRetry.paramVals, preparedRetry.binaryExecute)
+	if err != nil {
+		return nil, err
+	}
+	if applied {
+		return runtimePlan, nil
+	}
+	return retryPlan, nil
+}
+
+func preparedExecutionBuildPlanFunc(
+	ses FeSession,
+	stmt tree.Statement,
+	forcePrepare bool,
+	preparedRetry *preparedExecutionRetry,
+) func(context.Context) (*plan2.Plan, error) {
+	return func(ctx context.Context) (*plan2.Plan, error) {
+		return buildPlanForCompileRetry(
+			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare, preparedRetry)
+	}
 }
 
 func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {

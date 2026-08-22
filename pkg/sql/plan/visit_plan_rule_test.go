@@ -1475,6 +1475,37 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		})
 	}
 
+	t.Run("nested common value keeps exact outer comparison", func(t *testing.T) {
+		common, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*planpb.Expr{param(0), decimalColumn()})
+		require.NoError(t, err)
+		query := makeQuery(t, "=", []*planpb.Expr{common, decimalColumn()})
+		values := []any{ParamValue{
+			Value: "9007199254740992.0001tail", IsBinaryProtocol: true, EnableNumericPrefix: true,
+		}}
+		require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(query, values))
+
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, values)
+		require.NoError(t, err)
+		require.True(t, specialized, filled.String())
+		predicate := filled.GetQuery().Nodes[0].ProjectList[0]
+		require.Equal(t, "=", predicate.GetF().GetFunc().GetObjName(), predicate.String())
+		require.Equal(t, []types.T{types.T_decimal128, types.T_decimal128},
+			collectNumericOperandTypes(predicate), predicate.String())
+		require.NotNil(t, findNumericPrefixCast(predicate), predicate.String())
+	})
+
+	t.Run("SQL eligibility excludes float peer with decimal variable kind", func(t *testing.T) {
+		floatType := types.T_float32.ToType()
+		floatColumn := &planpb.Expr{
+			Typ:  makePlan2Type(&floatType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2}},
+		}
+		query := makeQuery(t, "=", []*planpb.Expr{floatColumn, param(0)})
+		require.False(t, PreparedPlanNeedsNumericPrefixSpecialization(query, []any{ParamValue{
+			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+		}}))
+	})
+
 	for _, test := range []struct {
 		name   string
 		fnName string
