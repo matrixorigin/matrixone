@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -98,11 +97,12 @@ type PartitionChangesHandle struct {
 	toTs   types.TS
 	tbl    *txnTable
 
-	skipDeletes        bool
-	primarySeqnum      int
-	snapshotReadPolicy engine.SnapshotReadPolicy
-	mp                 *mpool.MPool
-	fs                 fileservice.FileService
+	skipDeletes         bool
+	primarySeqnum       int
+	snapshotReadPolicy  engine.SnapshotReadPolicy
+	preserveAllVersions bool
+	mp                  *mpool.MPool
+	fs                  fileservice.FileService
 
 	bufferedBatches     []queuedChangeBatch
 	currentRangeDrained bool
@@ -120,14 +120,15 @@ func NewPartitionChangesHandle(
 		return nil, moerr.NewInternalErrorNoCtx("invalid timestamp")
 	}
 	handle := &PartitionChangesHandle{
-		tbl:                tbl,
-		fromTs:             from,
-		toTs:               to,
-		skipDeletes:        skipDeletes,
-		primarySeqnum:      tbl.primarySeqnum,
-		snapshotReadPolicy: snapshotReadPolicy,
-		mp:                 mp,
-		fs:                 tbl.getTxn().engine.fs,
+		tbl:                 tbl,
+		fromTs:              from,
+		toTs:                to,
+		skipDeletes:         skipDeletes,
+		primarySeqnum:       tbl.primarySeqnum,
+		snapshotReadPolicy:  snapshotReadPolicy,
+		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		mp:                  mp,
+		fs:                  tbl.getTxn().engine.fs,
 	}
 	end, err := handle.getNextChangeHandle(ctx)
 	if err != nil {
@@ -137,6 +138,13 @@ func NewPartitionChangesHandle(
 		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("logic error:from %s to %s", from.ToString(), to.ToString()))
 	}
 	return handle, err
+}
+
+func (h *PartitionChangesHandle) collectChangesContext(ctx context.Context) context.Context {
+	if h.preserveAllVersions {
+		return engine.WithCollectChangesPreserveAllVersions(ctx)
+	}
+	return ctx
 }
 
 func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
@@ -268,35 +276,11 @@ func (h *PartitionChangesHandle) loadCheckpointEntries(
 ) {
 	ctxWithDeadline, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	response, err := RequestSnapshotRead(ctxWithDeadline, h.tbl, &from)
-	if err != nil {
-		return nil, types.MaxTs(), types.TS{}, err
-	}
-	minTS = types.MaxTs()
-	maxTS = types.TS{}
-	resp, ok := response.(*cmd_util.SnapshotReadResp)
-	if !ok || !resp.Succeed || len(resp.Entries) == 0 {
-		return nil, minTS, maxTS, nil
-	}
-	checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
-	for _, entry := range resp.Entries {
-		logutil.Debug("ChangesHandle-Split-CheckpointEntry", zap.String("entry", entry.String()))
-		start := types.TimestampToTS(*entry.Start)
-		end := types.TimestampToTS(*entry.End)
-		if start.LT(&minTS) {
-			minTS = start
-		}
-		if end.GT(&maxTS) {
-			maxTS = end
-		}
-		checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entry.EntryType))
-		checkpointEntry.SetLocation(entry.Location1, entry.Location2)
-		checkpointEntries = append(checkpointEntries, checkpointEntry)
-	}
-	return checkpointEntries, minTS, maxTS, nil
+	return requestSnapshotCheckpointEntries(ctxWithDeadline, h.tbl, &from)
 }
 
 func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end bool, err error) {
+	ctx = h.collectChangesContext(ctx)
 	if h.currentPSTo.EQ(&h.toTs) {
 		return true, nil
 	}
@@ -454,6 +438,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 }
 
 func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx context.Context) (err error) {
+	ctx = h.collectChangesContext(ctx)
 	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
 		return nil
 	}
