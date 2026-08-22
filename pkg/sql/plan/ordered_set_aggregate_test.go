@@ -22,6 +22,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,6 +104,31 @@ func TestBuildMedianWithinGroupRejectsWindowForm(t *testing.T) {
 	require.NoError(t, err)
 	_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
 	require.Error(t, err)
+}
+
+func TestBindMedianWithinGroupRejectsInvalidShape(t *testing.T) {
+	binder := &HavingBinder{baseBinder: baseBinder{sysCtx: context.Background()}}
+	for _, tc := range []struct {
+		name string
+		expr *tree.FuncExpr
+		want string
+	}{
+		{
+			name: "multiple value expressions",
+			expr: &tree.FuncExpr{Exprs: tree.Exprs{nil, nil}},
+			want: "median requires exactly one value expression",
+		},
+		{
+			name: "missing order expression",
+			expr: &tree.FuncExpr{Exprs: tree.Exprs{nil}},
+			want: "median requires exactly one WITHIN GROUP ORDER BY expression",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := binder.bindMedianWithinGroupAgg(NameMedian, tc.expr, 0, false)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
 }
 
 func TestBuildOrderedSetPercentileRejectsInvalidWithinGroupShape(t *testing.T) {
