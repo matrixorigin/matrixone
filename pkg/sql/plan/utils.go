@@ -3325,6 +3325,18 @@ type ParamValue struct {
 	// binary-protocol value without being a binary string literal.
 	IsBinaryProtocol bool
 	PrepareParamKind vector.PrepareParamKind
+	// InferTextNumeric records SQL EXECUTE USING provenance. SQL user variables
+	// are transported through the text parameter vector and retain their
+	// PrepareParamKind; their binder type is not a binary-protocol physical type.
+	// Numeric consumers may infer from the text, while string/IN/assignment
+	// consumers keep the prepared contract.
+	InferTextNumeric bool
+	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
+	// is deliberately separate from RuntimeType: SQL parameters are transported
+	// as text and use this type only after a consumer establishes a numeric or
+	// other compatible domain.
+	SourceType    types.Type
+	HasSourceType bool
 	// RuntimeType is the type advertised by the binary-protocol parameter
 	// binding.  Prepared plans deliberately keep parameter markers as TEXT
 	// while they are cached, so the execute-time copy can use this optional
@@ -3686,6 +3698,11 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 		// conversion explicit so execution still materializes a Decimal256
 		// vector instead of treating the value as VARCHAR.
 		return castText()
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		// Literal_Sval is physically materialized as the executor's canonical
+		// string container. Keep the source as text and perform the declared
+		// binary conversion explicitly so Expr.Typ and the result vector agree.
+		return castText()
 	default:
 		return makeLiteral(&plan.Literal_Sval{Sval: rawText}), nil
 	}
@@ -3693,6 +3710,7 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, error) {
 	params := make([]*Expr, len(paramVals))
+	numericParams := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
 		isBin := false
@@ -3703,22 +3721,25 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 			isBin = param.IsBin
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
+			if param.HasSourceType && param.Value != nil {
+				numericParams[i], err = preparedRuntimeParamExpr(
+					ctx, param.Value, param.IsBin, param.SourceType)
+				if err != nil {
+					return false, err
+				}
+			}
 		}
 		paramType := plan.Type{Id: int32(types.T_text)}
 		if hasRuntimeType {
 			paramType = makePlan2Type(&runtimeType)
 		}
 		if val == nil {
-			pc := &plan.Literal{
-				Isnull: true,
-				Value:  &plan.Literal_Sval{Sval: ""},
-			}
-			params[i] = &plan.Expr{
-				Typ: paramType,
-				Expr: &plan.Expr_Lit{
-					Lit: pc,
-				},
-			}
+			// Keep NULL untyped until its actual consumer is rebound. Assigning
+			// TEXT here bypasses the normal implicit cast generation; aggregate
+			// executors such as COUNT then receive a different physical expression
+			// from direct COUNT(NULL) and may treat it as non-null input.
+			params[i] = makePlan2NullConstExprWithType()
+			params[i].GetLit().IsBin = isBin
 		} else {
 			if hasRuntimeType {
 				params[i], err = preparedRuntimeParamExpr(ctx, val, isBin, runtimeType)
@@ -3738,10 +3759,24 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.numericParams = numericParams
+	paramRule.sourceTypedParamExprs = make(map[*plan.Expr]struct{})
+	if query := preparedExecutionQuery(plan0); query != nil {
+		for _, node := range query.Nodes {
+			if node == nil {
+				continue
+			}
+			for _, expr := range node.ProjectList {
+				collectPreparedProjectedParamExprs(expr, paramRule.sourceTypedParamExprs)
+			}
+		}
+	}
 	paramRule.inferTextParamPositions = make(map[int]bool)
+	paramRule.paramKinds = make(map[int]vector.PrepareParamKind)
 	for i, val := range paramVals {
 		if param, ok := val.(ParamValue); ok {
-			if param.IsBinaryProtocol {
+			paramRule.paramKinds[i] = param.PrepareParamKind
+			if param.IsBinaryProtocol || param.InferTextNumeric {
 				paramRule.inferTextParamPositions[i] = true
 			}
 			if param.HasRuntimeType && param.RuntimeType.Oid == types.T_text {
@@ -3794,6 +3829,17 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 	// execute-time numeric domain must therefore be reflected in the copied
 	// plan even when it is not wrapped by a function overload.
 	specialized := paramRule.specialized
+	if !specialized {
+		for _, value := range paramVals {
+			if param, ok := value.(ParamValue); ok {
+				value = param.Value
+			}
+			if value == nil {
+				specialized = true
+				break
+			}
+		}
+	}
 	for pos := range directSelectRuntimeParam {
 		if runtimeParamHasExplicitType(paramVals[pos]) {
 			specialized = true
@@ -3801,6 +3847,39 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		}
 	}
 	return specialized, nil
+}
+
+func collectPreparedProjectedParamExprs(expr *Expr, result map[*Expr]struct{}) {
+	if expr == nil {
+		return
+	}
+	if expr.GetP() != nil {
+		result[expr] = struct{}{}
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			collectPreparedProjectedParamExprs(arg, result)
+		}
+		return
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			collectPreparedProjectedParamExprs(item, result)
+		}
+		return
+	}
+	if window := expr.GetW(); window != nil {
+		collectPreparedProjectedParamExprs(window.WindowFunc, result)
+		for _, item := range window.PartitionBy {
+			collectPreparedProjectedParamExprs(item, result)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				collectPreparedProjectedParamExprs(order.Expr, result)
+			}
+		}
+	}
 }
 
 func preparedExecutionQuery(plan0 *Plan) *Query {

@@ -175,6 +175,43 @@ func TestIssue25408PreparedRuntimeNumericRebind(t *testing.T) {
 
 		mustExec(t, ctx, conn, "create table n(a int)")
 		mustExec(t, ctx, conn, "insert into n values (1), (2), (3)")
+		mustExec(t, ctx, conn, "prepare runtime_count_null_first from 'select count(?) from n'")
+		defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare runtime_count_null_first") }()
+		mustExec(t, ctx, conn, "set @runtime_value = null")
+		var nullFirstCount string
+		require.NoError(t, conn.QueryRowContext(
+			ctx, "execute runtime_count_null_first using @runtime_value").Scan(&nullFirstCount))
+		require.Equal(t, "0", nullFirstCount)
+
+		mustExec(t, ctx, conn, "prepare runtime_count from 'select count(?) from n'")
+		defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare runtime_count") }()
+		for _, execution := range []struct {
+			assignment string
+			want       string
+		}{
+			{assignment: "set @runtime_value = 1", want: "3"},
+			{assignment: "set @runtime_value = null", want: "0"},
+			{assignment: "set @runtime_value = 1", want: "3"},
+		} {
+			mustExec(t, ctx, conn, execution.assignment)
+			var got string
+			require.NoError(t, conn.QueryRowContext(
+				ctx, "execute runtime_count using @runtime_value").Scan(&got))
+			require.Equal(t, execution.want, got)
+		}
+
+		mustExec(t, ctx, conn,
+			"create table runtime_binary(id int primary key, v binary(4), key idx_v(v))")
+		mustExec(t, ctx, conn, "insert into runtime_binary values (1, 'ab'), (2, 'cd')")
+		mustExec(t, ctx, conn, "set @runtime_binary = (select v from runtime_binary where id = 1)")
+		mustExec(t, ctx, conn,
+			"prepare runtime_binary_predicate from 'select id from runtime_binary where v = ?'")
+		defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare runtime_binary_predicate") }()
+		var binaryID string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"execute runtime_binary_predicate using @runtime_binary").Scan(&binaryID))
+		require.Equal(t, "1", binaryID)
+
 		mustExec(t, ctx, conn,
 			"prepare runtime_aggregate from 'select (select sum(? + a) from n) + 1'")
 		defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare runtime_aggregate") }()

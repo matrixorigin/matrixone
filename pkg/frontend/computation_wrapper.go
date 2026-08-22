@@ -1292,12 +1292,13 @@ func buildExecuteUserParams(
 			Value:            param,
 			IsBin:            paramIsBin[i],
 			PrepareParamKind: paramKinds[i],
+			InferTextNumeric: true,
 		}
 		if arg.Typ.Id != 0 {
 			paramValue := paramVals[i].(plan2.ParamValue)
-			paramValue.RuntimeType = types.New(
+			paramValue.SourceType = types.New(
 				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
-			paramValue.HasRuntimeType = true
+			paramValue.HasSourceType = true
 			paramVals[i] = paramValue
 		}
 	}

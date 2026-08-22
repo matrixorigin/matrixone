@@ -19,9 +19,11 @@ import (
 	"context"
 	"reflect"
 	"sort"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -415,11 +417,24 @@ type ResetParamRefRule struct {
 	// explicit/fixed DECIMAL boundary. String payloads in that subtree must be
 	// parsed as DECIMAL rather than first rounded through float64.
 	fixedExactContextDepth int
+	// numericConsumerDepth is non-zero while replacing an argument whose parent
+	// has positively established a numeric conversion domain. It lets textual
+	// SQL EXECUTE parameters restore BOOL provenance at the consumer boundary
+	// without changing the same parameter in a string consumer.
+	numericConsumerDepth int
+	paramKinds           map[int]vector.PrepareParamKind
+	numericParams        []*plan.Expr
+	// sourceTypedParamExprs identifies parameters that directly participate in
+	// a projected producer value. Their SQL user-variable source type is part of
+	// that producer's physical schema; consumers above relational/set-operation
+	// boundaries must not retroactively choose the branch representation.
+	sourceTypedParamExprs map[*plan.Expr]struct{}
 }
 
 type resetParamExprMemoKey struct {
-	expr       *plan.Expr
-	fixedExact bool
+	expr            *plan.Expr
+	fixedExact      bool
+	numericConsumer bool
 }
 
 // preparedRuntimeTypeLineageRule closes the type generation created when a
@@ -718,7 +733,11 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	if e == nil {
 		return nil, nil
 	}
-	key := resetParamExprMemoKey{expr: e, fixedExact: rule.fixedExactContextDepth > 0}
+	key := resetParamExprMemoKey{
+		expr:            e,
+		fixedExact:      rule.fixedExactContextDepth > 0,
+		numericConsumer: rule.numericConsumerDepth > 0,
+	}
 	if rewritten, ok := rule.exprMemo[key]; ok {
 		return rewritten, nil
 	}
@@ -780,7 +799,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if fixedExactBoundary {
 				rule.fixedExactContextDepth++
 			}
+			numericConsumer := preparedFunctionArgUsesNumericContext(
+				e, exprImpl.F.Func.GetObjName(), i, len(exprImpl.F.Args))
+			if numericConsumer {
+				rule.numericConsumerDepth++
+			}
 			rewrittenArg, applyErr := rule.ApplyExpr(arg)
+			if numericConsumer {
+				rule.numericConsumerDepth--
+			}
 			if fixedExactBoundary {
 				rule.fixedExactContextDepth--
 			}
@@ -852,13 +879,38 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}
 		param := rule.params[int(exprImpl.P.Pos)]
+		if rule.numericConsumerDepth > 0 && int(exprImpl.P.Pos) < len(rule.numericParams) &&
+			rule.numericParams[int(exprImpl.P.Pos)] != nil &&
+			rule.paramKinds[int(exprImpl.P.Pos)] != vector.PrepareParamBoolean {
+			numericParam := rule.numericParams[int(exprImpl.P.Pos)]
+			return &plan.Expr{Typ: numericParam.Typ, Expr: numericParam.Expr}, nil
+		}
+		if rule.numericConsumerDepth > 0 &&
+			rule.paramKinds[int(exprImpl.P.Pos)] == vector.PrepareParamBoolean &&
+			param != nil && param.GetLit() != nil && !param.GetLit().GetIsnull() {
+			boolean, parseErr := strconv.ParseBool(param.GetLit().GetSval())
+			if parseErr != nil {
+				return nil, moerr.NewInvalidArg(rule.ctx, "prepared boolean parameter", param.GetLit().GetSval())
+			}
+			if boolean {
+				return makePlan2Int64ConstExprWithType(1), nil
+			}
+			return makePlan2Int64ConstExprWithType(0), nil
+		}
+		if _, sourceTyped := rule.sourceTypedParamExprs[e]; sourceTyped &&
+			int(exprImpl.P.Pos) < len(rule.numericParams) &&
+			rule.numericParams[int(exprImpl.P.Pos)] != nil {
+			sourceParam := rule.numericParams[int(exprImpl.P.Pos)]
+			return &plan.Expr{Typ: sourceParam.Typ, Expr: sourceParam.Expr}, nil
+		}
 		typ := e.Typ
 		// Most prepared parameters are intentionally replaced as TEXT to retain
 		// the historical SQL-EXECUTE behavior.  Binary protocol executions can
 		// carry an explicit numeric domain, represented by a non-text type on the
 		// replacement expression; preserve that domain for direct projections and
 		// for the function rebinding performed by the parent expression.
-		if param != nil && param.Typ.Id != int32(types.T_text) {
+		if param != nil && (param.Typ.Id != int32(types.T_text) ||
+			param.GetLit() != nil && param.GetLit().GetIsnull()) {
 			typ = param.Typ
 		}
 		return &plan.Expr{
@@ -876,6 +928,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func preparedFunctionArgUsesNumericContext(parent *plan.Expr, name string, argIndex, argCount int) bool {
+	if parent == nil || !makeTypeByPlan2Expr(parent).IsNumeric() {
+		return false
+	}
+	if name == "cast" || isPreparedRuntimeTypeBoundary(name) {
+		return argIndex == 0
+	}
+	if !isNumericContextFunction(name) && !supportsGenericNumericFunctionContext(name) {
+		return false
+	}
+	return !numericFunctionHasSelectiveContext(name) ||
+		numericFunctionArgKeepsContext(name, argIndex, argCount)
 }
 
 func preparedExprFunctionObj(expr *plan.Expr) int64 {

@@ -74,6 +74,37 @@ func TestPreparedNumericContextParameterTypes(t *testing.T) {
 	}
 }
 
+func TestPreparedCountNullRefreshesAggregateInputLineage(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	ctx := optimizer.CurrentContext().GetContext()
+	stmts, err := mysql.Parse(ctx, "select count(?) from nation", 1)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+	require.NoError(t, NormalizePrepareParamRefs(ctx, queryPlan))
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, queryPlan, []any{
+		ParamValue{Value: nil, InferTextNumeric: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	foundNullCount := false
+	for _, node := range filled.GetQuery().Nodes {
+		for _, agg := range node.AggList {
+			fn := agg.GetF()
+			if fn == nil || fn.Func.GetObjName() != "count" || len(fn.Args) == 0 {
+				continue
+			}
+			arg := fn.Args[0]
+			foundNullCount = arg.GetF() != nil && arg.GetF().GetFunc().GetObjName() == "cast" &&
+				len(arg.GetF().Args) > 0 && arg.GetF().Args[0].GetLit().GetIsnull() &&
+				!arg.Typ.NotNullable
+		}
+	}
+	require.True(t, foundNullCount)
+}
+
 func TestNumericContextLeavesOrdinaryArithmeticOnOriginalPath(t *testing.T) {
 	tests := []string{
 		"select 1 + 2",

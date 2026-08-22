@@ -1414,6 +1414,44 @@ func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing
 	})
 	require.NoError(t, err)
 	require.True(t, specialized, "direct numeric result metadata must be specialized")
+
+	nullFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, direct, []any{
+		ParamValue{Value: nil, InferTextNumeric: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "NULL changes value semantics even when the overload remains stable")
+	require.True(t, nullFilled.GetQuery().Nodes[0].ProjectList[0].GetLit().GetIsnull())
+
+	countParam := param()
+	countParam.Typ.NotNullable = true
+	countExpr, err := BindFuncExprImplByPlanExpr(ctx, "count", []*planpb.Expr{countParam})
+	require.NoError(t, err)
+	countQuery := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType: planpb.Node_AGG,
+			AggList:  []*planpb.Expr{countExpr},
+		}},
+	}}}
+	_, _, err = FillValuesOfParamsInPlanWithSpecialization(ctx, countQuery, []any{
+		ParamValue{
+			Value: int64(1), InferTextNumeric: true,
+			SourceType: types.T_int64.ToType(), HasSourceType: true,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, countQuery.GetQuery().Nodes[0].AggList[0].GetF().Args[0].GetP(),
+		"runtime filling must not replace the cached parameter marker")
+	countFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, countQuery, []any{
+		ParamValue{Value: nil, InferTextNumeric: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	countArg := countFilled.GetQuery().Nodes[0].AggList[0].GetF().Args[0]
+	require.Equal(t, "cast", countArg.GetF().GetFunc().GetObjName())
+	require.True(t, countArg.GetF().Args[0].GetLit().GetIsnull())
+	require.False(t, countArg.Typ.NotNullable)
 }
 
 func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {

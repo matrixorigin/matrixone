@@ -516,6 +516,8 @@ func TestPreparedRuntimeParamExprMaterializesRuntimeTypes(t *testing.T) {
 		{name: "decimal128", value: "12.34", runtime: types.New(types.T_decimal128, 20, 2), wantLit: true},
 		{name: "decimal128 fallback", value: "bad", runtime: types.New(types.T_decimal128, 20, 2), wantFunc: true},
 		{name: "decimal256", value: "12.34", runtime: types.New(types.T_decimal256, 30, 2), wantFunc: true},
+		{name: "binary", value: "ab", runtime: types.New(types.T_binary, 4, 0), wantFunc: true},
+		{name: "varbinary", value: "ab", runtime: types.New(types.T_varbinary, 4, 0), wantFunc: true},
 		{name: "text", value: "plain text", runtime: types.T_text.ToType(), wantLit: true},
 	}
 	for _, test := range tests {
