@@ -4502,6 +4502,7 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 	v.sorted = layout.sorted
 	v.resetPrepareParamKind()
 	v.resetBinaryString()
+	v.resetStringSource()
 	v.cantFreeData = true
 	v.cantFreeArea = true
 	v.prepareParamKindsMP = nil
@@ -5299,11 +5300,19 @@ func (v *Vector) cloneToFlatCompact(
 			w.Free(mp)
 			return nil, err
 		}
+		if err := v.copyStringSourceToWithMP(w, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
 		return w, nil
 	}
 	if v.length == 0 {
 		w.setBinaryStringScalar(v.binaryString)
 		if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+		if err := v.copyStringSourceToWithMP(w, mp); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
@@ -5331,6 +5340,10 @@ func (v *Vector) cloneToFlatCompact(
 		dataLen := v.length * v.typ.TypeSize()
 		copy(w.data[:dataLen], v.data[:dataLen])
 		if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+		if err := v.copyStringSourceToWithMP(w, mp); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
@@ -5377,6 +5390,10 @@ func (v *Vector) cloneToFlatCompact(
 		w.Free(mp)
 		return nil, err
 	}
+	if err := v.copyStringSourceToWithMP(w, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
 	return w, nil
 }
 
@@ -5402,6 +5419,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 
 	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	oldKinds := v.prepareParamKinds
+	oldSources := v.stringSources
 	oldLength := v.length
 
 	if v.IsConst() {
@@ -5474,6 +5492,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
 	v.remapPrepareParamKindsAfterShrink(oldKinds, oldLength, sels, negate)
+	v.remapStringSourcesAfterShrink(oldSources, oldLength, sels, negate)
 	if v.binaryStringRowsActive {
 		v.binaryStringRows.RemapOrdered(sels, negate)
 		v.textStringRows.RemapOrdered(sels, negate)
@@ -5494,6 +5513,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		return
 	}
 	oldKinds := v.prepareParamKinds
+	oldSources := v.stringSources
 	oldLength := v.length
 
 	switch v.typ.Oid {
@@ -5557,6 +5577,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
 	v.remapPrepareParamKindsAfterShrinkMask(oldKinds, oldLength, sels, negate, offset)
+	v.remapStringSourcesAfterShrinkMask(oldSources, oldLength, sels, negate, offset)
 	if v.binaryStringRowsActive {
 		v.binaryStringRows.RemapMaskOrderedWithOffset(sels, negate, offset)
 		v.textStringRows.RemapMaskOrderedWithOffset(sels, negate, offset)
@@ -5661,6 +5682,100 @@ func (v *Vector) finishInPlacePrepareParamKindRemap(
 	v.prepareParamKind = PrepareParamNone
 	v.prepareParamKindSeen = true
 	v.normalizePrepareParamKinds()
+}
+
+func (v *Vector) remapStringSourcesAfterShrink(
+	sources []types.StringSource,
+	oldLength int,
+	sels []int64,
+	negate bool,
+) {
+	if sources == nil {
+		return
+	}
+	newLength := v.length
+	if !negate {
+		for output, selected := range sels {
+			if output >= newLength {
+				break
+			}
+			if selected >= 0 && int(selected) < oldLength && int(selected) < len(sources) {
+				sources[output] = sources[selected]
+			} else {
+				sources[output] = types.StringSourceExpression
+			}
+		}
+	} else {
+		write, selected := 0, 0
+		for row := 0; row < oldLength && row < len(sources); row++ {
+			if selected < len(sels) && int64(row) == sels[selected] {
+				selected++
+				continue
+			}
+			if write < newLength {
+				sources[write] = sources[row]
+				write++
+			}
+		}
+	}
+	v.finishInPlaceStringSourceRemap(sources, oldLength, newLength)
+}
+
+func (v *Vector) remapStringSourcesAfterShrinkMask(
+	sources []types.StringSource,
+	oldLength int,
+	sels *bitmap.Bitmap,
+	negate bool,
+	offset uint64,
+) {
+	if sources == nil {
+		return
+	}
+	newLength := v.length
+	if !negate {
+		iterator := sels.Iterator()
+		for output := 0; output < newLength && iterator.HasNext(); output++ {
+			selected := iterator.Next() + offset
+			if selected < uint64(oldLength) && selected < uint64(len(sources)) {
+				sources[output] = sources[selected]
+			} else {
+				sources[output] = types.StringSourceExpression
+			}
+		}
+	} else if sels.Count() > 0 {
+		iterator := sels.Iterator()
+		next := iterator.Next() + offset
+		write := 0
+		for row := 0; row < oldLength && row < len(sources); row++ {
+			if uint64(row) == next {
+				if iterator.HasNext() {
+					next = iterator.Next() + offset
+				}
+				continue
+			}
+			if write < newLength {
+				sources[write] = sources[row]
+				write++
+			}
+		}
+	}
+	v.finishInPlaceStringSourceRemap(sources, oldLength, newLength)
+}
+
+func (v *Vector) finishInPlaceStringSourceRemap(
+	sources []types.StringSource,
+	oldLength int,
+	newLength int,
+) {
+	if newLength == 0 {
+		v.resetStringSource()
+		return
+	}
+	if newLength < oldLength && newLength < len(sources) {
+		clear(sources[newLength:min(oldLength, len(sources))])
+	}
+	v.stringSources = sources[:newLength]
+	v.normalizeStringSources()
 }
 
 // remapPrepareParamKindsAfterShuffle uses the existing sidecar whenever the
@@ -10181,7 +10296,12 @@ func (s vectorMetadataSorter) Less(left, right int) bool {
 	if leftKind != rightKind {
 		return leftKind < rightKind
 	}
-	return s.vector.GetRuntimeStringDomainAt(left) < s.vector.GetRuntimeStringDomainAt(right)
+	leftDomain := s.vector.GetRuntimeStringDomainAt(left)
+	rightDomain := s.vector.GetRuntimeStringDomainAt(right)
+	if leftDomain != rightDomain {
+		return leftDomain < rightDomain
+	}
+	return s.vector.GetStringSourceAt(left) < s.vector.GetStringSourceAt(right)
 }
 
 func setBitmapRow(value *bitmap.Bitmap, row int, enabled bool) {
@@ -10216,13 +10336,18 @@ func (s vectorMetadataSorter) Swap(left, right int) {
 		s.vector.prepareParamKinds[left], s.vector.prepareParamKinds[right] =
 			s.vector.prepareParamKinds[right], s.vector.prepareParamKinds[left]
 	}
+	if s.vector.stringSources != nil {
+		s.vector.stringSources[left], s.vector.stringSources[right] =
+			s.vector.stringSources[right], s.vector.stringSources[left]
+	}
 }
 
 func (v *Vector) sortRowsEquivalent(left, right int) bool {
 	if v.IsNull(uint64(left)) != v.IsNull(uint64(right)) ||
 		v.gsp.Contains(uint64(left)) != v.gsp.Contains(uint64(right)) ||
 		v.GetPrepareParamKindAt(left) != v.GetPrepareParamKindAt(right) ||
-		v.GetRuntimeStringDomainAt(left) != v.GetRuntimeStringDomainAt(right) {
+		v.GetRuntimeStringDomainAt(left) != v.GetRuntimeStringDomainAt(right) ||
+		v.GetStringSourceAt(left) != v.GetStringSourceAt(right) {
 		return false
 	}
 	return v.IsNull(uint64(left)) || bytes.Equal(v.GetBytesAt(left), v.GetBytesAt(right))
@@ -10242,10 +10367,14 @@ func (v *Vector) copySortedRow(destination, source int, varlena []types.Varlena)
 	if v.prepareParamKinds != nil {
 		v.prepareParamKinds[destination] = v.prepareParamKinds[source]
 	}
+	if v.stringSources != nil {
+		v.stringSources[destination] = v.stringSources[source]
+	}
 }
 
 func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
-	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil) || v.IsConst() || !v.typ.IsVarlen() {
+	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil && v.stringSources == nil) ||
+		v.IsConst() || !v.typ.IsVarlen() {
 		return false
 	}
 	switch v.typ.Oid {
@@ -10286,6 +10415,10 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 			clear(v.prepareParamKinds[newLength:])
 			v.prepareParamKinds = v.prepareParamKinds[:newLength]
 		}
+		if v.stringSources != nil {
+			clear(v.stringSources[newLength:])
+			v.stringSources = v.stringSources[:newLength]
+		}
 		v.length = newLength
 	}
 	if v.prepareParamKinds != nil {
@@ -10293,6 +10426,9 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	}
 	if v.binaryStringRowsActive {
 		v.normalizeBinaryStringRows()
+	}
+	if v.stringSources != nil {
+		v.normalizeStringSources()
 	}
 	v.sorted = true
 	return true

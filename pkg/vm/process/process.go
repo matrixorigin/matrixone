@@ -341,7 +341,8 @@ func BinaryStringPrepareParamMetadataForRemote(
 
 // StringSourcePrepareParamMetadataForRemote validates the independent source
 // axis and gates non-default ownership on the protocol version that can carry
-// it. A nil result preserves the source-free protobuf fast path.
+// it. Older peers receive the pre-source payload during rolling upgrades; a
+// nil result also preserves the source-free protobuf fast path.
 func StringSourcePrepareParamMetadataForRemote(
 	service string,
 	paramCount int,
@@ -367,10 +368,8 @@ func StringSourcePrepareParamMetadataForRemote(
 	if !hasMetadata {
 		return nil, nil
 	}
-	if prepareParamProtocolVersion(service) < defines.MORPCVersion24 {
-		return nil, moerr.NewNotSupportedNoCtxf(
-			"prepared-parameter string source requires MORPC protocol version %d",
-			defines.MORPCVersion24)
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion25 {
+		return nil, nil
 	}
 	return append([]uint32(nil), metadata...), nil
 }

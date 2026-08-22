@@ -170,6 +170,10 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, 
 // ordinary string path and is intentionally omitted; a heterogeneous sidecar
 // is always significant even when some rows are None.
 func (bat *Batch) HasPrepareParamKindMetadata() bool {
+	return bat.hasPrepareParamKindMetadata(true)
+}
+
+func (bat *Batch) hasPrepareParamKindMetadata(includeStringSources bool) bool {
 	if bat == nil {
 		return false
 	}
@@ -177,7 +181,7 @@ func (bat *Batch) HasPrepareParamKindMetadata() bool {
 		if vec == nil {
 			continue
 		}
-		if vec.HasStringSourceMetadata() {
+		if includeStringSources && vec.HasStringSourceMetadata() {
 			return true
 		}
 		if vec.GetIsBinaryString() || vec.HasBinaryStringRows() {
@@ -249,12 +253,16 @@ func hasUniformExplicitTextStringMetadata(vec *vector.Vector) bool {
 // PrepareParamKindMetadataSize validates the transient trailer and returns its
 // exact wire size. Zero means that no trailer is required.
 func (bat *Batch) PrepareParamKindMetadataSize() (int, error) {
-	if bat == nil || !bat.HasPrepareParamKindMetadata() {
+	return bat.prepareParamKindMetadataSize(true)
+}
+
+func (bat *Batch) prepareParamKindMetadataSize(includeStringSources bool) (int, error) {
+	if bat == nil || !bat.hasPrepareParamKindMetadata(includeStringSources) {
 		return 0, nil
 	}
 	// magic/version + vector count + batch row count + trailing size.
 	total := uint64(4 + 4 + 8 + 4)
-	hasStringSources := bat.HasStringSourceMetadata()
+	hasStringSources := includeStringSources && bat.HasStringSourceMetadata()
 	for _, vec := range bat.Vecs {
 		if vec == nil {
 			return 0, moerr.NewInvalidInputNoCtx("cannot encode prepared parameter metadata for nil vector")
@@ -305,7 +313,11 @@ func (bat *Batch) PrepareParamKindMetadataSize() (int, error) {
 // trailer after the stable Batch bytes. It is intentionally not part of
 // MarshalBinaryTo: persisted/stable Vector and Batch bytes remain unchanged.
 func (bat *Batch) AppendPrepareParamKindMetadataTo(w io.Writer) error {
-	size, err := bat.PrepareParamKindMetadataSize()
+	return bat.appendPrepareParamKindMetadataTo(w, true)
+}
+
+func (bat *Batch) appendPrepareParamKindMetadataTo(w io.Writer, includeStringSources bool) error {
+	size, err := bat.prepareParamKindMetadataSize(includeStringSources)
 	if err != nil || size == 0 {
 		return err
 	}
@@ -313,7 +325,7 @@ func (bat *Batch) AppendPrepareParamKindMetadataTo(w io.Writer) error {
 		return io.ErrClosedPipe
 	}
 	version := prepareParamKindBatchVersionV1
-	if bat.HasStringSourceMetadata() {
+	if includeStringSources && bat.HasStringSourceMetadata() {
 		version = prepareParamKindBatchVersion
 	}
 	if err := writeBatchMarshalBytes(w, []byte{
@@ -419,13 +431,29 @@ func (bat *Batch) AppendPrepareParamKindMetadata(w io.Writer) error {
 // With no significant provenance it is byte-for-byte identical to the stable
 // Batch encoder.
 func (bat *Batch) MarshalBinaryWithPrepareParamKinds(w *bytes.Buffer, reset bool) ([]byte, error) {
+	return bat.MarshalBinaryWithPrepareParamKindsForProtocol(w, reset, true)
+}
+
+// MarshalBinaryWithPrepareParamKindsForProtocol omits string-source metadata
+// for an older peer while preserving every provenance axis that peer already
+// understands. Source is observational metadata until both peers advertise
+// its capability; dropping it at that rolling-upgrade boundary restores the
+// pre-capability behavior instead of rejecting an otherwise executable query.
+func (bat *Batch) MarshalBinaryWithPrepareParamKindsForProtocol(
+	w *bytes.Buffer,
+	reset bool,
+	includeStringSources bool,
+) ([]byte, error) {
 	if w == nil {
 		return nil, io.ErrClosedPipe
 	}
 	if reset {
 		w.Reset()
 	}
-	if err := bat.MarshalBinaryWithPrepareParamKindsTo(w); err != nil {
+	if err := bat.MarshalBinaryTo(w); err != nil {
+		return nil, err
+	}
+	if err := bat.appendPrepareParamKindMetadataTo(w, includeStringSources); err != nil {
 		return nil, err
 	}
 	return w.Bytes(), nil

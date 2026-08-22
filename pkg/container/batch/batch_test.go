@@ -828,6 +828,14 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	require.Equal(t, types.StringSourceCOMStmt, decoded.Vecs[0].GetStringSourceAt(0))
 	require.Equal(t, types.StringSourceSQLPrepare, decoded.Vecs[0].GetStringSourceAt(1))
 
+	var oldPeerWire bytes.Buffer
+	oldPeerEncoded, err := source.MarshalBinaryWithPrepareParamKindsForProtocol(&oldPeerWire, true, false)
+	require.NoError(t, err)
+	oldPeerDecoded := NewOffHeapEmpty()
+	require.NoError(t, oldPeerDecoded.UnmarshalBinaryWithPrepareParamKinds(oldPeerEncoded, mp))
+	require.False(t, oldPeerDecoded.Vecs[0].HasStringSourceMetadata())
+	oldPeerDecoded.Clean(mp)
+
 	corrupt := append([]byte(nil), encoded...)
 	const sourceRowsOffset = 4 + 4 + 8 + 1 + 4 + 2 + 1 + 4
 	corrupt[len(legacy)+sourceRowsOffset] = 255

@@ -1438,6 +1438,15 @@ func (ae *aggExec) PreAllocateGroups(more int) error {
 // SetExtraInformation also implemented by each agg.
 
 func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
+	return ae.SaveIntermediateResultWithStringSource(cnt, flags, writer, true)
+}
+
+func (ae *aggExec) SaveIntermediateResultWithStringSource(
+	cnt int64,
+	flags [][]uint8,
+	writer io.Writer,
+	includeStringSource bool,
+) error {
 	magic := magicNumber
 	if err := types.WriteUint64(writer, magic); err != nil {
 		return err
@@ -1469,7 +1478,7 @@ func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.
 			return err
 		}
 	}
-	if err := ae.writeBinaryStringTrailerForSelection(flags, writer); err != nil {
+	if err := ae.writeBinaryStringTrailerForSelection(flags, writer, includeStringSource); err != nil {
 		return err
 	}
 
@@ -1546,6 +1555,14 @@ func (ae *aggExec) UnmarshalSpillFromReader(
 }
 
 func (ae *aggExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
+	return ae.SaveIntermediateResultOfChunkWithStringSource(chunk, writer, true)
+}
+
+func (ae *aggExec) SaveIntermediateResultOfChunkWithStringSource(
+	chunk int,
+	writer io.Writer,
+	includeStringSource bool,
+) error {
 	if chunk < 0 || chunk >= len(ae.state) {
 		return moerr.NewInternalErrorNoCtx("chunk index out of range")
 	}
@@ -1562,7 +1579,7 @@ func (ae *aggExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) er
 		ae.mp, writer, &ae.aggInfo); err != nil {
 		return err
 	}
-	if err := ae.writeBinaryStringTrailerForChunk(chunk, writer); err != nil {
+	if err := ae.writeBinaryStringTrailerForChunk(chunk, writer, includeStringSource); err != nil {
 		return err
 	}
 
@@ -1586,7 +1603,11 @@ func writeAggBinaryStringByte(writer io.Writer, value byte) error {
 	return nil
 }
 
-func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, writer io.Writer) error {
+func (ae *aggExec) writeBinaryStringTrailerForSelection(
+	flags [][]uint8,
+	writer io.Writer,
+	includeStringSource bool,
+) error {
 	hasBinaryString := false
 	hasTextString := false
 	hasStringSource := false
@@ -1605,8 +1626,8 @@ func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, writer 
 				hasBinaryString = true
 				hasTextString = hasTextString || vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringText
 			}
-			hasStringSource = hasStringSource ||
-				vec != nil && vec.GetStringSourceAt(row) != types.StringSourceExpression
+			hasStringSource = includeStringSource && (hasStringSource ||
+				(vec != nil && vec.GetStringSourceAt(row) != types.StringSourceExpression))
 		}
 	}
 	if !hasBinaryString && !hasStringSource {
@@ -1653,11 +1674,15 @@ func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, writer 
 	return nil
 }
 
-func (ae *aggExec) writeBinaryStringTrailerForChunk(chunk int, writer io.Writer) error {
+func (ae *aggExec) writeBinaryStringTrailerForChunk(
+	chunk int,
+	writer io.Writer,
+	includeStringSource bool,
+) error {
 	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
 		ae.state[chunk].vecs[0] == nil ||
 		(!ae.state[chunk].vecs[0].HasBinaryStringMetadata() &&
-			!ae.state[chunk].vecs[0].HasStringSourceMetadata()) {
+			(!includeStringSource || !ae.state[chunk].vecs[0].HasStringSourceMetadata())) {
 		return nil
 	}
 	vec := ae.state[chunk].vecs[0]
@@ -1665,7 +1690,7 @@ func (ae *aggExec) writeBinaryStringTrailerForChunk(chunk int, writer io.Writer)
 	if vec.HasExplicitTextStringMetadata() {
 		marker = aggStringDomainTrailerMagic
 	}
-	if vec.HasStringSourceMetadata() {
+	if includeStringSource && vec.HasStringSourceMetadata() {
 		marker = aggStringStateTrailerMagic
 	}
 	if err := types.WriteUint64(writer, marker); err != nil {

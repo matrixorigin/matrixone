@@ -216,6 +216,20 @@ func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
 	}
 }
 
+func TestConstListExpressionExecutorPreservesLiteralSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exprs := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}},
+		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "b"}}}},
+	}
+	vec, err := GenerateConstListExpressionExecutor(proc, exprs)
+	require.NoError(t, err)
+	defer vec.Free(proc.Mp())
+	for row := range exprs {
+		require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(row))
+	}
+}
+
 func TestFlowControlSameDomainWithoutProvenanceKeepsFastPath(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	value, err := vector.NewConstBytes(

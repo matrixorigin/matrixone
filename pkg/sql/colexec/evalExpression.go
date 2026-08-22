@@ -1862,6 +1862,10 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			vec.SetIsBin(t.IsBin)
 		}
 	}
+	if err := vec.SetStringSource(types.StringSourceLiteral); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
+	}
 	return vec, nil
 }
 

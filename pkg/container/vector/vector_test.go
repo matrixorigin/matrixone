@@ -6276,3 +6276,66 @@ func TestStringSourceAppendRollbackAndReuse(t *testing.T) {
 	vec.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
 }
+
+func TestStringSourceRowTransformsStayAligned(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeVector := func() *Vector {
+		vec := NewVec(types.T_varchar.ToType())
+		require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, nil, mp))
+		require.NoError(t, vec.SetStringSourcesWithMP([]types.StringSource{
+			types.StringSourceLiteral, types.StringSourceSQLPrepare, types.StringSourceCOMStmt,
+		}, mp))
+		return vec
+	}
+	shrunk := makeVector()
+	shrunk.Shrink([]int64{1, 2}, false)
+	require.Equal(t, [][]byte{[]byte("b"), []byte("c")}, InefficientMustBytesCol(shrunk))
+	require.Equal(t, []types.StringSource{types.StringSourceSQLPrepare, types.StringSourceCOMStmt}, shrunk.GetStringSources())
+	shrunk.Free(mp)
+	masked := makeVector()
+	var mask bitmap.Bitmap
+	mask.InitWithSize(3)
+	mask.Add(1)
+	mask.Add(2)
+	masked.ShrinkByMask(&mask, false, 0)
+	require.Equal(t, [][]byte{[]byte("b"), []byte("c")}, InefficientMustBytesCol(masked))
+	require.Equal(t, []types.StringSource{types.StringSourceSQLPrepare, types.StringSourceCOMStmt}, masked.GetStringSources())
+	masked.Free(mp)
+	clonedSource := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(clonedSource, [][]byte{[]byte("x"), []byte("y")}, nil, mp))
+	require.NoError(t, clonedSource.SetStringSourcesWithMP([]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt}, mp))
+	cloned, err := clonedSource.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.Equal(t, clonedSource.GetStringSources(), cloned.GetStringSources())
+	cloned.Free(mp)
+	clonedSource.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestStringSourceInplaceSortAndStableDecode(t *testing.T) {
+	mp := mpool.MustNewZero()
+	sorted := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(sorted, [][]byte{[]byte("b"), []byte("a")}, nil, mp))
+	require.NoError(t, sorted.SetStringSourcesWithMP([]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt}, mp))
+	sorted.InplaceSort()
+	require.Equal(t, [][]byte{[]byte("a"), []byte("b")}, InefficientMustBytesCol(sorted))
+	require.Equal(t, []types.StringSource{types.StringSourceCOMStmt, types.StringSourceLiteral}, sorted.GetStringSources())
+	sorted.Free(mp)
+	withSource := NewOffHeapVecWithType(types.T_varchar.ToType())
+	payloadSource := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(payloadSource, []byte("old"), false, mp))
+	payload, err := payloadSource.MarshalBinary()
+	require.NoError(t, err)
+	require.NoError(t, withSource.UnmarshalBinary(payload))
+	require.NoError(t, withSource.SetStringSource(types.StringSourceCOMStmt))
+	withoutSource := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(withoutSource, []byte("new"), false, mp))
+	payload, err = withoutSource.MarshalBinary()
+	require.NoError(t, err)
+	require.NoError(t, withSource.UnmarshalBinary(payload))
+	require.False(t, withSource.HasStringSourceMetadata())
+	withoutSource.Free(mp)
+	payloadSource.Free(mp)
+	withSource.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}

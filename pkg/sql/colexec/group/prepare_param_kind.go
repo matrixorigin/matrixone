@@ -486,7 +486,36 @@ func stringSourceWireEnabled(proc *process.Process) bool {
 	}
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion24
+	return ok && version >= defines.MORPCVersion25
+}
+
+type aggregateStringSourceProtocolWriter interface {
+	SaveIntermediateResultOfChunkWithStringSource(
+		chunk int,
+		writer io.Writer,
+		includeStringSource bool,
+	) error
+}
+
+func saveAggregateChunkForProtocol(
+	agg aggexec.AggFuncExec,
+	chunk int,
+	writer io.Writer,
+	includeStringSource bool,
+) error {
+	if includeStringSource {
+		return agg.SaveIntermediateResultOfChunk(chunk, writer)
+	}
+	protocolWriter, ok := agg.(aggregateStringSourceProtocolWriter)
+	if !ok {
+		if vec := agg.PrepareParamKindVectorForChunk(chunk); vec != nil && vec.HasStringSourceMetadata() {
+			return moerr.NewInternalErrorNoCtx(
+				"aggregate cannot omit string source for an older peer")
+		}
+		return agg.SaveIntermediateResultOfChunk(chunk, writer)
+	}
+	return protocolWriter.SaveIntermediateResultOfChunkWithStringSource(
+		chunk, writer, false)
 }
 
 func hasPrepareParamKindPreservingAgg(aggs []aggexec.AggFuncExecExpression) bool {
