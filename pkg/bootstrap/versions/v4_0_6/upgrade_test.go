@@ -373,6 +373,7 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 		upgradeInformationSchemaReferentialConstraints(),
 		upgradeInformationSchemaCheckConstraints(),
 		upgradeInformationSchemaTableConstraints(),
+		upgradeInformationSchemaCollationCharacterSetApplicability(),
 	}
 
 	for _, entry := range entries {
@@ -412,7 +413,7 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 		return false, "", errors.New("check failed")
 	})
 	defer stub.Reset()
-	matched, err := entries[0].CheckFunc(nil, 42)
+	matched, err := entries[len(entries)-1].CheckFunc(nil, 42)
 	if err == nil || matched {
 		t.Fatalf("expected check error, matched=%v err=%v", matched, err)
 	}
