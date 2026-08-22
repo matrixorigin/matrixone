@@ -5026,8 +5026,10 @@ func TestBuildPlanWithPrepareModeAllowsMissingCompilerProcess(t *testing.T) {
 
 	compCtx := plan.NewEmptyCompilerContext()
 	compCtx.GetProcessFunc = func() *process.Process { return nil }
+	compCtx.SetContext(nil)
 	_, err = buildPlanWithPrepareMode(ctx, nil, compCtx, stmt, false)
 	require.NoError(t, err)
+	require.NotNil(t, compCtx.GetContext())
 }
 
 func TestPreparedSetExpressionPlanKeepsGlobalParserOrdinal(t *testing.T) {
