@@ -698,6 +698,7 @@ message UpdateCtx {
   bool ignore_affected_rows = 13;
   bool dedup_by_target_row_id = 14;
   int32 target_update_ctx_idx = 15;
+  repeated ColRef affected_rows_cols = 16 [(gogoproto.nullable) = false];
 }
 
 message InsertCtx {

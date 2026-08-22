@@ -630,8 +630,18 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	}
 
 	oldLength := fr.vec.Length()
-
-	if more := targetSize - oldLength; more > 0 {
+	wasConst := fr.vec.IsConst()
+	if wasConst {
+		// PreExtend is intentionally a no-op for CONSTANT vectors. Reset the
+		// class first so a later non-folded evaluation can materialize every
+		// requested row instead of retaining one broadcast physical value.
+		fr.vec.ResetWithSameType()
+		if targetSize > 0 {
+			if err := fr.vec.PreExtend(targetSize, fr.mp); err != nil {
+				return err
+			}
+		}
+	} else if more := targetSize - oldLength; more > 0 {
 		if err := fr.vec.PreExtend(more, fr.mp); err != nil {
 			return err
 		}
@@ -639,12 +649,14 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
 		return err
 	}
-	fr.vec.ResetWithSameType()
+	if !wasConst {
+		fr.vec.ResetWithSameType()
+	}
 
 	if !fr.isVarlena {
 		fr.length = 0
 		fr.vec.length = targetSize
-		if targetSize > oldLength {
+		if wasConst || targetSize > oldLength {
 			fr.cols = MustFixedColWithTypeCheck[T](fr.vec)
 		}
 	}
