@@ -251,8 +251,7 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 	for {
 		data, tombstone, hint, nextErr := h.currentChangeHandle.Next(ctx, mp)
 		if nextErr != nil {
-			if moerr.IsMoErrCode(nextErr, moerr.ErrFileNotFound) ||
-				logtailreplay.IsCommitTSBlockNotEvaluable(nextErr) {
+			if isVisibleStateRecoveryError(nextErr) {
 				// The replay handle for this sub-range is no longer trustworthy.
 				// Drop buffered output for the whole range, then rebuild from the
 				// end-snapshot state or, when row timestamps are unavailable, the
@@ -270,8 +269,7 @@ func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpo
 						zap.String("to", h.currentPSTo.ToString()),
 						zap.Error(swapErr),
 					)
-					if !moerr.IsMoErrCode(swapErr, moerr.ErrFileNotFound) &&
-						!logtailreplay.IsCommitTSBlockNotEvaluable(swapErr) {
+					if !isVisibleStateRecoveryError(swapErr) {
 						return swapErr
 					}
 				}
@@ -434,21 +432,27 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		)
 		h.handleIdx++
 		snapshotRangeStart := time.Now()
-		if err = h.swapCurrentHandleToSnapshotStateRange(ctx); err != nil {
-			if !logtailreplay.IsCommitTSBlockNotEvaluable(err) {
-				return false, err
-			}
-			logutil.Warn("ChangesHandle-SnapshotStateRange init failed, rebuilding exact visible-state delta",
-				zap.Uint64("table-id", h.tbl.tableId),
-				zap.String("from", h.currentPSFrom.ToString()),
-				zap.String("to", h.currentPSTo.ToString()),
-				zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
-				zap.Error(err),
-			)
-			visibleStateStart := time.Now()
-			if err = h.swapCurrentHandleToVisibleState(ctx); err != nil {
-				return false, err
-			}
+		var visibleStateStart time.Time
+		usedVisibleState, err := initializeVisibleStateRange(
+			func() error {
+				return h.swapCurrentHandleToSnapshotStateRange(ctx)
+			},
+			func(snapshotErr error) error {
+				logutil.Warn("ChangesHandle-SnapshotStateRange init failed, rebuilding exact visible-state delta",
+					zap.Uint64("table-id", h.tbl.tableId),
+					zap.String("from", h.currentPSFrom.ToString()),
+					zap.String("to", h.currentPSTo.ToString()),
+					zap.Duration("snapshot-range-attempt", time.Since(snapshotRangeStart)),
+					zap.Error(snapshotErr),
+				)
+				visibleStateStart = time.Now()
+				return h.swapCurrentHandleToVisibleState(ctx)
+			},
+		)
+		if err != nil {
+			return false, err
+		}
+		if usedVisibleState {
 			logutil.Info("ChangesHandle-VisibleState-Ready",
 				zap.Uint64("table-id", h.tbl.tableId),
 				zap.String("from", h.currentPSFrom.ToString()),
@@ -519,6 +523,28 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		return
 	}
 	return false, nil
+}
+
+func isVisibleStateRecoveryError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
+		logtailreplay.IsCommitTSBlockNotEvaluable(err)
+}
+
+// initializeVisibleStateRange keeps constructor-time and iteration-time
+// recovery consistent: loss of physical history and non-evaluable compacted
+// metadata both select the exact boundary-state reader. Other initialization
+// failures remain visible to the caller.
+func initializeVisibleStateRange(
+	initSnapshotRange func() error,
+	initVisibleState func(snapshotErr error) error,
+) (usedVisibleState bool, err error) {
+	if err = initSnapshotRange(); err == nil {
+		return false, nil
+	}
+	if !isVisibleStateRecoveryError(err) {
+		return false, err
+	}
+	return true, initVisibleState(err)
 }
 
 func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx context.Context) (err error) {

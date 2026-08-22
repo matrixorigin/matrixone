@@ -128,6 +128,71 @@ func TestPartitionChangesHandleCollectChangesContext(t *testing.T) {
 	))
 }
 
+func TestInitializeVisibleStateRangeRecoversConstructorFileNotFound(t *testing.T) {
+	fileNotFound := moerr.NewFileNotFoundNoCtx("gc-ed-object")
+	visibleStateCalls := 0
+	usedVisibleState, err := initializeVisibleStateRange(
+		func() error {
+			return fileNotFound
+		},
+		func(snapshotErr error) error {
+			visibleStateCalls++
+			require.Equal(t, fileNotFound, snapshotErr)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, usedVisibleState)
+	require.Equal(t, 1, visibleStateCalls)
+}
+
+func TestInitializeVisibleStateRangePreservesNonRecoveryError(t *testing.T) {
+	initErr := moerr.NewInternalErrorNoCtx("snapshot initialization failed")
+	visibleStateCalls := 0
+	usedVisibleState, err := initializeVisibleStateRange(
+		func() error {
+			return initErr
+		},
+		func(error) error {
+			visibleStateCalls++
+			return nil
+		},
+	)
+	require.Equal(t, initErr, err)
+	require.False(t, usedVisibleState)
+	require.Zero(t, visibleStateCalls)
+}
+
+func TestInitializeVisibleStateRangeKeepsSnapshotReaderOnSuccess(t *testing.T) {
+	visibleStateCalls := 0
+	usedVisibleState, err := initializeVisibleStateRange(
+		func() error {
+			return nil
+		},
+		func(error) error {
+			visibleStateCalls++
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.False(t, usedVisibleState)
+	require.Zero(t, visibleStateCalls)
+}
+
+func TestInitializeVisibleStateRangePropagatesRecoveryFailure(t *testing.T) {
+	visibleStateErr := moerr.NewInternalErrorNoCtx("visible-state initialization failed")
+	usedVisibleState, err := initializeVisibleStateRange(
+		func() error {
+			return moerr.NewFileNotFoundNoCtx("gc-ed-object")
+		},
+		func(error) error {
+			return visibleStateErr
+		},
+	)
+	require.Equal(t, visibleStateErr, err)
+	require.True(t, usedVisibleState)
+}
+
 type stubChangesHandle struct {
 	closed bool
 }
