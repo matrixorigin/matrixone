@@ -83,8 +83,26 @@ func SetupAutoIncrService(sid string) {
 			incrservice.Config{}))
 }
 
-func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Process {
+// ensureAutoIncrService initializes the runtime-owned service without
+// replacing an existing instance. Processes are short-lived and are created
+// repeatedly by planner tests, while the auto-increment service owns a
+// background allocator and must be shared for the lifetime of its runtime.
+func ensureAutoIncrService(sid string) {
+	rt := runtime.ServiceRuntime(sid)
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
+		runtime.SetupServiceBasedRuntime(sid, rt)
+	}
+	if v, ok := rt.GetGlobalVariables(runtime.AutoIncrementService); ok && v != nil {
+		if _, ok := v.(incrservice.AutoIncrementService); ok {
+			return
+		}
+	}
 	SetupAutoIncrService(sid)
+}
+
+func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Process {
+	ensureAutoIncrService(sid)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := process.NewTopProcess(
 		ctx,

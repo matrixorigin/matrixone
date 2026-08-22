@@ -368,6 +368,12 @@ type BaseProcess struct {
 	IncrService      incrservice.AutoIncrementService
 
 	LastInsertID *uint64
+	// StatementLastInsertID is the generated-key value reported by the
+	// current statement's OK packet.  LastInsertID intentionally keeps the
+	// session value so LAST_INSERT_ID() continues to observe the previous
+	// value when an INSERT supplies all auto-increment values explicitly.
+	StatementLastInsertID *uint64
+	statementInsertIDMu   sync.Mutex
 	// AffectedRows carries the number of rows affected by the previous
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
@@ -638,9 +644,64 @@ func (proc *Process) GetResolveVariablePrepareParamKindFunc() func(
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
+	if proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
 	if proc.Base.LastInsertID != nil {
 		atomic.StoreUint64(proc.Base.LastInsertID, num)
 	}
+}
+
+func (proc *Process) SetStatementLastInsertID(num uint64) {
+	if proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	if proc.Base.StatementLastInsertID != nil {
+		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+	}
+}
+
+// SetStatementLastInsertIDIfEarlier publishes the smallest non-zero generated
+// value seen by any parallel scope of the current statement.  Statement
+// LAST_INSERT_ID is reset before execution starts, so the shared coordinator
+// makes the first generated value deterministic while keeping the session and
+// statement values synchronized.
+func (proc *Process) SetStatementLastInsertIDIfEarlier(num uint64) uint64 {
+	if num == 0 {
+		if proc.Base == nil {
+			return 0
+		}
+		return proc.GetStatementLastInsertID()
+	}
+	if proc.Base == nil {
+		return num
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	if proc.Base.StatementLastInsertID == nil {
+		if proc.Base.LastInsertID != nil {
+			atomic.StoreUint64(proc.Base.LastInsertID, num)
+		}
+		return num
+	}
+	current := atomic.LoadUint64(proc.Base.StatementLastInsertID)
+	if current == 0 || num < current {
+		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+		if proc.Base.LastInsertID != nil {
+			atomic.StoreUint64(proc.Base.LastInsertID, num)
+		}
+		return num
+	}
+	if proc.Base.LastInsertID != nil {
+		// Keep the session-visible value synchronized if another scope won
+		// while this scope was still materializing its batch.
+		atomic.StoreUint64(proc.Base.LastInsertID, current)
+	}
+	return current
 }
 
 func (proc *Process) GetSessionInfo() *SessionInfo {
@@ -651,6 +712,13 @@ func (proc *Process) GetLastInsertID() uint64 {
 	if proc.Base.LastInsertID != nil {
 		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
+	}
+	return 0
+}
+
+func (proc *Process) GetStatementLastInsertID() uint64 {
+	if proc.Base.StatementLastInsertID != nil {
+		return atomic.LoadUint64(proc.Base.StatementLastInsertID)
 	}
 	return 0
 }

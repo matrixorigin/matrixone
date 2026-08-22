@@ -615,6 +615,53 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, combinedPipeline))
 }
 
+func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	autoPreInsert := &preinsert.PreInsert{HasAutoCol: true}
+	ordinaryPreInsert := &preinsert.PreInsert{}
+	autoPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op:        int32(vm.PreInsert),
+			PreInsert: &pipeline.PreInsert{HasAutoCol: true},
+		}},
+	}}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	_, _, err := convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 25")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline),
+		"requires MORPC protocol version 25")
+	encodedPipeline, err := autoPipeline.Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(encodedPipeline, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 25")
+
+	_, _, err = convertToPipelineInstruction(ordinaryPreInsert, proc, ctx, 1)
+	require.NoError(t, err, "PRE_INSERT without generated IDs remains wire-compatible")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion25)
+	_, instruction, err := convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.PreInsert.HasAutoCol)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
+	decoded, err := decodeScope(encodedPipeline, proc, true, nil)
+	require.NoError(t, err)
+	decoded.release()
+}
+
 func TestRightDedupInputUniqueRemoteProtocolValidation(t *testing.T) {
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
 	proc := testutil.NewProcess(t)

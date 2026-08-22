@@ -3810,23 +3810,30 @@ func (builder *QueryBuilder) addNameByColRef(tag int32, tableDef *plan.TableDef)
 }
 
 func GetRowSizeFromTableDef(tableDef *TableDef, ignoreHiddenKey bool) float64 {
-	size := int32(0)
+	// Column widths are protocol capacities and may use MaxLongTextLen
+	// (math.MaxInt32). Accumulate in float64 and cap the planner estimate so
+	// adding an ordinary column cannot wrap the old int32 accumulator negative.
+	const maxPlanningRowSize = float64(math.MaxInt32)
+	size := float64(0)
 	for _, col := range tableDef.Cols {
 		if col.Hidden && ignoreHiddenKey {
 			continue
 		}
 		if col.Typ.Width > 0 {
-			size += col.Typ.Width
-			continue
-		}
-		typ := types.T(col.Typ.Id).ToType()
-		if typ.Width > 0 {
-			size += typ.Width
+			size += float64(col.Typ.Width)
 		} else {
-			size += typ.Size
+			typ := types.T(col.Typ.Id).ToType()
+			if typ.Width > 0 {
+				size += float64(typ.Width)
+			} else {
+				size += float64(typ.Size)
+			}
+		}
+		if size >= maxPlanningRowSize {
+			return maxPlanningRowSize
 		}
 	}
-	return float64(size)
+	return size
 }
 
 type UnorderedSet[T ~string | ~int] map[T]int
