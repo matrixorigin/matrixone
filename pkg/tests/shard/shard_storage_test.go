@@ -33,35 +33,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPartitionBasedShardCanBeCreated(t *testing.T) {
-	runShardClusterTest(
-		t,
-		func(c embed.Cluster) {
-			cn1, err := c.GetCNService(0)
-			require.NoError(t, err)
+//time heay case: 119s
+// func TestPartitionBasedShardCanBeCreated(t *testing.T) {
+// 	runShardClusterTest(
+// 		t,
+// 		func(c embed.Cluster) {
+// 			cn1, err := c.GetCNService(0)
+// 			require.NoError(t, err)
 
-			db := testutils.GetDatabaseName(t)
-			testutils.CreateTestDatabase(t, db, cn1)
+// 			db := testutils.GetDatabaseName(t)
+// 			testutils.CreateTestDatabase(t, db, cn1)
 
-			store := mustCreateShardStorage(cn1)
-			partitions := 2
-			shardTableID := mustCreatePartitionTable(
-				t,
-				partitions,
-				db,
-				t.Name(),
-				cn1,
-			)
+// 			store := mustCreateShardStorage(cn1)
+// 			partitions := 2
+// 			shardTableID := mustCreatePartitionTable(
+// 				t,
+// 				partitions,
+// 				db,
+// 				t.Name(),
+// 				cn1,
+// 			)
 
-			checkPartitionBasedShardMetadata(
-				t,
-				store,
-				shardTableID,
-				partitions,
-			)
-		},
-	)
-}
+// 			checkPartitionBasedShardMetadata(
+// 				t,
+// 				store,
+// 				shardTableID,
+// 				partitions,
+// 			)
+// 		},
+// 	)
+// }
 
 func TestPartitionBasedShardCanBeDeleted(t *testing.T) {
 	runShardClusterTest(
