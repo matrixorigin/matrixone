@@ -840,6 +840,8 @@ mo_catalog  ¦  mo_user  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_user_defined_function  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_user_grant  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_variables  ¦  v  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_view_dependencies  ¦  cluster  ¦  -  𝄀
+mo_catalog  ¦  mo_view_refresh  ¦  cluster  ¦  -  𝄀
 mysql  ¦  columns_priv  ¦  r  ¦  accountadmin  𝄀
 mysql  ¦  db  ¦  r  ¦  accountadmin  𝄀
 mysql  ¦  procs_priv  ¦  r  ¦  accountadmin  𝄀

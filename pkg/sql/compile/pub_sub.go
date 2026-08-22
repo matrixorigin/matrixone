@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const sysAccountId = 0
@@ -94,6 +95,16 @@ func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
+	}
+	if viewMetadataRefreshEnabled(c.proc.GetService()) &&
+		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
+		oldCtx := c.proc.Ctx
+		c.proc.Ctx = process.WithSystemCTELimits(oldCtx)
+		defer func() { c.proc.Ctx = oldCtx }()
+		if err = c.runSqlWithSystemTenant(SubscriptionViewMetadataInvalidationSQL(
+			accountId, dbName, uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime))); err != nil {
+			return err
+		}
 	}
 
 	// update SubStatusNormal records
