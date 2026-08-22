@@ -325,6 +325,10 @@ select * from self_update_cascade force index(idx_self_update_parent) order by i
 11  ¦  null  𝄀
 12  ¦  11  𝄀
 13  ¦  12
+update self_update_cascade set id = id where id = 11;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
 create table parent_child_pk_action (
 id int primary key
 );

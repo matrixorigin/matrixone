@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -166,6 +167,9 @@ type MultiUpdateCtx struct {
 	// row_number() partition for every updated target table.
 	DedupByTargetRowID bool
 	TargetUpdateCtxIdx int
+	// ChangedRowsCol is the input bool column containing the final row-image
+	// change marker. Nil requests the legacy matched-row count.
+	ChangedRowsCol *int
 	// AffectedRowsCols contains one active selector for every writable alias
 	// coalesced into this physical target. Physical writes remain deduplicated,
 	// while affected rows count every selector that contributed to the Rowid.
@@ -289,6 +293,33 @@ func physicalInsertAffectedRows(updateCtx *MultiUpdateCtx, rowCount uint64) uint
 		return 0
 	}
 	return rowCount
+}
+
+func (update *MultiUpdate) insertAffectedRows(updateCtx *MultiUpdateCtx, input *batch.Batch) uint64 {
+	return insertAffectedRows(updateCtx, input)
+}
+
+func insertAffectedRows(updateCtx *MultiUpdateCtx, input *batch.Batch) uint64 {
+	if updateCtx.ChangedRowsCol == nil {
+		return uint64(input.RowCount())
+	}
+	changed := vector.MustFixedColWithTypeCheck[bool](input.Vecs[*updateCtx.ChangedRowsCol])
+	var count uint64
+	for row := 0; row < input.RowCount(); row++ {
+		if changed[row] {
+			count++
+		}
+	}
+	return count
+}
+
+func hasChangedRowsCol(updateCtxs []*MultiUpdateCtx) bool {
+	for _, updateCtx := range updateCtxs {
+		if updateCtx.ChangedRowsCol != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCount uint64) {

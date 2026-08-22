@@ -92,6 +92,72 @@ func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
 }
 
+func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
+	alias string,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (*plan.Expr, error) {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil || !proc.Base.SessionInfo.CountUpdateChangedRows {
+		return nil, nil
+	}
+
+	updatedCols := make([]string, 0)
+	prefix := alias + "."
+	for qualifiedName := range newColName2Idx {
+		if strings.HasPrefix(qualifiedName, prefix) {
+			updatedCols = append(updatedCols, qualifiedName)
+		}
+	}
+	sort.Strings(updatedCols)
+
+	var allEqual *plan.Expr
+	for _, qualifiedName := range updatedCols {
+		oldPos, ok := oldColName2Idx[qualifiedName]
+		if !ok {
+			continue
+		}
+		newPos := newColName2Idx[qualifiedName]
+		oldExpr := &plan.Expr{
+			Typ:  selectNode.ProjectList[oldPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: oldPos}},
+		}
+		newExpr := &plan.Expr{
+			Typ:  selectNode.ProjectList[newPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: newPos}},
+		}
+		var err error
+		if oldExpr.Typ.Id == int32(types.T_char) {
+			oldExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "rtrim", []*plan.Expr{oldExpr})
+			if err != nil {
+				return nil, err
+			}
+			newExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "rtrim", []*plan.Expr{newExpr})
+			if err != nil {
+				return nil, err
+			}
+		}
+		equal, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "<=>", []*plan.Expr{oldExpr, newExpr})
+		if err != nil {
+			return nil, err
+		}
+		if allEqual == nil {
+			allEqual = equal
+		} else {
+			allEqual, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allEqual, equal})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if allEqual == nil {
+		return nil, nil
+	}
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allEqual})
+}
+
 // appendSequentialSingleTableUpdateAssignments materializes the current row in
 // a chain of projection nodes. Each assignment reads the preceding projection,
 // while the second half of every projection retains the original row for
@@ -1879,6 +1945,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				})
 			}
 		}
+		changedRowsExpr, err := builder.makeUpdateChangedRowsExpr(
+			alias, selectNode, selectNodeTag, oldColName2Idx, newColName2Idx)
+		if err != nil {
+			return 0, err
+		}
 
 		updateCtx := &plan.UpdateCtx{
 			ObjRef:     dmlCtx.objRefs[i],
@@ -1908,6 +1979,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				RelPos: finalProjTag,
 				ColPos: affectedRowsFinalPos,
 			}}
+		}
+		if changedRowsExpr != nil {
+			changedRowsPos := int32(len(finalProjList))
+			finalProjList = append(finalProjList, changedRowsExpr)
+			updateCtx.ChangedRowsCol = &plan.ColRef{RelPos: finalProjTag, ColPos: changedRowsPos}
 		}
 		if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
 			partitionColName := getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)

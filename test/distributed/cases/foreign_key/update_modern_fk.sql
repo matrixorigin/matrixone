@@ -247,6 +247,8 @@ select * from self_update_cascade force index(idx_self_update_parent) order by i
 update self_update_cascade set id = id + 10 where id in (2, 3);
 select row_count();
 select * from self_update_cascade force index(idx_self_update_parent) order by id;
+update self_update_cascade set id = id where id = 11;
+select row_count();
 
 create table parent_child_pk_action (
     id int primary key

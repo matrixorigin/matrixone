@@ -229,8 +229,18 @@ func (update *MultiUpdate) insert_table(
 		}
 	}
 
-	update.addInsertAffectRows(
-		info.tableType, physicalInsertAffectedRows(updateCtx, uint64(writeBatch.RowCount())))
+	affectedRows := uint64(writeBatch.RowCount())
+	if info.tableType == UpdateMainTable && update.ctr.action == actionUpdate {
+		if len(updateCtx.AffectedRowsCols) > 0 {
+			// The shared self-action stream was counted by its explicit-root
+			// selectors in filterTargetRows. Its physical rows must still be
+			// written, but must not be counted again here.
+			affectedRows = 0
+		} else {
+			affectedRows = update.insertAffectedRows(updateCtx, inputBatch)
+		}
+	}
+	update.addInsertAffectRows(info.tableType, affectedRows)
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
