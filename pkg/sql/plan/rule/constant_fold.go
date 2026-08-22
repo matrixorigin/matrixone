@@ -179,6 +179,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 						Len:          int32(vec.Length()),
 						Data:         data,
 						IsSerialized: isSerialized,
+						StringSource: uint32(vec.GetStringSource()),
 					},
 				},
 			}
@@ -235,8 +236,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(vec.Length()),
-					Data: data,
+					Len:          int32(vec.Length()),
+					Data:         data,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}

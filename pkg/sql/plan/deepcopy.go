@@ -1240,6 +1240,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 				Len:          item.Vec.Len,
 				Data:         bytes.Clone(item.Vec.Data),
 				IsSerialized: item.Vec.IsSerialized,
+				StringSource: item.Vec.StringSource,
 			},
 		}
 

@@ -792,6 +792,10 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 		vector.PrepareParamFloat,
 		vector.PrepareParamNone,
 	})
+	require.NoError(t, source.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceCOMStmt,
+		types.StringSourceSQLPrepare,
+	}, mp))
 	require.NoError(t, source.Vecs[0].SetBinaryStringRows([]bool{true, false}))
 	source.SetRowCount(2)
 	defer source.Clean(mp)
@@ -821,12 +825,32 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
 	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
 	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
+	require.Equal(t, types.StringSourceCOMStmt, decoded.Vecs[0].GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, decoded.Vecs[0].GetStringSourceAt(1))
+
+	var oldPeerWire bytes.Buffer
+	oldPeerEncoded, err := source.MarshalBinaryWithPrepareParamKindsForProtocol(&oldPeerWire, true, false)
+	require.NoError(t, err)
+	oldPeerDecoded := NewOffHeapEmpty()
+	require.NoError(t, oldPeerDecoded.UnmarshalBinaryWithPrepareParamKinds(oldPeerEncoded, mp))
+	require.False(t, oldPeerDecoded.Vecs[0].HasStringSourceMetadata())
+	oldPeerDecoded.Clean(mp)
+
+	corrupt := append([]byte(nil), encoded...)
+	const sourceRowsOffset = 4 + 4 + 8 + 1 + 4 + 2 + 1 + 4
+	corrupt[len(legacy)+sourceRowsOffset] = 255
+	corruptDecoded := NewOffHeapEmpty()
+	require.ErrorContains(t,
+		corruptDecoded.UnmarshalBinaryWithPrepareParamKinds(corrupt, mp),
+		"invalid string source metadata")
+	corruptDecoded.Clean(mp)
 
 	// Reusing the receiver with a legacy payload must clear the previous
 	// sidecar rather than leaking the first generation's provenance.
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(legacy, mp))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.False(t, decoded.Vecs[0].GetIsBinaryString())
+	require.False(t, decoded.Vecs[0].HasStringSourceMetadata())
 	decoded.Clean(mp)
 }
 

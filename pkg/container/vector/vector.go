@@ -106,6 +106,12 @@ type Vector struct {
 	// whenever that sidecar is released, so reused vectors cannot retain a stale
 	// MPool pointer across query generations.
 	prepareParamKindsMP *mpool.MPool
+	// stringSource is independent of conversion kind and runtime string domain.
+	// The zero value (Expression) is the source-free fast path. A sidecar exists
+	// only when logical rows have different owners; NULL rows retain their owner.
+	stringSource    types.StringSource
+	stringSources   []types.StringSource
+	stringSourcesMP *mpool.MPool
 	// binaryString records byte-string semantics for dynamically typed values.
 	// Unlike isBin, it does not change numeric conversion into big-endian literal
 	// conversion and is therefore safe to preserve across local materialization.
@@ -190,6 +196,7 @@ func (v *Vector) SetSorted(b bool) {
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
 	v.resetPrepareParamKind()
+	v.resetStringSource()
 
 	v.class = FLAT
 	if v.area != nil {
@@ -210,6 +217,7 @@ func (v *Vector) Reset(typ types.Type) {
 
 func (v *Vector) ResetWithSameType() {
 	v.resetPrepareParamKind()
+	v.resetStringSource()
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -235,6 +243,7 @@ func (v *Vector) ResetArea() {
 func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.typ = *t
 	v.resetPrepareParamKind()
+	v.resetStringSource()
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -291,6 +300,7 @@ func (v *Vector) Allocated() int {
 	return cap(v.data) +
 		cap(v.area) +
 		cap(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +
+		cap(v.stringSources)*int(unsafe.Sizeof(types.StringSource(0))) +
 		binaryStringBytes +
 		8*v.nsp.GetBitmap().ExternalStorageCapacity() +
 		8*v.gsp.GetBitmap().ExternalStorageCapacity()
@@ -305,6 +315,9 @@ func (v *Vector) SetLength(n int) {
 	}
 	metadataLength := v.physicalMetadataRowCountForLength(n)
 	if err := v.preExtendPrepareParamKinds(metadataLength, nil); err != nil {
+		panic(err)
+	}
+	if err := v.preExtendStringSources(metadataLength, nil); err != nil {
 		panic(err)
 	}
 	oldLength := v.length
@@ -365,6 +378,8 @@ type AppendCheckpoint struct {
 	prepareParamKind        PrepareParamKind
 	prepareParamKindSeen    bool
 	hadPrepareParamKinds    bool
+	stringSource            types.StringSource
+	hadStringSources        bool
 	binaryString            bool
 	hadBinaryStringRows     bool
 	binaryStringRowsUniform bool
@@ -410,6 +425,8 @@ func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 		prepareParamKind:        v.prepareParamKind,
 		prepareParamKindSeen:    v.prepareParamKindSeen,
 		hadPrepareParamKinds:    v.prepareParamKinds != nil,
+		stringSource:            v.stringSource,
+		hadStringSources:        v.stringSources != nil,
 		binaryString:            v.binaryString,
 		hadBinaryStringRows:     v.binaryStringRowsActive,
 		binaryStringRowsUniform: binaryStringRowsUniform,
@@ -445,6 +462,17 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	}
 	v.prepareParamKind = checkpoint.prepareParamKind
 	v.prepareParamKindSeen = checkpoint.prepareParamKindSeen
+	if checkpoint.hadStringSources {
+		metadataLength := v.physicalMetadataRowCountForLength(checkpoint.length)
+		if len(v.stringSources) < metadataLength {
+			panic("string source sidecar lost during append rollback")
+		}
+		clear(v.stringSources[metadataLength:])
+		v.stringSources = v.stringSources[:metadataLength]
+	} else {
+		v.releaseStringSources()
+	}
+	v.stringSource = checkpoint.stringSource
 	if checkpoint.hadBinaryStringRows {
 		if !v.binaryStringRowsActive && checkpoint.binaryStringRowsUniform {
 			v.setBinaryStringScalar(checkpoint.binaryString)
@@ -471,7 +499,8 @@ func (v *Vector) Size() int {
 		binaryStringBytes += v.textStringRows.Size()
 	}
 	return v.length*v.typ.TypeSize() + len(v.area) + binaryStringBytes +
-		len(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0)))
+		len(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +
+		len(v.stringSources)*int(unsafe.Sizeof(types.StringSource(0)))
 }
 
 func (v *Vector) GetType() *types.Type {
@@ -606,6 +635,192 @@ func (v *Vector) SetIsBin(isBin bool) {
 
 func (v *Vector) GetPrepareParamKind() PrepareParamKind {
 	return v.prepareParamKind
+}
+
+// GetStringSource returns the scalar source summary. Expression is both the
+// ordinary source and the conservative summary of a heterogeneous vector;
+// use GetStringSourceAt when row-exact ownership is required.
+func (v *Vector) GetStringSource() types.StringSource {
+	if v == nil {
+		return types.StringSourceExpression
+	}
+	return v.stringSource
+}
+
+func (v *Vector) GetStringSourceAt(row int) types.StringSource {
+	if v == nil {
+		return types.StringSourceExpression
+	}
+	if v.IsConst() {
+		row = 0
+	}
+	if row < 0 || row >= v.length {
+		return types.StringSourceExpression
+	}
+	if row < len(v.stringSources) {
+		return v.stringSources[row]
+	}
+	return v.stringSource
+}
+
+func (v *Vector) GetStringSources() []types.StringSource {
+	return v.stringSources
+}
+
+func (v *Vector) HasStringSourceMetadata() bool {
+	return v != nil && (v.stringSource != types.StringSourceExpression || v.stringSources != nil)
+}
+
+func (v *Vector) SetStringSource(source types.StringSource) error {
+	if !source.Valid() {
+		return moerr.NewInvalidInputNoCtxf("invalid string source %d", source)
+	}
+	v.stringSource = source
+	v.releaseStringSources()
+	return nil
+}
+
+// SetStringSourcesWithMP installs exact ownership for every logical row.
+// Unlike conversion metadata, NULL rows participate: a typed or untyped NULL
+// still owns its parameter-marker source.
+func (v *Vector) SetStringSourcesWithMP(sources []types.StringSource, mp *mpool.MPool) error {
+	if v == nil {
+		return nil
+	}
+	if len(sources) == 0 || v.length == 0 {
+		v.resetStringSource()
+		return nil
+	}
+	if len(sources) != v.length {
+		return moerr.NewInvalidInputNoCtxf(
+			"string source row count %d does not match vector length %d", len(sources), v.length)
+	}
+	first := sources[0]
+	if !first.Valid() {
+		return moerr.NewInvalidInputNoCtxf("invalid string source %d", first)
+	}
+	mixed := false
+	for _, source := range sources[1:] {
+		if !source.Valid() {
+			return moerr.NewInvalidInputNoCtxf("invalid string source %d", source)
+		}
+		mixed = mixed || source != first
+	}
+	if v.IsConst() && mixed {
+		return moerr.NewInvalidInputNoCtx("constant vector cannot have mixed string sources")
+	}
+	if !mixed {
+		return v.SetStringSource(first)
+	}
+	allocated, owner, err := v.allocateStringSources(v.length, mp)
+	if err != nil {
+		return err
+	}
+	copy(allocated, sources)
+	v.releaseStringSources()
+	v.stringSource = types.StringSourceExpression
+	v.stringSources = allocated
+	v.stringSourcesMP = owner
+	return nil
+}
+
+func (v *Vector) SetStringSourcesFromReader(r io.Reader, n int, mp *mpool.MPool) error {
+	if v == nil || r == nil {
+		return io.ErrClosedPipe
+	}
+	if n < 0 || n != v.length {
+		return moerr.NewInvalidInputNoCtxf(
+			"string source row count %d does not match vector length %d", n, v.length)
+	}
+	if n == 0 {
+		v.resetStringSource()
+		return nil
+	}
+	sources, owner, err := v.allocateStringSources(n, mp)
+	if err != nil {
+		return err
+	}
+	release := func() {
+		if owner != nil {
+			mpool.FreeSlice(owner, sources)
+		}
+	}
+	var one [1]byte
+	for row := range sources {
+		if _, err = io.ReadFull(r, one[:]); err != nil {
+			release()
+			return err
+		}
+		source := types.StringSource(one[0])
+		if !source.Valid() {
+			release()
+			return moerr.NewInvalidInputNoCtxf("invalid string source %d", source)
+		}
+		sources[row] = source
+	}
+	first := sources[0]
+	mixed := false
+	for _, source := range sources[1:] {
+		mixed = mixed || source != first
+	}
+	if !mixed {
+		release()
+		return v.SetStringSource(first)
+	}
+	v.releaseStringSources()
+	v.stringSource = types.StringSourceExpression
+	v.stringSources = sources
+	v.stringSourcesMP = owner
+	return nil
+}
+
+func (v *Vector) SetStringSourceAtWithMP(row int, source types.StringSource, mp *mpool.MPool) error {
+	if v == nil || row < 0 || row >= v.length {
+		return nil
+	}
+	if !source.Valid() {
+		return moerr.NewInvalidInputNoCtxf("invalid string source %d", source)
+	}
+	if v.IsConst() {
+		return v.SetStringSource(source)
+	}
+	if v.stringSources == nil && v.stringSource == source {
+		return nil
+	}
+	if v.stringSources == nil {
+		allocated, owner, err := v.allocateStringSources(v.length, mp)
+		if err != nil {
+			return err
+		}
+		for i := range allocated {
+			allocated[i] = v.stringSource
+		}
+		v.stringSources = allocated
+		v.stringSourcesMP = owner
+	}
+	v.stringSources[row] = source
+	v.normalizeStringSources()
+	return nil
+}
+
+func (v *Vector) preflightStringSourceAt(row int, source types.StringSource, mp *mpool.MPool) error {
+	if v == nil || row < 0 || row >= v.length || v.IsConst() ||
+		v.stringSources != nil || v.stringSource == source {
+		return nil
+	}
+	if !source.Valid() {
+		return moerr.NewInvalidInputNoCtxf("invalid string source %d", source)
+	}
+	allocated, owner, err := v.allocateStringSources(v.length, mp)
+	if err != nil {
+		return err
+	}
+	for i := range allocated {
+		allocated[i] = v.stringSource
+	}
+	v.stringSources = allocated
+	v.stringSourcesMP = owner
+	return nil
 }
 
 // HasPrepareParamKind reports whether at least one non-NULL logical row has
@@ -1153,6 +1368,144 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 	return kinds, owner, err
 }
 
+func (v *Vector) resetStringSource() {
+	v.stringSource = types.StringSourceExpression
+	v.releaseStringSources()
+}
+
+func (v *Vector) releaseStringSources() {
+	if cap(v.stringSources) != 0 && v.stringSourcesMP != nil {
+		mpool.FreeSlice(v.stringSourcesMP, v.stringSources)
+	}
+	v.stringSources = nil
+	v.stringSourcesMP = nil
+}
+
+func (v *Vector) allocateStringSources(
+	n int,
+	mp *mpool.MPool,
+) ([]types.StringSource, *mpool.MPool, error) {
+	if n <= 0 {
+		return nil, nil, nil
+	}
+	owner := mp
+	if owner == nil {
+		owner = v.stringSourcesMP
+	}
+	if v.allocationAccount != nil {
+		if owner == nil {
+			return nil, nil, mpool.ErrAllocationAccountInvalid
+		}
+		sources, err := mpool.MakeSliceAccountedWithCapacityClass[types.StringSource](
+			n, owner, v.allocationAccount.account, v.allocationAccount.owner,
+			v.allocationAccount.dataSite, v.allocationAccount.capacityClass)
+		return sources, owner, err
+	}
+	if owner == nil {
+		return make([]types.StringSource, n), nil, nil
+	}
+	sources, err := mpool.MakeSlice[types.StringSource](n, owner, true)
+	return sources, owner, err
+}
+
+func (v *Vector) preExtendStringSources(n int, mp *mpool.MPool) error {
+	if v.stringSources == nil || n <= cap(v.stringSources) {
+		return nil
+	}
+	newCapacity, ok := mpool.GrowCapacity(int64(cap(v.stringSources)), int64(n))
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid string source sidecar capacity, old %d, required %d", cap(v.stringSources), n)
+	}
+	oldLength := len(v.stringSources)
+	sources, owner, err := v.allocateStringSources(int(newCapacity), mp)
+	if err != nil {
+		return err
+	}
+	copy(sources, v.stringSources)
+	v.releaseStringSources()
+	v.stringSources = sources[:oldLength]
+	v.stringSourcesMP = owner
+	return nil
+}
+
+func (v *Vector) normalizeStringSources() {
+	if v.stringSources == nil || len(v.stringSources) == 0 {
+		return
+	}
+	first := v.stringSources[0]
+	for _, source := range v.stringSources[1:] {
+		if source != first {
+			v.stringSource = types.StringSourceExpression
+			return
+		}
+	}
+	v.stringSource = first
+	v.releaseStringSources()
+}
+
+func (v *Vector) remapStringSources(sels []int64, mp *mpool.MPool) (
+	[]types.StringSource, *mpool.MPool, error,
+) {
+	if v.stringSources == nil {
+		return nil, nil, nil
+	}
+	sources, owner, err := v.allocateStringSources(len(sels), mp)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i, sel := range sels {
+		if sel >= 0 && int(sel) < len(v.stringSources) {
+			sources[i] = v.stringSources[sel]
+		}
+	}
+	return sources, owner, nil
+}
+
+func (v *Vector) publishRemappedStringSources(sources []types.StringSource, owner *mpool.MPool) {
+	if sources == nil {
+		return
+	}
+	v.releaseStringSources()
+	v.stringSource = types.StringSourceExpression
+	v.stringSources = sources
+	v.stringSourcesMP = owner
+	v.normalizeStringSources()
+}
+
+func (v *Vector) appendStringSourceAt(row int, _ int, source types.StringSource, mp *mpool.MPool) error {
+	if row < 0 || row >= v.length {
+		return nil
+	}
+	if v.stringSources != nil {
+		v.stringSources[row] = source
+		return nil
+	}
+	if row == 0 {
+		v.stringSource = source
+		return nil
+	}
+	if v.stringSource == source {
+		return nil
+	}
+	sources, owner, err := v.allocateStringSources(v.length, mp)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < row; i++ {
+		sources[i] = v.stringSource
+	}
+	for i := row; i < len(sources); i++ {
+		sources[i] = types.StringSourceExpression
+	}
+	sources[row] = source
+	v.releaseStringSources()
+	v.stringSource = types.StringSourceExpression
+	v.stringSources = sources
+	v.stringSourcesMP = owner
+	return nil
+}
+
 // preExtendPrepareParamKinds reserves row-parallel provenance capacity without
 // publishing a new logical vector length. Append and aggregate growth call it
 // before mutating length so allocation failure remains an ordinary error.
@@ -1251,10 +1604,38 @@ func (v *Vector) prepareOrdinaryBinaryStringAppend(rows int, mp *mpool.MPool) er
 }
 
 func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error {
+	if err := v.prepareOrdinaryStringSourceAppend(rows, mp); err != nil {
+		return err
+	}
 	if err := v.prepareOrdinaryAppend(rows, mp); err != nil {
 		return err
 	}
+	if rows > 0 && v.stringSources == nil && v.stringSource != types.StringSourceExpression {
+		if v.length == 0 {
+			v.stringSource = types.StringSourceExpression
+		} else {
+			sources, owner, err := v.allocateStringSources(v.length+rows, mp)
+			if err != nil {
+				return err
+			}
+			for row := 0; row < v.length; row++ {
+				sources[row] = v.stringSource
+			}
+			v.releaseStringSources()
+			v.stringSource = types.StringSourceExpression
+			v.stringSources = sources[:v.length]
+			v.stringSourcesMP = owner
+		}
+	}
 	return v.prepareOrdinaryBinaryStringAppend(rows, mp)
+}
+
+func (v *Vector) prepareOrdinaryStringSourceAppend(rows int, mp *mpool.MPool) error {
+	var summary stringSourceAppendSummary
+	if rows > 0 {
+		summary.observe(types.StringSourceExpression)
+	}
+	return v.preflightStringSourceAppend(v.length+rows, summary, mp)
 }
 
 // setLengthAfterExtend publishes a length whose row-parallel capacities were
@@ -1271,6 +1652,17 @@ func (v *Vector) setLengthAfterExtend(n int) {
 		if metadataLength > oldLength {
 			clear(v.prepareParamKinds[oldLength:])
 		}
+	}
+	if v.stringSources != nil {
+		if metadataLength > cap(v.stringSources) {
+			panic("string source sidecar capacity was not extended")
+		}
+		oldLength := len(v.stringSources)
+		v.stringSources = v.stringSources[:metadataLength]
+		if metadataLength > oldLength {
+			clear(v.stringSources[oldLength:])
+		}
+		v.normalizeStringSources()
 	}
 	v.length = n
 }
@@ -1322,7 +1714,70 @@ func (v *Vector) CopyPrepareParamMetadataToWithMP(dst *Vector, mp *mpool.MPool) 
 	if v == nil || dst == nil {
 		return nil
 	}
-	return v.copyPrepareParamKindToWithMP(dst, mp)
+	if err := v.copyPrepareParamKindToWithMP(dst, mp); err != nil {
+		return err
+	}
+	return v.copyStringSourceToWithMP(dst, mp)
+}
+
+func (v *Vector) copyStringSourceToWithMP(dst *Vector, mp *mpool.MPool) error {
+	if v.stringSources == nil {
+		dst.releaseStringSources()
+		dst.stringSource = v.stringSource
+		return nil
+	}
+	if mp == nil {
+		mp = v.stringSourcesMP
+	}
+	sources, owner, err := dst.allocateStringSources(len(v.stringSources), mp)
+	if err != nil {
+		return err
+	}
+	copy(sources, v.stringSources)
+	dst.releaseStringSources()
+	dst.stringSource = v.stringSource
+	dst.stringSources = sources
+	dst.stringSourcesMP = owner
+	return nil
+}
+
+func (v *Vector) copyStringSourceWindowToWithMP(
+	dst *Vector,
+	start int,
+	end int,
+	mp *mpool.MPool,
+) error {
+	if v.stringSources == nil || v.IsConst() {
+		return v.copyStringSourceToWithMP(dst, mp)
+	}
+	if start < 0 || end < start || end > len(v.stringSources) {
+		return moerr.NewInvalidInputNoCtx("invalid string source window")
+	}
+	if start == end {
+		dst.resetStringSource()
+		return nil
+	}
+	first := v.stringSources[start]
+	mixed := false
+	for _, source := range v.stringSources[start+1 : end] {
+		mixed = mixed || source != first
+	}
+	if !mixed {
+		return dst.SetStringSource(first)
+	}
+	if mp == nil {
+		mp = v.stringSourcesMP
+	}
+	sources, owner, err := dst.allocateStringSources(end-start, mp)
+	if err != nil {
+		return err
+	}
+	copy(sources, v.stringSources[start:end])
+	dst.releaseStringSources()
+	dst.stringSource = types.StringSourceExpression
+	dst.stringSources = sources
+	dst.stringSourcesMP = owner
+	return nil
 }
 
 func (v *Vector) copyPrepareParamKindWindowToWithMP(dst *Vector, start, end int, mp *mpool.MPool) error {
@@ -1596,6 +2051,76 @@ type prepareParamKindAppendSummary struct {
 	mixed bool
 }
 
+type stringSourceAppendSummary struct {
+	source types.StringSource
+	seen   bool
+	mixed  bool
+}
+
+func (s *stringSourceAppendSummary) observe(source types.StringSource) {
+	if !s.seen {
+		s.source, s.seen = source, true
+		return
+	}
+	s.mixed = s.mixed || s.source != source
+}
+
+func summarizeStringSourceSelection[T int32 | int64](w *Vector, sels []T) stringSourceAppendSummary {
+	var summary stringSourceAppendSummary
+	if w == nil {
+		return summary
+	}
+	for _, sel := range sels {
+		summary.observe(w.GetStringSourceAt(int(sel)))
+	}
+	return summary
+}
+
+func summarizeStringSourceOne(w *Vector, sel int64) stringSourceAppendSummary {
+	var summary stringSourceAppendSummary
+	if w != nil {
+		summary.observe(w.GetStringSourceAt(int(sel)))
+	}
+	return summary
+}
+
+func summarizeStringSourceBatch(w *Vector, offset int64, cnt int, flags []uint8) stringSourceAppendSummary {
+	var summary stringSourceAppendSummary
+	if w == nil {
+		return summary
+	}
+	for i := 0; i < cnt; i++ {
+		if flags != nil && flags[i] == 0 {
+			continue
+		}
+		summary.observe(w.GetStringSourceAt(int(offset) + i))
+	}
+	return summary
+}
+
+func (v *Vector) preflightStringSourceAppend(
+	finalLength int,
+	summary stringSourceAppendSummary,
+	mp *mpool.MPool,
+) error {
+	if v.stringSources != nil {
+		return v.preExtendStringSources(finalLength, mp)
+	}
+	if !summary.seen || (!summary.mixed && (v.length == 0 || v.stringSource == summary.source)) {
+		return nil
+	}
+	sources, owner, err := v.allocateStringSources(finalLength, mp)
+	if err != nil {
+		return err
+	}
+	for row := 0; row < v.length; row++ {
+		sources[row] = v.stringSource
+	}
+	v.stringSources = sources[:v.length]
+	v.stringSourcesMP = owner
+	return nil
+}
+
 func (s *prepareParamKindAppendSummary) observe(kind PrepareParamKind) {
 	if !s.seen {
 		s.kind = kind
@@ -1731,6 +2256,9 @@ func (v *Vector) preflightPrepareParamKindAppend(
 	summary prepareParamKindAppendSummary,
 	mp *mpool.MPool,
 ) error {
+	if err := v.preExtendStringSources(finalLength, mp); err != nil {
+		return err
+	}
 	if finalLength < v.length {
 		return moerr.NewInternalErrorNoCtxf(
 			"invalid prepared parameter append length %d below %d", finalLength, v.length)
@@ -1830,6 +2358,10 @@ func (v *Vector) PreflightUnionOnePrepareParamKinds(
 	sel int64,
 	mp *mpool.MPool,
 ) error {
+	if err := v.preflightStringSourceAppend(
+		v.length+1, summarizeStringSourceOne(w, sel), mp); err != nil {
+		return err
+	}
 	return v.preflightPrepareParamKindAppend(
 		v.length+1,
 		summarizePrepareParamKindOne(w, sel),
@@ -1843,6 +2375,10 @@ func (v *Vector) PreflightUnionPrepareParamKinds(
 	sels []int64,
 	mp *mpool.MPool,
 ) error {
+	if err := v.preflightStringSourceAppend(
+		v.length+len(sels), summarizeStringSourceSelection(w, sels), mp); err != nil {
+		return err
+	}
 	return v.preflightPrepareParamKindAppend(
 		v.length+len(sels),
 		summarizePrepareParamKindSelection(w, sels),
@@ -1887,6 +2423,10 @@ func (v *Vector) preflightUnionBatchPrepareParamKinds(
 		return moerr.NewInternalErrorNoCtxf(
 			"invalid prepared parameter append length %d below %d", finalLength, v.length)
 	}
+	if err := v.preflightStringSourceAppend(
+		finalLength, summarizeStringSourceBatch(w, offset, cnt, flags), mp); err != nil {
+		return err
+	}
 	if v.prepareParamKinds != nil {
 		return v.preExtendPrepareParamKinds(finalLength, mp)
 	}
@@ -1911,6 +2451,12 @@ func (v *Vector) preflightUnionBatchPrepareParamKinds(
 func (v *Vector) propagatePrepareParamKindsAll(w *Vector, oldLength int, mp *mpool.MPool) error {
 	if w == nil || w.length == 0 {
 		return nil
+	}
+	for row := 0; row < w.length; row++ {
+		if err := v.appendStringSourceAt(
+			oldLength+row, oldLength, w.GetStringSourceAt(row), mp); err != nil {
+			return err
+		}
 	}
 	if w.prepareParamKinds == nil {
 		if !prepareParamRangeHasValue(w, 0, w.length, nil) {
@@ -1943,12 +2489,23 @@ func (v *Vector) propagatePrepareParamKindsBatch(
 	if w == nil || cnt <= 0 {
 		return nil
 	}
+	output := oldLength
+	for i := 0; i < cnt; i++ {
+		if flags != nil && flags[i] == 0 {
+			continue
+		}
+		row := int(offset) + i
+		if err := v.appendStringSourceAt(output, oldLength, w.GetStringSourceAt(row), mp); err != nil {
+			return err
+		}
+		output++
+	}
 	if w.prepareParamKinds == nil && v.prepareParamKinds == nil &&
 		prepareParamRangeHasValue(w, int(offset), cnt, flags) {
 		return v.mergeUniformPrepareParamKind(oldLength, w.prepareParamKind, true, mp)
 	}
 	v.prepareParamKindAppendStart(oldLength)
-	output := oldLength
+	output = oldLength
 	if flags == nil {
 		for i := 0; i < cnt; i++ {
 			row := int(offset) + i
@@ -1983,6 +2540,12 @@ func propagatePrepareParamKindsSelection[T int32 | int64](
 	sels []T,
 	mp *mpool.MPool,
 ) error {
+	for i, sel := range sels {
+		if err := v.appendStringSourceAt(
+			oldLength+i, oldLength, w.GetStringSourceAt(int(sel)), mp); err != nil {
+			return err
+		}
+	}
 	if w.prepareParamKinds == nil && v.prepareParamKinds == nil {
 		hasValue := false
 		if w.IsConstNull() {
@@ -2998,6 +3561,7 @@ func (v *Vector) CleanOnlyData() {
 	v.gsp.Clear()
 	v.sorted = false
 	v.resetPrepareParamKind()
+	v.resetStringSource()
 	v.resetBinaryString()
 	v.areaDisjoint = v.length == 0
 }
@@ -3392,6 +3956,10 @@ func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
 // changes, so a metadata allocation failure cannot leave a partial overwrite.
 func SetBytesAtFrom(v *Vector, idx int, source *Vector, sourceRow int, mp *mpool.MPool) error {
 	domain := source.GetRuntimeStringDomainAt(sourceRow)
+	stringSource := source.GetStringSourceAt(sourceRow)
+	if err := v.preflightStringSourceAt(idx, stringSource, mp); err != nil {
+		return err
+	}
 	if err := v.preflightRuntimeStringDomainCopy(idx, domain, mp); err != nil {
 		return err
 	}
@@ -3399,9 +3967,15 @@ func SetBytesAtFrom(v *Vector, idx int, source *Vector, sourceRow int, mp *mpool
 		return err
 	}
 	if !v.binaryStringRowsActive && !v.hasPrepareParamValueExcept(idx) {
-		return v.SetRuntimeStringDomainWithMP(domain, mp)
+		if err := v.SetRuntimeStringDomainWithMP(domain, mp); err != nil {
+			return err
+		}
+		return v.SetStringSourceAtWithMP(idx, stringSource, mp)
 	}
-	return v.setRuntimeStringDomainAt(idx, domain, true, mp)
+	if err := v.setRuntimeStringDomainAt(idx, domain, true, mp); err != nil {
+		return err
+	}
+	return v.SetStringSourceAtWithMP(idx, stringSource, mp)
 }
 
 func SetBytesAtWithBinaryString(
@@ -3422,6 +3996,10 @@ func SetBytesAtWithBinaryString(
 
 func (v *Vector) SetRawBytesAtFrom(idx int, source *Vector, sourceRow int, mp *mpool.MPool) error {
 	domain := source.GetRuntimeStringDomainAt(sourceRow)
+	stringSource := source.GetStringSourceAt(sourceRow)
+	if err := v.preflightStringSourceAt(idx, stringSource, mp); err != nil {
+		return err
+	}
 	if err := v.preflightRuntimeStringDomainCopy(idx, domain, mp); err != nil {
 		return err
 	}
@@ -3429,9 +4007,15 @@ func (v *Vector) SetRawBytesAtFrom(idx int, source *Vector, sourceRow int, mp *m
 		return err
 	}
 	if !v.binaryStringRowsActive && !v.hasPrepareParamValueExcept(idx) {
-		return v.SetRuntimeStringDomainWithMP(domain, mp)
+		if err := v.SetRuntimeStringDomainWithMP(domain, mp); err != nil {
+			return err
+		}
+		return v.SetStringSourceAtWithMP(idx, stringSource, mp)
 	}
-	return v.setRuntimeStringDomainAt(idx, domain, true, mp)
+	if err := v.setRuntimeStringDomainAt(idx, domain, true, mp); err != nil {
+		return err
+	}
+	return v.SetStringSourceAtWithMP(idx, stringSource, mp)
 }
 
 // SetRawBytesAtFromAndUnsetNull replaces a row's payload, prepared-parameter
@@ -3440,9 +4024,13 @@ func (v *Vector) SetRawBytesAtFrom(idx int, source *Vector, sourceRow int, mp *m
 // expose a partial row on error.
 func (v *Vector) SetRawBytesAtFromAndUnsetNull(idx int, source *Vector, sourceRow int, mp *mpool.MPool) error {
 	domain := source.GetRuntimeStringDomainAt(sourceRow)
+	stringSource := source.GetStringSourceAt(sourceRow)
 	kind := source.GetPrepareParamKindAt(sourceRow)
 	hasOtherValue := v.hasPrepareParamValueExcept(idx)
 	if err := v.preflightPrepareParamKindCopy(idx, kind, false, mp); err != nil {
+		return err
+	}
+	if err := v.preflightStringSourceAt(idx, stringSource, mp); err != nil {
 		return err
 	}
 	if err := v.preflightRuntimeStringDomainCopy(idx, domain, mp); err != nil {
@@ -3456,9 +4044,15 @@ func (v *Vector) SetRawBytesAtFromAndUnsetNull(idx int, source *Vector, sourceRo
 		return err
 	}
 	if !v.binaryStringRowsActive && !hasOtherValue {
-		return v.SetRuntimeStringDomainWithMP(domain, mp)
+		if err := v.SetRuntimeStringDomainWithMP(domain, mp); err != nil {
+			return err
+		}
+		return v.SetStringSourceAtWithMP(idx, stringSource, mp)
 	}
-	return v.setRuntimeStringDomainAt(idx, domain, true, mp)
+	if err := v.setRuntimeStringDomainAt(idx, domain, true, mp); err != nil {
+		return err
+	}
+	return v.SetStringSourceAtWithMP(idx, stringSource, mp)
 }
 
 func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
@@ -3542,6 +4136,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.binaryStringRows = nil
 	v.textStringRows = nil
 	v.resetPrepareParamKind()
+	v.resetStringSource()
 	v.prepareParamKindsMP = nil
 	v.allocationAccount = nil
 	v.preflightAreaBytes = 0
@@ -3915,6 +4510,7 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 	v.sorted = layout.sorted
 	v.resetPrepareParamKind()
 	v.resetBinaryString()
+	v.resetStringSource()
 	v.cantFreeData = true
 	v.cantFreeArea = true
 	v.prepareParamKindsMP = nil
@@ -4588,6 +5184,10 @@ func (v *Vector) dup(
 		w.Free(mp)
 		return nil, err
 	}
+	if err := v.copyStringSourceToWithMP(w, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
 
 	if v.IsConstNull() {
 		w.length = v.length
@@ -4708,11 +5308,19 @@ func (v *Vector) cloneToFlatCompact(
 			w.Free(mp)
 			return nil, err
 		}
+		if err := v.copyStringSourceToWithMP(w, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
 		return w, nil
 	}
 	if v.length == 0 {
 		w.setBinaryStringScalar(v.binaryString)
 		if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+		if err := v.copyStringSourceToWithMP(w, mp); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
@@ -4740,6 +5348,10 @@ func (v *Vector) cloneToFlatCompact(
 		dataLen := v.length * v.typ.TypeSize()
 		copy(w.data[:dataLen], v.data[:dataLen])
 		if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+		if err := v.copyStringSourceToWithMP(w, mp); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
@@ -4786,6 +5398,10 @@ func (v *Vector) cloneToFlatCompact(
 		w.Free(mp)
 		return nil, err
 	}
+	if err := v.copyStringSourceToWithMP(w, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
 	return w, nil
 }
 
@@ -4811,6 +5427,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 
 	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	oldKinds := v.prepareParamKinds
+	oldSources := v.stringSources
 	oldLength := v.length
 
 	if v.IsConst() {
@@ -4883,6 +5500,7 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
 	v.remapPrepareParamKindsAfterShrink(oldKinds, oldLength, sels, negate)
+	v.remapStringSourcesAfterShrink(oldSources, oldLength, sels, negate)
 	if v.binaryStringRowsActive {
 		v.binaryStringRows.RemapOrdered(sels, negate)
 		v.textStringRows.RemapOrdered(sels, negate)
@@ -4903,6 +5521,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		return
 	}
 	oldKinds := v.prepareParamKinds
+	oldSources := v.stringSources
 	oldLength := v.length
 
 	switch v.typ.Oid {
@@ -4966,6 +5585,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
 	v.remapPrepareParamKindsAfterShrinkMask(oldKinds, oldLength, sels, negate, offset)
+	v.remapStringSourcesAfterShrinkMask(oldSources, oldLength, sels, negate, offset)
 	if v.binaryStringRowsActive {
 		v.binaryStringRows.RemapMaskOrderedWithOffset(sels, negate, offset)
 		v.textStringRows.RemapMaskOrderedWithOffset(sels, negate, offset)
@@ -5072,6 +5692,100 @@ func (v *Vector) finishInPlacePrepareParamKindRemap(
 	v.normalizePrepareParamKinds()
 }
 
+func (v *Vector) remapStringSourcesAfterShrink(
+	sources []types.StringSource,
+	oldLength int,
+	sels []int64,
+	negate bool,
+) {
+	if sources == nil {
+		return
+	}
+	newLength := v.length
+	if !negate {
+		for output, selected := range sels {
+			if output >= newLength {
+				break
+			}
+			if selected >= 0 && int(selected) < oldLength && int(selected) < len(sources) {
+				sources[output] = sources[selected]
+			} else {
+				sources[output] = types.StringSourceExpression
+			}
+		}
+	} else {
+		write, selected := 0, 0
+		for row := 0; row < oldLength && row < len(sources); row++ {
+			if selected < len(sels) && int64(row) == sels[selected] {
+				selected++
+				continue
+			}
+			if write < newLength {
+				sources[write] = sources[row]
+				write++
+			}
+		}
+	}
+	v.finishInPlaceStringSourceRemap(sources, oldLength, newLength)
+}
+
+func (v *Vector) remapStringSourcesAfterShrinkMask(
+	sources []types.StringSource,
+	oldLength int,
+	sels *bitmap.Bitmap,
+	negate bool,
+	offset uint64,
+) {
+	if sources == nil {
+		return
+	}
+	newLength := v.length
+	if !negate {
+		iterator := sels.Iterator()
+		for output := 0; output < newLength && iterator.HasNext(); output++ {
+			selected := iterator.Next() + offset
+			if selected < uint64(oldLength) && selected < uint64(len(sources)) {
+				sources[output] = sources[selected]
+			} else {
+				sources[output] = types.StringSourceExpression
+			}
+		}
+	} else if sels.Count() > 0 {
+		iterator := sels.Iterator()
+		next := iterator.Next() + offset
+		write := 0
+		for row := 0; row < oldLength && row < len(sources); row++ {
+			if uint64(row) == next {
+				if iterator.HasNext() {
+					next = iterator.Next() + offset
+				}
+				continue
+			}
+			if write < newLength {
+				sources[write] = sources[row]
+				write++
+			}
+		}
+	}
+	v.finishInPlaceStringSourceRemap(sources, oldLength, newLength)
+}
+
+func (v *Vector) finishInPlaceStringSourceRemap(
+	sources []types.StringSource,
+	oldLength int,
+	newLength int,
+) {
+	if newLength == 0 {
+		v.resetStringSource()
+		return
+	}
+	if newLength < oldLength && newLength < len(sources) {
+		clear(sources[newLength:min(oldLength, len(sources))])
+	}
+	v.stringSources = sources[:newLength]
+	v.normalizeStringSources()
+}
+
 // remapPrepareParamKindsAfterShuffle uses the existing sidecar whenever the
 // selection fits in it.  A larger selection is uncommon, but its replacement
 // sidecar is prepared before the payload shuffle so an MPool error cannot
@@ -5141,6 +5855,16 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 			return err
 		}
 	}
+	remappedSources, remappedSourcesOwner, err := v.remapStringSources(sels, mp)
+	if err != nil {
+		return err
+	}
+	releaseRemappedSources := true
+	defer func() {
+		if releaseRemappedSources && remappedSourcesOwner != nil {
+			mpool.FreeSlice(remappedSourcesOwner, remappedSources)
+		}
+	}()
 	remappedBinary, remappedStorage, err := v.prepareRemappedStringRows(v.binaryStringRows, sels, mp)
 	if err != nil {
 		return err
@@ -5226,6 +5950,8 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		return err
 	}
 	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
+	v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
+	releaseRemappedSources = false
 	v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
@@ -5260,6 +5986,16 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 			return err
 		}
 	}
+	remappedSources, remappedSourcesOwner, err := v.remapStringSources(sels, mp)
+	if err != nil {
+		return err
+	}
+	releaseRemappedSources := true
+	defer func() {
+		if releaseRemappedSources && remappedSourcesOwner != nil {
+			mpool.FreeSlice(remappedSourcesOwner, remappedSources)
+		}
+	}()
 	remappedBinary, remappedStorage, err := v.prepareRemappedStringRows(v.binaryStringRows, sels, mp)
 	if err != nil {
 		return err
@@ -5331,6 +6067,8 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 
 	if err == nil {
 		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, nil, nil)
+		v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
+		releaseRemappedSources = false
 		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
 	}
 	return err
@@ -5344,6 +6082,10 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && w.GetNulls().Contains(uint64(wi)))
 	sourceHasValue := w.length > 0 && !sourceNull
+	sourceStringSource := w.GetStringSourceAt(int(wi))
+	if err := v.preflightStringSourceAt(int(vi), sourceStringSource, mp); err != nil {
+		return err
+	}
 	if sourceHasValue {
 		kind := w.GetPrepareParamKindAt(int(wi))
 		if err := v.preflightPrepareParamKindCopy(
@@ -5384,7 +6126,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 				v.resetPrepareParamKind()
 			}
 			v.clearBinaryStringAt(int(vi))
-			return nil
+			return v.SetStringSourceAtWithMP(int(vi), sourceStringSource, mp)
 		}
 		// Non-null constant vectors still share the regular null/data path below.
 		wi = 0
@@ -5400,7 +6142,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 			v.resetPrepareParamKind()
 		}
 		v.clearBinaryStringAt(int(vi))
-		return nil
+		return v.SetStringSourceAtWithMP(int(vi), sourceStringSource, mp)
 	}
 	if v.typ.IsFixedLen() {
 		sz := v.typ.TypeSize()
@@ -5436,7 +6178,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 			return err
 		}
 	}
-	return nil
+	return v.SetStringSourceAtWithMP(int(vi), sourceStringSource, mp)
 }
 
 // GetUnionAllFunction: A more sensible function for copying vector,
@@ -5477,6 +6219,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		if err := v.preflightBinaryStringAppend(
 			oldLength+w.length,
 			summarizeBinaryStringAll(w),
+			mp,
+		); err != nil {
+			return err
+		}
+		if err := v.preflightStringSourceAppend(
+			oldLength+w.length,
+			summarizeStringSourceBatch(w, 0, w.length, nil),
 			mp,
 		); err != nil {
 			return err
@@ -6652,7 +7401,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		// SetConst* materializes a selected source row into one logical
 		// constant value.  The value and its prepared-parameter provenance are
 		// one state: copy only the selected row's category, never the source
-		// sidecar's whole row layout.  NULL has no observed source category.
+		// sidecar's whole row layout. NULL retains its independent source.
 		if length == 0 || w.IsConstNull() || w.IsNull(uint64(sel)) {
 			v.resetPrepareParamKind()
 			v.resetBinaryString()
@@ -6661,6 +7410,11 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			if err := v.SetRuntimeStringDomainWithMP(domain, mp); err != nil {
 				return err
 			}
+		}
+		if length == 0 {
+			v.resetStringSource()
+		} else if err := v.SetStringSource(w.GetStringSourceAt(int(sel))); err != nil {
+			return err
 		}
 		v.gsp.Reset()
 		if grouping && length > 0 {
@@ -6745,6 +7499,9 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.setLengthAfterExtend(v.length + 1)
+	if err := v.appendStringSourceAt(oldLen, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
+		return err
+	}
 	sourceHasValue := !sourceNull
 	if sourceGrouping {
 		nulls.Add(&v.gsp, uint64(oldLen))
@@ -6836,6 +7593,13 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	); err != nil {
 		return err
 	}
+	if err := v.preflightStringSourceAppend(
+		v.length+cnt,
+		summarizeStringSourceOne(w, sel),
+		mp,
+	); err != nil {
+		return err
+	}
 
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
@@ -6855,6 +7619,12 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 
 	oldLen := v.length
 	v.setLengthAfterExtend(v.length + cnt)
+	for i := 0; i < cnt; i++ {
+		if err := v.appendStringSourceAt(
+			oldLen+i, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
+			return err
+		}
+	}
 	sourceHasValue := !sourceNull
 	if sourceGrouping {
 		nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+cnt))
@@ -6956,6 +7726,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if err := v.preflightBinaryStringAppend(
 		v.length+len(sels),
 		summarizeBinaryStringSelection(w, sels),
+		mp,
+	); err != nil {
+		return err
+	}
+	if err := v.preflightStringSourceAppend(
+		v.length+len(sels),
+		summarizeStringSourceSelection(w, sels),
 		mp,
 	); err != nil {
 		return err
@@ -8179,10 +8956,12 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	if err := extendWithBitmaps(vec, 1, mp, isNull, false); err != nil {
 		return err
 	}
-	if !isNull {
-		if err := vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+	if isNull {
+		if err := vec.prepareOrdinaryStringSourceAppend(1, mp); err != nil {
 			return err
 		}
+	} else if err := vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + 1)
@@ -8308,10 +9087,12 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	if err := extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
 	}
-	if !isNull {
-		if err := vec.prepareOrdinaryAppendMetadata(cnt, mp); err != nil {
+	if isNull {
+		if err := vec.prepareOrdinaryStringSourceAppend(cnt, mp); err != nil {
 			return err
 		}
+	} else if err := vec.prepareOrdinaryAppendMetadata(cnt, mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + cnt)
@@ -8342,10 +9123,12 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	if err = extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
 	}
-	if !isNull {
-		if err = vec.prepareOrdinaryAppendMetadata(cnt, mp); err != nil {
+	if isNull {
+		if err = vec.prepareOrdinaryStringSourceAppend(cnt, mp); err != nil {
 			return err
 		}
+	} else if err = vec.prepareOrdinaryAppendMetadata(cnt, mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + cnt)
@@ -8378,10 +9161,12 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 	); err != nil {
 		return err
 	}
-	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
-		if err := vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+	if len(isNulls) > 0 && !slices.Contains(isNulls, false) {
+		if err := vec.prepareOrdinaryStringSourceAppend(len(vals), mp); err != nil {
 			return err
 		}
+	} else if err := vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
@@ -8414,10 +9199,12 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 	); err != nil {
 		return err
 	}
-	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
-		if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+	if len(isNulls) > 0 && !slices.Contains(isNulls, false) {
+		if err = vec.prepareOrdinaryStringSourceAppend(len(vals), mp); err != nil {
 			return err
 		}
+	} else if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
@@ -8458,10 +9245,12 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	); err != nil {
 		return err
 	}
-	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
-		if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+	if len(isNulls) > 0 && !slices.Contains(isNulls, false) {
+		if err = vec.prepareOrdinaryStringSourceAppend(len(vals), mp); err != nil {
 			return err
 		}
+	} else if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
@@ -8504,10 +9293,12 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 	); err != nil {
 		return err
 	}
-	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
-		if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+	if len(isNulls) > 0 && !slices.Contains(isNulls, false) {
+		if err = vec.prepareOrdinaryStringSourceAppend(len(vals), mp); err != nil {
 			return err
 		}
+	} else if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
@@ -8838,6 +9629,10 @@ func (v *Vector) window(
 			return nil, err
 		}
 	}
+	if err := v.copyStringSourceWindowToWithMP(w, start, end, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
 	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
 		w.Free(mp)
 		return nil, err
@@ -8972,6 +9767,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 	if start == end {
 		w.setBinaryStringScalar(v.binaryString)
 		w.resetPrepareParamKind()
+		w.resetStringSource()
 		return nil
 	}
 	if v.prepareParamKinds != nil {
@@ -8982,6 +9778,9 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		if err := v.copyPrepareParamKindToWithMP(w, mp); err != nil {
 			return err
 		}
+	}
+	if err := v.copyStringSourceWindowToWithMP(w, start, end, mp); err != nil {
+		return err
 	}
 	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
 		return err
@@ -9540,7 +10339,12 @@ func (s vectorMetadataSorter) Less(left, right int) bool {
 	if leftKind != rightKind {
 		return leftKind < rightKind
 	}
-	return s.vector.GetRuntimeStringDomainAt(left) < s.vector.GetRuntimeStringDomainAt(right)
+	leftDomain := s.vector.GetRuntimeStringDomainAt(left)
+	rightDomain := s.vector.GetRuntimeStringDomainAt(right)
+	if leftDomain != rightDomain {
+		return leftDomain < rightDomain
+	}
+	return s.vector.GetStringSourceAt(left) < s.vector.GetStringSourceAt(right)
 }
 
 func setBitmapRow(value *bitmap.Bitmap, row int, enabled bool) {
@@ -9575,13 +10379,18 @@ func (s vectorMetadataSorter) Swap(left, right int) {
 		s.vector.prepareParamKinds[left], s.vector.prepareParamKinds[right] =
 			s.vector.prepareParamKinds[right], s.vector.prepareParamKinds[left]
 	}
+	if s.vector.stringSources != nil {
+		s.vector.stringSources[left], s.vector.stringSources[right] =
+			s.vector.stringSources[right], s.vector.stringSources[left]
+	}
 }
 
 func (v *Vector) sortRowsEquivalent(left, right int) bool {
 	if v.IsNull(uint64(left)) != v.IsNull(uint64(right)) ||
 		v.gsp.Contains(uint64(left)) != v.gsp.Contains(uint64(right)) ||
 		v.GetPrepareParamKindAt(left) != v.GetPrepareParamKindAt(right) ||
-		v.GetRuntimeStringDomainAt(left) != v.GetRuntimeStringDomainAt(right) {
+		v.GetRuntimeStringDomainAt(left) != v.GetRuntimeStringDomainAt(right) ||
+		v.GetStringSourceAt(left) != v.GetStringSourceAt(right) {
 		return false
 	}
 	return v.IsNull(uint64(left)) || bytes.Equal(v.GetBytesAt(left), v.GetBytesAt(right))
@@ -9601,10 +10410,14 @@ func (v *Vector) copySortedRow(destination, source int, varlena []types.Varlena)
 	if v.prepareParamKinds != nil {
 		v.prepareParamKinds[destination] = v.prepareParamKinds[source]
 	}
+	if v.stringSources != nil {
+		v.stringSources[destination] = v.stringSources[source]
+	}
 }
 
 func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
-	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil) || v.IsConst() || !v.typ.IsVarlen() {
+	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil && v.stringSources == nil) ||
+		v.IsConst() || !v.typ.IsVarlen() {
 		return false
 	}
 	switch v.typ.Oid {
@@ -9645,6 +10458,10 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 			clear(v.prepareParamKinds[newLength:])
 			v.prepareParamKinds = v.prepareParamKinds[:newLength]
 		}
+		if v.stringSources != nil {
+			clear(v.stringSources[newLength:])
+			v.stringSources = v.stringSources[:newLength]
+		}
 		v.length = newLength
 	}
 	if v.prepareParamKinds != nil {
@@ -9652,6 +10469,9 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	}
 	if v.binaryStringRowsActive {
 		v.normalizeBinaryStringRows()
+	}
+	if v.stringSources != nil {
+		v.normalizeStringSources()
 	}
 	v.sorted = true
 	return true

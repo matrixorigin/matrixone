@@ -1091,7 +1091,8 @@ func (receiver *messageReceiverOnServer) sendBatch(
 			"prepared parameter provenance requires MORPCVersion12 for remote results")
 	}
 	var transport bytes.Buffer
-	data, err := b.MarshalBinaryWithPrepareParamKinds(&transport, false)
+	data, err := b.MarshalBinaryWithPrepareParamKindsForProtocol(
+		&transport, false, version >= defines.MORPCVersion26)
 	if err != nil {
 		return err
 	}

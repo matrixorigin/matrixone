@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -85,11 +86,12 @@ func TestAnyValuePreservesFirstPrepareParamKind(t *testing.T) {
 	results[0].Free(mp)
 }
 
-func TestAnyValueIntermediateRoundTripPreservesBinaryString(t *testing.T) {
+func TestAnyValueIntermediateRoundTripPreservesStringSemantics(t *testing.T) {
 	mp := mpool.MustNewZero()
 	input := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(input, []byte("binary"), false, mp))
 	input.SetIsBinaryString(true)
+	require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
 	source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
 	require.NoError(t, source.GroupGrow(1))
 	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
@@ -101,7 +103,33 @@ func TestAnyValueIntermediateRoundTripPreservesBinaryString(t *testing.T) {
 	results, err := restored.Flush()
 	require.NoError(t, err)
 	require.True(t, results[0].GetBinaryStringMetadataAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(0))
 
+	results[0].Free(mp)
+	restored.Free()
+	source.Free()
+	input.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAnyValueIntermediateOldPeerOmitsStringSource(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("literal"), false, mp))
+	require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
+	source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
+	var wire bytes.Buffer
+	protocolWriter := source.(interface {
+		SaveIntermediateResultOfChunkWithStringSource(int, io.Writer, bool) error
+	})
+	require.NoError(t, protocolWriter.SaveIntermediateResultOfChunkWithStringSource(0, &wire, false))
+	restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+	results, err := restored.Flush()
+	require.NoError(t, err)
+	require.False(t, results[0].HasStringSourceMetadata())
 	results[0].Free(mp)
 	restored.Free()
 	source.Free()

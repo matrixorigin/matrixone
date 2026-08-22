@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -393,6 +394,49 @@ func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, foldedControl.GetVec(), "same-domain list keeps the existing fold fast path")
+	require.Equal(t, uint32(types.StringSourceLiteral), foldedControl.GetVec().GetStringSource())
+	require.Equal(t, foldedControl.GetVec().GetStringSource(),
+		DeepCopyExpr(foldedControl).GetVec().GetStringSource())
+	payload, err := proto.Marshal(foldedControl)
+	require.NoError(t, err)
+	decodedControl := new(planpb.Expr)
+	require.NoError(t, proto.Unmarshal(payload, decodedControl))
+	require.Equal(t, foldedControl.GetVec().GetStringSource(),
+		decodedControl.GetVec().GetStringSource())
+	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
+		proc, foldedControl, []*batch.Batch{batch.EmptyForConstFoldBatch},
+	)
+	require.NoError(t, evalErr)
+	defer free()
+	require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(0))
+}
+
+func TestMakeInExprRuntimePayloadKeepsExpressionSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	scanKeys := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(scanKeys, []byte("runtime-key"), false, proc.Mp()))
+	require.Equal(t, types.StringSourceExpression, scanKeys.GetStringSourceAt(0))
+	data, err := scanKeys.MarshalBinary()
+	require.NoError(t, err)
+	scanKeys.Free(proc.Mp())
+
+	typ := planpb.Type{Id: int32(types.T_varchar)}
+	inExpr := MakeInExpr(t.Context(), &planpb.Expr{
+		Typ: typ,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: 0,
+		}},
+	}, 1, data, false)
+	runtimePayload := inExpr.GetF().Args[1]
+	require.Zero(t, runtimePayload.GetVec().GetStringSource())
+
+	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
+		proc, runtimePayload, []*batch.Batch{batch.EmptyForConstFoldBatch},
+	)
+	require.NoError(t, evalErr)
+	defer free()
+	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
 }
 
 func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {

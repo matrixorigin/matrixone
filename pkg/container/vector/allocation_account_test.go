@@ -2241,6 +2241,18 @@ func TestPrepareParamKindUnionAllocationFailureDoesNotPublishRows(t *testing.T) 
 				return GetUnionAllFunction(types.T_varchar.ToType(), mp)(destination, source)
 			},
 		},
+		{
+			name: "union-int64-selection",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.Union(source, []int64{0}, mp)
+			},
+		},
+		{
+			name: "union-int32-selection",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.UnionInt32(source, []int32{0}, mp)
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -2367,4 +2379,51 @@ func TestUnmarshalBinaryReplacesBorrowedAliases(t *testing.T) {
 	second.Free(mp)
 	target.Free(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestStringSourceUnionAllocationFailureDoesNotPublishRows(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(destination, source *Vector, mp *mpool.MPool) error
+	}{
+		{
+			name: "union-multi",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.UnionMulti(source, 0, 1, mp)
+			},
+		},
+		{
+			name: "union-all",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return GetUnionAllFunction(types.T_int64.ToType(), mp)(destination, source)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := newTestVectorAllocationAccount(t, 2*uint64(types.T_int64.ToType().TypeSize()), 16)
+			mp := mpool.MustNewZero()
+			destination := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+			require.NoError(t, destination.PreExtend(2, mp))
+			require.NoError(t, AppendFixed(destination, int64(6), false, mp))
+
+			source := NewOffHeapVecWithType(types.T_int64.ToType())
+			require.NoError(t, AppendFixed(source, int64(5), false, mp))
+			require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
+
+			before := state.account.Snapshot().Used
+			err := test.run(destination, source, mp)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Equal(t, 1, destination.Length())
+			require.Equal(t, []int64{6}, MustFixedColWithTypeCheck[int64](destination))
+			require.False(t, destination.HasStringSourceMetadata())
+			require.Equal(t, before, state.account.Snapshot().Used)
+
+			source.Free(mp)
+			destination.Free(mp)
+			finalizeTestVectorAllocationAccount(t, state)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }

@@ -204,6 +204,27 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
 	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
 	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
+
+	require.NoError(t, dynamic.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceCOMStmt, types.StringSourceSQLPrepare,
+	}, proc.Mp()))
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion24)
+	buf.Reset()
+	encoded, err = marshalRemoteBatch(proc, dynamic, buf)
+	require.NoError(t, err)
+	decodedWithoutSources := batch.NewOffHeapEmpty()
+	defer decodedWithoutSources.Clean(proc.Mp())
+	require.NoError(t, decodedWithoutSources.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
+	require.False(t, decodedWithoutSources.Vecs[0].HasStringSourceMetadata())
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion26)
+	buf.Reset()
+	encoded, err = marshalRemoteBatch(proc, dynamic, buf)
+	require.NoError(t, err)
+	decodedWithSources := batch.NewOffHeapEmpty()
+	defer decodedWithSources.Clean(proc.Mp())
+	require.NoError(t, decodedWithSources.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
+	require.Equal(t, types.StringSourceCOMStmt, decodedWithSources.Vecs[0].GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
 
 func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {

@@ -64,6 +64,10 @@ func explicitTextRemoteWireEnabled(proc *process.Process) bool {
 	return remoteBatchWireVersion(proc) >= defines.MORPCVersion23
 }
 
+func stringSourceRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion26
+}
+
 func remoteBatchWireVersion(proc *process.Process) int64 {
 	if proc == nil {
 		return 0
@@ -82,8 +86,8 @@ func remoteBatchWireVersion(proc *process.Process) int64 {
 
 // marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
 // optional transient provenance trailer only after the shared protocol gate is
-// enabled. Older protocol sessions fail before writing rather than silently
-// dropping a materialized row's source category.
+// enabled. During a rolling upgrade, source metadata is omitted for an older
+// peer while the already-supported provenance axes remain lossless.
 func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buffer) ([]byte, error) {
 	if bat == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
@@ -101,15 +105,11 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 		return nil, moerr.NewInvalidStateNoCtx(
 			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")
 	}
-	if _, err := bat.MarshalBinaryWithBuffer(buf, true); err != nil {
-		return nil, err
-	}
 	if wireEnabled {
-		if err := bat.AppendPrepareParamKindMetadata(buf); err != nil {
-			return nil, err
-		}
+		return bat.MarshalBinaryWithPrepareParamKindsForProtocol(
+			buf, true, stringSourceRemoteWireEnabled(proc))
 	}
-	return buf.Bytes(), nil
+	return bat.MarshalBinaryWithBuffer(buf, true)
 }
 
 func (ctr *container) removeIdxReceiver(idx int) {

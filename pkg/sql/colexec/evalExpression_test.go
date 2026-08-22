@@ -200,6 +200,7 @@ func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
 			}, nil)
 			require.NoError(t, err)
 			defer vec.Free(proc.Mp())
+			require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(0))
 			require.Equal(t, test.want, vec.GetRuntimeStringDomainAt(0))
 			effective := types.StaticStringDomain(*vec.GetType())
 			if test.want == types.RuntimeStringText {
@@ -212,6 +213,71 @@ func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
 				require.Equal(t, types.T_varchar, vec.GetType().Oid)
 			}
 		})
+	}
+}
+
+func TestConstListExpressionExecutorPreservesLiteralSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exprs := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}},
+		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "b"}}}},
+	}
+	vec, err := GenerateConstListExpressionExecutor(proc, exprs)
+	require.NoError(t, err)
+	defer vec.Free(proc.Mp())
+	for row := range exprs {
+		require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(row))
+	}
+}
+
+func TestLiteralVecExpressionExecutorRestoresLiteralSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exprs := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}},
+		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "b"}}}},
+	}
+	direct, err := GenerateConstListExpressionExecutor(proc, exprs)
+	require.NoError(t, err)
+	data, err := direct.MarshalBinary()
+	require.NoError(t, err)
+	direct.Free(proc.Mp())
+
+	executor, err := NewExpressionExecutor(proc, &plan.Expr{
+		Typ: exprs[0].Typ,
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+			Len:          int32(len(exprs)),
+			Data:         data,
+			StringSource: uint32(types.StringSourceLiteral),
+		}},
+	})
+	require.NoError(t, err)
+	defer executor.Free()
+
+	result, err := executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	for row := range exprs {
+		require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(row))
+	}
+}
+
+func TestLiteralVecExpressionExecutorRejectsInvalidStringSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, proc.Mp()))
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	vec.Free(proc.Mp())
+
+	for _, source := range []uint32{uint32(types.StringSourceCOMStmt) + 1, 256} {
+		_, err = NewExpressionExecutor(proc, &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+				Len:          1,
+				Data:         data,
+				StringSource: source,
+			}},
+		})
+		require.Error(t, err)
 	}
 }
 
@@ -485,6 +551,7 @@ func TestFlowControlConstantFoldingPreservesSelectedMetadata(t *testing.T) {
 			selected, err := vector.NewConstBytes(test.sourceType, []byte("selected"), 1, proc.Mp())
 			require.NoError(t, err)
 			selected.SetPrepareParamKind(vector.PrepareParamFloat)
+			require.NoError(t, selected.SetStringSource(types.StringSourceSQLPrepare))
 			fallback, err := vector.NewConstBytes(test.resultType, []byte("fallback"), 1, proc.Mp())
 			require.NoError(t, err)
 			condition, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
@@ -518,6 +585,7 @@ func TestFlowControlConstantFoldingPreservesSelectedMetadata(t *testing.T) {
 			require.Equal(t, "selected", result.GetStringAt(0))
 			require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(0))
 			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKindAt(0))
+			require.Equal(t, types.StringSourceSQLPrepare, result.GetStringSourceAt(0))
 
 			zeroBatch := batch.New(nil)
 			zeroBatch.SetRowCount(0)
@@ -534,6 +602,7 @@ func TestFlowControlConstantFoldingPreservesSelectedMetadata(t *testing.T) {
 				require.Equal(t, "selected", result.GetStringAt(row))
 				require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(row))
 				require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKindAt(row))
+				require.Equal(t, types.StringSourceSQLPrepare, result.GetStringSourceAt(row))
 			}
 		})
 	}
@@ -548,6 +617,14 @@ func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing
 	require.NoError(t, vector.AppendBytes(params, []byte("5.9"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("true"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
+	require.NoError(t, params.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceCOMStmt,
+		types.StringSourceSQLPrepare,
+		types.StringSourceUserVariable,
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+		types.StringSourceCOMStmt,
+	}, proc.Mp()))
 	proc.SetPrepareParamsWithMeta(params, []bool{true, false, false, false, false, false}, []vector.PrepareParamKind{
 		vector.PrepareParamNone,
 		vector.PrepareParamInteger,
@@ -576,17 +653,20 @@ func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing
 	require.True(t, binaryVec.GetIsBin())
 	require.Equal(t, vector.PrepareParamNone, binaryVec.GetPrepareParamKind())
 	require.Equal(t, "AB\x00\x00", binaryVec.GetStringAt(0))
+	require.Equal(t, types.StringSourceCOMStmt, binaryVec.GetStringSource())
 
 	integerVec, err := integerExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.False(t, integerVec.GetIsBin())
 	require.Equal(t, vector.PrepareParamInteger, integerVec.GetPrepareParamKind())
 	require.Equal(t, "5", integerVec.GetStringAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, integerVec.GetStringSource())
 
 	floatVec, err := floatExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamFloat, floatVec.GetPrepareParamKind())
 	require.Equal(t, "5.5", floatVec.GetStringAt(0))
+	require.Equal(t, types.StringSourceUserVariable, floatVec.GetStringSource())
 
 	decimalVec, err := decimalExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)

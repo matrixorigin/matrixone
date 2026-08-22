@@ -67,5 +67,13 @@ func mergeEqualRuntimeStringDomain(
 	if err != nil {
 		return err
 	}
-	return destination.SetRuntimeStringDomainAtWithMP(destinationRow, merged.RuntimeDomain(), mp)
+	if err := destination.SetRuntimeStringDomainAtWithMP(destinationRow, merged.RuntimeDomain(), mp); err != nil {
+		return err
+	}
+	mergedSource, err := types.MergeStringSources(
+		destination.GetStringSourceAt(destinationRow), source.GetStringSourceAt(sourceRow))
+	if err != nil {
+		return err
+	}
+	return destination.SetStringSourceAtWithMP(destinationRow, mergedSource, mp)
 }

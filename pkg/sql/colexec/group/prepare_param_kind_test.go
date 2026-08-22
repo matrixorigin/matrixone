@@ -138,7 +138,7 @@ func TestGroupSpillGroupKeyPrepareParamKindCodec(t *testing.T) {
 	// column count (4 bytes), followed by selected row count (4 bytes), then
 	// the selected-vector metadata byte.
 	require.Greater(t, len(invalid), 8)
-	invalid[8] |= 0x80
+	invalid[8] |= 0xc0 // source mode 3 is reserved
 	decoded = newDestination()
 	require.ErrorContains(t, unmarshalSpillGroupByRows(
 		bytes.NewReader(invalid), decoded, len(rows), mp), "metadata")

@@ -946,6 +946,9 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
+		if err = prepareStmt.params.SetStringSource(types.StringSourceCOMStmt); err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
 		var kinds []vector.PrepareParamKind
 		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
 			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
@@ -974,6 +977,10 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
 		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		if err = params.SetStringSource(types.StringSourceSQLPrepare); err != nil {
+			params.Free(cwft.proc.Mp())
 			return nil, nil, nil, originSQL, false, err
 		}
 		cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
