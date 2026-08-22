@@ -5434,6 +5434,7 @@ func TestUpdateSelfReferCascadeUsesModernPlan(t *testing.T) {
 		"UPDATE self_ref_cascade SET id = id + 10 WHERE id IN (1, 2)",
 	} {
 		mock := NewMockOptimizer(true)
+		mock.CurrentContext().GetProcess().Base.SessionInfo.CountUpdateChangedRows = true
 		logicPlan, err := runOneStmt(mock, t, sql)
 		require.NoError(t, err)
 		query := logicPlan.GetQuery()
@@ -5450,6 +5451,8 @@ func TestUpdateSelfReferCascadeUsesModernPlan(t *testing.T) {
 				if updateCtx.TableDef != nil && updateCtx.TableDef.Name == "self_ref_cascade" {
 					require.Len(t, updateCtx.AffectedRowsCols, 1,
 						"self-cascade rows must not inflate SQL affected-row accounting")
+					require.NotNil(t, updateCtx.ChangedRowsCol,
+						"default UPDATE semantics must count only changed explicit roots")
 					foundAffectedRowsSelector = true
 				}
 			}
