@@ -321,7 +321,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 
 // PreserveFoldedLiteralStringDomain keeps a binder-inserted cast transparent to
 // selected-value provenance when the cast itself is materialized as a literal.
-// Explicit CAST uses overload 1 and remains a semantic boundary.
+// Explicit CAST uses a non-zero overload and remains a semantic boundary.
 func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 	if expr == nil || literal == nil || literal.Isnull {
 		return

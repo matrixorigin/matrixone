@@ -396,7 +396,7 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 type ResetParamRefRule struct {
 	ctx                  context.Context
 	params               []*Expr
-	exprMemo             map[*plan.Expr]*plan.Expr
+	exprMemo             map[resetParamExprMemoKey]*plan.Expr
 	validateFunctionArgs func(string, []*Expr) error
 	// specialized is set only when execute-time rebinding changes a function
 	// overload/result type. Literal replacement alone is not enough to require
@@ -411,6 +411,15 @@ type ResetParamRefRule struct {
 	// path used by FillValuesOfParamsInPlan callers.  COM_STMT values use the
 	// per-position map above instead of this broad fallback.
 	inferTextParamTypes bool
+	// fixedExactContextDepth is non-zero while replacing parameters below an
+	// explicit/fixed DECIMAL boundary. String payloads in that subtree must be
+	// parsed as DECIMAL rather than first rounded through float64.
+	fixedExactContextDepth int
+}
+
+type resetParamExprMemoKey struct {
+	expr       *plan.Expr
+	fixedExact bool
 }
 
 // preparedRuntimeTypeLineageRule closes the type generation created when a
@@ -500,7 +509,7 @@ func (rule *preparedRuntimeTypeLineageRule) ApplyExpr(expr *plan.Expr) (*plan.Ex
 				// lineage changes. Mark the boundary dirty so its parent knows to
 				// remove the provisional coercion before rebinding. Root assignment
 				// casts remain intact because there is no parent consumer to remove
-				// them, while explicit SQL CAST uses overload one.
+				// them, while explicit SQL CAST uses a non-zero overload.
 				rule.markDirty(expr)
 			}
 			return expr, nil
@@ -569,7 +578,7 @@ func isPreparedRuntimeTypeBoundary(name string) bool {
 }
 
 // restorePreparedGeneratedNumericExpr removes only overload-zero numeric
-// coercions. Explicit SQL CASTs use overload one, while DML assignment casts
+// coercions. Explicit SQL CASTs use a non-zero overload, while DML assignment casts
 // form a boundary in ApplyExpr. The returned expression is rebound bottom-up
 // so nested exact siblings such as ABS(1), MOD(3,2), and (-1+0) re-enter their
 // natural domain before the new runtime consumer overload is selected.
@@ -659,7 +668,8 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	if e == nil {
 		return nil, nil
 	}
-	if rewritten, ok := rule.exprMemo[e]; ok {
+	key := resetParamExprMemoKey{expr: e, fixedExact: rule.fixedExactContextDepth > 0}
+	if rewritten, ok := rule.exprMemo[key]; ok {
 		return rewritten, nil
 	}
 	rewritten, err := rule.applyExpr(e)
@@ -667,9 +677,9 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		return nil, err
 	}
 	if rule.exprMemo == nil {
-		rule.exprMemo = make(map[*plan.Expr]*plan.Expr)
+		rule.exprMemo = make(map[resetParamExprMemoKey]*plan.Expr)
 	}
-	rule.exprMemo[e] = rewritten
+	rule.exprMemo[key] = rewritten
 	return rewritten, nil
 }
 
@@ -696,6 +706,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		needResetFunction := false
 		compareArgTypes := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
+		fixedExactBoundary := isPreparedFixedExactBoundary(e)
 		for i, arg := range exprImpl.F.Args {
 			originalArgTyp := plan.Type{}
 			originalArgFuncObj := int64(0)
@@ -716,7 +727,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// resolving the outer function again.
 				needResetFunction = true
 			}
+			if fixedExactBoundary {
+				rule.fixedExactContextDepth++
+			}
 			rewrittenArg, applyErr := rule.ApplyExpr(arg)
+			if fixedExactBoundary {
+				rule.fixedExactContextDepth--
+			}
 			err = applyErr
 			if err != nil {
 				return nil, err
@@ -738,10 +755,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// decimal parameter instead of retaining a prepare-time BIGINT cast.
 				inferText := rule.inferTextParamTypes ||
 					(hasParamPos && rule.inferTextParamPositions[paramPos])
-				if unwrapped, ok := unwrapImplicitPreparedParamCast(rule.ctx, rewrittenArg, inferText); ok {
+				if unwrapped, ok := unwrapImplicitPreparedParamCast(
+					rule.ctx, rewrittenArg, inferText,
+					fixedExactBoundary || rule.fixedExactContextDepth > 0); ok {
 					boundArgs[i] = unwrapped
 					compareArgTypes = true
 				}
+			}
+		}
+
+		if exprImpl.F.Func.GetObjName() == "cast" {
+			_, overload := planfunction.DecodeOverloadID(exprImpl.F.Func.GetObj())
+			if overload != 0 {
+				// The parameter payload below an explicit CAST changes at EXECUTE,
+				// but its declared target and conversion contract do not. Rebinding
+				// by name would select overload zero and erase that provenance.
+				return e, nil
 			}
 		}
 
@@ -843,7 +872,7 @@ func functionBindingChanged(
 
 // isImplicitPreparedParamCast identifies the cast inserted by overload
 // resolution around a parameter marker. Explicit CAST(? AS ...) uses a
-// separate cast overload and must remain authoritative.
+// non-zero cast overload and must remain authoritative.
 func isImplicitPreparedParamCast(expr *plan.Expr) bool {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 || fn.Args[0].GetP() == nil {
@@ -851,6 +880,22 @@ func isImplicitPreparedParamCast(expr *plan.Expr) bool {
 	}
 	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 	return overload == 0
+}
+
+func isPreparedFixedExactBoundary(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !makeTypeByPlan2Expr(expr).IsDecimal() {
+		return false
+	}
+	name := fn.Func.GetObjName()
+	if isPreparedRuntimeTypeBoundary(name) {
+		return true
+	}
+	if name != "cast" {
+		return false
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	return overload != 0
 }
 
 func implicitPreparedParamPosition(expr *plan.Expr) (int, bool) {
@@ -869,7 +914,12 @@ func implicitPreparedParamPosition(expr *plan.Expr) (int, bool) {
 // the execute-time value has a numeric type that can safely drive rebinding.
 // Decimal and YEAR casts are retained because their executors require the
 // target physical representation for arithmetic and index serialization.
-func unwrapImplicitPreparedParamCast(ctx context.Context, rewritten *plan.Expr, inferText bool) (*plan.Expr, bool) {
+func unwrapImplicitPreparedParamCast(
+	ctx context.Context,
+	rewritten *plan.Expr,
+	inferText bool,
+	fixedExact bool,
+) (*plan.Expr, bool) {
 	fn := rewritten.GetF()
 	if fn == nil || len(fn.Args) == 0 {
 		return nil, false
@@ -888,6 +938,12 @@ func unwrapImplicitPreparedParamCast(ctx context.Context, rewritten *plan.Expr, 
 		return nil, false
 	}
 	argType := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+	if targetType.Oid == types.T_year || (targetType.IsDecimal() && (!isStringBackedType(argType) || fixedExact)) {
+		// A fixed exact target must parse the original payload directly. Sending
+		// string-backed values through float64 first loses integers above 2^53
+		// and changes the contract of an enclosing explicit DECIMAL cast.
+		return nil, false
+	}
 	if isStringBackedType(argType) {
 		// MySQL evaluates a string source in an arithmetic expression in the
 		// approximate numeric domain. Keep the source literal's string type for
@@ -905,9 +961,6 @@ func unwrapImplicitPreparedParamCast(ctx context.Context, rewritten *plan.Expr, 
 		return cast, true
 	}
 	if !argType.IsNumeric() {
-		return nil, false
-	}
-	if targetType.IsDecimal() || targetType.Oid == types.T_year {
 		return nil, false
 	}
 	return arg, true

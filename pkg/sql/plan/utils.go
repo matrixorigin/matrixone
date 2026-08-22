@@ -3885,6 +3885,11 @@ func refreshPreparedRuntimeTypeLineage(
 	queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
 	visitor := NewVisitPlan(queryPlan, nil)
 	visitor.isUpdatePlan = query.StmtType == plan.Query_UPDATE
+	numericSetConsumers, err := preparedRuntimeNumericConsumerColumns(
+		ctx, query, NewVisitPlan(queryPlan, nil))
+	if err != nil {
+		return err
+	}
 	subqueryRoots := newSubqueryRootRule()
 	visited := make(map[int32]struct{})
 	generation := 0
@@ -3923,7 +3928,8 @@ func refreshPreparedRuntimeTypeLineage(
 		if err := visitor.exploreNode(ctx, lineage, node, nodeID); err != nil {
 			return err
 		}
-		setChanged, err := reconcilePreparedRuntimeSetOperationTypes(ctx, query, node)
+		setChanged, err := reconcilePreparedRuntimeSetOperationTypes(
+			ctx, query, node, nodeID, numericSetConsumers)
 		if err != nil {
 			return err
 		}
@@ -3960,6 +3966,8 @@ func reconcilePreparedRuntimeSetOperationTypes(
 	ctx context.Context,
 	query *Query,
 	node *Node,
+	nodeID int32,
+	numericConsumers map[[2]int32]struct{},
 ) (bool, error) {
 	switch node.NodeType {
 	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
@@ -3984,15 +3992,12 @@ func reconcilePreparedRuntimeSetOperationTypes(
 		rightExpr := unwrapPreparedRuntimeImplicitCast(right.ProjectList[col])
 		leftType := makeTypeByPlan2Expr(leftExpr)
 		rightType := makeTypeByPlan2Expr(rightExpr)
-		if !leftType.IsNumeric() || !rightType.IsNumeric() {
-			continue
-		}
-		common, ok := function.InferNumericParameterType([]types.Type{leftType, rightType}, nil)
-		if !ok {
-			continue
+		_, numericConsumer := numericConsumers[[2]int32{nodeID, int32(col)}]
+		common, err := preparedRuntimeSetOperationCommonType(ctx, leftType, rightType, numericConsumer)
+		if err != nil {
+			return false, err
 		}
 		target := makePlan2Type(&common)
-		var err error
 		if !leftType.Eq(common) {
 			leftExpr, err = makePlan2CastExpr(ctx, leftExpr, target)
 			if err != nil {
@@ -4021,6 +4026,181 @@ func reconcilePreparedRuntimeSetOperationTypes(
 		}
 	}
 	return changed, nil
+}
+
+func preparedRuntimeSetOperationCommonType(
+	ctx context.Context,
+	leftType, rightType types.Type,
+	numericConsumer bool,
+) (types.Type, error) {
+	if leftType.IsNumeric() && rightType.IsNumeric() {
+		if common, ok := function.InferNumericParameterType(
+			[]types.Type{leftType, rightType}, nil); ok {
+			return common, nil
+		}
+	}
+	if numericConsumer {
+		runtimeTypes := []types.Type{leftType, rightType}
+		for i := range runtimeTypes {
+			if runtimeTypes[i].Oid.IsMySQLString() {
+				// A string-backed parameter in a positively identified numeric
+				// consumer is an approximate value. Both set branches must use the
+				// resulting fixed-width DOUBLE representation before execution.
+				runtimeTypes[i] = types.T_float64.ToType()
+			}
+		}
+		if common, ok := function.InferNumericParameterType(runtimeTypes, nil); ok {
+			return common, nil
+		}
+	}
+
+	// Runtime specialization must use the same cross-domain coercion contract
+	// as the normal set-operation binder. In particular, a string/numeric pair
+	// has a VARCHAR branch representation; refreshing only the output metadata
+	// while leaving fixed-width branch vectors intact causes unsafe slice casts.
+	fGet, err := function.GetFunctionByName(ctx, "coalesce", []types.Type{leftType, rightType})
+	if err != nil {
+		return types.Type{}, err
+	}
+	targets, shouldCast := fGet.ShouldDoImplicitTypeCast()
+	if shouldCast {
+		if len(targets) != 2 || !targets[0].Eq(targets[1]) {
+			return types.Type{}, moerr.NewInternalError(ctx,
+				"set operation branches did not resolve to one runtime type")
+		}
+		return targets[0], nil
+	}
+
+	common := leftType
+	if (common.Oid == types.T_varchar || common.Oid == types.T_char) && rightType.Width > common.Width {
+		common.Width = rightType.Width
+	}
+	return common, nil
+}
+
+type preparedRuntimeNumericInputCollector struct {
+	query   *Query
+	node    *Node
+	demands map[[2]int32]struct{}
+	pending *[][2]int32
+}
+
+func (collector *preparedRuntimeNumericInputCollector) MatchNode(*Node) bool  { return false }
+func (collector *preparedRuntimeNumericInputCollector) IsApplyExpr() bool     { return true }
+func (collector *preparedRuntimeNumericInputCollector) ApplyNode(*Node) error { return nil }
+
+func (collector *preparedRuntimeNumericInputCollector) ApplyExpr(expr *Expr) (*Expr, error) {
+	collector.collect(expr, false)
+	return expr, nil
+}
+
+func (collector *preparedRuntimeNumericInputCollector) collect(expr *Expr, numeric bool) {
+	if expr == nil {
+		return
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if numeric {
+			collector.markChild(impl.Col)
+		}
+	case *plan.Expr_F:
+		if impl.F == nil || impl.F.Func == nil {
+			return
+		}
+		name := strings.ToLower(impl.F.Func.GetObjName())
+		if name == "cast" {
+			_, overload := function.DecodeOverloadID(impl.F.Func.GetObj())
+			if overload == 0 && makeTypeByPlan2Expr(expr).IsNumeric() && len(impl.F.Args) > 0 {
+				collector.collect(impl.F.Args[0], true)
+			}
+			return
+		}
+		resultNumeric := makeTypeByPlan2Expr(expr).IsNumeric()
+		for i, arg := range impl.F.Args {
+			childNumeric := resultNumeric &&
+				(supportsGenericNumericFunctionContext(name) ||
+					isPreparedNumericAggregate(name, len(impl.F.Args)) ||
+					(isNumericContextFunction(name) &&
+						(!numericFunctionHasSelectiveContext(name) ||
+							numericFunctionArgKeepsContext(name, i, len(impl.F.Args)))))
+			collector.collect(arg, childNumeric)
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			collector.collect(item, numeric)
+		}
+	case *plan.Expr_W:
+		if impl.W == nil {
+			return
+		}
+		collector.collect(impl.W.WindowFunc, numeric)
+		for _, item := range impl.W.PartitionBy {
+			collector.collect(item, false)
+		}
+		for _, item := range impl.W.OrderBy {
+			collector.collect(item.Expr, false)
+		}
+	case *plan.Expr_Sub:
+		if numeric && impl.Sub != nil && impl.Sub.Typ == plan.SubqueryRef_SCALAR &&
+			impl.Sub.RowSize == 1 && impl.Sub.NodeId >= 0 && int(impl.Sub.NodeId) < len(collector.query.Nodes) {
+			key := [2]int32{impl.Sub.NodeId, 0}
+			if _, exists := collector.demands[key]; !exists {
+				collector.demands[key] = struct{}{}
+				*collector.pending = append(*collector.pending, key)
+			}
+		}
+	}
+}
+
+func (collector *preparedRuntimeNumericInputCollector) markChild(col *plan.ColRef) {
+	if col == nil || col.ColPos < 0 || col.RelPos < 0 || int(col.RelPos) >= len(collector.node.Children) {
+		return
+	}
+	childID := collector.node.Children[col.RelPos]
+	if childID < 0 || int(childID) >= len(collector.query.Nodes) || collector.query.Nodes[childID] == nil ||
+		int(col.ColPos) >= len(collector.query.Nodes[childID].ProjectList) {
+		return
+	}
+	key := [2]int32{childID, col.ColPos}
+	if _, exists := collector.demands[key]; exists {
+		return
+	}
+	collector.demands[key] = struct{}{}
+	*collector.pending = append(*collector.pending, key)
+}
+
+func preparedRuntimeNumericConsumerColumns(
+	ctx context.Context,
+	query *Query,
+	visitor *VisitPlan,
+) (map[[2]int32]struct{}, error) {
+	demands := make(map[[2]int32]struct{})
+	pending := make([][2]int32, 0)
+	for nodeID, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		collector := &preparedRuntimeNumericInputCollector{
+			query: query, node: node, demands: demands, pending: &pending,
+		}
+		if err := visitor.exploreNode(ctx, collector, node, int32(nodeID)); err != nil {
+			return nil, err
+		}
+	}
+
+	for cursor := 0; cursor < len(pending); cursor++ {
+		key := pending[cursor]
+		nodeID, col := key[0], key[1]
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil ||
+			col < 0 || int(col) >= len(query.Nodes[nodeID].ProjectList) {
+			continue
+		}
+		collector := &preparedRuntimeNumericInputCollector{
+			query: query, node: query.Nodes[nodeID], demands: demands, pending: &pending,
+		}
+		collector.collect(query.Nodes[nodeID].ProjectList[col], true)
+	}
+	return demands, nil
 }
 
 func unwrapPreparedRuntimeImplicitCast(expr *Expr) *Expr {

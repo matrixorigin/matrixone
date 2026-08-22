@@ -400,6 +400,77 @@ func TestPreparedRuntimeUnionLineage(t *testing.T) {
 	require.True(t, foundUnion)
 }
 
+func TestPreparedRuntimeUnionMixedDomainsSharePhysicalType(t *testing.T) {
+	for _, params := range [][]any{
+		{
+			ParamValue{Value: "2.5", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true},
+			ParamValue{Value: int64(3), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		},
+		{
+			ParamValue{Value: 2.5, RuntimeType: types.T_float64.ToType(), HasRuntimeType: true},
+			ParamValue{Value: "3", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true},
+		},
+	} {
+		prepare := buildPreparedAggregatePlan(t,
+			"select x + 1 from (select ? as x union all select ? as x) u order by x")
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+			context.Background(), prepare.Plan, params)
+		require.NoError(t, err)
+		require.True(t, specialized)
+
+		var foundUnion bool
+		for _, node := range filled.GetQuery().Nodes {
+			if node.NodeType != planpb.Node_UNION_ALL {
+				continue
+			}
+			foundUnion = true
+			require.Equal(t, int32(types.T_float64), node.ProjectList[0].Typ.Id)
+			for _, childID := range node.Children {
+				require.Equal(t, node.ProjectList[0].Typ.Id,
+					filled.GetQuery().Nodes[childID].ProjectList[0].Typ.Id)
+			}
+		}
+		require.True(t, foundUnion)
+	}
+
+	prepare := buildPreparedAggregatePlan(t, "select ? union all select ?")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{
+			ParamValue{Value: "2.5", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true},
+			ParamValue{Value: int64(3), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	foundBareUnion := false
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_UNION_ALL {
+			foundBareUnion = true
+			require.Equal(t, int32(types.T_varchar), node.ProjectList[0].Typ.Id)
+		}
+	}
+	require.True(t, foundBareUnion)
+
+	// A numeric consumer above a string-returning function must not leak through
+	// that semantic boundary into the set branches.
+	prepare = buildPreparedAggregatePlan(t,
+		"select hex(x) + 1 from (select ? as x union all select ? as x) u")
+	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{
+			ParamValue{Value: "2.5", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true},
+			ParamValue{Value: int64(3), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	foundStringBoundaryUnion := false
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_UNION_ALL {
+			foundStringBoundaryUnion = true
+			require.Equal(t, int32(types.T_varchar), node.ProjectList[0].Typ.Id)
+		}
+	}
+	require.True(t, foundStringBoundaryUnion)
+}
+
 func TestPreparedNtileParameter(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t,
 		"select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation")

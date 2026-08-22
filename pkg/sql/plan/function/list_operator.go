@@ -2836,6 +2836,18 @@ var supportedOperators = []FuncNew{
 					return NewExplicitCast
 				},
 			},
+			{
+				// Explicit SQL casts that use MatrixOne's strict conversion
+				// contract still need a non-zero planner identity so prepared
+				// specialization cannot discard them as generated coercions.
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewCast
+				},
+			},
 		},
 	},
 

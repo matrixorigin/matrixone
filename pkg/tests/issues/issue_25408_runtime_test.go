@@ -17,10 +17,12 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
@@ -238,6 +240,29 @@ func TestIssue25408PreparedRuntimeNumericRebind(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.Equal(t, []string{"3.5", "4.5"}, unionValues)
 
+		queryStrings := func(query string) []string {
+			t.Helper()
+			queryRows, queryErr := conn.QueryContext(ctx, query)
+			require.NoError(t, queryErr)
+			defer queryRows.Close()
+			var values []string
+			for queryRows.Next() {
+				var value string
+				require.NoError(t, queryRows.Scan(&value))
+				values = append(values, value)
+			}
+			require.NoError(t, queryRows.Err())
+			return values
+		}
+		for _, assignment := range []string{
+			"set @runtime_left = '2.5', @runtime_right = 3",
+			"set @runtime_left = 2.5, @runtime_right = '3'",
+		} {
+			mustExec(t, ctx, conn, assignment)
+			got := queryStrings("execute runtime_union using @runtime_left, @runtime_right")
+			require.Equal(t, []string{"3.5", "4"}, got)
+		}
+
 		mustExec(t, ctx, conn,
 			"prepare runtime_ctas from 'create table runtime_ctas as select x + 1 as v from (select ? as x) d'")
 		defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare runtime_ctas") }()
@@ -299,6 +324,20 @@ func TestIssue25408PreparedRuntimeNumericRebind(t *testing.T) {
 			"execute runtime_decimal_cast using @runtime_text").Scan(&decimalCast))
 		require.Equal(t, "9007199254740994", decimalCast)
 
+		for _, query := range []string{
+			"select cast('128' as tinyint)",
+			"select cast('32768' as smallint)",
+			"select cast('9223372036854775808' as bigint)",
+			"select cast('256' as tinyint unsigned)",
+		} {
+			var ignored string
+			err = conn.QueryRowContext(ctx, query).Scan(&ignored)
+			require.Error(t, err, query)
+			var mysqlErr *mysqlDriver.MySQLError
+			require.True(t, errors.As(err, &mysqlErr), query)
+			require.Equal(t, uint16(1690), mysqlErr.Number, query)
+		}
+
 		mustExec(t, ctx, conn, "create table runtime_bits(v bit(64))")
 		mustExec(t, ctx, conn,
 			"prepare runtime_bit_text from 'insert into runtime_bits values (?)'")
@@ -324,6 +363,29 @@ func TestIssue25408PreparedRuntimeNumericRebind(t *testing.T) {
 			var got string
 			require.NoError(t, stmt.QueryRowContext(ctx, execution.value).Scan(&got))
 			require.Equal(t, execution.want, got)
+		}
+
+		binaryUnion, err := conn.PrepareContext(ctx,
+			"select x + 1 from (select ? as x union all select ? as x) u order by x")
+		require.NoError(t, err)
+		defer binaryUnion.Close()
+		for _, params := range [][2]any{
+			{"2.5", int64(3)},
+			{float64(2.5), "3"},
+		} {
+			func() {
+				binaryRows, queryErr := binaryUnion.QueryContext(ctx, params[0], params[1])
+				require.NoError(t, queryErr)
+				defer binaryRows.Close()
+				var values []string
+				for binaryRows.Next() {
+					var value string
+					require.NoError(t, binaryRows.Scan(&value))
+					values = append(values, value)
+				}
+				require.NoError(t, binaryRows.Err())
+				require.Equal(t, []string{"3.5", "4"}, values)
+			}()
 		}
 
 		binaryBit, err := conn.PrepareContext(ctx, "insert into runtime_bits values (?)")
