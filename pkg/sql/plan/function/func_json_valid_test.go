@@ -697,18 +697,24 @@ func TestJsonValue(t *testing.T) {
 		require.True(t, s, info)
 	})
 
-	t.Run("reject non simple path", func(t *testing.T) {
+	t.Run("non simple paths follow scalar match semantics", func(t *testing.T) {
 		tc := tcTemp{
-			info: "json_value reject wildcard path",
+			info: "json_value non simple paths",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`{"a":[1,2],"b":[3,4]}`},
-					[]bool{false}),
+					[]string{
+						`{"a":1,"b":2}`,
+						`{"a":1,"b":2}`,
+						`{"a":1,"b":2}`,
+					},
+					[]bool{false, false, false}),
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`$.*`},
-					[]bool{false}),
+					[]string{`$.*`, `$[*]`, `$**.a`},
+					[]bool{false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", "", "1"},
+				[]bool{true, true, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
 		s, info := fcTC.Run()
