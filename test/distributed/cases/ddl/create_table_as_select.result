@@ -2175,12 +2175,12 @@ insert into source_ai(payload) values ('one'), ('two');
 create table target_ctas as select id, payload from source_ai;
 select count(*) from information_schema.columns
 where table_schema = database() and table_name = 'source_ai'
-  and column_name = 'id' and extra = 'auto_increment';
+and column_name = 'id' and extra = 'auto_increment';
 ➤ count(*)[-5,64,0]  𝄀
 1
 select count(*) from information_schema.columns
 where table_schema = database() and table_name = 'target_ctas'
-  and column_name = 'id' and extra = 'auto_increment';
+and column_name = 'id' and extra = 'auto_increment';
 ➤ count(*)[-5,64,0]  𝄀
 0
 drop database ctas_auto_increment_24436;
