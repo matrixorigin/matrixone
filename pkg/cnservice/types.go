@@ -780,21 +780,30 @@ type service struct {
 	txnTraceService      trace.Service
 	siriusRuntime        *compile.SiriusRuntime
 
-	stopper             *stopper.Stopper
-	heartbeatInFlight   atomic.Bool
-	commandPollNeeded   atomic.Bool
-	commandPollWakeup   chan struct{}
-	commandMu           sync.Mutex
-	lastCommandBatchID  uint64
-	ackedCommandBatchID atomic.Uint64
-	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
-	lastCommandHash     [32]byte
-	legacyDedupeArmed   bool
-	aicm                *defines.AutoIncrCacheManager
-	lifecycleMu         sync.Mutex
-	lifecycle           serviceLifecycleState
-	closeOnce           sync.Once
-	closeErr            error
+	stopper                         *stopper.Stopper
+	heartbeatInFlight               atomic.Bool
+	commandPollNeeded               atomic.Bool
+	commandPollWakeup               chan struct{}
+	heartbeatWakeup                 chan struct{}
+	commandMu                       sync.Mutex
+	lastCommandBatchID              uint64
+	ackedCommandBatchID             atomic.Uint64
+	appliedCommandIDs               map[logservice.ScheduleCommandIdentity]struct{}
+	lastCommandHash                 [32]byte
+	legacyDedupeArmed               bool
+	viewMetadataAdmissionGeneration uint64
+	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
+	viewMetadataCatalogFencedEpoch  atomic.Uint64
+	viewMetadataEpochFence          *compile.ViewMetadataEpochFence
+	viewMetadataAdmissionUpdated    chan struct{}
+	viewMetadataCatalogFenceMu      sync.Mutex
+	viewMetadataCatalogFenceReady   atomic.Bool
+	viewMetadataIngressReady        atomic.Bool
+	aicm                            *defines.AutoIncrCacheManager
+	lifecycleMu                     sync.Mutex
+	lifecycle                       serviceLifecycleState
+	closeOnce                       sync.Once
+	closeErr                        error
 
 	task struct {
 		sync.RWMutex

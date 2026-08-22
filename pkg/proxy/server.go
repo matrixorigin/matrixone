@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -62,14 +64,23 @@ type Server struct {
 	counterSet     *counterSet
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// configData will be sent to HAKeeper.
-	configData *util.ConfigData
-	test       bool
+	configData                      *util.ConfigData
+	viewMetadataAdmissionGeneration uint64
+	viewMetadataObservedEpoch       atomic.Uint64
+	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
+	viewMetadataAdmissionUpdated    chan struct{}
+	viewMetadataAdmissionContext    context.Context
+	viewMetadataAdmissionCancel     context.CancelFunc
+	test                            bool
 }
 
 // NewServer creates the proxy server.
 //
 // NB: runtime must be included in opts.
 func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	config.FillDefault()
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -84,6 +95,13 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		config:     config,
 		counterSet: newCounterSet(),
 	}
+	s.viewMetadataAdmissionContext, s.viewMetadataAdmissionCancel = context.WithCancel(ctx)
+	initialized := false
+	defer func() {
+		if !initialized {
+			s.viewMetadataAdmissionCancel()
+		}
+	}()
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -100,6 +118,9 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err = s.initViewMetadataAdmission(ctx); err != nil {
+		return nil, err
 	}
 
 	logExporter := newCounterLogExporter(s.counterSet)
@@ -125,12 +146,12 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	if err := runBootstrapTask(ctx, s.stopper, h); err != nil {
 		return nil, err
 	}
+	s.handler = h
 
 	if err := s.stopper.RunNamedTask("proxy heartbeat", s.heartbeat); err != nil {
 		return nil, err
 	}
 
-	s.handler = h
 	listener, err := newProxyListener(config.ListenAddress)
 	if err != nil {
 		return nil, err
@@ -162,6 +183,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		return nil, err
 	}
 	s.app = app
+	initialized = true
 	return s, nil
 }
 
@@ -233,6 +255,9 @@ func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) erro
 
 // Start starts the proxy server.
 func (s *Server) Start() error {
+	if err := s.waitForViewMetadataAdmission(s.viewMetadataAdmissionContext); err != nil {
+		return err
+	}
 	err := s.app.Start()
 	if err != nil {
 		s.runtime.Logger().Error("proxy server start failed", zap.Error(err))
@@ -244,6 +269,9 @@ func (s *Server) Start() error {
 
 // Close closes the proxy server.
 func (s *Server) Close() error {
+	if s.viewMetadataAdmissionCancel != nil {
+		s.viewMetadataAdmissionCancel()
+	}
 	_ = s.handler.Close()
 	s.stopper.Stop()
 	stats.Unregister(statsFamilyName)

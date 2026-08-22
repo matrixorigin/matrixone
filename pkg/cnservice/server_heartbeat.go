@@ -40,7 +40,18 @@ func (s *service) startCNStoreHeartbeat() error {
 			return err
 		}
 	}
+	s.heartbeatWakeup = make(chan struct{}, 1)
 	return s.stopper.RunNamedTask("cnservice-control-plane", s.controlTask)
+}
+
+func (s *service) notifyHeartbeat() {
+	if s.heartbeatWakeup == nil {
+		return
+	}
+	select {
+	case s.heartbeatWakeup <- struct{}{}:
+	default:
+	}
 }
 
 func (s *service) heartbeatTask(ctx context.Context) {
@@ -60,13 +71,14 @@ func (s *service) heartbeatTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.heartbeat(ctx)
-			// see pkg/logservice/service_commands.go#130
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
+		case <-s.heartbeatWakeup:
+		}
+		s.heartbeat(ctx)
+		// see pkg/logservice/service_commands.go#130
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 	}
 }
@@ -199,9 +211,16 @@ func (s *service) heartbeat(ctx context.Context) {
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
-		CommitID:                    version.CommitID,
-		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
-		CommandDeliveryAckSupported: true,
+		CommitID:                        version.CommitID,
+		AckedCommandBatchID:             s.ackedCommandBatchID.Load(),
+		CommandDeliveryAckSupported:     true,
+		ViewMetadataAdmissionSupported:  s.viewMetadataAdmissionGeneration != 0,
+		ViewMetadataAdmissionGeneration: s.viewMetadataAdmissionGeneration,
+		ViewMetadataCatalogFencedEpoch:  s.viewMetadataCatalogFencedEpoch.Load(),
+		ViewMetadataIngressReady:        s.viewMetadataIngressReady.Load(),
+	}
+	if s.viewMetadataEpochFence != nil {
+		hb.ViewMetadataObservedEpoch = s.viewMetadataEpochFence.Epoch()
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
@@ -223,6 +242,12 @@ func (s *service) heartbeat(ctx context.Context) {
 	if ctx2.Err() != nil {
 		s.commandPollNeeded.Store(true)
 		s.notifyCommandPoll()
+		return
+	}
+	if err := s.applyViewMetadataAdmission(ctx, cb.ViewMetadataAdmission); err != nil {
+		if ctx.Err() == nil {
+			s.logger.Error("failed to apply view metadata admission heartbeat response", zap.Error(err))
+		}
 		return
 	}
 	s.commandPollNeeded.Store(false)

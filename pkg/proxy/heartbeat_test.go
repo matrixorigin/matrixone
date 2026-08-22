@@ -31,6 +31,8 @@ import (
 var _ logservice.ProxyHAKeeperClient = new(testHAClient)
 
 type testHAClient struct {
+	succeed bool
+	sent    chan pb.ProxyHeartbeat
 }
 
 func (tclient *testHAClient) Close() error {
@@ -94,6 +96,12 @@ func (tclient *testHAClient) DeleteCNStore(ctx context.Context, cnStore pb.Delet
 }
 
 func (tclient *testHAClient) SendProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+	if tclient.sent != nil {
+		tclient.sent <- hb
+	}
+	if tclient.succeed {
+		return pb.CommandBatch{}, nil
+	}
 	return pb.CommandBatch{}, moerr.NewInternalErrorNoCtx("return err")
 }
 
@@ -108,6 +116,38 @@ func TestServer_doHeartbeat(t *testing.T) {
 		runtime:        runtime.ServiceRuntime(""),
 	}
 	ser.doHeartbeat(ctx)
+}
+
+func TestServerHeartbeatSendsImmediately(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(t.Name(), rt)
+	sent := make(chan pb.ProxyHeartbeat, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &testHAClient{succeed: true, sent: sent}
+	ser := &Server{
+		haKeeperClient: client,
+		configData:     util.NewConfigData(nil),
+		runtime:        runtime.ServiceRuntime(t.Name()),
+	}
+	ser.config.HAKeeper.HeartbeatInterval.Duration = time.Hour
+	ser.config.HAKeeper.HeartbeatTimeout.Duration = time.Second
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ser.heartbeat(ctx)
+	}()
+
+	select {
+	case <-sent:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("Proxy heartbeat waited for the first ticker")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Proxy heartbeat did not stop after cancellation")
+	}
 }
 
 func TestServer_NewServer(t *testing.T) {

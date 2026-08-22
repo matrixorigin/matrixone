@@ -57,6 +57,10 @@ message CNStore {
   int64 UpTime = 14;
   string          ShardServiceAddress = 15;
   string CommitID = 16;
+  bool ViewMetadataAdmissionSupported = 17;
+  uint64 ViewMetadataAdmissionGeneration = 18;
+  uint64 ViewMetadataObservedEpoch = 19;
+  bool ViewMetadataAdmissionReady = 20;
 }
 
 message TNStore {
@@ -149,6 +153,17 @@ message CNStoreHeartbeat {
   // service. It is meaningful only when CommandDeliveryAckSupported is true.
   uint64          AckedCommandBatchID = 16;
   bool            CommandDeliveryAckSupported = 17;
+  bool            ViewMetadataAdmissionSupported = 18;
+  uint64          ViewMetadataAdmissionGeneration = 19;
+  uint64          ViewMetadataObservedEpoch = 20;
+  uint64          ViewMetadataCatalogFencedEpoch = 21;
+  // Reserved for the later activation layer. The admission baseline always
+  // reports false/zero and therefore remains lifecycle-unaware.
+  bool            ViewMetadataRefreshSupported = 22;
+  uint64          ViewMetadataRevalidatedEpoch = 23;
+  // ViewMetadataIngressReady is published only after every public CN ingress
+  // listener has started successfully. Admission alone is not routability.
+  bool            ViewMetadataIngressReady = 24;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -183,6 +198,9 @@ message LogStoreHeartbeat {
   // acknowledged delivery protocol only after every HAKeeper replica has
   // upgraded.
   bool CommandDeliverySupported = 9;
+  // ViewMetadataAdmissionSupported proves that every HAKeeper RSM hosted by
+  // this LogStore can decode the durable admission update and snapshot fields.
+  bool ViewMetadataAdmissionSupported = 10;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -417,6 +435,7 @@ enum HAKeeperUpdateType {
   RestoreIDWatermarkUpdate = 18;
   CompleteLogServiceRecoveryUpdate = 19;
   EnableCommandDeliveryUpdate = 20;
+  EnableViewMetadataAdmissionUpdate = 21;
 }
 
 // HAKeeperState state transition diagram
@@ -607,6 +626,34 @@ message CommandBatch {
   // fingerprints. A non-empty acknowledged batch must contain one valid ID per
   // command before it is exposed to CN/TN services.
   repeated ScheduleCommandID CommandIDs = 4 [(gogoproto.nullable) = false];
+  // ViewMetadataAdmission is the authoritative snapshot for the heartbeat
+  // sender. Old services ignore this additive field.
+  ViewMetadataAdmission ViewMetadataAdmission = 5;
+}
+
+// ViewMetadataAdmission is the durable cluster admission snapshot. Generation
+// and Ready describe the heartbeat sender when returned in CommandBatch; they
+// are zero/false in the global ClusterDetails copy.
+message ViewMetadataAdmission {
+  bool Preparing = 1;
+  bool Enabled = 2;
+  uint64 Epoch = 3;
+  bool RevalidationRequired = 4;
+  uint64 CatalogFencedEpoch = 5;
+  uint64 Generation = 6;
+  bool Ready = 7;
+  // Admitted authorizes a CN heartbeat sender to finish local startup. Ready
+  // is stronger: it also requires the CN's public ingress to be prepared.
+  bool Admitted = 8;
+}
+
+// ViewMetadataAdmissionTargets makes timeout-based phase-two/reconciliation
+// decisions deterministic in the replicated state machine.
+message ViewMetadataAdmissionTargets {
+  bool Explicit = 1;
+  uint64 CNStoreTimeoutTicks = 2;
+  uint64 ProxyStoreTimeoutTicks = 3;
+  bool EvaluateCurrentStores = 4;
 }
 
 // CNStoreInfo contains information on a CN store.
@@ -632,6 +679,14 @@ message CNStoreInfo {
   // non-destructive acknowledged schedule-command protocol. It is copied
   // from CNStoreHeartbeat so HAKeeper can gate activation and admission.
   bool CommandDeliveryAckSupported = 18;
+  bool ViewMetadataAdmissionSupported = 19;
+  uint64 ViewMetadataAdmissionGeneration = 20;
+  uint64 ViewMetadataObservedEpoch = 21;
+  uint64 ViewMetadataCatalogFencedEpoch = 22;
+  bool ViewMetadataRefreshSupported = 23;
+  uint64 ViewMetadataRevalidatedEpoch = 24;
+  bool ViewMetadataAdmissionReady = 25;
+  bool ViewMetadataIngressReady = 26;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -677,6 +732,10 @@ message ProxyStore {
   uint64 Tick = 2;
   string ListenAddress = 3;
   ConfigData ConfigData = 4;
+  bool ViewMetadataAdmissionSupported = 5;
+  uint64 ViewMetadataAdmissionGeneration = 6;
+  uint64 ViewMetadataObservedEpoch = 7;
+  bool ViewMetadataAdmissionReady = 8;
 }
 
 message ProxyState {
@@ -687,6 +746,9 @@ message ProxyHeartbeat {
   string UUID = 1;
   string ListenAddress = 2;
   ConfigData ConfigData = 3;
+  bool ViewMetadataAdmissionSupported = 4;
+  uint64 ViewMetadataAdmissionGeneration = 5;
+  uint64 ViewMetadataObservedEpoch = 6;
 };
 
 message ClusterDetails {
@@ -695,6 +757,7 @@ message ClusterDetails {
   repeated LogStore LogStores   = 3 [(gogoproto.nullable) = false];
   repeated ProxyStore ProxyStores = 4 [(gogoproto.nullable) = false];
   repeated DeletedStore DeletedStores = 5 [(gogoproto.nullable) = false];
+  ViewMetadataAdmission ViewMetadataAdmission = 6;
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It
@@ -733,6 +796,7 @@ message LogStoreInfo {
   ConfigData ConfigData = 7;
   Locality Locality = 8 [(gogoproto.nullable) = false];
   bool CommandDeliverySupported = 9;
+  bool ViewMetadataAdmissionSupported = 10;
 }
 
 message LogState {
@@ -834,6 +898,20 @@ message HAKeeperRSMState {
   // per-command identities. An absent field therefore triggers one migration
   // scan after upgrade.
   bool CommandDeliveryCommandIDsAssigned = 29;
+  bool ViewMetadataAdmissionPreparing = 30;
+  bool ViewMetadataAdmissionEnabled = 31;
+  uint64 ViewMetadataAdmissionEpoch = 32;
+  bool ViewMetadataRevalidationRequired = 33;
+  uint64 ViewMetadataCatalogFencedEpoch = 34;
+  map<string, bool> ViewMetadataAdmissionLogReady = 35;
+  map<string, bool> ViewMetadataAdmissionCNReady = 36;
+  map<string, bool> ViewMetadataAdmissionProxyReady = 37;
+  // Targets are keyed by service UUID and contain the generation that was
+  // active when an epoch transition started. A later generation must perform
+  // its own admission and cannot satisfy an older target.
+  map<string, uint64> ViewMetadataAdmissionCNTargets = 38;
+  map<string, uint64> ViewMetadataAdmissionProxyTargets = 39;
+  bool ViewMetadataAdmissionPending = 40;
 }
 
 // ReplicaInfo contains details of a replica
