@@ -1169,6 +1169,7 @@ enum ExternType {
   RESULT_SCAN = 2;
   ICEBERG_TB = 3;
   MONGODB_TB = 4;
+  DATASTREAM_TB = 5;
 }
 
 message ExternScan {
@@ -1184,6 +1185,23 @@ message ExternScan {
   map<string, int32> TbColToDataCol = 10;
   IcebergScan iceberg_scan = 11;
   MongoScan mongodb_scan = 12;
+  DataStreamScan datastream_scan = 13;
+}
+
+// DataStreamScan describes a scan of a datastream external table: a
+// streaming gRPC read of CSV chunks from server:port (see
+// proto/datastream/v1/datastream.proto for the wire contract).
+message DataStreamScan {
+  string server = 1;
+  int32 port = 2;
+  string table = 3;
+  bool recheck = 4;
+  // pushed_filter is the deparsed SQL text of the filter conjuncts sent to
+  // the server as a hint ("" when nothing could be pushed).
+  string pushed_filter = 5;
+  // api_key is the shared secret presented to the server ("" when the table
+  // configured none).
+  string api_key = 6;
 }
 
 message IcebergScan {
