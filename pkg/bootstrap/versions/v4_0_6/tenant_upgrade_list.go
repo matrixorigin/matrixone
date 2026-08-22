@@ -44,6 +44,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addUserDefinedFunctionArgumentTypesColumn(),
 	backfillUserDefinedFunctionArgumentTypes(),
 	addUserDefinedFunctionSignatureIndex(),
+	upgradeInformationSchemaCollationCharacterSetApplicability(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -93,6 +94,25 @@ func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "character_sets")
 		},
+	}
+}
+
+func upgradeInformationSchemaCollationCharacterSetApplicability() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "COLLATION_CHARACTER_SET_APPLICABILITY",
+		UpgType:   versions.CREATE_VIEW,
+		UpgSql:    sysview.InformationSchemaCollationCharacterSetApplicabilityDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID,
+				sysview.InformationDBConst, "COLLATION_CHARACTER_SET_APPLICABILITY")
+			if err != nil {
+				return false, err
+			}
+			return exists && viewDef == sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, nil
+		},
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLLATION_CHARACTER_SET_APPLICABILITY;",
+			sysview.InformationDBConst),
 	}
 }
 

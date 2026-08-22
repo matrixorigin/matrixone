@@ -543,6 +543,13 @@ var (
 		"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') NOT NULL" +
 		")"
 
+	// MySQL exposes the collation-to-character-set mapping as a separate
+	// information_schema object.  Keep it derived from COLLATIONS so the two
+	// metadata surfaces cannot disagree when collation rows are populated.
+	InformationSchemaCollationCharacterSetApplicabilityDDL = "CREATE VIEW information_schema.COLLATION_CHARACTER_SET_APPLICABILITY AS " +
+		"SELECT COLLATION_NAME, CHARACTER_SET_NAME " +
+		"FROM information_schema.COLLATIONS"
+
 	InformationSchemaTableConstraintsDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
 		"'def' AS CONSTRAINT_CATALOG, "+
 		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
