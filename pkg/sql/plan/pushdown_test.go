@@ -125,6 +125,49 @@ func TestJoinDoesNotPushDownVolatileFilter(t *testing.T) {
 	})
 }
 
+func TestVolatileFilterStopsAtPlanBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		node       *plan.Node
+		storedHere bool
+	}{
+		{name: "aggregate", node: &plan.Node{NodeType: plan.Node_AGG, BindingTags: []int32{1, 2}, Children: []int32{0}}, storedHere: true},
+		{name: "sample", node: &plan.Node{NodeType: plan.Node_SAMPLE, BindingTags: []int32{1, 2}, Children: []int32{0}}, storedHere: true},
+		{name: "window", node: &plan.Node{NodeType: plan.Node_WINDOW, BindingTags: []int32{1}, Children: []int32{0}}, storedHere: true},
+		{name: "time window", node: &plan.Node{NodeType: plan.Node_TIME_WINDOW, BindingTags: []int32{1}, Children: []int32{0}}, storedHere: true},
+		{name: "set operation", node: &plan.Node{NodeType: plan.Node_UNION_ALL, Children: []int32{0, 1}}},
+		{name: "apply", node: &plan.Node{NodeType: plan.Node_APPLY, Children: []int32{0}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+			builder.qry.Nodes = []*plan.Node{
+				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{1}, Stats: &plan.Stats{Outcnt: 1}},
+				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{2}, Stats: &plan.Stats{Outcnt: 1}},
+			}
+			rootID := int32(len(builder.qry.Nodes))
+			if test.node.NodeType == plan.Node_TABLE_SCAN {
+				rootID = 0
+				builder.qry.Nodes[0] = DeepCopyNode(test.node)
+			} else {
+				builder.qry.Nodes = append(builder.qry.Nodes, DeepCopyNode(test.node))
+			}
+			filter := makeVolatileJoinFilter(t, ctx, nil)
+
+			nodeID, cantPushdown := builder.pushdownFilters(rootID, []*plan.Expr{filter}, false)
+			require.Equal(t, rootID, nodeID)
+			if test.storedHere {
+				require.Empty(t, cantPushdown)
+				require.Equal(t, []*plan.Expr{filter}, builder.qry.Nodes[rootID].FilterList)
+			} else {
+				require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+			}
+			require.Empty(t, builder.qry.Nodes[0].FilterList)
+			require.Empty(t, builder.qry.Nodes[1].FilterList)
+		})
+	}
+}
+
 func TestAssertIsFilterPushdownBoundary(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, false, false)

@@ -59,6 +59,8 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 		execIssue27088VolatileSQL(t, ctx, conn, "insert into volatile_left_zero values (0)")
 		execIssue27088VolatileSQL(t, ctx, conn, "create table volatile_rhs_many (id int)")
 		execIssue27088VolatileSQL(t, ctx, conn, "insert into volatile_rhs_many values (1), (2)")
+		execIssue27088VolatileSQL(t, ctx, conn, "create table volatile_dups (id int)")
+		execIssue27088VolatileSQL(t, ctx, conn, "insert into volatile_dups values (1), (1)")
 
 		for _, test := range []struct {
 			name  string
@@ -206,6 +208,23 @@ func TestIssue27088VolatilePreparedINEvaluatesLeftOnce(t *testing.T) {
 				"select currval('volatile_scalar')").Scan(&current))
 			require.Equal(t, int64(2), current)
 			require.Equal(t, 1, got)
+		})
+
+		t.Run("aggregate does not pull volatile predicate below group", func(t *testing.T) {
+			execIssue27088VolatileSQL(t, ctx, conn, "drop sequence if exists volatile_scalar")
+			execIssue27088VolatileSQL(t, ctx, conn,
+				"create sequence volatile_scalar increment 1 start with 1 no cycle")
+
+			var got int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from "+
+					"(select id, count(*) as n from volatile_dups group by id) g "+
+					"where id + nextval('volatile_scalar') in ('1', '3')").Scan(&got))
+			var current int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select currval('volatile_scalar')").Scan(&current))
+			require.Equal(t, int64(1), current)
+			require.Equal(t, 0, got)
 		})
 
 		t.Run("tuple candidate casts share stable source", func(t *testing.T) {

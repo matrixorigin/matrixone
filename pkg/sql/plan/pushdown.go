@@ -55,6 +55,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		aggregateTag := node.BindingTags[1]
 
 		for _, filter := range filters {
+			if ContainsVolatileFunction(filter) {
+				node.FilterList = append(node.FilterList, filter)
+				continue
+			}
 			// A predicate with no column references is not safe below a global
 			// aggregate. If it evaluates to false, filtering the aggregate input
 			// still leaves the single global-aggregate output row alive. This can
@@ -86,7 +90,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		sampleTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, sampleTag) {
+			if ContainsVolatileFunction(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, sampleTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -127,7 +133,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 		for _, filter := range filters {
-			if containsTag(filter, windowTag) {
+			if ContainsVolatileFunction(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if containsTag(filter, windowTag) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if exprColRefsSubsetOf(filter, partCols) {
 				canPushdown = append(canPushdown, filter)
@@ -152,7 +160,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		windowTag := node.BindingTags[0]
 
 		for _, filter := range filters {
-			if !containsTag(filter, windowTag) {
+			if ContainsVolatileFunction(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, windowTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -575,6 +585,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		var canPushDownRight []*plan.Expr
 
 		for _, filter := range filters {
+			if ContainsVolatileFunction(filter) {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
 			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
 			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
 		}
@@ -660,9 +674,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_APPLY:
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], filters, separateNonEquiConds)
+		for _, filter := range filters {
+			if ContainsVolatileFunction(filter) {
+				cantPushdown = append(cantPushdown, filter)
+			} else {
+				canPushdown = append(canPushdown, filter)
+			}
+		}
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
 
-		cantPushdown = cantPushdownChild
+		cantPushdown = append(cantPushdown, cantPushdownChild...)
 
 		node.Children[0] = childID
 	default:
