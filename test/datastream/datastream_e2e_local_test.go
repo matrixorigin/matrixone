@@ -285,6 +285,71 @@ func TestDatastreamApiKeyAuth(t *testing.T) {
 	require.NotContains(t, strings.ToLower(ddl), "apikey")
 }
 
+// TestDatastreamNoBackslashEscapesSource is the differing-sql_mode negative
+// test for filter pushdown: the jdbc source session runs NO_BACKSLASH_ESCAPES,
+// under which a backslash-escaped quote would terminate a string literal
+// early (the injection the deparser now avoids by ”-doubling). A recheck=false
+// scan makes the server authoritative, so a wrong quote form would return wrong
+// rows; the correct ”-doubled form must return exactly the matching row.
+func TestDatastreamNoBackslashEscapesSource(t *testing.T) {
+	db, dsn := moConnect(t)
+	defer db.Close()
+
+	hostPort := "127.0.0.1:6001"
+	if s := strings.Index(dsn, "tcp("); s >= 0 {
+		if e := strings.Index(dsn[s:], ")"); e > 0 {
+			hostPort = dsn[s+4 : s+e]
+		}
+	}
+	// the jdbc session forces NO_BACKSLASH_ESCAPES
+	jdbcURL := "jdbc:mysql://" + hostPort +
+		"?useSSL=false&allowPublicKeyRetrieval=true&sessionVariables=sql_mode=NO_BACKSLASH_ESCAPES"
+
+	mustExec(t, db,
+		"drop database if exists datastream_nbs",
+		"create database datastream_nbs",
+		// source columns share the external table's names so the pushed filter
+		// text is valid on the source side (the jdbc-source contract)
+		"create table datastream_nbs.src (col1 int, col2 varchar(50))",
+		// a value containing an apostrophe and a value with a backslash
+		"insert into datastream_nbs.src values (1, 'o''brien'), (2, 'plain'), (3, 'a\\\\b')",
+	)
+	defer db.Exec("drop database if exists datastream_nbs")
+
+	port := startJstfuWithConfig(t, func(port int) string {
+		return fmt.Sprintf(`{
+    "port": %d,
+    "datasource": [
+        { "name": "nbs", "type": "jdbc",
+          "connectionstring": "%s",
+          "user": "dump", "password": "111",
+          "sql": "select col1, col2 from datastream_nbs.src where ${FILTER}" }
+    ]
+}`, port, jdbcURL)
+	})
+
+	// recheck=false: MO trusts the server for pushed conjuncts, so the pushed
+	// quote form must be interpreted correctly by the NO_BACKSLASH_ESCAPES source
+	mustExec(t, db, fmt.Sprintf(
+		`create external table datastream_nbs.ext (col1 int, col2 varchar(50)) `+
+			`engine = datastream with ('server'='127.0.0.1','port'='%d','table'='nbs','recheck'='false')`,
+		port))
+
+	// apostrophe literal: deparsed as 'o''brien' (doubled), matches row 1 on
+	// any sql_mode. The old backslash form 'o\'brien' would break out of the
+	// literal on this NO_BACKSLASH_ESCAPES source (backslash-refusal is
+	// covered by the deparser unit tests).
+	var id int
+	require.NoError(t, db.QueryRow(
+		"select col1 from datastream_nbs.ext where col2 = 'o''brien'").Scan(&id))
+	require.Equal(t, 1, id)
+
+	// a plain predicate still round-trips correctly through the same source
+	require.NoError(t, db.QueryRow(
+		"select col1 from datastream_nbs.ext where col2 = 'plain'").Scan(&id))
+	require.Equal(t, 2, id)
+}
+
 func TestJstfuErrors(t *testing.T) {
 	port := startJstfu(t, "")
 

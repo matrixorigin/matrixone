@@ -22,6 +22,7 @@ package datastream
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -55,9 +56,10 @@ type Config struct {
 	APIKey string
 }
 
-// Address returns the gRPC dial target.
+// Address returns the gRPC dial target. JoinHostPort brackets an IPv6 literal
+// (::1 -> [::1]:port) instead of producing the ambiguous ::1:port.
 func (c Config) Address() string {
-	return fmt.Sprintf("%s:%d", c.Server, c.Port)
+	return net.JoinHostPort(c.Server, strconv.Itoa(int(c.Port)))
 }
 
 // ParseTableOptions validates the WITH (...) list of ENGINE = DATASTREAM.

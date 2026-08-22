@@ -98,7 +98,15 @@ func TestDeparseFilters(t *testing.T) {
 		{"isnull", fn("isnull", col("a")), "(`a` IS NULL)"},
 		{"isnotnull", fn("isnotnull", col("a")), "(`a` IS NOT NULL)"},
 		{"like", fn("like", col("s"), str("ab%")), "(`s` LIKE 'ab%')"},
-		{"escape-quote", fn("=", col("s"), str("o'brien\\x")), "(`s` = 'o\\'brien\\\\x')"},
+		// apostrophes are doubled (sql_mode-independent), not backslash-escaped
+		{"apostrophe-doubled", fn("=", col("s"), str("o'brien")), "(`s` = 'o''brien')"},
+		// a crafted injection payload stays inside the doubled literal on any
+		// source sql_mode (the earlier backslash-escape form could break out
+		// under NO_BACKSLASH_ESCAPES)
+		{"injection-neutralized", fn("=", col("s"), str("x' UNION SELECT 1 --")),
+			"(`s` = 'x'' UNION SELECT 1 --')"},
+		// a backslash has no portable single-quoted form, so it is not pushed
+		{"backslash-not-pushed", fn("=", col("s"), str("a\\b")), ""},
 		// names resolved by position, never parsed from the display name:
 		// a column literally named "a.b" pushes with its real identifier
 		{"dotted-col-name", fn("=", col("a.b"), i64(1)), "(`a.b` = 1)"},

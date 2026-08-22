@@ -117,7 +117,14 @@ func deparseLiteral(expr *plan.Expr, lit *plan.Literal, loc *time.Location) (str
 		}
 		return "FALSE", true
 	case *plan.Literal_Sval:
-		if lit.IsBin || lit.IsSerialized || !isPrintableText(val.Sval) {
+		// A backslash has no sql_mode-independent representation in a
+		// single-quoted literal (default mode reads '\b' as backspace; a
+		// NO_BACKSLASH_ESCAPES source reads it literally), so a string
+		// containing one cannot be pushed to a source of unknown mode. Refuse
+		// it rather than emit text that parses differently — or breaks out —
+		// on the far side.
+		if lit.IsBin || lit.IsSerialized || !isPrintableText(val.Sval) ||
+			strings.ContainsRune(val.Sval, '\\') {
 			return "", false
 		}
 		return quoteStringLiteral(val.Sval), true
@@ -263,23 +270,13 @@ func isPrintableText(value string) bool {
 		strings.IndexFunc(value, func(r rune) bool { return !unicode.IsPrint(r) && r != ' ' }) == -1
 }
 
-// quoteStringLiteral renders a MySQL string literal with default-sql_mode
-// backslash escaping (the receiving server parses this text with its own
-// default-mode parser, never with MO session settings).
+// quoteStringLiteral renders a MySQL string literal using ”-doubling only.
+// Doubling is sql_mode-independent: a single-quoted literal with no backslash
+// (callers refuse those, see deparseLiteral) and apostrophes doubled parses
+// identically whether or not the receiving source runs NO_BACKSLASH_ESCAPES,
+// so a crafted predicate value cannot terminate the literal early and inject
+// SQL. Backslash escaping would NOT be safe here — a NO_BACKSLASH_ESCAPES
+// source reads '\” as a literal backslash followed by a string terminator.
 func quoteStringLiteral(value string) string {
-	var b strings.Builder
-	b.Grow(len(value) + 2)
-	b.WriteByte('\'')
-	for _, r := range value {
-		switch r {
-		case '\'':
-			b.WriteString("\\'")
-		case '\\':
-			b.WriteString("\\\\")
-		default:
-			b.WriteRune(r)
-		}
-	}
-	b.WriteByte('\'')
-	return b.String()
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }

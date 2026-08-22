@@ -38,6 +38,11 @@ func TestParseTableOptions(t *testing.T) {
 	require.Equal(t, Config{Server: "10.0.0.1", Port: 4444, Table: "src", Recheck: true}, cfg)
 	require.Equal(t, "10.0.0.1:4444", cfg.Address())
 
+	// an IPv6 server literal is bracketed, not ambiguously concatenated
+	cfg, err = ParseTableOptions(ctx, options("server", "::1", "port", "4444", "table", "src"))
+	require.NoError(t, err)
+	require.Equal(t, "[::1]:4444", cfg.Address())
+
 	cfg, err = ParseTableOptions(ctx, options("Server", "h", "PORT", "1", "table", "t", "recheck", "false"))
 	require.NoError(t, err)
 	require.False(t, cfg.Recheck)

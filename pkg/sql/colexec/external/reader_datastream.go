@@ -16,8 +16,9 @@ package external
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"net"
+	"strconv"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -69,7 +70,9 @@ func (r *DataStreamReader) Open(param *ExternalParam, proc *process.Process) (fi
 	if ds == nil {
 		return false, moerr.NewInternalError(proc.Ctx, "datastream reader without scan metadata")
 	}
-	target := fmt.Sprintf("%s:%d", ds.Server, ds.Port)
+	// JoinHostPort (not "server:port") so an IPv6 literal like ::1 becomes
+	// [::1]:4444 rather than the ambiguous ::1:4444
+	target := net.JoinHostPort(ds.Server, strconv.Itoa(int(ds.Port)))
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(datastreamMaxRecvSize)),
