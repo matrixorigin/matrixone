@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,8 +84,43 @@ func SetupAutoIncrService(sid string) {
 			incrservice.Config{}))
 }
 
+// Processes created without a testing.TB have no cleanup owner. Reuse their
+// auto-increment services so repeated mock process creation cannot leak one
+// service and its background workers per call.
+var nilProcessAutoIncrServices = struct {
+	sync.Mutex
+	services map[string]incrservice.AutoIncrementService
+}{
+	services: make(map[string]incrservice.AutoIncrementService),
+}
+
+func setupAutoIncrServiceForProcess(t testing.TB, sid string) {
+	if t != nil {
+		SetupAutoIncrService(sid)
+		return
+	}
+
+	nilProcessAutoIncrServices.Lock()
+	defer nilProcessAutoIncrServices.Unlock()
+
+	rt := runtime.ServiceRuntime(sid)
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
+		runtime.SetupServiceBasedRuntime(sid, rt)
+	}
+	service := nilProcessAutoIncrServices.services[sid]
+	if service == nil {
+		service = incrservice.NewIncrService(
+			"",
+			incrservice.NewMemStore(),
+			incrservice.Config{})
+		nilProcessAutoIncrServices.services[sid] = service
+	}
+	rt.SetGlobalVariables(runtime.AutoIncrementService, service)
+}
+
 func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Process {
-	SetupAutoIncrService(sid)
+	setupAutoIncrServiceForProcess(t, sid)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := process.NewTopProcess(
 		ctx,

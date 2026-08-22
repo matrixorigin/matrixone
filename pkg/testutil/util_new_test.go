@@ -15,10 +15,12 @@
 package testutil
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,6 +33,53 @@ func TestNewBatch(t *testing.T) {
 	bat := NewBatch([]types.Type{types.New(types.T_int8, 0, 0)}, true, Rows, m)
 	bat.Clean(m)
 	require.Equal(t, int64(0), m.CurrNB())
+}
+
+func TestNilTBProcessesShareAutoIncrService(t *testing.T) {
+	first := NewProcessWithMPool(nil, "", mpool.MustNewZeroNoFixed())
+	second := NewProcessWithMPool(nil, "", mpool.MustNewZeroNoFixed())
+
+	require.True(t, first.GetIncrService() == second.GetIncrService())
+
+	setupAutoIncrServiceForProcess(nil, "nil-tb-first")
+	firstSID := incrservice.GetAutoIncrementService("nil-tb-first")
+	setupAutoIncrServiceForProcess(nil, "nil-tb-other")
+	otherSID := incrservice.GetAutoIncrementService("nil-tb-other")
+	require.True(t, firstSID != otherSID)
+}
+
+func TestNilTBProcessRestoresSharedAutoIncrService(t *testing.T) {
+	const sid = ""
+	shared := NewProcessWithMPool(nil, sid, mpool.MustNewZeroNoFixed()).GetIncrService()
+	replacement := incrservice.NewIncrService(
+		"",
+		incrservice.NewMemStore(),
+		incrservice.Config{})
+	t.Cleanup(replacement.Close)
+	incrservice.SetAutoIncrementServiceByID(sid, replacement)
+
+	restored := NewProcessWithMPool(nil, sid, mpool.MustNewZeroNoFixed()).GetIncrService()
+	require.True(t, shared == restored)
+}
+
+func TestNilTBProcessesShareAutoIncrServiceConcurrently(t *testing.T) {
+	const count = 16
+	const sid = ""
+	services := make([]incrservice.AutoIncrementService, count)
+	var wg sync.WaitGroup
+	for i := range services {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			proc := NewProcessWithMPool(nil, sid, mpool.MustNewZeroNoFixed())
+			services[index] = proc.GetIncrService()
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 1; i < count; i++ {
+		require.True(t, services[0] == services[i], "service %d", i)
+	}
 }
 
 func TestVector(t *testing.T) {
