@@ -4484,9 +4484,15 @@ func TestBuildCTASDoesNotCopyAutoIncrement(t *testing.T) {
 	p, err := BuildPlan(ctx, stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
-	require.Len(t, cols, 1)
-	require.Equal(t, "id", cols[0].Name)
-	require.False(t, cols[0].Typ.AutoIncr)
+	var visible []*plan.ColDef
+	for _, col := range cols {
+		if !col.GetHidden() {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 1)
+	require.Equal(t, "id", visible[0].Name)
+	require.False(t, visible[0].Typ.AutoIncr)
 }
 
 func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
