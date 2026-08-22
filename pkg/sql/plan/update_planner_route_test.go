@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1142,7 +1143,7 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		})
 	}
 
-	t.Run("cascade changing child primary key is rejected", func(t *testing.T) {
+	t.Run("cascade changing child primary key uses modern multi update", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
 		emp := mock.ctxt.tables["emp"]
@@ -1159,10 +1160,20 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.ErrorContains(t, err, "parent foreign key action changing child primary key")
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerRejected, route)
-		require.Equal(t, updateRouteReasonForeignKey, reason)
+		require.NoError(t, err)
+		require.True(t, builder.qry.GetHasForeignKeyAction())
+		require.GreaterOrEqual(t, countUpdateFkPlanNodes(builder.qry, planpb.Node_MULTI_UPDATE), 2)
+		require.True(t, slices.ContainsFunc(builder.qry.Nodes, func(node *planpb.Node) bool {
+			if node.NodeType != planpb.Node_MULTI_UPDATE {
+				return false
+			}
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef != nil && updateCtx.TableDef.TblId == emp.TblId {
+					return len(updateCtx.InsertCols) > 0 && len(updateCtx.DeleteCols) >= 2
+				}
+			}
+			return false
+		}), "the child primary-key transition must be owned by a modern MULTI_UPDATE context")
 	})
 
 	t.Run("multiple actions targeting one child are rejected", func(t *testing.T) {
@@ -1399,25 +1410,27 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		require.True(t, updateFkPlanContainsFunc(query, "isnull"))
 	})
 
-	t.Run("self cascade uses typed rejection", func(t *testing.T) {
+	t.Run("self cascade uses modern single-writer plan", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareSelfRef(mock)
 		mock.ctxt.tables["self_ref"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
-		stmt, err := parsers.ParseOne(
-			mock.CurrentContext().GetContext(),
-			dialect.MYSQL,
-			"UPDATE self_ref SET id = 2",
-			1,
-		)
+		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET id = 2")
 		require.NoError(t, err)
-		defer stmt.Free()
-
-		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.Error(t, err)
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerRejected, route)
-		require.Equal(t, updateRouteReasonForeignKey, reason)
+		query := logicPlan.GetQuery()
+		require.True(t, query.GetHasForeignKeyAction())
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.True(t, queryHasNodeType(query, planpb.Node_UNION_ALL))
+		require.True(t, slices.ContainsFunc(query.Nodes, func(node *planpb.Node) bool {
+			if node.NodeType != planpb.Node_MULTI_UPDATE {
+				return false
+			}
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef != nil && updateCtx.TableDef.Name == "self_ref" {
+					return len(updateCtx.AffectedRowsCols) == 1
+				}
+			}
+			return false
+		}), "the self action must preserve direct-target affected-row accounting")
 	})
 
 	t.Run("disabled checks omit self detect sql", func(t *testing.T) {

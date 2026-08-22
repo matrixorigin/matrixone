@@ -1729,7 +1729,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 
 			joinType := plan.Node_LEFT
-			if !isMultiTargetUpdate && !idxDef.Unique && !isSpatialIndexDef(idxDef) {
+			if !isMultiTargetUpdate && !pkNeedUpdate[i] && !idxDef.Unique && !isSpatialIndexDef(idxDef) {
 				joinType = plan.Node_INNER
 			}
 			lastNodeID = builder.appendNode(&plan.Node{
@@ -1894,6 +1894,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					ColPos: oldPkPos,
 				},
 			},
+		}
+		if affectedRowsCol, ok := builder.updateAffectedRowsCols[tableDef.TblId]; ok {
+			affectedRowsFinalPos := int32(len(finalProjList))
+			finalProjList = append(finalProjList, &plan.Expr{
+				Typ: selectNode.ProjectList[affectedRowsCol.pos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: affectedRowsCol.pos,
+				}},
+			})
+			updateCtx.AffectedRowsCols = []plan.ColRef{{
+				RelPos: finalProjTag,
+				ColPos: affectedRowsFinalPos,
+			}}
 		}
 		if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
 			partitionColName := getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)

@@ -445,6 +445,15 @@ type QueryBuilder struct {
 	returningTableName  string
 	returningAlias      string
 	returningColPos     map[string]int32
+	// updateParentActionStack bounds recursive ON UPDATE actions by the active
+	// physical-table path. Acyclic multi-layer cascades recurse normally; a
+	// cycle is rejected before any mutation step is appended.
+	updateParentActionStack map[uint64]int
+	// updateAffectedRowsCols records selector columns added while self-referencing
+	// FK action rows are folded into a root UPDATE stream. The physical writer
+	// consumes every row, but SQL affected-row accounting includes only rows
+	// selected by the original statement.
+	updateAffectedRowsCols map[uint64]updateAffectedRowsColumn
 	// insertInputKeysUnique is set while binding a plain INSERT ... SELECT when
 	// the source primary key proves uniqueness of the target primary-key key.
 	// It is consumed only by the target-PK DEDUP node; secondary unique-index

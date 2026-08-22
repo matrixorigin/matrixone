@@ -3663,12 +3663,53 @@ func TestModernMultiTargetGeneratedColumnChainBuildsCompleteContexts(t *testing.
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "mgr", "empno")
 	setMockGeneratedColumn(t, mock, "emp", "deptno", "mgr")
+	emp := mock.ctxt.tables["emp"]
+	var empnoPos, mgrPos, deptnoPos int32
+	for pos, col := range emp.Cols {
+		switch col.Name {
+		case "empno":
+			empnoPos = int32(pos)
+		case "mgr":
+			mgrPos = int32(pos)
+		case "deptno":
+			deptnoPos = int32(pos)
+		}
+	}
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'chain-marker' WHERE emp.deptno = dept.deptno")
 	require.NoError(t, err)
+	query := logicPlan.GetQuery()
 	require.ElementsMatch(t, []string{"dept", "emp"}, modernBaseUpdateContextNames(logicPlan.GetQuery()))
 	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "chain-marker"))
+
+	var chainNodeID int32 = -1
+	for nodeID, node := range query.Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) <= int(deptnoPos) {
+			continue
+		}
+		mgrRewrite := node.ProjectList[mgrPos].GetF()
+		deptnoRewrite := node.ProjectList[deptnoPos].GetF()
+		if mgrRewrite == nil || mgrRewrite.Func.GetObjName() != "if" || len(mgrRewrite.Args) != 3 ||
+			deptnoRewrite == nil || deptnoRewrite.Func.GetObjName() != "if" || len(deptnoRewrite.Args) != 3 {
+			continue
+		}
+		freshMgr := mgrRewrite.Args[1]
+		if freshMgr.GetCol() == nil || freshMgr.GetCol().ColPos != empnoPos {
+			continue
+		}
+		// deptno is generated from mgr. Its active-row branch must consume the
+		// complete freshly recomputed mgr row image, not the stale input column.
+		require.Equal(t, node.ProjectList[mgrPos], deptnoRewrite.Args[1])
+		chainNodeID = int32(nodeID)
+		break
+	}
+	require.NotEqual(t, int32(-1), chainNodeID,
+		"the modern plan must preserve the two-layer generated-column row-image dependency")
+	require.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_MULTI_UPDATE && len(node.Children) == 1 &&
+			planNodeDependsOn(query, node.Children[0], chainNodeID, make(map[int32]struct{}))
+	}), "the generated-column chain must feed the physical MULTI_UPDATE")
 }
 
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
@@ -5387,15 +5428,53 @@ func TestDeleteSelfReferCascadeAcrossForeignKeys(t *testing.T) {
 	requireRecursiveCTESources(t, query)
 }
 
-func TestUpdateSelfReferCascadeIsRejected(t *testing.T) {
+func TestUpdateSelfReferCascadeUsesModernPlan(t *testing.T) {
 	for _, sql := range []string{
 		"UPDATE self_ref_cascade SET id = 10 WHERE id = 1",
 		"UPDATE self_ref_cascade SET id = id + 10 WHERE id IN (1, 2)",
 	} {
 		mock := NewMockOptimizer(true)
 		logicPlan, err := runOneStmt(mock, t, sql)
-		require.Nil(t, logicPlan)
-		require.ErrorContains(t, err, "self-referencing parent foreign key action")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.NotNil(t, query)
+		require.True(t, query.GetHasForeignKeyAction())
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, plan.Node_MULTI_UPDATE),
+			"the root UPDATE and self-referencing CASCADE must share one physical writer")
+		foundAffectedRowsSelector := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_MULTI_UPDATE {
+				continue
+			}
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef != nil && updateCtx.TableDef.Name == "self_ref_cascade" {
+					require.Len(t, updateCtx.AffectedRowsCols, 1,
+						"self-cascade rows must not inflate SQL affected-row accounting")
+					foundAffectedRowsSelector = true
+				}
+			}
+		}
+		require.True(t, foundAffectedRowsSelector)
+		joinTypes := make([]plan.Node_JoinType, 0)
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_JOIN {
+				joinTypes = append(joinTypes, node.JoinType)
+			}
+		}
+		require.True(t,
+			slices.Contains(joinTypes, plan.Node_LEFT) || slices.Contains(joinTypes, plan.Node_RIGHT),
+			"root-to-root cascades must be folded into the statement-owned row image")
+		require.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
+			return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_ANTI
+		}), "the cascade branch must exclude statement-owned rows before the streams are merged")
+		require.True(t, queryHasNodeType(query, plan.Node_UNION_ALL),
+			"root and non-root cascade rows must feed the same MULTI_UPDATE stream")
+		require.Equal(t, 0, countUpdateFkPlanNodes(query, plan.Node_PRE_INSERT_UK))
+		require.Equal(t, 0, countUpdateFkPlanNodes(query, plan.Node_PRE_INSERT_SK))
+		require.GreaterOrEqual(t, len(slices.DeleteFunc(slices.Clone(query.Nodes), func(node *plan.Node) bool {
+			return node.NodeType != plan.Node_SINK || node.ExtraOptions != materialized.CTESinkOption
+		})), 2, "both the root fold and the shared cascade transition source must be materialized")
+		requireQueryStepDependenciesAcyclic(t, query)
 	}
 }
 

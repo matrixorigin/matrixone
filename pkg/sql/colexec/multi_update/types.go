@@ -284,6 +284,13 @@ func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCou
 	}
 }
 
+func physicalInsertAffectedRows(updateCtx *MultiUpdateCtx, rowCount uint64) uint64 {
+	if updateCtx != nil && !updateCtx.DedupByTargetRowID && len(updateCtx.AffectedRowsCols) > 0 {
+		return 0
+	}
+	return rowCount
+}
+
 func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCount uint64) {
 	if tableType != UpdateMainTable {
 		return
