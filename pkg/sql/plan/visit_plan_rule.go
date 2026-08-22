@@ -527,6 +527,10 @@ func (rule *preparedRuntimeTypeLineageRule) ApplyExpr(expr *plan.Expr) (*plan.Ex
 			}
 			args[i] = restored
 		}
+		args, err := prepareRuntimeNumericConsumerArgs(rule.ctx, expr, name, args)
+		if err != nil {
+			return nil, err
+		}
 		rewritten, err := BindFuncExprImplByPlanExpr(rule.ctx, name, args)
 		if err != nil {
 			return nil, err
@@ -554,6 +558,52 @@ func (rule *preparedRuntimeTypeLineageRule) ApplyExpr(expr *plan.Expr) (*plan.Ex
 		return applyWindowExpr(expr, rule.ApplyExpr)
 	}
 	return expr, nil
+}
+
+// prepareRuntimeNumericConsumerArgs keeps relational type boundaries
+// authoritative while closing the conversion at the actual numeric consumer.
+// In particular, a set operation must compare, deduplicate, and order its
+// string/numeric branches in the normal VARCHAR common domain.  Its output is
+// converted to DOUBLE only when a parent numeric function consumes it.
+func prepareRuntimeNumericConsumerArgs(
+	ctx context.Context,
+	parent *plan.Expr,
+	name string,
+	args []*plan.Expr,
+) ([]*plan.Expr, error) {
+	if parent == nil || !makeTypeByPlan2Expr(parent).IsNumeric() ||
+		(!isNumericContextFunction(name) && !supportsGenericNumericFunctionContext(name)) {
+		return args, nil
+	}
+
+	for i, arg := range args {
+		if arg == nil {
+			continue
+		}
+		if numericFunctionHasSelectiveContext(name) &&
+			!numericFunctionArgKeepsContext(name, i, len(args)) {
+			continue
+		}
+		source := arg
+		if fn := arg.GetF(); fn != nil && fn.Func != nil &&
+			fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
+			_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+			if overload == 0 && types.T(fn.Args[0].Typ.Id).IsMySQLString() &&
+				makeTypeByPlan2Expr(arg).IsNumeric() {
+				source = fn.Args[0]
+			}
+		}
+		if !types.T(source.Typ.Id).IsMySQLString() {
+			continue
+		}
+		cast, err := appendExplicitCastBeforeExpr(
+			ctx, source, makeSimplePlan2Type(types.T_float64))
+		if err != nil {
+			return nil, err
+		}
+		args[i] = cast
+	}
+	return args, nil
 }
 
 func (rule *preparedRuntimeTypeLineageRule) markDirty(expr *plan.Expr) {

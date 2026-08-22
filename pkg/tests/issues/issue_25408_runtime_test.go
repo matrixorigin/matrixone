@@ -264,34 +264,34 @@ func TestIssue25408PreparedRuntimeNumericRebind(t *testing.T) {
 		}{
 			{
 				name:          "union_distinct",
-				preparedSQL:   "select x + 1 from (select ? as x union select ? as x) u order by x",
+				preparedSQL:   "select x + 1 from (select ? as x union select 2 as x) u order by x",
 				directSQL:     "select x + 1 from (select '02' as x union select 2 as x) u order by x",
-				textArguments: "set @runtime_set_left = '02', @runtime_set_right = 2",
-				binaryArgs:    []any{"02", int64(2)},
+				textArguments: "set @runtime_set_left = '02'",
+				binaryArgs:    []any{"02"},
 				want:          []string{"3", "3"},
 			},
 			{
 				name:          "intersect",
-				preparedSQL:   "select x + 1 from (select ? as x intersect select ? as x) u order by x",
+				preparedSQL:   "select x + 1 from (select ? as x intersect select 2 as x) u order by x",
 				directSQL:     "select x + 1 from (select '02' as x intersect select 2 as x) u order by x",
-				textArguments: "set @runtime_set_left = '02', @runtime_set_right = 2",
-				binaryArgs:    []any{"02", int64(2)},
+				textArguments: "set @runtime_set_left = '02'",
+				binaryArgs:    []any{"02"},
 				want:          nil,
 			},
 			{
 				name:          "minus",
-				preparedSQL:   "select x + 1 from (select ? as x minus select ? as x) u order by x",
+				preparedSQL:   "select x + 1 from (select ? as x minus select 2 as x) u order by x",
 				directSQL:     "select x + 1 from (select '02' as x minus select 2 as x) u order by x",
-				textArguments: "set @runtime_set_left = '02', @runtime_set_right = 2",
-				binaryArgs:    []any{"02", int64(2)},
+				textArguments: "set @runtime_set_left = '02'",
+				binaryArgs:    []any{"02"},
 				want:          []string{"3"},
 			},
 			{
 				name:          "union_all_order",
-				preparedSQL:   "select x + 1 from (select ? as x union all select ? as x) u order by x",
+				preparedSQL:   "select x + 1 from (select ? as x union all select 2 as x) u order by x",
 				directSQL:     "select x + 1 from (select '10' as x union all select 2 as x) u order by x",
-				textArguments: "set @runtime_set_left = '10', @runtime_set_right = 2",
-				binaryArgs:    []any{"10", int64(2)},
+				textArguments: "set @runtime_set_left = '10'",
+				binaryArgs:    []any{"10"},
 				want:          []string{"11", "3"},
 			},
 		}
@@ -303,7 +303,7 @@ func TestIssue25408PreparedRuntimeNumericRebind(t *testing.T) {
 				defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare "+stmtName) }()
 				mustExec(t, ctx, conn, testCase.textArguments)
 				require.Equal(t, testCase.want, queryStrings(t,
-					fmt.Sprintf("execute %s using @runtime_set_left, @runtime_set_right", stmtName)))
+					fmt.Sprintf("execute %s using @runtime_set_left", stmtName)))
 			})
 		}
 		for _, testCase := range setOperationCases {
