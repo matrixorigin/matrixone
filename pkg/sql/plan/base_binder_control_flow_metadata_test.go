@@ -395,7 +395,7 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
-		require.Equal(t, int32(6), expr.Typ.Width)
+		require.Equal(t, int32(8), expr.Typ.Width)
 		require.True(t, expr.Typ.NotNullable)
 	})
 
@@ -407,7 +407,7 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
-		require.Equal(t, int32(6), expr.Typ.Width)
+		require.Equal(t, int32(8), expr.Typ.Width)
 		require.True(t, expr.Typ.NotNullable)
 	})
 
@@ -495,9 +495,9 @@ func TestBuildControlFlowBinaryCharacterLiteralWidth(t *testing.T) {
 		sql   string
 		width int32
 	}{
-		{sql: `select case when 1 then _binary 'a' else 'bc' end as c`, width: 6},
-		{sql: `select if(1, _binary 'a', 'bc') as c`, width: 6},
-		{sql: `select case when 1 then _binary 'a' else '中文' end as c`, width: 6},
+		{sql: `select case when 1 then _binary 'a' else 'bc' end as c`, width: 8},
+		{sql: `select if(1, _binary 'a', 'bc') as c`, width: 8},
+		{sql: `select case when 1 then _binary 'a' else '中文' end as c`, width: 8},
 	} {
 		t.Run(test.sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)

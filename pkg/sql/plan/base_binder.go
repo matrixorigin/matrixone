@@ -21,6 +21,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -4750,13 +4751,16 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 }
 
 // adjustControlFlowBinaryMetadata narrows a binary/character conditional
-// result only when every character branch is a known literal. The shared
-// binary type checker keeps a conservative four-byte-per-character bound for
-// unknown values; MySQL's default string metadata uses a three-byte bound, but
-// a literal may contain a four-byte UTF-8 code point. Combining both bounds
-// keeps ASCII metadata compatible without advertising a width shorter than a
-// value that the expression can actually emit.
+// result only when every character branch is a known literal. MatrixOne's
+// textual type metadata currently uses its canonical utf8mb4 connection/view
+// charset; unlike MySQL, the planner does not carry a latin1/utf8mb3 session
+// charset through this expression. Keep the four-byte UTF-8 capacity here so
+// the binary result metadata agrees with that public charset policy and does
+// not understate ASCII or multibyte character branches. If charset-specific
+// planner metadata is added later, this bound must be derived from it.
 func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	const maxUTF8MB4BytesPerCharacter = int32(utf8.UTFMax)
+
 	hasBinary := false
 	hasCharacter := false
 	width := int32(0)
@@ -4782,8 +4786,8 @@ func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueI
 				return false
 			}
 			candidate := int32(0)
-			if typ.Width > 0 && typ.Width <= types.MaxVarBinaryLen/3 {
-				candidate = typ.Width * 3
+			if typ.Width > 0 && typ.Width <= types.MaxVarBinaryLen/maxUTF8MB4BytesPerCharacter {
+				candidate = typ.Width * maxUTF8MB4BytesPerCharacter
 			} else if typ.Width > 0 {
 				candidate = types.MaxVarBinaryLen
 			}
