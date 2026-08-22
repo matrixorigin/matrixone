@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -29,6 +28,9 @@ const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
+	if builder.checkPlanningCanceled() != nil {
+		return originalNodeID, filters
+	}
 	// Record before pushdownFilters
 	builder.optimizationHistory = append(builder.optimizationHistory,
 		fmt.Sprintf("pushdownFilters:before (nodeID: %d, nodeType: %s, filters: %d)", nodeID, builder.qry.Nodes[nodeID].NodeType, len(filters)))
@@ -229,11 +231,15 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		cantPushdown = append(cantPushdown, filters...)
 
 	case plan.Node_JOIN:
-		if node.JoinType == plan.Node_DEDUP && node.OnDuplicateAction == plan.Node_UPDATE {
+		dedupIgnoreHasReleaseRows := node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE && node.DedupJoinCtx != nil &&
+			len(node.DedupJoinCtx.OldColList) > 1
+		if node.JoinType == plan.Node_DEDUP &&
+			(node.OnDuplicateAction == plan.Node_UPDATE || dedupIgnoreHasReleaseRows) {
 			// DEDUP UPDATE mutates columns from its right input into the final row
-			// image. A predicate above it must observe that image; pushing it to
-			// either child would evaluate pre-update values or change conflict
-			// detection.
+			// image. DEDUP IGNORE can also carry delete-only rows that release keys
+			// for later candidates. A predicate above either form must stay above
+			// the join or it can change conflict detection.
 			for i, child := range node.Children {
 				childID, cantPushdownChild := builder.pushdownFilters(child, nil, separateNonEquiConds)
 				if len(cantPushdownChild) > 0 {
@@ -483,14 +489,22 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		switch node.JoinType {
 		case plan.Node_INNER, plan.Node_SEMI:
 			//inner and semi join can deduce new predicate from both side
-			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
-			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(rightPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[0], deduced, separateNonEquiConds)
+			}
+			if deduced := deduceNewFilterList(leftPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[1], deduced, separateNonEquiConds)
+			}
 		case plan.Node_RIGHT, plan.Node_ANTI:
 			//right join can deduce new predicate only from right side to left
-			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(rightPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[0], deduced, separateNonEquiConds)
+			}
 		case plan.Node_LEFT, plan.Node_SINGLE:
 			//left join can deduce new predicate only from left side to right
-			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(leftPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[1], deduced, separateNonEquiConds)
+			}
 		}
 
 		if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {
@@ -614,7 +628,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 			}
 		}
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		downFilters := make([]*plan.Expr, 0)
 		selfFilters := make([]*plan.Expr, 0)
 		for _, filter := range filters {
@@ -842,13 +856,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	for _, childID := range node.Children {
 		builder.pushdownVectorIndexTopToTableScan(childID)
 	}
-	if node.NodeType == plan.Node_TABLE_SCAN && node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries {
-		if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
-			if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
-				applyIvfReaderParamToEntriesScan(node, readerParam)
-			}
-		}
-	}
 	if builder.optimizerHints != nil && builder.optimizerHints.pushDownLimitToScan != 0 {
 		return
 	}
@@ -909,11 +916,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		},
 		Limit: DeepCopyExpr(node.Limit),
 	}
-	if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
-		if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
-			applyIvfReaderParamToEntriesScan(scanNode, readerParam)
-		}
-	}
 
 	// if there is a limit, outcnt is limit number
 	scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
@@ -932,21 +934,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	}
 
 	builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
-}
-
-func applyIvfReaderParamToEntriesScan(scanNode *plan.Node, readerParam *plan.IndexReaderParam) {
-	if scanNode == nil || scanNode.NodeType != plan.Node_TABLE_SCAN ||
-		scanNode.GetTableDef().GetTableType() != catalog.SystemSI_IVFFLAT_TblType_Entries ||
-		readerParam == nil || readerParam.GetOrigFuncName() == "" {
-		return
-	}
-	if scanNode.IndexReaderParam == nil {
-		scanNode.IndexReaderParam = &plan.IndexReaderParam{}
-	}
-	scanNode.IndexReaderParam.OrigFuncName = readerParam.OrigFuncName
-	scanNode.IndexReaderParam.DistRange = readerParam.DistRange
-	scanNode.IndexReaderParam.PartitionCnCnt = readerParam.PartitionCnCnt
-	scanNode.IndexReaderParam.PartitionCnIdx = readerParam.PartitionCnIdx
 }
 
 // exprColRefsSubsetOf returns true when every column reference in expr

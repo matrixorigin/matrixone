@@ -728,6 +728,9 @@ func (ag *AggFuncExecExpression) UnmarshalFromReader(r io.Reader) error {
 		if err := proto.Unmarshal(bs, expr); err != nil {
 			return err
 		}
+		if err := expr.ValidateStringLiteralForms(); err != nil {
+			return err
+		}
 		ag.argExpressions = append(ag.argExpressions, expr)
 	}
 	exLen, err := types.ReadInt32(r)

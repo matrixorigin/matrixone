@@ -3342,7 +3342,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 			return 0, nil, nil, err
 		}
 
-	case *tree.SelectClause:
+	case *tree.SelectClause, *tree.UnionClause:
 		astSelect = astRows
 
 		subCtx := NewBindContext(builder, bindCtx)

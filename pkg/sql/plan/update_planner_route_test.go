@@ -28,6 +28,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -253,11 +254,11 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			wantReason: updateRouteReasonNone,
 		},
 		{
-			name: "repeated writable aliases are rejected",
+			name: "repeated writable aliases use modern planner",
 			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
 				"SET a.n_name = 'a', b.n_comment = 'b'",
-			wantRoute:  updatePlannerRejected,
-			wantReason: updateRouteReasonMultiTarget,
+			wantRoute:  updatePlannerModern,
+			wantReason: updateRouteReasonNone,
 		},
 	}
 
@@ -1341,6 +1342,102 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 			return node.NodeType == planpb.Node_PRE_INSERT
 		}))
 	})
+}
+
+func TestBindUpdateSupportsMultipleAutoIncrementTargets(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for tableName, colName := range map[string]string{"nation": "n_regionkey", "nation2": "r_regionkey"} {
+		for _, col := range mock.ctxt.tables[tableName].Cols {
+			if col.Name == colName {
+				col.Typ.AutoIncr = true
+				break
+			}
+		}
+	}
+	queryPlan, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey "+
+			"SET n.n_regionkey = DEFAULT, n2.r_regionkey = DEFAULT",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, queryPlan.GetQuery())
+	preInsertCount := 0
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_PRE_INSERT {
+			preInsertCount++
+			require.True(t, node.PreInsertCtx.HasTargetSelector)
+		}
+	}
+	require.Equal(t, 2, preInsertCount)
+}
+
+func TestRepeatedPhysicalTargetPrimaryKeyUpdateIsRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
+			"SET a.n_nationkey = a.n_nationkey + 1, b.n_name = 'b'",
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Primary key/partition key update is not allowed")
+	moErr := err.(*moerr.Error)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMultiUpdateKeyConflict))
+	require.Equal(t, uint16(moerr.ER_MULTI_UPDATE_KEY_CONFLICT), moErr.MySQLCode())
+	require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+}
+
+func TestRepeatedPhysicalTargetPartitionKeyUpdateIsRejected(t *testing.T) {
+	partitionExpr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Args: []*planpb.Expr{
+		{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "n_name", ColPos: 1}}},
+		{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "n_regionkey", ColPos: 2}}},
+	}}}}
+
+	for _, test := range []struct {
+		name      string
+		sql       string
+		wantError bool
+	}{
+		{
+			name: "first partition expression column",
+			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_name = 'a', b.n_comment = 'b'",
+			wantError: true,
+		},
+		{
+			name: "second non-primary partition expression column",
+			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_regionkey = 11, b.n_comment = 'b'",
+			wantError: true,
+		},
+		{
+			name: "update ignore cannot bypass partition key check",
+			sql: "UPDATE IGNORE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_regionkey = 11, b.n_comment = 'b'",
+			wantError: true,
+		},
+		{
+			name: "unrelated columns remain legal",
+			sql: "UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+				"SET a.n_comment = 'a', b.n_comment = 'b'",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			tableDef := mock.ctxt.tables["nation"]
+			tableDef.FeatureFlag |= features.Partitioned
+			tableDef.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{{Def: partitionExpr}}}
+
+			_, err := runOneStmt(mock, t, test.sql)
+			if test.wantError {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrMultiUpdateKeyConflict))
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestLegacyInsertForeignKeyKeepsGenericAssert(t *testing.T) {

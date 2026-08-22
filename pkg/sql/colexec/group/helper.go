@@ -1011,6 +1011,7 @@ func (ctr *container) prepareSpillReloadRecord(
 			targets,
 			ctr.mp,
 			true,
+			true,
 		)
 		if err != nil {
 			return record, false, err
