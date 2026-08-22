@@ -16,10 +16,12 @@ package compile
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
@@ -230,6 +232,83 @@ func TestConstructScopeForExternalNodeKeepsWorkerIdentity(t *testing.T) {
 	require.Equal(t, "remote", scope.NodeInfo.Id)
 	require.Equal(t, "remote:6001", scope.NodeInfo.Addr)
 	require.Equal(t, 1, scope.NodeInfo.Mcpu)
+}
+
+func TestConstructMongoScanScopeUsesScheduledQueryWorker(t *testing.T) {
+	tests := []struct {
+		name      string
+		workers   engine.Nodes
+		wantID    string
+		wantAddr  string
+		wantMagic magicType
+	}{
+		{
+			name: "current CN remains local when scheduled",
+			workers: engine.Nodes{
+				{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+				{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 8},
+			},
+			wantID: "cn-local", wantAddr: "cn-local:6001", wantMagic: Merge,
+		},
+		{
+			name: "remote query worker owns source when coordinator is not scheduled",
+			workers: engine.Nodes{
+				{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+			},
+			wantID: "cn-remote", wantAddr: "cn-remote:6001", wantMagic: Remote,
+		},
+		{
+			name:     "current CN is fallback without query workers",
+			wantAddr: "cn-local:6001", wantMagic: Merge,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr = "cn-local:6001"
+			c.cnList = test.workers
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+			scope := c.constructMongoScanScope()
+
+			require.Equal(t, test.wantID, scope.NodeInfo.Id)
+			require.Equal(t, test.wantAddr, scope.NodeInfo.Addr)
+			require.Equal(t, 1, scope.NodeInfo.Mcpu)
+			require.Equal(t, test.wantMagic, scope.Magic)
+		})
+	}
+}
+
+func TestMongoScanScopeIsStartedByDistributedDedupShuffle(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-coordinator:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-a", Addr: "cn-a:6001", Mcpu: 1},
+		{Id: "cn-b", Addr: "cn-b:6001", Mcpu: 1},
+	}
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	mongoScope := c.constructMongoScanScope()
+	mongoScope.setRootOperator(colexec.NewMockOperator())
+	buildScope := newShuffleJoinTestScope(t, c.cnList[1], 1)
+	joinNode := newShuffleJoinTestNode(1)
+	joinNode.JoinType = plan.Node_DEDUP
+	stageNodes := c.queryWorkerStageNodes()
+
+	receivers := c.newShuffleJoinScopeListAt(
+		[]*Scope{mongoScope}, []*Scope{buildScope}, joinNode, stageNodes, false)
+
+	var sourceAttached bool
+	for _, receiver := range receivers {
+		if sameExecutionNode(receiver.NodeInfo, mongoScope.NodeInfo) {
+			sourceAttached = slices.Contains(receiver.PreScopes, mongoScope)
+			break
+		}
+	}
+	require.True(t, sourceAttached,
+		"the DEDUP shuffle receiver on the MongoDB worker must own the source scope")
 }
 
 func TestSameExecutionNodeUsesIdentityAndDoesNotMatchEmptyAddressToRemote(t *testing.T) {
