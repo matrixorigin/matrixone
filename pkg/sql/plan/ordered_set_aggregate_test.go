@@ -54,6 +54,7 @@ func TestBuildOrderedSetAggregates(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
 			queryPlan, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
 
@@ -86,6 +87,7 @@ func TestBuildOrderedSetPercentileRejectsNonConstant(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select percentile_cont(b) within group (order by a) from select_test.bind_select", 1)
 	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
 	_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
 	require.ErrorContains(t, err, "percentile argument of percentile_cont must be a non-null constant")
 }
@@ -94,6 +96,7 @@ func TestBuildMedianWithinGroupRejectsDifferentOrderExpression(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select median(a) within group (order by b) from select_test.bind_select", 1)
 	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
 	_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
 	require.ErrorContains(t, err, "median requires the WITHIN GROUP ORDER BY expression to match")
 }
@@ -102,6 +105,7 @@ func TestBuildMedianWithinGroupRejectsWindowForm(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select median(a) within group (order by a) over () from select_test.bind_select", 1)
 	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
 	_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
 	require.Error(t, err)
 }
