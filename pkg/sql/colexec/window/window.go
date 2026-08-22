@@ -1363,13 +1363,6 @@ func (ctr *container) timestampRangeSelection(
 		}
 	}
 
-	// A finite, valid conversion is a proof that civil membership remains one
-	// instant interval, so the existing binary searches are both correct and faster.
-	if hasLow && hasHigh {
-		if _, _, monotonic := types.DatetimeRangeToTimestampRange(low, high, loc); monotonic {
-			return nil, nil
-		}
-	}
 	if !hasLow && !hasHigh {
 		return nil, nil
 	}
