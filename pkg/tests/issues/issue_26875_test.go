@@ -215,11 +215,13 @@ func TestIssue26875MixedIndexedSetNullAndCascadeActions(t *testing.T) {
 			mustExec(t, ctx, conn, fmt.Sprintf(
 				"insert into %s values(10,1,2,10),(20,2,1,20),(30,1,1,30),(40,2,2,40)", child))
 			if prepared {
-				stmt, err := conn.PrepareContext(ctx, fmt.Sprintf("replace into %s values(?)", parent))
-				require.NoError(t, err)
-				_, err = stmt.ExecContext(ctx, 1)
-				require.NoError(t, err)
-				require.NoError(t, stmt.Close())
+				func() {
+					stmt, err := conn.PrepareContext(ctx, fmt.Sprintf("replace into %s values(?)", parent))
+					require.NoError(t, err)
+					defer stmt.Close()
+					_, err = stmt.ExecContext(ctx, 1)
+					require.NoError(t, err)
+				}()
 			} else {
 				mustExec(t, ctx, conn, fmt.Sprintf("replace into %s values(1)", parent))
 			}
