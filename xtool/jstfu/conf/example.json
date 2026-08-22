@@ -3,6 +3,8 @@
     "port": 4444,
     "chunksize": 1048576,
     "apikey": "",
+    "maxconcurrentreads": 256,
+    "querytimeoutseconds": 0,
     "datasource": [
         {
             "name": "jdbc_example",

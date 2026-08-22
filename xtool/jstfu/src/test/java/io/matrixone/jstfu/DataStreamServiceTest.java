@@ -25,6 +25,7 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DataStreamServiceTest {
@@ -88,7 +89,7 @@ class DataStreamServiceTest {
     private static DataStreamService service(String apiKey) {
         // no datasources: an authenticated request resolves to TABLE_NOT_FOUND,
         // which is enough to prove the auth gate let it through
-        return new DataStreamService(Collections.emptyMap(), apiKey);
+        return new DataStreamService(Collections.emptyMap(), apiKey, 8);
     }
 
     private static ErrorCode errorOf(Capture c) {
@@ -126,5 +127,39 @@ class DataStreamServiceTest {
                 ReadRequest.newBuilder().setTable("nope").setApiKey("s3cr3t").build(), c);
         // passed auth, then failed to find the (absent) datasource
         assertEquals(ErrorCode.ERROR_TABLE_NOT_FOUND, errorOf(c));
+    }
+
+    // Tracks whether an AutoCloseable was closed.
+    static final class TrackedCloseable implements AutoCloseable {
+        volatile boolean closed;
+
+        @Override
+        public void close() {
+            closed = true;
+        }
+    }
+
+    @Test
+    void cancellationClosesRegisteredResources() {
+        DataStreamService.Cancellation cx = new DataStreamService.Cancellation();
+        TrackedCloseable a = new TrackedCloseable();
+        assertTrue(cx.register(a)); // registered while live
+        assertFalse(a.closed);
+
+        cx.cancel();
+        assertTrue(a.closed); // cancel closes everything registered so far
+        assertTrue(cx.isCancelled());
+    }
+
+    @Test
+    void registerAfterCancelClosesImmediately() {
+        DataStreamService.Cancellation cx = new DataStreamService.Cancellation();
+        cx.cancel();
+
+        TrackedCloseable late = new TrackedCloseable();
+        // a resource opened after cancellation (the getConnection-then-register
+        // race) must be closed at once and the caller told to stop
+        assertFalse(cx.register(late));
+        assertTrue(late.closed);
     }
 }

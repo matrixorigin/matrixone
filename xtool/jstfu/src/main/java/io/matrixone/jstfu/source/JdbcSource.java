@@ -40,10 +40,12 @@ public class JdbcSource implements DataSource {
 
     private final Config.DataSourceConfig config;
     private final int chunkSize;
+    private final int queryTimeoutSeconds;
 
-    public JdbcSource(Config.DataSourceConfig config, int chunkSize) {
+    public JdbcSource(Config.DataSourceConfig config, int chunkSize, int queryTimeoutSeconds) {
         this.config = config;
         this.chunkSize = chunkSize;
+        this.queryTimeoutSeconds = queryTimeoutSeconds;
     }
 
     static String substituteFilter(String sql, String filter) {
@@ -59,6 +61,14 @@ public class JdbcSource implements DataSource {
             // register early so a cancelled MO query closes the connection even
             // while blocked in executeQuery/next, releasing the JDBC work
             ctx.registerForClose(conn);
+            // bound a stalled query even when the client never cancels
+            if (queryTimeoutSeconds > 0) {
+                try {
+                    stmt.setQueryTimeout(queryTimeoutSeconds);
+                } catch (Exception ignored) {
+                    // driver may not support it; connection-close on cancel remains
+                }
+            }
             // MySQL-protocol streaming mode: rows are fetched as they are read
             // instead of materializing the full result set in memory.
             try {

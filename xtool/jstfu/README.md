@@ -60,6 +60,8 @@ A JSON object with top-level server settings and a `datasource` array:
 | `port` | int | *(required)* | TCP port to listen on. Must match the MO table's `'port'` option. |
 | `apikey` | string | `""` | Shared-secret API key. When non-empty, every request must present a matching key (constant-time compared) or the server replies `ERROR_UNAUTHENTICATED`. Empty disables the check. |
 | `chunksize` | int | `1048576` (1 MiB) | Target CSV chunk size in bytes. Chunks are cut only at record boundaries, so an individual chunk may exceed this by up to one record. |
+| `maxconcurrentreads` | int | `256` | Upper bound on concurrent `Read` calls. Excess requests are rejected with a busy error instead of spawning unbounded worker threads. |
+| `querytimeoutseconds` | int | `0` | Per-query timeout for jdbc datasources (JDBC statement query timeout). `0` = driver default; a positive value bounds a stalled query even if the client never cancels. |
 | `datasource` | array | *(required)* | One or more datasource objects (below). |
 
 ### Datasource fields
@@ -122,12 +124,33 @@ Notes:
   operator's responsibility.
 - The gRPC channel is plaintext in v1, so also front an exposed server with a
   network trust boundary / TLS-terminating proxy.
-- The config file holds the `apikey` and the JDBC `password` in plaintext —
-  restrict its permissions (e.g. `chmod 600`). The key is read only at
+- The jstfu config file holds the `apikey` and the JDBC `password` in plaintext
+  — restrict its permissions (e.g. `chmod 600`). The key is read only at
   startup; rotate it by editing the file and restarting.
-- On the MO side the `apikey` is stored in the catalog and never shown by
-  SHOW CREATE, so a table restored from SHOW CREATE must have its `apikey`
-  re-supplied.
+
+### Keeping the MO-side key out of the catalog
+
+By default the MO `'apikey'` option value is stored in the catalog
+(`rel_createsql`); it is never shown by SHOW CREATE and is redacted in
+statement logs, but a same-account catalog reader could still recover a
+literal value. To keep the secret out of the catalog entirely, give the option
+an **`env:NAME` reference** instead of a literal:
+
+```sql
+CREATE EXTERNAL TABLE orders (...)
+ENGINE = DATASTREAM WITH (
+    'server' = '10.0.1.5', 'port' = '4444', 'table' = 'orders',
+    'apikey' = 'env:JSTFU_ORDERS_KEY'
+);
+```
+
+The catalog then stores only the reference `env:JSTFU_ORDERS_KEY`; the CN
+resolves it from its own process environment at scan time and presents the
+resolved secret to the server. Set the variable on the CN
+(e.g. `JSTFU_ORDERS_KEY=…` in the CN's environment) — an unset or empty
+variable fails the scan with a clear error. A restored table keeps working as
+long as the CN environment still defines the variable; a literal key must be
+re-supplied after a SHOW CREATE restore.
 
 ## CSV dialect
 

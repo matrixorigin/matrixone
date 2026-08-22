@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	datastream "github.com/matrixorigin/matrixone/pkg/datastream/v1"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -80,11 +81,18 @@ func (r *DataStreamReader) Open(param *ExternalParam, proc *process.Process) (fi
 	if err != nil {
 		return false, moerr.NewInternalErrorf(proc.Ctx, "datastream: cannot create client for %s: %v", target, err)
 	}
+	// Resolve an "env:NAME" apikey reference from the CN environment here, at
+	// scan time, so the secret was never stored in the catalog/plan/logs.
+	apiKey, err := sqldatastream.ResolveAPIKey(proc.Ctx, ds.ApiKey)
+	if err != nil {
+		conn.Close()
+		return false, err
+	}
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	stream, err := datastream.NewDataStreamClient(conn).Read(ctx, &datastream.ReadRequest{
 		Table:  ds.Table,
 		Filter: ds.PushedFilter,
-		ApiKey: ds.ApiKey,
+		ApiKey: apiKey,
 	})
 	if err != nil {
 		cancel()

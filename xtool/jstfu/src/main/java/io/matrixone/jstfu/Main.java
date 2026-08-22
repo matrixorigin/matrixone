@@ -46,7 +46,7 @@ public class Main {
         for (Config.DataSourceConfig ds : config.datasource) {
             switch (ds.type) {
                 case "jdbc":
-                    sources.put(ds.name, new JdbcSource(ds, config.chunkSize));
+                    sources.put(ds.name, new JdbcSource(ds, config.chunkSize, config.queryTimeoutSeconds));
                     break;
                 case "file":
                     sources.put(ds.name, new FileSource(ds.path, config.chunkSize));
@@ -56,7 +56,7 @@ public class Main {
             }
         }
 
-        DataStreamService service = new DataStreamService(sources, config.apiKey);
+        DataStreamService service = new DataStreamService(sources, config.apiKey, config.maxConcurrentReads);
         Server server = NettyServerBuilder
                 .forAddress(new InetSocketAddress(config.host, config.port))
                 .addService(service)

@@ -350,6 +350,54 @@ func TestDatastreamNoBackslashEscapesSource(t *testing.T) {
 	require.Equal(t, 2, id)
 }
 
+// TestDatastreamApiKeyEnvRef proves the env: apikey reference keeps the secret
+// out of the catalog: the table stores only "env:JSTFU_E2E_KEY", and the CN
+// resolves it from its own environment at scan time. Requires the MO under
+// test to have JSTFU_E2E_KEY exported (the same value this test reads), so it
+// skips when that is not set up.
+func TestDatastreamApiKeyEnvRef(t *testing.T) {
+	key := os.Getenv("JSTFU_E2E_KEY")
+	if key == "" {
+		t.Skip("JSTFU_E2E_KEY not set in this environment (and thus not in the CN); skip env-ref test")
+	}
+	db, _ := moConnect(t)
+	defer db.Close()
+
+	fixture, err := filepath.Abs(fixtureCSV)
+	require.NoError(t, err)
+	// the server requires exactly the key the CN will resolve from env
+	port := startJstfuWithConfig(t, func(port int) string {
+		return fmt.Sprintf(`{
+    "port": %d,
+    "apikey": "%s",
+    "datasource": [ { "name": "file_t", "type": "file", "path": "%s" } ]
+}`, port, key, fixture)
+	})
+
+	mustExec(t, db,
+		"drop database if exists datastream_envref",
+		"create database datastream_envref",
+	)
+	defer db.Exec("drop database if exists datastream_envref")
+
+	mustExec(t, db, fmt.Sprintf(
+		`create external table datastream_envref.ext (col1 int, col2 datetime, col3 varchar(50), col4 text) `+
+			`engine = datastream with ('server'='127.0.0.1','port'='%d','table'='file_t','apikey'='env:JSTFU_E2E_KEY')`,
+		port))
+
+	// the CN resolves env:JSTFU_E2E_KEY and authenticates
+	var n int
+	require.NoError(t, db.QueryRow("select count(*) from datastream_envref.ext").Scan(&n))
+	require.Equal(t, 5, n)
+
+	// the catalog stores only the reference (url-escaped), never the secret
+	var createsql string
+	require.NoError(t, db.QueryRow(
+		"select rel_createsql from mo_catalog.mo_tables where reldatabase='datastream_envref' and relname='ext'").Scan(&createsql))
+	require.Contains(t, createsql, "JSTFU_E2E_KEY") // the env-var reference name
+	require.NotContains(t, createsql, key)          // never the resolved secret
+}
+
 func TestJstfuErrors(t *testing.T) {
 	port := startJstfu(t, "")
 

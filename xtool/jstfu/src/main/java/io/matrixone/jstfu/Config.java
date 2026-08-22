@@ -59,6 +59,18 @@ public class Config {
     @JsonProperty("chunksize")
     public int chunkSize = DEFAULT_CHUNK_SIZE;
 
+    // Upper bound on concurrent Read calls served at once. Excess requests are
+    // rejected with a busy error rather than spawning unbounded worker threads.
+    @JsonProperty("maxconcurrentreads")
+    public int maxConcurrentReads = 256;
+
+    // Per-query timeout in seconds applied to jdbc datasources (Statement
+    // query timeout). 0 (the default) leaves the driver default; a positive
+    // value bounds a stalled executeQuery/next even if the client never
+    // cancels.
+    @JsonProperty("querytimeoutseconds")
+    public int queryTimeoutSeconds = 0;
+
     // Optional shared-secret API key. When non-empty, every Read request must
     // present a matching api_key or the server replies ERROR_UNAUTHENTICATED.
     // Empty (the default) disables the check. This is the enforcement boundary
@@ -110,6 +122,12 @@ public class Config {
         }
         if (chunkSize <= 0) {
             throw new IllegalArgumentException("config: chunksize must be positive, got " + chunkSize);
+        }
+        if (maxConcurrentReads <= 0) {
+            throw new IllegalArgumentException("config: maxconcurrentreads must be positive, got " + maxConcurrentReads);
+        }
+        if (queryTimeoutSeconds < 0) {
+            throw new IllegalArgumentException("config: querytimeoutseconds must not be negative, got " + queryTimeoutSeconds);
         }
         Set<String> names = new HashSet<>();
         for (DataSourceConfig ds : datasource) {
