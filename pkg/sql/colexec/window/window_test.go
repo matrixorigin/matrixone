@@ -3072,3 +3072,242 @@ func TestSearchLeftRightDateTimeIntervals(t *testing.T) {
 		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
 	})
 }
+
+func TestSearchLeftRightTemporalRangeOverflow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	tests := []struct {
+		name                string
+		ascending           []string
+		descending          []string
+		minimumAsc          []string
+		minimumDesc         []string
+		aboveDomainBy       int64
+		aboveDomainUnit     types.IntervalType
+		belowDomainBy       int64
+		belowDomainUnit     types.IntervalType
+		invalidIntervalUnit types.IntervalType
+		newVector           func([]string) *vector.Vector
+	}{
+		{
+			name:                "date",
+			ascending:           []string{"9999-12-30", "9999-12-31"},
+			descending:          []string{"9999-12-31", "9999-12-30"},
+			minimumAsc:          []string{"0001-01-01", "0001-01-02"},
+			minimumDesc:         []string{"0001-01-02", "0001-01-01"},
+			aboveDomainBy:       1,
+			aboveDomainUnit:     types.Year,
+			belowDomainBy:       2,
+			belowDomainUnit:     types.Year,
+			invalidIntervalUnit: types.Year,
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewDateVector(0, types.T_date.ToType(), mp, false, nil, values)
+			},
+		},
+		{
+			name:                "datetime",
+			ascending:           []string{"9999-12-30 23:59:59.999999", "9999-12-31 23:59:59.999999"},
+			descending:          []string{"9999-12-31 23:59:59.999999", "9999-12-30 23:59:59.999999"},
+			minimumAsc:          []string{"0001-01-01 00:00:00.000000", "0001-01-02 00:00:00.000000"},
+			minimumDesc:         []string{"0001-01-02 00:00:00.000000", "0001-01-01 00:00:00.000000"},
+			aboveDomainBy:       1,
+			aboveDomainUnit:     types.Year,
+			belowDomainBy:       1,
+			belowDomainUnit:     types.Year,
+			invalidIntervalUnit: types.Year,
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewDatetimeVector(0, types.T_datetime.ToType(), mp, false, nil, values)
+			},
+		},
+		{
+			name:                "time",
+			ascending:           []string{"2562047787:59:59.999998", "2562047787:59:59.999999"},
+			descending:          []string{"2562047787:59:59.999999", "2562047787:59:59.999998"},
+			minimumAsc:          []string{"-2562047787:59:59.999999", "-2562047787:59:59.999998"},
+			minimumDesc:         []string{"-2562047787:59:59.999998", "-2562047787:59:59.999999"},
+			aboveDomainBy:       1,
+			aboveDomainUnit:     types.MicroSecond,
+			belowDomainBy:       1,
+			belowDomainUnit:     types.MicroSecond,
+			invalidIntervalUnit: types.Hour,
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewTimeVector(0, types.T_time.ToType(), mp, false, nil, values)
+			},
+		},
+		{
+			name:                "timestamp",
+			ascending:           []string{"9999-12-30 23:59:59.999999", "9999-12-31 23:59:59.999999"},
+			descending:          []string{"9999-12-31 23:59:59.999999", "9999-12-30 23:59:59.999999"},
+			minimumAsc:          []string{"0001-01-01 00:00:00.000000", "0001-01-02 00:00:00.000000"},
+			minimumDesc:         []string{"0001-01-02 00:00:00.000000", "0001-01-01 00:00:00.000000"},
+			aboveDomainBy:       1,
+			aboveDomainUnit:     types.Day,
+			belowDomainBy:       1,
+			belowDomainUnit:     types.Day,
+			invalidIntervalUnit: types.Year,
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewTimestampVector(0, types.T_timestamp.ToType(), mp, false, nil, values)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(tt.aboveDomainBy, tt.aboveDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.descending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(tt.aboveDomainBy, tt.aboveDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+
+		t.Run(tt.name+"_below_domain_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumAsc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(tt.belowDomainBy, tt.belowDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+
+		t.Run(tt.name+"_below_domain_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumDesc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(tt.belowDomainBy, tt.belowDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"_negative_add_below_domain_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumAsc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.belowDomainBy, tt.belowDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+
+		t.Run(tt.name+"_negative_sub_above_domain_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.aboveDomainBy, tt.aboveDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_negative_add_below_domain_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumDesc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.belowDomainBy, tt.belowDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_negative_sub_above_domain_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.descending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.aboveDomainBy, tt.aboveDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"_invalid_interval_magnitude", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			_, err := searchRight(0, vec.Length(), 1, vec, intervalExpr(math.MaxInt64, tt.invalidIntervalUnit), false, false)
+			require.Error(t, err, "an invalid interval magnitude must not be treated as a domain boundary")
+			_, err = searchRight(0, vec.Length(), 1, vec, intervalExpr(math.MinInt64, tt.invalidIntervalUnit), false, false)
+			require.Error(t, err, "an invalid negative interval magnitude must not be treated as a domain boundary")
+		})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"_max_microsecond_above_domain", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(math.MaxInt64, types.MicroSecond)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_max_microsecond_below_domain", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumAsc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(math.MaxInt64, types.MicroSecond)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+	}
+}

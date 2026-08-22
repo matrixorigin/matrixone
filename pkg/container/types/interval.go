@@ -349,7 +349,7 @@ func JudgeIntervalNumOverflow(num int64, it IntervalType) error {
 		return nil
 	} else if num > int64(IntervalNumMAX) {
 		return moerr.NewInvalidArgNoCtx("interval", num)
-	} else if -num > int64(IntervalNumMAX) {
+	} else if num < -int64(IntervalNumMAX) {
 		return moerr.NewInvalidArgNoCtx("interval", num)
 	}
 	return nil
