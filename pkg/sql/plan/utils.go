@@ -3145,7 +3145,7 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
 	}
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	copied := DeepCopyPlan(preparePlan)
 	switch pp := copied.Plan.(type) {
