@@ -196,11 +196,16 @@ func NewExpressionExecutorWithAllocation(
 			vec.Free(proc.Mp())
 			return nil, err
 		}
-		// LiteralVec uses the stable Vector wire format, which intentionally does
-		// not carry runtime provenance. The container itself proves every decoded
-		// row was materialized from a literal, so restore that container-level
-		// source before exposing the executor result.
-		if err := vec.SetStringSource(types.StringSourceLiteral); err != nil {
+		// The stable Vector payload does not carry runtime provenance. LiteralVec
+		// explicitly records its uniform owner because the same container is used
+		// for SQL constants and runtime-filter payloads.
+		rawSource := t.Vec.GetStringSource()
+		if rawSource > uint32(types.StringSourceCOMStmt) {
+			vec.Free(proc.Mp())
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid literal vector string source %d", rawSource)
+		}
+		source := types.StringSource(rawSource)
+		if err := vec.SetStringSource(source); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
 		}

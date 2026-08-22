@@ -2241,6 +2241,18 @@ func TestPrepareParamKindUnionAllocationFailureDoesNotPublishRows(t *testing.T) 
 				return GetUnionAllFunction(types.T_varchar.ToType(), mp)(destination, source)
 			},
 		},
+		{
+			name: "union-int64-selection",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.Union(source, []int64{0}, mp)
+			},
+		},
+		{
+			name: "union-int32-selection",
+			run: func(destination, source *Vector, mp *mpool.MPool) error {
+				return destination.UnionInt32(source, []int32{0}, mp)
+			},
+		},
 	}
 
 	for _, test := range tests {

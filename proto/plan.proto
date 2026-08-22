@@ -271,6 +271,9 @@ message LiteralVec {
   // True when at least one element is a tuple-encoded serial value. This is
   // diagnostic provenance only; execution semantics remain in data.
   bool is_serialized = 3;
+  // Uniform runtime value owner. Values follow container/types.StringSource;
+  // zero is Expression so legacy and runtime-produced payloads stay ordinary.
+  uint32 string_source = 4;
 }
 
 enum CompressType {

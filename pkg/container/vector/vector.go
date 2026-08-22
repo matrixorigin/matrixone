@@ -7730,6 +7730,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	); err != nil {
 		return err
 	}
+	if err := v.preflightStringSourceAppend(
+		v.length+len(sels),
+		summarizeStringSourceSelection(w, sels),
+		mp,
+	); err != nil {
+		return err
+	}
 
 	if err := extendWithBitmaps(
 		v,

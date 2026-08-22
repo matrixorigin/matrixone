@@ -1497,6 +1497,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 					Len:          int32(vec.Length()),
 					Data:         data,
 					IsSerialized: isSerialized,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}, nil
@@ -1561,8 +1562,9 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(vec.Length()),
-					Data: data,
+					Len:          int32(vec.Length()),
+					Data:         data,
+					StringSource: uint32(vec.GetStringSource()),
 				},
 			},
 		}, nil

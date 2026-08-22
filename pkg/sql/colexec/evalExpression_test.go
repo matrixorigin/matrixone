@@ -245,8 +245,9 @@ func TestLiteralVecExpressionExecutorRestoresLiteralSource(t *testing.T) {
 	executor, err := NewExpressionExecutor(proc, &plan.Expr{
 		Typ: exprs[0].Typ,
 		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-			Len:  int32(len(exprs)),
-			Data: data,
+			Len:          int32(len(exprs)),
+			Data:         data,
+			StringSource: uint32(types.StringSourceLiteral),
 		}},
 	})
 	require.NoError(t, err)
@@ -256,6 +257,27 @@ func TestLiteralVecExpressionExecutorRestoresLiteralSource(t *testing.T) {
 	require.NoError(t, err)
 	for row := range exprs {
 		require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(row))
+	}
+}
+
+func TestLiteralVecExpressionExecutorRejectsInvalidStringSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, proc.Mp()))
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	vec.Free(proc.Mp())
+
+	for _, source := range []uint32{uint32(types.StringSourceCOMStmt) + 1, 256} {
+		_, err = NewExpressionExecutor(proc, &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+				Len:          1,
+				Data:         data,
+				StringSource: source,
+			}},
+		})
+		require.Error(t, err)
 	}
 }
 
