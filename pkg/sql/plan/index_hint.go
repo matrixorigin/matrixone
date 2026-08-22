@@ -116,25 +116,25 @@ func validateIndexHintNames(ctx context.Context, tableDef *plan.TableDef, names 
 	}
 	existing := make(map[string]string, len(tableDef.Indexes))
 	if tableDef.Pkey != nil && !strings.EqualFold(tableDef.Pkey.PkeyColName, catalog.FakePrimaryKeyColName) {
-		existing[strings.ToLower(PrimaryKeyName)] = strings.ToLower(PrimaryKeyName)
+		existing[indexNameKey(PrimaryKeyName)] = indexNameKey(PrimaryKeyName)
 	}
 	for _, idx := range tableDef.Indexes {
 		if idx == nil || !idx.TableExist {
 			continue
 		}
-		lowerName := strings.ToLower(idx.IndexName)
-		existing[lowerName] = lowerName
+		nameKey := indexNameKey(idx.IndexName)
+		existing[nameKey] = nameKey
 	}
 	normalized := make([]string, 0, len(names))
 	for _, name := range names {
-		lowerName := strings.ToLower(name)
-		if exact, ok := existing[lowerName]; ok {
+		nameKey := indexNameKey(name)
+		if exact, ok := existing[nameKey]; ok {
 			normalized = append(normalized, exact)
 			continue
 		}
 		var match string
 		for existingName := range existing {
-			if strings.HasPrefix(existingName, lowerName) {
+			if strings.HasPrefix(existingName, nameKey) {
 				if match != "" {
 					return nil, moerr.NewSyntaxErrorf(ctx, "index hint %q is ambiguous", name)
 				}
@@ -241,7 +241,7 @@ func filterIndexesByHintScope(indexes []*plan.IndexDef, scope indexHintScopeSet)
 }
 
 func indexAllowedByHintScope(indexName string, scope indexHintScopeSet) bool {
-	name := strings.ToLower(indexName)
+	name := indexNameKey(indexName)
 	if _, ignored := scope.ignore[name]; ignored {
 		return false
 	}

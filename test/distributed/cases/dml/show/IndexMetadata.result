@@ -16,8 +16,8 @@ id    name    age
 4    Dora    29
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    0    Idx    1    name    A    0    NULL    NULL    YES                    YES    name
 t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
-t1    0    idx    1    name    A    0    NULL    NULL    YES                    YES    name
 drop table t1;
 drop table if exists t2;
 create table t2 (
@@ -39,8 +39,8 @@ col1    col2    col3    col4
 4    Dora    29.0    zbcvdf
 show index from t2;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t2    0    Idx    1    col2    A    0    NULL    NULL    YES            create varchar index        YES    col2
 t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    col1
-t2    0    idx    1    col2    A    0    NULL    NULL    YES            create varchar index        YES    col2
 drop table t2;
 drop table if exists t3;
 create table t3(a int, b int, unique key(a) comment 'a');
@@ -166,7 +166,7 @@ create table t11(col1 int not null, col2 varchar(100), col3 bigint);
 create index ABc on t11(COL1);
 show index from t11;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t11    1    abc    1    col1    A    0    NULL    NULL                        YES    col1
+t11    1    ABc    1    col1    A    0    NULL    NULL                        YES    col1
 alter table t11 drop index ABc;
 show index from t11;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression

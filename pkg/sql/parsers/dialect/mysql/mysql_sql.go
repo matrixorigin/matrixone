@@ -24894,7 +24894,7 @@ yydefault:
 				io = tree.NewIndexOption()
 				io.IType = tree.INDEX_TYPE_INVALID
 			}
-			var Name = tree.Identifier(yyDollar[4].cstrUnion().Compare())
+			var Name = tree.Identifier(yyDollar[4].cstrUnion().Origin())
 			var Table = yyDollar[7].tableNameUnion()
 			var ifNotExists = false
 			var IndexCat = yyDollar[2].indexCategoryUnion()
@@ -28290,7 +28290,7 @@ yydefault:
 		{
 			var IfNotExists = yyDollar[3].ifNotExistsUnion()
 			var KeyParts = yyDollar[6].keyPartsUnion()
-			var Name = yyDollar[4].str
+			var Name = tree.NewCStr(yyDollar[4].str, 1).Compare()
 			var Refer = yyDollar[8].attributeReferenceUnion()
 			var Empty = true
 			yyLOCAL = tree.NewForeignKey(
@@ -28361,7 +28361,7 @@ yydefault:
 //line mysql_sql.y:11694
 		{
 			yyLOCAL = make([]string, 2)
-			yyLOCAL[0] = yyDollar[1].cstrUnion().Compare()
+			yyLOCAL[0] = yyDollar[1].cstrUnion().Origin()
 			yyLOCAL[1] = yyDollar[3].str
 		}
 		yyVAL.union = yyLOCAL
@@ -28375,7 +28375,7 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:11723
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().Compare()
+			yyVAL.str = yyDollar[1].cstrUnion().Origin()
 		}
 	case 1711:
 		yyDollar = yyS[yypt-3 : yypt+1]

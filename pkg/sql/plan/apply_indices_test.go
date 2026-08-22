@@ -538,6 +538,37 @@ func TestRecordIndexHintsValidatesNames(t *testing.T) {
 	require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
 }
 
+func TestIndexHintNamesUseCanonicalIdentifierComparison(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		Name: "t",
+		Indexes: []*planpb.IndexDef{
+			{IndexName: "Σ", TableExist: true},
+			{IndexName: "ς", TableExist: true},
+		},
+	}
+
+	names, err := validateIndexHintNames(context.Background(), tableDef, []string{"ς", "σ"})
+	require.NoError(t, err)
+	require.Equal(t, []string{indexNameKey("ς"), indexNameKey("Σ")}, names)
+	require.NotEqual(t, names[0], names[1])
+}
+
+func TestIndexAccessUsesCanonicalIdentifierComparison(t *testing.T) {
+	builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
+		{
+			NodeId:   0,
+			NodeType: planpb.Node_TABLE_SCAN,
+			IndexScanInfo: planpb.IndexScanInfo{
+				IsIndexScan: true,
+				IndexName:   "Σ",
+			},
+		},
+	}}}
+
+	require.True(t, builder.indexAccessUsesIndex(0, "σ"))
+	require.False(t, builder.indexAccessUsesIndex(0, "ς"))
+}
+
 func TestRecordIndexHintsMySQLCompatibility(t *testing.T) {
 	tableDef := &planpb.TableDef{
 		Name: "t",
