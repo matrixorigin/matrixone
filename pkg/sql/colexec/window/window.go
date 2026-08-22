@@ -742,7 +742,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 			ctr.runningRight = partitionStart
 		}
 
-		left, right, err := ctr.buildInterval(j, partitionStart, currentPartitionEnd, frame)
+		left, right, err := ctr.buildInterval(proc, j, partitionStart, currentPartitionEnd, frame)
 		if err != nil {
 			return nil, err
 		}
