@@ -2432,12 +2432,17 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	}()
 
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_MONGODB_TB) {
-		if err := c.hydrateMongoScan(node); err != nil {
+		// Hydration resolves execution-time catalog state and prunes the source
+		// mapping to the physical projection.  Keep that mutation isolated even
+		// when this helper is called outside compilePlanScope, because a prepared
+		// execution may otherwise hand us its cached logical plan directly.
+		executionNode := plan2.DeepCopyNode(node)
+		if err := c.hydrateMongoScan(executionNode); err != nil {
 			return nil, err
 		}
 		scope := c.constructMongoScanScope()
 		currentFirstFlag := c.anal.isFirst
-		op := mongoscan.NewArgument().WithScan(node.ExternScan.MongodbScan)
+		op := mongoscan.NewArgument().WithScan(executionNode.ExternScan.MongodbScan)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		scope.setRootOperator(op)
 		c.anal.isFirst = false

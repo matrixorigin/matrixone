@@ -154,7 +154,10 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	if err := verifyPreparedMongoDBScan(ctx, db); err != nil {
 		return err
 	}
-	r.Cases = append(r.Cases, "prepared-scan-binding-reuse-recovery-metadata")
+	if err := verifyTextPreparedMongoDBScan(ctx, db); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "prepared-scan-binary-and-text-reuse-recovery-metadata")
 
 	if err := verifyPrimaryKeyInsertSelect(ctx, db); err != nil {
 		return err
@@ -562,6 +565,44 @@ func verifyPreparedMongoDBScan(ctx context.Context, db *sql.DB) error {
 	}
 	if err := check(29, "1", false); err != nil {
 		return fmt.Errorf("prepared MongoDB scan did not recover after an execute error: %w", err)
+	}
+	return nil
+}
+
+func verifyTextPreparedMongoDBScan(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx,
+		"prepare mongo_pruned_no_params from 'select count(measurement) from mongodb_ci.events'"); err != nil {
+		return fmt.Errorf("prepare parameterless MongoDB scan: %w", err)
+	}
+	for range 2 {
+		if err := expectScalar(ctx, db, "execute mongo_pruned_no_params", "4"); err != nil {
+			return fmt.Errorf("execute parameterless MongoDB scan: %w", err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, "deallocate prepare mongo_pruned_no_params"); err != nil {
+		return fmt.Errorf("deallocate parameterless MongoDB scan: %w", err)
+	}
+
+	if _, err := db.ExecContext(ctx,
+		"prepare mongo_pruned_text from 'select count(measurement) from mongodb_ci.events where measurement > ?'"); err != nil {
+		return fmt.Errorf("prepare text-protocol MongoDB scan: %w", err)
+	}
+	for _, check := range []struct {
+		value    string
+		expected string
+	}{
+		{value: "13", expected: "3"},
+		{value: "19", expected: "2"},
+	} {
+		if _, err := db.ExecContext(ctx, "set @mongo_measurement = "+check.value); err != nil {
+			return fmt.Errorf("bind text-protocol MongoDB scan: %w", err)
+		}
+		if err := expectScalar(ctx, db, "execute mongo_pruned_text using @mongo_measurement", check.expected); err != nil {
+			return fmt.Errorf("execute text-protocol MongoDB scan: %w", err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, "deallocate prepare mongo_pruned_text"); err != nil {
+		return fmt.Errorf("deallocate text-protocol MongoDB scan: %w", err)
 	}
 	return nil
 }
