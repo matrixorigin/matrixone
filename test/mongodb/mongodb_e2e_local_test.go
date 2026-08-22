@@ -384,6 +384,16 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		sqlmock.NewRows([]string{"count(*)"}).AddRow("2"))
 	prepared.ExpectQuery().WithArgs(int64(29)).WillReturnRows(
 		sqlmock.NewRows([]string{"count(*)"}).AddRow("1"))
+	mock.ExpectExec("prepare mongo_pruned_no_params").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "4")
+	expectMongoDBE2EScalar(mock, "4")
+	mock.ExpectExec("deallocate prepare mongo_pruned_no_params").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("set @mongo_measurement = 13").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "3")
+	mock.ExpectExec("set @mongo_measurement = 19").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "2")
+	mock.ExpectExec("deallocate prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMongoDBE2EScalar(mock, "1")
@@ -441,7 +451,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"json-relaxed-extended-conversion",
 		"fixed-binary-padding",
 		"scan-projection-pushdown-null-conversion",
-		"prepared-scan-binding-reuse-recovery-metadata",
+		"prepared-scan-binary-and-text-reuse-recovery-metadata",
 		"insert-select-primary-key-targets",
 		"date-format-order-by",
 		"low-precision-temporal-residual",
