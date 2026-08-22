@@ -181,6 +181,7 @@ show tables;
 ➤ Tables_in_information_schema[12,5000,0]  𝄀
 character_sets  𝄀
 check_constraints  𝄀
+collation_character_set_applicability  𝄀
 collations  𝄀
 column_privileges  𝄀
 columns  𝄀

@@ -781,6 +781,7 @@ SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo
 mo_mo  ¦  null  ¦  null  ¦  -  𝄀
 information_schema  ¦  character_sets  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  check_constraints  ¦  v  ¦  accountadmin  𝄀
+information_schema  ¦  collation_character_set_applicability  ¦  v  ¦  accountadmin  𝄀
 information_schema  ¦  collations  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  column_privileges  ¦  r  ¦  accountadmin  𝄀
 information_schema  ¦  columns  ¦  v  ¦  accountadmin  𝄀
@@ -861,6 +862,7 @@ system_metrics  ¦  sql_transaction_total  ¦  v  ¦  accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='information_schema';
 ➤ name[12,5000,0]  ¦  owner[12,300,0]  𝄀
 check_constraints  ¦  accountadmin  𝄀
+collation_character_set_applicability  ¦  accountadmin  𝄀
 columns  ¦  accountadmin  𝄀
 key_column_usage  ¦  accountadmin  𝄀
 partitions  ¦  accountadmin  𝄀
