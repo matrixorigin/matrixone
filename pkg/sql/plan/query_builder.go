@@ -30,11 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -3100,6 +3102,10 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			for _, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
 			}
+
+			for _, col := range updateCtx.AffectedRowsCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+			}
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -3129,6 +3135,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			for i, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
 				err := builder.remapSingleColRef(&updateCtx.PartitionCols[i], childRemapping.globalToLocal, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			for i, col := range updateCtx.AffectedRowsCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				err := builder.remapSingleColRef(&updateCtx.AffectedRowsCols[i], childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
 					return nil, err
 				}
@@ -3172,6 +3186,71 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 
 	case plan.Node_PRE_INSERT:
+		if node.PreInsertCtx.IsNewUpdate && len(node.BindingTags) == 1 && len(node.ProjectList) > 0 {
+			outputTag := node.BindingTags[0]
+			selectorPositions := [3]int32{-1, -1, -1}
+			if node.PreInsertCtx.HasTargetSelector {
+				selectorPositions = [3]int32{
+					node.PreInsertCtx.TargetRowNumberCol,
+					node.PreInsertCtx.TargetActiveCol,
+					node.PreInsertCtx.TargetRowIdCol,
+				}
+				for _, pos := range selectorPositions {
+					if pos < 0 || int(pos) >= len(node.ProjectList) {
+						return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector")
+					}
+				}
+			}
+
+			// UPDATE PRE_INSERT uses ColOffset to mutate the target table's columns
+			// in place. Preserve the complete positional projection across a chain
+			// of AUTO_INCREMENT targets so pruning cannot move another target (or
+			// row_id) into that fixed slice.
+			neededOutputs := make([]int32, 0, len(node.ProjectList))
+			for pos, expr := range node.ProjectList {
+				neededOutputs = append(neededOutputs, int32(pos))
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+
+			childRemapping, err := builder.remapAllColRefs(
+				node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+			if err != nil {
+				return nil, err
+			}
+			childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+			newProjectList := make([]*plan.Expr, 0, len(neededOutputs))
+			selectorOutputPos := [3]int32{-1, -1, -1}
+			remapInfo.tip = "PreInsertUpdateProjection"
+			for outputPos, needed := range neededOutputs {
+				expr := node.ProjectList[needed]
+				increaseRefCnt(expr, -1, colRefCnt)
+				remapInfo.srcExprIdx = int(needed)
+				if err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo); err != nil {
+					return nil, err
+				}
+				refreshExprNullabilityFromInputs(expr, childProjList)
+				remapping.addColRef([2]int32{outputTag, needed})
+				newProjectList = append(newProjectList, expr)
+				for selectorIdx, selectorPos := range selectorPositions {
+					if needed == selectorPos {
+						selectorOutputPos[selectorIdx] = int32(outputPos)
+					}
+				}
+			}
+			node.ProjectList = newProjectList
+			if node.PreInsertCtx.HasTargetSelector {
+				for _, pos := range selectorOutputPos {
+					if pos < 0 {
+						return nil, moerr.NewInternalError(builder.GetContext(), "PRE_INSERT target selector was pruned")
+					}
+				}
+				node.PreInsertCtx.TargetRowNumberCol = selectorOutputPos[0]
+				node.PreInsertCtx.TargetActiveCol = selectorOutputPos[1]
+				node.PreInsertCtx.TargetRowIdCol = selectorOutputPos[2]
+			}
+			break
+		}
+
 		var selectorRefs [3][2]int32
 		if node.PreInsertCtx.HasTargetSelector {
 			selectorInput := builder.qry.Nodes[node.Children[0]]
@@ -3500,10 +3579,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 	builder.parseOptimizeHints()
 	for i, rootID := range builder.qry.Steps {
+		if err = builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
+		if err = builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		builder.annotatePartitionTopN(rootID)
 		builder.pushdownLimitToTableScan(rootID)
 		builder.determineGroupByHashKeys(rootID)
@@ -3535,6 +3620,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.determineJoinOrder(rootID)
+		if err = builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		colMap := make(map[[2]int32]int)
 		colGroup := make([]int, 0)
 		builder.removeRedundantJoinCond(rootID, colMap, colGroup)
@@ -10476,6 +10564,18 @@ func (builder *QueryBuilder) bindView(
 	defaultDatabase := viewData.DefaultDatabase
 	if obj.PubInfo != nil {
 		defaultDatabase = obj.SubscriptionName
+		subscription := builder.compCtx.GetQueryingSubscription()
+		if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
+			subscription = &SubscriptionMeta{
+				AccountId: obj.PubInfo.TenantId,
+				DbName:    viewData.DefaultDatabase,
+				SubName:   obj.SubscriptionName,
+				Tables:    pubsub.TableAll,
+			}
+		}
+		previousSubscription := builder.compCtx.GetQueryingSubscription()
+		builder.compCtx.SetQueryingSubscription(subscription)
+		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
 	viewCtx.defaultDatabase = defaultDatabase
 	viewKey := objectkey.Encode(schema, table)
@@ -11068,6 +11168,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			externType := plan.ExternType_EXTERNAL_TB
 			var icebergEnv sqliceberg.CreateSQLEnvelope
 			var mongoEnv sqlmongodb.CreateSQLEnvelope
+			var datastreamCfg sqldatastream.Config
 			if env, found, err := sqliceberg.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
 				return 0, err
 			} else if found {
@@ -11086,6 +11187,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					externType = plan.ExternType_MONGODB_TB
 					if builder.isPrepareStatement {
 						return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+					}
+				} else {
+					cfg, isDataStream, err := IsDataStreamTableDef(builder.GetContext(), tableDef)
+					if err != nil {
+						return 0, err
+					}
+					if isDataStream {
+						datastreamCfg = cfg
+						externType = plan.ExternType_DATASTREAM_TB
 					}
 				}
 			}
@@ -11114,6 +11224,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Columns:        sqlmongodb.ColumnsToPlan(mongoEnv.Columns),
 					ProjectedPaths: projectedMongoPaths(mongoEnv.Columns),
 					MaxParallelism: 1,
+				}
+			} else if externType == plan.ExternType_DATASTREAM_TB {
+				externScan.DatastreamScan = &plan.DataStreamScan{
+					Server:  datastreamCfg.Server,
+					Port:    datastreamCfg.Port,
+					Table:   datastreamCfg.Table,
+					Recheck: datastreamCfg.Recheck,
+					ApiKey:  datastreamCfg.APIKey,
 				}
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
@@ -11959,6 +12077,19 @@ func (builder *QueryBuilder) GetContext() context.Context {
 		return context.TODO()
 	}
 	return builder.compCtx.GetContext()
+}
+
+func (builder *QueryBuilder) checkPlanningCanceled() error {
+	ctx := builder.GetContext()
+	select {
+	case <-ctx.Done():
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+		return ctx.Err()
+	default:
+		return nil
+	}
 }
 
 // parseRankOption parses rank options from a map of option key-value pairs.
