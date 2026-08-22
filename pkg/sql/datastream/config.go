@@ -38,6 +38,7 @@ const (
 	optionPort    = "port"
 	optionTable   = "table"
 	optionRecheck = "recheck"
+	optionAPIKey  = "apikey"
 )
 
 // Config is the validated content of the WITH (...) option list.
@@ -49,6 +50,9 @@ type Config struct {
 	// and MO re-applies it locally; false trusts the server for the pushed
 	// conjuncts.
 	Recheck bool
+	// APIKey is the optional shared secret presented to the server; "" means
+	// the table configured no key.
+	APIKey string
 }
 
 // Address returns the gRPC dial target.
@@ -87,8 +91,10 @@ func ParseTableOptions(ctx context.Context, param *tree.DataStreamTableParam) (C
 				return Config{}, moerr.NewInvalidInputf(ctx, "datastream option 'recheck' must be true or false, got '%s'", value)
 			}
 			cfg.Recheck = recheck
+		case optionAPIKey:
+			cfg.APIKey = value
 		default:
-			return Config{}, moerr.NewInvalidInputf(ctx, "unknown datastream option '%s' (supported: server, port, table, recheck)", key)
+			return Config{}, moerr.NewInvalidInputf(ctx, "unknown datastream option '%s' (supported: server, port, table, recheck, apikey)", key)
 		}
 	}
 	if cfg.Server == "" {
@@ -106,14 +112,18 @@ func ParseTableOptions(ctx context.Context, param *tree.DataStreamTableParam) (C
 // BuildCreateSQLEnvelope renders the config into the planner-owned
 // rel_createsql comment envelope.
 func BuildCreateSQLEnvelope(cfg Config) string {
+	// The API key lives in the catalog-internal rel_createsql (never surfaced
+	// by SHOW CREATE, see build_show_util.go). It is url-escaped like every
+	// other field so ';' and '*/' in the secret cannot break the envelope.
 	return fmt.Sprintf(
-		"/* %s version=1; kind=%s; server=%s; port=%d; table=%s; recheck=%t */",
+		"/* %s version=1; kind=%s; server=%s; port=%d; table=%s; recheck=%t; apikey=%s */",
 		CreateSQLEnvelopePrefix,
 		CreateSQLKindDataStream,
 		url.QueryEscape(cfg.Server),
 		cfg.Port,
 		url.QueryEscape(cfg.Table),
 		cfg.Recheck,
+		url.QueryEscape(cfg.APIKey),
 	)
 }
 
@@ -169,6 +179,9 @@ func ParseCreateSQLEnvelope(ctx context.Context, createSQL string) (Config, bool
 		Port:    int32(port),
 		Table:   fields["table"],
 		Recheck: recheck,
+		// apikey is absent from envelopes written before auth existed; "" then
+		// means "no key", which matches a server that requires none
+		APIKey: fields["apikey"],
 	}
 	if cfg.Server == "" || cfg.Table == "" {
 		return Config{}, true, moerr.NewInvalidInput(ctx, "datastream rel_createsql envelope missing server or table")

@@ -81,6 +81,7 @@ func (r *DataStreamReader) Open(param *ExternalParam, proc *process.Process) (fi
 	stream, err := datastream.NewDataStreamClient(conn).Read(ctx, &datastream.ReadRequest{
 		Table:  ds.Table,
 		Filter: ds.PushedFilter,
+		ApiKey: ds.ApiKey,
 	})
 	if err != nil {
 		cancel()
@@ -177,6 +178,8 @@ func datastreamServerError(ctx context.Context, target string, respErr *datastre
 	switch respErr.GetCode() {
 	case datastream.ErrorCode_ERROR_TABLE_NOT_FOUND:
 		return moerr.NewInvalidInputf(ctx, "datastream: table not found on %s: %s", target, respErr.GetMessage())
+	case datastream.ErrorCode_ERROR_UNAUTHENTICATED:
+		return moerr.NewInvalidInputf(ctx, "datastream: authentication failed for %s: %s (check the table's 'apikey' option)", target, respErr.GetMessage())
 	default:
 		return moerr.NewInternalErrorf(ctx, "datastream: server %s reported %s: %s",
 			target, respErr.GetCode(), respErr.GetMessage())

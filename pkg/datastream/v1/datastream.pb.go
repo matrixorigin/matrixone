@@ -49,6 +49,8 @@ const (
 	ErrorCode_ERROR_TABLE_NOT_FOUND ErrorCode = 1
 	// The datasource failed (JDBC error, file unreadable/unparsable, ...).
 	ErrorCode_ERROR_DATASOURCE_ERROR ErrorCode = 2
+	// The request presented a missing or wrong API key.
+	ErrorCode_ERROR_UNAUTHENTICATED ErrorCode = 3
 )
 
 // Enum value maps for ErrorCode.
@@ -57,11 +59,13 @@ var (
 		0: "ERROR_UNKNOWN",
 		1: "ERROR_TABLE_NOT_FOUND",
 		2: "ERROR_DATASOURCE_ERROR",
+		3: "ERROR_UNAUTHENTICATED",
 	}
 	ErrorCode_value = map[string]int32{
 		"ERROR_UNKNOWN":          0,
 		"ERROR_TABLE_NOT_FOUND":  1,
 		"ERROR_DATASOURCE_ERROR": 2,
+		"ERROR_UNAUTHENTICATED":  3,
 	}
 )
 
@@ -99,7 +103,11 @@ type ReadRequest struct {
 	// Optional pushed-down predicate rendered as MySQL-dialect SQL text
 	// ("" if none).  This is a HINT: the server should apply it as early as
 	// possible but may ignore it entirely and return unfiltered rows.
-	Filter        string `protobuf:"bytes,2,opt,name=filter,proto3" json:"filter,omitempty"`
+	Filter string `protobuf:"bytes,2,opt,name=filter,proto3" json:"filter,omitempty"`
+	// Shared-secret API key. When the server is configured with an API key,
+	// every request must present a matching one or the server replies with an
+	// ERROR_UNAUTHENTICATED frame. Empty when the server requires no key.
+	ApiKey        string `protobuf:"bytes,3,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -144,6 +152,13 @@ func (x *ReadRequest) GetTable() string {
 func (x *ReadRequest) GetFilter() string {
 	if x != nil {
 		return x.Filter
+	}
+	return ""
+}
+
+func (x *ReadRequest) GetApiKey() string {
+	if x != nil {
+		return x.ApiKey
 	}
 	return ""
 }
@@ -338,10 +353,11 @@ var File_datastream_proto protoreflect.FileDescriptor
 
 const file_datastream_proto_rawDesc = "" +
 	"\n" +
-	"\x10datastream.proto\x12\rdatastream.v1\";\n" +
+	"\x10datastream.proto\x12\rdatastream.v1\"T\n" +
 	"\vReadRequest\x12\x14\n" +
 	"\x05table\x18\x01 \x01(\tR\x05table\x12\x16\n" +
-	"\x06filter\x18\x02 \x01(\tR\x06filter\"u\n" +
+	"\x06filter\x18\x02 \x01(\tR\x06filter\x12\x17\n" +
+	"\aapi_key\x18\x03 \x01(\tR\x06apiKey\"u\n" +
 	"\fReadResponse\x12,\n" +
 	"\x05chunk\x18\x01 \x01(\v2\x14.datastream.v1.ChunkH\x00R\x05chunk\x12,\n" +
 	"\x05error\x18\x02 \x01(\v2\x14.datastream.v1.ErrorH\x00R\x05errorB\t\n" +
@@ -350,11 +366,12 @@ const file_datastream_proto_rawDesc = "" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"O\n" +
 	"\x05Error\x12,\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x18.datastream.v1.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage*U\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage*p\n" +
 	"\tErrorCode\x12\x11\n" +
 	"\rERROR_UNKNOWN\x10\x00\x12\x19\n" +
 	"\x15ERROR_TABLE_NOT_FOUND\x10\x01\x12\x1a\n" +
-	"\x16ERROR_DATASOURCE_ERROR\x10\x022Q\n" +
+	"\x16ERROR_DATASOURCE_ERROR\x10\x02\x12\x19\n" +
+	"\x15ERROR_UNAUTHENTICATED\x10\x032Q\n" +
 	"\n" +
 	"DataStream\x12C\n" +
 	"\x04Read\x12\x1a.datastream.v1.ReadRequest\x1a\x1b.datastream.v1.ReadResponse\"\x000\x01Bo\n" +

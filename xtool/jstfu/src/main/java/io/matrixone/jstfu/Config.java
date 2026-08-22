@@ -59,6 +59,14 @@ public class Config {
     @JsonProperty("chunksize")
     public int chunkSize = DEFAULT_CHUNK_SIZE;
 
+    // Optional shared-secret API key. When non-empty, every Read request must
+    // present a matching api_key or the server replies ERROR_UNAUTHENTICATED.
+    // Empty (the default) disables the check. This is the enforcement boundary
+    // for the unauthenticated-by-default surface; combine with the loopback
+    // host bind when the server is exposed beyond the local MO.
+    @JsonProperty("apikey")
+    public String apiKey = "";
+
     @JsonProperty("datasource")
     public List<DataSourceConfig> datasource = new ArrayList<>();
 

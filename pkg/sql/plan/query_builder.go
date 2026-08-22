@@ -11101,6 +11101,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Port:    datastreamCfg.Port,
 					Table:   datastreamCfg.Table,
 					Recheck: datastreamCfg.Recheck,
+					ApiKey:  datastreamCfg.APIKey,
 				}
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")

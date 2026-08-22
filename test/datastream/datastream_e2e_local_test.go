@@ -231,6 +231,60 @@ func TestJstfuMultiChunkStreaming(t *testing.T) {
 	require.Equal(t, sb.String(), content, "reassembled stream differs from the file")
 }
 
+// TestDatastreamApiKeyAuth proves the full API-key handshake through MO: a
+// key-protected server rejects a table with a wrong/absent key and accepts
+// the matching one.
+func TestDatastreamApiKeyAuth(t *testing.T) {
+	db, _ := moConnect(t)
+	defer db.Close()
+
+	fixture, err := filepath.Abs(fixtureCSV)
+	require.NoError(t, err)
+	port := startJstfuWithConfig(t, func(port int) string {
+		return fmt.Sprintf(`{
+    "port": %d,
+    "apikey": "s3cr3t-key",
+    "datasource": [ { "name": "file_t", "type": "file", "path": "%s" } ]
+}`, port, fixture)
+	})
+
+	mustExec(t, db,
+		"drop database if exists datastream_auth",
+		"create database datastream_auth",
+	)
+	defer db.Exec("drop database if exists datastream_auth")
+
+	create := func(name, apikeyOpt string) {
+		mustExec(t, db, fmt.Sprintf(
+			`create external table datastream_auth.%s (col1 int, col2 datetime, col3 varchar(50), col4 text) `+
+				`engine = datastream with ('server'='127.0.0.1','port'='%d','table'='file_t'%s)`,
+			name, port, apikeyOpt))
+	}
+
+	// correct key: scan succeeds
+	create("ok", ", 'apikey'='s3cr3t-key'")
+	var n int
+	require.NoError(t, db.QueryRow("select count(*) from datastream_auth.ok").Scan(&n))
+	require.Equal(t, 5, n)
+
+	// wrong key and no key: both rejected with an auth error
+	create("wrong", ", 'apikey'='nope'")
+	err = db.QueryRow("select count(*) from datastream_auth.wrong").Scan(&n)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "authentication failed")
+
+	create("missing", "")
+	err = db.QueryRow("select count(*) from datastream_auth.missing").Scan(&n)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "authentication failed")
+
+	// SHOW CREATE must not leak the key
+	var tbl, ddl string
+	require.NoError(t, db.QueryRow("show create table datastream_auth.ok").Scan(&tbl, &ddl))
+	require.NotContains(t, ddl, "s3cr3t-key")
+	require.NotContains(t, strings.ToLower(ddl), "apikey")
+}
+
 func TestJstfuErrors(t *testing.T) {
 	port := startJstfu(t, "")
 

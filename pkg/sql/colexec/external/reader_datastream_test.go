@@ -174,6 +174,42 @@ func TestDataStreamReaderHappyPath(t *testing.T) {
 	require.Equal(t, "(`a` > 0)", fake.lastRequest.GetFilter())
 }
 
+func TestDataStreamReaderSendsApiKey(t *testing.T) {
+	fake := &fakeDataStreamServer{script: func(req *datastream.ReadRequest) []*datastream.ReadResponse {
+		// a server enforcing a key rejects a mismatch
+		if req.GetApiKey() != "s3cr3t" {
+			return []*datastream.ReadResponse{
+				streamErr(datastream.ErrorCode_ERROR_UNAUTHENTICATED, "missing or invalid api key"),
+			}
+		}
+		return []*datastream.ReadResponse{chunk("1,ok\n")}
+	}}
+	host, port := startFakeServer(t, fake)
+
+	// correct key: the reader forwards it and the read succeeds
+	param, proc, bat := newDatastreamTestParam(t, host, port, "")
+	param.DatastreamScan.ApiKey = "s3cr3t"
+	r := NewDataStreamReader(param)
+	_, err := r.Open(param, proc)
+	require.NoError(t, err)
+	finished, err := r.ReadBatch(proc.Ctx, bat, proc, nil)
+	require.NoError(t, err)
+	require.True(t, finished)
+	require.Equal(t, 1, bat.RowCount())
+	require.Equal(t, "s3cr3t", fake.lastRequest.GetApiKey())
+	require.NoError(t, r.Close())
+
+	// wrong key: surfaced as an authentication error
+	param2, proc2, bat2 := newDatastreamTestParam(t, host, port, "")
+	param2.DatastreamScan.ApiKey = "wrong"
+	r2 := NewDataStreamReader(param2)
+	_, err = r2.Open(param2, proc2)
+	require.NoError(t, err)
+	_, err = r2.ReadBatch(proc2.Ctx, bat2, proc2, nil)
+	require.ErrorContains(t, err, "authentication failed")
+	require.NoError(t, r2.Close())
+}
+
 func TestDataStreamReaderServerErrorFrame(t *testing.T) {
 	fake := &fakeDataStreamServer{script: func(*datastream.ReadRequest) []*datastream.ReadResponse {
 		return []*datastream.ReadResponse{

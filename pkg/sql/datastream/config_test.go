@@ -42,6 +42,11 @@ func TestParseTableOptions(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cfg.Recheck)
 
+	// apikey is optional; when present it is carried on the config
+	cfg, err = ParseTableOptions(ctx, options("server", "h", "port", "1", "table", "t", "apikey", "s3cr3t"))
+	require.NoError(t, err)
+	require.Equal(t, "s3cr3t", cfg.APIKey)
+
 	for _, bad := range []*tree.DataStreamTableParam{
 		options("port", "4444", "table", "t"),                                 // missing server
 		options("server", "h", "table", "t"),                                  // missing port
@@ -61,13 +66,22 @@ func TestParseTableOptions(t *testing.T) {
 
 func TestEnvelopeRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	in := Config{Server: "my host%;*/weird", Port: 65535, Table: "the;table=1", Recheck: false}
+	// an api key containing envelope-breaking bytes (';', '*/', '%') round-trips
+	in := Config{Server: "my host%;*/weird", Port: 65535, Table: "the;table=1", Recheck: false, APIKey: "k;e*/y%z"}
 	envelope := BuildCreateSQLEnvelope(in)
 
 	out, found, err := ParseCreateSQLEnvelope(ctx, envelope)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, in, out)
+
+	// an envelope written before auth existed (no apikey field) parses with an
+	// empty key rather than failing
+	legacy := "/* MO_DATASTREAM: version=1; kind=datastream_table; server=h; port=1; table=t; recheck=true */"
+	out, found, err = ParseCreateSQLEnvelope(ctx, legacy)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "", out.APIKey)
 
 	// non-envelope content is not recognized, not an error
 	for _, notEnv := range []string{"", "{\"ScanType\":0}", "create table t(a int)", "/* MO_MONGODB: ... */"} {

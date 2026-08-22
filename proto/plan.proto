@@ -1198,6 +1198,9 @@ message DataStreamScan {
   // pushed_filter is the deparsed SQL text of the filter conjuncts sent to
   // the server as a hint ("" when nothing could be pushed).
   string pushed_filter = 5;
+  // api_key is the shared secret presented to the server ("" when the table
+  // configured none).
+  string api_key = 6;
 }
 
 message IcebergScan {

@@ -34,7 +34,8 @@ func (option *DataStreamOption) Format(ctx *FmtCtx) {
 	value := option.Val
 	key := strings.ToLower(strings.ReplaceAll(string(option.Key), "_", ""))
 	if strings.Contains(key, "password") || strings.Contains(key, "credential") ||
-		strings.Contains(key, "token") || strings.Contains(key, "secret") {
+		strings.Contains(key, "token") || strings.Contains(key, "secret") ||
+		strings.Contains(key, "apikey") {
 		value = "<redacted>"
 	}
 	ctx.WriteString(strings.ReplaceAll(FormatString(value), "'", "''"))

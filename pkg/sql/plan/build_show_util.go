@@ -1330,6 +1330,10 @@ func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config, sqlMode
 		{key: "port", value: fmt.Sprintf("%d", cfg.Port)},
 		{key: "table", value: cfg.Table},
 		{key: "recheck", value: fmt.Sprintf("%t", cfg.Recheck)},
+		// cfg.APIKey is intentionally NOT emitted: SHOW CREATE output is
+		// widely visible and would leak the shared secret. A datastream table
+		// restored from SHOW CREATE (snapshot/PITR replay) must have its
+		// 'apikey' re-supplied if the server requires one.
 	}
 	var builder strings.Builder
 	builder.WriteString(" ENGINE = DATASTREAM WITH (")

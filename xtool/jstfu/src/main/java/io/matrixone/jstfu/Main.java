@@ -56,7 +56,7 @@ public class Main {
             }
         }
 
-        DataStreamService service = new DataStreamService(sources);
+        DataStreamService service = new DataStreamService(sources, config.apiKey);
         Server server = NettyServerBuilder
                 .forAddress(new InetSocketAddress(config.host, config.port))
                 .addService(service)

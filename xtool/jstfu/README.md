@@ -69,7 +69,8 @@ ENGINE = DATASTREAM WITH (
     'server' = '127.0.0.1',
     'port' = '4444',
     'table' = 'the_table_to_read_from',
-    'recheck' = 'true'      -- optional, default true
+    'recheck' = 'true',     -- optional, default true
+    'apikey' = 'shared-secret'  -- optional; required if the server sets apikey
 );
 SELECT * FROM t WHERE col2 > '2020-11-11 00:00:00';
 ```
@@ -95,12 +96,17 @@ SELECT * FROM t WHERE col2 > '2020-11-11 00:00:00';
 ## Security
 
 The server binds to **127.0.0.1** by default (`host` in the config): the
-`${FILTER}` text is substituted into SQL and requests are unauthenticated, so
-an off-box client that reached the port could run arbitrary SQL with the
-configured credentials. Co-located MO reaches it on loopback (the compose
-sidecar shares the CN network namespace; a launch deployment runs on the same
-host). Set `host` to `0.0.0.0` or a specific NIC only behind an authenticating
-trust boundary you control.
+`${FILTER}` text is substituted into SQL, so an off-box client that reached
+the port could run arbitrary SQL with the configured credentials. Co-located
+MO reaches it on loopback (the compose sidecar shares the CN network
+namespace; a launch deployment runs on the same host).
+
+Set an **`apikey`** (a shared secret) to authenticate requests: when non-empty,
+every `Read` must present a matching key or the server replies
+`ERROR_UNAUTHENTICATED` (constant-time compared). The MO table supplies it via
+the `'apikey'` WITH-option, which is stored in the catalog but never shown by
+SHOW CREATE (a table restored from SHOW CREATE must have its `apikey`
+re-supplied). Set an `apikey` before binding `host` to a routable interface.
 
 Binary columns (`BINARY`/`VARBINARY`/`BLOB`) are out of scope for the v1 CSV
 bridge — they cannot round-trip byte-for-byte through a UTF-8 CSV stream, so

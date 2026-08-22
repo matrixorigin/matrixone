@@ -51,15 +51,28 @@ public class DataStreamService extends DataStreamGrpc.DataStreamImplBase {
     private static final Logger log = Logger.getLogger(DataStreamService.class.getName());
 
     private final Map<String, DataSource> sources;
+    private final byte[] apiKey;
     private final ExecutorService workers;
 
-    public DataStreamService(Map<String, DataSource> sources) {
+    public DataStreamService(Map<String, DataSource> sources, String apiKey) {
         this.sources = sources;
+        this.apiKey = (apiKey == null || apiKey.isEmpty())
+                ? null
+                : apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         this.workers = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "jstfu-read");
             t.setDaemon(true);
             return t;
         });
+    }
+
+    private boolean authenticated(ReadRequest request) {
+        if (apiKey == null) {
+            return true; // auth disabled
+        }
+        // constant-time comparison so a wrong key cannot be recovered by timing
+        byte[] presented = request.getApiKey().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return java.security.MessageDigest.isEqual(apiKey, presented);
     }
 
     /** Stops the worker pool; call on server shutdown. */
@@ -77,6 +90,13 @@ public class DataStreamService extends DataStreamGrpc.DataStreamImplBase {
                 (ServerCallStreamObserver<ReadResponse>) responseObserver;
         String table = request.getTable();
         log.info(() -> "read table=" + table + " filter=" + request.getFilter());
+
+        if (!authenticated(request)) {
+            observer.onNext(errorResponse(ErrorCode.ERROR_UNAUTHENTICATED,
+                    "missing or invalid api key"));
+            observer.onCompleted();
+            return;
+        }
 
         DataSource source = sources.get(table);
         if (source == null) {

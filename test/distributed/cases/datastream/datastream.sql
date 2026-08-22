@@ -61,6 +61,12 @@ select * from ext_badsql;
 create external table ext_noserver (a int) engine = datastream with ('server' = '127.0.0.1', 'port' = '1', 'table' = 't');
 select * from ext_noserver;
 
+-- api key option: parsed and stored, ignored by an auth-disabled server, and
+-- never leaked by SHOW CREATE (enforcement is covered by the e2e's keyed server)
+create external table ext_keyed (col1 int, col2 datetime, col3 varchar(50), col4 text) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'jdbc_numbers', 'apikey' = 'bvt-secret');
+show create table ext_keyed;
+select count(*) from ext_keyed;
+
 -- external tables reject writes
 insert into ext_file values (9, '2020-01-01 00:00:00', 'x', 'y');
 

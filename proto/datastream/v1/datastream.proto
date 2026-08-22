@@ -42,6 +42,10 @@ message ReadRequest {
   // ("" if none).  This is a HINT: the server should apply it as early as
   // possible but may ignore it entirely and return unfiltered rows.
   string filter = 2;
+  // Shared-secret API key. When the server is configured with an API key,
+  // every request must present a matching one or the server replies with an
+  // ERROR_UNAUTHENTICATED frame. Empty when the server requires no key.
+  string api_key = 3;
 }
 
 message ReadResponse {
@@ -68,6 +72,8 @@ enum ErrorCode {
   ERROR_TABLE_NOT_FOUND = 1;
   // The datasource failed (JDBC error, file unreadable/unparsable, ...).
   ERROR_DATASOURCE_ERROR = 2;
+  // The request presented a missing or wrong API key.
+  ERROR_UNAUTHENTICATED = 3;
 }
 
 message Error {

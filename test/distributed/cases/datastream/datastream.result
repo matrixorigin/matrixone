@@ -5,7 +5,7 @@ invalid input: datastream external table requires the 'port' option
 create external table ds_err3 (a int) engine = datastream with ('server' = 'h', 'port' = 'abc', 'table' = 't');
 invalid input: datastream option 'port' must be a port number, got 'abc'
 create external table ds_err4 (a int) engine = datastream with ('server' = 'h', 'port' = '4444', 'table' = 't', 'bogus' = '1');
-invalid input: unknown datastream option 'bogus' (supported: server, port, table, recheck)
+invalid input: unknown datastream option 'bogus' (supported: server, port, table, recheck, apikey)
 create external table ds_err5 (a int) engine = datastream with ('server' = 'h', 'port' = '4444', 'table' = 't', 'server' = 'h2');
 invalid input: duplicate datastream option 'server'
 create external table ds_err6 (a int) engine = datastream with ('server' = 'h', 'port' = '4444', 'table' = 't', 'recheck' = 'maybe');
@@ -95,6 +95,18 @@ internal error: datastream: server 127.0.0.1:4444 reported ERROR_DATASOURCE_ERRO
 create external table ext_noserver (a int) engine = datastream with ('server' = '127.0.0.1', 'port' = '1', 'table' = 't');
 select * from ext_noserver;
 internal error: datastream: cannot open stream to 127.0.0.1:1: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 127.0.0.1:1: connect: connection refused"
+create external table ext_keyed (col1 int, col2 datetime, col3 varchar(50), col4 text) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'jdbc_numbers', 'apikey' = 'bvt-secret');
+show create table ext_keyed;
+➤ Table[12,9,0]  ¦  Create Table[12,325,0]  𝄀
+ext_keyed  ¦  CREATE EXTERNAL TABLE `ext_keyed` (
+  `col1` int DEFAULT NULL,
+  `col2` datetime DEFAULT NULL,
+  `col3` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `col4` text COLLATE utf8mb4_general_ci DEFAULT NULL
+) ENGINE = DATASTREAM WITH ("server" = '127.0.0.1', "port" = '4444', "table" = 'jdbc_numbers', "recheck" = 'true')
+select count(*) from ext_keyed;
+➤ count(*)[-5,64,0]  𝄀
+5
 insert into ext_file values (9, '2020-01-01 00:00:00', 'x', 'y');
 invalid input: cannot insert/update/delete from external table
 drop database datastream_bvt;
