@@ -279,6 +279,42 @@ func GetGpuDeviceList() ([]int, error) {
 	return devices, nil
 }
 
+// RowsFittingFreeMem reports how many rows of perRowBytes fit in ~60% of the free VRAM on
+// deviceID, together with the free-byte reading used. It shares one implementation with the
+// quantizer's staging bound (matrixone::rows_fitting_gpu_mem in cgo/cuvs/helper.h), so a
+// build sized by this cannot disagree with a quantizer sized by that.
+//
+// It ERRORS rather than guessing when cudaMemGetInfo fails. A caller that cannot measure the
+// device cannot size an upload for it, and the historical fallback -- assume the whole table
+// fits -- is exactly the out-of-memory this is meant to prevent.
+//
+// Sample this BEFORE constructing any index: the RMM pool that worker->start() creates counts
+// as used memory, so a later reading understates what is actually available for the build.
+func RowsFittingFreeMem(deviceID int, perRowBytes uint64) (rows int64, freeBytes uint64, err error) {
+	if perRowBytes == 0 {
+		return 0, 0, moerr.NewInternalErrorNoCtx("RowsFittingFreeMem: per-row size is 0")
+	}
+	var errmsg *C.char
+	var cRows C.int64_t
+	var cFree C.uint64_t
+	rc := C.gpu_rows_fitting_free_mem(
+		C.int(deviceID),
+		C.uint64_t(perRowBytes),
+		&cRows,
+		&cFree,
+		unsafe.Pointer(&errmsg),
+	)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if rc != 0 {
+		return 0, 0, moerr.NewInternalErrorNoCtx("RowsFittingFreeMem: failed to query GPU memory")
+	}
+	return int64(cRows), uint64(cFree), nil
+}
+
 // GpuAllocPinned allocates pinned (non-pageable) host memory.
 func GpuAllocPinned(size uint64) (unsafe.Pointer, error) {
 	if size == 0 {

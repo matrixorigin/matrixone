@@ -171,6 +171,28 @@ SearchResult cpu_topk_merge_sharded(const std::vector<SearchResult>& shard_resul
     return global_res;
 }
 
+// rows_fitting_gpu_mem caps requested_rows so that requested_rows * per_row_bytes fits in
+// ~60% of the FREE memory on the CURRENT device.
+//
+// 60% rather than 80%: the caller uploads the rows as ONE contiguous device allocation, and
+// a single block rarely fits 80% of free memory once the pool is fragmented, on top of which
+// cuVS needs its own scratch. This is the one implementation of that rule -- the quantizer
+// staging bound (cap_train_rows_to_gpu_mem) and the index-build capacity bound both derive
+// from it, so the two can never drift into disagreeing about what fits.
+//
+// THROWS on cudaMemGetInfo failure or per_row_bytes == 0; it never guesses. A caller that
+// cannot query the device cannot size an upload for it, and returning the request unchecked
+// would push the real fault into an opaque allocation failure later.
+//
+// A device must be current. `who` names the caller in the log line and the exception text.
+// out_free_bytes, when non-null, receives the free-memory reading that was used.
+// Pure query: how many rows of per_row_bytes fit ~60% of free VRAM. Does not log --
+// callers that are merely sizing something have capped nothing.
+int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_free_bytes);
+
+// Caps requested_rows to what fits, logging only when it actually caps.
+int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const char* who);
+
 } // namespace matrixone
 #endif
 
@@ -183,6 +205,28 @@ extern "C" {
     int gpu_get_next_device_id();
     void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements, int device_id, void* errmsg);
 // Pinned memory management
+// gpu_rows_fitting_free_mem exposes rows_fitting_gpu_mem to Go. It makes device_id current
+// first: cudaMemGetInfo reports the CURRENT device, and the Go caller runs on an arbitrary
+// thread with no device bound. Returns 0 on success, -1 on failure (errmsg set).
+int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
+                              int64_t* out_rows, uint64_t* out_free_bytes, void* errmsg);
+
+// ---- device memory governor, exposed to Go ------------------------------
+// One ledger for every large device allocation. C++ index LOADS claim through
+// it directly; BUILDS claim from Go, because Go owns the per-algo cost model
+// (CAGRA charges dataset+graph, IVF-PQ charges PQ codes and budgets the k-means
+// trainset as max(train,index) — restating that in C++ would fork it) and
+// because a Go-side claim can span the whole decided-but-not-yet-allocated
+// window, which a claim taken inside the C++ build cannot.
+//
+// gpu_device_memory_reserve returns an opaque token, or NULL with errmsg set
+// when the device cannot accommodate the request. The caller MUST pass the
+// token to gpu_device_memory_release exactly once; releasing NULL is a no-op.
+void*    gpu_device_memory_reserve(int device_id, uint64_t bytes, void* errmsg);
+void     gpu_device_memory_release(void* token);
+// Bytes currently claimed on a device. For tests and diagnostics.
+uint64_t gpu_device_memory_reserved(int device_id);
+
 void* gpu_alloc_pinned(uint64_t size, void* errmsg);
 void gpu_free_pinned(void* ptr, void* errmsg);
 

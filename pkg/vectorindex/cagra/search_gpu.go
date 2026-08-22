@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -473,7 +474,38 @@ func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error)
 
 // loadIndexes loads each model's index data from the database.
 // On any error it destroys all partially-loaded indexes and returns the error.
+//
+// Auto-rotation at build time can commit N sub-indexes each sized to fit 60%
+// of build-time free VRAM. At search all N must be resident simultaneously
+// (fan-out reads every sub-index per query), so the sum can exceed the current
+// free VRAM even when each individual model fit at build.
+//
+// That admission is enforced per sub-index inside CagraModel.LoadIndex, not as an
+// aggregate pre-pass here. It has to run after the tar is local, because
+// SHARDED attribution reads the shard count out of the tar manifest and a model
+// straight from LoadMetadata carries no Path yet; checking up front opened "".
+// Sub-indexes also load sequentially, so re-sampling free VRAM per sub-index
+// accounts for the ones already resident more precisely than one up-front sum,
+// and cgo/cuvs/device_memory.hpp claims the bytes across the window where an
+// admitted load is not resident yet.
 func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q]) ([]*CagraModel[B, Q], error) {
+	// A query reads every sub-index, so all of them are resident at once. Check
+	// the AGGREGATE before loading any: per-load admission alone would admit the
+	// early sub-indexes, spend the budget, and refuse a later one -- failing after
+	// most of the memory was already taken, with a message naming one sub-index
+	// instead of the total. Rotation bounds the build, never the search.
+	var totalBytes uint64
+	for _, idx := range indexes {
+		if idx.FileSize > 0 {
+			totalBytes += uint64(idx.FileSize)
+		}
+	}
+	if err := memory.DeviceLoadFits(
+		vectorindex.DistributionMode(s.Idxcfg.CuvsCagra.DistributionMode), s.Devices, totalBytes, cuvs.RowsFittingFreeMem,
+	); err != nil {
+		return nil, err
+	}
+
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
 		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {

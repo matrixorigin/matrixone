@@ -37,6 +37,7 @@ import (
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
 	cagrart "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -61,6 +62,10 @@ type cagraBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
+	// SetHostBytesPerRow hands the builder the per-row HOST cost computed above,
+	// so each sub-index can claim its eager capacity-sized host allocation
+	// against the per-CN ledger before InitEmpty spends it.
+	SetHostBytesPerRow(perRow uint64)
 	ToInsertSql(ts int64) ([]string, error)
 	Destroy() error
 }
@@ -148,13 +153,25 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 			len(u.cdcTail), u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.IndexTable)
 	}
 
+	totalBytes := 0
 	for _, s := range sqls {
+		totalBytes += len(s)
+	}
+	logutil.Infof("CAGRA create: executing %d SQLs (total %d bytes) for `%s`.`%s`",
+		len(sqls), totalBytes, u.tblcfg.DbName, u.tblcfg.IndexTable)
+	for i, s := range sqls {
+		logutil.Infof("CAGRA create: SQL %d/%d start (%d bytes)", i+1, len(sqls), len(s))
+		t0 := time.Now()
 		res, err := cagra_runSql(sqlexec.NewSqlProcess(proc), s)
 		if err != nil {
+			logutil.Errorf("CAGRA create: SQL %d/%d FAILED after %v: %v", i+1, len(sqls), time.Since(t0), err)
 			return err
 		}
+		logutil.Infof("CAGRA create: SQL %d/%d done in %v", i+1, len(sqls), time.Since(t0))
 		res.Close()
 	}
+	logutil.Infof("CAGRA create: all %d SQLs committed for `%s`.`%s`",
+		len(sqls), u.tblcfg.DbName, u.tblcfg.IndexTable)
 	return nil
 }
 
@@ -314,40 +331,9 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				u.tblcfg.DbName, u.tblcfg.SrcTable)
 			return nil
 		}
-		if u.idxcfg.IndexCapacity <= 0 {
-			u.idxcfg.IndexCapacity = srcRowCount
-			logutil.Infof("CAGRA create: auto-detected index capacity = %d from `%s`.`%s`",
-				u.idxcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
-		}
-
-		// Compute the small-tail cutoff. The trailing partial chunk is
-		// total % IndexCapacity. When IndexCapacity is auto-detected
-		// (== srcRowCount) the modulo is zero and no fallback fires.
-		// When the user explicitly set IndexCapacity and the trailing
-		// partial is smaller than the cuvs minimum (or every chunk
-		// would be too small because IndexCapacity itself is below the
-		// threshold) the tail rows route to CDC instead of cuvs.
-		// Threshold = the cuvs CAGRA minimum graph size for a build to
-		// succeed. Mirrors cuvs.DefaultCagraBuildParams().IntermediateGraphDegree
-		// (128) when the user didn't set it explicitly — same fallback
-		// chain the build itself uses.
-		threshold := int64(u.idxcfg.CuvsCagra.IntermediateGraphDegree)
-		if threshold <= 0 {
-			threshold = 128
-		}
-		u.cdcCutoff = srcRowCount
-		if u.idxcfg.IndexCapacity < threshold {
-			u.cdcCutoff = 0
-			logutil.Infof("CAGRA create: IndexCapacity %d < threshold %d; all %d rows route to CDC tail",
-				u.idxcfg.IndexCapacity, threshold, srcRowCount)
-		} else {
-			lastChunkSize := srcRowCount % u.idxcfg.IndexCapacity
-			if lastChunkSize > 0 && lastChunkSize < threshold {
-				u.cdcCutoff = srcRowCount - lastChunkSize
-				logutil.Infof("CAGRA create: trailing %d rows < threshold %d; routing them to CDC tail (cutoff=%d, total=%d)",
-					lastChunkSize, threshold, u.cdcCutoff, srcRowCount)
-			}
-		}
+		// Capacity is resolved further down, once the dimension, storage type and device
+		// are known — sizing it against VRAM needs all three.
+		requestedCapacity := u.idxcfg.IndexCapacity
 
 		// ---- validate argument types ----
 		idVec := tf.ctr.argVecs[1]
@@ -379,8 +365,116 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// modes can be built on a single-GPU host. No-op when gpu_multi_simulation < 2.
 		devices = vectorindex.SimulateDevices(devices, u.tblcfg.GpuMultiSimulation)
 
+		// ---- capacity, bounded by what the GPU can actually hold ----
+		// As in the ivfpq twin, every build is bounded and not just the default one: an
+		// explicit cagra_max_index_capacity is a request rather than an override.
+		//
+		// The per-row COST, though, is deliberately not the ivfpq one, and the
+		// difference is not an oversight. ivfpq dropped the dataset term because it
+		// hands cuVS a host view and the vectors are streamed and then discarded --
+		// only the PQ codes stay. CAGRA cannot do that: it searches by walking the
+		// graph and reading the actual vectors, so its dataset is resident for the
+		// index's whole life, not just the build. Streaming the build would not change
+		// that, which is why CAGRA still sizes against dim*sizeof(Q) here. On top of it
+		// sits the intermediate kNN graph (neighbour ids plus distances).
+		// Ask the index how many rows fit. The per-row cost model -- resident
+		// dataset plus intermediate kNN graph -- and the budget are computed in
+		// C++, and the per-device probe runs on worker threads already bound to
+		// their device. Go models no device bytes; host memory below is Go's.
+		//
+		// The probe index is unsized (allocates nothing but a worker pool) and is
+		// thrown away; the builder creates the real one at the planned capacity.
+		// Asked ONCE, before any sub-index exists -- a later probe would see the
+		// memory earlier sub-indexes took and shrink each successive capacity.
+		rowsFit, perRow, minDev, minFree, derr := cagraPkg.ProbeRowsFitting(u.idxcfg, qt, devices)
+		if derr != nil {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"cagra: %v; set cagra_max_index_capacity explicitly", derr)
+		}
+		if rowsFit > 0 {
+			logutil.Infof("CAGRA create: smallest participating device %d has %d MB free, %d B/row -> %d rows fit",
+				minDev, minFree>>20, perRow, rowsFit)
+		}
+
+		// INCLUDE column metadata is resolved HERE — before memory.HostRowsFitting —
+		// so its per-row bytes can be added to the host cost model. FilterStore::init
+		// eagerly resizes each INCLUDE column to `capacity * elem_size` up front, so a
+		// narrow vector with several fixed-width INCLUDE columns can blow the 60%
+		// budget when only the vector width is charged. filterCols is stashed on the
+		// state so the later filter setup does not rebuild it.
+		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
+			return err
+		}
+		// vimemory.HostIDBytesPerRow covers host_ids + id_to_index_, which the C++ side reserves
+		// and populates for every row regardless of how narrow the vector is.
+		hostPerRow := uint64(u.idxcfg.CuvsCagra.Dimensions)*quantizationBytes(qt) +
+			uint64(includeBytesPerRowFromCols(u.filterCols)) + vimemory.HostIDBytesPerRow
+
+		// CAGRA's per-row cost still includes the dataset, so its VRAM bound already
+		// keeps the host buffer at or under the device budget. The host bound is applied
+		// anyway: it costs one syscall, and it stops the two algorithms from drifting
+		// apart the next time one of their cost models changes.
+		hostRowsFit, availBytes, herr := vimemory.HostRowsFitting(hostPerRow)
+		if herr != nil {
+			// memory.HostRowsFitting errors ONLY on a successful measurement that
+			// cannot hold one row — which now includes a cgroup sitting at its
+			// limit (avail==0). An unavailable measurement returns (0,0,nil) and
+			// falls through to the GPU-only bound below, so there is no longer an
+			// availBytes>0 proxy to test: previously a full cgroup reported 0 and
+			// was misread as "unmeasured", disabling the bound it should enforce.
+			return moerr.NewInternalErrorf(proc.Ctx, "cagra: %v", herr)
+		}
+		if hostRowsFit > 0 {
+			logutil.Infof("CAGRA create: %d MB host available, %d B/row host (%d vector + %d include + %d ids) -> %d rows fit",
+				availBytes>>20, hostPerRow,
+				uint64(u.idxcfg.CuvsCagra.Dimensions)*quantizationBytes(qt),
+				includeBytesPerRowFromCols(u.filterCols),
+				vimemory.HostIDBytesPerRow,
+				hostRowsFit)
+		} else {
+			logutil.Warnf("CAGRA create: host memory unavailable; capacity bounded by GPU memory only")
+		}
+
+		graphDegree := uint64(u.idxcfg.CuvsCagra.IntermediateGraphDegree)
+		if graphDegree == 0 {
+			graphDegree = 128
+		}
+		// cuVS validate_build_params rejects `n_rows <= intermediate_graph_degree`,
+		// not just `<`. If a sub-index ends up with EXACTLY graphDegree rows the
+		// build throws "number of vectors per shard must be > intermediate_graph_degree".
+		// The threshold passed to planCapacity is what its `tail < threshold` /
+		// `capacity < threshold` guards compare against, so bump it by 1 to
+		// route any `srcRowCount % capacity == graphDegree` tail to the CDC path.
+		threshold := int64(graphDegree) + 1
+
+		// The SHARDED aggregate -- one index spread over N cards, so N x the
+		// per-card capacity -- is applied by rows_fitting() in C++, which knows
+		// the distribution mode and the distinct device count. Scaling again here
+		// would double it.
+		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
+			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
+			"cagra", "max_index_capacity")
+		if err != nil {
+			return err
+		}
+		u.idxcfg.IndexCapacity = plan.Capacity
+		u.cdcCutoff = plan.CdcCutoff
+		if plan.NumSubIdx > 1 || plan.VRAMBound {
+			logutil.Infof("CAGRA create: capacity=%d (requested=%d, vram_bound=%v) -> %d sub-index(es) for %d rows; cdc_cutoff=%d",
+				plan.Capacity, requestedCapacity, plan.VRAMBound, plan.NumSubIdx, srcRowCount, plan.CdcCutoff)
+		}
+
 		nthread := uint32(vectorindex.GetConcurrency(u.tblcfg.ThreadsBuild))
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
+
+		// Packed sub-index tars go to the LOCAL fileservice's scratch dir rather
+		// than /tmp: each tar is a whole sub-index, so a large build writes GB
+		// through it, and LOCAL is the provisioned data volume. "" when no LOCAL
+		// fileservice is attached, which os.MkdirTemp reads as $TMPDIR.
+		spillDir := vimemory.HostSpillDir(proc.Ctx, proc.Base.FileService)
+		if spillDir == "" {
+			logutil.Infof("CAGRA create: no LOCAL fileservice; index tars will use $TMPDIR")
+		}
 
 		// ---- create builder ----
 		// One real [B, Q] builder keyed on (base column type, storage qtype).
@@ -389,31 +483,32 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		isF16Base := u.baseOid == types.T_array_float16
 		switch {
 		case isF16Base && qt == metric.Quantization_F16:
-			u.builder, err = cagraPkg.NewCagraBuild[cuvs.Float16, cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = cagraPkg.NewCagraBuild[cuvs.Float16, cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		case isF16Base && qt == metric.Quantization_INT8:
-			u.builder, err = cagraPkg.NewCagraBuild[cuvs.Float16, int8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = cagraPkg.NewCagraBuild[cuvs.Float16, int8](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		case isF16Base && qt == metric.Quantization_UINT8:
-			u.builder, err = cagraPkg.NewCagraBuild[cuvs.Float16, uint8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = cagraPkg.NewCagraBuild[cuvs.Float16, uint8](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		case qt == metric.Quantization_F16:
-			u.builder, err = cagraPkg.NewCagraBuild[float32, cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = cagraPkg.NewCagraBuild[float32, cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		case qt == metric.Quantization_INT8:
-			u.builder, err = cagraPkg.NewCagraBuild[float32, int8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = cagraPkg.NewCagraBuild[float32, int8](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		case qt == metric.Quantization_UINT8:
-			u.builder, err = cagraPkg.NewCagraBuild[float32, uint8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = cagraPkg.NewCagraBuild[float32, uint8](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		default:
-			u.builder, err = cagraPkg.NewCagraBuild[float32, float32](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = cagraPkg.NewCagraBuild[float32, float32](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		}
 		if err != nil {
 			return err
 		}
 
+		// hostPerRow was computed for the capacity decision above; hand the same
+		// number to the builder so admission and the capacity model agree.
+		u.builder.SetHostBytesPerRow(hostPerRow)
+
 		// ---- pre-filter (INCLUDE columns) setup ----
-		// Derive filter column metadata from the INCLUDE names stashed in
-		// the params JSON paired with the types of the trailing argVecs —
-		// the DDL layer emits names, the table-function layer resolves types.
-		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
-			return err
-		}
+		// u.filterCols was already resolved above (before memory.HostRowsFitting)
+		// so its per-row bytes could be added to the host cost model. Just wire
+		// it into the C++ FilterStore here.
 		if len(u.filterCols) > 0 {
 			logutil.Infof("CAGRA create: INCLUDE columns = %v (from %d arg vectors)",
 				u.filterCols, len(tf.ctr.argVecs)-3)

@@ -27,6 +27,8 @@
 #include "cuvs_types.h"
 #include "quantize.hpp"
 #include "helper.h"
+#include "device_memory.hpp"
+#include "index_cost.hpp"
 #include "dynamic_batching.hpp"
 
 #include <cuda_fp16.h>
@@ -185,6 +187,7 @@ public:
     using storage_type = T;
     using ivf_pq_index = cuvs::neighbors::ivf_pq::index<int64_t>;
     using search_result_t = ivf_pq_search_result_t;
+
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
     using host_mask_bundle_t = typename gpu_index_base_t<B, T, ivf_pq_build_params_t, int64_t>::host_mask_bundle_t;
@@ -222,6 +225,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_pq_cost>(
+            this->dimension, bp.m, bp.bits_per_code, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         this->host_ids.reserve(this->count);
@@ -254,6 +259,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_pq_cost>(
+            this->dimension, bp.m, bp.bits_per_code, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
         this->host_ids.reserve(this->count);
@@ -280,6 +287,8 @@ public:
             worker_devices = {worker_devices[0]};
         }
         this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
+        this->cost_ = std::make_unique<matrixone::ivf_pq_cost>(
+            this->dimension, bp.m, bp.bits_per_code, sizeof(T), bp.kmeans_trainset_fraction);
 
         this->current_offset_ = 0;
     }
@@ -451,6 +460,34 @@ public:
                       << std::endl;
         };
 
+        // WHY THE DATASET IS NEVER UPLOADED
+        // ---------------------------------
+        // Every branch below hands cuVS a raft::host_matrix_view over
+        // flattened_host_dataset rather than copying it to the device first.
+        // cuVS's build is templated on the mdspan accessor
+        // (ivf_pq_build.cuh:1223), so the host view runs the same code with two
+        // differences that are exactly what a large build needs:
+        //
+        //   * sample_rows branches on cudaPointerGetAttributes and gathers the
+        //     k-means trainset ON THE HOST (sample_rows.cuh:47-63), so only the
+        //     trainset is ever uploaded — not the dataset.
+        //   * build_impl ends with detail::extend(dataset.data_handle(), ...)
+        //     (:1374), which streams through utils::batch_load_iterator with a
+        //     batch size that halves until it fits free memory (:1050-1097).
+        //
+        // Measured by cgo/cuvs/test/bench_hostview.cu at dim 960: while the
+        // dataset fits the card the two paths are within noise (+0.8% at 1M),
+        // and peak VRAM drops by the whole dataset (4.94 GB -> 1.35 GB at 1M,
+        // near flat as rows grow). Once the dataset exceeds VRAM the host path
+        // is 2.0x faster. recall@10 is identical at 1.000 across 250k..2.5M.
+        //
+        // Consequence: there is no build dataset left on the device afterwards,
+        // so neither dataset_device_ptr_ nor replicated_datasets_ is populated
+        // here. Both stay declared in index_base.hpp for the algorithms that do
+        // need a resident dataset (cagra keeps its to search). The resets and
+        // erases on the extend paths are now no-ops kept for those algorithms'
+        // symmetry, and the SHARDED post-build clear in build() has nothing left
+        // to free.
         try {
             cuvs::neighbors::ivf_pq::index_params index_params;
             index_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
@@ -461,19 +498,10 @@ public:
 
             if (this->dist_mode == DistributionMode_REPLICATED) {
                 auto res = handle.get_raft_resources();
-                log_mem("REPLICATED:before-alloc");
-                // Pool-bypass: training matrix is one huge transient allocation that
-                // must not pin the per-device pool's high-water mark. See
-                // matrixone::raw_device_mr() rationale in cuvs_worker.hpp.
-                auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                    static_cast<size_t>(this->count) * this->dimension,
-                    raft::resource::get_cuda_stream(*res),
-                    matrixone::raw_device_mr());
-                auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                    dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
-                log_mem("REPLICATED:after-alloc");
-                raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-                raft::resource::sync_stream(*res);
+                // Every device replicates the whole dataset, so each reads the
+                // same host buffer; cuVS uploads only its own trainset.
+                auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                    this->flattened_host_dataset.data(), (int64_t)this->count, (int64_t)this->dimension);
                 log_mem("REPLICATED:before-cuvs-build");
 
                 // Serialize concurrent builds on the same physical device — cuVS
@@ -482,8 +510,21 @@ public:
                 std::unique_ptr<ivf_pq_index> local_idx;
                 {
                     std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    matrixone::device_memory_governor::reservation build_claim;
+                    const size_t peak = this->build_peak_bytes(this->count);
+                    if (peak > 0) {
+                        // Claim what this build is about to allocate: max(kmeans
+                        // trainset, PQ codes), the peak of two phases that never
+                        // coexist. cuVS build() is stream-ordered -- it allocates
+                        // and enqueues, then returns -- so the claim ends when
+                        // this scope does, BEFORE the handle.sync() that waits on
+                        // the compute. By then the bytes are visible to
+                        // cudaMemGetInfo; holding the claim across the wait would
+                        // count them twice for the whole build, which is minutes.
+                        build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_pq::build");
+                    }
                     local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                        *res, index_params, raft::make_const_mdspan(dataset_device)));
+                        *res, index_params, dataset_host));
                 }
                 log_mem("REPLICATED:after-cuvs-build");
 
@@ -492,7 +533,6 @@ public:
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
                     this->replicated_indices_[handle.get_rank()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
-                    this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
                 }
                 handle.sync();
             } else if (this->dist_mode == DistributionMode_SHARDED) {
@@ -514,18 +554,11 @@ public:
                           << " start_row=" << start_row << " num_rows=" << num_rows
                           << " bytes_device=" << ((size_t)num_rows * this->dimension * sizeof(T))
                           << std::endl;
-                log_mem("SHARDED:before-alloc");
-                // Pool-bypass training shard — see REPLICATED branch.
-                auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                    static_cast<size_t>(num_rows) * this->dimension,
-                    raft::resource::get_cuda_stream(*res),
-                    matrixone::raw_device_mr());
-                auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                    dataset_storage->data(), (int64_t)num_rows, (int64_t)this->dimension);
-                log_mem("SHARDED:after-alloc");
-                raft::copy(*res, dataset_device,
-                           raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data() + (start_row * this->dimension), num_rows, this->dimension));
-                raft::resource::sync_stream(*res);
+                // This rank's slice of the shared host buffer. Ranks read disjoint
+                // ranges of one immutable buffer, so no copy and no coordination.
+                auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                    this->flattened_host_dataset.data() + (start_row * this->dimension),
+                    (int64_t)num_rows, (int64_t)this->dimension);
                 log_mem("SHARDED:before-cuvs-build");
 
                 // Serialize concurrent builds on the same physical device — cuVS
@@ -534,8 +567,21 @@ public:
                 std::unique_ptr<ivf_pq_index> local_idx;
                 {
                     std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    matrixone::device_memory_governor::reservation build_claim;
+                    const size_t peak = this->build_peak_bytes(this->count);
+                    if (peak > 0) {
+                        // Claim what this build is about to allocate: max(kmeans
+                        // trainset, PQ codes), the peak of two phases that never
+                        // coexist. cuVS build() is stream-ordered -- it allocates
+                        // and enqueues, then returns -- so the claim ends when
+                        // this scope does, BEFORE the handle.sync() that waits on
+                        // the compute. By then the bytes are visible to
+                        // cudaMemGetInfo; holding the claim across the wait would
+                        // count them twice for the whole build, which is minutes.
+                        build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_pq::build");
+                    }
                     local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                        *res, index_params, raft::make_const_mdspan(dataset_device)));
+                        *res, index_params, dataset_host));
                 }
                 log_mem("SHARDED:after-cuvs-build");
 
@@ -544,31 +590,29 @@ public:
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
                     this->replicated_indices_[handle.get_rank()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
-                    this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
                 }
                 handle.sync();
             } else {
                 // Do all GPU work outside the lock — holding shared_mutex across GPU calls
                 // would block concurrent readers for the entire build duration.
                 auto res = handle.get_raft_resources();
-                log_mem("SINGLE_GPU:before-alloc");
-                // Pool-bypass training matrix — see REPLICATED branch.
-                auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                    static_cast<size_t>(this->count) * this->dimension,
-                    raft::resource::get_cuda_stream(*res),
-                    matrixone::raw_device_mr());
-                auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                    dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
-                log_mem("SINGLE_GPU:after-alloc");
-                raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-                raft::resource::sync_stream(*res);
+                auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                    this->flattened_host_dataset.data(), (int64_t)this->count, (int64_t)this->dimension);
                 log_mem("SINGLE_GPU:before-cuvs-build");
 
                 std::unique_ptr<ivf_pq_index> new_idx;
                 {
                     std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    matrixone::device_memory_governor::reservation build_claim;
+                    const size_t peak = this->build_peak_bytes(this->count);
+                    if (peak > 0) {
+                        // See the REPLICATED site: max(kmeans trainset, PQ codes),
+                        // released when this scope ends -- before handle.sync()
+                        // waits on the compute.
+                        build_claim = matrixone::device_memory_governor::reserve(peak, "ivf_pq::build");
+                    }
                     new_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                        *res, index_params, raft::make_const_mdspan(dataset_device)));
+                        *res, index_params, dataset_host));
                 }
                 log_mem("SINGLE_GPU:after-cuvs-build");
 
@@ -578,7 +622,6 @@ public:
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
                     index_ = std::move(new_idx);
-                    this->dataset_device_ptr_ = std::move(dataset_storage);
                 }
             }
         } catch (const std::exception& e) {
@@ -1679,6 +1722,12 @@ public:
         auto task = [&](raft_handle_wrapper_t& handle) -> std::any {
             auto res = handle.get_raft_resources();
             auto local_idx = std::make_unique<ivf_pq_index>(*res);
+            // Claim the VRAM this load is about to materialise so a concurrent
+            // build or load on this device cannot spend the same free bytes. The
+            // claim holds no lock; it is dropped at scope exit, by which point the
+            // memory is resident and cudaMemGetInfo accounts for it.
+            const size_t load_bytes = matrixone::required_path_bytes(filename, "ivf_pq::load");
+            auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load");
             cuvs::neighbors::ivf_pq::deserialize(*res, filename, local_idx.get());
             // Drain `res`'s stream so any H2D copy committed by deserialize is
             // visible before any search thread reads the loaded index. Without
@@ -1845,6 +1894,12 @@ public:
             auto task = [&, full_path](raft_handle_wrapper_t& handle) -> std::any {
                 auto res = handle.get_raft_resources();
                 auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                // Claim the VRAM this load is about to materialise so a concurrent
+                // build or load on this device cannot spend the same free bytes. The
+                // claim holds no lock; it is dropped at scope exit, by which point the
+                // memory is resident and cudaMemGetInfo accounts for it.
+                const size_t load_bytes = matrixone::required_path_bytes(full_path, "ivf_pq::load");
+                auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load");
                 cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
                 // Drain `res`'s stream so deserialize's H2D copy is committed
                 // before any search thread reads the loaded index. See the
@@ -1869,6 +1924,12 @@ public:
                 [&, full_path](raft_handle_wrapper_t& handle) -> std::any {
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                    // Claim the VRAM this load is about to materialise so a concurrent
+                    // build or load on this device cannot spend the same free bytes. The
+                    // claim holds no lock; it is dropped at scope exit, by which point the
+                    // memory is resident and cudaMemGetInfo accounts for it.
+                    const size_t load_bytes = matrixone::required_path_bytes(full_path, "ivf_pq::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load");
                     cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
@@ -1894,6 +1955,12 @@ public:
                     std::string shard_path = dir + "/" + shard_files[rank];
                     auto res = handle.get_raft_resources();
                     auto local_idx = std::make_unique<ivf_pq_index>(*res);
+                    // Claim the VRAM this load is about to materialise so a concurrent
+                    // build or load on this device cannot spend the same free bytes. The
+                    // claim holds no lock; it is dropped at scope exit, by which point the
+                    // memory is resident and cudaMemGetInfo accounts for it.
+                    const size_t load_bytes = matrixone::required_path_bytes(shard_path, "ivf_pq::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load");
                     cuvs::neighbors::ivf_pq::deserialize(*res, shard_path, local_idx.get());
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);

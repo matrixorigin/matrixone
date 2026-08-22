@@ -38,6 +38,7 @@ import (
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	ivfpqPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq"
 	ivfpqrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -73,6 +74,10 @@ type ivfpqBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
+	// SetHostBytesPerRow hands the builder the per-row HOST cost computed above,
+	// so each sub-index can claim its eager capacity-sized host allocation
+	// against the per-CN ledger before InitEmpty spends it.
+	SetHostBytesPerRow(perRow uint64)
 	ToInsertSql(ts int64) ([]string, error)
 	Destroy() error
 }
@@ -160,13 +165,25 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 			len(u.cdcTail), u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.IndexTable)
 	}
 
+	totalBytes := 0
 	for _, s := range sqls {
+		totalBytes += len(s)
+	}
+	logutil.Infof("IVFPQ create: executing %d SQLs (total %d bytes) for `%s`.`%s`",
+		len(sqls), totalBytes, u.tblcfg.DbName, u.tblcfg.IndexTable)
+	for i, s := range sqls {
+		logutil.Infof("IVFPQ create: SQL %d/%d start (%d bytes)", i+1, len(sqls), len(s))
+		t0 := time.Now()
 		res, err := ivfpq_runSql(sqlexec.NewSqlProcess(proc), s)
 		if err != nil {
+			logutil.Errorf("IVFPQ create: SQL %d/%d FAILED after %v: %v", i+1, len(sqls), time.Since(t0), err)
 			return err
 		}
+		logutil.Infof("IVFPQ create: SQL %d/%d done in %v", i+1, len(sqls), time.Since(t0))
 		res.Close()
 	}
+	logutil.Infof("IVFPQ create: all %d SQLs committed for `%s`.`%s`",
+		len(sqls), u.tblcfg.DbName, u.tblcfg.IndexTable)
 	return nil
 }
 
@@ -324,33 +341,9 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				u.tblcfg.DbName, u.tblcfg.SrcTable)
 			return nil
 		}
-		if u.idxcfg.IndexCapacity <= 0 {
-			u.idxcfg.IndexCapacity = srcRowCount
-			logutil.Infof("IVFPQ create: auto-detected index capacity = %d from `%s`.`%s`",
-				u.idxcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
-		}
-
-		// Small-tail cutoff. Threshold = the cuvs IVF-PQ k-means
-		// minimum (lists). When the trailing partial chunk is smaller
-		// than lists — or every chunk would be too small because
-		// IndexCapacity itself is below lists — the tail rows route to
-		// CDC instead of cuvs k-means.
-		threshold := int64(u.idxcfg.CuvsIvfpq.Lists)
-		u.cdcCutoff = srcRowCount
-		if threshold > 0 {
-			if u.idxcfg.IndexCapacity < threshold {
-				u.cdcCutoff = 0
-				logutil.Infof("IVFPQ create: IndexCapacity %d < lists %d; all %d rows route to CDC tail",
-					u.idxcfg.IndexCapacity, threshold, srcRowCount)
-			} else {
-				lastChunkSize := srcRowCount % u.idxcfg.IndexCapacity
-				if lastChunkSize > 0 && lastChunkSize < threshold {
-					u.cdcCutoff = srcRowCount - lastChunkSize
-					logutil.Infof("IVFPQ create: trailing %d rows < lists %d; routing them to CDC tail (cutoff=%d, total=%d)",
-						lastChunkSize, threshold, u.cdcCutoff, srcRowCount)
-				}
-			}
-		}
+		// Capacity is resolved further down, once the dimension, storage type and device
+		// are known — sizing it against VRAM needs all three.
+		requestedCapacity := u.idxcfg.IndexCapacity
 
 		// kmeans training fraction (0-100 percent → 0-1 fraction). Flat
 		// algo_params key (set in CREATE INDEX) wins; otherwise the session
@@ -405,8 +398,147 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// modes can be built on a single-GPU host. No-op when gpu_multi_simulation < 2.
 		devices = vectorindex.SimulateDevices(devices, u.tblcfg.GpuMultiSimulation)
 
+		// ---- capacity, bounded by what the GPU can actually hold ----
+		// Every build is bounded, not just the default one: an explicit
+		// max_index_capacity is a request, and honouring a request larger than the
+		// device can take would reintroduce the OOM this bound exists to prevent.
+		//
+		// The build dataset no longer costs device memory: build_internal hands cuVS a
+		// raft::host_matrix_view, which gathers the k-means trainset on the host and
+		// streams the encode in batches. So capacity is bounded by what STAYS
+		// resident -- the PQ codes plus their int64 payloads. That is also the honest
+		// bound: a search reaches every list, so the whole index must be loaded and
+		// splitting into sub-indexes does not shrink the total.
+		//
+		// Use the EFFECTIVE fraction, not the configured one. ivfpqConfig only forwards
+		// the config value when it is > 0 (model_gpu.go), so `kmeans_train_percent = 0`
+		// leaves cuVS on its own default of 0.5.
+		trainFrac := u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction
+		if trainFrac <= 0 {
+			trainFrac = cuvs.DefaultIvfPqBuildParams().KmeansTrainsetFraction
+		}
+		dim := uint64(u.idxcfg.CuvsIvfpq.Dimensions)
+
+		// Ask the index how many rows fit. Everything about device memory is
+		// computed in C++ -- the per-row cost model, the k-means trainset cost
+		// and the budget all live on the index class, and the per-device probe
+		// runs on its worker threads, which are already bound to their device.
+		// Go models no device bytes; host memory below is Go's.
+		//
+		// The probe index is created UNSIZED: it allocates nothing but a worker
+		// pool, because sizing it would need the number being asked for. It is
+		// thrown away here and the real index is created with the planned
+		// capacity by the builder.
+		//
+		// Asked exactly ONCE, before any sub-index exists. A second probe would
+		// run after the first sub-index allocated, see less free memory, and
+		// shrink every successive sub-index instead of sharing one capacity.
+		rowsFit, maxTrainRows, perRow, minDev, minFree, derr := ivfpqPkg.ProbeRowsFitting(
+			u.idxcfg, qt, devices)
+		if derr != nil {
+			// Never guess. Assuming the whole table fits is precisely the failure
+			// being prevented, so say which lever the operator has instead.
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"ivfpq: %v; set max_index_capacity explicitly", derr)
+		}
+		if rowsFit > 0 {
+			logutil.Infof("IVFPQ create: smallest participating device %d has %d MB free, %d B/row resident -> %d rows fit (%d training rows)",
+				minDev, minFree>>20, perRow, rowsFit, maxTrainRows)
+		}
+
+		// INCLUDE column metadata is resolved HERE — before memory.HostRowsFitting —
+		// so its per-row bytes can be added to the host cost model. FilterStore::init
+		// eagerly resizes each INCLUDE column to `capacity * elem_size` up front, so a
+		// narrow vector with several fixed-width INCLUDE columns can blow the 60%
+		// budget when only the vector width is charged. filterCols is stashed on the
+		// state so the later filter setup does not rebuild it.
+		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
+			return err
+		}
+		ibprHost := uint64(includeBytesPerRowFromCols(u.filterCols))
+
+		// Capacity is a host allocation before it is a device one: InitEmpty resizes
+		// flattened_host_dataset to capacity*dim up front. Sizing against the PQ codes
+		// makes capacity ~7.7x larger than the old dataset-based bound did, so the host
+		// side now needs its own limit -- otherwise a 20 GB card derives 63M rows and
+		// asks the host for 97 GB.
+		// vimemory.HostIDBytesPerRow covers host_ids + id_to_index_, which the C++ side reserves
+		// and populates for every row regardless of how narrow the vector is.
+		hostPerRow := dim*quantizationBytes(qt) + ibprHost + vimemory.HostIDBytesPerRow
+		hostRowsFit, availBytes, herr := vimemory.HostRowsFitting(hostPerRow)
+		if herr != nil {
+			// memory.HostRowsFitting errors ONLY on a successful measurement that
+			// cannot hold one row — which now includes a cgroup sitting at its
+			// limit (avail==0). An unavailable measurement returns (0,0,nil) and
+			// falls through to the GPU-only bound below, so there is no longer an
+			// availBytes>0 proxy to test: previously a full cgroup reported 0 and
+			// was misread as "unmeasured", disabling the bound it should enforce.
+			return moerr.NewInternalErrorf(proc.Ctx, "ivfpq: %v", herr)
+		}
+		if hostRowsFit > 0 {
+			logutil.Infof("IVFPQ create: %d MB host available, %d B/row host (%d vector + %d include + %d ids) -> %d rows fit",
+				availBytes>>20, hostPerRow, dim*quantizationBytes(qt), ibprHost, uint64(vimemory.HostIDBytesPerRow), hostRowsFit)
+		}
+
+		// lists defaults to the cuVS default when unset; a 0 threshold would silently
+		// disable the k-means minimum check below.
+		threshold := int64(u.idxcfg.CuvsIvfpq.Lists)
+		if threshold <= 0 {
+			threshold = int64(cuvs.DefaultIvfPqBuildParams().NLists)
+		}
+
+		// The SHARDED aggregate -- one index spread over N cards, so N x the
+		// per-card capacity -- is applied by rows_fitting() in C++, which knows
+		// the distribution mode and the distinct device count. Scaling again here
+		// would double it.
+		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
+			u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
+			"ivfpq", "max_index_capacity")
+		if err != nil {
+			return err
+		}
+		u.idxcfg.IndexCapacity = plan.Capacity
+		u.cdcCutoff = plan.CdcCutoff
+		if plan.NumSubIdx > 1 || plan.VRAMBound || plan.HostBound {
+			logutil.Infof("IVFPQ create: capacity=%d (requested=%d, vram_bound=%v, host_bound=%v) -> %d sub-index(es) for %d rows; cdc_cutoff=%d",
+				plan.Capacity, requestedCapacity, plan.VRAMBound, plan.HostBound, plan.NumSubIdx, srcRowCount, plan.CdcCutoff)
+		}
+
+		// Resolve the training sample against the capacity just chosen, and record the
+		// EFFECTIVE fraction rather than the requested one. Without this the clamp is
+		// invisible: a request for 20% that the device can only honour at 3.7% still
+		// builds, still succeeds, and only shows up as recall nobody can explain.
+		tp := planTrainFraction(plan.Capacity, maxTrainRows, threshold, trainFrac)
+		if tp.Rows > 0 {
+			u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction = tp.Fraction
+			if tp.Clamped {
+				logutil.Infof("IVFPQ create: kmeans trainset %.4f -> %.4f (%d rows of %d); "+
+					"GPU memory allows %d training rows",
+					trainFrac, tp.Fraction, tp.Rows, plan.Capacity, maxTrainRows)
+			}
+			if tp.Thin {
+				// Warn, do not refuse. The floor is a rule of thumb, not a cuVS
+				// constraint (validate_build_params only checks rows >= n_lists), and
+				// rejecting a build on a heuristic would break configurations that
+				// work today. Name both levers so the choice stays with the operator.
+				logutil.Warnf("IVFPQ create: %d training rows for %d lists is %.0f points "+
+					"per centroid, under the ~%d k-means wants; recall may suffer. "+
+					"Lower lists, or raise kmeans_train_percent / max_index_capacity.",
+					tp.Rows, threshold, float64(tp.Rows)/float64(threshold), kmeansPointsPerCentroid)
+			}
+		}
+
 		nthread := uint32(vectorindex.GetConcurrency(u.tblcfg.ThreadsBuild))
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
+
+		// Packed sub-index tars go to the LOCAL fileservice's scratch dir rather
+		// than /tmp: each tar is a whole sub-index, so a large build writes GB
+		// through it, and LOCAL is the provisioned data volume. "" when no LOCAL
+		// fileservice is attached, which os.MkdirTemp reads as $TMPDIR.
+		spillDir := vimemory.HostSpillDir(proc.Ctx, proc.Base.FileService)
+		if spillDir == "" {
+			logutil.Infof("IVFPQ create: no LOCAL fileservice; index tars will use $TMPDIR")
+		}
 
 		// ---- create builder ----
 		// One real [B, Q] builder keyed on (base column type, storage qtype).
@@ -415,30 +547,32 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		isF16Base := u.baseOid == types.T_array_float16
 		switch {
 		case isF16Base && qt == metric.Quantization_F16:
-			u.builder, err = ivfpqPkg.NewIvfpqBuild[cuvs.Float16, cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = ivfpqPkg.NewIvfpqBuild[cuvs.Float16, cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		case isF16Base && qt == metric.Quantization_INT8:
-			u.builder, err = ivfpqPkg.NewIvfpqBuild[cuvs.Float16, int8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = ivfpqPkg.NewIvfpqBuild[cuvs.Float16, int8](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		case isF16Base && qt == metric.Quantization_UINT8:
-			u.builder, err = ivfpqPkg.NewIvfpqBuild[cuvs.Float16, uint8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = ivfpqPkg.NewIvfpqBuild[cuvs.Float16, uint8](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		case qt == metric.Quantization_F16:
-			u.builder, err = ivfpqPkg.NewIvfpqBuild[float32, cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = ivfpqPkg.NewIvfpqBuild[float32, cuvs.Float16](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		case qt == metric.Quantization_INT8:
-			u.builder, err = ivfpqPkg.NewIvfpqBuild[float32, int8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = ivfpqPkg.NewIvfpqBuild[float32, int8](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		case qt == metric.Quantization_UINT8:
-			u.builder, err = ivfpqPkg.NewIvfpqBuild[float32, uint8](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = ivfpqPkg.NewIvfpqBuild[float32, uint8](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		default:
-			u.builder, err = ivfpqPkg.NewIvfpqBuild[float32, float32](uid, u.idxcfg, u.tblcfg, nthread, devices)
+			u.builder, err = ivfpqPkg.NewIvfpqBuild[float32, float32](uid, u.idxcfg, u.tblcfg, nthread, devices, spillDir)
 		}
 		if err != nil {
 			return err
 		}
 
+		// hostPerRow was computed for the capacity decision above; hand the same
+		// number to the builder so admission and the capacity model agree.
+		u.builder.SetHostBytesPerRow(hostPerRow)
+
 		// ---- pre-filter (INCLUDE columns) setup ----
-		// Derive filter column metadata from the INCLUDE names stashed in
-		// the params JSON paired with the types of the trailing argVecs.
-		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
-			return err
-		}
+		// u.filterCols was already resolved above (before memory.HostRowsFitting)
+		// so its per-row bytes could be added to the host cost model. Just wire
+		// it into the C++ FilterStore here.
 		if len(u.filterCols) > 0 {
 			logutil.Infof("IVFPQ create: INCLUDE columns = %v (from %d arg vectors)",
 				u.filterCols, len(tf.ctr.argVecs)-3)

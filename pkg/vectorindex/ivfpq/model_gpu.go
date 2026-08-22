@@ -18,11 +18,14 @@ package ivfpq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -44,9 +47,13 @@ var runSql_streaming = sqlexec.RunStreamingSql
 
 // IvfpqModel wraps a GpuIvfPq index and handles load/save to secondary index tables.
 type IvfpqModel[B, Q cuvs.VectorType] struct {
-	Id          string
-	Index       *cuvs.GpuIvfPq[B, Q]
-	Path        string
+	Id     string
+	Index  *cuvs.GpuIvfPq[B, Q]
+	Path   string
+	TmpDir string
+	// TmpDir scopes this model's packed tar to its builder's private directory so
+	// the builder can reclaim every tar with one RemoveAll. Empty means $TMPDIR,
+	// which keeps any non-builder caller behaving exactly as before.
 	FileSize    int64
 	MaxCapacity uint64
 
@@ -203,17 +210,22 @@ func (idx *IvfpqModel[B, Q]) Build() error {
 }
 
 func (idx *IvfpqModel[B, Q]) Destroy() error {
+	// Release the GPU handle and the packed tar independently: the file does not
+	// depend on the handle, so returning early on a Destroy() error used to leak it
+	// for the lifetime of the process. Collect both outcomes instead.
+	var errs error
 	if idx.Index != nil {
 		if err := idx.Index.Destroy(); err != nil {
-			return err
+			errs = errors.Join(errs, err)
+		} else {
+			idx.Index = nil
 		}
-		idx.Index = nil
 	}
 	if len(idx.Path) > 0 {
 		os.Remove(idx.Path)
 		idx.Path = ""
 	}
-	return nil
+	return errs
 }
 
 func (idx *IvfpqModel[B, Q]) saveToFile() error {
@@ -232,6 +244,7 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 	}
 
 	if idx.Len == 0 {
+		logutil.Infof("IvfpqModel.saveToFile: empty index idx=%s, destroy only", idx.Id)
 		if err := idx.Index.Destroy(); err != nil {
 			return err
 		}
@@ -239,31 +252,47 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 		return nil
 	}
 
-	tarFile, err := os.CreateTemp("", "ivfpq")
+	tarFile, err := os.CreateTemp(idx.TmpDir, "ivfpq")
 	if err != nil {
 		return err
 	}
 	tarPath := tarFile.Name()
 	tarFile.Close()
 
-	if err = idx.Index.Pack(tarPath); err != nil {
+	logutil.Infof("IvfpqModel.saveToFile: idx=%s len=%d calling Pack -> %s", idx.Id, idx.Len, tarPath)
+	t0 := time.Now()
+	if err = idx.Index.Pack(tarPath, idx.TmpDir); err != nil {
+		logutil.Errorf("IvfpqModel.saveToFile: Pack FAILED idx=%s after %v: %v", idx.Id, time.Since(t0), err)
 		os.Remove(tarPath)
 		return err
 	}
+	packDur := time.Since(t0)
+	fi, _ := os.Stat(tarPath)
+	packedBytes := int64(0)
+	if fi != nil {
+		packedBytes = fi.Size()
+	}
+	logutil.Infof("IvfpqModel.saveToFile: Pack done idx=%s in %v (%d bytes)", idx.Id, packDur, packedBytes)
 
 	chksum, err := vectorindex.CheckSum(tarPath)
 	if err != nil {
+		logutil.Errorf("IvfpqModel.saveToFile: CheckSum FAILED idx=%s: %v", idx.Id, err)
 		os.Remove(tarPath)
 		return err
 	}
 	idx.Checksum = chksum
 
+	// Record the successfully-packed tar BEFORE attempting Destroy: a Destroy
+	// failure does not invalidate the on-disk artifact, and removing it here
+	// would lose committed data.
+	idx.Path = tarPath
+
 	if err = idx.Index.Destroy(); err != nil {
-		os.Remove(tarPath)
+		logutil.Errorf("IvfpqModel.saveToFile: Destroy FAILED idx=%s (tar RETAINED at %s): %v", idx.Id, tarPath, err)
 		return err
 	}
 	idx.Index = nil
-	idx.Path = tarPath
+	logutil.Infof("IvfpqModel.saveToFile: DONE idx=%s path=%s", idx.Id, tarPath)
 	return nil
 }
 
@@ -546,6 +575,27 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 	idx.Idxcfg = idxcfg
 	idx.NThread = uint32(nthread)
 
+	// Reconcile idx.Devices with the shard topology recorded in the tar's
+	// manifest.json. On a single-GPU host the loader auto-pads so a SHARDED
+	// index built under gpu_multi_simulation=N loads all N shards; on a
+	// multi-GPU host with fewer physical GPUs than the saved shard count
+	// this errors (misconfig should surface, not silently degrade).
+	resolved, shardCount, perr := cuvs.ResolveDevicesForTarLoad(idx.Devices, idx.Path)
+	if perr != nil {
+		return perr
+	}
+	if shardCount > 0 && len(resolved) != len(idx.Devices) {
+		logutil.Infof("IvfpqModel.LoadIndex: adjusted idx.Devices from %v to %v to match manifest shard_count=%d",
+			idx.Devices, resolved, shardCount)
+		idx.Devices = resolved
+	}
+
+	// VRAM admission for this load lives in C++ now: cgo/cuvs/device_memory.hpp
+	// claims the bytes each deserialize is about to materialise, in one ledger
+	// that C++ builds can also join. A Go-side ledger could never see a build,
+	// whose decided-but-unallocated window spans minutes. It also needs no shard
+	// attribution: each shard's deserialize claims its own file on its own device.
+
 	cuvsMetric, bp, mode, err := idx.ivfpqConfig()
 	if err != nil {
 		return err
@@ -571,7 +621,9 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 		return err
 	}
 
-	if err = gi.Unpack(idx.Path, mode); err != nil {
+	// idx.Path lives in HostSpillDir; extract into the same directory so the
+	// intermediate (same-size scratch as the tar) does NOT land in /tmp.
+	if err = gi.Unpack(idx.Path, filepath.Dir(idx.Path), mode); err != nil {
 		gi.Destroy()
 		return err
 	}

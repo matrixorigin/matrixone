@@ -142,7 +142,7 @@ func TestGpuIvfFlatPackUnpack(t *testing.T) {
 
 	for _, filename := range []string{"test_ivf_flat_pack.tar", "test_ivf_flat_pack.tar.gz"} {
 		t.Run(filename, func(t *testing.T) {
-			if err := index.Pack(filename); err != nil {
+			if err := index.Pack(filename, ""); err != nil {
 				t.Fatalf("Pack failed: %v", err)
 			}
 			defer os.Remove(filename)
@@ -155,7 +155,7 @@ func TestGpuIvfFlatPackUnpack(t *testing.T) {
 			if err := index2.Start(); err != nil {
 				t.Fatalf("index2 Start failed: %v", err)
 			}
-			if err := index2.Unpack(filename, SingleGpu); err != nil {
+			if err := index2.Unpack(filename, "", SingleGpu); err != nil {
 				t.Fatalf("Unpack failed: %v", err)
 			}
 
@@ -195,7 +195,7 @@ func TestGpuIvfFlatFromDataDirectory(t *testing.T) {
 	}
 
 	tarFile := "test_ivf_flat_dir.tar"
-	if err := index.Pack(tarFile); err != nil {
+	if err := index.Pack(tarFile, ""); err != nil {
 		t.Fatalf("Pack failed: %v", err)
 	}
 	defer os.Remove(tarFile)

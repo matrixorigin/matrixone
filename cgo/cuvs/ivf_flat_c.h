@@ -183,6 +183,9 @@ uint64_t gpu_ivf_flat_search_quantize_with_filter_async(gpu_ivf_flat_c index_c, 
                                                       uint32_t limit, ivf_flat_search_params_t search_params,
                                                       const char* preds_json, void* errmsg);
 
+
+
+
 #ifdef __cplusplus
 }
 #endif

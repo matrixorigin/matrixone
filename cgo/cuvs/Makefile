@@ -37,7 +37,7 @@ INCLUDES := -I. -I/usr/local/cuda/include -I$(CONDA_PREFIX)/include -I$(CONDA_PR
 # leave HOST_ARCH=native in CI artifacts: deploying onto an older node will
 # fail with SIGILL the moment an AVX-512 (or newer) instruction executes.
 HOST_ARCH ?= haswell
-NVCC_FLAGS := -O3 -std=c++17 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -march=$(HOST_ARCH)" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
+NVCC_FLAGS := -O3 -std=c++20 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -march=$(HOST_ARCH)" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
     -gencode arch=compute_75,code=sm_75 \
     -gencode arch=compute_80,code=sm_80 \
     -gencode arch=compute_86,code=sm_86 \
@@ -62,7 +62,7 @@ HEADERS := $(wildcard *.h *.hpp)
 # Source files
 C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp
 CPP_SRCS := helper.cpp
-TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu test/ivf_pq_test.cu test/cagra_test.cu test/kmeans_test.cu test/quantize_test.cu test/distance_test.cu test/adhoc_test.cu test/batching_test.cu test/snmg_test.cu test/verify_half_conversion.cu test/filter_test.cu
+TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu test/ivf_pq_test.cu test/cagra_test.cu test/kmeans_test.cu test/quantize_test.cu test/distance_test.cu test/adhoc_test.cu test/batching_test.cu test/snmg_test.cu test/verify_half_conversion.cu test/filter_test.cu test/device_memory_test.cu test/rows_fitting_test.cu
 
 # Object files
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)
@@ -72,7 +72,14 @@ TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
 all: libmocuvs.so
 
-test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter
+# Builds every standalone binary in this directory, the bench sources included.
+# For the benches this is BUILD coverage, not execution: bench_wiki88 wants a
+# 20 GB card, and test_dynb deliberately reproduces an upstream dynamic_batching
+# deadlock. Building them here is what catches an API break at build time --
+# bench_upload_cost silently rotted through the cuVS 26.08 migration precisely
+# because no target compiled it, and only turned up when built by hand.
+test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter \
+      bench_hostview bench_wiki88 bench_upload_cost
 
 release: all
 
@@ -157,7 +164,26 @@ test_ivfpq_filter: obj/test/test_ivfpq_filter.o
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+# Measures what MO gives up by uploading the dataset itself instead of handing
+# cuVS a raft::host_matrix_view (which samples the trainset on the host and
+# streams the encode in batches). Standalone: cuVS / RAFT / RMM only.
+bench_hostview: obj/test/bench_hostview.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
+# Projects the wiki_all 88M float16 index against a 20 GB card using the real
+# tuning from mo_vector_benchmark/cfg/templates/88M.json. Measures the train and
+# encode phases separately, because their allocations do not overlap.
+bench_wiki88: obj/test/bench_wiki88.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
+# A/B for CAGRA and IVF-Flat: what the dataset upload costs each of them.
+bench_upload_cost: obj/test/bench_upload_cost.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter bench_hostview bench_wiki88 bench_upload_cost
 	rm -rf obj

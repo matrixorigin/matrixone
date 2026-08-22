@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include "device_memory.hpp"
+#include "index_cost.hpp"
+
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -544,6 +548,19 @@ public:
     // directly from this store (see filter.hpp / eval_filter_bitmap_cpu).
     // Empty means the index has no INCLUDE columns and only unfiltered search applies.
     FilterStore filter_host_;
+
+    // cost_ is this index's DEVICE cost model (index_cost.hpp). Each index type
+    // constructs its own concrete cost in its constructor, so "what does a row
+    // cost" and "what will this build peak at" have exactly one definition per
+    // index and every caller -- the capacity planner and the build claim alike --
+    // reads the same object.
+    std::unique_ptr<matrixone::index_cost_base> cost_;
+
+    // build_peak_bytes: what a build of `rows` rows is about to allocate. Routed
+    // through cost_ so the claim cannot drift from the planner's model.
+    size_t build_peak_bytes(uint64_t rows) const {
+        return cost_ ? cost_->build_peak_bytes(rows) : 0;
+    }
 
     gpu_index_base_t() = default;
     virtual ~gpu_index_base_t() {
@@ -1216,35 +1233,16 @@ public:
         return limit;
     }
 
+    // Thin wrapper over matrixone::rows_fitting_gpu_mem, which owns the 60%-of-free-VRAM
+    // rule shared with the index-build capacity bound. It throws rather than falling back
+    // to the requested count: this runs inside a submit_main task, so a device is current
+    // by construction and a cudaMemGetInfo failure means the context is already broken
+    // (sticky launch error, device reset). Returning requested_rows would send an
+    // unchecked upload into a dead context and surface the real fault later as an opaque
+    // allocation failure inside train().
     int64_t cap_train_rows_to_gpu_mem(int64_t requested_rows) const {
-        if (requested_rows < 1) requested_rows = 1;
-        size_t free_bytes = 0, total_bytes = 0;
-        cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
-        if (err != cudaSuccess) {
-            // Do NOT fall back to the requested count. This runs inside a
-            // submit_main task, so a device is current by construction and a
-            // failure means the context is already broken (sticky launch error,
-            // device reset). Returning requested_rows would send an unchecked
-            // upload into a dead context and surface the real fault later as an
-            // opaque allocation failure inside train().
-            throw std::runtime_error(
-                std::string("cap_train_rows_to_gpu_mem: cudaMemGetInfo failed: ") +
-                cudaGetErrorString(err));
-        }
-        size_t per_row = static_cast<size_t>(dimension) * sizeof(B);
-        if (per_row == 0) {
-            throw std::runtime_error("cap_train_rows_to_gpu_mem: index dimension is 0");
-        }
-        int64_t max_rows = static_cast<int64_t>((free_bytes / 10 * 6) / per_row);
-        if (max_rows < 1) max_rows = 1;
-        if (requested_rows > max_rows) {
-            std::cerr << "[quantizer] train sample capped " << requested_rows
-                      << " -> " << max_rows << " rows to fit 60% of "
-                      << (free_bytes >> 20) << " MB free GPU mem (dim="
-                      << dimension << ")" << std::endl;
-            return max_rows;
-        }
-        return requested_rows;
+        return matrixone::cap_rows_to_gpu_mem(
+            requested_rows, static_cast<size_t>(dimension) * sizeof(B), "quantizer");
     }
 
 
@@ -2228,8 +2226,19 @@ protected:
         raft_handle_wrapper_t& handle, const T* host_data, uint64_t n_rows) {
         auto res    = handle.get_raft_resources();
         auto stream = raft::resource::get_cuda_stream(*res);
+        // Claim the upload before allocating it. extend() decides how much it is
+        // about to move to the device well before it moves it, and that window is
+        // invisible to a live cudaMemGetInfo -- which is exactly what a claim is
+        // for. The claim ends when this returns: by then the buffer exists and
+        // every later admission sees it in the free figure, so holding it longer
+        // would count the same bytes twice.
+        const size_t upload_bytes = static_cast<size_t>(n_rows) * this->dimension * sizeof(T);
+        matrixone::device_memory_governor::reservation upload_claim;
+        if (upload_bytes > 0) {
+            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload");
+        }
         rmm::device_uvector<T> storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
         auto device_view = raft::make_device_matrix_view<T, int64_t>(
             storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
         raft::copy(*res, device_view,
@@ -2247,8 +2256,25 @@ protected:
         raft_handle_wrapper_t& handle, const float* host_data, uint64_t n_rows) {
         auto res    = handle.get_raft_resources();
         auto stream = raft::resource::get_cuda_stream(*res);
+        // As upload_T_matrix, but this path can stage more than the destination:
+        // a non-float T also materialises the f32 source on device, and a half
+        // base adds a B buffer on top. Charge the peak, not just the result --
+        // under-claiming the staging is how a concurrent load gets admitted
+        // against memory this upload is about to take.
+        const size_t elems = static_cast<size_t>(n_rows) * this->dimension;
+        size_t upload_bytes = elems * sizeof(T);
+        if constexpr (!std::is_same_v<T, float>) {
+            upload_bytes += elems * sizeof(float);
+            if constexpr (!std::is_same_v<B, float>) {
+                upload_bytes += elems * sizeof(B);
+            }
+        }
+        matrixone::device_memory_governor::reservation upload_claim;
+        if (upload_bytes > 0) {
+            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload");
+        }
         rmm::device_uvector<T> storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
         auto device_view = raft::make_device_matrix_view<T, int64_t>(
             storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
         if constexpr (std::is_same_v<T, float>) {
@@ -2257,7 +2283,7 @@ protected:
                            host_data, n_rows, this->dimension));
         } else {
             rmm::device_uvector<float> float_storage(
-                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
             auto float_view = raft::make_device_matrix_view<float, int64_t>(
                 float_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
             raft::copy(*res, float_view,
@@ -2275,7 +2301,7 @@ protected:
                     // B == half: quantizer is half-source. Cast the f32 input to
                     // half on-device, then transform half -> T.
                     rmm::device_uvector<B> b_storage(
-                        static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+                        static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
                     auto b_view = raft::make_device_matrix_view<B, int64_t>(
                         b_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
                     raft::copy(*res, b_view, float_view);

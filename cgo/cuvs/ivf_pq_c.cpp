@@ -781,3 +781,50 @@ template class gpu_ivf_pq_t<half, half>;
 template class gpu_ivf_pq_t<half, int8_t>;
 template class gpu_ivf_pq_t<half, uint8_t>;
 } // namespace matrixone
+
+// gpu_ivf_pq_rows_fitting: how many rows this index can hold, and how many
+// k-means training rows fit, asked of the index's own devices.
+//
+// Takes the handle gpu_ivf_pq_new_empty() already returned, because rows_fitting
+// is a member: the per-device query runs as a task on this index's worker
+// threads, which are already bound to their device. Nothing here binds a device
+// or moves the caller's thread.
+
+
+
+// gpu_ivf_pq_rows_fitting: capacity for this index shape, computed entirely in C++.
+//
+// Takes no index: a cost object is a value type built from the shape, so nothing
+// has to be constructed or allocated to ask. See index_cost.hpp.
+int gpu_ivf_pq_rows_fitting(uint64_t dim, uint64_t m, uint64_t bits_per_code, uint64_t elem_size,
+                            const int* device_ids, int num_devices, int dist_mode,
+                            int64_t* out_rows, int64_t* out_trainset_rows, uint64_t* out_per_row,
+                            int* out_min_device, uint64_t* out_min_free, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        matrixone::ivf_pq_cost cost(dim, m, bits_per_code, elem_size);
+        size_t per_row = 0, min_free = 0;
+        int min_dev = 0;
+        const int64_t rows = cost.rows_fitting(device_ids, num_devices, dist_mode,
+                                               "gpu_ivf_pq_rows_fitting", &per_row, &min_dev, &min_free);
+        if (out_trainset_rows) {
+            // The trainset is a different per-row cost against the same budget,
+            // and never coexists with the index data, so it gets its own count
+            // rather than being folded into per_row.
+            const auto tcost = matrixone::ivf_pq_trainset_cost(dim, m, bits_per_code, elem_size);
+            *out_trainset_rows = tcost.rows_fitting(device_ids, num_devices, dist_mode,
+                                                    "ivfpq trainset");
+        }
+        if (out_rows) *out_rows = rows;
+        if (out_per_row) *out_per_row = static_cast<uint64_t>(per_row);
+        if (out_min_device) *out_min_device = min_dev;
+        if (out_min_free) *out_min_free = static_cast<uint64_t>(min_free);
+        return 0;
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_rows_fitting", e.what());
+        return -1;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_ivf_pq_rows_fitting", "unknown C++ exception");
+        return -1;
+    }
+}

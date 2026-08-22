@@ -23,6 +23,7 @@
 #pragma once
 
 #include "index_base.hpp"
+#include "device_memory.hpp"
 #include "cuvs_worker.hpp"
 #include "cuvs_types.h"
 #include "quantize.hpp"
@@ -324,11 +325,32 @@ public:
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
 
-        // Create and own the device memory
+        // Claim the dataset bytes this build is about to materialise, in the same
+        // per-device ledger index loads use, so a concurrent load cannot spend
+        // the free bytes this build is relying on. brute_force keeps the raw
+        // vectors resident (it searches them directly), so count*dim*sizeof(T) is
+        // the real demand — unlike IVF-PQ, which streams the dataset and keeps
+        // only the PQ codes. Skipped for an empty index: there is nothing to
+        // allocate, and reserve() refuses a zero claim by design.
+        // Create and own the device memory. The claim covers the upload and ENDS
+        // with it: once the copy has landed the bytes are visible to a live
+        // cudaMemGetInfo, so a claim held past this point is counted twice --
+        // once in the ledger, once in the free figure that already dropped --
+        // and refuses concurrent loads over memory that is only spoken for once.
+        // In particular it deliberately does not span brute_force::build below.
         using dataset_t = raft::device_matrix<T, int64_t>;
-        auto dataset_device = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
-        raft::copy(*res, dataset_device.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-        raft::resource::sync_stream(*res);
+        raft::device_matrix<T, int64_t> dataset_device = [&] {
+            matrixone::device_memory_governor::reservation build_claim;
+            if (this->count > 0 && this->dimension > 0) {
+                build_claim = matrixone::device_memory_governor::reserve(
+                    static_cast<size_t>(this->count) * static_cast<size_t>(this->dimension) * sizeof(T),
+                    "brute_force::build");
+            }
+            auto d = raft::make_device_matrix<T, int64_t>(*res, (int64_t)this->count, (int64_t)this->dimension);
+            raft::copy(*res, d.view(), raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
+            raft::resource::sync_stream(*res);
+            return d;
+        }();
 
         // Move the matrix into the shared pointer FIRST to ensure it's alive and owned
         auto shared_dataset = std::make_shared<dataset_t>(std::move(dataset_device));

@@ -26,9 +26,11 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // GpuCagra represents the C++ gpu_cagra_t object.
@@ -553,12 +555,16 @@ func (gi *GpuCagra[B, Q]) Save(filename string) error {
 }
 
 // Pack saves the index to a .tar or .tar.gz file using save_dir.
-func (gi *GpuCagra[B, Q]) Pack(filename string) error {
+// spillDir hosts the intermediate save_dir tree (index.bin + ids.bin +
+// deleted_bitset.bin + host_ids.bin + manifest.json + filter blobs); pass the
+// LocalSpillDir the caller is already using for the final .tar so this scratch
+// does NOT land in $TMPDIR (/tmp) where a wiki_all-scale build would ENOSPC.
+func (gi *GpuCagra[B, Q]) Pack(filename, spillDir string) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "cagra-pack-*")
+	tmpDir, err := os.MkdirTemp(spillDir, "cagra-pack-*")
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
@@ -568,26 +574,52 @@ func (gi *GpuCagra[B, Q]) Pack(filename string) error {
 	cDir := C.CString(tmpDir)
 	defer C.free(unsafe.Pointer(cDir))
 
+	logutil.Infof("GpuCagra.Pack: -> gpu_cagra_save_dir tmpDir=%s target=%s", tmpDir, filename)
+	t0 := time.Now()
 	C.gpu_cagra_save_dir(gi.cCagra, cDir, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
+		logutil.Errorf("GpuCagra.Pack: gpu_cagra_save_dir returned error after %v: %s", time.Since(t0), errStr)
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
-
-	return Pack(tmpDir, filename)
+	// List what save_dir actually wrote so we know cuVS finished cleanly (vs died mid-write).
+	if entries, err := os.ReadDir(tmpDir); err == nil {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if fi, ferr := e.Info(); ferr == nil {
+				names = append(names, fmt.Sprintf("%s(%d)", e.Name(), fi.Size()))
+			} else {
+				names = append(names, e.Name())
+			}
+		}
+		logutil.Infof("GpuCagra.Pack: gpu_cagra_save_dir returned in %v; wrote %d files: %v",
+			time.Since(t0), len(entries), names)
+	} else {
+		logutil.Infof("GpuCagra.Pack: gpu_cagra_save_dir returned in %v (ReadDir failed: %v)", time.Since(t0), err)
+	}
+	logutil.Infof("GpuCagra.Pack: -> Pack (tar) tmpDir=%s target=%s", tmpDir, filename)
+	t1 := time.Now()
+	if err := Pack(tmpDir, filename); err != nil {
+		logutil.Errorf("GpuCagra.Pack: Pack (tar) FAILED after %v: %v", time.Since(t1), err)
+		return err
+	}
+	logutil.Infof("GpuCagra.Pack: Pack (tar) done in %v", time.Since(t1))
+	return nil
 }
 
 // Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.
 // mode overrides the distribution mode at load time — pass Replicated to broadcast
 // a SINGLE_GPU .tar to all GPUs without rebuilding.
 // The index must already be initialized and started before calling Unpack.
-func (gi *GpuCagra[B, Q]) Unpack(filename string, mode DistributionMode) error {
+// spillDir hosts the intermediate extraction of the .tar (same-size scratch as
+// the tar itself). Pass a large-enough local dir; empty falls back to $TMPDIR.
+func (gi *GpuCagra[B, Q]) Unpack(filename, spillDir string, mode DistributionMode) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "cagra-unpack-*")
+	tmpDir, err := os.MkdirTemp(spillDir, "cagra-unpack-*")
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
@@ -1268,4 +1300,37 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries 
 	}
 
 	return uint64(jobID), nil
+}
+
+// CagraRowsFitting answers how many rows a CAGRA index of this shape fits on
+// these devices. See IvfPqRowsFitting: the cost model is a value type in C++, so
+// no index is needed, and the answer must be taken once before anything has been
+// allocated.
+func CagraRowsFitting(dim, elemSize, intermediateGraphDegree uint64, devices []int, mode DistributionMode) (
+	rows int64, perRow uint64, minDevice int, minFree uint64, err error) {
+	if len(devices) == 0 {
+		return 0, 0, 0, 0, nil
+	}
+	cDevs := make([]C.int, len(devices))
+	for i, d := range devices {
+		cDevs[i] = C.int(d)
+	}
+	var errmsg *C.char
+	var cRows C.int64_t
+	var cPerRow, cFree C.uint64_t
+	var cMinDev C.int
+	rc := C.gpu_cagra_rows_fitting(
+		C.uint64_t(dim), C.uint64_t(elemSize), C.uint64_t(intermediateGraphDegree),
+		&cDevs[0], C.int(len(cDevs)), C.int(mode),
+		&cRows, &cPerRow, &cMinDev, &cFree, unsafe.Pointer(&errmsg))
+	runtime.KeepAlive(cDevs)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, 0, 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if rc != 0 {
+		return 0, 0, 0, 0, moerr.NewInternalErrorNoCtx("CagraRowsFitting failed")
+	}
+	return int64(cRows), uint64(cPerRow), int(cMinDev), uint64(cFree), nil
 }

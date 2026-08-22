@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -350,4 +351,67 @@ func TestConcurrentDebounce(t *testing.T) {
 
 	// Should complete without panic or race condition
 	t.Log("concurrent debounce test passed")
+}
+
+// TestMinHierarchicalHeadroom is the counterexample for taking the minimum
+// ancestor LIMIT and then subtracting only the leaf's usage: a constrained
+// parent has far less headroom than that arithmetic reports.
+func TestMinHierarchicalHeadroom(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+
+	write := func(dir, name, val string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(val+"\n"), 0o600))
+	}
+
+	// Parent: 8 GiB cap with 7 GiB already charged (siblings) -> 1 GiB headroom.
+	// Child:  4 GiB cap with 1 GiB charged to us              -> 3 GiB headroom.
+	// The binding constraint is the PARENT's 1 GiB. Limit-minimum minus
+	// leaf-usage would instead report 4 GiB - 1 GiB = 3 GiB, i.e. 3x too much.
+	write(root, "memory.max", "max")
+	write(root, "memory.current", "0")
+	write(parent, "memory.max", strconv.FormatUint(8<<30, 10))
+	write(parent, "memory.current", strconv.FormatUint(7<<30, 10))
+	write(child, "memory.max", strconv.FormatUint(4<<30, 10))
+	write(child, "memory.current", strconv.FormatUint(1<<30, 10))
+
+	got, ok := minHierarchicalHeadroom(child, root, "memory.max", "memory.current")
+	require.True(t, ok)
+	require.Equal(t, uint64(1<<30), got, "must report the parent's headroom, not the leaf's")
+
+	t.Run("exhausted level reports zero, still measured", func(t *testing.T) {
+		write(parent, "memory.current", strconv.FormatUint(9<<30, 10)) // over its cap
+		got, ok := minHierarchicalHeadroom(child, root, "memory.max", "memory.current")
+		require.True(t, ok, "an exhausted cgroup is MEASURED, not unmeasured")
+		require.Equal(t, uint64(0), got)
+		write(parent, "memory.current", strconv.FormatUint(7<<30, 10))
+	})
+
+	t.Run("limit without readable usage is unmeasured", func(t *testing.T) {
+		// Skipping such a level would resurrect the overstatement this prevents.
+		require.NoError(t, os.Remove(filepath.Join(parent, "memory.current")))
+		_, ok := minHierarchicalHeadroom(child, root, "memory.max", "memory.current")
+		require.False(t, ok)
+		write(parent, "memory.current", strconv.FormatUint(7<<30, 10))
+	})
+
+	t.Run("no limit anywhere is unmeasured", func(t *testing.T) {
+		write(parent, "memory.max", "max")
+		write(child, "memory.max", "max")
+		_, ok := minHierarchicalHeadroom(child, root, "memory.max", "memory.current")
+		require.False(t, ok, "unlimited hierarchy must fall back to the host reading")
+	})
+}
+
+func TestMemoryAvailableIncludingCacheReportsStatus(t *testing.T) {
+	// The contract that matters to callers: a zero value must be distinguishable
+	// from an unavailable measurement, because they demand opposite responses.
+	avail, measured := MemoryAvailableIncludingCache()
+	if measured {
+		require.GreaterOrEqual(t, avail, uint64(0))
+	} else {
+		require.Equal(t, uint64(0), avail, "unmeasured must report zero")
+	}
 }

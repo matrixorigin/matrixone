@@ -159,6 +159,133 @@ func cgroupDirectory(mountPoint, mountRoot, processPath string) (string, bool) {
 	return filepath.Join(mountPoint, rel), true
 }
 
+// readCgroupUint reads a single-value cgroup file. ok is false when the file is
+// missing, empty, or the literal "max" (cgroup v2's "unlimited"). A value of 0
+// is returned as ok -- it is a legitimate usage reading for an empty cgroup.
+func readCgroupUint(path string) (uint64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" || value == "max" {
+		return 0, false
+	}
+	v, perr := strconv.ParseUint(value, 10, 64)
+	if perr != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// minHierarchicalHeadroom returns the tightest `limit - usage` across every
+// governing level from `dir` up to `mountPoint`, and whether any level imposed
+// a limit at all.
+//
+// Taking the minimum LIMIT and subtracting only the leaf's usage (which is what
+// CgroupMemoryLimit + GetMemUsage(pid) amounts to) overstates headroom whenever
+// an ancestor is the binding constraint: a parent capped at 8 GiB with 7 GiB
+// already charged to sibling processes has 1 GiB left, but leaf-usage
+// arithmetic reports nearly the whole 8 GiB. Headroom has to be computed at
+// each level and then minimised.
+//
+// A level that publishes a limit but no readable usage makes the whole
+// measurement unavailable rather than being skipped -- skipping a governing
+// level is exactly the overstatement this exists to prevent.
+func minHierarchicalHeadroom(dir, mountPoint, limitFile, usageFile string) (uint64, bool) {
+	dir = filepath.Clean(dir)
+	mountPoint = filepath.Clean(mountPoint)
+	var (
+		minimum uint64
+		found   bool
+	)
+	for {
+		if limit, ok := readCgroupUint(filepath.Join(dir, limitFile)); ok && limit > 0 {
+			usage, uok := readCgroupUint(filepath.Join(dir, usageFile))
+			if !uok {
+				return 0, false
+			}
+			var headroom uint64
+			if limit > usage {
+				headroom = limit - usage
+			}
+			if !found || headroom < minimum {
+				minimum = headroom
+				found = true
+			}
+		}
+		if dir == mountPoint {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir || (parent != mountPoint && !strings.HasPrefix(parent, mountPoint+string(os.PathSeparator))) {
+			break
+		}
+		dir = parent
+	}
+	return minimum, found
+}
+
+// hierarchicalCgroupHeadroom is the headroom twin of
+// hierarchicalCgroupMemoryLimit: same cgroup/mountinfo resolution, but it
+// returns the tightest per-level `limit - usage` instead of the tightest limit.
+// ok is false when no cgroup hierarchy could be resolved for the process.
+func hierarchicalCgroupHeadroom(pid int) (uint64, bool) {
+	cgroupData, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return 0, false
+	}
+	mountData, err := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
+	if err != nil {
+		return 0, false
+	}
+
+	v2Path := ""
+	v1MemoryPath := ""
+	for _, line := range strings.Split(string(cgroupData), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if parts[0] == "0" && parts[1] == "" {
+			v2Path = parts[2]
+		}
+		for _, controller := range strings.Split(parts[1], ",") {
+			if controller == "memory" {
+				v1MemoryPath = parts[2]
+			}
+		}
+	}
+
+	for _, line := range strings.Split(string(mountData), "\n") {
+		leftRight := strings.SplitN(line, " - ", 2)
+		if len(leftRight) != 2 {
+			continue
+		}
+		left := strings.Fields(leftRight[0])
+		right := strings.Fields(leftRight[1])
+		if len(left) < 5 || len(right) < 3 {
+			continue
+		}
+		mountRoot, mountPoint, fsType := left[3], left[4], right[0]
+		switch fsType {
+		case "cgroup2":
+			if v2Path != "" {
+				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v2Path); ok {
+					return minHierarchicalHeadroom(dir, mountPoint, "memory.max", "memory.current")
+				}
+			}
+		case "cgroup":
+			if v1MemoryPath != "" && strings.Contains(","+right[2]+",", ",memory,") {
+				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v1MemoryPath); ok {
+					return minHierarchicalHeadroom(dir, mountPoint, "memory.limit_in_bytes", "memory.usage_in_bytes")
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
 func minHierarchicalLimit(dir, mountPoint, filename string) uint64 {
 	dir = filepath.Clean(dir)
 	mountPoint = filepath.Clean(mountPoint)
@@ -201,6 +328,56 @@ func MemoryAvailable() uint64 {
 		logutil.Errorf("failed to get memory stats: %v", err)
 	}
 	return mem.Free
+}
+
+// MemoryAvailableIncludingCache returns memory that could be allocated on this
+// node without evicting live pages. This is the number to use for sizing bulk
+// allocations (index build buffers, ANN staging arrays):
+//
+//   - When a cgroup memory limit is discoverable for the current process
+//     (regardless of whether the process is PID 1), it is `limit - cgroup
+//     usage`. This bounds allocations by the CN's actual budget rather than
+//     the host's, so mo-service behind an init/entrypoint on a large node
+//     with a small cgroup does not size against the whole host and get
+//     OOM-killed by the cgroup.
+//   - Otherwise (bare-metal, no cgroup): gosigar ActualFree, i.e. Linux
+//     /proc/meminfo:MemAvailable — MemFree plus reclaimable page cache and
+//     buffers. Raw MemFree drops to a few GiB the moment the cache warms up
+//     even when the kernel can reclaim hundreds of GiB on demand.
+//
+// The second return reports whether the measurement SUCCEEDED. A zero value
+// with measured==true means the budget is genuinely exhausted; callers must
+// not conflate that with measured==false (unavailable), because the two
+// demand opposite responses -- fail the request vs. fall back to another bound.
+func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
+	// Prefer the hierarchy walk: it subtracts usage at each governing level, so
+	// a constrained ancestor is reported at ITS headroom rather than the leaf's.
+	if headroom, ok := hierarchicalCgroupHeadroom(pid); ok {
+		return headroom, true
+	}
+	// Fallback for hosts where the ancestry is not readable (cgroup namespaces,
+	// unusual mountinfo). Single-level: limit minus this process's usage.
+	if limit := CgroupMemoryLimit(); limit > 0 {
+		used, err := cgroup.GetMemUsage(pid)
+		if err != nil {
+			logutil.Errorf("failed to get cgroup memory usage: %v", err)
+			return 0, false
+		}
+		if uint64(used) >= limit {
+			// Measured, and genuinely exhausted. This is NOT the same as an
+			// unavailable measurement: reporting it as unmeasured is what let
+			// callers silently disable their memory bound on a full cgroup.
+			return 0, true
+		}
+		return limit - uint64(used), true
+	}
+	s := gosigar.ConcreteSigar{}
+	mem, err := s.GetMem()
+	if err != nil {
+		logutil.Errorf("failed to get memory stats: %v", err)
+		return 0, false
+	}
+	return mem.ActualFree, true
 }
 
 func MemoryUsed() uint64 {
