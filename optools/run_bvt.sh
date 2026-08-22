@@ -38,6 +38,40 @@ function wait_system_init() {
     return 1
 }
 
+# Start the jstfu datastream server (xtool/jstfu) that
+# test/distributed/cases/datastream talks to on 127.0.0.1:4444.  In this
+# launch deployment MO runs on the host, so a host jstfu is reachable from
+# the CN.  Idempotent: the restart pass reuses the running instance and the
+# already-built jar.  Java is guaranteed here (mo-tester itself needs it);
+# the Maven wrapper bootstraps its own Maven, and the pom emits Java 8
+# bytecode on any JDK.
+function launch_jstfu() {
+    cd $MO_WORKSPACE
+    if bash -c 'exec 3<>/dev/tcp/127.0.0.1/4444' 2>/dev/null; then
+        echo "jstfu already listening on :4444, skip"
+        return 0
+    fi
+    if [ ! -f xtool/jstfu/target/jstfu.jar ]; then
+        echo "building jstfu.jar"
+        (cd xtool/jstfu && ./mvnw -q -B -DskipTests package) || {
+            echo "jstfu build failed; datastream BVT cases will fail" >&2
+            return 1
+        }
+    fi
+    nohup ./optools/jstfu_bvt.sh "$MO_WORKSPACE/test/distributed/resources" 127.0.0.1:6001 &>jstfu.log &
+    for _ in {1..30}; do
+        if bash -c 'exec 3<>/dev/tcp/127.0.0.1/4444' 2>/dev/null; then
+            echo "jstfu ready on :4444"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "jstfu did not start; see jstfu.log" >&2
+    cat jstfu.log >&2 || true
+    return 1
+}
+
 launch_mo
+launch_jstfu || exit $?
 wait_system_init
 exit $?

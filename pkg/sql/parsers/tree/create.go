@@ -950,6 +950,7 @@ type CreateTable struct {
 	Param              *ExternParam
 	IcebergParam       *IcebergTableParam
 	MongoDBParam       *MongoDBTableParam
+	DataStreamParam    *DataStreamTableParam
 	AsSource           *Select
 	IsAsSelect         bool
 	IsAsLike           bool
@@ -969,7 +970,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IsClusterTable {
 		ctx.WriteString(" cluster")
 	}
-	if node.Param != nil || node.IcebergParam != nil || node.MongoDBParam != nil {
+	if node.Param != nil || node.IcebergParam != nil || node.MongoDBParam != nil || node.DataStreamParam != nil {
 		ctx.WriteString(" external")
 	}
 	ctx.WriteString(" table")
@@ -1024,6 +1025,10 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.MongoDBParam != nil {
 		ctx.WriteByte(' ')
 		node.MongoDBParam.Format(ctx)
+	}
+	if node.DataStreamParam != nil {
+		ctx.WriteByte(' ')
+		node.DataStreamParam.Format(ctx)
 	}
 
 	if node.PartitionOption != nil {

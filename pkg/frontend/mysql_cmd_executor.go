@@ -333,10 +333,18 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 func redactStatementTextForLogging(statement tree.Statement, text string) string {
-	switch statement.(type) {
+	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
 		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
 		return tree.String(statement, dialect.MYSQL)
+	case *tree.CreateTable:
+		// A datastream external table's WITH options may carry an 'apikey'
+		// secret; re-rendering the AST redacts it (DataStreamOption.Format),
+		// so the raw CREATE text never reaches statement logging.
+		if stmt.DataStreamParam != nil {
+			return tree.String(statement, dialect.MYSQL)
+		}
+		return text
 	default:
 		return text
 	}
