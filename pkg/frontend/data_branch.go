@@ -3293,6 +3293,7 @@ func getTableCreationCommitTSByCollectChanges(
 		ctx = engine.WithPKFilter(ctx, pkFilter)
 	}
 	ctx = engine.WithCollectChangesDebugLabel(ctx, "data-branch-table-cts")
+	ctx = engine.WithCollectChangesPreserveAllVersions(ctx)
 
 	handle, err := rel.CollectChanges(ctx, lowerBound, snapshotTS, true, mp)
 	if err != nil {

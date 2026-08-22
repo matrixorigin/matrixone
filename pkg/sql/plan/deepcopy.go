@@ -110,6 +110,7 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			IgnoreAffectedRows:    ctx.IgnoreAffectedRows,
 			DedupByTargetRowId:    ctx.DedupByTargetRowId,
 			TargetUpdateCtxIdx:    ctx.TargetUpdateCtxIdx,
+			AffectedRowsCols:      slices.Clone(ctx.AffectedRowsCols),
 		}
 	}
 

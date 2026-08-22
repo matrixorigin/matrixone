@@ -62,3 +62,14 @@ func TestVisibleStateRecoveryResourcesContextRoundTrip(t *testing.T) {
 	ctx := WithVisibleStateRecoveryResources(base, resources)
 	require.Same(t, resources, VisibleStateRecoveryResourcesFromContext(ctx))
 }
+
+func TestCollectChangesPreserveAllVersionsContextRoundTrip(t *testing.T) {
+	base := context.Background()
+
+	require.False(t, CollectChangesPreserveAllVersionsFromContext(nil))
+	require.False(t, CollectChangesPreserveAllVersionsFromContext(base))
+	require.Nil(t, WithCollectChangesPreserveAllVersions(nil))
+
+	ctx := WithCollectChangesPreserveAllVersions(base)
+	require.True(t, CollectChangesPreserveAllVersionsFromContext(ctx))
+}
