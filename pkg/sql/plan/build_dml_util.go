@@ -1490,7 +1490,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					combinedStep := builder.appendStep(combinedNodeID)
 					upPlanCtx := getDmlPlanCtx()
 					upPlanCtx.objRef = childObjRef
-					upPlanCtx.tableDef = childTableDef
+					// buildUpdatePlans removes hidden columns from its TableDef. Keep
+					// the combined SET NULL stream isolated from sibling CASCADE actions.
+					upPlanCtx.tableDef = CloneTableDefForPlan(childTableDef, true)
 					upPlanCtx.updateColLength = len(updateMap)
 					upPlanCtx.rowIdPos = childRowIdPos
 					upPlanCtx.sourceStep = combinedStep
@@ -1506,6 +1508,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					if err != nil {
 						return err
 					}
+					setNullDeleteSourcePending = delCtx.skipTargetDelete
 				}
 			}
 
@@ -1562,7 +1565,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					if err != nil {
 						return err
 					}
-					setNullDeleteSourcePending = delCtx.skipTargetDelete
 				}
 			}
 
