@@ -3763,6 +3763,66 @@ func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t 
 	result.Free(mp)
 }
 
+func TestWindowTimestampRangeFoldAggregateMembershipPreservesMultiKeyOrder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	// Multi-key RANGE frames use ctr.os to preserve the complete ORDER BY tuple
+	// peer boundary. The last TIMESTAMP key repeats from B to A at the next k
+	// group, which is a normal lexicographic reset rather than a timezone fold.
+	// Keep this in UTC so the expected tuple semantics do not depend on DST.
+	timestampA, err := types.ParseTimestamp(time.UTC, "2024-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	timestampB, err := types.ParseTimestamp(time.UTC, "2024-01-01 01:00:00.000000", 6)
+	require.NoError(t, err)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 2, 2}, nil, mp)
+	bat.Vecs[1] = vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []types.Timestamp{
+		timestampA, timestampB, timestampA, timestampB,
+	}, nil, mp))
+	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 4, 8}, nil, mp)
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	spec := makeWindowSpec()
+	spec.GetW().OrderBy = []*plan.OrderBySpec{
+		{Expr: newColExprWithType(0, types.T_int32.ToType())},
+		{Expr: newColExprWithType(1, types.T_timestamp.ToType())},
+	}
+	spec.GetW().Frame = &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExprAt(2)},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	defer arg.Free(proc, false, nil)
+
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+	arg.Fs = makeOrderBy(spec)
+	arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
+	for i := range arg.Fs {
+		arg.ctr.orderVecs[i], err = colexec.MakeEvalVector(proc, []*plan.Expr{arg.Fs[i].Expr})
+		require.NoError(t, err)
+	}
+	_, err = arg.ctr.processOrder(0, arg, bat, proc)
+	require.NoError(t, err)
+
+	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3, 7, 15}, vector.MustFixedColWithTypeCheck[int64](result))
+	result.Free(mp)
+}
+
 func TestWindowTimestampRangeFoldValueMembership(t *testing.T) {
 	newYork, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
