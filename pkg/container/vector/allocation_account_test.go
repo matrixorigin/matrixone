@@ -879,6 +879,29 @@ func TestConstSetPreservesSelectedBinaryString(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConstSetRuntimeStringDomainAdmissionIsFailureAtomic(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 2)
+	mp := mpool.MustNewZero()
+	destination := newAccountedTestVector(t, types.T_varbinary.ToType(), state.selection)
+	require.NoError(t, AppendBytes(destination, []byte("old"), false, mp))
+
+	source := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, AppendBytes(source, []byte("new"), false, mp))
+	require.NoError(t, source.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+
+	set := GetConstSetFunction(types.T_varbinary.ToType(), mp)
+	err := set(destination, source, 0, 4)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.Equal(t, 1, destination.Length())
+	require.False(t, destination.IsConst())
+	require.Equal(t, "old", destination.GetStringAt(0))
+	require.Equal(t, types.RuntimeStringInherit, destination.GetRuntimeStringDomainAt(0))
+
+	source.Free(mp)
+	destination.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestVectorAllocationAccountCopyRollback(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 1)
 	mp := mpool.MustNewZero()
@@ -1495,6 +1518,101 @@ func TestAccountedBinaryStringCreatedAfterPayloadGrowthCoversSetLength(t *testin
 	require.False(t, vec.GetIsBinaryStringAt(65535))
 
 	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedConstRuntimeStringDomainUsesPhysicalRowCapacity(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 16)
+	mp := mpool.MustNewZero()
+	vec, err := NewConstBytesWithAllocation(
+		types.T_varbinary.ToType(), []byte("selected"), 1, mp, state.selection,
+	)
+	require.NoError(t, err)
+	require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+	used := state.account.Snapshot().Used
+	binaryCapacity := vec.binaryStringRows.ExternalStorageCapacity()
+	textCapacity := vec.textStringRows.ExternalStorageCapacity()
+	require.Equal(t, 1, binaryCapacity)
+	require.Equal(t, 1, textCapacity)
+
+	require.NotPanics(t, func() { vec.SetLength(65) })
+	require.Equal(t, used, state.account.Snapshot().Used)
+	require.Equal(t, binaryCapacity, vec.binaryStringRows.ExternalStorageCapacity())
+	require.Equal(t, textCapacity, vec.textStringRows.ExternalStorageCapacity())
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(64))
+
+	vec.SetLength(0)
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	require.NotPanics(t, func() { vec.SetLength(129) })
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(128))
+	require.Equal(t, used, state.account.Snapshot().Used)
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedConstRuntimeStringDomainCopiesUsePhysicalRowCapacity(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 256, 16)
+	mp := mpool.MustNewZero()
+	source, err := NewConstBytes(
+		types.T_varbinary.ToType(), []byte("selected"), 8192, mp,
+	)
+	require.NoError(t, err)
+	require.NoError(t, source.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+
+	assertPhysicalText := func(t *testing.T, vec *Vector) {
+		require.Equal(t, 1, vec.binaryStringRows.ExternalStorageCapacity())
+		require.Equal(t, 1, vec.textStringRows.ExternalStorageCapacity())
+		require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0))
+		require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(8191))
+	}
+
+	duplicate, err := source.DupOffHeapWithAllocation(mp, state.selection)
+	require.NoError(t, err)
+	assertPhysicalText(t, duplicate)
+	duplicate.Free(mp)
+	require.Zero(t, state.account.Snapshot().Used)
+
+	window, err := source.WindowWithAllocation(0, 8192, mp, state.selection)
+	require.NoError(t, err)
+	assertPhysicalText(t, window)
+	window.Free(mp)
+	require.Zero(t, state.account.Snapshot().Used)
+
+	source.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestZeroLengthConstRuntimeStringDomainDupRetainsPhysicalRow(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 256, 16)
+	mp := mpool.MustNewZero()
+	source, err := NewConstBytes(
+		types.T_varbinary.ToType(), []byte("selected"), 1, mp,
+	)
+	require.NoError(t, err)
+	require.NoError(t, source.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+	source.SetLength(0)
+
+	accounted, err := source.DupOffHeapWithAllocation(mp, state.selection)
+	require.NoError(t, err)
+	require.Equal(t, 1, accounted.binaryStringRows.ExternalStorageCapacity())
+	require.Equal(t, 1, accounted.textStringRows.ExternalStorageCapacity())
+	accounted.SetLength(8)
+	require.Equal(t, types.RuntimeStringText, accounted.GetRuntimeStringDomainAt(7))
+	accounted.Free(mp)
+	require.Zero(t, state.account.Snapshot().Used)
+
+	unaccounted, err := source.Dup(mp)
+	require.NoError(t, err)
+	unaccounted.SetLength(8)
+	require.Equal(t, types.RuntimeStringText, unaccounted.GetRuntimeStringDomainAt(7))
+	unaccounted.Free(mp)
+
+	source.Free(mp)
 	finalizeTestVectorAllocationAccount(t, state)
 	require.Zero(t, mp.CurrNB())
 }

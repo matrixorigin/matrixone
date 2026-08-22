@@ -5629,7 +5629,7 @@ drop_table_stmt:
     }
 
 drop_view_stmt:
-    DROP VIEW exists_opt table_name_list
+    DROP VIEW exists_opt table_name_list drop_table_opt
     {
         var ifExists = $3
         var names = $4

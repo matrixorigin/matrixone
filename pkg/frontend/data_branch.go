@@ -81,7 +81,11 @@ func dataBranchGeneratedColumnsEqual(left, right *plan.GeneratedCol) bool {
 		return false
 	}
 	if left.Expr != nil || right.Expr != nil {
-		return proto.Equal(left.Expr, right.Expr)
+		leftExpr := proto.Clone(left.Expr).(*plan.Expr)
+		rightExpr := proto.Clone(right.Expr).(*plan.Expr)
+		return leftExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+			rightExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+			proto.Equal(leftExpr, rightExpr)
 	}
 	return left.OriginString != "" && left.OriginString == right.OriginString
 }
@@ -123,7 +127,10 @@ func dataBranchGeneratedColumnsLogicallyEqual(
 		}
 		return strings.ToLower(col.Name), true
 	})
-	return leftOK && rightOK && proto.Equal(leftExpr, rightExpr)
+	return leftOK && rightOK &&
+		leftExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+		rightExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+		proto.Equal(leftExpr, rightExpr)
 }
 
 func dataBranchGeneratedExprColumn(tblDef *plan.TableDef, pos int32) *plan.ColDef {
@@ -3226,6 +3233,7 @@ func getTableCreationCommitTSByCollectChanges(
 		ctx = engine.WithPKFilter(ctx, pkFilter)
 	}
 	ctx = engine.WithCollectChangesDebugLabel(ctx, "data-branch-table-cts")
+	ctx = engine.WithCollectChangesPreserveAllVersions(ctx)
 
 	handle, err := rel.CollectChanges(ctx, lowerBound, snapshotTS, true, mp)
 	if err != nil {

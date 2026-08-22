@@ -15989,6 +15989,52 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 	})
 }
 
+func TestShouldInvalidateTimestampSnapshotBindings(t *testing.T) {
+	const query = "select snapshot_id from mo_catalog.mo_snapshots where ts = 123 " +
+		"order by snapshot_id for update;"
+	newSnapshotIDs := func(ids ...string) *MysqlResultSet {
+		result := &MysqlResultSet{}
+		column := &MysqlColumn{}
+		column.SetName("snapshot_id")
+		column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		result.AddColumn(column)
+		for _, id := range ids {
+			result.AddRow([]interface{}{id})
+		}
+		return result
+	}
+
+	for _, tc := range []struct {
+		name       string
+		ids        []string
+		queryErr   error
+		invalidate bool
+	}{
+		{name: "last snapshot", ids: []string{"dropped"}, invalidate: true},
+		{name: "another snapshot retains timestamp", ids: []string{"dropped", "retained"}},
+		{name: "catalog row already absent", invalidate: true},
+		{name: "catalog error", queryErr: errors.New("snapshot catalog unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[query] = newSnapshotIDs(tc.ids...)
+			bh.sql2err[query] = tc.queryErr
+
+			invalidate, err := shouldInvalidateTimestampSnapshotBindings(
+				context.Background(), bh, "dropped", 123)
+			if tc.queryErr != nil {
+				require.ErrorIs(t, err, tc.queryErr)
+				require.False(t, invalidate)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.invalidate, invalidate)
+			require.Equal(t, []string{query}, bh.executedSQLs)
+		})
+	}
+}
+
 func TestDoDropSnapshot(t *testing.T) {
 	convey.Convey("doDropSnapshot success", t, func() {
 		ctrl := gomock.NewController(t)

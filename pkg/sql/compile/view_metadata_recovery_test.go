@@ -16,8 +16,10 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -26,7 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -35,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,6 +48,20 @@ type viewMetadataCleanupRecordingExecutor struct {
 	systemCTELimits []bool
 	results         []executor.Result
 	failures        map[int]error
+}
+
+func enableViewMetadataRefreshForTest(t *testing.T) {
+	t.Helper()
+	original := viewMetadataRefreshEnabled
+	viewMetadataRefreshEnabled = func(string) bool { return true }
+	t.Cleanup(func() { viewMetadataRefreshEnabled = original })
+}
+
+func setSynchronousViewRefreshBudgetForTest(t *testing.T, budget int) {
+	t.Helper()
+	original := viewMetadataSynchronousRefreshBudget
+	viewMetadataSynchronousRefreshBudget = budget
+	t.Cleanup(func() { viewMetadataSynchronousRefreshBudget = original })
 }
 
 func (e *viewMetadataCleanupRecordingExecutor) Exec(
@@ -100,6 +119,13 @@ func TestRelationRemovalUsesOneAtomicRecursiveClosureInvalidation(t *testing.T) 
 			"coalesce(nullif(a.target_logical_id,0),a.target_relation_id)=999))")
 	require.Contains(t, enqueueSQL, "limit 16 offset 0")
 	require.Contains(t, exec.sqls[1], "limit 16 offset 16")
+}
+
+func TestExportedViewMetadataRevalidationSQLReturnsDefensiveCopy(t *testing.T) {
+	statements := ViewMetadataRequireRevalidationSQL()
+	require.Equal(t, viewMetadataRequireRevalidationSQL(), statements)
+	statements[0] = "mutated"
+	require.NotEqual(t, statements, ViewMetadataRequireRevalidationSQL())
 }
 
 func TestSeedMissingViewMetadataUsesOnlyUserViewsWithoutState(t *testing.T) {
@@ -229,8 +255,17 @@ func TestRunViewMetadataRecoveryPageIsBoundedAndFair(t *testing.T) {
 }
 
 func TestRecoveryCompilerContextRestoresValidatedSnapshot(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	liveSnapshot := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+	liveSnapshot.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(liveSnapshot, 0, []string{"snapshot-id"}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		liveSnapshot.GetResult(), {},
+	}}
+	installViewMetadataTestExecutor(t, proc, exec)
 	snapshot := &planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 123}}
 	ctx := &recoveryCompilerContext{
+		compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
 		dependencies:    []plan2.ViewDependency{{SnapshotName: "daily", Snapshot: snapshot}},
 		legacySnapshots: map[string]*plan2.Snapshot{"daily": snapshot},
 	}
@@ -244,6 +279,60 @@ func TestRecoveryCompilerContextRestoresValidatedSnapshot(t *testing.T) {
 	valid, err = ctx.CheckTimeStampValid(124)
 	require.NoError(t, err)
 	require.False(t, valid)
+	require.Equal(t, []string{
+		"select snapshot_id from mo_catalog.mo_snapshots where ts=123 limit 1",
+		"select snapshot_id from mo_catalog.mo_snapshots where ts=124 limit 1",
+	}, exec.sqls)
+}
+
+func TestRecoveryCompilerContextRejectsStalePersistedTimestamp(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exec := &viewMetadataCleanupRecordingExecutor{}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctx := &recoveryCompilerContext{
+		compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
+		dependencies: []plan2.ViewDependency{{
+			Snapshot: &planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 456}},
+		}},
+	}
+
+	valid, err := ctx.CheckTimeStampValid(456)
+	require.NoError(t, err)
+	require.False(t, valid)
+	require.Equal(t,
+		[]string{"select snapshot_id from mo_catalog.mo_snapshots where ts=456 limit 1"}, exec.sqls)
+}
+
+func TestRecoveryCompilerContextAcceptsLiveTimestampWithoutPersistedDependency(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	liveSnapshot := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+	liveSnapshot.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(liveSnapshot, 0, []string{"snapshot-id"}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{liveSnapshot.GetResult()}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctx := &recoveryCompilerContext{
+		compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
+	}
+
+	valid, err := ctx.CheckTimeStampValid(456)
+	require.NoError(t, err)
+	require.True(t, valid)
+	require.Equal(t,
+		[]string{"select snapshot_id from mo_catalog.mo_snapshots where ts=456 limit 1"}, exec.sqls)
+}
+
+func TestRecoveryCompilerContextPropagatesTimestampCatalogError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	expected := errors.New("snapshot catalog unavailable")
+	exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: expected}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctx := &recoveryCompilerContext{
+		compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
+	}
+
+	valid, err := ctx.CheckTimeStampValid(456)
+	require.False(t, valid)
+	require.ErrorIs(t, err, expected)
 }
 
 func TestViewDependencyNameKeyHonorsLowerCaseTableNames(t *testing.T) {
@@ -267,6 +356,676 @@ func TestSynchronousViewRefreshCountNeverExceedsBudget(t *testing.T) {
 	require.Zero(t, synchronousViewRefreshCount(1, 0))
 	require.Zero(t, synchronousViewRefreshCount(1, -1))
 	require.Equal(t, 3, synchronousViewRefreshCount(3, 8))
+}
+
+func TestPersistViewDependenciesCoversCatalogWriteModes(t *testing.T) {
+	viewData, err := json.Marshal(plan2.ViewData{Dependencies: []plan2.ViewDependency{
+		{
+			AccountID: 1, DatabaseID: 2, RelationID: 3, LogicalID: 4,
+			DatabaseName: "source db", RelationName: "source table", RelationKind: "r",
+			LowerCaseTableNames: 1,
+		},
+		{
+			AccountID: 5, DatabaseID: 6, RelationID: 7, LogicalID: 8,
+			DatabaseName: "publisher db", RelationName: "publisher table", RelationKind: "r",
+			SubscriptionName: "subscription", PublisherAccount: 5,
+			Snapshot: &planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 123}},
+		},
+	}})
+	require.NoError(t, err)
+	viewDef := &planpb.TableDef{Name: "target view", ViewSql: &planpb.ViewDef{View: string(viewData)}}
+
+	for _, createState := range []bool{true, false} {
+		t.Run(fmt.Sprintf("create state %t", createState), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			exec := &viewMetadataCleanupRecordingExecutor{}
+			if !createState {
+				exec.results = []executor.Result{{}, {}, {}, {}, {AffectedRows: 1}}
+			}
+			installViewMetadataTestExecutor(t, proc, exec)
+			relation := mock_frontend.NewMockRelation(ctrl)
+			relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
+			relation.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{LogicalId: 17})
+			database := mock_frontend.NewMockDatabase(ctrl)
+			database.EXPECT().Relation(gomock.Any(), "target view", gomock.Any()).Return(relation, nil)
+			database.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
+			c := &Compile{proc: proc, pn: &planpb.Plan{}}
+
+			require.NoError(t, c.persistViewDependenciesWithContext(
+				proc.Ctx, database, "target db", viewDef, 19, createState))
+			require.Len(t, exec.sqls, 5)
+			require.Contains(t, exec.sqls[0], "delete from mo_catalog.mo_view_dependencies")
+			require.Contains(t, exec.sqls[1], "source db")
+			require.Contains(t, exec.sqls[2], "subscription")
+			require.Contains(t, exec.sqls[3], "delete from mo_catalog.mo_view_refresh")
+			if createState {
+				require.Contains(t, exec.sqls[4], "replace into mo_catalog.mo_view_refresh")
+			} else {
+				require.Contains(t, exec.sqls[4], "update mo_catalog.mo_view_refresh")
+			}
+		})
+	}
+}
+
+func TestPersistViewDependenciesRejectsStaleOrMalformedCatalogState(t *testing.T) {
+	t.Run("missing definition", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).
+			persistViewDependencyEdgesWithContext(proc.Ctx, nil, "db", nil, 1)
+		require.Error(t, err)
+	})
+
+	t.Run("relation lookup", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		ctrl := gomock.NewController(t)
+		database := mock_frontend.NewMockDatabase(ctrl)
+		expected := errors.New("relation unavailable")
+		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(nil, expected)
+		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencyEdgesWithContext(
+			proc.Ctx, database, "db", &planpb.TableDef{Name: "view", ViewSql: &planpb.ViewDef{}}, 1)
+		require.ErrorIs(t, err, expected)
+	})
+
+	t.Run("database identity", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		ctrl := gomock.NewController(t)
+		database := mock_frontend.NewMockDatabase(ctrl)
+		relation := mock_frontend.NewMockRelation(ctrl)
+		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{})
+		database.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid")
+		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencyEdgesWithContext(
+			proc.Ctx, database, "db", &planpb.TableDef{Name: "view", ViewSql: &planpb.ViewDef{}}, 1)
+		require.Error(t, err)
+	})
+
+	t.Run("persisted view JSON", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		ctrl := gomock.NewController(t)
+		database := mock_frontend.NewMockDatabase(ctrl)
+		relation := mock_frontend.NewMockRelation(ctrl)
+		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{LogicalId: 17})
+		database.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
+		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencyEdgesWithContext(
+			proc.Ctx, database, "db", &planpb.TableDef{
+				Name: "view", ViewSql: &planpb.ViewDef{View: "{"},
+			}, 1)
+		require.Error(t, err)
+	})
+}
+
+func TestLoadDependentViewsDecodesCatalogRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	result := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
+		types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
+	}, proc.Mp())
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(result, 0, []uint32{7}))
+	require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{11}))
+	require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{13}))
+	require.NoError(t, executor.AppendFixedRows(result, 3, []uint64{17}))
+	require.NoError(t, executor.AppendStringRows(result, 4, []string{"target_db"}))
+	require.NoError(t, executor.AppendStringRows(result, 5, []string{"target_view"}))
+	require.NoError(t, executor.AppendFixedRows(result, 6, []uint64{19}))
+
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{result.GetResult()}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	c := &Compile{proc: proc, pn: &planpb.Plan{}}
+	targets, err := c.loadDependentViews(viewRelationMutation{
+		accountID: 7, databaseID: 23, relationID: 29, logicalID: 31,
+		databaseName: "source_db", relationName: "source_table",
+	}, 37, 41)
+	require.NoError(t, err)
+	require.Equal(t, []viewRefreshTarget{{
+		accountID: 7, databaseID: 11, relationID: 13, logicalID: 17,
+		databaseName: "target_db", relationName: "target_view", generation: 19,
+	}}, targets)
+	require.Len(t, exec.sqls, 1)
+	require.Contains(t, exec.sqls[0], "d.source_account_id=7")
+	require.Contains(t, exec.sqls[0], "d.source_relation_id in (29,37)")
+	require.Contains(t, exec.sqls[0], "d.source_logical_id in (31,41)")
+}
+
+func TestLoadViewCatalogOwnershipHandlesPresentAndMissingRows(t *testing.T) {
+	t.Run("present", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		result := executor.NewMemResult([]types.Type{
+			types.T_uint32.ToType(), types.T_uint32.ToType(), types.T_timestamp.ToType(),
+		}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint32{3}))
+		require.NoError(t, executor.AppendFixedRows(result, 1, []uint32{5}))
+		require.NoError(t, executor.AppendFixedRows(result, 2, []types.Timestamp{7}))
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{result.GetResult()}}
+		installViewMetadataTestExecutor(t, proc, exec)
+		ownership, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).loadViewCatalogOwnership(11, 13)
+		require.NoError(t, err)
+		require.Equal(t, viewCatalogOwnership{creator: 3, owner: 5, createdTime: 7}, ownership)
+		require.Contains(t, exec.sqls[0], "account_id=11 and rel_id=13")
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		installViewMetadataTestExecutor(t, proc, &viewMetadataCleanupRecordingExecutor{})
+		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).loadViewCatalogOwnership(11, 13)
+		var changed *viewRefreshIdentityChangedError
+		require.ErrorAs(t, err, &changed)
+	})
+}
+
+func TestEnabledViewMetadataCommandRoutesLifecycleOperations(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		parameter string
+		results   []executor.Result
+		count     int
+		contains  string
+	}{
+		{
+			name: "discover", parameter: `{"discover":true}`,
+			results: []executor.Result{{}, {}, {}}, count: 1,
+			contains: "'LEGACY_SCAN'",
+		},
+		{
+			name: "revalidate", parameter: `{"revalidate":true}`,
+			results: []executor.Result{{}, {AffectedRows: 1}}, count: 1,
+			contains: "source_relation_kind='REVALIDATE_SCAN'",
+		},
+		{
+			name: "recover target", parameter: `{"worker_id":"worker","account_id":1,"relation_id":2,"generation":3}`,
+			results: []executor.Result{{}, {}}, count: 0,
+			contains: "and account_id=1 and target_relation_id=2 and target_generation=3",
+		},
+		{
+			name: "legacy worker parameter", parameter: "worker",
+			results: []executor.Result{{}, {}}, count: 0,
+			contains: "status in ('PENDING','DISCOVERING')",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enableViewMetadataRefreshForTest(t)
+			proc := testutil.NewProcess(t)
+			exec := &viewMetadataCleanupRecordingExecutor{results: tc.results}
+			installViewMetadataTestExecutor(t, proc, exec)
+			count, err := recoverViewMetadataCommand(proc, tc.parameter)
+			require.NoError(t, err)
+			require.Equal(t, tc.count, count)
+			require.NotEmpty(t, exec.sqls)
+			require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
+			require.Contains(t, strings.Join(exec.sqls, "\n"), tc.contains)
+		})
+	}
+}
+
+func TestEnabledRelationMutationDurablyEnqueuesClosure(t *testing.T) {
+	enableViewMetadataRefreshForTest(t)
+	setSynchronousViewRefreshBudgetForTest(t, 1)
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+	exec := &viewMetadataCleanupRecordingExecutor{}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 31})
+	proc.Base.TxnOperator = txnOperator
+	engine := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	engine.EXPECT().Database(gomock.Any(), "source_db", gomock.Any()).Return(database, nil)
+	database.EXPECT().Relation(gomock.Any(), "source_table", gomock.Any()).Return(relation, nil)
+	database.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{LogicalId: 17})
+
+	c := &Compile{proc: proc, e: engine, pn: &planpb.Plan{}}
+	require.NoError(t, c.refreshViewsAfterRelationMutation("source_db", "source_table", 19, 23))
+	require.Len(t, exec.sqls, 2)
+	require.Contains(t, exec.sqls[0], "d.source_account_id=7")
+	require.Contains(t, exec.sqls[0], "d.source_relation_id in (13,19)")
+	require.Contains(t, exec.sqls[0], "d.source_logical_id in (17,23)")
+	require.Contains(t, exec.sqls[1], "order by d.account_id,d.target_database_id")
+}
+
+func TestEnabledRelationMutationBoundsRetryingSynchronousRefresh(t *testing.T) {
+	enableViewMetadataRefreshForTest(t)
+	setSynchronousViewRefreshBudgetForTest(t, 1)
+	lockStub := gostub.Stub(&lockMoTable,
+		func(_ *Compile, _, _ string, _ lock.LockMode) error { return nil })
+	t.Cleanup(lockStub.Reset)
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+	targets := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
+		types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
+	}, proc.Mp())
+	targets.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(targets, 0, []uint32{7}))
+	require.NoError(t, executor.AppendFixedRows(targets, 1, []uint64{31}))
+	require.NoError(t, executor.AppendFixedRows(targets, 2, []uint64{37}))
+	require.NoError(t, executor.AppendFixedRows(targets, 3, []uint64{41}))
+	require.NoError(t, executor.AppendStringRows(targets, 4, []string{"target_db"}))
+	require.NoError(t, executor.AppendStringRows(targets, 5, []string{"target_view"}))
+	require.NoError(t, executor.AppendFixedRows(targets, 6, []uint64{43}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		{}, targets.GetResult(), {},
+	}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 47})
+	proc.Base.TxnOperator = txnOperator
+	storage := mock_frontend.NewMockEngine(ctrl)
+	sourceDatabase := mock_frontend.NewMockDatabase(ctrl)
+	sourceRelation := mock_frontend.NewMockRelation(ctrl)
+	storage.EXPECT().Database(gomock.Any(), "source_db", gomock.Any()).Return(sourceDatabase, nil)
+	sourceDatabase.EXPECT().Relation(gomock.Any(), "source_table", gomock.Any()).Return(sourceRelation, nil)
+	sourceDatabase.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
+	sourceRelation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
+	sourceRelation.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{LogicalId: 17})
+	storage.EXPECT().Database(gomock.Any(), "target_db", gomock.Any()).
+		Return(nil, errors.New("target temporarily unavailable"))
+
+	c := &Compile{proc: proc, e: storage, pn: &planpb.Plan{}}
+	require.NoError(t, c.refreshViewsAfterRelationMutation("source_db", "source_table", 19, 23))
+	require.Len(t, exec.sqls, 3)
+	require.Contains(t, exec.sqls[2], "d.source_account_id=7")
+}
+
+func TestEnabledLifecycleRemovalAndCleanupPaths(t *testing.T) {
+	enableViewMetadataRefreshForTest(t)
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 31})
+	proc.Base.TxnOperator = txnOperator
+	exec := &viewMetadataCleanupRecordingExecutor{}
+	installViewMetadataTestExecutor(t, proc, exec)
+	c := &Compile{proc: proc, pn: &planpb.Plan{}}
+
+	require.NoError(t, c.enqueueViewsAfterRelationRemoval("source_db", "source_table", 11, 13, 17))
+	require.Len(t, exec.sqls, 1)
+	require.Contains(t, exec.sqls[0], "d.source_account_id=7")
+	require.Contains(t, exec.sqls[0], "not ((a.account_id=7 and a.target_database_id=11")
+
+	exec.sqls = nil
+	require.NoError(t, c.deleteDroppedViewMetadata(13))
+	require.Len(t, exec.sqls, 3)
+	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
+	require.Contains(t, exec.sqls[1], "account_id=7 and target_relation_id=13")
+	require.Contains(t, exec.sqls[2], "account_id=7 and target_relation_id=13")
+
+	exec.sqls = nil
+	require.NoError(t, c.deleteDroppedDatabaseViewMetadata(7, 11, "source'db"))
+	require.Len(t, exec.sqls, 3)
+	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
+	require.Contains(t, exec.sqls[1], "target_database_id=11 or target_database_name='source''db'")
+	require.Contains(t, exec.sqls[2], "target_database_id=11 or target_database_name='source''db'")
+
+	exec.sqls = nil
+	require.NoError(t, c.enqueueViewsAfterDatabaseRemoval(7, 11, 31))
+	require.Len(t, exec.sqls, 1)
+	require.Contains(t, exec.sqls[0], "d.source_account_id=7 and d.source_database_id=11")
+}
+
+func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
+	t.Run("subscription catalog result is cached", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		result := executor.NewMemResult([]types.Type{
+			types.T_int32.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+			types.T_varchar.ToType(), types.T_varchar.ToType(),
+		}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []int32{11}))
+		require.NoError(t, executor.AppendStringRows(result, 1, []string{"publisher"}))
+		require.NoError(t, executor.AppendStringRows(result, 2, []string{"publication"}))
+		require.NoError(t, executor.AppendStringRows(result, 3, []string{"published_db"}))
+		require.NoError(t, executor.AppendStringRows(result, 4, []string{"table_a,table_b"}))
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{result.GetResult()}}
+		installViewMetadataTestExecutor(t, proc, exec)
+		ctx := &recoveryCompilerContext{compilerContext: &compilerContext{
+			ctx: proc.Ctx, proc: proc, lower: 1,
+		}}
+		meta, err := ctx.GetSubscriptionMeta("SUB_DB", nil)
+		require.NoError(t, err)
+		require.Equal(t, int32(11), meta.AccountId)
+		require.Equal(t, "published_db", meta.DbName)
+		require.Equal(t, "SUB_DB", meta.SubName)
+		cached, err := ctx.GetSubscriptionMeta("sub_db", nil)
+		require.NoError(t, err)
+		require.Same(t, meta, cached)
+		require.Len(t, exec.sqls, 1)
+	})
+
+	t.Run("dependency binding uses physical account", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		ctrl := gomock.NewController(t)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		expected := errors.New("physical catalog unavailable")
+		storage.EXPECT().Database(gomock.Any(), "physical_db", gomock.Any()).Return(nil, expected)
+		ctx := &recoveryCompilerContext{
+			compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc, engine: storage},
+			dependencies: []plan2.ViewDependency{{
+				AccountID: 11, DatabaseName: "physical_db", RelationName: "physical_table",
+				BindingDatabaseName: "binding_db", BindingRelationName: "binding_table",
+				LowerCaseTableNames: 1, RelationID: 13,
+			}},
+		}
+		require.False(t, ctx.DatabaseExists("BINDING_DB", nil))
+		storage.EXPECT().Database(gomock.Any(), "physical_db", gomock.Any()).Return(nil, expected)
+		_, _, err := ctx.Resolve("BINDING_DB", "BINDING_TABLE", nil)
+		require.ErrorIs(t, err, expected)
+		storage.EXPECT().Database(gomock.Any(), "physical_db", gomock.Any()).Return(nil, expected)
+		_, _, err = ctx.ResolveById(13, nil)
+		require.ErrorIs(t, err, expected)
+	})
+
+	t.Run("fallback adapters restore top context", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		ctrl := gomock.NewController(t)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		expected := errors.New("catalog unavailable")
+		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, expected)
+		ctx := &recoveryCompilerContext{
+			compilerContext:          &compilerContext{ctx: proc.Ctx, proc: proc, engine: storage},
+			legacySubscriptionLooked: map[string]struct{}{"db": {}},
+			legacySubscriptions:      map[string]*planpb.SubscriptionMeta{},
+		}
+		originalTop := proc.GetTopContext()
+		require.False(t, ctx.DatabaseExists("db", nil))
+		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, expected)
+		_, _, err := ctx.Resolve("db", "table", nil)
+		require.ErrorIs(t, err, expected)
+		require.Equal(t, originalTop, proc.GetTopContext())
+		storage.EXPECT().GetNameById(gomock.Any(), gomock.Any(), uint64(19)).Return("", "", expected)
+		_, _, err = ctx.ResolveById(19, nil)
+		require.ErrorIs(t, err, expected)
+	})
+
+	t.Run("stale subscription binding is unavailable", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		ctx := &recoveryCompilerContext{
+			compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc},
+			dependencies: []plan2.ViewDependency{{
+				AccountID: 11, DatabaseName: "published_db", RelationName: "table",
+				SubscriptionName: "sub", RelationID: 13,
+			}},
+			legacySubscriptionLooked: map[string]struct{}{"sub": {}},
+			legacySubscriptions: map[string]*planpb.SubscriptionMeta{
+				"sub": {AccountId: 99, DbName: "published_db", SubName: "sub", Tables: "table"},
+			},
+		}
+		_, _, err := ctx.Resolve("sub", "table", nil)
+		var unavailable *viewRefreshDependencyUnavailableError
+		require.ErrorAs(t, err, &unavailable)
+	})
+}
+
+func TestUpdateViewRefreshFailurePersistsRetryAndTerminalState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	pending := &pendingViewRefresh{viewRefreshTarget: viewRefreshTarget{
+		accountID: 7, relationID: 11, generation: 13,
+	}, leaseEpoch: 9}
+	for _, tc := range []struct {
+		name   string
+		retry  bool
+		status string
+		want   string
+	}{
+		{name: "retry", retry: true, status: viewRefreshStatusPending, want: "interval 256 second"},
+		{name: "terminal", status: viewRefreshStatusInvalid, want: "next_retry_at=null"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &viewMetadataCleanupRecordingExecutor{}
+			require.NoError(t, updateViewRefreshFailure(proc, exec, executor.Options{}, pending,
+				tc.status, viewRefreshFailureInfrastructure, tc.retry))
+			require.Len(t, exec.sqls, 1)
+			require.Contains(t, exec.sqls[0], tc.want)
+			require.Contains(t, exec.sqls[0], "target_generation=13 and lease_epoch=9")
+		})
+	}
+
+	t.Run("catalog error", func(t *testing.T) {
+		expected := errors.New("catalog unavailable")
+		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: expected}}
+		err := updateViewRefreshFailure(proc, exec, executor.Options{}, pending,
+			viewRefreshStatusPending, viewRefreshFailureInfrastructure, true)
+		require.ErrorIs(t, err, expected)
+	})
+}
+
+func TestRefreshOneViewRejectsStaleCatalogTargetsBeforeReplacement(t *testing.T) {
+	target := viewRefreshTarget{
+		accountID: 7, databaseID: 11, relationID: 13, logicalID: 17,
+		databaseName: "db", relationName: "view", generation: 19,
+	}
+	source := viewRelationMutation{}
+
+	t.Run("database unavailable", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ctrl := gomock.NewController(t)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		expected := errors.New("database unavailable")
+		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, expected)
+		err := (&Compile{proc: proc, e: storage, pn: &planpb.Plan{}}).refreshOneView(target, source)
+		require.ErrorIs(t, err, expected)
+	})
+
+	t.Run("relation unavailable", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ctrl := gomock.NewController(t)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		database := mock_frontend.NewMockDatabase(ctrl)
+		expected := errors.New("relation unavailable")
+		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(nil, expected)
+		err := (&Compile{proc: proc, e: storage, pn: &planpb.Plan{}}).refreshOneView(target, source)
+		require.ErrorIs(t, err, expected)
+	})
+
+	t.Run("physical identity changed", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ctrl := gomock.NewController(t)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		database := mock_frontend.NewMockDatabase(ctrl)
+		relation := mock_frontend.NewMockRelation(ctrl)
+		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(99))
+		err := (&Compile{proc: proc, e: storage, pn: &planpb.Plan{}}).refreshOneView(target, source)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "identity changed")
+	})
+
+	t.Run("target is no longer a view", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ctrl := gomock.NewController(t)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		database := mock_frontend.NewMockDatabase(ctrl)
+		relation := mock_frontend.NewMockRelation(ctrl)
+		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
+		relation.EXPECT().CopyTableDef(gomock.Any()).Return(nil)
+		err := (&Compile{proc: proc, e: storage, pn: &planpb.Plan{}}).refreshOneView(target, source)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no longer a View")
+	})
+
+	t.Run("catalog ownership disappeared", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		installViewMetadataTestExecutor(t, proc, &viewMetadataCleanupRecordingExecutor{})
+		ctrl := gomock.NewController(t)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		database := mock_frontend.NewMockDatabase(ctrl)
+		relation := mock_frontend.NewMockRelation(ctrl)
+		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
+		relation.EXPECT().CopyTableDef(gomock.Any()).Return(&planpb.TableDef{
+			ViewSql: &planpb.ViewDef{View: `{}`},
+		})
+		err := (&Compile{proc: proc, e: storage, pn: &planpb.Plan{}}).refreshOneView(target, source)
+		var changed *viewRefreshIdentityChangedError
+		require.ErrorAs(t, err, &changed)
+	})
+
+	t.Run("replacement error after authoritative regeneration", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		ownership := executor.NewMemResult([]types.Type{
+			types.T_uint32.ToType(), types.T_uint32.ToType(), types.T_timestamp.ToType(),
+		}, proc.Mp())
+		ownership.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(ownership, 0, []uint32{3}))
+		require.NoError(t, executor.AppendFixedRows(ownership, 1, []uint32{5}))
+		require.NoError(t, executor.AppendFixedRows(ownership, 2, []types.Timestamp{7}))
+		installViewMetadataTestExecutor(t, proc, &viewMetadataCleanupRecordingExecutor{
+			results: []executor.Result{ownership.GetResult()},
+		})
+		ctrl := gomock.NewController(t)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		database := mock_frontend.NewMockDatabase(ctrl)
+		relation := mock_frontend.NewMockRelation(ctrl)
+		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
+		relation.EXPECT().CopyTableDef(gomock.Any()).Return(&planpb.TableDef{
+			Name: "view", Version: 23,
+			ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view view as select 1","DefaultDatabase":"db"}`},
+		})
+		expected := errors.New("replace failed")
+		relation.EXPECT().AlterTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(expected)
+		err := (&Compile{proc: proc, e: storage, pn: &planpb.Plan{}}).refreshOneView(target, source)
+		require.ErrorIs(t, err, expected)
+	})
+}
+
+func TestRegenerateViewRejectsMalformedPersistedEnvironment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	originalTop := proc.GetTopContext()
+	_, err := regenerateViewUsingPersistedEnvironment(proc, nil,
+		defines.AttachAccountId(proc.Ctx, 7), &planpb.TableDef{ViewSql: &planpb.ViewDef{View: "{"}})
+	require.Error(t, err)
+	require.Equal(t, originalTop, proc.GetTopContext())
+}
+
+func TestRegenerateConstantViewUsingPersistedEnvironment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	targetContext := defines.AttachAccountId(proc.Ctx, 7)
+	regenerated, err := regenerateViewUsingPersistedEnvironment(proc, nil, targetContext,
+		&planpb.TableDef{ViewSql: &planpb.ViewDef{
+			View: `{"Stmt":"create view view as select 1","DefaultDatabase":"db"}`,
+		}})
+	require.NoError(t, err)
+	require.NotNil(t, regenerated.TableDef.ViewSql)
+	require.Empty(t, regenerated.Dependencies)
+}
+
+func TestRefreshPendingConstantViewCommitsReplacementAndLifecycleState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ownership := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_uint32.ToType(), types.T_timestamp.ToType(),
+	}, proc.Mp())
+	ownership.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(ownership, 0, []uint32{3}))
+	require.NoError(t, executor.AppendFixedRows(ownership, 1, []uint32{5}))
+	require.NoError(t, executor.AppendFixedRows(ownership, 2, []types.Timestamp{7}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		{}, ownership.GetResult(), {}, {}, {AffectedRows: 1},
+	}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctrl := gomock.NewController(t)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	proc.GetSessionInfo().StorageEngine = storage
+	storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+	database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil).Times(2)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13)).Times(2)
+	currentDef := &planpb.TableDef{
+		Name: "view", Version: 23, LogicalId: 17,
+		ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view view as select 1","DefaultDatabase":"db"}`},
+	}
+	relation.EXPECT().CopyTableDef(gomock.Any()).Return(currentDef)
+	relation.EXPECT().AlterTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(currentDef)
+	database.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
+
+	wrote, err := refreshPendingView(proc, &pendingViewRefresh{viewRefreshTarget: viewRefreshTarget{
+		accountID: 7, databaseID: 11, relationID: 13, logicalID: 17,
+		databaseName: "db", relationName: "view", generation: 19,
+	}})
+	require.NoError(t, err)
+	require.True(t, wrote)
+	require.Len(t, exec.sqls, 5)
+	require.Contains(t, exec.sqls[0], "r.target_relation_id is null or r.status='CURRENT'")
+	require.Contains(t, exec.sqls[4], "completed_generation=19,status='CURRENT'")
+}
+
+func TestRefreshOneConstantViewCommitsReplacementAndLifecycleState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ownership := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_uint32.ToType(), types.T_timestamp.ToType(),
+	}, proc.Mp())
+	ownership.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(ownership, 0, []uint32{3}))
+	require.NoError(t, executor.AppendFixedRows(ownership, 1, []uint32{5}))
+	require.NoError(t, executor.AppendFixedRows(ownership, 2, []types.Timestamp{7}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		ownership.GetResult(), {}, {}, {AffectedRows: 1},
+	}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctrl := gomock.NewController(t)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+	database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil).Times(2)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13)).Times(2)
+	currentDef := &planpb.TableDef{
+		Name: "view", Version: 23, LogicalId: 17,
+		ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view view as select 1","DefaultDatabase":"db"}`},
+	}
+	relation.EXPECT().CopyTableDef(gomock.Any()).Return(currentDef)
+	relation.EXPECT().AlterTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(currentDef)
+	database.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
+
+	err := (&Compile{proc: proc, e: storage, pn: &planpb.Plan{}}).refreshOneView(
+		viewRefreshTarget{
+			accountID: 7, databaseID: 11, relationID: 13, logicalID: 17,
+			databaseName: "db", relationName: "view", generation: 19,
+		}, viewRelationMutation{accountID: 7, logicalID: 29})
+	require.NoError(t, err)
+	require.Len(t, exec.sqls, 4)
+	require.Contains(t, exec.sqls[3], "completed_generation=19,status='CURRENT'")
+}
+
+func TestMarkSynchronousViewRefreshInvalidUsesGenerationFence(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exec := &viewMetadataCleanupRecordingExecutor{}
+	installViewMetadataTestExecutor(t, proc, exec)
+	c := &Compile{proc: proc, pn: &planpb.Plan{}}
+	require.NoError(t, c.markSynchronousViewRefreshInvalid(viewRefreshTarget{
+		accountID: 7, relationID: 11, generation: 13,
+	}, viewRefreshFailureIdentityChanged))
+	require.Len(t, exec.sqls, 1)
+	require.Contains(t, exec.sqls[0], "status='INVALID'")
+	require.Contains(t, exec.sqls[0], "account_id=7 and target_relation_id=11 and target_generation=13")
 }
 
 func TestViewMetadataLifecycleSkipsRestoreCatalogDDL(t *testing.T) {
@@ -303,8 +1062,32 @@ func TestTableAndDatabaseRestoreInvalidateAtRelationRemoval(t *testing.T) {
 }
 
 func TestBindingLifecycleInvalidationSQLUsesPersistedIdentity(t *testing.T) {
-	snapshotSQL := SnapshotViewMetadataInvalidationSQL(`{"ExtraInfo":{"Name":"odd snapshot"}}`, 7)
+	snapshotSQL := SnapshotViewMetadataInvalidationSQL(
+		`{"ExtraInfo":{"Name":"odd snapshot"}}`, 123, true, 7)
 	require.Contains(t, snapshotSQL,
+		`d.snapshot_data='{"ExtraInfo":{"Name":"odd snapshot"}}'`)
+	require.Contains(t, snapshotSQL,
+		"json_extract(d.snapshot_data,'$.ExtraInfo.Name') is null and cast(json_unquote(json_extract("+
+			"d.snapshot_data,'$.TS.PhysicalTime')) as bigint)=123")
+	require.NotContains(t, snapshotSQL, "d.snapshot_name")
+	require.Contains(t, catalog.MoViewDependenciesColumns, "snapshot_data")
+	require.Contains(t, catalog.MoViewDependenciesDDL, "snapshot_data text")
+	require.NotContains(t, catalog.MoViewDependenciesDDL, "snapshot_name")
+	dependencyColumns := make(map[string]struct{})
+	for _, column := range strings.Split(catalog.MoViewDependenciesColumns, ",") {
+		dependencyColumns[column] = struct{}{}
+	}
+	for _, match := range regexp.MustCompile(`\bd\.([a-z_]+)\b`).FindAllStringSubmatch(snapshotSQL, -1) {
+		require.Contains(t, dependencyColumns, match[1], "generated dependency column %s", match[1])
+	}
+	ddlStatements, err := mysql.Parse(context.Background(), catalog.MoViewDependenciesDDL, 1)
+	require.NoError(t, err)
+	require.Len(t, ddlStatements, 1)
+	ddlStatements[0].Free()
+	preservedTimestampSQL := SnapshotViewMetadataInvalidationSQL(
+		`{"ExtraInfo":{"Name":"odd snapshot"}}`, 123, false, 7)
+	require.NotContains(t, preservedTimestampSQL, "$.TS.PhysicalTime")
+	require.Contains(t, preservedTimestampSQL,
 		`d.snapshot_data='{"ExtraInfo":{"Name":"odd snapshot"}}'`)
 	require.NotContains(t, strings.ToLower(snapshotSQL), " like ")
 
@@ -319,7 +1102,10 @@ func TestBindingLifecycleInvalidationSQLUsesPersistedIdentity(t *testing.T) {
 		"d.account_id=11 and d.subscription_name='odd name'")
 	accountSQL := AccountViewMetadataInvalidationSQL(13, 14)
 	require.Contains(t, accountSQL, "d.source_account_id=13")
-	for _, sql := range []string{snapshotSQL, publicationSQL, accountPublicationSQL, subscriptionSQL, accountSQL} {
+	for _, sql := range []string{
+		snapshotSQL, preservedTimestampSQL, publicationSQL,
+		accountPublicationSQL, subscriptionSQL, accountSQL,
+	} {
 		require.Contains(t, sql, "with recursive affected")
 		require.Contains(t, sql, " union select ")
 		require.NotContains(t, sql, "select distinct")
@@ -1065,7 +1851,9 @@ func TestRecoveryContextMissingSnapshotAndDependencyIdentity(t *testing.T) {
 	ctx.legacySnapshots["daily"] = &plan2.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 789}}
 	valid, err := ctx.CheckTimeStampValid(789)
 	require.NoError(t, err)
-	require.True(t, valid)
+	require.False(t, valid)
+	require.Len(t, exec.sqls, 2)
+	require.Contains(t, exec.sqls[1], "where ts=789 limit 1")
 }
 
 func TestRecoveryContextRestoresCatalogSnapshot(t *testing.T) {
