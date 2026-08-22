@@ -196,6 +196,14 @@ func NewExpressionExecutorWithAllocation(
 			vec.Free(proc.Mp())
 			return nil, err
 		}
+		// LiteralVec uses the stable Vector wire format, which intentionally does
+		// not carry runtime provenance. The container itself proves every decoded
+		// row was materialized from a literal, so restore that container-level
+		// source before exposing the executor result.
+		if err := vec.SetStringSource(types.StringSourceLiteral); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
 		return NewFixedVectorExpressionExecutor(proc.Mp(), true, vec), nil
 
 	case *plan.Expr_List:

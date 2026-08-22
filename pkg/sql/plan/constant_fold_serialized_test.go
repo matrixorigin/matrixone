@@ -393,6 +393,12 @@ func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, foldedControl.GetVec(), "same-domain list keeps the existing fold fast path")
+	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
+		proc, foldedControl, []*batch.Batch{batch.EmptyForConstFoldBatch},
+	)
+	require.NoError(t, evalErr)
+	defer free()
+	require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(0))
 }
 
 func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {

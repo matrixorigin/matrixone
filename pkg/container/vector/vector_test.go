@@ -6339,3 +6339,57 @@ func TestStringSourceInplaceSortAndStableDecode(t *testing.T) {
 	withSource.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
+
+func TestStringSourceGenericNullAppendUsesExpression(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(*Vector, *mpool.MPool) error
+		rows int
+	}{
+		{name: "one", run: func(vec *Vector, mp *mpool.MPool) error {
+			return vec.UnionNull(mp)
+		}, rows: 1},
+		{name: "multi", run: func(vec *Vector, mp *mpool.MPool) error {
+			return AppendMultiFixed(vec, int64(0), true, 2, mp)
+		}, rows: 2},
+		{name: "list", run: func(vec *Vector, mp *mpool.MPool) error {
+			return AppendFixedList(vec, []int64{0, 0}, []bool{true, true}, mp)
+		}, rows: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			uniform := NewVec(types.T_int64.ToType())
+			require.NoError(t, AppendFixed(uniform, int64(1), false, mp))
+			require.NoError(t, uniform.SetStringSource(types.StringSourceLiteral))
+			require.NoError(t, test.run(uniform, mp))
+			require.Equal(t, types.StringSourceLiteral, uniform.GetStringSourceAt(0))
+			for row := 1; row <= test.rows; row++ {
+				require.Equal(t, types.StringSourceExpression, uniform.GetStringSourceAt(row))
+				require.True(t, uniform.IsNull(uint64(row)))
+			}
+			uniform.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+
+	mp := mpool.MustNewZero()
+
+	mixed := NewVec(types.T_int64.ToType())
+	require.NoError(t, mixed.PreExtend(3, mp))
+	require.NoError(t, AppendFixedList(mixed, []int64{1, 2}, nil, mp))
+	require.NoError(t, mixed.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceCOMStmt,
+	}, mp))
+	require.NotPanics(t, func() {
+		require.NoError(t, mixed.UnionNull(mp))
+	})
+	require.Equal(t, []types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceCOMStmt,
+		types.StringSourceExpression,
+	}, mixed.GetStringSources())
+	mixed.Free(mp)
+
+	require.Zero(t, mp.CurrNB())
+}

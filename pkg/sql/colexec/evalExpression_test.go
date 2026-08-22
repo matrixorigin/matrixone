@@ -230,6 +230,35 @@ func TestConstListExpressionExecutorPreservesLiteralSource(t *testing.T) {
 	}
 }
 
+func TestLiteralVecExpressionExecutorRestoresLiteralSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	exprs := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}},
+		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "b"}}}},
+	}
+	direct, err := GenerateConstListExpressionExecutor(proc, exprs)
+	require.NoError(t, err)
+	data, err := direct.MarshalBinary()
+	require.NoError(t, err)
+	direct.Free(proc.Mp())
+
+	executor, err := NewExpressionExecutor(proc, &plan.Expr{
+		Typ: exprs[0].Typ,
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+			Len:  int32(len(exprs)),
+			Data: data,
+		}},
+	})
+	require.NoError(t, err)
+	defer executor.Free()
+
+	result, err := executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	for row := range exprs {
+		require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(row))
+	}
+}
+
 func TestFlowControlSameDomainWithoutProvenanceKeepsFastPath(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	value, err := vector.NewConstBytes(

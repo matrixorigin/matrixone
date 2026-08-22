@@ -1604,7 +1604,7 @@ func (v *Vector) prepareOrdinaryBinaryStringAppend(rows int, mp *mpool.MPool) er
 }
 
 func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error {
-	if err := v.preExtendStringSources(v.length+rows, mp); err != nil {
+	if err := v.prepareOrdinaryStringSourceAppend(rows, mp); err != nil {
 		return err
 	}
 	if err := v.prepareOrdinaryAppend(rows, mp); err != nil {
@@ -1628,6 +1628,14 @@ func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error 
 		}
 	}
 	return v.prepareOrdinaryBinaryStringAppend(rows, mp)
+}
+
+func (v *Vector) prepareOrdinaryStringSourceAppend(rows int, mp *mpool.MPool) error {
+	var summary stringSourceAppendSummary
+	if rows > 0 {
+		summary.observe(types.StringSourceExpression)
+	}
+	return v.preflightStringSourceAppend(v.length+rows, summary, mp)
 }
 
 // setLengthAfterExtend publishes a length whose row-parallel capacities were
@@ -6215,6 +6223,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 		); err != nil {
 			return err
 		}
+		if err := v.preflightStringSourceAppend(
+			oldLength+w.length,
+			summarizeStringSourceBatch(w, 0, w.length, nil),
+			mp,
+		); err != nil {
+			return err
+		}
 		if w.gsp.Any() {
 			if err := v.ensureGroupingCapacity(oldLength+w.length, mp); err != nil {
 				return err
@@ -7578,6 +7593,13 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	); err != nil {
 		return err
 	}
+	if err := v.preflightStringSourceAppend(
+		v.length+cnt,
+		summarizeStringSourceOne(w, sel),
+		mp,
+	); err != nil {
+		return err
+	}
 
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
@@ -8927,10 +8949,12 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	if err := extendWithBitmaps(vec, 1, mp, isNull, false); err != nil {
 		return err
 	}
-	if !isNull {
-		if err := vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+	if isNull {
+		if err := vec.prepareOrdinaryStringSourceAppend(1, mp); err != nil {
 			return err
 		}
+	} else if err := vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + 1)
@@ -9056,10 +9080,12 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	if err := extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
 	}
-	if !isNull {
-		if err := vec.prepareOrdinaryAppendMetadata(cnt, mp); err != nil {
+	if isNull {
+		if err := vec.prepareOrdinaryStringSourceAppend(cnt, mp); err != nil {
 			return err
 		}
+	} else if err := vec.prepareOrdinaryAppendMetadata(cnt, mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + cnt)
@@ -9090,10 +9116,12 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	if err = extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
 	}
-	if !isNull {
-		if err = vec.prepareOrdinaryAppendMetadata(cnt, mp); err != nil {
+	if isNull {
+		if err = vec.prepareOrdinaryStringSourceAppend(cnt, mp); err != nil {
 			return err
 		}
+	} else if err = vec.prepareOrdinaryAppendMetadata(cnt, mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + cnt)
@@ -9126,10 +9154,12 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 	); err != nil {
 		return err
 	}
-	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
-		if err := vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+	if len(isNulls) > 0 && !slices.Contains(isNulls, false) {
+		if err := vec.prepareOrdinaryStringSourceAppend(len(vals), mp); err != nil {
 			return err
 		}
+	} else if err := vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
@@ -9162,10 +9192,12 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 	); err != nil {
 		return err
 	}
-	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
-		if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+	if len(isNulls) > 0 && !slices.Contains(isNulls, false) {
+		if err = vec.prepareOrdinaryStringSourceAppend(len(vals), mp); err != nil {
 			return err
 		}
+	} else if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
@@ -9206,10 +9238,12 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	); err != nil {
 		return err
 	}
-	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
-		if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+	if len(isNulls) > 0 && !slices.Contains(isNulls, false) {
+		if err = vec.prepareOrdinaryStringSourceAppend(len(vals), mp); err != nil {
 			return err
 		}
+	} else if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
@@ -9252,10 +9286,12 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 	); err != nil {
 		return err
 	}
-	if len(isNulls) == 0 || slices.Contains(isNulls, false) {
-		if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+	if len(isNulls) > 0 && !slices.Contains(isNulls, false) {
+		if err = vec.prepareOrdinaryStringSourceAppend(len(vals), mp); err != nil {
 			return err
 		}
+	} else if err = vec.prepareOrdinaryAppendMetadata(len(vals), mp); err != nil {
+		return err
 	}
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
