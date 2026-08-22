@@ -188,13 +188,6 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	return newCtx
 }
 
-func DeepCopyPostDmlCtx(ctx *plan.PostDmlCtx) *plan.PostDmlCtx {
-	if ctx == nil {
-		return nil
-	}
-	return proto.Clone(ctx).(*plan.PostDmlCtx)
-}
-
 func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 	if target == nil {
 		return nil
@@ -281,14 +274,12 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		ClusterTable:           DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:              DeepCopyInsertCtx(node.InsertCtx),
 		NotCacheable:           node.NotCacheable,
-		SourceStep:             slices.Clone(node.SourceStep),
+		SourceStep:             node.SourceStep,
 		PreInsertCtx:           DeepCopyPreInsertCtx(node.PreInsertCtx),
 		PreInsertUkCtx:         DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		PreInsertSkCtx:         DeepCopyPreInsertUkCtx(node.PreInsertSkCtx),
 		LockTargets:            make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:            DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:                  node.IsEnd,
-		RecursiveSink:          node.RecursiveSink,
 		ExternScan:             deepCopyExternScan(node.ExternScan),
 		SampleFunc:             DeepCopySampleFuncSpec(node.SampleFunc),
 		OnUpdateExprs:          DeepCopyExprList(node.OnUpdateExprs),
@@ -302,12 +293,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		OriginViews:            slices.Clone(node.OriginViews),
 		DirectView:             node.DirectView,
 		RankOption:             DeepCopyRankOption(node.RankOption),
-		WindowIdx:              node.WindowIdx,
-		RecursiveCte:           node.RecursiveCte,
-		ApplyType:              node.ApplyType,
-		PostDmlCtx:             DeepCopyPostDmlCtx(node.PostDmlCtx),
-		OnDuplicateAction:      node.OnDuplicateAction,
-		RollupFilter:           node.RollupFilter,
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
 		FilterIsBarrier:        node.FilterIsBarrier,
 		PartitionByCount:       node.PartitionByCount,
@@ -319,12 +304,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		RuntimeFilterBuildList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterBuildList),
 		IfInsertFromUnique: node.IfInsertFromUnique,
-		// Runtime execution plans are deep-copied before prepared parameters
-		// are specialized.  Join compilation relies on these message headers
-		// to recover the JoinMap tag; dropping them makes the copied plan panic
-		// with "wrong joinmap tag".
-		SendMsgList: slices.Clone(node.SendMsgList),
-		RecvMsgList: slices.Clone(node.RecvMsgList),
 	}
 	if node.Fuzzymessage != nil {
 		newNode.Fuzzymessage = &plan.OriginTableMessageForFuzzy{
@@ -766,22 +745,12 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 }
 
 func DeepCopyQuery(qry *plan.Query) *plan.Query {
-	backgroundQueries := make([]*plan.Query, len(qry.BackgroundQueries))
-	for idx, query := range qry.BackgroundQueries {
-		if query != nil {
-			backgroundQueries[idx] = DeepCopyQuery(query)
-		}
-	}
 	newQry := &plan.Query{
 		StmtType:            qry.StmtType,
-		Steps:               slices.Clone(qry.Steps),
+		Steps:               qry.Steps,
 		Nodes:               make([]*plan.Node, len(qry.Nodes)),
 		Params:              DeepCopyExprList(qry.Params),
-		Headings:            slices.Clone(qry.Headings),
-		LoadTag:             qry.LoadTag,
-		LoadWriteS3:         qry.LoadWriteS3,
-		BackgroundQueries:   backgroundQueries,
-		MaxDop:              qry.MaxDop,
+		Headings:            qry.Headings,
 		HasForeignKeyAction: qry.HasForeignKeyAction,
 		HasReturning:        qry.HasReturning,
 		ReturningStep:       qry.ReturningStep,
@@ -859,8 +828,22 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 		}
 
 	case *plan.DataDefinition_CreateTable:
+		CreateTable := &plan.CreateTable{
+			Replace:     df.CreateTable.Replace,
+			IfNotExists: df.CreateTable.IfNotExists,
+			Temporary:   df.CreateTable.Temporary,
+			Database:    df.CreateTable.Database,
+			TableDef:    DeepCopyTableDef(df.CreateTable.TableDef, true),
+			IndexTables: DeepCopyTableDefList(df.CreateTable.GetIndexTables()),
+			FkDbs:       slices.Clone(df.CreateTable.FkDbs),
+			FkTables:    slices.Clone(df.CreateTable.FkTables),
+			FkCols:      make([]*plan.FkColName, len(df.CreateTable.FkCols)),
+		}
+		for i, val := range df.CreateTable.FkCols {
+			CreateTable.FkCols[i] = &plan.FkColName{Cols: slices.Clone(val.Cols)}
+		}
 		newDf.Definition = &plan.DataDefinition_CreateTable{
-			CreateTable: DeepCopyCreateTable(df.CreateTable),
+			CreateTable: CreateTable,
 		}
 
 	case *plan.DataDefinition_AlterTable:
@@ -923,10 +906,17 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_CreateIndex:
 		newDf.Definition = &plan.DataDefinition_CreateIndex{
 			CreateIndex: &plan.CreateIndex{
-				Database:              df.CreateIndex.Database,
-				Table:                 df.CreateIndex.Table,
-				TableDef:              DeepCopyTableDef(df.CreateIndex.TableDef, true),
-				Index:                 DeepCopyCreateTable(df.CreateIndex.Index),
+				Database: df.CreateIndex.Database,
+				Table:    df.CreateIndex.Table,
+				TableDef: DeepCopyTableDef(df.CreateIndex.TableDef, true),
+				Index: &plan.CreateTable{
+					IfNotExists: df.CreateIndex.Index.IfNotExists,
+					Temporary:   df.CreateIndex.Index.Temporary,
+					Database:    df.CreateIndex.Index.Database,
+					Replace:     df.CreateIndex.Index.Replace,
+					TableDef:    DeepCopyTableDef(df.CreateIndex.Index.TableDef, true),
+					IndexTables: DeepCopyTableDefList(df.CreateIndex.Index.GetIndexTables()),
+				},
 				OriginTablePrimaryKey: df.CreateIndex.OriginTablePrimaryKey,
 				TableExist:            df.CreateIndex.TableExist,
 			},
@@ -993,18 +983,6 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	}
 
 	return newDf
-}
-
-// DeepCopyCreateTable clones the complete CreateTable message, including the
-// execution-only fields used after the table metadata is created. In
-// particular, CTAS execution depends on CreateAsSelectSql, while foreign-key
-// bookkeeping and partition execution depend on the other fields that used to
-// be omitted by the hand-written subset copy.
-func DeepCopyCreateTable(src *plan.CreateTable) *plan.CreateTable {
-	if src == nil {
-		return nil
-	}
-	return proto.Clone(src).(*plan.CreateTable)
 }
 
 func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
