@@ -4625,6 +4625,8 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 	switch {
 	case returnType.Oid == types.T_varchar:
 		changed = adjustControlFlowVarcharMetadata(args, argTypes, valueIndexes, returnType)
+	case returnType.Oid == types.T_varbinary:
+		changed = adjustControlFlowBinaryMetadata(args, argTypes, valueIndexes, returnType)
 	case returnType.Oid.IsDecimal():
 		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
 	}
@@ -4641,6 +4643,12 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 	if returnType.Oid == types.T_varchar {
 		for _, idx := range valueIndexes {
 			argsCastType[idx] = conservativeReturnType
+		}
+		return
+	}
+	if returnType.Oid == types.T_varbinary {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = *returnType
 		}
 		return
 	}
@@ -4739,6 +4747,61 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 		return changed
 	}
 	return false
+}
+
+// adjustControlFlowBinaryMetadata narrows a binary/character conditional
+// result only when every character branch is a known literal. The shared
+// binary type checker keeps a conservative four-byte-per-character bound for
+// unknown values; MySQL's default string metadata uses a three-byte bound, but
+// a literal may contain a four-byte UTF-8 code point. Combining both bounds
+// keeps ASCII metadata compatible without advertising a width shorter than a
+// value that the expression can actually emit.
+func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	hasBinary := false
+	hasCharacter := false
+	width := int32(0)
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) || controlFlowNullExpr(args[idx]) {
+			continue
+		}
+		typ := argTypes[idx]
+		switch typ.Oid {
+		case types.T_binary, types.T_varbinary:
+			hasBinary = true
+			if typ.Width > width {
+				width = typ.Width
+			}
+		case types.T_char, types.T_varchar:
+			hasCharacter = true
+			lit := args[idx].GetLit()
+			if lit == nil || lit.Isnull {
+				return false
+			}
+			value, ok := lit.Value.(*plan.Literal_Sval)
+			if !ok {
+				return false
+			}
+			candidate := int32(0)
+			if typ.Width > 0 && typ.Width <= types.MaxVarBinaryLen/3 {
+				candidate = typ.Width * 3
+			} else if typ.Width > 0 {
+				candidate = types.MaxVarBinaryLen
+			}
+			if byteWidth := int32(len(value.Sval)); byteWidth > candidate {
+				candidate = byteWidth
+			}
+			if candidate > width {
+				width = candidate
+			}
+		default:
+			return false
+		}
+	}
+	if !hasBinary || !hasCharacter || width <= 0 || width >= returnType.Width {
+		return false
+	}
+	returnType.Width = width
+	return true
 }
 
 func controlFlowNullExpr(expr *Expr) bool {
