@@ -21,6 +21,7 @@ package fulltext2
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -250,11 +251,11 @@ func TestDirtyVsCompactedScoreParity(t *testing.T) {
 
 	require.Equal(t, compacted.NumDocs(), dirty.NumDocs(), "same live doc count")
 
-	scoresOf := func(res []Result, err error) map[int64]float64 {
+	scoresOf := func(res []Result, err error) map[int64]uint32 {
 		require.NoError(t, err)
-		m := make(map[int64]float64, len(res))
+		m := make(map[int64]uint32, len(res))
 		for _, r := range res {
-			m[r.Pk.(int64)] = float64(r.Score)
+			m[r.Pk.(int64)] = math.Float32bits(r.Score)
 		}
 		return m
 	}
@@ -262,15 +263,15 @@ func TestDirtyVsCompactedScoreParity(t *testing.T) {
 	// live-fixes are exercised — SearchQuery(boolean=false) alone would only hit the phrase path.
 	modes := []struct {
 		name string
-		run  func(idx *Index, algo ScoreAlgo, q string) map[int64]float64
+		run  func(idx *Index, algo ScoreAlgo, q string) map[int64]uint32
 	}{
-		{"wand-bag", func(idx *Index, algo ScoreAlgo, q string) map[int64]float64 { // WAND disjunction -> df()
+		{"wand-bag", func(idx *Index, algo ScoreAlgo, q string) map[int64]uint32 { // WAND disjunction -> df()
 			return scoresOf(idx.SearchBagOfWords([]byte(q), ParserDefault, algo, 100, nil))
 		}},
-		{"bool-or", func(idx *Index, algo ScoreAlgo, q string) map[int64]float64 { // boolean OR -> WAND -> df()
+		{"bool-or", func(idx *Index, algo ScoreAlgo, q string) map[int64]uint32 { // boolean OR -> WAND -> df()
 			return scoresOf(idx.SearchQuery([]byte(q), true, ParserDefault, algo, 100, nil))
 		}},
-		{"nl-phrase", func(idx *Index, algo ScoreAlgo, q string) map[int64]float64 { // NL / phrase -> phraseDf()
+		{"nl-phrase", func(idx *Index, algo ScoreAlgo, q string) map[int64]uint32 { // NL / phrase -> phraseDf()
 			return scoresOf(idx.SearchQuery([]byte(q), false, ParserDefault, algo, 100, nil))
 		}},
 	}
@@ -283,7 +284,7 @@ func TestDirtyVsCompactedScoreParity(t *testing.T) {
 				for pk, cscore := range cs {
 					dscore, ok := ds[pk]
 					require.Truef(t, ok, "algo=%v mode=%s q=%q pk %d present in dirty result", algo, m.name, q, pk)
-					require.InDeltaf(t, cscore, dscore, 1e-6, "algo=%v mode=%s q=%q pk %d dirty-vs-compacted score parity", algo, m.name, q, pk)
+					require.Equalf(t, cscore, dscore, "algo=%v mode=%s q=%q pk %d dirty-vs-compacted score parity", algo, m.name, q, pk)
 				}
 			}
 		}

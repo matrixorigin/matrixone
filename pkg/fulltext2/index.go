@@ -156,6 +156,38 @@ func (idx *Index) isLive(si int, ord int64) bool {
 	return b == nil || b[ord]
 }
 
+// liveTermDF returns the number of live documents in segment si that contain p.
+// A nil liveness bitmap proves that the segment is fully live, so its raw posting
+// count is exact without touching compressed blocks. Dirty loaded segments decode
+// one docID block at a time and never materialize the full posting list.
+func (idx *Index) liveTermDF(si int, p *termPostings) int {
+	live := idx.liveOrd[si]
+	if live == nil {
+		return p.df()
+	}
+
+	df := 0
+	if p.docIDs != nil {
+		for _, ord := range p.docIDs {
+			if ord >= 0 && ord < int64(len(live)) && live[ord] {
+				df++
+			}
+		}
+		return df
+	}
+
+	var docs [BlockSize]int64
+	for b := 0; b < p.nblk(); b++ {
+		n, _, _ := p.decodeBlockDocs(b, docs[:])
+		for _, ord := range docs[:n] {
+			if ord >= 0 && ord < int64(len(live)) && live[ord] {
+				df++
+			}
+		}
+	}
+	return df
+}
+
 // SearchPhrase runs an NL exact-phrase query across all segments and returns the
 // global top-k (score desc; equal scores are order-unspecified). A single term is the
 // degenerate one-term phrase. Scoring uses global N + global avgDocLen, and the
@@ -358,9 +390,9 @@ func (gs *globalStats) phraseHits(seg *Segment, slots []phraseSlot) []docTf {
 // newer copy (recency) or a tombstone are counted. df feeds idf against the LIVE globalN, so
 // counting dead PHYSICAL copies (an UPDATE leaves the old copy in a lower-recency segment
 // until MERGE reclaims it) would inflate df past N and make a dirty base+tail rank a query
-// DIFFERENTLY from the identical corpus after compaction. Enumerating the term's ords and
-// testing isLive costs O(df) per query term, memoized so it is paid once — and WAND walks the
-// same posting list anyway.
+// DIFFERENTLY from the identical corpus after compaction. Dirty segments stream one posting
+// block at a time while fully-live segments use raw df directly; the result is memoized so the
+// scan is paid once per query term.
 func (gs *globalStats) df(term string) int {
 	if d, ok := gs.dfCache[term]; ok {
 		return d
@@ -368,11 +400,7 @@ func (gs *globalStats) df(term string) int {
 	d := 0
 	for si, seg := range gs.idx.segments {
 		if pl, ok := seg.lookup(term); ok {
-			for _, ord := range pl.materializeDocIDs() {
-				if gs.idx.isLive(si, ord) {
-					d++
-				}
-			}
+			d += gs.idx.liveTermDF(si, pl)
 		}
 	}
 	gs.dfCache[term] = d
