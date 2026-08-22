@@ -113,3 +113,6 @@ etc/docker-multi-cn-local-disk/*.toml
 
 # jstfu (datastream server) build output
 xtool/jstfu/target/
+
+# written by optools/run_bvt.sh when it starts the datastream server
+/jstfu.log
