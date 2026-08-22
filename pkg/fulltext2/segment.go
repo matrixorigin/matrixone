@@ -415,6 +415,19 @@ func (s *Segment) pk(ord int64) any {
 	return v
 }
 
+// pkContent returns the canonical PK content bytes for a loaded segment without
+// decoding them into a boxed Go value. The returned slice is a view into the
+// immutable docmap/mmap and remains valid for the segment lifetime. Build-side
+// segments do not have this encoded view and return ok=false.
+func (s *Segment) pkContent(ord int64) (content []byte, ok bool) {
+	if s.pks != nil || ord < 0 || ord >= s.N {
+		return nil, false
+	}
+	off := int(s.pkOffsets[ord])
+	l := int(binary.LittleEndian.Uint32(s.pkRaw[off:]))
+	return s.pkRaw[off+4 : off+4+l], true
+}
+
 // includeLayout is the derived per-column addressing for the docmap include section: a dense
 // stride-addressed FIXED region (the integer family) plus an offset-addressed VARLENA region
 // (varchar/char). Fixed columns need NO per-doc offset — their value sits at a computed
