@@ -9,19 +9,20 @@ count(1)
 4
 drop table if exists test2;
 create table test2(s char(26));
-insert into test2 values(substr(now(),1,26));
-insert into test2 values(substr(now(),1,26));
-insert into test2 values(substr(now(),1,26));
-insert into test2 values(substr(now(),1,26));
+set @plan_cache_now=now();
+insert into test2 values(substr(@plan_cache_now,1,26));
+insert into test2 values(substr(@plan_cache_now,1,26));
+insert into test2 values(substr(@plan_cache_now,1,26));
+insert into test2 values(substr(@plan_cache_now,1,26));
 select count(1) from test2 group by s;
 count(1)
 4
 drop table if exists test3;
 create table test3(s char(25));
-insert into test3 values(substr(substr(now(),1,26),2,25));
-insert into test3 values(substr(substr(now(),1,26),2,25));
-insert into test3 values(substr(substr(now(),1,26),2,25));
-insert into test3 values(substr(substr(now(),1,26),2,25));
+insert into test3 values(substr(substr(@plan_cache_now,1,26),2,25));
+insert into test3 values(substr(substr(@plan_cache_now,1,26),2,25));
+insert into test3 values(substr(substr(@plan_cache_now,1,26),2,25));
+insert into test3 values(substr(substr(@plan_cache_now,1,26),2,25));
 select count(1) from test3 group by s;
 count(1)
 4
