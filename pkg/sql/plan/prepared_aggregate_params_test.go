@@ -78,6 +78,40 @@ func collectParamPositions(expr *planpb.Expr, positions map[int32]struct{}) {
 	}
 }
 
+func TestPreparedRuntimeStringComparisonStaysString(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t,
+		`prepare stmt1 from "select n_name from nation where concat(n_name, '') = ?"`)
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+
+	query := prepare.GetPlan().GetQuery()
+	require.NotNil(t, query)
+
+	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{ParamValue{
+			Value:          "abc",
+			RuntimeType:    types.New(types.T_varchar, 3, 0),
+			HasRuntimeType: true,
+		}})
+	require.NoError(t, err)
+	var filter *planpb.Expr
+	for _, node := range filled.GetQuery().Nodes {
+		if len(node.FilterList) > 0 {
+			filter = node.FilterList[0]
+			break
+		}
+	}
+	require.NotNil(t, filter)
+	equal := filter.GetF()
+	require.NotNil(t, equal)
+	require.Equal(t, "=", equal.Func.GetObjName())
+	require.Len(t, equal.Args, 2)
+	require.True(t, types.T(equal.Args[0].Typ.Id).IsMySQLString(), equal.Args[0].String())
+	require.True(t, types.T(equal.Args[1].Typ.Id).IsMySQLString(), equal.Args[1].String())
+}
+
 func collectColumnNames(expr *planpb.Expr, names *[]string) {
 	if expr == nil {
 		return
@@ -306,6 +340,149 @@ func TestPreparedNumericAggregateParameterIdentity(t *testing.T) {
 
 	_, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{int64(1), "2.5"})
 	require.NoError(t, err)
+}
+
+func TestPreparedRuntimeWindowLineage(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select sum(? + 1) over () + 1 from nation limit 1")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(),
+		prepare.Plan,
+		[]any{ParamValue{
+			Value:          0.5,
+			RuntimeType:    types.T_float64.ToType(),
+			HasRuntimeType: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	query := filled.GetQuery()
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Equal(t, int32(types.T_float64), root.ProjectList[0].Typ.Id)
+	for _, node := range query.Nodes {
+		if node.NodeType != planpb.Node_WINDOW {
+			continue
+		}
+		require.Len(t, node.WinSpecList, 1)
+		require.Equal(t, int32(types.T_float64), node.WinSpecList[0].Typ.Id)
+		require.Equal(t, int32(types.T_float64),
+			node.WinSpecList[0].GetW().GetWindowFunc().Typ.Id)
+	}
+}
+
+func TestPreparedRuntimeUnionLineage(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select x + 1 from (select ? as x union all select ? as x) u order by x")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(),
+		prepare.Plan,
+		[]any{
+			ParamValue{Value: 2.5, RuntimeType: types.T_float64.ToType(), HasRuntimeType: true},
+			ParamValue{Value: 3.5, RuntimeType: types.T_float64.ToType(), HasRuntimeType: true},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	query := filled.GetQuery()
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Equal(t, int32(types.T_float64), root.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(types.T_float64), root.ProjectList[0].GetF().Args[0].Typ.Id)
+	var foundUnion bool
+	for _, node := range query.Nodes {
+		if node.NodeType != planpb.Node_UNION_ALL {
+			continue
+		}
+		foundUnion = true
+		for _, nodeID := range node.Children {
+			require.Equal(t, int32(types.T_float64), query.Nodes[nodeID].ProjectList[0].Typ.Id)
+		}
+	}
+	require.True(t, foundUnion)
+}
+
+func TestPreparedRuntimeSetOperationSemanticBoundary(t *testing.T) {
+	rowIDType := types.T_Rowid.ToType()
+	common, err := preparedRuntimeSetOperationCommonType(
+		context.Background(), rowIDType, rowIDType)
+	require.NoError(t, err)
+	require.True(t, rowIDType.Eq(common))
+	stringType := types.T_varchar.ToType()
+	common, err = preparedRuntimeSetOperationCommonType(
+		context.Background(), stringType, stringType)
+	require.NoError(t, err)
+	require.Equal(t, types.T_varchar, common.Oid)
+
+	for _, params := range [][]any{
+		{
+			ParamValue{Value: "2.5", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true},
+			ParamValue{Value: int64(3), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		},
+		{
+			ParamValue{Value: 2.5, RuntimeType: types.T_float64.ToType(), HasRuntimeType: true},
+			ParamValue{Value: "3", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true},
+		},
+	} {
+		prepare := buildPreparedAggregatePlan(t,
+			"select x + 1 from (select ? as x union all select ? as x) u order by x")
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+			context.Background(), prepare.Plan, params)
+		require.NoError(t, err)
+		require.True(t, specialized)
+		query := filled.GetQuery()
+		root := query.Nodes[query.Steps[len(query.Steps)-1]]
+		require.Equal(t, int32(types.T_float64), root.ProjectList[0].Typ.Id)
+
+		var foundUnion bool
+		for _, node := range query.Nodes {
+			if node.NodeType != planpb.Node_UNION_ALL {
+				continue
+			}
+			foundUnion = true
+			require.Equal(t, int32(types.T_varchar), node.ProjectList[0].Typ.Id)
+			for _, childID := range node.Children {
+				require.Equal(t, node.ProjectList[0].Typ.Id,
+					query.Nodes[childID].ProjectList[0].Typ.Id)
+			}
+		}
+		require.True(t, foundUnion)
+	}
+
+	prepare := buildPreparedAggregatePlan(t, "select ? union all select ?")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{
+			ParamValue{Value: "2.5", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true},
+			ParamValue{Value: int64(3), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	foundBareUnion := false
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_UNION_ALL {
+			foundBareUnion = true
+			require.Equal(t, int32(types.T_varchar), node.ProjectList[0].Typ.Id)
+		}
+	}
+	require.True(t, foundBareUnion)
+
+	// A numeric consumer above a string-returning function must not leak through
+	// that semantic boundary into the set branches.
+	prepare = buildPreparedAggregatePlan(t,
+		"select hex(x) + 1 from (select ? as x union all select ? as x) u")
+	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{
+			ParamValue{Value: "2.5", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true},
+			ParamValue{Value: int64(3), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	foundStringBoundaryUnion := false
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_UNION_ALL {
+			foundStringBoundaryUnion = true
+			require.Equal(t, int32(types.T_varchar), node.ProjectList[0].Typ.Id)
+		}
+	}
+	require.True(t, foundStringBoundaryUnion)
 }
 
 func TestPreparedNtileParameter(t *testing.T) {

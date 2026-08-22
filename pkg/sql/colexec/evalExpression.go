@@ -976,7 +976,7 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 }
 
 // flowControlSelectedValueSource unwraps only binder-inserted casts. Explicit
-// CAST uses overload 1 and remains a semantic boundary. An implicit cast has
+// CAST uses a non-zero overload and remains a semantic boundary. An implicit cast has
 // already evaluated its source, so this does not execute an expression twice.
 func flowControlSelectedValueSource(value *vector.Vector, executor ExpressionExecutor) *vector.Vector {
 	for {

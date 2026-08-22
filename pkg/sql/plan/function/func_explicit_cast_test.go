@@ -682,6 +682,10 @@ func TestGetFunctionByNameWithOverload(t *testing.T) {
 	require.NoError(t, err)
 	_, overload := DecodeOverloadID(got.GetEncodedOverloadID())
 	require.Equal(t, int32(1), overload)
+	got, err = GetFunctionByNameWithOverload(context.Background(), "cast", args, 2)
+	require.NoError(t, err)
+	_, overload = DecodeOverloadID(got.GetEncodedOverloadID())
+	require.Equal(t, int32(2), overload)
 
 	_, err = GetFunctionByNameWithOverload(context.Background(), "cast", args, 99)
 	require.Error(t, err)

@@ -991,13 +991,13 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 
 	// Parameter markers are kept in the cached plan so ordinary prepared
-	// executions can reuse it.  A binary execution may nevertheless change the
+	// executions can reuse it.  Each execution may nevertheless change the
 	// parameter domain (for example DECIMAL versus INT), which affects both
 	// overloaded function selection and the result-column metadata of a direct
-	// SELECT ?.  Specialize an isolated copy after the values and protocol types
+	// SELECT ?.  Specialize an isolated copy after the values and runtime types
 	// are available; never mutate PrepareStmt.PreparePlan or its cached compile.
 	runtimeSpecialized := false
-	if execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(cwft.paramVals) > 0 && executionPlan != nil &&
+	if len(cwft.paramVals) > 0 && executionPlan != nil &&
 		(executionPlan.GetQuery() != nil || executionPlan.GetDdl() != nil) {
 		runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
 			reqCtx, executionPlan, cwft.paramVals)
@@ -1010,17 +1010,17 @@ func initExecuteStmtParamWithResolverInSession(
 		if runtimePlan != nil && (specialized || executionPlan.GetDdl() != nil) {
 			executionPlan = runtimePlan
 			runtimeSpecialized = specialized
-			columns := getPreparedResultColumnsFor(
-				prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes))
-			resper := execCtx.resper
-			if executionSes.IsBackgroundSession() {
-				resper = owner.GetResponser()
-			}
-			colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
-			if metadataErr != nil {
-				return nil, nil, nil, originSQL, false, metadataErr
-			}
 			if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+				columns := getPreparedResultColumnsFor(
+					prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes))
+				resper := execCtx.resper
+				if executionSes.IsBackgroundSession() {
+					resper = owner.GetResponser()
+				}
+				colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+				if metadataErr != nil {
+					return nil, nil, nil, originSQL, false, metadataErr
+				}
 				execCtx.prepareColDef = colDefData
 			}
 		}
@@ -1292,6 +1292,14 @@ func buildExecuteUserParams(
 			Value:            param,
 			IsBin:            paramIsBin[i],
 			PrepareParamKind: paramKinds[i],
+			InferTextNumeric: true,
+		}
+		if arg.Typ.Id != 0 {
+			paramValue := paramVals[i].(plan2.ParamValue)
+			paramValue.SourceType = types.New(
+				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+			paramValue.HasSourceType = true
+			paramVals[i] = paramValue
 		}
 	}
 	return

@@ -3167,10 +3167,12 @@ func FillValuesOfParamsInPlanWithSpecialization(
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			_, err := replaceParamVals(ctx, copied, paramVals)
+			specialized, err := replaceParamVals(ctx, copied, paramVals)
 			if err != nil {
 				return nil, false, err
 			}
+			refreshPreparedCTASSchema(preparePlan, copied)
+			return copied, specialized, nil
 		}
 
 	case *plan.Plan_Query:
@@ -3323,6 +3325,18 @@ type ParamValue struct {
 	// binary-protocol value without being a binary string literal.
 	IsBinaryProtocol bool
 	PrepareParamKind vector.PrepareParamKind
+	// InferTextNumeric records SQL EXECUTE USING provenance. SQL user variables
+	// are transported through the text parameter vector and retain their
+	// PrepareParamKind; their binder type is not a binary-protocol physical type.
+	// Numeric consumers may infer from the text, while string/IN/assignment
+	// consumers keep the prepared contract.
+	InferTextNumeric bool
+	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
+	// is deliberately separate from RuntimeType: SQL parameters are transported
+	// as text and use this type only after a consumer establishes a numeric or
+	// other compatible domain.
+	SourceType    types.Type
+	HasSourceType bool
 	// RuntimeType is the type advertised by the binary-protocol parameter
 	// binding.  Prepared plans deliberately keep parameter markers as TEXT
 	// while they are cached, so the execute-time copy can use this optional
@@ -3684,6 +3698,11 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 		// conversion explicit so execution still materializes a Decimal256
 		// vector instead of treating the value as VARCHAR.
 		return castText()
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		// Literal_Sval is physically materialized as the executor's canonical
+		// string container. Keep the source as text and perform the declared
+		// binary conversion explicitly so Expr.Typ and the result vector agree.
+		return castText()
 	default:
 		return makeLiteral(&plan.Literal_Sval{Sval: rawText}), nil
 	}
@@ -3691,6 +3710,7 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, error) {
 	params := make([]*Expr, len(paramVals))
+	numericParams := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
 		isBin := false
@@ -3701,22 +3721,25 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 			isBin = param.IsBin
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
+			if param.HasSourceType && param.Value != nil {
+				numericParams[i], err = preparedRuntimeParamExpr(
+					ctx, param.Value, param.IsBin, param.SourceType)
+				if err != nil {
+					return false, err
+				}
+			}
 		}
 		paramType := plan.Type{Id: int32(types.T_text)}
 		if hasRuntimeType {
 			paramType = makePlan2Type(&runtimeType)
 		}
 		if val == nil {
-			pc := &plan.Literal{
-				Isnull: true,
-				Value:  &plan.Literal_Sval{Sval: ""},
-			}
-			params[i] = &plan.Expr{
-				Typ: paramType,
-				Expr: &plan.Expr_Lit{
-					Lit: pc,
-				},
-			}
+			// Keep NULL untyped until its actual consumer is rebound. Assigning
+			// TEXT here bypasses the normal implicit cast generation; aggregate
+			// executors such as COUNT then receive a different physical expression
+			// from direct COUNT(NULL) and may treat it as non-null input.
+			params[i] = makePlan2NullConstExprWithType()
+			params[i].GetLit().IsBin = isBin
 		} else {
 			if hasRuntimeType {
 				params[i], err = preparedRuntimeParamExpr(ctx, val, isBin, runtimeType)
@@ -3736,10 +3759,24 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.numericParams = numericParams
+	paramRule.sourceTypedParamExprs = make(map[*plan.Expr]struct{})
+	if query := preparedExecutionQuery(plan0); query != nil {
+		for _, node := range query.Nodes {
+			if node == nil {
+				continue
+			}
+			for _, expr := range node.ProjectList {
+				collectPreparedProjectedParamExprs(expr, paramRule.sourceTypedParamExprs)
+			}
+		}
+	}
 	paramRule.inferTextParamPositions = make(map[int]bool)
+	paramRule.paramKinds = make(map[int]vector.PrepareParamKind)
 	for i, val := range paramVals {
 		if param, ok := val.(ParamValue); ok {
-			if param.IsBinaryProtocol {
+			paramRule.paramKinds[i] = param.PrepareParamKind
+			if param.IsBinaryProtocol || param.InferTextNumeric {
 				paramRule.inferTextParamPositions[i] = true
 			}
 			if param.HasRuntimeType && param.RuntimeType.Oid == types.T_text {
@@ -3748,7 +3785,8 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		}
 	}
 	directSelectRuntimeParam := make(map[int]bool)
-	if query := plan0.GetQuery(); query != nil && query.StmtType == plan.Query_SELECT {
+	query := preparedExecutionQuery(plan0)
+	if query != nil && query.StmtType == plan.Query_SELECT {
 		for _, node := range query.Nodes {
 			if node == nil {
 				continue
@@ -3778,8 +3816,11 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		}
 		return nil
 	}
-	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
-	err = VisitQuery.Visit(ctx)
+	if query != nil {
+		err = refreshPreparedRuntimeTypeLineage(ctx, query, paramRule)
+	} else {
+		err = NewVisitPlan(plan0, []VisitPlanRule{paramRule}).Visit(ctx)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -3788,6 +3829,17 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 	// execute-time numeric domain must therefore be reflected in the copied
 	// plan even when it is not wrapped by a function overload.
 	specialized := paramRule.specialized
+	if !specialized {
+		for _, value := range paramVals {
+			if param, ok := value.(ParamValue); ok {
+				value = param.Value
+			}
+			if value == nil {
+				specialized = true
+				break
+			}
+		}
+	}
 	for pos := range directSelectRuntimeParam {
 		if runtimeParamHasExplicitType(paramVals[pos]) {
 			specialized = true
@@ -3795,6 +3847,389 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		}
 	}
 	return specialized, nil
+}
+
+func collectPreparedProjectedParamExprs(expr *Expr, result map[*Expr]struct{}) {
+	if expr == nil {
+		return
+	}
+	if expr.GetP() != nil {
+		result[expr] = struct{}{}
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			collectPreparedProjectedParamExprs(arg, result)
+		}
+		return
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			collectPreparedProjectedParamExprs(item, result)
+		}
+		return
+	}
+	if window := expr.GetW(); window != nil {
+		collectPreparedProjectedParamExprs(window.WindowFunc, result)
+		for _, item := range window.PartitionBy {
+			collectPreparedProjectedParamExprs(item, result)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				collectPreparedProjectedParamExprs(order.Expr, result)
+			}
+		}
+	}
+}
+
+func preparedExecutionQuery(plan0 *Plan) *Query {
+	if plan0 == nil {
+		return nil
+	}
+	if query := plan0.GetQuery(); query != nil {
+		return query
+	}
+	if ddl := plan0.GetDdl(); ddl != nil {
+		return ddl.GetQuery()
+	}
+	return nil
+}
+
+func refreshPreparedCTASSchema(canonical, specialized *Plan) {
+	originalDDL := canonical.GetDdl()
+	specializedDDL := specialized.GetDdl()
+	if originalDDL == nil || specializedDDL == nil ||
+		originalDDL.GetQuery() == nil || specializedDDL.GetQuery() == nil {
+		return
+	}
+	originalCreate := originalDDL.GetCreateTable()
+	specializedCreate := specializedDDL.GetCreateTable()
+	if originalCreate == nil || specializedCreate == nil ||
+		originalCreate.TableDef == nil || specializedCreate.TableDef == nil {
+		return
+	}
+	originalQuery := originalDDL.GetQuery()
+	newQuery := specializedDDL.GetQuery()
+	if len(originalQuery.Steps) == 0 || len(newQuery.Steps) == 0 {
+		return
+	}
+	originalRootID := originalQuery.Steps[len(originalQuery.Steps)-1]
+	newRootID := newQuery.Steps[len(newQuery.Steps)-1]
+	if originalRootID < 0 || int(originalRootID) >= len(originalQuery.Nodes) ||
+		newRootID < 0 || int(newRootID) >= len(newQuery.Nodes) {
+		return
+	}
+	originalRoot := originalQuery.Nodes[originalRootID]
+	newRoot := newQuery.Nodes[newRootID]
+	if originalRoot == nil || newRoot == nil {
+		return
+	}
+	limit := min(len(originalQuery.Headings), len(originalRoot.ProjectList), len(newRoot.ProjectList))
+	for idx := 0; idx < limit; idx++ {
+		heading := originalQuery.Headings[idx]
+		colIdx := slices.IndexFunc(originalCreate.TableDef.Cols, func(col *ColDef) bool {
+			return col != nil && strings.EqualFold(col.Name, heading)
+		})
+		if colIdx < 0 || colIdx >= len(specializedCreate.TableDef.Cols) {
+			continue
+		}
+		col := specializedCreate.TableDef.Cols[colIdx]
+		col.Typ = newRoot.ProjectList[idx].Typ
+		if col.Default != nil {
+			col.Default.NullAbility = !col.Typ.NotNullable
+		}
+	}
+}
+
+func samePreparedRuntimeTypeShape(left, right plan.Type) bool {
+	return left.Id == right.Id && left.Width == right.Width && left.Scale == right.Scale &&
+		left.NotNullable == right.NotNullable
+}
+
+// refreshPreparedRuntimeTypeLineage performs two bottom-up generations. The
+// first replaces parameter markers and rebuilds their immediate producers;
+// the second starts from the resulting physical outputs and converges every
+// logical/local consumer and scalar-subquery boundary on the same types.
+func refreshPreparedRuntimeTypeLineage(
+	ctx context.Context,
+	query *Query,
+	paramRule *ResetParamRefRule,
+) error {
+	if query == nil {
+		return nil
+	}
+	lineage := &preparedRuntimeTypeLineageRule{
+		ctx: ctx, query: query, types: make(map[[2]int32]plan.Type),
+	}
+	queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
+	visitor := NewVisitPlan(queryPlan, nil)
+	visitor.isUpdatePlan = query.StmtType == plan.Query_UPDATE
+	subqueryRoots := newSubqueryRootRule()
+	visited := make(map[int32]struct{})
+	generation := 0
+
+	var visit func(int32) error
+	visit = func(nodeID int32) error {
+		if _, ok := visited[nodeID]; ok {
+			return nil
+		}
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+			return moerr.NewInternalErrorNoCtx("invalid query node id")
+		}
+		visited[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		for _, childID := range node.Children {
+			if err := visit(childID); err != nil {
+				return err
+			}
+		}
+
+		subqueryRoots.pending = subqueryRoots.pending[:0]
+		if err := visitor.exploreNode(ctx, subqueryRoots, node, nodeID); err != nil {
+			return err
+		}
+		for _, rootID := range append([]int32(nil), subqueryRoots.pending...) {
+			if err := visit(rootID); err != nil {
+				return err
+			}
+		}
+
+		if generation == 0 {
+			if err := visitor.exploreNode(ctx, paramRule, node, nodeID); err != nil {
+				return err
+			}
+		}
+		if err := visitor.exploreNode(ctx, lineage, node, nodeID); err != nil {
+			return err
+		}
+		setChanged, err := reconcilePreparedRuntimeSetOperationTypes(ctx, query, node)
+		if err != nil {
+			return err
+		}
+		lineage.changed = lineage.changed || setChanged
+
+		localTypes := preparedRuntimeLocalInputTypes(query, node)
+		if len(localTypes) > 0 {
+			localRule := &preparedRuntimeTypeLineageRule{
+				ctx: ctx, query: query, types: localTypes,
+			}
+			if err := visitor.exploreNode(ctx, localRule, node, nodeID); err != nil {
+				return err
+			}
+			lineage.changed = lineage.changed || localRule.changed
+		}
+		recordPreparedRuntimeNodeOutputTypes(lineage.types, node)
+		return nil
+	}
+
+	for generation = 0; generation < 2; generation++ {
+		clear(visited)
+		clear(lineage.dirty)
+		for _, rootID := range query.Steps {
+			if err := visit(rootID); err != nil {
+				return err
+			}
+		}
+	}
+	paramRule.specialized = paramRule.specialized || lineage.changed
+	return nil
+}
+
+func reconcilePreparedRuntimeSetOperationTypes(
+	ctx context.Context,
+	query *Query,
+	node *Node,
+) (bool, error) {
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+	default:
+		return false, nil
+	}
+	if len(node.Children) != 2 {
+		return false, nil
+	}
+	leftID, rightID := node.Children[0], node.Children[1]
+	if leftID < 0 || rightID < 0 || int(leftID) >= len(query.Nodes) || int(rightID) >= len(query.Nodes) {
+		return false, nil
+	}
+	left, right := query.Nodes[leftID], query.Nodes[rightID]
+	if left == nil || right == nil || len(left.ProjectList) != len(right.ProjectList) {
+		return false, nil
+	}
+	changed := false
+	for col := range left.ProjectList {
+		leftExpr := unwrapPreparedRuntimeImplicitCast(left.ProjectList[col])
+		rightExpr := unwrapPreparedRuntimeImplicitCast(right.ProjectList[col])
+		leftType := makeTypeByPlan2Expr(leftExpr)
+		rightType := makeTypeByPlan2Expr(rightExpr)
+		common, err := preparedRuntimeSetOperationCommonType(ctx, leftType, rightType)
+		if err != nil {
+			return false, err
+		}
+		target := makePlan2Type(&common)
+		if !leftType.Eq(common) {
+			leftExpr, err = makePlan2CastExpr(ctx, leftExpr, target)
+			if err != nil {
+				return false, err
+			}
+		}
+		if !rightType.Eq(common) {
+			rightExpr, err = makePlan2CastExpr(ctx, rightExpr, target)
+			if err != nil {
+				return false, err
+			}
+		}
+		if left.ProjectList[col] != leftExpr || right.ProjectList[col] != rightExpr ||
+			!samePreparedRuntimeTypeShape(left.ProjectList[col].Typ, leftExpr.Typ) ||
+			!samePreparedRuntimeTypeShape(right.ProjectList[col].Typ, rightExpr.Typ) {
+			changed = true
+		}
+		left.ProjectList[col] = leftExpr
+		right.ProjectList[col] = rightExpr
+		if col < len(node.ProjectList) {
+			outputType := setOperationOutputType(node.NodeType, leftExpr.Typ, rightExpr.Typ)
+			if !samePreparedRuntimeTypeShape(node.ProjectList[col].Typ, outputType) {
+				changed = true
+			}
+			node.ProjectList[col].Typ = outputType
+		}
+	}
+	return changed, nil
+}
+
+func preparedRuntimeSetOperationCommonType(
+	ctx context.Context,
+	leftType, rightType types.Type,
+) (types.Type, error) {
+	if leftType.Eq(rightType) {
+		// Hidden DML columns such as ROWID already have one physical layout and
+		// are not valid COALESCE arguments. Cross-domain inference is unnecessary
+		// when both branches agree exactly.
+		return leftType, nil
+	}
+	if leftType.IsNumeric() && rightType.IsNumeric() {
+		if common, ok := function.InferNumericParameterType(
+			[]types.Type{leftType, rightType}, nil); ok {
+			return common, nil
+		}
+	}
+	// Runtime specialization must use the same cross-domain coercion contract
+	// as the normal set-operation binder. A set operation is a semantic boundary:
+	// string/numeric branches use a VARCHAR representation for comparison,
+	// de-duplication, and ordering. A numeric consumer above the set operation
+	// may cast its output, but must not push that conversion into the branches.
+	fGet, err := function.GetFunctionByName(ctx, "coalesce", []types.Type{leftType, rightType})
+	if err != nil {
+		return types.Type{}, err
+	}
+	targets, shouldCast := fGet.ShouldDoImplicitTypeCast()
+	if shouldCast {
+		if len(targets) != 2 || !targets[0].Eq(targets[1]) {
+			return types.Type{}, moerr.NewInternalError(ctx,
+				"set operation branches did not resolve to one runtime type")
+		}
+		return targets[0], nil
+	}
+
+	common := leftType
+	if (common.Oid == types.T_varchar || common.Oid == types.T_char) && rightType.Width > common.Width {
+		common.Width = rightType.Width
+	}
+	return common, nil
+}
+
+func unwrapPreparedRuntimeImplicitCast(expr *Expr) *Expr {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			return expr
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			return expr
+		}
+		expr = fn.Args[0]
+	}
+	return expr
+}
+
+// preparedRuntimeLocalInputTypes describes the post-optimizer physical
+// coordinates consumed by expression executors. Logical binding tags may have
+// been rewritten to child slots (0..n), aggregate slots (-1/-2), or the window
+// result appended after its child's projection.
+func preparedRuntimeLocalInputTypes(query *Query, node *Node) map[[2]int32]plan.Type {
+	result := make(map[[2]int32]plan.Type)
+	for relPos, childID := range node.Children {
+		if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID] == nil {
+			continue
+		}
+		for col, expr := range query.Nodes[childID].ProjectList {
+			result[[2]int32{int32(relPos), int32(col)}] = expr.Typ
+		}
+	}
+
+	switch node.NodeType {
+	case plan.Node_AGG, plan.Node_SAMPLE:
+		for col, expr := range node.GroupBy {
+			result[[2]int32{-1, int32(col)}] = expr.Typ
+		}
+		groupCount := int32(len(node.GroupBy))
+		for col, expr := range node.AggList {
+			result[[2]int32{-2, groupCount + int32(col)}] = expr.Typ
+		}
+	case plan.Node_WINDOW:
+		childWidth := int32(0)
+		if len(node.Children) > 0 {
+			childID := node.Children[0]
+			if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID] != nil {
+				childWidth = int32(len(query.Nodes[childID].ProjectList))
+			}
+		}
+		for col, expr := range node.WinSpecList {
+			result[[2]int32{-1, childWidth + int32(col)}] = expr.Typ
+		}
+	}
+	return result
+}
+
+func recordPreparedRuntimeNodeOutputTypes(lineage map[[2]int32]plan.Type, node *Node) {
+	if len(node.BindingTags) == 1 {
+		tag := node.BindingTags[0]
+		for col, expr := range node.ProjectList {
+			lineage[[2]int32{tag, int32(col)}] = expr.Typ
+		}
+	}
+
+	switch node.NodeType {
+	case plan.Node_AGG, plan.Node_SAMPLE:
+		if len(node.BindingTags) < 2 {
+			return
+		}
+		for col, expr := range node.GroupBy {
+			lineage[[2]int32{node.BindingTags[0], int32(col)}] = expr.Typ
+		}
+		for col, expr := range node.AggList {
+			lineage[[2]int32{node.BindingTags[1], int32(col)}] = expr.Typ
+		}
+	case plan.Node_WINDOW:
+		if len(node.BindingTags) == 0 {
+			return
+		}
+		for col, expr := range node.WinSpecList {
+			lineage[[2]int32{node.BindingTags[0], node.GetWindowIdx() + int32(col)}] = expr.Typ
+		}
+	case plan.Node_TIME_WINDOW:
+		if len(node.BindingTags) < 2 {
+			return
+		}
+		for col, expr := range node.AggList {
+			lineage[[2]int32{node.BindingTags[0], int32(col)}] = expr.Typ
+		}
+		for col, expr := range node.GroupBy {
+			lineage[[2]int32{node.BindingTags[1], int32(col)}] = expr.Typ
+		}
+	}
 }
 
 func runtimeParamHasExplicitType(value any) bool {

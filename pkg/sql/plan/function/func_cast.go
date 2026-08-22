@@ -6290,9 +6290,12 @@ func strToSignedWithProc[T constraints.Signed](
 				r = int64(num)
 				result = T(r)
 			} else {
-				s := strings.TrimSpace(convertByteSliceToString(v))
+				s, err := preparedNumericString(from, i, v)
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, "cast to int", convertByteSliceToString(v))
+				}
+				s = strings.TrimSpace(s)
 				var r int64
-				var err error
 				if len(explicit) > 0 && explicit[0] {
 					r, err = parseSignedExplicitCastString(s, bitSize)
 				} else {
@@ -6791,7 +6794,11 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				res = &s
 				val, tErr = strconv.ParseUint(s, 16, 64)
 			} else {
-				s := strings.TrimSpace(convertByteSliceToString(v))
+				s, err := preparedNumericString(from, i, v)
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), convertByteSliceToString(v))
+				}
+				s = strings.TrimSpace(s)
 				res = &s
 				if len(explicit) > 0 && explicit[0] {
 					val, tErr = parseUnsignedExplicitCastString(s, bitSize)
@@ -6856,6 +6863,13 @@ func strToFloatWithProc[T constraints.Float](
 				return err
 			}
 		} else {
+			if !isBinary {
+				normalized, err := preparedNumericString(from, i, v)
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, "cast to float", convertByteSliceToString(v))
+				}
+				v = []byte(normalized)
+			}
 			parseBitSize := bitSize
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
@@ -6899,7 +6913,11 @@ func strToDecimal64(
 		var result types.Decimal64
 		var err error
 		if !null {
-			result, err = parseMySQLDecimal64Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
+			s, normalizeErr := preparedNumericString(from, 0, v)
+			if normalizeErr != nil {
+				return normalizeErr
+			}
+			result, err = parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
 			if err != nil {
 				return err
 			}
@@ -6918,11 +6936,13 @@ func strToDecimal64(
 				return err
 			}
 		} else {
-			s := convertByteSliceToString(v)
+			s, err := preparedNumericString(from, i, v)
+			if err != nil {
+				return err
+			}
 			if !isb {
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal64
-				var err error
 				if totype.Charset == 255 {
 					result, err = parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
 				} else if isExplicit {
@@ -7355,7 +7375,11 @@ func strToDecimal128(
 		var result types.Decimal128
 		var err error
 		if !null {
-			result, err = parseMySQLDecimal128Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
+			s, normalizeErr := preparedNumericString(from, 0, v)
+			if normalizeErr != nil {
+				return normalizeErr
+			}
+			result, err = parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
 			if err != nil {
 				return err
 			}
@@ -7374,11 +7398,13 @@ func strToDecimal128(
 				return err
 			}
 		} else {
-			s := convertByteSliceToString(v)
+			s, err := preparedNumericString(from, i, v)
+			if err != nil {
+				return err
+			}
 			if !isb {
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal128
-				var err error
 				if totype.Charset == 255 {
 					result, err = parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
 				} else if isExplicit {
@@ -7457,7 +7483,11 @@ func strToDecimal256(
 		var result types.Decimal256
 		var err error
 		if !null {
-			result, err = parseMySQLDecimal256Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
+			s, normalizeErr := preparedNumericString(from, 0, v)
+			if normalizeErr != nil {
+				return normalizeErr
+			}
+			result, err = parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
 			if err != nil {
 				return err
 			}
@@ -7476,11 +7506,13 @@ func strToDecimal256(
 				return err
 			}
 		} else {
-			s := convertByteSliceToString(v)
+			s, err := preparedNumericString(from, i, v)
+			if err != nil {
+				return err
+			}
 			if !isb {
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal256
-				var err error
 				if totype.Charset == 255 {
 					result, err = parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
 				} else if isExplicit {
@@ -8251,6 +8283,27 @@ func preparedBooleanToBit(input string) (value uint64, inRange bool, err error) 
 		return 1, true, nil
 	}
 	return 0, true, nil
+}
+
+// preparedNumericString restores the numeric representation of values whose
+// SQL EXECUTE transport is textual. The provenance is intentionally consulted
+// only by numeric casts, so the same BOOL parameter remains "true"/"false"
+// when assigned to a string consumer.
+func preparedNumericString(
+	from vector.FunctionParameterWrapper[types.Varlena], row uint64, raw []byte,
+) (string, error) {
+	input := convertByteSliceToString(raw)
+	if from.GetSourceVector().GetPrepareParamKindAt(int(row)) != vector.PrepareParamBoolean {
+		return input, nil
+	}
+	boolean, err := strconv.ParseBool(input)
+	if err != nil {
+		return "", err
+	}
+	if boolean {
+		return "1", nil
+	}
+	return "0", nil
 }
 
 func strToArray[T types.ArrayElement](

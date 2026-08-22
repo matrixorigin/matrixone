@@ -194,9 +194,20 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				return
 			}
 		}
-		if useExplicitCastOverload(exprImpl.Type) {
+		castOverloadID := explicitCastOverloadID(exprImpl.Type)
+		if castOverloadID == 2 && (b.builder == nil || !b.builder.isPrepareStatement) {
+			// MatrixOne's fixed-width numeric CASTs retain their ordinary overload
+			// outside prepared statements. A prepared sibling can cause the whole
+			// numeric expression to be rebound, so every user CAST in that statement
+			// needs provenance even when its own subtree has no parameter marker.
+			castOverloadID = 0
+		}
+		switch castOverloadID {
+		case 1:
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
-		} else {
+		case 2:
+			expr, err = appendFixedCastBeforeExpr(b.GetContext(), expr, typ)
+		default:
 			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
 		}
 
@@ -324,28 +335,39 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	return
 }
 
-func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
+func explicitCastOverloadID(typ tree.ResolvableTypeReference) int32 {
 	t, ok := typ.(*tree.T)
 	if !ok {
-		return false
+		return 0
 	}
 	internal := t.InternalType
 	switch defines.MysqlType(internal.Oid) {
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
-		return true
+		return 1
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING,
 		defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT,
 		defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB,
 		defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_BLOB:
 		// Character and binary casts are semantic boundaries even though the
 		// value conversion is shared with ordinary overload-coercion casts.
-		return true
+		return 1
 	case defines.MYSQL_TYPE_LONGLONG:
 		family := strings.ToLower(internal.FamilyString)
-		return family == "signed" || family == "integer" ||
-			(internal.Unsigned && (family == "" || family == "unsigned"))
+		if family == "signed" || family == "integer" ||
+			(internal.Unsigned && (family == "" || family == "unsigned")) {
+			return 1
+		}
+		// BIGINT is a fixed explicit boundary, but MatrixOne's extension keeps
+		// strict overflow behavior instead of MySQL's wrapping conversion.
+		return 2
+	case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_FLOAT,
+		defines.MYSQL_TYPE_DOUBLE, defines.MYSQL_TYPE_BIT:
+		// Overload two executes the same strict NewCast implementation as
+		// generated casts while retaining explicit provenance in the plan.
+		return 2
 	default:
-		return false
+		return 0
 	}
 }
 
@@ -5312,6 +5334,10 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 
 func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+}
+
+func appendFixedCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
 }
 
 func appendCastBeforeExprWithOverload(

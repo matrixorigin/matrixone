@@ -218,8 +218,8 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
-	require.Equal(t, plan2.ParamValue{Value: "AB\x00\x00", IsBin: true}, cw.paramVals[0])
-	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false}, cw.paramVals[1])
+	require.Equal(t, plan2.ParamValue{Value: "AB\x00\x00", IsBin: true, InferTextNumeric: true}, cw.paramVals[0])
+	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false, InferTextNumeric: true}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
@@ -640,13 +640,54 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		vector.PrepareParamNone,
 	}, paramKinds)
 	require.Equal(t, []any{
-		plan2.ParamValue{Value: int64(10), IsBin: false, PrepareParamKind: vector.PrepareParamInteger},
-		plan2.ParamValue{Value: int64(20), IsBin: false, PrepareParamKind: vector.PrepareParamInteger},
-		plan2.ParamValue{Value: "session-binary", IsBin: true},
+		plan2.ParamValue{Value: int64(10), IsBin: false, PrepareParamKind: vector.PrepareParamInteger, InferTextNumeric: true},
+		plan2.ParamValue{Value: int64(20), IsBin: false, PrepareParamKind: vector.PrepareParamInteger, InferTextNumeric: true},
+		plan2.ParamValue{Value: "session-binary", IsBin: true, InferTextNumeric: true},
 	}, paramVals)
 	require.Equal(t, "10", params.GetStringAt(0))
 	require.Equal(t, "20", params.GetStringAt(1))
 	require.Equal(t, "session-binary", params.GetStringAt(2))
+}
+
+func TestBuildExecuteUserParamsPreservesSQLExecuteProvenance(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 106)
+	defer prepareStmt.Close()
+
+	decimalType := plan.Type{Id: int32(types.T_decimal64), Width: 3, Scale: 2}
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
+		"integer_value", int64(2), "", false,
+		plan.Type{Id: int32(types.T_int64)}, vector.PrepareParamInteger))
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
+		"decimal_value", "2.50", "", false,
+		decimalType, vector.PrepareParamDecimal))
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
+		"string_value", "2.5", "", false,
+		plan.Type{Id: int32(types.T_varchar), Width: 3}, vector.PrepareParamNone))
+
+	args := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "integer_value"}}},
+		{Typ: decimalType, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "decimal_value"}}},
+		{Typ: plan.Type{Id: int32(types.T_varchar), Width: 3}, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "string_value"}}},
+	}
+	params, paramVals, _, _, err := buildExecuteUserParams(cw.proc, args)
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+
+	require.Equal(t, []any{
+		plan2.ParamValue{
+			Value: int64(2), PrepareParamKind: vector.PrepareParamInteger,
+			InferTextNumeric: true, SourceType: types.T_int64.ToType(), HasSourceType: true,
+		},
+		plan2.ParamValue{
+			Value: "2.50", PrepareParamKind: vector.PrepareParamDecimal,
+			InferTextNumeric: true,
+			SourceType:       types.New(types.T_decimal64, 3, 2), HasSourceType: true,
+		},
+		plan2.ParamValue{
+			Value: "2.5", InferTextNumeric: true,
+			SourceType: types.New(types.T_varchar, 3, 0), HasSourceType: true,
+		},
+	}, paramVals)
 }
 
 // A nil cached compile means the statement was rejected for prepare-time
@@ -937,6 +978,41 @@ func TestInitExecuteStmtParamReusesCachedCompileForTextParameter(t *testing.T) {
 		"unchanged text parameter domain must not force a full recompilation")
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
+}
+
+func TestInitExecuteStmtParamMaterializesNullAggregateParameter(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 112, "select count(?)")
+	defer prepareStmt.Close()
+
+	require.NoError(t, ses.SetUserDefinedVar("null_value", nil, ""))
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+	execPlan := &plan.Execute{
+		Name: prepareStmt.Name,
+		Args: []*plan.Expr{{
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "null_value"}},
+		}},
+	}
+
+	retComp, retPlan, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	require.Nil(t, retComp, "NULL materialization must not reuse a value-filled compile")
+
+	foundNull := false
+	for _, node := range retPlan.GetQuery().Nodes {
+		for _, agg := range node.AggList {
+			if fn := agg.GetF(); fn != nil && fn.Func.GetObjName() == "count" && len(fn.Args) > 0 {
+				arg := fn.Args[0]
+				foundNull = arg.GetF() != nil && arg.GetF().GetFunc().GetObjName() == "cast" &&
+					len(arg.GetF().Args) > 0 && arg.GetF().Args[0].GetLit().GetIsnull() &&
+					!arg.Typ.NotNullable
+			}
+		}
+	}
+	require.True(t, foundNull)
 }
 
 func TestInitExecuteStmtParamTransfersFreshCloneOwnership(t *testing.T) {

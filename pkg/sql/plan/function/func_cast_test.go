@@ -223,6 +223,43 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 	run("malformed decimal rejected", vector.PrepareParamDecimal, []string{"5.9junk"}, bit64, nil, true)
 }
 
+func TestPreparedBooleanTextToNumeric(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal64Type := types.New(types.T_decimal64, 10, 2)
+	decimal128Type := types.New(types.T_decimal128, 20, 2)
+	decimal256Type := types.New(types.T_decimal256, 40, 2)
+
+	for _, tc := range []struct {
+		name   string
+		target FunctionTestInput
+		want   FunctionTestResult
+	}{
+		{"signed", NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0}, nil)},
+		{"unsigned", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil),
+			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 0}, nil)},
+		{"float", NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+			NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, 0}, nil)},
+		{"decimal64", NewFunctionTestInput(decimal64Type, []types.Decimal64{}, nil),
+			NewFunctionTestResult(decimal64Type, false, []types.Decimal64{100, 0}, nil)},
+		{"decimal128", NewFunctionTestInput(decimal128Type, []types.Decimal128{}, nil),
+			NewFunctionTestResult(decimal128Type, false, []types.Decimal128{{B0_63: 100}, {}}, nil)},
+		{"decimal256", NewFunctionTestInput(decimal256Type, []types.Decimal256{}, nil),
+			NewFunctionTestResult(decimal256Type, false, []types.Decimal256{{B0_63: 100}, {}}, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"true", "false"}, nil),
+					tc.target,
+				}, tc.want, NewCast)
+			tcc.parameters[0].SetPrepareParamKind(vector.PrepareParamBoolean)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.SetStmtProfile(&process.StmtProfile{})
