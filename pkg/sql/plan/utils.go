@@ -1772,6 +1772,13 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 	if constExpr.GetP() != nil && columnT.IsNumeric() {
 		return true
 	}
+	// Runtime specialization materializes prepared values as typed constant
+	// casts. When their domain already equals the IN left side, they are safe to
+	// keep in the typed list just like a direct literal. Do not extend this to
+	// row-dependent expressions merely because their declared types match.
+	if constT.Eq(columnT) && rule.IsConstant(constExpr, false) {
+		return true
+	}
 
 	lit := constExpr.GetLit()
 	if lit == nil {
@@ -1779,9 +1786,6 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
 	}
 
 	//TODO: Check if T_array is required here?
-	if constT.Eq(columnT) {
-		return true
-	}
 	switch constT.Oid {
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		switch columnT.Oid {
@@ -3330,6 +3334,11 @@ type ParamValue struct {
 	// the cached plan.
 	RuntimeType    types.Type
 	HasRuntimeType bool
+	// EnableNumericPrefix records that the deployment-wide protocol version can
+	// execute planner-injected MySQL numeric-prefix casts.  Keep the negotiated
+	// capability on each value so execute-time plan specialization does not need
+	// to guess a service identity from context.Context.
+	EnableNumericPrefix bool
 }
 
 // PreparedRuntimeTypeFromString infers the narrowest numeric type needed by a
@@ -3366,6 +3375,105 @@ func PreparedRuntimeTypeFromString(value string) (types.Type, bool) {
 		return types.T_int64.ToType(), true
 	}
 	return types.T_uint64.ToType(), true
+}
+
+// PreparedNumericPrefixTypeFromString derives the exact numeric domain of the
+// prefix accepted by the CAST layer. It is intentionally separate from
+// PreparedRuntimeTypeFromString: arbitrary text remains text outside a
+// DECIMAL-aware common-type consumer, while that consumer follows MySQL and
+// treats a missing numeric prefix as zero.
+func PreparedNumericPrefixTypeFromString(value string) types.Type {
+	prefix, ok := function.GetNumericStringPrefix(value)
+	if !ok {
+		return types.New(types.T_decimal64, 1, 0)
+	}
+
+	unsigned := prefix
+	if unsigned[0] == '+' || unsigned[0] == '-' {
+		unsigned = unsigned[1:]
+	}
+	mantissa := unsigned
+	exponentText := ""
+	if exponentAt := strings.IndexAny(unsigned, "eE"); exponentAt >= 0 {
+		mantissa = unsigned[:exponentAt]
+		exponentText = unsigned[exponentAt+1:]
+	}
+
+	digits := strings.ReplaceAll(mantissa, ".", "")
+	nonZero := strings.TrimLeft(digits, "0")
+	if nonZero == "" {
+		return types.New(types.T_decimal64, 1, 0)
+	}
+
+	fractionalDigits := int64(0)
+	if pointAt := strings.IndexByte(mantissa, '.'); pointAt >= 0 {
+		fractionalDigits = int64(len(mantissa) - pointAt - 1)
+	}
+	exponent, bounded := preparedBoundedDecimalExponent(exponentText)
+	if !bounded {
+		return types.T_float64.ToType()
+	}
+
+	coefficient := nonZero
+	trailingZeros := len(coefficient) - len(strings.TrimRight(coefficient, "0"))
+	coefficient = coefficient[:len(coefficient)-trailingZeros]
+	decimalExponent := exponent - fractionalDigits + int64(trailingZeros)
+
+	integralWidth := int64(0)
+	scale := int64(0)
+	if decimalExponent >= 0 {
+		integralWidth = int64(len(coefficient)) + decimalExponent
+	} else {
+		scale = -decimalExponent
+		integralWidth = int64(len(coefficient)) - scale
+		if integralWidth < 0 {
+			integralWidth = 0
+		}
+	}
+	width := integralWidth + scale
+	if width < 1 {
+		width = 1
+	}
+	if width > int64(types.T_decimal256.ToType().Width) || scale > int64(types.T_decimal256.ToType().Width) {
+		return types.T_float64.ToType()
+	}
+
+	w, s := int32(width), int32(scale)
+	switch {
+	case w <= types.T_decimal64.ToType().Width:
+		return types.New(types.T_decimal64, w, s)
+	case w <= types.T_decimal128.ToType().Width:
+		return types.New(types.T_decimal128, w, s)
+	default:
+		return types.New(types.T_decimal256, w, s)
+	}
+}
+
+func preparedBoundedDecimalExponent(value string) (int64, bool) {
+	if value == "" {
+		return 0, true
+	}
+	negative := value[0] == '-'
+	if value[0] == '+' || value[0] == '-' {
+		value = value[1:]
+	}
+	value = strings.TrimLeft(value, "0")
+	if value == "" {
+		return 0, true
+	}
+	// Only exponents in [-76, 76] can contribute to a representable
+	// Decimal256 domain. Avoid parsing attacker-sized exponent strings.
+	if len(value) > 2 {
+		return 0, false
+	}
+	exponent, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || exponent > int64(types.T_decimal256.ToType().Width) {
+		return 0, false
+	}
+	if negative {
+		exponent = -exponent
+	}
+	return exponent, true
 }
 
 func preparedDecimalType(value string) (types.Type, bool) {
@@ -3737,6 +3845,8 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
 	paramRule.inferTextParamPositions = make(map[int]bool)
+	paramRule.numericPrefixParamPositions = make(map[int]bool)
+	paramRule.numericPrefixParamKinds = make(map[int]types.StringConversionKind)
 	for i, val := range paramVals {
 		if param, ok := val.(ParamValue); ok {
 			if param.IsBinaryProtocol {
@@ -3744,6 +3854,10 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 			}
 			if param.HasRuntimeType && param.RuntimeType.Oid == types.T_text {
 				paramRule.inferTextParamTypes = true
+			}
+			if param.EnableNumericPrefix {
+				paramRule.numericPrefixParamPositions[i] = true
+				paramRule.numericPrefixParamKinds[i] = param.PrepareParamKind
 			}
 		}
 	}

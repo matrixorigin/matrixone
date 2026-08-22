@@ -146,6 +146,77 @@ func RequiresMORPCVersion23StringLiterals(owner any) (bool, error) {
 	return RequiresMORPCVersion23StringProvenance(owner)
 }
 
+// RequiresMORPCVersion25NumericPrefix reports whether an owner contains a
+// planner-injected CAST that uses the numeric-prefix sentinel. Charset=255 was
+// deliberately unused before this contract, so older workers must not execute
+// any plan that carries it.
+func RequiresMORPCVersion25NumericPrefix(owner any) (bool, error) {
+	required := false
+	err := walkExpressionsInOwner(owner, func(expr *Expr) error {
+		if !required {
+			required = expr.requiresMORPCVersion25NumericPrefix()
+		}
+		return nil
+	})
+	return required, err
+}
+
+func (m *Expr) requiresMORPCVersion25NumericPrefix() bool {
+	if m == nil {
+		return false
+	}
+	if m.Typ.Charset == 255 {
+		fn := m.GetF()
+		if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") {
+			return true
+		}
+	}
+	if lit := m.GetLit(); lit != nil && lit.Src.requiresMORPCVersion25NumericPrefix() {
+		return true
+	}
+	if fn := m.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if arg.requiresMORPCVersion25NumericPrefix() {
+				return true
+			}
+		}
+	}
+	if list := m.GetList(); list != nil {
+		for _, item := range list.List {
+			if item.requiresMORPCVersion25NumericPrefix() {
+				return true
+			}
+		}
+	}
+	if subquery := m.GetSub(); subquery != nil && subquery.Child.requiresMORPCVersion25NumericPrefix() {
+		return true
+	}
+	if window := m.GetW(); window != nil {
+		if window.WindowFunc.requiresMORPCVersion25NumericPrefix() {
+			return true
+		}
+		for _, item := range window.PartitionBy {
+			if item.requiresMORPCVersion25NumericPrefix() {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && order.Expr.requiresMORPCVersion25NumericPrefix() {
+				return true
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil && window.Frame.Start.Val.requiresMORPCVersion25NumericPrefix() {
+				return true
+			}
+			if window.Frame.End != nil && window.Frame.End.Val.requiresMORPCVersion25NumericPrefix() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (m *Expr) possibleRuntimeStringDomains() (uint8, bool, error) {
 	if m == nil {
 		return 0, false, nil

@@ -774,6 +774,63 @@ func TestCrossDomainStringLiteralRemoteProtocolValidation(t *testing.T) {
 	require.ErrorContains(t, err, "requires MORPC protocol version 23")
 }
 
+func TestPreparedNumericPrefixRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	makeScope := func(charset uint32) *Scope {
+		text := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "12.5tail"}}},
+		}
+		cast := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 4, Scale: 2, Charset: charset},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "cast"}, Args: []*planpb.Expr{text},
+			}},
+		}
+		return &Scope{
+			Magic:  Remote,
+			Proc:   proc,
+			RootOp: value_scan.NewArgument(),
+			Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, ProjectList: []*planpb.Expr{cast}}},
+			}}},
+		}
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion24)
+	_, _, _, _, err := prepareRemoteRunSendingData("", makeScope(255), proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, "require MORPC protocol version 25")
+	compatibleData, _, _, _, err := prepareRemoteRunSendingData("", makeScope(0), proc, nil, uuid.Nil)
+	require.NoError(t, err, "ordinary casts remain compatible with version 24")
+	compatibleScope, err := decodeScope(compatibleData, proc, true, nil)
+	require.NoError(t, err)
+	compatibleScope.release()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion25)
+	prefixData, _, _, _, err := prepareRemoteRunSendingData("", makeScope(255), proc, nil, uuid.Nil)
+	require.NoError(t, err)
+	prefixScope, err := decodeScope(prefixData, proc, true, nil)
+	require.NoError(t, err)
+	prefixScope.release()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion24)
+	_, err = decodeScope(prefixData, proc, true, nil)
+	require.ErrorContains(t, err, "require MORPC protocol version 25")
+}
+
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,

@@ -991,13 +991,14 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 
 	// Parameter markers are kept in the cached plan so ordinary prepared
-	// executions can reuse it.  A binary execution may nevertheless change the
-	// parameter domain (for example DECIMAL versus INT), which affects both
-	// overloaded function selection and the result-column metadata of a direct
-	// SELECT ?.  Specialize an isolated copy after the values and protocol types
-	// are available; never mutate PrepareStmt.PreparePlan or its cached compile.
+	// executions can reuse it. The actual SQL-EXECUTE or COM_STMT value may
+	// nevertheless change the parameter domain, which affects overloaded
+	// function selection. Specialize an isolated copy after the values and
+	// protocol types are available; never mutate PrepareStmt.PreparePlan or its
+	// cached compile.
 	runtimeSpecialized := false
-	if execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(cwft.paramVals) > 0 && executionPlan != nil &&
+	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
+	if len(cwft.paramVals) > 0 && executionPlan != nil &&
 		(executionPlan.GetQuery() != nil || executionPlan.GetDdl() != nil) {
 		runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
 			reqCtx, executionPlan, cwft.paramVals)
@@ -1007,20 +1008,20 @@ func initExecuteStmtParamWithResolverInSession(
 		// DDL plans still need their parameter literals materialized even when
 		// no overload/result-domain specialization was required.  Query plans
 		// can stay on the cached parameterized plan in that case.
-		if runtimePlan != nil && (specialized || executionPlan.GetDdl() != nil) {
+		if runtimePlan != nil && (specialized || (binaryExecute && executionPlan.GetDdl() != nil)) {
 			executionPlan = runtimePlan
 			runtimeSpecialized = specialized
-			columns := getPreparedResultColumnsFor(
-				prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes))
-			resper := execCtx.resper
-			if executionSes.IsBackgroundSession() {
-				resper = owner.GetResponser()
-			}
-			colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
-			if metadataErr != nil {
-				return nil, nil, nil, originSQL, false, metadataErr
-			}
-			if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+			if binaryExecute {
+				columns := getPreparedResultColumnsFor(
+					prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes))
+				resper := execCtx.resper
+				if executionSes.IsBackgroundSession() {
+					resper = owner.GetResponser()
+				}
+				colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+				if metadataErr != nil {
+					return nil, nil, nil, originSQL, false, metadataErr
+				}
 				execCtx.prepareColDef = colDefData
 			}
 		}
@@ -1210,9 +1211,10 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 			return nil, err
 		}
 		paramValue := plan2.ParamValue{
-			Value:            string(raw),
-			IsBin:            proc.GetPrepareParamIsBin(i),
-			PrepareParamKind: proc.GetPrepareParamKind(i),
+			Value:               string(raw),
+			IsBin:               proc.GetPrepareParamIsBin(i),
+			PrepareParamKind:    proc.GetPrepareParamKind(i),
+			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion25,
 		}
 		if i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
@@ -1289,9 +1291,10 @@ func buildExecuteUserParams(
 			return
 		}
 		paramVals[i] = plan2.ParamValue{
-			Value:            param,
-			IsBin:            paramIsBin[i],
-			PrepareParamKind: paramKinds[i],
+			Value:               param,
+			IsBin:               paramIsBin[i],
+			PrepareParamKind:    paramKinds[i],
+			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion25,
 		}
 	}
 	return

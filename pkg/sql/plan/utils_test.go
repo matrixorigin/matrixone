@@ -429,6 +429,63 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 	}
 }
 
+func TestPreparedNumericPrefixTypeFromString(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		wantOID   types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{name: "non numeric is zero", value: "abc", wantOID: types.T_decimal64, wantWidth: 1},
+		{name: "empty is zero", value: "  ", wantOID: types.T_decimal64, wantWidth: 1},
+		{name: "suffix", value: "12.340tail", wantOID: types.T_decimal64, wantWidth: 4, wantScale: 2},
+		{name: "equivalent exponent", value: "1234e-2tail", wantOID: types.T_decimal64, wantWidth: 4, wantScale: 2},
+		{
+			name:      "decimal128",
+			value:     "9007199254740992.0001suffix",
+			wantOID:   types.T_decimal128,
+			wantWidth: 20,
+			wantScale: 4,
+		},
+		{
+			name:      "decimal256",
+			value:     strings.Repeat("9", 39) + "." + strings.Repeat("1", 20) + "tail",
+			wantOID:   types.T_decimal256,
+			wantWidth: 59,
+			wantScale: 20,
+		},
+		{name: "positive overflow", value: "1e76", wantOID: types.T_float64},
+		{name: "negative overflow", value: "1e-77", wantOID: types.T_float64},
+		{name: "huge exponent", value: "1e999999999999suffix", wantOID: types.T_float64},
+		{name: "huge negative exponent", value: "1e-999999999999suffix", wantOID: types.T_float64},
+		{name: "zero huge exponent", value: "0e999999999999suffix", wantOID: types.T_decimal64, wantWidth: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := PreparedNumericPrefixTypeFromString(test.value)
+			require.Equal(t, test.wantOID, got.Oid)
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, test.wantScale, got.Scale)
+		})
+	}
+}
+
+func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
+	ctx := context.Background()
+	target := types.T_int64.ToType()
+	literalCast, err := appendCastBeforeExpr(ctx, makePlan2Int32ConstExprWithType(7), makePlan2Type(&target))
+	require.NoError(t, err)
+	require.True(t, checkNoNeedCast(target, target, literalCast))
+
+	columnCast, err := appendCastBeforeExpr(ctx, &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}, makePlan2Type(&target))
+	require.NoError(t, err)
+	require.False(t, checkNoNeedCast(target, target, columnCast))
+}
+
 func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
 	for _, test := range []struct {
 		value string
