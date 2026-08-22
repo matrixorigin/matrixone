@@ -15,9 +15,12 @@
 package window
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -66,6 +69,35 @@ type container struct {
 	rBat       *batch.Batch
 
 	runtimeFrames []*plan.FrameClause
+
+	// timestampCivilOrder caches the monotonic civil-time spans of a sorted
+	// TIMESTAMP partition. It is scoped to one materialized input generation
+	// and is cleared before order vectors are reused for the next input batch.
+	// A fold query can then binary-search each span instead of rescanning the
+	// partition for every frame row.
+	timestampCivilOrder map[timestampCivilOrderKey]*timestampCivilOrderIndex
+}
+
+type timestampCivilOrderKey struct {
+	vec        *vector.Vector
+	loc        *time.Location
+	start, end int
+	desc       bool
+}
+
+type timestampCivilOrderIndex struct {
+	hasFold bool
+	spans   []timestampCivilOrderSpan
+}
+
+type timestampCivilOrderSpan struct {
+	start, end int
+}
+
+// timestampRangeSelection preserves window order while allowing a civil-time
+// frame to consist of several disjoint instant-sorted spans around a fold.
+type timestampRangeSelection struct {
+	spans []timestampCivilOrderSpan
 }
 
 type Window struct {
@@ -142,6 +174,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 
 	ctr.cleanOutput(proc.Mp())
 	ctr.runtimeFrames = nil
+	ctr.timestampCivilOrder = nil
 	// Free aggregators before the batch so an error exit from Call (which skips
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
@@ -165,6 +198,7 @@ func (ctr *container) resetParam() {
 	ctr.ps = nil
 	ctr.os = nil
 	ctr.runtimeFrames = nil
+	ctr.timestampCivilOrder = nil
 }
 
 // cleanOutput releases the batch returned by the previous Call. Input-column

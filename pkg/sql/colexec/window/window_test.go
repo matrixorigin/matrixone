@@ -17,9 +17,11 @@ package window
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -3071,4 +3073,898 @@ func TestSearchLeftRightDateTimeIntervals(t *testing.T) {
 		defer vec.Free(mp)
 		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
 	})
+}
+
+func TestWindowTimestampRangeUsesSessionTimeZone(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	precedingFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  intervalExpr(1, types.Hour),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	followingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(1, types.Hour),
+		},
+	}
+	for _, test := range []struct {
+		name             string
+		utcValues        []string
+		rowIdx           int
+		newYorkPreceding [2]int
+		utcPreceding     [2]int
+		newYorkFollowing [2]int
+		utcFollowing     [2]int
+	}{
+		{
+			name: "spring forward",
+			utcValues: []string{
+				"2024-03-10 06:59:59.999999",
+				"2024-03-10 07:00:00.000000",
+				"2024-03-10 07:30:00.000000",
+			},
+			rowIdx:           2,
+			newYorkPreceding: [2]int{1, 3},
+			utcPreceding:     [2]int{0, 3},
+			newYorkFollowing: [2]int{0, 2},
+			utcFollowing:     [2]int{0, 3},
+		},
+		{
+			name: "fall back",
+			utcValues: []string{
+				"2024-11-03 05:30:00.000000",
+				"2024-11-03 06:30:00.000000",
+				"2024-11-03 07:00:00.000000",
+			},
+			rowIdx:           2,
+			newYorkPreceding: [2]int{0, 3},
+			utcPreceding:     [2]int{1, 3},
+			newYorkFollowing: [2]int{0, 3},
+			utcFollowing:     [2]int{0, 2},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Equal(t, int64(0), mp.CurrNB())
+			}()
+
+			values := make([]types.Timestamp, len(test.utcValues))
+			for i, value := range test.utcValues {
+				values[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+			defer vec.Free(mp)
+
+			ctr := &container{
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			}
+
+			proc.GetSessionInfo().TimeZone = newYork
+			start, end, err := ctr.buildInterval(proc, test.rowIdx, 0, vec.Length(), precedingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.newYorkPreceding, [2]int{start, end})
+
+			// Reuse the same process/container generation after a session zone change.
+			proc.GetSessionInfo().TimeZone = time.UTC
+			start, end, err = ctr.buildInterval(proc, test.rowIdx, 0, vec.Length(), precedingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.utcPreceding, [2]int{start, end})
+
+			proc.GetSessionInfo().TimeZone = newYork
+			start, end, err = ctr.buildInterval(proc, 0, 0, vec.Length(), followingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.newYorkFollowing, [2]int{start, end})
+
+			proc.GetSessionInfo().TimeZone = time.UTC
+			start, end, err = ctr.buildInterval(proc, 0, 0, vec.Length(), followingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.utcFollowing, [2]int{start, end})
+		})
+	}
+}
+
+func TestWindowTimestampRangeFoldMembership(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	precedingFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	followingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+	unboundedPrecedingFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type:      plan.FrameBound_PRECEDING,
+			UnBounded: true,
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	unboundedFollowingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type:      plan.FrameBound_FOLLOWING,
+			UnBounded: true,
+		},
+	}
+
+	utcValues := []string{
+		"2024-11-03 05:00:00.000000", // 01:00 EDT
+		"2024-11-03 05:30:00.000000", // 01:30 EDT
+		"2024-11-03 05:59:00.000000", // 01:59 EDT
+		"2024-11-03 06:00:00.000000", // 01:00 EST
+		"2024-11-03 06:30:00.000000", // 01:30 EST
+		"2024-11-03 06:59:00.000000", // 01:59 EST
+		"2024-11-03 07:00:00.000000", // 02:00 EST
+		"2024-11-03 07:30:00.000000", // 02:30 EST
+	}
+	values := make([]types.Timestamp, len(utcValues))
+	for i, value := range utcValues {
+		values[i], err = types.ParseTimestamp(time.UTC, value, 6)
+		require.NoError(t, err)
+	}
+
+	selectionRows := func(left, right int, selection *timestampRangeSelection) []int {
+		if selection == nil {
+			rows := make([]int, 0, right-left)
+			for row := left; row < right; row++ {
+				rows = append(rows, row)
+			}
+			return rows
+		}
+		var rows []int
+		for _, span := range selection.spans {
+			for row := span.start; row < span.end; row++ {
+				rows = append(rows, row)
+			}
+		}
+		return rows
+	}
+
+	for _, test := range []struct {
+		name     string
+		desc     bool
+		frame    *plan.FrameClause
+		rowIdx   int
+		wantRows []int
+	}{
+		{
+			name:     "asc preceding excludes intervening repeated lower wall time",
+			frame:    precedingFrame,
+			rowIdx:   4,
+			wantRows: []int{0, 1, 3, 4},
+		},
+		{
+			name:     "asc following includes both repeated upper wall times",
+			frame:    followingFrame,
+			rowIdx:   1,
+			wantRows: []int{1, 2, 4, 5, 6},
+		},
+		{
+			name:     "asc unbounded preceding excludes later civil rows before the fold",
+			frame:    unboundedPrecedingFrame,
+			rowIdx:   4,
+			wantRows: []int{0, 1, 3, 4},
+		},
+		{
+			name:     "asc unbounded following excludes earlier civil rows after the fold",
+			frame:    unboundedFollowingFrame,
+			rowIdx:   1,
+			wantRows: []int{1, 2, 4, 5, 6, 7},
+		},
+		{
+			name:     "desc preceding includes both repeated upper wall times",
+			desc:     true,
+			frame:    precedingFrame,
+			rowIdx:   3,
+			wantRows: []int{1, 2, 3, 5, 6},
+		},
+		{
+			name:     "desc following excludes intervening repeated higher wall time",
+			desc:     true,
+			frame:    followingFrame,
+			rowIdx:   6,
+			wantRows: []int{3, 4, 6, 7},
+		},
+		{
+			name:     "desc unbounded preceding excludes later civil rows before the fold",
+			desc:     true,
+			frame:    unboundedPrecedingFrame,
+			rowIdx:   3,
+			wantRows: []int{0, 1, 2, 3, 5, 6},
+		},
+		{
+			name:     "desc unbounded following excludes earlier civil rows after the fold",
+			desc:     true,
+			frame:    unboundedFollowingFrame,
+			rowIdx:   6,
+			wantRows: []int{3, 4, 6, 7},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Equal(t, int64(0), mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			orderedValues := append([]types.Timestamp(nil), values...)
+			if test.desc {
+				for i := range orderedValues[:len(orderedValues)/2] {
+					j := len(orderedValues) - 1 - i
+					orderedValues[i], orderedValues[j] = orderedValues[j], orderedValues[i]
+				}
+			}
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, orderedValues, nil, mp))
+			defer vec.Free(mp)
+
+			ctr := &container{
+				desc:      []bool{test.desc},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			}
+			left, right, selection, err := ctr.buildIntervalRows(proc, test.rowIdx, 0, vec.Length(), test.frame)
+			require.NoError(t, err)
+			require.Equal(t, test.wantRows, selectionRows(left, right, selection))
+		})
+	}
+}
+
+func TestWindowTimestampRangeFoldMembershipDetectsSparseTransitions(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	currentRowFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	followingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+
+	for _, test := range []struct {
+		name     string
+		desc     bool
+		utc      []string
+		frame    *plan.FrameClause
+		wantRows []int
+	}{
+		{
+			name: "sparse increasing civil values cross fall-back transition",
+			utc: []string{
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+			},
+			frame:    followingFrame,
+			wantRows: []int{0, 1},
+		},
+		{
+			name: "descending sparse civil values cross fall-back transition",
+			desc: true,
+			utc: []string{
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+			},
+			frame:    followingFrame,
+			wantRows: []int{0, 1},
+		},
+		{
+			name: "equal civil values cross fall-back transition",
+			utc: []string{
+				"2024-11-03 05:30:00.000000", // 01:30 EDT
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+			},
+			frame:    currentRowFrame,
+			wantRows: []int{0, 1},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			values := make([]types.Timestamp, len(test.utc))
+			for i, value := range test.utc {
+				values[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+			defer vec.Free(mp)
+
+			ctr := &container{
+				desc:      []bool{test.desc},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			}
+			_, _, selection, err := ctr.buildIntervalRows(proc, 0, 0, vec.Length(), test.frame)
+			require.NoError(t, err)
+			require.NotNil(t, selection)
+			var gotRows []int
+			for _, span := range selection.spans {
+				for row := span.start; row < span.end; row++ {
+					gotRows = append(gotRows, row)
+				}
+			}
+			require.Equal(t, test.wantRows, gotRows)
+		})
+	}
+}
+
+func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = newYork
+
+	source := vector.NewVec(types.T_timestamp.ToType())
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = source
+	defer input.Clean(mp)
+
+	order, err := colexec.MakeEvalVector(proc, []*plan.Expr{newColExprWithType(0, types.T_timestamp.ToType())})
+	require.NoError(t, err)
+	ctr := &container{orderVecs: []colexec.ExprEvalVector{order}}
+	defer ctr.freeExes()
+	defer ctr.freeVector(mp)
+
+	frame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	appendBatch := func(values []string) {
+		source.CleanOnlyData()
+		for _, value := range values {
+			ts, parseErr := types.ParseTimestamp(time.UTC, value, 6)
+			require.NoError(t, parseErr)
+			require.NoError(t, vector.AppendFixed(source, ts, false, mp))
+		}
+		input.SetRowCount(source.Length())
+		require.NoError(t, ctr.evalOrderVector(input, proc))
+	}
+
+	// The first materialization has no fold and caches that fact against the
+	// reusable order-vector pointer.
+	appendBatch([]string{
+		"2024-11-03 08:00:00.000000", "2024-11-03 08:30:00.000000",
+		"2024-11-03 09:00:00.000000", "2024-11-03 09:30:00.000000",
+		"2024-11-03 10:00:00.000000", "2024-11-03 10:30:00.000000",
+		"2024-11-03 11:00:00.000000", "2024-11-03 11:30:00.000000",
+	})
+	materialized := ctr.orderVecs[0].Vec[0]
+	_, _, selection, err := ctr.buildIntervalRows(proc, 4, 0, materialized.Length(), frame)
+	require.NoError(t, err)
+	require.Nil(t, selection)
+
+	// evalOrderVector keeps the same materialized vector but replaces its data.
+	// The second batch crosses the New York fall-back fold, so the cache must be
+	// rebuilt and return its non-contiguous civil-time membership.
+	appendBatch([]string{
+		"2024-11-03 05:00:00.000000", "2024-11-03 05:30:00.000000",
+		"2024-11-03 05:59:00.000000", "2024-11-03 06:00:00.000000",
+		"2024-11-03 06:30:00.000000", "2024-11-03 06:59:00.000000",
+		"2024-11-03 07:00:00.000000", "2024-11-03 07:30:00.000000",
+	})
+	require.Same(t, materialized, ctr.orderVecs[0].Vec[0])
+	_, _, selection, err = ctr.buildIntervalRows(proc, 4, 0, materialized.Length(), frame)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	var rows []int
+	for _, span := range selection.spans {
+		for row := span.start; row < span.end; row++ {
+			rows = append(rows, row)
+		}
+	}
+	require.Equal(t, []int{0, 1, 3, 4}, rows)
+}
+
+func TestWindowTimestampRangeFoldIndexHonorsCancellation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = newYork
+
+	const rows = cancellationCheckInterval * 2
+	start, err := types.ParseTimestamp(time.UTC, "2024-11-03 04:00:00.000000", 6)
+	require.NoError(t, err)
+	values := make([]types.Timestamp, rows)
+	for i := range values {
+		values[i] = start + types.Timestamp(int64(i)*60*types.MicroSecsPerSec)
+	}
+	vec := vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+	defer vec.Free(mp)
+
+	ctr := &container{orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}}}
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	// The index checks at row 0 and then every cancellationCheckInterval rows.
+	// Cancel on the second check to prove that a long initial span build can be
+	// interrupted rather than only rejecting an already-canceled invocation.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
+	_, _, _, err = ctr.buildIntervalRows(proc, rows-1, 0, rows, frame)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = newYork
+
+	orderValues := []string{
+		"2024-11-03 05:00:00.000000",
+		"2024-11-03 05:30:00.000000",
+		"2024-11-03 05:59:00.000000",
+		"2024-11-03 06:00:00.000000",
+		"2024-11-03 06:30:00.000000",
+		"2024-11-03 06:59:00.000000",
+		"2024-11-03 07:00:00.000000",
+		"2024-11-03 07:30:00.000000",
+	}
+	timestamps := make([]types.Timestamp, len(orderValues))
+	for i, value := range orderValues {
+		timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+		require.NoError(t, err)
+	}
+	orderVec := vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(orderVec, timestamps, nil, mp))
+	defer orderVec.Free(mp)
+
+	values := testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 6, 7, 8}, nil, mp)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = values
+	bat.SetRowCount(values.Length())
+	defer bat.Clean(mp)
+
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+	spec := makeWindowSpec()
+	spec.GetW().Frame = frame
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:       bat,
+		aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{values}}},
+		orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+	}
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{12, 23, 16, 12, 23, 16, 15, 8},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	result.Free(mp)
+}
+
+func TestWindowTimestampRangeFoldAggregateMembershipSmallPartitions(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	currentRowFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	precedingFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  intervalExpr(1, types.Hour),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	followingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+
+	for _, test := range []struct {
+		name  string
+		utc   []string
+		vals  []int32
+		frame *plan.FrameClause
+		want  []int64
+	}{
+		{
+			name:  "repeated civil peer remains in preceding frame",
+			utc:   []string{"2024-11-03 05:30:00.000000", "2024-11-03 06:30:00.000000", "2024-11-03 07:00:00.000000"},
+			vals:  []int32{10, 20, 30},
+			frame: precedingFrame,
+			want:  []int64{30, 30, 60},
+		},
+		{
+			name:  "sparse transition includes later civil boundary",
+			utc:   []string{"2024-11-03 05:00:00.000000", "2024-11-03 06:30:00.000000"},
+			vals:  []int32{1, 10},
+			frame: followingFrame,
+			want:  []int64{11, 10},
+		},
+		{
+			name:  "equal civil timestamps are peers",
+			utc:   []string{"2024-11-03 05:30:00.000000", "2024-11-03 06:30:00.000000"},
+			vals:  []int32{1, 10},
+			frame: currentRowFrame,
+			want:  []int64{11, 11},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			timestamps := make([]types.Timestamp, len(test.utc))
+			for i, value := range test.utc {
+				timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(orderVec, timestamps, nil, mp))
+			defer orderVec.Free(mp)
+
+			values := testutil.MakeInt32Vector(test.vals, nil, mp)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = values
+			bat.SetRowCount(values.Length())
+			defer bat.Clean(mp)
+
+			spec := makeWindowSpec()
+			spec.GetW().Frame = test.frame
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+			}
+			ctr := &container{
+				bat:       bat,
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{values}}},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+			}
+			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, err)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result))
+			result.Free(mp)
+		})
+	}
+}
+
+func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	proc.GetSessionInfo().TimeZone = newYork
+
+	timestamps := make([]types.Timestamp, 2)
+	for i, value := range []string{
+		"2024-11-03 05:00:00.000000", // 01:00 EDT
+		"2024-11-03 06:30:00.000000", // 01:30 EST
+	} {
+		timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+		require.NoError(t, err)
+	}
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], timestamps, nil, mp))
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 10}, nil, mp)
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	orderExpr := newColExprWithType(0, types.T_timestamp.ToType())
+	spec := makeWindowSpec()
+	spec.GetW().OrderBy = []*plan.OrderBySpec{{Expr: orderExpr}}
+	spec.GetW().Frame = frame
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExprAt(1)},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	defer arg.Free(proc, false, nil)
+
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+	arg.Fs = makeOrderBy(spec)
+	arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
+	for i := range arg.Fs {
+		arg.ctr.orderVecs[i], err = colexec.MakeEvalVector(proc, []*plan.Expr{arg.Fs[i].Expr})
+		require.NoError(t, err)
+	}
+	_, err = arg.ctr.processOrder(0, arg, bat, proc)
+	require.NoError(t, err)
+
+	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{11, 10}, vector.MustFixedColWithTypeCheck[int64](result))
+	result.Free(mp)
+}
+
+func TestWindowTimestampRangeFoldAggregateMembershipPreservesMultiKeyOrder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	// Multi-key RANGE frames use ctr.os to preserve the complete ORDER BY tuple
+	// peer boundary. The last TIMESTAMP key repeats from B to A at the next k
+	// group, which is a normal lexicographic reset rather than a timezone fold.
+	// Keep this in UTC so the expected tuple semantics do not depend on DST.
+	timestampA, err := types.ParseTimestamp(time.UTC, "2024-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	timestampB, err := types.ParseTimestamp(time.UTC, "2024-01-01 01:00:00.000000", 6)
+	require.NoError(t, err)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 2, 2}, nil, mp)
+	bat.Vecs[1] = vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []types.Timestamp{
+		timestampA, timestampB, timestampA, timestampB,
+	}, nil, mp))
+	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 4, 8}, nil, mp)
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	spec := makeWindowSpec()
+	spec.GetW().OrderBy = []*plan.OrderBySpec{
+		{Expr: newColExprWithType(0, types.T_int32.ToType())},
+		{Expr: newColExprWithType(1, types.T_timestamp.ToType())},
+	}
+	spec.GetW().Frame = &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExprAt(2)},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	defer arg.Free(proc, false, nil)
+
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+	arg.Fs = makeOrderBy(spec)
+	arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
+	for i := range arg.Fs {
+		arg.ctr.orderVecs[i], err = colexec.MakeEvalVector(proc, []*plan.Expr{arg.Fs[i].Expr})
+		require.NoError(t, err)
+	}
+	_, err = arg.ctr.processOrder(0, arg, bat, proc)
+	require.NoError(t, err)
+
+	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3, 7, 15}, vector.MustFixedColWithTypeCheck[int64](result))
+	result.Free(mp)
+}
+
+func TestWindowTimestampRangeFoldValueMembership(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	orderValues := []string{
+		"2024-11-03 05:00:00.000000", // 01:00 EDT
+		"2024-11-03 05:30:00.000000", // 01:30 EDT
+		"2024-11-03 05:59:00.000000", // 01:59 EDT
+		"2024-11-03 06:00:00.000000", // 01:00 EST
+		"2024-11-03 06:30:00.000000", // 01:30 EST
+		"2024-11-03 06:59:00.000000", // 01:59 EST
+		"2024-11-03 07:00:00.000000", // 02:00 EST
+		"2024-11-03 07:30:00.000000", // 02:30 EST
+	}
+
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+
+	for _, test := range []struct {
+		name      string
+		want      []int32
+		lastIsNil bool
+	}{
+		{name: "first_value", want: []int32{1, 2, 3, 1, 2, 3, 7, 8}},
+		{name: "last_value", want: []int32{5, 7, 7, 5, 7, 7, 8, 8}},
+		{name: "nth_value", want: []int32{2, 3, 6, 2, 3, 6, 8, 0}, lastIsNil: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			timestamps := make([]types.Timestamp, len(orderValues))
+			for i, value := range orderValues {
+				timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(orderVec, timestamps, nil, mp))
+			defer orderVec.Free(mp)
+
+			values := testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 6, 7, 8}, nil, mp)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = values
+			bat.SetRowCount(values.Length())
+			defer bat.Clean(mp)
+
+			spec := makeValueWindowSpecWithName(test.name, int32(types.T_int32))
+			spec.GetW().Frame = frame
+			arg := &Window{WinSpecList: []*plan.Expr{spec}}
+			valueVecs := []*vector.Vector{values}
+			var nthVec *vector.Vector
+			if test.name == "nth_value" {
+				nthVec = testutil.MakeInt32Vector([]int32{2, 2, 2, 2, 2, 2, 2, 2}, nil, mp)
+				valueVecs = append(valueVecs, nthVec)
+				defer nthVec.Free(mp)
+			}
+			ctr := &container{
+				bat:       bat,
+				aggVecs:   []colexec.ExprEvalVector{{Vec: valueVecs}},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+			}
+
+			result, err := ctr.processValueFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, err)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int32](result))
+			if test.lastIsNil {
+				require.True(t, result.IsNull(uint64(result.Length()-1)))
+			}
+			result.Free(mp)
+		})
+	}
+}
+
+// BenchmarkWindowTimestampRangeFoldUnboundedValue guards the value-function
+// path that used to rescan a folded partition for every output row. Each size
+// crosses the New York fall-back transition; the production first_value path
+// must reuse its civil-time spans and only binary-search them per frame.
+func BenchmarkWindowTimestampRangeFoldUnboundedValue(b *testing.B) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(b, err)
+	start, err := types.ParseTimestamp(time.UTC, "2024-11-03 04:00:00.000000", 6)
+	require.NoError(b, err)
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+
+	for _, size := range []int{1000, 2000, 4000} {
+		b.Run(fmt.Sprintf("rows=%d", size), func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(b, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(b, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			timestamps := make([]types.Timestamp, size)
+			for i := range timestamps {
+				timestamps[i] = start + types.Timestamp(int64(i)*60*types.MicroSecsPerSec)
+			}
+			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(b, vector.AppendFixedList(orderVec, timestamps, nil, mp))
+			defer orderVec.Free(mp)
+
+			values := make([]int32, size)
+			for i := range values {
+				values[i] = int32(i)
+			}
+			valueVec := testutil.MakeInt32Vector(values, nil, mp)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = valueVec
+			bat.SetRowCount(size)
+			defer bat.Clean(mp)
+
+			spec := makeValueWindowSpecWithName("first_value", int32(types.T_int32))
+			spec.GetW().Frame = frame
+			arg := &Window{WinSpecList: []*plan.Expr{spec}}
+			ctr := &container{
+				bat:       bat,
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{valueVec}}},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				result, runErr := ctr.processValueFuncRange(0, arg, proc, 0, size)
+				require.NoError(b, runErr)
+				result.Free(mp)
+			}
+		})
+	}
 }
