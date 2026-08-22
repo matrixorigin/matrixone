@@ -161,6 +161,17 @@ func run(ctx context.Context, db *sql.DB, esEndpoint, esUser, esPassword string,
 	}
 	r.Cases = append(r.Cases, "esql_tvf_disconnect")
 
+	// env: config on the TVF connect path: no credential ever appears in SQL
+	// text (statement logs only see 'env:MO_ESQL_E2E_CFG').
+	if _, err := db.ExecContext(ctx, "set @henv = esql_tvf_connect('env:MO_ESQL_E2E_CFG')"); err != nil {
+		return fmt.Errorf("esql_tvf_connect env: %w", err)
+	}
+	if err := expectScalar(ctx, db,
+		"select count(*) from esql_tvf('FROM employees | KEEP name, dept, salary | LIMIT 100', 'ssI', @henv) t", "5"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "tvf-env-config")
+
 	return runExternalTable(ctx, db, cfgStr, r)
 }
 

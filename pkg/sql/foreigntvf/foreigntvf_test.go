@@ -19,10 +19,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -102,4 +104,69 @@ func TestDriverAliases(t *testing.T) {
 	require.Equal(t, "pgx", driverAliases["postgres"])
 	require.Equal(t, "pgx", driverAliases["postgresql"])
 	require.Equal(t, "mysql", driverAliases["mysql"])
+}
+
+type fakeConnCache struct {
+	conns map[string]process.ForeignConn
+}
+
+func newFakeConnCache() *fakeConnCache {
+	return &fakeConnCache{conns: make(map[string]process.ForeignConn)}
+}
+
+func (c *fakeConnCache) PutForeignConn(handle string, conn process.ForeignConn) {
+	c.conns[handle] = conn
+}
+func (c *fakeConnCache) GetForeignConn(handle string) (process.ForeignConn, bool) {
+	v, ok := c.conns[handle]
+	return v, ok
+}
+func (c *fakeConnCache) RemoveForeignConn(handle string) (process.ForeignConn, bool) {
+	v, ok := c.conns[handle]
+	if ok {
+		delete(c.conns, handle)
+	}
+	return v, ok
+}
+
+var _ process.ForeignConnCache = (*fakeConnCache)(nil)
+
+// TestResolveOrConnectEnvRef proves env:NAME config references resolve from
+// the process environment BEFORE hashing, so the handle is derived from the
+// resolved JSON (an env: caller and an inline caller of the same config share
+// one cache entry), and that unset/empty references error clearly.
+func TestResolveOrConnectEnvRef(t *testing.T) {
+	ctx := context.Background()
+	cache := newFakeConnCache()
+
+	// The env var holds a config with an unsupported driver: resolution must
+	// happen first (we see the driver error, not a JSON error on "env:...").
+	t.Setenv("MO_FOREIGNTVF_TEST_CFG", `{"driver":"nope","dsn":"x"}`)
+	_, _, err := ResolveOrConnect(ctx, cache, KindSQL, "env:MO_FOREIGNTVF_TEST_CFG")
+	require.ErrorContains(t, err, `unsupported driver "nope"`)
+
+	// unset / empty-name references error clearly.
+	_, _, err = ResolveOrConnect(ctx, cache, KindSQL, "env:MO_FOREIGNTVF_TEST_UNSET")
+	require.ErrorContains(t, err, "unset or empty")
+	_, _, err = ResolveOrConnect(ctx, cache, KindSQL, "env:")
+	require.ErrorContains(t, err, "no variable name")
+
+	// the handle is derived from the RESOLVED config: seed the cache under the
+	// resolved-config handle and connect via the env reference — it must hit.
+	seeded := &seedConn{}
+	resolvedHandle := MakeHandle(KindSQL, `{"driver":"nope","dsn":"x"}`)
+	cache.conns[resolvedHandle] = seeded
+	conn, handle, err := ResolveOrConnect(ctx, cache, KindSQL, "env:MO_FOREIGNTVF_TEST_CFG")
+	require.NoError(t, err)
+	require.Equal(t, resolvedHandle, handle)
+	require.Same(t, seeded, conn.(*seedConn))
+}
+
+// seedConn is a minimal Conn for cache-hit testing.
+type seedConn struct{}
+
+func (c *seedConn) Close() error { return nil }
+func (c *seedConn) Kind() Kind   { return KindSQL }
+func (c *seedConn) Query(ctx context.Context, q string) (io.ReadCloser, error) {
+	return nil, nil
 }
