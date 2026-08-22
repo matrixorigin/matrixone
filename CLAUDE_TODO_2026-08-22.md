@@ -294,3 +294,27 @@ checkpoint。
 - `pkg/sql/compile` 全包仅失败 3 个 Parquet 空文件 fanout 用例，签名与前次已确认的基线失败一致；
   本轮未修改 `scope.go/scope_test.go`，将在合并最新 `main` 后再次确认基线归因。
 - `gofmt`、`git diff --check` 通过；最终 list/build/vet、race、自审和 post-merge 黑盒结果在 push 前补记。
+
+### 整改最终验证与自审
+
+- 正常 merge 最新 `mo/main@596b2f2113`，无冲突；最终结论均在 merge 后重新验证。
+- 8 个 diff-derived owning packages 在 `GOWORK=off`、`-mod=readonly` 与隔离 cache/tmp 下通过
+  `go list`；7 个含生产 Go 文件的 package 通过 `go build`，全部 8 个 package 通过 `go vet`。
+- merge 后 `pkg/defines`、`pkg/pb/plan`、`pkg/sql/plan/rule`、`pkg/sql/plan/function`、
+  `pkg/sql/plan`、`pkg/frontend` 全量 CGo tests 再次通过；嵌入式 issue 黑盒再次通过。
+- `pkg/sql/compile` 全包仍只失败 3 个 Parquet 空文件 fanout 测试；在干净
+  `main@596b2f2113` 上定向运行三个同名测试，逐项复现完全相同断言，确认非本 PR 因果。
+  本 PR 的 `TestPreparedNumericPrefixRemoteProtocolValidation` 定向测试通过。
+- retry lifecycle 触发 race 门禁：focused test 先用 `-list` 证明非空，warm build 后 `-json`
+  实测 `T=0.01s`；取 `B=30s`，按 `clamp(floor(B/T),1,100)` 得 `N=100`。focused
+  `-race -count=100` 与完整 `pkg/frontend -race -count=1`（23.891s）均通过。首次 warm build
+  因隔离磁盘耗尽中止；按用户授权对本任务隔离 GOCACHE 执行 `go clean -cache` 后以 `-p=2`
+  重跑通过，未删除共享缓存或其它 worktree 数据。
+- 全 PR changed-code coverage 为 592/741 statements（79.9%），超过 75% 门禁；`gofmt`、
+  `git diff --check mo/main...HEAD` 和新增 debug-output 扫描通过。
+- `mo-self-review` 与 unhappy-path Q1-Q3 结论：retry snapshot 仅持有当前 execution 的有界参数
+  slice，callback 在 cached compile 每轮 Reset 前被新 generation 覆盖并随 compile 回收；无新增
+  goroutine、锁、channel、等待边或 cleanup owner；SQL EXECUTE eligibility 是只读 O(plan expr)
+  扫描，只分配参数位置集合，不再为未命中执行完整 DeepCopyPlan。COM_STMT、SQL EXECUTE、fresh
+  compile、definition-change retry 和 v24/v25 remote boundary 的终态均有独立 oracle，未发现剩余
+  blocker。
