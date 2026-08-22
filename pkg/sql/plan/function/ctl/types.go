@@ -62,6 +62,7 @@ var (
 	TableExtra               = strings.ToUpper("table-extra")
 	PrefetchOnSubscribed     = strings.ToUpper("prefetch-on-subscribed")
 	GCCatalogCacheMethod     = strings.ToUpper("GCCatalogCache")
+	RefreshViewMetadata      = strings.ToUpper("RefreshViewMetadata")
 )
 
 var (
@@ -107,6 +108,7 @@ var (
 		TableExtra:               handleTableExtra,
 		PrefetchOnSubscribed:     handlePrefetchOnSubscribed,
 		GCCatalogCacheMethod:     handleGCCatalogCache,
+		RefreshViewMetadata:      handleRefreshViewMetadata,
 	}
 )
 
