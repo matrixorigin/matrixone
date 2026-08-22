@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/binary"
+	"reflect"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -269,7 +270,9 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	b.insideAgg = true
 	var expr *plan.Expr
 	var err error
-	if strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc) {
+	if strings.EqualFold(funcName, NameMedian) && astExpr.WithinGroup {
+		expr, err = b.bindMedianWithinGroupAgg(funcName, astExpr, depth, isRoot)
+	} else if strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc) {
 		expr, err = b.bindOrderedSetPercentileAgg(funcName, astExpr, depth, isRoot)
 	} else {
 		expr, err = b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
@@ -334,6 +337,40 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 			},
 		},
 	}, nil
+}
+
+// bindMedianWithinGroupAgg accepts the SQL-standard spelling of MEDIAN as an
+// ordered-set aggregate while reusing the existing median executor. MEDIAN is
+// defined over its value expression, so accepting a different ORDER BY key
+// would silently change the meaning of the query; require the key to match the
+// value expression and let the regular median binder perform type checking.
+func (b *HavingBinder) bindMedianWithinGroupAgg(
+	funcName string,
+	astExpr *tree.FuncExpr,
+	depth int32,
+	isRoot bool,
+) (*plan.Expr, error) {
+	if len(astExpr.Exprs) != 1 {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"%s requires exactly one value expression", funcName)
+	}
+	if len(astExpr.OrderBy) != 1 || astExpr.OrderBy[0] == nil || astExpr.OrderBy[0].Expr == nil {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
+	}
+	value, err := b.BindExpr(astExpr.Exprs[0], depth, isRoot)
+	if err != nil {
+		return nil, err
+	}
+	order, err := b.BindExpr(astExpr.OrderBy[0].Expr, depth, isRoot)
+	if err != nil {
+		return nil, err
+	}
+	if !reflect.DeepEqual(value, order) {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"%s requires the WITHIN GROUP ORDER BY expression to match its value expression", funcName)
+	}
+	return b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
 }
 
 // bindOrderedSetPercentileAgg converts the SQL-standard

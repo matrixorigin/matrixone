@@ -28,6 +28,10 @@ group by g order by g;
 1  ¦  20,30,10,20  𝄀
 2  ¦  8,4,2  𝄀
 3  ¦  null
+select median(v) within group (order by v desc) as median_within_group
+from t_ordered_set_bvt;
+➤ median_within_group[8,54,0]  𝄀
+10.0
 select percentile_cont(0.25) within group (order by v) as p25_cont,
 percentile_disc(0.25) within group (order by v) as p25_disc
 from t_ordered_set_bvt;

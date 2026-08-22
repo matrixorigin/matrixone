@@ -13313,7 +13313,7 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   MEDIAN '(' func_type_opt expression ')' window_spec_opt
+|   MEDIAN '(' func_type_opt expression ')' within_group_opt window_spec_opt
     {
 	name := tree.NewUnresolvedColName($1)
 	$$ = &tree.FuncExpr{
@@ -13321,8 +13321,10 @@ function_call_aggregate:
         FuncName: tree.NewCStr($1, 1),
 	    Exprs: tree.Exprs{$4},
 	    Type: $3,
-	    WindowSpec: $6,
-	    }
+	    OrderBy: $6,
+	    WithinGroup: $6 != nil,
+	    WindowSpec: $7,
+	}
     }
 |   BITMAP_CONSTRUCT_AGG '(' func_type_opt expression ')' window_spec_opt
     {

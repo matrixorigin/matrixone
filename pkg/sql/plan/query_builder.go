@@ -4350,6 +4350,7 @@ func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts [
 
 const NameGroupConcat = "group_concat"
 const NameClusterCenters = "cluster_centers"
+const NameMedian = "median"
 const NameApproxPercentile = "approx_percentile"
 const NamePercentileCont = "percentile_cont"
 const NamePercentileDisc = "percentile_disc"
