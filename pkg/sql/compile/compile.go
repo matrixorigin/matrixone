@@ -76,6 +76,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -2039,6 +2040,10 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		return nil, err
 	}
 
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_DATASTREAM_TB) {
+		return c.compileDatastreamScan(node, strictSqlMode)
+	}
+
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_ICEBERG_TB) {
 		access, err := c.checkIcebergScanAccess(node)
 		if err != nil {
@@ -2112,6 +2117,58 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	} else {
 		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode)
 	}
+}
+
+// compileDatastreamScan builds the single-scope pipeline for a datastream
+// external table: deparse the pushable filter conjuncts into the pushdown
+// hint, optionally drop them from local rechecking (recheck=false), and run
+// the external operator with a DataStreamReader.  node is the compile-owned
+// deep copy, so trimming its FilterList only affects this pipeline's
+// downstream restrict.
+func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	ds := node.ExternScan.GetDatastreamScan()
+	if ds == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "datastream external table is missing scan metadata")
+	}
+	// The pushed filter can only be sent to the server when the user has
+	// opted into trusting the server's predicate semantics (recheck=false).
+	//
+	// A pushed predicate is NOT provably superset-preserving across engines:
+	// the server may drop a row MO would keep under a different collation,
+	// time zone, or coercion (e.g. a case-insensitive source evaluating
+	// `s <> 'a'` drops both 'a' and 'A', but MO distinguishes them and wants
+	// the 'A' row). Local recheck can only *remove* over-returned rows, never
+	// restore ones the source already filtered out — so pushing in the
+	// recheck=true default would under-return. Therefore recheck=true (the
+	// safe default) sends no narrowing filter: the server returns the full
+	// datasource and MO applies every predicate locally, which is correct
+	// under any server semantics. recheck=false trusts the server for exactly
+	// the conjuncts that were pushed; conjuncts the deparser could not express
+	// always stay local.
+	if !ds.Recheck {
+		pushedText, pushed := sqldatastream.DeparseFilters(node.FilterList, node.TableDef.Cols, c.proc.GetSessionInfo().TimeZone)
+		ds.PushedFilter = pushedText
+		if pushedText != "" {
+			kept := make([]*plan.Expr, 0, len(node.FilterList))
+			for i, expr := range node.FilterList {
+				if !pushed[i] {
+					kept = append(kept, expr)
+				}
+			}
+			node.FilterList = kept
+		}
+	}
+
+	param := external.DatastreamExternParam()
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
 }
 
 func (c *Compile) hydrateMongoScan(node *plan.Node) error {

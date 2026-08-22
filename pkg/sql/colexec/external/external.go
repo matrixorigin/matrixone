@@ -87,14 +87,21 @@ func (external *External) Prepare(proc *process.Process) error {
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
 
 	if param.Extern == nil {
-		param.Extern = &tree.ExternParam{}
-		if err := json.Unmarshal([]byte(param.CreateSql), param.Extern); err != nil {
-			return err
+		if param.DatastreamScan != nil {
+			// A datastream scan has no file-backed ExternParam; its CreateSql is
+			// the datastream envelope, not JSON.  Rebuild the synthetic param
+			// (remote-run decode arrives here with Extern == nil).
+			param.Extern = DatastreamExternParam()
+		} else {
+			param.Extern = &tree.ExternParam{}
+			if err := json.Unmarshal([]byte(param.CreateSql), param.Extern); err != nil {
+				return err
+			}
+			if err := plan2.InitS3Param(param.Extern); err != nil {
+				return err
+			}
+			param.Extern.FileService = proc.Base.FileService
 		}
-		if err := plan2.InitS3Param(param.Extern); err != nil {
-			return err
-		}
-		param.Extern.FileService = proc.Base.FileService
 	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
@@ -147,6 +154,8 @@ func (external *External) Prepare(proc *process.Process) error {
 
 	// Create reader (single dispatch point)
 	switch {
+	case param.DatastreamScan != nil:
+		external.reader = NewDataStreamReader(param)
 	case param.Extern.ExternType == int32(plan.ExternType_RESULT_SCAN):
 		external.reader = NewZonemapReader(param, proc)
 	case param.Extern.Format == tree.PARQUET:

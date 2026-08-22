@@ -1,0 +1,112 @@
+create external table ds_err1 (a int) engine = datastream;
+invalid input: datastream external table requires the 'server' option
+create external table ds_err2 (a int) engine = datastream with ('server' = '127.0.0.1');
+invalid input: datastream external table requires the 'port' option
+create external table ds_err3 (a int) engine = datastream with ('server' = 'h', 'port' = 'abc', 'table' = 't');
+invalid input: datastream option 'port' must be a port number, got 'abc'
+create external table ds_err4 (a int) engine = datastream with ('server' = 'h', 'port' = '4444', 'table' = 't', 'bogus' = '1');
+invalid input: unknown datastream option 'bogus' (supported: server, port, table, recheck, apikey)
+create external table ds_err5 (a int) engine = datastream with ('server' = 'h', 'port' = '4444', 'table' = 't', 'server' = 'h2');
+invalid input: duplicate datastream option 'server'
+create external table ds_err6 (a int) engine = datastream with ('server' = 'h', 'port' = '4444', 'table' = 't', 'recheck' = 'maybe');
+invalid input: datastream option 'recheck' must be true or false, got 'maybe'
+drop database if exists datastream_bvt;
+create database datastream_bvt;
+use datastream_bvt;
+create table src_numbers (col1 int, col2 datetime, col3 varchar(50), col4 text);
+insert into src_numbers values
+(1, '2020-01-01 10:00:00', 'alpha', 'first row'),
+(2, '2020-06-15 12:30:00', 'beta', 'second, with comma'),
+(3, '2021-03-10 08:45:00', 'gamma', NULL),
+(4, '2021-11-11 11:11:11', 'delta', 'fourth row'),
+(5, '2022-07-04 00:00:00', 'epsilon', 'fifth row');
+create external table ext_file (col1 int, col2 datetime, col3 varchar(50), col4 text) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'file_numbers');
+select * from ext_file order by col1;
+➤ col1[4,32,0]  ¦  col2[93,64,0]  ¦  col3[12,50,0]  ¦  col4[12,0,0]  𝄀
+1  ¦  2020-01-01 10:00:00  ¦  alpha  ¦  first row  𝄀
+2  ¦  2020-06-15 12:30:00  ¦  beta  ¦  second, with comma  𝄀
+3  ¦  2021-03-10 08:45:00  ¦  gamma  ¦  null  𝄀
+4  ¦  2021-11-11 11:11:11  ¦  delta  ¦  fourth row  𝄀
+5  ¦  2022-07-04 00:00:00  ¦  epsilon  ¦  fifth row
+select col1, col3 from ext_file where col2 > '2021-01-01 00:00:00' order by col1;
+➤ col1[4,32,0]  ¦  col3[12,50,0]  𝄀
+3  ¦  gamma  𝄀
+4  ¦  delta  𝄀
+5  ¦  epsilon
+select count(*) from ext_file where col4 is null;
+➤ count(*)[-5,64,0]  𝄀
+1
+show create table ext_file;
+➤ Table[12,8,0]  ¦  Create Table[12,324,0]  𝄀
+ext_file  ¦  CREATE EXTERNAL TABLE `ext_file` (
+  `col1` int DEFAULT NULL,
+  `col2` datetime DEFAULT NULL,
+  `col3` varchar(50) DEFAULT NULL,
+  `col4` text DEFAULT NULL
+) ENGINE = DATASTREAM WITH ("server" = '127.0.0.1', "port" = '4444', "table" = 'file_numbers', "recheck" = 'true')
+create external table ext_jdbc (col1 int, col2 datetime, col3 varchar(50), col4 text) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'jdbc_numbers');
+select * from ext_jdbc order by col1;
+➤ col1[4,32,0]  ¦  col2[93,64,0]  ¦  col3[12,50,0]  ¦  col4[12,0,0]  𝄀
+1  ¦  2020-01-01 10:00:00  ¦  alpha  ¦  first row  𝄀
+2  ¦  2020-06-15 12:30:00  ¦  beta  ¦  second, with comma  𝄀
+3  ¦  2021-03-10 08:45:00  ¦  gamma  ¦  null  𝄀
+4  ¦  2021-11-11 11:11:11  ¦  delta  ¦  fourth row  𝄀
+5  ¦  2022-07-04 00:00:00  ¦  epsilon  ¦  fifth row
+select col1, col3 from ext_jdbc where col1 between 2 and 4 order by col1;
+➤ col1[4,32,0]  ¦  col3[12,50,0]  𝄀
+2  ¦  beta  𝄀
+3  ¦  gamma  𝄀
+4  ¦  delta
+select count(*) from ext_jdbc where col2 > '2021-01-01 00:00:00' and col3 <> 'delta';
+➤ count(*)[-5,64,0]  𝄀
+2
+create external table ext_jdbc_norecheck (col1 int, col2 datetime, col3 varchar(50), col4 text) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'jdbc_numbers', 'recheck' = 'false');
+select count(*) from ext_jdbc_norecheck where col1 > 2;
+➤ count(*)[-5,64,0]  𝄀
+3
+show create table ext_jdbc_norecheck;
+➤ Table[12,18,0]  ¦  Create Table[12,335,0]  𝄀
+ext_jdbc_norecheck  ¦  CREATE EXTERNAL TABLE `ext_jdbc_norecheck` (
+  `col1` int DEFAULT NULL,
+  `col2` datetime DEFAULT NULL,
+  `col3` varchar(50) DEFAULT NULL,
+  `col4` text DEFAULT NULL
+) ENGINE = DATASTREAM WITH ("server" = '127.0.0.1', "port" = '4444', "table" = 'jdbc_numbers', "recheck" = 'false')
+create table dest (col1 int, col2 datetime, col3 varchar(50), col4 text);
+insert into dest select * from ext_jdbc;
+select count(*) from dest;
+➤ count(*)[-5,64,0]  𝄀
+5
+create table dest2 (col1 int, col2 datetime, col3 varchar(50), col4 text);
+insert into dest2 select * from ext_jdbc where col1 <= 2;
+insert into dest2 select * from ext_jdbc where col1 > 2;
+select count(*) from dest2;
+➤ count(*)[-5,64,0]  𝄀
+5
+create external table ext_missing (a int) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'no_such_source');
+select * from ext_missing;
+invalid input: datastream: table not found on 127.0.0.1:4444: no datasource named 'no_such_source'
+create external table ext_badfile (a int) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'bad_file');
+select * from ext_badfile;
+internal error: datastream: server 127.0.0.1:4444 reported ERROR_DATASOURCE_ERROR: /nonexistent/jstfu/bvt.csv (No such file or directory)
+create external table ext_badsql (a int) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'jdbc_bad_sql');
+select * from ext_badsql;
+internal error: datastream: server 127.0.0.1:4444 reported ERROR_DATASOURCE_ERROR: SQL parser error: table "no_such_table" does not exist
+create external table ext_noserver (a int) engine = datastream with ('server' = '127.0.0.1', 'port' = '1', 'table' = 't');
+select * from ext_noserver;
+internal error: datastream: cannot open stream to 127.0.0.1:1: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 127.0.0.1:1: connect: connection refused"
+create external table ext_keyed (col1 int, col2 datetime, col3 varchar(50), col4 text) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'jdbc_numbers', 'apikey' = 'bvt-secret');
+show create table ext_keyed;
+➤ Table[12,9,0]  ¦  Create Table[12,325,0]  𝄀
+ext_keyed  ¦  CREATE EXTERNAL TABLE `ext_keyed` (
+  `col1` int DEFAULT NULL,
+  `col2` datetime DEFAULT NULL,
+  `col3` varchar(50) DEFAULT NULL,
+  `col4` text DEFAULT NULL
+) ENGINE = DATASTREAM WITH ("server" = '127.0.0.1', "port" = '4444', "table" = 'jdbc_numbers', "recheck" = 'true')
+select count(*) from ext_keyed;
+➤ count(*)[-5,64,0]  𝄀
+5
+insert into ext_file values (9, '2020-01-01 00:00:00', 'x', 'y');
+invalid input: cannot insert/update/delete from external table
+drop database datastream_bvt;

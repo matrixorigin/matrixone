@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -1141,6 +1142,25 @@ func buildCreateTable(
 		properties := []*plan.Property{
 			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
 			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqlmongodb.BuildCreateSQLEnvelope(spec.Mapping)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
+	} else if stmt.DataStreamParam != nil {
+		cfg, err := sqldatastream.ParseTableOptions(ctx.GetContext(), stmt.DataStreamParam)
+		if err != nil {
+			return nil, err
+		}
+		// Like MongoDB, the durable typed feature bit is the discriminator that
+		// cannot be injected through the user-controlled rel_createsql JSON of a
+		// generic external table.
+		createTable.TableDef.FeatureFlag |= features.DataStreamExternal
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqldatastream.BuildCreateSQLEnvelope(cfg)},
 		}
 		createTable.TableDef.TableType = catalog.SystemExternalRel
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
