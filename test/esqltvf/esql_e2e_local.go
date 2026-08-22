@@ -235,6 +235,26 @@ func runExternalTable(ctx context.Context, db *sql.DB, cfgStr string, r *report)
 	}
 	r.Cases = append(r.Cases, "exttab-session-config")
 
+	// inline 'config' JSON on an ENGINE = ESQL table (the form the loopback
+	// SQL BVT covers for the SQL kind; this closes the inline x ESQL gap).
+	// SHOW CREATE must redact it.
+	if _, err := db.ExecContext(ctx,
+		"create external table emp_inline (name varchar(100), dept varchar(50), salary bigint) engine = esql with ('config' = '"+sqlEscape(cfgStr)+"')"); err != nil {
+		return fmt.Errorf("exttab inline create: %w", err)
+	}
+	if err := expectScalar(ctx, db,
+		"select count(*) from emp_inline where __mo_query = '"+sqlEscape(q1)+"'", "5"); err != nil {
+		return err
+	}
+	var tbl, createStmt string
+	if err := db.QueryRowContext(ctx, "show create table emp_inline").Scan(&tbl, &createStmt); err != nil {
+		return fmt.Errorf("exttab inline show create: %w", err)
+	}
+	if !strings.Contains(createStmt, "'<redacted>'") || strings.Contains(createStmt, "password") {
+		return fmt.Errorf("exttab inline show create not redacted: %s", createStmt)
+	}
+	r.Cases = append(r.Cases, "exttab-inline-config")
+
 	if _, err := db.ExecContext(ctx, "drop database esql_ext"); err != nil {
 		return err
 	}
