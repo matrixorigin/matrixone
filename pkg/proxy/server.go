@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -62,8 +64,12 @@ type Server struct {
 	counterSet     *counterSet
 	haKeeperClient logservice.ProxyHAKeeperClient
 	// configData will be sent to HAKeeper.
-	configData *util.ConfigData
-	test       bool
+	configData                      *util.ConfigData
+	viewMetadataAdmissionGeneration uint64
+	viewMetadataObservedEpoch       atomic.Uint64
+	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
+	viewMetadataAdmissionUpdated    chan struct{}
+	test                            bool
 }
 
 // NewServer creates the proxy server.
@@ -101,6 +107,9 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 			return nil, err
 		}
 	}
+	if err = s.initViewMetadataAdmission(ctx); err != nil {
+		return nil, err
+	}
 
 	logExporter := newCounterLogExporter(s.counterSet)
 	// Unregister first to handle the case where a previous registration might still exist
@@ -125,12 +134,12 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	if err := runBootstrapTask(ctx, s.stopper, h); err != nil {
 		return nil, err
 	}
+	s.handler = h
 
 	if err := s.stopper.RunNamedTask("proxy heartbeat", s.heartbeat); err != nil {
 		return nil, err
 	}
 
-	s.handler = h
 	listener, err := newProxyListener(config.ListenAddress)
 	if err != nil {
 		return nil, err
@@ -233,6 +242,9 @@ func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) erro
 
 // Start starts the proxy server.
 func (s *Server) Start() error {
+	if err := s.waitForViewMetadataAdmission(); err != nil {
+		return err
+	}
 	err := s.app.Start()
 	if err != nil {
 		s.runtime.Logger().Error("proxy server start failed", zap.Error(err))

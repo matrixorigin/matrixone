@@ -280,6 +280,10 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 	}
 	s := c.services.Load()
 	for _, cn := range s.cn {
+		if (s.viewMetadataAdmission.Preparing || s.viewMetadataAdmission.Enabled) &&
+			!cn.ViewMetadataAdmissionReady {
+			continue
+		}
 		// If the all field is false, the work state of CN service MUST be
 		// working, and then we could do the filter job. If the state is not
 		// working, means that the CN may be marked as draining and is going
@@ -525,6 +529,9 @@ func (c *cluster) refreshWithContext(ctx context.Context) error {
 		zap.Int("dn-count", len(details.TNStores)))
 
 	new := &services{}
+	if details.ViewMetadataAdmission != nil {
+		new.viewMetadataAdmission = *details.ViewMetadataAdmission
+	}
 	for _, cn := range details.CNStores {
 		v := newCNService(cn)
 		new.addCN([]metadata.CNService{v})
@@ -579,6 +586,7 @@ func (c *cluster) copyServices() *services {
 	if old != nil {
 		new.addCN(old.cn)
 		new.addTN(old.tn)
+		new.viewMetadataAdmission = old.viewMetadataAdmission
 	}
 	return new
 }
@@ -596,8 +604,11 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		CommitID:               cn.CommitID,
 		// why set this cfg, cc https://github.com/matrixorigin/matrixone/issues/16537
 		// should be used in getCNList
-		CPUTotal: cn.Resource.CPUTotal,
-		MemTotal: cn.Resource.MemTotal,
+		CPUTotal:                        cn.Resource.CPUTotal,
+		MemTotal:                        cn.Resource.MemTotal,
+		ViewMetadataAdmissionGeneration: cn.ViewMetadataAdmissionGeneration,
+		ViewMetadataAdmissionReady:      cn.ViewMetadataAdmissionReady,
+		ViewMetadataObservedEpoch:       cn.ViewMetadataObservedEpoch,
 	}
 }
 
@@ -622,8 +633,14 @@ func newTNService(tn logpb.TNStore) metadata.TNService {
 }
 
 type services struct {
-	cn []metadata.CNService
-	tn []metadata.TNService
+	cn                    []metadata.CNService
+	tn                    []metadata.TNService
+	viewMetadataAdmission logpb.ViewMetadataAdmission
+}
+
+func (c *cluster) GetViewMetadataAdmission() logpb.ViewMetadataAdmission {
+	c.waitReady()
+	return c.services.Load().viewMetadataAdmission
 }
 
 func (s *services) addCN(values []metadata.CNService) {

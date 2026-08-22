@@ -878,7 +878,8 @@ func (s *stateMachine) hasPendingHAKeeperAdmission() bool {
 }
 
 func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) bool {
-	if !s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled {
+	if !s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled &&
+		!s.state.ViewMetadataAdmissionPreparing && !s.state.ViewMetadataAdmissionEnabled {
 		return true
 	}
 	uuid, admission := hakeeperAdmissionTarget(cmd)
@@ -886,7 +887,18 @@ func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) boo
 		return true
 	}
 	store, ok := s.state.LogState.Stores[uuid]
-	return ok && store.CommandDeliverySupported
+	if !ok {
+		return false
+	}
+	if (s.state.CommandDeliveryPreparing || s.state.CommandDeliveryEnabled) &&
+		!store.CommandDeliverySupported {
+		return false
+	}
+	if (s.state.ViewMetadataAdmissionPreparing || s.state.ViewMetadataAdmissionEnabled) &&
+		!store.ViewMetadataAdmissionSupported {
+		return false
+	}
+	return true
 }
 
 // getCommandBatchWithAck implements at-least-once transport. Delivery is a
@@ -984,7 +996,10 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	s.state.CNState.Update(hb, s.state.Tick)
+	if !s.updateCNViewMetadataAdmission(hb) {
+		return s.attachViewMetadataAdmission(sm.Result{}, hb.UUID, false)
+	}
+	var result sm.Result
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryCNReady == nil {
 			s.state.CommandDeliveryCNReady = make(map[string]bool)
@@ -993,7 +1008,8 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	}
 	if (s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing) &&
 		hb.CommandDeliveryAckSupported {
-		return s.getCommandBatchWithAck(hb.UUID, hb.AckedCommandBatchID)
+		result = s.getCommandBatchWithAck(hb.UUID, hb.AckedCommandBatchID)
+		return s.attachViewMetadataAdmission(result, hb.UUID, false)
 	}
 	if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 		// An old CN may still heartbeat after HAKeeper activates the protocol
@@ -1001,9 +1017,10 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 		// to destructive delivery: a lost response would recreate the command-
 		// loss window. The command remains durable until this CN is upgraded and
 		// starts acknowledging it.
-		return sm.Result{}
+		return s.attachViewMetadataAdmission(result, hb.UUID, false)
 	}
-	return s.getCommandBatch(hb.UUID)
+	result = s.getCommandBatch(hb.UUID)
+	return s.attachViewMetadataAdmission(result, hb.UUID, false)
 }
 
 func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
@@ -1038,6 +1055,16 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.LogState.Update(hb, s.state.Tick)
+	if s.state.ViewMetadataAdmissionPreparing {
+		if s.state.ViewMetadataAdmissionLogReady == nil {
+			s.state.ViewMetadataAdmissionLogReady = make(map[string]bool)
+		}
+		if hb.ViewMetadataAdmissionSupported {
+			s.state.ViewMetadataAdmissionLogReady[hb.UUID] = true
+		} else {
+			delete(s.state.ViewMetadataAdmissionLogReady, hb.UUID)
+		}
+	}
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryReady == nil {
 			s.state.CommandDeliveryReady = make(map[string]bool)
@@ -1350,8 +1377,10 @@ func (s *stateMachine) handleProxyHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	s.state.ProxyState.Update(hb, s.state.Tick)
-	return s.getCommandBatch(hb.UUID)
+	if !s.updateProxyViewMetadataAdmission(hb) {
+		return s.attachViewMetadataAdmission(sm.Result{}, hb.UUID, true)
+	}
+	return s.attachViewMetadataAdmission(s.getCommandBatch(hb.UUID), hb.UUID, true)
 }
 
 func (s *stateMachine) handleUpdateNonVotingReplicaNum(cmd []byte) sm.Result {
@@ -1601,6 +1630,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleCompleteLogServiceRecoveryCmd(), nil
 	case pb.EnableCommandDeliveryUpdate:
 		return s.handleEnableCommandDelivery(cmd), nil
+	case pb.EnableViewMetadataAdmissionUpdate:
+		return s.handleEnableViewMetadataAdmission(cmd), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1673,26 +1704,45 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		LogStores:   make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
 		ProxyStores: make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
 	}
+	if s.viewMetadataAdmissionActive() {
+		cd.ViewMetadataAdmission = &pb.ViewMetadataAdmission{
+			Preparing:            s.state.ViewMetadataAdmissionPreparing,
+			Enabled:              s.state.ViewMetadataAdmissionEnabled,
+			Epoch:                s.state.ViewMetadataAdmissionEpoch,
+			RevalidationRequired: s.state.ViewMetadataRevalidationRequired,
+			CatalogFencedEpoch:   s.state.ViewMetadataCatalogFencedEpoch,
+		}
+	}
 	for uuid, info := range s.state.CNState.Stores {
+		if s.viewMetadataAdmissionActive() &&
+			!info.ViewMetadataAdmissionReady &&
+			(!info.ViewMetadataAdmissionSupported ||
+				info.ViewMetadataAdmissionGeneration == 0) {
+			continue
+		}
 		state := pb.NormalState
 		if cfg.CNStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
 		}
 		n := pb.CNStore{
-			UUID:                uuid,
-			Tick:                info.Tick,
-			ServiceAddress:      info.ServiceAddress,
-			SQLAddress:          info.SQLAddress,
-			LockServiceAddress:  info.LockServiceAddress,
-			ShardServiceAddress: info.ShardServiceAddress,
-			State:               state,
-			WorkState:           info.WorkState,
-			Labels:              info.Labels,
-			QueryAddress:        info.QueryAddress,
-			ConfigData:          info.ConfigData,
-			Resource:            info.Resource,
-			UpTime:              info.UpTime,
-			CommitID:            info.CommitID,
+			UUID:                            uuid,
+			Tick:                            info.Tick,
+			ServiceAddress:                  info.ServiceAddress,
+			SQLAddress:                      info.SQLAddress,
+			LockServiceAddress:              info.LockServiceAddress,
+			ShardServiceAddress:             info.ShardServiceAddress,
+			State:                           state,
+			WorkState:                       info.WorkState,
+			Labels:                          info.Labels,
+			QueryAddress:                    info.QueryAddress,
+			ConfigData:                      info.ConfigData,
+			Resource:                        info.Resource,
+			UpTime:                          info.UpTime,
+			CommitID:                        info.CommitID,
+			ViewMetadataAdmissionSupported:  info.ViewMetadataAdmissionSupported,
+			ViewMetadataAdmissionGeneration: info.ViewMetadataAdmissionGeneration,
+			ViewMetadataObservedEpoch:       info.ViewMetadataObservedEpoch,
+			ViewMetadataAdmissionReady:      info.ViewMetadataAdmissionReady,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
@@ -1733,11 +1783,21 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		cd.LogStores = append(cd.LogStores, n)
 	}
 	for uuid, info := range s.state.ProxyState.Stores {
+		if s.viewMetadataAdmissionActive() &&
+			!info.ViewMetadataAdmissionReady &&
+			(!info.ViewMetadataAdmissionSupported ||
+				info.ViewMetadataAdmissionGeneration == 0) {
+			continue
+		}
 		cd.ProxyStores = append(cd.ProxyStores, pb.ProxyStore{
-			UUID:          uuid,
-			Tick:          info.Tick,
-			ListenAddress: info.ListenAddress,
-			ConfigData:    info.ConfigData,
+			UUID:                            uuid,
+			Tick:                            info.Tick,
+			ListenAddress:                   info.ListenAddress,
+			ConfigData:                      info.ConfigData,
+			ViewMetadataAdmissionSupported:  info.ViewMetadataAdmissionSupported,
+			ViewMetadataAdmissionGeneration: info.ViewMetadataAdmissionGeneration,
+			ViewMetadataObservedEpoch:       info.ViewMetadataObservedEpoch,
+			ViewMetadataAdmissionReady:      info.ViewMetadataAdmissionReady,
 		})
 	}
 	for _, store := range s.state.DeletedStores {
@@ -1803,6 +1863,37 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 			CNReady:                cnReady,
 			TNReady:                tnReady,
 		}, nil
+	} else if _, ok := query.(*ViewMetadataAdmissionStateQuery); ok {
+		var logReady map[string]bool
+		if s.state.ViewMetadataAdmissionLogReady != nil {
+			logReady = make(map[string]bool, len(s.state.ViewMetadataAdmissionLogReady))
+			for uuid, ready := range s.state.ViewMetadataAdmissionLogReady {
+				logReady[uuid] = ready
+			}
+		}
+		var cnReady map[string]bool
+		if s.state.ViewMetadataAdmissionCNReady != nil {
+			cnReady = make(map[string]bool, len(s.state.ViewMetadataAdmissionCNReady))
+			for uuid, ready := range s.state.ViewMetadataAdmissionCNReady {
+				cnReady[uuid] = ready
+			}
+		}
+		var proxyReady map[string]bool
+		if s.state.ViewMetadataAdmissionProxyReady != nil {
+			proxyReady = make(map[string]bool, len(s.state.ViewMetadataAdmissionProxyReady))
+			for uuid, ready := range s.state.ViewMetadataAdmissionProxyReady {
+				proxyReady[uuid] = ready
+			}
+		}
+		return ViewMetadataAdmissionState{
+			Preparing:              s.state.ViewMetadataAdmissionPreparing,
+			Enabled:                s.state.ViewMetadataAdmissionEnabled,
+			Pending:                s.state.ViewMetadataAdmissionPending,
+			HAKeeperAdmissionReady: !s.hasPendingHAKeeperAdmission(),
+			LogReady:               logReady,
+			CNReady:                cnReady,
+			ProxyReady:             proxyReady,
+		}, nil
 	} else if q, ok := query.(*ClusterDetailsQuery); ok {
 		return s.handleClusterDetailsQuery(q.Cfg), nil
 	} else if _, ok := query.(*IndexQuery); ok {
@@ -1840,5 +1931,16 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	s.state.CommandDeliveryTNReady = nil
 	s.state.CommandDeliveryBatchIDsAssigned = false
 	s.state.CommandDeliveryCommandIDsAssigned = false
+	s.state.ViewMetadataAdmissionPreparing = false
+	s.state.ViewMetadataAdmissionEnabled = false
+	s.state.ViewMetadataAdmissionEpoch = 0
+	s.state.ViewMetadataRevalidationRequired = false
+	s.state.ViewMetadataCatalogFencedEpoch = 0
+	s.state.ViewMetadataAdmissionLogReady = nil
+	s.state.ViewMetadataAdmissionCNReady = nil
+	s.state.ViewMetadataAdmissionProxyReady = nil
+	s.state.ViewMetadataAdmissionCNTargets = nil
+	s.state.ViewMetadataAdmissionProxyTargets = nil
+	s.state.ViewMetadataAdmissionPending = false
 	return s.state.Unmarshal(data)
 }

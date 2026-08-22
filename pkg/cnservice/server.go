@@ -116,7 +116,7 @@ func NewService(
 	fileService fileservice.FileService,
 	gossipNode *gossip.Node,
 	options ...Option,
-) (Service, error) {
+) (result Service, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -203,6 +203,14 @@ func NewService(
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
+	if err = srv.initViewMetadataAdmission(ctx); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			srv.closeViewMetadataAdmission()
+		}
+	}()
 	if err = srv.initQueryService(); err != nil {
 		return nil, err
 	}
@@ -415,6 +423,10 @@ func (s *service) Start() (err error) {
 	if err = s.bootstrap(); err != nil {
 		return err
 	}
+	s.viewMetadataCatalogFenceReady.Store(true)
+	if err = s.waitForViewMetadataAdmission(); err != nil {
+		return err
+	}
 	if err = s.startSiriusRuntime(context.Background()); err != nil {
 		return err
 	}
@@ -454,6 +466,7 @@ func (s *service) closeService() error {
 	s.closeOnce.Do(func() {
 		defer logutil.LogClose(s.logger, "cnservice")()
 
+		s.closeViewMetadataAdmission()
 		s.stopper.Stop()
 
 		s.closeErr = closeCNServiceSteps(

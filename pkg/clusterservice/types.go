@@ -117,6 +117,12 @@ type AuthoritativeRefresher interface {
 	Refresh(context.Context) error
 }
 
+// ViewMetadataAdmissionReader returns the admission snapshot that was swapped
+// atomically with the current CN inventory.
+type ViewMetadataAdmissionReader interface {
+	GetViewMetadataAdmission() logpb.ViewMetadataAdmission
+}
+
 type ClusterClient interface {
 	GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error)
 }

@@ -136,6 +136,9 @@ message CNService {
   uint64 CPUTotal = 11;
   // MemTotal is mem quota from logservicepb.CNStore
   uint64 MemTotal = 12;
+  uint64 ViewMetadataAdmissionGeneration = 13;
+  bool ViewMetadataAdmissionReady = 14;
+  uint64 ViewMetadataObservedEpoch = 15;
 }
 
 // TNService tn service metadata

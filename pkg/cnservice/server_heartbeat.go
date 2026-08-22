@@ -199,9 +199,15 @@ func (s *service) heartbeat(ctx context.Context) {
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
-		CommitID:                    version.CommitID,
-		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
-		CommandDeliveryAckSupported: true,
+		CommitID:                        version.CommitID,
+		AckedCommandBatchID:             s.ackedCommandBatchID.Load(),
+		CommandDeliveryAckSupported:     true,
+		ViewMetadataAdmissionSupported:  s.viewMetadataAdmissionGeneration != 0,
+		ViewMetadataAdmissionGeneration: s.viewMetadataAdmissionGeneration,
+		ViewMetadataCatalogFencedEpoch:  s.viewMetadataCatalogFencedEpoch.Load(),
+	}
+	if s.viewMetadataEpochFence != nil {
+		hb.ViewMetadataObservedEpoch = s.viewMetadataEpochFence.Epoch()
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
@@ -223,6 +229,12 @@ func (s *service) heartbeat(ctx context.Context) {
 	if ctx2.Err() != nil {
 		s.commandPollNeeded.Store(true)
 		s.notifyCommandPoll()
+		return
+	}
+	if err := s.applyViewMetadataAdmission(ctx, cb.ViewMetadataAdmission); err != nil {
+		if ctx.Err() == nil {
+			s.logger.Error("failed to apply view metadata admission heartbeat response", zap.Error(err))
+		}
 		return
 	}
 	s.commandPollNeeded.Store(false)

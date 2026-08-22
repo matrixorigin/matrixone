@@ -875,6 +875,99 @@ func (l *store) getCommandDeliveryState(ctx context.Context) (hakeeper.CommandDe
 	return v.(hakeeper.CommandDeliveryState), nil
 }
 
+func (l *store) getViewMetadataAdmissionState(
+	ctx context.Context,
+) (hakeeper.ViewMetadataAdmissionState, error) {
+	v, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID,
+		&hakeeper.ViewMetadataAdmissionStateQuery{})
+	if err != nil {
+		return hakeeper.ViewMetadataAdmissionState{}, handleNotHAKeeperError(ctx, err)
+	}
+	return v.(hakeeper.ViewMetadataAdmissionState), nil
+}
+
+func (l *store) viewMetadataAdmissionLogStoresReady(state *pb.CheckerState) bool {
+	cfg := l.cfg.GetHAKeeperConfig()
+	cfg.Fill()
+	for _, info := range state.LogState.Stores {
+		if !cfg.LogStoreExpired(info.Tick, state.Tick) &&
+			!info.ViewMetadataAdmissionSupported {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *store) tryEnableViewMetadataAdmission(
+	ctx context.Context,
+	state *pb.CheckerState,
+) (bool, error) {
+	admission, err := l.getViewMetadataAdmissionState(ctx)
+	if err != nil {
+		return false, err
+	}
+	if admission.Enabled && !admission.Pending {
+		return true, nil
+	}
+	if state == nil {
+		state, err = l.getCheckerStateWithContext(ctx)
+		if err != nil {
+			return false, err
+		}
+	}
+	shard, ok := state.LogState.Shards[hakeeper.DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return false, nil
+	}
+	resetBarrier := admission.Preparing &&
+		(admission.LogReady == nil || admission.CNReady == nil || admission.ProxyReady == nil)
+	ready := func(uuid string) bool {
+		if admission.Preparing && !resetBarrier {
+			return admission.LogReady[uuid]
+		}
+		store, ok := state.LogState.Stores[uuid]
+		return ok && store.ViewMetadataAdmissionSupported
+	}
+	for _, uuid := range shard.Replicas {
+		if !ready(uuid) {
+			return false, nil
+		}
+	}
+	for _, uuid := range shard.NonVotingReplicas {
+		if !ready(uuid) {
+			return false, nil
+		}
+	}
+	if !admission.Preparing && !admission.Enabled {
+		if !admission.HAKeeperAdmissionReady ||
+			!l.viewMetadataAdmissionLogStoresReady(state) {
+			return false, nil
+		}
+		cfg := l.cfg.GetHAKeeperConfig()
+		cfg.Fill()
+		hasLiveCN := false
+		for _, info := range state.CNState.Stores {
+			if !cfg.CNStoreExpired(info.Tick, state.Tick) {
+				hasLiveCN = true
+				break
+			}
+		}
+		if !hasLiveCN {
+			return false, nil
+		}
+	}
+	cmd := hakeeper.GetEnableViewMetadataAdmissionCmd()
+	if admission.Preparing || admission.Enabled {
+		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(l.cfg.GetHAKeeperConfig())
+	}
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return false, handleNotHAKeeperError(ctx, err)
+	}
+	return result.Value == 1, nil
+}
+
 func (l *store) commandDeliveryTargetsReady(
 	delivery hakeeper.CommandDeliveryState,
 	state *pb.CheckerState,
@@ -1430,13 +1523,14 @@ func (l *store) hakeeperTick() {
 
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	m := pb.LogStoreHeartbeat{
-		UUID:                     l.id(),
-		RaftAddress:              l.cfg.RaftServiceAddr(),
-		ServiceAddress:           l.cfg.LogServiceServiceAddr(),
-		GossipAddress:            l.cfg.GossipServiceAddr(),
-		Replicas:                 make([]pb.LogReplicaInfo, 0),
-		Locality:                 l.cfg.getLocality(),
-		CommandDeliverySupported: true,
+		UUID:                           l.id(),
+		RaftAddress:                    l.cfg.RaftServiceAddr(),
+		ServiceAddress:                 l.cfg.LogServiceServiceAddr(),
+		GossipAddress:                  l.cfg.GossipServiceAddr(),
+		Replicas:                       make([]pb.LogReplicaInfo, 0),
+		Locality:                       l.cfg.getLocality(),
+		CommandDeliverySupported:       true,
+		ViewMetadataAdmissionSupported: true,
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,

@@ -276,8 +276,9 @@ func (r *router) AllServers(sid string) ([]*CNServer, error) {
 		clusterservice.NewSelectAll(), "dump", nil,
 		func(s *metadata.CNService) {
 			cns = append(cns, &CNServer{
-				uuid: s.ServiceID,
-				addr: s.SQLAddress,
+				uuid:                s.ServiceID,
+				addr:                s.SQLAddress,
+				admissionGeneration: s.ViewMetadataAdmissionGeneration,
 			})
 		})
 	return cns, nil
@@ -292,10 +293,11 @@ func (r *router) selectForSuperTenant(sid string, c clientInfo, filter func(stri
 		c.labelInfo.genSelector(clusterservice.EQ_Globbing), c.username, filter,
 		func(s *metadata.CNService) {
 			cns = append(cns, &CNServer{
-				reqLabel: c.labelInfo,
-				cnLabel:  s.Labels,
-				uuid:     s.ServiceID,
-				addr:     s.SQLAddress,
+				reqLabel:            c.labelInfo,
+				cnLabel:             s.Labels,
+				uuid:                s.ServiceID,
+				addr:                s.SQLAddress,
+				admissionGeneration: s.ViewMetadataAdmissionGeneration,
 			})
 		})
 	return cns
@@ -313,10 +315,11 @@ func (r *router) selectForCommonTenant(
 		sid,
 		c.labelInfo.genSelector(clusterservice.EQ_Globbing), filter, func(s *metadata.CNService) {
 			cns = append(cns, &CNServer{
-				reqLabel: c.labelInfo,
-				cnLabel:  s.Labels,
-				uuid:     s.ServiceID,
-				addr:     s.SQLAddress,
+				reqLabel:            c.labelInfo,
+				cnLabel:             s.Labels,
+				uuid:                s.ServiceID,
+				addr:                s.SQLAddress,
+				admissionGeneration: s.ViewMetadataAdmissionGeneration,
 			})
 		},
 	)
@@ -432,7 +435,8 @@ func (r *router) CanReuseCachedCN(cn *CNServer, client clientInfo) bool {
 	eligible := false
 	selector := client.labelInfo.genSelector(clusterservice.EQ_Globbing)
 	appendFn := func(service *metadata.CNService) {
-		if service.ServiceID == cn.uuid {
+		if service.ServiceID == cn.uuid &&
+			service.ViewMetadataAdmissionGeneration == cn.admissionGeneration {
 			eligible = true
 		}
 	}

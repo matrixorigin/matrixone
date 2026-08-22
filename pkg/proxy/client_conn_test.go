@@ -367,10 +367,11 @@ func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNSe
 
 func TestClientConn_KillCurrentBackendConn(t *testing.T) {
 	currentCN := &CNServer{
-		connID: 10,
-		uuid:   "cn1",
-		addr:   "127.0.0.1:6001",
-		salt:   testSlat,
+		connID:              10,
+		uuid:                "cn1",
+		addr:                "127.0.0.1:6001",
+		salt:                testSlat,
+		admissionGeneration: 23,
 	}
 	execSC := &killExecServerConn{}
 	activeTunnel := &tunnel{}
@@ -379,6 +380,7 @@ func TestClientConn_KillCurrentBackendConn(t *testing.T) {
 			require.Equal(t, currentCN.uuid, c.uuid)
 			require.Equal(t, currentCN.addr, c.addr)
 			require.Equal(t, currentCN.salt, c.salt)
+			require.Equal(t, currentCN.admissionGeneration, c.admissionGeneration)
 			require.NotZero(t, c.connID)
 			require.Nil(t, tun, "temporary admin connections must not borrow the active session tunnel")
 			return execSC, makeOKPacket(8), nil

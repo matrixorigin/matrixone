@@ -699,9 +699,10 @@ func (c *clientConn) KillCurrentBackendConn(sc ServerConn) error {
 	}
 
 	tempCN := &CNServer{
-		uuid: currentCN.uuid,
-		addr: currentCN.addr,
-		salt: currentCN.salt,
+		uuid:                currentCN.uuid,
+		addr:                currentCN.addr,
+		salt:                currentCN.salt,
+		admissionGeneration: currentCN.admissionGeneration,
 	}
 	if c.mysqlProto != nil {
 		tempCN.salt = c.mysqlProto.GetSalt()

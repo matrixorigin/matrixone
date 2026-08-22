@@ -156,6 +156,12 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.Resource = hb.Resource
 	storeInfo.CommitID = hb.CommitID
 	storeInfo.CommandDeliveryAckSupported = hb.CommandDeliveryAckSupported
+	storeInfo.ViewMetadataAdmissionSupported = hb.ViewMetadataAdmissionSupported
+	storeInfo.ViewMetadataAdmissionGeneration = hb.ViewMetadataAdmissionGeneration
+	storeInfo.ViewMetadataObservedEpoch = hb.ViewMetadataObservedEpoch
+	storeInfo.ViewMetadataCatalogFencedEpoch = hb.ViewMetadataCatalogFencedEpoch
+	storeInfo.ViewMetadataRefreshSupported = hb.ViewMetadataRefreshSupported
+	storeInfo.ViewMetadataRevalidatedEpoch = hb.ViewMetadataRevalidatedEpoch
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -266,6 +272,7 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	}
 	storeInfo.Locality = hb.Locality
 	storeInfo.CommandDeliverySupported = hb.CommandDeliverySupported
+	storeInfo.ViewMetadataAdmissionSupported = hb.ViewMetadataAdmissionSupported
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -380,6 +387,9 @@ func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
 	storeInfo.UUID = hb.UUID
 	storeInfo.Tick = tick
 	storeInfo.ListenAddress = hb.ListenAddress
+	storeInfo.ViewMetadataAdmissionSupported = hb.ViewMetadataAdmissionSupported
+	storeInfo.ViewMetadataAdmissionGeneration = hb.ViewMetadataAdmissionGeneration
+	storeInfo.ViewMetadataObservedEpoch = hb.ViewMetadataObservedEpoch
 	if hb.ConfigData != nil {
 		storeInfo.ConfigData = hb.ConfigData
 	}
