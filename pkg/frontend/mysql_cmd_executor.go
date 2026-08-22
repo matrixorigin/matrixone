@@ -3333,8 +3333,18 @@ func buildPlanWithPrepareMode(
 		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
-	// NOTE: The context used by buildPlan comes from the CompilerContext object
+	// NOTE: The context used by buildPlan comes from the CompilerContext object.
+	// A nested expression evaluation can temporarily replace that context with
+	// an ExecCtx which is closed before a later statement in the same packet is
+	// planned.  Keep planning and the tracing helpers on the current request
+	// context instead of passing nil to context.WithValue.
 	planContext := ctx.GetContext()
+	if planContext == nil {
+		planContext = reqCtx
+	}
+	if planContext == nil {
+		planContext = context.Background()
+	}
 	stats := statistic.StatsInfoFromContext(planContext)
 	stats.PlanStart()
 
