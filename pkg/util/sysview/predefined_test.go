@@ -82,6 +82,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	assert.NotContains(t, legacy, InformationSchemaCheckConstraintsDDL)
 	assert.NotContains(t, legacy, InformationSchemaTableConstraintsDDL)
 	assert.Contains(t, legacy, InformationSchemaTableConstraintsLegacyDDL)
+	assert.Contains(t, legacy, InformationSchemaCollationCharacterSetApplicabilityDDL)
 	for _, sql := range legacy {
 		assert.NotContains(t, sql, "mo_check_constraints()")
 	}
@@ -191,4 +192,19 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, ddlIndex, 0)
 	assert.Equal(t, ddlIndex+1, dataIndex)
+}
+
+func TestInformationSchemaCollationCharacterSetApplicabilityDDL(t *testing.T) {
+	assert.Contains(t, InformationSchemaCollationCharacterSetApplicabilityDDL,
+		"CREATE VIEW information_schema.COLLATION_CHARACTER_SET_APPLICABILITY AS")
+	assert.Contains(t, InformationSchemaCollationCharacterSetApplicabilityDDL,
+		"SELECT COLLATION_NAME, CHARACTER_SET_NAME")
+	assert.Contains(t, InformationSchemaCollationCharacterSetApplicabilityDDL,
+		"FROM information_schema.COLLATIONS")
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaCollationCharacterSetApplicabilityDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
 }

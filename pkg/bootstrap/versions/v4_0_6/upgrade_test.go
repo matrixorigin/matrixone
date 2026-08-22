@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 17)
+	require.Len(t, tenantUpgEntries, 18)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -113,6 +113,13 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionSignatureIndex.Schema)
 	require.Equal(t, "mo_user_defined_function", userDefinedFunctionSignatureIndex.TableName)
 	require.Contains(t, strings.ToLower(userDefinedFunctionSignatureIndex.UpgSql), "unique index name_db_arg_types")
+	collationApplicability := tenantUpgEntries[17]
+	require.Equal(t, versions.CREATE_VIEW, collationApplicability.UpgType)
+	require.Equal(t, sysview.InformationDBConst, collationApplicability.Schema)
+	require.Equal(t, "COLLATION_CHARACTER_SET_APPLICABILITY", collationApplicability.TableName)
+	require.Equal(t, sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, collationApplicability.UpgSql)
+	require.Contains(t, strings.ToLower(collationApplicability.PreSql),
+		"drop view if exists information_schema.collation_character_set_applicability")
 }
 
 func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *testing.T) {
@@ -130,7 +137,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 17)
+	require.Len(t, tenantUpgEntries, 18)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -366,6 +373,7 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 		upgradeInformationSchemaReferentialConstraints(),
 		upgradeInformationSchemaCheckConstraints(),
 		upgradeInformationSchemaTableConstraints(),
+		upgradeInformationSchemaCollationCharacterSetApplicability(),
 	}
 
 	for _, entry := range entries {
@@ -405,7 +413,7 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 		return false, "", errors.New("check failed")
 	})
 	defer stub.Reset()
-	matched, err := entries[0].CheckFunc(nil, 42)
+	matched, err := entries[len(entries)-1].CheckFunc(nil, 42)
 	if err == nil || matched {
 		t.Fatalf("expected check error, matched=%v err=%v", matched, err)
 	}
@@ -497,6 +505,8 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaReferentialConstraintsDDL, nil
 			case "CHECK_CONSTRAINTS":
 				return true, sysview.InformationSchemaCheckConstraintsDDL, nil
+			case "COLLATION_CHARACTER_SET_APPLICABILITY":
+				return true, sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, nil
 			case "TABLE_CONSTRAINTS":
 				return true, sysview.InformationSchemaTableConstraintsDDL, nil
 			case "COLUMNS":

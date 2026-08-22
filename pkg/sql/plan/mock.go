@@ -60,6 +60,11 @@ type MockCompilerContext struct {
 	ResolveVariableFunc     func(string, bool, bool) (interface{}, error)
 	ResolveVariableTypeFunc func(string, bool, bool) (Type, error)
 	GetProcessFunc          func() *process.Process
+	// proc is shared by all planner calls for this mock context. Creating a
+	// process also installs an auto-increment service; constructing one for
+	// every GetProcess call leaks that service for the lifetime of the test
+	// binary and makes large planner suites exhaust the CI cgroup.
+	proc *process.Process
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -2010,6 +2015,9 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 	if m.GetProcessFunc != nil {
 		return m.GetProcessFunc()
 	}
+	if m.proc != nil {
+		return m.proc
+	}
 	proc := testutil.NewProc(nil)
 	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
 		moruntime.InternalSQLExecutor,
@@ -2017,7 +2025,8 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 			return executor.Result{}, nil
 		}),
 	)
-	return proc
+	m.proc = proc
+	return m.proc
 }
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {

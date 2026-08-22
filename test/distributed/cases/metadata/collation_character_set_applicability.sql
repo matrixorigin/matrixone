@@ -1,0 +1,18 @@
+-- @bvt:issue#25103
+-- MySQL exposes this mapping as an information_schema object.  It must be
+-- queryable even when the current collation catalog has no materialized rows.
+SELECT COUNT(*)
+FROM information_schema.COLLATION_CHARACTER_SET_APPLICABILITY;
+
+SELECT COUNT(*)
+FROM (
+    SELECT *
+    FROM information_schema.COLLATION_CHARACTER_SET_APPLICABILITY
+    LIMIT 1
+) AS applicability;
+
+SELECT COUNT(*)
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'information_schema'
+  AND TABLE_NAME = 'COLLATION_CHARACTER_SET_APPLICABILITY'
+  AND COLUMN_NAME IN ('COLLATION_NAME', 'CHARACTER_SET_NAME');
