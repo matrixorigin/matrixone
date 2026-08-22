@@ -68,7 +68,19 @@ export GOWORK=off
 
 THIRDPARTIES_INSTALL_DIR=${BUILD_WKSP}/thirdparties/install
 CGO_CFLAGS="-I${BUILD_WKSP}/cgo -I${THIRDPARTIES_INSTALL_DIR}/include"
-CGO_LDFLAGS="-Wl,-rpath,${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo -L${THIRDPARTIES_INSTALL_DIR}/lib -L${BUILD_WKSP}/cgo -lmo -lusearch_c -lm"
+if ! CGO_NATIVE_LDFLAGS=$(GOWORK=off go list ${GO_MODULE_MODE} \
+    -f '{{join .CgoLDFLAGS " "}}' ./cgo); then
+    echo "failed to resolve MatrixOne CGo native link dependencies"
+    exit 1
+fi
+if [[ -z "${CGO_NATIVE_LDFLAGS}" ]]; then
+    echo "MatrixOne's cgo package declared no native link dependencies"
+    exit 1
+fi
+# cgo/lib.go owns libmo's native dependency declaration. Keep -lmo before
+# that queried closure because archive resolution is order-sensitive. This
+# prevents the CI test path from drifting from the deterministic CGo wrapper.
+CGO_LDFLAGS="-Wl,-rpath,${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo -L${THIRDPARTIES_INSTALL_DIR}/lib -L${BUILD_WKSP}/cgo -lmo ${CGO_NATIVE_LDFLAGS}"
 LD_LIBRARY_PATH="${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo"
 
 if [[ -n "${MO_CL_CUDA:-}" ]] ; then
