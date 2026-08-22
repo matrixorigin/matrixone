@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -10456,6 +10457,18 @@ func (builder *QueryBuilder) bindView(
 	defaultDatabase := viewData.DefaultDatabase
 	if obj.PubInfo != nil {
 		defaultDatabase = obj.SubscriptionName
+		subscription := builder.compCtx.GetQueryingSubscription()
+		if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
+			subscription = &SubscriptionMeta{
+				AccountId: obj.PubInfo.TenantId,
+				DbName:    viewData.DefaultDatabase,
+				SubName:   obj.SubscriptionName,
+				Tables:    pubsub.TableAll,
+			}
+		}
+		previousSubscription := builder.compCtx.GetQueryingSubscription()
+		builder.compCtx.SetQueryingSubscription(subscription)
+		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
 	viewCtx.defaultDatabase = defaultDatabase
 	viewKey := objectkey.Encode(schema, table)

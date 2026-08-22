@@ -123,6 +123,11 @@ type SessionInfo struct {
 	LockWaitTimeout     int64
 	LockWaitTimeoutSet  bool // distinguishes an explicit zero from an unset value
 	MatrixOneNativeMode bool
+	// IsRestore identifies catalog DDL executed by snapshot/PITR restore. Such
+	// DDL rebuilds persisted View metadata through legacy discovery after the
+	// restore transaction, rather than running dependency hooks while catalog
+	// identities are being replaced.
+	IsRestore bool
 	// ExplicitZeroTemporalCastReturnsNull is resolved on the initiating CN and
 	// carried in the remote process snapshot because remote CNs have no session
 	// variable resolver.

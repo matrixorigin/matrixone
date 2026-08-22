@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -465,6 +467,135 @@ func TestMongoDBMappingsFollowExternalTableRestoreSkipPolicy(t *testing.T) {
 		require.True(t, needSkipSystemTable(accountID, info))
 	}
 	require.Equal(t, systemCatalogRestoreSkip, systemCatalogRestorePolicies[sqlmongodb.TableMappings])
+}
+
+func TestViewMetadataTablesAreRebuiltDuringRestore(t *testing.T) {
+	for _, tableName := range []string{catalog.MO_VIEW_DEPENDENCIES, catalog.MO_VIEW_REFRESH} {
+		require.Equal(t, systemCatalogRestoreSkip, systemCatalogRestorePolicies[tableName])
+		require.True(t, needSkipTable(sysAccountID, moCatalog, tableName))
+		require.True(t, needSkipSystemTable(sysAccountID, &tableInfo{
+			dbName: moCatalog, tblName: tableName, typ: clusterTable,
+		}))
+	}
+}
+
+func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	t.Run("capability disabled", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		require.NoError(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42))
+		require.Equal(t, compile.ViewMetadataRequireRevalidationSQL(), bh.executedSQLs)
+		require.Equal(t, []uint32{0, 0, 0}, bh.executionAccountIDs)
+		require.Equal(t, []bool{true, true, true}, bh.systemCTELimits)
+		require.Contains(t, bh.executedSQLs[1], "REVALIDATE_REQUIRED")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		require.NoError(t, invalidateAccountViewMetadataEnabled(context.Background(), bh, 42))
+		require.Len(t, bh.executedSQLs, 2)
+		require.Equal(t, []uint32{catalog.System_Account, catalog.System_Account}, bh.executionAccountIDs)
+		require.Equal(t, []bool{false, true}, bh.systemCTELimits)
+		require.Contains(t, bh.executedSQLs[0], catalog.ViewMetadataLifecycleGateSQL)
+		require.Contains(t, bh.executedSQLs[1], "d.source_account_id=42")
+	})
+
+	t.Run("gate failure", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		testErr := moerr.NewInternalErrorNoCtx("gate failed")
+		bh.sql2err[catalog.ViewMetadataLifecycleGateSQL] = testErr
+		require.ErrorIs(t, invalidateAccountViewMetadataEnabled(context.Background(), bh, 42), testErr)
+		require.Len(t, bh.executedSQLs, 1)
+	})
+
+	t.Run("closure failure", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		testErr := moerr.NewInternalErrorNoCtx("closure failed")
+		// The generation is time-derived, so fail the second statement after the gate.
+		bh.sql2err[catalog.ViewMetadataLifecycleGateSQL] = nil
+		bhFailure := &failSecondBackgroundExec{backgroundExecTest: bh, err: testErr}
+		require.ErrorIs(t, invalidateAccountViewMetadataEnabled(context.Background(), bhFailure, 42), testErr)
+	})
+}
+
+func TestPrepareViewMetadataMutationCatalogCompatibilityAndFailures(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	statements := compile.ViewMetadataRequireRevalidationSQL()
+
+	t.Run("typed missing table remains compatible", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2err[statements[0]] = moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
+		enabled, err := prepareViewMetadataMutation(context.Background(), bh, ses.GetService())
+		require.NoError(t, err)
+		require.False(t, enabled)
+		require.Equal(t, statements[:1], bh.executedSQLs)
+	})
+
+	t.Run("ordinary failure aborts mutation", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		testErr := moerr.NewInternalErrorNoCtx("marker failed")
+		bh.sql2err[statements[1]] = testErr
+		enabled, err := prepareViewMetadataMutation(context.Background(), bh, ses.GetService())
+		require.False(t, enabled)
+		require.ErrorIs(t, err, testErr)
+		require.Equal(t, statements[:2], bh.executedSQLs)
+	})
+}
+
+func TestPublicationInvalidationPersistsMarkerWhenCapabilityIsClosed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	bh := &backgroundExecTest{}
+	bh.init()
+	require.NoError(t, invalidatePublicationViewMetadata(context.Background(), bh, ses.GetService(),
+		&pubsub.PubInfo{PubAccountId: 7, DbId: 11}))
+	require.Equal(t, compile.ViewMetadataRequireRevalidationSQL(), bh.executedSQLs)
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "source_database_id=11")
+	}
+}
+
+func TestReconcileAccountViewMetadataUsesSystemContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	bh := &backgroundExecTest{}
+	bh.init()
+	require.NoError(t, reconcileAccountViewMetadataEnabled(context.Background(), bh, 42))
+	require.Len(t, bh.executedSQLs, 4)
+	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
+	require.Contains(t, bh.executedSQLs[1], "delete from mo_catalog.mo_view_dependencies")
+	require.Contains(t, bh.executedSQLs[2], "delete from mo_catalog.mo_view_refresh")
+	require.Contains(t, bh.executedSQLs[3], "where t.account_id=42")
+	require.Equal(t, []uint32{0, 0, 0, 0}, bh.executionAccountIDs)
+	require.Equal(t, []bool{true, true, true, true}, bh.systemCTELimits)
+}
+
+type failSecondBackgroundExec struct {
+	*backgroundExecTest
+	err error
+}
+
+func (e *failSecondBackgroundExec) Exec(ctx context.Context, sql string) error {
+	if err := e.backgroundExecTest.Exec(ctx, sql); err != nil {
+		return err
+	}
+	if len(e.executedSQLs) == 2 {
+		return e.err
+	}
+	return nil
 }
 
 func TestMergeFkDepsDeduplicatesSources(t *testing.T) {
