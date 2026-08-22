@@ -2435,7 +2435,7 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		if err := c.hydrateMongoScan(node); err != nil {
 			return nil, err
 		}
-		scope := c.constructScopeForExternal(c.addr, false)
+		scope := c.constructMongoScanScope()
 		currentFirstFlag := c.anal.isFirst
 		op := mongoscan.NewArgument().WithScan(node.ExternScan.MongodbScan)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -2578,6 +2578,29 @@ func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
 	return []*Scope{scope}, nil
+}
+
+// constructMongoScanScope keeps the single MongoDB reader in the scheduled
+// query-worker set. This matters when a downstream DEDUP join builds a
+// distributed shuffle: a coordinator-local source outside that set has no
+// receiver tree to start it, leaving every shuffle receiver waiting forever.
+func (c *Compile) constructMongoScanScope() *Scope {
+	current := c.materializeScheduledWorker(c.currentCNWorker())
+	node := current
+	stageNodes := c.queryWorkerStageNodes()
+	if len(stageNodes) > 0 {
+		node = stageNodes[0]
+		for _, candidate := range stageNodes {
+			if sameExecutionNode(candidate, current) {
+				node = candidate
+				break
+			}
+		}
+	}
+
+	scope := c.constructScopeForExternalNode(node, !sameExecutionNode(node, current))
+	scope.NodeInfo.Mcpu = 1
+	return scope
 }
 
 func (c *Compile) hydrateMongoScan(node *plan.Node) error {
