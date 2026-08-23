@@ -87,6 +87,27 @@ func TestAsofExplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
 	}
 }
 
+func TestAsofLegacyImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
+	tests := []struct {
+		sql       string
+		leftAlias tree.Identifier
+	}{
+		{sql: "select * from asof join u on asof.k = u.k"},
+		{sql: "select * from t asof join u on asof.k = u.k", leftAlias: "asof"},
+		{sql: "select * from (select 1 as k) asof join (select 1 as k) u on asof.k = u.k", leftAlias: "asof"},
+	}
+
+	for _, test := range tests {
+		stmt, err := ParseOne(context.Background(), test.sql, 1)
+		require.NoError(t, err, test.sql)
+		join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
+		require.Equal(t, tree.JOIN_TYPE_INNER, join.JoinType, test.sql)
+		left := join.Left.(*tree.AliasedTableExpr)
+		require.Equal(t, test.leftAlias, left.As.Alias, test.sql)
+		stmt.Free()
+	}
+}
+
 func TestAsofJoinProducesAsofAst(t *testing.T) {
 	for _, sql := range []string{
 		"select * from l asof join r on l.k = r.k and l.ts >= r.ts",
