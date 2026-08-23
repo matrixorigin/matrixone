@@ -238,3 +238,49 @@ func TestForeignTvfOperatorErrors(t *testing.T) {
 
 	_ = vm.CallResult{} // keep vm imported for clarity of the driver above
 }
+
+// TestForeignTvfPrepareDispatch goes through TableFunction.Prepare's name
+// switch (the operator-framework entry the direct esqlTvfPrepare calls above
+// bypass).
+func TestForeignTvfPrepareDispatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, name := range []string{"sql_tvf", "esql_tvf"} {
+		kind := plan2.ForeignTVFKindSQL
+		if name == "esql_tvf" {
+			kind = plan2.ForeignTVFKindESQL
+		}
+		arg := mkForeignTvfArg(t, kind, true, nil,
+			[]*plan.ColDef{{Name: "result", Typ: plan.Type{Id: int32(types.T_json)}}},
+			[]string{"result"}, "q", "h")
+		require.Equal(t, name, arg.FuncName)
+		require.NoError(t, arg.Prepare(proc))
+		arg.Free(proc, false, nil)
+	}
+}
+
+// TestForeignTvfSessionVarFallback covers start()'s conn==NULL path: the
+// config comes from @sql_tvf_config, and an invalid value errors cleanly.
+func TestForeignTvfSessionVarFallback(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Session = &fakeTvfCacheSession{}
+	proc.SetResolveVariableFunc(func(name string, sys, glob bool) (any, error) {
+		return `{"driver":"nope","dsn":"x"}`, nil
+	})
+
+	schemaCols := []plan2.ParseJsonlOptionsCol{{Name: "id", Type: "int64"}}
+	rets := []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}}}
+	arg := mkForeignTvfArg(t, plan2.ForeignTVFKindSQL, false, schemaCols, rets, []string{"id"}, "q", "h")
+	// only the query argument: conn absent -> session-var fallback
+	arg.Args = arg.Args[:1]
+	arg.ctr.retSchema = []types.Type{types.T_int64.ToType()}
+	st, err := sqlTvfPrepare(proc, arg)
+	require.NoError(t, err)
+	inputBat := batch.EmptyForConstFoldBatch
+	for i := range arg.ctr.executorsForArgs {
+		arg.ctr.argVecs[i], err = arg.ctr.executorsForArgs[i].Eval(proc, []*batch.Batch{inputBat}, nil)
+		require.NoError(t, err)
+	}
+	err = st.start(arg, proc, 0, nil)
+	require.ErrorContains(t, err, "unsupported driver")
+	arg.ctr.cleanExecutors()
+}

@@ -197,3 +197,26 @@ func TestBuildParseJsonlSpecs(t *testing.T) {
 	}
 	runTestShouldError(mock, t, errSqls)
 }
+
+// TestBuildCreateForeignTable drives the CREATE EXTERNAL TABLE ... ENGINE =
+// ESQL|SQL DDL branch: option validation, inline-config JSON validation, the
+// envelope + feature-flag stamping, and the error cases.
+func TestBuildCreateForeignTable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		`create external table t1 (a int, b varchar(10)) engine = sql with ('config'='{"driver":"mysql","dsn":"u@h/db"}', 'query'='select 1')`,
+		`create external table t2 (a int) engine = esql with ('config'='env:ES_CFG')`,
+		`create external table t3 (a int) engine = esql`,
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+	errSqls := []string{
+		// unknown option
+		`create external table t4 (a int) engine = sql with ('recheck'='true')`,
+		// bad inline config JSON shape
+		`create external table t5 (a int) engine = sql with ('config'='{"driver":"nope","dsn":"x"}')`,
+		`create external table t6 (a int) engine = esql with ('config'='{}')`,
+		// SHOW CREATE replay of a redacted config
+		`create external table t7 (a int) engine = sql with ('config'='<redacted>')`,
+	}
+	runTestShouldError(mock, t, errSqls)
+}

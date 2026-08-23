@@ -195,3 +195,20 @@ func TestTrimISO8601Zulu(t *testing.T) {
 	require.Equal(t, "2026-01-15 10:20:30", trimISO8601Zulu("2026-01-15 10:20:30"))
 	require.Equal(t, "", trimISO8601Zulu(""))
 }
+
+// TestEvalQueryTextsRejectsNonString proves a non-string candidate expression
+// errors instead of silently deriving garbage.
+func TestEvalQueryTextsRejectsNonString(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	node := foreignQueryTestNode("id")
+	queryCol := filePruningColumn(1, catalog.ExternalQuery)
+	intLit := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 7}}},
+	}
+	node.FilterList = []*plan.Expr{
+		foreignQueryFn("=", int64(function.EQUAL)<<32, queryCol, intLit),
+	}
+	_, err := DeriveForeignQueryList(context.Background(), node, proc)
+	require.ErrorContains(t, err, "must compare against a string value")
+}

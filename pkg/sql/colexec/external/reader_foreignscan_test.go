@@ -231,3 +231,58 @@ func TestForeignExternParamDialects(t *testing.T) {
 	require.NotNil(t, esqlParam.Tail.Fields.EscapedBy)
 	require.Equal(t, byte(0), esqlParam.Tail.Fields.EscapedBy.Value)
 }
+
+// TestForeignScanISO8601Timestamp proves an ESQL scan parses ES's native
+// ISO 8601 UTC dates ("...T...Z") into a declared timestamp column, and that
+// External.Prepare rehydrates the synthetic Extern param from ForeignScan
+// (the remote-decode path arrives with Extern == nil).
+func TestForeignScanISO8601Timestamp(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ses := &fakeScanSession{}
+	proc.Session = ses
+	cfg := `{"addresses":["http://unused"]}`
+	conn := &fakeScanConn{kind: foreigntvf.KindESQL,
+		csv: "name,hired\r\nDave,2023-06-15T08:30:00.123Z\r\n"}
+	ses.PutForeignConn(foreigntvf.MakeHandle(foreigntvf.KindESQL, cfg), conn)
+
+	ts3 := types.New(types.T_timestamp, 0, 3)
+	cols := []*plan.ColDef{
+		{Name: "name", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+		{Name: "hired", Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 3}},
+	}
+	param := foreignScanParam(t, "esql", cfg, cols, []string{"name", "hired"})
+	param.Fileparam.Filepath = "FROM employees"
+
+	r := NewForeignScanReader(param)
+	_, err := r.Open(param, proc)
+	require.NoError(t, err)
+	bat := batch.NewWithSize(2)
+	bat.Attrs = []string{"name", "hired"}
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(ts3)
+	defer bat.Clean(proc.Mp())
+	finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
+	require.NoError(t, err)
+	require.True(t, finished)
+	require.Equal(t, 1, bat.RowCount())
+	require.False(t, bat.Vecs[1].GetNulls().Contains(0))
+	require.NoError(t, r.Close())
+
+	// Prepare-time rehydration: Extern nil + ForeignScan set -> synthetic
+	// param rebuilt with the ESQL dialect.
+	op := NewArgument()
+	op.Es = &ExternalParam{}
+	op.Es.ForeignScan = &plan.ForeignScan{Kind: "esql"}
+	op.Es.FileList = []string{"q"}
+	op.Es.Cols = cols
+	attrs := make([]plan.ExternAttr, len(cols))
+	for i, col := range cols {
+		attrs[i] = plan.ExternAttr{ColName: col.Name, ColIndex: int32(i), ColFieldIndex: int32(i)}
+	}
+	op.Es.Attrs = attrs
+	op.Es.Fileparam = &ExFileparam{}
+	require.NoError(t, op.Prepare(proc))
+	require.NotNil(t, op.Es.Extern)
+	require.Equal(t, uint64(1), op.Es.Extern.Tail.IgnoredLines)
+	op.Free(proc, false, nil)
+}

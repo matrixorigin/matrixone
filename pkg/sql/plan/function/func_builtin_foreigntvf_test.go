@@ -15,9 +15,11 @@
 package function
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreigntvf"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -136,4 +138,41 @@ func TestForeignTvfKindConstantsMatchPlan(t *testing.T) {
 	// foreigntvf.Kind values; keep them aligned.
 	require.Equal(t, "esql", string(foreigntvf.KindESQL))
 	require.Equal(t, "sql", string(foreigntvf.KindSQL))
+}
+
+// TestForeignTvfRegistration goes through the registration table
+// (GetFunctionByName runs checkFn + retType; RunFunctionDirectly invokes
+// newOp), which the direct-call tests above never touch. Disconnect executes
+// fully against the fake session cache; connect executes its closure and fails
+// cleanly on an unsupported driver.
+func TestForeignTvfRegistration(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	ses := &fakeTvfSession{}
+	proc.Session = ses
+
+	varcharArg := []types.Type{types.T_varchar.ToType()}
+
+	for _, name := range []string{"esql_tvf_disconnect", "sql_tvf_disconnect"} {
+		get, err := GetFunctionByName(ctx, name, varcharArg)
+		require.NoError(t, err, name)
+		require.Equal(t, types.T_bool, get.GetReturnType().Oid, name)
+		in := testutil.NewVector(1, types.T_varchar.ToType(), proc.Mp(), false, []string{"sql:nosuch"})
+		out, err := RunFunctionDirectly(proc, get.GetEncodedOverloadID(), []*vector.Vector{in}, 1)
+		require.NoError(t, err, name)
+		require.False(t, vector.MustFixedColWithTypeCheck[bool](out)[0])
+		out.Free(proc.Mp())
+		in.Free(proc.Mp())
+	}
+
+	for _, name := range []string{"esql_tvf_connect", "sql_tvf_connect"} {
+		get, err := GetFunctionByName(ctx, name, varcharArg)
+		require.NoError(t, err, name)
+		require.Equal(t, types.T_varchar, get.GetReturnType().Oid, name)
+		// the closure runs; the connect itself fails fast on a bad config
+		in := testutil.NewVector(1, types.T_varchar.ToType(), proc.Mp(), false, []string{`{"driver":"nope","dsn":"x"}`})
+		_, err = RunFunctionDirectly(proc, get.GetEncodedOverloadID(), []*vector.Vector{in}, 1)
+		require.Error(t, err, name)
+		in.Free(proc.Mp())
+	}
 }
