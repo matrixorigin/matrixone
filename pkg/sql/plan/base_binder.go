@@ -2635,6 +2635,7 @@ func mysqlSpecialTypeNumericLiteral(expr tree.Expr) bool {
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
 	candidates := make([]*plan.Expr, 0, len(rightTuple.Exprs))
+	leftMemoIDs := make([][]int32, len(leftTuple.Exprs))
 
 	for _, rightVal := range rightTuple.Exprs {
 		rightTupleVal, ok := unwrapParenExpr(rightVal).(*tree.Tuple)
@@ -2650,6 +2651,10 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 			eqExpr, err := b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth)
 			if err != nil {
 				return nil, err
+			}
+			if eqFunc := eqExpr.GetF(); eqFunc != nil && len(eqFunc.Args) == 2 &&
+				containsVolatileFunction(eqFunc.Args[0]) && b.ctx != nil {
+				b.markTupleVolatileSources(eqFunc.Args[0], &leftMemoIDs[i])
 			}
 			equalities = append(equalities, eqExpr)
 		}
@@ -2670,6 +2675,52 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 		return BindFuncExprImplByPlanExpr(b.GetContext(), "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32) {
+	sources := make([]*plan.Expr, 0, 1)
+	collectVolatileFunctionSources(expr, &sources)
+	if len(sources) == 0 {
+		// Unknown expression forms stay conservative and preserve the prior
+		// whole-operand behavior.
+		sources = append(sources, expr)
+	}
+	for len(*memoIDs) < len(sources) {
+		b.ctx.volatileExprMemoID--
+		*memoIDs = append(*memoIDs, b.ctx.volatileExprMemoID)
+	}
+	for i, source := range sources {
+		source.AuxId = (*memoIDs)[i]
+	}
+}
+
+func collectVolatileFunctionSources(expr *plan.Expr, sources *[]*plan.Expr) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		*sources = append(*sources, expr)
+	case *plan.Expr_F:
+		if e.F == nil {
+			return
+		}
+		if e.F.Func != nil {
+			overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+			if ok && overload.CannotFold() {
+				*sources = append(*sources, expr)
+			}
+		}
+		for _, arg := range e.F.Args {
+			collectVolatileFunctionSources(arg, sources)
+		}
+	case *plan.Expr_List:
+		if e.List != nil {
+			for _, item := range e.List.List {
+				collectVolatileFunctionSources(item, sources)
+			}
+		}
+	}
 }
 
 // combinePlanExprsBalanced preserves the input order while building a
@@ -3013,6 +3064,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
+	if (name == "in" || name == "not_in") && len(args) == 2 &&
+		containsVolatileFunction(args[0]) && b.ctx != nil {
+		b.markVolatileInLeft(args[0])
+	}
 	//promote interval expr rewrite here
 	if name == "interval" {
 		if len(astArgs) == 2 {
@@ -3087,6 +3142,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func (b *baseBinder) markVolatileInLeft(left *plan.Expr) {
+	if list := left.GetList(); list != nil {
+		for _, elem := range list.List {
+			if containsVolatileFunction(elem) {
+				b.ctx.volatileExprMemoID--
+				elem.AuxId = b.ctx.volatileExprMemoID
+			}
+		}
+		return
+	}
+	b.ctx.volatileExprMemoID--
+	left.AuxId = b.ctx.volatileExprMemoID
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
@@ -4117,7 +4186,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr)
+					left := DeepCopyExpr(args[0])
+					left.AuxId = args[0].AuxId
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", left, expr)
 					if err != nil {
 						return nil, err
 					}
@@ -4126,7 +4197,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr)
+					left := DeepCopyExpr(args[0])
+					left.AuxId = args[0].AuxId
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", left, expr)
 					if err != nil {
 						return nil, err
 					}
@@ -4424,6 +4497,21 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			returnType.Scale = fsp
 		}
 
+	case "current_timestamp", "now", "localtime", "localtimestamp", "sysdate", "current_time", "curtime":
+		// The overloads use the default FSP because their return-type callback
+		// receives only argument types. A literal FSP is nevertheless known at
+		// bind time and must be reflected in the plan metadata. For a runtime
+		// FSP expression, retain the timestamp family's conservative six-digit
+		// bound; with no argument, the overload's MySQL default FSP=0 remains in
+		// effect.
+		if len(args) == 1 {
+			if fsp, ok := temporalFunctionFSPFromPlanExpr(args[0]); ok {
+				returnType.Scale = fsp
+			} else if returnType.Oid == types.T_timestamp {
+				returnType.Scale = 6
+			}
+		}
+
 	case "timestampadd":
 		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
 		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
@@ -4606,6 +4694,22 @@ func utcFunctionFSPFromPlanExpr(ctx context.Context, name string, expr *Expr) (i
 		return 0, moerr.NewErrTooBigPrecision(ctx, fsp.I64Val, name, 6)
 	}
 	return int32(fsp.I64Val), nil
+}
+
+// temporalFunctionFSPFromPlanExpr extracts an optional literal FSP for the
+// current-time family. Unlike UTC_TIME/UTC_TIMESTAMP, MySQL permits a runtime
+// integer expression here, so an unknown expression keeps the overload's
+// conservative default metadata rather than being rejected during binding.
+func temporalFunctionFSPFromPlanExpr(expr *Expr) (int32, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, false
+	}
+	fsp, ok := literal.GetValue().(*plan.Literal_I64Val)
+	if !ok || fsp.I64Val < 0 || fsp.I64Val > 6 {
+		return 0, false
+	}
+	return int32(fsp.I64Val), true
 }
 
 // adjustControlFlowMetadata keeps MySQL-visible metadata for conditional

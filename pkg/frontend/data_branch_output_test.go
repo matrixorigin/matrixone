@@ -665,7 +665,7 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "y", col.Name())
 		require.Equal(t, defines.MYSQL_TYPE_YEAR, col.ColumnType())
-		require.Equal(t, uint32(types.MaxVarcharLen), col.Length())
+		require.Equal(t, uint32(4), col.Length())
 	})
 
 	t.Run("default output preserves binary charset metadata", func(t *testing.T) {

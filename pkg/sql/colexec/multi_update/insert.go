@@ -228,7 +228,11 @@ func (update *MultiUpdate) insert_table(
 		}
 	}
 
-	update.addInsertAffectRows(info.tableType, uint64(writeBatch.RowCount()))
+	affectedRows := uint64(writeBatch.RowCount())
+	if info.tableType == UpdateMainTable && update.ctr.action == actionUpdate {
+		affectedRows = update.insertAffectedRows(updateCtx, inputBatch)
+	}
+	update.addInsertAffectRows(info.tableType, affectedRows)
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
