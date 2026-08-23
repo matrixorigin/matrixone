@@ -1457,8 +1457,6 @@ func mergeFilters(
 ) (finalFilter BasePKFilter, err error) {
 	unsafeInput := false
 	defer func() {
-		finalFilter.Oid = left.Oid
-
 		if !finalFilter.Valid && connector == function.AND && !unsafeInput {
 			// Keep one atomic conjunct when representing the full intersection
 			// would require distributing AND over OR.  It remains a safe early
@@ -1479,7 +1477,10 @@ func mergeFilters(
 					(*left).Vec = nil
 				}
 			}
+			return
 		}
+
+		finalFilter.Oid = left.Oid
 	}()
 	unsafeInput = (len(left.Disjuncts) == 0 && !validBasePKMergeOperand(*left)) ||
 		(len(right.Disjuncts) == 0 && !validBasePKMergeOperand(*right))
@@ -1487,6 +1488,14 @@ func mergeFilters(
 		(len(left.Disjuncts) == 0 && len(right.Disjuncts) == 0 && left.Oid != right.Oid) ||
 		(left.Op != function.IN && len(left.Disjuncts) == 0 && !validEncodedBasePKValue(left.Oid, left.LB)) ||
 		(right.Op != function.IN && len(right.Disjuncts) == 0 && !validEncodedBasePKValue(right.Oid, right.LB)) {
+		return BasePKFilter{}, nil
+	}
+	// A disjunctive filter is a container, not an atomic predicate. Its zero
+	// value Op happens to equal function.EQUAL, so entering either connector's
+	// atomic merge can compare empty bounds and produce a false-negative filter.
+	// Return an invalid merge: OR will flatten both containers, while AND's
+	// deferred fallback keeps one safe atomic conjunct.
+	if len(left.Disjuncts) > 0 || len(right.Disjuncts) > 0 {
 		return BasePKFilter{}, nil
 	}
 
