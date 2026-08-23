@@ -4171,8 +4171,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
-	if len(node.FilterList) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
+	storageFilters := filterScanStorageExprs(node.FilterList)
+	if len(storageFilters) != len(s.DataSource.FilterList) {
+		s.DataSource.FilterList = plan2.DeepCopyExprList(storageFilters)
 		for _, e := range s.DataSource.FilterList {
 			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
@@ -4210,6 +4211,25 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.RecvMsgList = node.RecvMsgList
 
 	return nil
+}
+
+// filterScanStorageExprs excludes row-dependent predicates from the engine
+// reader. The complete node.FilterList remains owned by TableScan or Restrict,
+// so these predicates are still evaluated once at the row-level boundary.
+func filterScanStorageExprs(exprs []*plan.Expr) []*plan.Expr {
+	for i, expr := range exprs {
+		if plan2.ContainsVolatileFunction(expr) {
+			filtered := make([]*plan.Expr, 0, len(exprs)-1)
+			filtered = append(filtered, exprs[:i]...)
+			for _, remaining := range exprs[i+1:] {
+				if !plan2.ContainsVolatileFunction(remaining) {
+					filtered = append(filtered, remaining)
+				}
+			}
+			return filtered
+		}
+	}
+	return exprs
 }
 
 func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
