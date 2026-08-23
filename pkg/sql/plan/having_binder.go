@@ -384,13 +384,14 @@ func (b *HavingBinder) bindMedianWithinGroupAgg(
 	if err != nil {
 		return nil, err
 	}
+	args := useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), funcName, []*plan.Expr{value})
 
 	if b.builder == nil || b.builder.compCtx == nil {
-		return BindFuncExprImplByPlanExpr(b.GetContext(), funcName, []*plan.Expr{value})
+		return BindFuncExprImplByPlanExpr(b.GetContext(), funcName, args)
 	}
 	return bindFuncExprAndConstFold(
 		b.GetContext(), b.builder.compCtx.GetProcess(), funcName,
-		[]*plan.Expr{value},
+		args,
 	)
 }
 
