@@ -27,6 +27,15 @@ type observerMock struct {
 	finished bool
 }
 
+type invalidationMock struct {
+	MockSearch
+	reasons []string
+}
+
+func (m *invalidationMock) OnCacheInvalidated(reason string) {
+	m.reasons = append(m.reasons, reason)
+}
+
 func (m *observerMock) SetLoadWaiters(n int64) { m.waiters = n }
 func (m *observerMock) FinishLoadObservation() { m.finished = true }
 
@@ -39,4 +48,12 @@ func TestVectorIndexSearchCompletesLoadObserverAfterWaiterSample(t *testing.T) {
 	require.Equal(t, int64(5), mock.waiters)
 	require.True(t, mock.finished)
 	s.Destroy()
+}
+
+func TestVectorIndexSearchNotifiesEmptyInvalidationReason(t *testing.T) {
+	mock := &invalidationMock{}
+	s := &VectorIndexSearch{Algo: mock}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s.Destroy()
+	require.Equal(t, []string{""}, mock.reasons)
 }
