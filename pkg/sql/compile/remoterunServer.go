@@ -389,6 +389,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				if runCompile.proc.GetSession() == receiver.warningSession {
 					receiver.warningCount, receiver.warningDiagnostics = receiver.warningSession.SnapshotWarnings()
 				}
+				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
 				runCompile.clear()
 				return nil
 			}))
@@ -787,6 +788,7 @@ type messageReceiverOnServer struct {
 	warningSession                    *remoteWarningCollector
 	warningCount                      uint64
 	warningDiagnostics                []remoteWarningDiagnostic
+	statementLastInsertID             uint64
 }
 
 func newMessageReceiverOnServer(
@@ -1092,7 +1094,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	}
 	var transport bytes.Buffer
 	data, err := b.MarshalBinaryWithPrepareParamKindsForProtocol(
-		&transport, false, version >= defines.MORPCVersion26)
+		&transport, false, version >= defines.MORPCVersion27)
 	if err != nil {
 		return err
 	}
@@ -1179,6 +1181,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:   remoteTerminalResourceVersion,
+		StatementLastInsertID:     receiver.statementLastInsertID,
 		WarningCount:              receiver.warningCount,
 		Delta:                     receiver.resourceDelta,
 		Memory:                    receiver.resourceMemory,

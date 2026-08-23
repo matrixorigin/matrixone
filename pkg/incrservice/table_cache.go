@@ -149,7 +149,9 @@ func (c *tableCache) insertAutoValues(
 		vec := vecs[col.ColIndex]
 		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows, txnOp); err != nil {
 			return 0, err
-		} else {
+		} else if lastInsert == 0 {
+			// A statement may carry more than one auto-increment cache. Keep
+			// the first generated value for the statement-level protocol result.
 			lastInsert = v
 		}
 	}

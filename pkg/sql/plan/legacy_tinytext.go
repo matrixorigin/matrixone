@@ -35,6 +35,7 @@ const maxLegacyTinyTextLineageDepth = 64
 type legacyTinyTextColumn struct {
 	ordinal int
 	name    string
+	width   int32
 }
 
 type legacyTinyTextCreateEvidence struct {
@@ -73,8 +74,8 @@ func RecoverLegacyTinyTextFromCreateSQL(ctx context.Context, tableDef *planpb.Ta
 // For an unaltered explicit CREATE, the original declaration ordinal is matched
 // only to the column's durable Seqnum. For an unaltered legacy CREATE TABLE ...
 // LIKE, which contains no subtype declarations, recovery follows the source
-// relation and copies only a recovered TINYTEXT marker after the complete visible
-// ColDef structures match.
+// relation and copies recovered TEXT-family capacity markers after the complete
+// visible ColDef structures match.
 //
 // Recovery is metadata-only: oversized values written before upgrade remain
 // readable, while future assignments observe the recovered 255-byte limit.
@@ -102,7 +103,7 @@ func recoverLegacyTinyText(
 	}
 
 	lowerCreateSQL := strings.ToLower(tableDef.Createsql)
-	if !strings.Contains(lowerCreateSQL, "tinytext") && !strings.Contains(lowerCreateSQL, "like") {
+	if !containsLegacyTextFamily(lowerCreateSQL) && !strings.Contains(lowerCreateSQL, "like") {
 		return nil
 	}
 	evidence, err := parseLegacyTinyTextEvidence(ctx, tableDef.Createsql)
@@ -152,9 +153,10 @@ func hasAuthoritativeLegacyCreate(tableDef *planpb.TableDef) bool {
 }
 
 // LegacyTinyTextCreateSQLNeedsRebuild reports whether rel_createsql can no
-// longer describe the current TEXT subtype safely. Schema consumers that emit
-// executable DDL should reconstruct it from the structured TableDef in this
-// case instead of replaying historical TINYTEXT or CREATE LIKE lineage.
+// longer describe the current TEXT-family subtype safely. Schema consumers
+// that emit executable DDL should reconstruct it from the structured TableDef
+// in this case instead of replaying historical TEXT-family or CREATE LIKE
+// lineage.
 func LegacyTinyTextCreateSQLNeedsRebuild(tableDef *planpb.TableDef) bool {
 	if tableDef == nil || (tableDef.Version == 0 && hasAuthoritativeLegacyCreate(tableDef)) ||
 		tableDef.Createsql == "" || !isLegacyTinyTextTableKind(tableDef.TableType) ||
@@ -162,8 +164,14 @@ func LegacyTinyTextCreateSQLNeedsRebuild(tableDef *planpb.TableDef) bool {
 		return false
 	}
 	lowerCreateSQL := strings.ToLower(tableDef.Createsql)
-	return strings.Contains(lowerCreateSQL, "tinytext") ||
+	return containsLegacyTextFamily(lowerCreateSQL) ||
 		strings.Contains(lowerCreateSQL, "like")
+}
+
+func containsLegacyTextFamily(createSQL string) bool {
+	return strings.Contains(createSQL, "tinytext") ||
+		strings.Contains(createSQL, "mediumtext") ||
+		strings.Contains(createSQL, "longtext")
 }
 
 func hasLegacyUnboundedText(tableDef *planpb.TableDef) bool {
@@ -198,7 +206,7 @@ func recoverLegacyTinyTextColumns(tableDef *planpb.TableDef, columns []legacyTin
 			continue
 		}
 		cloned := *candidate
-		cloned.Typ.Width = types.MaxTinyTextLen
+		cloned.Typ.Width = historical.width
 		tableDef.Cols[candidateIndex] = &cloned
 	}
 }
@@ -217,14 +225,14 @@ func recoverLegacyTinyTextFromLike(target, source *planpb.TableDef) {
 	for index, sourceColumn := range sourceColumns {
 		targetColumn := targetColumns[index]
 		if types.T(sourceColumn.Typ.Id) != types.T_text ||
-			sourceColumn.Typ.Width != types.MaxTinyTextLen ||
+			!isLegacyTextWidth(sourceColumn.Typ.Width) ||
 			types.T(targetColumn.Typ.Id) != types.T_text || targetColumn.Typ.Width != 0 {
 			continue
 		}
 		for tableIndex, column := range target.Cols {
 			if column == targetColumn {
 				cloned := *column
-				cloned.Typ.Width = types.MaxTinyTextLen
+				cloned.Typ.Width = sourceColumn.Typ.Width
 				target.Cols[tableIndex] = &cloned
 				break
 			}
@@ -261,7 +269,7 @@ func legacyLikeColumnsCompatible(target, source *planpb.ColDef) bool {
 		}
 	}
 	if types.T(targetClone.Typ.Id) == types.T_text && targetClone.Typ.Width == 0 &&
-		types.T(sourceClone.Typ.Id) == types.T_text && sourceClone.Typ.Width == types.MaxTinyTextLen {
+		types.T(sourceClone.Typ.Id) == types.T_text && isLegacyTextWidth(sourceClone.Typ.Width) {
 		sourceClone.Typ.Width = 0
 	}
 	for _, column := range []*planpb.ColDef{targetClone, sourceClone} {
@@ -286,6 +294,12 @@ func isLegacyTinyTextTableKind(tableType string) bool {
 	default:
 		return false
 	}
+}
+
+func isLegacyTextWidth(width int32) bool {
+	return width == types.MaxTinyTextLen ||
+		width == types.MaxMediumTextLen ||
+		width == types.MaxLongTextLen
 }
 
 func parseLegacyTinyTextEvidence(ctx context.Context, createSQL string) (legacyTinyTextCreateEvidence, error) {
@@ -342,13 +356,24 @@ func tinyTextColumnsFromLegacyCreate(stmt *tree.CreateTable) []legacyTinyTextCol
 		}
 		ordinal++
 		typ, ok := column.Type.(*tree.T)
-		if !ok || defines.MysqlType(typ.InternalType.Oid) != defines.MYSQL_TYPE_TEXT ||
-			!strings.EqualFold(typ.InternalType.FamilyString, "tinytext") {
+		if !ok || defines.MysqlType(typ.InternalType.Oid) != defines.MYSQL_TYPE_TEXT {
+			continue
+		}
+		var width int32
+		switch strings.ToLower(typ.InternalType.FamilyString) {
+		case "tinytext":
+			width = types.MaxTinyTextLen
+		case "mediumtext":
+			width = types.MaxMediumTextLen
+		case "longtext":
+			width = types.MaxLongTextLen
+		default:
 			continue
 		}
 		columns = append(columns, legacyTinyTextColumn{
 			ordinal: ordinal,
 			name:    column.Name.ColName(),
+			width:   width,
 		})
 	}
 	return columns
@@ -362,7 +387,8 @@ func equalLegacyTinyTextEvidence(left, right legacyTinyTextCreateEvidence) bool 
 	}
 	for index := range left.columns {
 		if left.columns[index].ordinal != right.columns[index].ordinal ||
-			!strings.EqualFold(left.columns[index].name, right.columns[index].name) {
+			!strings.EqualFold(left.columns[index].name, right.columns[index].name) ||
+			left.columns[index].width != right.columns[index].width {
 			return false
 		}
 	}
