@@ -1385,24 +1385,8 @@ func doSetVar(
 		var evalErr error
 		if index < len(preparedItems) && preparedItems[index].Value != nil {
 			if preparedPlanExprContainsSubquery(preparedItems[index].Value) {
-				value, valueType, evalErr = getExprValueWithPrepareMeta(
-					assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
-				if evalErr == nil && types.T(preparedItems[index].Value.Typ.Id).IsDecimal() {
-					if text, ok := value.(string); ok {
-						if prefix, ok := planfunction.GetNumericStringPrefix(text); ok {
-							typ := preparedItems[index].Value.Typ
-							typedExpr, materializeErr := plan2.PreparedRuntimeParamExpr(
-								execCtx.reqCtx, prefix, isBin,
-								types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)))
-							if materializeErr != nil {
-								evalErr = materializeErr
-							} else {
-								value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
-									typedExpr, ses, execCtx, &prepareParamKind, &isBin)
-							}
-						}
-					}
-				}
+				value, valueType, evalErr = getPreparedPlanExprValueWithSubqueries(
+					assign.Value, preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
 			} else {
 				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
 					preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)

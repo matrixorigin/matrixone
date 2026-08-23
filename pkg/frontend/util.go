@@ -275,8 +275,15 @@ func getExprValueWithPrepareMeta(
 			tcc.SetExecCtx(execCtx)
 		}
 	}()
+	var preparedParamVals []any
+	var preparedBinaryExecute bool
+	if preparedExpression && execCtx.cw != nil {
+		preparedParamVals = execCtx.cw.ParamVals()
+		preparedBinaryExecute = execCtx.input != nil && execCtx.input.isBinaryProtExecute
+	}
 	err = executeStmtInSameSession(
-		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
+		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect,
+		preparedExpression, preparedParamVals, preparedBinaryExecute)
 	if err != nil {
 		return nil, plan.Type{}, err
 	}
@@ -339,6 +346,230 @@ func getExprValueWithPrepareMeta(
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 	return value, plan2.MakePlan2Type(resultVec.GetType()), err
+}
+
+func collectScalarSubqueries(expr tree.Expr, subqueries *[]*tree.Subquery) {
+	if expr == nil {
+		return
+	}
+	switch current := expr.(type) {
+	case *tree.Subquery:
+		*subqueries = append(*subqueries, current)
+	case *tree.ComparisonExpr:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.Right, subqueries)
+	case *tree.AndExpr:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.Right, subqueries)
+	case *tree.OrExpr:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.Right, subqueries)
+	case *tree.XorExpr:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.Right, subqueries)
+	case *tree.BinaryExpr:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.Right, subqueries)
+	case *tree.UnaryExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.NotExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.ParenExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsNullExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsNotNullExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsUnknownExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsNotUnknownExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsTrueExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsNotTrueExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsFalseExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IsNotFalseExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.CastExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.BitCastExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.IntervalExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.SerialExtractExpr:
+		collectScalarSubqueries(current.SerialExpr, subqueries)
+		collectScalarSubqueries(current.IndexExpr, subqueries)
+	case *tree.FuncExpr:
+		for _, arg := range current.Exprs {
+			collectScalarSubqueries(arg, subqueries)
+		}
+		for _, order := range current.OrderBy {
+			if order != nil {
+				collectScalarSubqueries(order.Expr, subqueries)
+			}
+		}
+		if current.WindowSpec != nil {
+			for _, partition := range current.WindowSpec.PartitionBy {
+				collectScalarSubqueries(partition, subqueries)
+			}
+			for _, order := range current.WindowSpec.OrderBy {
+				if order != nil {
+					collectScalarSubqueries(order.Expr, subqueries)
+				}
+			}
+			if frame := current.WindowSpec.Frame; frame != nil {
+				if frame.Start != nil {
+					collectScalarSubqueries(frame.Start.Expr, subqueries)
+				}
+				if frame.End != nil {
+					collectScalarSubqueries(frame.End.Expr, subqueries)
+				}
+			}
+		}
+	case *tree.Tuple:
+		for _, item := range current.Exprs {
+			collectScalarSubqueries(item, subqueries)
+		}
+	case *tree.RangeCond:
+		collectScalarSubqueries(current.Left, subqueries)
+		collectScalarSubqueries(current.From, subqueries)
+		collectScalarSubqueries(current.To, subqueries)
+	case *tree.CaseExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
+		for _, when := range current.Whens {
+			collectScalarSubqueries(when.Cond, subqueries)
+			collectScalarSubqueries(when.Val, subqueries)
+		}
+		collectScalarSubqueries(current.Else, subqueries)
+	case *tree.ExprList:
+		for _, item := range current.Exprs {
+			collectScalarSubqueries(item, subqueries)
+		}
+	}
+}
+
+func replacePreparedPlanSubqueries(expr *plan.Expr, replacements []*plan.Expr, position *int) (*plan.Expr, error) {
+	if expr == nil {
+		return nil, nil
+	}
+	if expr.GetSub() != nil {
+		if *position >= len(replacements) {
+			return nil, moerr.NewInternalErrorNoCtx("prepared SET expression subquery count mismatch")
+		}
+		replacement := replacements[*position]
+		*position = *position + 1
+		if replacement.GetLit().GetIsnull() {
+			replacement.Typ = expr.Typ
+		}
+		return replacement, nil
+	}
+	if fn := expr.GetF(); fn != nil {
+		for i, arg := range fn.Args {
+			var err error
+			fn.Args[i], err = replacePreparedPlanSubqueries(arg, replacements, position)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for i, item := range list.List {
+			var err error
+			list.List[i], err = replacePreparedPlanSubqueries(item, replacements, position)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Src != nil {
+		var err error
+		lit.Src, err = replacePreparedPlanSubqueries(lit.Src, replacements, position)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		var err error
+		window.WindowFunc, err = replacePreparedPlanSubqueries(window.WindowFunc, replacements, position)
+		if err != nil {
+			return nil, err
+		}
+		for i, partition := range window.PartitionBy {
+			window.PartitionBy[i], err = replacePreparedPlanSubqueries(partition, replacements, position)
+			if err != nil {
+				return nil, err
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				order.Expr, err = replacePreparedPlanSubqueries(order.Expr, replacements, position)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		if frame := window.Frame; frame != nil {
+			if frame.Start != nil {
+				frame.Start.Val, err = replacePreparedPlanSubqueries(frame.Start.Val, replacements, position)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if frame.End != nil {
+				frame.End.Val, err = replacePreparedPlanSubqueries(frame.End.Val, replacements, position)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return expr, nil
+}
+
+func getPreparedPlanExprValueWithSubqueries(
+	astExpr tree.Expr,
+	specializedExpr *plan.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	prepareParamKind *vector.PrepareParamKind,
+	isBin *bool,
+) (interface{}, plan.Type, error) {
+	var subqueries []*tree.Subquery
+	collectScalarSubqueries(astExpr, &subqueries)
+	replacements := make([]*plan.Expr, len(subqueries))
+	for i, subquery := range subqueries {
+		var subqueryKind vector.PrepareParamKind
+		var subqueryIsBin bool
+		value, valueType, err := getExprValueWithPrepareMeta(
+			subquery, ses, execCtx, true, &subqueryKind, &subqueryIsBin)
+		if err != nil {
+			return nil, plan.Type{}, err
+		}
+		if value == nil {
+			replacements[i] = &plan.Expr{Typ: valueType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Isnull: true, IsBin: subqueryIsBin, Value: &plan.Literal_Sval{Sval: ""},
+			}}}
+		} else {
+			replacements[i], err = plan2.PreparedRuntimeParamExpr(
+				execCtx.reqCtx, value, subqueryIsBin, plan2.MakeTypeByPlan2Type(valueType))
+			if err != nil {
+				return nil, plan.Type{}, err
+			}
+		}
+	}
+	runtimeExpr := plan2.DeepCopyExpr(specializedExpr)
+	position := 0
+	var err error
+	runtimeExpr, err = replacePreparedPlanSubqueries(runtimeExpr, replacements, &position)
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	if position != len(replacements) {
+		return nil, plan.Type{}, moerr.NewInternalErrorNoCtx("prepared SET expression subquery count mismatch")
+	}
+	return getPreparedPlanExprValueWithMeta(runtimeExpr, ses, execCtx, prepareParamKind, isBin)
 }
 
 func preparedPlanExprContainsSubquery(expr *plan.Expr) bool {
@@ -1976,7 +2207,9 @@ type UserInput struct {
 	isSetExpression bool
 	// isPreparedExpression marks a nested SET-derived expression that is being
 	// evaluated as part of prepared-statement execution.
-	isPreparedExpression bool
+	isPreparedExpression  bool
+	preparedParamVals     []any
+	preparedBinaryExecute bool
 	// isInternalInput mark this UserInput is come from mo internal.
 	// replace old logic: (stmt != nil)
 	// cc isInternal()

@@ -191,3 +191,20 @@
 - 含 subquery 的 outer DECIMAL consumer 在 query 执行后按 specialized DCL result type 物化，保留 DECIMAL width/scale，而不是返回 suffix 文本域。
 - issue rows helper 不再拥有 Close；每个 QueryContext 调用作用域显式 defer `rows.Close()` 并检查 `rows.Err()`，sqlclosecheck/rowserrcheck 均为 0 issue。
 - merge main 后 numeric-prefix MORPC capability 顺延至 v27，v26 保留 statement LAST_INSERT_ID；发送/接收边界与文档需使用 v26/v27。
+
+## 第五轮 Review P1 修复方案
+
+1. 为 COM_STMT prepared SET 增加 direct/subquery 对照回归，覆盖 JSON 数值类型与 `SET @x = ?` metadata，证明 scalar subquery 不改变 binary 参数 RuntimeType、protocol/type metadata 或值域。
+2. 删除 outer DECIMAL 的字符串 prefix 后处理；让含 subquery 的完整 specialized expression 在 query-aware 执行路径中完成 common-type coercion，覆盖无 prefix、prefix、NULL、overflow/error/warning 语义。
+3. 将外层执行已构造的完整 `ParamValue` 传入 synthetic prepared-expression build/retry generation，不再从 process text vector 重建；初始 build 与 definition-change retry 共用同一填值和 specialization helper。
+4. 增加 definition-change retry 白盒测试，断言每一代 runtime plan 都无 ParamRef 且维持 DECIMAL consumer/type。
+5. 运行 gofmt、目标 UT/issue 黑盒测试、frontend/plan/compile/pb 全包、sqlclosecheck/rowserrcheck、build/vet，并按完整 diff 做 self-review 后提交推送。
+
+### 第五轮执行结果
+
+- synthetic prepared-expression 不再从 process text vector 重建参数；`UserInput` 直接携带 outer execution 的完整不可变 `ParamValue` snapshot（含 binary protocol 与 RuntimeType metadata）。
+- scalar subquery 由 query pipeline 独立求值并取得 typed result；结果替换到 deep-copied runtime-specialized DCL expression 后，再对完整 outer consumer 求值，删除字符串 prefix 条件后处理。
+- 无数字前缀、NULL、多个 scalar subquery 顺序均由 specialized outer DECIMAL expression 的 cast/coalesce 语义处理。
+- definition-change retry 对 forced prepared-expression generation 无条件重放完整参数填值，不再以 `specialized` 标志决定是否采用 runtime plan。
+- binary prepared SET 即使 overload 未变化也采用 literal-materialized DCL copy，保留 direct/subquery 的 int64 runtime type 与 JSON number domain。
+- 新增 COM_STMT JSON/type oracle、无 prefix、NULL、多 subquery 与 binary retry typed white-box 回归。

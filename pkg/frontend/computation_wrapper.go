@@ -300,6 +300,11 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	defer RecordStatementTxnID(execCtx.reqCtx, cwft.ses)
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 
+	var preparedExprRetry *preparedExecutionRetry
+	if execCtx.input.isPreparedExpr() {
+		preparedExprRetry = newPreparedExecutionRetry(
+			execCtx.input.preparedParamVals, execCtx.input.preparedBinaryExecute)
+	}
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.protocolVersion = currentProtocolVersion(cwft.proc)
@@ -313,9 +318,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		if err != nil {
 			return nil, err
 		}
-		if execCtx.input.isPreparedExpr() {
+		if preparedExprRetry != nil {
 			runtimePlan, _, specializationErr := plan2.FillValuesOfParamsInPlanWithSpecialization(
-				execCtx.reqCtx, cwft.plan, preparedExpressionParamValues(cwft.proc))
+				execCtx.reqCtx, cwft.plan, preparedExprRetry.paramVals)
 			if specializationErr != nil {
 				return nil, specializationErr
 			}
@@ -513,7 +518,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			fill,
 			false,
 			&cwft.schedulingTrace,
-			nil,
+			preparedExprRetry,
 		)
 		if err != nil {
 			return nil, err
@@ -1094,10 +1099,12 @@ func specializePreparedExecutionPlan(
 	if err != nil {
 		return nil, false, false, err
 	}
-	// Binary DDL plans need literal materialization even when no overload or
-	// result domain changed. Query plans use the copy only when specialization
-	// changed execution semantics.
-	if runtimePlan != nil && (specialized || (binaryExecute && executionPlan.GetDdl() != nil)) {
+	// Binary DDL and SET plans need literal materialization even when no
+	// overload or result domain changed. Query plans use the copy only when
+	// specialization changed execution semantics.
+	binaryLiteralPlan := binaryExecute &&
+		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
+	if runtimePlan != nil && (specialized || binaryLiteralPlan) {
 		return runtimePlan, specialized, true, nil
 	}
 	return executionPlan, false, false, nil
@@ -1255,26 +1262,6 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	default:
 		return false
 	}
-}
-
-func preparedExpressionParamValues(proc *process.Process) []any {
-	params := proc.GetPrepareParams()
-	if params == nil || params.Length() == 0 {
-		return nil
-	}
-	values := make([]any, params.Length())
-	for i := range values {
-		param := plan2.ParamValue{
-			IsBin:               proc.GetPrepareParamIsBin(i),
-			PrepareParamKind:    proc.GetPrepareParamKind(i),
-			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion27,
-		}
-		if !params.IsNull(uint64(i)) {
-			param.Value = string(params.GetRawBytesAt(i))
-		}
-		values[i] = param
-	}
-	return values
 }
 
 func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error) {
@@ -1576,6 +1563,11 @@ func buildPlanForCompileRetry(
 	}
 	if preparedRetry == nil {
 		return retryPlan, nil
+	}
+	if forcePrepare {
+		runtimePlan, _, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
+			ctx, retryPlan, preparedRetry.paramVals)
+		return runtimePlan, err
 	}
 	runtimePlan, _, applied, err := specializePreparedExecutionPlan(
 		ctx, retryPlan, preparedRetry.paramVals, preparedRetry.binaryExecute)

@@ -5652,6 +5652,27 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 	require.True(t, requiresV26, commonValue.String())
 }
 
+func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ? from dual", 1)
+	require.NoError(t, err)
+
+	retryPlan, err := buildPlanForCompileRetry(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true,
+		newPreparedExecutionRetry([]any{plan.ParamValue{
+			Value:            "42",
+			IsBinaryProtocol: true,
+			RuntimeType:      types.T_int64.ToType(),
+			HasRuntimeType:   true,
+		}}, true))
+	require.NoError(t, err)
+	require.Empty(t, queryParamPositions(retryPlan.GetQuery()), retryPlan.String())
+	root := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[len(retryPlan.GetQuery().Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_int64), root.ProjectList[0].Typ.Id, root.ProjectList[0].String())
+	require.Equal(t, int64(42), root.ProjectList[0].GetLit().GetI64Val())
+}
+
 func queryParamPositions(query *plan0.Query) []int32 {
 	var positions []int32
 	var visitExpr func(*plan0.Expr)

@@ -884,6 +884,8 @@ func executeStmtInSameSession(
 	execCtx *ExecCtx,
 	stmt tree.Statement,
 	preparedExpression bool,
+	preparedParamVals []any,
+	preparedBinaryExecute bool,
 ) error {
 	ses.EnterFPrint(FPExecStmtInSameSession)
 	defer ses.ExitFPrint(FPExecStmtInSameSession)
@@ -937,10 +939,12 @@ func executeStmtInSameSession(
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
 	return doComQuery(ses, execCtx, &UserInput{
-		stmt:                 stmt,
-		isInternalInput:      true,
-		isSetExpression:      true,
-		isPreparedExpression: preparedExpression,
+		stmt:                  stmt,
+		isInternalInput:       true,
+		isSetExpression:       true,
+		isPreparedExpression:  preparedExpression,
+		preparedParamVals:     preparedParamVals,
+		preparedBinaryExecute: preparedBinaryExecute,
 	})
 }
 

@@ -231,6 +231,53 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.Equal(t, "12.5000000000", value)
 		})
 
+		t.Run("COM_STMT SET scalar subquery preserves runtime type", func(t *testing.T) {
+			directJSON, prepareErr := conn.PrepareContext(ctx, "set @issue27088_direct_json = json_object('v', ?)")
+			require.NoError(t, prepareErr)
+			defer directJSON.Close()
+			subqueryJSON, prepareErr := conn.PrepareContext(ctx, "set @issue27088_subquery_json = (select json_object('v', ?))")
+			require.NoError(t, prepareErr)
+			defer subqueryJSON.Close()
+			_, execErr := directJSON.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			_, execErr = subqueryJSON.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			var direct, subquery string
+			require.NoError(t, conn.QueryRowContext(
+				ctx, "select @issue27088_direct_json, @issue27088_subquery_json").Scan(&direct, &subquery))
+			require.JSONEq(t, `{"v": 42}`, direct)
+			require.JSONEq(t, direct, subquery)
+
+			directValue, prepareErr := conn.PrepareContext(ctx, "set @issue27088_direct_value = ?")
+			require.NoError(t, prepareErr)
+			defer directValue.Close()
+			subqueryValue, prepareErr := conn.PrepareContext(ctx, "set @issue27088_subquery_value = (select ?)")
+			require.NoError(t, prepareErr)
+			defer subqueryValue.Close()
+			_, execErr = directValue.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			_, execErr = subqueryValue.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			readIntegerVariable := func(name string, expectedType string) int64 {
+				rows, queryErr := conn.QueryContext(ctx, "select "+name)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				columnTypes, typeErr := rows.ColumnTypes()
+				require.NoError(t, typeErr)
+				require.Len(t, columnTypes, 1)
+				require.Equal(t, expectedType, columnTypes[0].DatabaseTypeName())
+				require.True(t, rows.Next())
+				var value int64
+				require.NoError(t, rows.Scan(&value))
+				require.NoError(t, rows.Err())
+				return value
+			}
+			directInteger := readIntegerVariable("@issue27088_direct_value", "BIGINT")
+			subqueryInteger := readIntegerVariable("@issue27088_subquery_value", "BIGINT")
+			require.Equal(t, int64(42), directInteger)
+			require.Equal(t, directInteger, subqueryInteger)
+		})
+
 		t.Run("SQL EXECUTE SET specializes consumer inside subquery", func(t *testing.T) {
 			mustExec(t, ctx, conn, `prepare issue27088_set_inner from
 				'set @issue27088_inner_out = (select id from common_type where d = ?)'`)
@@ -251,6 +298,29 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			var value string
 			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_outer_out").Scan(&value))
 			require.Equal(t, "12.5000000000", value)
+
+			mustExec(t, ctx, conn, "set @issue27088_outer_value = 'tail'")
+			mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_outer_out").Scan(&value))
+			require.Equal(t, "0.0000000000", value)
+
+			mustExec(t, ctx, conn, "set @issue27088_outer_value = null")
+			mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_outer_out").Scan(&value))
+			require.Equal(t, "1.0000000000", value)
+		})
+
+		t.Run("SQL EXECUTE SET preserves multiple scalar subquery order and typed NULL", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_set_multi_sub from
+				'set @issue27088_multi_sub_out = coalesce((select ?), (select cast(2 as decimal(38,10))))'`)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_multi_sub")
+			}()
+			mustExec(t, ctx, conn, "set @issue27088_multi_sub_value = null")
+			mustExec(t, ctx, conn, "execute issue27088_set_multi_sub using @issue27088_multi_sub_value")
+			var value string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_multi_sub_out").Scan(&value))
+			require.Equal(t, "2.0000000000", value)
 		})
 
 		t.Run("SQL EXECUTE SET preserves scalar subquery execution", func(t *testing.T) {
