@@ -3232,6 +3232,9 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
 	}
+	if err := ValidatePreparedLagLeadParams(ctx, preparePlan, paramVals); err != nil {
+		return nil, err
+	}
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, err
 	}
@@ -3253,6 +3256,52 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 		}
 	}
 	return copied, nil
+}
+
+// ValidatePreparedLagLeadParams validates LAG/LEAD offset markers before the
+// generic expression cast path can discard their protocol source type. This is
+// also called by the cached prepared-execution path, which does not replace
+// ParamRefs in the plan for each execution.
+func ValidatePreparedLagLeadParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
+	if preparePlan == nil || len(paramVals) == 0 {
+		return nil
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.GetWinSpecList() {
+			window := expr.GetW()
+			if window == nil {
+				continue
+			}
+			function := window.GetWindowFunc().GetF()
+			if function == nil || len(function.Args) < 2 {
+				continue
+			}
+			name := function.GetFunc().GetObjName()
+			if name != "lag" && name != "lead" {
+				continue
+			}
+			if position, ok := preparedWindowArgumentParamPosition(function.Args[1]); ok {
+				if position < 0 || int(position) >= len(paramVals) {
+					continue
+				}
+				if !isNonNegativePreparedInteger(paramVals[position]) {
+					return moerr.NewWrongArguments(ctx, name)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // ValidatePreparedPaginationParams validates parameter markers used by LIMIT
@@ -3502,35 +3551,18 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
 	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
-		switch name {
-		case "nth_value":
-			if len(args) != 2 {
-				return nil
-			}
-			pos, ok := preparedWindowArgumentParamPosition(args[1])
-			if !ok {
-				return nil
-			}
-			if pos < 0 || int(pos) >= len(paramVals) {
-				return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
-			}
-			if !isPositivePreparedInteger(paramVals[pos]) {
-				return moerr.NewWrongArguments(ctx, name)
-			}
-		case "lag", "lead":
-			if len(args) < 2 {
-				return nil
-			}
-			pos, ok := preparedWindowArgumentParamPosition(args[1])
-			if !ok {
-				return nil
-			}
-			if pos < 0 || int(pos) >= len(paramVals) {
-				return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
-			}
-			if !isNonNegativePreparedInteger(paramVals[pos]) {
-				return moerr.NewWrongArguments(ctx, name)
-			}
+		if name != "nth_value" || len(args) != 2 {
+			return nil
+		}
+		pos, ok := preparedWindowArgumentParamPosition(args[1])
+		if !ok {
+			return nil
+		}
+		if pos < 0 || int(pos) >= len(paramVals) {
+			return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
+		}
+		if !isPositivePreparedInteger(paramVals[pos]) {
+			return moerr.NewWrongArguments(ctx, name)
 		}
 		return nil
 	}

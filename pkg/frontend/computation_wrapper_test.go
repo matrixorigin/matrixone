@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -294,6 +295,82 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 	for i := 0; i < prepareStmt.params.Length(); i++ {
 		require.Equal(t, vector.PrepareParamNone, cw.proc.GetPrepareParamKind(i),
 			"parameter %d retained stale numeric metadata", i)
+	}
+}
+
+func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		wantError bool
+		configure func(*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper) *plan.Execute
+	}{
+		{
+			name:      "binary float",
+			sql:       "select lag(1, ?) over ()",
+			wantError: true,
+			configure: func(t *testing.T, _ *Session, prepareStmt *PrepareStmt, cw *TxnComputationWrapper) *plan.Execute {
+				prepareStmt.params = vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+				prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
+				return nil
+			},
+		},
+		{
+			name:      "text boolean",
+			sql:       "select lead(1, ?) over ()",
+			wantError: true,
+			configure: func(t *testing.T, ses *Session, prepareStmt *PrepareStmt, _ *TxnComputationWrapper) *plan.Execute {
+				require.NoError(t, ses.SetUserDefinedVar("offset_value", true, ""))
+				return &plan.Execute{
+					Name: prepareStmt.Name,
+					Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "offset_value"}}}},
+				}
+			},
+		},
+		{
+			name: "binary integer control",
+			sql:  "select lag(1, ?) over ()",
+			configure: func(t *testing.T, _ *Session, prepareStmt *PrepareStmt, cw *TxnComputationWrapper) *plan.Execute {
+				prepareStmt.params = vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+				prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+				return nil
+			},
+		},
+	}
+
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, uint32(120+i), test.sql)
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+
+			sentinel := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			prepareStmt.compile = sentinel
+			execPlan := test.configure(t, ses, prepareStmt, cw)
+
+			retComp, _, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, execPlan, prepareStmt.Name)
+			if test.wantError {
+				require.Error(t, err)
+				moErr, ok := err.(*moerr.Error)
+				require.True(t, ok)
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, moErr.MySQLCode())
+				require.Same(t, sentinel, prepareStmt.compile)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Same(t, sentinel, retComp)
+			if owned {
+				executionStmt.Free()
+			}
+		})
 	}
 }
 

@@ -39,7 +39,10 @@ execute lag_offset using @offset;
 Incorrect arguments to lag
 set @offset = -1.5;
 execute lag_offset using @offset;
-invalid argument cast to int, bad value -1.5
+Incorrect arguments to lag
+set @offset = 1.0;
+execute lag_offset using @offset;
+Incorrect arguments to lag
 set @offset = 0;
 execute lag_offset using @offset;
 ➤ id[4,32,0]  ¦  lag_v[4,32,0]  𝄀
@@ -58,6 +61,9 @@ set @offset = -2;
 execute lead_offset using @offset;
 Incorrect arguments to lead
 set @offset = cast(-1 as decimal);
+execute lead_offset using @offset;
+Incorrect arguments to lead
+set @offset = true;
 execute lead_offset using @offset;
 Incorrect arguments to lead
 set @offset = 0;

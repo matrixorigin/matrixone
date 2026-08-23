@@ -41,6 +41,8 @@ set @offset = null;
 execute lag_offset using @offset;
 set @offset = -1.5;
 execute lag_offset using @offset;
+set @offset = 1.0;
+execute lag_offset using @offset;
 set @offset = 0;
 execute lag_offset using @offset;
 set @offset = 1;
@@ -51,6 +53,8 @@ prepare lead_offset from 'select id, lead(v, ?, 88) over (order by id) lead_v fr
 set @offset = -2;
 execute lead_offset using @offset;
 set @offset = cast(-1 as decimal);
+execute lead_offset using @offset;
+set @offset = true;
 execute lead_offset using @offset;
 set @offset = 0;
 execute lead_offset using @offset;

@@ -5215,7 +5215,7 @@ func normalizeLagLeadOffsetParam(ctx context.Context, name string, args []*Expr)
 }
 
 // LAG/LEAD offsets must be non-NULL, non-negative integers. Prepared markers
-// are normalized to int64 above and checked when their values are filled;
+// are normalized to int64 above and checked before execution or plan filling;
 // row-dependent integer expressions are checked after evaluation by the
 // window operator.
 func validateLagLeadOffsetLiteral(ctx context.Context, name string, args []*Expr) error {
