@@ -899,7 +899,19 @@ func TestGetExprValue(t *testing.T) {
 					cvey.So(value, cvey.ShouldEqual, kase.want)
 				}
 			}
+			// Evaluating a SET expression runs a synthetic SELECT.  It must
+			// not leave the compiler context pointing at the closed temporary
+			// execution context, because the next statement in the packet
+			// reuses it for planning.
+			cvey.So(ses.txnCompileCtx.execCtx, cvey.ShouldEqual, ec)
 		}
+
+		// The next statement in the same packet must still be able to plan
+		// through the session compiler context after SET evaluation.
+		nextStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select 1", 1)
+		cvey.So(err, cvey.ShouldBeNil)
+		_, err = buildPlanWithPrepareMode(ctx, ses, ses.txnCompileCtx, nextStmt, false)
+		cvey.So(err, cvey.ShouldBeNil)
 
 	})
 

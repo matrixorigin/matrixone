@@ -2239,6 +2239,31 @@ func TestBuiltInCurrentTimeNoArgDefaultsToZeroFSP(t *testing.T) {
 	}
 }
 
+// TestBuiltInCurrentTimestampReadsStatementTimePerExecution reuses the same
+// overload ID while changing the statement timestamp. This mirrors repeated
+// executions of a cached NOW() plan and proves the value is read at execution
+// time rather than folded when the plan is built.
+func TestBuiltInCurrentTimestampReadsStatementTimePerExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "now", nil)
+	require.NoError(t, err)
+	overloadID := fn.GetEncodedOverloadID()
+
+	for _, unixNano := range []int64{
+		1704150245123456789,
+		1704150246123456789,
+	} {
+		proc.Base.UnixTime = unixNano
+		out, err := RunFunctionDirectly(proc, overloadID, nil, 1)
+		require.NoError(t, err)
+		require.Equal(t, int32(0), out.GetType().Scale)
+		require.Equal(t,
+			types.UnixNanoToTimestamp(unixNano).TruncateToScale(0),
+			vector.MustFixedColWithTypeCheck[types.Timestamp](out)[0])
+		out.Free(proc.Mp())
+	}
+}
+
 func TestBuiltInCurrentTimestamp_ScaleValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

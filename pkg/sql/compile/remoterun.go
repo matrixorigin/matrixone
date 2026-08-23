@@ -171,6 +171,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteUpdateChangedRowsPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -939,14 +942,21 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *multi_update.MultiUpdate:
 		targetAware := false
+		changedRows := false
 		affectedRowsSelectors := false
 		for _, muCtx := range t.MultiUpdateCtx {
 			if muCtx.DedupByTargetRowID || muCtx.TargetUpdateCtxIdx != 0 {
 				targetAware = true
 			}
+			if muCtx.ChangedRowsCol != nil {
+				changedRows = true
+			}
 			affectedRowsSelectors = affectedRowsSelectors || len(muCtx.AffectedRowsCols) > 0
 		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, targetAware); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteUpdateChangedRowsProtocol(proc, changedRows); err != nil {
 			return ctxId, nil, err
 		}
 		if err := validateRemoteAffectedRowsSelectorsProtocol(proc, affectedRowsSelectors); err != nil {
@@ -967,6 +977,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 			for j, pos := range muCtx.AffectedRowsCols {
 				updateCtxList[i].AffectedRowsCols[j].ColPos = int32(pos)
+			}
+			if muCtx.ChangedRowsCol != nil {
+				updateCtxList[i].ChangedRowsCol = &plan.ColRef{ColPos: int32(*muCtx.ChangedRowsCol)}
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1509,6 +1522,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			for j, pos := range muCtx.AffectedRowsCols {
 				arg.MultiUpdateCtx[i].AffectedRowsCols[j] = int(pos.ColPos)
 			}
+			if muCtx.ChangedRowsCol != nil {
+				changedRowsCol := int(muCtx.ChangedRowsCol.ColPos)
+				arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
+			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
 			for j, pos := range muCtx.InsertCols {
@@ -1633,6 +1650,18 @@ func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware 
 	return nil
 }
 
+func validateRemoteUpdateChangedRowsProtocol(proc *process.Process, changedRows bool) error {
+	if !changedRows {
+		return nil
+	}
+	if proc == nil || !supportsRemoteUpdateChangedRows(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"UPDATE changed-row counting requires MORPC protocol version 25",
+		)
+	}
+	return nil
+}
+
 func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inputKeysUnique bool) error {
 	if !inputKeysUnique {
 		return nil
@@ -1651,7 +1680,7 @@ func validateRemoteStatementLastInsertIDProtocol(proc *process.Process, hasAutoC
 	}
 	if proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"remote auto-increment PRE_INSERT requires MORPC protocol version 25",
+			"remote auto-increment PRE_INSERT requires MORPC protocol version 26",
 		)
 	}
 	return nil
@@ -1764,6 +1793,30 @@ func validateRemoteTargetAwareUpdatePipelineProtocol(
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteTargetAwareUpdatePipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteUpdateChangedRowsPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
+			for _, updateCtx := range multiUpdate.UpdateCtxList {
+				if updateCtx.ChangedRowsCol != nil {
+					return validateRemoteUpdateChangedRowsProtocol(proc, true)
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteUpdateChangedRowsPipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}

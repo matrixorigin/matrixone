@@ -139,17 +139,20 @@ type SessionInfo struct {
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
 	ApplySQLSelectLimit bool
-	StorageEngine       engine.Engine
-	QueryId             []string
-	ResultColTypes      []types.Type
-	SeqCurValues        map[uint64]string
-	SeqDeleteKeys       []uint64
-	SeqAddValues        map[uint64]string
-	SeqLastValue        []string
-	SqlHelper           sqlHelper
-	Buf                 *buffer.Buffer
-	LogLevel            zapcore.Level
-	SessionId           uuid.UUID
+	// CountUpdateChangedRows requests MySQL changed-row semantics for UPDATE.
+	// Frontend sessions set it when CLIENT_FOUND_ROWS was not negotiated.
+	CountUpdateChangedRows bool
+	StorageEngine          engine.Engine
+	QueryId                []string
+	ResultColTypes         []types.Type
+	SeqCurValues           map[uint64]string
+	SeqDeleteKeys          []uint64
+	SeqAddValues           map[uint64]string
+	SeqLastValue           []string
+	SqlHelper              sqlHelper
+	Buf                    *buffer.Buffer
+	LogLevel               zapcore.Level
+	SessionId              uuid.UUID
 }
 
 type Session interface {
