@@ -66,6 +66,15 @@ type queryWorkLifecycle struct {
 	closeErr  error
 }
 
+func (l *queryWorkLifecycle) beginClose() {
+	l.Lock()
+	l.closing = true
+	if l.cancel != nil {
+		l.cancel()
+	}
+	l.Unlock()
+}
+
 func (l *queryWorkLifecycle) admit() (func(), bool) {
 	l.Lock()
 	defer l.Unlock()
@@ -98,13 +107,7 @@ func (l *queryWorkLifecycle) launch(executor taskservice.TaskExecutor, asyncTask
 
 func (l *queryWorkLifecycle) close(closeIngress func() error) error {
 	l.closeOnce.Do(func() {
-		l.Lock()
-		l.closing = true
-		if l.cancel != nil {
-			l.cancel()
-		}
-		l.Unlock()
-
+		l.beginClose()
 		l.closeErr = closeIngress()
 		l.wg.Wait()
 	})

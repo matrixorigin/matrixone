@@ -912,6 +912,11 @@ message HAKeeperRSMState {
   map<string, uint64> ViewMetadataAdmissionCNTargets = 38;
   map<string, uint64> ViewMetadataAdmissionProxyTargets = 39;
   bool ViewMetadataAdmissionPending = 40;
+  // Target ticks conservatively cover every generation superseded while the
+  // target is pending. The current authoritative generation never refreshes
+  // this liveness proof for an older process.
+  map<string, uint64> ViewMetadataAdmissionCNTargetTicks = 41;
+  map<string, uint64> ViewMetadataAdmissionProxyTargetTicks = 42;
 }
 
 // ReplicaInfo contains details of a replica

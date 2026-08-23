@@ -799,6 +799,7 @@ type service struct {
 	viewMetadataCatalogFenceMu      sync.Mutex
 	viewMetadataCatalogFenceReady   atomic.Bool
 	viewMetadataIngressReady        atomic.Bool
+	viewMetadataRevocationOnce      sync.Once
 	aicm                            *defines.AutoIncrCacheManager
 	lifecycleMu                     sync.Mutex
 	lifecycle                       serviceLifecycleState

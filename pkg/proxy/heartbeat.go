@@ -40,12 +40,13 @@ func (s *Server) heartbeat(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.doHeartbeat(ctx)
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
+		case <-s.viewMetadataHeartbeatWakeup:
+		}
+		s.doHeartbeat(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 	}
 }

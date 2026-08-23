@@ -86,10 +86,19 @@ func (s *service) applyViewMetadataAdmission(
 		s.notifyViewMetadataAdmissionUpdated()
 		return nil
 	}
-	if snapshot.Generation != s.viewMetadataAdmissionGeneration {
-		s.logger.Warn("ignored view metadata admission response for another generation",
-			zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
-			zap.Uint64("response-generation", snapshot.Generation))
+	if snapshot.Generation < s.viewMetadataAdmissionGeneration {
+		if s.logger != nil {
+			s.logger.Warn("ignored stale view metadata admission response",
+				zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
+				zap.Uint64("response-generation", snapshot.Generation))
+		}
+		return nil
+	}
+	if snapshot.Generation > s.viewMetadataAdmissionGeneration {
+		copy := *snapshot
+		s.viewMetadataAdmission.Store(&copy)
+		s.notifyViewMetadataAdmissionUpdated()
+		s.revokeViewMetadataGeneration(snapshot.Generation)
 		return nil
 	}
 	if s.viewMetadataEpochFence == nil {
@@ -102,6 +111,36 @@ func (s *service) applyViewMetadataAdmission(
 	s.viewMetadataAdmission.Store(&copy)
 	s.notifyViewMetadataAdmissionUpdated()
 	return s.fenceViewMetadataCatalog(ctx, &copy)
+}
+
+// revokeViewMetadataGeneration fences a process that no longer owns its UUID.
+// The gates are closed synchronously so scheduling an asynchronous full Close
+// cannot leave a window for new SQL, QueryService, or pipeline work. Full Close
+// runs outside the heartbeat stopper task to avoid waiting for itself.
+func (s *service) revokeViewMetadataGeneration(authoritative uint64) {
+	s.viewMetadataRevocationOnce.Do(func() {
+		s.viewMetadataIngressReady.Store(false)
+		_ = s.closePipelineAdmission()
+		s.queryWork.beginClose()
+		if s.mo != nil {
+			if err := s.stopFrontend(); err != nil && s.logger != nil {
+				s.logger.Error("failed to stop superseded CN frontend",
+					zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
+					zap.Uint64("authoritative-generation", authoritative),
+					zap.Error(err))
+			}
+		}
+		if s.stopper != nil {
+			go func() {
+				if err := s.Close(); err != nil && s.logger != nil {
+					s.logger.Error("failed to close superseded CN",
+						zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
+						zap.Uint64("authoritative-generation", authoritative),
+						zap.Error(err))
+				}
+			}()
+		}
+	})
 }
 
 func (s *service) fenceViewMetadataCatalog(

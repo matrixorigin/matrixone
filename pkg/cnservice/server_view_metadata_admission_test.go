@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,11 +27,28 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
+
+type admissionRevocationMOServer struct {
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func (s *admissionRevocationMOServer) GetRoutineManager() *frontend.RoutineManager {
+	return nil
+}
+
+func (s *admissionRevocationMOServer) Start() error { return nil }
+
+func (s *admissionRevocationMOServer) Stop() error {
+	s.once.Do(func() { close(s.stopped) })
+	return nil
+}
 
 type admissionCNHAKeeperClient struct {
 	logservice.CNHAKeeperClient
@@ -124,6 +142,49 @@ func TestCNViewMetadataAdmissionRejectsSupersededResponse(t *testing.T) {
 		}))
 	require.Zero(t, s.viewMetadataEpochFence.Epoch())
 	require.False(t, s.viewMetadataAdmission.Load().Enabled)
+}
+
+func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) {
+	mo := &admissionRevocationMOServer{stopped: make(chan struct{})}
+	s := &service{
+		cfg:                             &Config{UUID: "superseded-cn"},
+		logger:                          zap.NewNop(),
+		mo:                              mo,
+		viewMetadataAdmissionGeneration: 8,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	s.viewMetadataIngressReady.Store(true)
+	pipelineCtx, releasePipeline, admitted := s.admitPipelineHandler(context.Background())
+	require.True(t, admitted)
+	releaseQuery, admitted := s.queryWork.admit()
+	require.True(t, admitted)
+
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(),
+		&logservicepb.ViewMetadataAdmission{
+			Enabled:    true,
+			Epoch:      4,
+			Generation: 9,
+		}))
+	require.Equal(t, uint64(9), s.viewMetadataAdmission.Load().Generation)
+	require.False(t, s.viewMetadataIngressReady.Load())
+	select {
+	case <-pipelineCtx.Done():
+	default:
+		t.Fatal("active pipeline was not canceled after generation revocation")
+	}
+	select {
+	case <-mo.stopped:
+	default:
+		t.Fatal("SQL frontend and active direct sessions were not stopped")
+	}
+	_, _, admitted = s.admitPipelineHandler(context.Background())
+	require.False(t, admitted)
+	_, admitted = s.queryWork.admit()
+	require.False(t, admitted)
+
+	releasePipeline()
+	releaseQuery()
 }
 
 func TestCNViewMetadataAdmissionWaitsForAuthoritativeResponse(t *testing.T) {

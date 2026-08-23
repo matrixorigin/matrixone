@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -69,8 +70,12 @@ type Server struct {
 	viewMetadataObservedEpoch       atomic.Uint64
 	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
 	viewMetadataAdmissionUpdated    chan struct{}
+	viewMetadataHeartbeatWakeup     chan struct{}
 	viewMetadataAdmissionContext    context.Context
 	viewMetadataAdmissionCancel     context.CancelFunc
+	viewMetadataRevocationOnce      sync.Once
+	closeOnce                       sync.Once
+	closeErr                        error
 	test                            bool
 }
 
@@ -269,11 +274,20 @@ func (s *Server) Start() error {
 
 // Close closes the proxy server.
 func (s *Server) Close() error {
-	if s.viewMetadataAdmissionCancel != nil {
-		s.viewMetadataAdmissionCancel()
-	}
-	_ = s.handler.Close()
-	s.stopper.Stop()
-	stats.Unregister(statsFamilyName)
-	return s.app.Stop()
+	s.closeOnce.Do(func() {
+		if s.viewMetadataAdmissionCancel != nil {
+			s.viewMetadataAdmissionCancel()
+		}
+		if s.handler != nil {
+			_ = s.handler.Close()
+		}
+		if s.stopper != nil {
+			s.stopper.Stop()
+		}
+		stats.Unregister(statsFamilyName)
+		if s.app != nil {
+			s.closeErr = s.app.Stop()
+		}
+	})
+	return s.closeErr
 }

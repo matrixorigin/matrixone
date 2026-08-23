@@ -115,7 +115,15 @@ func (s *stateMachine) resetViewMetadataAdmissionBarrier() {
 	for uuid, store := range s.state.CNState.Stores {
 		// These stores were already serving before phase one. Keep them active
 		// during preparation, but discard every pre-barrier capability/epoch ack.
-		store.ViewMetadataAdmissionReady = store.ViewMetadataIngressReady
+		// A legacy binary has no ingress-ready field, so its zero value must not
+		// withdraw an already-serving CN during a rolling upgrade. A capable CN,
+		// however, is routable only after it has published ingress readiness.
+		if store.ViewMetadataAdmissionSupported &&
+			store.ViewMetadataAdmissionGeneration != 0 {
+			store.ViewMetadataAdmissionReady = store.ViewMetadataIngressReady
+		} else {
+			store.ViewMetadataAdmissionReady = true
+		}
 		store.ViewMetadataAdmissionSupported = false
 		store.ViewMetadataObservedEpoch = 0
 		store.ViewMetadataCatalogFencedEpoch = 0
@@ -134,24 +142,72 @@ func (s *stateMachine) resetViewMetadataAdmissionBarrier() {
 	s.state.ViewMetadataAdmissionProxyReady = make(map[string]bool)
 	s.state.ViewMetadataAdmissionCNTargets = nil
 	s.state.ViewMetadataAdmissionProxyTargets = nil
+	s.state.ViewMetadataAdmissionCNTargetTicks = nil
+	s.state.ViewMetadataAdmissionProxyTargetTicks = nil
 	s.state.ViewMetadataAdmissionPending = false
 }
 
 func (s *stateMachine) startViewMetadataRequiredEpoch() {
+	previousCNTargets := s.state.ViewMetadataAdmissionCNTargets
+	previousProxyTargets := s.state.ViewMetadataAdmissionProxyTargets
+	previousCNTargetTicks := s.state.ViewMetadataAdmissionCNTargetTicks
+	previousProxyTargetTicks := s.state.ViewMetadataAdmissionProxyTargetTicks
 	s.state.ViewMetadataAdmissionEpoch++
 	s.state.ViewMetadataRevalidationRequired = true
 	s.state.ViewMetadataCatalogFencedEpoch = 0
 	s.state.ViewMetadataAdmissionCNTargets = make(map[string]uint64)
 	s.state.ViewMetadataAdmissionProxyTargets = make(map[string]uint64)
+	s.state.ViewMetadataAdmissionCNTargetTicks = make(map[string]uint64)
+	s.state.ViewMetadataAdmissionProxyTargetTicks = make(map[string]uint64)
+	for uuid, generation := range previousCNTargets {
+		s.state.ViewMetadataAdmissionCNTargets[uuid] = generation
+		s.state.ViewMetadataAdmissionCNTargetTicks[uuid] = previousCNTargetTicks[uuid]
+	}
+	for uuid, generation := range previousProxyTargets {
+		s.state.ViewMetadataAdmissionProxyTargets[uuid] = generation
+		s.state.ViewMetadataAdmissionProxyTargetTicks[uuid] = previousProxyTargetTicks[uuid]
+	}
 	for uuid, store := range s.state.CNState.Stores {
 		if store.ViewMetadataAdmissionReady {
-			s.state.ViewMetadataAdmissionCNTargets[uuid] = store.ViewMetadataAdmissionGeneration
+			s.captureCNViewMetadataAdmissionTarget(uuid, store)
 		}
 	}
 	for uuid, store := range s.state.ProxyState.Stores {
 		if store.ViewMetadataAdmissionReady {
-			s.state.ViewMetadataAdmissionProxyTargets[uuid] = store.ViewMetadataAdmissionGeneration
+			s.captureProxyViewMetadataAdmissionTarget(uuid, store)
 		}
+	}
+	s.state.ViewMetadataAdmissionPending = true
+}
+
+func (s *stateMachine) captureCNViewMetadataAdmissionTarget(uuid string, store pb.CNStoreInfo) {
+	if s.state.ViewMetadataAdmissionCNTargets == nil {
+		s.state.ViewMetadataAdmissionCNTargets = make(map[string]uint64)
+	}
+	if s.state.ViewMetadataAdmissionCNTargetTicks == nil {
+		s.state.ViewMetadataAdmissionCNTargetTicks = make(map[string]uint64)
+	}
+	if _, ok := s.state.ViewMetadataAdmissionCNTargets[uuid]; !ok {
+		s.state.ViewMetadataAdmissionCNTargets[uuid] = store.ViewMetadataAdmissionGeneration
+	}
+	if tick, ok := s.state.ViewMetadataAdmissionCNTargetTicks[uuid]; !ok || store.Tick > tick {
+		s.state.ViewMetadataAdmissionCNTargetTicks[uuid] = store.Tick
+	}
+	s.state.ViewMetadataAdmissionPending = true
+}
+
+func (s *stateMachine) captureProxyViewMetadataAdmissionTarget(uuid string, store pb.ProxyStore) {
+	if s.state.ViewMetadataAdmissionProxyTargets == nil {
+		s.state.ViewMetadataAdmissionProxyTargets = make(map[string]uint64)
+	}
+	if s.state.ViewMetadataAdmissionProxyTargetTicks == nil {
+		s.state.ViewMetadataAdmissionProxyTargetTicks = make(map[string]uint64)
+	}
+	if _, ok := s.state.ViewMetadataAdmissionProxyTargets[uuid]; !ok {
+		s.state.ViewMetadataAdmissionProxyTargets[uuid] = store.ViewMetadataAdmissionGeneration
+	}
+	if tick, ok := s.state.ViewMetadataAdmissionProxyTargetTicks[uuid]; !ok || store.Tick > tick {
+		s.state.ViewMetadataAdmissionProxyTargetTicks[uuid] = store.Tick
 	}
 	s.state.ViewMetadataAdmissionPending = true
 }
@@ -219,6 +275,8 @@ func (s *stateMachine) tryPromoteViewMetadataAdmissions(
 	if !pending {
 		s.state.ViewMetadataAdmissionCNTargets = nil
 		s.state.ViewMetadataAdmissionProxyTargets = nil
+		s.state.ViewMetadataAdmissionCNTargetTicks = nil
+		s.state.ViewMetadataAdmissionProxyTargetTicks = nil
 	}
 	s.state.ViewMetadataAdmissionPending = pending
 }
@@ -228,17 +286,31 @@ func (s *stateMachine) expireViewMetadataAdmissionTargets(targets pb.ViewMetadat
 		return
 	}
 	for uuid, generation := range s.state.ViewMetadataAdmissionCNTargets {
-		store, ok := s.state.CNState.Stores[uuid]
-		if !ok || store.ViewMetadataAdmissionGeneration != generation ||
-			commandDeliveryStoreExpired(store.Tick, s.state.Tick, targets.CNStoreTimeoutTicks) {
+		lastTick, ok := s.state.ViewMetadataAdmissionCNTargetTicks[uuid]
+		if !ok {
+			// Snapshots written before target ticks were introduced can recover
+			// the tick only while the captured generation still owns the UUID.
+			if store, exists := s.state.CNState.Stores[uuid]; exists &&
+				store.ViewMetadataAdmissionGeneration == generation {
+				lastTick = store.Tick
+			}
+		}
+		if commandDeliveryStoreExpired(lastTick, s.state.Tick, targets.CNStoreTimeoutTicks) {
 			delete(s.state.ViewMetadataAdmissionCNTargets, uuid)
+			delete(s.state.ViewMetadataAdmissionCNTargetTicks, uuid)
 		}
 	}
 	for uuid, generation := range s.state.ViewMetadataAdmissionProxyTargets {
-		store, ok := s.state.ProxyState.Stores[uuid]
-		if !ok || store.ViewMetadataAdmissionGeneration != generation ||
-			commandDeliveryStoreExpired(store.Tick, s.state.Tick, targets.ProxyStoreTimeoutTicks) {
+		lastTick, ok := s.state.ViewMetadataAdmissionProxyTargetTicks[uuid]
+		if !ok {
+			if store, exists := s.state.ProxyState.Stores[uuid]; exists &&
+				store.ViewMetadataAdmissionGeneration == generation {
+				lastTick = store.Tick
+			}
+		}
+		if commandDeliveryStoreExpired(lastTick, s.state.Tick, targets.ProxyStoreTimeoutTicks) {
 			delete(s.state.ViewMetadataAdmissionProxyTargets, uuid)
+			delete(s.state.ViewMetadataAdmissionProxyTargetTicks, uuid)
 		}
 	}
 }
@@ -293,6 +365,11 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 	if !hasTargets || !targets.EvaluateCurrentStores {
 		return sm.Result{}
 	}
+	s.expireViewMetadataAdmissionTargets(targets)
+	if len(s.state.ViewMetadataAdmissionCNTargets) != 0 ||
+		len(s.state.ViewMetadataAdmissionProxyTargets) != 0 {
+		return sm.Result{}
+	}
 	for uuid, store := range s.state.CNState.Stores {
 		if commandDeliveryStoreExpired(store.Tick, s.state.Tick, targets.CNStoreTimeoutTicks) {
 			continue
@@ -334,6 +411,10 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 	s.state.ViewMetadataAdmissionLogReady = nil
 	s.state.ViewMetadataAdmissionCNReady = nil
 	s.state.ViewMetadataAdmissionProxyReady = nil
+	s.state.ViewMetadataAdmissionCNTargets = nil
+	s.state.ViewMetadataAdmissionProxyTargets = nil
+	s.state.ViewMetadataAdmissionCNTargetTicks = nil
+	s.state.ViewMetadataAdmissionProxyTargetTicks = nil
 	s.state.ViewMetadataAdmissionPending = false
 	return sm.Result{Value: 1}
 }
@@ -342,15 +423,33 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 // generation already owns this UUID. It returns false for a stale heartbeat.
 func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) bool {
 	previous, existed := s.state.CNState.Stores[hb.UUID]
-	if existed && hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
+	active := s.viewMetadataAdmissionActive()
+	if active && existed &&
+		hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
 		return false
 	}
 	newGeneration := !existed ||
 		hb.ViewMetadataAdmissionGeneration > previous.ViewMetadataAdmissionGeneration
+	if active && s.state.ViewMetadataAdmissionEnabled && newGeneration &&
+		!s.state.ViewMetadataRevalidationRequired && !hb.ViewMetadataRefreshSupported {
+		// Capture the old owner before CNState.Update replaces it.
+		s.startViewMetadataRequiredEpoch()
+	}
+	if active && existed && newGeneration &&
+		(previous.ViewMetadataAdmissionReady || previous.ViewMetadataIngressReady) {
+		s.captureCNViewMetadataAdmissionTarget(hb.UUID, previous)
+	}
 	s.state.CNState.Update(hb, s.state.Tick)
 	store := s.state.CNState.Stores[hb.UUID]
-	if !s.viewMetadataAdmissionActive() {
+	if !active {
 		return true
+	}
+	if generation, ok := s.state.ViewMetadataAdmissionCNTargets[hb.UUID]; ok &&
+		generation == hb.ViewMetadataAdmissionGeneration {
+		if s.state.ViewMetadataAdmissionCNTargetTicks == nil {
+			s.state.ViewMetadataAdmissionCNTargetTicks = make(map[string]uint64)
+		}
+		s.state.ViewMetadataAdmissionCNTargetTicks[hb.UUID] = store.Tick
 	}
 	if newGeneration {
 		store.ViewMetadataAdmissionReady = false
@@ -378,11 +477,6 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 		hb.ViewMetadataObservedEpoch >= hb.ViewMetadataCatalogFencedEpoch {
 		s.state.ViewMetadataCatalogFencedEpoch = hb.ViewMetadataCatalogFencedEpoch
 	}
-	if s.state.ViewMetadataAdmissionEnabled && newGeneration &&
-		!s.state.ViewMetadataRevalidationRequired && !hb.ViewMetadataRefreshSupported {
-		s.state.CNState.Stores[hb.UUID] = store
-		s.startViewMetadataRequiredEpoch()
-	}
 	if s.state.ViewMetadataAdmissionEnabled && !store.ViewMetadataAdmissionReady {
 		s.state.ViewMetadataAdmissionPending = true
 	}
@@ -393,15 +487,27 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 
 func (s *stateMachine) updateProxyViewMetadataAdmission(hb pb.ProxyHeartbeat) bool {
 	previous, existed := s.state.ProxyState.Stores[hb.UUID]
-	if existed && hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
+	active := s.viewMetadataAdmissionActive()
+	if active && existed &&
+		hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
 		return false
 	}
 	newGeneration := !existed ||
 		hb.ViewMetadataAdmissionGeneration > previous.ViewMetadataAdmissionGeneration
+	if active && existed && newGeneration && previous.ViewMetadataAdmissionReady {
+		s.captureProxyViewMetadataAdmissionTarget(hb.UUID, previous)
+	}
 	s.state.ProxyState.Update(hb, s.state.Tick)
 	store := s.state.ProxyState.Stores[hb.UUID]
-	if !s.viewMetadataAdmissionActive() {
+	if !active {
 		return true
+	}
+	if generation, ok := s.state.ViewMetadataAdmissionProxyTargets[hb.UUID]; ok &&
+		generation == hb.ViewMetadataAdmissionGeneration {
+		if s.state.ViewMetadataAdmissionProxyTargetTicks == nil {
+			s.state.ViewMetadataAdmissionProxyTargetTicks = make(map[string]uint64)
+		}
+		s.state.ViewMetadataAdmissionProxyTargetTicks[hb.UUID] = store.Tick
 	}
 	if newGeneration {
 		store.ViewMetadataAdmissionReady = false

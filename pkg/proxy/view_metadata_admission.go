@@ -43,12 +43,20 @@ func (s *Server) initViewMetadataAdmission(ctx context.Context) error {
 	}
 	s.viewMetadataAdmissionGeneration = generation
 	s.viewMetadataAdmissionUpdated = make(chan struct{}, 1)
+	s.viewMetadataHeartbeatWakeup = make(chan struct{}, 1)
 	return nil
 }
 
 func (s *Server) notifyViewMetadataAdmissionUpdated() {
 	select {
 	case s.viewMetadataAdmissionUpdated <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Server) notifyViewMetadataHeartbeat() {
+	select {
+	case s.viewMetadataHeartbeatWakeup <- struct{}{}:
 	default:
 	}
 }
@@ -65,10 +73,19 @@ func (s *Server) applyViewMetadataAdmission(
 		s.notifyViewMetadataAdmissionUpdated()
 		return nil
 	}
-	if snapshot.Generation != s.viewMetadataAdmissionGeneration {
-		s.runtime.Logger().Warn("ignored view metadata admission response for another proxy generation",
-			zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
-			zap.Uint64("response-generation", snapshot.Generation))
+	if snapshot.Generation < s.viewMetadataAdmissionGeneration {
+		if s.runtime != nil {
+			s.runtime.Logger().Warn("ignored stale view metadata admission response for proxy",
+				zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
+				zap.Uint64("response-generation", snapshot.Generation))
+		}
+		return nil
+	}
+	if snapshot.Generation > s.viewMetadataAdmissionGeneration {
+		copy := *snapshot
+		s.viewMetadataAdmission.Store(&copy)
+		s.notifyViewMetadataAdmissionUpdated()
+		s.revokeViewMetadataGeneration(snapshot.Generation)
 		return nil
 	}
 	if snapshot.Epoch > s.viewMetadataObservedEpoch.Load() {
@@ -94,11 +111,40 @@ func (s *Server) applyViewMetadataAdmission(
 				snapshot.Epoch)
 		}
 		s.viewMetadataObservedEpoch.Store(snapshot.Epoch)
+		s.notifyViewMetadataHeartbeat()
 	}
 	copy := *snapshot
 	s.viewMetadataAdmission.Store(&copy)
 	s.notifyViewMetadataAdmissionUpdated()
 	return nil
+}
+
+func (s *Server) revokeViewMetadataGeneration(authoritative uint64) {
+	s.viewMetadataRevocationOnce.Do(func() {
+		if s.viewMetadataAdmissionCancel != nil {
+			s.viewMetadataAdmissionCancel()
+		}
+		// Stop closes the listener before waiting for sessions, so no new client
+		// can enter after this method returns and existing tunnels are disconnected.
+		if s.app != nil {
+			if err := s.app.Stop(); err != nil && s.runtime != nil {
+				s.runtime.Logger().Error("failed to stop superseded proxy ingress",
+					zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
+					zap.Uint64("authoritative-generation", authoritative),
+					zap.Error(err))
+			}
+		}
+		if s.stopper != nil {
+			go func() {
+				if err := s.Close(); err != nil && s.runtime != nil {
+					s.runtime.Logger().Error("failed to close superseded proxy",
+						zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
+						zap.Uint64("authoritative-generation", authoritative),
+						zap.Error(err))
+				}
+			}()
+		}
+	})
 }
 
 func (s *Server) waitForViewMetadataAdmission(parent context.Context) error {
@@ -134,9 +180,9 @@ func (s *Server) waitForViewMetadataAdmission(parent context.Context) error {
 	}
 }
 
-// viewMetadataAdmissionTimeout covers one immediate heartbeat and one complete
-// retry after the configured interval. It therefore scales with valid long
-// heartbeat intervals instead of imposing an unrelated fixed startup limit.
+// viewMetadataAdmissionTimeout covers the two RPCs needed by an active epoch:
+// one to discover the authoritative epoch and one to report that observation.
+// The interval is retained as scheduling tolerance and as a fallback window.
 func (s *Server) viewMetadataAdmissionTimeout() time.Duration {
 	interval := s.config.HAKeeper.HeartbeatInterval.Duration
 	if interval <= 0 {
@@ -146,9 +192,9 @@ func (s *Server) viewMetadataAdmissionTimeout() time.Duration {
 	if rpcTimeout <= 0 {
 		rpcTimeout = defaultHeartbeatTimeout
 	}
-	retryWindow := max(interval, rpcTimeout)
-	if retryWindow > time.Duration(1<<63-1)-rpcTimeout {
+	const maxDuration = time.Duration(1<<63 - 1)
+	if rpcTimeout > (maxDuration-interval)/2 {
 		return time.Duration(1<<63 - 1)
 	}
-	return retryWindow + rpcTimeout
+	return interval + 2*rpcTimeout
 }

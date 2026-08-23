@@ -1350,6 +1350,7 @@ func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
 	s.state.DeletedStores = s.state.DeletedStores[pos:]
 	delete(s.state.ViewMetadataAdmissionCNReady, uuid)
 	delete(s.state.ViewMetadataAdmissionCNTargets, uuid)
+	delete(s.state.ViewMetadataAdmissionCNTargetTicks, uuid)
 	if store, ok := s.state.CNState.Stores[uuid]; ok {
 		delete(s.state.CNState.Stores, uuid)
 		var addr string
@@ -1372,6 +1373,7 @@ func (s *stateMachine) handleDeleteProxyCmd(uuid string) sm.Result {
 	delete(s.state.ProxyState.Stores, uuid)
 	delete(s.state.ViewMetadataAdmissionProxyReady, uuid)
 	delete(s.state.ViewMetadataAdmissionProxyTargets, uuid)
+	delete(s.state.ViewMetadataAdmissionProxyTargetTicks, uuid)
 	return sm.Result{}
 }
 
@@ -1945,6 +1947,8 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	s.state.ViewMetadataAdmissionProxyReady = nil
 	s.state.ViewMetadataAdmissionCNTargets = nil
 	s.state.ViewMetadataAdmissionProxyTargets = nil
+	s.state.ViewMetadataAdmissionCNTargetTicks = nil
+	s.state.ViewMetadataAdmissionProxyTargetTicks = nil
 	s.state.ViewMetadataAdmissionPending = false
 	return s.state.Unmarshal(data)
 }

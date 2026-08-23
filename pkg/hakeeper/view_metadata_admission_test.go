@@ -146,6 +146,37 @@ func TestViewMetadataAdmissionActivationUsesPostBarrierAcks(t *testing.T) {
 	require.True(t, rsm.state.ProxyState.Stores["proxy-1"].ViewMetadataAdmissionReady)
 }
 
+func TestViewMetadataAdmissionPreparingKeepsLegacyAndHidesPendingCN(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "log-1"},
+	}
+	updateViewMetadataLog(t, rsm, "log-1")
+	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:           "legacy-cn",
+		ServiceAddress: "legacy-pipeline",
+	})
+	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "pending-cn",
+		ServiceAddress:                  "pending-pipeline",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 2,
+	})
+
+	result, err := rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetEnableViewMetadataAdmissionCmd(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), result.Value)
+	require.True(t, rsm.state.CNState.Stores["legacy-cn"].ViewMetadataAdmissionReady)
+	require.False(t, rsm.state.CNState.Stores["pending-cn"].ViewMetadataAdmissionReady)
+
+	details := rsm.handleClusterDetailsQuery(Config{})
+	require.Len(t, details.CNStores, 1)
+	require.Equal(t, "legacy-cn", details.CNStores[0].UUID)
+}
+
 func TestViewMetadataAdmissionRejectsStaleGeneration(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.ViewMetadataAdmissionEnabled = true
@@ -175,6 +206,195 @@ func TestViewMetadataAdmissionRejectsStaleGeneration(t *testing.T) {
 	require.Equal(t, "new-address", rsm.state.CNState.Stores["cn-1"].ServiceAddress)
 	require.Equal(t, uint64(12),
 		rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionGeneration)
+}
+
+func TestViewMetadataAdmissionAllowsGenerationRollbackBeforeActivation(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 3
+	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "cn-1",
+		ServiceAddress:                  "new-cn",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 12,
+	})
+	updateViewMetadataProxy(t, rsm, pb.ProxyHeartbeat{
+		UUID:                            "proxy-1",
+		ListenAddress:                   "new-proxy",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 13,
+	})
+
+	rsm.state.Tick = 7
+	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:           "cn-1",
+		ServiceAddress: "rolled-back-cn",
+	})
+	updateViewMetadataProxy(t, rsm, pb.ProxyHeartbeat{
+		UUID:          "proxy-1",
+		ListenAddress: "rolled-back-proxy",
+	})
+
+	cn := rsm.state.CNState.Stores["cn-1"]
+	require.Equal(t, uint64(0), cn.ViewMetadataAdmissionGeneration)
+	require.Equal(t, uint64(7), cn.Tick)
+	require.Equal(t, "rolled-back-cn", cn.ServiceAddress)
+	proxy := rsm.state.ProxyState.Stores["proxy-1"]
+	require.Equal(t, uint64(0), proxy.ViewMetadataAdmissionGeneration)
+	require.Equal(t, uint64(7), proxy.Tick)
+	require.Equal(t, "rolled-back-proxy", proxy.ListenAddress)
+}
+
+func TestViewMetadataAdmissionReplacementKeepsOldGenerationUntilTimeout(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 10
+	rsm.state.ViewMetadataAdmissionEnabled = true
+	rsm.state.ViewMetadataAdmissionEpoch = 3
+	rsm.state.ViewMetadataRevalidationRequired = true
+	rsm.state.ViewMetadataCatalogFencedEpoch = 3
+	rsm.state.CNState.Stores["cn-1"] = pb.CNStoreInfo{
+		Tick:                            10,
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 10,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataAdmissionReady:      true,
+		ViewMetadataIngressReady:        true,
+	}
+	rsm.state.ProxyState.Stores["proxy-1"] = pb.ProxyStore{
+		UUID:                            "proxy-1",
+		Tick:                            10,
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 20,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataAdmissionReady:      true,
+	}
+
+	rsm.state.Tick = 11
+	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "cn-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 11,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataIngressReady:        true,
+		ViewMetadataRefreshSupported:    true,
+	})
+	updateViewMetadataProxy(t, rsm, pb.ProxyHeartbeat{
+		UUID:                            "proxy-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 21,
+		ViewMetadataObservedEpoch:       3,
+	})
+	require.Equal(t, uint64(10), rsm.state.ViewMetadataAdmissionCNTargets["cn-1"])
+	require.Equal(t, uint64(10), rsm.state.ViewMetadataAdmissionCNTargetTicks["cn-1"])
+	require.Equal(t, uint64(20), rsm.state.ViewMetadataAdmissionProxyTargets["proxy-1"])
+	require.Equal(t, uint64(10), rsm.state.ViewMetadataAdmissionProxyTargetTicks["proxy-1"])
+
+	// Rejected heartbeats from the replaced processes receive the authoritative
+	// generation but cannot refresh their captured target ticks.
+	rsm.state.Tick = 12
+	cnBatch := updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "cn-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 10,
+	})
+	proxyBatch := updateViewMetadataProxy(t, rsm, pb.ProxyHeartbeat{
+		UUID:                            "proxy-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 20,
+	})
+	require.Equal(t, uint64(11), cnBatch.ViewMetadataAdmission.Generation)
+	require.Equal(t, uint64(21), proxyBatch.ViewMetadataAdmission.Generation)
+	require.Equal(t, uint64(10), rsm.state.ViewMetadataAdmissionCNTargetTicks["cn-1"])
+	require.Equal(t, uint64(10), rsm.state.ViewMetadataAdmissionProxyTargetTicks["proxy-1"])
+
+	// A third overlapping process extends the revocation deadline to the latest
+	// replaced owner without forgetting the still-unexpired oldest generation.
+	rsm.state.Tick = 13
+	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "cn-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 12,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataIngressReady:        true,
+		ViewMetadataRefreshSupported:    true,
+	})
+	require.Equal(t, uint64(10), rsm.state.ViewMetadataAdmissionCNTargets["cn-1"])
+	require.Equal(t, uint64(11), rsm.state.ViewMetadataAdmissionCNTargetTicks["cn-1"])
+	rsm.state.Tick = 14
+	cnBatch = updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "cn-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 11,
+	})
+	require.Equal(t, uint64(12), cnBatch.ViewMetadataAdmission.Generation)
+	require.Equal(t, uint64(11), rsm.state.ViewMetadataAdmissionCNTargetTicks["cn-1"])
+
+	cfg := Config{
+		TickPerSecond:     1,
+		CNStoreTimeout:    5 * time.Second,
+		ProxyStoreTimeout: 5 * time.Second,
+	}
+	rsm.state.Tick = 16
+	result, err := rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfig(cfg),
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.True(t, rsm.state.ViewMetadataAdmissionPending)
+
+	rsm.state.Tick = 17
+	result, err = rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfig(cfg),
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Value)
+	require.False(t, rsm.state.ViewMetadataAdmissionPending)
+	require.True(t, rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionReady)
+	require.True(t, rsm.state.ProxyState.Stores["proxy-1"].ViewMetadataAdmissionReady)
+}
+
+func TestViewMetadataAdmissionPreparingWaitsForReplacedGenerationTimeout(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 5
+	rsm.state.ViewMetadataAdmissionPreparing = true
+	rsm.state.ViewMetadataAdmissionEpoch = 1
+	rsm.state.ViewMetadataRevalidationRequired = true
+	rsm.state.ViewMetadataCatalogFencedEpoch = 1
+	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "log-1"},
+	}
+	rsm.state.ViewMetadataAdmissionLogReady = map[string]bool{"log-1": true}
+	rsm.state.ViewMetadataAdmissionCNReady = map[string]bool{"cn-1": true}
+	rsm.state.ViewMetadataAdmissionProxyReady = make(map[string]bool)
+	rsm.state.CNState.Stores["cn-1"] = pb.CNStoreInfo{
+		Tick:                            5,
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 2,
+		ViewMetadataObservedEpoch:       1,
+		ViewMetadataCatalogFencedEpoch:  1,
+		ViewMetadataIngressReady:        true,
+	}
+	rsm.state.ViewMetadataAdmissionCNTargets = map[string]uint64{"cn-1": 1}
+	rsm.state.ViewMetadataAdmissionCNTargetTicks = map[string]uint64{"cn-1": 1}
+
+	cfg := Config{TickPerSecond: 1, CNStoreTimeout: 10 * time.Second}
+	result, err := rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfig(cfg),
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.True(t, rsm.state.ViewMetadataAdmissionPreparing)
+
+	rsm.state.Tick = 12
+	result, err = rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfig(cfg),
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Value)
+	require.True(t, rsm.state.ViewMetadataAdmissionEnabled)
 }
 
 func TestLifecycleUnawareJoinAdvancesEpochBeforeAdmission(t *testing.T) {
@@ -369,6 +589,8 @@ func TestViewMetadataAdmissionSnapshotRoundTripAndOldSnapshotFailClosed(t *testi
 	source.state.ViewMetadataAdmissionPending = true
 	source.state.ViewMetadataAdmissionCNTargets = map[string]uint64{"cn-1": 7}
 	source.state.ViewMetadataAdmissionProxyTargets = map[string]uint64{"proxy-1": 8}
+	source.state.ViewMetadataAdmissionCNTargetTicks = map[string]uint64{"cn-1": 70}
+	source.state.ViewMetadataAdmissionProxyTargetTicks = map[string]uint64{"proxy-1": 80}
 
 	buf := bytes.NewBuffer(nil)
 	require.NoError(t, source.SaveSnapshot(buf, nil, nil))
@@ -380,6 +602,12 @@ func TestViewMetadataAdmissionSnapshotRoundTripAndOldSnapshotFailClosed(t *testi
 	require.True(t, recovered.state.ViewMetadataAdmissionPending)
 	require.Equal(t, map[string]uint64{"cn-1": 7},
 		recovered.state.ViewMetadataAdmissionCNTargets)
+	require.Equal(t, map[string]uint64{"proxy-1": 8},
+		recovered.state.ViewMetadataAdmissionProxyTargets)
+	require.Equal(t, map[string]uint64{"cn-1": 70},
+		recovered.state.ViewMetadataAdmissionCNTargetTicks)
+	require.Equal(t, map[string]uint64{"proxy-1": 80},
+		recovered.state.ViewMetadataAdmissionProxyTargetTicks)
 
 	legacy := pb.NewRSMState()
 	legacyBytes, err := legacy.Marshal()
@@ -455,6 +683,8 @@ func TestViewMetadataAdmissionReconciliationExpiresAbandonedGeneration(t *testin
 	}
 	rsm.state.ViewMetadataAdmissionCNTargets = map[string]uint64{"abandoned-cn": 9}
 	rsm.state.ViewMetadataAdmissionProxyTargets = map[string]uint64{"abandoned-proxy": 10}
+	rsm.state.ViewMetadataAdmissionCNTargetTicks = map[string]uint64{"abandoned-cn": 1}
+	rsm.state.ViewMetadataAdmissionProxyTargetTicks = map[string]uint64{"abandoned-proxy": 1}
 
 	result, err := rsm.Update(sm.Entry{
 		Index: rsm.state.Index + 1,
@@ -473,6 +703,8 @@ func TestViewMetadataAdmissionReconciliationExpiresAbandonedGeneration(t *testin
 		rsm.state.ProxyState.Stores["abandoned-proxy"].ViewMetadataAdmissionReady)
 	require.Empty(t, rsm.state.ViewMetadataAdmissionCNTargets)
 	require.Empty(t, rsm.state.ViewMetadataAdmissionProxyTargets)
+	require.Empty(t, rsm.state.ViewMetadataAdmissionCNTargetTicks)
+	require.Empty(t, rsm.state.ViewMetadataAdmissionProxyTargetTicks)
 }
 
 func TestViewMetadataAdmissionDeletionPrunesHistoricalMembership(t *testing.T) {
@@ -483,6 +715,8 @@ func TestViewMetadataAdmissionDeletionPrunesHistoricalMembership(t *testing.T) {
 	rsm.state.ViewMetadataAdmissionProxyReady = make(map[string]bool)
 	rsm.state.ViewMetadataAdmissionCNTargets = make(map[string]uint64)
 	rsm.state.ViewMetadataAdmissionProxyTargets = make(map[string]uint64)
+	rsm.state.ViewMetadataAdmissionCNTargetTicks = make(map[string]uint64)
+	rsm.state.ViewMetadataAdmissionProxyTargetTicks = make(map[string]uint64)
 
 	for i := range 64 {
 		cnID := fmt.Sprintf("cn-%d", i)
@@ -502,6 +736,8 @@ func TestViewMetadataAdmissionDeletionPrunesHistoricalMembership(t *testing.T) {
 		})
 		rsm.state.ViewMetadataAdmissionCNTargets[cnID] = generation
 		rsm.state.ViewMetadataAdmissionProxyTargets[proxyID] = generation
+		rsm.state.ViewMetadataAdmissionCNTargetTicks[cnID] = generation
+		rsm.state.ViewMetadataAdmissionProxyTargetTicks[proxyID] = generation
 
 		rsm.handleDeleteCNCmd(cnID)
 		rsm.handleDeleteProxyCmd(proxyID)
@@ -511,6 +747,8 @@ func TestViewMetadataAdmissionDeletionPrunesHistoricalMembership(t *testing.T) {
 		require.Empty(t, rsm.state.ViewMetadataAdmissionProxyReady)
 		require.Empty(t, rsm.state.ViewMetadataAdmissionCNTargets)
 		require.Empty(t, rsm.state.ViewMetadataAdmissionProxyTargets)
+		require.Empty(t, rsm.state.ViewMetadataAdmissionCNTargetTicks)
+		require.Empty(t, rsm.state.ViewMetadataAdmissionProxyTargetTicks)
 	}
 
 	buf := bytes.NewBuffer(nil)
@@ -521,4 +759,6 @@ func TestViewMetadataAdmissionDeletionPrunesHistoricalMembership(t *testing.T) {
 	require.Empty(t, recovered.state.ViewMetadataAdmissionProxyReady)
 	require.Empty(t, recovered.state.ViewMetadataAdmissionCNTargets)
 	require.Empty(t, recovered.state.ViewMetadataAdmissionProxyTargets)
+	require.Empty(t, recovered.state.ViewMetadataAdmissionCNTargetTicks)
+	require.Empty(t, recovered.state.ViewMetadataAdmissionProxyTargetTicks)
 }

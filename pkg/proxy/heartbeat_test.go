@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -31,8 +33,9 @@ import (
 var _ logservice.ProxyHAKeeperClient = new(testHAClient)
 
 type testHAClient struct {
-	succeed bool
-	sent    chan pb.ProxyHeartbeat
+	succeed     bool
+	sent        chan pb.ProxyHeartbeat
+	heartbeatFn func(context.Context, pb.ProxyHeartbeat) (pb.CommandBatch, error)
 }
 
 func (tclient *testHAClient) Close() error {
@@ -96,6 +99,9 @@ func (tclient *testHAClient) DeleteCNStore(ctx context.Context, cnStore pb.Delet
 }
 
 func (tclient *testHAClient) SendProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+	if tclient.heartbeatFn != nil {
+		return tclient.heartbeatFn(ctx, hb)
+	}
 	if tclient.sent != nil {
 		tclient.sent <- hb
 	}
@@ -103,6 +109,17 @@ func (tclient *testHAClient) SendProxyHeartbeat(ctx context.Context, hb pb.Proxy
 		return pb.CommandBatch{}, nil
 	}
 	return pb.CommandBatch{}, moerr.NewInternalErrorNoCtx("return err")
+}
+
+type admissionHeartbeatCluster struct {
+	clusterservice.MOCluster
+	admission pb.ViewMetadataAdmission
+}
+
+func (c *admissionHeartbeatCluster) Refresh(context.Context) error { return nil }
+
+func (c *admissionHeartbeatCluster) GetViewMetadataAdmission() pb.ViewMetadataAdmission {
+	return c.admission
 }
 
 func TestServer_doHeartbeat(t *testing.T) {
@@ -145,6 +162,77 @@ func TestServerHeartbeatSendsImmediately(t *testing.T) {
 	}
 	select {
 	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Proxy heartbeat did not stop after cancellation")
+	}
+}
+
+func TestServerHeartbeatImmediatelyReportsObservedAdmissionEpoch(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(t.Name(), rt)
+	releases := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	calls := make(chan pb.ProxyHeartbeat, 2)
+	callIndex := 0
+	client := &testHAClient{heartbeatFn: func(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+		index := callIndex
+		callIndex++
+		calls <- hb
+		select {
+		case <-ctx.Done():
+			return pb.CommandBatch{}, ctx.Err()
+		case <-releases[index]:
+		}
+		return pb.CommandBatch{ViewMetadataAdmission: &pb.ViewMetadataAdmission{
+			Enabled:    true,
+			Epoch:      5,
+			Generation: 9,
+			Ready:      index == 1,
+		}}, nil
+	}}
+	cluster := &admissionHeartbeatCluster{admission: pb.ViewMetadataAdmission{
+		Enabled: true,
+		Epoch:   5,
+	}}
+	ser := &Server{
+		haKeeperClient:                  client,
+		configData:                      util.NewConfigData(nil),
+		runtime:                         runtime.ServiceRuntime(t.Name()),
+		handler:                         &handler{moCluster: cluster},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		viewMetadataHeartbeatWakeup:     make(chan struct{}, 1),
+	}
+	ser.config.HAKeeper.HeartbeatInterval.Duration = time.Hour
+	ser.config.HAKeeper.HeartbeatTimeout.Duration = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		ser.heartbeat(ctx)
+	}()
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- ser.waitForViewMetadataAdmission(waitCtx) }()
+
+	select {
+	case first := <-calls:
+		require.Zero(t, first.ViewMetadataObservedEpoch)
+	case <-time.After(time.Second):
+		t.Fatal("Proxy did not send the initial heartbeat")
+	}
+	close(releases[0])
+	select {
+	case second := <-calls:
+		require.Equal(t, uint64(5), second.ViewMetadataObservedEpoch)
+	case <-time.After(time.Second):
+		t.Fatal("Proxy waited for the one-hour ticker before reporting the observed epoch")
+	}
+	close(releases[1])
+	require.NoError(t, <-waitDone)
+	cancel()
+	select {
+	case <-heartbeatDone:
 	case <-time.After(time.Second):
 		t.Fatal("Proxy heartbeat did not stop after cancellation")
 	}

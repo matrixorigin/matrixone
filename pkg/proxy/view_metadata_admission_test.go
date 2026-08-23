@@ -17,9 +17,11 @@ package proxy
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -27,6 +29,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
+
+type admissionProxyApplication struct {
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func (a *admissionProxyApplication) Start() error { return nil }
+
+func (a *admissionProxyApplication) Stop() error {
+	a.once.Do(func() { close(a.stopped) })
+	return nil
+}
+
+func (a *admissionProxyApplication) StopAndWait() error { return a.Stop() }
+
+func (a *admissionProxyApplication) GetSession(uint64) (goetty.IOSession, error) {
+	return nil, errors.New("no session")
+}
 
 type admissionProxyHAKeeperClient struct {
 	logservice.ProxyHAKeeperClient
@@ -106,6 +126,34 @@ func TestProxyAdmissionRefreshesMembershipBeforeEpochAck(t *testing.T) {
 	require.False(t, s.viewMetadataAdmission.Load().Ready)
 }
 
+func TestProxyAdmissionRevokesIngressForHigherGeneration(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	app := &admissionProxyApplication{stopped: make(chan struct{})}
+	s := &Server{
+		config:                          Config{UUID: "superseded-proxy"},
+		runtime:                         runtime.DefaultRuntime(),
+		app:                             app,
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		viewMetadataAdmissionContext:    ctx,
+		viewMetadataAdmissionCancel:     cancel,
+	}
+
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(),
+		&logservicepb.ViewMetadataAdmission{
+			Enabled:    true,
+			Epoch:      5,
+			Generation: 10,
+		}))
+	require.Equal(t, uint64(10), s.viewMetadataAdmission.Load().Generation)
+	select {
+	case <-app.stopped:
+	default:
+		t.Fatal("superseded Proxy ingress and active sessions were not stopped")
+	}
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+}
+
 func TestProxyAdmissionWaitsForAuthoritativeResponse(t *testing.T) {
 	s := &Server{
 		config:                          Config{UUID: "proxy-authoritative-wait"},
@@ -132,7 +180,7 @@ func TestProxyAdmissionTimeoutTracksHeartbeatConfiguration(t *testing.T) {
 	s := &Server{}
 	s.config.HAKeeper.HeartbeatInterval.Duration = 31 * time.Second
 	s.config.HAKeeper.HeartbeatTimeout.Duration = 3 * time.Second
-	require.Equal(t, 34*time.Second, s.viewMetadataAdmissionTimeout())
+	require.Equal(t, 37*time.Second, s.viewMetadataAdmissionTimeout())
 }
 
 func TestProxyAdmissionWaitHonorsCallerCancellation(t *testing.T) {
