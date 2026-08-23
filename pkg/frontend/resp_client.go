@@ -109,6 +109,9 @@ func respClientWhenSuccess(ses *Session,
 	if execCtx.inMigration {
 		return nil
 	}
+	if err = publishPreparedCursorQueryResult(execCtx); err != nil {
+		return err
+	}
 	err = execCtx.resper.RespPostMeta(execCtx, nil)
 	if err != nil {
 		return err
@@ -221,15 +224,22 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSe
 		return nil
 	}
 
-	if resper.binWr != nil {
-		//write batch into fileservice
-		err = resper.binWr.Write(execCtx, crs, bat)
-		if err != nil {
-			return err
-		}
+	if err = resper.saveResultBatch(execCtx, crs, bat); err != nil {
+		return err
 	}
 
 	return resper.writeClientBatch(execCtx, crs, bat)
+}
+
+// saveResultBatch persists a result batch without writing it to the client.
+// Server cursors use this path while retaining rows for COM_STMT_FETCH, so
+// cursor execution must keep the same save_query_result lifecycle as a normal
+// result stream.
+func (resper *MysqlResp) saveResultBatch(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
+	if resper.binWr == nil {
+		return nil
+	}
+	return resper.binWr.Write(execCtx, crs, bat)
 }
 
 func (resper *MysqlResp) writeClientBatch(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {

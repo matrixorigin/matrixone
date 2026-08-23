@@ -827,6 +827,12 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
 		return e
 	}
+	// A retry is a new statement execution generation. Do not let a generated
+	// value from the rolled-back attempt win the new attempt's result, and
+	// restore the session-visible LAST_INSERT_ID baseline until the retry
+	// generates a replacement value.
+	c.proc.SetStatementLastInsertID(0)
+	c.proc.SetLastInsertID(c.proc.GetSessionInfo().LastInsertID)
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()

@@ -624,6 +624,46 @@ func TestBuildControlFlowTypedNullVarcharMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildControlFlowTextFamilyMetadataFromColumns(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["text_family"] = &planpb.TableDef{
+		TblId:     1001,
+		Name:      "text_family",
+		DbName:    "tpch",
+		TableType: "ORDINARY",
+		Cols: []*planpb.ColDef{
+			{Name: "tiny_col", OriginName: "tiny_col", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}},
+			{Name: "medium_col", OriginName: "medium_col", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}},
+			{Name: "long_col", OriginName: "long_col", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxLongTextLen}},
+		},
+	}
+	ctx.objects["text_family"] = &ObjectRef{ObjName: "text_family", SchemaName: "tpch"}
+
+	for _, test := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{name: "case medium", sql: "select case when true then medium_col else medium_col end from text_family", width: types.MaxMediumTextLen},
+		{name: "if long", sql: "select if(true, long_col, long_col) from text_family", width: types.MaxLongTextLen},
+		{name: "coalesce tiny", sql: "select coalesce(tiny_col, tiny_col) from text_family", width: types.MaxTinyTextLen},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			pl, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_text), projectList[0].Typ.Id)
+			require.Equal(t, test.width, projectList[0].Typ.Width)
+		})
+	}
+}
+
 func TestBuildCaseSameFixedBinaryMetadata(t *testing.T) {
 	for _, sql := range []string{
 		`select case when true then cast('a' as binary(4)) else cast('b' as binary(4)) end`,
