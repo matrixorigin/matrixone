@@ -54,6 +54,88 @@ func maxByInputs(t *testing.T, mp *mpool.MPool, values []string, nullValue map[i
 	return []*vector.Vector{valueVec, orderVec, tieVec}
 }
 
+func TestMaxByEqualCandidatesMergeStringSourcesForAllPhysicalFamilies(t *testing.T) {
+	for _, valueType := range []struct {
+		name  string
+		typ   types.Type
+		value any
+	}{
+		{name: "fixed", typ: types.T_int64.ToType(), value: int64(7)},
+		{name: "json", typ: types.T_json.ToType(), value: []byte(`{"v":7}`)},
+		{name: "array", typ: types.T_array_float32.ToType(), value: types.ArrayToBytes([]float32{7})},
+	} {
+		for _, sources := range [][]types.StringSource{
+			{types.StringSourceLiteral, types.StringSourceCOMStmt},
+			{types.StringSourceCOMStmt, types.StringSourceLiteral},
+		} {
+			t.Run(fmt.Sprintf("%s/%d-first", valueType.name, sources[0]), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				values := vector.NewVec(valueType.typ)
+				for range sources {
+					if valueType.typ.IsVarlen() {
+						require.NoError(t, vector.AppendBytes(values, valueType.value.([]byte), false, mp))
+					} else {
+						require.NoError(t, vector.AppendAny(values, valueType.value, false, mp))
+					}
+				}
+				require.NoError(t, values.SetStringSourcesWithMP(sources, mp))
+				orders := vector.NewVec(types.T_int64.ToType())
+				ties := vector.NewVec(types.T_int64.ToType())
+				for range sources {
+					require.NoError(t, vector.AppendFixed(orders, int64(1), false, mp))
+					require.NoError(t, vector.AppendFixed(ties, int64(1), false, mp))
+				}
+				exec := makeMaxByExec(mp, AggIdOfMaxBy, false, []types.Type{
+					valueType.typ, types.T_int64.ToType(), types.T_int64.ToType(),
+				})
+				require.NoError(t, exec.GroupGrow(1))
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, orders, ties}))
+				results, err := exec.Flush()
+				require.NoError(t, err)
+				require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(0))
+				results[0].Free(mp)
+				exec.Free()
+				values.Free(mp)
+				orders.Free(mp)
+				ties.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
+func TestMaxByPartialMergeCombinesEqualCandidateStringSources(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeExec := func(source types.StringSource) (*maxByExec, []*vector.Vector) {
+		values := vector.NewVec(types.T_int64.ToType())
+		orders := vector.NewVec(types.T_int64.ToType())
+		ties := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(values, int64(7), false, mp))
+		require.NoError(t, vector.AppendFixed(orders, int64(1), false, mp))
+		require.NoError(t, vector.AppendFixed(ties, int64(1), false, mp))
+		require.NoError(t, values.SetStringSource(source))
+		exec := makeMaxByExec(mp, AggIdOfMaxBy, false, []types.Type{
+			types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
+		}).(*maxByExec)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, orders, ties}))
+		return exec, []*vector.Vector{values, orders, ties}
+	}
+	left, leftInputs := makeExec(types.StringSourceLiteral)
+	right, rightInputs := makeExec(types.StringSourceCOMStmt)
+	require.NoError(t, left.Merge(right, 0, 0))
+	results, err := left.Flush()
+	require.NoError(t, err)
+	require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(0))
+	results[0].Free(mp)
+	left.Free()
+	right.Free()
+	for _, vec := range append(leftInputs, rightInputs...) {
+		vec.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestMaxByCompactsReplacedVarlenaState(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}

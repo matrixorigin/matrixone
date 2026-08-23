@@ -808,6 +808,13 @@ func (v *Vector) SetStringSourceAtWithMP(row int, source types.StringSource, mp 
 	return nil
 }
 
+// PreflightSetStringSourceAt reserves a row-source sidecar without changing
+// logical provenance. Correlated-state owners call it before publishing hash
+// or aggregate state that cannot be rolled back after an allocation failure.
+func (v *Vector) PreflightSetStringSourceAt(row int, source types.StringSource, mp *mpool.MPool) error {
+	return v.preflightStringSourceAt(row, source, mp)
+}
+
 func (v *Vector) preflightStringSourceAt(row int, source types.StringSource, mp *mpool.MPool) error {
 	if v == nil || row < 0 || row >= v.length || v.IsConst() ||
 		v.stringSources != nil || v.stringSource == source {

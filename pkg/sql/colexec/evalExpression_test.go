@@ -293,7 +293,7 @@ func TestLiteralVecExpressionExecutorRestoresLiteralSource(t *testing.T) {
 
 func TestLiteralStringSourceRejectsWideWireValuesBeforeNarrowing(t *testing.T) {
 	for _, rawSource := range []uint32{256, 257, ^uint32(0)} {
-		_, err := literalStringSource(&plan.Literal{StringSource: rawSource})
+		_, err := DecodeLiteralStringSource(&plan.Literal{StringSource: rawSource})
 		require.ErrorContains(t, err, "invalid literal string source")
 	}
 	for source := types.StringSourceExpression; source <= types.StringSourceCOMStmt; source++ {
@@ -301,7 +301,7 @@ func TestLiteralStringSourceRejectsWideWireValuesBeforeNarrowing(t *testing.T) {
 		if source == types.StringSourceLiteral {
 			encoded = 0
 		}
-		decoded, err := literalStringSource(&plan.Literal{StringSource: encoded})
+		decoded, err := DecodeLiteralStringSource(&plan.Literal{StringSource: encoded})
 		require.NoError(t, err)
 		require.Equal(t, source, decoded)
 	}

@@ -171,6 +171,21 @@ func (ctr *container) commitGroupByChunk(
 	offset, rows int,
 	preview groupInsertPreview,
 ) ([]uint64, int, error) {
+	hasStringSourceMetadata := ctr.groupKeyStringSourceMetadata
+	if !hasStringSourceMetadata {
+		for _, vec := range vectors {
+			if vec.HasStringSourceMetadata() {
+				hasStringSourceMetadata = true
+				break
+			}
+		}
+	}
+	if hasStringSourceMetadata {
+		if err := ctr.preflightDuplicateGroupKeyStringSources(
+			vectors, offset, preview.values, preview.inserted); err != nil {
+			return nil, 0, err
+		}
+	}
 	values, _, err := ctr.hr.TxnItr.CommitPreview(&ctr.hr.insertPlan)
 	if err != nil {
 		return nil, 0, err
@@ -183,7 +198,91 @@ func (ctr *container) commitGroupByChunk(
 	if more != preview.newGroups {
 		return nil, 0, mpool.ErrAllocationAccountInvariant
 	}
+	if hasStringSourceMetadata {
+		if err := ctr.mergeDuplicateGroupKeyStringSources(
+			vectors, offset, values, preview.inserted); err != nil {
+			return nil, 0, err
+		}
+		ctr.groupKeyStringSourceMetadata = true
+	}
 	return values, more, nil
+}
+
+func (ctr *container) preflightDuplicateGroupKeyStringSources(
+	vectors []*vector.Vector,
+	offset int,
+	groups []uint64,
+	inserted []uint8,
+) error {
+	for row := range groups {
+		if inserted[row] != 0 || groups[row] == 0 {
+			continue
+		}
+		groupIndex := int(groups[row] - 1)
+		batchIndex := groupIndex / aggBatchSize
+		batchRow := groupIndex % aggBatchSize
+		// A duplicate can refer to a group first inserted in this same preview;
+		// its selected-row append preflight owns the destination sidecar.
+		if batchIndex >= len(ctr.groupByBatches) {
+			continue
+		}
+		destination := ctr.groupByBatches[batchIndex]
+		for column, sourceVector := range vectors {
+			destinationVector := destination.Vecs[column]
+			if !sourceVector.HasStringSourceMetadata() && !destinationVector.HasStringSourceMetadata() {
+				continue
+			}
+			if err := destinationVector.PreflightSetStringSourceAt(
+				batchRow, sourceVector.GetStringSourceAt(offset+row), ctr.mp); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// mergeDuplicateGroupKeyStringSources keeps SQL key equality independent from
+// provenance while making the representative metadata deterministic. New rows
+// already copied their complete metadata in appendGroupByBatch; duplicate rows
+// contribute source ownership to the existing representative.
+func (ctr *container) mergeDuplicateGroupKeyStringSources(
+	vectors []*vector.Vector,
+	offset int,
+	groups []uint64,
+	inserted []uint8,
+) error {
+	for row := range groups {
+		if inserted[row] != 0 || groups[row] == 0 {
+			continue
+		}
+		groupIndex := int(groups[row] - 1)
+		batchIndex := groupIndex / aggBatchSize
+		batchRow := groupIndex % aggBatchSize
+		if batchIndex >= len(ctr.groupByBatches) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		destination := ctr.groupByBatches[batchIndex]
+		for column, sourceVector := range vectors {
+			destinationVector := destination.Vecs[column]
+			if !sourceVector.HasStringSourceMetadata() && !destinationVector.HasStringSourceMetadata() {
+				continue
+			}
+			merged, err := types.MergeStringSources(
+				destinationVector.GetStringSourceAt(batchRow),
+				sourceVector.GetStringSourceAt(offset+row),
+			)
+			if err != nil {
+				return err
+			}
+			if merged == destinationVector.GetStringSourceAt(batchRow) {
+				continue
+			}
+			if err := destinationVector.SetStringSourceAtWithMP(batchRow, merged, ctr.mp); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {

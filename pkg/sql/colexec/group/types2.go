@@ -226,12 +226,13 @@ type container struct {
 	aggArgEvaluate []colexec.ExprEvalVector
 
 	// group by columns
-	groupByTypes   []types.Type
-	groupByBatches []*batch.Batch
-	groupByStandby *batch.Batch
-	groupingRollup []*vector.Vector
-	groupByHashKey []int32
-	hashKeyVecs    []*vector.Vector
+	groupByTypes                 []types.Type
+	groupByBatches               []*batch.Batch
+	groupByStandby               *batch.Batch
+	groupingRollup               []*vector.Vector
+	groupByHashKey               []int32
+	hashKeyVecs                  []*vector.Vector
+	groupKeyStringSourceMetadata bool
 
 	// MergeGroup locks the partial wire metadata on the first input. It must
 	// survive resident spills, because later partials and queued spill records
@@ -580,6 +581,7 @@ func (ctr *container) freeGroupByBatches() {
 		}
 	}
 	ctr.groupByBatches = nil
+	ctr.groupKeyStringSourceMetadata = false
 	if ctr.groupByStandby != nil {
 		ctr.groupByStandby.Clean(ctr.mp)
 		ctr.groupByStandby = nil

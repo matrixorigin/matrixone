@@ -25,6 +25,67 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFixedMinMaxPreservesAndMergesStringSources(t *testing.T) {
+	for _, valueType := range []struct {
+		name       string
+		typ        types.Type
+		low, high  any
+		equalValue any
+	}{
+		{name: "int64", typ: types.T_int64.ToType(), low: int64(1), high: int64(2), equalValue: int64(7)},
+		{name: "date", typ: types.T_date.ToType(), low: types.Date(1), high: types.Date(2), equalValue: types.Date(7)},
+		{name: "decimal64", typ: types.T_decimal64.ToType(), low: types.Decimal64(1), high: types.Decimal64(2), equalValue: types.Decimal64(7)},
+	} {
+		for _, aggID := range []int64{AggIdOfMin, AggIdOfMax} {
+			t.Run(fmt.Sprintf("%s/%d", valueType.name, aggID), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				input := vector.NewVec(valueType.typ)
+				require.NoError(t, vector.AppendAny(input, valueType.low, false, mp))
+				require.NoError(t, vector.AppendAny(input, valueType.high, false, mp))
+				require.NoError(t, input.SetStringSourcesWithMP([]types.StringSource{
+					types.StringSourceSQLPrepare, types.StringSourceCOMStmt,
+				}, mp))
+				exec := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, valueType.typ)
+				require.NoError(t, exec.GroupGrow(1))
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+				results, err := exec.Flush()
+				require.NoError(t, err)
+				want := types.StringSourceSQLPrepare
+				if aggID == AggIdOfMax {
+					want = types.StringSourceCOMStmt
+				}
+				require.Equal(t, want, results[0].GetStringSourceAt(0))
+				results[0].Free(mp)
+				exec.Free()
+				input.Free(mp)
+
+				leftInput := vector.NewVec(valueType.typ)
+				rightInput := vector.NewVec(valueType.typ)
+				require.NoError(t, vector.AppendAny(leftInput, valueType.equalValue, false, mp))
+				require.NoError(t, vector.AppendAny(rightInput, valueType.equalValue, false, mp))
+				require.NoError(t, leftInput.SetStringSource(types.StringSourceLiteral))
+				require.NoError(t, rightInput.SetStringSource(types.StringSourceUserVariable))
+				left := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, valueType.typ)
+				right := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, valueType.typ)
+				require.NoError(t, left.GroupGrow(1))
+				require.NoError(t, right.GroupGrow(1))
+				require.NoError(t, left.BulkFill(0, []*vector.Vector{leftInput}))
+				require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
+				require.NoError(t, left.Merge(right, 0, 0))
+				results, err = left.Flush()
+				require.NoError(t, err)
+				require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(0))
+				results[0].Free(mp)
+				left.Free()
+				right.Free()
+				leftInput.Free(mp)
+				rightInput.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
 func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 	values := []string{"a", "b", "c", "E", "C", "D"}
 	testCases := []struct {

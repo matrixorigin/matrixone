@@ -1863,7 +1863,7 @@ func generateConstExpressionExecutor(
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
 		if err == nil {
-			source, sourceErr := literalStringSource(con)
+			source, sourceErr := DecodeLiteralStringSource(con)
 			if sourceErr != nil {
 				vec.Free(proc.Mp())
 				return nil, sourceErr
@@ -1900,7 +1900,7 @@ func generateConstExpressionExecutor(
 	}
 	if err == nil && con.GetIsnull() {
 		var source types.StringSource
-		source, err = literalStringSource(con)
+		source, err = DecodeLiteralStringSource(con)
 		if err == nil {
 			err = vec.SetStringSource(source)
 		}
@@ -1908,7 +1908,10 @@ func generateConstExpressionExecutor(
 	return vec, err
 }
 
-func literalStringSource(literal *plan.Literal) (types.StringSource, error) {
+// DecodeLiteralStringSource validates the protobuf-width encoding before
+// narrowing it to the runtime enum. Scalar literal consumers must share this
+// boundary so malformed plans cannot depend on the chosen execution path.
+func DecodeLiteralStringSource(literal *plan.Literal) (types.StringSource, error) {
 	if literal == nil || literal.GetStringSource() == 0 {
 		return types.StringSourceLiteral, nil
 	}
@@ -1940,7 +1943,7 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 		if t == nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "args in list must be constant")
 		}
-		sources[i], err = literalStringSource(t)
+		sources[i], err = DecodeLiteralStringSource(t)
 		if err != nil {
 			vec.Free(proc.Mp())
 			return nil, err

@@ -33,8 +33,16 @@ func mergeEqualRuntimeStringDomain(
 ) error {
 	destinationType := *destination.GetType()
 	sourceType := *source.GetType()
+	mergedSource, err := types.MergeStringSources(
+		destination.GetStringSourceAt(destinationRow), source.GetStringSourceAt(sourceRow))
+	if err != nil {
+		return err
+	}
+	if err := destination.PreflightSetStringSourceAt(destinationRow, mergedSource, mp); err != nil {
+		return err
+	}
 	if types.StaticStringDomain(destinationType) == types.StringDomainNone {
-		return nil
+		return destination.SetStringSourceAtWithMP(destinationRow, mergedSource, mp)
 	}
 	destinationState, err := types.NewStringSemanticState(
 		destinationType,
@@ -68,11 +76,6 @@ func mergeEqualRuntimeStringDomain(
 		return err
 	}
 	if err := destination.SetRuntimeStringDomainAtWithMP(destinationRow, merged.RuntimeDomain(), mp); err != nil {
-		return err
-	}
-	mergedSource, err := types.MergeStringSources(
-		destination.GetStringSourceAt(destinationRow), source.GetStringSourceAt(sourceRow))
-	if err != nil {
 		return err
 	}
 	return destination.SetStringSourceAtWithMP(destinationRow, mergedSource, mp)

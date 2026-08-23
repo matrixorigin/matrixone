@@ -14,7 +14,7 @@
 | arithmetic / string / general function wrapper | function executor 与各 kernel | kernel 生成新值时为 Expression；仅明确声明的透明 wrapper 传播 | expression consumer UT；BVT wrapper controls |
 | COALESCE | `evalExpression.go` | 每行采用 selected arm 来源 | 独立 selected-arm UT/BVT |
 | IF、CASE、IFNULL | `evalExpression.go` | common-domain：结果 source 为 Expression；runtime domain仍按被选中值相对公共静态类型计算；IFNULL rewrite 为 CASE | normal/selection/fold/reset flow-control UT；独立 BVT controls |
-| vector → scalar literal | `rule.GetConstantValue` | 目标 row 来源编码进 `Literal.StringSource`，NULL 不例外；普通 Literal 使用兼容零值 | rule/compile protobuf round-trip UT |
+| vector → scalar literal / VALUE_SCAN scalar materialization | `rule.GetConstantValue`、`GetConstantValue2`、`constructValueScan` | raw-width校验后目标row来源编码/写入，NULL不例外；constant与dynamic RowsetExpr等价 | rule合法/invalid UT；VALUE_SCAN constant/dynamic/reset UT |
 | scalar/list literal → vector | `GenerateConstExpressionExecutor`、`GenerateConstListExpressionExecutor` | 解码 uniform/逐项来源；非法值拒绝 | colexec UT；list-fold UT |
 | LiteralVec → scalar/list | `decodeLiteralVec`、`inRHSValues` | 先验证并恢复外层 uniform source，再拆行；stable `Data` 不提供来源 | Expression/Literal/COMStmt/NULL/invalid UT；OR-IN/composite rewrite UT |
 | scalar/list constant fold | `pkg/sql/plan/rule/constant_fold.go`、`pkg/sql/plan/utils.go` | 折叠前后 executable owner 相同；mixed-owner list 不降为只能表示 uniform source 的 LiteralVec | planner fold/deepcopy/hash/protobuf UT |
@@ -27,10 +27,10 @@
 | derived table / projection materialization | planner projection、colexec materialization | 透明逐行传播 | derived-table BVT；materialization UT |
 | CTE | CTE planning/materialization owner | producer→consumer 透明；多引用不共享可变 sidecar owner | planner/clone/materialization UT；inventory coverage control |
 | join | join output vector append/union owner | copied columns透明；新计算表达式为 Expression | vector union/join package UT |
-| SQL UNION / UNION ALL | set operator与vector union owner | UNION ALL逐行透明；UNION去重按完整语义状态，来源不同不能误合并 | union/vector compact UT |
-| DISTINCT | distinct/hash/group owner | row identity携带来源；输出代表行保留对应来源 | sort/compact/group UT |
-| GROUP BY | `pkg/sql/colexec/group` | key逐行透明；group merge使用显式贡献合并 | group codec/merge UT |
-| aggregate | `pkg/sql/colexec/aggexec` | 单一代表值保留来源；多贡献值按相同保持/不同→Expression | 五类 source full/chunk state round-trip；same/mixed merge、invalid/reuse UT |
+| SQL UNION / UNION ALL | set operator与group/vector owner | UNION ALL逐行透明；UNION仍按SQL值去重，不改变行数，同值代表来源按同源保持/异源→Expression合并 | group正反序与spill/reload typed UT；UNION public reachability BVT |
+| DISTINCT | distinct/hash/group owner | SQL key identity忽略来源；重复key的代表来源按所有贡献行确定性合并 | group正反序、same/mixed source UT |
+| GROUP BY | `pkg/sql/colexec/group` | key按SQL值分组；重复key同源保持、异源→Expression；与到达顺序、spill/reload无关 | hash-group正反序、spill/reload、reset UT |
+| aggregate | `pkg/sql/colexec/aggexec` | MIN/MAX/MAX_BY winner replacement保留代表来源；equal candidate同源保持、异源→Expression；source merge独立于字符串runtime-domain | 五类 state round-trip；fixed numeric/date/decimal MIN/MAX、fixed/JSON/array MAX_BY、partial merge UT |
 | window | window operator / aggregate state | value window按实际 lag/lead/first/last/nth row透明；窗口聚合使用 aggregate merge | `TestValueWindowExecPreservesRowStringSources`；window/agg UT |
 
 ## Vector 边界

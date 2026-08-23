@@ -548,6 +548,18 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *p
 
 func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vector) (get bool, err error) {
 	if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok {
+		source, sourceErr := colexec.DecodeLiteralStringSource(cExpr.Lit)
+		if sourceErr != nil {
+			return false, sourceErr
+		}
+		// Existing type-specific branches publish exactly one physical row on a
+		// successful constant match. Apply metadata after that append so NULL and
+		// every physical family share one owner without duplicating switch arms.
+		defer func() {
+			if get && err == nil {
+				err = vec.SetStringSourceAtWithMP(vec.Length()-1, source, proc.Mp())
+			}
+		}()
 		if cExpr.Lit.Isnull {
 			err = vector.AppendBytes(vec, nil, true, proc.Mp())
 			return true, err
