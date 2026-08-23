@@ -4228,6 +4228,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	if err := normalizeLagLeadOffsetParam(ctx, name, args); err != nil {
 		return nil, err
 	}
+	if err := validateLagLeadOffsetLiteral(ctx, name, args); err != nil {
+		return nil, err
+	}
 
 	// get args(exprs) & types
 	argsLength := len(args)
@@ -5208,6 +5211,25 @@ func normalizeLagLeadOffsetParam(ctx context.Context, name string, args []*Expr)
 		return err
 	}
 	args[1] = offset
+	return nil
+}
+
+// Literal LAG/LEAD offsets are known while binding and must not reach the
+// executor when they are negative. Prepared parameters are checked when their
+// values are filled, and non-constant expressions are checked after their
+// vectors are evaluated by the window operator.
+func validateLagLeadOffsetLiteral(ctx context.Context, name string, args []*Expr) error {
+	if (name != "lag" && name != "lead") || len(args) < 2 {
+		return nil
+	}
+
+	lit := args[1].GetLit()
+	if lit == nil || lit.Isnull {
+		return nil
+	}
+	if offset, ok := literalSignedValue(lit); ok && offset < 0 {
+		return moerr.NewWrongArguments(ctx, name)
+	}
 	return nil
 }
 

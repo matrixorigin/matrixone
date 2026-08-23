@@ -236,6 +236,36 @@ func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 	}
 }
 
+func TestLagLeadRejectNegativeConstantOffset(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, name := range []string{"lag", "lead"} {
+		for _, offset := range []string{"-1", "0 - 1"} {
+			t.Run(name+"/"+offset, func(t *testing.T) {
+				sql := "select " + name + "(a, " + offset + ") over (order by a) from select_test.bind_select"
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+
+				_, err = BuildPlan(ctx, stmt, false)
+				require.EqualError(t, err, "Incorrect arguments to "+name)
+				moErr, ok := err.(*moerr.Error)
+				require.True(t, ok)
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, moErr.MySQLCode())
+			})
+		}
+
+		for _, offset := range []string{"0", "1"} {
+			t.Run(name+"/valid/"+offset, func(t *testing.T) {
+				sql := "select " + name + "(a, " + offset + ") over (order by a) from select_test.bind_select"
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+
+				_, err = BuildPlan(ctx, stmt, false)
+				require.NoError(t, err)
+			})
+		}
+	}
+}
+
 func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	stmt, err := parsers.ParseOne(

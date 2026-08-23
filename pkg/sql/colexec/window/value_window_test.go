@@ -251,6 +251,26 @@ func TestProcessValueFuncHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestValidateLagLeadOffsetsHonorsCancellation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	bat := makeInt32Batch(mp, []int32{10, 20})
+	offsetVec := testutil.MakeInt64Vector([]int64{0, 1}, nil, mp)
+	ctr := &container{bat: bat, aggVecs: make([]colexec.ExprEvalVector, 1)}
+	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
+	arg := &Window{WinSpecList: []*plan.Expr{makeLagWindowSpec()}}
+
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+	require.ErrorIs(t, ctr.validateLagLeadOffsets(0, arg, proc), context.Canceled)
+
+	offsetVec.Free(mp)
+	bat.Clean(mp)
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestProcessValueFunc_ErrorPathFreesLocalResult(t *testing.T) {
 	mp := mpool.MustNewZero()
 	resultMP, err := mpool.NewMPool("value-window-error", 1<<20, mpool.NoFixed)
@@ -1060,8 +1080,8 @@ func TestProcessValueFunc_LagNonConstOffset(t *testing.T) {
 	spec := makeLagWindowSpec()
 
 	ctr := &container{bat: bat}
-	// Non-const offset vector: [1, 2, 0, -1]
-	offsetVec := testutil.MakeInt64Vector([]int64{1, 2, 0, -1}, nil, mp)
+	// Non-const offset vector: [1, 2, 0, 1]
+	offsetVec := testutil.MakeInt64Vector([]int64{1, 2, 0, 1}, nil, mp)
 	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
@@ -1075,7 +1095,7 @@ func TestProcessValueFunc_LagNonConstOffset(t *testing.T) {
 	require.True(t, result.IsNull(0))    // lag(10, 1) → NULL (no prev)
 	require.True(t, result.IsNull(1))    // lag(20, 2) → NULL (not enough rows)
 	require.Equal(t, int32(30), vals[2]) // lag(30, 0) → 30 (self)
-	require.True(t, result.IsNull(3))    // lag(40, -1) → NULL (negative offset)
+	require.Equal(t, int32(30), vals[3]) // lag(40, 1) → 30
 
 	result.Free(mp)
 	offsetVec.Free(mp)
@@ -1093,7 +1113,7 @@ func TestProcessValueFunc_LeadNonConstOffset(t *testing.T) {
 	spec := makeLeadWindowSpec()
 
 	ctr := &container{bat: bat}
-	offsetVec := testutil.MakeInt64Vector([]int64{2, 1, 0, -1}, nil, mp)
+	offsetVec := testutil.MakeInt64Vector([]int64{2, 1, 0, 1}, nil, mp)
 	ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
@@ -1107,13 +1127,70 @@ func TestProcessValueFunc_LeadNonConstOffset(t *testing.T) {
 	require.Equal(t, int32(30), vals[0]) // lead(10, 2) → 30
 	require.Equal(t, int32(30), vals[1]) // lead(20, 1) → 30
 	require.Equal(t, int32(30), vals[2]) // lead(30, 0) → 30 (self)
-	require.True(t, result.IsNull(3))    // lead(40, -1) → NULL (negative offset)
+	require.True(t, result.IsNull(3))    // lead(40, 1) → NULL (no next)
 
 	result.Free(mp)
 	offsetVec.Free(mp)
 	bat.Clean(mp)
 	proc.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestProcessValueFunc_RejectsNegativeLagLeadOffset(t *testing.T) {
+	tests := []struct {
+		name        string
+		makeSpec    func() *plan.Expr
+		offsets     []int64
+		constOffset bool
+		withDefault bool
+	}{
+		{name: "lag constant", makeSpec: makeLagWindowSpec, offsets: []int64{-1}, constOffset: true},
+		{name: "lead constant with default", makeSpec: makeLeadWindowSpec, offsets: []int64{-2}, constOffset: true, withDefault: true},
+		{name: "lag expression", makeSpec: makeLagWindowSpec, offsets: []int64{1, -1, 0, 1}},
+		{name: "lead expression with default", makeSpec: makeLeadWindowSpec, offsets: []int64{2, 1, -1, 0}, withDefault: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+
+			var offsetVec *vector.Vector
+			var err error
+			if test.constOffset {
+				offsetVec, err = vector.NewConstFixed(types.T_int64.ToType(), test.offsets[0], bat.RowCount(), mp)
+				require.NoError(t, err)
+			} else {
+				offsetVec = testutil.MakeInt64Vector(test.offsets, nil, mp)
+			}
+
+			args := []*vector.Vector{bat.Vecs[0], offsetVec}
+			var defaultVec *vector.Vector
+			if test.withDefault {
+				defaultVec, err = vector.NewConstFixed(types.T_int32.ToType(), int32(99), bat.RowCount(), mp)
+				require.NoError(t, err)
+				args = append(args, defaultVec)
+			}
+
+			ctr := &container{bat: bat, aggVecs: make([]colexec.ExprEvalVector, 1)}
+			ctr.aggVecs[0].Vec = args
+			ap := &Window{WinSpecList: []*plan.Expr{test.makeSpec()}}
+
+			require.ErrorContains(t, ctr.validateLagLeadOffsets(0, ap, proc), "Incorrect arguments to")
+			result, err := ctr.processValueFunc(0, ap, proc)
+			require.Nil(t, result)
+			require.ErrorContains(t, err, "Incorrect arguments to")
+
+			if defaultVec != nil {
+				defaultVec.Free(mp)
+			}
+			offsetVec.Free(mp)
+			bat.Clean(mp)
+			proc.Free()
+			require.Equal(t, int64(0), mp.CurrNB())
+		})
+	}
 }
 
 // TestProcessValueFunc_NthValueNonConst tests nth_value with a non-const n vector.

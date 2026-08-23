@@ -309,7 +309,7 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	}
 }
 
-func TestPreparedNthValueParamPosition(t *testing.T) {
+func TestPreparedWindowArgumentParamPosition(t *testing.T) {
 	param := func(pos int32) *plan.Expr {
 		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
 	}
@@ -338,7 +338,7 @@ func TestPreparedNthValueParamPosition(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			pos, ok := preparedNthValueParamPosition(test.expr)
+			pos, ok := preparedWindowArgumentParamPosition(test.expr)
 			require.Equal(t, test.wantOK, ok)
 			require.Equal(t, test.wantPos, pos)
 		})

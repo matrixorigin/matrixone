@@ -260,6 +260,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
+			if err = ctr.validateLagLeadOffsets(0, window, proc); err != nil {
+				return result, err
+			}
 			for i := range window.Aggs {
 				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
 					arg := ctr.aggVecs[i].Vec[0]
@@ -927,6 +930,33 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	return ctr.processValueFuncRange(idx, ap, proc, 0, ctr.bat.RowCount())
 }
 
+// validateLagLeadOffsets checks the complete evaluated offset vector before
+// the first output chunk is emitted. Literal offsets are rejected by the
+// binder; this pass covers prepared parameters and row-dependent expressions.
+func (ctr *container) validateLagLeadOffsets(idx int, ap *Window, proc *process.Process) error {
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	if (w.Name != "lag" && w.Name != "lead") ||
+		idx >= len(ctr.aggVecs) || len(ctr.aggVecs[idx].Vec) < 2 {
+		return nil
+	}
+
+	offsetVec := ctr.aggVecs[idx].Vec[1]
+	rows := offsetVec.Length()
+	if offsetVec.IsConst() && rows > 1 {
+		rows = 1
+	}
+	for row := 0; row < rows; row++ {
+		if err := checkCanceled(proc, row); err != nil {
+			return err
+		}
+		offset, ok := getInt64FromVec(offsetVec, row)
+		if ok && offset < 0 {
+			return moerr.NewWrongArguments(proc.Ctx, w.Name)
+		}
+	}
+	return nil
+}
+
 func (ctr *container) processValueFuncRange(
 	idx int,
 	ap *Window,
@@ -960,6 +990,9 @@ func (ctr *container) processValueFuncRange(
 			offsetVec = ctr.aggVecs[idx].Vec[1]
 			if offsetVec.IsConst() {
 				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+				if constOK && constOffset < 0 {
+					return nil, moerr.NewWrongArguments(proc.Ctx, funcName)
+				}
 			}
 		}
 		var defaultVec *vector.Vector
@@ -974,7 +1007,10 @@ func (ctr *container) processValueFuncRange(
 			if offsetVec != nil && !offsetVec.IsConst() {
 				offset, ok = getInt64FromVec(offsetVec, j)
 			}
-			if !ok || offset < 0 {
+			if ok && offset < 0 {
+				return nil, moerr.NewWrongArguments(proc.Ctx, funcName)
+			}
+			if !ok {
 				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
@@ -1003,6 +1039,9 @@ func (ctr *container) processValueFuncRange(
 			offsetVec = ctr.aggVecs[idx].Vec[1]
 			if offsetVec.IsConst() {
 				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+				if constOK && constOffset < 0 {
+					return nil, moerr.NewWrongArguments(proc.Ctx, funcName)
+				}
 			}
 		}
 		var defaultVec *vector.Vector
@@ -1017,7 +1056,10 @@ func (ctr *container) processValueFuncRange(
 			if offsetVec != nil && !offsetVec.IsConst() {
 				offset, ok = getInt64FromVec(offsetVec, j)
 			}
-			if !ok || offset < 0 {
+			if ok && offset < 0 {
+				return nil, moerr.NewWrongArguments(proc.Ctx, funcName)
+			}
+			if !ok {
 				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}

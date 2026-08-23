@@ -1,0 +1,52 @@
+drop database if exists mysql_compat_window_lag_lead_negative_offset;
+create database mysql_compat_window_lag_lead_negative_offset;
+use mysql_compat_window_lag_lead_negative_offset;
+create table t (id int primary key, v int);
+insert into t values (1, 10), (2, 20), (3, 30);
+select id, lag(v, -1) over (order by id) from t order by id;
+Incorrect arguments to lag
+select id, lag(v, -2, 99) over (order by id) from t order by id;
+Incorrect arguments to lag
+select id, lead(v, -1) over (order by id) from t order by id;
+Incorrect arguments to lead
+select id, lead(v, -2, 88) over (order by id) from t order by id;
+Incorrect arguments to lead
+select id, lag(v, 0 - 1) over (order by id) from t order by id;
+Incorrect arguments to lag
+select id, lead(v, id - 2, 88) over (order by id) from t order by id;
+Incorrect arguments to lead
+prepare lag_offset from 'select id, lag(v, ?) over (order by id) lag_v from t order by id';
+set @offset = -1;
+execute lag_offset using @offset;
+Incorrect arguments to lag
+set @offset = 0;
+execute lag_offset using @offset;
+➤ id[4,32,0]  ¦  lag_v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+set @offset = 1;
+execute lag_offset using @offset;
+➤ id[4,32,0]  ¦  lag_v[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  10  𝄀
+3  ¦  20
+deallocate prepare lag_offset;
+prepare lead_offset from 'select id, lead(v, ?, 88) over (order by id) lead_v from t order by id';
+set @offset = -2;
+execute lead_offset using @offset;
+Incorrect arguments to lead
+set @offset = 0;
+execute lead_offset using @offset;
+➤ id[4,32,0]  ¦  lead_v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+set @offset = 1;
+execute lead_offset using @offset;
+➤ id[4,32,0]  ¦  lead_v[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  30  𝄀
+3  ¦  88
+deallocate prepare lead_offset;
+drop database mysql_compat_window_lag_lead_negative_offset;

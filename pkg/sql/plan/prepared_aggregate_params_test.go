@@ -20,7 +20,9 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -343,6 +345,18 @@ func TestPreparedLagLeadOffsetParameter(t *testing.T) {
 			require.NoError(t, err)
 			require.NotSame(t, prepare.Plan, filled)
 			require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
+
+			_, err = FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{int64(0)})
+			require.NoError(t, err)
+
+			for _, negative := range []any{
+				int64(-1),
+				ParamValue{Value: "-1", PrepareParamKind: vector.PrepareParamInteger},
+			} {
+				_, err = FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{negative})
+				require.Error(t, err)
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
+			}
 		})
 	}
 }

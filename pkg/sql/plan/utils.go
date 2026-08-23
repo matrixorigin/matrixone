@@ -3393,7 +3393,7 @@ type ParamValue struct {
 	PrepareParamKind vector.PrepareParamKind
 }
 
-func preparedNthValueParamPosition(expr *Expr) (int32, bool) {
+func preparedWindowArgumentParamPosition(expr *Expr) (int32, bool) {
 	if param := expr.GetP(); param != nil {
 		return param.Pos, true
 	}
@@ -3482,18 +3482,36 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
 	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
-		if name != "nth_value" || len(args) != 2 {
-			return nil
-		}
-		pos, ok := preparedNthValueParamPosition(args[1])
-		if !ok {
-			return nil
-		}
-		if pos < 0 || int(pos) >= len(paramVals) {
-			return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
-		}
-		if !isPositivePreparedInteger(paramVals[pos]) {
-			return moerr.NewWrongArguments(ctx, "nth_value")
+		switch name {
+		case "nth_value":
+			if len(args) != 2 {
+				return nil
+			}
+			pos, ok := preparedWindowArgumentParamPosition(args[1])
+			if !ok {
+				return nil
+			}
+			if pos < 0 || int(pos) >= len(paramVals) {
+				return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
+			}
+			if !isPositivePreparedInteger(paramVals[pos]) {
+				return moerr.NewWrongArguments(ctx, name)
+			}
+		case "lag", "lead":
+			if len(args) < 2 {
+				return nil
+			}
+			pos, ok := preparedWindowArgumentParamPosition(args[1])
+			if !ok {
+				return nil
+			}
+			if pos < 0 || int(pos) >= len(paramVals) {
+				return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
+			}
+			_, negative := validatePreparedPaginationValue(paramVals[pos])
+			if negative {
+				return moerr.NewWrongArguments(ctx, name)
+			}
 		}
 		return nil
 	}
