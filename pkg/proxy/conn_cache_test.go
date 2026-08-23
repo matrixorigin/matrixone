@@ -687,10 +687,10 @@ func TestPreparedShortConnectionQuitPublishesReusableBackend(t *testing.T) {
 			context.Background(),
 			"",
 			runtime.DefaultRuntime().Logger(),
+			withMOCluster(cc.moCluster),
 			withQueryClient(cc.queryClient),
 			withAuthConstructor(nil),
 		)
-		cache.(*connCache).moCluster = cc.moCluster
 		defer cache.Close()
 
 		client := &clientConn{

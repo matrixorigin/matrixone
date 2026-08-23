@@ -134,13 +134,18 @@ func TestNewServer(t *testing.T) {
 	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(listenAddr))
 	cfg := Config{
-		ListenAddress: "unix://" + listenAddr,
+		ListenAddress:    "unix://" + listenAddr,
+		ConnCacheEnabled: true,
 	}
 	hc := &mockHAKeeperClient{}
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
 		WithHAKeeperClient(hc))
 	require.NoError(t, err)
 	require.NotNil(t, s)
+	cache, ok := s.handler.connCache.(*connCache)
+	require.True(t, ok)
+	require.Same(t, s.handler.moCluster, cache.moCluster,
+		"conn cache must bind the current handler generation explicitly")
 	defer func() {
 		if s != nil {
 			err := s.Close()

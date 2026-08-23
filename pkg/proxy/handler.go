@@ -220,7 +220,10 @@ func newProxyHandler(
 	}
 	if h.config.ConnCacheEnabled && h.config.Plugin == nil {
 		var cacheOpts []connCacheOption
-		cacheOpts = append(cacheOpts, withQueryClient(queryClient))
+		cacheOpts = append(cacheOpts,
+			withMOCluster(mc),
+			withQueryClient(queryClient),
+		)
 		if checker, ok := ru.(cacheReuseChecker); ok {
 			cacheOpts = append(cacheOpts, withCanReuseCN(checker.CanReuseCachedCN))
 		}
