@@ -107,15 +107,59 @@ wait_primary() {
   done
 }
 
+find_free_port_block() {
+  python3 - <<'PY'
+import random
+import socket
+
+# A CN/TN address manager may use up to 20 adjacent ports. Keep the LogService,
+# TN, and CN ranges in one verified block so a local developer cluster cannot
+# collide with this disposable E2E deployment.
+width = 80
+candidates = list(range(36000, 57000 - width, width))
+random.shuffle(candidates)
+for base in candidates:
+    sockets = []
+    try:
+        for port in range(base, base + width):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(("127.0.0.1", port))
+            sockets.append(sock)
+    except OSError:
+        pass
+    else:
+        print(base)
+        raise SystemExit(0)
+    finally:
+        for sock in sockets:
+            sock.close()
+raise SystemExit("could not find a free 80-port range for the MongoDB E2E cluster")
+PY
+}
+
+find_free_port() {
+  python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+
 generate_mo_config() {
   local source_dir="$ROOT_DIR/etc/launch"
   local generated_dir="$TMP_DIR/mo-config"
   mkdir -p "$generated_dir"
   for name in log tn; do
     sed -e "s#\./mo-data#$TMP_DIR/mo-data#g" -e "s#\"mo-data/#\"$TMP_DIR/mo-data/#g" \
+      -e "s#^status-port = [0-9][0-9]*#status-port = $STATUS_PORT#" \
+      -e "s#^port-base = [0-9][0-9]*#port-base = $TN_PORT_BASE#" \
       "$source_dir/$name.toml" >"$generated_dir/$name.toml"
   done
   sed -e "s#\./mo-data#$TMP_DIR/mo-data#g" -e "s#\"mo-data/#\"$TMP_DIR/mo-data/#g" \
+      -e "s#^status-port = [0-9][0-9]*#status-port = $STATUS_PORT#" \
+      -e "s#^port-base = [0-9][0-9]*#port-base = $CN_PORT_BASE#" \
       "$source_dir/cn.toml" | awk -v port="$MO_PORT" '
         /^\[cn\.frontend\.iceberg\]$/ && !inserted {
           print "[cn.frontend]"
@@ -126,6 +170,25 @@ generate_mo_config() {
         { print }
         END { if (!inserted) exit 42 }
       ' >"$generated_dir/cn.toml"
+  {
+    printf '\n[logservice]\n'
+    printf 'raft-port = %s\n' "$LOG_RAFT_PORT"
+    printf 'logservice-port = %s\n' "$LOG_SERVICE_PORT"
+    printf 'gossip-port = %s\n' "$LOG_GOSSIP_PORT"
+    printf 'gossip-seed-addresses = ["127.0.0.1:%s"]\n' "$LOG_GOSSIP_PORT"
+  } >>"$generated_dir/log.toml"
+  {
+    printf '\n[hakeeper-client]\n'
+    printf 'service-addresses = ["127.0.0.1:%s"]\n' "$LOG_SERVICE_PORT"
+  } >>"$generated_dir/log.toml"
+  {
+    printf '\n[hakeeper-client]\n'
+    printf 'service-addresses = ["127.0.0.1:%s"]\n' "$LOG_SERVICE_PORT"
+  } >>"$generated_dir/tn.toml"
+  {
+    printf '\n[hakeeper-client]\n'
+    printf 'service-addresses = ["127.0.0.1:%s"]\n' "$LOG_SERVICE_PORT"
+  } >>"$generated_dir/cn.toml"
   {
     printf '\n[cn.frontend.mongodb]\n'
     printf 'enable = true\nallow-loopback = true\n'
@@ -144,10 +207,27 @@ run_e2e() {
   TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mo-mongodb-e2e.XXXXXX")"
   trap cleanup EXIT
   export COMPOSE_PROJECT_NAME="mo-mongodb-$(basename "$TMP_DIR" | tr '[:upper:].' '[:lower:]-')"
-  # Let Docker and MatrixOne bind port 0 themselves. The selected listeners
-  # stay owned from allocation through use, eliminating the bind-close-rebind
-  # window that let adjacent CI jobs steal either port.
-  export MONGODB_PORT="" MO_PORT="0"
+  # Docker owns its published listener. MatrixOne treats a frontend port of 0
+  # as its default (6001), so allocate an explicit port for this disposable
+  # cluster instead of accidentally sharing a developer's local frontend.
+  export MONGODB_PORT="" MO_PORT="${MO_MONGODB_FRONTEND_PORT:-$(find_free_port)}"
+  [[ "$MO_PORT" =~ ^[1-9][0-9]*$ ]] || die "MO_MONGODB_FRONTEND_PORT must be a TCP port"
+  STATUS_PORT="${MO_MONGODB_STATUS_PORT:-$(python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+)}"
+  [[ "$STATUS_PORT" =~ ^[1-9][0-9]*$ ]] || die "MO_MONGODB_STATUS_PORT must be a TCP port"
+  LOG_PORT_BASE="${MO_MONGODB_LOG_PORT_BASE:-$(find_free_port_block)}"
+  [[ "$LOG_PORT_BASE" =~ ^[1-9][0-9]*$ ]] || die "MO_MONGODB_LOG_PORT_BASE must be a TCP port"
+  LOG_RAFT_PORT="$LOG_PORT_BASE"
+  LOG_SERVICE_PORT="$((LOG_PORT_BASE + 1))"
+  LOG_GOSSIP_PORT="$((LOG_PORT_BASE + 2))"
+  TN_PORT_BASE="$((LOG_PORT_BASE + 24))"
+  CN_PORT_BASE="$((LOG_PORT_BASE + 48))"
   export MONGODB_ROOT_USER="root_$(openssl rand -hex 6)"
   export MONGODB_ROOT_PASSWORD="$(openssl rand -hex 24)"
   export MONGODB_READER_PASSWORD="$(openssl rand -hex 24)"
@@ -181,7 +261,8 @@ run_e2e() {
 	fi
   "$ROOT_DIR/mo-service" -launch "$TMP_DIR/mo-config/launch.toml" >"$TMP_DIR/mo-service.log" 2>&1 &
   MO_PID=$!
-  MO_PORT="$(wait_mo_port)"
+  PUBLISHED_MO_PORT="$(wait_mo_port)"
+  [[ "$PUBLISHED_MO_PORT" == "$MO_PORT" ]] || die "MatrixOne published frontend port $PUBLISHED_MO_PORT, expected $MO_PORT"
   export MO_PORT
   (cd "$ROOT_DIR" && go run ./test/mongodb/mongodb_e2e_local.go \
     --dsn "root:111@tcp(127.0.0.1:$MO_PORT)/?timeout=5s&readTimeout=30s&writeTimeout=30s" \

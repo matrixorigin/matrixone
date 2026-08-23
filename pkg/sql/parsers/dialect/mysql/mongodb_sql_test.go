@@ -27,6 +27,7 @@ func TestMongoDBSQLSurfaceAndRedaction(t *testing.T) {
 	ctx := context.Background()
 	sqls := []string{
 		"create mongodb connection if not exists sensor with ('hosts'='mongo:27017','credential_secret_ref'='secret://env/MONGO','tls_mode'='disabled')",
+		"create mongodb connection if not exists sensor with ('hosts'='127.0.0.1:27017','replica_set'='rs0','auth_source'='mongodb_source','auth_mechanism'='SCRAM-SHA-256','credential_secret_ref'='secret://env/MONGO','tls_mode'='disabled','read_preference'='primary','read_concern'='majority','options_json'='{\"direct\":true}')",
 		"alter mongodb connection sensor set ('credential_secret_ref'='secret://env/MONGO_NEXT')",
 		"alter mongodb connection sensor disable",
 		"alter mongodb connection sensor enable",
@@ -35,13 +36,15 @@ func TestMongoDBSQLSurfaceAndRedaction(t *testing.T) {
 		"create external table events(ts datetime mongodb_path 'ts', measurement double mongodb_path 'payload.measurement' mongodb_convert 'try_null') engine=mongodb with ('connection'='sensor', 'database'='telemetry', 'collection'='events', 'max_parallelism'='1')",
 	}
 	for _, sql := range sqls {
-		stmt, err := ParseOne(ctx, sql, 1)
-		require.NoError(t, err, sql)
-		formatted := tree.String(stmt, dialect.MYSQL)
-		_, err = ParseOne(ctx, formatted, 1)
-		require.NoError(t, err, formatted)
-		require.NotContains(t, strings.ToLower(formatted), "mongo_next")
-		require.NotContains(t, strings.ToLower(formatted), "mongo:27017")
+		for _, lowerCaseTableNames := range []int64{0, 1, 2} {
+			stmt, err := ParseOne(ctx, sql, lowerCaseTableNames)
+			require.NoError(t, err, sql)
+			formatted := tree.String(stmt, dialect.MYSQL)
+			_, err = ParseOne(ctx, formatted, lowerCaseTableNames)
+			require.NoError(t, err, formatted)
+			require.NotContains(t, strings.ToLower(formatted), "mongo_next")
+			require.NotContains(t, strings.ToLower(formatted), "mongo:27017")
+		}
 	}
 }
 

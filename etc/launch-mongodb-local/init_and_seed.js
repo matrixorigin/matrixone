@@ -54,3 +54,11 @@ source.binary_padding.insertMany([
   {_id: "d3", value: BinData(0, "YSAg")},
   {_id: "d4", value: BinData(0, "QQ==")}
 ]);
+
+source.temporal_order.drop();
+source.temporal_order.insertMany([
+  {_id: "a", d: ISODate("2026-03-08T01:59:59.123Z"), t: ISODate("2026-03-08T01:59:59.123Z")},
+  {_id: "b", d: ISODate("2026-03-08T03:00:00.456Z"), t: ISODate("2026-03-08T03:00:00.456Z")},
+  {_id: "c", d: ISODate("2026-11-01T01:59:59.789Z"), t: ISODate("2026-11-01T01:59:59.789Z")},
+  {_id: "d", d: ISODate("2026-11-01T02:00:00.012Z"), t: ISODate("2026-11-01T02:00:00.012Z")}
+]);
