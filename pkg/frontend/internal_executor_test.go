@@ -183,7 +183,9 @@ func Test_internalProtocol_Write(t *testing.T) {
 		return bat
 	}
 	batch1 := mockBatch([]int64{100})
+	defer batch1.Clean(mp)
 	batch2 := mockBatch([]int64{200, 201})
+	defer batch2.Clean(mp)
 
 	// ======================= main ===================
 	ip.Reset(ses)
