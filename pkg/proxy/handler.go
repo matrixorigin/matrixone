@@ -48,6 +48,8 @@ type handler struct {
 	moCluster clusterservice.MOCluster
 	// router select the best CN server and connects to it.
 	router Router
+	// plugin owns the optional RPC client used by the decorated router.
+	plugin *rpcPlugin
 	// rebalancer is the global rebalancer.
 	rebalancer *rebalancer
 	// counterSet counts the events in proxy.
@@ -96,9 +98,36 @@ func newProxyHandler(
 		moconfig.NewParameterUnit(frontendParameters, nil, nil, nil),
 	)
 
-	// Create the MO cluster.
+	// Create the MO cluster. It starts private background tasks immediately, so
+	// keep local ownership until the complete handler has been constructed.
 	mc := clusterservice.NewMOCluster(cfg.UUID, haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
-	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	constructed := false
+	var pluginClient *rpcPlugin
+	var queryClient client.QueryClient
+	defer func() {
+		if constructed {
+			return
+		}
+		if queryClient != nil {
+			_ = queryClient.Close()
+		}
+		if pluginClient != nil {
+			_ = pluginClient.Close()
+		}
+		mc.Close()
+	}()
+
+	// Create fallible standalone clients before starting rebalancer tasks.
+	if cfg.Plugin != nil {
+		pluginClient, err = newRPCPlugin(cfg.UUID, cfg.Plugin.Backend, cfg.Plugin.Timeout)
+		if err != nil {
+			return nil, err
+		}
+	}
+	queryClient, err = client.NewQueryClient(cfg.UUID, morpc.Config{})
+	if err != nil {
+		return nil, err
+	}
 
 	// Create the rebalancer.
 	var opts []rebalancerOption
@@ -144,13 +173,9 @@ func newProxyHandler(
 		ru = newRouter(mc, re, sw, false, routerOpts...)
 	}
 
-	// Decorate the router if plugin is enabled
-	if cfg.Plugin != nil {
-		p, err := newRPCPlugin(cfg.UUID, cfg.Plugin.Backend, cfg.Plugin.Timeout)
-		if err != nil {
-			return nil, err
-		}
-		ru = newPluginRouter(cfg.UUID, ru, p)
+	// Decorate the router if plugin is enabled.
+	if pluginClient != nil {
+		ru = newPluginRouter(cfg.UUID, ru, pluginClient)
 	}
 
 	var ipNetList []*net.IPNet
@@ -163,10 +188,6 @@ func newProxyHandler(
 		} else {
 			ipNetList = append(ipNetList, ipNet)
 		}
-	}
-	qc, err := client.NewQueryClient(cfg.UUID, morpc.Config{})
-	if err != nil {
-		return nil, err
 	}
 	maxConnections := cfg.MaxConnections
 	if maxConnections == 0 {
@@ -184,11 +205,12 @@ func newProxyHandler(
 		moCluster:        mc,
 		counterSet:       cs,
 		router:           ru,
+		plugin:           pluginClient,
 		rebalancer:       re,
 		haKeeperClient:   haKeeperClient,
 		ipNetList:        ipNetList,
 		sqlWorker:        sw,
-		queryClient:      qc,
+		queryClient:      queryClient,
 		sessionAllocator: sessionAllocator,
 		connectionLimiter: newConnectionLimiter(
 			maxConnections,
@@ -198,7 +220,7 @@ func newProxyHandler(
 	}
 	if h.config.ConnCacheEnabled && h.config.Plugin == nil {
 		var cacheOpts []connCacheOption
-		cacheOpts = append(cacheOpts, withQueryClient(qc))
+		cacheOpts = append(cacheOpts, withQueryClient(queryClient))
 		if checker, ok := ru.(cacheReuseChecker); ok {
 			cacheOpts = append(cacheOpts, withCanReuseCN(checker.CanReuseCachedCN))
 		}
@@ -206,6 +228,8 @@ func newProxyHandler(
 	} else if h.config.ConnCacheEnabled && h.config.Plugin != nil {
 		rt.Logger().Warn("proxy conn cache disabled because plugin routing is enabled")
 	}
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	constructed = true
 	return h, nil
 }
 
@@ -480,14 +504,17 @@ func (h *handler) closeBackendAfterClientDisconnect(cc ClientConn, sc ServerConn
 // Close closes the handler.
 func (h *handler) Close() error {
 	if h != nil {
-		h.moCluster.Close()
-		_ = h.haKeeperClient.Close()
-		if h.queryClient != nil {
-			_ = h.queryClient.Close()
-		}
 		if h.connCache != nil {
 			_ = h.connCache.Close()
 		}
+		if h.queryClient != nil {
+			_ = h.queryClient.Close()
+		}
+		if h.plugin != nil {
+			_ = h.plugin.Close()
+		}
+		h.moCluster.Close()
+		_ = h.haKeeperClient.Close()
 	}
 	return nil
 }

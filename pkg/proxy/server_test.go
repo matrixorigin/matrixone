@@ -88,6 +88,7 @@ func TestNewServerClosesHAKeeperClientOnAdmissionInitializationFailure(t *testin
 }
 
 func TestNewServerClosesHAKeeperClientOnHandlerConstructionFailure(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	client := &constructionCleanupHAKeeperClient{}
 	runtime.SetupServiceBasedRuntime(t.Name(), runtime.DefaultRuntime())
 	_, err := NewServer(context.Background(), Config{
