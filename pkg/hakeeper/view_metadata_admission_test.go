@@ -463,6 +463,27 @@ func TestLifecycleUnawareJoinAdvancesEpochBeforeAdmission(t *testing.T) {
 	require.False(t, rsm.state.ViewMetadataAdmissionPending)
 }
 
+func TestViewMetadataAdmissionNewEpochRecoversLegacyTargetTicks(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.ViewMetadataAdmissionEnabled = true
+	rsm.state.ViewMetadataAdmissionEpoch = 4
+	rsm.state.ViewMetadataAdmissionCNTargets = map[string]uint64{"cn-1": 7}
+	rsm.state.ViewMetadataAdmissionProxyTargets = map[string]uint64{"proxy-1": 8}
+	rsm.state.CNState.Stores["cn-1"] = pb.CNStoreInfo{
+		Tick:                            41,
+		ViewMetadataAdmissionGeneration: 7,
+	}
+	rsm.state.ProxyState.Stores["proxy-1"] = pb.ProxyStore{
+		UUID:                            "proxy-1",
+		Tick:                            42,
+		ViewMetadataAdmissionGeneration: 8,
+	}
+
+	rsm.startViewMetadataRequiredEpoch()
+	require.Equal(t, uint64(41), rsm.state.ViewMetadataAdmissionCNTargetTicks["cn-1"])
+	require.Equal(t, uint64(42), rsm.state.ViewMetadataAdmissionProxyTargetTicks["proxy-1"])
+}
+
 func TestLifecycleCapableJoinKeepsCurrentEpoch(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.ViewMetadataAdmissionEnabled = true

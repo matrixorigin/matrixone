@@ -161,11 +161,25 @@ func (s *stateMachine) startViewMetadataRequiredEpoch() {
 	s.state.ViewMetadataAdmissionProxyTargetTicks = make(map[string]uint64)
 	for uuid, generation := range previousCNTargets {
 		s.state.ViewMetadataAdmissionCNTargets[uuid] = generation
-		s.state.ViewMetadataAdmissionCNTargetTicks[uuid] = previousCNTargetTicks[uuid]
+		tick, ok := previousCNTargetTicks[uuid]
+		if !ok {
+			if store, exists := s.state.CNState.Stores[uuid]; exists &&
+				store.ViewMetadataAdmissionGeneration == generation {
+				tick = store.Tick
+			}
+		}
+		s.state.ViewMetadataAdmissionCNTargetTicks[uuid] = tick
 	}
 	for uuid, generation := range previousProxyTargets {
 		s.state.ViewMetadataAdmissionProxyTargets[uuid] = generation
-		s.state.ViewMetadataAdmissionProxyTargetTicks[uuid] = previousProxyTargetTicks[uuid]
+		tick, ok := previousProxyTargetTicks[uuid]
+		if !ok {
+			if store, exists := s.state.ProxyState.Stores[uuid]; exists &&
+				store.ViewMetadataAdmissionGeneration == generation {
+				tick = store.Tick
+			}
+		}
+		s.state.ViewMetadataAdmissionProxyTargetTicks[uuid] = tick
 	}
 	for uuid, store := range s.state.CNState.Stores {
 		if store.ViewMetadataAdmissionReady {
