@@ -775,7 +775,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		needResetFunction := false
 		compareArgTypes := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
-		fixedExactBoundary := isPreparedFixedExactBoundary(e)
+		fixedExactBoundary := isPreparedFixedExactBoundary(e) ||
+			preparedFunctionHasFixedExactOperandContract(e)
 		for i, arg := range exprImpl.F.Args {
 			originalArgTyp := plan.Type{}
 			originalArgFuncObj := int64(0)
@@ -1012,6 +1013,29 @@ func isPreparedFixedExactBoundary(expr *plan.Expr) bool {
 	}
 	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 	return overload != 0
+}
+
+// preparedFunctionHasFixedExactOperandContract recognizes predicates whose
+// non-parameter operand has already established a DECIMAL comparison domain.
+// The implicit cast around a parameter is deliberately not evidence by itself:
+// two otherwise-untyped parameters must remain free to specialize at EXECUTE.
+func preparedFunctionHasFixedExactOperandContract(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.GetObjName() {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
+		"in", "not_in", "partition_in":
+	default:
+		return false
+	}
+	for _, arg := range fn.Args {
+		if arg != nil && types.T(arg.Typ.Id).IsDecimal() && !isImplicitPreparedParamCast(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 func implicitPreparedParamPosition(expr *plan.Expr) (int, bool) {

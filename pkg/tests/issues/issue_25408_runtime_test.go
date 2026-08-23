@@ -173,6 +173,60 @@ func TestIssue25408PreparedRuntimeNumericRebind(t *testing.T) {
 			"select group_concat(id order by id) from runtime_strings").Scan(&remainingIDs))
 		require.Equal(t, "2,3", remainingIDs)
 
+		mustExec(t, ctx, conn,
+			"create table runtime_decimals(id int primary key, v decimal(20,4))")
+		mustExec(t, ctx, conn,
+			"insert into runtime_decimals values "+
+				"(1, 9007199254740992.0000), "+
+				"(2, 9007199254740992.0001), "+
+				"(3, 9007199254740993.0000)")
+		mustExec(t, ctx, conn, "set @runtime_decimal_text = '9007199254740992.0001'")
+		for _, comparison := range []struct {
+			name     string
+			operator string
+			want     string
+		}{
+			{name: "equal", operator: "=", want: "2"},
+			{name: "null_safe_equal", operator: "<=>", want: "2"},
+			{name: "not_equal", operator: "<>", want: "1,3"},
+			{name: "less", operator: "<", want: "1"},
+			{name: "less_equal", operator: "<=", want: "1,2"},
+			{name: "greater", operator: ">", want: "3"},
+			{name: "greater_equal", operator: ">=", want: "2,3"},
+			{name: "in", operator: "in", want: "2"},
+		} {
+			t.Run("sql_prepare_decimal_"+comparison.name, func(t *testing.T) {
+				predicate := "v " + comparison.operator + " ?"
+				if comparison.operator == "in" {
+					predicate = "v in (?)"
+				}
+				stmtName := "runtime_decimal_" + comparison.name
+				mustExec(t, ctx, conn, fmt.Sprintf(
+					"prepare %s from 'select group_concat(id order by id) from runtime_decimals where %s'",
+					stmtName, predicate))
+				defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare "+stmtName) }()
+				var got string
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"execute "+stmtName+" using @runtime_decimal_text").Scan(&got))
+				require.Equal(t, comparison.want, got)
+			})
+
+			t.Run("binary_prepare_decimal_"+comparison.name, func(t *testing.T) {
+				predicate := "v " + comparison.operator + " ?"
+				if comparison.operator == "in" {
+					predicate = "v in (?)"
+				}
+				stmt, prepareErr := conn.PrepareContext(ctx,
+					"select group_concat(id order by id) from runtime_decimals where "+predicate)
+				require.NoError(t, prepareErr)
+				defer stmt.Close()
+				var got string
+				require.NoError(t, stmt.QueryRowContext(ctx,
+					"9007199254740992.0001").Scan(&got))
+				require.Equal(t, comparison.want, got)
+			})
+		}
+
 		mustExec(t, ctx, conn, "create table n(a int)")
 		mustExec(t, ctx, conn, "insert into n values (1), (2), (3)")
 		mustExec(t, ctx, conn, "prepare runtime_count_null_first from 'select count(?) from n'")

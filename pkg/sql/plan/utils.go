@@ -3766,8 +3766,14 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 			if node == nil {
 				continue
 			}
-			for _, expr := range node.ProjectList {
-				collectPreparedProjectedParamExprs(expr, paramRule.sourceTypedParamExprs)
+			for _, exprs := range [][]*plan.Expr{
+				node.ProjectList,
+				node.AggList,
+				node.WinSpecList,
+			} {
+				for _, expr := range exprs {
+					collectPreparedProducerParamExprs(expr, paramRule.sourceTypedParamExprs)
+				}
 			}
 		}
 	}
@@ -3849,7 +3855,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 	return specialized, nil
 }
 
-func collectPreparedProjectedParamExprs(expr *Expr, result map[*Expr]struct{}) {
+func collectPreparedProducerParamExprs(expr *Expr, result map[*Expr]struct{}) {
 	if expr == nil {
 		return
 	}
@@ -3859,24 +3865,24 @@ func collectPreparedProjectedParamExprs(expr *Expr, result map[*Expr]struct{}) {
 	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
-			collectPreparedProjectedParamExprs(arg, result)
+			collectPreparedProducerParamExprs(arg, result)
 		}
 		return
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			collectPreparedProjectedParamExprs(item, result)
+			collectPreparedProducerParamExprs(item, result)
 		}
 		return
 	}
 	if window := expr.GetW(); window != nil {
-		collectPreparedProjectedParamExprs(window.WindowFunc, result)
+		collectPreparedProducerParamExprs(window.WindowFunc, result)
 		for _, item := range window.PartitionBy {
-			collectPreparedProjectedParamExprs(item, result)
+			collectPreparedProducerParamExprs(item, result)
 		}
 		for _, order := range window.OrderBy {
 			if order != nil {
-				collectPreparedProjectedParamExprs(order.Expr, result)
+				collectPreparedProducerParamExprs(order.Expr, result)
 			}
 		}
 	}

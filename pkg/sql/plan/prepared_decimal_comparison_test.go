@@ -243,3 +243,41 @@ func TestPreparedDecimalComparisonPlannerReplacementAndReuse(t *testing.T) {
 		require.True(t, planExprContainsPreparedDecimalParam(original))
 	}
 }
+
+func TestPreparedDecimalComparisonKeepsExactRuntimeString(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"prepare decimal_cmp from 'select p_partkey from part where p_retailprice <=> ?'",
+	)
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{ParamValue{
+			Value:            "9007199254740992.0001",
+			InferTextNumeric: true,
+			SourceType:       types.New(types.T_varchar, 21, 0),
+			HasSourceType:    true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	comparison := findPreparedDecimalComparisonInPlan(filled, "<=>")
+	require.NotNil(t, comparison)
+	for _, arg := range comparison.GetF().Args {
+		require.Equal(t, int32(decimalType.Oid), arg.Typ.Id)
+		require.Equal(t, decimalType.Width, arg.Typ.Width)
+		require.Equal(t, decimalType.Scale, arg.Typ.Scale)
+	}
+	parameterCast := comparison.GetF().Args[1].GetF()
+	require.NotNil(t, parameterCast)
+	require.Equal(t, "cast", parameterCast.Func.GetObjName())
+	require.Equal(t, int32(types.T_varchar), parameterCast.Args[0].Typ.Id)
+}
