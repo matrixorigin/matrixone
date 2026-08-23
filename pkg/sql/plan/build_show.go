@@ -934,7 +934,9 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
 		"GROUP BY `tcl`.`att_relname`, `idx`.`type`, `idx`.`name`, `idx`.`ordinal_position`, " +
 		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
-		"`idx`.`algo_params`, `idx`.`is_visible`"
+		"`idx`.`algo_params`, `idx`.`is_visible` " +
+		"ORDER BY CASE WHEN `idx`.`type` = 'PRIMARY' THEN 0 ELSE 1 END, " +
+		"`idx`.`name`, `idx`.`ordinal_position`"
 
 	displayTblName := tblName
 	if tableDef.IsTemporary {
