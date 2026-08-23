@@ -467,9 +467,9 @@ func preparedExprNeedsNumericPrefixSpecialization(
 	case *plan.Expr_F:
 		if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) &&
 			preparedExprHasRuntimeDecimalParam(expr, positions) {
-			// Secondary-index planning keeps the original comparison but exposes
-			// only its serialized prefix predicate to this owner scan. Admit the
-			// plan so the retained comparison can be rebound from its runtime kind.
+			// Secondary-index planning exposes only its serialized prefix predicate
+			// to this owner scan. Admit the plan so the runtime DECIMAL parameter can
+			// be materialized in the prefix key's prepared target type.
 			return true
 		}
 		// SQL EXECUTE admits either a static DECIMAL peer or a runtime DECIMAL
