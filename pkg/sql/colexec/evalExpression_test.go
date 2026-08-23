@@ -467,6 +467,89 @@ func TestCastStringSourceOwnershipAcrossSelectionAndReuse(t *testing.T) {
 	}
 }
 
+func TestFoldedCastStringSourceOwnership(t *testing.T) {
+	makeCast := func(overload int32, source *plan.Expr) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varbinary)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.EncodeOverloadID(function.CAST, overload),
+					ObjName: "cast",
+				},
+				Args: []*plan.Expr{source, {
+					Typ:  plan.Type{Id: int32(types.T_varbinary)},
+					Expr: &plan.Expr_T{T: &plan.TargetType{}},
+				}},
+			}},
+		}
+	}
+
+	for _, test := range []struct {
+		name     string
+		overload int32
+		want     types.StringSource
+	}{
+		{name: "implicit", overload: 0, want: types.StringSourceLiteral},
+		{name: "explicit", overload: 1, want: types.StringSourceExpression},
+	} {
+		t.Run("literal "+test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			executor, err := NewExpressionExecutor(proc, makeCast(test.overload, &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+					Value: &plan.Literal_Sval{Sval: "5"},
+				}},
+			}))
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.GetStringSourceAt(0))
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		overload int32
+		want     types.StringSource
+	}{
+		{name: "implicit", overload: 0, want: types.StringSourceSQLPrepare},
+		{name: "explicit", overload: 1, want: types.StringSourceExpression},
+	} {
+		t.Run("runtime parameter "+test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.SetBaseProcessRunningStatus(true)
+			params := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte("5"), false, proc.Mp()))
+			require.NoError(t, params.SetStringSource(types.StringSourceSQLPrepare))
+			defer params.Free(proc.Mp())
+			proc.SetPrepareParams(params)
+
+			executor, err := NewExpressionExecutor(proc, makeCast(test.overload, &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}))
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.GetStringSourceAt(0))
+
+			executor.ResetForNextQuery()
+			require.NoError(t, params.SetStringSource(types.StringSourceCOMStmt))
+			result, err = executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			wantAfterReset := types.StringSourceCOMStmt
+			if test.overload == 1 {
+				wantAfterReset = types.StringSourceExpression
+			}
+			require.Equal(t, wantAfterReset, result.GetStringSourceAt(0))
+		})
+	}
+}
+
 func TestEvalIffSkipsUnselectedBranch(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bat := batch.New(nil)

@@ -854,6 +854,36 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	decoded.Clean(mp)
 }
 
+func TestPrepareParamKindDecoderRejectsMixedConstStringSources(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytesList(
+		source.Vecs[0], [][]byte{[]byte("value"), []byte("value")}, nil, mp))
+	require.NoError(t, source.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral, types.StringSourceSQLPrepare,
+	}, mp))
+	// Construct a malformed wire witness that cannot be produced through the
+	// validated const-vector setter.
+	source.Vecs[0].SetClass(vector.CONSTANT)
+	source.SetRowCount(2)
+	defer source.Clean(mp)
+
+	var wire bytes.Buffer
+	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+
+	buffered := NewOffHeapEmpty()
+	err = buffered.UnmarshalBinaryWithPrepareParamKinds(encoded, mp)
+	require.ErrorContains(t, err, "constant vector cannot have mixed string sources")
+	buffered.Clean(mp)
+
+	streaming := NewOffHeapEmpty()
+	err = streaming.UnmarshalFromReaderWithPrepareParamKinds(bytes.NewReader(encoded), int64(len(encoded)), mp)
+	require.ErrorContains(t, err, "constant vector cannot have mixed string sources")
+	streaming.Clean(mp)
+}
+
 func TestPrepareParamKindTransportMixedBinaryKeepsUniformKind(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(1)

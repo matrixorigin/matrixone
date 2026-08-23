@@ -87,6 +87,9 @@ message Literal {
   // literal_form records binder-visible syntax independently from isBin and
   // the resolved SQL string domain. Zero keeps old serialized plans valid.
   StringLiteralForm literal_form = 28;
+  // Executable value ownership encoded as container/types.StringSource + 1.
+  // Zero means an ordinary source literal for compatibility with old plans.
+  uint32 string_source = 29;
 }
 
 // Bounded param for prepared statement.  User fill on execution.

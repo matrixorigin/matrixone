@@ -1858,7 +1858,12 @@ func generateConstExpressionExecutor(
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
 		if err == nil {
-			if err = vec.SetStringSource(types.StringSourceLiteral); err != nil {
+			source, sourceErr := literalStringSource(con)
+			if sourceErr != nil {
+				vec.Free(proc.Mp())
+				return nil, sourceErr
+			}
+			if err = vec.SetStringSource(source); err != nil {
 				vec.Free(proc.Mp())
 				return nil, err
 			}
@@ -1889,9 +1894,25 @@ func generateConstExpressionExecutor(
 		}
 	}
 	if err == nil && con.GetIsnull() {
-		err = vec.SetStringSource(types.StringSourceLiteral)
+		var source types.StringSource
+		source, err = literalStringSource(con)
+		if err == nil {
+			err = vec.SetStringSource(source)
+		}
 	}
 	return vec, err
+}
+
+func literalStringSource(literal *plan.Literal) (types.StringSource, error) {
+	if literal == nil || literal.GetStringSource() == 0 {
+		return types.StringSourceLiteral, nil
+	}
+	source := types.StringSource(literal.GetStringSource() - 1)
+	if !source.Valid() {
+		return types.StringSourceExpression,
+			moerr.NewInvalidInputNoCtxf("invalid literal string source %d", literal.GetStringSource())
+	}
+	return source, nil
 }
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
@@ -1902,11 +1923,17 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 	if err != nil {
 		return nil, err
 	}
+	sources := make([]types.StringSource, lenList)
 	for i := 0; i < lenList; i++ {
 		expr := exprs[i]
 		t := expr.GetLit()
 		if t == nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "args in list must be constant")
+		}
+		sources[i], err = literalStringSource(t)
+		if err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
 		}
 		if t.GetIsnull() {
 			vec.GetNulls().Set(uint64(i))
@@ -2000,7 +2027,7 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			vec.SetIsBin(t.IsBin)
 		}
 	}
-	if err := vec.SetStringSource(types.StringSourceLiteral); err != nil {
+	if err := vec.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
 		vec.Free(proc.Mp())
 		return nil, err
 	}

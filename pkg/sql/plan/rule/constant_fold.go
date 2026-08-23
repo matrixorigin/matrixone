@@ -161,6 +161,11 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				return expr
 			}
 			defer vec.Free(proc.Mp())
+			if vec.GetStringSources() != nil {
+				// LiteralVec has only a uniform source field. Keep mixed-owner
+				// lists structured so each scalar literal retains its identity.
+				return expr
+			}
 
 			// Nullable IN-lists must keep their null bitmap aligned with values.
 			if !vec.IsConstNull() && !vec.GetNulls().Any() {
@@ -227,6 +232,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	defer free()
 
 	if isVec {
+		if vec.GetStringSources() != nil {
+			return expr
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr
@@ -249,6 +257,11 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 	PreserveFoldedLiteralStringDomain(expr, c)
+	// Zero remains the canonical spelling of an ordinary source literal.
+	// Other executable owners are encoded as StringSource + 1.
+	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
+		c.StringSource = uint32(source) + 1
+	}
 
 	MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 

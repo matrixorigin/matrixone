@@ -411,6 +411,55 @@ func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
 	require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(0))
 }
 
+func TestConstantFoldPreservesExplicitCastSource(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := mysql.ParseOne(t.Context(), "select cast('x' as char)", 1)
+	require.NoError(t, err)
+	pl, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	query := pl.GetQuery()
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	unfolded := root.ProjectList[0]
+	require.NotNil(t, unfolded.GetF())
+
+	node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(unfolded)}}
+	rule.NewConstantFold(false).Apply(node, nil, ctx.GetProcess())
+	folded := node.ProjectList[0]
+	require.NotNil(t, folded.GetLit())
+	require.Equal(t, uint32(types.StringSourceExpression)+1, folded.GetLit().GetStringSource())
+
+	copied := DeepCopyExpr(folded)
+	require.Equal(t, folded.GetLit().GetStringSource(), copied.GetLit().GetStringSource())
+	require.Equal(t, exprStructuralHash(folded), exprStructuralHash(copied))
+	require.True(t, exprStructuralEqual(folded, copied))
+	payload, err := proto.Marshal(folded)
+	require.NoError(t, err)
+	decoded := new(planpb.Expr)
+	require.NoError(t, proto.Unmarshal(payload, decoded))
+	require.Equal(t, folded.GetLit().GetStringSource(), decoded.GetLit().GetStringSource())
+	require.Equal(t, exprStructuralHash(folded), exprStructuralHash(decoded))
+	require.True(t, exprStructuralEqual(folded, decoded))
+
+	result, free, err := colexec.GetReadonlyResultFromExpression(
+		ctx.GetProcess(), decoded, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, err)
+	defer free()
+	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
+
+	plain := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Sval{Sval: "x"},
+		}},
+	}
+	plainResult, plainFree, err := colexec.GetReadonlyResultFromExpression(
+		ctx.GetProcess(), plain, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, err)
+	defer plainFree()
+	require.Equal(t, types.StringSourceLiteral, plainResult.GetStringSourceAt(0))
+}
+
 func TestMakeInExprRuntimePayloadKeepsExpressionSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	scanKeys := vector.NewVec(types.T_varchar.ToType())

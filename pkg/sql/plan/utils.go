@@ -1568,6 +1568,9 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 			return nil, err
 		}
 		defer vec.Free(proc.Mp())
+		if vec.GetStringSources() != nil {
+			return expr, nil
+		}
 
 		// Nullable IN-lists must keep their null bitmap aligned with values.
 		if !vec.IsConstNull() && !vec.GetNulls().Any() {
@@ -1636,6 +1639,9 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	defer free()
 
 	if isVec {
+		if vec.GetStringSources() != nil {
+			return expr, nil
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr, nil
@@ -1662,6 +1668,9 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		return expr, nil
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)
+	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
+		c.StringSource = uint32(source) + 1
+	}
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,

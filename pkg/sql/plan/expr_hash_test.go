@@ -272,6 +272,12 @@ func TestExprStructuralHashIgnoresDiagnosticProvenance(t *testing.T) {
 	require.NotEqual(t, exprStructuralHash(vectorExpr), exprStructuralHash(differentSource))
 	require.False(t, exprStructuralEqual(vectorExpr, differentSource))
 
+	literalSource := strLit("same literal")
+	expressionSource := DeepCopyExpr(literalSource)
+	expressionSource.GetLit().StringSource = uint32(types.StringSourceExpression) + 1
+	require.NotEqual(t, exprStructuralHash(literalSource), exprStructuralHash(expressionSource))
+	require.False(t, exprStructuralEqual(literalSource, expressionSource))
+
 	differentData := DeepCopyExpr(vectorExpr)
 	differentData.GetVec().Data = []byte("different executable vector")
 	require.NotEqual(t, exprStructuralHash(vectorExpr), exprStructuralHash(differentData))

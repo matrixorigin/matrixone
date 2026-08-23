@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -766,6 +767,10 @@ func (v *Vector) SetStringSourcesFromReader(r io.Reader, n int, mp *mpool.MPool)
 	if !mixed {
 		release()
 		return v.SetStringSource(first)
+	}
+	if v.IsConst() {
+		release()
+		return moerr.NewInvalidInputNoCtx("constant vector cannot have mixed string sources")
 	}
 	v.releaseStringSources()
 	v.stringSource = types.StringSourceExpression
@@ -10312,6 +10317,127 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 	return
 }
 
+func compareOrderedRows[T cmp.Ordered](v *Vector, left, right int) int {
+	return cmp.Compare(GetFixedAtNoTypeCheck[T](v, left), GetFixedAtNoTypeCheck[T](v, right))
+}
+
+func supportsInplaceSort(oid types.T) bool {
+	switch oid {
+	case types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_date, types.T_year, types.T_datetime, types.T_time, types.T_timestamp, types.T_enum,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_TS, types.T_uuid, types.T_Rowid,
+		types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary,
+		types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		return true
+	default:
+		return false
+	}
+}
+
+func compareVectorRows(v *Vector, left, right int) int {
+	switch v.typ.Oid {
+	case types.T_bool:
+		leftValue, rightValue := GetFixedAtNoTypeCheck[bool](v, left), GetFixedAtNoTypeCheck[bool](v, right)
+		if leftValue == rightValue {
+			return 0
+		}
+		if !leftValue {
+			return -1
+		}
+		return 1
+	case types.T_bit:
+		return compareOrderedRows[uint64](v, left, right)
+	case types.T_int8:
+		return compareOrderedRows[int8](v, left, right)
+	case types.T_int16:
+		return compareOrderedRows[int16](v, left, right)
+	case types.T_int32:
+		return compareOrderedRows[int32](v, left, right)
+	case types.T_int64:
+		return compareOrderedRows[int64](v, left, right)
+	case types.T_uint8:
+		return compareOrderedRows[uint8](v, left, right)
+	case types.T_uint16:
+		return compareOrderedRows[uint16](v, left, right)
+	case types.T_uint32:
+		return compareOrderedRows[uint32](v, left, right)
+	case types.T_uint64:
+		return compareOrderedRows[uint64](v, left, right)
+	case types.T_float32:
+		return compareOrderedRows[float32](v, left, right)
+	case types.T_float64:
+		return compareOrderedRows[float64](v, left, right)
+	case types.T_date:
+		return compareOrderedRows[types.Date](v, left, right)
+	case types.T_year:
+		return compareOrderedRows[types.MoYear](v, left, right)
+	case types.T_datetime:
+		return compareOrderedRows[types.Datetime](v, left, right)
+	case types.T_time:
+		return compareOrderedRows[types.Time](v, left, right)
+	case types.T_timestamp:
+		return compareOrderedRows[types.Timestamp](v, left, right)
+	case types.T_enum:
+		return compareOrderedRows[types.Enum](v, left, right)
+	case types.T_decimal64:
+		return GetFixedAtNoTypeCheck[types.Decimal64](v, left).Compare(
+			GetFixedAtNoTypeCheck[types.Decimal64](v, right))
+	case types.T_decimal128:
+		return GetFixedAtNoTypeCheck[types.Decimal128](v, left).Compare(
+			GetFixedAtNoTypeCheck[types.Decimal128](v, right))
+	case types.T_decimal256:
+		return GetFixedAtNoTypeCheck[types.Decimal256](v, left).Compare(
+			GetFixedAtNoTypeCheck[types.Decimal256](v, right))
+	case types.T_TS:
+		leftValue, rightValue := GetFixedAtNoTypeCheck[types.TS](v, left), GetFixedAtNoTypeCheck[types.TS](v, right)
+		if leftValue.LT(&rightValue) {
+			return -1
+		}
+		if rightValue.LT(&leftValue) {
+			return 1
+		}
+		return 0
+	case types.T_uuid:
+		return GetFixedAtNoTypeCheck[types.Uuid](v, left).Compare(
+			GetFixedAtNoTypeCheck[types.Uuid](v, right))
+	case types.T_Rowid:
+		leftValue, rightValue := GetFixedAtNoTypeCheck[types.Rowid](v, left), GetFixedAtNoTypeCheck[types.Rowid](v, right)
+		if leftValue.LT(&rightValue) {
+			return -1
+		}
+		if rightValue.LT(&leftValue) {
+			return 1
+		}
+		return 0
+	case types.T_array_float32:
+		return types.ArrayCompare[float32](
+			types.BytesToArray[float32](v.GetBytesAt(left)), types.BytesToArray[float32](v.GetBytesAt(right)))
+	case types.T_array_float64:
+		return types.ArrayCompare[float64](
+			types.BytesToArray[float64](v.GetBytesAt(left)), types.BytesToArray[float64](v.GetBytesAt(right)))
+	case types.T_array_bf16:
+		return types.ArrayElementCompare[types.BF16](
+			types.BytesToArray[types.BF16](v.GetBytesAt(left)), types.BytesToArray[types.BF16](v.GetBytesAt(right)))
+	case types.T_array_float16:
+		return types.ArrayElementCompare[types.Float16](
+			types.BytesToArray[types.Float16](v.GetBytesAt(left)), types.BytesToArray[types.Float16](v.GetBytesAt(right)))
+	case types.T_array_int8:
+		return types.ArrayElementCompare[int8](
+			types.BytesToArray[int8](v.GetBytesAt(left)), types.BytesToArray[int8](v.GetBytesAt(right)))
+	case types.T_array_uint8:
+		return types.ArrayElementCompare[uint8](
+			types.BytesToArray[uint8](v.GetBytesAt(left)), types.BytesToArray[uint8](v.GetBytesAt(right)))
+	default:
+		return bytes.Compare(v.GetBytesAt(left), v.GetBytesAt(right))
+	}
+}
+
 type vectorMetadataSorter struct {
 	vector  *Vector
 	varlena []types.Varlena
@@ -10325,8 +10451,8 @@ func (s vectorMetadataSorter) Less(left, right int) bool {
 		return leftNull
 	}
 	if !leftNull {
-		if cmp := bytes.Compare(s.vector.GetBytesAt(left), s.vector.GetBytesAt(right)); cmp != 0 {
-			return cmp < 0
+		if order := compareVectorRows(s.vector, left, right); order != 0 {
+			return order < 0
 		}
 	}
 	leftGrouping := s.vector.gsp.Contains(uint64(left))
@@ -10358,7 +10484,15 @@ func (s vectorMetadataSorter) Swap(left, right int) {
 	if left == right {
 		return
 	}
-	s.varlena[left], s.varlena[right] = s.varlena[right], s.varlena[left]
+	if s.varlena != nil {
+		s.varlena[left], s.varlena[right] = s.varlena[right], s.varlena[left]
+	} else {
+		leftBytes := s.vector.GetRawBytesAt(left)
+		rightBytes := s.vector.GetRawBytesAt(right)
+		for i := range leftBytes {
+			leftBytes[i], rightBytes[i] = rightBytes[i], leftBytes[i]
+		}
+	}
 	leftNull, rightNull := s.vector.IsNull(uint64(left)), s.vector.IsNull(uint64(right))
 	leftGrouping, rightGrouping := s.vector.gsp.Contains(uint64(left)), s.vector.gsp.Contains(uint64(right))
 	setBitmapRow(s.vector.nsp.GetBitmap(), left, rightNull)
@@ -10393,14 +10527,18 @@ func (v *Vector) sortRowsEquivalent(left, right int) bool {
 		v.GetStringSourceAt(left) != v.GetStringSourceAt(right) {
 		return false
 	}
-	return v.IsNull(uint64(left)) || bytes.Equal(v.GetBytesAt(left), v.GetBytesAt(right))
+	return v.IsNull(uint64(left)) || compareVectorRows(v, left, right) == 0
 }
 
 func (v *Vector) copySortedRow(destination, source int, varlena []types.Varlena) {
 	if destination == source {
 		return
 	}
-	varlena[destination] = varlena[source]
+	if varlena != nil {
+		varlena[destination] = varlena[source]
+	} else {
+		copy(v.GetRawBytesAt(destination), v.GetRawBytesAt(source))
+	}
 	setBitmapRow(v.nsp.GetBitmap(), destination, v.IsNull(uint64(source)))
 	setBitmapRow(v.gsp.GetBitmap(), destination, v.gsp.Contains(uint64(source)))
 	if v.binaryStringRowsActive {
@@ -10417,17 +10555,14 @@ func (v *Vector) copySortedRow(destination, source int, varlena []types.Varlena)
 
 func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil && v.stringSources == nil) ||
-		v.IsConst() || !v.typ.IsVarlen() {
-		return false
-	}
-	switch v.typ.Oid {
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
-	default:
+		v.IsConst() || !supportsInplaceSort(v.typ.Oid) {
 		return false
 	}
 
-	varlena := MustFixedColNoTypeCheck[types.Varlena](v)
+	var varlena []types.Varlena
+	if v.typ.IsVarlen() {
+		varlena = MustFixedColNoTypeCheck[types.Varlena](v)
+	}
 	v.nsp.GetBitmap().TryExpandWithSize(v.length)
 	v.gsp.GetBitmap().TryExpandWithSize(v.length)
 	if v.binaryStringRowsActive {

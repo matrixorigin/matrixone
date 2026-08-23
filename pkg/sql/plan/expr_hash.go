@@ -186,11 +186,22 @@ func executableLiteralForm(typ plan.Type, form plan.StringLiteralForm) plan.Stri
 	return form
 }
 
+func executableLiteralStringSource(lit *plan.Literal) uint32 {
+	if lit == nil {
+		return 0
+	}
+	if lit.StringSource != 0 {
+		return lit.StringSource
+	}
+	return uint32(types.StringSourceLiteral) + 1
+}
+
 func hashLitInto(h writeByter, typ plan.Type, lit *plan.Literal) {
 	if lit == nil {
 		writeByte(h, 0)
 		return
 	}
+	writeUint32(h, executableLiteralStringSource(lit))
 	if lit.Isnull {
 		writeByte(h, 1)
 		return
@@ -380,7 +391,7 @@ func literalEqual(typ plan.Type, a, b *plan.Literal) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	if a.Isnull != b.Isnull {
+	if a.Isnull != b.Isnull || executableLiteralStringSource(a) != executableLiteralStringSource(b) {
 		return false
 	}
 	if a.Isnull {

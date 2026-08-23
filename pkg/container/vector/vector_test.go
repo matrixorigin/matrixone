@@ -6340,6 +6340,72 @@ func TestStringSourceInplaceSortAndStableDecode(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestStringSourceSortAllPhysicalFamilies(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	t.Run("fixed sort and compact", func(t *testing.T) {
+		fixed := NewVec(types.T_int64.ToType())
+		require.NoError(t, AppendFixedList(fixed, []int64{2, 1}, nil, mp))
+		require.NoError(t, fixed.SetStringSourcesWithMP([]types.StringSource{
+			types.StringSourceSQLPrepare, types.StringSourceLiteral,
+		}, mp))
+		fixed.InplaceSort()
+		require.Equal(t, []int64{1, 2}, MustFixedColNoTypeCheck[int64](fixed))
+		require.Equal(t, types.StringSourceLiteral, fixed.GetStringSourceAt(0))
+		require.Equal(t, types.StringSourceSQLPrepare, fixed.GetStringSourceAt(1))
+		fixed.Free(mp)
+
+		compact := NewVec(types.T_int64.ToType())
+		require.NoError(t, AppendFixedList(compact, []int64{1, 1}, nil, mp))
+		require.NoError(t, compact.SetStringSourcesWithMP([]types.StringSource{
+			types.StringSourceLiteral, types.StringSourceSQLPrepare,
+		}, mp))
+		compact.InplaceSortAndCompact()
+		require.Equal(t, 2, compact.Length(), "source-distinct rows are not equivalent")
+		compact.Free(mp)
+	})
+
+	t.Run("json sort", func(t *testing.T) {
+		json := NewVec(types.T_json.ToType())
+		for _, value := range []string{`{"b":1}`, `{"a":1}`} {
+			require.NoError(t, AppendBytes(json, []byte(value), false, mp))
+		}
+		require.NoError(t, json.SetStringSourcesWithMP([]types.StringSource{
+			types.StringSourceSQLPrepare, types.StringSourceLiteral,
+		}, mp))
+		json.InplaceSort()
+		require.Equal(t, `{"a":1}`, string(json.GetBytesAt(0)))
+		require.Equal(t, types.StringSourceLiteral, json.GetStringSourceAt(0))
+		json.Free(mp)
+	})
+
+	t.Run("array sort", func(t *testing.T) {
+		array := NewVec(types.T_array_float32.ToType())
+		require.NoError(t, AppendArrayList(array, [][]float32{{2}, {1}}, nil, mp))
+		require.NoError(t, array.SetStringSourcesWithMP([]types.StringSource{
+			types.StringSourceSQLPrepare, types.StringSourceLiteral,
+		}, mp))
+		array.InplaceSort()
+		require.Equal(t, []float32{1}, GetArrayAt[float32](array, 0))
+		require.Equal(t, types.StringSourceLiteral, array.GetStringSourceAt(0))
+		array.Free(mp)
+	})
+}
+
+func TestSetStringSourcesFromReaderRejectsMixedConst(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, err := NewConstBytes(types.T_varchar.ToType(), []byte("value"), 2, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	err = vec.SetStringSourcesFromReader(bytes.NewReader([]byte{
+		byte(types.StringSourceLiteral), byte(types.StringSourceSQLPrepare),
+	}), 2, mp)
+	require.ErrorContains(t, err, "constant vector cannot have mixed string sources")
+	require.False(t, vec.HasStringSourceMetadata())
+}
+
 func TestStringSourceGenericNullAppendUsesExpression(t *testing.T) {
 	for _, test := range []struct {
 		name string

@@ -1614,6 +1614,13 @@ func constLiteralKey(expr *plan.Expr) (string, bool) {
 		return "", false
 	}
 	lit = literalForExecutableIdentity(typ, lit)
+	if lit.StringSource != 0 {
+		// Source ownership affects executable-expression identity, not SQL value
+		// equality used to intersect filter domains.
+		literalCopy := *lit
+		literalCopy.StringSource = 0
+		lit = &literalCopy
+	}
 	typ = literalSemanticKeyType(typ)
 	// Serialize the literal with proto binary Marshal rather than String(),
 	// which goes through the reflection-driven TextMarshaler and can dominate
