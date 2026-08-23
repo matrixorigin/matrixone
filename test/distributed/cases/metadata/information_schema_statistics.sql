@@ -23,7 +23,7 @@ select count(*) from information_schema.statistics
 where table_schema = 'stat_view_db'
   and table_name = 't';
 
-show index from t;
+show keys from t;
 
 create database stat_view_db_a;
 create database stat_view_db_b;

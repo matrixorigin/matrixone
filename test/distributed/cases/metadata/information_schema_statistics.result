@@ -26,12 +26,12 @@ where table_schema = 'stat_view_db'
 and table_name = 't';
 count(*)
 4
-show index from t;
+show keys from t;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t    0    uniq_b    1    b    A    0    NULL    NULL    YES                    YES    b
+t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
 t    1    idx_bc    1    b    A    0    NULL    NULL    YES                    YES    b
 t    1    idx_bc    2    c    A    0    NULL    NULL    YES                    YES    c
-t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+t    0    uniq_b    1    b    A    0    NULL    NULL    YES                    YES    b
 create database stat_view_db_a;
 create database stat_view_db_b;
 use stat_view_db_a;
