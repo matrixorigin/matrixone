@@ -134,24 +134,44 @@ func exactContractCol(typ types.Type) *plan.Expr {
 	}
 }
 
-func TestTupleComponentSlotAcceptsPlannerCast(t *testing.T) {
-	sourceType := types.T_int64.ToType()
-	targetType := types.T_int32.ToType()
-	casted := &plan.Expr{
-		Typ: *exactContractPlanType(targetType),
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: "cast"},
-			Args: []*plan.Expr{
-				exactContractCol(sourceType),
-				{Typ: *exactContractPlanType(targetType), Expr: &plan.Expr_T{T: &plan.TargetType{}}},
-			},
-		}},
+func TestTupleComponentSlotCastContract(t *testing.T) {
+	makeCast := func(sourceType, targetType types.Type, name string) *plan.Expr {
+		return &plan.Expr{
+			Typ: *exactContractPlanType(targetType),
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: name},
+				Args: []*plan.Expr{
+					exactContractCol(sourceType),
+					{Typ: *exactContractPlanType(targetType), Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+				},
+			}},
+		}
 	}
 
-	slot, source, ok := TupleComponentSlot(casted)
-	require.True(t, ok)
-	require.Zero(t, slot)
-	require.Equal(t, sourceType, source)
+	for _, test := range []struct {
+		name       string
+		sourceType types.Type
+		targetType types.Type
+		function   string
+		valid      bool
+	}{
+		{name: "signed narrowing", sourceType: types.T_int64.ToType(), targetType: types.T_int32.ToType(), function: "cast", valid: true},
+		{name: "unsigned narrowing", sourceType: types.T_uint64.ToType(), targetType: types.T_uint16.ToType(), function: "cast", valid: true},
+		{name: "cross signedness", sourceType: types.T_int64.ToType(), targetType: types.T_uint32.ToType(), function: "cast"},
+		{name: "reverse widening", sourceType: types.T_int32.ToType(), targetType: types.T_int64.ToType(), function: "cast"},
+		{name: "non integer", sourceType: types.T_varchar.ToType(), targetType: types.T_int32.ToType(), function: "cast"},
+		{name: "forged function", sourceType: types.T_int64.ToType(), targetType: types.T_int32.ToType(), function: "plus"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			slot, source, ok := TupleComponentSlot(makeCast(
+				test.sourceType, test.targetType, test.function))
+			require.Equal(t, test.valid, ok)
+			if test.valid {
+				require.Zero(t, slot)
+				require.Equal(t, test.sourceType, source)
+			}
+		})
+	}
 }
 
 func exactRawContract(

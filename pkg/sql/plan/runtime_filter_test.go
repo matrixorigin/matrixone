@@ -529,6 +529,42 @@ func TestExactRuntimeFilterPairRequiresMaterializableShape(t *testing.T) {
 	})
 }
 
+func TestSafeRuntimeFilterIntegerCast(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		source    types.T
+		target    types.T
+		narrowing bool
+		safe      bool
+	}{
+		{name: "signed widening", source: types.T_int32, target: types.T_int64, safe: true},
+		{name: "signed narrowing", source: types.T_int64, target: types.T_int32, narrowing: true, safe: true},
+		{name: "unsigned widening", source: types.T_uint8, target: types.T_uint64, safe: true},
+		{name: "unsigned narrowing", source: types.T_uint64, target: types.T_uint16, narrowing: true, safe: true},
+		{name: "reverse widening", source: types.T_int64, target: types.T_int32},
+		{name: "reverse narrowing", source: types.T_int32, target: types.T_int64, narrowing: true},
+		{name: "cross signedness", source: types.T_int64, target: types.T_uint64},
+		{name: "non integer source", source: types.T_varchar, target: types.T_int32},
+		{name: "non integer target", source: types.T_int32, target: types.T_decimal64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.safe, safeRuntimeFilterIntegerCast(
+				test.source, test.target, test.narrowing))
+		})
+	}
+}
+
+func TestSerializedRuntimeFilterComponentColRejectsForgedShape(t *testing.T) {
+	require.Nil(t, serializedRuntimeFilterComponentCol(nil))
+	require.Nil(t, serializedRuntimeFilterComponentCol(&planpb.Expr{}))
+	require.Nil(t, serializedRuntimeFilterComponentCol(&planpb.Expr{
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "plus"},
+			Args: []*planpb.Expr{GetColExpr(planpb.Type{Id: int32(types.T_int32)}, 1, 0)},
+		}},
+	}))
+}
+
 func TestSerializedExactRuntimeFilterPairContract(t *testing.T) {
 	builder := newRuntimeFilterSingleTestBuilder(true)
 	sid := builder.compCtx.GetProcess().GetService()

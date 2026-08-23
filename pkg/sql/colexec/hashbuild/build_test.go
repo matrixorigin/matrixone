@@ -1717,6 +1717,138 @@ func TestHashBuildSerializedRuntimeFilterAllocationFailureFallsBackToPass(t *tes
 	require.Empty(t, runtimeFilter.Data)
 }
 
+func makeSerializedRuntimeFilterCastExpr(
+	t *testing.T,
+	proc *process.Process,
+	slot int32,
+	sourceType, targetType types.Type,
+) *plan.Expr {
+	t.Helper()
+	expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "cast", []*plan.Expr{
+		newExpr(slot, sourceType),
+		{
+			Typ:  *runtimeFilterPlanType(targetType),
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		},
+	})
+	require.NoError(t, err)
+	return expr
+}
+
+func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		wide       []int64
+		direct     []int32
+		expectedRF int32
+	}{
+		{
+			name:       "mixed cast and direct components follow tuple order",
+			wide:       []int64{1, 2},
+			direct:     []int32{11, 12},
+			expectedRF: message.RuntimeFilter_IN,
+		},
+		{
+			name:       "out of range cast fails open",
+			wide:       []int64{math.MaxInt32 + 1},
+			direct:     []int32{11},
+			expectedRF: message.RuntimeFilter_PASS,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wideType := types.T_int64.ToType()
+			narrowType := types.T_int32.ToType()
+			conditions := []*plan.Expr{
+				newExpr(0, wideType),
+				newExpr(1, narrowType),
+			}
+			tc := newTestCase(
+				t,
+				[]bool{false, false},
+				[]types.Type{wideType, narrowType},
+				conditions,
+			)
+			spec := makeSerializedRuntimeFilterSpec(
+				t, tc.proc, 206, 100,
+				[]types.Type{narrowType, narrowType}, false)
+			// The tuple contract follows probe/primary-key order: direct slot 1
+			// first, then narrowed slot 0. This is intentionally different from
+			// the physical HashBuild condition order.
+			spec.BuildExpr.GetF().Args[0] = newExpr(1, narrowType)
+			spec.BuildExpr.GetF().Args[1] = makeSerializedRuntimeFilterCastExpr(
+				t, tc.proc, 0, wideType, narrowType)
+			tc.arg.RuntimeFilterSpec = spec
+			tc.arg.ctr.hashmapBuilder.InputBatchRowCount = len(test.wide)
+			budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			installTestExecutionResourceBudget(t, tc.arg, generation)
+			tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+				testutil.MakeInt64Vector(test.wide, nil, tc.proc.Mp()),
+				testutil.MakeInt32Vector(test.direct, nil, tc.proc.Mp()),
+			}
+
+			service := tc.proc.GetService()
+			rt := moruntime.ServiceRuntime(service)
+			original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion8)
+			t.Cleanup(func() {
+				if hadOriginal {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+				} else {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+				}
+			})
+
+			require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+			require.True(t, tc.arg.ctr.runtimeFilterDone)
+			require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
+
+			receiver := message.NewMessageReceiver(
+				[]int32{spec.Tag},
+				message.AddrBroadCastOnCurrentCN(),
+				tc.proc.GetMessageBoard(),
+			)
+			msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+			require.NoError(t, err)
+			require.False(t, done)
+			require.Len(t, msgs, 1)
+			runtimeFilter := msgs[0].(message.RuntimeFilterMessage)
+			require.Equal(t, test.expectedRF, runtimeFilter.Typ)
+
+			if test.expectedRF == message.RuntimeFilter_IN {
+				require.Equal(t, int32(len(test.wide)), runtimeFilter.Card)
+				payload := vector.NewVec(types.T_any.ToType())
+				require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
+				require.Equal(t, len(test.wide), payload.Length())
+				expected := make(map[string]struct{}, len(test.wide))
+				packer := types.NewPacker()
+				for i := range test.wide {
+					packer.Reset()
+					packer.EncodeInt32(test.direct[i])
+					packer.EncodeInt32(int32(test.wide[i]))
+					expected[string(packer.GetBuf())] = struct{}{}
+				}
+				packer.Close()
+				for i := 0; i < payload.Length(); i++ {
+					delete(expected, string(payload.GetBytesAt(i)))
+				}
+				require.Empty(t, expected)
+				payload.Free(tc.proc.Mp())
+			} else {
+				require.Zero(t, runtimeFilter.Card)
+				require.Empty(t, runtimeFilter.Data)
+			}
+
+			runtimeFilter.Destroy()
+			require.Zero(t, generation.Used(), "payload, temporary cast vectors, and executors must release their account")
+			generation.Close()
+			tc.proc.Free()
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 	const rowCount = 1000
 	componentType := types.T_int32.ToType()
