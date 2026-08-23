@@ -101,6 +101,20 @@ func TestBuildMedianWithinGroupRejectsDifferentOrderExpression(t *testing.T) {
 	require.ErrorContains(t, err, "median requires the WITHIN GROUP ORDER BY expression to match")
 }
 
+func TestBuildMedianWithinGroupAcceptsIdenticalScalarSubquery(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select median((select 1)) within group (order by (select 1)) from select_test.bind_select", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+
+	fn := findAggregateByName(queryPlan.GetQuery(), "median")
+	require.NotNil(t, fn)
+	require.Len(t, fn.Args, 1)
+}
+
 func TestBuildMedianWithinGroupRejectsWindowForm(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select median(a) within group (order by a) over () from select_test.bind_select", 1)

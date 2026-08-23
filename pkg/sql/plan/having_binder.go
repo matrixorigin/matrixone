@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"encoding/binary"
-	"reflect"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -358,19 +357,41 @@ func (b *HavingBinder) bindMedianWithinGroupAgg(
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
 			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
 	}
+	// Compare canonical source expressions before binding them. Qualifying
+	// cloned expressions preserves normal column identity (for example, a
+	// becomes bind_select.a) without allocating identity-bearing subquery
+	// nodes. Comparing bound plans would reject two identical scalar subqueries
+	// because each bind creates a fresh plan node ID.
+	valueAst := cloneTreeExpr(astExpr.Exprs[0])
+	orderAst := cloneTreeExpr(astExpr.OrderBy[0].Expr)
+	if b.ctx != nil {
+		var err error
+		valueAst, err = b.ctx.qualifyColumnNames(valueAst, NoAlias)
+		if err != nil {
+			return nil, err
+		}
+		orderAst, err = b.ctx.qualifyColumnNames(orderAst, NoAlias)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if semanticAstKey(valueAst) != semanticAstKey(orderAst) {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+			"%s requires the WITHIN GROUP ORDER BY expression to match its value expression", funcName)
+	}
+
 	value, err := b.BindExpr(astExpr.Exprs[0], depth, isRoot)
 	if err != nil {
 		return nil, err
 	}
-	order, err := b.BindExpr(astExpr.OrderBy[0].Expr, depth, isRoot)
-	if err != nil {
-		return nil, err
+
+	if b.builder == nil || b.builder.compCtx == nil {
+		return BindFuncExprImplByPlanExpr(b.GetContext(), funcName, []*plan.Expr{value})
 	}
-	if !reflect.DeepEqual(value, order) {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires the WITHIN GROUP ORDER BY expression to match its value expression", funcName)
-	}
-	return b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
+	return bindFuncExprAndConstFold(
+		b.GetContext(), b.builder.compCtx.GetProcess(), funcName,
+		[]*plan.Expr{value},
+	)
 }
 
 // bindOrderedSetPercentileAgg converts the SQL-standard
