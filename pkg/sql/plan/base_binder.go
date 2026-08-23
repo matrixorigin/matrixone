@@ -4751,16 +4751,13 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 }
 
 // adjustControlFlowBinaryMetadata narrows a binary/character conditional
-// result only when every character branch is a known literal. MatrixOne's
-// textual type metadata currently uses its canonical utf8mb4 connection/view
-// charset; unlike MySQL, the planner does not carry a latin1/utf8mb3 session
-// charset through this expression. Keep the four-byte UTF-8 capacity here so
-// the binary result metadata agrees with that public charset policy and does
-// not understate ASCII or multibyte character branches. If charset-specific
-// planner metadata is added later, this bound must be derived from it.
+// result only when every character branch is a known literal. The result is
+// VARBINARY, so a character branch's declared width must first be converted
+// from characters to bytes using its effective charset. CharsetLegacy is the
+// pre-collation plan encoding and is emitted as utf8_general_ci, whose
+// utf8mb3-compatible three-byte bound is retained for old plans. New text
+// expressions carry CharsetUTF8/CharsetUTF8MB4Bin and use the utf8mb4 bound.
 func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
-	const maxUTF8MB4BytesPerCharacter = int32(utf8.UTFMax)
-
 	hasBinary := false
 	hasCharacter := false
 	width := int32(0)
@@ -4786,8 +4783,9 @@ func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueI
 				return false
 			}
 			candidate := int32(0)
-			if typ.Width > 0 && typ.Width <= types.MaxVarBinaryLen/maxUTF8MB4BytesPerCharacter {
-				candidate = typ.Width * maxUTF8MB4BytesPerCharacter
+			maxBytesPerCharacter := controlFlowMaxBytesPerCharacter(typ.Charset)
+			if typ.Width > 0 && typ.Width <= types.MaxVarBinaryLen/maxBytesPerCharacter {
+				candidate = typ.Width * maxBytesPerCharacter
 			} else if typ.Width > 0 {
 				candidate = types.MaxVarBinaryLen
 			}
@@ -4806,6 +4804,23 @@ func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueI
 	}
 	returnType.Width = width
 	return true
+}
+
+func controlFlowMaxBytesPerCharacter(charset uint8) int32 {
+	switch charset {
+	case types.CharsetBinary:
+		return 1
+	case types.CharsetLegacy:
+		// Legacy text metadata is exposed as utf8_general_ci, which has the
+		// utf8mb3 three-byte maximum. Keep this bound for pre-collation plans.
+		return 3
+	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
+		return int32(utf8.UTFMax)
+	default:
+		// Unknown text identities must not understate a value that may contain
+		// four-byte UTF-8 code points.
+		return int32(utf8.UTFMax)
+	}
 }
 
 func controlFlowNullExpr(expr *Expr) bool {

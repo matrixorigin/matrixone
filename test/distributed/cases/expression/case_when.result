@@ -419,7 +419,7 @@ create view v_if_binary_char as
 select if(1, _binary 'a', 'bc') as if_binary_char;
 desc v_if_binary_char;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-if_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
+if_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦
 select hex(if_binary_char) as if_binary_char_hex from v_if_binary_char;
 ➤ if_binary_char_hex[12,65535,0]  𝄀
 61
@@ -508,7 +508,7 @@ create view v_case_binary_utf8 as
 select case when 1 then _binary 'a' else '中文' end as case_binary_utf8;
 desc v_case_binary_utf8;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-case_binary_utf8  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
+case_binary_utf8  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦
 select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
 ➤ case_utf8_hex[12,65535,0]  𝄀
 E4B8ADE69687

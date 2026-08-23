@@ -423,6 +423,31 @@ func TestBindControlFlowMetadata(t *testing.T) {
 	})
 }
 
+func TestBindControlFlowBinaryCharacterCharsetWidth(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		charset uint8
+		width   int32
+	}{
+		{name: "utf8mb3-compatible legacy text", charset: types.CharsetLegacy, width: 6},
+		{name: "utf8mb4 general text", charset: types.CharsetUTF8, width: 8},
+		{name: "utf8mb4 binary collation", charset: types.CharsetUTF8MB4Bin, width: 8},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			character := makePlan2StringConstExprWithType("bc")
+			character.Typ.Charset = uint32(test.charset)
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), "if", []*planpb.Expr{
+				makePlan2BoolConstExprWithType(true),
+				makePlan2VarBinaryConstExprWithType("a"),
+				character,
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
+			require.Equal(t, test.width, expr.Typ.Width)
+		})
+	}
+}
+
 func TestBuildCaseSignedUnsignedMetadataWithNull(t *testing.T) {
 	for _, test := range []struct {
 		name string
