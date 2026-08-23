@@ -244,12 +244,7 @@ func (s *service) heartbeat(ctx context.Context) {
 		s.notifyCommandPoll()
 		return
 	}
-	if err := s.applyViewMetadataAdmission(ctx, cb.ViewMetadataAdmission); err != nil {
-		if ctx.Err() == nil {
-			s.logger.Error("failed to apply view metadata admission heartbeat response", zap.Error(err))
-		}
-		return
-	}
+	admissionErr := s.applyViewMetadataAdmission(ctx, cb.ViewMetadataAdmission)
 	s.commandPollNeeded.Store(false)
 	s.notifyCommandPoll()
 
@@ -261,6 +256,9 @@ func (s *service) heartbeat(ctx context.Context) {
 	}
 	s.config.DecrCount()
 	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
+	if admissionErr != nil && ctx.Err() == nil {
+		s.logger.Error("failed to apply view metadata admission heartbeat response", zap.Error(admissionErr))
+	}
 }
 
 func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {

@@ -288,10 +288,32 @@ func TestViewMetadataAdmissionReplacementKeepsOldGenerationUntilTimeout(t *testi
 	require.Equal(t, uint64(20), rsm.state.ViewMetadataAdmissionProxyTargets["proxy-1"])
 	require.Equal(t, uint64(10), rsm.state.ViewMetadataAdmissionProxyTargetTicks["proxy-1"])
 
+	otherBatch := updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "cn-2",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 30,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataIngressReady:        true,
+		ViewMetadataRefreshSupported:    true,
+	})
+	require.True(t, otherBatch.ViewMetadataAdmission.Admitted,
+		"a stale replaced-generation target must not block another UUID")
+	require.True(t, otherBatch.ViewMetadataAdmission.Ready)
+	cnBatch := updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "cn-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 11,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataIngressReady:        true,
+		ViewMetadataRefreshSupported:    true,
+	})
+	require.False(t, cnBatch.ViewMetadataAdmission.Admitted,
+		"the replacement must remain fenced until its own old generation expires")
+
 	// Rejected heartbeats from the replaced processes receive the authoritative
 	// generation but cannot refresh their captured target ticks.
 	rsm.state.Tick = 12
-	cnBatch := updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+	cnBatch = updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
 		UUID:                            "cn-1",
 		ViewMetadataAdmissionSupported:  true,
 		ViewMetadataAdmissionGeneration: 10,

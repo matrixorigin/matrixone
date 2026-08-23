@@ -86,11 +86,11 @@ func (s *stateMachine) viewMetadataAdmissionActive() bool {
 	return s.state.ViewMetadataAdmissionPreparing || s.state.ViewMetadataAdmissionEnabled
 }
 
-func (s *stateMachine) cnViewMetadataAdmitted(store pb.CNStoreInfo) bool {
+func (s *stateMachine) cnViewMetadataAdmitted(uuid string, store pb.CNStoreInfo) bool {
 	if !s.viewMetadataAdmissionActive() {
 		return true
 	}
-	if !s.viewMetadataAdmissionTargetsReady() ||
+	if !s.viewMetadataAdmissionTargetsReadyFor(uuid, false) ||
 		!store.ViewMetadataAdmissionSupported ||
 		store.ViewMetadataAdmissionGeneration == 0 ||
 		store.ViewMetadataObservedEpoch < s.state.ViewMetadataAdmissionEpoch {
@@ -101,9 +101,9 @@ func (s *stateMachine) cnViewMetadataAdmitted(store pb.CNStoreInfo) bool {
 		store.ViewMetadataCatalogFencedEpoch >= s.state.ViewMetadataAdmissionEpoch
 }
 
-func (s *stateMachine) proxyViewMetadataAdmitted(store pb.ProxyStore) bool {
+func (s *stateMachine) proxyViewMetadataAdmitted(uuid string, store pb.ProxyStore) bool {
 	return !s.viewMetadataAdmissionActive() ||
-		(s.viewMetadataAdmissionTargetsReady() &&
+		(s.viewMetadataAdmissionTargetsReadyFor(uuid, true) &&
 			store.ViewMetadataAdmissionSupported &&
 			store.ViewMetadataAdmissionGeneration != 0 &&
 			store.ViewMetadataObservedEpoch >= s.state.ViewMetadataAdmissionEpoch)
@@ -228,18 +228,28 @@ func (s *stateMachine) captureProxyViewMetadataAdmissionTarget(uuid string, stor
 	s.state.ViewMetadataAdmissionPending = true
 }
 
-func (s *stateMachine) viewMetadataAdmissionTargetsReady() bool {
-	for uuid, generation := range s.state.ViewMetadataAdmissionCNTargets {
-		store, ok := s.state.CNState.Stores[uuid]
-		if !ok || store.ViewMetadataAdmissionGeneration != generation ||
-			store.ViewMetadataObservedEpoch < s.state.ViewMetadataAdmissionEpoch {
+func (s *stateMachine) viewMetadataAdmissionTargetsReadyFor(uuid string, proxy bool) bool {
+	for targetUUID, generation := range s.state.ViewMetadataAdmissionCNTargets {
+		store, ok := s.state.CNState.Stores[targetUUID]
+		if ok && store.ViewMetadataAdmissionGeneration != generation {
+			if !proxy && targetUUID == uuid {
+				return false
+			}
+			continue
+		}
+		if !ok || store.ViewMetadataObservedEpoch < s.state.ViewMetadataAdmissionEpoch {
 			return false
 		}
 	}
-	for uuid, generation := range s.state.ViewMetadataAdmissionProxyTargets {
-		store, ok := s.state.ProxyState.Stores[uuid]
-		if !ok || store.ViewMetadataAdmissionGeneration != generation ||
-			store.ViewMetadataObservedEpoch < s.state.ViewMetadataAdmissionEpoch {
+	for targetUUID, generation := range s.state.ViewMetadataAdmissionProxyTargets {
+		store, ok := s.state.ProxyState.Stores[targetUUID]
+		if ok && store.ViewMetadataAdmissionGeneration != generation {
+			if proxy && targetUUID == uuid {
+				return false
+			}
+			continue
+		}
+		if !ok || store.ViewMetadataObservedEpoch < s.state.ViewMetadataAdmissionEpoch {
 			return false
 		}
 	}
@@ -250,14 +260,13 @@ func (s *stateMachine) tryPromoteViewMetadataAdmissions(
 	targets *pb.ViewMetadataAdmissionTargets,
 ) {
 	if !s.state.ViewMetadataAdmissionEnabled || !s.state.ViewMetadataAdmissionPending ||
-		s.state.ViewMetadataCatalogFencedEpoch < s.state.ViewMetadataAdmissionEpoch ||
-		!s.viewMetadataAdmissionTargetsReady() {
+		s.state.ViewMetadataCatalogFencedEpoch < s.state.ViewMetadataAdmissionEpoch {
 		return
 	}
 
 	pending := false
 	for uuid, store := range s.state.CNState.Stores {
-		if s.cnViewMetadataAdmitted(store) && store.ViewMetadataIngressReady {
+		if s.cnViewMetadataAdmitted(uuid, store) && store.ViewMetadataIngressReady {
 			store.ViewMetadataAdmissionReady = true
 			s.state.CNState.Stores[uuid] = store
 		} else if store.ViewMetadataAdmissionSupported &&
@@ -273,7 +282,7 @@ func (s *stateMachine) tryPromoteViewMetadataAdmissions(
 		}
 	}
 	for uuid, store := range s.state.ProxyState.Stores {
-		if s.proxyViewMetadataAdmitted(store) {
+		if s.proxyViewMetadataAdmitted(uuid, store) {
 			store.ViewMetadataAdmissionReady = true
 			s.state.ProxyState.Stores[uuid] = store
 		} else if store.ViewMetadataAdmissionSupported &&
@@ -408,7 +417,7 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 	for uuid, store := range s.state.CNState.Stores {
 		store.ViewMetadataAdmissionReady = false
 		if !commandDeliveryStoreExpired(store.Tick, s.state.Tick, targets.CNStoreTimeoutTicks) &&
-			s.cnViewMetadataAdmitted(store) && store.ViewMetadataIngressReady {
+			s.cnViewMetadataAdmitted(uuid, store) && store.ViewMetadataIngressReady {
 			store.ViewMetadataAdmissionReady = true
 		}
 		s.state.CNState.Stores[uuid] = store
@@ -565,12 +574,12 @@ func (s *stateMachine) viewMetadataAdmissionSnapshot(uuid string, proxy bool) *p
 		if store, ok := s.state.ProxyState.Stores[uuid]; ok {
 			snapshot.Generation = store.ViewMetadataAdmissionGeneration
 			snapshot.Ready = store.ViewMetadataAdmissionReady
-			snapshot.Admitted = s.proxyViewMetadataAdmitted(store)
+			snapshot.Admitted = s.proxyViewMetadataAdmitted(uuid, store)
 		}
 	} else if store, ok := s.state.CNState.Stores[uuid]; ok {
 		snapshot.Generation = store.ViewMetadataAdmissionGeneration
 		snapshot.Ready = store.ViewMetadataAdmissionReady
-		snapshot.Admitted = s.cnViewMetadataAdmitted(store)
+		snapshot.Admitted = s.cnViewMetadataAdmitted(uuid, store)
 	}
 	return snapshot
 }
