@@ -397,7 +397,7 @@ func TestResetIntervalFunctionArgsNullHandling(t *testing.T) {
 	require.NotNil(t, args[1])
 }
 
-// TestResetIntervalFunctionArgsNonLiteral tests non-literal expressions (should go through cast path)
+// TestResetIntervalFunctionArgsNonLiteral tests non-literal expressions.
 func TestResetIntervalFunctionArgsNonLiteral(t *testing.T) {
 	ctx := context.Background()
 
@@ -464,6 +464,33 @@ func TestResetIntervalFunctionArgsNonLiteral(t *testing.T) {
 	require.Len(t, args3, 2)
 	require.NotNil(t, args3[0])
 	require.NotNil(t, args3[1])
+
+	// Test non-literal VARCHAR expression. It must remain a row-dependent
+	// expression rather than being normalized as an empty string literal.
+	colRefVarcharExpr := &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 3,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_varchar),
+			NotNullable: true,
+		},
+	}
+
+	intervalExpr4 := makeIntervalExpr(colRefVarcharExpr, "SECOND")
+	args4, err := resetIntervalFunctionArgs(ctx, intervalExpr4)
+	require.NoError(t, err)
+	require.Len(t, args4, 2)
+
+	normalizeExpr := args4[0].GetF()
+	require.NotNil(t, normalizeExpr)
+	require.NotNil(t, normalizeExpr.Func)
+	require.Equal(t, "to_interval", normalizeExpr.Func.GetObjName())
+	require.Equal(t, colRefVarcharExpr, normalizeExpr.Args[0])
+	require.Equal(t, int64(types.Second), extractInt64FromExpr(normalizeExpr.Args[1]))
 }
 
 // TestResetIntervalFunction tests the wrapper function resetIntervalFunction

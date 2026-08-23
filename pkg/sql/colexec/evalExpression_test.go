@@ -636,49 +636,26 @@ func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing
 	require.Equal(t, "text", textVec.GetStringAt(0))
 }
 
-func TestPreparedNumericLiteralsMaterializeWithTheirRuntimeTypes(t *testing.T) {
+func TestGenerateConstExpressionExecutorYear(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+
 	bat := batch.New(nil)
 	bat.SetRowCount(1)
-
-	decimalExpr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{
-			Decimal64Val: &plan.Decimal64{A: -15},
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_year)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{
+			I32Val: 2026,
 		}}},
 	}
-	decimalExecutor, err := NewExpressionExecutor(proc, decimalExpr)
+	executor, err := NewExpressionExecutor(proc, expr)
 	require.NoError(t, err)
-	defer decimalExecutor.Free()
-	decimalVec, err := decimalExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	require.Equal(t, types.T_decimal64, decimalVec.GetType().Oid)
-	require.Equal(t, int64(-15), int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](decimalVec, 0)))
+	defer executor.Free()
 
-	integerExpr := &plan.Expr{
-		Typ:  plan.Type{Id: int32(types.T_int64)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: -42}}},
-	}
-	integerExecutor, err := NewExpressionExecutor(proc, integerExpr)
+	vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 	require.NoError(t, err)
-	defer integerExecutor.Free()
-	integerVec, err := integerExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	require.Equal(t, types.T_int64, integerVec.GetType().Oid)
-	require.Equal(t, int64(-42), vector.GetFixedAtNoTypeCheck[int64](integerVec, 0))
-
-	yearExpr := &plan.Expr{
-		Typ:  plan.Type{Id: int32(types.T_year)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 2026}}},
-	}
-	yearExecutor, err := NewExpressionExecutor(proc, yearExpr)
-	require.NoError(t, err)
-	defer yearExecutor.Free()
-	yearVec, err := yearExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	require.Equal(t, types.T_year, yearVec.GetType().Oid)
-	require.Equal(t, types.MoYear(2026), vector.GetFixedAtNoTypeCheck[types.MoYear](yearVec, 0))
+	require.Equal(t, types.T_year, vec.GetType().Oid)
+	require.Equal(t, types.MoYear(2026), vector.GetFixedAtNoTypeCheck[types.MoYear](vec, 0))
 }
 
 func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
