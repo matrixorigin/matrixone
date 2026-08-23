@@ -71,6 +71,10 @@ select * from sql_tvf('select 1', 'I', 42) x;
 invalid input: the conn (3rd) argument of sql_tvf must be a string, not BIGINT
 select * from typed t, sql_tvf(t.txt, 'I', @h) x;
 not supported: the query (1st) argument of sql_tvf must not reference columns; use a constant, parameter, or session variable
+select x.col0 from typed t cross apply sql_tvf(t.txt, 'I', @h) x;
+not supported: the query (1st) argument of sql_tvf must not reference columns; use a constant, parameter, or session variable
+select x.col0 from typed t cross apply sql_tvf(concat(t.txt, ''), 'I', @h) x;
+not supported: the query (1st) argument of sql_tvf must not reference columns; use a constant, parameter, or session variable
 select * from esql_tvf('FROM idx', 'I', @h) x;
 invalid input: connection handle "sql:1108129e3e966f3a" is a sql connection; esql_tvf accepts only esql connections
 create table bad_col (id int, __mo_query varchar(10));

@@ -50,6 +50,16 @@ func TestBuildForeignTVF(t *testing.T) {
 		// no arguments / too many arguments
 		`select * from sql_tvf() x`,
 		`select * from sql_tvf('q', 'I', @h, 'extra') x`,
+		// correlated runtime input (comma-join and CROSS APPLY spellings): the
+		// scan must stay on the session CN, so column-referencing arguments
+		// are rejected at bind time — including nested inside functions.
+		`select f.col0 from nation n, sql_tvf(n.n_name, 'I', @h) f`,
+		`select f.col0 from nation n cross apply sql_tvf(n.n_name, 'I', @h) f`,
+		`select f.col0 from nation n cross apply sql_tvf(concat(n.n_name, ''), 'I', @h) f`,
+		`select f.col0 from nation n cross apply esql_tvf(n.n_name, 'I', @h) f`,
+		// non-string runtime arguments
+		`select * from sql_tvf(1, 'I') x`,
+		`select * from sql_tvf('q', 'I', 42) x`,
 		// schema must be a constant literal
 		`select * from sql_tvf('q', @schema_var) x`,
 		// malformed schema

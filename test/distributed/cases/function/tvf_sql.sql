@@ -64,6 +64,8 @@ select * from sql_tvf('select 1', 'I', 42) x;
 -- column-referencing runtime arguments (correlated/CROSS APPLY shape) are rejected:
 -- the scan must stay on the session CN where the connection cache lives.
 select * from typed t, sql_tvf(t.txt, 'I', @h) x;
+select x.col0 from typed t cross apply sql_tvf(t.txt, 'I', @h) x;
+select x.col0 from typed t cross apply sql_tvf(concat(t.txt, ''), 'I', @h) x;
 -- a handle of the wrong kind is rejected before any query is sent.
 select * from esql_tvf('FROM idx', 'I', @h) x;
 -- the hidden-column names are reserved.

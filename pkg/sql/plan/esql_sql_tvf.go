@@ -64,6 +64,15 @@ func (builder *QueryBuilder) buildForeignTVF(tvfName, kind string, tbl *tree.Tab
 	if len(exprs) < 1 || len(exprs) > 3 {
 		return 0, moerr.NewInvalidInputf(builder.GetContext(), "%s requires 1 to 3 arguments: (query [, schema [, conn]])", tvfName)
 	}
+	// A child (apply/lateral input) would make this a driven scan that
+	// compileApply can attach to remote child scopes — but the connection
+	// cache lives only on the session CN. The column-free argument rule below
+	// already makes a correlated input unreachable; this guard keeps the
+	// contract fail-closed if a future caller passes children directly.
+	if len(children) > 0 {
+		return 0, moerr.NewNotSupportedf(builder.GetContext(),
+			"%s with a lateral/apply input; its arguments must be session-local constants", tvfName)
+	}
 
 	// Resolve the output schema at plan time. A present, non-NULL schema
 	// argument must be a constant string literal.
@@ -154,17 +163,23 @@ func validateForeignTVFRuntimeArg(ctx context.Context, tvfName, argName string, 
 	}
 }
 
-// foreignTVFArgHasColumn reports whether e contains any column reference.
+// foreignTVFArgHasColumn reports whether e contains a column reference or any
+// expression kind that is not provably column-free. It is FAIL-CLOSED: only
+// the explicitly whitelisted constant-shaped kinds (literals, parameters,
+// session variables, folded values, and functions/lists over them) pass, so a
+// new expression kind cannot silently smuggle a correlated input past the
+// placement guard.
 func foreignTVFArgHasColumn(e *plan.Expr) bool {
 	if e == nil {
 		return false
 	}
 	switch t := e.Expr.(type) {
-	case *plan.Expr_Col, *plan.Expr_Corr, *plan.Expr_Raw:
-		return true
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T,
+		*plan.Expr_Fold, *plan.Expr_Vec, *plan.Expr_Max:
+		return false
 	case *plan.Expr_F:
 		if t.F == nil {
-			return false
+			return true
 		}
 		for _, arg := range t.F.Args {
 			if foreignTVFArgHasColumn(arg) {
@@ -183,7 +198,8 @@ func foreignTVFArgHasColumn(e *plan.Expr) bool {
 		}
 		return false
 	default:
-		return false
+		// Expr_Col, Expr_Corr, Expr_Raw, Expr_Sub, and anything future.
+		return true
 	}
 }
 
