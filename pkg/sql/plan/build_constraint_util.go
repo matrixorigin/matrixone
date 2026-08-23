@@ -450,8 +450,8 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	}
 	// Preserve the original target-table order from tblInfo. Iterating
 	// usedTbl directly would randomize order across runs (Go map
-	// iteration), which makes the fallback UPDATE planner emit the
-	// per-target column blocks in a non-deterministic layout.
+	// iteration), which makes downstream UPDATE consumers observe
+	// non-deterministic per-target column blocks.
 	aliasByIdx := make([]string, len(tblInfo.tableDefs))
 	for alias, idx := range tblInfo.alias {
 		aliasByIdx[idx] = alias
