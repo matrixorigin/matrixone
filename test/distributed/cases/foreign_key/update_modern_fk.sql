@@ -271,6 +271,22 @@ select * from child_pk_action order by parent_id, seq;
 select * from child_pk_action force index(idx_child_pk_payload)
     where payload in (10, 20) order by payload;
 
+create table parent_child_pk_nullable_idx (
+    id int primary key
+);
+create table child_pk_nullable_idx (
+    parent_id int primary key,
+    payload int,
+    key idx_child_nullable_payload(payload),
+    constraint fk_child_pk_nullable_idx foreign key (parent_id)
+        references parent_child_pk_nullable_idx(id) on update cascade
+);
+insert into parent_child_pk_nullable_idx values (1);
+insert into child_pk_nullable_idx values (1, null);
+update parent_child_pk_nullable_idx set id = 2 where id = 1;
+select row_count();
+select * from child_pk_nullable_idx order by parent_id;
+
 set foreign_key_checks = 0;
 create table update_preinsert_index (
     a int not null auto_increment primary key,

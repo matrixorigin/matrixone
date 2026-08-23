@@ -359,6 +359,25 @@ where payload in (10, 20) order by payload;
 ➤ parent_id[4,32,0]  ¦  seq[4,32,0]  ¦  payload[4,32,0]  𝄀
 2  ¦  1  ¦  10  𝄀
 2  ¦  2  ¦  20
+create table parent_child_pk_nullable_idx (
+id int primary key
+);
+create table child_pk_nullable_idx (
+parent_id int primary key,
+payload int,
+key idx_child_nullable_payload(payload),
+constraint fk_child_pk_nullable_idx foreign key (parent_id)
+references parent_child_pk_nullable_idx(id) on update cascade
+);
+insert into parent_child_pk_nullable_idx values (1);
+insert into child_pk_nullable_idx values (1, null);
+update parent_child_pk_nullable_idx set id = 2 where id = 1;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+1
+select * from child_pk_nullable_idx order by parent_id;
+➤ parent_id[4,32,0]  ¦  payload[4,32,0]  𝄀
+2  ¦  NULL
 set foreign_key_checks = 0;
 create table update_preinsert_index (
 a int not null auto_increment primary key,

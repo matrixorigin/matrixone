@@ -2167,7 +2167,10 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			return buildErr
 		}
 		joinType := plan.Node_INNER
-		if idxDef.Unique {
+		if idxDef.Unique || primaryKeyChanged {
+			// A PK cascade must preserve the base child row even when a nullable
+			// secondary-index key has no hidden row. Missing old index state only
+			// suppresses index deletion; it must not suppress the child mutation.
 			joinType = plan.Node_LEFT
 		}
 		joinNodeID = builder.appendNode(&plan.Node{

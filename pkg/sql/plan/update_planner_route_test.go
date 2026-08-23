@@ -1230,6 +1230,64 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		}), "the child primary-key transition must be owned by a modern MULTI_UPDATE context")
 	})
 
+	t.Run("child primary key cascade preserves rows missing nullable secondary index entries", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
+		emp := mock.ctxt.tables["emp"]
+		emp.Pkey = &planpb.PrimaryKeyDef{Names: []string{"deptno"}, PkeyColName: "deptno"}
+		payloadPos := int32(slices.IndexFunc(emp.Cols, func(col *planpb.ColDef) bool {
+			return col.Name == "ename"
+		}))
+		deptnoPos := int32(slices.IndexFunc(emp.Cols, func(col *planpb.ColDef) bool {
+			return col.Name == "deptno"
+		}))
+		require.GreaterOrEqual(t, payloadPos, int32(0))
+		require.GreaterOrEqual(t, deptnoPos, int32(0))
+		const indexTableName = "__mo_index_emp_nullable_payload"
+		emp.Indexes = append(emp.Indexes, &planpb.IndexDef{
+			IndexName: "idx_emp_nullable_payload", IndexTableName: indexTableName,
+			Parts: []string{"ename"}, TableExist: true,
+		})
+		const indexTableID = uint64(88894)
+		indexTableDef := &planpb.TableDef{
+			Name: indexTableName, TblId: indexTableID,
+			Cols: []*planpb.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: emp.Cols[payloadPos].Typ},
+				{Name: catalog.IndexTablePrimaryColName, Typ: emp.Cols[deptnoPos].Typ},
+				{Name: catalog.Row_ID, Typ: planpb.Type{Id: int32(types.T_Rowid)}},
+			},
+			Pkey: &planpb.PrimaryKeyDef{
+				Names:       []string{catalog.IndexTablePrimaryColName},
+				PkeyColName: catalog.IndexTablePrimaryColName,
+			},
+			Name2ColIndex: map[string]int32{
+				catalog.IndexTableIndexColName: 0, catalog.IndexTablePrimaryColName: 1, catalog.Row_ID: 2,
+			},
+		}
+		mock.ctxt.tables[indexTableName] = indexTableDef
+		mock.ctxt.objects[indexTableName] = &planpb.ObjectRef{
+			Obj: int64(indexTableID), ObjName: indexTableName,
+		}
+		mock.ctxt.id2name[indexTableID] = indexTableName
+
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(), dialect.MYSQL, "UPDATE dept SET deptno = 2", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.NoError(t, err)
+
+		require.True(t, slices.ContainsFunc(builder.qry.Nodes, func(node *planpb.Node) bool {
+			if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_LEFT || len(node.Children) != 2 {
+				return false
+			}
+			right := builder.qry.Nodes[node.Children[1]]
+			return right.NodeType == planpb.Node_TABLE_SCAN && right.TableDef != nil &&
+				right.TableDef.TblId == indexTableID
+		}), "nullable secondary-index lookup must not filter the base child cascade row")
+	})
+
 	t.Run("child primary key cascade keeps RTree geometry payload", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
