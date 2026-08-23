@@ -276,6 +276,82 @@ func TestStorageTopKEligibility(t *testing.T) {
 	require.Equal(t, plan.OrderBySpec_DESC, ivfOrderFlag(sqlproc.IndexReaderParam))
 }
 
+func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	baseConfig := func() vectorindex.IndexConfig {
+		cfg := vectorindex.IndexConfig{}
+		cfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+		cfg.Ivfflat.VectorType = int32(types.T_array_float32)
+		return cfg
+	}
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", EntriesTable: "entries", PKeyType: int32(types.T_int64)}
+	query := []float32{0, 0}
+
+	t.Run("malformed membership", func(t *testing.T) {
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.IvfHasMembershipFilter = true
+		sqlproc.IvfRuntimeFilterData = []byte("not-a-vector")
+		_, err := (&IvfflatSearchIndex[float32]{}).scanEntries(
+			sqlproc, baseConfig(), tblcfg, query, 1, []int64{2}, nil, nil, 1)
+		require.Error(t, err)
+	})
+
+	t.Run("unknown storage metric", func(t *testing.T) {
+		cfg := baseConfig()
+		cfg.Ivfflat.Metric = math.MaxUint16
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		_, err := (&IvfflatSearchIndex[float32]{}).scanEntries(
+			sqlproc, cfg, tblcfg, query, 1, []int64{2}, nil, nil, 1)
+		require.Error(t, err)
+	})
+
+	t.Run("storage omits distance", func(t *testing.T) {
+		scanner := &scriptedRelationScanner{t: t, run: func(req sqlexec.RelationScanRequest) executor.Result {
+			bat := batch.NewWithSize(len(req.Columns))
+			for i := range bat.Vecs {
+				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(bat.Vecs[i], int64(0), false, mp))
+			}
+			bat.SetRowCount(1)
+			return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+		}}
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.RelationScanner = scanner
+		_, err := (&IvfflatSearchIndex[float32]{}).scanEntries(
+			sqlproc, baseConfig(), tblcfg, query, 1, []int64{2}, nil, nil, 1)
+		require.ErrorContains(t, err, "storage Top-K returned")
+	})
+
+	t.Run("local distance evaluation fails", func(t *testing.T) {
+		residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
+		require.NoError(t, err)
+		scanner := &scriptedRelationScanner{t: t, run: func(sqlexec.RelationScanRequest) executor.Result {
+			bat := batch.NewWithSize(4)
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(3), false, mp))
+			require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{1, 2}, false, mp))
+			bat.SetRowCount(1)
+			return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+		}}
+		cfg := baseConfig()
+		cfg.Ivfflat.Metric = math.MaxUint16
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.RelationScanner = scanner
+		_, err = (&IvfflatSearchIndex[float32]{}).scanEntries(
+			sqlproc, cfg, tblcfg, query, 1, []int64{2}, nil, []*plan.Expr{residual}, 1)
+		require.Error(t, err)
+	})
+
+	_, err := ivfCentroidPrefixFilter(proc.Ctx, mp, 1, nil, 4)
+	require.ErrorContains(t, err, "requires at least one centroid")
+}
+
 func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	mp := mpool.MustNewZero()
 	keys := vector.NewVec(types.T_int32.ToType())
