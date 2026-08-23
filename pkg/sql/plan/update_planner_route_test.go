@@ -1637,6 +1637,8 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		prepareSelfRef(mock)
 		selfRef := mock.ctxt.tables["self_ref"]
 		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+		originalForeignCols := append([]uint64(nil), selfRef.Fkeys[0].ForeignCols...)
+		defer func() { selfRef.Fkeys[0].ForeignCols = originalForeignCols }()
 		selfRef.Fkeys[0].ForeignCols = []uint64{selfRef.Cols[1].ColId}
 
 		logicPlan, err := runOneStmt(
@@ -1676,6 +1678,8 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		prepareSelfRef(mock)
 		selfRef := mock.ctxt.tables["self_ref"]
 		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+		originalForeignCols := append([]uint64(nil), selfRef.Fkeys[0].ForeignCols...)
+		defer func() { selfRef.Fkeys[0].ForeignCols = originalForeignCols }()
 		selfRef.Fkeys[0].ForeignCols = []uint64{selfRef.Cols[1].ColId}
 
 		logicPlan, err := runOneStmt(
