@@ -374,7 +374,10 @@ func clonePartitionTargetContexts(contexts []*MultiUpdateCtx) []*MultiUpdateCtx 
 	cloned := make([]*MultiUpdateCtx, len(contexts))
 	for i, ctx := range contexts {
 		cloned[i] = ctx.clone()
+		// selectPartitionTargetRows already accounted for selector semantics.
+		// Physical partition writers only contribute their inserted row count.
 		cloned[i].DedupByTargetRowID = false
+		cloned[i].AffectedRowsCols = nil
 	}
 	return cloned
 }
@@ -386,7 +389,10 @@ func clonePartitionPhaseContexts(
 	cloned := make([]*MultiUpdateCtx, len(contexts))
 	for i, ctx := range contexts {
 		cloned[i] = ctx.clone()
+		// Partition-key moves share the selection result across delete and
+		// insert phases, so neither phase may count the selectors again.
 		cloned[i].DedupByTargetRowID = false
+		cloned[i].AffectedRowsCols = nil
 		if deletePhase {
 			cloned[i].InsertCols = nil
 		} else {

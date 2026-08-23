@@ -36,6 +36,7 @@ func TestClonePartitionPhaseContextsSeparatesDeleteAndInsert(t *testing.T) {
 		InsertCols:         []int{1, 2},
 		DeleteCols:         []int{3, 4},
 		DedupByTargetRowID: true,
+		AffectedRowsCols:   []int{5, 6},
 	}}
 	deleteContexts := clonePartitionPhaseContexts(contexts, true)
 	insertContexts := clonePartitionPhaseContexts(contexts, false)
@@ -46,6 +47,9 @@ func TestClonePartitionPhaseContextsSeparatesDeleteAndInsert(t *testing.T) {
 	require.Equal(t, []int{1, 2}, insertContexts[0].InsertCols)
 	require.False(t, deleteContexts[0].DedupByTargetRowID)
 	require.False(t, insertContexts[0].DedupByTargetRowID)
+	require.Empty(t, deleteContexts[0].AffectedRowsCols)
+	require.Empty(t, insertContexts[0].AffectedRowsCols)
+	require.Equal(t, []int{5, 6}, contexts[0].AffectedRowsCols)
 	require.Equal(t, []int{1, 2}, contexts[0].InsertCols)
 	require.Equal(t, []int{3, 4}, contexts[0].DeleteCols)
 }
@@ -113,15 +117,17 @@ func TestPartitionTargetSelectionPrecedesDirectAndS3Routing(t *testing.T) {
 
 func TestClonePartitionTargetContextsDisablesSecondSelectionPass(t *testing.T) {
 	contexts := []*MultiUpdateCtx{
-		{ObjRef: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, DedupByTargetRowID: true},
-		{ObjRef: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, DedupByTargetRowID: true},
+		{ObjRef: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, DedupByTargetRowID: true, AffectedRowsCols: []int{1}},
+		{ObjRef: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, DedupByTargetRowID: true, AffectedRowsCols: []int{2}},
 	}
 	cloned := clonePartitionTargetContexts(contexts)
 	require.Len(t, cloned, 2)
 	for i := range cloned {
 		require.NotSame(t, contexts[i], cloned[i])
 		require.False(t, cloned[i].DedupByTargetRowID)
+		require.Empty(t, cloned[i].AffectedRowsCols)
 		require.True(t, contexts[i].DedupByTargetRowID)
+		require.NotEmpty(t, contexts[i].AffectedRowsCols)
 	}
 }
 

@@ -359,6 +359,16 @@ func TestFilterTargetRowsCountsSelectorsWithoutDroppingCascadeRows(t *testing.T)
 	require.Zero(t, physicalInsertAffectedRows(updateCtx, uint64(filtered.RowCount())))
 }
 
+func TestPhysicalInsertAffectedRowsPreservesDeduplicatedTargetRows(t *testing.T) {
+	updateCtx := &MultiUpdateCtx{
+		DedupByTargetRowID: true,
+		AffectedRowsCols:   []int{2, 3},
+	}
+
+	require.Equal(t, uint64(2), physicalInsertAffectedRows(updateCtx, 2),
+		"ordinary multi-target updates retain their physical affected rows")
+}
+
 func TestS3WriterRefreshSelectorState(t *testing.T) {
 	update := &MultiUpdate{
 		ctr: container{seenTargetRows: map[uint64]*hashmap.StrHashMap{}},
