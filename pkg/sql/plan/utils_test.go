@@ -351,6 +351,92 @@ func TestPreparedPlanNeedsRuntimeSpecialization(t *testing.T) {
 	}
 }
 
+func TestPreparedRuntimeSpecializationScanRuleTraversesExpressionForms(t *testing.T) {
+	literal := MakePlan2Int64ConstExprWithType(1)
+	param := func() *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	}
+	stableFunc := func(args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "="},
+			Args: args,
+		}}}
+	}
+
+	containsParam := []struct {
+		name string
+		expr *plan.Expr
+		want bool
+	}{
+		{name: "nil", want: false},
+		{name: "parameter", expr: param(), want: true},
+		{name: "user variable", expr: &plan.Expr{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "v"}}}, want: true},
+		{name: "empty function", expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}, want: false},
+		{name: "nested function", expr: stableFunc(literal, param()), want: true},
+		{name: "constant function", expr: stableFunc(literal), want: false},
+		{name: "empty window", expr: &plan.Expr{Expr: &plan.Expr_W{W: &plan.WindowSpec{}}}, want: false},
+		{
+			name: "window partition",
+			expr: &plan.Expr{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				PartitionBy: []*plan.Expr{param()},
+			}}},
+			want: true,
+		},
+		{
+			name: "window order",
+			expr: &plan.Expr{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				OrderBy: []*plan.OrderBySpec{nil, {Expr: param()}},
+			}}},
+			want: true,
+		},
+		{
+			name: "list",
+			expr: &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{literal, param()}}}},
+			want: true,
+		},
+		{name: "empty list", expr: &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{}}}, want: false},
+	}
+	for _, test := range containsParam {
+		t.Run("contains/"+test.name, func(t *testing.T) {
+			require.Equal(t, test.want, preparedExprContainsParam(test.expr))
+		})
+	}
+
+	rule := &preparedRuntimeSpecializationScanRule{seen: make(map[*plan.Expr]struct{})}
+	require.False(t, rule.MatchNode(nil))
+	require.True(t, rule.IsApplyExpr())
+	require.NoError(t, rule.ApplyNode(nil))
+	rule.scanExpr(nil, false)
+	rule.scanExpr(&plan.Expr{Expr: &plan.Expr_F{}}, false)
+	rule.scanExpr(&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}, false)
+	rule.scanExpr(&plan.Expr{Expr: &plan.Expr_W{}}, false)
+
+	window := &plan.Expr{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+		WindowFunc:  stableFunc(literal),
+		PartitionBy: []*plan.Expr{literal, nil},
+		OrderBy:     []*plan.OrderBySpec{nil, {Expr: literal}},
+		Frame: &plan.FrameClause{
+			Start: &plan.FrameBound{Val: literal},
+			End:   &plan.FrameBound{Val: literal},
+		},
+	}}}
+	list := &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{literal, nil}}}}
+	rule.scanExpr(window, false)
+	rule.scanExpr(list, false)
+	rule.scanExpr(window, false) // exercise expression de-duplication.
+	require.False(t, rule.needs)
+
+	ddlPlan := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Query: &plan.Query{
+		StmtType: plan.Query_INSERT,
+		Steps:    []int32{0},
+		Nodes:    []*plan.Node{{NodeType: plan.Node_VALUE_SCAN, ProjectList: []*plan.Expr{stableFunc(literal)}}},
+	}}}}
+	require.False(t, PreparedPlanNeedsRuntimeSpecialization(ddlPlan))
+	// DeepCopyPlan cannot represent an empty oneof; the scanner fails closed
+	// and keeps the correctness path enabled.
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(&plan.Plan{}))
+}
+
 func TestPreparedNthValueParamPosition(t *testing.T) {
 	param := func(pos int32) *plan.Expr {
 		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
