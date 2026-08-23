@@ -1369,7 +1369,15 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	default:
 		var rs *Scope
 		if c.IsSingleScope(ss) {
-			rs = ss[0]
+			// Output owns a callback created by this Compile and cannot be
+			// serialized for execution on another CN. Keep the result sink on
+			// its owner and return the remote child through the existing
+			// connector/merge path.
+			if ss[0].Magic == Remote && !ss[0].ipAddrMatch(c.addr) {
+				rs = c.newMergeScope(ss)
+			} else {
+				rs = ss[0]
+			}
 		} else {
 			ss = c.mergeShuffleScopesIfNeeded(ss, false)
 			rs = c.newMergeScope(ss)
