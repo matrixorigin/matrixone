@@ -561,13 +561,14 @@ func TestPadSpaceRemoteProtocolValidation(t *testing.T) {
 				defines.MORPCVersion23,
 				defines.MORPCVersion24,
 				defines.MORPCVersion25,
+				defines.MORPCVersion26,
 			} {
 				rt.SetGlobalVariables(runtime.MOProtocolVersion, unsupportedVersion)
 				require.ErrorContains(t, validateRemotePadSpacePipelineProtocol(proc, test.pipeline),
-					"requires MORPC protocol version 26")
+					"requires MORPC protocol version 27")
 			}
 
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion26)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion27)
 			require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, test.pipeline))
 		})
 	}
@@ -593,13 +594,14 @@ func TestPadCharModeRemoteProtocolValidation(t *testing.T) {
 		defines.MORPCVersion23,
 		defines.MORPCVersion24,
 		defines.MORPCVersion25,
+		defines.MORPCVersion26,
 	} {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, unsupportedVersion)
 		require.ErrorContains(t, validateRemotePadSpacePipelineProtocol(proc, p),
-			"requires MORPC protocol version 26")
+			"requires MORPC protocol version 27")
 	}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion26)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion27)
 	require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, p))
 }
 

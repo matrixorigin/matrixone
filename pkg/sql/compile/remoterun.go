@@ -1985,7 +1985,7 @@ func validateRemotePadSpacePipelineProtocol(
 	}
 	if proc == nil || !supportsRemotePadSpaceSemantics(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"PAD SPACE remote execution requires MORPC protocol version 26",
+			"PAD SPACE remote execution requires MORPC protocol version 27",
 		)
 	}
 	return nil
