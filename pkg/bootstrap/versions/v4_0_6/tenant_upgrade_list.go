@@ -15,6 +15,7 @@ package v4_0_6
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,6 +36,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaKeyColumnUsage(),
 	upgradeInformationSchemaReferentialConstraints(),
 	ensureInformationSchemaCharacterSetsTable(),
+	populateInformationSchemaCollations(),
 	populateInformationSchemaCharacterSets(),
 	upgradeInformationSchemaColumns(),
 	upgradeInformationSchemaCheckConstraints(),
@@ -95,6 +97,48 @@ func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
 			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "character_sets")
 		},
 	}
+}
+
+func populateInformationSchemaCollations() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "COLLATIONS",
+		UpgType:   versions.MODIFY_METADATA,
+		UpgSql:    sysview.InformationSchemaCollationsData,
+		PreSql:    "DELETE FROM information_schema.COLLATIONS",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDataExist(txn, accountID, informationSchemaCollationsCheckSQL())
+		},
+	}
+}
+
+func informationSchemaCollationsCheckSQL() string {
+	if len(sysview.SupportedCollationDefinitions) == 0 {
+		return "SELECT 1 WHERE FALSE"
+	}
+
+	conditions := make([]string, 0, len(sysview.SupportedCollationDefinitions))
+	for _, collation := range sysview.SupportedCollationDefinitions {
+		conditions = append(conditions, fmt.Sprintf(
+			"COLLATION_NAME = '%s' AND CHARACTER_SET_NAME = '%s' AND ID = %d AND IS_DEFAULT = '%s' AND IS_COMPILED = '%s' AND SORTLEN = %d AND PAD_ATTRIBUTE = '%s'",
+			collation.Name,
+			collation.Charset,
+			collation.ID,
+			collation.IsDefault,
+			collation.IsCompiled,
+			collation.SortLen,
+			collation.PadAttribute,
+		))
+	}
+
+	checks := make([]string, 0, len(conditions))
+	checks = append(checks, conditions[0])
+	for _, condition := range conditions[1:] {
+		checks = append(checks, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM information_schema.COLLATIONS WHERE %s)", condition,
+		))
+	}
+	return fmt.Sprintf("SELECT 1 FROM information_schema.COLLATIONS WHERE %s LIMIT 1", strings.Join(checks, " AND "))
 }
 
 func upgradeInformationSchemaCollationCharacterSetApplicability() versions.UpgradeEntry {

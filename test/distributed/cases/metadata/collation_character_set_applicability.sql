@@ -1,6 +1,6 @@
 -- @bvt:issue#25103
--- MySQL exposes this mapping as an information_schema object.  It must be
--- queryable even when the current collation catalog has no materialized rows.
+-- MySQL exposes this mapping as an information_schema object.  It must carry
+-- the supported collation-to-character-set rows used by metadata consumers.
 SELECT COUNT(*)
 FROM information_schema.COLLATION_CHARACTER_SET_APPLICABILITY;
 
@@ -10,6 +10,14 @@ FROM (
     FROM information_schema.COLLATION_CHARACTER_SET_APPLICABILITY
     LIMIT 1
 ) AS applicability;
+
+SELECT ccsa.CHARACTER_SET_NAME
+FROM information_schema.TABLES AS tbl
+JOIN information_schema.COLLATION_CHARACTER_SET_APPLICABILITY AS ccsa
+  ON ccsa.COLLATION_NAME = tbl.TABLE_COLLATION
+WHERE tbl.TABLE_SCHEMA = 'information_schema'
+  AND tbl.TABLE_NAME = 'TABLES'
+LIMIT 1;
 
 SELECT COUNT(*)
 FROM information_schema.COLUMNS

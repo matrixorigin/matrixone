@@ -16,6 +16,7 @@ package sysview
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
@@ -543,6 +544,8 @@ var (
 		"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') NOT NULL" +
 		")"
 
+	InformationSchemaCollationsData = informationSchemaCollationsDataSQL()
+
 	// MySQL exposes the collation-to-character-set mapping as a separate
 	// information_schema object.  Keep it derived from COLLATIONS so the two
 	// metadata surfaces cannot disagree when collation rows are populated.
@@ -650,3 +653,19 @@ var (
 		"EXTRA  varchar(256)" +
 		")"
 )
+
+func informationSchemaCollationsDataSQL() string {
+	values := make([]string, 0, len(SupportedCollationDefinitions))
+	for _, collation := range SupportedCollationDefinitions {
+		values = append(values, fmt.Sprintf("('%s', '%s', %d, '%s', '%s', %d, '%s')",
+			collation.Name,
+			collation.Charset,
+			collation.ID,
+			collation.IsDefault,
+			collation.IsCompiled,
+			collation.SortLen,
+			collation.PadAttribute,
+		))
+	}
+	return "INSERT INTO information_schema.COLLATIONS VALUES " + strings.Join(values, ",")
+}

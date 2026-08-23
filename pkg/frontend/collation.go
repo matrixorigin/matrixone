@@ -14,6 +14,8 @@
 
 package frontend
 
+import "github.com/matrixorigin/matrixone/pkg/util/sysview"
+
 type Collation struct {
 	collationName string
 	charset       string
@@ -25,12 +27,23 @@ type Collation struct {
 }
 
 // Collations is the executable capability list exposed by SHOW COLLATION.
-// Keep unsupported UCA/0900 names out of this list: advertising them as
-// compiled while DDL rejects them makes capability discovery unusable.
-var Collations []*Collation = []*Collation{
-	{"utf8_general_ci", "utf8", 33, "YES", "Yes", 1, "PAD SPACE"},
-	{"binary", "binary", 63, "YES", "Yes", 1, "NO PAD"},
-	{"utf8_bin", "utf8", 83, "", "Yes", 1, "PAD SPACE"},
-	{"utf8mb4_general_ci", "utf8mb4", 45, "YES", "Yes", 1, "PAD SPACE"},
-	{"utf8mb4_bin", "utf8mb4", 46, "", "Yes", 1, "PAD SPACE"},
-}
+// It is derived from the canonical information-schema definitions so SHOW
+// COLLATION and COLLATION_CHARACTER_SET_APPLICABILITY cannot drift apart.
+var Collations = func() []*Collation {
+	collations := make([]*Collation, 0, len(sysview.SupportedCollationDefinitions))
+	for _, definition := range sysview.SupportedCollationDefinitions {
+		if !definition.Advertised {
+			continue
+		}
+		collations = append(collations, &Collation{
+			collationName: definition.Name,
+			charset:       definition.Charset,
+			id:            definition.ID,
+			isDefault:     definition.IsDefault,
+			isCompiled:    definition.IsCompiled,
+			sortLen:       definition.SortLen,
+			padAttribute:  definition.PadAttribute,
+		})
+	}
+	return collations
+}()

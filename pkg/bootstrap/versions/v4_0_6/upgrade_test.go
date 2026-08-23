@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 18)
+	require.Len(t, tenantUpgEntries, 19)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -57,50 +57,56 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "CHARACTER_SETS", characterSetsTable.TableName)
 	require.Equal(t, versions.CREATE_NEW_TABLE, characterSetsTable.UpgType)
 	require.Equal(t, sysview.InformationSchemaCharacterSetsDDL, characterSetsTable.UpgSql)
-	characterSets := tenantUpgEntries[8]
+	collations := tenantUpgEntries[8]
+	require.Equal(t, sysview.InformationDBConst, collations.Schema)
+	require.Equal(t, "COLLATIONS", collations.TableName)
+	require.Equal(t, versions.MODIFY_METADATA, collations.UpgType)
+	require.Equal(t, sysview.InformationSchemaCollationsData, collations.UpgSql)
+	require.Contains(t, strings.ToLower(collations.PreSql), "delete from information_schema.collations")
+	characterSets := tenantUpgEntries[9]
 	require.Equal(t, sysview.InformationDBConst, characterSets.Schema)
 	require.Equal(t, "CHARACTER_SETS", characterSets.TableName)
 	require.Equal(t, versions.MODIFY_METADATA, characterSets.UpgType)
 	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSets.UpgSql)
 	require.Contains(t, strings.ToLower(characterSets.PreSql), "delete from information_schema.character_sets")
-	columns := tenantUpgEntries[9]
+	columns := tenantUpgEntries[10]
 	require.Equal(t, sysview.InformationDBConst, columns.Schema)
 	require.Equal(t, "COLUMNS", columns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, columns.UpgSql)
 	require.Contains(t, strings.ToLower(columns.PreSql), "drop view if exists information_schema.columns")
-	checkConstraints := tenantUpgEntries[10]
+	checkConstraints := tenantUpgEntries[11]
 	require.Equal(t, sysview.InformationDBConst, checkConstraints.Schema)
 	require.Equal(t, "CHECK_CONSTRAINTS", checkConstraints.TableName)
 	require.Equal(t, versions.CREATE_VIEW, checkConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaCheckConstraintsDDL, checkConstraints.UpgSql)
 	require.Equal(t, int64(defines.MORPCVersion16), checkConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(checkConstraints.PreSql), "drop view if exists information_schema.check_constraints")
-	tableConstraints := tenantUpgEntries[11]
+	tableConstraints := tenantUpgEntries[12]
 	require.Equal(t, sysview.InformationDBConst, tableConstraints.Schema)
 	require.Equal(t, "TABLE_CONSTRAINTS", tableConstraints.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, tableConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaTableConstraintsDDL, tableConstraints.UpgSql)
 	require.Equal(t, int64(defines.MORPCVersion16), tableConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(tableConstraints.PreSql), "drop view if exists information_schema.table_constraints")
-	hideInternalColumns := tenantUpgEntries[12]
+	hideInternalColumns := tenantUpgEntries[13]
 	require.Equal(t, sysview.InformationDBConst, hideInternalColumns.Schema)
 	require.Equal(t, "COLUMNS", hideInternalColumns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, hideInternalColumns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, hideInternalColumns.UpgSql)
 	require.Contains(t, strings.ToLower(hideInternalColumns.PreSql), "drop view if exists information_schema.columns")
-	userDefinedFunctions := tenantUpgEntries[13]
+	userDefinedFunctions := tenantUpgEntries[14]
 	require.Equal(t, versions.DROP_INDEX, userDefinedFunctions.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctions.Schema)
 	require.Equal(t, "mo_user_defined_function", userDefinedFunctions.TableName)
 	require.Contains(t, strings.ToLower(userDefinedFunctions.UpgSql), "drop index name")
-	userDefinedFunctionArgumentTypes := tenantUpgEntries[14]
+	userDefinedFunctionArgumentTypes := tenantUpgEntries[15]
 	require.Equal(t, versions.ADD_COLUMN, userDefinedFunctionArgumentTypes.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionArgumentTypes.Schema)
 	require.Equal(t, "mo_user_defined_function", userDefinedFunctionArgumentTypes.TableName)
 	require.Contains(t, strings.ToLower(userDefinedFunctionArgumentTypes.UpgSql), "arg_types")
 	require.Contains(t, userDefinedFunctionArgumentTypes.UpgSql, "varchar(65535)")
-	userDefinedFunctionBackfill := tenantUpgEntries[15]
+	userDefinedFunctionBackfill := tenantUpgEntries[16]
 	require.Equal(t, versions.MODIFY_METADATA, userDefinedFunctionBackfill.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionBackfill.Schema)
 	require.Equal(t, "mo_user_defined_function", userDefinedFunctionBackfill.TableName)
@@ -108,12 +114,12 @@ func TestUpgradeEntries(t *testing.T) {
 		"update mo_catalog.mo_user_defined_function set arg_types = "+catalog.UserDefinedFunctionArgumentTypesSQL,
 		userDefinedFunctionBackfill.UpgSql,
 	)
-	userDefinedFunctionSignatureIndex := tenantUpgEntries[16]
+	userDefinedFunctionSignatureIndex := tenantUpgEntries[17]
 	require.Equal(t, versions.ADD_INDEX, userDefinedFunctionSignatureIndex.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionSignatureIndex.Schema)
 	require.Equal(t, "mo_user_defined_function", userDefinedFunctionSignatureIndex.TableName)
 	require.Contains(t, strings.ToLower(userDefinedFunctionSignatureIndex.UpgSql), "unique index name_db_arg_types")
-	collationApplicability := tenantUpgEntries[17]
+	collationApplicability := tenantUpgEntries[18]
 	require.Equal(t, versions.CREATE_VIEW, collationApplicability.UpgType)
 	require.Equal(t, sysview.InformationDBConst, collationApplicability.Schema)
 	require.Equal(t, "COLLATION_CHARACTER_SET_APPLICABILITY", collationApplicability.TableName)
@@ -137,7 +143,7 @@ func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *te
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 18)
+	require.Len(t, tenantUpgEntries, 19)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]

@@ -65,6 +65,7 @@ var (
 		InformationSchemaTablePrivilegesDDL,
 		InformationSchemaColumnPrivilegesDDL,
 		InformationSchemaCollationsDDL,
+		InformationSchemaCollationsData,
 		InformationSchemaCollationCharacterSetApplicabilityDDL,
 		InformationSchemaTableConstraintsDDL,
 		InformationSchemaEventsDDL,

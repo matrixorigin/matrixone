@@ -16,6 +16,7 @@ package sysview
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -187,6 +188,34 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 		case InformationSchemaCharacterSetsDDL:
 			ddlIndex = i
 		case InformationSchemaCharacterSetsData:
+			dataIndex = i
+		}
+	}
+	assert.GreaterOrEqual(t, ddlIndex, 0)
+	assert.Equal(t, ddlIndex+1, dataIndex)
+}
+
+func TestInformationSchemaCollationsData(t *testing.T) {
+	for _, collation := range SupportedCollationDefinitions {
+		assert.Contains(t, InformationSchemaCollationsData,
+			fmt.Sprintf("('%s', '%s', %d, '%s', '%s', %d, '%s')",
+				collation.Name,
+				collation.Charset,
+				collation.ID,
+				collation.IsDefault,
+				collation.IsCompiled,
+				collation.SortLen,
+				collation.PadAttribute,
+			))
+	}
+
+	ddlIndex := -1
+	dataIndex := -1
+	for i, sql := range InitInformationSchemaSysTables {
+		switch sql {
+		case InformationSchemaCollationsDDL:
+			ddlIndex = i
+		case InformationSchemaCollationsData:
 			dataIndex = i
 		}
 	}
