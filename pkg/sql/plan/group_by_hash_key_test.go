@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -184,6 +185,35 @@ func TestBuildPlanAnnotatesDistinctRewriteAggregate(t *testing.T) {
 				"the primary key determines both the payload and distinct argument")
 		})
 	}
+}
+
+func TestBuildPlanKeepsMixedCountDistinctParallelMergeable(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select e.deptno, count(d.deptno), count(distinct d.loc) "+
+			"from constraint_test.emp e left join constraint_test.dept d on e.deptno = d.deptno "+
+			"group by e.deptno",
+	)
+	require.NoError(t, err)
+
+	var mixedAgg *pbplan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == pbplan.Node_AGG && len(node.AggList) == 2 {
+			mixedAgg = node
+			break
+		}
+	}
+	require.NotNil(t, mixedAgg)
+	require.False(t, RequiresSingleStageDistinctAgg(mixedAgg))
+	var distinctCount bool
+	for _, expr := range mixedAgg.AggList {
+		agg := expr.GetF()
+		if agg != nil && agg.Func != nil && uint64(agg.Func.Obj)&function.Distinct != 0 {
+			distinctCount = true
+		}
+	}
+	require.True(t, distinctCount, "mixed aggregates must retain COUNT(DISTINCT) for MergeGroup")
 }
 
 func TestBuildPlanAnnotatesJoinDistinctRewriteAggregate(t *testing.T) {

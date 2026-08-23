@@ -180,10 +180,11 @@ type exactGroupScratchController struct {
 }
 
 type rejectNextGroupAllocationController struct {
-	mu       sync.Mutex
-	used     uint64
-	armed    bool
-	rejected bool
+	mu         sync.Mutex
+	used       uint64
+	armed      bool
+	rejected   bool
+	rejectWhen func() bool
 }
 
 func (c *rejectNextGroupAllocationController) arm() {
@@ -195,7 +196,7 @@ func (c *rejectNextGroupAllocationController) arm() {
 func (c *rejectNextGroupAllocationController) AcquireAllocationCapacity(size uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.armed {
+	if c.armed || c.rejectWhen != nil && c.rejectWhen() {
 		c.armed = false
 		c.rejected = true
 		return mpool.ErrAllocationAccountCapacity
@@ -981,6 +982,90 @@ func TestGroupSelectedBinaryPreflightAllocatesNothingAfterHashCommit(t *testing.
 	require.Zero(t, used)
 	finalizeGroupTestAllocation(t, g, allocation)
 	input.Clean(proc.Mp())
+}
+
+func TestGroupSamePreviewDuplicateSourcePreflightsBeforeHashCommit(t *testing.T) {
+	for _, rejectPreflight := range []bool{true, false} {
+		t.Run(fmt.Sprintf("reject-preflight=%v", rejectPreflight), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+			for _, value := range []string{"same", "same", "other"} {
+				require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(value), false, proc.Mp()))
+			}
+			require.NoError(t, input.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+				types.StringSourceLiteral,
+				types.StringSourceUserVariable,
+				types.StringSourceLiteral,
+			}, proc.Mp()))
+			input.SetRowCount(3)
+
+			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
+			generation, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
+			require.NoError(t, err)
+			controller := &rejectNextGroupAllocationController{}
+			account, err := registry.OpenWithController(64<<20, controller)
+			require.NoError(t, err)
+			require.NoError(t, g.ctr.setAllocationAccount(account))
+			allocation := groupTestAllocation{
+				generation: generation,
+				registry:   registry,
+				account:    account,
+			}
+			require.NoError(t, g.Prepare(proc))
+			require.NoError(t, g.ctr.buildHashTable(proc.Ctx, 0))
+			require.NoError(t, g.ctr.hr.TxnItr.PreviewInsert(
+				0, input.RowCount(), g.ctr.hashKeyVectors(input.Vecs),
+				g.ctr.hr.Hash.GroupCount(), &g.ctr.hr.insertPlan))
+			preview := groupInsertPreview{
+				values:    g.ctr.hr.insertPlan.Values(),
+				inserted:  g.ctr.hr.insertPlan.Inserted(),
+				newGroups: int(g.ctr.hr.insertPlan.NewGroups()),
+			}
+			require.Equal(t, []uint8{1, 0, 1}, preview.inserted)
+			require.NoError(t, g.ctr.hr.Hash.PreAlloc(g.ctr.hr.insertPlan.NewGroups()))
+			require.NoError(t, g.ctr.preflightBuildChunk(
+				input.Vecs, 0, input.RowCount(), preview.inserted, preview.newGroups))
+
+			if rejectPreflight {
+				controller.arm()
+			} else {
+				controller.rejectWhen = func() bool {
+					return g.ctr.hr.Hash.GroupCount() != 0
+				}
+			}
+			values, added, commitErr := g.ctr.commitGroupByChunk(
+				input.Vecs, 0, input.RowCount(), preview)
+			if rejectPreflight {
+				require.ErrorIs(t, commitErr, mpool.ErrAllocationAccountCapacity)
+				require.Zero(t, g.ctr.hr.Hash.GroupCount(),
+					"source allocation rejection must precede hash publication")
+				_, rejected := controller.snapshot()
+				require.True(t, rejected)
+				g.ctr.cancelGroupByPreflights()
+			} else {
+				require.NoError(t, commitErr)
+				require.Equal(t, 2, added)
+				require.Equal(t, []uint64{1, 1, 2}, values[:3])
+				_, rejected := controller.snapshot()
+				require.False(t, rejected,
+					"hash commit and publication must use preflighted source capacity")
+				controller.rejectWhen = nil
+				require.Equal(t, types.StringSourceExpression,
+					g.ctr.groupByBatches[0].Vecs[0].GetStringSourceAt(0))
+				require.Equal(t, types.StringSourceLiteral,
+					g.ctr.groupByBatches[0].Vecs[0].GetStringSourceAt(1))
+			}
+
+			g.Free(proc, false, nil)
+			require.Zero(t, account.Snapshot().Used)
+			finalizeGroupTestAllocation(t, g, allocation)
+			input.Clean(proc.Mp())
+		})
+	}
 }
 
 func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {

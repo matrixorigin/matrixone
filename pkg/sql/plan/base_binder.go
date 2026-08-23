@@ -5734,21 +5734,9 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		return nil, err
 	}
 
-	intervalTypeInFunction := &plan.Type{
-		Id: int32(types.T_int64),
-	}
-
-	if firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char) {
-		s := firstExpr.GetLit().GetSval()
-		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
-
-		if err != nil {
-			// MySQL behavior: invalid interval string should return NULL at execution time, not error at parse time
-			// Use a special marker value (math.MaxInt64) to indicate invalid interval
-			// This will be detected in function execution and return NULL
-			returnNum = math.MaxInt64
-			returnType = intervalType
-		}
+	if numberExpr, returnType, handled, err := bindStringIntervalExpr(ctx, firstExpr, intervalType); err != nil {
+		return nil, err
+	} else if handled {
 		// "date '2020-10-10' - interval 1 Hour"  will return datetime
 		// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
 		if dateExpr.Typ.Id == int32(types.T_date) {
@@ -5766,7 +5754,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		}
 		return []*Expr{
 			dateExpr,
-			makePlan2Int64ConstExprWithType(returnNum),
+			numberExpr,
 			makePlan2Int64ConstExprWithType(int64(returnType)),
 		}, nil
 	}
@@ -5880,7 +5868,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		}
 	}
 
-	numberExpr, err := appendCastBeforeExpr(ctx, firstExpr, *intervalTypeInFunction)
+	numberExpr, err := appendCastBeforeExpr(ctx, firstExpr, plan.Type{Id: int32(types.T_int64)})
 	if err != nil {
 		return nil, err
 	}
@@ -5890,6 +5878,39 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		numberExpr,
 		makePlan2Int64ConstExprWithType(int64(intervalType)),
 	}, nil
+}
+
+// bindStringIntervalExpr keeps VARCHAR/CHAR interval semantics identical for
+// literals and column expressions. Dynamic values are normalized row-by-row at
+// execution time instead of using a normal VARCHAR -> INT64 cast.
+func bindStringIntervalExpr(ctx context.Context, expr *Expr, intervalType types.IntervalType) (*Expr, types.IntervalType, bool, error) {
+	if expr.Typ.Id != int32(types.T_varchar) && expr.Typ.Id != int32(types.T_char) {
+		return nil, types.IntervalTypeInvalid, false, nil
+	}
+	if lit := expr.GetLit(); lit != nil {
+		number, normalizedType, err := types.NormalizeInterval(lit.GetSval(), intervalType)
+		if err != nil {
+			// Existing literal behavior: date functions recognize this marker and
+			// return NULL rather than propagating a parse/cast error.
+			number = math.MaxInt64
+			normalizedType = intervalType
+		}
+		return makePlan2Int64ConstExprWithType(number), normalizedType, true, nil
+	}
+
+	// The normalized unit depends only on the SQL interval unit, not on a row.
+	_, normalizedType, err := types.NormalizeInterval("0", intervalType)
+	if err != nil {
+		return nil, types.IntervalTypeInvalid, false, err
+	}
+	numberExpr, err := BindFuncExprImplByPlanExpr(ctx, "to_interval", []*Expr{
+		expr,
+		makePlan2Int64ConstExprWithType(int64(intervalType)),
+	})
+	if err != nil {
+		return nil, types.IntervalTypeInvalid, false, err
+	}
+	return numberExpr, normalizedType, true, nil
 }
 
 func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
@@ -5947,22 +5968,11 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 		return nil, err
 	}
 
-	intervalTypeInFunction := &plan.Type{
-		Id: int32(types.T_int64),
-	}
-
-	if firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char) {
-		s := firstExpr.GetLit().GetSval()
-		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
-		if err != nil {
-			// MySQL behavior: invalid interval string should return NULL at execution time, not error at parse time
-			// Use a special marker value (math.MaxInt64) to indicate invalid interval
-			// This will be detected in function execution and return NULL
-			returnNum = math.MaxInt64
-			returnType = intervalType
-		}
+	if numberExpr, returnType, handled, err := bindStringIntervalExpr(ctx, firstExpr, intervalType); err != nil {
+		return nil, err
+	} else if handled {
 		return []*Expr{
-			makePlan2Int64ConstExprWithType(returnNum),
+			numberExpr,
 			makePlan2Int64ConstExprWithType(int64(returnType)),
 		}, nil
 	}
@@ -6037,7 +6047,7 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 		}
 	}
 
-	numberExpr, err := appendCastBeforeExpr(ctx, firstExpr, *intervalTypeInFunction)
+	numberExpr, err := appendCastBeforeExpr(ctx, firstExpr, plan.Type{Id: int32(types.T_int64)})
 	if err != nil {
 		return nil, err
 	}

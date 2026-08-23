@@ -611,6 +611,19 @@ func TestCompositeKeyPreservesPartWhenRewriteMutatesPredicateInPlace(t *testing.
 	requireFuncNames(t, builder.qry.Nodes[0].BlockFilterList, "prefix_eq", "=")
 }
 
+func TestMergeFiltersOnCompositeKeySkipsUnboundInternalScan(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.qry.Nodes = []*planpb.Node{{
+		NodeType: planpb.Node_TABLE_SCAN,
+		TableDef: makeExprOptCompositeSortKeyTableDef(),
+	}}
+
+	require.NotPanics(t, func() {
+		builder.mergeFiltersOnCompositeKey(0)
+	})
+}
+
 func TestCompositeKeyPartBlockFiltersDoNotRestoreUnchangedPredicates(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)

@@ -311,6 +311,10 @@ func (exec *maxByExec) copyWinner(
 			return err
 		}
 	}
+	valueSource := src[0].GetStringSourceAt(srcRows[0])
+	if err := dst[0].PreflightSetStringSourceAt(dstRow, valueSource, exec.mp); err != nil {
+		return err
+	}
 	if !src[0].IsNull(uint64(srcRows[0])) {
 		if err := dst[0].PreflightSetPrepareParamKindAt(
 			dstRow,
@@ -324,6 +328,9 @@ func (exec *maxByExec) copyWinner(
 		if src[i].IsNull(uint64(srcRows[i])) {
 			if i == 0 {
 				dst[i].SetNullPreservingPrepareParamCapacity(uint64(dstRow))
+				if err := dst[i].SetStringSourceAtWithMP(dstRow, valueSource, exec.mp); err != nil {
+					return err
+				}
 			} else {
 				dst[i].SetNull(uint64(dstRow))
 			}

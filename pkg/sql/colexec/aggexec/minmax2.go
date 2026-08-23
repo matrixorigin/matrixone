@@ -380,12 +380,21 @@ func (exec *minMaxExecFixed[T]) Flush() ([]*vector.Vector, error) {
 	if exec.hasExtra {
 		for _, vec := range vecs {
 			for i := range vec.Length() {
+				if err := vec.PreflightSetStringSourceAt(
+					i, types.StringSourceExpression, exec.mp); err != nil {
+					return freeResultsOnError(err)
+				}
+			}
+			for i := range vec.Length() {
 				if vec.IsNull(uint64(i)) {
 					vec.UnsetNull(uint64(i))
 					if err := vector.SetFixedAtNoTypeCheck(vec, int(i), exec.extra); err != nil {
 						return freeResultsOnError(err)
 					}
 					if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
+						return freeResultsOnError(err)
+					}
+					if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
 						return freeResultsOnError(err)
 					}
 				} else {
@@ -398,8 +407,14 @@ func (exec *minMaxExecFixed[T]) Flush() ([]*vector.Vector, error) {
 						if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
 							return freeResultsOnError(err)
 						}
+						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
 					case cmp == 0:
 						if err := mergeMinMaxPrepareParamKind(vec, i, vector.PrepareParamNone, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
 							return freeResultsOnError(err)
 						}
 					}
@@ -555,12 +570,21 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 	if exec.hasExtra {
 		for _, vec := range vecs {
 			for i := range vec.Length() {
+				if err := vec.PreflightSetStringSourceAt(
+					i, types.StringSourceExpression, exec.mp); err != nil {
+					return freeResultsOnError(err)
+				}
+			}
+			for i := range vec.Length() {
 				if vec.IsNull(uint64(i)) {
 					vec.UnsetNull(uint64(i))
 					if err := vector.SetBytesAtWithBinaryString(vec, int(i), exec.extra, false, exec.mp); err != nil {
 						return freeResultsOnError(err)
 					}
 					if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
+						return freeResultsOnError(err)
+					}
+					if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
 						return freeResultsOnError(err)
 					}
 				} else {
@@ -573,8 +597,14 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 						if err := vec.SetPrepareParamKindAtWithMP(i, vector.PrepareParamNone, exec.mp); err != nil {
 							return freeResultsOnError(err)
 						}
+						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
 					case cmp == 0:
 						if err := mergeMinMaxPrepareParamKind(vec, i, vector.PrepareParamNone, exec.mp); err != nil {
+							return freeResultsOnError(err)
+						}
+						if err := vec.SetStringSourceAtWithMP(i, types.StringSourceExpression, exec.mp); err != nil {
 							return freeResultsOnError(err)
 						}
 					}

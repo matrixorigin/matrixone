@@ -631,6 +631,52 @@ func TestMinMaxBatchMergeEqualValuesFoldsPrepareParamKinds(t *testing.T) {
 	}
 }
 
+func TestMinMaxExtraSourceOwnershipForWinsAndLosses(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		typ       types.Type
+		input     any
+		extra     any
+		want      types.StringSource
+		appendVal func(*vector.Vector, any, *mpool.MPool) error
+	}{
+		{name: "fixed wins", typ: types.T_int64.ToType(), input: int64(5), extra: int64(3), want: types.StringSourceExpression,
+			appendVal: func(vec *vector.Vector, value any, mp *mpool.MPool) error {
+				return vector.AppendFixed(vec, value.(int64), false, mp)
+			}},
+		{name: "fixed loses", typ: types.T_int64.ToType(), input: int64(5), extra: int64(7), want: types.StringSourceCOMStmt,
+			appendVal: func(vec *vector.Vector, value any, mp *mpool.MPool) error {
+				return vector.AppendFixed(vec, value.(int64), false, mp)
+			}},
+		{name: "bytes wins", typ: types.T_text.ToType(), input: []byte("5"), extra: []byte("3"), want: types.StringSourceExpression,
+			appendVal: func(vec *vector.Vector, value any, mp *mpool.MPool) error {
+				return vector.AppendBytes(vec, value.([]byte), false, mp)
+			}},
+		{name: "bytes loses", typ: types.T_text.ToType(), input: []byte("5"), extra: []byte("7"), want: types.StringSourceCOMStmt,
+			appendVal: func(vec *vector.Vector, value any, mp *mpool.MPool) error {
+				return vector.AppendBytes(vec, value.([]byte), false, mp)
+			}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			input := vector.NewVec(test.typ)
+			require.NoError(t, test.appendVal(input, test.input, mp))
+			require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
+			agg := makeMinMaxExec(mp, AggIdOfMin, true, test.typ)
+			require.NoError(t, agg.GroupGrow(1))
+			require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+			require.NoError(t, agg.SetExtraInformation(test.extra, 0))
+			results, err := agg.Flush()
+			require.NoError(t, err)
+			require.Equal(t, test.want, results[0].GetStringSourceAt(0))
+			results[0].Free(mp)
+			agg.Free()
+			input.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestMinMaxExtraEqualValueFoldsPrepareParamKind(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -658,6 +704,7 @@ func TestMinMaxExtraEqualValueFoldsPrepareParamKind(t *testing.T) {
 				input.SetPrepareParamKind(vector.PrepareParamFloat)
 				extra = int64(5)
 			}
+			require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
 			agg := makeMinMaxExec(mp, tc.id, tc.id == AggIdOfMin, typ)
 			require.NoError(t, agg.GroupGrow(1))
 			require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
@@ -665,6 +712,7 @@ func TestMinMaxExtraEqualValueFoldsPrepareParamKind(t *testing.T) {
 			results, err := agg.Flush()
 			require.NoError(t, err)
 			require.Equal(t, vector.PrepareParamNone, results[0].GetPrepareParamKindAt(0))
+			require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(0))
 			results[0].Free(mp)
 			agg.Free()
 			input.Free(mp)

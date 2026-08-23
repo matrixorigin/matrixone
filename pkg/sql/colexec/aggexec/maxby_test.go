@@ -104,13 +104,65 @@ func TestMaxByEqualCandidatesMergeStringSourcesForAllPhysicalFamilies(t *testing
 	}
 }
 
-func TestMaxByPartialMergeCombinesEqualCandidateStringSources(t *testing.T) {
+func TestMaxByNullWinnerPreservesSelectedStringSource(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		firstNull   bool
+		firstSource types.StringSource
+		second      bool
+		equalSecond bool
+		want        types.StringSource
+	}{
+		{name: "first null winner", firstNull: true, firstSource: types.StringSourceCOMStmt, want: types.StringSourceCOMStmt},
+		{name: "equal null same source", firstNull: true, firstSource: types.StringSourceCOMStmt, equalSecond: true, want: types.StringSourceCOMStmt},
+		{name: "null replacement", firstSource: types.StringSourceLiteral, second: true, want: types.StringSourceCOMStmt},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			values := vector.NewVec(types.T_varchar.ToType())
+			orders := vector.NewVec(types.T_int64.ToType())
+			ties := vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendBytes(values, []byte("first"), test.firstNull, mp))
+			require.NoError(t, vector.AppendFixed(orders, int64(1), false, mp))
+			require.NoError(t, vector.AppendFixed(ties, int64(1), false, mp))
+			sources := []types.StringSource{test.firstSource}
+			if test.second || test.equalSecond {
+				require.NoError(t, vector.AppendBytes(values, nil, true, mp))
+				order := int64(2)
+				if test.equalSecond {
+					order = 1
+				}
+				require.NoError(t, vector.AppendFixed(orders, order, false, mp))
+				require.NoError(t, vector.AppendFixed(ties, order, false, mp))
+				sources = append(sources, types.StringSourceCOMStmt)
+			}
+			require.NoError(t, values.SetStringSourcesWithMP(sources, mp))
+			exec := makeMaxByExec(mp, AggIdOfMaxBy, false, []types.Type{
+				types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
+			})
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, orders, ties}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.True(t, results[0].IsNull(0))
+			require.Equal(t, test.want, results[0].GetStringSourceAt(0))
+			results[0].Free(mp)
+			exec.Free()
+			values.Free(mp)
+			orders.Free(mp)
+			ties.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestMaxByPartialMergeCombinesEqualNullCandidateStringSources(t *testing.T) {
 	mp := mpool.MustNewZero()
 	makeExec := func(source types.StringSource) (*maxByExec, []*vector.Vector) {
 		values := vector.NewVec(types.T_int64.ToType())
 		orders := vector.NewVec(types.T_int64.ToType())
 		ties := vector.NewVec(types.T_int64.ToType())
-		require.NoError(t, vector.AppendFixed(values, int64(7), false, mp))
+		require.NoError(t, vector.AppendFixed(values, int64(7), true, mp))
 		require.NoError(t, vector.AppendFixed(orders, int64(1), false, mp))
 		require.NoError(t, vector.AppendFixed(ties, int64(1), false, mp))
 		require.NoError(t, values.SetStringSource(source))
@@ -126,6 +178,7 @@ func TestMaxByPartialMergeCombinesEqualCandidateStringSources(t *testing.T) {
 	require.NoError(t, left.Merge(right, 0, 0))
 	results, err := left.Flush()
 	require.NoError(t, err)
+	require.True(t, results[0].IsNull(0))
 	require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(0))
 	results[0].Free(mp)
 	left.Free()

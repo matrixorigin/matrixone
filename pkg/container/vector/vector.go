@@ -135,9 +135,10 @@ type Vector struct {
 	// PreExtendSelectedBatch for the next UnionBatchPreflighted publication.
 	// Keeping the proof with the destination removes operator-side parallel
 	// metadata and makes the preflight/publication pair self-contained.
-	preflightAreaBytes int
-	preflightAreaReady bool
-	preflightRowCount  int
+	preflightAreaBytes         int
+	preflightAreaReady         bool
+	preflightRowCount          int
+	preflightStringSourceReady bool
 
 	// areaDisjoint proves that every live non-inline varlena descriptor owns a
 	// distinct range in area. Spill projections use it to avoid scanning normal
@@ -812,7 +813,49 @@ func (v *Vector) SetStringSourceAtWithMP(row int, source types.StringSource, mp 
 // logical provenance. Correlated-state owners call it before publishing hash
 // or aggregate state that cannot be rolled back after an allocation failure.
 func (v *Vector) PreflightSetStringSourceAt(row int, source types.StringSource, mp *mpool.MPool) error {
-	return v.preflightStringSourceAt(row, source, mp)
+	return v.PreflightSetStringSourceAtLength(row, v.length, source, mp)
+}
+
+// PreflightSetStringSourceAtLength also supports a row that will become
+// visible at finalLength. Group hash preview uses it to reserve provenance for
+// new representatives before committing the hash table.
+func (v *Vector) PreflightSetStringSourceAtLength(
+	row int,
+	finalLength int,
+	source types.StringSource,
+	mp *mpool.MPool,
+) error {
+	if v == nil || row < 0 || finalLength < v.length || row >= finalLength {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if !source.Valid() {
+		return moerr.NewInvalidInputNoCtxf("invalid string source %d", source)
+	}
+	if v.IsConst() || v.stringSource == source && v.stringSources == nil {
+		return nil
+	}
+	if v.stringSources != nil {
+		if err := v.preExtendStringSources(finalLength, mp); err != nil {
+			return err
+		}
+		if finalLength > v.length {
+			v.preflightStringSourceReady = true
+		}
+		return nil
+	}
+	allocated, owner, err := v.allocateStringSources(finalLength, mp)
+	if err != nil {
+		return err
+	}
+	for i := range allocated {
+		allocated[i] = v.stringSource
+	}
+	v.stringSources = allocated[:v.length]
+	v.stringSourcesMP = owner
+	if finalLength > v.length {
+		v.preflightStringSourceReady = true
+	}
+	return nil
 }
 
 func (v *Vector) preflightStringSourceAt(row int, source types.StringSource, mp *mpool.MPool) error {
@@ -1382,6 +1425,7 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 
 func (v *Vector) resetStringSource() {
 	v.stringSource = types.StringSourceExpression
+	v.preflightStringSourceReady = false
 	v.releaseStringSources()
 }
 
@@ -1674,7 +1718,9 @@ func (v *Vector) setLengthAfterExtend(n int) {
 		if metadataLength > oldLength {
 			clear(v.stringSources[oldLength:])
 		}
-		v.normalizeStringSources()
+		if !v.preflightStringSourceReady {
+			v.normalizeStringSources()
+		}
 	}
 	v.length = n
 }
@@ -5130,6 +5176,8 @@ func (v *Vector) CancelSelectedBatchPreflight() {
 	v.preflightAreaBytes = 0
 	v.preflightAreaReady = false
 	v.preflightRowCount = 0
+	v.preflightStringSourceReady = false
+	v.normalizeStringSources()
 }
 
 // UnionBatchPreflighted publishes a selection after PreExtendSelectedBatch.
@@ -5149,9 +5197,12 @@ func (v *Vector) UnionBatchPreflighted(
 	v.preflightAreaBytes = 0
 	v.preflightAreaReady = false
 	v.preflightRowCount = 0
-	return v.unionBatch(
+	err := v.unionBatch(
 		w, offset, cnt, flags, mp,
 		selectedAreaBytes, preflightRowCount, true)
+	v.preflightStringSourceReady = false
+	v.normalizeStringSources()
+	return err
 }
 
 // Dup use to copy an identical vector
