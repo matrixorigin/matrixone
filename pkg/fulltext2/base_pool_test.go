@@ -92,12 +92,25 @@ func TestImmutableBasePoolWaiterCancellationDoesNotCancelLoader(t *testing.T) {
 	<-started
 
 	ctx, cancel := context.WithCancel(context.Background())
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := p.acquire(ctx, key, func() (*Segment, error) {
+			return nil, errors.New("canceled waiter became the loader")
+		}, 0)
+		waiterDone <- err
+	}()
+	select {
+	case err := <-waiterDone:
+		t.Fatalf("waiter returned before cancellation: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
 	cancel()
-	_, err := p.acquire(ctx, key, func() (*Segment, error) {
-		t.Fatalf("canceled waiter became the loader")
-		return nil, nil
-	}, 0)
-	require.ErrorIs(t, err, context.Canceled)
+	select {
+	case err := <-waiterDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("canceled waiter did not return")
+	}
 
 	close(release)
 	require.NoError(t, <-loaderDone)
