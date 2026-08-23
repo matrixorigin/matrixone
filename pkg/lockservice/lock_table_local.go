@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -61,6 +62,7 @@ type localLockTable struct {
 		beforeCloseFirstWaiter func(c *lockContext)
 		beforeWait             func(c *lockContext) func()
 		afterWait              func(c *lockContext) func()
+		beforeHandoffCommit    func()
 	}
 }
 
@@ -426,6 +428,7 @@ func (l *localLockTable) unlockWithContext(
 		keys         [][]byte
 		existingKeys [][]byte
 		prepared     *preparedTxnLocks
+		created      bool
 	}
 	var replacementsByID map[string]*replacementUpdate
 	if len(handoffs) > 0 {
@@ -459,14 +462,27 @@ func (l *localLockTable) unlockWithContext(
 	}
 	sort.Strings(replacementIDs)
 	lockedReplacements := make([]*activeTxn, 0, len(replacementIDs))
+	handoffCommitted := false
 	defer func() {
+		if !handoffCommitted {
+			for _, txnID := range replacementIDs {
+				update := replacementsByID[txnID]
+				if update.created && l.txnHolder.deleteActiveTxnIf(
+					[]byte(txnID), update.txn) {
+					// Keep the pooled generation behind its still-held mutex. Any
+					// Lock handler that fetched this pointer before deletion must
+					// observe the reset identity after the deferred Unlock below.
+					reuse.Free(update.txn, nil)
+				}
+			}
+		}
 		for idx := len(lockedReplacements) - 1; idx >= 0; idx-- {
 			lockedReplacements[idx].Unlock()
 		}
 	}()
 	for _, txnID := range replacementIDs {
 		update := replacementsByID[txnID]
-		update.txn = l.txnHolder.getActiveTxn(
+		update.txn, update.created = l.txnHolder.getActiveTxnWithCreated(
 			[]byte(txnID),
 			len(update.keys) > 0,
 			txn.remoteService,
@@ -474,7 +490,9 @@ func (l *localLockTable) unlockWithContext(
 		if update.txn == nil {
 			return ErrTxnNotFound
 		}
-		update.txn.Lock()
+		if !update.created {
+			update.txn.Lock()
+		}
 		lockedReplacements = append(lockedReplacements, update.txn)
 		if !bytes.Equal(update.txn.txnID, []byte(txnID)) {
 			return ErrTxnNotFound
@@ -534,6 +552,9 @@ func (l *localLockTable) unlockWithContext(
 		defer prepared.close()
 	}
 
+	if l.options.beforeHandoffCommit != nil {
+		l.options.beforeHandoffCommit()
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -578,6 +599,7 @@ func (l *localLockTable) unlockWithContext(
 			)
 		}
 	}
+	handoffCommitted = true
 
 	var startKey []byte
 	tableDefChanged := false

@@ -7390,6 +7390,48 @@ func TestProxyHandoffBookkeepingFailureLeavesSourceRetryable(t *testing.T) {
 	)
 }
 
+func TestProxyHandoffClosedTableDoesNotRetainEmptyReplacement(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"proxy-handoff-closed-table"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const table = uint64(26717)
+			row := []byte("closed-table-handoff-row")
+			sourceTxnID := []byte("closed-table-source")
+			replacementTxnID := []byte("closed-table-replacement")
+			_, err := s.Lock(
+				ctx,
+				table,
+				[][]byte{row},
+				sourceTxnID,
+				newTestRowSharedOptions(),
+			)
+			require.NoError(t, err)
+
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			lt.options.beforeHandoffCommit = func() {
+				lt.options.beforeHandoffCommit = nil
+				lt.close(closeReasonBindChanged)
+			}
+			require.NoError(t, s.Unlock(
+				ctx,
+				sourceTxnID,
+				timestamp.Timestamp{},
+				pb.ExtraMutation{Key: row, ReplaceTo: replacementTxnID},
+			))
+			require.Nil(t, s.activeTxnHolder.getActiveTxn(
+				replacementTxnID,
+				false,
+				"",
+			), "an aborted handoff must remove its unpublished replacement generation")
+		},
+	)
+}
+
 func TestProxyHandoffExistingReplacementRequiresLiveLedger(t *testing.T) {
 	runLockServiceTests(
 		t,

@@ -793,6 +793,7 @@ func (s *service) unlockRemoteLockTable(
 				); err != nil {
 					return err
 				}
+				s.adoptRemoteHandoffLockTableRefs(bind, mutations)
 			}
 			// A missing/rebound current table has already closed the old physical
 			// generation. Forget only this transaction's matching ledger entry; never
@@ -817,6 +818,75 @@ func (s *service) unlockRemoteLockTable(
 	s.deadlockDetector.txnClosed(txnID)
 	reuse.Free(txn, nil)
 	return nil
+}
+
+// adoptRemoteHandoffLockTableRefs transfers service-drain ownership after a
+// local owner atomically moves physical holders and transaction ledgers. A
+// Shared proxy follower may not have existed at the physical owner before the
+// handoff, so prepareLockUpdate creates its ledger without passing through the
+// ordinary Lock admission that records tableBindIntents and increments the
+// service reference. Source cleanup would then drop the last reference while
+// the replacement still holds the table, allowing rolling restart to publish
+// that table as movable.
+//
+// The caller still owns closure-admission tokens for the source and every
+// ReplaceTo transaction. The source reference remains live until this method
+// returns, so recording the replacement intent before incrementing its
+// reference cannot create a zero-reference publication window.
+func (s *service) adoptRemoteHandoffLockTableRefs(
+	bind pb.LockTable,
+	mutations []pb.ExtraMutation,
+) {
+	var firstReplacementID []byte
+	var seen map[string]struct{}
+	for idx := range mutations {
+		replacementID := mutations[idx].ReplaceTo
+		if mutations[idx].Skip || len(replacementID) == 0 {
+			continue
+		}
+		if firstReplacementID == nil {
+			firstReplacementID = replacementID
+		} else {
+			if seen == nil {
+				if bytes.Equal(firstReplacementID, replacementID) {
+					continue
+				}
+				seen = make(map[string]struct{}, len(mutations))
+				seen[string(firstReplacementID)] = struct{}{}
+			}
+			replacementKey := string(replacementID)
+			if _, ok := seen[replacementKey]; ok {
+				continue
+			}
+			seen[replacementKey] = struct{}{}
+		}
+
+		replacement := s.activeTxnHolder.getActiveTxn(
+			replacementID,
+			false,
+			"",
+		)
+		if replacement == nil {
+			continue
+		}
+
+		adopted := false
+		replacement.Lock()
+		holder := replacement.lockHolders[bind.Group]
+		if holder != nil {
+			recordedBind, holdsTable := holder.tableBinds[bind.Table]
+			_, ownsRef := holder.tableBindIntents[bind.Table]
+			if holdsTable && recordedBind.Equal(bind) && !ownsRef {
+				holder.tableBindIntents[bind.Table] = recordedBind
+				adopted = true
+			}
+		}
+		replacement.Unlock()
+
+		if adopted {
+			s.incRef(bind.Group, bind.Table)
+		}
+	}
 }
 
 // unlockUnknownCommit is used only after Commit returned an unknown outcome.
@@ -2111,6 +2181,8 @@ type activeTxnHolder interface {
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
 	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
+	getActiveTxnWithCreated(txnID []byte, create bool, remoteService string) (*activeTxn, bool)
+	deleteActiveTxnIf(txnID []byte, expected *activeTxn) bool
 	canUnlockRemoteTxn(pb.WaitTxn) (bool, timestamp.Timestamp)
 	getTimeoutRemoveTxn(
 		timeoutServices map[string]struct{},
@@ -2196,25 +2268,50 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 	create bool,
 	remoteService string,
 ) *activeTxn {
+	txn, _ := h.getActiveTxnInternal(txnID, create, remoteService, false)
+	return txn
+}
+
+// getActiveTxnWithCreated returns a newly published transaction with its mutex
+// held. Handoff preparation uses that publication barrier to prevent an
+// ordinary Lock from populating the candidate before an aborted handoff can
+// remove it. Existing transactions are returned unlocked.
+func (h *mapBasedTxnHolder) getActiveTxnWithCreated(
+	txnID []byte,
+	create bool,
+	remoteService string,
+) (*activeTxn, bool) {
+	return h.getActiveTxnInternal(txnID, create, remoteService, true)
+}
+
+func (h *mapBasedTxnHolder) getActiveTxnInternal(
+	txnID []byte,
+	create bool,
+	remoteService string,
+	lockCreated bool,
+) (*activeTxn, bool) {
 	txnKey := util.UnsafeBytesToString(txnID)
 	shard := h.getActiveTxnShard(txnKey)
 	shard.RLock()
 	entry, ok := shard.txns[txnKey]
 	shard.RUnlock()
 	if ok {
-		return entry.txn
+		return entry.txn, false
 	}
 	if !create {
-		return nil
+		return nil, false
 	}
 
 	shard.Lock()
 	defer shard.Unlock()
 	if entry, ok := shard.txns[txnKey]; ok {
-		return entry.txn
+		return entry.txn, false
 	}
 
 	txn := newActiveTxn(txnID, txnKey, h.fsp, remoteService)
+	if lockCreated {
+		txn.Lock()
+	}
 	// Publish the transaction count before the map entry. This keeps empty()
 	// conservative while a create is in flight: count == 0 always means that
 	// every shard is empty, which is required by the service drain transition.
@@ -2232,7 +2329,7 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 		h.mu.Unlock()
 	}
 	logTxnCreated(h.logger, txn)
-	return txn
+	return txn, true
 }
 
 func (h *mapBasedTxnHolder) hasActiveTxn(txnID []byte) bool {
@@ -2272,6 +2369,22 @@ func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 	}
 	shard.Unlock()
 	return entry.txn
+}
+
+func (h *mapBasedTxnHolder) deleteActiveTxnIf(
+	txnID []byte,
+	expected *activeTxn,
+) bool {
+	txnKey := util.UnsafeBytesToString(txnID)
+	shard := h.getActiveTxnShard(txnKey)
+	shard.Lock()
+	entry, ok := shard.txns[txnKey]
+	if ok && entry.txn == expected {
+		delete(shard.txns, txnKey)
+		h.activeTxnCount.Add(-1)
+	}
+	shard.Unlock()
+	return ok && entry.txn == expected
 }
 
 func (h *mapBasedTxnHolder) restoreActiveTxn(txn *activeTxn) bool {

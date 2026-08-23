@@ -1580,8 +1580,24 @@ func TestProxyHandoffPreservesEveryTableOnSameOwner(t *testing.T) {
 					"each proxy table needs its own owner-side handoff")
 				require.Equal(t, replacementTxn, holder.TxnID)
 			}
+			owner.mu.RLock()
+			for _, table := range tables {
+				require.Equal(t, uint64(1), owner.mu.lockTableRef[0][table],
+					"handoff must transfer the drain reference with physical ownership")
+			}
+			owner.mu.RUnlock()
+			owner.checkCanMoveGroupTables()
+			require.Nil(t, owner.topGroupTables(),
+				"a table with a handed-off physical holder is not movable")
 
 			require.NoError(t, origin.Unlock(ctx, replacementTxn, timestamp.Timestamp{}))
+			owner.mu.RLock()
+			for _, table := range tables {
+				_, retained := owner.mu.lockTableRef[0][table]
+				require.False(t, retained)
+			}
+			owner.mu.RUnlock()
+			require.Equal(t, pb.Status_ServiceUnLockSucc, owner.getStatus())
 		},
 	)
 }
