@@ -13,7 +13,7 @@ Where
     esql: is a elastic search ES|QL query.  This tvf will send the esql to elastic search.
     schema: Reuse same schema specification from parse_jsonl_data TVF.  If not sepcified, or if null, 
             the result has one column, which should be a json array type, each element of the array is string.
-    conn: A connection handle, from esql_connect function.   If not specified, or null, use default.  See esql_connect.
+    conn: A connection handle, from the esql_tvf_connect function.   If not specified, or null, use default.  See esql_tvf_connect.
 ```
 
 Use the CSV format for ESQL query result.  Parse csv according to the column spec in schema, and error if the format
@@ -52,8 +52,9 @@ select * from sql_tvf(sql, schema, conn) t;
 And the following two functions,
 ```
 sql_tvf_connect(config): --
-    config is a json that contains enough information to establish a sql connection.   Especially, at this moment
-    we should support mysql, postgresql, oracle, ms sqlserver.   Example config
+    config is a json that contains enough information to establish a sql connection.   Currently mysql and
+    postgresql are supported; oracle and ms sqlserver are planned follow-ups behind the same driver
+    registry (adding one is a blank import plus an alias entry).   Example config
     {
         "driver": "mysql",
         "dsn": "connection-string-to-my-database"

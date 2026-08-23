@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -52,7 +53,7 @@ func TestSessionForeignConnCache(t *testing.T) {
 
 	// put + get; Put returns the stored conn
 	c1 := &fakeForeignConn{}
-	w, err := ses.PutForeignConn("h1", c1)
+	w, err := ses.PutForeignConn(context.TODO(), "h1", c1)
 	require.NoError(t, err)
 	require.Same(t, c1, w)
 	got, ok := ses.GetForeignConn("h1")
@@ -63,7 +64,7 @@ func TestSessionForeignConnCache(t *testing.T) {
 	// and returns it; the cache never closes either connection (the losing
 	// caller closes its own).
 	c2 := &fakeForeignConn{}
-	w, err = ses.PutForeignConn("h1", c2)
+	w, err = ses.PutForeignConn(context.TODO(), "h1", c2)
 	require.NoError(t, err)
 	require.Same(t, c1, w)
 	require.Equal(t, 0, c1.closeCount())
@@ -81,7 +82,7 @@ func TestSessionForeignConnCache(t *testing.T) {
 	require.False(t, ok)
 
 	// after remove, a new Put stores the new conn
-	w, err = ses.PutForeignConn("h1", c2)
+	w, err = ses.PutForeignConn(context.TODO(), "h1", c2)
 	require.NoError(t, err)
 	require.Same(t, c2, w)
 	removed, ok = ses.RemoveForeignConn("h1")
@@ -90,8 +91,8 @@ func TestSessionForeignConnCache(t *testing.T) {
 
 	// closeForeignConns closes everything left and clears the cache
 	c3, c4 := &fakeForeignConn{}, &fakeForeignConn{}
-	ses.PutForeignConn("h3", c3)
-	ses.PutForeignConn("h4", c4)
+	ses.PutForeignConn(context.TODO(), "h3", c3)
+	ses.PutForeignConn(context.TODO(), "h4", c4)
 	ses.closeForeignConns()
 	require.Equal(t, 1, c3.closeCount())
 	require.Equal(t, 1, c4.closeCount())
@@ -100,7 +101,7 @@ func TestSessionForeignConnCache(t *testing.T) {
 
 	// cache remains usable after closeForeignConns
 	c5 := &fakeForeignConn{}
-	ses.PutForeignConn("h5", c5)
+	ses.PutForeignConn(context.TODO(), "h5", c5)
 	_, ok = ses.GetForeignConn("h5")
 	require.True(t, ok)
 	ses.closeForeignConns()
@@ -118,7 +119,7 @@ func TestSessionForeignConnCacheConcurrent(t *testing.T) {
 			defer wg.Done()
 			h := "h" + string(rune('a'+g))
 			for i := 0; i < 200; i++ {
-				ses.PutForeignConn(h, &fakeForeignConn{})
+				ses.PutForeignConn(context.TODO(), h, &fakeForeignConn{})
 				ses.GetForeignConn(h)
 				if c, ok := ses.RemoveForeignConn(h); ok {
 					_ = c.Close()
@@ -143,23 +144,23 @@ func TestSessionForeignConnCacheConcurrent(t *testing.T) {
 func TestSessionForeignConnCacheBound(t *testing.T) {
 	ses := &Session{}
 	for i := 0; i < maxForeignConns; i++ {
-		_, err := ses.PutForeignConn(fmt.Sprintf("h%d", i), &fakeForeignConn{})
+		_, err := ses.PutForeignConn(context.TODO(), fmt.Sprintf("h%d", i), &fakeForeignConn{})
 		require.NoError(t, err)
 	}
 	// over the cap: rejected, not stored
 	rejected := &fakeForeignConn{}
-	_, err := ses.PutForeignConn("overflow", rejected)
+	_, err := ses.PutForeignConn(context.TODO(), "overflow", rejected)
 	require.ErrorContains(t, err, "disconnect unused handles")
 	_, ok := ses.GetForeignConn("overflow")
 	require.False(t, ok)
 	// an existing handle still resolves (first-wins path is not an admission)
-	w, err := ses.PutForeignConn("h0", &fakeForeignConn{})
+	w, err := ses.PutForeignConn(context.TODO(), "h0", &fakeForeignConn{})
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	// removing one frees a slot
 	_, ok = ses.RemoveForeignConn("h1")
 	require.True(t, ok)
-	_, err = ses.PutForeignConn("overflow", rejected)
+	_, err = ses.PutForeignConn(context.TODO(), "overflow", rejected)
 	require.NoError(t, err)
 	ses.closeForeignConns()
 }

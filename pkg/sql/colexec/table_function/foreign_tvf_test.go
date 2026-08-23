@@ -43,7 +43,7 @@ func (s *fakeTvfCacheSession) AddTempTable(dbName, alias, realName string)      
 func (s *fakeTvfCacheSession) RemoveTempTable(dbName, alias string)             {}
 func (s *fakeTvfCacheSession) RemoveTempTableByRealName(realName string)        {}
 func (s *fakeTvfCacheSession) GetSqlModeNoAutoValueOnZero() (bool, bool)        { return false, false }
-func (s *fakeTvfCacheSession) PutForeignConn(handle string, c process.ForeignConn) (process.ForeignConn, error) {
+func (s *fakeTvfCacheSession) PutForeignConn(_ context.Context, handle string, c process.ForeignConn) (process.ForeignConn, error) {
 	if s.conns == nil {
 		s.conns = make(map[string]process.ForeignConn)
 	}
@@ -157,7 +157,7 @@ func TestForeignTvfOperatorSchemaMode(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ses := &fakeTvfCacheSession{}
 	proc.Session = ses
-	ses.PutForeignConn("sql:fixture", &fakeForeignConn{
+	ses.PutForeignConn(context.TODO(), "sql:fixture", &fakeForeignConn{
 		kind: foreigntvf.KindSQL,
 		csv:  "\"1\",\"alice\"\n\"2\",\\N\n",
 	})
@@ -181,7 +181,7 @@ func TestForeignTvfOperatorNoSchemaMode(t *testing.T) {
 	ses := &fakeTvfCacheSession{}
 	proc.Session = ses
 	// esql dialect: header line is skipped in no-schema mode too.
-	ses.PutForeignConn("esql:fixture", &fakeForeignConn{
+	ses.PutForeignConn(context.TODO(), "esql:fixture", &fakeForeignConn{
 		kind: foreigntvf.KindESQL,
 		csv:  "a,b\r\n1,x\r\n2,\"y,z\"\r\n",
 	})

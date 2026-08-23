@@ -41,7 +41,7 @@ func (s *fakeScanSession) AddTempTable(dbName, alias, realName string)      {}
 func (s *fakeScanSession) RemoveTempTable(dbName, alias string)             {}
 func (s *fakeScanSession) RemoveTempTableByRealName(realName string)        {}
 func (s *fakeScanSession) GetSqlModeNoAutoValueOnZero() (bool, bool)        { return false, false }
-func (s *fakeScanSession) PutForeignConn(handle string, c process.ForeignConn) (process.ForeignConn, error) {
+func (s *fakeScanSession) PutForeignConn(_ context.Context, handle string, c process.ForeignConn) (process.ForeignConn, error) {
 	if s.conns == nil {
 		s.conns = make(map[string]process.ForeignConn)
 	}
@@ -113,7 +113,7 @@ func TestForeignScanReaderOpenReadClose(t *testing.T) {
 	proc.Session = ses
 	cfg := `{"driver":"nope","dsn":"unused"}` // never dialed: conn pre-seeded
 	conn := &fakeScanConn{kind: foreigntvf.KindSQL, csv: "\"1\",\"alice\"\n\"2\",\\N\n"}
-	ses.PutForeignConn(foreigntvf.MakeHandle(foreigntvf.KindSQL, cfg), conn)
+	ses.PutForeignConn(context.TODO(), foreigntvf.MakeHandle(foreigntvf.KindSQL, cfg), conn)
 
 	param := foreignScanParam(t, "sql", cfg, foreignScanCols(), []string{"id", "name"})
 	param.Fileparam.Filepath = "select q1"
@@ -162,7 +162,7 @@ func TestForeignScanReaderESQLHeaderSkip(t *testing.T) {
 	proc.Session = ses
 	cfg := `{"addresses":["http://unused"]}`
 	conn := &fakeScanConn{kind: foreigntvf.KindESQL, csv: "id,name\r\n1,alice\r\n"}
-	ses.PutForeignConn(foreigntvf.MakeHandle(foreigntvf.KindESQL, cfg), conn)
+	ses.PutForeignConn(context.TODO(), foreigntvf.MakeHandle(foreigntvf.KindESQL, cfg), conn)
 
 	param := foreignScanParam(t, "esql", cfg, foreignScanCols(), []string{"id", "name"})
 	require.Equal(t, uint64(1), param.Extern.Tail.IgnoredLines)
@@ -245,7 +245,7 @@ func TestForeignScanISO8601Timestamp(t *testing.T) {
 	cfg := `{"addresses":["http://unused"]}`
 	conn := &fakeScanConn{kind: foreigntvf.KindESQL,
 		csv: "name,hired\r\nDave,2023-06-15T08:30:00.123Z\r\n"}
-	ses.PutForeignConn(foreigntvf.MakeHandle(foreigntvf.KindESQL, cfg), conn)
+	ses.PutForeignConn(context.TODO(), foreigntvf.MakeHandle(foreigntvf.KindESQL, cfg), conn)
 
 	ts3 := types.New(types.T_timestamp, 0, 3)
 	cols := []*plan.ColDef{

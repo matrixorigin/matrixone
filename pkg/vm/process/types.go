@@ -187,7 +187,7 @@ type ForeignConnCache interface {
 	// connection another operator may already be using. Admission is bounded:
 	// when the cache is full a non-nil error is returned and nothing is
 	// stored; the caller owns (and must close) the rejected conn.
-	PutForeignConn(handle string, conn ForeignConn) (ForeignConn, error)
+	PutForeignConn(ctx context.Context, handle string, conn ForeignConn) (ForeignConn, error)
 	GetForeignConn(handle string) (ForeignConn, bool)
 	// RemoveForeignConn detaches and returns the connection for handle so the
 	// caller can close it; ok=false if no such handle.

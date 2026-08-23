@@ -37,7 +37,7 @@ func (s *fakeTvfSession) RemoveTempTable(dbName, alias string)             {}
 func (s *fakeTvfSession) RemoveTempTableByRealName(realName string)        {}
 func (s *fakeTvfSession) GetSqlModeNoAutoValueOnZero() (bool, bool)        { return false, false }
 
-func (s *fakeTvfSession) PutForeignConn(handle string, conn process.ForeignConn) (process.ForeignConn, error) {
+func (s *fakeTvfSession) PutForeignConn(_ context.Context, handle string, conn process.ForeignConn) (process.ForeignConn, error) {
 	if s.conns == nil {
 		s.conns = make(map[string]process.ForeignConn)
 	}
@@ -69,7 +69,7 @@ func TestForeignTvfDisconnectBuiltin(t *testing.T) {
 	proc.Session = ses
 
 	conn := &fakeClosableConn{}
-	ses.PutForeignConn("sql:abc", conn)
+	ses.PutForeignConn(context.TODO(), "sql:abc", conn)
 
 	// existing handle -> true (and closed); unknown -> false; NULL -> NULL.
 	tc := NewFunctionTestCase(proc,
@@ -134,8 +134,10 @@ func TestForeignTvfConnectBadConfig(t *testing.T) {
 }
 
 func TestForeignTvfKindConstantsMatchPlan(t *testing.T) {
-	// The operator resolves plan.ForeignTVFParam.Kind strings into
-	// foreigntvf.Kind values; keep them aligned.
+	// plan.ForeignTVFKind* strings travel in ForeignTVFParam / ForeignScan and
+	// are resolved into foreigntvf.Kind values on the execution side (the
+	// foreign-table reader converts ForeignScan.Kind; the TVF operator derives
+	// its kind from the function name). Keep the constants aligned.
 	require.Equal(t, "esql", string(foreigntvf.KindESQL))
 	require.Equal(t, "sql", string(foreigntvf.KindSQL))
 }

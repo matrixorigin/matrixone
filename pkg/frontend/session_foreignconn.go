@@ -41,7 +41,7 @@ var _ process.ForeignConnCache = (*Session)(nil)
 // concurrent scans with the same config can race to connect; keeping the
 // first entry (instead of superseding) means the cache never closes a
 // connection another operator may already be using — the loser closes its own.
-func (ses *Session) PutForeignConn(handle string, conn process.ForeignConn) (process.ForeignConn, error) {
+func (ses *Session) PutForeignConn(ctx context.Context, handle string, conn process.ForeignConn) (process.ForeignConn, error) {
 	ses.foreignConnMu.Lock()
 	defer ses.foreignConnMu.Unlock()
 	if ses.foreignConns == nil {
@@ -51,7 +51,7 @@ func (ses *Session) PutForeignConn(handle string, conn process.ForeignConn) (pro
 		return existing, nil
 	}
 	if len(ses.foreignConns) >= maxForeignConns {
-		return nil, moerr.NewInvalidInputf(context.TODO(),
+		return nil, moerr.NewInvalidInputf(ctx,
 			"this session already caches %d foreign connections; disconnect unused handles with esql_tvf_disconnect/sql_tvf_disconnect or reuse an existing config",
 			maxForeignConns)
 	}

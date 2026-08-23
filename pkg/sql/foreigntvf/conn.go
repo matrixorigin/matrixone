@@ -152,7 +152,7 @@ func ResolveOrConnect(ctx context.Context, cache process.ForeignConnCache, kind 
 	// how many connections it retains. In both non-winning cases our freshly
 	// opened conn must be closed — the cache never closes a connection someone
 	// else may be using.
-	winner, admitErr := cache.PutForeignConn(handle, c)
+	winner, admitErr := cache.PutForeignConn(ctx, handle, c)
 	if admitErr != nil {
 		_ = c.Close()
 		return nil, "", admitErr

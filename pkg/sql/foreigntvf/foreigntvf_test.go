@@ -115,7 +115,7 @@ func newFakeConnCache() *fakeConnCache {
 	return &fakeConnCache{conns: make(map[string]process.ForeignConn)}
 }
 
-func (c *fakeConnCache) PutForeignConn(handle string, conn process.ForeignConn) (process.ForeignConn, error) {
+func (c *fakeConnCache) PutForeignConn(_ context.Context, handle string, conn process.ForeignConn) (process.ForeignConn, error) {
 	if existing, ok := c.conns[handle]; ok && existing != nil {
 		return existing, nil
 	}
