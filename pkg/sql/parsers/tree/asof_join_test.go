@@ -32,10 +32,12 @@ func TestFormatAsofJoinTolerance(t *testing.T) {
 		},
 	}
 	join := &JoinTableExpr{
-		Left:      NewTableName("l", ObjectNamePrefix{}, nil),
+		Left: NewAliasedTableExpr(
+			NewTableName("l", ObjectNamePrefix{}, nil), "l", nil,
+		),
 		JoinType:  JOIN_TYPE_ASOF_LEFT,
 		Right:     NewTableName("r", ObjectNamePrefix{}, nil),
 		Tolerance: tolerance,
 	}
-	require.Equal(t, "l asof left join r tolerance INTERVAL 2 minute", String(join, dialect.MYSQL))
+	require.Equal(t, "l as l asof left join r tolerance INTERVAL 2 minute", String(join, dialect.MYSQL))
 }

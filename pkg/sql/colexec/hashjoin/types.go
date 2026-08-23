@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -94,7 +93,8 @@ type container struct {
 	probeLeftAnti          bool
 	probeMark              bool
 	buildHasNullKey        bool
-	asofCompare            compare.Compare
+	asofLeftCol            int
+	asofStrict             bool
 	asofIndexes            []asofIndex
 	asofIndexCount         int
 
@@ -123,14 +123,34 @@ type container struct {
 	probeBucketActive bool // true while reading probe batches from a bucket
 }
 
-// asofIndex keeps the equality-group key and its accounted temporal ordering
-// in one accounted slice.  Keeping the metadata in the same mpool-owned
-// backing storage prevents the per-group map/slice headers from escaping the
-// query allocation account.
+type asofIndexOrder uint8
+
+const (
+	asofIndexEmpty asofIndexOrder = iota
+	asofIndexAscending
+	asofIndexDescending
+	asofIndexTree
+)
+
+// asofTreeNode is an array-backed AVL node. Child links are indexes into the
+// same mpool-accounted slice, so no node or pointer escapes to the Go heap.
+type asofTreeNode struct {
+	row    int32
+	left   int32
+	right  int32
+	height int32
+}
+
+// asofIndex keeps all equality-group metadata in an accounted open-addressed
+// table. Time-ordered groups search the immutable JoinMap selection directly;
+// only an unordered group owns an accounted AVL node slice.
 type asofIndex struct {
-	key      uint64
-	values   []int32
-	occupied bool
+	key            uint64
+	nodes          []asofTreeNode
+	root           int32
+	candidateCount int32
+	order          asofIndexOrder
+	occupied       bool
 }
 
 type HashJoin struct {
@@ -210,7 +230,7 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
-		hashJoin.ctr.asofIndexCount != 0 ||
+		len(hashJoin.ctr.asofIndexes) != 0 ||
 		len(hashJoin.ctr.eqCondExecs) != 0 ||
 		hashJoin.ctr.nonEqCondExec != nil ||
 		hashJoin.ctr.rightRowsMatched != nil ||
@@ -300,7 +320,8 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.bitmapSynced = false
 	ctr.probeMark = false
 	ctr.buildHasNullKey = false
-	ctr.asofCompare = nil
+	ctr.asofLeftCol = -1
+	ctr.asofStrict = false
 	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch
@@ -325,7 +346,7 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 func (ctr *container) cleanAsofIndexes(proc *process.Process) {
 	if proc != nil {
 		for _, index := range ctr.asofIndexes {
-			mpool.FreeSlice(proc.Mp(), index.values)
+			mpool.FreeSlice(proc.Mp(), index.nodes)
 		}
 		mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
 	}

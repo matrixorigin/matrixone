@@ -1340,6 +1340,10 @@ func TestFindAsofPredecessor(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, int32(2), best)
+	_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 1, []int32{0, 1, 2})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, 2, arg.ctr.asofIndexCount)
 
 	// Equal-timestamp ties follow the materialized build order for this map.
 	right.Vecs[1].CleanOnlyData()
@@ -1349,9 +1353,159 @@ func TestFindAsofPredecessor(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, int32(0), best)
+	// A changed group belongs to a new immutable-map generation. Rebuilding it
+	// drops every old open-addressed entry rather than breaking a collision chain.
+	require.Equal(t, 1, arg.ctr.asofIndexCount)
 	_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 0, []int32{0, 1})
 	require.NoError(t, err)
 	require.True(t, found)
+
+	arg.ctr.leftBat = nil
+	arg.ctr.rightBats = nil
+	arg.Free(proc, false, nil)
+	left.Clean(proc.Mp())
+	right.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestAsofIndexChoosesOrderedSearchOrAccountedTree(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	arg := &HashJoin{
+		JoinType:     plan.Node_ASOF_LEFT,
+		LeftTypes:    []types.Type{keyType, timeType},
+		RightTypes:   []types.Type{keyType, timeType},
+		EqConds:      [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}},
+		NonEqCond:    makeAsofCondition(t, timeType, ">="),
+		AsofRightCol: 1,
+	}
+	installTestAllocation(t, arg)
+	require.NoError(t, arg.Prepare(proc))
+
+	left := batch.NewWithSize(2)
+	left.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	left.Vecs[1] = vector.NewVec(timeType)
+	require.NoError(t, vector.AppendFixedList(left.Vecs[1], []types.Timestamp{10}, nil, proc.Mp()))
+	left.SetRowCount(1)
+
+	// Four equality groups: ascending, descending, unordered, and unordered
+	// with a NULL temporal value. Ordered groups reuse JoinMap selections and
+	// allocate no per-row index; only unordered non-NULL rows become AVL nodes.
+	rightTimes := []types.Timestamp{
+		7, 9, 11,
+		11, 9, 7,
+		9, 7, 9,
+		0, 9, 8,
+	}
+	nulls := make([]bool, len(rightTimes))
+	nulls[9] = true
+	right := batch.NewWithSize(2)
+	right.Vecs[0] = testutil.MakeInt32Vector(make([]int32, len(rightTimes)), nil, proc.Mp())
+	right.Vecs[1] = vector.NewVec(timeType)
+	require.NoError(t, vector.AppendFixedList(right.Vecs[1], rightTimes, nulls, proc.Mp()))
+	right.SetRowCount(len(rightTimes))
+
+	arg.ctr.leftBat = left
+	arg.ctr.rightBats = []*batch.Batch{right}
+	arg.ctr.joinBats[0], arg.ctr.cfs1 = colexec.NewJoinBatch(left, proc.Mp())
+	arg.ctr.joinBats[1], arg.ctr.cfs2 = colexec.NewJoinBatch(right, proc.Mp())
+
+	tests := []struct {
+		key        uint64
+		candidates []int32
+		want       int32
+		order      asofIndexOrder
+		nodes      int
+	}{
+		{key: 1, candidates: []int32{0, 1, 2}, want: 1, order: asofIndexAscending},
+		{key: 2, candidates: []int32{3, 4, 5}, want: 4, order: asofIndexDescending},
+		{key: 3, candidates: []int32{6, 7, 8}, want: 6, order: asofIndexTree, nodes: 3},
+		{key: 4, candidates: []int32{9, 10, 11}, want: 10, order: asofIndexTree, nodes: 2},
+	}
+	for _, test := range tests {
+		best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, test.key, test.candidates)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, test.want, best)
+		index := arg.ctr.asofIndexes[arg.ctr.findAsofIndexSlot(test.key)]
+		require.Equal(t, test.order, index.order)
+		require.Len(t, index.nodes, test.nodes)
+	}
+
+	arg.ctr.leftBat = nil
+	arg.ctr.rightBats = nil
+	arg.Free(proc, false, nil)
+	left.Clean(proc.Mp())
+	right.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestAsofUnorderedIndexHasLogarithmicHeightAndReusesAllocation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	arg := &HashJoin{
+		JoinType:     plan.Node_ASOF,
+		LeftTypes:    []types.Type{keyType, timeType},
+		RightTypes:   []types.Type{keyType, timeType},
+		EqConds:      [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}},
+		NonEqCond:    makeAsofCondition(t, timeType, ">="),
+		AsofRightCol: 1,
+	}
+	installTestAllocation(t, arg)
+	require.NoError(t, arg.Prepare(proc))
+
+	const rowCount = 4095
+	left := batch.NewWithSize(2)
+	left.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	left.Vecs[1] = vector.NewVec(timeType)
+	require.NoError(t, vector.AppendFixedList(left.Vecs[1], []types.Timestamp{rowCount - 1}, nil, proc.Mp()))
+	left.SetRowCount(1)
+
+	candidates := make([]int32, rowCount)
+	timestamps := make([]types.Timestamp, rowCount)
+	keys := make([]int32, rowCount)
+	for i := range rowCount {
+		candidates[i] = int32(i)
+		keys[i] = 1
+		// 37 is coprime with 4095, producing a deterministic permutation.
+		timestamps[i] = types.Timestamp((i * 37) % rowCount)
+	}
+	right := batch.NewWithSize(2)
+	right.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	right.Vecs[1] = vector.NewVec(timeType)
+	require.NoError(t, vector.AppendFixedList(right.Vecs[1], timestamps, nil, proc.Mp()))
+	right.SetRowCount(rowCount)
+
+	arg.ctr.leftBat = left
+	arg.ctr.rightBats = []*batch.Batch{right}
+	arg.ctr.joinBats[0], arg.ctr.cfs1 = colexec.NewJoinBatch(left, proc.Mp())
+	arg.ctr.joinBats[1], arg.ctr.cfs2 = colexec.NewJoinBatch(right, proc.Mp())
+
+	best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 1, candidates)
+	require.NoError(t, err)
+	require.True(t, found)
+	bestValue, valid := arg.ctr.asofRightTemporalValue(arg, best)
+	require.True(t, valid)
+	require.Equal(t, int64(rowCount-1), bestValue)
+	index := &arg.ctr.asofIndexes[arg.ctr.findAsofIndexSlot(1)]
+	require.Equal(t, asofIndexTree, index.order)
+	require.Len(t, index.nodes, rowCount)
+	require.LessOrEqual(t, index.nodes[index.root].height, int32(16))
+
+	// Repeated probes reuse the immutable index and add no retained memory.
+	_, _, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 1, candidates)
+	require.NoError(t, err)
+	retained := proc.Mp().CurrNB()
+	for range 1024 {
+		_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 1, candidates)
+		require.NoError(t, err)
+		require.True(t, found)
+	}
+	require.Equal(t, retained, proc.Mp().CurrNB())
 
 	arg.ctr.leftBat = nil
 	arg.ctr.rightBats = nil
@@ -1422,9 +1576,35 @@ func TestAsofTemporalMetadataFindsNestedAndCommutedPredicate(t *testing.T) {
 	nested := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
 		Func: &plan.ObjectRef{ObjName: "and"}, Args: []*plan.Expr{commuted, tolerance},
 	}}}
-	col, strict := asofTemporalMetadata(nested)
-	require.Equal(t, 1, col)
+	leftCol, rightCol, strict := asofTemporalMetadata(nested)
+	require.Equal(t, 1, leftCol)
+	require.Equal(t, 1, rightCol)
 	require.True(t, strict)
+}
+
+func TestAsofPrepareRejectsMismatchedRightTemporalColumn(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	arg := &HashJoin{
+		JoinType:     plan.Node_ASOF,
+		LeftTypes:    []types.Type{keyType, timeType},
+		RightTypes:   []types.Type{keyType, timeType, timeType},
+		EqConds:      [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}},
+		NonEqCond:    makeAsofCondition(t, timeType, ">="),
+		AsofRightCol: 2,
+	}
+	require.ErrorContains(t, arg.Prepare(proc), "invalid ASOF temporal predicate metadata")
+}
+
+func TestAsofAllocationAccountCannotDetachWithEmptyIndexTable(t *testing.T) {
+	arg := &HashJoin{}
+	account := installTestAllocation(t, arg)
+	arg.ctr.asofIndexes = make([]asofIndex, 8)
+	require.ErrorIs(t, arg.ClearAllocationAccount(account), mpool.ErrAllocationAccountInvariant)
+	arg.ctr.asofIndexes = nil
+	require.NoError(t, arg.ClearAllocationAccount(account))
 }
 
 /*

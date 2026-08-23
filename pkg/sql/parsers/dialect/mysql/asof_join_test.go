@@ -26,9 +26,10 @@ import (
 
 func TestAsofJoinSyntaxRoundTrip(t *testing.T) {
 	tests := []string{
-		"select * from l asof join r on l.k = r.k and l.ts >= r.ts",
-		"select * from l asof left join r on l.k = r.k and l.ts > r.ts tolerance interval 2 minute",
-		"select * from l asof left outer join r on l.k1 = r.k1 and l.k2 = r.k2 and r.ts <= l.ts",
+		"select * from l l asof join r on l.k = r.k and l.ts >= r.ts",
+		"select * from l AS l asof join r on l.k = r.k and l.ts >= r.ts",
+		"select * from l AS l asof left join r on l.k = r.k and l.ts > r.ts tolerance interval 2 minute",
+		"select * from l AS l asof left outer join r on l.k1 = r.k1 and l.k2 = r.k2 and r.ts <= l.ts",
 	}
 
 	for _, sql := range tests {
@@ -91,17 +92,23 @@ func TestAsofLegacyImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
 	tests := []struct {
 		sql       string
 		leftAlias tree.Identifier
+		joinType  string
 	}{
-		{sql: "select * from asof join u on asof.k = u.k"},
-		{sql: "select * from t asof join u on asof.k = u.k", leftAlias: "asof"},
-		{sql: "select * from (select 1 as k) asof join (select 1 as k) u on asof.k = u.k", leftAlias: "asof"},
+		{sql: "select * from asof join u on asof.k = u.k", joinType: tree.JOIN_TYPE_INNER},
+		{sql: "select * from t asof join u on asof.k = u.k", leftAlias: "asof", joinType: tree.JOIN_TYPE_INNER},
+		{sql: "select * from t asof join u on asof.k = u.k and asof.ts > u.ts", leftAlias: "asof", joinType: tree.JOIN_TYPE_INNER},
+		{sql: "select * from t asof join u on a = b and x > y", leftAlias: "asof", joinType: tree.JOIN_TYPE_INNER},
+		{sql: "select * from t asof join u on asof.k = u.k and u.tolerance = 1", leftAlias: "asof", joinType: tree.JOIN_TYPE_INNER},
+		{sql: "select * from t asof join u on a = b where x > y", leftAlias: "asof", joinType: tree.JOIN_TYPE_INNER},
+		{sql: "select * from t asof left join u on asof.k = u.k", leftAlias: "asof", joinType: tree.JOIN_TYPE_LEFT},
+		{sql: "select * from (select 1 as k) asof join (select 1 as k) u on asof.k = u.k", leftAlias: "asof", joinType: tree.JOIN_TYPE_INNER},
 	}
 
 	for _, test := range tests {
 		stmt, err := ParseOne(context.Background(), test.sql, 1)
 		require.NoError(t, err, test.sql)
 		join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
-		require.Equal(t, tree.JOIN_TYPE_INNER, join.JoinType, test.sql)
+		require.Equal(t, test.joinType, join.JoinType, test.sql)
 		left := join.Left.(*tree.AliasedTableExpr)
 		require.Equal(t, test.leftAlias, left.As.Alias, test.sql)
 		stmt.Free()
@@ -110,14 +117,16 @@ func TestAsofLegacyImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
 
 func TestAsofJoinProducesAsofAst(t *testing.T) {
 	for _, sql := range []string{
-		"select * from l asof join r on l.k = r.k and l.ts >= r.ts",
-		"select * from l asof join r on l.k = r.k and r.ts <= l.ts",
-		"select * from l asof join r on lk = r.rk and event_ts >= r.effective_ts",
-		"select * from l asof join r on lk = r.rk and r.effective_ts <= event_ts",
-		"select * from l asof join r on lk = rk and event_ts >= effective_ts",
-		"select * from l asof join r on lk = rk and a >= b",
-		"select * from l asof join r on lk = rk and revision >= baseline",
-		"select * from l asof join r on l.k = r.k",
+		"select * from l l asof join r on l.k = r.k and l.ts >= r.ts",
+		"select * from (select 1 k, cast('2026-01-01' as timestamp) ts) l asof join r on l.k = r.k and l.ts >= r.ts",
+		"select * from l AS l asof join r on l.k = r.k and l.ts >= r.ts",
+		"select * from l AS l asof join r on l.k = r.k and r.ts <= l.ts",
+		"select * from l AS l asof join r on lk = r.rk and event_ts >= r.effective_ts",
+		"select * from l AS l asof join r on lk = r.rk and r.effective_ts <= event_ts",
+		"select * from l AS l asof join r on lk = rk and event_ts >= effective_ts",
+		"select * from l AS l asof join r on lk = rk and a >= b",
+		"select * from l AS l asof join r on lk = rk and revision >= baseline",
+		"select * from l AS l asof join r on l.k = r.k",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
@@ -129,18 +138,19 @@ func TestAsofJoinProducesAsofAst(t *testing.T) {
 
 func TestAsofJoinNamesDoNotChangeContext(t *testing.T) {
 	for _, sql := range []string{
-		"select * from l asof join asof on l.k = asof.k and l.ts >= asof.ts",
-		"select * from l asof join r asof on l.k = r.k and l.ts >= r.ts",
-		"select * from l asof join r asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from l AS l asof join asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from l AS l asof join r asof on l.k = r.k and l.ts >= r.ts",
+		"select * from l AS l asof join r asof on l.k = asof.k and l.ts >= asof.ts",
 		"select * from t as `l` asof join r on `l`.k = r.k and `l`.ts >= r.ts",
-		"select * from l asof join r AS asof on l.k = asof.k and l.ts >= asof.ts",
-		"select * from l asof join r AS `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",
-		"select * from l asof join db.r AS asof on l.k = asof.k and l.ts >= asof.ts",
-		"select * from l asof join db.`r` AS `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",
-		"select * from l asof join db.r `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",
-		"select * from `l` asof join `db`.`r` AS `asof` on `l`.k = `asof`.k and `l`.ts >= `asof`.ts",
-		"select * from l asof join (select 1 k, ')' marker) AS asof on l.k = asof.k and l.ts >= asof.ts",
-		"select * from l asof join (select 1 k, now() ts /* ) */) AS asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from l AS l asof join r AS asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from l AS l asof join r AS `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",
+		"select * from l AS l asof join db.r AS asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from l AS l asof join db.`r` AS `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",
+		"select * from l AS l asof join db.r `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",
+		"select * from `l` AS `l` asof join `db`.`r` AS `asof` on `l`.k = `asof`.k and `l`.ts >= `asof`.ts",
+		"select * from l AS l asof join (select 1 k, ')' marker) AS asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from l AS l asof join (select 1 k, now() ts /* ) */) AS asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from l AS l /* left */ asof /* modifier */ join r on l.k = r.k and l.ts >= r.ts",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)

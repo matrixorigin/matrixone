@@ -198,6 +198,7 @@ type Lexer struct {
 	paramIndex            int
 	lower                 int64
 	lastToken             int
+	previousToken         int
 	syntaxLastToken       int
 	syntaxDepth           int
 	syntaxInFrom          []bool
@@ -242,6 +243,7 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.paramIndex = 0
 	l.lower = lower
 	l.lastToken = 0
+	l.previousToken = 0
 	l.syntaxLastToken = 0
 	l.syntaxDepth = 0
 	l.syntaxInFrom = l.syntaxInFrom[:0]
@@ -310,11 +312,58 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
 		typ = ID
 	}
+	// `t asof JOIN u` was valid before native ASOF JOIN and means
+	// `t AS asof JOIN u`. A left factor that already has a distinct explicit or
+	// implicit alias makes the modifier unambiguous without inspecting relation
+	// names or ON predicates: `t l ASOF JOIN u` is native ASOF, while the legacy
+	// form stays INNER.
+	if typ == ID && strings.EqualFold(str, "asof") &&
+		l.hasUnambiguousAsofLeftAlias() && l.asofJoinPhraseAhead() {
+		typ = ASOF
+	}
 
+	l.previousToken = l.lastToken
 	l.lastToken = typ
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ
+}
+
+func (l *Lexer) hasUnambiguousAsofLeftAlias() bool {
+	if l.previousToken == AS {
+		return true
+	}
+	// For a bare alias, the token immediately before it is the final component
+	// of a simple table name or the closing parenthesis of a derived/function
+	// factor. With no alias, ASOF itself is the first token after FROM/JOIN/, or
+	// after a qualified-name dot, so none of these patterns match.
+	if l.lastToken != ID && l.lastToken != QUOTE_ID && l.lastToken != STRING {
+		return false
+	}
+	return l.previousToken == ID || l.previousToken == QUOTE_ID || l.previousToken == int(')')
+}
+
+func (l *Lexer) asofJoinPhraseAhead() bool {
+	lookahead := Scanner{}
+	lookahead.setSql(l.scanner.buf[l.scanner.Pos:])
+	lookahead.setSQLMode(l.sqlMode)
+
+	next, _ := lookahead.Scan()
+	if next == JOIN {
+		return true
+	}
+	if next != LEFT {
+		return false
+	}
+	next, _ = lookahead.Scan()
+	if next == JOIN {
+		return true
+	}
+	if next != OUTER {
+		return false
+	}
+	next, _ = lookahead.Scan()
+	return next == JOIN
 }
 
 func (l *Lexer) recordSyntaxToken(token int) {

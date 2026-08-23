@@ -28,7 +28,7 @@ import (
 )
 
 func TestCompileBroadcastAsofJoin(t *testing.T) {
-	node := newShuffleJoinTestNode(1)
+	node := newShuffleJoinTestNode(4)
 	node.JoinType = plan.Node_ASOF_LEFT
 	node.AsofRightCol = 1
 	node.Stats.HashmapStats.Shuffle = false
@@ -47,18 +47,23 @@ func TestCompileBroadcastAsofJoin(t *testing.T) {
 		makeMarkJoinTestColumn(1, 0, true),
 		{Typ: colType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 1}}},
 	}}
-	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
-	probe := newShuffleJoinTestScope(t, c.cnList[0], 1)
+	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}})
+	probes := make([]*Scope, 4)
+	for i := range probes {
+		probes[i] = newShuffleJoinTestScope(t, c.cnList[0], 1)
+	}
 
-	result := c.compileProbeSideForBroadcastJoin(node, left, right, []*Scope{probe})
-	require.Len(t, result, 1)
-	op, ok := result[0].RootOp.(*hashjoin.HashJoin)
-	require.True(t, ok)
-	require.Equal(t, plan.Node_ASOF_LEFT, op.JoinType)
-	require.False(t, op.HashOnPK, "ASOF must retain the full equality-key group")
-	require.Equal(t, int32(1), op.AsofRightCol)
-	require.NotNil(t, op.NonEqCond)
-	require.Len(t, op.EqConds[0], 1)
+	result := c.compileProbeSideForBroadcastJoin(node, left, right, probes)
+	require.Len(t, result, 4)
+	for _, scope := range result {
+		op, ok := scope.RootOp.(*hashjoin.HashJoin)
+		require.True(t, ok)
+		require.Equal(t, plan.Node_ASOF_LEFT, op.JoinType)
+		require.False(t, op.HashOnPK, "ASOF must retain the full equality-key group")
+		require.Equal(t, int32(1), op.AsofRightCol)
+		require.NotNil(t, op.NonEqCond)
+		require.Len(t, op.EqConds[0], 1)
+	}
 }
 
 func TestRemoteAsofJoinProtocolGate(t *testing.T) {

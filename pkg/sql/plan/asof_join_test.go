@@ -44,11 +44,30 @@ func TestBuildAsofJoin(t *testing.T) {
 
 	commuted, err := runOneStmt(NewMockOptimizer(false), t,
 		"select * from "+
-			"(select 1 k, cast('2026-01-01' as timestamp) ts) l "+
+			"(select 1 k, cast('2026-01-01' as timestamp) ts) AS l "+
 			"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r "+
 			"on r.k = l.k and r.ts <= l.ts")
 	require.NoError(t, err)
 	require.NotNil(t, commuted)
+}
+
+func TestBuildAsofPreservesLegacyImplicitAliasJoin(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		"select asof.k from "+
+			"(select 1 k, cast('2026-01-01' as timestamp) ts) asof "+
+			"join (select 1 k, cast('2026-01-02' as timestamp) ts) u "+
+			"on asof.k = u.k and asof.ts > u.ts")
+	require.NoError(t, err)
+
+	var join *planpb.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_JOIN {
+			join = node
+			break
+		}
+	}
+	require.NotNil(t, join)
+	require.Equal(t, planpb.Node_INNER, join.JoinType)
 }
 
 func TestBuildAsofJoinRejectsInvalidContracts(t *testing.T) {
@@ -59,61 +78,61 @@ func TestBuildAsofJoinRejectsInvalidContracts(t *testing.T) {
 	}{
 		{
 			name: "missing equality key",
-			sql: "select * from (select cast('2026-01-01' as timestamp) ts) l " +
+			sql: "select * from (select cast('2026-01-01' as timestamp) ts) AS l " +
 				"asof join (select cast('2026-01-01' as timestamp) ts) r on l.ts >= r.ts",
 			want: "at least one equality key",
 		},
 		{
 			name: "forward lookup",
-			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) l " +
+			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) AS l " +
 				"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r " +
 				"on l.k = r.k and l.ts <= r.ts",
 			want: "must look backward",
 		},
 		{
 			name: "two temporal predicates",
-			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) l " +
+			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) AS l " +
 				"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r " +
 				"on l.k = r.k and l.ts >= r.ts and l.ts > r.ts",
 			want: "exactly one temporal inequality",
 		},
 		{
 			name: "missing temporal predicate",
-			sql: "select * from (select 1 k) l asof join (select 1 k) r " +
+			sql: "select * from (select 1 k) AS l asof join (select 1 k) r " +
 				"on l.k = r.k",
 			want: "exactly one temporal inequality",
 		},
 		{
 			name: "predicate stays on left input",
-			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) l " +
+			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) AS l " +
 				"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r " +
 				"on l.k = r.k and l.ts >= l.ts",
 			want: "must compare the left and right inputs",
 		},
 		{
 			name: "temporal operand is not a column",
-			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) l " +
+			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) AS l " +
 				"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r " +
 				"on l.k = r.k and date_add(l.ts, interval 1 second) >= r.ts",
 			want: "temporal operands must be columns",
 		},
 		{
 			name: "temporal type coercion is not a column",
-			sql: "select * from (select 1 k, cast('2026-01-01' as date) ts) l " +
+			sql: "select * from (select 1 k, cast('2026-01-01' as date) ts) AS l " +
 				"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r " +
 				"on l.k = r.k and l.ts >= r.ts",
 			want: "temporal operands must be columns",
 		},
 		{
 			name: "nonconstant tolerance",
-			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) l " +
+			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) AS l " +
 				"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r " +
 				"on l.k = r.k and l.ts >= r.ts tolerance interval l.k minute",
 			want: "TOLERANCE must be a constant interval",
 		},
 		{
 			name: "using clause",
-			sql:  "select * from (select 1 k) l asof join (select 1 k) r using (k)",
+			sql:  "select * from (select 1 k) AS l asof join (select 1 k) r using (k)",
 			want: "requires an ON clause",
 		},
 	}

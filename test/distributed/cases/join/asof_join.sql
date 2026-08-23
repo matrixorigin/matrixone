@@ -9,6 +9,20 @@ use asof_join_db;
 set @saved_time_zone = @@session.time_zone;
 set time_zone = '+00:00';
 
+-- ASOF remains an ordinary table name and implicit alias for SQL that was
+-- valid before native ASOF JOIN. The inequality join must retain both rows.
+create table asof (k int, v int);
+create table legacy_right (k int, v int);
+insert into asof values (1, 3);
+insert into legacy_right values (1, 1), (1, 2);
+select asof.k, u.v as right_v
+from asof join legacy_right u on asof.k = u.k
+order by right_v;
+select asof.k, asof.v as left_v, u.v as right_v
+from asof asof join legacy_right u
+  on asof.k = u.k and asof.v > u.v
+order by right_v;
+
 create table readings (
     id int,
     device varchar(8),
@@ -100,6 +114,26 @@ from readings r asof left join empty_config c
   on r.device = c.device and r.event_ts >= c.effective_ts
 where r.id in (1, 2)
 order by r.id;
+
+-- Force a multi-pipeline ASOF plan. The build is physically descending and
+-- each of the four probe pipelines must emit exactly one predecessor per row.
+set @@max_dop = 4;
+create table parallel_left (id int, k int, ts datetime);
+create table parallel_right (id int, k int, ts datetime);
+insert into parallel_left
+select result, result % 32,
+       date_add('2026-01-01', interval result second)
+from generate_series(1, 20000) g;
+insert into parallel_right
+select result, result % 32,
+       date_add('2026-01-01', interval result second)
+from generate_series(20000, 1, -1) g;
+select count(*) as matched_rows,
+       min(l.id - r.id) as min_delta,
+       max(l.id - r.id) as max_delta
+from parallel_left l asof join parallel_right r
+  on l.k = r.k and l.ts >= r.ts;
+set @@max_dop = 0;
 
 -- DATE, DATETIME, and TIME ordering columns use the same predecessor rule.
 create table temporal_left (id int, k int, d date, dt datetime(6), tm time(6));

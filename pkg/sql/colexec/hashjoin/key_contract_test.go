@@ -50,6 +50,7 @@ func TestHashJoinAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(80), uint8(hashJoinAllocationSiteMatchedRows))
 	require.Equal(t, uint8(102), uint8(hashJoinAllocationSiteResultData))
 	require.Equal(t, uint8(105), uint8(hashJoinAllocationSiteResultGrouping))
+	require.Equal(t, uint8(106), uint8(hashJoinAllocationSiteAsofIndex))
 }
 
 type joinKeyContractValue struct {

@@ -909,6 +909,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:             t.JoinMapTag,
 			ShuffleIdx:             t.ShuffleIdx,
 			OnDuplicateAction:      t.OnDuplicateAction,
+			InputKeysUnique:        t.InputKeysUnique,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
 			DelColIdx:              t.DelColIdx,
@@ -916,7 +917,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RightTypes:             convertToPlanTypes(t.RightTypes),
 			UpdateColIdxList:       t.UpdateColIdxList,
 			UpdateColExprList:      t.UpdateColExprList,
-			InputKeysUnique:        t.InputKeysUnique,
 		}
 		in.SpillMem = t.SpillThreshold
 	case *apply.Apply:
@@ -1467,12 +1467,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.InputKeysUnique = t.InputKeysUnique
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
-		arg.InputKeysUnique = t.InputKeysUnique
 		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Apply:
@@ -1731,7 +1731,9 @@ func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	}
 	for _, instruction := range p.InstructionList {
 		if rightDedup := instruction.GetRightDedupJoin(); rightDedup != nil {
-			if err := validateRemoteRightDedupInputKeysUniqueProtocol(proc, rightDedup.InputKeysUnique); err != nil {
+			if err := validateRemoteRightDedupInputKeysUniqueProtocol(
+				proc, rightDedup.InputKeysUnique,
+			); err != nil {
 				return err
 			}
 		}

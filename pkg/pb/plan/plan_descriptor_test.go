@@ -103,6 +103,25 @@ func TestGeneratedPlanDescriptorContainsAsofContract(t *testing.T) {
 	t.Fatal("generated Node descriptor missing asof_right_col = 86")
 }
 
+func TestGeneratedJoinTypeEnumDescriptorContainsAsofValues(t *testing.T) {
+	b, path := Node_ASOF.EnumDescriptor()
+	file := decodePlanDescriptor(t, b)
+	if len(path) != 2 {
+		t.Fatalf("unexpected Node.JoinType descriptor path: %v", path)
+	}
+	node := file.GetMessageType()[path[0]]
+	joinType := node.GetEnumType()[path[1]]
+	want := map[string]int32{"ASOF": 11, "ASOF_LEFT": 12}
+	for _, value := range joinType.GetValue() {
+		if number, ok := want[value.GetName()]; ok && number == value.GetNumber() {
+			delete(want, value.GetName())
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("generated Node.JoinType descriptor missing ASOF values: %v", want)
+	}
+}
+
 func decodePlanDescriptor(t *testing.T, b []byte) *descriptor.FileDescriptorProto {
 	t.Helper()
 	r, err := gzip.NewReader(bytes.NewReader(b))

@@ -33,7 +33,6 @@ func init() {
 		"and":                        AND,
 		"any":                        ANY,
 		"as":                         AS,
-		"asof":                       ASOF,
 		"asc":                        ASC,
 		"ascii":                      ASCII,
 		"asensitive":                 UNUSED,
