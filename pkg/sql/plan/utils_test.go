@@ -310,6 +310,47 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	}
 }
 
+func TestPreparedPlanNeedsRuntimeSpecialization(t *testing.T) {
+	param := func() *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	}
+	fn := func(name string, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: args,
+		}}}
+	}
+	makePlan := func(stmtType plan.Query_StatementType, expr *plan.Expr) *plan.Plan {
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: stmtType,
+			Steps:    []int32{0},
+			Nodes: []*plan.Node{{
+				NodeType:    plan.Node_VALUE_SCAN,
+				ProjectList: []*plan.Expr{expr},
+			}},
+		}}}
+	}
+
+	tests := []struct {
+		name string
+		plan *plan.Plan
+		want bool
+	}{
+		{name: "direct select parameter", plan: makePlan(plan.Query_SELECT, param()), want: true},
+		{name: "numeric overload", plan: makePlan(plan.Query_SELECT, fn("abs", param())), want: true},
+		{name: "sleep overload", plan: makePlan(plan.Query_SELECT, fn("sleep", param())), want: true},
+		{name: "aggregate result domain", plan: makePlan(plan.Query_SELECT, fn("min", param())), want: true},
+		{name: "ordinary predicate", plan: makePlan(plan.Query_SELECT, fn("=", param(), param())), want: false},
+		{name: "explicit cast", plan: makePlan(plan.Query_SELECT, fn("cast", param())), want: false},
+		{name: "dml value parameter", plan: makePlan(plan.Query_INSERT, param()), want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, PreparedPlanNeedsRuntimeSpecialization(test.plan))
+		})
+	}
+}
+
 func TestPreparedNthValueParamPosition(t *testing.T) {
 	param := func(pos int32) *plan.Expr {
 		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}

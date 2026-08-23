@@ -885,6 +885,7 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan = newPreparePlan
 		executionPlan = preparePlan.Plan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.runtimeSpecializationPlan = nil
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -939,7 +940,19 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 		}
 	}
+
+	// Runtime type rebinding is only needed for plans whose parameter domains
+	// can affect a result column or an overloaded expression.  Ordinary OLTP
+	// prepared statements (including the TPCC DML path) only need the current
+	// parameter values and must stay on the cached prepare-time plan/compile.
+	if prepareStmt.runtimeSpecializationPlan != prepareStmt.PreparePlan {
+		prepareStmt.runtimeSpecializationNeeded = plan2.PreparedPlanNeedsRuntimeSpecialization(
+			preparePlan.Plan)
+		prepareStmt.runtimeSpecializationPlan = prepareStmt.PreparePlan
+	}
 	numParams := len(preparePlan.ParamTypes)
+	needsRuntimeSpecialization := prepareStmt.runtimeSpecializationNeeded ||
+		(executionPlan != nil && executionPlan.GetDdl() != nil)
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
@@ -964,7 +977,8 @@ func initExecuteStmtParamWithResolverInSession(
 		} else {
 			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
 		}
-		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
+		cwft.paramVals, err = preparedParamValues(
+			cwft.proc, prepareStmt.ParamTypes, needsRuntimeSpecialization)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -997,7 +1011,7 @@ func initExecuteStmtParamWithResolverInSession(
 	// SELECT ?.  Specialize an isolated copy after the values and protocol types
 	// are available; never mutate PrepareStmt.PreparePlan or its cached compile.
 	runtimeSpecialized := false
-	if execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(cwft.paramVals) > 0 && executionPlan != nil &&
+	if needsRuntimeSpecialization && execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(cwft.paramVals) > 0 && executionPlan != nil &&
 		(executionPlan.GetQuery() != nil || executionPlan.GetDdl() != nil) {
 		runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
 			reqCtx, executionPlan, cwft.paramVals)
@@ -1195,7 +1209,7 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error) {
+func preparedParamValues(proc *process.Process, paramTypes []byte, specialize bool) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
@@ -1214,7 +1228,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 			IsBin:            proc.GetPrepareParamIsBin(i),
 			PrepareParamKind: proc.GetPrepareParamKind(i),
 		}
-		if i*2+1 < len(paramTypes) {
+		if specialize && i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
 			isUnsigned := paramTypes[i*2+1]&0x80 != 0
 			// The MySQL binary protocol represents Go bool values as signed
@@ -1234,8 +1248,9 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 		}
 		// COM_STMT_EXECUTE values are binary-protocol values even when their
 		// declared MySQL type is VAR_STRING. Keep this provenance separate from
-		// RuntimeType so text values can safely participate in numeric overload
-		// inference without changing direct string result metadata.
+		// RuntimeType so callers that explicitly materialize a plan (for example
+		// EXPLAIN ANALYZE) retain the existing binary-protocol semantics. The
+		// expensive type inference above is still gated by specialize.
 		paramValue.IsBinaryProtocol = true
 		values[i] = paramValue
 	}

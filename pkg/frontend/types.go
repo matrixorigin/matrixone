@@ -334,6 +334,15 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+
+	// runtimeSpecializationPlan records the plan for which the static
+	// execute-time specialization decision was made.  Most binary prepared
+	// statements only need parameter values and can reuse the prepare-time
+	// compile; keeping this decision with the plan avoids copying and walking
+	// the whole plan on every EXECUTE.  The pointer changes when a prepared plan
+	// is rebuilt after a catalog or session dependency change.
+	runtimeSpecializationPlan   *plan.Plan
+	runtimeSpecializationNeeded bool
 }
 
 /*
