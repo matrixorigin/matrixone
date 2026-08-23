@@ -253,16 +253,24 @@ func populateInformationSchemaCharacterSets() versions.UpgradeEntry {
 			"WHERE lower(CHARACTER_SET_NAME) IN ('binary','utf8','utf8mb4')",
 		UpgSql: sysview.InformationSchemaCharacterSetsData,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			return versions.CheckTableDataExist(txn, accountID,
-				"SELECT 1 FROM information_schema.CHARACTER_SETS "+
-					"WHERE CHARACTER_SET_NAME = 'binary' AND DEFAULT_COLLATE_NAME = 'binary' AND MAXLEN = 1 "+
-					"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
-					"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = 'utf8_bin' AND MAXLEN = 4) "+
-					"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
-					"WHERE CHARACTER_SET_NAME = 'utf8mb4' AND DEFAULT_COLLATE_NAME = 'utf8mb4_bin' AND MAXLEN = 4) "+
-					"LIMIT 1")
+			return versions.CheckTableDataExist(txn, accountID, informationSchemaCharacterSetsCheckSQL())
 		},
 	}
+}
+
+func informationSchemaCharacterSetsCheckSQL() string {
+	return fmt.Sprintf(
+		"SELECT 1 FROM information_schema.CHARACTER_SETS "+
+			"WHERE CHARACTER_SET_NAME = 'binary' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 1 "+
+			"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+			"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 4) "+
+			"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+			"WHERE CHARACTER_SET_NAME = 'utf8mb4' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 4) "+
+			"LIMIT 1",
+		sysview.DefaultCollationForCharset("binary"),
+		sysview.DefaultCollationForCharset("utf8"),
+		sysview.DefaultCollationForCharset("utf8mb4"),
+	)
 }
 
 func newMongoDBCatalogTable(name, ddl string) versions.UpgradeEntry {

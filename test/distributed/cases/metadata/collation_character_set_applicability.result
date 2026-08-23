@@ -12,6 +12,20 @@ LIMIT 1
 ➤ count(*)[-5,64,0]  𝄀
 1
 
+SELECT cs.CHARACTER_SET_NAME,
+cs.DEFAULT_COLLATE_NAME,
+c.COLLATION_NAME,
+c.IS_DEFAULT
+FROM information_schema.CHARACTER_SETS AS cs
+LEFT JOIN information_schema.COLLATIONS AS c
+ON c.CHARACTER_SET_NAME = cs.CHARACTER_SET_NAME
+AND c.IS_DEFAULT = 'YES'
+WHERE cs.CHARACTER_SET_NAME IN ('utf8', 'utf8mb4')
+ORDER BY cs.CHARACTER_SET_NAME;
+➤ CHARACTER_SET_NAME[12,64,0]  ¦  DEFAULT_COLLATE_NAME[12,64,0]  ¦  COLLATION_NAME[12,64,0]  ¦  IS_DEFAULT[12,3,0]  𝄀
+utf8  ¦  utf8_general_ci  ¦  utf8_general_ci  ¦  YES  𝄀
+utf8mb4  ¦  utf8mb4_general_ci  ¦  utf8mb4_general_ci  ¦  YES  𝄀
+
 SELECT ccsa.CHARACTER_SET_NAME FROM information_schema.TABLES AS tbl JOIN information_schema.COLLATION_CHARACTER_SET_APPLICABILITY AS ccsa ON ccsa.COLLATION_NAME = tbl.TABLE_COLLATION WHERE tbl.TABLE_SCHEMA = 'information_schema' AND tbl.TABLE_NAME = 'TABLES' LIMIT 1;
 ➤ CHARACTER_SET_NAME[12,64,0]  𝄀
 utf8mb4

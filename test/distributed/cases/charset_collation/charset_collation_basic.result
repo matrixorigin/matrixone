@@ -12,8 +12,8 @@ FROM information_schema.CHARACTER_SETS
 ORDER BY CHARACTER_SET_NAME;
 character_set_name    default_collate_name    maxlen
 binary    binary    1
-utf8    utf8_bin    4
-utf8mb4    utf8mb4_bin    4
+utf8    utf8_general_ci    4
+utf8mb4    utf8mb4_general_ci    4
 SHOW COLLATION;
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 binary    binary    63    YES    Yes    1    NO PAD

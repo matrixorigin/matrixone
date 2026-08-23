@@ -14,6 +14,8 @@
 
 package sysview
 
+import "strings"
+
 // CollationDefinition is the canonical metadata for a collation identity that
 // MatrixOne can execute or expose through compatibility metadata. SHOW
 // COLLATION exposes the definitions with Advertised set, while the same
@@ -40,4 +42,17 @@ var SupportedCollationDefinitions = []CollationDefinition{
 	{Name: "utf8mb4_general_ci", Charset: "utf8mb4", ID: 45, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
 	{Name: "utf8mb4_bin", Charset: "utf8mb4", ID: 46, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
 	{Name: "utf8mb4_0900_ai_ci", Charset: "utf8mb4", ID: 255, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
+}
+
+// DefaultCollationForCharset returns the canonical default collation exposed
+// by the information_schema and SHOW COLLATION compatibility surfaces.
+// An empty result means that the canonical definitions do not contain a
+// default for the requested character set.
+func DefaultCollationForCharset(charset string) string {
+	for _, definition := range SupportedCollationDefinitions {
+		if strings.EqualFold(definition.Charset, charset) && definition.IsDefault == "YES" {
+			return definition.Name
+		}
+	}
+	return ""
 }

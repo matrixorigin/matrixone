@@ -137,6 +137,15 @@ func TestInformationSchemaCollationsUpgradeCheckIsExact(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaCharacterSetsUpgradeCheckUsesCanonicalDefaults(t *testing.T) {
+	checkSQL := informationSchemaCharacterSetsCheckSQL()
+	for _, charset := range []string{"binary", "utf8", "utf8mb4"} {
+		require.Contains(t, checkSQL,
+			"CHARACTER_SET_NAME = '"+charset+"' AND DEFAULT_COLLATE_NAME = '"+
+				sysview.DefaultCollationForCharset(charset)+"'")
+	}
+}
+
 func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *testing.T) {
 	entry := backfillUserDefinedFunctionArgumentTypes()
 	txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {

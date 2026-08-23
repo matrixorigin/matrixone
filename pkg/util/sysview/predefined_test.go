@@ -175,8 +175,8 @@ func TestInformationSchemaCheckConstraintsDDL(t *testing.T) {
 func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	for _, expected := range []string{
 		"('binary','binary','Binary pseudo charset',1)",
-		"('utf8','utf8_bin','UTF-8 Unicode',4)",
-		"('utf8mb4','utf8mb4_bin','UTF-8 Unicode',4)",
+		"('utf8','utf8_general_ci','UTF-8 Unicode',4)",
+		"('utf8mb4','utf8mb4_general_ci','UTF-8 Unicode',4)",
 	} {
 		assert.Contains(t, InformationSchemaCharacterSetsData, expected)
 	}
@@ -193,6 +193,33 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, ddlIndex, 0)
 	assert.Equal(t, ddlIndex+1, dataIndex)
+}
+
+func TestInformationSchemaDefaultCollationsMatchCanonicalDefinitions(t *testing.T) {
+	for _, charset := range []string{"binary", "utf8", "utf8mb4"} {
+		defaultCollation := DefaultCollationForCharset(charset)
+		assert.NotEmpty(t, defaultCollation, "missing canonical default for %s", charset)
+		assert.Contains(t, InformationSchemaCharacterSetsData,
+			fmt.Sprintf("('%s','%s'", charset, defaultCollation))
+	}
+	assert.Contains(t, InformationSchemaSchemataDDL,
+		"'"+DefaultCollationForCharset("utf8mb4")+"' AS DEFAULT_COLLATION_NAME")
+	assert.Contains(t, InformationSchemaTablesDDL,
+		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION")
+	assert.Contains(t, InformationSchemaViewsDDL,
+		"'"+DefaultCollationForCharset("utf8mb4")+"' AS `COLLATION_CONNECTION`")
+}
+
+func TestSupportedCollationDefinitionsHaveOneDefaultPerCharset(t *testing.T) {
+	defaults := make(map[string]int)
+	for _, definition := range SupportedCollationDefinitions {
+		if definition.IsDefault == "YES" {
+			defaults[definition.Charset]++
+		}
+	}
+	for _, charset := range []string{"binary", "utf8", "utf8mb4"} {
+		assert.Equal(t, 1, defaults[charset], "expected exactly one default collation for %s", charset)
+	}
 }
 
 func TestInformationSchemaCollationsData(t *testing.T) {
