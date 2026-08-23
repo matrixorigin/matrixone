@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"math"
+	"reflect"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -229,43 +230,402 @@ func rejectWindowResultDependency(ctx context.Context, expr *plan.Expr, windowTa
 	return nil
 }
 
-func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
-		return nil, moerr.NewNYI(b.GetContext(), "DISTINCT in window function")
+func cloneWindowSpec(spec *tree.WindowSpec) *tree.WindowSpec {
+	if spec == nil {
+		return nil
+	}
+	cloned := *spec
+	cloned.PartitionBy = cloneTreeExprs(spec.PartitionBy)
+	if len(spec.OrderBy) > 0 {
+		cloned.OrderBy = make(tree.OrderBy, len(spec.OrderBy))
+		for i, order := range spec.OrderBy {
+			if order == nil {
+				continue
+			}
+			orderCopy := *order
+			orderCopy.Expr = cloneTreeExpr(order.Expr)
+			cloned.OrderBy[i] = &orderCopy
+		}
+	}
+	if spec.Frame != nil {
+		frameCopy := *spec.Frame
+		if spec.Frame.Start != nil {
+			startCopy := *spec.Frame.Start
+			startCopy.Expr = cloneTreeExpr(spec.Frame.Start.Expr)
+			frameCopy.Start = &startCopy
+		}
+		if spec.Frame.End != nil {
+			endCopy := *spec.Frame.End
+			endCopy.Expr = cloneTreeExpr(spec.Frame.End.Expr)
+			frameCopy.End = &endCopy
+		}
+		cloned.Frame = &frameCopy
+	}
+	return &cloned
+}
+
+func inheritWindowSpec(ctx context.Context, base, local *tree.WindowSpec, baseName string) (*tree.WindowSpec, error) {
+	if len(local.PartitionBy) > 0 {
+		return nil, moerr.NewSyntaxError(ctx, "A window which depends on another cannot define partitioning")
+	}
+	if base.HasFrame {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"Window '%s' has a frame definition, so cannot be referenced by another window", baseName)
+	}
+	if len(base.OrderBy) > 0 && len(local.OrderBy) > 0 {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"Window '%s' cannot inherit ORDER BY because its base window already has an ORDER BY clause", baseName)
 	}
 
-	if err := validateCountArgs(b.GetContext(), funcName, astExpr); err != nil {
-		return nil, err
+	merged := cloneWindowSpec(base)
+	if len(local.OrderBy) > 0 {
+		merged.OrderBy = cloneWindowSpec(local).OrderBy
 	}
-	if err := validateWindowFuncNoNested(b.GetContext(), astExpr); err != nil {
-		return nil, err
+	if local.HasFrame {
+		localCopy := cloneWindowSpec(local)
+		merged.HasFrame = true
+		merged.Frame = localCopy.Frame
+	} else {
+		// The parser materializes an implicit frame before named-window
+		// inheritance is resolved. Drop that provisional frame here so it can
+		// be rebuilt from the final inherited ORDER BY clause.
+		merged.HasFrame = false
+		merged.Frame = nil
 	}
-	if len(astExpr.OrderBy) > 0 {
-		return nil, moerr.NewNYI(b.GetContext(), "function-local ORDER BY in window function")
+	merged.RefName = nil
+	merged.ReferencedOnly = false
+	return merged, nil
+}
+
+func resolveNamedWindowDefinitions(ctx context.Context, definitions tree.WindowDefinitions) (map[string]*tree.WindowSpec, error) {
+	raw := make(map[string]*tree.WindowDefinition, len(definitions))
+	for _, definition := range definitions {
+		if definition == nil || definition.Name == nil || definition.Spec == nil {
+			return nil, moerr.NewSyntaxError(ctx, "Invalid named window definition")
+		}
+		name := definition.Name.Compare()
+		if _, exists := raw[name]; exists {
+			return nil, moerr.NewSyntaxErrorf(ctx, "Window '%s' is defined twice", definition.Name.Origin())
+		}
+		raw[name] = definition
 	}
 
-	astStr := windowExprAstKey(astExpr)
-
-	w := &plan.WindowSpec{}
-	ws := astExpr.WindowSpec
-	if ws != nil {
-		wsCopy := *ws
-		ws = &wsCopy
+	resolved := make(map[string]*tree.WindowSpec, len(raw))
+	state := make(map[string]uint8, len(raw))
+	var resolve func(string) (*tree.WindowSpec, error)
+	resolve = func(name string) (*tree.WindowSpec, error) {
+		if spec, ok := resolved[name]; ok {
+			return spec, nil
+		}
+		definition, ok := raw[name]
+		if !ok {
+			return nil, moerr.NewSyntaxErrorf(ctx, "Window name '%s' is not defined", name)
+		}
+		if state[name] == 1 {
+			return nil, moerr.NewSyntaxErrorf(ctx, "Window circularity in window '%s'", definition.Name.Origin())
+		}
+		state[name] = 1
+		local := cloneWindowSpec(definition.Spec)
+		var spec *tree.WindowSpec
+		if local.RefName == nil {
+			spec = local
+			spec.ReferencedOnly = false
+		} else {
+			baseName := local.RefName.Compare()
+			base, err := resolve(baseName)
+			if err != nil {
+				return nil, err
+			}
+			spec, err = inheritWindowSpec(ctx, base, local, local.RefName.Origin())
+			if err != nil {
+				return nil, err
+			}
+		}
+		state[name] = 2
+		resolved[name] = spec
+		return spec, nil
 	}
 
-	// window function
-	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
+	for name := range raw {
+		if _, err := resolve(name); err != nil {
+			return nil, err
+		}
+	}
+	return resolved, nil
+}
+
+func resolveWindowSpecReference(
+	ctx context.Context,
+	spec *tree.WindowSpec,
+	namedWindows map[string]*tree.WindowSpec,
+) (*tree.WindowSpec, error) {
+	local := cloneWindowSpec(spec)
+	if local == nil || local.RefName == nil {
+		return local, nil
+	}
+	baseName := local.RefName.Compare()
+	base, ok := namedWindows[baseName]
+	if !ok {
+		return nil, moerr.NewSyntaxErrorf(ctx, "Window name '%s' is not defined", local.RefName.Origin())
+	}
+	if local.ReferencedOnly {
+		resolved := cloneWindowSpec(base)
+		resolved.RefName = nil
+		resolved.ReferencedOnly = false
+		return resolved, nil
+	}
+	return inheritWindowSpec(ctx, base, local, local.RefName.Origin())
+}
+
+func ensureDefaultWindowFrame(spec *tree.WindowSpec) {
+	if spec == nil || spec.Frame != nil {
+		return
+	}
+	spec.HasFrame = false
+	spec.Frame = &tree.FrameClause{
+		Type:  tree.Range,
+		Start: &tree.FrameBound{Type: tree.Preceding, UnBounded: true},
+	}
+	if len(spec.OrderBy) == 0 {
+		spec.Frame.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
+	} else {
+		spec.Frame.End = &tree.FrameBound{Type: tree.CurrentRow}
+	}
+}
+
+func expandNamedWindowReferences(
+	ctx context.Context,
+	clause *tree.SelectClause,
+	orderBy tree.OrderBy,
+) (*tree.SelectClause, tree.OrderBy, error) {
+	if len(clause.Windows) == 0 {
+		return clause, orderBy, nil
+	}
+	namedWindows, err := resolveNamedWindowDefinitions(ctx, clause.Windows)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err = rejectWindowResultDependency(b.GetContext(), windowFunc, ctx.windowTag); err != nil {
-		return nil, err
-	}
-	w.WindowFunc = windowFunc
-	w.Name = funcName
 
-	isWinValueFunc := function.GetFunctionIsWinValueFunByName(funcName)
-	if isWinValueFunc && !ws.HasFrame {
+	clonedClause := cloneTreeValue(
+		reflect.ValueOf(clause), make(map[treeClonePointer]reflect.Value),
+	).Interface().(*tree.SelectClause)
+	for _, definition := range clonedClause.Windows {
+		if definition == nil || definition.Name == nil {
+			continue
+		}
+		definition.Spec = cloneWindowSpec(namedWindows[definition.Name.Compare()])
+	}
+	var clonedOrderBy tree.OrderBy
+	if orderBy != nil {
+		clonedOrderBy = make(tree.OrderBy, len(orderBy))
+		for i, order := range orderBy {
+			if order == nil {
+				continue
+			}
+			orderCopy := *order
+			orderCopy.Expr = cloneTreeExpr(order.Expr)
+			clonedOrderBy[i] = &orderCopy
+		}
+	}
+
+	var expandErr error
+	expand := func(expr tree.Expr) bool {
+		if _, subquery := expr.(*tree.Subquery); subquery {
+			return false
+		}
+		function, ok := expr.(*tree.FuncExpr)
+		if !ok || function.WindowSpec == nil || function.WindowSpec.RefName == nil {
+			return true
+		}
+		function.WindowSpec, expandErr = resolveWindowSpecReference(ctx, function.WindowSpec, namedWindows)
+		return expandErr == nil
+	}
+	walk := func(expr tree.Expr) {
+		if expr != nil && expandErr == nil {
+			walkGroupingSetOrderByExpr(expr, expand)
+		}
+	}
+	for _, selectExpr := range clonedClause.Exprs {
+		walk(selectExpr.Expr)
+	}
+	if clonedClause.Where != nil {
+		walk(clonedClause.Where.Expr)
+	}
+	if clonedClause.GroupBy != nil {
+		for _, group := range clonedClause.GroupBy.GroupByExprsList {
+			for _, expr := range group {
+				walk(expr)
+			}
+		}
+	}
+	if clonedClause.Having != nil {
+		walk(clonedClause.Having.Expr)
+	}
+	for _, order := range clonedOrderBy {
+		if order != nil {
+			walk(order.Expr)
+		}
+	}
+	if expandErr != nil {
+		return nil, nil, expandErr
+	}
+	return clonedClause, clonedOrderBy, nil
+}
+
+func cloneWindowValidationMap[K comparable, V any](source map[K]V) map[K]V {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[K]V, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneBindContextForWindowValidation(ctx *BindContext) *BindContext {
+	cloned := *ctx
+	cloned.queryBlockOwner = &cloned
+	cloned.groupByAst = cloneWindowValidationMap(ctx.groupByAst)
+	cloned.groupByCanonicalAst = cloneWindowValidationMap(ctx.groupByCanonicalAst)
+	cloned.groupByParamAst = cloneWindowValidationMap(ctx.groupByParamAst)
+	cloned.aggregateByAst = cloneWindowValidationMap(ctx.aggregateByAst)
+	cloned.sampleByAst = cloneWindowValidationMap(ctx.sampleByAst)
+	cloned.windowByAst = cloneWindowValidationMap(ctx.windowByAst)
+	cloned.projectByExpr = cloneWindowValidationMap(ctx.projectByExpr)
+	cloned.timeByAst = cloneWindowValidationMap(ctx.timeByAst)
+	cloned.projectColByAst = cloneWindowValidationMap(ctx.projectColByAst)
+	cloned.flattenedVolatileExprs = cloneWindowValidationMap(ctx.flattenedVolatileExprs)
+	cloned.groups = append([]*plan.Expr(nil), ctx.groups...)
+	cloned.aggregates = append([]*plan.Expr(nil), ctx.aggregates...)
+	cloned.projects = append([]*plan.Expr(nil), ctx.projects...)
+	cloned.results = append([]*plan.Expr(nil), ctx.results...)
+	cloned.windows = append([]*plan.Expr(nil), ctx.windows...)
+	cloned.times = append([]*plan.Expr(nil), ctx.times...)
+	cloned.timeAsts = append([]tree.Expr(nil), ctx.timeAsts...)
+	cloned.views = append([]string(nil), ctx.views...)
+	return &cloned
+}
+
+type windowValidationCTERefSnapshot struct {
+	ref          *CTERef
+	isRecursive  bool
+	occurrences  []cteOccurrence
+	hasNestedRef bool
+	hasNestedUse bool
+}
+
+type windowValidationContextSnapshot struct {
+	ctx   *BindContext
+	views []string
+}
+
+// snapshotWindowValidationCTEState keeps the validation-only builder from
+// publishing its node ids through the mutable CTE metadata shared by the real
+// query builder. CTE declaration contexts are included because binding a CTE
+// can also record view dependencies on the declaration root.
+func snapshotWindowValidationCTEState(ctx *BindContext) func() {
+	cteSnapshots := make(map[*CTERef]windowValidationCTERefSnapshot)
+	contextSnapshots := make(map[*BindContext]windowValidationContextSnapshot)
+
+	var collectContext func(*BindContext)
+	var collectCTE func(*CTERef)
+	collectCTE = func(ref *CTERef) {
+		if ref == nil {
+			return
+		}
+		if _, exists := cteSnapshots[ref]; exists {
+			return
+		}
+		cteSnapshots[ref] = windowValidationCTERefSnapshot{
+			ref:          ref,
+			isRecursive:  ref.isRecursive,
+			occurrences:  append([]cteOccurrence(nil), ref.occurrences...),
+			hasNestedRef: ref.hasNestedRef,
+			hasNestedUse: ref.hasNestedUse,
+		}
+		collectContext(ref.declarationCtx)
+	}
+	collectContext = func(current *BindContext) {
+		if current == nil {
+			return
+		}
+		if _, exists := contextSnapshots[current]; exists {
+			return
+		}
+		contextSnapshots[current] = windowValidationContextSnapshot{
+			ctx:   current,
+			views: append([]string(nil), current.views...),
+		}
+		for _, ref := range current.cteByName {
+			collectCTE(ref)
+		}
+		for _, ref := range current.boundCtes {
+			collectCTE(ref)
+		}
+		collectCTE(current.cteState.cte)
+		collectContext(current.parent)
+	}
+	collectContext(ctx)
+
+	return func() {
+		for _, snapshot := range cteSnapshots {
+			snapshot.ref.isRecursive = snapshot.isRecursive
+			snapshot.ref.occurrences = snapshot.occurrences
+			snapshot.ref.hasNestedRef = snapshot.hasNestedRef
+			snapshot.ref.hasNestedUse = snapshot.hasNestedUse
+		}
+		for _, snapshot := range contextSnapshots {
+			snapshot.ctx.views = snapshot.views
+		}
+	}
+}
+
+func validateNamedWindowDefinitions(builder *QueryBuilder, ctx *BindContext, definitions tree.WindowDefinitions) error {
+	if len(definitions) == 0 {
+		return nil
+	}
+
+	validationBuilder := NewQueryBuilder(plan.Query_SELECT, builder.compCtx, builder.isPrepareStatement, true)
+	validationBuilder.nextBindTag = builder.nextBindTag
+	validationCtx := cloneBindContextForWindowValidation(ctx)
+	restoreCTEState := snapshotWindowValidationCTEState(validationCtx)
+	defer restoreCTEState()
+	havingBinder := NewHavingBinder(validationBuilder, validationCtx)
+	projectionBinder := NewProjectionBinder(validationBuilder, validationCtx, havingBinder)
+	validationCtx.binder = projectionBinder
+
+	for _, definition := range definitions {
+		if definition == nil || definition.Spec == nil {
+			continue
+		}
+		windowSpec := cloneWindowSpec(definition.Spec)
+		ensureDefaultWindowFrame(windowSpec)
+		validationExpr := &tree.FuncExpr{WindowSpec: windowSpec}
+		if err := validateWindowFuncNoNested(builder.GetContext(), validationExpr); err != nil {
+			return err
+		}
+		if _, err := bindWindowSpec(
+			projectionBinder, validationCtx, "", windowSpec, 0, true, false,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func bindWindowSpec(
+	b windowFuncExprBinder,
+	ctx *BindContext,
+	funcName string,
+	ws *tree.WindowSpec,
+	depth int32,
+	isRoot bool,
+	consumerSpecific bool,
+) (*plan.WindowSpec, error) {
+	w := &plan.WindowSpec{}
+
+	if consumerSpecific && function.GetFunctionIsWinValueFunByName(funcName) && !ws.HasFrame {
 		ws.Frame = &tree.FrameClause{Type: tree.Rows}
 		ws.Frame.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
 		ws.Frame.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
@@ -373,7 +733,7 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		}
 		typ = &w.OrderBy[0].Expr.Typ
 		t := types.Type{Oid: types.T(typ.Id)}
-		if !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
+		if consumerSpecific && !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type")
 		}
 	case tree.Groups:
@@ -386,6 +746,7 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		(isWindowFrameParam(ws.Frame.Start.Expr) || isWindowFrameParam(ws.Frame.End.Expr)) {
 		return nil, moerr.NewNotSupported(b.GetContext(), "prepared parameter markers in RANGE window frames")
 	}
+	var err error
 	if ws.Frame.Start.Expr != nil {
 		if isWindowFrameParam(ws.Frame.Start.Expr) {
 			w.Frame.Start.Val, err = b.bindPreparedRowsFrameBound(ws.Frame.Start.Expr)
@@ -412,6 +773,51 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 			return nil, err
 		}
 	}
+
+	return w, nil
+}
+
+func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
+		return nil, moerr.NewNYI(b.GetContext(), "DISTINCT in window function")
+	}
+
+	if err := validateCountArgs(b.GetContext(), funcName, astExpr); err != nil {
+		return nil, err
+	}
+	ws := cloneWindowSpec(astExpr.WindowSpec)
+	if ws == nil {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "Window function '%s' requires an OVER clause", funcName)
+	}
+	if ws.RefName != nil {
+		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "Window name '%s' is not defined", ws.RefName.Origin())
+	}
+	ensureDefaultWindowFrame(ws)
+	resolvedAstExpr := *astExpr
+	resolvedAstExpr.WindowSpec = ws
+	if err := validateWindowFuncNoNested(b.GetContext(), &resolvedAstExpr); err != nil {
+		return nil, err
+	}
+	if len(astExpr.OrderBy) > 0 {
+		return nil, moerr.NewNYI(b.GetContext(), "function-local ORDER BY in window function")
+	}
+
+	astStr := windowExprAstKey(&resolvedAstExpr)
+
+	// window function
+	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
+	if err != nil {
+		return nil, err
+	}
+	if err = rejectWindowResultDependency(b.GetContext(), windowFunc, ctx.windowTag); err != nil {
+		return nil, err
+	}
+	w, err := bindWindowSpec(b, ctx, funcName, ws, depth, isRoot, true)
+	if err != nil {
+		return nil, err
+	}
+	w.WindowFunc = windowFunc
+	w.Name = funcName
 
 	if colPos, ok := ctx.windowByAst[astStr]; ok {
 		return buildWindowColRefExpr(ctx, ctx.windows[colPos].Typ, colPos), nil

@@ -487,7 +487,26 @@ func selectClauseHasStar(selectClause *tree.SelectClause) bool {
 	if whereHasStar(selectClause.Where) || whereHasStar(selectClause.Having) {
 		return true
 	}
-	return groupByHasStar(selectClause.GroupBy)
+	return groupByHasStar(selectClause.GroupBy) || windowDefinitionsHaveStar(selectClause.Windows)
+}
+
+func windowDefinitionsHaveStar(definitions tree.WindowDefinitions) bool {
+	for _, definition := range definitions {
+		if definition == nil || definition.Spec == nil {
+			continue
+		}
+		if exprsHasStar(definition.Spec.PartitionBy) || orderByHasStar(definition.Spec.OrderBy) {
+			return true
+		}
+		if definition.Spec.Frame != nil {
+			for _, bound := range []*tree.FrameBound{definition.Spec.Frame.Start, definition.Spec.Frame.End} {
+				if bound != nil && exprHasStar(bound.Expr) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func fromHasStar(from *tree.From) bool {
@@ -803,6 +822,10 @@ func viewSelectStatementWithExpandedStars(
 			stableClause.GroupBy = stableGroupBy
 			rewritten = true
 		}
+		if stableWindows, windowsRewritten := viewWindowDefinitionsWithExpandedStars(selectStmt.Windows, expandedSelectLists); windowsRewritten {
+			stableClause.Windows = stableWindows
+			rewritten = true
+		}
 		return &stableClause, rewritten
 	case *tree.Select:
 		stableSelect := *selectStmt
@@ -962,6 +985,53 @@ func viewGroupByWithExpandedStars(
 		rewritten = true
 	}
 	return &stableGroupBy, rewritten
+}
+
+func viewWindowDefinitionsWithExpandedStars(
+	definitions tree.WindowDefinitions,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.WindowDefinitions, bool) {
+	if len(definitions) == 0 {
+		return definitions, false
+	}
+	stableDefinitions := make(tree.WindowDefinitions, len(definitions))
+	rewritten := false
+	for i, definition := range definitions {
+		if definition == nil {
+			continue
+		}
+		stableDefinition := *definition
+		if definition.Name != nil {
+			stableDefinition.Name = tree.NewCStr(definition.Name.Origin(), 1)
+		}
+		if definition.Spec != nil {
+			stableSpec := *definition.Spec
+			var fieldRewritten bool
+			stableSpec.PartitionBy, fieldRewritten = viewExprsWithExpandedStars(definition.Spec.PartitionBy, expandedSelectLists)
+			rewritten = rewritten || fieldRewritten
+			stableSpec.OrderBy, fieldRewritten = viewOrderByWithExpandedStars(definition.Spec.OrderBy, expandedSelectLists)
+			rewritten = rewritten || fieldRewritten
+			if definition.Spec.Frame != nil {
+				stableFrame := *definition.Spec.Frame
+				if definition.Spec.Frame.Start != nil {
+					stableStart := *definition.Spec.Frame.Start
+					stableStart.Expr, fieldRewritten = viewExprWithExpandedStars(definition.Spec.Frame.Start.Expr, expandedSelectLists)
+					rewritten = rewritten || fieldRewritten
+					stableFrame.Start = &stableStart
+				}
+				if definition.Spec.Frame.End != nil {
+					stableEnd := *definition.Spec.Frame.End
+					stableEnd.Expr, fieldRewritten = viewExprWithExpandedStars(definition.Spec.Frame.End.Expr, expandedSelectLists)
+					rewritten = rewritten || fieldRewritten
+					stableFrame.End = &stableEnd
+				}
+				stableSpec.Frame = &stableFrame
+			}
+			stableDefinition.Spec = &stableSpec
+		}
+		stableDefinitions[i] = &stableDefinition
+	}
+	return stableDefinitions, rewritten
 }
 
 func viewExprsWithExpandedStars(

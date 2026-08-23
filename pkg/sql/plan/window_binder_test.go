@@ -463,6 +463,181 @@ func firstWindowSpec(t *testing.T, queryPlan *planpb.Plan) *planpb.WindowSpec {
 	return nil
 }
 
+func allWindowSpecs(queryPlan *planpb.Plan) []*planpb.WindowSpec {
+	var result []*planpb.WindowSpec
+	for _, node := range queryPlan.GetQuery().Nodes {
+		for _, window := range node.WinSpecList {
+			if spec := window.GetW(); spec != nil {
+				result = append(result, spec)
+			}
+		}
+	}
+	return result
+}
+
+func buildNamedWindowPlan(t *testing.T, sql string) (*planpb.Plan, error) {
+	t.Helper()
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	if err != nil {
+		return nil, err
+	}
+	return BuildPlan(NewMockCompilerContext(true), stmt, false)
+}
+
+func TestBuildPlanNamedWindows(t *testing.T) {
+	t.Run("reuse", func(t *testing.T) {
+		queryPlan, err := buildNamedWindowPlan(t, `
+			select sum(n_nationkey) over win, rank() over win
+			from nation
+			window win as (partition by n_regionkey order by n_nationkey)`)
+		require.NoError(t, err)
+		windows := allWindowSpecs(queryPlan)
+		require.Len(t, windows, 2)
+		for _, window := range windows {
+			require.Len(t, window.PartitionBy, 1)
+			require.Len(t, window.OrderBy, 1)
+			require.Equal(t, planpb.FrameClause_RANGE, window.Frame.Type)
+			require.Equal(t, planpb.FrameBound_CURRENT_ROW, window.Frame.End.Type)
+		}
+	})
+
+	t.Run("forward inheritance", func(t *testing.T) {
+		queryPlan, err := buildNamedWindowPlan(t, `
+			select sum(n_nationkey) over ordered_win
+			from nation
+			window ordered_win as (base_win order by n_nationkey rows unbounded preceding),
+			       base_win as (partition by n_regionkey)`)
+		require.NoError(t, err)
+		window := firstWindowSpec(t, queryPlan)
+		require.Len(t, window.PartitionBy, 1)
+		require.Len(t, window.OrderBy, 1)
+		require.Equal(t, planpb.FrameClause_ROWS, window.Frame.Type)
+		require.Equal(t, planpb.FrameBound_CURRENT_ROW, window.Frame.End.Type)
+	})
+
+	t.Run("bounded rows frame", func(t *testing.T) {
+		queryPlan, err := buildNamedWindowPlan(t, `
+			select sum(n_nationkey) over framed
+			from nation
+			window framed as (partition by n_regionkey order by n_nationkey
+			                  rows between 1 preceding and current row)`)
+		require.NoError(t, err)
+		window := firstWindowSpec(t, queryPlan)
+		require.Equal(t, planpb.FrameClause_ROWS, window.Frame.Type)
+		require.NotNil(t, window.Frame.Start.Val)
+		require.Equal(t, planpb.FrameBound_CURRENT_ROW, window.Frame.End.Type)
+	})
+
+	t.Run("consumer specific range validation", func(t *testing.T) {
+		_, inlineErr := buildNamedWindowPlan(t, `
+			select rank() over (order by n_name range 1 preceding)
+			from nation`)
+		_, namedErr := buildNamedWindowPlan(t, `
+			select rank() over win
+			from nation
+			window win as (order by n_name range 1 preceding)`)
+		require.NoError(t, inlineErr)
+		require.NoError(t, namedErr)
+	})
+
+	t.Run("cte subquery validation is isolated", func(t *testing.T) {
+		_, err := buildNamedWindowPlan(t, `
+			with c as (select n_nationkey from nation)
+			select n_nationkey
+			from c
+			window win as (order by (select max(n_nationkey) from c))`)
+		require.NoError(t, err)
+	})
+}
+
+func TestSnapshotWindowValidationCTEState(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(builder, nil)
+	declarationCtx := NewBindContext(builder, nil)
+	declarationCtx.views = []string{"original_view"}
+	ref := &CTERef{
+		isRecursive:    true,
+		declarationCtx: declarationCtx,
+		occurrences:    []cteOccurrence{{rootID: 7, rootTag: 8}},
+	}
+	ctx.cteByName = map[string]*CTERef{"c": ref}
+
+	restore := snapshotWindowValidationCTEState(ctx)
+	ref.isRecursive = false
+	ref.occurrences = append(ref.occurrences, cteOccurrence{rootID: 70, rootTag: 80})
+	ref.hasNestedRef = true
+	ref.hasNestedUse = true
+	declarationCtx.views = append(declarationCtx.views, "validation_view")
+	restore()
+
+	require.True(t, ref.isRecursive)
+	require.Equal(t, []cteOccurrence{{rootID: 7, rootTag: 8}}, ref.occurrences)
+	require.False(t, ref.hasNestedRef)
+	require.False(t, ref.hasNestedUse)
+	require.Equal(t, []string{"original_view"}, declarationCtx.views)
+}
+
+func TestBuildPlanRejectsInvalidNamedWindows(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr string
+	}{
+		{
+			name:    "unknown",
+			sql:     "select sum(n_nationkey) over missing from nation",
+			wantErr: "Window name 'missing' is not defined",
+		},
+		{
+			name:    "duplicate",
+			sql:     "select 1 from nation window w as (), w as ()",
+			wantErr: "Window 'w' is defined twice",
+		},
+		{
+			name:    "cycle",
+			sql:     "select 1 from nation window w1 as (w2), w2 as (w1)",
+			wantErr: "Window circularity",
+		},
+		{
+			name:    "inherited partition",
+			sql:     "select 1 from nation window w1 as (), w2 as (w1 partition by n_regionkey)",
+			wantErr: "cannot define partitioning",
+		},
+		{
+			name:    "inherited order",
+			sql:     "select 1 from nation window w1 as (order by n_regionkey), w2 as (w1 order by n_nationkey)",
+			wantErr: "already has an ORDER BY clause",
+		},
+		{
+			name:    "inherited frame",
+			sql:     "select 1 from nation window w1 as (rows unbounded preceding), w2 as (w1)",
+			wantErr: "has a frame definition",
+		},
+		{
+			name:    "unused unknown column",
+			sql:     "select 1 from nation window w as (partition by no_such_column)",
+			wantErr: "no_such_column",
+		},
+		{
+			name:    "unused nested window",
+			sql:     "select 1 from nation window w as (partition by row_number() over ())",
+			wantErr: "cannot use the window function",
+		},
+		{
+			name:    "unused illegal frame",
+			sql:     "select 1 from nation window w as (rows between unbounded following and current row)",
+			wantErr: "frame start cannot be UNBOUNDED FOLLOWING",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := buildNamedWindowPlan(t, test.sql)
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
 func requirePreparedRowsFrameParam(t *testing.T, expr *planpb.Expr, pos int32) {
 	t.Helper()
 	require.Equal(t, int32(types.T_uint64), expr.Typ.Id)

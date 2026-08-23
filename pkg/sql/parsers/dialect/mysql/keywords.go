@@ -676,6 +676,7 @@ func init() {
 		"fill":                       FILL,
 		"gapfill":                    GAPFILL,
 		"groups":                     GROUPS,
+		"window":                     WINDOW,
 		"table_number":               TABLE_NUMBER,
 		"table_values":               TABLE_VALUES,
 		"table_size":                 TABLE_SIZE,

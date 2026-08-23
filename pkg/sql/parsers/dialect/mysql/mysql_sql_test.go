@@ -787,6 +787,35 @@ func TestBitXorWindowSpec(t *testing.T) {
 	require.Equal(t, "bit_xor", identifier.ColName())
 }
 
+func TestNamedWindowClause(t *testing.T) {
+	sql := "select sum(v) over win, rank() over (base_win order by v) from t " +
+		"window win as (partition by g order by v), base_win as (partition by g)"
+	stmt, err := ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, clause.Windows, 2)
+	require.Equal(t, "win", clause.Windows[0].Name.Compare())
+	require.Nil(t, clause.Windows[0].Spec.RefName)
+	require.Equal(t, "base_win", clause.Windows[1].Name.Compare())
+
+	first, ok := clause.Exprs[0].Expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "win", first.WindowSpec.RefName.Compare())
+	require.True(t, first.WindowSpec.ReferencedOnly)
+	second, ok := clause.Exprs[1].Expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "base_win", second.WindowSpec.RefName.Compare())
+	require.False(t, second.WindowSpec.ReferencedOnly)
+	require.Len(t, second.WindowSpec.OrderBy, 1)
+
+	require.Equal(t, sql, tree.String(stmt, dialect.MYSQL))
+}
+
 func firstColumnType(t *testing.T, stmt tree.Statement) tree.InternalType {
 	t.Helper()
 	createTable, ok := stmt.(*tree.CreateTable)
