@@ -1149,6 +1149,7 @@ func TestDataBranchOutputShouldDiffAsCSV(t *testing.T) {
 		defer mpool.DeleteMPool(mp)
 
 		bat := batch.NewWithSize(1)
+		defer bat.Clean(mp)
 		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
 		require.NoError(t, vector.AppendFixed[uint64](bat.Vecs[0], 3, false, mp))
 		bat.SetRowCount(1)
@@ -1166,6 +1167,7 @@ func TestDataBranchOutputShouldDiffAsCSV(t *testing.T) {
 		defer mpool.DeleteMPool(mp)
 
 		bat := batch.NewWithSize(1)
+		defer bat.Clean(mp)
 		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
 		require.NoError(t, vector.AppendFixed[uint64](bat.Vecs[0], 0, false, mp))
 		bat.SetRowCount(1)
