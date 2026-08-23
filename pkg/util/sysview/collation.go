@@ -16,9 +16,8 @@ package sysview
 
 // CollationDefinition is the canonical metadata for a collation identity that
 // MatrixOne can execute or expose through compatibility metadata. SHOW
-// COLLATION deliberately exposes only definitions with Advertised set; the
-// utf8mb4_0900_ai_ci alias is retained in the information-schema catalog
-// because TABLES and other MySQL-compatible metadata surfaces use that name.
+// COLLATION exposes the definitions with Advertised set, while the same
+// definitions populate the information-schema metadata surfaces.
 type CollationDefinition struct {
 	Name         string
 	Charset      string
@@ -33,12 +32,12 @@ type CollationDefinition struct {
 // SupportedCollationDefinitions is the single source of truth for the
 // supported collation mapping. The information_schema.COLLATIONS table and
 // COLLATION_CHARACTER_SET_APPLICABILITY view are populated from every entry;
-// the protocol SHOW COLLATION implementation uses only Advertised entries.
+// the protocol SHOW COLLATION implementation uses the same advertised set.
 var SupportedCollationDefinitions = []CollationDefinition{
 	{Name: "utf8_general_ci", Charset: "utf8", ID: 33, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
 	{Name: "binary", Charset: "binary", ID: 63, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "NO PAD", Advertised: true},
 	{Name: "utf8_bin", Charset: "utf8", ID: 83, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
 	{Name: "utf8mb4_general_ci", Charset: "utf8mb4", ID: 45, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
 	{Name: "utf8mb4_bin", Charset: "utf8mb4", ID: 46, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-	{Name: "utf8mb4_0900_ai_ci", Charset: "utf8mb4", ID: 255, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE"},
+	{Name: "utf8mb4_0900_ai_ci", Charset: "utf8mb4", ID: 255, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
 }

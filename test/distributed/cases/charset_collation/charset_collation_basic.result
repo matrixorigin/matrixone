@@ -19,14 +19,17 @@ Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 binary    binary    63    YES    Yes    1    NO PAD
 utf8_bin    utf8    83        Yes    1    PAD SPACE
 utf8_general_ci    utf8    33    YES    Yes    1    PAD SPACE
+utf8mb4_0900_ai_ci    utf8mb4    255        Yes    1    PAD SPACE
 utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION LIKE 'utf8mb4%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_0900_ai_ci    utf8mb4    255        Yes    1    PAD SPACE
 utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION WHERE Charset = 'utf8mb4';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_0900_ai_ci    utf8mb4    255        Yes    1    PAD SPACE
 utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION WHERE Collation = 'utf8mb4_bin';
