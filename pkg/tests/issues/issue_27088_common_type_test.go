@@ -247,6 +247,18 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				ctx, "select @issue27088_direct_json, @issue27088_subquery_json").Scan(&direct, &subquery))
 			require.JSONEq(t, `{"v": 42}`, direct)
 			require.JSONEq(t, direct, subquery)
+			for _, name := range []string{"@issue27088_direct_json", "@issue27088_subquery_json"} {
+				func() {
+					rows, queryErr := conn.QueryContext(ctx, "select "+name)
+					require.NoError(t, queryErr)
+					defer rows.Close()
+					columnTypes, typeErr := rows.ColumnTypes()
+					require.NoError(t, typeErr)
+					require.Len(t, columnTypes, 1)
+					require.Equal(t, "JSON", columnTypes[0].DatabaseTypeName())
+					require.NoError(t, rows.Err())
+				}()
+			}
 
 			directNested, prepareErr := conn.PrepareContext(
 				ctx, "set @issue27088_direct_nested = json_object('outer', json_object('v', ?))")

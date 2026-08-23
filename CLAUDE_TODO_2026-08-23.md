@@ -215,3 +215,10 @@
 2. 移除 scalar-subquery result 对 numeric-only `PreparedRuntimeParamExpr` 的泛用依赖；建立 result-vector typed materialization，确保 literal oneof/显式 cast 与 JSON、DATE、TIME、DATETIME、TIMESTAMP、UUID、ENUM、ARRAY 等实际 OID 一致。
 3. 增加 COM_STMT direct/subquery 类型与 nested JSON consumer 对照，以及 DATE `date_add` consumer 对照；补齐 NULL、错误和 retry generation 回归。
 4. 重新运行 issue #26685/#27088、frontend/plan/compile/pb 全包、SCA、build/vet；对 merge 后完整 diff 执行 self-review 后推送。
+
+### 第六轮执行结果
+
+- 已 merge `mo/main` @ `dc403fbac6`；冲突源仅为 main 的 prepared-type revert，保留本分支已验证实现，同时纳入其余 main 变更。
+- scalar-subquery replacement 现在直接从 result vector 生成匹配 oneof 的 literal；JSON/UUID/Decimal256 等无直接 literal 路径的类型使用显式 CAST，不再以 `Sval + 非字符串 Expr.Typ` 冒充 typed vector。
+- 新增 nested JSON consumer、JSON metadata 和 DATE `date_add` direct/subquery 对照，均通过。
+- merge 后 frontend/plan/compile/pb 全包、issue #26685/#27088、build、vet 通过；sqlclosecheck/rowserrcheck 为 0 issue。
