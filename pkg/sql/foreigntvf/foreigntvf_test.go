@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -208,4 +209,40 @@ func TestTruncationGuard(t *testing.T) {
 	require.NoError(t, err) // io.ReadAll swallows clean EOF
 	require.Equal(t, "a,b\n", string(buf))
 	require.NoError(t, g.Close())
+}
+
+// TestConfigFromSessionVar covers the @esql_tvf_config / @sql_tvf_config
+// fallback: resolver missing, variable unset, non-string value, and success.
+func TestConfigFromSessionVar(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+
+	// no resolver installed
+	proc.SetResolveVariableFunc(nil)
+	_, err := ConfigFromSessionVar(ctx, proc, KindSQL)
+	require.ErrorContains(t, err, "unavailable")
+
+	vars := map[string]any{}
+	proc.SetResolveVariableFunc(func(name string, sys, glob bool) (any, error) {
+		return vars[name], nil
+	})
+
+	// unset -> "is not set"
+	_, err = ConfigFromSessionVar(ctx, proc, KindSQL)
+	require.ErrorContains(t, err, "is not set")
+
+	// non-string -> typed error
+	vars[SessionVarSQLConfig] = 123
+	_, err = ConfigFromSessionVar(ctx, proc, KindSQL)
+	require.ErrorContains(t, err, "must be a string config")
+
+	// string and []byte succeed, per kind
+	vars[SessionVarSQLConfig] = `{"driver":"mysql","dsn":"x"}`
+	got, err := ConfigFromSessionVar(ctx, proc, KindSQL)
+	require.NoError(t, err)
+	require.Equal(t, `{"driver":"mysql","dsn":"x"}`, got)
+	vars[SessionVarESQLConfig] = []byte(`{"addresses":["http://h"]}`)
+	got, err = ConfigFromSessionVar(ctx, proc, KindESQL)
+	require.NoError(t, err)
+	require.Equal(t, `{"addresses":["http://h"]}`, got)
 }
