@@ -208,3 +208,10 @@
 - definition-change retry 对 forced prepared-expression generation 无条件重放完整参数填值，不再以 `specialized` 标志决定是否采用 runtime plan。
 - binary prepared SET 即使 overload 未变化也采用 literal-materialized DCL copy，保留 direct/subquery 的 int64 runtime type 与 JSON number domain。
 - 新增 COM_STMT JSON/type oracle、无 prefix、NULL、多 subquery 与 binary retry typed white-box 回归。
+
+## 第六轮 Review P1 与 main 冲突修复方案
+
+1. merge 最新 `mo/main`，按 v27 numeric-prefix、prepared retry 和 main 新增行为的功能闭环逐块解决冲突，不丢失任一侧测试。
+2. 移除 scalar-subquery result 对 numeric-only `PreparedRuntimeParamExpr` 的泛用依赖；建立 result-vector typed materialization，确保 literal oneof/显式 cast 与 JSON、DATE、TIME、DATETIME、TIMESTAMP、UUID、ENUM、ARRAY 等实际 OID 一致。
+3. 增加 COM_STMT direct/subquery 类型与 nested JSON consumer 对照，以及 DATE `date_add` consumer 对照；补齐 NULL、错误和 retry generation 回归。
+4. 重新运行 issue #26685/#27088、frontend/plan/compile/pb 全包、SCA、build/vet；对 merge 后完整 diff 执行 self-review 后推送。
