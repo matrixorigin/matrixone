@@ -1054,6 +1054,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if stmt.HasReturning() {
 		tableDef := dmlCtx.tableDefs[0]
 		alias := dmlCtx.aliases[0]
+		if affectedRowsCol, ok := builder.updateAffectedRowsCols[tableDef.TblId]; ok {
+			builder.returningFilterPos = affectedRowsCol.pos
+		}
 		colPos := make(map[string]int32, len(tableDef.Cols))
 		for _, col := range tableDef.Cols {
 			qualifiedName := alias + "." + col.Name

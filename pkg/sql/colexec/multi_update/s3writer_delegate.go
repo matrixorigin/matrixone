@@ -379,7 +379,7 @@ func (writer *s3WriterDelegate) append(
 		}
 
 		if tableType == UpdateMainTable && updateCtx.ChangedRowsCol != nil &&
-			len(updateCtx.AffectedRowsCols) == 0 {
+			len(updateCtx.AffectedRowsCols) == 0 && !updateCtx.SuppressPhysicalAffectedRows {
 			writer.addAffectedRows(insertAffectedRows(updateCtx, contextBatch))
 		}
 

@@ -368,6 +368,20 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 			}},
 		})
 	}
+	returningFilterProjectPos := int32(-1)
+	if builder.returningFilterPos >= 0 {
+		if int(builder.returningFilterPos) >= len(sourceSink.ProjectList) {
+			return moerr.NewInternalError(builder.GetContext(), "DML RETURNING selector is unavailable")
+		}
+		returningFilterProjectPos = int32(len(scanProjects))
+		scanProjects = append(scanProjects, &planpb.Expr{
+			Typ: sourceSink.ProjectList[builder.returningFilterPos].Typ,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+				RelPos: sourceSink.BindingTags[0],
+				ColPos: builder.returningFilterPos,
+			}},
+		})
+	}
 	scanID := builder.appendNode(&planpb.Node{
 		NodeType:    planpb.Node_SINK_SCAN,
 		SourceStep:  []int32{builder.returningSourceStep},
@@ -391,6 +405,20 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	}
 	if len(returnCtx.bindings) != 1 {
 		return moerr.NewInternalError(builder.GetContext(), "DML RETURNING failed to bind target image")
+	}
+	returningInputID := scanID
+	if returningFilterProjectPos >= 0 {
+		returningInputID = builder.appendNode(&planpb.Node{
+			NodeType: planpb.Node_FILTER,
+			Children: []int32{scanID},
+			FilterList: []*planpb.Expr{{
+				Typ: sourceSink.ProjectList[builder.returningFilterPos].Typ,
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+					RelPos: scanTag,
+					ColPos: returningFilterProjectPos,
+				}},
+			}},
+		}, returnCtx)
 	}
 	binding := returnCtx.bindings[0]
 	returnCtx.bindingByTable[builder.returningTableName] = binding
@@ -428,7 +456,7 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	projectTag := builder.genNewBindTag()
 	projectID := builder.appendNode(&planpb.Node{
 		NodeType:    planpb.Node_PROJECT,
-		Children:    []int32{scanID},
+		Children:    []int32{returningInputID},
 		ProjectList: returnCtx.projects,
 		BindingTags: []int32{projectTag},
 	}, returnCtx)

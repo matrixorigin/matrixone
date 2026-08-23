@@ -175,6 +175,10 @@ type MultiUpdateCtx struct {
 	// physical write eligibility, so implicit cascade rows can be written without
 	// contributing to SQL affected-row accounting.
 	AffectedRowsCols []int
+	// SuppressPhysicalAffectedRows is set by the partition wrapper after it has
+	// already accounted for this context's semantic selectors. Partition-local
+	// writers must not count their physical inserts a second time.
+	SuppressPhysicalAffectedRows bool
 	// TargetTableID stays logical when a partition wrapper replaces TableDef
 	// with a physical partition definition.
 	TargetTableID uint64
@@ -290,7 +294,7 @@ func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCou
 }
 
 func physicalInsertAffectedRows(updateCtx *MultiUpdateCtx, rowCount uint64) uint64 {
-	if updateCtx != nil && len(updateCtx.AffectedRowsCols) > 0 {
+	if updateCtx != nil && (len(updateCtx.AffectedRowsCols) > 0 || updateCtx.SuppressPhysicalAffectedRows) {
 		return 0
 	}
 	return rowCount

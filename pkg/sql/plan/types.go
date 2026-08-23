@@ -439,12 +439,16 @@ type QueryBuilder struct {
 	// The mutation plan and the returning projection use independent SINK_SCAN
 	// readers, so index/FK side-effect branches cannot multiply returned rows.
 	returningSourceStep int32
-	returningRequested  bool
-	returningTableDef   *plan.TableDef
-	returningObjRef     *plan.ObjectRef
-	returningTableName  string
-	returningAlias      string
-	returningColPos     map[string]int32
+	// returningFilterPos identifies an optional semantic eligibility selector in
+	// the materialized row image. It filters only the RETURNING reader; mutation
+	// readers continue to consume implicit FK action rows.
+	returningFilterPos int32
+	returningRequested bool
+	returningTableDef  *plan.TableDef
+	returningObjRef    *plan.ObjectRef
+	returningTableName string
+	returningAlias     string
+	returningColPos    map[string]int32
 	// updateParentActionStack bounds recursive ON UPDATE actions by the active
 	// physical-table path. Acyclic multi-layer cascades recurse normally; a
 	// cycle is rejected before any mutation step is appended.

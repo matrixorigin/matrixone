@@ -49,9 +49,38 @@ func TestClonePartitionPhaseContextsSeparatesDeleteAndInsert(t *testing.T) {
 	require.False(t, insertContexts[0].DedupByTargetRowID)
 	require.Empty(t, deleteContexts[0].AffectedRowsCols)
 	require.Empty(t, insertContexts[0].AffectedRowsCols)
+	require.True(t, deleteContexts[0].SuppressPhysicalAffectedRows)
+	require.True(t, insertContexts[0].SuppressPhysicalAffectedRows)
+	require.Zero(t, physicalInsertAffectedRows(insertContexts[0], 1),
+		"partition insert must not recount semantic affected rows")
 	require.Equal(t, []int{5, 6}, contexts[0].AffectedRowsCols)
 	require.Equal(t, []int{1, 2}, contexts[0].InsertCols)
 	require.Equal(t, []int{3, 4}, contexts[0].DeleteCols)
+}
+
+func TestClonePartitionTargetContextsSuppressesPhysicalAffectedRows(t *testing.T) {
+	contexts := []*MultiUpdateCtx{{
+		ObjRef:             &plan.ObjectRef{},
+		TableDef:           &plan.TableDef{},
+		InsertCols:         []int{1},
+		DeleteCols:         []int{2, 3, 4, 5},
+		DedupByTargetRowID: true,
+		AffectedRowsCols:   []int{6},
+	}}
+
+	cloned := clonePartitionTargetContexts(contexts)
+	require.False(t, cloned[0].DedupByTargetRowID)
+	require.Empty(t, cloned[0].AffectedRowsCols)
+	require.True(t, cloned[0].SuppressPhysicalAffectedRows)
+	require.Zero(t, physicalInsertAffectedRows(cloned[0], 1))
+	require.False(t, contexts[0].SuppressPhysicalAffectedRows)
+
+	ordinary := clonePartitionTargetContexts([]*MultiUpdateCtx{{
+		ObjRef: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, InsertCols: []int{1},
+	}})
+	require.False(t, ordinary[0].SuppressPhysicalAffectedRows)
+	require.EqualValues(t, 1, physicalInsertAffectedRows(ordinary[0], 1),
+		"single-target partition updates still count physical inserts")
 }
 
 func TestPartitionTargetSelectionPrecedesDirectAndS3Routing(t *testing.T) {

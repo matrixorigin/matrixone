@@ -74,6 +74,8 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			continue
 		}
 		repeatedPhysicalTarget := targetCountByTableID[tableDef.TblId] > 1
+		canonicalRepeatedTarget := repeatedPhysicalTarget && !deferRepeatedPhysicalTargetMerge &&
+			(len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0)
 		if repeatedPhysicalTarget && !deferRepeatedPhysicalTargetMerge {
 			if _, handled := handledFinalTable[tableDef.TblId]; handled {
 				continue
@@ -83,7 +85,26 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 
 		alias := dmlCtx.aliases[i]
 		var targetSelected *plan.Expr
-		if targetRowNumberPos[i] >= 0 {
+		if canonicalRepeatedTarget {
+			var canonicalErr error
+			lastNodeID, selectNodeTag, selectNode, targetSelected, canonicalErr =
+				builder.appendRepeatedPhysicalTargetCanonicalProjection(
+					bindCtx,
+					dmlCtx,
+					tableDef,
+					alias,
+					lastNodeID,
+					selectNodeTag,
+					selectNode,
+					oldColName2Idx,
+					newColName2Idx,
+					targetRowNumberPos,
+					targetBranchActivePos,
+				)
+			if canonicalErr != nil {
+				return 0, 0, nil, canonicalErr
+			}
+		} else if targetRowNumberPos[i] >= 0 {
 			targetSelected, err = builder.buildTargetSelectedExpr(
 				selectNodeTag, selectNode, targetRowNumberPos[i], targetBranchActivePos[i])
 			if err != nil {
@@ -94,12 +115,18 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			selfTargetSelectors := &updateSelfTargetSelectors{
 				targetRowNumberPos:      targetRowNumberPos,
 				targetActivePos:         targetBranchActivePos,
+				targetRowIDPos:          make([]int32, len(dmlCtx.tableDefs)),
 				physicalTargetActivePos: physicalTargetActivePos,
+			}
+			for targetIdx := range selfTargetSelectors.targetRowIDPos {
+				selfTargetSelectors.targetRowIDPos[targetIdx] = -1
 			}
 			for targetIdx, targetDef := range dmlCtx.tableDefs {
 				if len(dmlCtx.updateCol2Expr[targetIdx]) > 0 && targetDef.TblId == tableDef.TblId {
 					selfTargetSelectors.targetIndexes = append(
 						selfTargetSelectors.targetIndexes, targetIdx)
+					selfTargetSelectors.targetRowIDPos[targetIdx] =
+						oldColName2Idx[dmlCtx.aliases[targetIdx]+"."+catalog.Row_ID]
 				}
 			}
 			lastNodeID, selectNodeTag, err = builder.appendUpdateParentForeignKeyChecks(
@@ -121,8 +148,12 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			selectNode = builder.updateInputProjectNode(lastNodeID)
 		}
 		if targetRowNumberPos[i] >= 0 {
+			activePos := targetBranchActivePos[i]
+			if canonicalRepeatedTarget {
+				activePos = physicalTargetActivePos[i]
+			}
 			targetSelected, err = builder.buildTargetSelectedExpr(
-				selectNodeTag, selectNode, targetRowNumberPos[i], targetBranchActivePos[i])
+				selectNodeTag, selectNode, targetRowNumberPos[i], activePos)
 			if err != nil {
 				return 0, 0, nil, err
 			}
@@ -582,7 +613,149 @@ type updateSelfTargetSelectors struct {
 	targetIndexes           []int
 	targetRowNumberPos      []int32
 	targetActivePos         []int32
+	targetRowIDPos          []int32
 	physicalTargetActivePos []int32
+}
+
+// appendRepeatedPhysicalTargetCanonicalProjection gives FK checks one physical
+// row image when several writable aliases refer to the same table. Each alias
+// keeps its own semantic active column, while the parent action is eligible when
+// any alias is active. Old/new values are selected from the active alias rather
+// than implicitly taking the first alias in planner order.
+func (builder *QueryBuilder) appendRepeatedPhysicalTargetCanonicalProjection(
+	bindCtx *BindContext,
+	dmlCtx *DMLContext,
+	tableDef *plan.TableDef,
+	canonicalAlias string,
+	lastNodeID int32,
+	inputTag int32,
+	inputNode *plan.Node,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+	targetRowNumberPos []int32,
+	targetActivePos []int32,
+) (int32, int32, *plan.Node, *plan.Expr, error) {
+	targetIndexes := make([]int, 0, 2)
+	selectors := make([]*plan.Expr, 0, 2)
+	for targetIdx, targetDef := range dmlCtx.tableDefs {
+		if len(dmlCtx.updateCol2Expr[targetIdx]) == 0 || targetDef.TblId != tableDef.TblId {
+			continue
+		}
+		if targetRowNumberPos[targetIdx] < 0 {
+			return 0, 0, nil, nil, moerr.NewInternalError(
+				builder.GetContext(), "repeated physical UPDATE target selector is unavailable")
+		}
+		selected, err := builder.buildTargetSelectedExpr(
+			inputTag, inputNode, targetRowNumberPos[targetIdx], targetActivePos[targetIdx])
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+		targetIndexes = append(targetIndexes, targetIdx)
+		selectors = append(selectors, selected)
+	}
+	if len(selectors) == 0 {
+		return 0, 0, nil, nil, moerr.NewInternalError(
+			builder.GetContext(), "repeated physical UPDATE target has no writable alias")
+	}
+
+	project := make([]*plan.Expr, len(inputNode.ProjectList))
+	for pos, expr := range inputNode.ProjectList {
+		project[pos] = &plan.Expr{
+			Typ:  expr.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: inputTag, ColPos: int32(pos)}},
+		}
+	}
+	buildSelectedValue := func(values []*plan.Expr) (*plan.Expr, error) {
+		value := DeepCopyExpr(values[len(values)-1])
+		for idx := len(values) - 2; idx >= 0; idx-- {
+			var err error
+			value, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+				DeepCopyExpr(selectors[idx]), DeepCopyExpr(values[idx]), value,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+		return value, nil
+	}
+	for _, col := range tableDef.Cols {
+		// ROWID has no CASE overload. Self-action matching and root exclusion
+		// preserve every alias ROWID independently through targetRowIDPos.
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		oldValues := make([]*plan.Expr, len(targetIndexes))
+		updatedValues := make([]*plan.Expr, len(targetIndexes))
+		changed := false
+		for idx, targetIdx := range targetIndexes {
+			qualifiedName := dmlCtx.aliases[targetIdx] + "." + col.Name
+			oldPos, ok := oldColName2Idx[qualifiedName]
+			if !ok {
+				return 0, 0, nil, nil, moerr.NewInternalErrorf(
+					builder.GetContext(), "repeated physical UPDATE old column %s is unavailable", col.Name)
+			}
+			oldValues[idx] = &plan.Expr{
+				Typ:  inputNode.ProjectList[oldPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: inputTag, ColPos: oldPos}},
+			}
+			if newPos, updated := newColName2Idx[qualifiedName]; updated {
+				changed = true
+				updatedValues[idx] = &plan.Expr{
+					Typ:  inputNode.ProjectList[newPos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: inputTag, ColPos: newPos}},
+				}
+			}
+		}
+		oldValue, err := buildSelectedValue(oldValues)
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+		oldColName2Idx[canonicalAlias+"."+col.Name] = int32(len(project))
+		project = append(project, oldValue)
+		if changed {
+			// Assignments from overlapping aliases merge column-by-column. An
+			// active alias that did not update this column must not mask another
+			// active alias's explicit value.
+			newValue := DeepCopyExpr(oldValue)
+			for idx := len(updatedValues) - 1; idx >= 0; idx-- {
+				if updatedValues[idx] == nil {
+					continue
+				}
+				var buildErr error
+				newValue, buildErr = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+					DeepCopyExpr(selectors[idx]), DeepCopyExpr(updatedValues[idx]), newValue,
+				})
+				if buildErr != nil {
+					return 0, 0, nil, nil, buildErr
+				}
+			}
+			newColName2Idx[canonicalAlias+"."+col.Name] = int32(len(project))
+			project = append(project, newValue)
+		}
+	}
+	physicalSelected := DeepCopyExpr(selectors[0])
+	for idx := 1; idx < len(selectors); idx++ {
+		var err error
+		physicalSelected, err = BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "or", []*plan.Expr{physicalSelected, DeepCopyExpr(selectors[idx])})
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+	}
+	physicalSelectedPos := int32(len(project))
+	project = append(project, physicalSelected)
+	outputTag := builder.genNewBindTag()
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeID},
+		ProjectList: project,
+		BindingTags: []int32{outputTag},
+	}, bindCtx)
+	outputNode := builder.qry.Nodes[lastNodeID]
+	return lastNodeID, outputTag, outputNode, &plan.Expr{
+		Typ:  outputNode.ProjectList[physicalSelectedPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outputTag, ColPos: physicalSelectedPos}},
+	}, nil
 }
 
 // validateDistinctUpdateForeignKeyMutationTargets builds the complete mutating
@@ -1609,7 +1782,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		JoinType: plan.Node_INNER,
 		OnList:   joinPreds,
 	}, bindCtx)
-	var selfAffectedRowsExpr *plan.Expr
+	var selfAffectedRowsExprs []*plan.Expr
 	if selfReferencing {
 		// Collapse the child scan and parent transition into one binding before
 		// the explicit-root LEFT join. Keeping the parent value under its old
@@ -1674,16 +1847,37 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		}
 		childRowIDPos := childTableDef.Name2ColIndex[catalog.Row_ID]
 		rootRowIDPos := oldColName2Idx[parentAlias+"."+catalog.Row_ID]
-		matchExplicitRoot, buildErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			{Typ: childTableDef.Cols[childRowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: childTag, ColPos: childRowIDPos,
-			}}},
-			{Typ: parentNode.ProjectList[rootRowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: explicitRootTag, ColPos: rootRowIDPos,
-			}}},
-		})
-		if buildErr != nil {
-			return buildErr
+		rootRowIDPositions := []int32{rootRowIDPos}
+		if selfTargetSelectors != nil && len(selfTargetSelectors.targetIndexes) > 0 {
+			rootRowIDPositions = rootRowIDPositions[:0]
+			for _, targetIdx := range selfTargetSelectors.targetIndexes {
+				if pos := selfTargetSelectors.targetRowIDPos[targetIdx]; pos >= 0 {
+					rootRowIDPositions = append(rootRowIDPositions, pos)
+				}
+			}
+		}
+		var matchExplicitRoot *plan.Expr
+		for _, candidateRowIDPos := range rootRowIDPositions {
+			match, buildErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+				{Typ: childTableDef.Cols[childRowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: childTag, ColPos: childRowIDPos,
+				}}},
+				{Typ: parentNode.ProjectList[candidateRowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: explicitRootTag, ColPos: candidateRowIDPos,
+				}}},
+			})
+			if buildErr != nil {
+				return buildErr
+			}
+			if matchExplicitRoot == nil {
+				matchExplicitRoot = match
+			} else {
+				matchExplicitRoot, buildErr = BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "or", []*plan.Expr{matchExplicitRoot, match})
+				if buildErr != nil {
+					return buildErr
+				}
+			}
 		}
 		joinNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN, Children: []int32{joinNodeID, explicitRootID},
@@ -1699,7 +1893,29 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		if buildErr != nil {
 			return buildErr
 		}
-		selfAffectedRowsExpr = DeepCopyExpr(matchedRoot)
+		multiTargetSelectors := false
+		if selfTargetSelectors != nil {
+			for _, targetIdx := range selfTargetSelectors.targetIndexes {
+				if selfTargetSelectors.targetRowNumberPos[targetIdx] >= 0 {
+					multiTargetSelectors = true
+					break
+				}
+			}
+		}
+		if multiTargetSelectors {
+			selfAffectedRowsExprs = make([]*plan.Expr, 0, len(selfTargetSelectors.targetIndexes))
+			for _, targetIdx := range selfTargetSelectors.targetIndexes {
+				activePos := selfTargetSelectors.targetActivePos[targetIdx]
+				selfAffectedRowsExprs = append(selfAffectedRowsExprs, &plan.Expr{
+					Typ: parentNode.ProjectList[activePos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: explicitRootTag, ColPos: activePos,
+					}},
+				})
+			}
+		} else {
+			selfAffectedRowsExprs = []*plan.Expr{DeepCopyExpr(matchedRoot)}
+		}
 		for colPos, col := range childTableDef.Cols {
 			if col.Name == catalog.Row_ID {
 				continue
@@ -1828,14 +2044,14 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	}
 
 	var oldChildExprs map[int32]*plan.Expr
-	joinNodeID, childTag, newChildExprs, oldChildExprs, selfAffectedRowsExpr, err =
+	joinNodeID, childTag, newChildExprs, oldChildExprs, selfAffectedRowsExprs, err =
 		builder.appendRecursiveUpdateParentMutations(
 			bindCtx,
 			childTableDef,
 			joinNodeID,
 			childTag,
 			newChildExprs,
-			selfAffectedRowsExpr,
+			selfAffectedRowsExprs,
 			excludedMutationEdges,
 		)
 	if err != nil {
@@ -1874,7 +2090,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			childTag,
 			newChildExprs,
 			oldChildExprs,
-			selfAffectedRowsExpr,
+			selfAffectedRowsExprs,
 			selfTargetSelectors,
 		)
 		if err == nil {
@@ -2147,10 +2363,10 @@ func (builder *QueryBuilder) appendUpdateSelfMutationRows(
 	actionTag int32,
 	newChildExprs map[int32]*plan.Expr,
 	oldChildExprs map[int32]*plan.Expr,
-	actionAffectedRowsExpr *plan.Expr,
+	actionAffectedRowsExprs []*plan.Expr,
 	selfTargetSelectors *updateSelfTargetSelectors,
 ) (int32, int32, error) {
-	if actionAffectedRowsExpr == nil {
+	if len(actionAffectedRowsExprs) == 0 {
 		return 0, 0, moerr.NewInternalError(
 			builder.GetContext(), "self-referencing parent action affected-row selector is unavailable")
 	}
@@ -2278,7 +2494,7 @@ func (builder *QueryBuilder) appendUpdateSelfMutationRows(
 		actionProject[newPos] = DeepCopyExpr(newExpr)
 	}
 	if multiTarget {
-		for _, targetIdx := range selfTargetSelectors.targetIndexes {
+		for selectorIdx, targetIdx := range selfTargetSelectors.targetIndexes {
 			rowNumberPos := selfTargetSelectors.targetRowNumberPos[targetIdx]
 			activePos := selfTargetSelectors.targetActivePos[targetIdx]
 			if rowNumberPos < 0 || int(rowNumberPos) >= len(actionProject) ||
@@ -2286,12 +2502,16 @@ func (builder *QueryBuilder) appendUpdateSelfMutationRows(
 				return 0, 0, moerr.NewInternalError(
 					builder.GetContext(), "self-referencing target selector is unavailable")
 			}
+			if selectorIdx >= len(actionAffectedRowsExprs) {
+				return 0, 0, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing alias selector is unavailable")
+			}
 			actionProject[rowNumberPos] = makePlan2Int64ConstExprWithType(1)
-			actionProject[activePos] = DeepCopyExpr(actionAffectedRowsExpr)
+			actionProject[activePos] = DeepCopyExpr(actionAffectedRowsExprs[selectorIdx])
 		}
 		actionProject[physicalActivePos] = makePlan2BoolConstExprWithType(true)
 	} else if affectedRowsPos >= 0 {
-		actionProject[affectedRowsPos] = DeepCopyExpr(actionAffectedRowsExpr)
+		actionProject[affectedRowsPos] = DeepCopyExpr(actionAffectedRowsExprs[0])
 	}
 	actionOutputTag := builder.genNewBindTag()
 	actionNodeID = builder.appendNode(&plan.Node{
@@ -2318,22 +2538,43 @@ func (builder *QueryBuilder) appendUpdateSelfMutationRows(
 		return 0, 0, moerr.NewInternalError(
 			builder.GetContext(), "self-referencing parent action rowid is unavailable")
 	}
-	rootIsAction, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-		{
-			Typ: rootProject[rowIDPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: rootTag, ColPos: rowIDPos,
-			}},
-		},
-		{
-			Typ: actionProject[rowIDPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: actionExclusionTag, ColPos: rowIDPos,
-			}},
-		},
-	})
-	if err != nil {
-		return 0, 0, err
+	rootRowIDPositions := []int32{rowIDPos}
+	if selfTargetSelectors != nil && len(selfTargetSelectors.targetIndexes) > 0 {
+		rootRowIDPositions = rootRowIDPositions[:0]
+		for _, targetIdx := range selfTargetSelectors.targetIndexes {
+			if pos := selfTargetSelectors.targetRowIDPos[targetIdx]; pos >= 0 {
+				rootRowIDPositions = append(rootRowIDPositions, pos)
+			}
+		}
+	}
+	var rootIsAction *plan.Expr
+	for _, candidateRowIDPos := range rootRowIDPositions {
+		match, buildErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			{
+				Typ: rootProject[candidateRowIDPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: rootTag, ColPos: candidateRowIDPos,
+				}},
+			},
+			{
+				Typ: actionProject[rowIDPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: actionExclusionTag, ColPos: rowIDPos,
+				}},
+			},
+		})
+		if buildErr != nil {
+			return 0, 0, buildErr
+		}
+		if rootIsAction == nil {
+			rootIsAction = match
+		} else {
+			rootIsAction, buildErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "or", []*plan.Expr{rootIsAction, match})
+			if buildErr != nil {
+				return 0, 0, buildErr
+			}
+		}
 	}
 	rootNodeID = builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN, Children: []int32{rootNodeID, actionExclusionID},
@@ -2398,9 +2639,9 @@ func (builder *QueryBuilder) appendRecursiveUpdateParentMutations(
 	lastNodeID int32,
 	inputTag int32,
 	replacements map[int32]*plan.Expr,
-	affectedRowsExpr *plan.Expr,
+	affectedRowsExprs []*plan.Expr,
 	excludedMutationEdges map[updateForeignKeyActionEdgeKey]struct{},
-) (int32, int32, map[int32]*plan.Expr, map[int32]*plan.Expr, *plan.Expr, error) {
+) (int32, int32, map[int32]*plan.Expr, map[int32]*plan.Expr, []*plan.Expr, error) {
 	if tableDef == nil || len(replacements) == 0 {
 		return 0, 0, nil, nil, nil, moerr.NewInternalError(
 			builder.GetContext(), "parent foreign key action row image is incomplete")
@@ -2439,9 +2680,8 @@ func (builder *QueryBuilder) appendRecursiveUpdateParentMutations(
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: inputTag, ColPos: pos}},
 		})
 	}
-	affectedRowsPos := int32(-1)
-	if affectedRowsExpr != nil {
-		affectedRowsPos = int32(len(projectList))
+	affectedRowsPos := int32(len(projectList))
+	for _, affectedRowsExpr := range affectedRowsExprs {
 		projectList = append(projectList, DeepCopyExpr(affectedRowsExpr))
 	}
 
@@ -2501,16 +2741,17 @@ func (builder *QueryBuilder) appendRecursiveUpdateParentMutations(
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: checkedTag, ColPos: oldPos}},
 		}
 	}
-	var checkedAffectedRowsExpr *plan.Expr
-	if affectedRowsPos >= 0 {
-		checkedAffectedRowsExpr = &plan.Expr{
-			Typ: checkedProject[affectedRowsPos].Typ,
+	checkedAffectedRowsExprs := make([]*plan.Expr, len(affectedRowsExprs))
+	for idx := range affectedRowsExprs {
+		pos := affectedRowsPos + int32(idx)
+		checkedAffectedRowsExprs[idx] = &plan.Expr{
+			Typ: checkedProject[pos].Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: checkedTag, ColPos: affectedRowsPos,
+				RelPos: checkedTag, ColPos: pos,
 			}},
 		}
 	}
-	return checkedNodeID, checkedTag, newExprs, oldExprs, checkedAffectedRowsExpr, nil
+	return checkedNodeID, checkedTag, newExprs, oldExprs, checkedAffectedRowsExprs, nil
 }
 
 func (builder *QueryBuilder) appendRowNumberMappingGuardNode(

@@ -162,6 +162,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
 		irregularMaintDeleteStep: -1,
 		returningSourceStep:      -1,
+		returningFilterPos:       -1,
 	}
 }
 

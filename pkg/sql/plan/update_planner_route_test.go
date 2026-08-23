@@ -1611,6 +1611,83 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		}), "the self action must preserve direct-target affected-row accounting")
 	})
 
+	t.Run("self cascade returning filters implicit action rows", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareSelfRef(mock)
+		mock.ctxt.tables["self_ref"].Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+
+		logicPlan, err := runOneStmt(
+			mock, t, "UPDATE self_ref SET id = 10 WHERE id = 1 RETURNING id, parent_id")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.True(t, query.GetHasForeignKeyAction())
+		require.GreaterOrEqual(t, query.ReturningStep, int32(0))
+		returningProject := query.Nodes[query.Steps[query.ReturningStep]]
+		require.Equal(t, planpb.Node_PROJECT, returningProject.NodeType)
+		require.Len(t, returningProject.Children, 1)
+		returningFilter := query.Nodes[returningProject.Children[0]]
+		require.Equal(t, planpb.Node_FILTER, returningFilter.NodeType,
+			"RETURNING must have a reader-local semantic selector filter")
+		require.Len(t, returningFilter.FilterList, 1)
+		require.Equal(t, int32(types.T_bool), returningFilter.FilterList[0].Typ.Id)
+	})
+
+	t.Run("repeated physical aliases preserve independent self action selectors", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareSelfRef(mock)
+		selfRef := mock.ctxt.tables["self_ref"]
+		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+		selfRef.Fkeys[0].ForeignCols = []uint64{selfRef.Cols[1].ColId}
+
+		logicPlan, err := runOneStmt(
+			mock,
+			t,
+			"UPDATE self_ref a JOIN self_ref b ON a.id = b.id "+
+				"SET a.parent_id = a.parent_id + 10, b.name = 'explicit-b'",
+		)
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.True(t, query.GetHasForeignKeyAction())
+		var selfCtx *planpb.UpdateCtx
+		var input *planpb.Node
+		for _, node := range query.Nodes {
+			if node.NodeType != planpb.Node_MULTI_UPDATE || len(node.Children) != 1 {
+				continue
+			}
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef != nil && updateCtx.TableDef.TblId == selfRef.TblId {
+					selfCtx = updateCtx
+					input = query.Nodes[node.Children[0]]
+					break
+				}
+			}
+		}
+		require.NotNil(t, selfCtx)
+		require.NotNil(t, input)
+		require.Len(t, selfCtx.AffectedRowsCols, 2)
+		firstSelector := input.ProjectList[selfCtx.AffectedRowsCols[0].ColPos]
+		secondSelector := input.ProjectList[selfCtx.AffectedRowsCols[1].ColPos]
+		require.NotEqual(t, firstSelector.String(), secondSelector.String(),
+			"self action must not broadcast one alias selector to every alias")
+	})
+
+	t.Run("second repeated alias can independently schedule self action", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareSelfRef(mock)
+		selfRef := mock.ctxt.tables["self_ref"]
+		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+		selfRef.Fkeys[0].ForeignCols = []uint64{selfRef.Cols[1].ColId}
+
+		logicPlan, err := runOneStmt(
+			mock,
+			t,
+			"UPDATE self_ref a JOIN self_ref b ON a.id = b.id "+
+				"SET a.name = 'explicit-a', b.parent_id = b.parent_id + 10",
+		)
+		require.NoError(t, err)
+		require.True(t, logicPlan.GetQuery().GetHasForeignKeyAction())
+	})
+
 	t.Run("multi target self cascade preserves physical and semantic selectors", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareSelfRef(mock)
