@@ -1662,6 +1662,13 @@ func mergeFilters(
 		}
 
 	case function.OR:
+		// A disjunctive filter is a container, not an atomic predicate. Its zero
+		// value Op happens to equal function.EQUAL, so attempting an atomic merge
+		// compares empty bounds and can discard an entire nested OR branch. Return
+		// an invalid merge and let constructBasePKFilter flatten both containers.
+		if len(left.Disjuncts) > 0 || len(right.Disjuncts) > 0 {
+			return BasePKFilter{}, nil
+		}
 		switch left.Op {
 		case function.IN:
 			switch right.Op {
