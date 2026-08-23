@@ -5123,9 +5123,9 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 	commonValue := root.ProjectList[0]
 	require.Equal(t, "coalesce", commonValue.GetF().GetFunc().GetObjName(), commonValue.String())
 	require.True(t, types.T(commonValue.Typ.Id).IsDecimal(), commonValue.String())
-	requiresV25, err := plan0.RequiresMORPCVersion25NumericPrefix(commonValue)
+	requiresV26, err := plan0.RequiresMORPCVersion26NumericPrefix(commonValue)
 	require.NoError(t, err)
-	require.True(t, requiresV25, commonValue.String())
+	require.True(t, requiresV26, commonValue.String())
 }
 
 func queryParamPositions(query *plan0.Query) []int32 {

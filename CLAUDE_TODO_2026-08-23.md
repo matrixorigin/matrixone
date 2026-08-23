@@ -2,13 +2,13 @@
 
 ## 已确认不变量
 
-1. **dependency 只属于 numeric-prefix common-type consumer**：v25 仅表示参数具备 numeric-prefix 能力，不能把所有参数表达式自动标记为 dependency。普通算术、聚合和其它非 consumer 必须保留 prepare-time/runtime rebinding 的既有隐式 cast。
+1. **dependency 只属于 numeric-prefix common-type consumer**：numeric-prefix 协议能力仅表示参数具备该能力，不能把所有参数表达式自动标记为 dependency。普通算术、聚合和其它非 consumer 必须保留 prepare-time/runtime rebinding 的既有隐式 cast。
 2. **物理 cast 不能被语义 dependency 展开误删**：外层 consumer 重绑只能移除因 prepare-time TEXT 域产生的 provisional cast；YEAR 等执行器或索引比较所需的物理 cast 必须保留。
 3. **最近邻控制组**：`coalesce(?, decimal)` 参与外层精确比较时仍需传播 dependency；普通 `(? + ?)` 不传播；YEAR covering-index 与非索引查询结果必须一致。
 
 ## 根因与最小设计
 
-- 当前 `Expr_P` 分支只要参数位置启用 v25 就无条件标记 dependency，混淆了“capability”与“本表达式实际选择了 numeric-prefix domain”。改为仅当 `preparedNumericPrefixArgs` 确认 consumer 命中并完成 contextual cast/rebind 后，才从该 consumer 向父表达式传播 dependency；参数替换本身不传播。
+- 当前 `Expr_P` 分支只要参数位置启用 numeric-prefix capability 就无条件标记 dependency，混淆了“capability”与“本表达式实际选择了 numeric-prefix domain”。改为仅当 `preparedNumericPrefixArgs` 确认 consumer 命中并完成 contextual cast/rebind 后，才从该 consumer 向父表达式传播 dependency；参数替换本身不传播。
 - dependency 子树外层重绑时，不再无条件剥离任意 binder cast。复用/收窄现有 provisional-cast 判定，只移除 numeric source 被 prepare-time 临时提升到 TEXT/FLOAT 的 cast；保留 YEAR 及其它物理表示所需 cast。
 - 不新增状态、缓存或 plan 字段；修改限制在 execute-time visitor 及其回归测试，热路径复杂度和分配阶数不变。
 
@@ -35,7 +35,7 @@
 - 在 `26a76a623e` 逐项复现：`TestIssue25753PreparedNumericProtocolLifecycle` 报
   `invalid argument operator +, bad value [TEXT TEXT]`；
   `TestIssue26873BinaryPreparedEnumAndYearCoveringIndex/year` 报 `sql: no rows in result set`。
-- 删除 `Expr_P` 上仅由 v25 capability 触发的 dependency 标记；dependency 现在只由
+- 删除 `Expr_P` 上仅由 numeric-prefix capability 触发的 dependency 标记；dependency 现在只由
   `preparedNumericPrefixArgs` 实际命中 numeric-prefix common-type consumer 后产生。
 - `unwrapNumericPrefixDependentImplicitCast` 仅展开 numeric source 到 FLOAT/TEXT 的 binder
   provisional cast；YEAR、DECIMAL、整数等物理 cast保持不变。父表达式 sibling 重绑复用同一窄判定。
@@ -43,3 +43,6 @@
   `[TEXT TEXT] +` synthetic binder case 已删除，真实 SQL prepare/COM_STMT 作为算术语义 oracle。
 - 两个用户点名测试已由失败转为通过；`TestIssue27088PreparedDecimalCommonType` 及 frontend 的
   retry、SQL eligibility、NULL provenance focused tests继续通过，证明未回退上一轮修复。
+- merge 最新 `mo/main` 时发现 v25 已由 #27442 用于 UPDATE changed-row counting。保留 main 的
+  v25 契约，将 prepared numeric-prefix 的首次可用版本顺延为 v26；v25 worker 必须拒绝携带
+  numeric-prefix sentinel 的远程计划，v26 同时兼容 v25 changed-row 能力。

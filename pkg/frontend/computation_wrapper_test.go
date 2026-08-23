@@ -529,9 +529,9 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
 	project := projectNode.ProjectList[0]
 	require.True(t, types.T(project.Typ.Id).IsDecimal(), project.String())
-	requiresV25, scanErr := plan.RequiresMORPCVersion25NumericPrefix(project)
+	requiresV26, scanErr := plan.RequiresMORPCVersion26NumericPrefix(project)
 	require.NoError(t, scanErr)
-	require.True(t, requiresV25, project.String())
+	require.True(t, requiresV26, project.String())
 
 	executor, execErr := colexec.NewExpressionExecutor(cw.proc, project)
 	require.NoError(t, execErr)
@@ -546,9 +546,9 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0))
 
 	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
-	requiresV25, scanErr = plan.RequiresMORPCVersion25NumericPrefix(originalProjectNode.ProjectList[0])
+	requiresV26, scanErr = plan.RequiresMORPCVersion26NumericPrefix(originalProjectNode.ProjectList[0])
 	require.NoError(t, scanErr)
-	require.False(t, requiresV25)
+	require.False(t, requiresV26)
 }
 
 func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
@@ -1277,8 +1277,8 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
 		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
 		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
-		{name: "numeric prefix upgrade", from: defines.MORPCVersion24, to: defines.MORPCVersion25},
-		{name: "numeric prefix rollback", from: defines.MORPCVersion25, to: defines.MORPCVersion24},
+		{name: "numeric prefix upgrade", from: defines.MORPCVersion25, to: defines.MORPCVersion26},
+		{name: "numeric prefix rollback", from: defines.MORPCVersion26, to: defines.MORPCVersion25},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
