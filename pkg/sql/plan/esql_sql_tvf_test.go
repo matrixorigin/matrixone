@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	"github.com/stretchr/testify/require"
@@ -219,4 +220,53 @@ func TestBuildCreateForeignTable(t *testing.T) {
 		`create external table t7 (a int) engine = sql with ('config'='<redacted>')`,
 	}
 	runTestShouldError(mock, t, errSqls)
+}
+
+// TestSelectAndAlterForeignTable injects a foreign external table into the
+// mock catalog and drives the SELECT-side recognition (FOREIGN_TB dispatch +
+// hidden __mo_query column) and the ALTER guard.
+func TestSelectAndAlterForeignTable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mcc := mock.CurrentContext().(*MockCompilerContext)
+	env := foreignext.BuildCreateSQLEnvelope(foreignext.Config{Kind: "sql", ConfigJSON: "env:X"})
+	mcc.tables["foreign_t"] = &TableDef{
+		TableType:   catalog.SystemExternalRel,
+		TblId:       990001,
+		Name:        "foreign_t",
+		Createsql:   env,
+		FeatureFlag: features.ForeignExternal,
+		Cols: []*plan.ColDef{
+			{Name: "a", ColId: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", ColId: 2, Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
+		},
+	}
+	mcc.objects["foreign_t"] = &ObjectRef{SchemaName: "tpch", ObjName: "foreign_t", Obj: 990001}
+
+	// SELECT recognition: FOREIGN_TB extern scan with the hidden column usable
+	// in predicates and projection.
+	sqls := []string{
+		`select a, b from foreign_t where __mo_query = 'select 1'`,
+		`select a, __mo_query from foreign_t where __mo_query in ('q1', 'q2')`,
+		`select * from foreign_t where __mo_query = 'q'`, // * hides __mo_query
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// the built plan really is a FOREIGN_TB extern scan
+	p, err := runOneStmt(mock, t, `select a from foreign_t where __mo_query = 'q'`)
+	require.NoError(t, err)
+	var found bool
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_EXTERNAL_SCAN {
+			require.Equal(t, int32(plan.ExternType_FOREIGN_TB), node.ExternScan.Type)
+			require.Equal(t, "sql", node.ExternScan.ForeignScan.Kind)
+			last := node.TableDef.Cols[len(node.TableDef.Cols)-1]
+			require.Equal(t, catalog.ExternalQuery, last.Name)
+			require.Equal(t, catalog.ExternalQueryColId, last.ColId)
+			found = true
+		}
+	}
+	require.True(t, found)
+
+	// ALTER is cleanly rejected.
+	runTestShouldError(mock, t, []string{`alter table foreign_t add column c int`})
 }

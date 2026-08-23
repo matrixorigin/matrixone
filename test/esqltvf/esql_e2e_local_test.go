@@ -15,7 +15,11 @@
 package main
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -82,5 +86,52 @@ func TestWriteReport(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(nested, "report.json")); err != nil {
 		t.Fatalf("nested report.json missing: %v", err)
+	}
+}
+
+// scalarDriver is a minimal database/sql driver whose every query returns one
+// row with the single string value "42" — enough to exercise expectScalar and
+// waitForMO without a server.
+type scalarDriver struct{}
+type scalarConn struct{}
+type scalarStmt struct{}
+type scalarRows struct{ done bool }
+
+func (scalarDriver) Open(string) (driver.Conn, error)         { return scalarConn{}, nil }
+func (scalarConn) Prepare(string) (driver.Stmt, error)        { return scalarStmt{}, nil }
+func (scalarConn) Close() error                               { return nil }
+func (scalarConn) Begin() (driver.Tx, error)                  { return nil, driver.ErrSkip }
+func (scalarStmt) Close() error                               { return nil }
+func (scalarStmt) NumInput() int                              { return 0 }
+func (scalarStmt) Exec([]driver.Value) (driver.Result, error) { return driver.ResultNoRows, nil }
+func (scalarStmt) Query([]driver.Value) (driver.Rows, error)  { return &scalarRows{}, nil }
+func (r *scalarRows) Columns() []string                       { return []string{"v"} }
+func (r *scalarRows) Close() error                            { return nil }
+func (r *scalarRows) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	r.done = true
+	dest[0] = []byte("42")
+	return nil
+}
+
+func TestExpectScalarAndWaitForMO(t *testing.T) {
+	sql.Register("esqltvf-scalar", scalarDriver{})
+	db, err := sql.Open("esqltvf-scalar", "any")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if err := waitForMO(ctx, db); err != nil {
+		t.Fatalf("waitForMO: %v", err)
+	}
+	if err := expectScalar(ctx, db, "select 42", "42"); err != nil {
+		t.Fatalf("expectScalar match: %v", err)
+	}
+	if err := expectScalar(ctx, db, "select 42", "43"); err == nil {
+		t.Fatal("expectScalar should report a mismatch")
 	}
 }
