@@ -128,6 +128,15 @@ func TestUpgradeEntries(t *testing.T) {
 		"drop view if exists information_schema.collation_character_set_applicability")
 }
 
+func TestInformationSchemaCollationsUpgradeCheckIsExact(t *testing.T) {
+	checkSQL := informationSchemaCollationsCheckSQL()
+	require.Contains(t, checkSQL, "(SELECT COUNT(*) FROM information_schema.COLLATIONS) = ")
+	for _, collation := range sysview.SupportedCollationDefinitions {
+		require.Contains(t, checkSQL, "COLLATION_NAME = '"+collation.Name+"'")
+		require.Contains(t, checkSQL, "CHARACTER_SET_NAME = '"+collation.Charset+"'")
+	}
+}
+
 func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *testing.T) {
 	entry := backfillUserDefinedFunctionArgumentTypes()
 	txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {

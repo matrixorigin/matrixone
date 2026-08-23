@@ -138,7 +138,11 @@ func informationSchemaCollationsCheckSQL() string {
 			"EXISTS (SELECT 1 FROM information_schema.COLLATIONS WHERE %s)", condition,
 		))
 	}
-	return fmt.Sprintf("SELECT 1 FROM information_schema.COLLATIONS WHERE %s LIMIT 1", strings.Join(checks, " AND "))
+	return fmt.Sprintf(
+		"SELECT 1 FROM information_schema.COLLATIONS WHERE (SELECT COUNT(*) FROM information_schema.COLLATIONS) = %d AND %s LIMIT 1",
+		len(sysview.SupportedCollationDefinitions),
+		strings.Join(checks, " AND "),
+	)
 }
 
 func upgradeInformationSchemaCollationCharacterSetApplicability() versions.UpgradeEntry {
