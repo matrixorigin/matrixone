@@ -896,7 +896,7 @@ set mo_table_stats.use_old_impl = yes;
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
 ➤ name[12,5000,0]  ¦  rows[-5,64,0]  ¦  size[-5,64,0]  ¦  owner[12,300,0]  𝄀
 character_sets  ¦  3  ¦  96  ¦  accountadmin  𝄀
-collations  ¦  0  ¦  0  ¦  accountadmin  𝄀
+collations  ¦  6  ¦  192  ¦  accountadmin  𝄀
 column_privileges  ¦  0  ¦  0  ¦  accountadmin  𝄀
 engines  ¦  0  ¦  0  ¦  accountadmin  𝄀
 events  ¦  0  ¦  0  ¦  accountadmin  𝄀
