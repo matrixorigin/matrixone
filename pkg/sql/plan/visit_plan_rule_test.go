@@ -1506,6 +1506,23 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		}}))
 	})
 
+	t.Run("dependency unwrap preserves physical casts", func(t *testing.T) {
+		numericSource := makePlan2Int64ConstExprWithType(2026)
+		yearType := types.T_year.ToType()
+		yearCast, err := makePlan2CastExpr(ctx, numericSource, makePlan2Type(&yearType))
+		require.NoError(t, err)
+		unwrapped, changed := unwrapNumericPrefixDependentImplicitCast(yearCast)
+		require.False(t, changed, yearCast.String())
+		require.Same(t, yearCast, unwrapped)
+
+		floatType := types.T_float64.ToType()
+		floatCast, err := makePlan2CastExpr(ctx, decimalColumn(), makePlan2Type(&floatType))
+		require.NoError(t, err)
+		unwrapped, changed = unwrapNumericPrefixDependentImplicitCast(floatCast)
+		require.True(t, changed, floatCast.String())
+		require.Equal(t, types.T_decimal128, types.T(unwrapped.Typ.Id))
+	})
+
 	for _, test := range []struct {
 		name   string
 		fnName string

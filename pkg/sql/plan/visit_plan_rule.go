@@ -736,8 +736,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// child. Rebind the enclosing consumer from numeric source domains
 				// so a DECIMAL peer is not left behind a FLOAT cast selected while
 				// the parameter marker was still TEXT.
-				unwrapped := unwrapPreparedImplicitCast(arg, false)
-				if unwrapped != arg {
+				unwrapped, changed := unwrapNumericPrefixDependentImplicitCast(arg)
+				if changed {
 					boundArgs[i] = unwrapped
 					needResetFunction = true
 					compareArgTypes = true
@@ -811,9 +811,6 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		rewritten := &plan.Expr{
 			Typ:  typ,
 			Expr: param.Expr,
-		}
-		if rule.numericPrefixParamPositions[int(exprImpl.P.Pos)] {
-			rule.markNumericPrefixDependent(e, rewritten)
 		}
 		return rewritten, nil
 	case *plan.Expr_List:
@@ -1248,6 +1245,15 @@ func unwrapNumericPrefixDependentImplicitCast(expr *plan.Expr) (*plan.Expr, bool
 		}
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 		if overload != 0 {
+			break
+		}
+		target := makeTypeByPlan2Expr(current)
+		source := makeTypeByPlan2Expr(fn.Args[0])
+		// Dependency propagation only invalidates the provisional coercions
+		// selected while a numeric common-type child was still TEXT. Physical
+		// casts such as YEAR and DECIMAL remain part of the executor/index ABI.
+		if !source.IsNumeric() ||
+			(!target.Oid.IsFloat() && !target.Oid.IsMySQLString()) {
 			break
 		}
 		current = fn.Args[0]
