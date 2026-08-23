@@ -997,8 +997,20 @@ func initExecuteStmtParamWithResolverInSession(
 	// SELECT ?.  Specialize an isolated copy after the values and protocol types
 	// are available; never mutate PrepareStmt.PreparePlan or its cached compile.
 	runtimeSpecialized := false
+	preparedDML := false
+	if executionPlan != nil && executionPlan.GetQuery() != nil {
+		switch executionPlan.GetQuery().StmtType {
+		case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE, plan.Query_MERGE:
+			preparedDML = true
+		}
+	}
+	// DML plans contain positional projections consumed by the write operator.
+	// Rebinding their parameter expressions on an execute-time copy can leave
+	// those projections inconsistent with UpdateCtx/InsertCtx column positions.
+	// The cached parameterized compile already receives the binary values through
+	// the execution batch, so keep DML on that path and specialize only reads.
 	if execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(cwft.paramVals) > 0 && executionPlan != nil &&
-		(executionPlan.GetQuery() != nil || executionPlan.GetDdl() != nil) {
+		(executionPlan.GetQuery() != nil || executionPlan.GetDdl() != nil) && !preparedDML {
 		runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
 			reqCtx, executionPlan, cwft.paramVals)
 		if err != nil {

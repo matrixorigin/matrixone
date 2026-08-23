@@ -3871,6 +3871,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 	if err != nil {
 		return false, err
 	}
+	refreshPreparedPlanProjectionTypes(plan0)
 
 	// A direct SELECT parameter is part of the result-column contract. Its
 	// execute-time numeric domain must therefore be reflected in the copied
@@ -3883,6 +3884,86 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		}
 	}
 	return specialized, nil
+}
+
+// refreshPreparedPlanProjectionTypes repairs column expressions whose source
+// expression changed type while a prepared plan was rebound.  Aggregate
+// result columns are represented by synthetic column references, so the
+// expression visitor cannot update their cached type after AggList is
+// rebound.  Leaving those types stale makes the executor produce (for
+// example) DECIMAL128 while the protocol layer still decodes the result as
+// FLOAT64.
+func refreshPreparedPlanProjectionTypes(plan0 *Plan) {
+	query := plan0.GetQuery()
+	if query == nil {
+		return
+	}
+
+	visited := make(map[int32]bool)
+	var refreshNode func(int32)
+	refreshNode = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+			return
+		}
+		visited[nodeID] = true
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		for _, childID := range node.Children {
+			refreshNode(childID)
+		}
+
+		if node.NodeType == plan.Node_AGG {
+			groupSize := int32(len(node.GroupBy))
+			for _, expr := range node.ProjectList {
+				if expr == nil {
+					continue
+				}
+				col := expr.GetCol()
+				if col == nil {
+					continue
+				}
+				switch col.RelPos {
+				case -1:
+					if col.ColPos >= 0 && int(col.ColPos) < len(node.GroupBy) {
+						expr.Typ = node.GroupBy[col.ColPos].Typ
+					}
+				case -2:
+					aggPos := col.ColPos - groupSize
+					if aggPos >= 0 && int(aggPos) < len(node.AggList) {
+						expr.Typ = node.AggList[aggPos].Typ
+					}
+				}
+			}
+		}
+
+		// A projection node exposes its child columns through RelPos == 0.
+		// Propagate the child's refreshed type so the final result metadata and
+		// the vector decoder agree with the runtime expression domain.
+		if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
+			childID := node.Children[0]
+			if childID >= 0 && int(childID) < len(query.Nodes) {
+				child := query.Nodes[childID]
+				if child != nil {
+					for _, expr := range node.ProjectList {
+						if expr == nil {
+							continue
+						}
+						col := expr.GetCol()
+						if col == nil || col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+							continue
+						}
+						expr.Typ = child.ProjectList[col.ColPos].Typ
+					}
+				}
+			}
+		}
+	}
+
+	for _, step := range query.Steps {
+		refreshNode(step)
+	}
 }
 
 func runtimeParamHasExplicitType(value any) bool {

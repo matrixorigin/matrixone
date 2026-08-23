@@ -308,6 +308,35 @@ func TestPreparedNumericAggregateParameterIdentity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPreparedAggregateRuntimeTypeReachesResultProjection(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select sum(?) from nation")
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(),
+		prepare.Plan,
+		[]any{ParamValue{
+			Value:            "7",
+			RuntimeType:      types.T_int64.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	columns := GetResultColumnsFromPlan(filled)
+	require.Len(t, columns, 1)
+	require.Equal(t, int32(types.T_decimal128), columns[0].Typ.Id)
+	for _, node := range filled.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col != nil && col.RelPos == -2 {
+				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+			}
+		}
+	}
+}
+
 func TestPreparedNtileParameter(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t,
 		"select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation")
