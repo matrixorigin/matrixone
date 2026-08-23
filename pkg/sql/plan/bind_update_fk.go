@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -50,6 +51,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 	newColName2Idx map[string]int32,
 	targetRowNumberPos []int32,
 	targetBranchActivePos []int32,
+	physicalTargetActivePos []int32,
 	deferRepeatedPhysicalTargetMerge bool,
 ) (int32, int32, *plan.Node, error) {
 	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
@@ -72,6 +74,8 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			continue
 		}
 		repeatedPhysicalTarget := targetCountByTableID[tableDef.TblId] > 1
+		canonicalRepeatedTarget := repeatedPhysicalTarget && !deferRepeatedPhysicalTargetMerge &&
+			(len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0)
 		if repeatedPhysicalTarget && !deferRepeatedPhysicalTargetMerge {
 			if _, handled := handledFinalTable[tableDef.TblId]; handled {
 				continue
@@ -81,7 +85,26 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 
 		alias := dmlCtx.aliases[i]
 		var targetSelected *plan.Expr
-		if targetRowNumberPos[i] >= 0 {
+		if canonicalRepeatedTarget {
+			var canonicalErr error
+			lastNodeID, selectNodeTag, selectNode, targetSelected, canonicalErr =
+				builder.appendRepeatedPhysicalTargetCanonicalProjection(
+					bindCtx,
+					dmlCtx,
+					tableDef,
+					alias,
+					lastNodeID,
+					selectNodeTag,
+					selectNode,
+					oldColName2Idx,
+					newColName2Idx,
+					targetRowNumberPos,
+					targetBranchActivePos,
+				)
+			if canonicalErr != nil {
+				return 0, 0, nil, canonicalErr
+			}
+		} else if targetRowNumberPos[i] >= 0 {
 			targetSelected, err = builder.buildTargetSelectedExpr(
 				selectNodeTag, selectNode, targetRowNumberPos[i], targetBranchActivePos[i])
 			if err != nil {
@@ -89,6 +112,23 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			}
 		}
 		if !repeatedPhysicalTarget || !deferRepeatedPhysicalTargetMerge {
+			selfTargetSelectors := &updateSelfTargetSelectors{
+				targetRowNumberPos:      targetRowNumberPos,
+				targetActivePos:         targetBranchActivePos,
+				targetRowIDPos:          make([]int32, len(dmlCtx.tableDefs)),
+				physicalTargetActivePos: physicalTargetActivePos,
+			}
+			for targetIdx := range selfTargetSelectors.targetRowIDPos {
+				selfTargetSelectors.targetRowIDPos[targetIdx] = -1
+			}
+			for targetIdx, targetDef := range dmlCtx.tableDefs {
+				if len(dmlCtx.updateCol2Expr[targetIdx]) > 0 && targetDef.TblId == tableDef.TblId {
+					selfTargetSelectors.targetIndexes = append(
+						selfTargetSelectors.targetIndexes, targetIdx)
+					selfTargetSelectors.targetRowIDPos[targetIdx] =
+						oldColName2Idx[dmlCtx.aliases[targetIdx]+"."+catalog.Row_ID]
+				}
+			}
 			lastNodeID, selectNodeTag, err = builder.appendUpdateParentForeignKeyChecks(
 				bindCtx,
 				tableDef,
@@ -99,6 +139,8 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 				newColName2Idx,
 				targetSelected,
 				false,
+				selfTargetSelectors,
+				nil,
 			)
 			if err != nil {
 				return 0, 0, nil, err
@@ -106,8 +148,12 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			selectNode = builder.updateInputProjectNode(lastNodeID)
 		}
 		if targetRowNumberPos[i] >= 0 {
+			activePos := targetBranchActivePos[i]
+			if canonicalRepeatedTarget {
+				activePos = physicalTargetActivePos[i]
+			}
 			targetSelected, err = builder.buildTargetSelectedExpr(
-				selectNodeTag, selectNode, targetRowNumberPos[i], targetBranchActivePos[i])
+				selectNodeTag, selectNode, targetRowNumberPos[i], activePos)
 			if err != nil {
 				return 0, 0, nil, err
 			}
@@ -435,6 +481,8 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetParentForeignKeyChecks(
 			newColName2Idx,
 			targetSelected,
 			true,
+			nil,
+			nil,
 		)
 		if err != nil {
 			return 0, 0, nil, err
@@ -532,14 +580,193 @@ type updateParentForeignKey struct {
 	fk            *plan.ForeignKeyDef
 }
 
-// validateDistinctUpdateForeignKeyMutationTargets protects the Stage-1
-// distinct-table planner invariant: one statement may have only one physical
-// write path for a table. Parent actions are separate MULTI_UPDATE steps, so a
-// child that is also an explicit target, or is reached from two parent targets,
-// cannot be safely planned until those paths share one final-row merger.
+type updateSelfMutationRows struct {
+	nodeID         int32
+	tag            int32
+	rootSourceStep int32
+}
+
+type updateAffectedRowsColumn struct {
+	pos int32
+}
+
+type updateForeignKeyActionEdgeKey struct {
+	parentTableID uint64
+	childTableID  uint64
+	signature     string
+}
+
+func makeUpdateForeignKeyActionEdgeKey(
+	parentTableID uint64,
+	childTableID uint64,
+	fk *plan.ForeignKeyDef,
+) updateForeignKeyActionEdgeKey {
+	return updateForeignKeyActionEdgeKey{
+		parentTableID: parentTableID,
+		childTableID:  childTableID,
+		signature: fmt.Sprintf(
+			"%s/%v/%v", fk.Name, fk.Cols, fk.ForeignCols),
+	}
+}
+
+type updateSelfTargetSelectors struct {
+	targetIndexes           []int
+	targetRowNumberPos      []int32
+	targetActivePos         []int32
+	targetRowIDPos          []int32
+	physicalTargetActivePos []int32
+}
+
+// appendRepeatedPhysicalTargetCanonicalProjection gives FK checks one physical
+// row image when several writable aliases refer to the same table. Each alias
+// keeps its own semantic active column, while the parent action is eligible when
+// any alias is active. Old/new values are selected from the active alias rather
+// than implicitly taking the first alias in planner order.
+func (builder *QueryBuilder) appendRepeatedPhysicalTargetCanonicalProjection(
+	bindCtx *BindContext,
+	dmlCtx *DMLContext,
+	tableDef *plan.TableDef,
+	canonicalAlias string,
+	lastNodeID int32,
+	inputTag int32,
+	inputNode *plan.Node,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+	targetRowNumberPos []int32,
+	targetActivePos []int32,
+) (int32, int32, *plan.Node, *plan.Expr, error) {
+	targetIndexes := make([]int, 0, 2)
+	selectors := make([]*plan.Expr, 0, 2)
+	for targetIdx, targetDef := range dmlCtx.tableDefs {
+		if len(dmlCtx.updateCol2Expr[targetIdx]) == 0 || targetDef.TblId != tableDef.TblId {
+			continue
+		}
+		if targetRowNumberPos[targetIdx] < 0 {
+			return 0, 0, nil, nil, moerr.NewInternalError(
+				builder.GetContext(), "repeated physical UPDATE target selector is unavailable")
+		}
+		selected, err := builder.buildTargetSelectedExpr(
+			inputTag, inputNode, targetRowNumberPos[targetIdx], targetActivePos[targetIdx])
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+		targetIndexes = append(targetIndexes, targetIdx)
+		selectors = append(selectors, selected)
+	}
+	if len(selectors) == 0 {
+		return 0, 0, nil, nil, moerr.NewInternalError(
+			builder.GetContext(), "repeated physical UPDATE target has no writable alias")
+	}
+
+	project := make([]*plan.Expr, len(inputNode.ProjectList))
+	for pos, expr := range inputNode.ProjectList {
+		project[pos] = &plan.Expr{
+			Typ:  expr.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: inputTag, ColPos: int32(pos)}},
+		}
+	}
+	buildSelectedValue := func(values []*plan.Expr) (*plan.Expr, error) {
+		value := DeepCopyExpr(values[len(values)-1])
+		for idx := len(values) - 2; idx >= 0; idx-- {
+			var err error
+			value, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+				DeepCopyExpr(selectors[idx]), DeepCopyExpr(values[idx]), value,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+		return value, nil
+	}
+	for _, col := range tableDef.Cols {
+		// ROWID has no CASE overload. Self-action matching and root exclusion
+		// preserve every alias ROWID independently through targetRowIDPos.
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		oldValues := make([]*plan.Expr, len(targetIndexes))
+		updatedValues := make([]*plan.Expr, len(targetIndexes))
+		changed := false
+		for idx, targetIdx := range targetIndexes {
+			qualifiedName := dmlCtx.aliases[targetIdx] + "." + col.Name
+			oldPos, ok := oldColName2Idx[qualifiedName]
+			if !ok {
+				return 0, 0, nil, nil, moerr.NewInternalErrorf(
+					builder.GetContext(), "repeated physical UPDATE old column %s is unavailable", col.Name)
+			}
+			oldValues[idx] = &plan.Expr{
+				Typ:  inputNode.ProjectList[oldPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: inputTag, ColPos: oldPos}},
+			}
+			if newPos, updated := newColName2Idx[qualifiedName]; updated {
+				changed = true
+				updatedValues[idx] = &plan.Expr{
+					Typ:  inputNode.ProjectList[newPos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: inputTag, ColPos: newPos}},
+				}
+			}
+		}
+		oldValue, err := buildSelectedValue(oldValues)
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+		oldColName2Idx[canonicalAlias+"."+col.Name] = int32(len(project))
+		project = append(project, oldValue)
+		if changed {
+			// Assignments from overlapping aliases merge column-by-column. An
+			// active alias that did not update this column must not mask another
+			// active alias's explicit value.
+			newValue := DeepCopyExpr(oldValue)
+			for idx := len(updatedValues) - 1; idx >= 0; idx-- {
+				if updatedValues[idx] == nil {
+					continue
+				}
+				var buildErr error
+				newValue, buildErr = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+					DeepCopyExpr(selectors[idx]), DeepCopyExpr(updatedValues[idx]), newValue,
+				})
+				if buildErr != nil {
+					return 0, 0, nil, nil, buildErr
+				}
+			}
+			newColName2Idx[canonicalAlias+"."+col.Name] = int32(len(project))
+			project = append(project, newValue)
+		}
+	}
+	physicalSelected := DeepCopyExpr(selectors[0])
+	for idx := 1; idx < len(selectors); idx++ {
+		var err error
+		physicalSelected, err = BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "or", []*plan.Expr{physicalSelected, DeepCopyExpr(selectors[idx])})
+		if err != nil {
+			return 0, 0, nil, nil, err
+		}
+	}
+	physicalSelectedPos := int32(len(project))
+	project = append(project, physicalSelected)
+	outputTag := builder.genNewBindTag()
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{lastNodeID},
+		ProjectList: project,
+		BindingTags: []int32{outputTag},
+	}, bindCtx)
+	outputNode := builder.qry.Nodes[lastNodeID]
+	return lastNodeID, outputTag, outputNode, &plan.Expr{
+		Typ:  outputNode.ProjectList[physicalSelectedPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outputTag, ColPos: physicalSelectedPos}},
+	}, nil
+}
+
+// validateDistinctUpdateForeignKeyMutationTargets builds the complete mutating
+// ON UPDATE action graph before any action MULTI_UPDATE step is appended. The
+// current planner can fold self actions into their physical parent's writer,
+// but it cannot merge row images produced by independent parent paths. Reject
+// those converging paths rather than emitting multiple writers for one table.
 func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext,
+	newColName2Idx map[string]int32,
 ) error {
 	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
 	if err != nil || !enabled {
@@ -547,35 +774,52 @@ func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 	}
 
 	type writeOrigin struct {
-		description    string
-		actionParentID uint64
+		description string
 	}
+	type actionRoot struct {
+		tableDef    *plan.TableDef
+		changedCols map[uint64]struct{}
+		origin      string
+	}
+
 	writeOrigins := make(map[uint64]writeOrigin)
+	rootsByTableID := make(map[uint64]*actionRoot)
+	rootOrder := make([]uint64, 0)
 	for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
 		if len(updateCols) == 0 {
 			continue
 		}
-		tableID := dmlCtx.tableDefs[targetIdx].TblId
-		if _, exists := writeOrigins[tableID]; !exists {
-			writeOrigins[tableID] = writeOrigin{
-				description: fmt.Sprintf("explicit target '%s'", dmlCtx.aliases[targetIdx]),
+		tableDef := dmlCtx.tableDefs[targetIdx]
+		if tableDef == nil {
+			continue
+		}
+		root := rootsByTableID[tableDef.TblId]
+		if root == nil {
+			root = &actionRoot{
+				tableDef:    tableDef,
+				changedCols: make(map[uint64]struct{}),
+				origin:      fmt.Sprintf("explicit target '%s'", dmlCtx.aliases[targetIdx]),
+			}
+			rootsByTableID[tableDef.TblId] = root
+			rootOrder = append(rootOrder, tableDef.TblId)
+			writeOrigins[tableDef.TblId] = writeOrigin{description: root.origin}
+		}
+		alias := dmlCtx.aliases[targetIdx]
+		for _, col := range tableDef.Cols {
+			if _, changed := newColName2Idx[alias+"."+col.Name]; changed {
+				root.changedCols[col.ColId] = struct{}{}
 			}
 		}
 	}
 
-	for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
-		if len(updateCols) == 0 {
-			continue
+	collectAffected := func(
+		parentTableDef *plan.TableDef,
+		changedCols map[uint64]struct{},
+	) ([]updateParentForeignKey, error) {
+		if parentTableDef == nil || len(parentTableDef.RefChildTbls) == 0 || len(changedCols) == 0 {
+			return nil, nil
 		}
-		parentTableDef := dmlCtx.tableDefs[targetIdx]
-		if parentTableDef == nil || len(parentTableDef.RefChildTbls) == 0 {
-			continue
-		}
-
-		parentColIDToName := make(map[uint64]string, len(parentTableDef.Cols))
-		for _, col := range parentTableDef.Cols {
-			parentColIDToName[col.ColId] = col.Name
-		}
+		affected := make([]updateParentForeignKey, 0)
 		visitedChildren := make(map[uint64]struct{}, len(parentTableDef.RefChildTbls))
 		for _, childTableID := range parentTableDef.RefChildTbls {
 			if childTableID == 0 {
@@ -585,18 +829,15 @@ func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 				continue
 			}
 			visitedChildren[childTableID] = struct{}{}
-
 			childObjRef, childTableDef, resolveErr := builder.compCtx.ResolveById(
 				childTableID, bindCtx.snapshot)
 			if resolveErr != nil {
-				return resolveErr
+				return nil, resolveErr
 			}
 			if childTableDef == nil {
-				return moerr.NewInternalErrorf(
+				return nil, moerr.NewInternalErrorf(
 					builder.GetContext(), "foreign-key child table %d not found", childTableID)
 			}
-
-			hasMutation := false
 			for _, fk := range childTableDef.Fkeys {
 				referencesParent := fk.ForeignTbl == parentTableDef.TblId ||
 					(fk.ForeignTbl == 0 && childTableDef.TblId == parentTableDef.TblId)
@@ -605,30 +846,92 @@ func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 					continue
 				}
 				for _, parentColID := range fk.ForeignCols {
-					if _, updated := updateCols[parentColIDToName[parentColID]]; updated {
-						hasMutation = true
+					if _, changed := changedCols[parentColID]; changed {
+						affected = append(affected, updateParentForeignKey{
+							childObjRef: childObjRef, childTableDef: childTableDef, fk: fk,
+						})
 						break
 					}
 				}
-				if hasMutation {
-					break
-				}
 			}
-			if !hasMutation || childTableID == parentTableDef.TblId {
-				// Self-referencing actions already take the established legacy route.
-				continue
+		}
+		sort.SliceStable(affected, func(i, j int) bool {
+			if affected[i].childTableDef.TblId != affected[j].childTableDef.TblId {
+				return affected[i].childTableDef.TblId < affected[j].childTableDef.TblId
 			}
+			return affected[i].fk.Name < affected[j].fk.Name
+		})
+		return affected, nil
+	}
 
-			origin := fmt.Sprintf("foreign key action from '%s'", dmlCtx.aliases[targetIdx])
-			if previousOrigin, exists := writeOrigins[childTableID]; exists {
-				if previousOrigin.actionParentID == parentTableDef.TblId {
-					// Sibling aliases of one physical parent row feed one merged
-					// parent-key transition and therefore one child mutation path.
+	multipleActionsError := func() error {
+		return newRejectedUpdatePlannerRouteError(
+			updateRouteReasonForeignKey,
+			moerr.NewUnsupportedDML(
+				builder.GetContext(), "multiple parent foreign key actions targeting the same child table"),
+		)
+	}
+	var walkActionGraph func(*plan.TableDef, map[uint64]struct{}) error
+	walkActionGraph = func(
+		parentTableDef *plan.TableDef,
+		changedCols map[uint64]struct{},
+	) error {
+		handledSelfEdges := make(map[updateForeignKeyActionEdgeKey]struct{})
+		for {
+			affected, collectErr := collectAffected(parentTableDef, changedCols)
+			if collectErr != nil {
+				return collectErr
+			}
+			addedSelfChange := false
+			for _, action := range affected {
+				if action.childTableDef.TblId != parentTableDef.TblId {
 					continue
 				}
-				childName := childTableDef.Name
-				if childObjRef != nil && childObjRef.ObjName != "" {
-					childName = childObjRef.ObjName
+				edgeKey := makeUpdateForeignKeyActionEdgeKey(
+					parentTableDef.TblId, action.childTableDef.TblId, action.fk)
+				if _, handled := handledSelfEdges[edgeKey]; handled {
+					continue
+				}
+				if len(handledSelfEdges) > 0 {
+					return multipleActionsError()
+				}
+				handledSelfEdges[edgeKey] = struct{}{}
+				for _, childColID := range action.fk.Cols {
+					if _, changed := changedCols[childColID]; !changed {
+						changedCols[childColID] = struct{}{}
+						addedSelfChange = true
+					}
+				}
+			}
+			if !addedSelfChange {
+				break
+			}
+		}
+
+		affected, collectErr := collectAffected(parentTableDef, changedCols)
+		if collectErr != nil {
+			return collectErr
+		}
+		childrenFromParent := make(map[uint64]struct{})
+		for _, action := range affected {
+			childTableID := action.childTableDef.TblId
+			if childTableID == parentTableDef.TblId {
+				continue
+			}
+			if _, duplicate := childrenFromParent[childTableID]; duplicate {
+				return multipleActionsError()
+			}
+			childrenFromParent[childTableID] = struct{}{}
+
+			actionOrigin := fmt.Sprintf(
+				"foreign key action '%s' from table '%s'",
+				action.fk.Name,
+				parentTableDef.Name,
+			)
+			if previousOrigin, exists := writeOrigins[childTableID]; exists {
+				childName := action.childTableDef.Name
+				if action.childObjRef != nil && action.childObjRef.ObjName != "" {
+					childName = action.childObjRef.ObjName
 				}
 				return newUpdatePlannerRouteError(
 					updatePlannerRejected,
@@ -638,14 +941,26 @@ func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 						"overlapping update paths for table '%s': %s and %s",
 						childName,
 						previousOrigin.description,
-						origin,
+						actionOrigin,
 					),
 				)
 			}
-			writeOrigins[childTableID] = writeOrigin{
-				description:    origin,
-				actionParentID: parentTableDef.TblId,
+			writeOrigins[childTableID] = writeOrigin{description: actionOrigin}
+			childChangedCols := make(map[uint64]struct{}, len(action.fk.Cols))
+			for _, childColID := range action.fk.Cols {
+				childChangedCols[childColID] = struct{}{}
 			}
+			if err := walkActionGraph(action.childTableDef, childChangedCols); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, tableID := range rootOrder {
+		root := rootsByTableID[tableID]
+		if err := walkActionGraph(root.tableDef, root.changedCols); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -661,6 +976,8 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	newColName2Idx map[string]int32,
 	targetSelected *plan.Expr,
 	skipSelfReferencingActions bool,
+	selfTargetSelectors *updateSelfTargetSelectors,
+	excludedMutationEdges map[updateForeignKeyActionEdgeKey]struct{},
 ) (int32, int32, error) {
 	if tableDef == nil || len(tableDef.RefChildTbls) == 0 {
 		return lastNodeID, selectNodeTag, nil
@@ -672,6 +989,22 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	}
 	if len(affected) == 0 {
 		return lastNodeID, selectNodeTag, nil
+	}
+	if builder.updateParentActionStack == nil {
+		builder.updateParentActionStack = make(map[uint64]int)
+	}
+	continuingCurrentWriter := excludedMutationEdges != nil
+	if builder.updateParentActionStack[tableDef.TblId] > 0 && !continuingCurrentWriter {
+		return 0, 0, newRejectedUpdatePlannerRouteError(
+			updateRouteReasonForeignKey,
+			moerr.NewUnsupportedDML(builder.GetContext(), "cyclic parent foreign key action graph"),
+		)
+	}
+	if !continuingCurrentWriter {
+		builder.updateParentActionStack[tableDef.TblId]++
+		defer func() {
+			builder.updateParentActionStack[tableDef.TblId]--
+		}()
 	}
 	// PREPARE may happen before the execution transaction exists. Keep a marker
 	// in the serialized plan so compile/run can enforce the actual transaction
@@ -705,24 +1038,6 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	}
 
 	for _, affectedFK := range affected {
-		if affectedFK.childTableDef.TblId == tableDef.TblId {
-			switch affectedFK.fk.OnUpdate {
-			case plan.ForeignKeyDef_RESTRICT,
-				plan.ForeignKeyDef_NO_ACTION,
-				plan.ForeignKeyDef_SET_DEFAULT:
-			case plan.ForeignKeyDef_CASCADE, plan.ForeignKeyDef_SET_NULL:
-				if skipSelfReferencingActions {
-					continue
-				}
-				return 0, 0, newLegacyUpdatePlannerRouteError(
-					updateRouteReasonForeignKey,
-					moerr.NewUnsupportedDML(
-						builder.GetContext(),
-						"self-referencing parent foreign key action",
-					),
-				)
-			}
-		}
 		switch affectedFK.fk.OnUpdate {
 		case plan.ForeignKeyDef_RESTRICT,
 			plan.ForeignKeyDef_NO_ACTION,
@@ -761,6 +1076,11 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 		}
 		if affectedFK.fk.OnUpdate == plan.ForeignKeyDef_CASCADE ||
 			affectedFK.fk.OnUpdate == plan.ForeignKeyDef_SET_NULL {
+			edgeKey := makeUpdateForeignKeyActionEdgeKey(
+				tableDef.TblId, affectedFK.childTableDef.TblId, affectedFK.fk)
+			if _, excluded := excludedMutationEdges[edgeKey]; excluded {
+				continue
+			}
 			mutations = append(mutations, affectedFK)
 		}
 	}
@@ -771,7 +1091,7 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	mutationByChild := make(map[uint64]struct{}, len(mutations))
 	for _, mutation := range mutations {
 		if _, exists := mutationByChild[mutation.childTableDef.TblId]; exists {
-			return 0, 0, newLegacyUpdatePlannerRouteError(
+			return 0, 0, newRejectedUpdatePlannerRouteError(
 				updateRouteReasonForeignKey,
 				moerr.NewUnsupportedDML(
 					builder.GetContext(),
@@ -780,14 +1100,90 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 			)
 		}
 		mutationByChild[mutation.childTableDef.TblId] = struct{}{}
-		if err := builder.validateModernUpdateParentMutation(bindCtx, tableDef, mutation); err != nil {
+		if err := builder.validateModernUpdateParentMutation(tableDef, mutation); err != nil {
 			return 0, 0, err
 		}
 	}
 
-	sourceSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, selectNodeTag)
-	sourceStep := builder.appendStep(sourceSinkID)
+	recursiveExcludedEdges := make(map[updateForeignKeyActionEdgeKey]struct{},
+		len(excludedMutationEdges)+len(mutations))
+	for edgeKey := range excludedMutationEdges {
+		recursiveExcludedEdges[edgeKey] = struct{}{}
+	}
 	for _, mutation := range mutations {
+		recursiveExcludedEdges[makeUpdateForeignKeyActionEdgeKey(
+			tableDef.TblId, mutation.childTableDef.TblId, mutation.fk)] = struct{}{}
+	}
+
+	remainingMutations := make([]updateParentForeignKey, 0, len(mutations))
+	for _, mutation := range mutations {
+		if mutation.childTableDef.TblId != tableDef.TblId {
+			remainingMutations = append(remainingMutations, mutation)
+			continue
+		}
+		// A self action writes the same physical table as the root UPDATE. Fold
+		// its non-root transition rows into the root stream so one MULTI_UPDATE
+		// owns every row and regular hidden-index maintenance stays atomic.
+		sourceSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, selectNodeTag)
+		builder.qry.Nodes[sourceSinkID].ExtraOptions = materialized.CTESinkOption
+		sourceStep := builder.appendStep(sourceSinkID)
+		// Keep every materialized source at two readers. The root source feeds
+		// the final root branch and this action-source copy; the copy then feeds
+		// the parent mapping and explicit-root exclusion joins.
+		actionSourceID := builder.appendTaggedSinkScan(bindCtx, sourceStep, selectNodeTag)
+		actionSourceSinkID := appendSinkNodeWithTag(
+			builder, bindCtx, actionSourceID, selectNodeTag)
+		builder.qry.Nodes[actionSourceSinkID].ExtraOptions = materialized.CTESinkOption
+		actionSourceStep := builder.appendStep(actionSourceSinkID)
+		selfRows := &updateSelfMutationRows{rootSourceStep: sourceStep}
+		if err := builder.appendUpdateParentMutation(
+			bindCtx,
+			tableDef,
+			alias,
+			mutation,
+			actionSourceStep,
+			selectNodeTag,
+			oldColName2Idx,
+			newColName2Idx,
+			targetSelected,
+			true,
+			selfRows,
+			selfTargetSelectors,
+			recursiveExcludedEdges,
+		); err != nil {
+			return 0, 0, err
+		}
+		lastNodeID = selfRows.nodeID
+		selectNodeTag = selfRows.tag
+		if selfTargetSelectors != nil {
+			targetSelected = nil
+			for _, targetIdx := range selfTargetSelectors.targetIndexes {
+				rowNumberPos := selfTargetSelectors.targetRowNumberPos[targetIdx]
+				if rowNumberPos < 0 {
+					continue
+				}
+				var buildErr error
+				targetSelected, buildErr = builder.buildTargetSelectedExpr(
+					selectNodeTag,
+					builder.updateInputProjectNode(lastNodeID),
+					rowNumberPos,
+					selfTargetSelectors.physicalTargetActivePos[targetIdx],
+				)
+				if buildErr != nil {
+					return 0, 0, buildErr
+				}
+				break
+			}
+		}
+	}
+	if len(remainingMutations) == 0 {
+		return lastNodeID, selectNodeTag, nil
+	}
+
+	sourceSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, selectNodeTag)
+	builder.qry.Nodes[sourceSinkID].ExtraOptions = materialized.CTESinkOption
+	sourceStep := builder.appendStep(sourceSinkID)
+	for _, mutation := range remainingMutations {
 		if err := builder.appendUpdateParentMutation(
 			bindCtx,
 			tableDef,
@@ -798,12 +1194,35 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 			oldColName2Idx,
 			newColName2Idx,
 			targetSelected,
+			false,
+			nil,
+			nil,
+			nil,
 		); err != nil {
 			return 0, 0, err
 		}
 	}
 	lastNodeID = builder.appendTaggedSinkScan(bindCtx, sourceStep, selectNodeTag)
 	return lastNodeID, selectNodeTag, nil
+}
+
+func (builder *QueryBuilder) appendUpdateRetagProject(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	inputTag int32,
+	outputTag int32,
+) int32 {
+	inputProject := getProjectionByLastNodeWithTag(builder, lastNodeID, inputTag)
+	projectList := make([]*plan.Expr, len(inputProject))
+	for i, expr := range inputProject {
+		projectList[i] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: inputTag, ColPos: int32(i),
+		}}}
+	}
+	return builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+		ProjectList: projectList, BindingTags: []int32{outputTag},
+	}, bindCtx)
 }
 
 func (builder *QueryBuilder) collectUpdateParentForeignKeys(
@@ -1100,7 +1519,6 @@ func updateParentReferenceIsUnique(
 }
 
 func (builder *QueryBuilder) validateModernUpdateParentMutation(
-	bindCtx *BindContext,
 	parentTableDef *plan.TableDef,
 	affectedFK updateParentForeignKey,
 ) error {
@@ -1108,12 +1526,6 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 	ensureName2ColIndexForReplace(childTableDef)
 	if err := builder.validateModernUpdateParentRowClosure(parentTableDef, affectedFK); err != nil {
 		return err
-	}
-	if childTableDef.TblId == parentTableDef.TblId {
-		return newLegacyUpdatePlannerRouteError(
-			updateRouteReasonForeignKey,
-			moerr.NewUnsupportedDML(builder.GetContext(), "self-referencing parent foreign key action"),
-		)
 	}
 	_, hasIrregularIndex := getValidIndexes(childTableDef)
 	if hasIrregularIndex {
@@ -1127,27 +1539,6 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 			builder.GetContext(),
 			"parent foreign key action on partitioned child table",
 		)
-	}
-
-	childColIDToName := make(map[uint64]string, len(childTableDef.Cols))
-	for _, col := range childTableDef.Cols {
-		childColIDToName[col.ColId] = col.Name
-	}
-	primaryNames := make(map[string]struct{}, len(childTableDef.Pkey.Names)+1)
-	primaryNames[childTableDef.Pkey.PkeyColName] = struct{}{}
-	for _, name := range childTableDef.Pkey.Names {
-		primaryNames[name] = struct{}{}
-	}
-	for _, childColID := range affectedFK.fk.Cols {
-		if _, ok := primaryNames[childColIDToName[childColID]]; ok {
-			return newLegacyUpdatePlannerRouteError(
-				updateRouteReasonForeignKey,
-				moerr.NewUnsupportedDML(
-					builder.GetContext(),
-					"parent foreign key action changing child primary key",
-				),
-			)
-		}
 	}
 
 	updatedChildCols := make(map[uint64]struct{}, len(affectedFK.fk.Cols))
@@ -1169,35 +1560,6 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 					builder.GetContext(),
 					"parent foreign key action changing child column constrained by another foreign key",
 				)
-			}
-		}
-	}
-	visited := make(map[uint64]struct{}, len(childTableDef.RefChildTbls))
-	for _, grandchildID := range childTableDef.RefChildTbls {
-		if grandchildID == 0 {
-			grandchildID = childTableDef.TblId
-		}
-		if _, ok := visited[grandchildID]; ok {
-			continue
-		}
-		visited[grandchildID] = struct{}{}
-		_, grandchildDef, err := builder.compCtx.ResolveById(grandchildID, bindCtx.snapshot)
-		if err != nil {
-			return err
-		}
-		for _, fk := range grandchildDef.Fkeys {
-			referencesChild := fk.ForeignTbl == childTableDef.TblId ||
-				(fk.ForeignTbl == 0 && grandchildDef.TblId == childTableDef.TblId)
-			if !referencesChild {
-				continue
-			}
-			for _, referencedColID := range fk.ForeignCols {
-				if _, changed := updatedChildCols[referencedColID]; changed {
-					return moerr.NewNotSupported(
-						builder.GetContext(),
-						"recursive parent foreign key action graph",
-					)
-				}
 			}
 		}
 	}
@@ -1241,16 +1603,6 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 			return builder.newUnsupportedUpdateParentRowClosureError()
 		}
 	}
-	for _, idxDef := range childTableDef.Indexes {
-		if !idxDef.Unique {
-			continue
-		}
-		for _, part := range idxDef.Parts {
-			if _, changed := updatedChildNames[catalog.ResolveAlias(part)]; changed {
-				return builder.newUnsupportedUpdateParentRowClosureError()
-			}
-		}
-	}
 	if childTableDef.ClusterBy != nil &&
 		planutil.JudgeIsCompositeClusterByColumn(childTableDef.ClusterBy.Name) {
 		for _, colName := range planutil.SplitCompositeClusterByColumnName(childTableDef.ClusterBy.Name) {
@@ -1283,6 +1635,10 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
 	targetSelected *plan.Expr,
+	selfReferencing bool,
+	selfRows *updateSelfMutationRows,
+	selfTargetSelectors *updateSelfTargetSelectors,
+	excludedMutationEdges map[updateForeignKeyActionEdgeKey]struct{},
 ) error {
 	parentNodeID := builder.appendTaggedSinkScan(bindCtx, sourceStep, sourceTag)
 	parentNode := builder.qry.Nodes[parentNodeID]
@@ -1406,12 +1762,215 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		}
 	}
 
+	primaryKeyChanged := false
+	primaryNames := make(map[string]struct{}, len(childTableDef.Pkey.Names)+1)
+	for _, name := range childTableDef.Pkey.Names {
+		primaryNames[catalog.ResolveAlias(name)] = struct{}{}
+	}
+	if len(childTableDef.Pkey.Names) <= 1 && childTableDef.Pkey.PkeyColName != "" {
+		primaryNames[catalog.ResolveAlias(childTableDef.Pkey.PkeyColName)] = struct{}{}
+	}
+	for childPos := range newChildExprs {
+		if _, isPrimary := primaryNames[catalog.ResolveAlias(childTableDef.Cols[childPos].Name)]; isPrimary {
+			primaryKeyChanged = true
+			break
+		}
+	}
 	joinNodeID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		Children: []int32{parentNodeID, childNodeID},
 		JoinType: plan.Node_INNER,
 		OnList:   joinPreds,
 	}, bindCtx)
+	var selfAffectedRowsExprs []*plan.Expr
+	if selfReferencing {
+		// Collapse the child scan and parent transition into one binding before
+		// the explicit-root LEFT join. Keeping the parent value under its old
+		// binding lets join reordering place that binding on a nullable side when
+		// the later join is compiled, which turns a valid CASCADE value into NULL.
+		actionBaseTag := builder.genNewBindTag()
+		actionBaseProject := make([]*plan.Expr, 0, len(childTableDef.Cols)+len(newChildExprs))
+		for colPos, col := range childTableDef.Cols {
+			actionBaseProject = append(actionBaseProject, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: childTag, ColPos: int32(colPos),
+				}},
+			})
+		}
+		actionPositions := make([]int, 0, len(newChildExprs))
+		for colPos := range newChildExprs {
+			actionPositions = append(actionPositions, int(colPos))
+		}
+		sort.Ints(actionPositions)
+		physicalActionExprs := make(map[int32]*plan.Expr, len(newChildExprs))
+		for _, rawColPos := range actionPositions {
+			colPos := int32(rawColPos)
+			physicalPos := int32(len(actionBaseProject))
+			actionBaseProject = append(actionBaseProject, newChildExprs[colPos])
+			physicalActionExprs[colPos] = &plan.Expr{
+				Typ: childTableDef.Cols[colPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: actionBaseTag, ColPos: physicalPos,
+				}},
+			}
+		}
+		joinNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{joinNodeID},
+			ProjectList: actionBaseProject, BindingTags: []int32{actionBaseTag},
+		}, bindCtx)
+		actionBaseSinkID := appendSinkNodeWithTag(builder, bindCtx, joinNodeID, actionBaseTag)
+		if builder.preserveSinkProjection == nil {
+			builder.preserveSinkProjection = make(map[int32]struct{})
+		}
+		builder.preserveSinkProjection[actionBaseSinkID] = struct{}{}
+		actionBaseStep := builder.appendStep(actionBaseSinkID)
+		joinNodeID = builder.appendTaggedSinkScan(bindCtx, actionBaseStep, actionBaseTag)
+		if builder.preserveScanProjection == nil {
+			builder.preserveScanProjection = make(map[int32]struct{})
+		}
+		builder.preserveScanProjection[joinNodeID] = struct{}{}
+		childTag = actionBaseTag
+		newChildExprs = physicalActionExprs
+
+		explicitRootID := builder.appendTaggedSinkScan(bindCtx, sourceStep, sourceTag)
+		explicitRootTag := builder.genNewBindTag()
+		explicitRootID = builder.appendUpdateRetagProject(
+			bindCtx, explicitRootID, sourceTag, explicitRootTag)
+		if targetSelected != nil {
+			explicitFilter := DeepCopyExpr(targetSelected)
+			replaceColRefTag(explicitFilter, sourceTag, explicitRootTag)
+			explicitRootID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_FILTER, Children: []int32{explicitRootID},
+				FilterList: []*plan.Expr{explicitFilter},
+			}, bindCtx)
+		}
+		childRowIDPos := childTableDef.Name2ColIndex[catalog.Row_ID]
+		rootRowIDPos := oldColName2Idx[parentAlias+"."+catalog.Row_ID]
+		rootRowIDPositions := []int32{rootRowIDPos}
+		if selfTargetSelectors != nil && len(selfTargetSelectors.targetIndexes) > 0 {
+			rootRowIDPositions = rootRowIDPositions[:0]
+			for _, targetIdx := range selfTargetSelectors.targetIndexes {
+				if pos := selfTargetSelectors.targetRowIDPos[targetIdx]; pos >= 0 {
+					rootRowIDPositions = append(rootRowIDPositions, pos)
+				}
+			}
+		}
+		var matchExplicitRoot *plan.Expr
+		for _, candidateRowIDPos := range rootRowIDPositions {
+			match, buildErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+				{Typ: childTableDef.Cols[childRowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: childTag, ColPos: childRowIDPos,
+				}}},
+				{Typ: parentNode.ProjectList[candidateRowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: explicitRootTag, ColPos: candidateRowIDPos,
+				}}},
+			})
+			if buildErr != nil {
+				return buildErr
+			}
+			if matchExplicitRoot == nil {
+				matchExplicitRoot = match
+			} else {
+				matchExplicitRoot, buildErr = BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "or", []*plan.Expr{matchExplicitRoot, match})
+				if buildErr != nil {
+					return buildErr
+				}
+			}
+		}
+		joinNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN, Children: []int32{joinNodeID, explicitRootID},
+			JoinType: plan.Node_LEFT, OnList: []*plan.Expr{matchExplicitRoot},
+		}, bindCtx)
+		matchedRoot, buildErr := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "isnotnull", []*plan.Expr{{
+				Typ: parentNode.ProjectList[rootRowIDPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: explicitRootTag, ColPos: rootRowIDPos,
+				}},
+			}})
+		if buildErr != nil {
+			return buildErr
+		}
+		multiTargetSelectors := false
+		if selfTargetSelectors != nil {
+			for _, targetIdx := range selfTargetSelectors.targetIndexes {
+				if selfTargetSelectors.targetRowNumberPos[targetIdx] >= 0 {
+					multiTargetSelectors = true
+					break
+				}
+			}
+		}
+		if multiTargetSelectors {
+			selfAffectedRowsExprs = make([]*plan.Expr, 0, len(selfTargetSelectors.targetIndexes))
+			for _, targetIdx := range selfTargetSelectors.targetIndexes {
+				activePos := selfTargetSelectors.targetActivePos[targetIdx]
+				selfAffectedRowsExprs = append(selfAffectedRowsExprs, &plan.Expr{
+					Typ: parentNode.ProjectList[activePos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: explicitRootTag, ColPos: activePos,
+					}},
+				})
+			}
+		} else {
+			selfAffectedRowsExprs = []*plan.Expr{DeepCopyExpr(matchedRoot)}
+		}
+		for colPos, col := range childTableDef.Cols {
+			if col.Name == catalog.Row_ID {
+				continue
+			}
+			if _, foreignKeyActionValue := newChildExprs[int32(colPos)]; foreignKeyActionValue {
+				// The referential action overrides the explicit root image for its
+				// child columns, matching the legacy self-cascade contract.
+				continue
+			}
+			qualifiedName := parentAlias + "." + col.Name
+			rootPos := oldColName2Idx[qualifiedName]
+			if newPos, updated := newColName2Idx[qualifiedName]; updated {
+				rootPos = newPos
+			}
+			rootValue := &plan.Expr{
+				Typ: parentNode.ProjectList[rootPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: explicitRootTag, ColPos: rootPos,
+				}},
+			}
+			childValue := &plan.Expr{
+				Typ:  col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: childTag, ColPos: int32(colPos)}},
+			}
+			mergedValue, mergeErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "if", []*plan.Expr{DeepCopyExpr(matchedRoot), rootValue, childValue})
+			if mergeErr != nil {
+				return mergeErr
+			}
+			newChildExprs[int32(colPos)] = mergedValue
+			if _, isPrimary := primaryNames[catalog.ResolveAlias(col.Name)]; isPrimary {
+				primaryKeyChanged = true
+			}
+		}
+	}
+	if primaryKeyChanged && len(childTableDef.Pkey.Names) > 1 {
+		primaryParts := make([]*plan.Expr, len(childTableDef.Pkey.Names))
+		for i, name := range childTableDef.Pkey.Names {
+			partPos := childTableDef.Name2ColIndex[catalog.ResolveAlias(name)]
+			if replacement, updated := newChildExprs[partPos]; updated {
+				primaryParts[i] = DeepCopyExpr(replacement)
+			} else {
+				primaryParts[i] = &plan.Expr{
+					Typ:  childTableDef.Cols[partPos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: childTag, ColPos: partPos}},
+				}
+			}
+		}
+		compositePrimary, buildErr := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "serial", primaryParts)
+		if buildErr != nil {
+			return buildErr
+		}
+		newChildExprs[childTableDef.Name2ColIndex[childTableDef.Pkey.PkeyColName]] = compositePrimary
+	}
 	if !uniqueReference {
 		mappingTag := builder.genNewBindTag()
 		mappingProjection := make([]*plan.Expr, 0, len(childTableDef.Cols)+len(newChildExprs))
@@ -1425,8 +1984,13 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			})
 		}
 		mappingNewChildExprs := make(map[int32]*plan.Expr, len(newChildExprs))
-		for _, childColID := range affectedFK.fk.Cols {
-			childPos := childColIDToPos[childColID]
+		replacementPositions := make([]int, 0, len(newChildExprs))
+		for childPos := range newChildExprs {
+			replacementPositions = append(replacementPositions, int(childPos))
+		}
+		sort.Ints(replacementPositions)
+		for _, rawChildPos := range replacementPositions {
+			childPos := int32(rawChildPos)
 			newPos := int32(len(mappingProjection))
 			mappingProjection = append(mappingProjection, newChildExprs[childPos])
 			mappingNewChildExprs[childPos] = &plan.Expr{
@@ -1479,6 +2043,62 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		}
 	}
 
+	var oldChildExprs map[int32]*plan.Expr
+	joinNodeID, childTag, newChildExprs, oldChildExprs, selfAffectedRowsExprs, err =
+		builder.appendRecursiveUpdateParentMutations(
+			bindCtx,
+			childTableDef,
+			joinNodeID,
+			childTag,
+			newChildExprs,
+			selfAffectedRowsExprs,
+			excludedMutationEdges,
+		)
+	if err != nil {
+		return err
+	}
+	if selfReferencing {
+		if selfRows == nil {
+			return moerr.NewInternalError(
+				builder.GetContext(), "self-referencing parent action output is unavailable")
+		}
+		// Keep the action row image positional across the root/action merger.
+		// Without a materialization boundary, projection folding can compose the
+		// parent-source expression through both self joins and bind it to the
+		// nullable side of the explicit-root LEFT join.
+		actionImageSinkID := appendSinkNodeWithTag(builder, bindCtx, joinNodeID, childTag)
+		builder.qry.Nodes[actionImageSinkID].ExtraOptions = materialized.CTESinkOption
+		if builder.preserveSinkProjection == nil {
+			builder.preserveSinkProjection = make(map[int32]struct{})
+		}
+		builder.preserveSinkProjection[actionImageSinkID] = struct{}{}
+		actionImageStep := builder.appendStep(actionImageSinkID)
+		joinNodeID = builder.appendTaggedSinkScan(bindCtx, actionImageStep, childTag)
+		if builder.preserveScanProjection == nil {
+			builder.preserveScanProjection = make(map[int32]struct{})
+		}
+		builder.preserveScanProjection[joinNodeID] = struct{}{}
+		selfRows.nodeID, selfRows.tag, err = builder.appendUpdateSelfMutationRows(
+			bindCtx,
+			childTableDef,
+			parentAlias,
+			selfRows.rootSourceStep,
+			sourceTag,
+			oldColName2Idx,
+			newColName2Idx,
+			joinNodeID,
+			childTag,
+			newChildExprs,
+			oldChildExprs,
+			selfAffectedRowsExprs,
+			selfTargetSelectors,
+		)
+		if err == nil {
+			builder.qry.HasForeignKeyAction = true
+		}
+		return err
+	}
+
 	type mutationIndex struct {
 		def      *plan.IndexDef
 		objRef   *plan.ObjectRef
@@ -1498,7 +2118,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 				break
 			}
 		}
-		if !indexAffected {
+		if !indexAffected && !primaryKeyChanged {
 			continue
 		}
 		idxObjRef, idxTableDef, resolveErr := builder.compCtx.ResolveIndexTableByRef(
@@ -1520,11 +2140,11 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			ScanSnapshot: bindCtx.snapshot,
 		}, bindCtx)
 
-		oldKeyExpr, buildErr := builder.buildUpdateMutationIndexKey(
+		oldKeyExpr, buildErr := builder.buildUpdateMutationIndexLookupIdentity(
 			childTableDef,
 			idxDef,
 			childTag,
-			nil,
+			oldChildExprs,
 		)
 		if buildErr != nil {
 			return buildErr
@@ -1547,7 +2167,10 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			return buildErr
 		}
 		joinType := plan.Node_INNER
-		if idxDef.Unique {
+		if idxDef.Unique || primaryKeyChanged {
+			// A PK cascade must preserve the base child row even when a nullable
+			// secondary-index key has no hidden row. Missing old index state only
+			// suppresses index deletion; it must not suppress the child mutation.
 			joinType = plan.Node_LEFT
 		}
 		joinNodeID = builder.appendNode(&plan.Node{
@@ -1582,6 +2205,17 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	finalReplacements := make(map[int32]*plan.Expr, len(newChildExprs))
 	for pos, expr := range newChildExprs {
 		finalReplacements[pos] = expr
+	}
+	pkPos := childTableDef.Name2ColIndex[childTableDef.Pkey.PkeyColName]
+	deletePkPos := pkPos
+	if primaryKeyChanged {
+		deletePkPos = int32(len(actionProjection))
+		oldPkExpr, ok := oldChildExprs[pkPos]
+		if !ok {
+			return moerr.NewInternalError(
+				builder.GetContext(), "parent foreign key action old primary key is unavailable")
+		}
+		actionProjection = append(actionProjection, DeepCopyExpr(oldPkExpr))
 	}
 
 	type mutationIndexPositions struct {
@@ -1629,7 +2263,6 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	}, bindCtx)
 
 	rowIDPos := childTableDef.Name2ColIndex[catalog.Row_ID]
-	pkPos := childTableDef.Name2ColIndex[childTableDef.Pkey.PkeyColName]
 	insertCols := make([]plan.ColRef, 0, len(childTableDef.Cols)-1)
 	for i, col := range childTableDef.Cols {
 		if col.Name == catalog.Row_ID {
@@ -1645,6 +2278,15 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		PrimaryColTyp:      actionProjection[pkPos].Typ,
 	}
 	lockTargets := []*plan.LockTarget{lockTarget}
+	if deletePkPos != pkPos {
+		lockTargets = append(lockTargets, &plan.LockTarget{
+			TableId:            childTableDef.TblId,
+			ObjRef:             affectedFK.childObjRef,
+			PrimaryColIdxInBat: deletePkPos,
+			PrimaryColRelPos:   actionTag,
+			PrimaryColTyp:      actionProjection[deletePkPos].Typ,
+		})
+	}
 	updateCtxList := []*plan.UpdateCtx{{
 		ObjRef:             affectedFK.childObjRef,
 		TableDef:           childTableDef,
@@ -1652,7 +2294,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		IgnoreAffectedRows: true,
 		DeleteCols: []plan.ColRef{
 			{RelPos: actionTag, ColPos: rowIDPos},
-			{RelPos: actionTag, ColPos: pkPos},
+			{RelPos: actionTag, ColPos: deletePkPos},
 		},
 	}}
 	for i, idx := range indexes {
@@ -1706,6 +2348,413 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	builder.appendStep(actionNodeID)
 	builder.qry.HasForeignKeyAction = true
 	return nil
+}
+
+// appendUpdateSelfMutationRows converts the non-root self-cascade rows back to
+// the root UPDATE's positional schema, then unions both row sets. The ordinary
+// UPDATE planner therefore owns base-table and hidden-index maintenance for one
+// physical table in one MULTI_UPDATE node.
+func (builder *QueryBuilder) appendUpdateSelfMutationRows(
+	bindCtx *BindContext,
+	tableDef *plan.TableDef,
+	alias string,
+	sourceStep int32,
+	sourceTag int32,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+	actionNodeID int32,
+	actionTag int32,
+	newChildExprs map[int32]*plan.Expr,
+	oldChildExprs map[int32]*plan.Expr,
+	actionAffectedRowsExprs []*plan.Expr,
+	selfTargetSelectors *updateSelfTargetSelectors,
+) (int32, int32, error) {
+	if len(actionAffectedRowsExprs) == 0 {
+		return 0, 0, moerr.NewInternalError(
+			builder.GetContext(), "self-referencing parent action affected-row selector is unavailable")
+	}
+	rootNodeID := builder.appendTaggedSinkScan(bindCtx, sourceStep, sourceTag)
+	rootInput := getProjectionByLastNodeWithTag(builder, rootNodeID, sourceTag)
+	rootTag := builder.genNewBindTag()
+	rootProject := make([]*plan.Expr, len(rootInput), len(rootInput)+len(newChildExprs))
+	for pos, expr := range rootInput {
+		rootProject[pos] = &plan.Expr{
+			Typ:  expr.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: int32(pos)}},
+		}
+	}
+	replacementPositions := make([]int, 0, len(newChildExprs))
+	for colPos := range newChildExprs {
+		replacementPositions = append(replacementPositions, int(colPos))
+	}
+	sort.Ints(replacementPositions)
+	for _, rawColPos := range replacementPositions {
+		colPos := int32(rawColPos)
+		qualifiedName := alias + "." + tableDef.Cols[colPos].Name
+		if _, exists := newColName2Idx[qualifiedName]; exists {
+			continue
+		}
+		oldPos, exists := oldColName2Idx[qualifiedName]
+		if !exists {
+			return 0, 0, moerr.NewInternalErrorf(
+				builder.GetContext(), "self-referencing parent action column %s is unavailable",
+				tableDef.Cols[colPos].Name)
+		}
+		newColName2Idx[qualifiedName] = int32(len(rootProject))
+		rootProject = append(rootProject, &plan.Expr{
+			Typ: rootInput[oldPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: sourceTag, ColPos: oldPos,
+			}},
+		})
+	}
+	affectedRowsPos := int32(-1)
+	physicalActivePos := int32(-1)
+	multiTarget := false
+	if selfTargetSelectors != nil {
+		for _, targetIdx := range selfTargetSelectors.targetIndexes {
+			if targetIdx >= 0 && targetIdx < len(selfTargetSelectors.targetRowNumberPos) &&
+				selfTargetSelectors.targetRowNumberPos[targetIdx] >= 0 {
+				multiTarget = true
+				break
+			}
+		}
+	}
+	if multiTarget {
+		var rootPhysicalActive *plan.Expr
+		for _, targetIdx := range selfTargetSelectors.targetIndexes {
+			activePos := selfTargetSelectors.targetActivePos[targetIdx]
+			if activePos < 0 || int(activePos) >= len(rootProject) {
+				return 0, 0, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing target active selector is unavailable")
+			}
+			activeExpr := DeepCopyExpr(rootProject[activePos])
+			if rootPhysicalActive == nil {
+				rootPhysicalActive = activeExpr
+				continue
+			}
+			var buildErr error
+			rootPhysicalActive, buildErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "or", []*plan.Expr{rootPhysicalActive, activeExpr})
+			if buildErr != nil {
+				return 0, 0, buildErr
+			}
+		}
+		if rootPhysicalActive == nil {
+			return 0, 0, moerr.NewInternalError(
+				builder.GetContext(), "self-referencing physical target selector is unavailable")
+		}
+		physicalActivePos = int32(len(rootProject))
+		rootProject = append(rootProject, rootPhysicalActive)
+		for _, targetIdx := range selfTargetSelectors.targetIndexes {
+			selfTargetSelectors.physicalTargetActivePos[targetIdx] = physicalActivePos
+		}
+	} else if selfTargetSelectors != nil {
+		affectedRowsPos = int32(len(rootProject))
+		rootProject = append(rootProject, makePlan2BoolConstExprWithType(true))
+	}
+	rootNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{rootNodeID},
+		ProjectList: rootProject, BindingTags: []int32{rootTag},
+	}, bindCtx)
+
+	actionInput := getProjectionByLastNodeWithTag(builder, actionNodeID, actionTag)
+	actionProject := make([]*plan.Expr, len(rootProject))
+	for pos, expr := range rootProject {
+		actionProject[pos] = nullUpdateProjectionExpr(expr.Typ)
+	}
+	for colPos, col := range tableDef.Cols {
+		qualifiedName := alias + "." + col.Name
+		oldPos, ok := oldColName2Idx[qualifiedName]
+		if !ok || oldPos < 0 || int(oldPos) >= len(actionProject) {
+			return 0, 0, moerr.NewInternalErrorf(
+				builder.GetContext(), "self-referencing parent action old column %s is unavailable", col.Name)
+		}
+		oldExpr, changed := oldChildExprs[int32(colPos)]
+		if !changed {
+			oldExpr = &plan.Expr{
+				Typ:  col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: actionTag, ColPos: int32(colPos)}},
+			}
+		}
+		actionProject[oldPos] = DeepCopyExpr(oldExpr)
+
+		newPos, changed := newColName2Idx[qualifiedName]
+		if !changed {
+			continue
+		}
+		if newPos < 0 || int(newPos) >= len(actionProject) {
+			return 0, 0, moerr.NewInternalErrorf(
+				builder.GetContext(), "self-referencing parent action new column %s is unavailable", col.Name)
+		}
+		newExpr, changed := newChildExprs[int32(colPos)]
+		if !changed {
+			newExpr = &plan.Expr{
+				Typ:  actionInput[colPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: actionTag, ColPos: int32(colPos)}},
+			}
+		}
+		actionProject[newPos] = DeepCopyExpr(newExpr)
+	}
+	if multiTarget {
+		for selectorIdx, targetIdx := range selfTargetSelectors.targetIndexes {
+			rowNumberPos := selfTargetSelectors.targetRowNumberPos[targetIdx]
+			activePos := selfTargetSelectors.targetActivePos[targetIdx]
+			if rowNumberPos < 0 || int(rowNumberPos) >= len(actionProject) ||
+				activePos < 0 || int(activePos) >= len(actionProject) {
+				return 0, 0, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing target selector is unavailable")
+			}
+			if selectorIdx >= len(actionAffectedRowsExprs) {
+				return 0, 0, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing alias selector is unavailable")
+			}
+			actionProject[rowNumberPos] = makePlan2Int64ConstExprWithType(1)
+			actionProject[activePos] = DeepCopyExpr(actionAffectedRowsExprs[selectorIdx])
+		}
+		actionProject[physicalActivePos] = makePlan2BoolConstExprWithType(true)
+	} else if affectedRowsPos >= 0 {
+		actionProject[affectedRowsPos] = DeepCopyExpr(actionAffectedRowsExprs[0])
+	}
+	actionOutputTag := builder.genNewBindTag()
+	actionNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{actionNodeID},
+		ProjectList: actionProject, BindingTags: []int32{actionOutputTag},
+	}, bindCtx)
+	actionSinkID := appendSinkNodeWithTag(builder, bindCtx, actionNodeID, actionOutputTag)
+	builder.qry.Nodes[actionSinkID].ExtraOptions = materialized.CTESinkOption
+	if builder.preserveSinkProjection == nil {
+		builder.preserveSinkProjection = make(map[int32]struct{})
+	}
+	builder.preserveSinkProjection[actionSinkID] = struct{}{}
+	actionStep := builder.appendStep(actionSinkID)
+	if builder.preserveScanProjection == nil {
+		builder.preserveScanProjection = make(map[int32]struct{})
+	}
+	actionExclusionID := builder.appendTaggedSinkScan(bindCtx, actionStep, actionOutputTag)
+	builder.preserveScanProjection[actionExclusionID] = struct{}{}
+	actionExclusionTag := builder.genNewBindTag()
+	actionExclusionID = builder.appendUpdateRetagProject(
+		bindCtx, actionExclusionID, actionOutputTag, actionExclusionTag)
+	rowIDPos, ok := oldColName2Idx[alias+"."+catalog.Row_ID]
+	if !ok {
+		return 0, 0, moerr.NewInternalError(
+			builder.GetContext(), "self-referencing parent action rowid is unavailable")
+	}
+	rootRowIDPositions := []int32{rowIDPos}
+	if selfTargetSelectors != nil && len(selfTargetSelectors.targetIndexes) > 0 {
+		rootRowIDPositions = rootRowIDPositions[:0]
+		for _, targetIdx := range selfTargetSelectors.targetIndexes {
+			if pos := selfTargetSelectors.targetRowIDPos[targetIdx]; pos >= 0 {
+				rootRowIDPositions = append(rootRowIDPositions, pos)
+			}
+		}
+	}
+	var rootIsAction *plan.Expr
+	for _, candidateRowIDPos := range rootRowIDPositions {
+		match, buildErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			{
+				Typ: rootProject[candidateRowIDPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: rootTag, ColPos: candidateRowIDPos,
+				}},
+			},
+			{
+				Typ: actionProject[rowIDPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: actionExclusionTag, ColPos: rowIDPos,
+				}},
+			},
+		})
+		if buildErr != nil {
+			return 0, 0, buildErr
+		}
+		if rootIsAction == nil {
+			rootIsAction = match
+		} else {
+			rootIsAction, buildErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "or", []*plan.Expr{rootIsAction, match})
+			if buildErr != nil {
+				return 0, 0, buildErr
+			}
+		}
+	}
+	rootNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN, Children: []int32{rootNodeID, actionExclusionID},
+		JoinType: plan.Node_ANTI, OnList: []*plan.Expr{rootIsAction},
+	}, bindCtx)
+	rootMergedTag := builder.genNewBindTag()
+	rootNodeID = builder.appendUpdateRetagProject(
+		bindCtx, rootNodeID, rootTag, rootMergedTag)
+	rootTag = rootMergedTag
+	rootSinkID := appendSinkNodeWithTag(builder, bindCtx, rootNodeID, rootTag)
+	builder.preserveSinkProjection[rootSinkID] = struct{}{}
+	rootStep := builder.appendStep(rootSinkID)
+	rootNodeID = builder.appendTaggedSinkScan(bindCtx, rootStep, rootTag)
+	builder.preserveScanProjection[rootNodeID] = struct{}{}
+	rootInputTag := builder.genNewBindTag()
+	rootNodeID = builder.appendUpdateRetagProject(bindCtx, rootNodeID, rootTag, rootInputTag)
+
+	actionNodeID = builder.appendTaggedSinkScan(bindCtx, actionStep, actionOutputTag)
+	builder.preserveScanProjection[actionNodeID] = struct{}{}
+	actionInputTag := builder.genNewBindTag()
+	actionNodeID = builder.appendUpdateRetagProject(
+		bindCtx, actionNodeID, actionOutputTag, actionInputTag)
+
+	unionTag := builder.genNewBindTag()
+	unionProject := make([]*plan.Expr, len(rootProject))
+	for pos, expr := range rootProject {
+		unionProject[pos] = &plan.Expr{
+			Typ:  expr.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rootInputTag, ColPos: int32(pos)}},
+		}
+	}
+	unionNodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_UNION_ALL, Children: []int32{rootNodeID, actionNodeID},
+		ProjectList: unionProject, BindingTags: []int32{unionTag},
+	}, bindCtx)
+	validRow, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*plan.Expr{{
+		Typ:  rootProject[rowIDPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: unionTag, ColPos: rowIDPos}},
+	}})
+	if err != nil {
+		return 0, 0, err
+	}
+	unionNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_FILTER, Children: []int32{unionNodeID}, FilterList: []*plan.Expr{validRow},
+	}, bindCtx)
+	outputTag := builder.genNewBindTag()
+	unionNodeID = builder.appendUpdateRetagProject(bindCtx, unionNodeID, unionTag, outputTag)
+	if affectedRowsPos >= 0 {
+		if builder.updateAffectedRowsCols == nil {
+			builder.updateAffectedRowsCols = make(map[uint64]updateAffectedRowsColumn)
+		}
+		builder.updateAffectedRowsCols[tableDef.TblId] = updateAffectedRowsColumn{
+			pos: affectedRowsPos,
+		}
+	}
+	return unionNodeID, outputTag, nil
+}
+
+func (builder *QueryBuilder) appendRecursiveUpdateParentMutations(
+	bindCtx *BindContext,
+	tableDef *plan.TableDef,
+	lastNodeID int32,
+	inputTag int32,
+	replacements map[int32]*plan.Expr,
+	affectedRowsExprs []*plan.Expr,
+	excludedMutationEdges map[updateForeignKeyActionEdgeKey]struct{},
+) (int32, int32, map[int32]*plan.Expr, map[int32]*plan.Expr, []*plan.Expr, error) {
+	if tableDef == nil || len(replacements) == 0 {
+		return 0, 0, nil, nil, nil, moerr.NewInternalError(
+			builder.GetContext(), "parent foreign key action row image is incomplete")
+	}
+
+	actionTag := builder.genNewBindTag()
+	projectList := make([]*plan.Expr, len(tableDef.Cols))
+	oldColName2Idx := make(map[string]int32, len(tableDef.Cols))
+	newColName2Idx := make(map[string]int32, len(replacements))
+	alias := tableDef.Name
+	for i, col := range tableDef.Cols {
+		qualifiedName := alias + "." + col.Name
+		oldColName2Idx[qualifiedName] = int32(i)
+		if replacement, updated := replacements[int32(i)]; updated {
+			projectList[i] = DeepCopyExpr(replacement)
+			newColName2Idx[qualifiedName] = int32(i)
+			continue
+		}
+		projectList[i] = &plan.Expr{
+			Typ:  col.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: inputTag, ColPos: int32(i)}},
+		}
+	}
+
+	replacementPositions := make([]int, 0, len(replacements))
+	for pos := range replacements {
+		replacementPositions = append(replacementPositions, int(pos))
+	}
+	sort.Ints(replacementPositions)
+	for _, rawPos := range replacementPositions {
+		pos := int32(rawPos)
+		col := tableDef.Cols[pos]
+		oldColName2Idx[alias+"."+col.Name] = int32(len(projectList))
+		projectList = append(projectList, &plan.Expr{
+			Typ:  col.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: inputTag, ColPos: pos}},
+		})
+	}
+	affectedRowsPos := int32(len(projectList))
+	for _, affectedRowsExpr := range affectedRowsExprs {
+		projectList = append(projectList, DeepCopyExpr(affectedRowsExpr))
+	}
+
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+		ProjectList: projectList, BindingTags: []int32{actionTag},
+	}, bindCtx)
+	checkedNodeID, checkedTag := lastNodeID, actionTag
+	if len(tableDef.Checks) > 0 {
+		var err error
+		checkedNodeID, err = appendCheckConstraintPlanWithColLookup(
+			builder,
+			bindCtx,
+			tableDef,
+			checkedNodeID,
+			checkedTag,
+			func(colName string) (int32, bool) {
+				pos, ok := tableDef.Name2ColIndex[colName]
+				return pos, ok
+			},
+			false,
+		)
+		if err != nil {
+			return 0, 0, nil, nil, nil, err
+		}
+	}
+	var err error
+	checkedNodeID, checkedTag, err = builder.appendUpdateParentForeignKeyChecks(
+		bindCtx,
+		tableDef,
+		alias,
+		checkedNodeID,
+		checkedTag,
+		oldColName2Idx,
+		newColName2Idx,
+		nil,
+		false,
+		nil,
+		excludedMutationEdges,
+	)
+	if err != nil {
+		return 0, 0, nil, nil, nil, err
+	}
+	checkedProject := getProjectionByLastNodeWithTag(builder, checkedNodeID, checkedTag)
+	newExprs := make(map[int32]*plan.Expr, len(replacements))
+	oldExprs := make(map[int32]*plan.Expr, len(replacements))
+	for pos := range replacements {
+		qualifiedName := alias + "." + tableDef.Cols[pos].Name
+		newPos := newColName2Idx[qualifiedName]
+		oldPos := oldColName2Idx[qualifiedName]
+		newExprs[pos] = &plan.Expr{
+			Typ:  checkedProject[newPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: checkedTag, ColPos: newPos}},
+		}
+		oldExprs[pos] = &plan.Expr{
+			Typ:  checkedProject[oldPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: checkedTag, ColPos: oldPos}},
+		}
+	}
+	checkedAffectedRowsExprs := make([]*plan.Expr, len(affectedRowsExprs))
+	for idx := range affectedRowsExprs {
+		pos := affectedRowsPos + int32(idx)
+		checkedAffectedRowsExprs[idx] = &plan.Expr{
+			Typ: checkedProject[pos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: checkedTag, ColPos: pos,
+			}},
+		}
+	}
+	return checkedNodeID, checkedTag, newExprs, oldExprs, checkedAffectedRowsExprs, nil
 }
 
 func (builder *QueryBuilder) appendRowNumberMappingGuardNode(
@@ -1798,26 +2847,34 @@ func (builder *QueryBuilder) appendRowNumberMappingGuardNode(
 	}, bindCtx), nil
 }
 
+func (builder *QueryBuilder) buildUpdateMutationIndexLookupIdentity(
+	tableDef *plan.TableDef,
+	idxDef *plan.IndexDef,
+	tableTag int32,
+	replacements map[int32]*plan.Expr,
+) (*plan.Expr, error) {
+	if !isSpatialIndexDef(idxDef) {
+		return builder.buildUpdateMutationIndexKey(tableDef, idxDef, tableTag, replacements)
+	}
+	pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+	if replacement, ok := replacements[pkPos]; ok {
+		return DeepCopyExpr(replacement), nil
+	}
+	return &plan.Expr{
+		Typ: tableDef.Cols[pkPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: tableTag,
+			ColPos: pkPos,
+		}},
+	}, nil
+}
+
 func (builder *QueryBuilder) buildUpdateMutationIndexKey(
 	tableDef *plan.TableDef,
 	idxDef *plan.IndexDef,
 	tableTag int32,
 	replacements map[int32]*plan.Expr,
 ) (*plan.Expr, error) {
-	if isSpatialIndexDef(idxDef) {
-		pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
-		if replacement, ok := replacements[pkPos]; ok {
-			return DeepCopyExpr(replacement), nil
-		}
-		return &plan.Expr{
-			Typ: tableDef.Cols[pkPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: tableTag,
-				ColPos: pkPos,
-			}},
-		}, nil
-	}
-
 	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 	if err != nil {
 		return nil, err
