@@ -49,7 +49,7 @@ func loadReasonKey(db, index string) string {
 }
 
 func rememberLoadReason(index string, reason LoadMissReason) {
-	if index == "" || reason == "" {
+	if !loadObservationEnabled() || index == "" || reason == "" {
 		return
 	}
 	now := time.Now()
@@ -76,6 +76,9 @@ func rememberLoadReason(index string, reason LoadMissReason) {
 }
 
 func takeLoadReason(index string) LoadMissReason {
+	if !loadObservationEnabled() {
+		return ""
+	}
 	now := time.Now()
 	pendingLoadReasons.Lock()
 	defer pendingLoadReasons.Unlock()
@@ -90,6 +93,12 @@ func takeLoadReason(index string) LoadMissReason {
 	return v.reason
 }
 
+func clearReusableLoadGeneration(cfg TableConfig) {
+	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	loadedBasePool.clearIndex(index)
+	loadedTailPool.clear(index)
+}
+
 // invalidateLoadGeneration records why the next load will miss and clears
 // reusable immutable state only when the base itself is known to have changed.
 // It runs from the generic cache's invalidation hook, so the existing cache
@@ -98,10 +107,21 @@ func invalidateLoadGeneration(cfg TableConfig, reason LoadMissReason) {
 	if reason != LoadMissReason("process_shutdown") {
 		rememberLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), reason)
 	}
-	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
 	switch reason {
 	case LoadMissMerge, LoadMissRebuild, LoadMissReason("process_shutdown"):
-		loadedBasePool.clearIndex(index)
-		loadedTailPool.clear(index)
+		if reason == LoadMissReason("process_shutdown") {
+			loadedBasePool.clearAll()
+			loadedTailPool.clearAll()
+		} else {
+			clearReusableLoadGeneration(cfg)
+		}
+	case LoadMissTTLExpired, LoadMissGenerationChange:
+		// Keep the current index's immutable base/tail reusable across CDC and
+		// TTL refreshes, but sweep stale entries belonging to indexes that have
+		// not been queried recently. This gives the process-global pools a
+		// bounded idle lifetime without making every CDC refresh cold-load its
+		// own base.
+		loadedBasePool.evict(time.Now())
+		loadedTailPool.evict(time.Now())
 	}
 }

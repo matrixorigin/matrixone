@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -67,4 +68,26 @@ func TestTailPoolRejectsStaleDeltaInstall(t *testing.T) {
 func TestMergeTailDeletesInitializesInsertOnlyDelta(t *testing.T) {
 	merged := mergeTailDeletes(nil, map[any]int64{"new": 11})
 	require.Equal(t, map[any]int64{"new": int64(11)}, merged)
+}
+
+func TestTailPoolBoundsIndexesAndEvictsIdle(t *testing.T) {
+	p := &tailPool{
+		states:     make(map[string]*tailState),
+		maxEntries: 1,
+		maxBytes:   1 << 20,
+		idleTTL:    time.Hour,
+	}
+	for i, index := range []string{"db.one", "db.two"} {
+		state := newTailState(1, int64(i), []*Segment{NewSegment(index, 0)}, nil)
+		views, _ := p.installAndAcquire(index, state)
+		for _, view := range views {
+			view.Free()
+		}
+	}
+	require.LessOrEqual(t, len(p.states), 1)
+
+	p.idleTTL = time.Nanosecond
+	p.evict(time.Now().Add(time.Second))
+	require.Empty(t, p.states)
+	p.clearAll()
 }

@@ -15,9 +15,12 @@
 package fulltext2
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -47,7 +50,7 @@ func TestImmutableBasePoolSingleflightAndRetire(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			view, err := p.acquire(key, func() (*Segment, error) {
+			view, err := p.acquire(context.Background(), key, func() (*Segment, error) {
 				loads.Add(1)
 				return NewSegment("base-0", 0), nil
 			}, 3)
@@ -69,7 +72,76 @@ func TestImmutableBasePoolSingleflightAndRetire(t *testing.T) {
 	require.Empty(t, p.entries)
 }
 
+func TestImmutableBasePoolWaiterCancellationDoesNotCancelLoader(t *testing.T) {
+	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
+	key := baseKey{index: "db.store", id: "base-0", checksum: "sum", filesize: 1}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	loaderDone := make(chan error, 1)
+	go func() {
+		view, err := p.acquire(context.Background(), key, func() (*Segment, error) {
+			close(started)
+			<-release
+			return NewSegment("base-0", 0), nil
+		}, 0)
+		if view != nil {
+			view.Free()
+		}
+		loaderDone <- err
+	}()
+	<-started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := p.acquire(ctx, key, func() (*Segment, error) {
+		t.Fatalf("canceled waiter became the loader")
+		return nil, nil
+	}, 0)
+	require.ErrorIs(t, err, context.Canceled)
+
+	close(release)
+	require.NoError(t, <-loaderDone)
+	p.clearAll()
+}
+
+func TestImmutableBasePoolBoundsEntriesAndEvictsIdle(t *testing.T) {
+	p := &immutableBasePool{
+		entries:    make(map[baseKey]*baseEntry),
+		maxEntries: 1,
+		maxBytes:   1 << 30,
+		idleTTL:    time.Hour,
+	}
+	for i := 0; i < 2; i++ {
+		key := baseKey{index: "db" + string(rune('0'+i)), id: "base", checksum: "sum", filesize: 1}
+		view, err := p.acquire(context.Background(), key, func() (*Segment, error) {
+			return NewSegment(key.id, 0), nil
+		}, 0)
+		require.NoError(t, err)
+		view.Free()
+	}
+	require.LessOrEqual(t, len(p.entries), 1)
+
+	p.idleTTL = time.Nanosecond
+	p.evict(time.Now().Add(time.Second))
+	require.Empty(t, p.entries)
+	p.clearAll()
+}
+
+func TestImmutableBasePoolLoadFailureDoesNotRetainEntry(t *testing.T) {
+	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
+	key := baseKey{index: "db.store", id: "broken", checksum: "sum", filesize: 1}
+	want := errors.New("load failed")
+	_, err := p.acquire(context.Background(), key, func() (*Segment, error) {
+		return nil, want
+	}, 0)
+	require.ErrorIs(t, err, want)
+	require.Empty(t, p.entries)
+	require.Zero(t, p.totalBytes)
+}
+
 func TestLoadReasonRegistryIsDatabaseQualified(t *testing.T) {
+	cleanup := setLoadObserver(func(LoadEvent) {})
+	defer cleanup()
 	key1 := loadReasonKey("db1", "store")
 	key2 := loadReasonKey("db2", "store")
 	rememberLoadReason(key1, LoadMissCDCFlush)
@@ -77,4 +149,12 @@ func TestLoadReasonRegistryIsDatabaseQualified(t *testing.T) {
 	require.Equal(t, LoadMissCDCFlush, takeLoadReason(key1))
 	require.Equal(t, LoadMissMerge, takeLoadReason(key2))
 	require.Empty(t, takeLoadReason(key1))
+}
+
+func TestLoadReasonRegistryIsDisabledWithObserverOff(t *testing.T) {
+	cleanup := setLoadObserver(nil)
+	defer cleanup()
+	key := loadReasonKey("db", "store")
+	rememberLoadReason(key, LoadMissCDCFlush)
+	require.Empty(t, takeLoadReason(key))
 }

@@ -100,9 +100,11 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // global stats and per-pk liveness. An index created on an empty table has no tag=0
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
-	reason := takeLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable))
-	if reason == "" {
-		reason = LoadMissProcessStart
+	reason := LoadMissProcessStart
+	if loadObservationEnabled() {
+		if observed := takeLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)); observed != "" {
+			reason = observed
+		}
 	}
 	trace := newLoadTrace(s.cfg.IndexTable, reason)
 	canceled := false
@@ -201,6 +203,13 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 // it does not run on a warm query. The bounded registry lets the next load
 // classify its miss without changing VectorIndexSearchIf.
 func (s *Fulltext2Search) OnCacheInvalidated(reason string) {
+	if reason == "" {
+		// A reason-less Remove is used by DROP/restore and by generic cache
+		// callers. No next-load diagnostic event is needed, but reusable state
+		// for this index must not survive the cache ownership boundary.
+		clearReusableLoadGeneration(s.cfg)
+		return
+	}
 	invalidateLoadGeneration(s.cfg, LoadMissReason(reason))
 }
 

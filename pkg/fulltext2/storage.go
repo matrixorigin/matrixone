@@ -322,10 +322,6 @@ func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, err
 	return loadAllBasesUncached(sqlproc, cfg, nil)
 }
 
-func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
-	return loadAllBasesWithPool(sqlproc, cfg, trace)
-}
-
 func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
 	idSQL := fmt.Sprintf("SELECT %s FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
@@ -362,7 +358,7 @@ func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *l
 	return bases, nil
 }
 
-func loadAllBasesWithPool(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
+func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
 	idSQL := fmt.Sprintf("SELECT %s FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
 	var sqlStart time.Time
@@ -411,7 +407,7 @@ func loadAllBasesWithPool(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *l
 			return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s has empty filesize", id))
 		}
 		key := baseKey{index: cfg.DbName + "." + cfg.IndexTable, id: id, checksum: checksum, filesize: filesize}
-		m, lerr := loadedBasePool.acquire(key, func() (*Segment, error) {
+		m, lerr := loadedBasePool.acquire(sqlproc.GetContext(), key, func() (*Segment, error) {
 			return loadFromStorageMetadata(sqlproc, cfg, id, checksum, filesize, recency, trace)
 		}, recency)
 		if lerr != nil {
