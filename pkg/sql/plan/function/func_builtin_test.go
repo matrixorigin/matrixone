@@ -1027,6 +1027,35 @@ func Test_BuiltIn_MoShowVisibleBinGeometryWithLen(t *testing.T) {
 	require.True(t, succeed, tc.info, info)
 }
 
+func Test_BuiltIn_MoShowVisibleBinTextFamilyWithLen(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		want string
+	}{
+		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "TINYTEXT"},
+		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), want: "MEDIUMTEXT"},
+		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), want: "LONGTEXT"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typeBytes, err := types.Encode(&tc.typ)
+			require.NoError(t, err)
+			input := tcTemp{
+				info: "show visible bin text family with len",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+					NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typWithLen}, nil),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil),
+			}
+			tcc := NewFunctionTestCase(proc, input.inputs, input.expect, builtInMoShowVisibleBin)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, input.info, info)
+		})
+	}
+}
+
 func Test_BuiltIn_Repeat(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{
@@ -2230,6 +2259,52 @@ func Test_BuiltIn_Math(t *testing.T) {
 }
 
 // TestBuiltInCurrentTimestamp_ScaleValidation tests scale validation for builtInCurrentTimestamp
+func TestBuiltInCurrentTimeNoArgDefaultsToZeroFSP(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		typ  types.Type
+	}{
+		{name: "current_timestamp", fn: builtInCurrentTimestamp, typ: types.T_timestamp.ToType()},
+		{name: "sysdate", fn: builtInSysdate, typ: types.T_timestamp.ToType()},
+		{name: "current_time", fn: builtInCurrentTime, typ: types.T_time.ToType()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(tc.typ, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, tc.fn(nil, result, proc, 1, nil))
+			require.Equal(t, int32(0), result.GetResultVector().GetType().Scale)
+		})
+	}
+}
+
+// TestBuiltInCurrentTimestampReadsStatementTimePerExecution reuses the same
+// overload ID while changing the statement timestamp. This mirrors repeated
+// executions of a cached NOW() plan and proves the value is read at execution
+// time rather than folded when the plan is built.
+func TestBuiltInCurrentTimestampReadsStatementTimePerExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "now", nil)
+	require.NoError(t, err)
+	overloadID := fn.GetEncodedOverloadID()
+
+	for _, unixNano := range []int64{
+		1704150245123456789,
+		1704150246123456789,
+	} {
+		proc.Base.UnixTime = unixNano
+		out, err := RunFunctionDirectly(proc, overloadID, nil, 1)
+		require.NoError(t, err)
+		require.Equal(t, int32(0), out.GetType().Scale)
+		require.Equal(t,
+			types.UnixNanoToTimestamp(unixNano).TruncateToScale(0),
+			vector.MustFixedColWithTypeCheck[types.Timestamp](out)[0])
+		out.Free(proc.Mp())
+	}
+}
+
 func TestBuiltInCurrentTimestamp_ScaleValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

@@ -59,6 +59,7 @@ import (
 	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -83,6 +84,17 @@ func TestHasOrderedGroupConcat(t *testing.T) {
 	ordered.GroupBy = nil
 	ordered.AggList[0].GetF().AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
 	require.False(t, hasOrderedGroupConcat(ordered))
+}
+
+func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	volatile := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+		Obj: randFn.GetEncodedOverloadID(), ObjName: "rand",
+	}}}}
+	stable := plan2.MakePlan2Int64ConstExprWithType(1)
+
+	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs([]*plan.Expr{stable, volatile}))
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
@@ -1766,6 +1778,81 @@ func TestCompileJoinGroupsExternalSinkScanOwner(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompileMergeGroupDistinctTopology(t *testing.T) {
+	var containsGroup func(vm.Operator) bool
+	containsGroup = func(op vm.Operator) bool {
+		if _, ok := op.(*group.Group); ok {
+			return true
+		}
+		for _, child := range op.GetOperatorBase().Children {
+			if containsGroup(child) {
+				return true
+			}
+		}
+		return false
+	}
+	makeAgg := func(name string, id int32, distinct bool, arg *plan.Expr) *plan.Expr {
+		encoded := function.EncodeOverloadID(id, 0)
+		if distinct {
+			encoded = int64(uint64(encoded) | uint64(function.Distinct))
+		}
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: encoded, ObjName: name},
+				Args: []*plan.Expr{arg},
+			}},
+		}
+	}
+
+	t.Run("mixed count distinct uses local parallel groups", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		node, nodes := newShuffleGroupTestNodes(2)
+		arg := nodes[0].ProjectList[0]
+		node.AggList = []*plan.Expr{
+			makeAgg("count", function.COUNT, false, arg),
+			makeAgg("count", function.COUNT, true, arg),
+		}
+		scopes := []*Scope{
+			newShuffleGroupInputScope(t, 1),
+			newShuffleGroupInputScope(t, 1),
+		}
+
+		requiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
+		require.False(t, requiresSingleStage)
+		result := c.compileMergeGroup(node, scopes, nodes, requiresSingleStage)
+
+		require.Len(t, result, 1)
+		for _, scope := range scopes {
+			require.True(t, containsGroup(scope.RootOp),
+				"each input worker should aggregate before MergeGroup")
+		}
+	})
+
+	t.Run("unsupported distinct keeps one group", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		node, nodes := newShuffleGroupTestNodes(2)
+		arg := nodes[0].ProjectList[0]
+		node.AggList = []*plan.Expr{makeAgg("avg", function.AVG, true, arg)}
+		scopes := []*Scope{
+			newShuffleGroupInputScope(t, 1),
+			newShuffleGroupInputScope(t, 1),
+		}
+
+		requiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
+		require.True(t, requiresSingleStage)
+		result := c.compileMergeGroup(node, scopes, nodes, requiresSingleStage)
+
+		require.Len(t, result, 1)
+		for _, scope := range scopes {
+			require.False(t, containsGroup(scope.RootOp))
+		}
+		require.Len(t, result[0].PreScopes, 1)
+		require.True(t, containsGroup(result[0].PreScopes[0].RootOp),
+			"non-mergeable DISTINCT states must share one Group operator")
+	})
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {

@@ -1682,7 +1682,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
-		anyDistinctAgg := groupInfo.AnyDistinctAgg()
+		distinctRequiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
@@ -1701,7 +1701,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
 			return ss, nil
 		} else {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileMergeGroup(node, ss, nodes, anyDistinctAgg))))
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node,
+				c.compileMergeGroup(node, ss, nodes, distinctRequiresSingleStage))))
 			return ss, nil
 		}
 	case plan.Node_SAMPLE:
@@ -4171,8 +4172,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
-	if len(node.FilterList) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
+	storageFilters := filterScanStorageExprs(node.FilterList)
+	if len(storageFilters) != len(s.DataSource.FilterList) {
+		s.DataSource.FilterList = plan2.DeepCopyExprList(storageFilters)
 		for _, e := range s.DataSource.FilterList {
 			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
@@ -4210,6 +4212,25 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.RecvMsgList = node.RecvMsgList
 
 	return nil
+}
+
+// filterScanStorageExprs excludes row-dependent predicates from the engine
+// reader. The complete node.FilterList remains owned by TableScan or Restrict,
+// so these predicates are still evaluated once at the row-level boundary.
+func filterScanStorageExprs(exprs []*plan.Expr) []*plan.Expr {
+	for i, expr := range exprs {
+		if plan2.ContainsVolatileFunction(expr) {
+			filtered := make([]*plan.Expr, 0, len(exprs)-1)
+			filtered = append(filtered, exprs[:i]...)
+			for _, remaining := range exprs[i+1:] {
+				if !plan2.ContainsVolatileFunction(remaining) {
+					filtered = append(filtered, remaining)
+				}
+			}
+			return filtered
+		}
+	}
+	return exprs
 }
 
 func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
@@ -5657,16 +5678,16 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return ss
 }
 
-func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Node, hasDistinct bool) []*Scope {
-	// for less memory usage while merge group,
-	// we do not run the group-operator in parallel once this has a distinct aggregation.
-	// because the parallel need to store all the source data in the memory for merging.
-	// we construct a pipeline like the following description for this case:
-	//
-	// all the operators from ss[0] to ss[last] send the data to only one group-operator.
-	// this group-operator sends its result to the merge-group-operator.
-	// todo: I cannot remove the merge-group action directly, because the merge-group action is used to fill the partial result.
-	if hasDistinct {
+func (c *Compile) compileMergeGroup(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+	distinctRequiresSingleStage bool,
+) []*Scope {
+	// DISTINCT aggregates without an exact state-merge contract run one Group
+	// operator before MergeGroup. Parallel-mergeable DISTINCT aggregates use the
+	// ordinary local Group + MergeGroup pipeline below.
+	if distinctRequiresSingleStage {
 		ss = c.mergeShuffleScopesIfNeeded(ss, false)
 		mergeToGroup := c.newMergeScope(ss)
 
@@ -5852,6 +5873,32 @@ func supportsRemoteCrossDomainStringLiterals(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion23
+}
+
+func supportsRemoteStatementLastInsertID(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion26
+}
+
+func supportsRemoteUpdateChangedRows(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion25
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
