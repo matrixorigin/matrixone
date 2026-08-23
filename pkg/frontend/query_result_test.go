@@ -27,6 +27,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -115,6 +116,28 @@ func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
 		}
 	}
 	return bat
+}
+
+func TestBuildQueryResultMetaBatchCleansPartialBatchOnAppendFailure(t *testing.T) {
+	originalCapLimit := mpool.CapLimit
+	mpool.CapLimit = 128
+	t.Cleanup(func() { mpool.CapLimit = originalCapLimit })
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	meta := &catalog.Meta{Statement: strings.Repeat("x", 256)}
+	result, err := buildQueryResultMetaBatch(meta, mp)
+	require.Error(t, err)
+	require.Nil(t, result)
+
+	// Retain the helper input so the test can observe Batch.Clean's terminal
+	// state directly; 4.2 does not account Go-heap-backed vectors in CurrNB.
+	bat := batch.NewWithSize(len(catalog.MetaColTypes))
+	_, err = populateQueryResultMetaBatch(bat, meta, mp)
+	require.Error(t, err)
+	require.Nil(t, bat.Vecs)
+	require.Nil(t, bat.Attrs)
 }
 
 func Test_saveQueryResultMeta(t *testing.T) {

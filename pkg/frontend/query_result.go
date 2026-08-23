@@ -610,8 +610,17 @@ func getTablesFromPlan(p *plan.Plan) string {
 }
 
 func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, error) {
-	var err error
 	bat := batch.NewWithSize(len(catalog.MetaColTypes))
+	return populateQueryResultMetaBatch(bat, m, mp)
+}
+
+func populateQueryResultMetaBatch(bat *batch.Batch, m *catalog.Meta, mp *mpool.MPool) (_ *batch.Batch, err error) {
+	completed := false
+	defer func() {
+		if !completed {
+			bat.Clean(mp)
+		}
+	}()
 	bat.SetAttributes(catalog.MetaColNames)
 	for i, t := range catalog.MetaColTypes {
 		bat.Vecs[i] = vector.NewVec(t)
@@ -664,6 +673,7 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	if err = vector.AppendFixed(bat.Vecs[catalog.QUERY_ROW_COUNT_IDX], m.QueryRowCount, false, mp); err != nil {
 		return nil, err
 	}
+	completed = true
 	return bat, nil
 }
 
