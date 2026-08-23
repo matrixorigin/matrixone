@@ -375,7 +375,7 @@ func (b *HavingBinder) bindMedianWithinGroupAgg(
 			return nil, err
 		}
 	}
-	if medianWithinGroupAstKey(valueAst) != medianWithinGroupAstKey(orderAst) {
+	if canonicalGroupByAstKey(b.ctx, valueAst) != canonicalGroupByAstKey(b.ctx, orderAst) {
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
 			"%s requires the WITHIN GROUP ORDER BY expression to match its value expression", funcName)
 	}
@@ -393,29 +393,6 @@ func (b *HavingBinder) bindMedianWithinGroupAgg(
 		b.GetContext(), b.builder.compCtx.GetProcess(), funcName,
 		args,
 	)
-}
-
-// medianWithinGroupAstKey compares source expressions using SQL identifier
-// identity rather than their original spelling. Column and function names are
-// case-insensitive, while semanticAstKey still preserves parameter ordinals
-// and literal values in the resulting key.
-func medianWithinGroupAstKey(astExpr tree.Expr) string {
-	normalized := cloneTreeExpr(astExpr)
-	walkGroupingSetOrderByExpr(normalized, func(expr tree.Expr) bool {
-		switch node := expr.(type) {
-		case *tree.UnresolvedName:
-			normalizeGroupByName(node)
-		case *tree.FuncExpr:
-			if node.FuncName != nil {
-				node.FuncName = tree.NewCStr(node.FuncName.Compare(), 0)
-			}
-			if functionName, ok := node.Func.FunctionReference.(*tree.UnresolvedName); ok {
-				normalizeGroupByName(functionName)
-			}
-		}
-		return true
-	})
-	return semanticAstKey(normalized)
 }
 
 // bindOrderedSetPercentileAgg converts the SQL-standard

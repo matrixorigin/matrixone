@@ -135,6 +135,27 @@ func TestBuildMedianWithinGroupAcceptsCaseInsensitiveIdentifiers(t *testing.T) {
 	}
 }
 
+func TestBuildMedianWithinGroupAcceptsEquivalentColumnQualifications(t *testing.T) {
+	for _, sql := range []string{
+		"select median(a) within group (order by bind_select.a) from select_test.bind_select",
+		"select median(bind_select.a) within group (order by select_test.bind_select.a) from select_test.bind_select",
+		"select median(select_test.bind_select.a) within group (order by a) from select_test.bind_select",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+
+			fn := findAggregateByName(queryPlan.GetQuery(), "median")
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, 1)
+		})
+	}
+}
+
 func TestBuildMedianWithinGroupRejectsWindowForm(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select median(a) within group (order by a) over () from select_test.bind_select", 1)
