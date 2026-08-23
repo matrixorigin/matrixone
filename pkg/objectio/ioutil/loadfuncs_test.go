@@ -185,6 +185,50 @@ func TestReadDeletesBroadcastsConstantAbort(t *testing.T) {
 	require.False(t, aborts.At(1))
 }
 
+func TestFillBlockDeleteMaskSupportsLegacyTombstoneWithoutAbortColumn(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(objectio.RowidType)
+	input.Vecs[1] = vector.NewVec(objectio.TSType)
+	defer input.Clean(mp)
+	require.NoError(t, vector.AppendFixed(
+		input.Vecs[0], types.NewRowid(blockID, 7), false, mp,
+	))
+	require.NoError(t, vector.AppendFixed(
+		input.Vecs[1], types.BuildTS(5, 0), false, mp,
+	))
+	input.SetRowCount(1)
+
+	writer := ConstructWriter(
+		0,
+		[]uint16{objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS},
+		-1,
+		false,
+		false,
+		fs,
+	)
+	writer.SetAppendable()
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	location := stats.ObjectLocation()
+	snapshot := types.BuildTS(10, 0)
+
+	mask, err := FillBlockDeleteMask(
+		ctx, &snapshot, blockID, location, fs, false,
+	)
+	require.NoError(t, err)
+	defer mask.Release()
+	require.True(t, mask.Contains(7))
+}
+
 func TestValidateTombstoneAbortColumnRejectsMalformed(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
