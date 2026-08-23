@@ -49,7 +49,7 @@ func loadReasonKey(db, index string) string {
 }
 
 func rememberLoadReason(index string, reason LoadMissReason) {
-	if index == "" || reason == "" {
+	if !loadObservationEnabled() || index == "" || reason == "" {
 		return
 	}
 	now := time.Now()
@@ -76,6 +76,9 @@ func rememberLoadReason(index string, reason LoadMissReason) {
 }
 
 func takeLoadReason(index string) LoadMissReason {
+	if !loadObservationEnabled() {
+		return ""
+	}
 	now := time.Now()
 	pendingLoadReasons.Lock()
 	defer pendingLoadReasons.Unlock()

@@ -322,10 +322,6 @@ func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, err
 	return loadAllBasesUncached(sqlproc, cfg, nil)
 }
 
-func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
-	return loadAllBasesUncached(sqlproc, cfg, trace)
-}
-
 func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
 	idSQL := fmt.Sprintf("SELECT %s FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
@@ -360,10 +356,6 @@ func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *l
 		bases = append(bases, m)
 	}
 	return bases, nil
-}
-
-func loadAllBasesWithPool(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
-	return loadAllBasesUncached(sqlproc, cfg, trace)
 }
 
 // LoadFromStorage reads an index id's metadata + chunks, verifies the checksum,
