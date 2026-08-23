@@ -19,7 +19,7 @@ where __mo_query = 'select id, name, amount, created from src order by id';
 2  ¦  bob  ¦  null  𝄀
 3  ¦  c,d  ¦  75.25
 select * from orders where __mo_query = 'select id, name, amount, created from src where id = 2';
-➤ id[-5,64,0]  ¦  name[12,64,0]  ¦  amount[3,12,2]  ¦  created[93,64,0]  𝄀
+➤ id[-5,64,0]  ¦  name[12,64,0]  ¦  amount[3,12,2]  ¦  created[93,19,0]  𝄀
 2  ¦  bob  ¦  null  ¦  2026-01-02 11:00:00
 desc orders;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -123,7 +123,7 @@ select id, b, f32, f64, dec from typed_ext order by id;
 2  ¦  0  ¦  null  ¦  -0.5  ¦  -0.0001  𝄀
 3  ¦  null  ¦  3.14  ¦  1.0E10  ¦  99999999999999.9999
 select id, d, dt, ts from typed_ext order by id;
-➤ id[4,32,0]  ¦  d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
+➤ id[4,32,0]  ¦  d[91,10,0]  ¦  dt[93,23,0]  ¦  ts[93,23,0]  𝄀
 1  ¦  2026-01-15  ¦  2026-01-15 10:20:30.123000000  ¦  2026-01-15 10:20:30.456000000  𝄀
 2  ¦  1970-01-01  ¦  1970-01-01 00:00:01  ¦  2038-01-19 03:14:07  𝄀
 3  ¦  null  ¦  null  ¦  null
@@ -145,4 +145,7 @@ or not (x.ts <=> s.ts) or not (x.vb <=> s.vb) or not (x.txt <=> s.txt);
 0
 create external table bad_ext (id int, __mo_query varchar(10)) engine = sql with ('config'='{"driver":"mysql","dsn":"x@tcp(h)/d"}');
 invalid input: column name __mo_query is reserved for external table scans
+select sql_tvf_disconnect(sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_exttab"}'));
+➤ sql_tvf_disconnect(sql_tvf_connect({"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_exttab"}))[-7,1,0]  𝄀
+1
 drop database foreign_exttab;

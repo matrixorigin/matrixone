@@ -56,12 +56,12 @@ insert into typed values
 (true, 42, 1.5, 2.25, '2026-01-15 10:20:30', 'line1\nline2 unicode 中文'),
 (false, NULL, NULL, -0.5, NULL, NULL);
 select * from sql_tvf('select b,i32,f32,f64,ts,txt from typed order by i32', '{"cols":[{"name":"b","type":"bool"},{"name":"i32","type":"int32"},{"name":"f32","type":"float32"},{"name":"f64","type":"float64"},{"name":"ts","type":"timestamp"},{"name":"txt","type":"string"}]}', @h) x;
-➤ b[-7,1,0]  ¦  i32[4,32,0]  ¦  f32[7,23,31]  ¦  f64[8,53,31]  ¦  ts[93,64,0]  ¦  txt[12,536870911,0]  𝄀
+➤ b[-7,1,0]  ¦  i32[4,32,0]  ¦  f32[7,23,31]  ¦  f64[8,53,31]  ¦  ts[93,19,0]  ¦  txt[12,536870911,0]  𝄀
 0  ¦  null  ¦  null  ¦  -0.5  ¦  null  ¦  null  𝄀
 1  ¦  42  ¦  1.5  ¦  2.25  ¦  2026-01-15 10:20:30  ¦  line1
 line2 unicode 中文
 select * from sql_tvf('select b,i32,f32,f64,ts from typed where i32 is not null', 'bifFt', @h) x;
-➤ col0[-7,1,0]  ¦  col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[8,53,31]  ¦  col4[93,64,0]  𝄀
+➤ col0[-7,1,0]  ¦  col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[8,53,31]  ¦  col4[93,19,0]  𝄀
 1  ¦  42  ¦  1.5  ¦  2.25  ¦  2026-01-15 10:20:30
 select * from sql_tvf('select 1,2', '{"cols":[{"name":"a","type":"int64"},{"name":"a","type":"int64"}]}', @h) x;
 invalid input: duplicate column name "a" in options
@@ -81,4 +81,7 @@ create table bad_col (id int, __mo_query varchar(10));
 invalid input: column name __mo_query is reserved for external table scans
 create table bad_col2 (id int, __mo_filepath varchar(10));
 invalid input: column name __mo_filepath is reserved for external table scans
+select sql_tvf_disconnect(@h);
+➤ sql_tvf_disconnect(@h)[-7,1,0]  𝄀
+1
 drop database sql_tvf_test;

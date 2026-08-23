@@ -132,4 +132,7 @@ where not (x.b <=> s.b) or not (x.f32 <=> s.f32) or not (x.f64 <=> s.f64)
 -- reserved hidden-column names are rejected on external tables too.
 create external table bad_ext (id int, __mo_query varchar(10)) engine = sql with ('config'='{"driver":"mysql","dsn":"x@tcp(h)/d"}');
 
+-- leave the shared session clean: all scans above used one loopback config,
+-- so one disconnect (reconnect returns the same deterministic handle).
+select sql_tvf_disconnect(sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_exttab"}'));
 drop database foreign_exttab;

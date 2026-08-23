@@ -72,4 +72,6 @@ select * from esql_tvf('FROM idx', 'I', @h) x;
 create table bad_col (id int, __mo_query varchar(10));
 create table bad_col2 (id int, __mo_filepath varchar(10));
 
+-- leave the shared session clean for later case files.
+select sql_tvf_disconnect(@h);
 drop database sql_tvf_test;
