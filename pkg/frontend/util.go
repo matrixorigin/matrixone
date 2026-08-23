@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	planrule "github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -199,7 +200,7 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, error) {
-	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
+	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, nil, isBin...)
 	return value, err
 }
 
@@ -208,6 +209,7 @@ func getExprValueWithPrepareMeta(
 	ses *Session,
 	execCtx *ExecCtx,
 	preparedExpression bool,
+	materializedResult **plan.Expr,
 	prepareParamKind *vector.PrepareParamKind,
 	isBin ...*bool,
 ) (interface{}, plan.Type, error) {
@@ -344,8 +346,29 @@ func getExprValueWithPrepareMeta(
 			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
 		}
 	}
+	resultType := plan2.MakePlan2Type(resultVec.GetType())
 	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
-	return value, plan2.MakePlan2Type(resultVec.GetType()), err
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	if materializedResult != nil {
+		literal := planrule.GetConstantValue(resultVec, false, 0)
+		if literal == nil && resultVec.GetType().Oid == types.T_enum {
+			literal = planrule.GetConstantValue(resultVec, true, 0)
+		}
+		if literal != nil {
+			*materializedResult = &plan.Expr{Typ: resultType, Expr: &plan.Expr_Lit{Lit: literal}}
+		} else {
+			source := plan2.MakePlan2StringConstExprWithType(fmt.Sprintf("%v", value))
+			target := &plan.Expr{Typ: resultType, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			*materializedResult, err = plan2.BindFuncExprImplByPlanExpr(
+				execCtx.reqCtx, "cast", []*plan.Expr{source, target})
+			if err != nil {
+				return nil, plan.Type{}, err
+			}
+		}
+	}
+	return value, resultType, nil
 }
 
 func collectScalarSubqueries(expr tree.Expr, subqueries *[]*tree.Subquery) {
@@ -542,21 +565,10 @@ func getPreparedPlanExprValueWithSubqueries(
 	for i, subquery := range subqueries {
 		var subqueryKind vector.PrepareParamKind
 		var subqueryIsBin bool
-		value, valueType, err := getExprValueWithPrepareMeta(
-			subquery, ses, execCtx, true, &subqueryKind, &subqueryIsBin)
+		_, _, err := getExprValueWithPrepareMeta(
+			subquery, ses, execCtx, true, &replacements[i], &subqueryKind, &subqueryIsBin)
 		if err != nil {
 			return nil, plan.Type{}, err
-		}
-		if value == nil {
-			replacements[i] = &plan.Expr{Typ: valueType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-				Isnull: true, IsBin: subqueryIsBin, Value: &plan.Literal_Sval{Sval: ""},
-			}}}
-		} else {
-			replacements[i], err = plan2.PreparedRuntimeParamExpr(
-				execCtx.reqCtx, value, subqueryIsBin, plan2.MakeTypeByPlan2Type(valueType))
-			if err != nil {
-				return nil, plan.Type{}, err
-			}
 		}
 	}
 	runtimeExpr := plan2.DeepCopyExpr(specializedExpr)

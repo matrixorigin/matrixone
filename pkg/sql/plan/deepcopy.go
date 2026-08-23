@@ -301,12 +301,12 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		UpdateCtxList:          DeepCopyUpdateCtxList(node.UpdateCtxList),
 		DedupJoinCtx:           DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam:       DeepCopyIndexReaderParam(node.IndexReaderParam),
-		ScanSnapshot:           DeepCopySnapshot(node.ScanSnapshot),
 		VectorIndexScan:        DeepCopyVectorIndexScan(node.VectorIndexScan),
 		OriginViews:            slices.Clone(node.OriginViews),
 		DirectView:             node.DirectView,
 		RankOption:             DeepCopyRankOption(node.RankOption),
 		WindowIdx:              node.WindowIdx,
+		ScanSnapshot:           DeepCopySnapshot(node.ScanSnapshot),
 		RecursiveCte:           node.RecursiveCte,
 		ApplyType:              node.ApplyType,
 		PostDmlCtx:             DeepCopyPostDmlCtx(node.PostDmlCtx),
@@ -323,10 +323,9 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		RuntimeFilterBuildList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterBuildList),
 		IfInsertFromUnique: node.IfInsertFromUnique,
-		// Runtime execution plans are deep-copied before prepared parameters
-		// are specialized.  Join compilation relies on these message headers
-		// to recover the JoinMap tag; dropping them makes the copied plan panic
-		// with "wrong joinmap tag".
+		// Join compilation relies on these message headers to recover the
+		// JoinMap tag; dropping them makes the copied plan panic with
+		// "wrong joinmap tag".
 		SendMsgList: slices.Clone(node.SendMsgList),
 		RecvMsgList: slices.Clone(node.RecvMsgList),
 	}

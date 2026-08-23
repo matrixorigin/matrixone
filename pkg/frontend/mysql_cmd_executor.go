@@ -1393,7 +1393,7 @@ func doSetVar(
 			}
 		} else {
 			value, valueType, evalErr = getExprValueWithPrepareMeta(
-				assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
+				assign.Value, ses, execCtx, preparedExpression, nil, &prepareParamKind, &isBin)
 		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr

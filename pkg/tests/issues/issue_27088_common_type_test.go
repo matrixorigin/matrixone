@@ -248,6 +248,23 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.JSONEq(t, `{"v": 42}`, direct)
 			require.JSONEq(t, direct, subquery)
 
+			directNested, prepareErr := conn.PrepareContext(
+				ctx, "set @issue27088_direct_nested = json_object('outer', json_object('v', ?))")
+			require.NoError(t, prepareErr)
+			defer directNested.Close()
+			subqueryNested, prepareErr := conn.PrepareContext(
+				ctx, "set @issue27088_subquery_nested = json_object('outer', (select json_object('v', ?)))")
+			require.NoError(t, prepareErr)
+			defer subqueryNested.Close()
+			_, execErr = directNested.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			_, execErr = subqueryNested.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			require.NoError(t, conn.QueryRowContext(
+				ctx, "select @issue27088_direct_nested, @issue27088_subquery_nested").Scan(&direct, &subquery))
+			require.JSONEq(t, `{"outer": {"v": 42}}`, direct)
+			require.JSONEq(t, direct, subquery)
+
 			directValue, prepareErr := conn.PrepareContext(ctx, "set @issue27088_direct_value = ?")
 			require.NoError(t, prepareErr)
 			defer directValue.Close()
@@ -276,6 +293,26 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			subqueryInteger := readIntegerVariable("@issue27088_subquery_value", "BIGINT")
 			require.Equal(t, int64(42), directInteger)
 			require.Equal(t, directInteger, subqueryInteger)
+		})
+
+		t.Run("prepared SET scalar subquery preserves DATE consumer", func(t *testing.T) {
+			directDate, prepareErr := conn.PrepareContext(ctx,
+				"set @issue27088_direct_date = date_add(cast('2024-01-02' as date), interval 1 day)")
+			require.NoError(t, prepareErr)
+			defer directDate.Close()
+			subqueryDate, prepareErr := conn.PrepareContext(ctx,
+				"set @issue27088_subquery_date = date_add((select cast('2024-01-02' as date)), interval 1 day)")
+			require.NoError(t, prepareErr)
+			defer subqueryDate.Close()
+			_, execErr := directDate.ExecContext(ctx)
+			require.NoError(t, execErr)
+			_, execErr = subqueryDate.ExecContext(ctx)
+			require.NoError(t, execErr)
+			var direct, subquery string
+			require.NoError(t, conn.QueryRowContext(
+				ctx, "select @issue27088_direct_date, @issue27088_subquery_date").Scan(&direct, &subquery))
+			require.Equal(t, "2024-01-03", direct)
+			require.Equal(t, direct, subquery)
 		})
 
 		t.Run("SQL EXECUTE SET specializes consumer inside subquery", func(t *testing.T) {
