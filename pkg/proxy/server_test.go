@@ -17,13 +17,16 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,6 +34,50 @@ func WithHAKeeperClient(c logservice.ProxyHAKeeperClient) Option {
 	return func(s *Server) {
 		s.haKeeperClient = c
 	}
+}
+
+type immediateProxyRevocationClient struct {
+	mockHAKeeperClient
+	responded chan struct{}
+	once      sync.Once
+}
+
+func (c *immediateProxyRevocationClient) AllocateIDByKey(context.Context, string) (uint64, error) {
+	return 9, nil
+}
+
+func (c *immediateProxyRevocationClient) SendProxyHeartbeat(
+	context.Context,
+	logservicepb.ProxyHeartbeat,
+) (logservicepb.CommandBatch, error) {
+	c.once.Do(func() { close(c.responded) })
+	return logservicepb.CommandBatch{ViewMetadataAdmission: &logservicepb.ViewMetadataAdmission{
+		Enabled:    true,
+		Epoch:      1,
+		Generation: 10,
+	}}, nil
+}
+
+func TestNewServerImmediatelyRevokedReleasesListener(t *testing.T) {
+	reserved, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := reserved.Addr().String()
+	require.NoError(t, reserved.Close())
+
+	runtime.SetupServiceBasedRuntime(t.Name(), runtime.DefaultRuntime())
+	client := &immediateProxyRevocationClient{responded: make(chan struct{})}
+	s, err := NewServer(context.Background(), Config{
+		UUID:          t.Name(),
+		ListenAddress: address,
+	}, WithRuntime(runtime.ServiceRuntime(t.Name())), WithHAKeeperClient(client))
+	require.NoError(t, err)
+	<-client.responded
+	<-s.viewMetadataAdmissionContext.Done()
+	require.NoError(t, s.Close())
+
+	rebound, err := net.Listen("tcp4", address)
+	require.NoError(t, err, "construction-time revocation must retain and close the listener owner")
+	require.NoError(t, rebound.Close())
 }
 
 func TestNewServer(t *testing.T) {

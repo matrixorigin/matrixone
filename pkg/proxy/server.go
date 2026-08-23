@@ -107,9 +107,21 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	}
 	s.viewMetadataAdmissionContext, s.viewMetadataAdmissionCancel = context.WithCancel(ctx)
 	initialized := false
+	statsRegistered := false
 	defer func() {
-		if !initialized {
-			s.viewMetadataAdmissionCancel()
+		if initialized {
+			return
+		}
+		s.viewMetadataAdmissionCancel()
+		_ = s.closeIngress()
+		if s.handler != nil {
+			_ = s.handler.Close()
+		}
+		if s.stopper != nil {
+			s.stopper.Stop()
+		}
+		if statsRegistered {
+			stats.Unregister(statsFamilyName)
 		}
 	}()
 	for _, opt := range opts {
@@ -138,6 +150,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	// (e.g., from a previous test run or failed initialization).
 	stats.Unregister(statsFamilyName)
 	stats.Register(statsFamilyName, stats.WithLogExporter(logExporter))
+	statsRegistered = true
 
 	s.stopper = stopper.NewStopper("mo-proxy", stopper.WithLogger(s.runtime.Logger().RawLogger()))
 	h, err := newProxyHandler(
@@ -153,12 +166,8 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		return nil, err
 	}
 
-	if err := runBootstrapTask(ctx, s.stopper, h); err != nil {
-		return nil, err
-	}
 	s.handler = h
-
-	if err := s.stopper.RunNamedTask("proxy heartbeat", s.heartbeat); err != nil {
+	if err := runBootstrapTask(ctx, s.stopper, h); err != nil {
 		return nil, err
 	}
 
@@ -194,6 +203,12 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	}
 	s.app = app
 	s.listener = listener
+
+	// Admission may revoke this generation immediately, so publish every ingress
+	// resource before the first heartbeat can observe an authoritative response.
+	if err := s.stopper.RunNamedTask("proxy heartbeat", s.heartbeat); err != nil {
+		return nil, err
+	}
 	initialized = true
 	return s, nil
 }
