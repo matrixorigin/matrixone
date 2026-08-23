@@ -16,6 +16,7 @@ package mpool
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sync"
@@ -98,6 +99,66 @@ func TestReportMemUsage(t *testing.T) {
 	t.Logf("mem usage: %s", j1)
 	t.Logf("global mem usage: %s", j2)
 	t.Logf("testjson mem usage: %s", j3)
+}
+
+func TestOnHeapStatsLifecycleAndReport(t *testing.T) {
+	mp := MustNew("onheap-stats-lifecycle")
+	defer DeleteMPool(mp)
+	mp.EnableDetailRecording()
+
+	globalBytesBefore := GlobalOnHeapStats().NumCurrBytes.Load()
+	globalObjectsBefore := GlobalOnHeapStats().NumCurrObjects.Load()
+
+	buf, err := mp.Alloc(128, false)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB(), "on-heap ownership must not change off-heap admission stats")
+	require.Equal(t, int64(128), mp.OnHeapCurrNB())
+	_, objects := mp.OnHeapOutstanding()
+	require.Equal(t, int64(1), objects)
+	require.Equal(t, globalBytesBefore+128, GlobalOnHeapStats().NumCurrBytes.Load())
+	require.Equal(t, globalObjectsBefore+1, GlobalOnHeapStats().NumCurrObjects.Load())
+
+	report := mp.ReportJson()
+	require.True(t, json.Valid([]byte(report)), report)
+	require.Contains(t, report, `"on_heap"`)
+	require.Contains(t, report, `"on_heap_alloc"`)
+
+	mp.Free(buf)
+	require.Zero(t, mp.OnHeapCurrNB())
+	require.Equal(t, globalBytesBefore, GlobalOnHeapStats().NumCurrBytes.Load())
+	require.Equal(t, globalObjectsBefore, GlobalOnHeapStats().NumCurrObjects.Load())
+	require.Contains(t, mp.ReportJson(), `"on_heap_free"`)
+}
+
+func TestOnHeapStatsNoLockAndGrow(t *testing.T) {
+	mp := MustNewNoLock("onheap-stats-nolock-grow")
+	defer DeleteMPool(mp)
+
+	buf, err := mp.Alloc(8, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(8), mp.OnHeapCurrNB())
+
+	grown, err := mp.Grow(buf, 1024, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(cap(grown)), mp.OnHeapCurrNB())
+	_, objects := mp.OnHeapOutstanding()
+	require.Equal(t, int64(1), objects)
+
+	mp.Free(grown)
+	require.Zero(t, mp.OnHeapCurrNB())
+	_, objects = mp.OnHeapOutstanding()
+	require.Zero(t, objects)
+}
+
+func TestOnHeapStatsFailedAllocationDoesNotAdvance(t *testing.T) {
+	mp := MustNew("onheap-stats-failed-allocation")
+	defer DeleteMPool(mp)
+
+	_, err := mp.Alloc(math.MaxInt, false)
+	require.Error(t, err)
+	require.Zero(t, mp.OnHeapCurrNB())
+	_, objects := mp.OnHeapOutstanding()
+	require.Zero(t, objects)
 }
 
 func TestMP(t *testing.T) {
@@ -530,12 +591,13 @@ func TestCrossPoolFreeOnHeap(t *testing.T) {
 	// Allocate on-heap from mp1
 	bs, err := mp1.Alloc(1024, false)
 	require.NoError(t, err)
+	require.Equal(t, int64(1024), mp1.OnHeapCurrNB())
+	globalBefore := GlobalOnHeapStats().NumCurrBytes.Load()
 
 	// Free from mp2 (cross-pool free) - should not panic
 	mp2.Free(bs)
-
-	// On-heap cross-pool free: no stats recorded since offHeap=false returns early
-	// This is expected behavior - on-heap memory is managed by Go GC
+	require.Zero(t, mp1.OnHeapCurrNB())
+	require.Equal(t, globalBefore-1024, GlobalOnHeapStats().NumCurrBytes.Load())
 
 	DeleteMPool(mp1)
 	DeleteMPool(mp2)
@@ -557,6 +619,21 @@ func TestMPoolTeardownTracksPhysicalLifetime(t *testing.T) {
 		require.Equal(t, globalBefore, GlobalStats().NumCurrBytes.Load())
 	})
 
+	t.Run("normal-pool-late-onheap-free", func(t *testing.T) {
+		owner := MustNew("teardown-normal-onheap-owner")
+		other := MustNew("teardown-normal-onheap-other")
+		defer DeleteMPool(other)
+
+		globalBefore := GlobalOnHeapStats().NumCurrBytes.Load()
+		buffer, err := owner.Alloc(64, false)
+		require.NoError(t, err)
+		DeleteMPool(owner)
+		require.Equal(t, globalBefore+64, GlobalOnHeapStats().NumCurrBytes.Load())
+
+		other.Free(buffer)
+		require.Equal(t, globalBefore, GlobalOnHeapStats().NumCurrBytes.Load())
+	})
+
 	t.Run("no-lock-pool-owns-teardown", func(t *testing.T) {
 		mp := MustNewNoLock("teardown-no-lock-owner")
 		globalBefore := GlobalStats().NumCurrBytes.Load()
@@ -566,51 +643,93 @@ func TestMPoolTeardownTracksPhysicalLifetime(t *testing.T) {
 		DeleteMPool(mp)
 		require.Equal(t, globalBefore, GlobalStats().NumCurrBytes.Load())
 	})
+
+	t.Run("no-lock-pool-owns-onheap-teardown", func(t *testing.T) {
+		mp := MustNewNoLock("teardown-no-lock-onheap-owner")
+		globalBefore := GlobalOnHeapStats().NumCurrBytes.Load()
+		_, err := mp.Alloc(64, false)
+		require.NoError(t, err)
+
+		DeleteMPool(mp)
+		require.Zero(t, mp.OnHeapCurrNB())
+		require.Equal(t, globalBefore, GlobalOnHeapStats().NumCurrBytes.Load())
+	})
 }
 
 // TestDoubleFree tests that double free is detected and panics.
 func TestDoubleFree(t *testing.T) {
-	mp := MustNew("double-free-test")
+	for _, offHeap := range []bool{false, true} {
+		t.Run(fmt.Sprintf("offheap=%t", offHeap), func(t *testing.T) {
+			mp := MustNew("double-free-test")
+			defer DeleteMPool(mp)
 
-	bs, err := mp.Alloc(1024, true)
-	require.NoError(t, err)
-
-	mp.Free(bs)
-
-	// Second free should panic
-	require.Panics(t, func() {
-		mp.Free(bs)
-	}, "double free should panic")
-
-	DeleteMPool(mp)
+			bs, err := mp.Alloc(1024, offHeap)
+			require.NoError(t, err)
+			mp.Free(bs)
+			require.Panics(t, func() {
+				mp.Free(bs)
+			}, "double free should panic")
+		})
+	}
 }
 
 // TestConcurrentAllocFree tests concurrent allocation and free with sharded locks.
 func TestConcurrentAllocFree(t *testing.T) {
-	mp := MustNew("concurrent-test")
-	var wg sync.WaitGroup
+	for _, offHeap := range []bool{false, true} {
+		t.Run(fmt.Sprintf("offheap=%t", offHeap), func(t *testing.T) {
+			mp := MustNew("concurrent-test")
+			defer DeleteMPool(mp)
+			var wg sync.WaitGroup
 
-	numGoroutines := 100
-	numOps := 1000
-
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < numOps; j++ {
-				bs, err := mp.Alloc(64, true)
-				if err != nil {
-					t.Errorf("alloc failed: %v", err)
-					return
-				}
-				mp.Free(bs)
+			const numGoroutines = 100
+			const numOps = 1000
+			for i := 0; i < numGoroutines; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for j := 0; j < numOps; j++ {
+						bs, err := mp.Alloc(64, offHeap)
+						if err != nil {
+							t.Errorf("alloc failed: %v", err)
+							return
+						}
+						mp.Free(bs)
+					}
+				}()
 			}
-		}()
+			wg.Wait()
+			if offHeap {
+				require.Zero(t, mp.CurrNB())
+			} else {
+				require.Zero(t, mp.OnHeapCurrNB())
+			}
+		})
 	}
+}
 
-	wg.Wait()
-	require.Equal(t, int64(0), mp.CurrNB(), "all memory should be freed")
-	DeleteMPool(mp)
+func BenchmarkMPoolOnHeapAllocFree(b *testing.B) {
+	for _, noLock := range []bool{false, true} {
+		for _, size := range []int{64, 1024, 64 << 10} {
+			name := fmt.Sprintf("nolock=%t/bytes=%d", noLock, size)
+			b.Run(name, func(b *testing.B) {
+				flags := NoFixed
+				if noLock {
+					flags |= NoLock
+				}
+				mp, err := NewMPool(name, 0, flags)
+				require.NoError(b, err)
+				defer DeleteMPool(mp)
+				b.ReportAllocs()
+				for b.Loop() {
+					buf, err := mp.Alloc(size, false)
+					if err != nil {
+						b.Fatal(err)
+					}
+					mp.Free(buf)
+				}
+			})
+		}
+	}
 }
 
 // TestConcurrentCrossPoolFree tests concurrent cross-pool free operations.

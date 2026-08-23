@@ -310,6 +310,12 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snaps
 	ses := tcc.GetSession()
 	_, err = tcc.GetTxnHandler().GetStorage().Database(tempCtx, name, txn)
 	if err != nil {
+		// ExpectedEOB means the database is not visible at this snapshot. That
+		// is a normal negative answer for an existence probe, not an engine
+		// failure that should be emitted at ERROR level.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return false
+		}
 		ses.Error(tempCtx,
 			"Failed to get database",
 			zap.String("databaseName", name),
