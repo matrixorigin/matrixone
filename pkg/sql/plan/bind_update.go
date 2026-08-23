@@ -839,6 +839,70 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 	}
+	if isMultiTargetUpdate && !deferRepeatedPhysicalTargetMerge {
+		targetsByTableID := make(map[uint64][]int)
+		physicalTableOrder := make([]uint64, 0, len(dmlCtx.tableDefs))
+		for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
+			if len(updateCols) == 0 {
+				continue
+			}
+			tableID := dmlCtx.tableDefs[targetIdx].TblId
+			if len(targetsByTableID[tableID]) == 0 {
+				physicalTableOrder = append(physicalTableOrder, tableID)
+			}
+			targetsByTableID[tableID] = append(targetsByTableID[tableID], targetIdx)
+		}
+		groupActiveProject := make([]*plan.Expr, len(selectNode.ProjectList))
+		for pos, expr := range selectNode.ProjectList {
+			groupActiveProject[pos] = &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectNodeTag, ColPos: int32(pos),
+				}},
+			}
+		}
+		appendedGroupActive := false
+		for _, tableID := range physicalTableOrder {
+			targets := targetsByTableID[tableID]
+			if len(targets) < 2 {
+				continue
+			}
+			var groupActive *plan.Expr
+			for _, targetIdx := range targets {
+				activePos := targetBranchActivePos[targetIdx]
+				active := &plan.Expr{
+					Typ: selectNode.ProjectList[activePos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: selectNodeTag, ColPos: activePos,
+					}},
+				}
+				if groupActive == nil {
+					groupActive = active
+					continue
+				}
+				groupActive, err = BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "or", []*plan.Expr{groupActive, active})
+				if err != nil {
+					return 0, err
+				}
+			}
+			groupActivePos := int32(len(groupActiveProject))
+			groupActiveProject = append(groupActiveProject, groupActive)
+			for _, targetIdx := range targets {
+				physicalTargetActivePos[targetIdx] = groupActivePos
+			}
+			appendedGroupActive = true
+		}
+		if appendedGroupActive {
+			groupActiveTag := builder.genNewBindTag()
+			selectNode = &plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+				ProjectList: groupActiveProject, BindingTags: []int32{groupActiveTag},
+			}
+			lastNodeID = builder.appendNode(selectNode, bindCtx)
+			selectNodeTag = groupActiveTag
+		}
+	}
 	if !isMultiTargetUpdate && updateHasMultipleSourceTables(stmt) {
 		lastNodeID, selectNode, selectNodeTag, err = builder.appendUpdateFromDedupNode(
 			bindCtx, lastNodeID, selectNode, selectNodeTag, dmlCtx, oldColName2Idx, newColName2Idx)

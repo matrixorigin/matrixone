@@ -8381,7 +8381,13 @@ func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 			}
 			mainContexts++
 			require.True(t, updateCtx.DedupByTargetRowId)
+			require.Len(t, updateCtx.DeleteCols, 4)
 			require.Len(t, updateCtx.AffectedRowsCols, 2)
+			physicalActivePos := updateCtx.DeleteCols[3].ColPos
+			for _, semanticSelector := range updateCtx.AffectedRowsCols {
+				require.NotEqual(t, semanticSelector.ColPos, physicalActivePos,
+					"repeated aliases must write through the group OR, not one alias selector")
+			}
 			if tableID == 0 {
 				tableID = updateCtx.TableDef.TblId
 			} else {
