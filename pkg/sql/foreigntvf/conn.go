@@ -28,12 +28,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"os"
-	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -78,37 +74,6 @@ func MakeHandle(kind Kind, configJSON string) string {
 	return string(kind) + ":" + hex.EncodeToString(sum[:8])
 }
 
-// configEnvPrefix marks a config value as a reference to a process
-// environment variable resolved on the CN at connect time. Using it keeps the
-// credential-bearing JSON out of SQL text entirely — statement logs, query
-// history, and session variables then only ever see "env:NAME". This is the
-// same convention the ESQL/SQL external tables and the datastream apikey use.
-const configEnvPrefix = "env:"
-
-// resolveConfigRef resolves an "env:NAME" config reference from the process
-// environment; any other value is returned literally. Resolution is gated to
-// the sys account: the CN environment is operator-owned and shared across
-// tenants, so an ordinary tenant guessing an operator-defined name must not
-// be able to use its credentials.
-func resolveConfigRef(ctx context.Context, raw string) (string, error) {
-	if !strings.HasPrefix(raw, configEnvPrefix) {
-		return raw, nil
-	}
-	if accountId, err := defines.GetAccountId(ctx); err != nil || accountId != catalog.System_Account {
-		return "", moerr.NewInvalidInput(ctx,
-			"'env:' config references resolve operator-owned CN environment variables and require the sys account")
-	}
-	name := strings.TrimPrefix(raw, configEnvPrefix)
-	if name == "" {
-		return "", moerr.NewInvalidInput(ctx, "foreigntvf: config 'env:' reference has no variable name")
-	}
-	value := os.Getenv(name)
-	if value == "" {
-		return "", moerr.NewInvalidInputf(ctx, "foreigntvf: config env var %q is unset or empty", name)
-	}
-	return value, nil
-}
-
 // ValidateConfig checks the JSON shape of a connection config without dialing
 // anything. Used at CREATE EXTERNAL TABLE time (docs/cn/esql_sql_exttab.md §4:
 // no DDL-time connectivity check, only option/config syntax).
@@ -138,14 +103,10 @@ func Connect(ctx context.Context, kind Kind, configJSON string) (Conn, error) {
 // ResolveOrConnect returns the session-cached connection for configJSON,
 // opening and caching a new one (keyed by a config-derived handle) if absent.
 // It is used by the connect builtins and by a TVF whose conn argument is NULL.
-// An "env:NAME" reference is resolved first and the handle is derived from
-// the RESOLVED config, so a TVF connecting via env: and an external table
-// whose option resolved to the same JSON share one cached connection.
+// The config comes from user input or the session only (an argument, a table
+// option, or @esql_tvf_config / @sql_tvf_config); query processing never
+// reads the CN process environment.
 func ResolveOrConnect(ctx context.Context, cache process.ForeignConnCache, kind Kind, configJSON string) (Conn, string, error) {
-	configJSON, err := resolveConfigRef(ctx, configJSON)
-	if err != nil {
-		return nil, "", err
-	}
 	handle := MakeHandle(kind, configJSON)
 	if c, ok := cache.GetForeignConn(handle); ok {
 		if fc, ok := c.(Conn); ok {

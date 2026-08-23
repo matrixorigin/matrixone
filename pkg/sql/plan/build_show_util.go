@@ -1394,16 +1394,12 @@ func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, sqlMode strin
 	builder.WriteString(strings.ToUpper(cfg.Kind))
 	options := make([]struct{ key, value string }, 0, 2)
 	if cfg.ConfigJSON != "" {
-		value := cfg.ConfigJSON
-		// An inline config carries credentials (ES password, DSN password):
-		// SHOW CREATE output is widely visible, so it is redacted. A table
+		// A config carries credentials (ES password, DSN password): SHOW
+		// CREATE output is widely visible, so it is always redacted. A table
 		// restored from SHOW CREATE (snapshot/PITR replay) must have its
-		// 'config' re-supplied. An "env:NAME" reference is not a secret and
-		// is emitted verbatim (the recommended production form).
-		if !strings.HasPrefix(value, "env:") {
-			value = "<redacted>"
-		}
-		options = append(options, struct{ key, value string }{"config", value})
+		// 'config' re-supplied, or be created without one and use the
+		// @esql_tvf_config / @sql_tvf_config session variable.
+		options = append(options, struct{ key, value string }{"config", "<redacted>"})
 	}
 	if cfg.DefaultQuery != "" {
 		options = append(options, struct{ key, value string }{"query", cfg.DefaultQuery})

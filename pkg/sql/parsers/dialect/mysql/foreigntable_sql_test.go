@@ -47,13 +47,13 @@ func TestForeignCreateExternalTable(t *testing.T) {
 	_, err = ParseOne(ctx, formatted, 1)
 	require.NoError(t, err, formatted)
 
-	// An env: config reference is not a secret and is emitted verbatim.
-	stmtEnv, err := ParseOne(ctx, "create external table t (a int) engine = ESQL with ('config' = 'env:ES_CFG')", 1)
+	// every config value is redacted on re-render, whatever its shape
+	stmtEsql, err := ParseOne(ctx, "create external table t (a int) engine = ESQL with ('config' = '{\"addresses\":[\"http://h\"]}')", 1)
 	require.NoError(t, err)
-	require.Equal(t, "esql", stmtEnv.(*tree.CreateTable).ForeignParam.Kind)
-	formattedEnv := tree.String(stmtEnv, dialect.MYSQL)
-	require.Contains(t, formattedEnv, "engine = esql with (")
-	require.Contains(t, formattedEnv, `"config" = 'env:ES_CFG'`)
+	require.Equal(t, "esql", stmtEsql.(*tree.CreateTable).ForeignParam.Kind)
+	formattedEsql := tree.String(stmtEsql, dialect.MYSQL)
+	require.Contains(t, formattedEsql, "engine = esql with (")
+	require.Contains(t, formattedEsql, `"config" = '<redacted>'`)
 
 	// optionless forms, with and without '='.
 	for _, s := range []string{

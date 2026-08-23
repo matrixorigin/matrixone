@@ -62,7 +62,7 @@ func main() {
 		err = waitForMO(ctx, db)
 	}
 	if err == nil {
-		err = run(ctx, db, esEndpoint, esUser, esPassword, &r)
+		err = run(ctx, db, dsn, esEndpoint, esUser, esPassword, &r)
 	}
 	if err == nil {
 		r.Status = "passed"
@@ -93,7 +93,7 @@ func waitForMO(ctx context.Context, db *sql.DB) error {
 	}
 }
 
-func run(ctx context.Context, db *sql.DB, esEndpoint, esUser, esPassword string, r *report) error {
+func run(ctx context.Context, db *sql.DB, dsn, esEndpoint, esUser, esPassword string, r *report) error {
 	cfg := esConfig{Addresses: []string{esEndpoint}, Username: esUser, Password: esPassword}
 	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {
@@ -164,39 +164,39 @@ func run(ctx context.Context, db *sql.DB, esEndpoint, esUser, esPassword string,
 	}
 	r.Cases = append(r.Cases, "esql_tvf_disconnect")
 
-	// env: config on the TVF connect path: no credential ever appears in SQL
-	// text (statement logs only see 'env:MO_ESQL_E2E_CFG').
-	if _, err := db.ExecContext(ctx, "set @henv = esql_tvf_connect('env:MO_ESQL_E2E_CFG')"); err != nil {
-		return fmt.Errorf("esql_tvf_connect env: %w", err)
+	// a fresh inline-config handle plus the short one-letter schema form
+	if _, err := db.ExecContext(ctx, "set @h2 = esql_tvf_connect('"+sqlEscape(cfgStr)+"')"); err != nil {
+		return fmt.Errorf("esql_tvf_connect (short-schema): %w", err)
 	}
 	if err := expectScalar(ctx, db,
-		"select count(*) from esql_tvf('FROM employees | KEEP name, dept, salary | LIMIT 100', 'ssI', @henv) t", "5"); err != nil {
+		"select count(*) from esql_tvf('FROM employees | KEEP name, dept, salary | LIMIT 100', 'ssI', @h2) t", "5"); err != nil {
 		return err
 	}
-	r.Cases = append(r.Cases, "tvf-env-config")
+	if _, err := db.ExecContext(ctx, "select esql_tvf_disconnect(@h2)"); err != nil {
+		return fmt.Errorf("esql_tvf_disconnect @h2: %w", err)
+	}
+	r.Cases = append(r.Cases, "tvf-short-schema")
 
-	return runExternalTable(ctx, db, cfgStr, r)
+	return runExternalTable(ctx, db, cfgStr, dsn, r)
 }
 
 // runExternalTable exercises CREATE EXTERNAL TABLE ... ENGINE = ESQL over the
 // same seeded index: schema-typed rows, IN of two ES|QL queries, a local
-// predicate on a declared column, and config via env: (the harness exports
-// MO_ESQL_E2E_CFG into the mo-service process) and via @esql_tvf_config.
-func runExternalTable(ctx context.Context, db *sql.DB, cfgStr string, r *report) error {
+// predicate on a declared column, and config both inline and via the
+// @esql_tvf_config session variable (never the CN process environment).
+func runExternalTable(ctx context.Context, db *sql.DB, cfgStr, dsn string, r *report) error {
 	stmts := []string{
 		"drop database if exists esql_ext",
 		"create database esql_ext",
 		"use esql_ext",
-		// config comes from the environment of the CN process (env:NAME),
-		// so no secret is inlined in the DDL.
-		"create external table emp (name varchar(100), dept varchar(50), salary bigint) engine = esql with ('config' = 'env:MO_ESQL_E2E_CFG')",
+		"create external table emp (name varchar(100), dept varchar(50), salary bigint) engine = esql with ('config' = '" + sqlEscape(cfgStr) + "')",
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("exttab setup %q: %w", stmt, err)
 		}
 	}
-	r.Cases = append(r.Cases, "exttab-create-env-config")
+	r.Cases = append(r.Cases, "exttab-create")
 
 	const keep = " | KEEP name, dept, salary"
 	q1 := "FROM employees" + keep + " | LIMIT 100"
@@ -274,7 +274,7 @@ func runExternalTable(ctx context.Context, db *sql.DB, cfgStr string, r *report)
 	// rejected the trailing 'Z'), including millisecond precision, and typed
 	// predicates must work on the parsed values.
 	if _, err := db.ExecContext(ctx,
-		"create external table emp_ts (name varchar(100), hired timestamp(3)) engine = esql with ('config' = 'env:MO_ESQL_E2E_CFG')"); err != nil {
+		"create external table emp_ts (name varchar(100), hired timestamp(3)) engine = esql with ('config' = '"+sqlEscape(cfgStr)+"')"); err != nil {
 		return fmt.Errorf("exttab ts create: %w", err)
 	}
 	qTS := "FROM employees | KEEP name, hired | SORT name"
@@ -332,12 +332,32 @@ func runExternalTable(ctx context.Context, db *sql.DB, cfgStr string, r *report)
 		return err
 	}
 
-	// A handle of the wrong kind is rejected before any query is sent.
+	// A handle of the wrong kind is rejected before any query is sent: open a
+	// REAL sql-kind connection (loopback MO) and hand it to esql_tvf, so the
+	// failure is the kind check itself, not a connect error.
+	// json.Marshal HTML-escapes '&' (common in a DSN's query string) to
+	// \u0026, whose backslash a SQL string literal would consume; encode
+	// with HTML escaping off.
+	var sqlCfg strings.Builder
+	enc := json.NewEncoder(&sqlCfg)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(map[string]string{"driver": "mysql", "dsn": dsn}); err != nil {
+		return fmt.Errorf("encode loopback config: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "set @hsql = sql_tvf_connect('"+sqlEscape(strings.TrimSpace(sqlCfg.String()))+"')"); err != nil {
+		return fmt.Errorf("sql_tvf_connect loopback: %w", err)
+	}
 	var one int
 	err := db.QueryRowContext(ctx,
-		"select count(*) from esql_tvf('FROM employees', 'I', sql_tvf_connect('env:MO_ESQL_E2E_CFG')) t").Scan(&one)
+		"select count(*) from esql_tvf('FROM employees', 'I', @hsql) t").Scan(&one)
 	if err == nil {
 		return fmt.Errorf("cross-kind handle should be rejected")
+	}
+	if !strings.Contains(err.Error(), "accepts only esql connections") {
+		return fmt.Errorf("cross-kind rejection has wrong error: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "select sql_tvf_disconnect(@hsql)"); err != nil {
+		return fmt.Errorf("sql_tvf_disconnect @hsql: %w", err)
 	}
 	r.Cases = append(r.Cases, "cross-kind-handle-rejected")
 

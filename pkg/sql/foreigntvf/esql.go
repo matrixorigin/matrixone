@@ -60,7 +60,7 @@ func connectESQL(ctx context.Context, configJSON string) (Conn, error) {
 	// uses: go-elasticsearch treats an empty config as "read ELASTICSEARCH_URL
 	// or default to localhost:9200" (including URL userinfo as credentials),
 	// so an unvalidated '{}' would inherit operator-configured process
-	// defaults and bypass the sys-only env: gate.
+	// defaults — query processing must never read the CN environment.
 	if err := validateESQLConfig(ctx, configJSON); err != nil {
 		return nil, err
 	}

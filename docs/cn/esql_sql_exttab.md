@@ -61,7 +61,7 @@ shape as `sqldatastream.ParseTableOptions`).
 
 | option | ESQL | SQL | meaning |
 |---|---|---|---|
-| `config` | optional | optional | The **same JSON** that `esql_tvf_connect(config)` / `sql_tvf_connect(config)` accept: an `elasticsearch.Config` JSON for ESQL, `{"driver": "...", "dsn": "..."}` for SQL.  Passed verbatim to `foreigntvf.Connect(kind, configJSON)`.  May also be `env:NAME`, resolved from the CN process environment at scan time (like the datastream `apikey`), so secrets never enter the catalog. If omitted, the scan uses `@esql_tvf_config` / `@sql_tvf_config` of the querying session (exactly `foreigntvf.ConfigFromSessionVar`); error if neither is set. |
+| `config` | optional | optional | The **same JSON** that `esql_tvf_connect(config)` / `sql_tvf_connect(config)` accept: an `elasticsearch.Config` JSON for ESQL, `{"driver": "...", "dsn": "..."}` for SQL.  Passed verbatim to `foreigntvf.Connect(kind, configJSON)`.  All connection info comes from user input or the session — query processing never reads the CN process environment. If omitted, the scan uses `@esql_tvf_config` / `@sql_tvf_config` of the querying session (exactly `foreigntvf.ConfigFromSessionVar`); error if neither is set. |
 | `query` | optional | optional | Default query text, used when a `SELECT` has no `__mo_query` predicate (see §2).  Plain text, no placeholders. |
 
 No other options.  In particular there is **no** `recheck`: nothing but the
@@ -207,9 +207,9 @@ Reused wholesale from `pkg/sql/foreigntvf`:
 * The cache is the frontend `Session` (`process.ForeignConnCache`), reached via
   `proc.GetSession()`, closed in `Session.Close()`.  Scans therefore run on the
   session's CN (§5).
-* Config resolution order at scan time: table option `config` (inline JSON, or
-  `env:NAME` resolved on the CN) → session variable `@esql_tvf_config` /
-  `@sql_tvf_config` (`ConfigFromSessionVar`) → error.
+* Config resolution order at scan time: table option `config` (inline JSON) →
+  session variable `@esql_tvf_config` / `@sql_tvf_config`
+  (`ConfigFromSessionVar`) → error.
 * `esql_tvf_disconnect(handle)` on a handle that an external table is implicitly
   using just removes it from the cache; the next scan reconnects.  A MO session
   executes one statement at a time, so no scan is in flight during a
@@ -270,12 +270,11 @@ Mirror DATASTREAM:
   forged through the user-controlled `rel_createsql` JSON of a generic external
   table (`IsDataStreamTableDef` rationale);
 * `SHOW CREATE TABLE` emits `ENGINE = ESQL|SQL WITH ("config" = '...', "query"
-  = '...')`.  An `env:NAME` config is emitted verbatim (it is not a secret).  An
-  inline config is emitted **redacted** (`'config' = '<redacted>'`) because it
-  carries credentials (ES password / DSN password), so a table restored from
-  SHOW CREATE output (snapshot/PITR replay) must have `config` re-supplied —
-  same trade-off DATASTREAM makes for `apikey`, stated in the same place.  The
-  recommended production form is `env:NAME` or no `config` + session variable.
+  = '...')`.  The config is always emitted **redacted** (`'config' =
+  '<redacted>'`) because it carries credentials (ES password / DSN password),
+  so a table restored from SHOW CREATE output (snapshot/PITR replay) must have
+  `config` re-supplied — same trade-off DATASTREAM makes for `apikey`.  The
+  recommended production form is no `config` + session variable.
 * `SHOW CREATE` never emits `__mo_query`; `DESC`/`SHOW COLUMNS` hide it like
   `__mo_filepath`.
 
@@ -300,7 +299,7 @@ Mirror DATASTREAM:
 |---|---|---|
 | grammar, `tree.*TableParam`, option validation, envelope, feature bit, SHOW CREATE | `ENGINE = DATASTREAM` (`mysql_sql.y`, `tree/datastream.go`, `pkg/sql/datastream/config.go`, `plan/datastream_util.go`, `build_show_util.go`) | copy the shape for ESQL/SQL |
 | hidden column + query-level filter split + list pruning | `__mo_filepath` (`catalog.ExternalFilePath`, `query_builder.go`, `external.FilterFileList`, `isFileLevelFilter`, `makeFilepathBatch`, `getFieldFromLine`) | `catalog.ExternalQuery`; candidate derivation from `=`/`IN`/`OR` (§2.2 step 2) |
-| connect / cache / config resolution / secrets-in-session | `pkg/sql/foreigntvf` (`Connect`, `ResolveOrConnect`, `ConfigFromSessionVar`, `MakeHandle`), `process.ForeignConnCache`, `Session.Close()` | `env:NAME` resolution for `config` (copy of `ResolveAPIKey`) |
+| connect / cache / config resolution / secrets-in-session | `pkg/sql/foreigntvf` (`Connect`, `ResolveOrConnect`, `ConfigFromSessionVar`, `MakeHandle`), `process.ForeignConnCache`, `Session.Close()` | — |
 | query execution → CSV stream | `foreigntvf.Conn.Query` (ES|QL `format=csv`, `encodeRowsCSV`) | — |
 | CSV → batch, type coercion, NULLs, pruning-safe field mapping | `external.BuildForeignTVFExternParam`, `external.ForeignTVFReader`, `CsvReader` | `NewForeignScanReader` (list iterator around `ForeignTVFReader`) |
 | compile/scope/placement | `compileDatastreamScan` shape, `constructExternal` | `compileForeignScan` |
@@ -309,8 +308,8 @@ Mirror DATASTREAM:
 9. Tests
 --------
 
-* **Go unit**: option validation + envelope round-trip (incl. `env:` and
-  url-escaping of `;`/`*/` in DSNs); query-list derivation from `=`, `IN`,
+* **Go unit**: option validation + envelope round-trip (incl. url-escaping of
+  `;`/`*/` in DSNs); query-list derivation from `=`, `IN`,
   `OR`, mixed with `LIKE` pruning, missing predicate + `query` option fallback,
   missing both → error; `__mo_query` column fill; pruning/reordering of
   projected columns keeps field alignment.
@@ -325,4 +324,4 @@ Mirror DATASTREAM:
 * **E2E (ephemeral ES, manual workflow)** — extend `optools/esql_ci.bash` /
   `test/esqltvf/esql_e2e_local.go` with an `ENGINE = ESQL` table over the seeded
   index: schema-typed rows, `IN` of two ES|QL queries, local predicate on a
-  declared column, config via `env:` and via `@esql_tvf_config`.
+  declared column, config inline and via `@esql_tvf_config`.

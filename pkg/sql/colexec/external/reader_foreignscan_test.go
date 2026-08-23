@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreigntvf"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -189,7 +188,7 @@ func TestForeignScanReaderESQLHeaderSkip(t *testing.T) {
 }
 
 // TestForeignScanReaderErrors covers the unhappy Open paths: missing scan
-// metadata, a session without the cache capability, an unresolvable env:
+// metadata, a session without the cache capability, a malformed inline
 // config, and no config anywhere.
 func TestForeignScanReaderErrors(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -208,17 +207,11 @@ func TestForeignScanReaderErrors(t *testing.T) {
 	_, err = NewForeignScanReader(param).Open(param, proc)
 	require.ErrorContains(t, err, "interactive session")
 
-	// env: reference: the testutil proc runs as the sys account, so the unset
-	// variable is the error; a tenant account is stopped by the gate first.
+	// a malformed inline config fails cleanly at connect
 	proc.Session = &fakeScanSession{}
-	param = foreignScanParam(t, "sql", "env:MO_FOREIGN_SCAN_TEST_UNSET", cols, []string{"id", "name"})
+	param = foreignScanParam(t, "sql", "not-json", cols, []string{"id", "name"})
 	_, err = NewForeignScanReader(param).Open(param, proc)
-	require.ErrorContains(t, err, "unset or empty")
-	savedCtx := proc.Ctx
-	proc.Ctx = defines.AttachAccountId(proc.Ctx, 42)
-	_, err = NewForeignScanReader(param).Open(param, proc)
-	require.ErrorContains(t, err, "require the sys account")
-	proc.Ctx = savedCtx
+	require.ErrorContains(t, err, "invalid config")
 
 	// no config and no session variable
 	param = foreignScanParam(t, "sql", "", cols, []string{"id", "name"})

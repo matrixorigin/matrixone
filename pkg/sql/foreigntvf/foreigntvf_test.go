@@ -23,8 +23,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -137,55 +135,6 @@ func (c *fakeConnCache) RemoveForeignConn(handle string) (process.ForeignConn, b
 }
 
 var _ process.ForeignConnCache = (*fakeConnCache)(nil)
-
-// TestResolveOrConnectEnvRef proves env:NAME config references resolve from
-// the process environment BEFORE hashing, so the handle is derived from the
-// resolved JSON (an env: caller and an inline caller of the same config share
-// one cache entry), and that unset/empty references error clearly.
-func TestResolveOrConnectEnvRef(t *testing.T) {
-	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	cache := newFakeConnCache()
-
-	// The env var holds a config with an unsupported driver: resolution must
-	// happen first (we see the driver error, not a JSON error on "env:...").
-	t.Setenv("MO_FOREIGNTVF_TEST_CFG", `{"driver":"nope","dsn":"x"}`)
-	_, _, err := ResolveOrConnect(ctx, cache, KindSQL, "env:MO_FOREIGNTVF_TEST_CFG")
-	require.ErrorContains(t, err, `unsupported driver "nope"`)
-
-	// unset / empty-name references error clearly.
-	_, _, err = ResolveOrConnect(ctx, cache, KindSQL, "env:MO_FOREIGNTVF_TEST_UNSET")
-	require.ErrorContains(t, err, "unset or empty")
-	_, _, err = ResolveOrConnect(ctx, cache, KindSQL, "env:")
-	require.ErrorContains(t, err, "no variable name")
-
-	// env: references resolve operator-owned CN environment variables and are
-	// gated to the sys account: a tenant guessing an operator secret name must
-	// not be able to use it (and a context with no account at all is rejected).
-	tenantCtx := defines.AttachAccountId(context.Background(), 42)
-	_, _, err = ResolveOrConnect(tenantCtx, cache, KindSQL, "env:MO_FOREIGNTVF_TEST_CFG")
-	require.ErrorContains(t, err, "require the sys account")
-	_, _, err = ResolveOrConnect(context.Background(), cache, KindSQL, "env:MO_FOREIGNTVF_TEST_CFG")
-	require.ErrorContains(t, err, "require the sys account")
-
-	// the handle is derived from the RESOLVED config: seed the cache under the
-	// resolved-config handle and connect via the env reference — it must hit.
-	seeded := &seedConn{}
-	resolvedHandle := MakeHandle(KindSQL, `{"driver":"nope","dsn":"x"}`)
-	cache.conns[resolvedHandle] = seeded
-	conn, handle, err := ResolveOrConnect(ctx, cache, KindSQL, "env:MO_FOREIGNTVF_TEST_CFG")
-	require.NoError(t, err)
-	require.Equal(t, resolvedHandle, handle)
-	require.Same(t, seeded, conn.(*seedConn))
-}
-
-// seedConn is a minimal Conn for cache-hit testing.
-type seedConn struct{}
-
-func (c *seedConn) Close() error { return nil }
-func (c *seedConn) Kind() Kind   { return KindSQL }
-func (c *seedConn) Query(ctx context.Context, q string) (io.ReadCloser, error) {
-	return nil, nil
-}
 
 // errReadCloser yields data then a chosen error.
 type errReadCloser struct {

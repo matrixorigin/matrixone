@@ -142,7 +142,7 @@ func TestForeignTVFParamRoundTrip(t *testing.T) {
 }
 
 // TestFormatForeignTableOptionsForShowCreate pins SHOW CREATE emission:
-// inline config redacted, env: verbatim, query emitted, optionless minimal.
+// every config redacted, query emitted, optionless minimal.
 func TestFormatForeignTableOptionsForShowCreate(t *testing.T) {
 	got := formatForeignTableOptionsForShowCreate(foreignext.Config{
 		Kind: "sql", ConfigJSON: `{"driver":"mysql","dsn":"u:pw@h/db"}`, DefaultQuery: "select 1",
@@ -150,10 +150,11 @@ func TestFormatForeignTableOptionsForShowCreate(t *testing.T) {
 	require.Equal(t, ` ENGINE = SQL WITH ("config" = '<redacted>', "query" = 'select 1')`, got)
 	require.NotContains(t, got, "pw@h")
 
+	// every config is redacted; the session-variable path needs no option
 	got = formatForeignTableOptionsForShowCreate(foreignext.Config{
-		Kind: "esql", ConfigJSON: "env:ES_CFG",
+		Kind: "esql", ConfigJSON: `{"addresses":["http://h"]}`,
 	}, "")
-	require.Equal(t, ` ENGINE = ESQL WITH ("config" = 'env:ES_CFG')`, got)
+	require.Equal(t, ` ENGINE = ESQL WITH ("config" = '<redacted>')`, got)
 
 	got = formatForeignTableOptionsForShowCreate(foreignext.Config{Kind: "esql"}, "")
 	require.Equal(t, ` ENGINE = ESQL`, got)
@@ -162,7 +163,7 @@ func TestFormatForeignTableOptionsForShowCreate(t *testing.T) {
 // TestIsForeignTableDef covers the envelope/feature-bit cross-check.
 func TestIsForeignTableDef(t *testing.T) {
 	ctx := context.Background()
-	env := foreignext.BuildCreateSQLEnvelope(foreignext.Config{Kind: "sql", ConfigJSON: "env:X"})
+	env := foreignext.BuildCreateSQLEnvelope(foreignext.Config{Kind: "sql", ConfigJSON: `{"driver":"mysql","dsn":"x"}`})
 
 	// nil / non-external table
 	_, ok, err := IsForeignTableDef(ctx, nil)
@@ -223,7 +224,7 @@ func TestBuildCreateForeignTable(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{
 		`create external table t1 (a int, b varchar(10)) engine = sql with ('config'='{"driver":"mysql","dsn":"u@h/db"}', 'query'='select 1')`,
-		`create external table t2 (a int) engine = esql with ('config'='env:ES_CFG')`,
+		`create external table t2 (a int) engine = esql with ('config'='{"addresses":["http://es:9200"]}')`,
 		`create external table t3 (a int) engine = esql`,
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
@@ -245,7 +246,7 @@ func TestBuildCreateForeignTable(t *testing.T) {
 func TestSelectAndAlterForeignTable(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mcc := mock.CurrentContext().(*MockCompilerContext)
-	env := foreignext.BuildCreateSQLEnvelope(foreignext.Config{Kind: "sql", ConfigJSON: "env:X"})
+	env := foreignext.BuildCreateSQLEnvelope(foreignext.Config{Kind: "sql", ConfigJSON: `{"driver":"mysql","dsn":"x"}`})
 	mcc.tables["foreign_t"] = &TableDef{
 		TableType:   catalog.SystemExternalRel,
 		TblId:       990001,
@@ -326,7 +327,7 @@ func TestPreexistingMoQueryColumnStaysVisible(t *testing.T) {
 	require.NoError(t, err)
 
 	// contrast: the foreign table's SYNTHETIC column stays hidden from *
-	env := foreignext.BuildCreateSQLEnvelope(foreignext.Config{Kind: "sql", ConfigJSON: "env:X"})
+	env := foreignext.BuildCreateSQLEnvelope(foreignext.Config{Kind: "sql", ConfigJSON: `{"driver":"mysql","dsn":"x"}`})
 	mcc.tables["foreign_t2"] = &TableDef{
 		TableType:   catalog.SystemExternalRel,
 		TblId:       990003,

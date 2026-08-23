@@ -34,11 +34,9 @@ func (option ForeignTableOption) Format(ctx *FmtCtx) {
 	ctx.WriteString(string(option.Key))
 	ctx.WriteString("\" = '")
 	value := option.Val
-	// An inline config JSON carries credentials (ES password, DSN password);
-	// redact it wherever the statement is re-rendered (statement logs, SHOW
-	// CREATE). An "env:NAME" reference is not a secret and stays verbatim.
-	if strings.EqualFold(strings.TrimSpace(string(option.Key)), "config") &&
-		!strings.HasPrefix(strings.TrimSpace(value), "env:") {
+	// A config JSON carries credentials (ES password, DSN password); redact it
+	// wherever the statement is re-rendered (statement logs, SHOW CREATE).
+	if strings.EqualFold(strings.TrimSpace(string(option.Key)), "config") {
 		value = "<redacted>"
 	}
 	ctx.WriteString(strings.ReplaceAll(FormatString(value), "'", "''"))

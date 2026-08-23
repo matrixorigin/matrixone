@@ -8494,12 +8494,12 @@ func (m *DataStreamScan) GetApiKey() string {
 // ForeignScan describes a scan of an ESQL/SQL foreign external table
 // (CREATE EXTERNAL TABLE ... ENGINE = ESQL|SQL): the query texts to run come
 // from __mo_query predicates (the scan's FileList), the connection from
-// config (inline JSON, an env:NAME reference, or "" meaning the session's
-// @esql_tvf_config / @sql_tvf_config). See docs/cn/esql_sql_exttab.md.
+// config (inline JSON, or "" meaning the session's @esql_tvf_config /
+// @sql_tvf_config). See docs/cn/esql_sql_exttab.md.
 type ForeignScan struct {
 	// kind is "esql" or "sql".
 	Kind string `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
-	// config is the connection config option, verbatim (may be env:NAME or "").
+	// config is the connection config option, verbatim ("" means session var).
 	Config string `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
 	// default_query is the 'query' table option ("" when not set).
 	DefaultQuery         string   `protobuf:"bytes,3,opt,name=default_query,json=defaultQuery,proto3" json:"default_query,omitempty"`

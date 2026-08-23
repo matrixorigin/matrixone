@@ -2343,10 +2343,10 @@ func buildCreateTable(
 		if err != nil {
 			return nil, err
 		}
-		// Validate the JSON shape of an inline config without dialing (env:
-		// references and the session-variable fallback are resolved at scan
-		// time on the CN, so there is nothing to validate here for them).
-		if cfg.ConfigJSON != "" && !strings.HasPrefix(cfg.ConfigJSON, "env:") {
+		// Validate the JSON shape of an inline config without dialing (the
+		// session-variable fallback is resolved at scan time, so there is
+		// nothing to validate here for it).
+		if cfg.ConfigJSON != "" {
 			if err := foreigntvf.ValidateConfig(ctx.GetContext(), foreigntvf.Kind(cfg.Kind), cfg.ConfigJSON); err != nil {
 				return nil, err
 			}

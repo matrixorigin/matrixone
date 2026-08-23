@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 
@@ -41,12 +40,6 @@ const (
 	optionTable   = "table"
 	optionRecheck = "recheck"
 	optionAPIKey  = "apikey"
-
-	// apiKeyEnvPrefix marks an apikey value as a reference to a process
-	// environment variable resolved on the CN at scan time, instead of an
-	// inline secret. Using it keeps the actual secret out of the catalog
-	// (rel_createsql), the plan, and statement logs.
-	apiKeyEnvPrefix = "env:"
 )
 
 // Config is the validated content of the WITH (...) option list.
@@ -67,25 +60,6 @@ type Config struct {
 // (::1 -> [::1]:port) instead of producing the ambiguous ::1:port.
 func (c Config) Address() string {
 	return net.JoinHostPort(c.Server, strconv.Itoa(int(c.Port)))
-}
-
-// ResolveAPIKey resolves an apikey option value into the secret to present to
-// the server. A value "env:NAME" is a reference resolved from the process
-// environment at scan time (so the secret is never stored in the catalog,
-// plan, or logs); any other value is used literally. "" stays "" (no key).
-func ResolveAPIKey(ctx context.Context, raw string) (string, error) {
-	if !strings.HasPrefix(raw, apiKeyEnvPrefix) {
-		return raw, nil
-	}
-	name := strings.TrimPrefix(raw, apiKeyEnvPrefix)
-	if name == "" {
-		return "", moerr.NewInvalidInput(ctx, "datastream apikey 'env:' reference has no variable name")
-	}
-	value := os.Getenv(name)
-	if value == "" {
-		return "", moerr.NewInvalidInputf(ctx, "datastream apikey env var %q is unset or empty", name)
-	}
-	return value, nil
 }
 
 // ParseTableOptions validates the WITH (...) list of ENGINE = DATASTREAM.

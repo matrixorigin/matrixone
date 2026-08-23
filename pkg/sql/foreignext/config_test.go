@@ -19,8 +19,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -48,9 +46,9 @@ func TestParseTableOptions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, KindESQL, cfg.Kind)
 	require.Empty(t, cfg.ConfigJSON)
-	cfg, err = ParseTableOptions(ctx, mk("ESQL", "CONFIG", "env:ES_CFG"))
+	cfg, err = ParseTableOptions(ctx, mk("ESQL", "CONFIG", `{"addresses":["http://h"]}`))
 	require.NoError(t, err)
-	require.Equal(t, "env:ES_CFG", cfg.ConfigJSON)
+	require.Equal(t, `{"addresses":["http://h"]}`, cfg.ConfigJSON)
 
 	// duplicate key
 	_, err = ParseTableOptions(ctx, mk("sql", "config", "a", "config", "b"))
@@ -71,7 +69,7 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 
 	cases := []Config{
 		{Kind: KindSQL, ConfigJSON: `{"driver":"mysql","dsn":"u:p@tcp(h:3306)/db"}`, DefaultQuery: "select * from t"},
-		{Kind: KindESQL, ConfigJSON: "env:ES_CFG", DefaultQuery: ""},
+		{Kind: KindESQL, ConfigJSON: `{"addresses":["http://h:9200"]}`, DefaultQuery: ""},
 		{Kind: KindESQL, ConfigJSON: "", DefaultQuery: "FROM idx | LIMIT 10"},
 		// hostile values: ';', '*/', newline in DSN or query must not break the envelope
 		{Kind: KindSQL, ConfigJSON: `{"dsn":"a;b*/c"}`, DefaultQuery: "select 1; -- */ \n"},
@@ -117,33 +115,6 @@ func TestEnvelopeRecognition(t *testing.T) {
 	}
 }
 
-func TestResolveConfig(t *testing.T) {
-	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	// literal passes through
-	v, err := ResolveConfig(ctx, `{"driver":"mysql"}`)
-	require.NoError(t, err)
-	require.Equal(t, `{"driver":"mysql"}`, v)
-	// empty stays empty (session-var fallback is the caller's job)
-	v, err = ResolveConfig(ctx, "")
-	require.NoError(t, err)
-	require.Empty(t, v)
-	// env reference
-	t.Setenv("MO_FOREIGNEXT_TEST_CFG", `{"driver":"mysql","dsn":"x"}`)
-	v, err = ResolveConfig(ctx, "env:MO_FOREIGNEXT_TEST_CFG")
-	require.NoError(t, err)
-	require.Equal(t, `{"driver":"mysql","dsn":"x"}`, v)
-	// unset env / empty name error
-	_, err = ResolveConfig(ctx, "env:MO_FOREIGNEXT_TEST_UNSET")
-	require.Error(t, err)
-	_, err = ResolveConfig(ctx, "env:")
-	require.Error(t, err)
-	// non-sys accounts (and account-less contexts) may not resolve env: refs
-	_, err = ResolveConfig(defines.AttachAccountId(context.Background(), 42), "env:MO_FOREIGNEXT_TEST_CFG")
-	require.ErrorContains(t, err, "require the sys account")
-	_, err = ResolveConfig(context.Background(), "env:MO_FOREIGNEXT_TEST_CFG")
-	require.ErrorContains(t, err, "require the sys account")
-}
-
 // TestRedactedConfigRejectedClearly proves replaying SHOW CREATE output (whose
 // inline config is redacted) fails with an explanation, not a JSON error.
 func TestRedactedConfigRejectedClearly(t *testing.T) {
@@ -154,5 +125,5 @@ func TestRedactedConfigRejectedClearly(t *testing.T) {
 	_, err := ParseTableOptions(ctx, p)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "SHOW CREATE")
-	require.Contains(t, err.Error(), "env:NAME")
+	require.Contains(t, err.Error(), "session variable")
 }

@@ -51,30 +51,6 @@ func TestParseTableOptions(t *testing.T) {
 	cfg, err = ParseTableOptions(ctx, options("server", "h", "port", "1", "table", "t", "apikey", "s3cr3t"))
 	require.NoError(t, err)
 	require.Equal(t, "s3cr3t", cfg.APIKey)
-}
-
-func TestResolveAPIKey(t *testing.T) {
-	ctx := context.Background()
-
-	// literal values (incl. empty) pass through unchanged
-	got, err := ResolveAPIKey(ctx, "")
-	require.NoError(t, err)
-	require.Equal(t, "", got)
-	got, err = ResolveAPIKey(ctx, "s3cr3t")
-	require.NoError(t, err)
-	require.Equal(t, "s3cr3t", got)
-
-	// env: reference resolves from the process environment at call time
-	t.Setenv("JSTFU_TEST_KEY", "from-env")
-	got, err = ResolveAPIKey(ctx, "env:JSTFU_TEST_KEY")
-	require.NoError(t, err)
-	require.Equal(t, "from-env", got)
-
-	// misconfigured references are errors, not silent empties
-	_, err = ResolveAPIKey(ctx, "env:")
-	require.Error(t, err)
-	_, err = ResolveAPIKey(ctx, "env:JSTFU_DEFINITELY_UNSET_VAR")
-	require.Error(t, err)
 
 	for _, bad := range []*tree.DataStreamTableParam{
 		options("port", "4444", "table", "t"),                                 // missing server

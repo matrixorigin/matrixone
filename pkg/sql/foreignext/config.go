@@ -23,13 +23,10 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -45,12 +42,6 @@ const (
 
 	optionConfig = "config"
 	optionQuery  = "query"
-
-	// configEnvPrefix marks a config value as a reference to a process
-	// environment variable resolved on the CN at scan time, instead of inline
-	// JSON carrying credentials. Using it keeps the secret out of the catalog
-	// (rel_createsql), the plan, and statement logs.
-	configEnvPrefix = "env:"
 )
 
 // Config is the validated content of the WITH (...) option list.
@@ -58,37 +49,13 @@ type Config struct {
 	// Kind is KindESQL or KindSQL, from the ENGINE clause.
 	Kind string
 	// ConfigJSON is the connection config: inline JSON (as accepted by
-	// esql_tvf_connect / sql_tvf_connect), an "env:NAME" reference, or ""
-	// meaning "resolve from @esql_tvf_config / @sql_tvf_config at scan time".
+	// esql_tvf_connect / sql_tvf_connect), or "" meaning "resolve from
+	// @esql_tvf_config / @sql_tvf_config at scan time". User input or session
+	// only; query processing never reads the CN process environment.
 	ConfigJSON string
 	// DefaultQuery is the query text used when a SELECT has no
 	// __mo_query = '...' predicate; "" means no default.
 	DefaultQuery string
-}
-
-// ResolveConfig resolves the config option value into the connection config
-// JSON. A value "env:NAME" is resolved from the process environment at scan
-// time; any other value is used literally. "" stays "" (caller falls back to
-// the session variable).
-func ResolveConfig(ctx context.Context, raw string) (string, error) {
-	if !strings.HasPrefix(raw, configEnvPrefix) {
-		return raw, nil
-	}
-	// Same gate as the TVF connect path: the CN environment is operator-owned
-	// and shared across tenants, so only the sys account may reference it.
-	if accountId, err := defines.GetAccountId(ctx); err != nil || accountId != catalog.System_Account {
-		return "", moerr.NewInvalidInput(ctx,
-			"'env:' config references resolve operator-owned CN environment variables and require the sys account")
-	}
-	name := strings.TrimPrefix(raw, configEnvPrefix)
-	if name == "" {
-		return "", moerr.NewInvalidInput(ctx, "foreign table config 'env:' reference has no variable name")
-	}
-	value := os.Getenv(name)
-	if value == "" {
-		return "", moerr.NewInvalidInputf(ctx, "foreign table config env var %q is unset or empty", name)
-	}
-	return value, nil
 }
 
 // ParseTableOptions validates the WITH (...) list of ENGINE = ESQL|SQL.
@@ -115,7 +82,7 @@ func ParseTableOptions(ctx context.Context, param *tree.ForeignTableParam) (Conf
 				// (snapshot/PITR restore, copy-paste) must say why it cannot
 				// work instead of failing on unparseable JSON.
 				return Config{}, moerr.NewInvalidInputf(ctx,
-					"the 'config' option is '<redacted>' (SHOW CREATE hides inline credentials); re-supply the real config, or use an env:NAME reference which is never redacted")
+					"the 'config' option is '<redacted>' (SHOW CREATE hides inline credentials); re-supply the real config, or omit it and set the @esql_tvf_config / @sql_tvf_config session variable")
 			}
 			cfg.ConfigJSON = value
 		case optionQuery:

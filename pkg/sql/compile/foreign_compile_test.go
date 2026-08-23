@@ -44,7 +44,7 @@ func foreignTestNode(defaultQuery string, filters ...*plan.Expr) *plan.Node {
 			TbColToDataCol: map[string]int32{"a": 0},
 			ForeignScan: &plan.ForeignScan{
 				Kind:         "sql",
-				Config:       "env:UNUSED",
+				Config:       `{"driver":"mysql","dsn":"unused"}`,
 				DefaultQuery: defaultQuery,
 			},
 		},

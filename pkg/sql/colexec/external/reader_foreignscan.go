@@ -101,13 +101,10 @@ func (r *ForeignScanReader) Open(param *ExternalParam, proc *process.Process) (f
 		return false, moerr.NewInvalidInput(proc.Ctx, "an ESQL/SQL external table can only be read in an interactive session")
 	}
 
-	// Config resolution order: table option (inline JSON or env:NAME resolved
-	// on the CN right now, so secrets never sat in the catalog) -> session
-	// variable @esql_tvf_config / @sql_tvf_config -> error.
-	configJSON, err := foreignext.ResolveConfig(proc.Ctx, fs.Config)
-	if err != nil {
-		return false, err
-	}
+	// Config resolution order: the table option (inline JSON) -> session
+	// variable @esql_tvf_config / @sql_tvf_config -> error. User input or
+	// session only; query processing never reads the CN process environment.
+	configJSON := fs.Config
 	if configJSON == "" {
 		if configJSON, err = foreigntvf.ConfigFromSessionVar(proc.Ctx, proc, kind); err != nil {
 			return false, err
