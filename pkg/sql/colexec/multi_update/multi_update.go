@@ -484,9 +484,6 @@ func filterTargetRows(
 	rowIDNulls := rowIDVec.GetNulls()
 	rowNumberNulls := rowNumberVec.GetNulls()
 	activeCols := updateCtx.AffectedRowsCols
-	if len(activeCols) == 0 && len(updateCtx.DeleteCols) >= 4 {
-		activeCols = updateCtx.DeleteCols[3:4]
-	}
 	activeVecs := make([]*vector.Vector, len(activeCols))
 	for i, col := range activeCols {
 		if col < 0 || col >= len(input.Vecs) {
@@ -495,6 +492,19 @@ func filterTargetRows(
 		activeVecs[i] = input.Vecs[col]
 		if activeVecs[i].GetType().Oid != types.T_bool {
 			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
+		}
+	}
+	var physicalActiveVec *vector.Vector
+	if len(updateCtx.DeleteCols) >= 4 {
+		physicalActiveCol := updateCtx.DeleteCols[3]
+		if physicalActiveCol < 0 || physicalActiveCol >= len(input.Vecs) {
+			return nil, false, 0, moerr.NewInternalError(
+				proc.Ctx, "invalid multi-target update selector columns")
+		}
+		physicalActiveVec = input.Vecs[physicalActiveCol]
+		if physicalActiveVec.GetType().Oid != types.T_bool {
+			return nil, false, 0, moerr.NewInternalError(
+				proc.Ctx, "invalid multi-target update selector types")
 		}
 	}
 	if updateCtx.ChangedRowsCol != nil {
@@ -522,7 +532,16 @@ func filterTargetRows(
 				}
 			}
 		}
-		if activeCount == 0 {
+		physicalActive := true
+		if physicalActiveVec != nil {
+			physicalActive = !physicalActiveVec.IsNull(uint64(i)) &&
+				vector.GetFixedAtNoTypeCheck[bool](physicalActiveVec, i)
+		} else if len(activeVecs) > 0 {
+			// Compatibility with plans produced before physical write eligibility
+			// was separated from semantic affected-row selectors.
+			physicalActive = activeCount > 0
+		}
+		if !physicalActive {
 			continue
 		}
 		selections = append(selections, int64(i))
@@ -543,9 +562,8 @@ func filterTargetRows(
 		if updateCtx.ChangedRowsCol != nil {
 			semanticAffectedRows = countSemanticAffectedRows(updateCtx, filtered, activeCols)
 		}
-		physicalAffectedRows := insertAffectedRows(updateCtx, filtered)
-		additionalAffectedRows := semanticAffectedRows - physicalAffectedRows
-		return filtered, true, additionalAffectedRows, nil
+		return filtered, true, filterReportedAffectedRows(
+			updateCtx, semanticAffectedRows, insertAffectedRows(updateCtx, filtered)), nil
 	}
 
 	physicalSelections := make([]int64, 0, filtered.RowCount())
@@ -576,9 +594,19 @@ func filterTargetRows(
 	if updateCtx.ChangedRowsCol != nil {
 		semanticAffectedRows = countSemanticAffectedRows(updateCtx, filtered, activeCols)
 	}
-	physicalAffectedRows := insertAffectedRows(updateCtx, filtered)
-	additionalAffectedRows := semanticAffectedRows - physicalAffectedRows
-	return filtered, true, additionalAffectedRows, nil
+	return filtered, true, filterReportedAffectedRows(
+		updateCtx, semanticAffectedRows, insertAffectedRows(updateCtx, filtered)), nil
+}
+
+func filterReportedAffectedRows(
+	updateCtx *MultiUpdateCtx,
+	semanticAffectedRows uint64,
+	physicalAffectedRows uint64,
+) uint64 {
+	if len(updateCtx.AffectedRowsCols) > 0 {
+		return semanticAffectedRows
+	}
+	return semanticAffectedRows - physicalAffectedRows
 }
 
 func countSemanticAffectedRows(updateCtx *MultiUpdateCtx, input *batch.Batch, activeCols []int) uint64 {

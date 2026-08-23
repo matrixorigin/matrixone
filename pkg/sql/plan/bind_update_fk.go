@@ -51,6 +51,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 	newColName2Idx map[string]int32,
 	targetRowNumberPos []int32,
 	targetBranchActivePos []int32,
+	physicalTargetActivePos []int32,
 	deferRepeatedPhysicalTargetMerge bool,
 ) (int32, int32, *plan.Node, error) {
 	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
@@ -90,6 +91,17 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			}
 		}
 		if !repeatedPhysicalTarget || !deferRepeatedPhysicalTargetMerge {
+			selfTargetSelectors := &updateSelfTargetSelectors{
+				targetRowNumberPos:      targetRowNumberPos,
+				targetActivePos:         targetBranchActivePos,
+				physicalTargetActivePos: physicalTargetActivePos,
+			}
+			for targetIdx, targetDef := range dmlCtx.tableDefs {
+				if len(dmlCtx.updateCol2Expr[targetIdx]) > 0 && targetDef.TblId == tableDef.TblId {
+					selfTargetSelectors.targetIndexes = append(
+						selfTargetSelectors.targetIndexes, targetIdx)
+				}
+			}
 			lastNodeID, selectNodeTag, err = builder.appendUpdateParentForeignKeyChecks(
 				bindCtx,
 				tableDef,
@@ -100,6 +112,8 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 				newColName2Idx,
 				targetSelected,
 				false,
+				selfTargetSelectors,
+				nil,
 			)
 			if err != nil {
 				return 0, 0, nil, err
@@ -436,6 +450,8 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetParentForeignKeyChecks(
 			newColName2Idx,
 			targetSelected,
 			true,
+			nil,
+			nil,
 		)
 		if err != nil {
 			return 0, 0, nil, err
@@ -543,14 +559,41 @@ type updateAffectedRowsColumn struct {
 	pos int32
 }
 
-// validateDistinctUpdateForeignKeyMutationTargets protects the Stage-1
-// distinct-table planner invariant: one statement may have only one physical
-// write path for a table. Parent actions are separate MULTI_UPDATE steps, so a
-// child that is also an explicit target, or is reached from two parent targets,
-// cannot be safely planned until those paths share one final-row merger.
+type updateForeignKeyActionEdgeKey struct {
+	parentTableID uint64
+	childTableID  uint64
+	signature     string
+}
+
+func makeUpdateForeignKeyActionEdgeKey(
+	parentTableID uint64,
+	childTableID uint64,
+	fk *plan.ForeignKeyDef,
+) updateForeignKeyActionEdgeKey {
+	return updateForeignKeyActionEdgeKey{
+		parentTableID: parentTableID,
+		childTableID:  childTableID,
+		signature: fmt.Sprintf(
+			"%s/%v/%v", fk.Name, fk.Cols, fk.ForeignCols),
+	}
+}
+
+type updateSelfTargetSelectors struct {
+	targetIndexes           []int
+	targetRowNumberPos      []int32
+	targetActivePos         []int32
+	physicalTargetActivePos []int32
+}
+
+// validateDistinctUpdateForeignKeyMutationTargets builds the complete mutating
+// ON UPDATE action graph before any action MULTI_UPDATE step is appended. The
+// current planner can fold self actions into their physical parent's writer,
+// but it cannot merge row images produced by independent parent paths. Reject
+// those converging paths rather than emitting multiple writers for one table.
 func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext,
+	newColName2Idx map[string]int32,
 ) error {
 	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
 	if err != nil || !enabled {
@@ -558,35 +601,52 @@ func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 	}
 
 	type writeOrigin struct {
-		description    string
-		actionParentID uint64
+		description string
 	}
+	type actionRoot struct {
+		tableDef    *plan.TableDef
+		changedCols map[uint64]struct{}
+		origin      string
+	}
+
 	writeOrigins := make(map[uint64]writeOrigin)
+	rootsByTableID := make(map[uint64]*actionRoot)
+	rootOrder := make([]uint64, 0)
 	for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
 		if len(updateCols) == 0 {
 			continue
 		}
-		tableID := dmlCtx.tableDefs[targetIdx].TblId
-		if _, exists := writeOrigins[tableID]; !exists {
-			writeOrigins[tableID] = writeOrigin{
-				description: fmt.Sprintf("explicit target '%s'", dmlCtx.aliases[targetIdx]),
+		tableDef := dmlCtx.tableDefs[targetIdx]
+		if tableDef == nil {
+			continue
+		}
+		root := rootsByTableID[tableDef.TblId]
+		if root == nil {
+			root = &actionRoot{
+				tableDef:    tableDef,
+				changedCols: make(map[uint64]struct{}),
+				origin:      fmt.Sprintf("explicit target '%s'", dmlCtx.aliases[targetIdx]),
+			}
+			rootsByTableID[tableDef.TblId] = root
+			rootOrder = append(rootOrder, tableDef.TblId)
+			writeOrigins[tableDef.TblId] = writeOrigin{description: root.origin}
+		}
+		alias := dmlCtx.aliases[targetIdx]
+		for _, col := range tableDef.Cols {
+			if _, changed := newColName2Idx[alias+"."+col.Name]; changed {
+				root.changedCols[col.ColId] = struct{}{}
 			}
 		}
 	}
 
-	for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
-		if len(updateCols) == 0 {
-			continue
+	collectAffected := func(
+		parentTableDef *plan.TableDef,
+		changedCols map[uint64]struct{},
+	) ([]updateParentForeignKey, error) {
+		if parentTableDef == nil || len(parentTableDef.RefChildTbls) == 0 || len(changedCols) == 0 {
+			return nil, nil
 		}
-		parentTableDef := dmlCtx.tableDefs[targetIdx]
-		if parentTableDef == nil || len(parentTableDef.RefChildTbls) == 0 {
-			continue
-		}
-
-		parentColIDToName := make(map[uint64]string, len(parentTableDef.Cols))
-		for _, col := range parentTableDef.Cols {
-			parentColIDToName[col.ColId] = col.Name
-		}
+		affected := make([]updateParentForeignKey, 0)
 		visitedChildren := make(map[uint64]struct{}, len(parentTableDef.RefChildTbls))
 		for _, childTableID := range parentTableDef.RefChildTbls {
 			if childTableID == 0 {
@@ -596,18 +656,15 @@ func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 				continue
 			}
 			visitedChildren[childTableID] = struct{}{}
-
 			childObjRef, childTableDef, resolveErr := builder.compCtx.ResolveById(
 				childTableID, bindCtx.snapshot)
 			if resolveErr != nil {
-				return resolveErr
+				return nil, resolveErr
 			}
 			if childTableDef == nil {
-				return moerr.NewInternalErrorf(
+				return nil, moerr.NewInternalErrorf(
 					builder.GetContext(), "foreign-key child table %d not found", childTableID)
 			}
-
-			hasMutation := false
 			for _, fk := range childTableDef.Fkeys {
 				referencesParent := fk.ForeignTbl == parentTableDef.TblId ||
 					(fk.ForeignTbl == 0 && childTableDef.TblId == parentTableDef.TblId)
@@ -616,31 +673,92 @@ func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 					continue
 				}
 				for _, parentColID := range fk.ForeignCols {
-					if _, updated := updateCols[parentColIDToName[parentColID]]; updated {
-						hasMutation = true
+					if _, changed := changedCols[parentColID]; changed {
+						affected = append(affected, updateParentForeignKey{
+							childObjRef: childObjRef, childTableDef: childTableDef, fk: fk,
+						})
 						break
 					}
 				}
-				if hasMutation {
-					break
-				}
 			}
-			if !hasMutation || childTableID == parentTableDef.TblId {
-				// Self-referencing actions are folded into the explicit target's
-				// single physical writer by appendUpdateParentForeignKeyChecks.
-				continue
+		}
+		sort.SliceStable(affected, func(i, j int) bool {
+			if affected[i].childTableDef.TblId != affected[j].childTableDef.TblId {
+				return affected[i].childTableDef.TblId < affected[j].childTableDef.TblId
 			}
+			return affected[i].fk.Name < affected[j].fk.Name
+		})
+		return affected, nil
+	}
 
-			origin := fmt.Sprintf("foreign key action from '%s'", dmlCtx.aliases[targetIdx])
-			if previousOrigin, exists := writeOrigins[childTableID]; exists {
-				if previousOrigin.actionParentID == parentTableDef.TblId {
-					// Sibling aliases of one physical parent row feed one merged
-					// parent-key transition and therefore one child mutation path.
+	multipleActionsError := func() error {
+		return newRejectedUpdatePlannerRouteError(
+			updateRouteReasonForeignKey,
+			moerr.NewUnsupportedDML(
+				builder.GetContext(), "multiple parent foreign key actions targeting the same child table"),
+		)
+	}
+	var walkActionGraph func(*plan.TableDef, map[uint64]struct{}) error
+	walkActionGraph = func(
+		parentTableDef *plan.TableDef,
+		changedCols map[uint64]struct{},
+	) error {
+		handledSelfEdges := make(map[updateForeignKeyActionEdgeKey]struct{})
+		for {
+			affected, collectErr := collectAffected(parentTableDef, changedCols)
+			if collectErr != nil {
+				return collectErr
+			}
+			addedSelfChange := false
+			for _, action := range affected {
+				if action.childTableDef.TblId != parentTableDef.TblId {
 					continue
 				}
-				childName := childTableDef.Name
-				if childObjRef != nil && childObjRef.ObjName != "" {
-					childName = childObjRef.ObjName
+				edgeKey := makeUpdateForeignKeyActionEdgeKey(
+					parentTableDef.TblId, action.childTableDef.TblId, action.fk)
+				if _, handled := handledSelfEdges[edgeKey]; handled {
+					continue
+				}
+				if len(handledSelfEdges) > 0 {
+					return multipleActionsError()
+				}
+				handledSelfEdges[edgeKey] = struct{}{}
+				for _, childColID := range action.fk.Cols {
+					if _, changed := changedCols[childColID]; !changed {
+						changedCols[childColID] = struct{}{}
+						addedSelfChange = true
+					}
+				}
+			}
+			if !addedSelfChange {
+				break
+			}
+		}
+
+		affected, collectErr := collectAffected(parentTableDef, changedCols)
+		if collectErr != nil {
+			return collectErr
+		}
+		childrenFromParent := make(map[uint64]struct{})
+		for _, action := range affected {
+			childTableID := action.childTableDef.TblId
+			if childTableID == parentTableDef.TblId {
+				continue
+			}
+			if _, duplicate := childrenFromParent[childTableID]; duplicate {
+				return multipleActionsError()
+			}
+			childrenFromParent[childTableID] = struct{}{}
+
+			actionOrigin := fmt.Sprintf(
+				"foreign key action '%s' from table '%s'",
+				action.fk.Name,
+				parentTableDef.Name,
+			)
+			if previousOrigin, exists := writeOrigins[childTableID]; exists {
+				childName := action.childTableDef.Name
+				if action.childObjRef != nil && action.childObjRef.ObjName != "" {
+					childName = action.childObjRef.ObjName
 				}
 				return newUpdatePlannerRouteError(
 					updatePlannerRejected,
@@ -650,14 +768,26 @@ func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
 						"overlapping update paths for table '%s': %s and %s",
 						childName,
 						previousOrigin.description,
-						origin,
+						actionOrigin,
 					),
 				)
 			}
-			writeOrigins[childTableID] = writeOrigin{
-				description:    origin,
-				actionParentID: parentTableDef.TblId,
+			writeOrigins[childTableID] = writeOrigin{description: actionOrigin}
+			childChangedCols := make(map[uint64]struct{}, len(action.fk.Cols))
+			for _, childColID := range action.fk.Cols {
+				childChangedCols[childColID] = struct{}{}
 			}
+			if err := walkActionGraph(action.childTableDef, childChangedCols); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, tableID := range rootOrder {
+		root := rootsByTableID[tableID]
+		if err := walkActionGraph(root.tableDef, root.changedCols); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -673,6 +803,8 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	newColName2Idx map[string]int32,
 	targetSelected *plan.Expr,
 	skipSelfReferencingActions bool,
+	selfTargetSelectors *updateSelfTargetSelectors,
+	excludedMutationEdges map[updateForeignKeyActionEdgeKey]struct{},
 ) (int32, int32, error) {
 	if tableDef == nil || len(tableDef.RefChildTbls) == 0 {
 		return lastNodeID, selectNodeTag, nil
@@ -688,16 +820,19 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	if builder.updateParentActionStack == nil {
 		builder.updateParentActionStack = make(map[uint64]int)
 	}
-	if builder.updateParentActionStack[tableDef.TblId] > 0 {
+	continuingCurrentWriter := excludedMutationEdges != nil
+	if builder.updateParentActionStack[tableDef.TblId] > 0 && !continuingCurrentWriter {
 		return 0, 0, newRejectedUpdatePlannerRouteError(
 			updateRouteReasonForeignKey,
 			moerr.NewUnsupportedDML(builder.GetContext(), "cyclic parent foreign key action graph"),
 		)
 	}
-	builder.updateParentActionStack[tableDef.TblId]++
-	defer func() {
-		builder.updateParentActionStack[tableDef.TblId]--
-	}()
+	if !continuingCurrentWriter {
+		builder.updateParentActionStack[tableDef.TblId]++
+		defer func() {
+			builder.updateParentActionStack[tableDef.TblId]--
+		}()
+	}
 	// PREPARE may happen before the execution transaction exists. Keep a marker
 	// in the serialized plan so compile/run can enforce the actual transaction
 	// mode even when the binder could not observe it.
@@ -768,6 +903,11 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 		}
 		if affectedFK.fk.OnUpdate == plan.ForeignKeyDef_CASCADE ||
 			affectedFK.fk.OnUpdate == plan.ForeignKeyDef_SET_NULL {
+			edgeKey := makeUpdateForeignKeyActionEdgeKey(
+				tableDef.TblId, affectedFK.childTableDef.TblId, affectedFK.fk)
+			if _, excluded := excludedMutationEdges[edgeKey]; excluded {
+				continue
+			}
 			mutations = append(mutations, affectedFK)
 		}
 	}
@@ -790,6 +930,16 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 		if err := builder.validateModernUpdateParentMutation(tableDef, mutation); err != nil {
 			return 0, 0, err
 		}
+	}
+
+	recursiveExcludedEdges := make(map[updateForeignKeyActionEdgeKey]struct{},
+		len(excludedMutationEdges)+len(mutations))
+	for edgeKey := range excludedMutationEdges {
+		recursiveExcludedEdges[edgeKey] = struct{}{}
+	}
+	for _, mutation := range mutations {
+		recursiveExcludedEdges[makeUpdateForeignKeyActionEdgeKey(
+			tableDef.TblId, mutation.childTableDef.TblId, mutation.fk)] = struct{}{}
 	}
 
 	remainingMutations := make([]updateParentForeignKey, 0, len(mutations))
@@ -825,11 +975,33 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 			targetSelected,
 			true,
 			selfRows,
+			selfTargetSelectors,
+			recursiveExcludedEdges,
 		); err != nil {
 			return 0, 0, err
 		}
 		lastNodeID = selfRows.nodeID
 		selectNodeTag = selfRows.tag
+		if selfTargetSelectors != nil {
+			targetSelected = nil
+			for _, targetIdx := range selfTargetSelectors.targetIndexes {
+				rowNumberPos := selfTargetSelectors.targetRowNumberPos[targetIdx]
+				if rowNumberPos < 0 {
+					continue
+				}
+				var buildErr error
+				targetSelected, buildErr = builder.buildTargetSelectedExpr(
+					selectNodeTag,
+					builder.updateInputProjectNode(lastNodeID),
+					rowNumberPos,
+					selfTargetSelectors.physicalTargetActivePos[targetIdx],
+				)
+				if buildErr != nil {
+					return 0, 0, buildErr
+				}
+				break
+			}
+		}
 	}
 	if len(remainingMutations) == 0 {
 		return lastNodeID, selectNodeTag, nil
@@ -850,6 +1022,8 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 			newColName2Idx,
 			targetSelected,
 			false,
+			nil,
+			nil,
 			nil,
 		); err != nil {
 			return 0, 0, err
@@ -1290,6 +1464,8 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	targetSelected *plan.Expr,
 	selfReferencing bool,
 	selfRows *updateSelfMutationRows,
+	selfTargetSelectors *updateSelfTargetSelectors,
+	excludedMutationEdges map[updateForeignKeyActionEdgeKey]struct{},
 ) error {
 	parentNodeID := builder.appendTaggedSinkScan(bindCtx, sourceStep, sourceTag)
 	parentNode := builder.qry.Nodes[parentNodeID]
@@ -1660,7 +1836,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			childTag,
 			newChildExprs,
 			selfAffectedRowsExpr,
-			selfReferencing,
+			excludedMutationEdges,
 		)
 	if err != nil {
 		return err
@@ -1699,6 +1875,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			newChildExprs,
 			oldChildExprs,
 			selfAffectedRowsExpr,
+			selfTargetSelectors,
 		)
 		if err == nil {
 			builder.qry.HasForeignKeyAction = true
@@ -1747,7 +1924,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			ScanSnapshot: bindCtx.snapshot,
 		}, bindCtx)
 
-		oldKeyExpr, buildErr := builder.buildUpdateMutationIndexKey(
+		oldKeyExpr, buildErr := builder.buildUpdateMutationIndexLookupIdentity(
 			childTableDef,
 			idxDef,
 			childTag,
@@ -1971,6 +2148,7 @@ func (builder *QueryBuilder) appendUpdateSelfMutationRows(
 	newChildExprs map[int32]*plan.Expr,
 	oldChildExprs map[int32]*plan.Expr,
 	actionAffectedRowsExpr *plan.Expr,
+	selfTargetSelectors *updateSelfTargetSelectors,
 ) (int32, int32, error) {
 	if actionAffectedRowsExpr == nil {
 		return 0, 0, moerr.NewInternalError(
@@ -2011,8 +2189,51 @@ func (builder *QueryBuilder) appendUpdateSelfMutationRows(
 			}},
 		})
 	}
-	affectedRowsPos := int32(len(rootProject))
-	rootProject = append(rootProject, makePlan2BoolConstExprWithType(true))
+	affectedRowsPos := int32(-1)
+	physicalActivePos := int32(-1)
+	multiTarget := false
+	if selfTargetSelectors != nil {
+		for _, targetIdx := range selfTargetSelectors.targetIndexes {
+			if targetIdx >= 0 && targetIdx < len(selfTargetSelectors.targetRowNumberPos) &&
+				selfTargetSelectors.targetRowNumberPos[targetIdx] >= 0 {
+				multiTarget = true
+				break
+			}
+		}
+	}
+	if multiTarget {
+		var rootPhysicalActive *plan.Expr
+		for _, targetIdx := range selfTargetSelectors.targetIndexes {
+			activePos := selfTargetSelectors.targetActivePos[targetIdx]
+			if activePos < 0 || int(activePos) >= len(rootProject) {
+				return 0, 0, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing target active selector is unavailable")
+			}
+			activeExpr := DeepCopyExpr(rootProject[activePos])
+			if rootPhysicalActive == nil {
+				rootPhysicalActive = activeExpr
+				continue
+			}
+			var buildErr error
+			rootPhysicalActive, buildErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "or", []*plan.Expr{rootPhysicalActive, activeExpr})
+			if buildErr != nil {
+				return 0, 0, buildErr
+			}
+		}
+		if rootPhysicalActive == nil {
+			return 0, 0, moerr.NewInternalError(
+				builder.GetContext(), "self-referencing physical target selector is unavailable")
+		}
+		physicalActivePos = int32(len(rootProject))
+		rootProject = append(rootProject, rootPhysicalActive)
+		for _, targetIdx := range selfTargetSelectors.targetIndexes {
+			selfTargetSelectors.physicalTargetActivePos[targetIdx] = physicalActivePos
+		}
+	} else if selfTargetSelectors != nil {
+		affectedRowsPos = int32(len(rootProject))
+		rootProject = append(rootProject, makePlan2BoolConstExprWithType(true))
+	}
 	rootNodeID = builder.appendNode(&plan.Node{
 		NodeType: plan.Node_PROJECT, Children: []int32{rootNodeID},
 		ProjectList: rootProject, BindingTags: []int32{rootTag},
@@ -2056,7 +2277,22 @@ func (builder *QueryBuilder) appendUpdateSelfMutationRows(
 		}
 		actionProject[newPos] = DeepCopyExpr(newExpr)
 	}
-	actionProject[affectedRowsPos] = DeepCopyExpr(actionAffectedRowsExpr)
+	if multiTarget {
+		for _, targetIdx := range selfTargetSelectors.targetIndexes {
+			rowNumberPos := selfTargetSelectors.targetRowNumberPos[targetIdx]
+			activePos := selfTargetSelectors.targetActivePos[targetIdx]
+			if rowNumberPos < 0 || int(rowNumberPos) >= len(actionProject) ||
+				activePos < 0 || int(activePos) >= len(actionProject) {
+				return 0, 0, moerr.NewInternalError(
+					builder.GetContext(), "self-referencing target selector is unavailable")
+			}
+			actionProject[rowNumberPos] = makePlan2Int64ConstExprWithType(1)
+			actionProject[activePos] = DeepCopyExpr(actionAffectedRowsExpr)
+		}
+		actionProject[physicalActivePos] = makePlan2BoolConstExprWithType(true)
+	} else if affectedRowsPos >= 0 {
+		actionProject[affectedRowsPos] = DeepCopyExpr(actionAffectedRowsExpr)
+	}
 	actionOutputTag := builder.genNewBindTag()
 	actionNodeID = builder.appendNode(&plan.Node{
 		NodeType: plan.Node_PROJECT, Children: []int32{actionNodeID},
@@ -2145,11 +2381,13 @@ func (builder *QueryBuilder) appendUpdateSelfMutationRows(
 	}, bindCtx)
 	outputTag := builder.genNewBindTag()
 	unionNodeID = builder.appendUpdateRetagProject(bindCtx, unionNodeID, unionTag, outputTag)
-	if builder.updateAffectedRowsCols == nil {
-		builder.updateAffectedRowsCols = make(map[uint64]updateAffectedRowsColumn)
-	}
-	builder.updateAffectedRowsCols[tableDef.TblId] = updateAffectedRowsColumn{
-		pos: affectedRowsPos,
+	if affectedRowsPos >= 0 {
+		if builder.updateAffectedRowsCols == nil {
+			builder.updateAffectedRowsCols = make(map[uint64]updateAffectedRowsColumn)
+		}
+		builder.updateAffectedRowsCols[tableDef.TblId] = updateAffectedRowsColumn{
+			pos: affectedRowsPos,
+		}
 	}
 	return unionNodeID, outputTag, nil
 }
@@ -2161,7 +2399,7 @@ func (builder *QueryBuilder) appendRecursiveUpdateParentMutations(
 	inputTag int32,
 	replacements map[int32]*plan.Expr,
 	affectedRowsExpr *plan.Expr,
-	skipParentChecks bool,
+	excludedMutationEdges map[updateForeignKeyActionEdgeKey]struct{},
 ) (int32, int32, map[int32]*plan.Expr, map[int32]*plan.Expr, *plan.Expr, error) {
 	if tableDef == nil || len(replacements) == 0 {
 		return 0, 0, nil, nil, nil, moerr.NewInternalError(
@@ -2212,22 +2450,40 @@ func (builder *QueryBuilder) appendRecursiveUpdateParentMutations(
 		ProjectList: projectList, BindingTags: []int32{actionTag},
 	}, bindCtx)
 	checkedNodeID, checkedTag := lastNodeID, actionTag
-	if !skipParentChecks {
+	if len(tableDef.Checks) > 0 {
 		var err error
-		checkedNodeID, checkedTag, err = builder.appendUpdateParentForeignKeyChecks(
+		checkedNodeID, err = appendCheckConstraintPlanWithColLookup(
+			builder,
 			bindCtx,
 			tableDef,
-			alias,
-			lastNodeID,
-			actionTag,
-			oldColName2Idx,
-			newColName2Idx,
-			nil,
+			checkedNodeID,
+			checkedTag,
+			func(colName string) (int32, bool) {
+				pos, ok := tableDef.Name2ColIndex[colName]
+				return pos, ok
+			},
 			false,
 		)
 		if err != nil {
 			return 0, 0, nil, nil, nil, err
 		}
+	}
+	var err error
+	checkedNodeID, checkedTag, err = builder.appendUpdateParentForeignKeyChecks(
+		bindCtx,
+		tableDef,
+		alias,
+		checkedNodeID,
+		checkedTag,
+		oldColName2Idx,
+		newColName2Idx,
+		nil,
+		false,
+		nil,
+		excludedMutationEdges,
+	)
+	if err != nil {
+		return 0, 0, nil, nil, nil, err
 	}
 	checkedProject := getProjectionByLastNodeWithTag(builder, checkedNodeID, checkedTag)
 	newExprs := make(map[int32]*plan.Expr, len(replacements))
@@ -2347,26 +2603,34 @@ func (builder *QueryBuilder) appendRowNumberMappingGuardNode(
 	}, bindCtx), nil
 }
 
+func (builder *QueryBuilder) buildUpdateMutationIndexLookupIdentity(
+	tableDef *plan.TableDef,
+	idxDef *plan.IndexDef,
+	tableTag int32,
+	replacements map[int32]*plan.Expr,
+) (*plan.Expr, error) {
+	if !isSpatialIndexDef(idxDef) {
+		return builder.buildUpdateMutationIndexKey(tableDef, idxDef, tableTag, replacements)
+	}
+	pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+	if replacement, ok := replacements[pkPos]; ok {
+		return DeepCopyExpr(replacement), nil
+	}
+	return &plan.Expr{
+		Typ: tableDef.Cols[pkPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: tableTag,
+			ColPos: pkPos,
+		}},
+	}, nil
+}
+
 func (builder *QueryBuilder) buildUpdateMutationIndexKey(
 	tableDef *plan.TableDef,
 	idxDef *plan.IndexDef,
 	tableTag int32,
 	replacements map[int32]*plan.Expr,
 ) (*plan.Expr, error) {
-	if isSpatialIndexDef(idxDef) {
-		pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
-		if replacement, ok := replacements[pkPos]; ok {
-			return DeepCopyExpr(replacement), nil
-		}
-		return &plan.Expr{
-			Typ: tableDef.Cols[pkPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: tableTag,
-				ColPos: pkPos,
-			}},
-		}, nil
-	}
-
 	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 	if err != nil {
 		return nil, err

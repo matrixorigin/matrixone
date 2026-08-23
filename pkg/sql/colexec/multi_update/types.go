@@ -170,9 +170,10 @@ type MultiUpdateCtx struct {
 	// ChangedRowsCol is the input bool column containing the final row-image
 	// change marker. Nil requests the legacy matched-row count.
 	ChangedRowsCol *int
-	// AffectedRowsCols contains one active selector for every writable alias
-	// coalesced into this physical target. Physical writes remain deduplicated,
-	// while affected rows count every selector that contributed to the Rowid.
+	// AffectedRowsCols contains one semantic selector for every writable alias
+	// coalesced into this physical target. DeleteCols[3] independently controls
+	// physical write eligibility, so implicit cascade rows can be written without
+	// contributing to SQL affected-row accounting.
 	AffectedRowsCols []int
 	// TargetTableID stays logical when a partition wrapper replaces TableDef
 	// with a physical partition definition.
@@ -289,7 +290,7 @@ func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCou
 }
 
 func physicalInsertAffectedRows(updateCtx *MultiUpdateCtx, rowCount uint64) uint64 {
-	if updateCtx != nil && !updateCtx.DedupByTargetRowID && len(updateCtx.AffectedRowsCols) > 0 {
+	if updateCtx != nil && len(updateCtx.AffectedRowsCols) > 0 {
 		return 0
 	}
 	return rowCount

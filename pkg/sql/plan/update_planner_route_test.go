@@ -498,6 +498,60 @@ func TestBindUpdateRejectsOverlappingForeignKeyMutationTargets(t *testing.T) {
 		)
 		assertRejected(t, err)
 	})
+
+	t.Run("diamond cascade rejects duplicate grandchild writer", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(
+			t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_CASCADE)
+
+		dept := mock.ctxt.tables["dept"]
+		emp := mock.ctxt.tables["emp"]
+		nation := mock.ctxt.tables["nation"]
+		grandchild := mock.ctxt.tables["nation2"]
+		require.NotNil(t, nation)
+		require.NotNil(t, grandchild)
+
+		setTableID := func(name string, tableDef *planpb.TableDef, tableID uint64) {
+			delete(mock.ctxt.id2name, tableDef.TblId)
+			tableDef.TblId = tableID
+			mock.ctxt.id2name[tableID] = name
+			mock.ctxt.objects[name].Obj = int64(tableID)
+		}
+		setTableID("nation", nation, 88890)
+		setTableID("nation2", grandchild, 88891)
+
+		deptKey := dept.Cols[dept.Name2ColIndex["deptno"]].ColId
+		empKey := emp.Fkeys[0].Cols[0]
+		nationKey := nation.Cols[nation.Name2ColIndex["n_nationkey"]].ColId
+		grandchildKey := grandchild.Cols[grandchild.Name2ColIndex["n_nationkey"]].ColId
+		nation.Fkeys = append(nation.Fkeys, &planpb.ForeignKeyDef{
+			Name: "fk_nation_dept", Cols: []uint64{nationKey},
+			ForeignTbl: dept.TblId, ForeignCols: []uint64{deptKey},
+			OnUpdate: planpb.ForeignKeyDef_CASCADE,
+		})
+		dept.RefChildTbls = append(dept.RefChildTbls, nation.TblId)
+
+		emp.RefChildTbls = []uint64{grandchild.TblId}
+		nation.RefChildTbls = []uint64{grandchild.TblId}
+		grandchild.Fkeys = []*planpb.ForeignKeyDef{
+			{
+				Name: "fk_grandchild_emp", Cols: []uint64{grandchildKey},
+				ForeignTbl: emp.TblId, ForeignCols: []uint64{empKey},
+				OnUpdate: planpb.ForeignKeyDef_CASCADE,
+			},
+			{
+				Name: "fk_grandchild_nation", Cols: []uint64{grandchildKey},
+				ForeignTbl: nation.TblId, ForeignCols: []uint64{nationKey},
+				OnUpdate: planpb.ForeignKeyDef_CASCADE,
+			},
+		}
+
+		err := bindDirect(t, mock, "UPDATE dept SET deptno = deptno + 1")
+		require.ErrorContains(t, err, "overlapping update paths for table 'nation2'")
+		route, reason, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerRejected, route)
+		require.Equal(t, updateRouteReasonForeignKey, reason)
+	})
 }
 
 func TestUpdateIrregularIndexLocksBeforeMaintenanceFanout(t *testing.T) {
@@ -1176,6 +1230,130 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		}), "the child primary-key transition must be owned by a modern MULTI_UPDATE context")
 	})
 
+	t.Run("child primary key cascade keeps RTree geometry payload", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
+		emp := mock.ctxt.tables["emp"]
+		emp.Pkey = &planpb.PrimaryKeyDef{
+			Names:       []string{"deptno"},
+			PkeyColName: "deptno",
+		}
+		geometryPos := int32(slices.IndexFunc(emp.Cols, func(col *planpb.ColDef) bool {
+			return col.Name == "ename"
+		}))
+		deptnoPos := int32(slices.IndexFunc(emp.Cols, func(col *planpb.ColDef) bool {
+			return col.Name == "deptno"
+		}))
+		require.GreaterOrEqual(t, geometryPos, int32(0))
+		require.GreaterOrEqual(t, deptnoPos, int32(0))
+		emp.Cols[geometryPos].Typ = planpb.Type{Id: int32(types.T_geometry)}
+		const indexTableName = "__mo_index_emp_geometry"
+		emp.Indexes = append(emp.Indexes, &planpb.IndexDef{
+			IndexName:      "idx_emp_geometry",
+			IndexTableName: indexTableName,
+			IndexAlgo:      catalog.MoIndexRTreeAlgo.ToString(),
+			Parts: []string{
+				"ename",
+				catalog.CreateAlias("deptno"),
+			},
+			TableExist: true,
+		})
+		indexTableID := uint64(88892)
+		indexTableDef := &planpb.TableDef{
+			Name:  indexTableName,
+			TblId: indexTableID,
+			Cols: []*planpb.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: emp.Cols[geometryPos].Typ},
+				{Name: catalog.IndexTablePrimaryColName, Typ: emp.Cols[deptnoPos].Typ},
+				{Name: catalog.Row_ID, Typ: planpb.Type{Id: int32(types.T_Rowid)}},
+			},
+			Pkey: &planpb.PrimaryKeyDef{
+				Names:       []string{catalog.IndexTablePrimaryColName},
+				PkeyColName: catalog.IndexTablePrimaryColName,
+			},
+			Name2ColIndex: map[string]int32{
+				catalog.IndexTableIndexColName:   0,
+				catalog.IndexTablePrimaryColName: 1,
+				catalog.Row_ID:                   2,
+			},
+		}
+		mock.ctxt.tables[indexTableName] = indexTableDef
+		mock.ctxt.objects[indexTableName] = &planpb.ObjectRef{
+			Obj: int64(indexTableID), ObjName: indexTableName,
+		}
+		mock.ctxt.id2name[indexTableID] = indexTableName
+
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(), dialect.MYSQL,
+			"UPDATE dept SET deptno = 2", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.NoError(t, err)
+
+		found := false
+		for _, node := range builder.qry.Nodes {
+			if node.NodeType != planpb.Node_MULTI_UPDATE || len(node.Children) != 1 {
+				continue
+			}
+			lockNode := builder.qry.Nodes[node.Children[0]]
+			if lockNode.NodeType != planpb.Node_LOCK_OP || len(lockNode.Children) != 1 {
+				continue
+			}
+			inputProject := builder.qry.Nodes[lockNode.Children[0]]
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef == nil || updateCtx.TableDef.TblId != indexTableID {
+					continue
+				}
+				require.Len(t, updateCtx.InsertCols, 2)
+				geometryPayloadPos := updateCtx.InsertCols[0].ColPos
+				newPrimaryKeyPos := updateCtx.InsertCols[1].ColPos
+				require.Equal(t, int32(types.T_geometry), inputProject.ProjectList[geometryPayloadPos].Typ.Id)
+				require.Equal(t, emp.Cols[deptnoPos].Typ.Id, inputProject.ProjectList[newPrimaryKeyPos].Typ.Id)
+				found = true
+			}
+		}
+		require.True(t, found, "child cascade must maintain the RTree hidden table")
+	})
+
+	t.Run("child primary key cascade validates child check constraint", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
+		emp := mock.ctxt.tables["emp"]
+		emp.Pkey = &planpb.PrimaryKeyDef{
+			Names:       []string{"deptno"},
+			PkeyColName: "deptno",
+		}
+		deptnoPos := int32(slices.IndexFunc(emp.Cols, func(col *planpb.ColDef) bool {
+			return col.Name == "deptno"
+		}))
+		require.GreaterOrEqual(t, deptnoPos, int32(0))
+		checkExpr, err := BindFuncExprImplByPlanExpr(t.Context(), ">", []*planpb.Expr{
+			{
+				Typ: emp.Cols[deptnoPos].Typ,
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+					RelPos: 0, ColPos: deptnoPos,
+				}},
+			},
+			MakePlan2Int64ConstExprWithType(0),
+		})
+		require.NoError(t, err)
+		emp.Checks = []*planpb.CheckDef{{Name: "positive_deptno", Check: checkExpr}}
+
+		logicPlan, err := runOneStmt(mock, t, "UPDATE dept SET deptno = 0")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.True(t, slices.ContainsFunc(query.Nodes, func(node *planpb.Node) bool {
+			if node.NodeType != planpb.Node_ASSERT {
+				return false
+			}
+			return slices.ContainsFunc(node.FilterList, func(expr *planpb.Expr) bool {
+				return exprContainsFunc(expr, "_check_constraint_assert")
+			})
+		}), "child action final row image must pass through a CHECK assert")
+	})
+
 	t.Run("multiple actions targeting one child are rejected", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
@@ -1431,6 +1609,134 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 			}
 			return false
 		}), "the self action must preserve direct-target affected-row accounting")
+	})
+
+	t.Run("multi target self cascade preserves physical and semantic selectors", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareSelfRef(mock)
+		selfRef := mock.ctxt.tables["self_ref"]
+		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+
+		logicPlan, err := runOneStmt(
+			mock,
+			t,
+			"UPDATE self_ref s JOIN nation n ON s.id = n.n_nationkey "+
+				"SET s.id = s.id + 10, n.n_name = 'changed'",
+		)
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		var selfCtx *planpb.UpdateCtx
+		var input *planpb.Node
+		for _, node := range query.Nodes {
+			if node.NodeType != planpb.Node_MULTI_UPDATE || len(node.Children) != 1 {
+				continue
+			}
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef != nil && updateCtx.TableDef.TblId == selfRef.TblId {
+					selfCtx = updateCtx
+					input = query.Nodes[node.Children[0]]
+					break
+				}
+			}
+		}
+		require.NotNil(t, selfCtx)
+		require.NotNil(t, input)
+		require.True(t, selfCtx.DedupByTargetRowId)
+		require.Len(t, selfCtx.DeleteCols, 4)
+		require.Len(t, selfCtx.AffectedRowsCols, 1,
+			"one explicit alias must contribute exactly one semantic affected-row selector")
+		rowNumberPos := selfCtx.DeleteCols[2].ColPos
+		physicalActivePos := selfCtx.DeleteCols[3].ColPos
+		semanticActivePos := selfCtx.AffectedRowsCols[0].ColPos
+		require.NotEqual(t, physicalActivePos, semanticActivePos,
+			"cascade write eligibility must be independent from affected-row accounting")
+		require.Equal(t, int32(types.T_int64), input.ProjectList[rowNumberPos].Typ.Id)
+		require.Equal(t, int32(types.T_bool), input.ProjectList[physicalActivePos].Typ.Id)
+		require.Equal(t, int32(types.T_bool), input.ProjectList[semanticActivePos].Typ.Id)
+	})
+
+	t.Run("multi target self cascade shares downstream mutation writer", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareSelfRef(mock)
+		selfRef := mock.ctxt.tables["self_ref"]
+		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+		const childName = "self_action_child"
+		child := &planpb.TableDef{
+			Name:  childName,
+			TblId: 88893,
+			Cols: []*planpb.ColDef{
+				{
+					Name: "parent_id", ColId: 0,
+					Typ: selfRef.Cols[1].Typ, Default: &planpb.Default{NullAbility: true},
+				},
+				{Name: catalog.Row_ID, ColId: 1, Typ: planpb.Type{Id: int32(types.T_Rowid)}},
+			},
+			Pkey: &planpb.PrimaryKeyDef{Names: []string{"parent_id"}, PkeyColName: "parent_id"},
+			Name2ColIndex: map[string]int32{
+				"parent_id":    0,
+				catalog.Row_ID: 1,
+			},
+			Fkeys: []*planpb.ForeignKeyDef{{
+				Name:        "fk_action_child_self_parent_id",
+				Cols:        []uint64{0},
+				ForeignTbl:  selfRef.TblId,
+				ForeignCols: []uint64{selfRef.Fkeys[0].Cols[0]},
+				OnUpdate:    planpb.ForeignKeyDef_CASCADE,
+			}},
+		}
+		mock.ctxt.tables[childName] = child
+		mock.ctxt.objects[childName] = &planpb.ObjectRef{Obj: int64(child.TblId), ObjName: childName}
+		mock.ctxt.id2name[child.TblId] = childName
+		selfRef.RefChildTbls = append(selfRef.RefChildTbls, child.TblId)
+
+		logicPlan, err := runOneStmt(
+			mock,
+			t,
+			"UPDATE self_ref s JOIN nation n ON s.id = n.n_nationkey "+
+				"SET s.id = s.id + 10, s.parent_id = s.parent_id + 10, n.n_name = 'changed'",
+		)
+		require.NoError(t, err)
+		childWriters := 0
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType != planpb.Node_MULTI_UPDATE {
+				continue
+			}
+			for _, updateCtx := range node.UpdateCtxList {
+				if updateCtx.TableDef != nil && updateCtx.TableDef.TblId == child.TblId {
+					childWriters++
+				}
+			}
+		}
+		require.Equal(t, 1, childWriters)
+	})
+
+	t.Run("self cascade still checks other outgoing parent edges", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareSelfRef(mock)
+		selfRef := mock.ctxt.tables["self_ref"]
+		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
+		emp := mock.ctxt.tables["emp"]
+		empDeptno := emp.Fkeys[0].Cols[0]
+		selfParentID := selfRef.Fkeys[0].Cols[0]
+		emp.Fkeys = append(emp.Fkeys, &planpb.ForeignKeyDef{
+			Name:        "fk_emp_self_parent_id",
+			Cols:        []uint64{empDeptno},
+			ForeignTbl:  selfRef.TblId,
+			ForeignCols: []uint64{selfParentID},
+			OnUpdate:    planpb.ForeignKeyDef_RESTRICT,
+		})
+		selfRef.RefChildTbls = append(selfRef.RefChildTbls, emp.TblId)
+		mock.ctxt.id2name[emp.TblId] = "emp"
+
+		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET id = id + 10")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.True(t, slices.ContainsFunc(query.Nodes, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil &&
+				node.TableDef.TblId == emp.TblId
+		}), "the RESTRICT edge reached through the self action must scan its child table")
+		require.True(t, updateFkPlanContainsTypedAssert(query, foreignKeyRowIsReferencedAssert),
+			"the RESTRICT edge reached through the self action must probe its child table")
 	})
 
 	t.Run("disabled checks omit self detect sql", func(t *testing.T) {

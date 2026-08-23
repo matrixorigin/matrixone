@@ -332,9 +332,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if err = builder.validateDistinctUpdateForeignKeyMutationTargets(bindCtx, dmlCtx); err != nil {
-		return 0, err
-	}
 	targetAliases := make([]string, len(dmlCtx.tableDefs))
 	for i, updateCol2Expr := range dmlCtx.updateCol2Expr {
 		if len(updateCol2Expr) > 0 {
@@ -969,6 +966,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
+	if err = builder.validateDistinctUpdateForeignKeyMutationTargets(
+		bindCtx, dmlCtx, newColName2Idx); err != nil {
+		return 0, err
+	}
+
 	for i, tableDef := range dmlCtx.tableDefs {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(tableDef.Checks) == 0 {
 			continue
@@ -1042,6 +1044,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		newColName2Idx,
 		targetRowNumberPos,
 		targetBranchActivePos,
+		physicalTargetActivePos,
 		deferRepeatedPhysicalTargetMerge,
 	)
 	if err != nil {
@@ -1931,8 +1934,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			})
 			physicalTargetActiveFinalPos[i] = targetActiveFinalPos[i]
-			if deferRepeatedPhysicalTargetMerge &&
-				physicalTargetActivePos[i] != targetBranchActivePos[i] {
+			if physicalTargetActivePos[i] != targetBranchActivePos[i] {
 				physicalTargetActiveFinalPos[i] = int32(len(finalProjList))
 				finalProjList = append(finalProjList, &plan.Expr{
 					Typ: selectNode.ProjectList[physicalTargetActivePos[i]].Typ,
