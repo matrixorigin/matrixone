@@ -250,9 +250,11 @@ func canUseStorageTopK(
 	filters []*plan.Expr,
 	limit uint,
 ) bool {
-	// Membership, user predicates, and bounded ranges can remove a row after
-	// storage ranking. They must stay on the filter-then-local-Top-K path.
-	if sqlproc == nil || sqlproc.IvfHasMembershipFilter || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 {
+	// Storage vector Top-N currently ranks only ascending distances. Descending
+	// requests, membership, user predicates, and bounded ranges must stay on
+	// the filter-then-local-Top-K path.
+	if sqlproc == nil || sqlproc.IvfHasMembershipFilter || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 ||
+		ivfOrderFlag(sqlproc.IndexReaderParam)&plan.OrderBySpec_DESC != 0 {
 		return false
 	}
 	distRange := sqlproc.IndexReaderParam.GetDistRange()

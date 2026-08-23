@@ -123,7 +123,7 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 		require.NotNil(t, req.IndexParam)
 		require.False(t, req.PostFilterTopOnly)
 		require.Equal(t, uint64(3), req.IndexParam.GetLimit().GetLit().GetU64Val())
-		require.Equal(t, plan.OrderBySpec_DESC, req.IndexParam.OrderBy[0].Flag)
+		require.Equal(t, plan.OrderBySpec_ASC, req.IndexParam.OrderBy[0].Flag)
 		require.Empty(t, req.FilterHint.MembershipFilterBytes)
 		require.Equal(t, []string{
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
@@ -179,7 +179,7 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	sqlproc.RelationScanner = scanner
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
-		OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
+		OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC}},
 	}
 	idx := &IvfflatSearchIndex[float32]{Version: 4, QuantMul: 1}
 	idxcfg := vectorindex.IndexConfig{}
@@ -274,6 +274,37 @@ func TestStorageTopKEligibility(t *testing.T) {
 	require.Equal(t, plan.OrderBySpec_ASC, ivfOrderFlag(nil))
 	sqlproc.IndexReaderParam.OrderBy = []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
 	require.Equal(t, plan.OrderBySpec_DESC, ivfOrderFlag(sqlproc.IndexReaderParam))
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+}
+
+func TestStorageTopKEligibilityMatchesVectorTopNDirection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	defer entries.Free(mp)
+	for _, entry := range [][]float32{{1}, {10}} {
+		require.NoError(t, vector.AppendArray(entries, entry, false, mp))
+	}
+
+	storageTop := &objectio.IndexReaderTopOp{
+		Typ:        types.T_array_float32,
+		MetricType: metric.Metric_L2sqDistance,
+		NumVec:     types.ArrayToBytes([]float32{0}),
+		Limit:      1,
+		Desc:       true,
+	}
+	rows, distances, err := objectio.TopNVector(context.Background(), nil, entries, storageTop)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0}, rows)
+	require.Equal(t, []float64{1}, distances)
+
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
+	}
+	require.False(t, canUseStorageTopK(sqlproc, []int64{1}, nil, 1),
+		"descending requests must use local Top-K until storage implements descending vector selection")
 }
 
 func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
