@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -85,57 +86,101 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 	filters []*plan.Expr,
 	limit uint,
 ) (executor.Result, error) {
-	versionFilter, err := ivfFuncExpr(sqlproc.GetContext(), "=",
-		ivfColExpr(0, plan.Type{Id: int32(types.T_int64)}), ivfInt64Expr(version))
-	if err != nil {
-		return executor.Result{}, err
-	}
-	allFilters := make([]*plan.Expr, 0, 2+len(filters))
-	allFilters = append(allFilters, versionFilter)
-	if len(centroidIDs) > 0 {
-		centroidFilter, filterErr := ivfInInt64Expr(sqlproc.GetContext(), sqlproc.Proc.Mp(),
-			ivfColExpr(1, plan.Type{Id: int32(types.T_int64)}), centroidIDs)
-		if filterErr != nil {
-			return executor.Result{}, filterErr
-		}
-		allFilters = append(allFilters, centroidFilter)
-	}
-	if sqlproc.IvfHasMembershipFilter {
-		membershipFilter, filterErr := ivfRuntimeMembershipExpr(
-			sqlproc.GetContext(), sqlproc.IvfRuntimeFilterData,
-			ivfColExpr(2, plan.Type{Id: tblcfg.PKeyType}))
-		if filterErr != nil {
-			return executor.Result{}, filterErr
-		}
-		allFilters = append(allFilters, membershipFilter)
-	}
-	allFilters = append(allFilters, filters...)
-	filter, err := ivfAndExpr(sqlproc.GetContext(), allFilters...)
-	if err != nil {
-		return executor.Result{}, err
-	}
-
 	queryBytes, queryType, err := idx.entryQueryBytes(idxcfg, query)
 	if err != nil {
 		return executor.Result{}, err
 	}
 	columns := entryScanColumns(tblcfg.IncludeColumns)
-	postFilterTop := &plan.IndexReaderParam{
+	orderFlag := ivfOrderFlag(sqlproc.IndexReaderParam)
+	storageTopK := canUseStorageTopK(sqlproc, centroidIDs, filters, limit)
+	var filter *plan.Expr
+	indexParam := &plan.IndexReaderParam{
 		Limit:   ivfUint64Expr(uint64(limit)),
-		OrderBy: []*plan.OrderBySpec{{}},
+		OrderBy: []*plan.OrderBySpec{{Flag: orderFlag}},
+	}
+	if storageTopK {
+		// The entries table is ordered by (version, centroid, source PK).
+		// Express the complete candidate set as composite-key prefixes so both
+		// range pruning and block reads enforce it before their distance heap.
+		cpkeyPos := int32(len(columns))
+		columns = append(columns, catalog.CPrimaryKeyColName)
+		filter, err = ivfCentroidPrefixFilter(
+			sqlproc.GetContext(), sqlproc.Proc.Mp(), version, centroidIDs, cpkeyPos)
+		if err != nil {
+			return executor.Result{}, err
+		}
+		entryExpr := ivfColExpr(3, queryType)
+		queryExpr := &plan.Expr{
+			Typ: queryType,
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_VecVal{VecVal: string(queryBytes)},
+			}},
+		}
+		indexParam.OrderBy[0].Expr, err = ivfFuncExpr(
+			sqlproc.GetContext(),
+			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+			entryExpr,
+			queryExpr,
+		)
+		if err != nil {
+			return executor.Result{}, err
+		}
+		indexParam.OrigFuncName = tblcfg.OrigFuncName
+	} else {
+		versionFilter, filterErr := ivfFuncExpr(sqlproc.GetContext(), "=",
+			ivfColExpr(0, plan.Type{Id: int32(types.T_int64)}), ivfInt64Expr(version))
+		if filterErr != nil {
+			return executor.Result{}, filterErr
+		}
+		allFilters := make([]*plan.Expr, 0, 2+len(filters))
+		allFilters = append(allFilters, versionFilter)
+		if len(centroidIDs) > 0 {
+			centroidFilter, centroidErr := ivfInInt64Expr(sqlproc.GetContext(), sqlproc.Proc.Mp(),
+				ivfColExpr(1, plan.Type{Id: int32(types.T_int64)}), centroidIDs)
+			if centroidErr != nil {
+				return executor.Result{}, centroidErr
+			}
+			allFilters = append(allFilters, centroidFilter)
+		}
+		if sqlproc.IvfHasMembershipFilter {
+			membershipFilter, membershipErr := ivfRuntimeMembershipExpr(
+				sqlproc.GetContext(), sqlproc.IvfRuntimeFilterData,
+				ivfColExpr(2, plan.Type{Id: tblcfg.PKeyType}))
+			if membershipErr != nil {
+				return executor.Result{}, membershipErr
+			}
+			allFilters = append(allFilters, membershipFilter)
+		}
+		allFilters = append(allFilters, filters...)
+		filter, err = ivfAndExpr(sqlproc.GetContext(), allFilters...)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
+	var blockFilters []*plan.Expr
+	if storageTopK {
+		blockFilters = []*plan.Expr{filter}
 	}
 	res, err := sqlproc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
 		Schema:            tblcfg.DbName,
 		Table:             tblcfg.EntriesTable,
 		Columns:           columns,
 		Filter:            filter,
-		IndexParam:        postFilterTop,
-		PostFilterTopOnly: true,
+		BlockFilters:      blockFilters,
+		IndexParam:        indexParam,
+		PostFilterTopOnly: !storageTopK,
 		BatchTransform: func(bat *batch.Batch) error {
 			batchResult := executor.Result{Batches: []*batch.Batch{bat}, Mp: sqlproc.Proc.Mp()}
-			if transformErr := appendEntryDistances(sqlproc, &batchResult, queryBytes, queryType,
-				metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)]); transformErr != nil {
-				return transformErr
+			if storageTopK {
+				if len(bat.Vecs) != len(columns)+1 {
+					return moerr.NewInternalErrorNoCtxf(
+						"ivfflat storage Top-K returned %d vectors, expected %d", len(bat.Vecs), len(columns)+1)
+				}
+			} else {
+				if transformErr := appendEntryDistances(sqlproc, &batchResult, queryBytes, queryType,
+					metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)]); transformErr != nil {
+					return transformErr
+				}
 			}
 			if transformErr := idx.filterEntryDistanceRange(&batchResult, sqlproc.IndexReaderParam.GetDistRange(),
 				tblcfg.OrigFuncName, metric.MetricType(idxcfg.Ivfflat.Metric)); transformErr != nil {
@@ -197,6 +242,104 @@ func (idx *IvfflatSearchIndex[T]) scanEntries(
 		bat.Attrs = append([]string{catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, "vec_dist"}, includeCols...)
 	}
 	return res, nil
+}
+
+func canUseStorageTopK(
+	sqlproc *sqlexec.SqlProcess,
+	centroidIDs []int64,
+	filters []*plan.Expr,
+	limit uint,
+) bool {
+	// Membership, user predicates, and bounded ranges can remove a row after
+	// storage ranking. They must stay on the filter-then-local-Top-K path.
+	if sqlproc == nil || sqlproc.IvfHasMembershipFilter || len(centroidIDs) == 0 || len(filters) != 0 || limit == 0 {
+		return false
+	}
+	distRange := sqlproc.IndexReaderParam.GetDistRange()
+	return distRange == nil ||
+		distRange.LowerBoundType == plan.BoundType_UNBOUNDED &&
+			distRange.UpperBoundType == plan.BoundType_UNBOUNDED
+}
+
+func ivfOrderFlag(param *plan.IndexReaderParam) plan.OrderBySpec_OrderByFlag {
+	if param != nil && len(param.OrderBy) > 0 && param.OrderBy[0] != nil {
+		return param.OrderBy[0].Flag
+	}
+	return plan.OrderBySpec_ASC
+}
+
+func ivfCentroidPrefixFilter(
+	ctx context.Context,
+	mp *mpool.MPool,
+	version int64,
+	centroidIDs []int64,
+	cpkeyPos int32,
+) (*plan.Expr, error) {
+	if len(centroidIDs) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("IVF storage Top-K requires at least one centroid")
+	}
+	if len(centroidIDs) > int(^uint32(0)>>1) {
+		return nil, moerr.NewInvalidInputNoCtx("IVF centroid prefix set is too large")
+	}
+
+	versionVec, err := vector.NewConstFixed(types.T_int64.ToType(), version, len(centroidIDs), mp)
+	if err != nil {
+		return nil, err
+	}
+	defer versionVec.Free(mp)
+	centroidVec := vector.NewVec(types.T_int64.ToType())
+	defer centroidVec.Free(mp)
+	if err = vector.AppendFixedList(centroidVec, centroidIDs, nil, mp); err != nil {
+		return nil, err
+	}
+	versionEncoder, err := function.NewSerialValueEncoder(versionVec)
+	if err != nil {
+		return nil, err
+	}
+	centroidEncoder, err := function.NewSerialValueEncoder(centroidVec)
+	if err != nil {
+		return nil, err
+	}
+
+	cpkeyType := types.T_varchar.ToType()
+	cpkeyType.Width = types.MaxVarcharLen
+	cpkeyType.Charset = types.CharsetBinary
+	prefixVec := vector.NewVec(cpkeyType)
+	defer prefixVec.Free(mp)
+	packer := types.NewPacker()
+	defer packer.Close()
+	for row := range centroidIDs {
+		packer.Reset()
+		versionEncoder(versionVec, row, packer)
+		centroidEncoder(centroidVec, row, packer)
+		if err = vector.AppendBytes(prefixVec, packer.Bytes(), false, mp); err != nil {
+			return nil, err
+		}
+	}
+	data, err := prefixVec.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	cpkeyPlanType := plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   types.MaxVarcharLen,
+		Charset: uint32(types.CharsetBinary),
+	}
+	left := &plan.Expr{
+		Typ: cpkeyPlanType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			Name:   catalog.CPrimaryKeyColName,
+			ColPos: cpkeyPos,
+		}},
+	}
+	right := &plan.Expr{
+		Typ: cpkeyPlanType,
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+			Len:  int32(len(centroidIDs)),
+			Data: data,
+		}},
+	}
+	return ivfFuncExpr(ctx, function.PrefixInFunctionName, left, right)
 }
 
 func entryScanColumns(includeColumns []string) []string {
