@@ -3290,6 +3290,7 @@ func FillValuesOfParamsInPlanWithSpecialization(
 		return nil, false, err
 	}
 	copied := DeepCopyPlan(preparePlan)
+	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, paramVals)
 	switch pp := copied.Plan.(type) {
 
 	case *plan.Plan_Ddl:
@@ -3305,7 +3306,7 @@ func FillValuesOfParamsInPlanWithSpecialization(
 		if err != nil {
 			return nil, false, err
 		}
-		return copied, specialized, nil
+		return copied, specialized || runtimeDecimalPrefix, nil
 	}
 	return copied, false, nil
 }

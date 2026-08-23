@@ -422,7 +422,8 @@ type ResetParamRefRule struct {
 	// was selected from an execute-time numeric-prefix parameter. The dependency
 	// propagates through binder-inserted casts so enclosing consumers can remove
 	// provisional prepare-time coercions and bind against the runtime domain.
-	numericPrefixDependent map[*plan.Expr]bool
+	numericPrefixDependent      map[*plan.Expr]bool
+	serializedDecimalParamTypes map[*plan.Expr]types.Type
 }
 
 // PreparedPlanNeedsNumericPrefixSpecialization reports whether a prepared plan
@@ -433,13 +434,13 @@ func PreparedPlanNeedsNumericPrefixSpecialization(preparePlan *Plan, paramVals [
 	if preparePlan == nil || len(paramVals) == 0 {
 		return false
 	}
-	positions := make(map[int]bool)
+	positions := make(map[int]types.StringConversionKind)
 	for i, value := range paramVals {
 		param, ok := value.(ParamValue)
 		if !ok || !param.EnableNumericPrefix {
 			continue
 		}
-		positions[i] = true
+		positions[i] = param.PrepareParamKind
 	}
 	if len(positions) == 0 {
 		return false
@@ -457,18 +458,24 @@ func PreparedPlanNeedsNumericPrefixSpecialization(preparePlan *Plan, paramVals [
 
 func preparedExprNeedsNumericPrefixSpecialization(
 	expr *plan.Expr,
-	positions map[int]bool,
+	positions map[int]types.StringConversionKind,
 ) bool {
 	if expr == nil {
 		return false
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		// SQL EXECUTE is admitted only when the prepared expression already
-		// contains a static DECIMAL peer. A DECIMAL user-variable category alone
-		// must not pull an ordinary FLOAT comparison into runtime specialization.
-		// COM_STMT bypasses this eligibility scan and still uses runtime kinds
-		// while performing the actual rewrite.
+		if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) &&
+			preparedExprHasRuntimeDecimalParam(expr, positions) {
+			// Secondary-index planning keeps the original comparison but exposes
+			// only its serialized prefix predicate to this owner scan. Admit the
+			// plan so the retained comparison can be rebound from its runtime kind.
+			return true
+		}
+		// SQL EXECUTE admits either a static DECIMAL peer or a runtime DECIMAL
+		// parameter paired with an exact numeric operand. Keep approximate FLOAT
+		// operands outside this path. COM_STMT bypasses this eligibility scan and
+		// still uses runtime kinds while performing the actual rewrite.
 		if preparedNumericPrefixPositionContext(
 			exprImpl.F.Func.GetObjName(), exprImpl.F.Args, positions) {
 			return true
@@ -517,10 +524,113 @@ func preparedExprNeedsNumericPrefixSpecialization(
 	return false
 }
 
+func (rule *ResetParamRefRule) markSerializedDecimalParamTypes(expr *plan.Expr) {
+	if expr == nil {
+		return
+	}
+	if isImplicitPreparedParamCast(expr) {
+		fn := expr.GetF()
+		if len(fn.Args) > 0 {
+			paramExpr := fn.Args[0]
+			if param := paramExpr.GetP(); param != nil && param.Pos >= 0 {
+				pos := int(param.Pos)
+				if rule.numericPrefixParamKinds[pos] == types.StringConversionDecimal {
+					if rule.serializedDecimalParamTypes == nil {
+						rule.serializedDecimalParamTypes = make(map[*plan.Expr]types.Type)
+					}
+					rule.serializedDecimalParamTypes[paramExpr] = makeTypeByPlan2Expr(expr)
+				}
+			}
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			rule.markSerializedDecimalParamTypes(arg)
+		}
+	}
+}
+
+func exactIntegerDecimalText(value string) (string, bool) {
+	integer, fraction, found := strings.Cut(strings.TrimSpace(value), ".")
+	if !found {
+		return integer, integer != ""
+	}
+	if integer == "" || strings.Trim(fraction, "0") != "" {
+		return "", false
+	}
+	return integer, true
+}
+
+func hasRuntimeDecimalPrefixFilter(preparePlan *Plan, paramVals []any) bool {
+	query := preparePlan.GetQuery()
+	if query == nil {
+		return false
+	}
+	positions := make(map[int]types.StringConversionKind)
+	for i, value := range paramVals {
+		param, ok := value.(ParamValue)
+		if ok && param.EnableNumericPrefix && param.PrepareParamKind == types.StringConversionDecimal {
+			positions[i] = param.PrepareParamKind
+		}
+	}
+	if len(positions) == 0 {
+		return false
+	}
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		for _, filters := range [][]*plan.Expr{node.FilterList, node.BlockFilterList} {
+			for _, filter := range filters {
+				fn := filter.GetF()
+				if fn != nil && isPreparedPrefixFilter(fn.Func.GetObjName()) &&
+					preparedExprHasRuntimeDecimalParam(filter, positions) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func isPreparedPrefixFilter(name string) bool {
+	switch name {
+	case "prefix_eq", "prefix_in", "prefix_between", "prefix_in_range":
+		return true
+	default:
+		return false
+	}
+}
+
+func preparedExprHasRuntimeDecimalParam(
+	expr *plan.Expr,
+	positions map[int]types.StringConversionKind,
+) bool {
+	if pos, ok := preparedParamPosition(expr); ok && positions[pos] == types.StringConversionDecimal {
+		return true
+	}
+	fn := expr.GetF()
+	if fn != nil {
+		for _, arg := range fn.Args {
+			if preparedExprHasRuntimeDecimalParam(arg, positions) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if preparedExprHasRuntimeDecimalParam(item, positions) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func preparedNumericPrefixPositionContext(
 	name string,
 	args []*plan.Expr,
-	positions map[int]bool,
+	positions map[int]types.StringConversionKind,
 ) bool {
 	switch name {
 	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
@@ -529,7 +639,9 @@ func preparedNumericPrefixPositionContext(
 	}
 
 	hasEligibleParam := false
+	hasRuntimeDecimal := false
 	hasDecimalPeer := false
+	hasFloatPeer := false
 	hasCommonValueBoundary := false
 	numericArgCount := len(args)
 	if name == "in_range" && numericArgCount > 3 {
@@ -540,10 +652,12 @@ func preparedNumericPrefixPositionContext(
 			continue
 		}
 		pos, directEligible := preparedParamPosition(arg)
-		directEligible = directEligible && positions[pos]
+		kind, eligiblePosition := positions[pos]
+		directEligible = directEligible && eligiblePosition
 		source := unwrapPreparedImplicitCast(arg, directEligible)
 		if directEligible {
 			hasEligibleParam = true
+			hasRuntimeDecimal = hasRuntimeDecimal || kind == types.StringConversionDecimal
 			continue
 		}
 		if source == nil {
@@ -552,12 +666,15 @@ func preparedNumericPrefixPositionContext(
 		if list := source.GetList(); list != nil {
 			for _, item := range list.List {
 				itemPos, itemEligible := preparedParamPosition(item)
-				itemEligible = itemEligible && positions[itemPos]
+				kind, eligiblePosition := positions[itemPos]
+				itemEligible = itemEligible && eligiblePosition
 				item = unwrapPreparedImplicitCast(item, itemEligible)
 				if itemEligible {
 					hasEligibleParam = true
-				} else if item != nil && types.T(item.Typ.Id).IsDecimal() {
-					hasDecimalPeer = true
+					hasRuntimeDecimal = hasRuntimeDecimal || kind == types.StringConversionDecimal
+				} else if item != nil {
+					hasDecimalPeer = hasDecimalPeer || types.T(item.Typ.Id).IsDecimal()
+					hasFloatPeer = hasFloatPeer || preparedStaticFloatOperand(item)
 				}
 			}
 			continue
@@ -565,12 +682,24 @@ func preparedNumericPrefixPositionContext(
 		if types.T(source.Typ.Id).IsDecimal() {
 			hasDecimalPeer = true
 		}
+		if preparedStaticFloatOperand(source) {
+			hasFloatPeer = true
+		}
 		if isPreparedCommonValueFunction(name) &&
 			!preparedNumericCommonOperandType(types.T(source.Typ.Id)) {
 			hasCommonValueBoundary = true
 		}
 	}
-	return hasEligibleParam && hasDecimalPeer && !hasCommonValueBoundary
+	return hasEligibleParam && (hasDecimalPeer || hasRuntimeDecimal) && !hasFloatPeer && !hasCommonValueBoundary
+}
+
+func preparedStaticFloatOperand(expr *plan.Expr) bool {
+	if expr == nil || !types.T(expr.Typ.Id).IsFloat() {
+		return false
+	}
+	// Function result types can be provisional products of prepare-time TEXT
+	// binding. Only leaf FLOAT values establish an approximate-domain boundary.
+	return expr.GetCol() != nil || expr.GetLit() != nil
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -629,6 +758,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
+		if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) {
+			rule.markSerializedDecimalParamTypes(e)
+		}
 		if rule.validateFunctionArgs != nil {
 			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
 				return nil, err
@@ -811,6 +943,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		rewritten := &plan.Expr{
 			Typ:  typ,
 			Expr: param.Expr,
+		}
+		if target, ok := rule.serializedDecimalParamTypes[e]; ok {
+			if integerText, exact := exactIntegerDecimalText(rewritten.GetLit().GetSval()); exact {
+				return preparedRuntimeParamExpr(rule.ctx, integerText, false, target)
+			}
 		}
 		return rewritten, nil
 	case *plan.Expr_List:

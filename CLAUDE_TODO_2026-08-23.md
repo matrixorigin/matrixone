@@ -60,3 +60,49 @@
   在 v25 下仍可执行；UPDATE changed-row 的 v24/v25 边界保持不变。
 - 完整 diff 的功能闭包、retry 快照所有权、远程版本门禁及失败路径已复核；本轮改动不新增 goroutine、
   wait-for 边或资源所有权，未发现新的 correctness/lifecycle blocker。`git diff --check` 通过。
+
+---
+
+# PR #27483 review comments 修复计划
+
+## 背景与不变量
+
+- SQL `EXECUTE ... USING` 的 eligibility 预扫描必须与实际 prepared-plan specialization 对运行时参数类型的判定一致。
+- 精确 `DECIMAL` 运行时参数应允许 `INT`/`DECIMAL` 公共类型重写；近似 `FLOAT` 域仍必须排除，避免扩大语义边界。
+- issue 回归测试的每个 `database/sql.Rows` 消费点必须在 linter 可证明的调用作用域检查 `Rows.Err()`。
+- PR 协议说明必须与当前 MORPC 版本一致（v25/v26）。
+
+## 实施步骤
+
+1. 拉取远端并 merge 最新 `mo/main`，确认 PR 分支基线及协议常量。
+2. 追踪 frontend SQL EXECUTE eligibility、plan 预扫描和实际重写的完整调用链，定位运行时 `PrepareParamDecimal` 丢失点。
+3. 以最小通用修改让预扫描接收并识别运行时参数种类，同时显式保留 `PrepareParamFloat` 排除边界。
+4. 补充/调整 plan 白盒测试：覆盖 INT + 运行时 DECIMAL 可 specialized，以及运行时 FLOAT 不可 specialized 的控制组。
+5. 修复 issue 黑盒测试的三处 `rowserrcheck`，在查询消费调用作用域显式检查 `rows.Err()`，不关闭 linter。
+6. 运行受影响 package 的 focused/full test、build、vet 和相关 lint；按 diff 派生验证范围并检查覆盖率。
+7. 对完整 diff 执行 pre-push 自审，确认 correctness、边界、性能及 unhappy path 无新增问题。
+8. commit、push 到现有 PR 分支，更新 PR 正文 MORPC v25/v26 描述；处理可解决的 inline conversation 并请求 re-review。
+
+## 测试矩阵
+
+| 场景 | 参数类别 | 预期 |
+|---|---|---|
+| SQL EXECUTE: INT column = decimal variable | `PrepareParamDecimal` | eligibility 通过并完成公共类型重写，返回正确行 |
+| SQL EXECUTE: INT column = float variable | `PrepareParamFloat` | eligibility 保持排除，不跨入精确 DECIMAL 域 |
+| 静态 DECIMAL 同伴 | plan static DECIMAL | 既有行为保持 |
+| 整数运行时参数 | integer | 既有行为保持 |
+| issue 查询 rows 消费 | success / iteration error | 调用作用域显式检查 `Rows.Err()`，SCA 通过 |
+
+## 成本与设计约束
+
+- eligibility 仅在每次 SQL EXECUTE 的计划预扫描中增加对已有参数元数据的常数时间分类，不引入逐行成本、缓存或新状态。
+- 不修改缓存 prepared plan；仍只 specialized 隔离的执行计划副本。
+- 不把 FLOAT 近似值误分类为 DECIMAL，也不针对单个 SQL/issue 写特判。
+
+## 执行结果
+
+- eligibility 现携带每个运行时参数的 `StringConversionKind`，INT + runtime DECIMAL 可进入 specialization，FLOAT peer 继续排除。
+- secondary-index `prefix_*` 路径会识别运行时 DECIMAL；对值等价于整数（如 `9.0`）的序列化索引参数按原计划整数目标类型物化，避免字符串直接 cast 报错并保持索引 key 类型。
+- issue 黑盒新增带二级索引的 SQL EXECUTE 验收格，`9.0` 正确返回 `id=1`。
+- 所有 `Rows` 查询调用作用域均显式检查 `rows.Err()`，targeted `rowserrcheck` 为 0 issue。
+- 验证：`pkg/sql/plan` full test、issue #27088 embedded test、build、vet 均通过。

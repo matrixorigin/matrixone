@@ -1494,6 +1494,29 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		require.NotNil(t, findNumericPrefixCast(predicate), predicate.String())
 	})
 
+	t.Run("SQL eligibility includes integer peer with decimal variable kind", func(t *testing.T) {
+		intType := types.T_int32.ToType()
+		intColumn := &planpb.Expr{
+			Typ:  makePlan2Type(&intType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2}},
+		}
+		query := makeQuery(t, "=", []*planpb.Expr{intColumn, param(0)})
+		values := []any{ParamValue{
+			Value: "9.0", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+		}}
+		require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(query, values))
+
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, values)
+		require.NoError(t, err)
+		require.True(t, specialized, filled.String())
+		predicate := filled.GetQuery().Nodes[0].ProjectList[0]
+		operandTypes := collectNumericOperandTypes(predicate)
+		require.Len(t, operandTypes, 2, predicate.String())
+		for _, operandType := range operandTypes {
+			require.True(t, operandType.IsDecimal(), predicate.String())
+		}
+	})
+
 	t.Run("SQL eligibility excludes float peer with decimal variable kind", func(t *testing.T) {
 		floatType := types.T_float32.ToType()
 		floatColumn := &planpb.Expr{
@@ -1503,7 +1526,7 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		query := makeQuery(t, "=", []*planpb.Expr{floatColumn, param(0)})
 		require.False(t, PreparedPlanNeedsNumericPrefixSpecialization(query, []any{ParamValue{
 			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
-		}}))
+		}}), query.String())
 	})
 
 	t.Run("dependency unwrap preserves physical casts", func(t *testing.T) {

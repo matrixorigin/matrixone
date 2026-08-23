@@ -86,6 +86,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer equality.Close()
 			rows, queryErr := equality.QueryContext(ctx, "9007199254740992.0000000002tail")
 			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
 
 			inList, prepareErr := conn.PrepareContext(ctx,
 				"select id from common_type where d in (?, ?) order by id")
@@ -94,6 +95,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			rows, queryErr = inList.QueryContext(ctx,
 				"9007199254740992.0000000000first", "9007199254740992.0000000003second")
 			assertIDs(t, rows, queryErr, 1, 3)
+			require.NoError(t, rows.Err())
 		})
 
 		t.Run("COM_STMT row dependent between", func(t *testing.T) {
@@ -103,6 +105,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer stmt.Close()
 			rows, queryErr := stmt.QueryContext(ctx, "9007199254740992.0000000001tail")
 			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
 		})
 
 		t.Run("common value functions preserve context", func(t *testing.T) {
@@ -121,8 +124,10 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer nested.Close()
 			rows, queryErr := nested.QueryContext(ctx, "9007199254740992.0000000001tail")
 			assertIDs(t, rows, queryErr)
+			require.NoError(t, rows.Err())
 			rows, queryErr = nested.QueryContext(ctx, nil)
 			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
 
 			stringsOnly, prepareErr := conn.PrepareContext(ctx, "select greatest(?, ?)")
 			require.NoError(t, prepareErr)
@@ -139,6 +144,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			mustExec(t, ctx, conn, "set @issue27088_value = '9007199254740992.0000000002tail'")
 			rows, queryErr := conn.QueryContext(ctx, "execute issue27088_sql using @issue27088_value")
 			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
 
 			mustExec(t, ctx, conn, `prepare issue27088_nested_sql from 'select id from common_type
 				where coalesce(?, d) = cast(''9007199254740992.0000000002'' as decimal(38,10))
@@ -150,9 +156,23 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				"set @issue27088_nested = cast('9007199254740992.0000000001' as decimal(38,10))")
 			rows, queryErr = conn.QueryContext(ctx, "execute issue27088_nested_sql using @issue27088_nested")
 			assertIDs(t, rows, queryErr)
+			require.NoError(t, rows.Err())
 			mustExec(t, ctx, conn, "set @issue27088_nested = null")
 			rows, queryErr = conn.QueryContext(ctx, "execute issue27088_nested_sql using @issue27088_nested")
 			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
+		})
+
+		t.Run("SQL EXECUTE specializes integer comparison for decimal variable", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table execute_integer(id int primary key, vi int, key idx_i(vi))")
+			mustExec(t, ctx, conn, "insert into execute_integer values (1, 9), (2, 10), (3, null)")
+			mustExec(t, ctx, conn,
+				"prepare issue27088_integer from 'select id from execute_integer where vi = ? order by id'")
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_integer") }()
+			mustExec(t, ctx, conn, "set @issue27088_integer = 9.0")
+			rows, queryErr := conn.QueryContext(ctx, "execute issue27088_integer using @issue27088_integer")
+			assertIDs(t, rows, queryErr, 1)
+			require.NoError(t, rows.Err())
 		})
 
 		t.Run("SQL EXECUTE preserves legacy float and null domains", func(t *testing.T) {
@@ -165,6 +185,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			mustExec(t, ctx, conn, "set @issue27088_float = 1.2345678")
 			rows, queryErr := conn.QueryContext(ctx, "execute issue27088_float using @issue27088_float")
 			assertIDs(t, rows, queryErr, 1)
+			require.NoError(t, rows.Err())
 
 			mustExec(t, ctx, conn,
 				"prepare issue27088_count from 'select count(?) from execute_control'")
@@ -210,6 +231,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				"00000000-0000-0000-0000-000000000001",
 				"00000000-0000-0000-0000-000000000002",
 				"00000000-0000-0000-0000-000000000003")
+			require.NoError(t, rows.Err())
 
 			rows, queryErr = conn.QueryContext(ctx, `select u from uuid_control
 				where u between cast('00000000-0000-0000-0000-000000000002' as uuid)
@@ -219,6 +241,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				"00000000-0000-0000-0000-000000000002",
 				"00000000-0000-0000-0000-000000000003",
 				"00000000-0000-0000-0000-000000000004")
+			require.NoError(t, rows.Err())
 		})
 	})
 }
