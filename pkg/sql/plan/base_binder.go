@@ -2636,6 +2636,7 @@ func mysqlSpecialTypeNumericLiteral(expr tree.Expr) bool {
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
 	candidates := make([]*plan.Expr, 0, len(rightTuple.Exprs))
+	leftMemoIDs := make([][]int32, len(leftTuple.Exprs))
 
 	for _, rightVal := range rightTuple.Exprs {
 		rightTupleVal, ok := unwrapParenExpr(rightVal).(*tree.Tuple)
@@ -2651,6 +2652,10 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 			eqExpr, err := b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth)
 			if err != nil {
 				return nil, err
+			}
+			if eqFunc := eqExpr.GetF(); eqFunc != nil && len(eqFunc.Args) == 2 &&
+				containsVolatileFunction(eqFunc.Args[0]) && b.ctx != nil {
+				b.markTupleVolatileSources(eqFunc.Args[0], &leftMemoIDs[i])
 			}
 			equalities = append(equalities, eqExpr)
 		}
@@ -2671,6 +2676,52 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 		return BindFuncExprImplByPlanExpr(b.GetContext(), "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32) {
+	sources := make([]*plan.Expr, 0, 1)
+	collectVolatileFunctionSources(expr, &sources)
+	if len(sources) == 0 {
+		// Unknown expression forms stay conservative and preserve the prior
+		// whole-operand behavior.
+		sources = append(sources, expr)
+	}
+	for len(*memoIDs) < len(sources) {
+		b.ctx.volatileExprMemoID--
+		*memoIDs = append(*memoIDs, b.ctx.volatileExprMemoID)
+	}
+	for i, source := range sources {
+		source.AuxId = (*memoIDs)[i]
+	}
+}
+
+func collectVolatileFunctionSources(expr *plan.Expr, sources *[]*plan.Expr) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		*sources = append(*sources, expr)
+	case *plan.Expr_F:
+		if e.F == nil {
+			return
+		}
+		if e.F.Func != nil {
+			overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+			if ok && overload.CannotFold() {
+				*sources = append(*sources, expr)
+			}
+		}
+		for _, arg := range e.F.Args {
+			collectVolatileFunctionSources(arg, sources)
+		}
+	case *plan.Expr_List:
+		if e.List != nil {
+			for _, item := range e.List.List {
+				collectVolatileFunctionSources(item, sources)
+			}
+		}
+	}
 }
 
 // combinePlanExprsBalanced preserves the input order while building a
@@ -3014,6 +3065,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
+	if (name == "in" || name == "not_in") && len(args) == 2 &&
+		containsVolatileFunction(args[0]) && b.ctx != nil {
+		b.markVolatileInLeft(args[0])
+	}
 	//promote interval expr rewrite here
 	if name == "interval" {
 		if len(astArgs) == 2 {
@@ -3088,6 +3143,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func (b *baseBinder) markVolatileInLeft(left *plan.Expr) {
+	if list := left.GetList(); list != nil {
+		for _, elem := range list.List {
+			if containsVolatileFunction(elem) {
+				b.ctx.volatileExprMemoID--
+				elem.AuxId = b.ctx.volatileExprMemoID
+			}
+		}
+		return
+	}
+	b.ctx.volatileExprMemoID--
+	left.AuxId = b.ctx.volatileExprMemoID
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
@@ -4118,7 +4187,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr)
+					left := DeepCopyExpr(args[0])
+					left.AuxId = args[0].AuxId
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", left, expr)
 					if err != nil {
 						return nil, err
 					}
@@ -4127,7 +4198,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr)
+					left := DeepCopyExpr(args[0])
+					left.AuxId = args[0].AuxId
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", left, expr)
 					if err != nil {
 						return nil, err
 					}
@@ -4425,6 +4498,21 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			returnType.Scale = fsp
 		}
 
+	case "current_timestamp", "now", "localtime", "localtimestamp", "sysdate", "current_time", "curtime":
+		// The overloads use the default FSP because their return-type callback
+		// receives only argument types. A literal FSP is nevertheless known at
+		// bind time and must be reflected in the plan metadata. For a runtime
+		// FSP expression, retain the timestamp family's conservative six-digit
+		// bound; with no argument, the overload's MySQL default FSP=0 remains in
+		// effect.
+		if len(args) == 1 {
+			if fsp, ok := temporalFunctionFSPFromPlanExpr(args[0]); ok {
+				returnType.Scale = fsp
+			} else if returnType.Oid == types.T_timestamp {
+				returnType.Scale = 6
+			}
+		}
+
 	case "timestampadd":
 		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
 		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
@@ -4609,6 +4697,22 @@ func utcFunctionFSPFromPlanExpr(ctx context.Context, name string, expr *Expr) (i
 	return int32(fsp.I64Val), nil
 }
 
+// temporalFunctionFSPFromPlanExpr extracts an optional literal FSP for the
+// current-time family. Unlike UTC_TIME/UTC_TIMESTAMP, MySQL permits a runtime
+// integer expression here, so an unknown expression keeps the overload's
+// conservative default metadata rather than being rejected during binding.
+func temporalFunctionFSPFromPlanExpr(expr *Expr) (int32, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, false
+	}
+	fsp, ok := literal.GetValue().(*plan.Literal_I64Val)
+	if !ok || fsp.I64Val < 0 || fsp.I64Val > 6 {
+		return 0, false
+	}
+	return int32(fsp.I64Val), true
+}
+
 // adjustControlFlowMetadata keeps MySQL-visible metadata for conditional
 // expressions precise after overload selection.  The overload resolver only
 // sees types, whereas a literal branch has a narrower domain than its default
@@ -4753,10 +4857,12 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 // adjustControlFlowBinaryMetadata narrows a binary/character conditional
 // result only when every character branch is a known literal. The result is
 // VARBINARY, so a character branch's declared width must first be converted
-// from characters to bytes using its effective charset. CharsetLegacy is the
-// pre-collation plan encoding and is emitted as utf8_general_ci, whose
-// utf8mb3-compatible three-byte bound is retained for old plans. New text
-// expressions carry CharsetUTF8/CharsetUTF8MB4Bin and use the utf8mb4 bound.
+// from characters to bytes using its effective charset. MatrixOne currently
+// exposes UTF-8 text as utf8mb4 on the wire and in persisted view metadata;
+// CharsetLegacy is only the zero-value marker on pre-collation plans, not a
+// promise that the client session uses utf8mb3. Keep the advertised utf8mb4
+// bound for that legacy identity as well. New text expressions carry
+// CharsetUTF8/CharsetUTF8MB4Bin and use the same utf8mb4 bound.
 func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
 	hasBinary := false
 	hasCharacter := false
@@ -4812,9 +4918,10 @@ func controlFlowMaxBytesPerCharacter(charset uint8) int32 {
 		return 1
 	case types.CharsetLegacy:
 		// CharsetLegacy is the zero value in plans written before collation
-		// metadata became meaningful. Its protocol fallback is utf8_general_ci,
-		// so retain the utf8mb3 three-byte bound for those historical plans.
-		return 3
+		// metadata became meaningful. MatrixOne's effective/public text charset
+		// is utf8mb4, so use its four-byte bound instead of treating this
+		// historical marker as an explicit utf8mb3 setting.
+		return int32(utf8.UTFMax)
 	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
 		// Both explicit text identities are utf8mb4 in MatrixOne. This is the
 		// effective charset of newly bound literals and view expressions, so a

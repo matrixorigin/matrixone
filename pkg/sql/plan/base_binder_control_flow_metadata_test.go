@@ -429,7 +429,7 @@ func TestBindControlFlowBinaryCharacterCharsetWidth(t *testing.T) {
 		charset uint8
 		width   int32
 	}{
-		{name: "utf8mb3-compatible legacy text", charset: types.CharsetLegacy, width: 6},
+		{name: "legacy text follows advertised utf8mb4 policy", charset: types.CharsetLegacy, width: 8},
 		{name: "utf8mb4 general text", charset: types.CharsetUTF8, width: 8},
 		{name: "utf8mb4 binary collation", charset: types.CharsetUTF8MB4Bin, width: 8},
 		{name: "binary payload", charset: types.CharsetBinary, width: 2},
@@ -682,6 +682,46 @@ func TestBuildControlFlowTypedNullVarcharMetadata(t *testing.T) {
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 			require.Len(t, projectList, 1)
 			require.Equal(t, int32(types.T_varchar), projectList[0].Typ.Id)
+			require.Equal(t, test.width, projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestBuildControlFlowTextFamilyMetadataFromColumns(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["text_family"] = &planpb.TableDef{
+		TblId:     1001,
+		Name:      "text_family",
+		DbName:    "tpch",
+		TableType: "ORDINARY",
+		Cols: []*planpb.ColDef{
+			{Name: "tiny_col", OriginName: "tiny_col", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}},
+			{Name: "medium_col", OriginName: "medium_col", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}},
+			{Name: "long_col", OriginName: "long_col", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxLongTextLen}},
+		},
+	}
+	ctx.objects["text_family"] = &ObjectRef{ObjName: "text_family", SchemaName: "tpch"}
+
+	for _, test := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{name: "case medium", sql: "select case when true then medium_col else medium_col end from text_family", width: types.MaxMediumTextLen},
+		{name: "if long", sql: "select if(true, long_col, long_col) from text_family", width: types.MaxLongTextLen},
+		{name: "coalesce tiny", sql: "select coalesce(tiny_col, tiny_col) from text_family", width: types.MaxTinyTextLen},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			pl, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_text), projectList[0].Typ.Id)
 			require.Equal(t, test.width, projectList[0].Typ.Width)
 		})
 	}
