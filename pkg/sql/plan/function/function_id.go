@@ -958,6 +958,7 @@ var functionIdRegister = map[string]int32{
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,
+	"to_interval": TO_INTERVAL,
 	"str_to_date": STR_TO_DATE,
 	"ts_to_time":  TS_TO_TIME,
 	"date_format": DATE_FORMAT,

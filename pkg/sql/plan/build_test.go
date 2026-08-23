@@ -6042,9 +6042,9 @@ func TestReplaceSelfReferSetNullExcludesMainOldRow(t *testing.T) {
 	query := logicPlan.GetQuery()
 	assert.True(t, queryUpdatesTable(query, "self_ref_cascade"))
 	assert.True(t, slices.ContainsFunc(query.Nodes, func(node *plan.Node) bool {
-		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER && len(node.OnList) > 1
+		return node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK
 	}),
-		"self-referencing SET NULL must exclude the old row owned by the main REPLACE")
+		"self-referencing SET NULL must anti-match the complete old-row set owned by the main REPLACE")
 }
 
 func TestReplaceCascadeWinsOverSetNullForSameChildRow(t *testing.T) {
