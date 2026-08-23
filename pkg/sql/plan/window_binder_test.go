@@ -484,6 +484,131 @@ func buildNamedWindowPlan(t *testing.T, sql string) (*planpb.Plan, error) {
 	return BuildPlan(NewMockCompilerContext(true), stmt, false)
 }
 
+func TestNamedWindowSpecHelpers(t *testing.T) {
+	ctx := context.Background()
+
+	require.Nil(t, cloneWindowSpec(nil))
+	original := &tree.WindowSpec{
+		OrderBy: tree.OrderBy{
+			nil,
+			tree.NewOrder(testNumVal(1), tree.Ascending, tree.DefaultNullsPosition, false),
+		},
+		Frame: &tree.FrameClause{
+			Start: &tree.FrameBound{Expr: testNumVal(2)},
+			End:   &tree.FrameBound{Expr: testNumVal(3)},
+		},
+	}
+	cloned := cloneWindowSpec(original)
+	require.NotSame(t, original, cloned)
+	require.Nil(t, cloned.OrderBy[0])
+	require.NotSame(t, original.OrderBy[1], cloned.OrderBy[1])
+	require.NotSame(t, original.Frame, cloned.Frame)
+	require.NotSame(t, original.Frame.Start, cloned.Frame.Start)
+	require.NotSame(t, original.Frame.End, cloned.Frame.End)
+
+	ensureDefaultWindowFrame(nil)
+	defaultFrame := &tree.WindowSpec{}
+	ensureDefaultWindowFrame(defaultFrame)
+	require.Equal(t, tree.Range, defaultFrame.Frame.Type)
+	require.True(t, defaultFrame.Frame.Start.UnBounded)
+	require.Equal(t, tree.Following, defaultFrame.Frame.End.Type)
+	require.True(t, defaultFrame.Frame.End.UnBounded)
+	existingFrame := defaultFrame.Frame
+	ensureDefaultWindowFrame(defaultFrame)
+	require.Same(t, existingFrame, defaultFrame.Frame)
+
+	base := &tree.WindowSpec{
+		PartitionBy: tree.Exprs{testNumVal(1)},
+		Frame:       existingFrame,
+	}
+	local := &tree.WindowSpec{RefName: tree.NewCStr("base", 1)}
+	inherited, err := inheritWindowSpec(ctx, base, local, "base")
+	require.NoError(t, err)
+	require.Len(t, inherited.PartitionBy, 1)
+	require.False(t, inherited.HasFrame)
+	require.Nil(t, inherited.Frame)
+	require.Nil(t, inherited.RefName)
+
+	_, err = resolveNamedWindowDefinitions(ctx, tree.WindowDefinitions{nil})
+	require.ErrorContains(t, err, "Invalid named window definition")
+	_, err = resolveNamedWindowDefinitions(ctx, tree.WindowDefinitions{{
+		Name: tree.NewCStr("derived", 1),
+		Spec: &tree.WindowSpec{RefName: tree.NewCStr("missing", 1)},
+	}})
+	require.ErrorContains(t, err, "Window name 'missing' is not defined")
+
+	resolved, err := resolveWindowSpecReference(ctx, nil, nil)
+	require.NoError(t, err)
+	require.Nil(t, resolved)
+	_, err = resolveWindowSpecReference(ctx, local, nil)
+	require.ErrorContains(t, err, "Window name 'base' is not defined")
+
+	named := map[string]*tree.WindowSpec{"base": base}
+	referenced, err := resolveWindowSpecReference(ctx, &tree.WindowSpec{
+		RefName:        tree.NewCStr("base", 1),
+		ReferencedOnly: true,
+	}, named)
+	require.NoError(t, err)
+	require.Nil(t, referenced.RefName)
+	require.False(t, referenced.ReferencedOnly)
+	require.Len(t, referenced.PartitionBy, 1)
+
+	plainClause := &tree.SelectClause{}
+	expanded, orderBy, err := expandNamedWindowReferences(ctx, plainClause, nil)
+	require.NoError(t, err)
+	require.Same(t, plainClause, expanded)
+	require.Nil(t, orderBy)
+}
+
+func TestExpandNamedWindowReferencesAcrossClauses(t *testing.T) {
+	windowRef := func(name string) *tree.FuncExpr {
+		return testWindowFuncExpr(
+			"sum",
+			tree.FUNC_TYPE_DEFAULT,
+			&tree.WindowSpec{
+				RefName:        tree.NewCStr(name, 1),
+				ReferencedOnly: true,
+			},
+			testNumVal(1),
+		)
+	}
+	definitions := tree.WindowDefinitions{{
+		Name: tree.NewCStr("base", 1),
+		Spec: &tree.WindowSpec{PartitionBy: tree.Exprs{testNumVal(1)}},
+	}}
+	clause := &tree.SelectClause{
+		Exprs:   tree.SelectExprs{{Expr: windowRef("base")}},
+		Where:   &tree.Where{Expr: windowRef("base")},
+		GroupBy: &tree.GroupByClause{GroupByExprsList: []tree.Exprs{{windowRef("base")}}},
+		Having:  &tree.Where{Expr: windowRef("base")},
+		Windows: definitions,
+	}
+	inputOrderBy := tree.OrderBy{
+		nil,
+		tree.NewOrder(windowRef("base"), tree.Ascending, tree.DefaultNullsPosition, false),
+	}
+
+	expanded, orderBy, err := expandNamedWindowReferences(context.Background(), clause, inputOrderBy)
+	require.NoError(t, err)
+	require.NotSame(t, clause, expanded)
+	require.Nil(t, expanded.Exprs[0].Expr.(*tree.FuncExpr).WindowSpec.RefName)
+	require.Nil(t, expanded.Where.Expr.(*tree.FuncExpr).WindowSpec.RefName)
+	require.Nil(t, expanded.GroupBy.GroupByExprsList[0][0].(*tree.FuncExpr).WindowSpec.RefName)
+	require.Nil(t, expanded.Having.Expr.(*tree.FuncExpr).WindowSpec.RefName)
+	require.Nil(t, orderBy[0])
+	require.Nil(t, orderBy[1].Expr.(*tree.FuncExpr).WindowSpec.RefName)
+	require.NotSame(t, inputOrderBy[1], orderBy[1])
+
+	badClause := &tree.SelectClause{
+		Exprs:   tree.SelectExprs{{Expr: windowRef("missing")}},
+		Windows: definitions,
+	}
+	expanded, orderBy, err = expandNamedWindowReferences(context.Background(), badClause, nil)
+	require.ErrorContains(t, err, "Window name 'missing' is not defined")
+	require.Nil(t, expanded)
+	require.Nil(t, orderBy)
+}
+
 func TestBuildPlanNamedWindows(t *testing.T) {
 	t.Run("reuse", func(t *testing.T) {
 		queryPlan, err := buildNamedWindowPlan(t, `
