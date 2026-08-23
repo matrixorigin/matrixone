@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -167,8 +168,12 @@ func TestProxyAdmissionRevokesIngressForHigherGeneration(t *testing.T) {
 func TestProxyCloseIsIdempotent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	app := &admissionProxyApplication{stopped: make(chan struct{})}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
 	s := &Server{
 		app:                          app,
+		listener:                     listener,
 		viewMetadataAdmissionCancel:  cancel,
 		viewMetadataAdmissionContext: ctx,
 	}
@@ -180,6 +185,10 @@ func TestProxyCloseIsIdempotent(t *testing.T) {
 	default:
 		t.Fatal("Proxy application was not stopped")
 	}
+	rebound, err := net.Listen("tcp", address)
+	require.NoError(t, err, "Close must release a listener before application Start")
+	require.NoError(t, rebound.Close())
+	require.Error(t, s.Start(), "a closed Proxy must never reopen ingress")
 }
 
 func TestProxyAdmissionWaitsForAuthoritativeResponse(t *testing.T) {
@@ -208,7 +217,7 @@ func TestProxyAdmissionTimeoutTracksHeartbeatConfiguration(t *testing.T) {
 	s := &Server{}
 	s.config.HAKeeper.HeartbeatInterval.Duration = 31 * time.Second
 	s.config.HAKeeper.HeartbeatTimeout.Duration = 3 * time.Second
-	require.Equal(t, 37*time.Second, s.viewMetadataAdmissionTimeout())
+	require.Equal(t, 40*time.Second, s.viewMetadataAdmissionTimeout())
 }
 
 func TestProxyAdmissionWaitHonorsCallerCancellation(t *testing.T) {

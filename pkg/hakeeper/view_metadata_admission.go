@@ -90,7 +90,8 @@ func (s *stateMachine) cnViewMetadataAdmitted(store pb.CNStoreInfo) bool {
 	if !s.viewMetadataAdmissionActive() {
 		return true
 	}
-	if !store.ViewMetadataAdmissionSupported ||
+	if !s.viewMetadataAdmissionTargetsReady() ||
+		!store.ViewMetadataAdmissionSupported ||
 		store.ViewMetadataAdmissionGeneration == 0 ||
 		store.ViewMetadataObservedEpoch < s.state.ViewMetadataAdmissionEpoch {
 		return false
@@ -102,7 +103,8 @@ func (s *stateMachine) cnViewMetadataAdmitted(store pb.CNStoreInfo) bool {
 
 func (s *stateMachine) proxyViewMetadataAdmitted(store pb.ProxyStore) bool {
 	return !s.viewMetadataAdmissionActive() ||
-		(store.ViewMetadataAdmissionSupported &&
+		(s.viewMetadataAdmissionTargetsReady() &&
+			store.ViewMetadataAdmissionSupported &&
 			store.ViewMetadataAdmissionGeneration != 0 &&
 			store.ViewMetadataObservedEpoch >= s.state.ViewMetadataAdmissionEpoch)
 }

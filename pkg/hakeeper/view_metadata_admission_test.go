@@ -430,6 +430,16 @@ func TestLifecycleUnawareJoinAdvancesEpochBeforeAdmission(t *testing.T) {
 	require.Equal(t, uint64(1), rsm.state.ViewMetadataAdmissionCNTargets["active-cn"])
 	require.Equal(t, uint64(2), rsm.state.ViewMetadataAdmissionProxyTargets["active-proxy"])
 
+	batch = updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "joining-cn",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 3,
+		ViewMetadataObservedEpoch:       8,
+		ViewMetadataCatalogFencedEpoch:  8,
+	})
+	require.False(t, batch.ViewMetadataAdmission.Admitted,
+		"a joining CN must wait until all captured old-epoch targets have drained")
+
 	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
 		UUID:                            "active-cn",
 		ViewMetadataAdmissionSupported:  true,

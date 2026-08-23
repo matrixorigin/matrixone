@@ -54,10 +54,11 @@ const (
 )
 
 type Server struct {
-	runtime runtime.Runtime
-	stopper *stopper.Stopper
-	config  Config
-	app     goetty.NetApplication
+	runtime  runtime.Runtime
+	stopper  *stopper.Stopper
+	config   Config
+	app      goetty.NetApplication
+	listener net.Listener
 
 	// handler handles the client connection.
 	handler *handler
@@ -75,6 +76,9 @@ type Server struct {
 	viewMetadataAdmissionCancel     context.CancelFunc
 	viewMetadataRevocationOnce      sync.Once
 	viewMetadataCloseFn             func() error
+	lifecycleMu                     sync.Mutex
+	started                         bool
+	closed                          bool
 	closeOnce                       sync.Once
 	closeErr                        error
 	test                            bool
@@ -189,6 +193,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		return nil, err
 	}
 	s.app = app
+	s.listener = listener
 	initialized = true
 	return s, nil
 }
@@ -264,13 +269,32 @@ func (s *Server) Start() error {
 	if err := s.waitForViewMetadataAdmission(s.viewMetadataAdmissionContext); err != nil {
 		return err
 	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return moerr.NewInternalErrorNoCtx("proxy server is closed")
+	}
 	err := s.app.Start()
 	if err != nil {
 		s.runtime.Logger().Error("proxy server start failed", zap.Error(err))
 	} else {
+		s.started = true
 		s.runtime.Logger().Info("proxy server started")
 	}
 	return err
+}
+
+func (s *Server) closeIngress() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.closed = true
+	if !s.started && s.listener != nil {
+		_ = s.listener.Close()
+	}
+	if s.app != nil {
+		return s.app.Stop()
+	}
+	return nil
 }
 
 // Close closes the proxy server.
@@ -279,6 +303,7 @@ func (s *Server) Close() error {
 		if s.viewMetadataAdmissionCancel != nil {
 			s.viewMetadataAdmissionCancel()
 		}
+		s.closeErr = s.closeIngress()
 		if s.handler != nil {
 			_ = s.handler.Close()
 		}
@@ -286,9 +311,6 @@ func (s *Server) Close() error {
 			s.stopper.Stop()
 		}
 		stats.Unregister(statsFamilyName)
-		if s.app != nil {
-			s.closeErr = s.app.Stop()
-		}
 	})
 	return s.closeErr
 }

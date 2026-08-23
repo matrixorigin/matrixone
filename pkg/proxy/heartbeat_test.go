@@ -113,10 +113,21 @@ func (tclient *testHAClient) SendProxyHeartbeat(ctx context.Context, hb pb.Proxy
 
 type admissionHeartbeatCluster struct {
 	clusterservice.MOCluster
-	admission pb.ViewMetadataAdmission
+	admission    pb.ViewMetadataAdmission
+	refreshDelay time.Duration
 }
 
-func (c *admissionHeartbeatCluster) Refresh(context.Context) error { return nil }
+func (c *admissionHeartbeatCluster) Refresh(ctx context.Context) error {
+	if c.refreshDelay <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(c.refreshDelay):
+		return nil
+	}
+}
 
 func (c *admissionHeartbeatCluster) GetViewMetadataAdmission() pb.ViewMetadataAdmission {
 	return c.admission
@@ -165,6 +176,37 @@ func TestServerHeartbeatSendsImmediately(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Proxy heartbeat did not stop after cancellation")
 	}
+}
+
+func TestServerHeartbeatUsesIndependentRefreshDeadline(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(t.Name(), rt)
+	client := &testHAClient{heartbeatFn: func(ctx context.Context, _ pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+		select {
+		case <-ctx.Done():
+			return pb.CommandBatch{}, ctx.Err()
+		case <-time.After(35 * time.Millisecond):
+			return pb.CommandBatch{ViewMetadataAdmission: &pb.ViewMetadataAdmission{
+				Enabled: true, Epoch: 5, Generation: 9,
+			}}, nil
+		}
+	}}
+	cluster := &admissionHeartbeatCluster{
+		admission:    pb.ViewMetadataAdmission{Enabled: true, Epoch: 5},
+		refreshDelay: 25 * time.Millisecond,
+	}
+	ser := &Server{
+		haKeeperClient:                  client,
+		configData:                      util.NewConfigData(nil),
+		runtime:                         runtime.ServiceRuntime(t.Name()),
+		handler:                         &handler{moCluster: cluster},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		viewMetadataHeartbeatWakeup:     make(chan struct{}, 1),
+	}
+	ser.config.HAKeeper.HeartbeatTimeout.Duration = 50 * time.Millisecond
+	ser.doHeartbeat(context.Background())
+	require.Equal(t, uint64(5), ser.viewMetadataObservedEpoch.Load())
 }
 
 func TestServerHeartbeatImmediatelyReportsObservedAdmissionEpoch(t *testing.T) {

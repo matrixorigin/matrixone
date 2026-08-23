@@ -52,9 +52,12 @@ func (s *Server) heartbeat(ctx context.Context) {
 }
 
 func (s *Server) doHeartbeat(ctx context.Context) {
-	ctx, cancel := context.WithTimeoutCause(ctx, s.config.HAKeeper.HeartbeatTimeout.Duration, moerr.CauseDoHeartbeat)
-	defer cancel()
-	batch, err := s.haKeeperClient.SendProxyHeartbeat(ctx, pb.ProxyHeartbeat{
+	timeout := s.config.HAKeeper.HeartbeatTimeout.Duration
+	if timeout <= 0 {
+		timeout = defaultHeartbeatTimeout
+	}
+	heartbeatCtx, heartbeatCancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseDoHeartbeat)
+	batch, err := s.haKeeperClient.SendProxyHeartbeat(heartbeatCtx, pb.ProxyHeartbeat{
 		UUID:                            s.config.UUID,
 		ListenAddress:                   s.config.ListenAddress,
 		ConfigData:                      s.configData.GetData(),
@@ -63,10 +66,15 @@ func (s *Server) doHeartbeat(ctx context.Context) {
 		ViewMetadataObservedEpoch:       s.viewMetadataObservedEpoch.Load(),
 	})
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
+		err = moerr.AttachCause(heartbeatCtx, err)
+		heartbeatCancel()
 		s.runtime.Logger().Error("failed to send heartbeat", zap.Error(err))
-	} else if err := s.applyViewMetadataAdmission(ctx, batch.ViewMetadataAdmission); err != nil {
-		if ctx.Err() == nil {
+	} else {
+		heartbeatCancel()
+		refreshCtx, refreshCancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseDoHeartbeat)
+		err = s.applyViewMetadataAdmission(refreshCtx, batch.ViewMetadataAdmission)
+		refreshCancel()
+		if err != nil && ctx.Err() == nil {
 			s.runtime.Logger().Error("failed to apply view metadata admission response", zap.Error(err))
 		}
 	}

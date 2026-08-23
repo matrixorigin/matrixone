@@ -124,15 +124,13 @@ func (s *Server) revokeViewMetadataGeneration(authoritative uint64) {
 		if s.viewMetadataAdmissionCancel != nil {
 			s.viewMetadataAdmissionCancel()
 		}
-		// Stop closes the listener before waiting for sessions, so no new client
-		// can enter after this method returns and existing tunnels are disconnected.
-		if s.app != nil {
-			if err := s.app.Stop(); err != nil && s.runtime != nil {
-				s.runtime.Logger().Error("failed to stop superseded proxy ingress",
-					zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
-					zap.Uint64("authoritative-generation", authoritative),
-					zap.Error(err))
-			}
+		// Mark the lifecycle closed before scheduling full shutdown. This shares
+		// the Start/Close lock and explicitly releases a pre-start listener.
+		if err := s.closeIngress(); err != nil && s.runtime != nil {
+			s.runtime.Logger().Error("failed to stop superseded proxy ingress",
+				zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
+				zap.Uint64("authoritative-generation", authoritative),
+				zap.Error(err))
 		}
 		if s.stopper != nil || s.viewMetadataCloseFn != nil {
 			closeFn := s.Close
@@ -184,9 +182,9 @@ func (s *Server) waitForViewMetadataAdmission(parent context.Context) error {
 	}
 }
 
-// viewMetadataAdmissionTimeout covers the two RPCs needed by an active epoch:
-// one to discover the authoritative epoch and one to report that observation.
-// The interval is retained as scheduling tolerance and as a fallback window.
+// viewMetadataAdmissionTimeout covers the three RPCs needed by an active epoch:
+// one to discover the authoritative epoch, one to refresh ClusterDetails, and
+// one to report that observation. The interval is retained as scheduling tolerance.
 func (s *Server) viewMetadataAdmissionTimeout() time.Duration {
 	interval := s.config.HAKeeper.HeartbeatInterval.Duration
 	if interval <= 0 {
@@ -197,8 +195,8 @@ func (s *Server) viewMetadataAdmissionTimeout() time.Duration {
 		rpcTimeout = defaultHeartbeatTimeout
 	}
 	const maxDuration = time.Duration(1<<63 - 1)
-	if rpcTimeout > (maxDuration-interval)/2 {
-		return time.Duration(1<<63 - 1)
+	if rpcTimeout > (maxDuration-interval)/3 {
+		return maxDuration
 	}
-	return interval + 2*rpcTimeout
+	return interval + 3*rpcTimeout
 }
