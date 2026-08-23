@@ -6285,7 +6285,7 @@ func runBenchmark(b *testing.B, name string, t uint64) {
 	b.Run(name, func(b *testing.B) {
 		runLockServiceTestsWithLevel(
 			b,
-			zapcore.InfoLevel,
+			zapcore.ErrorLevel,
 			[]string{"s1"},
 			time.Second*10,
 			func(alloc *lockTableAllocator, s []*service) {
@@ -6302,7 +6302,13 @@ func runBenchmark(b *testing.B, name string, t uint64) {
 				b.ResetTimer()
 
 				b.RunParallel(func(p *testing.PB) {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					// The benchmark framework grows b.N during calibration. A context
+					// shared by all iterations must therefore not expire mid-run; making
+					// one per operation would also pollute the allocation measurement.
+					// Keep a request deadline shorter than the one-hour lock-wait ceiling
+					// so context composition exercises the same path as before. Ten minutes
+					// outlives this benchmark's five-minute process timeout.
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 					defer cancel()
 
 					row := [][]byte{buf.Uint64ToBytes(rowID.Add(1))}
