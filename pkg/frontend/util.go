@@ -341,6 +341,15 @@ func getExprValueWithPrepareMeta(
 	return value, plan2.MakePlan2Type(resultVec.GetType()), err
 }
 
+func preparedPlanExprContainsSubquery(expr *plan.Expr) bool {
+	contains := false
+	_ = plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+		contains = contains || candidate.GetSub() != nil
+		return nil
+	})
+	return contains
+}
+
 func getPreparedPlanExprValueWithMeta(
 	expr *plan.Expr,
 	ses *Session,

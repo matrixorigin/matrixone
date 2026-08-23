@@ -410,6 +410,70 @@ func ValidateStringLiteralFormsInOwner(owner any) error {
 	return validateStringLiteralFormsInOwner(owner)
 }
 
+// VisitExprTree visits expr and every nested expression exactly once in
+// deterministic pre-order. It is the canonical traversal for Expr variants;
+// callers should not maintain partial per-variant recursion.
+func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
+	if expr == nil {
+		return nil
+	}
+	if err := visitor(expr); err != nil {
+		return err
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return VisitExprTree(lit.Src, visitor)
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if err := VisitExprTree(arg, visitor); err != nil {
+				return err
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if err := VisitExprTree(item, visitor); err != nil {
+				return err
+			}
+		}
+	}
+	if subquery := expr.GetSub(); subquery != nil {
+		if err := VisitExprTree(subquery.Child, visitor); err != nil {
+			return err
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if err := VisitExprTree(window.WindowFunc, visitor); err != nil {
+			return err
+		}
+		for _, item := range window.PartitionBy {
+			if err := VisitExprTree(item, visitor); err != nil {
+				return err
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				if err := VisitExprTree(order.Expr, visitor); err != nil {
+					return err
+				}
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				if err := VisitExprTree(window.Frame.Start.Val, visitor); err != nil {
+					return err
+				}
+			}
+			if window.Frame.End != nil {
+				if err := VisitExprTree(window.Frame.End.Val, visitor); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // VisitExpressionsInOwner calls visitor once for every expression root nested
 // in owner. The visitor owns traversal inside each Expr; the reflective walk
 // deliberately stops at *Expr so expression subtrees are not visited twice.

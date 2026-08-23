@@ -45,6 +45,31 @@ func TestValidateStringLiteralFormsTraversesSubqueryChild(t *testing.T) {
 	require.ErrorContains(t, expr.ValidateStringLiteralForms(), "invalid string literal form 99")
 }
 
+func TestVisitExprTreeTraversesEveryNestedVariant(t *testing.T) {
+	param := &Expr{Expr: &Expr_P{P: &ParamRef{Pos: 3}}}
+	literalSource := &Expr{Expr: &Expr_P{P: &ParamRef{Pos: 4}}}
+	literal := &Expr{Expr: &Expr_Lit{Lit: &Literal{Src: literalSource}}}
+	subquery := &Expr{Expr: &Expr_Sub{Sub: &SubqueryRef{Child: param}}}
+	window := &Expr{Expr: &Expr_W{W: &WindowSpec{
+		WindowFunc:  &Expr{Expr: &Expr_F{F: &Function{Args: []*Expr{literal}}}},
+		PartitionBy: []*Expr{subquery},
+		OrderBy:     []*OrderBySpec{{Expr: &Expr{Expr: &Expr_P{P: &ParamRef{Pos: 5}}}}},
+		Frame: &FrameClause{
+			Start: &FrameBound{Val: &Expr{Expr: &Expr_P{P: &ParamRef{Pos: 6}}}},
+			End:   &FrameBound{Val: &Expr{Expr: &Expr_P{P: &ParamRef{Pos: 7}}}},
+		},
+	}}}
+
+	var positions []int32
+	require.NoError(t, VisitExprTree(window, func(expr *Expr) error {
+		if param := expr.GetP(); param != nil {
+			positions = append(positions, param.Pos)
+		}
+		return nil
+	}))
+	require.Equal(t, []int32{4, 3, 5, 6, 7}, positions)
+}
+
 func TestValidateStringLiteralFormsSkipsBytePayloads(t *testing.T) {
 	owner := struct {
 		Payload []byte

@@ -1382,45 +1382,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	return nil
 }
 
-func collectParamPositions(expr *plan.Expr, positions map[int]bool) {
-	if expr == nil {
-		return
-	}
-	if param := expr.GetP(); param != nil && param.Pos >= 0 {
-		positions[int(param.Pos)] = true
-		return
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			collectParamPositions(arg, positions)
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			collectParamPositions(item, positions)
-		}
-	}
-}
-
-func collectDecimalParamPositions(expr *plan.Expr, positions map[int]bool) {
-	if expr == nil {
-		return
-	}
-	if types.T(expr.Typ.Id).IsDecimal() {
-		collectParamPositions(expr, positions)
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			collectDecimalParamPositions(arg, positions)
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			collectDecimalParamPositions(item, positions)
-		}
-	}
-}
-
 func (s *Scope) CreateTable(c *Compile) error {
 	return s.createTable(c, nil)
 }
@@ -2156,12 +2117,19 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		numericPrefixPositions := make(map[int]bool)
 		if c.pn.GetDdl().GetQuery() != nil {
 			scanErr := plan.VisitExpressionsInOwner(c.pn.GetDdl().GetQuery(), func(expr *plan.Expr) error {
-				requiresV26, err := plan.RequiresMORPCVersion26NumericPrefix(expr)
-				if err == nil && requiresV26 {
+				return plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+					fn := candidate.GetF()
+					if fn == nil || fn.Func.GetObjName() != "cast" || candidate.Typ.Charset != 255 {
+						return nil
+					}
 					numericPrefixPlan = true
-				}
-				collectDecimalParamPositions(expr, numericPrefixPositions)
-				return err
+					return plan.VisitExprTree(candidate, func(source *plan.Expr) error {
+						if param := source.GetP(); param != nil && param.Pos >= 0 {
+							numericPrefixPositions[int(param.Pos)] = true
+						}
+						return nil
+					})
+				})
 			})
 			if scanErr != nil {
 				return scanErr

@@ -3946,11 +3946,13 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		isBin := false
 		runtimeType := types.T_text.ToType()
 		hasRuntimeType := false
+		numericPrefixSource := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
+			numericPrefixSource = param.EnableNumericPrefix
 		}
 		paramType := plan.Type{Id: int32(types.T_text)}
 		if hasRuntimeType {
@@ -3973,6 +3975,11 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 				if err != nil {
 					return false, err
 				}
+				if numericPrefixSource && params[i].GetLit() != nil {
+					params[i].GetLit().Src = &plan.Expr{
+						Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
+					}
+				}
 				continue
 			}
 			pc := &plan.Literal{IsBin: isBin}
@@ -3982,6 +3989,11 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 				Expr: &plan.Expr_Lit{
 					Lit: pc,
 				},
+			}
+		}
+		if numericPrefixSource && params[i].GetLit() != nil {
+			params[i].GetLit().Src = &plan.Expr{
+				Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 			}
 		}
 	}

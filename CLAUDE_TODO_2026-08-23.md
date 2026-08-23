@@ -143,3 +143,28 @@
 - DeepCopyPlan 支持 DCL；Prepared SET 的 specialized `SetVariablesItem.Value` 由表达式执行器直接求值，不再回退到未特化 AST synthetic SELECT。
 - 新增补偿指数 COM_STMT、SQL EXECUTE CTAS、SQL EXECUTE SET 黑盒回归及净指数白盒测试。
 - 验证通过：plan/frontend/compile 全包测试，issue #27088 embedded 黑盒，受影响包 list/build/vet，targeted rowserrcheck。
+
+---
+
+## PR #27483 第三轮阻塞评论修复计划
+
+### 不变量
+
+1. Prepared SET 仅能把标量执行器支持的表达式交给 `NewExpressionExecutor`；含 `Expr_Sub` 的 assignment 必须保留 synthetic SELECT/query 执行闭包及其原子多赋值语义。
+2. CTAS numeric-prefix 参数位置收集必须覆盖 `Expr_F/List/W/Sub/Lit provenance` 等完整表达式树，且每个节点只由一个统一 traversal 处理。
+3. 参数位置只能来自实际 numeric-prefix 语义域，不能因同一 CTAS 中存在一个 v26 cast 就误改无关字符串参数。
+
+### 步骤与测试
+
+1. 在 `pkg/pb/plan` 增加完整 Expr tree visitor，并为 Window、Subquery、Literal source 等形态增加单测。
+2. Prepared SET 使用统一 visitor 检测 `Expr_Sub`：含 subquery 回退既有 synthetic SELECT；纯标量 specialized item 继续直接执行。
+3. CTAS 使用同一 visitor 收集 numeric-prefix cast 与其对应参数来源，删除 F/List 手写递归。
+4. 在 issue #27088 增加 Window CTAS tail 黑盒；复跑既有 issue #26685 text/binary multi-SET 与 scalar subquery 回归。
+5. 运行 pb/plan、plan、compile、frontend、issues 的 focused/full test、build、vet、SCA，自审后推送。
+
+### 第三轮执行结果
+
+- 新增 `plan.VisitExprTree` 作为 Expr_F/List/W/Sub/Lit provenance/frame/order 等完整变体的统一前序遍历。
+- Prepared SET 检测到 `Expr_Sub` 时保留 synthetic SELECT/query 执行闭包；纯标量 specialized item 才使用 expression executor。
+- runtime numeric-prefix literal 记录 ParamRef provenance；CTAS 仅从实际 Charset=255 numeric-prefix cast 子树收集参数位置，Window 路径不再漏参，也不改无关字符串参数。
+- 新增 scalar-subquery SET 与 Window CTAS tail 黑盒；issue #26685 text/binary multi-SET 回归通过。

@@ -998,7 +998,8 @@ func doSetVar(
 		var value interface{}
 		var valueType plan.Type
 		var evalErr error
-		if index < len(preparedItems) && preparedItems[index].Value != nil {
+		if index < len(preparedItems) && preparedItems[index].Value != nil &&
+			!preparedPlanExprContainsSubquery(preparedItems[index].Value) {
 			value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
 				preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
 		} else {

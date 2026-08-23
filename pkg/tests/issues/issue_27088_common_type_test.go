@@ -188,6 +188,29 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.NoError(t, rows.Err())
 		})
 
+		t.Run("SQL EXECUTE specializes CTAS window expression", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_ctas_window from
+				'create table ctas_window_result as
+				 select id, count(*) over (partition by d = ?) as grp
+				 from common_type where id <= 3'`)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_ctas_window")
+			}()
+			mustExec(t, ctx, conn, "set @issue27088_ctas_window = '9007199254740992.0000000002tail'")
+			mustExec(t, ctx, conn, "execute issue27088_ctas_window using @issue27088_ctas_window")
+			rows, queryErr := conn.QueryContext(ctx, "select id, grp from ctas_window_result order by id")
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			var got [][2]int
+			for rows.Next() {
+				var id, groupSize int
+				require.NoError(t, rows.Scan(&id, &groupSize))
+				got = append(got, [2]int{id, groupSize})
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, [][2]int{{1, 2}, {2, 1}, {3, 2}}, got)
+		})
+
 		t.Run("SQL EXECUTE specializes SET expression", func(t *testing.T) {
 			mustExec(t, ctx, conn, `prepare issue27088_set from
 				'set @issue27088_out = coalesce(?, cast(1 as decimal(38,10)))'`)
@@ -197,6 +220,18 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			var value string
 			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_out").Scan(&value))
 			require.Equal(t, "12.5000000000", value)
+		})
+
+		t.Run("SQL EXECUTE SET preserves scalar subquery execution", func(t *testing.T) {
+			mustExec(t, ctx, conn, "prepare issue27088_set_subquery from 'set @issue27088_subquery_out = (select ?)' ")
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_subquery")
+			}()
+			mustExec(t, ctx, conn, "set @issue27088_subquery_value = 42")
+			mustExec(t, ctx, conn, "execute issue27088_set_subquery using @issue27088_subquery_value")
+			var value int
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_subquery_out").Scan(&value))
+			require.Equal(t, 42, value)
 		})
 
 		t.Run("SQL EXECUTE specializes integer comparison for decimal variable", func(t *testing.T) {
