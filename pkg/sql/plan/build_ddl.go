@@ -2026,12 +2026,8 @@ func buildCreateTable(
 	isPrepareStmt bool,
 ) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
-	// Internal DDL and session-scoped temporary tables can materialize generated
-	// physical names with UUID prefixes or suffixes.
-	if getNumOfCharacters(tableName) > MaxIdentifierLength &&
-		!defines.IsInternalExecutor(ctx.GetContext()) &&
-		!isGeneratedSessionTempTableName(ctx, tableName) {
-		return nil, moerr.NewTooLongIdent(ctx.GetContext(), tableName)
+	if err := validateCreateTableIdentifier(ctx, tableName); err != nil {
+		return nil, err
 	}
 
 	if stmt.IsAsLike {
@@ -2464,6 +2460,29 @@ func buildCreateTable(
 	}, nil
 }
 
+func validateTableIdentifier(ctx context.Context, name string) error {
+	if getNumOfCharacters(name) <= MaxIdentifierLength {
+		return nil
+	}
+
+	return moerr.NewTooLongIdent(ctx, name)
+}
+
+func validateCreateTableIdentifier(ctx CompilerContext, name string) error {
+	err := validateTableIdentifier(ctx.GetContext(), name)
+	if err == nil {
+		return nil
+	}
+
+	// Internal DDL and session-scoped temporary tables can materialize generated
+	// physical names with UUID prefixes or suffixes.
+	if defines.IsInternalExecutor(ctx.GetContext()) || isGeneratedSessionTempTableName(ctx, name) {
+		return nil
+	}
+
+	return err
+}
+
 func isGeneratedSessionTempTableName(ctx CompilerContext, name string) bool {
 	rootStmt, err := parsers.ParseOne(
 		ctx.GetContext(),
@@ -2474,6 +2493,7 @@ func isGeneratedSessionTempTableName(ctx CompilerContext, name string) bool {
 	if err != nil {
 		return false
 	}
+	defer rootStmt.Free()
 	if _, isCreateTable := rootStmt.(*tree.CreateTable); isCreateTable {
 		return false
 	}
@@ -5341,6 +5361,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 			case *tree.AlterOptionTableName:
 				oldName := tableName
 				newName := string(opt.Name.ToTableName().ObjectName)
+				if err := validateTableIdentifier(ctx.GetContext(), newName); err != nil {
+					return nil, err
+				}
 				dstKey := schemaName + "." + newName
 				if oldName != newName {
 					if _, ok := nameMapping[dstKey]; ok {
@@ -5932,6 +5955,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)
+			if err := validateTableIdentifier(ctx.GetContext(), newName); err != nil {
+				return nil, err
+			}
 			if oldName == newName {
 				continue
 			}

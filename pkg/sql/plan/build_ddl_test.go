@@ -201,6 +201,69 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	require.Equal(t, "t3", renames[1].GetActions()[0].GetAlterName().GetNewName())
 }
 
+func TestBuildTableRenameIdentifierLength(t *testing.T) {
+	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
+
+	testCases := []struct {
+		name string
+		sql  func(string) string
+	}{
+		{
+			name: "rename table",
+			sql: func(name string) string {
+				return fmt.Sprintf("rename table nation to `%s`", name)
+			},
+		},
+		{
+			name: "alter table rename",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation rename to `%s`", name)
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name+" accepts 64 characters", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(validName))
+			require.NoError(t, err)
+		})
+
+		invalidNames := []struct {
+			name string
+			make func(*MockOptimizer) string
+		}{
+			{
+				name: "65 characters",
+				make: func(*MockOptimizer) string {
+					return "表" + strings.Repeat("b", MaxIdentifierLength)
+				},
+			},
+			{
+				name: "generated temporary table prefix",
+				make: func(mock *MockOptimizer) string {
+					return defines.GenTempTableName(
+						mock.ctxt.GetProcess().GetSessionInfo().SessionId,
+						"database",
+						strings.Repeat("t", MaxIdentifierLength),
+					)
+				},
+			},
+		}
+
+		for _, invalidName := range invalidNames {
+			t.Run(testCase.name+" rejects "+invalidName.name, func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				_, err := runOneStmt(mock, t, testCase.sql(invalidName.make(mock)))
+				require.Error(t, err)
+				moErr, ok := err.(*moerr.Error)
+				require.True(t, ok, "unexpected error type %T: %v", err, err)
+				require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+				require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+			})
+		}
+	}
+}
+
 func TestBuildRejectsCrossDatabaseTableRename(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -4167,6 +4230,7 @@ func TestBuildCreateTableIdentifierLength(t *testing.T) {
 		1,
 	)
 	require.NoError(t, err)
+	defer stmt.Free()
 	plan, err = BuildPlan(tempCtx, stmt, false)
 	require.NoError(t, err)
 	require.Equal(t, physicalTempName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
