@@ -38,6 +38,14 @@ import (
 // projection expressions during planning.
 const maxSequentialUpdateProjectionExprs = 1 << 18
 
+func isDefaultValExpr(e *Expr) bool {
+	if ce, ok := e.Expr.(*plan.Expr_Lit); ok {
+		_, isDefVal := ce.Lit.Value.(*plan.Literal_Defaultval)
+		return isDefVal
+	}
+	return false
+}
+
 func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 	alias string,
 	tableDef *plan.TableDef,
@@ -324,9 +332,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if err = builder.validateDistinctUpdateForeignKeyMutationTargets(bindCtx, dmlCtx); err != nil {
-		return 0, err
-	}
 	targetAliases := make([]string, len(dmlCtx.tableDefs))
 	for i, updateCol2Expr := range dmlCtx.updateCol2Expr {
 		if len(updateCol2Expr) > 0 {
@@ -339,33 +344,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		return 0, err
 	}
 	updatedTargetCount := 0
-	physicalTargetCounts := make(map[uint64]int)
-	hasRepeatedPhysicalTarget := false
 	for i := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) > 0 {
 			updatedTargetCount++
-			tableID := dmlCtx.tableDefs[i].TblId
-			physicalTargetCounts[tableID]++
-			hasRepeatedPhysicalTarget = hasRepeatedPhysicalTarget || physicalTargetCounts[tableID] > 1
 		}
 	}
-	defer func() {
-		if err == nil || !hasRepeatedPhysicalTarget {
-			return
-		}
-		route, reason, routedErr := classifyUpdatePlannerError(err)
-		if route == updatePlannerLegacy {
-			err = newUpdatePlannerRouteError(updatePlannerRejected, reason, routedErr)
-		}
-	}()
 	if err = validateRepeatedPhysicalTargetPrimaryKeyUpdate(builder.GetContext(), dmlCtx); err != nil {
 		return 0, err
-	}
-	routeUnsupported := func(reason updatePlannerRouteReason, routeErr error) error {
-		if hasRepeatedPhysicalTarget {
-			return newUpdatePlannerRouteError(updatePlannerRejected, reason, routeErr)
-		}
-		return newLegacyUpdatePlannerRouteError(reason, routeErr)
 	}
 	if stmt.HasReturning() {
 		if len(dmlCtx.tableDefs) != 1 {
@@ -390,7 +375,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	// MySQL guarantees left-to-right evaluation only for single-table UPDATE.
 	// Keep the existing simultaneous projection path for multi-target and UPDATE
 	// FROM statements, whose assignment order is not guaranteed by MySQL.
-	sequentialAssignments := len(dmlCtx.tableDefs) == 1 &&
+	sequentialAssignments := !updateHasMultipleSourceTables(stmt) && len(dmlCtx.tableDefs) == 1 &&
 		len(dmlCtx.updateAssignments) == 1 && len(dmlCtx.updateAssignments[0]) > 1 &&
 		stmt.From == nil
 	sequentialExprs := make([][]UpdateAssignment, len(dmlCtx.aliases))
@@ -416,8 +401,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 		}
 
-		var legacyIrregularRoute bool
-		inlineIrregularIndexes[i], legacyIrregularRoute, err = classifyIrregularIndexesForUpdate(
+		var unsupportedIrregularRoute bool
+		inlineIrregularIndexes[i], unsupportedIrregularRoute, err = classifyIrregularIndexesForUpdate(
 			builder.GetContext(), tableDef, dmlCtx.updateCol2Expr[i])
 		if err != nil {
 			if stmt.HasReturning() {
@@ -427,8 +412,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 			return 0, err
 		}
-		if legacyIrregularRoute {
-			return 0, routeUnsupported(
+		if unsupportedIrregularRoute {
+			return 0, newRejectedUpdatePlannerRouteError(
 				updateRouteReasonIrregularIndex,
 				moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
 			)
@@ -616,7 +601,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 	}
-	guardTargetAssignmentEvaluation := isMultiTargetUpdate || len(dmlCtx.aliases) > updatedTargetCount
+	hasReadOnlyUpdateSource := dmlCtx.hasReadOnlySource || len(dmlCtx.aliases) > updatedTargetCount
+	guardTargetAssignmentEvaluation := isMultiTargetUpdate || hasReadOnlyUpdateSource
 
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -764,7 +750,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
-	if !isMultiTargetUpdate && len(dmlCtx.aliases) > updatedTargetCount {
+	if !isMultiTargetUpdate && hasReadOnlyUpdateSource {
 		for i, alias := range dmlCtx.aliases {
 			if len(dmlCtx.updateCol2Expr[i]) == 0 {
 				continue
@@ -851,6 +837,70 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if err != nil {
 				return 0, err
 			}
+		}
+	}
+	if isMultiTargetUpdate && !deferRepeatedPhysicalTargetMerge {
+		targetsByTableID := make(map[uint64][]int)
+		physicalTableOrder := make([]uint64, 0, len(dmlCtx.tableDefs))
+		for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
+			if len(updateCols) == 0 {
+				continue
+			}
+			tableID := dmlCtx.tableDefs[targetIdx].TblId
+			if len(targetsByTableID[tableID]) == 0 {
+				physicalTableOrder = append(physicalTableOrder, tableID)
+			}
+			targetsByTableID[tableID] = append(targetsByTableID[tableID], targetIdx)
+		}
+		groupActiveProject := make([]*plan.Expr, len(selectNode.ProjectList))
+		for pos, expr := range selectNode.ProjectList {
+			groupActiveProject[pos] = &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectNodeTag, ColPos: int32(pos),
+				}},
+			}
+		}
+		appendedGroupActive := false
+		for _, tableID := range physicalTableOrder {
+			targets := targetsByTableID[tableID]
+			if len(targets) < 2 {
+				continue
+			}
+			var groupActive *plan.Expr
+			for _, targetIdx := range targets {
+				activePos := targetBranchActivePos[targetIdx]
+				active := &plan.Expr{
+					Typ: selectNode.ProjectList[activePos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: selectNodeTag, ColPos: activePos,
+					}},
+				}
+				if groupActive == nil {
+					groupActive = active
+					continue
+				}
+				groupActive, err = BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "or", []*plan.Expr{groupActive, active})
+				if err != nil {
+					return 0, err
+				}
+			}
+			groupActivePos := int32(len(groupActiveProject))
+			groupActiveProject = append(groupActiveProject, groupActive)
+			for _, targetIdx := range targets {
+				physicalTargetActivePos[targetIdx] = groupActivePos
+			}
+			appendedGroupActive = true
+		}
+		if appendedGroupActive {
+			groupActiveTag := builder.genNewBindTag()
+			selectNode = &plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+				ProjectList: groupActiveProject, BindingTags: []int32{groupActiveTag},
+			}
+			lastNodeID = builder.appendNode(selectNode, bindCtx)
+			selectNodeTag = groupActiveTag
 		}
 	}
 	if !isMultiTargetUpdate && updateHasMultipleSourceTables(stmt) {
@@ -980,6 +1030,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
+	if err = builder.validateDistinctUpdateForeignKeyMutationTargets(
+		bindCtx, dmlCtx, newColName2Idx); err != nil {
+		return 0, err
+	}
+
 	for i, tableDef := range dmlCtx.tableDefs {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(tableDef.Checks) == 0 {
 			continue
@@ -1053,6 +1108,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		newColName2Idx,
 		targetRowNumberPos,
 		targetBranchActivePos,
+		physicalTargetActivePos,
 		deferRepeatedPhysicalTargetMerge,
 	)
 	if err != nil {
@@ -1062,6 +1118,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if stmt.HasReturning() {
 		tableDef := dmlCtx.tableDefs[0]
 		alias := dmlCtx.aliases[0]
+		if affectedRowsCol, ok := builder.updateAffectedRowsCols[tableDef.TblId]; ok {
+			builder.returningFilterPos = affectedRowsCol.pos
+		}
 		colPos := make(map[string]int32, len(tableDef.Cols))
 		for _, col := range tableDef.Cols {
 			qualifiedName := alias + "." + col.Name
@@ -1806,7 +1865,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 
 			joinType := plan.Node_LEFT
-			if !isMultiTargetUpdate && !idxDef.Unique && !isSpatialIndexDef(idxDef) {
+			if !isMultiTargetUpdate && !pkNeedUpdate[i] && !idxDef.Unique && !isSpatialIndexDef(idxDef) {
 				joinType = plan.Node_INNER
 			}
 			lastNodeID = builder.appendNode(&plan.Node{
@@ -1942,8 +2001,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			})
 			physicalTargetActiveFinalPos[i] = targetActiveFinalPos[i]
-			if deferRepeatedPhysicalTargetMerge &&
-				physicalTargetActivePos[i] != targetBranchActivePos[i] {
+			if physicalTargetActivePos[i] != targetBranchActivePos[i] {
 				physicalTargetActiveFinalPos[i] = int32(len(finalProjList))
 				finalProjList = append(finalProjList, &plan.Expr{
 					Typ: selectNode.ProjectList[physicalTargetActivePos[i]].Typ,
@@ -1976,6 +2034,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					ColPos: oldPkPos,
 				},
 			},
+		}
+		if affectedRowsCol, ok := builder.updateAffectedRowsCols[tableDef.TblId]; ok {
+			affectedRowsFinalPos := int32(len(finalProjList))
+			finalProjList = append(finalProjList, &plan.Expr{
+				Typ: selectNode.ProjectList[affectedRowsCol.pos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: affectedRowsCol.pos,
+				}},
+			})
+			updateCtx.AffectedRowsCols = []plan.ColRef{{
+				RelPos: finalProjTag,
+				ColPos: affectedRowsFinalPos,
+			}}
 		}
 		if changedRowsExpr != nil {
 			changedRowsPos := int32(len(finalProjList))
@@ -4440,8 +4512,8 @@ func irregularIndexAffectedByUpdate(
 // classifyIrregularIndexesForUpdate separates synchronous inline maintenance
 // from CDC-only indexes using plugin metadata. MASTER has no plugin, but shares
 // the modern synchronous maintenance pipeline with the plugin-backed indexes.
-// The bool return preserves the legacy route only for an affected irregular
-// algorithm that has not migrated to either mechanism. MASTER indexes delete
+// The bool return reports an affected irregular algorithm that has not migrated
+// to either mechanism. MASTER indexes delete
 // by the old source PK and rebuild from the final row image, so changing the
 // base-table PK is handled by the same maintenance pipeline. Plugin-backed
 // synchronous full-text/vector indexes retain their existing PK-update
@@ -4450,7 +4522,7 @@ func classifyIrregularIndexesForUpdate(
 	ctx context.Context,
 	tableDef *plan.TableDef,
 	updateCols map[string]tree.Expr,
-) (inline []*plan.IndexDef, legacyRoute bool, err error) {
+) (inline []*plan.IndexDef, unsupported bool, err error) {
 	if tableDef == nil || len(updateCols) == 0 {
 		return nil, false, nil
 	}
