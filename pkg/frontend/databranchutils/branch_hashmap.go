@@ -161,6 +161,11 @@ const (
 // exported APIs are safe for concurrent use.
 type branchHashmap struct {
 	allocator malloc.Allocator
+	// strictCapacity rejects an entry that cannot fit after spilling instead of
+	// placing that entry on the unaccounted Go heap. It is used by recovery
+	// stores whose capacity contract must fail closed.
+	strictCapacity bool
+	rawEncodedKeys bool
 
 	valueTypes []types.Type
 	keyTypes   []types.Type
@@ -188,6 +193,18 @@ type BranchHashmapOption func(*branchHashmap)
 func WithBranchHashmapAllocator(allocator malloc.Allocator) BranchHashmapOption {
 	return func(bh *branchHashmap) {
 		bh.allocator = allocator
+	}
+}
+
+func withBranchHashmapStrictCapacity() BranchHashmapOption {
+	return func(bh *branchHashmap) {
+		bh.strictCapacity = true
+	}
+}
+
+func withBranchHashmapRawEncodedKeys() BranchHashmapOption {
+	return func(bh *branchHashmap) {
+		bh.rawEncodedKeys = true
 	}
 }
 
@@ -372,6 +389,9 @@ func (bh *branchHashmap) flushPreparedEntries(shardEntries [][]int, chunk []prep
 		buf, deallocator, err = bh.allocateBuffer(uint64(totalBytes))
 		if err != nil {
 			if len(chunk) <= 1 {
+				if bh.strictCapacity {
+					return err
+				}
 				// Fallback to Go heap for single entry when allocator is exhausted.
 				buf = make([]byte, totalBytes)
 			} else {
@@ -457,7 +477,7 @@ func (bh *branchHashmap) GetByEncodedKey(encodedKey []byte) (GetResult, error) {
 		bh.metaMu.RUnlock()
 		return result, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
 	}
-	if len(bh.keyTypes) == 0 {
+	if len(bh.keyTypes) == 0 && !bh.rawEncodedKeys {
 		bh.metaMu.RUnlock()
 		return result, nil
 	}
@@ -714,7 +734,7 @@ func (bh *branchHashmap) PopByEncodedKey(encodedKey []byte, removeAll bool) (Get
 		bh.metaMu.RUnlock()
 		return result, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
 	}
-	if len(bh.keyTypes) == 0 {
+	if len(bh.keyTypes) == 0 && !bh.rawEncodedKeys {
 		bh.metaMu.RUnlock()
 		return result, nil
 	}
@@ -742,7 +762,7 @@ func (bh *branchHashmap) PopByEncodedKeyValue(encodedKey []byte, encodedValue []
 		bh.metaMu.RUnlock()
 		return 0, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
 	}
-	if len(bh.keyTypes) == 0 {
+	if len(bh.keyTypes) == 0 && !bh.rawEncodedKeys {
 		bh.metaMu.RUnlock()
 		return 0, nil
 	}
@@ -1550,7 +1570,9 @@ func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator
 			return nil, nil, err
 		}
 		if buf == nil {
-			return nil, nil, moerr.NewInternalErrorNoCtx("branchHashmap failed to allocate memory after spilling")
+			return nil, nil, moerr.NewMPoolCapacityNoCtxf(
+				"branchHashmap failed to allocate %d bytes after spilling", size,
+			)
 		}
 	}
 	return buf, deallocator, nil
@@ -1586,7 +1608,9 @@ func (bh *branchHashmap) spill(required uint64) error {
 		}
 	}
 	if freed < required {
-		return moerr.NewInternalErrorNoCtx("branchHashmap cannot spill enough data to satisfy allocation request")
+		return moerr.NewMPoolCapacityNoCtxf(
+			"branchHashmap cannot spill %d bytes required for allocation", required-freed,
+		)
 	}
 	// TODO(monitoring): emit spill counters once metrics plumbing is ready.
 	return nil

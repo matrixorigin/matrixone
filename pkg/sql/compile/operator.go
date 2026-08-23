@@ -976,6 +976,10 @@ func constructMultiUpdate(
 			TargetTableID:      updateCtx.TableDef.TblId,
 			AffectedRowsCols:   affectedRowsCols,
 		}
+		if updateCtx.ChangedRowsCol != nil {
+			changedRowsCol := int(updateCtx.ChangedRowsCol.ColPos)
+			arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
+		}
 	}
 	arg.Action = action
 

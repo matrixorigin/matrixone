@@ -655,15 +655,17 @@ type BindContext struct {
 	// boundary column references.
 	timeBoundaryType *plan.Type
 
-	groupByAst          map[string]int32
-	groupByCanonicalAst map[string]int32
-	groupByParamAst     map[string]int32
-	aggregateByAst      map[string]int32
-	sampleByAst         map[string]int32
-	windowByAst         map[string]int32
-	projectByExpr       map[string]int32
-	timeByAst           map[string]int32
-	whereFilters        []*plan.Expr
+	groupByAst             map[string]int32
+	groupByCanonicalAst    map[string]int32
+	groupByParamAst        map[string]int32
+	aggregateByAst         map[string]int32
+	sampleByAst            map[string]int32
+	windowByAst            map[string]int32
+	projectByExpr          map[string]int32
+	timeByAst              map[string]int32
+	whereFilters           []*plan.Expr
+	volatileExprMemoID     int32
+	flattenedVolatileExprs map[int32]*plan.Expr
 	// gapFillWhereFilters preserves the complete bound WHERE tree before
 	// subqueries are flattened into joins. Bounded GAPFILL inference must see
 	// every timestamp predicate, including IN/ANY/ALL subquery operands.
