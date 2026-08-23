@@ -2025,6 +2025,10 @@ func buildCreateTable(
 	cloneStmt *tree.CloneTable,
 	isPrepareStmt bool,
 ) (*Plan, error) {
+	tableName := string(stmt.Table.ObjectName)
+	if getNumOfCharacters(tableName) > MaxIdentifierLength {
+		return nil, moerr.NewTooLongIdent(ctx.GetContext(), tableName)
+	}
 
 	if stmt.IsAsLike {
 		var err error

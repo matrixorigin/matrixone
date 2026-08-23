@@ -4118,6 +4118,27 @@ func TestBuildCreateTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCreateTableIdentifierLength(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
+	plan, err := runOneStmt(mock, t, fmt.Sprintf("create table `%s` (id int)", validName))
+	require.NoError(t, err)
+	require.Equal(t, validName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
+
+	for _, invalidName := range []string{
+		"表" + strings.Repeat("b", MaxIdentifierLength),
+		"表" + strings.Repeat("c", MaxIdentifierLength+1),
+	} {
+		_, err = runOneStmt(mock, t, fmt.Sprintf("create table `%s` (id int)", invalidName))
+		require.Error(t, err)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok, "unexpected error type %T: %v", err, err)
+		require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+		require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+		require.Equal(t, fmt.Sprintf("Identifier name '%s' is too long", invalidName), moErr.Error())
+	}
+}
+
 func TestBuildCreateTableAcceptsTextBlobDisplayLength(t *testing.T) {
 	tests := []struct {
 		name    string
