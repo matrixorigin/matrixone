@@ -2026,7 +2026,11 @@ func buildCreateTable(
 	isPrepareStmt bool,
 ) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
-	if getNumOfCharacters(tableName) > MaxIdentifierLength {
+	// Internal DDL and session-scoped temporary tables can materialize generated
+	// physical names with UUID prefixes or suffixes.
+	if getNumOfCharacters(tableName) > MaxIdentifierLength &&
+		!defines.IsInternalExecutor(ctx.GetContext()) &&
+		!isGeneratedSessionTempTableName(ctx, tableName) {
 		return nil, moerr.NewTooLongIdent(ctx.GetContext(), tableName)
 	}
 
@@ -2458,6 +2462,28 @@ func buildCreateTable(
 			},
 		},
 	}, nil
+}
+
+func isGeneratedSessionTempTableName(ctx CompilerContext, name string) bool {
+	rootStmt, err := parsers.ParseOne(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		ctx.GetRootSql(),
+		ctx.GetLowerCaseTableNames(),
+	)
+	if err != nil {
+		return false
+	}
+	if _, isCreateTable := rootStmt.(*tree.CreateTable); isCreateTable {
+		return false
+	}
+
+	proc := ctx.GetProcess()
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return false
+	}
+	sessionID := strings.ReplaceAll(proc.GetSessionInfo().SessionId.String(), "-", "")
+	return strings.HasPrefix(name, defines.TempTableNamePrefix+sessionID+"_")
 }
 
 func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.TableDef {

@@ -203,6 +203,7 @@ drop table if exists `temp-table-with-dash`;
 create temporary table temp_very_long_table_name_that_exceeds_normal_limits_and_might_cause_issues (
 id int
 );
+Identifier name 'temp_very_long_table_name_that_exceeds_normal_limits_and_might_cause_issues' is too long
 drop table if exists temp_very_long_table_name_that_exceeds_normal_limits_and_might_cause_issues;
 create temporary table temp_long_column (
 very_long_column_name_that_exceeds_normal_limits_and_might_cause_issues int

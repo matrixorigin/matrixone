@@ -4137,6 +4137,46 @@ func TestBuildCreateTableIdentifierLength(t *testing.T) {
 		require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
 		require.Equal(t, fmt.Sprintf("Identifier name '%s' is too long", invalidName), moErr.Error())
 	}
+
+	internalMock := NewMockOptimizer(false)
+	internalMock.ctxt.SetContext(context.WithValue(
+		internalMock.ctxt.GetContext(),
+		defines.InternalExecutorKey{},
+		true,
+	))
+	internalName := "表" + strings.Repeat("i", MaxIdentifierLength)
+	plan, err = runOneStmt(internalMock, t, fmt.Sprintf("create table `%s` (id int)", internalName))
+	require.NoError(t, err)
+	require.Equal(t, internalName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
+
+	tempMock := NewMockOptimizer(false)
+	tempCtx := &rootSQLCompilerContext{
+		MockCompilerContext: &tempMock.ctxt,
+		rootSQL:             "delete from temp_table",
+	}
+	physicalTempName := defines.GenTempTableName(
+		tempCtx.GetProcess().GetSessionInfo().SessionId,
+		"database",
+		strings.Repeat("t", MaxIdentifierLength),
+	)
+	createTempSQL := fmt.Sprintf("create table `%s` (id int)", physicalTempName)
+	stmt, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		createTempSQL,
+		1,
+	)
+	require.NoError(t, err)
+	plan, err = BuildPlan(tempCtx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, physicalTempName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
+
+	tempCtx.rootSQL = createTempSQL
+	_, err = BuildPlan(tempCtx, stmt, false)
+	require.Error(t, err)
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok, "unexpected error type %T: %v", err, err)
+	require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
 }
 
 func TestBuildCreateTableAcceptsTextBlobDisplayLength(t *testing.T) {
