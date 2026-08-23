@@ -85,6 +85,17 @@ func (ses *Session) RemoveForeignConn(handle string) (process.ForeignConn, bool)
 	return c, ok
 }
 
+// hasForeignConns reports whether the session currently caches any foreign
+// connection. Used by connection migration: these connections are bound to
+// this CN's process and cannot be transferred, so a migration snapshot must
+// fail closed while any exist (a migrated client would otherwise carry handle
+// strings that resolve to nothing on the target).
+func (ses *Session) hasForeignConns() bool {
+	ses.foreignConnMu.Lock()
+	defer ses.foreignConnMu.Unlock()
+	return len(ses.foreignConns) > 0
+}
+
 // closeForeignConns closes and clears every cached foreign connection. It is
 // called from Session.Close and is safe to call when no connection was ever
 // opened (the map is lazily allocated).

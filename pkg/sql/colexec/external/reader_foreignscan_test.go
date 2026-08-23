@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreigntvf"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -207,11 +208,17 @@ func TestForeignScanReaderErrors(t *testing.T) {
 	_, err = NewForeignScanReader(param).Open(param, proc)
 	require.ErrorContains(t, err, "interactive session")
 
-	// env: reference unset
+	// env: reference: the testutil proc runs as the sys account, so the unset
+	// variable is the error; a tenant account is stopped by the gate first.
 	proc.Session = &fakeScanSession{}
 	param = foreignScanParam(t, "sql", "env:MO_FOREIGN_SCAN_TEST_UNSET", cols, []string{"id", "name"})
 	_, err = NewForeignScanReader(param).Open(param, proc)
 	require.ErrorContains(t, err, "unset or empty")
+	savedCtx := proc.Ctx
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 42)
+	_, err = NewForeignScanReader(param).Open(param, proc)
+	require.ErrorContains(t, err, "require the sys account")
+	proc.Ctx = savedCtx
 
 	// no config and no session variable
 	param = foreignScanParam(t, "sql", "", cols, []string{"id", "name"})

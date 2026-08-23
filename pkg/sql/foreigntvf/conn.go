@@ -31,7 +31,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -84,10 +86,17 @@ func MakeHandle(kind Kind, configJSON string) string {
 const configEnvPrefix = "env:"
 
 // resolveConfigRef resolves an "env:NAME" config reference from the process
-// environment; any other value is returned literally.
+// environment; any other value is returned literally. Resolution is gated to
+// the sys account: the CN environment is operator-owned and shared across
+// tenants, so an ordinary tenant guessing an operator-defined name must not
+// be able to use its credentials.
 func resolveConfigRef(ctx context.Context, raw string) (string, error) {
 	if !strings.HasPrefix(raw, configEnvPrefix) {
 		return raw, nil
+	}
+	if accountId, err := defines.GetAccountId(ctx); err != nil || accountId != catalog.System_Account {
+		return "", moerr.NewInvalidInput(ctx,
+			"'env:' config references resolve operator-owned CN environment variables and require the sys account")
 	}
 	name := strings.TrimPrefix(raw, configEnvPrefix)
 	if name == "" {

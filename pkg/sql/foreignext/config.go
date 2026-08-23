@@ -27,7 +27,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -71,6 +73,12 @@ type Config struct {
 func ResolveConfig(ctx context.Context, raw string) (string, error) {
 	if !strings.HasPrefix(raw, configEnvPrefix) {
 		return raw, nil
+	}
+	// Same gate as the TVF connect path: the CN environment is operator-owned
+	// and shared across tenants, so only the sys account may reference it.
+	if accountId, err := defines.GetAccountId(ctx); err != nil || accountId != catalog.System_Account {
+		return "", moerr.NewInvalidInput(ctx,
+			"'env:' config references resolve operator-owned CN environment variables and require the sys account")
 	}
 	name := strings.TrimPrefix(raw, configEnvPrefix)
 	if name == "" {

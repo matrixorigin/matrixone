@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -141,7 +143,7 @@ var _ process.ForeignConnCache = (*fakeConnCache)(nil)
 // resolved JSON (an env: caller and an inline caller of the same config share
 // one cache entry), and that unset/empty references error clearly.
 func TestResolveOrConnectEnvRef(t *testing.T) {
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	cache := newFakeConnCache()
 
 	// The env var holds a config with an unsupported driver: resolution must
@@ -155,6 +157,15 @@ func TestResolveOrConnectEnvRef(t *testing.T) {
 	require.ErrorContains(t, err, "unset or empty")
 	_, _, err = ResolveOrConnect(ctx, cache, KindSQL, "env:")
 	require.ErrorContains(t, err, "no variable name")
+
+	// env: references resolve operator-owned CN environment variables and are
+	// gated to the sys account: a tenant guessing an operator secret name must
+	// not be able to use it (and a context with no account at all is rejected).
+	tenantCtx := defines.AttachAccountId(context.Background(), 42)
+	_, _, err = ResolveOrConnect(tenantCtx, cache, KindSQL, "env:MO_FOREIGNTVF_TEST_CFG")
+	require.ErrorContains(t, err, "require the sys account")
+	_, _, err = ResolveOrConnect(context.Background(), cache, KindSQL, "env:MO_FOREIGNTVF_TEST_CFG")
+	require.ErrorContains(t, err, "require the sys account")
 
 	// the handle is derived from the RESOLVED config: seed the cache under the
 	// resolved-config handle and connect via the env reference — it must hit.

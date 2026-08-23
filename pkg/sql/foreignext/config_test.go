@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -116,7 +118,7 @@ func TestEnvelopeRecognition(t *testing.T) {
 }
 
 func TestResolveConfig(t *testing.T) {
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	// literal passes through
 	v, err := ResolveConfig(ctx, `{"driver":"mysql"}`)
 	require.NoError(t, err)
@@ -135,6 +137,11 @@ func TestResolveConfig(t *testing.T) {
 	require.Error(t, err)
 	_, err = ResolveConfig(ctx, "env:")
 	require.Error(t, err)
+	// non-sys accounts (and account-less contexts) may not resolve env: refs
+	_, err = ResolveConfig(defines.AttachAccountId(context.Background(), 42), "env:MO_FOREIGNEXT_TEST_CFG")
+	require.ErrorContains(t, err, "require the sys account")
+	_, err = ResolveConfig(context.Background(), "env:MO_FOREIGNEXT_TEST_CFG")
+	require.ErrorContains(t, err, "require the sys account")
 }
 
 // TestRedactedConfigRejectedClearly proves replaying SHOW CREATE output (whose
