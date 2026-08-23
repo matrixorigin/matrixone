@@ -379,21 +379,25 @@ func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
 	}
 
 	textType := planpb.Type{Id: int32(types.T_varchar)}
+	ordinaryLiteral := &planpb.Expr{
+		Typ: textType,
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value:       &planpb.Literal_Sval{Sval: "ordinary"},
+			LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT,
+		}},
+	}
 	ordinaryList := &planpb.Expr{
 		Typ: textType,
-		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{{
-			Typ: textType,
-			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
-				Value:       &planpb.Literal_Sval{Sval: "ordinary"},
-				LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT,
-			}},
-		}}}},
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			ordinaryLiteral, DeepCopyExpr(ordinaryLiteral),
+		}}},
 	}
 	foldedControl, err := ConstantFold(
 		batch.EmptyForConstFoldBatch, ordinaryList, proc, false, true,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, foldedControl.GetVec(), "same-domain list keeps the existing fold fast path")
+	require.Equal(t, int32(1), foldedControl.GetVec().GetLen(), "duplicate literals compact to one row")
 	require.Equal(t, uint32(types.StringSourceLiteral), foldedControl.GetVec().GetStringSource())
 	require.Equal(t, foldedControl.GetVec().GetStringSource(),
 		DeepCopyExpr(foldedControl).GetVec().GetStringSource())

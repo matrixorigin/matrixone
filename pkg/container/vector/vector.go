@@ -10554,7 +10554,7 @@ func (v *Vector) copySortedRow(destination, source int, varlena []types.Varlena)
 }
 
 func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
-	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil && v.stringSources == nil) ||
+	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil && !v.HasStringSourceMetadata()) ||
 		v.IsConst() || !supportsInplaceSort(v.typ.Oid) {
 		return false
 	}
@@ -10563,11 +10563,22 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	if v.typ.IsVarlen() {
 		varlena = MustFixedColNoTypeCheck[types.Varlena](v)
 	}
-	v.nsp.GetBitmap().TryExpandWithSize(v.length)
-	v.gsp.GetBitmap().TryExpandWithSize(v.length)
+	// Empty external-storage bitmaps need no capacity: swaps only remove false
+	// bits from them. Expanding those bitmaps would panic even though there is no
+	// row metadata to move (runtime-filter vectors commonly use this layout).
+	if !v.nsp.GetBitmap().IsEmpty() {
+		v.nsp.GetBitmap().TryExpandWithSize(v.length)
+	}
+	if !v.gsp.GetBitmap().IsEmpty() {
+		v.gsp.GetBitmap().TryExpandWithSize(v.length)
+	}
 	if v.binaryStringRowsActive {
-		v.binaryStringRows.TryExpandWithSize(v.length)
-		v.textStringRows.TryExpandWithSize(v.length)
+		if !v.binaryStringRows.IsEmpty() {
+			v.binaryStringRows.TryExpandWithSize(v.length)
+		}
+		if !v.textStringRows.IsEmpty() {
+			v.textStringRows.TryExpandWithSize(v.length)
+		}
 	}
 	sort.Stable(vectorMetadataSorter{vector: v, varlena: varlena})
 	newLength := v.length

@@ -676,10 +676,11 @@ func TestBlockFilterConstantSetIgnoresSerializedProvenance(t *testing.T) {
 	for _, item := range serializedList.GetList().List {
 		item.Typ = vectorSet.Typ
 		item.GetLit().IsSerialized = true
+		item.GetLit().StringSource = uint32(types.StringSourceExpression) + 1
 	}
 
 	require.True(t, blockFilterConstantSetsEqual(serializedList, vectorSet),
-		"diagnostic provenance must not change block-filter set semantics")
+		"execution provenance must not change block-filter value-set semantics")
 }
 
 func TestConstLiteralKeyIgnoresSerializedProvenance(t *testing.T) {

@@ -1,0 +1,37 @@
+-- @suite
+
+-- @case
+-- @desc: string source provenance across public SQL execution boundaries
+-- @label:bvt
+
+drop database if exists string_source_provenance;
+create database string_source_provenance;
+use string_source_provenance;
+
+set @source_value = binary 'A\0B';
+select hex(@source_value) as local_user_variable;
+select hex(v) as derived_user_variable from (select @source_value as v) dt;
+
+create table source_materialized(id int primary key, payload varbinary(8));
+insert into source_materialized values (1, @source_value), (2, null);
+select id, hex(payload) as materialized_value from source_materialized order by id;
+select id, hex(coalesce(payload, @source_value)) as remote_selected_value
+from source_materialized order by id;
+
+select hex(coalesce(@source_value, binary 'fallback')) as coalesce_first_arm;
+set @source_value = null;
+select hex(coalesce(@source_value, binary 'fallback')) as coalesce_second_arm;
+select hex(if(@source_value is null, binary 'fallback', @source_value)) as if_common_domain_control;
+select hex(case when @source_value is null then binary 'fallback' else @source_value end) as case_common_domain_control;
+select hex(ifnull(@source_value, binary 'fallback')) as ifnull_common_domain_control;
+
+prepare source_stmt from 'select hex(coalesce(?, binary \'fallback\')) as prepared_value';
+set @prepared_value = binary 'A\0B';
+execute source_stmt using @prepared_value;
+execute source_stmt using @prepared_value;
+set @prepared_value = null;
+execute source_stmt using @prepared_value;
+execute source_stmt using @prepared_value;
+deallocate prepare source_stmt;
+
+drop database string_source_provenance;

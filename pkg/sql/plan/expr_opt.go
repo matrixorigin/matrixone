@@ -558,10 +558,15 @@ func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
 	if lit == nil {
 		return "", false
 	}
-	// IsSerialized only controls diagnostic rendering. It must not make
-	// otherwise identical list/vector block-filter sets compare different,
-	// including plans produced by older peers that do not carry provenance.
+	// IsSerialized and StringSource do not change the value set tested by a
+	// block filter. Normalize both only at this specialized value-comparison
+	// boundary; general expression identity must continue to preserve source.
 	lit = literalForExecutableIdentity(typ, lit)
+	if lit.StringSource != 0 {
+		literalCopy := *lit
+		literalCopy.StringSource = 0
+		lit = &literalCopy
+	}
 	typ = literalSemanticKeyType(typ)
 	litBytes, err := lit.Marshal()
 	if err != nil {

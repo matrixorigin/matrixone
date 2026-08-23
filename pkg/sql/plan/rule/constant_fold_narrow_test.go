@@ -53,3 +53,24 @@ func TestGetConstantValueNarrowVec(t *testing.T) {
 		vec.Free(mp)
 	}
 }
+
+func TestGetConstantValuePreservesRowStringSource(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytesList(vec, [][]byte{[]byte("value"), nil}, []bool{false, true}, mp))
+	require.NoError(t, vec.SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceUserVariable,
+		types.StringSourceCOMStmt,
+	}, mp))
+	defer vec.Free(mp)
+
+	nonNull := GetConstantValue(vec, false, 0)
+	require.Equal(t, "value", nonNull.GetSval())
+	require.Equal(t, uint32(types.StringSourceUserVariable)+1, nonNull.GetStringSource())
+
+	null := GetConstantValue(vec, false, 1)
+	require.True(t, null.GetIsnull())
+	require.Equal(t, uint32(types.StringSourceCOMStmt)+1, null.GetStringSource())
+}

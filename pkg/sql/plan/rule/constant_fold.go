@@ -257,11 +257,6 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 	PreserveFoldedLiteralStringDomain(expr, c)
-	// Zero remains the canonical spelling of an ordinary source literal.
-	// Other executable owners are encoded as StringSource + 1.
-	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
-		c.StringSource = uint32(source) + 1
-	}
 
 	MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 
@@ -381,7 +376,18 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 	}
 }
 
-func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Literal {
+func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *plan.Literal) {
+	defer func() {
+		if literal == nil {
+			return
+		}
+		// Zero is the canonical spelling of an ordinary source literal. Encode
+		// every other executable owner as StringSource + 1 so every vector to
+		// scalar materialization path, including NULL, preserves provenance.
+		if source := vec.GetStringSourceAt(int(row)); source != types.StringSourceLiteral {
+			literal.StringSource = uint32(source) + 1
+		}
+	}()
 	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
 		return &plan.Literal{Isnull: true}
 	}

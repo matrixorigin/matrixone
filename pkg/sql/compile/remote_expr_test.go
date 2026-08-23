@@ -597,6 +597,50 @@ func TestFoldVarExprsInRemoteRunScopeDoesNotMutateReusableScope(t *testing.T) {
 	require.True(t, scopeContainsVarExpr(scope))
 }
 
+func TestRemoteUserVariableFoldPreservesStringSource(t *testing.T) {
+	makeProc := func(value any) *process.Process {
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+			if name == "remote_value" && !system {
+				return value, nil
+			}
+			return nil, moerr.NewInternalErrorNoCtx("variable not found")
+		})
+		return proc
+	}
+	makeVariable := func() *plan.Expr {
+		expr := makeTestVarExpr("remote_value")
+		expr.GetV().System = false
+		return expr
+	}
+	foldRoundTrip := func(proc *process.Process) *plan.Literal {
+		expr := makeVariable()
+		folded, err := foldVarExprsInExprInPlace(expr, proc)
+		require.NoError(t, err)
+		require.True(t, folded)
+
+		payload, err := expr.Marshal()
+		require.NoError(t, err)
+		decoded := new(plan.Expr)
+		require.NoError(t, decoded.Unmarshal(payload))
+		return decoded.GetLit()
+	}
+
+	first := foldRoundTrip(makeProc("first"))
+	require.Equal(t, "first", first.GetSval())
+	require.Equal(t, uint32(types.StringSourceUserVariable)+1, first.GetStringSource())
+
+	// A NULL value retains its source across the same scalar and wire boundary.
+	null := foldRoundTrip(makeProc(nil))
+	require.True(t, null.GetIsnull())
+	require.Equal(t, uint32(types.StringSourceUserVariable)+1, null.GetStringSource())
+
+	// Reusing the expression shape with a fresh process is equivalent to a fresh scope.
+	second := foldRoundTrip(makeProc("second"))
+	require.Equal(t, "second", second.GetSval())
+	require.Equal(t, first.GetStringSource(), second.GetStringSource())
+}
+
 func TestFoldVarExprsInHiddenExpressionsUsePrivateCopies(t *testing.T) {
 	proc := newResolveVariableProcess(t, "ANSI")
 	sharedAggExpr := makeTestVarExpr("sql_mode")

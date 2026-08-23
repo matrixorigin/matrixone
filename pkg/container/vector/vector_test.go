@@ -6340,6 +6340,49 @@ func TestStringSourceInplaceSortAndStableDecode(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestStringSourceUniformInplaceSortAndCompact(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	t.Run("fixed", func(t *testing.T) {
+		vec := NewVec(types.T_int64.ToType())
+		require.NoError(t, AppendFixedList(vec, []int64{1, 1}, nil, mp))
+		require.NoError(t, vec.SetStringSource(types.StringSourceLiteral))
+		vec.InplaceSortAndCompact()
+		require.Equal(t, []int64{1}, MustFixedColNoTypeCheck[int64](vec))
+		require.True(t, vec.HasStringSourceMetadata())
+		require.Nil(t, vec.GetStringSources())
+		require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(0))
+		vec.Free(mp)
+	})
+
+	t.Run("varlen", func(t *testing.T) {
+		vec := NewVec(types.T_varchar.ToType())
+		require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("a"), []byte("a")}, nil, mp))
+		require.NoError(t, vec.SetStringSource(types.StringSourceLiteral))
+		vec.InplaceSortAndCompact()
+		require.Equal(t, [][]byte{[]byte("a")}, InefficientMustBytesCol(vec))
+		require.True(t, vec.HasStringSourceMetadata())
+		require.Nil(t, vec.GetStringSources())
+		require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(0))
+		vec.Free(mp)
+	})
+
+	t.Run("external empty bitmaps", func(t *testing.T) {
+		vec := NewVec(types.T_int64.ToType())
+		require.NoError(t, AppendFixedList(vec, []int64{2, 1}, nil, mp))
+		vec.nsp.GetBitmap().InstallExternalStorage(make([]uint64, 0))
+		vec.gsp.GetBitmap().InstallExternalStorage(make([]uint64, 0))
+		require.True(t, vec.GetNulls().GetBitmap().HasExternalStorage())
+		require.NoError(t, vec.SetStringSource(types.StringSourceLiteral))
+		require.NotPanics(t, vec.InplaceSort)
+		require.Equal(t, []int64{1, 2}, MustFixedColNoTypeCheck[int64](vec))
+		require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(0))
+		vec.Free(mp)
+	})
+
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestStringSourceSortAllPhysicalFamilies(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()) }()

@@ -1,0 +1,54 @@
+drop database if exists string_source_provenance;
+create database string_source_provenance;
+use string_source_provenance;
+set @source_value = binary 'A\0B';
+select hex(@source_value) as local_user_variable;
+➤ local_user_variable[12,65535,0]  𝄀
+410042
+select hex(v) as derived_user_variable from (select @source_value as v) dt;
+➤ derived_user_variable[12,65535,0]  𝄀
+410042
+create table source_materialized(id int primary key, payload varbinary(8));
+insert into source_materialized values (1, @source_value), (2, null);
+select id, hex(payload) as materialized_value from source_materialized order by id;
+➤ id[4,32,0]  ¦  materialized_value[12,65535,0]  𝄀
+1  ¦  410042  𝄀
+2  ¦  null
+select id, hex(coalesce(payload, @source_value)) as remote_selected_value
+from source_materialized order by id;
+➤ id[4,32,0]  ¦  remote_selected_value[12,65535,0]  𝄀
+1  ¦  410042  𝄀
+2  ¦  410042
+select hex(coalesce(@source_value, binary 'fallback')) as coalesce_first_arm;
+➤ coalesce_first_arm[12,65535,0]  𝄀
+410042
+set @source_value = null;
+select hex(coalesce(@source_value, binary 'fallback')) as coalesce_second_arm;
+➤ coalesce_second_arm[12,65535,0]  𝄀
+66616C6C6261636B
+select hex(if(@source_value is null, binary 'fallback', @source_value)) as if_common_domain_control;
+➤ if_common_domain_control[12,65535,0]  𝄀
+66616C6C6261636B
+select hex(case when @source_value is null then binary 'fallback' else @source_value end) as case_common_domain_control;
+➤ case_common_domain_control[12,65535,0]  𝄀
+66616C6C6261636B
+select hex(ifnull(@source_value, binary 'fallback')) as ifnull_common_domain_control;
+➤ ifnull_common_domain_control[12,65535,0]  𝄀
+66616C6C6261636B
+prepare source_stmt from 'select hex(coalesce(?, binary \'fallback\')) as prepared_value';
+set @prepared_value = binary 'A\0B';
+execute source_stmt using @prepared_value;
+➤ prepared_value[12,65535,0]  𝄀
+410042
+execute source_stmt using @prepared_value;
+➤ prepared_value[12,65535,0]  𝄀
+410042
+set @prepared_value = null;
+execute source_stmt using @prepared_value;
+➤ prepared_value[12,65535,0]  𝄀
+66616C6C6261636B
+execute source_stmt using @prepared_value;
+➤ prepared_value[12,65535,0]  𝄀
+66616C6C6261636B
+deallocate prepare source_stmt;
+drop database string_source_provenance;
