@@ -134,6 +134,26 @@ func exactContractCol(typ types.Type) *plan.Expr {
 	}
 }
 
+func TestTupleComponentSlotAcceptsPlannerCast(t *testing.T) {
+	sourceType := types.T_int64.ToType()
+	targetType := types.T_int32.ToType()
+	casted := &plan.Expr{
+		Typ: *exactContractPlanType(targetType),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "cast"},
+			Args: []*plan.Expr{
+				exactContractCol(sourceType),
+				{Typ: *exactContractPlanType(targetType), Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+			},
+		}},
+	}
+
+	slot, source, ok := TupleComponentSlot(casted)
+	require.True(t, ok)
+	require.Zero(t, slot)
+	require.Equal(t, sourceType, source)
+}
+
 func exactRawContract(
 	probeType, declaredBuildType types.Type,
 ) *plan.RuntimeFilterSpec {

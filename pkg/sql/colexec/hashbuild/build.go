@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -619,6 +621,54 @@ func planExprType(expr *plan.Expr) (types.Type, bool) {
 	), true
 }
 
+func serializedRuntimeFilterSourceCol(expr *plan.Expr) *plan.ColRef {
+	if expr == nil {
+		return nil
+	}
+	if col := expr.GetCol(); col != nil {
+		return col
+	}
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) == 0 || fn.Args[0] == nil {
+		return nil
+	}
+	return fn.Args[0].GetCol()
+}
+
+func serializedRuntimeFilterEvalArg(expr *plan.Expr) *plan.Expr {
+	col := serializedRuntimeFilterSourceCol(expr)
+	if expr == nil || col == nil {
+		return nil
+	}
+	source := &plan.Expr{
+		Typ: colExprType(expr),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 0,
+			ColPos: col.ColPos,
+			Name:   col.Name,
+		}},
+	}
+	if expr.GetCol() != nil {
+		source.Typ = expr.Typ
+		return source
+	}
+	fn := expr.GetF()
+	return &plan.Expr{
+		Typ: expr.Typ,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: fn.Func,
+			Args: []*plan.Expr{source, fn.Args[1]},
+		}},
+	}
+}
+
+func colExprType(expr *plan.Expr) plan.Type {
+	if expr.GetCol() != nil {
+		return expr.Typ
+	}
+	return expr.GetF().Args[0].Typ
+}
+
 func runtimeFilterComponentSlots(spec *plan.RuntimeFilterSpec) ([]int, bool) {
 	buildExpr := runtimefilter.BuildKeyExpr(spec)
 	if buildExpr == nil || buildExpr.GetF() == nil {
@@ -630,10 +680,11 @@ func runtimeFilterComponentSlots(spec *plan.RuntimeFilterSpec) ([]int, bool) {
 	}
 	slots := make([]int, len(args))
 	for i, arg := range args {
-		if arg == nil || arg.GetCol() == nil || arg.GetCol().ColPos < 0 {
+		slot, _, ok := runtimefilter.TupleComponentSlot(arg)
+		if !ok {
 			return nil, false
 		}
-		slots[i] = int(arg.GetCol().ColPos)
+		slots[i] = slot
 	}
 	return slots, true
 }
@@ -708,11 +759,17 @@ func (hashBuild *HashBuild) declaredRuntimeFilterEncoding(
 		return keycodec.ExactRuntimeFilterUnsupported, false
 	}
 	componentTypes := make([]types.Type, len(slots))
+	args := buildExpr.GetF().Args
 	for i, slot := range slots {
 		if slot >= len(hashBuild.Conditions) {
 			return keycodec.ExactRuntimeFilterUnsupported, false
 		}
-		componentTypes[i], ok = planExprType(hashBuild.Conditions[slot])
+		conditionType, valid := planExprType(hashBuild.Conditions[slot])
+		_, sourceType, validSlot := runtimefilter.TupleComponentSlot(args[i])
+		if !valid || !validSlot || conditionType != sourceType {
+			return keycodec.ExactRuntimeFilterUnsupported, false
+		}
+		componentTypes[i], ok = planExprType(args[i])
 		if !ok {
 			return keycodec.ExactRuntimeFilterUnsupported, false
 		}
@@ -737,12 +794,22 @@ func materializedRuntimeFilterComponents(
 		return nil, 0, false
 	}
 	componentTypes := make([]types.Type, len(slots))
+	buildExpr := runtimefilter.BuildKeyExpr(spec)
+	args := buildExpr.GetF().Args
 	rowCount := -1
 	for i, slot := range slots {
 		if slot >= len(keys) || keys[slot] == nil {
 			return nil, 0, false
 		}
-		componentTypes[i] = *keys[slot].GetType()
+		_, sourceType, validSlot := runtimefilter.TupleComponentSlot(args[i])
+		if !validSlot || *keys[slot].GetType() != sourceType {
+			return nil, 0, false
+		}
+		var valid bool
+		componentTypes[i], valid = planExprType(args[i])
+		if !valid {
+			return nil, 0, false
+		}
 		if rowCount == -1 {
 			rowCount = keys[slot].Length()
 		} else if keys[slot].Length() != rowCount {
@@ -993,6 +1060,14 @@ func (hashBuild *HashBuild) handleSerializedRuntimeFilter(
 		hashBuild.materializeSerializedRuntimeFilter(
 			proc, spec, componentTypes, rowCount)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+			// A comparison key outside the narrower probe domain cannot match any
+			// probe row. The optional tuple encoder may reject that narrowing;
+			// publish PASS rather than changing the join's error semantics.
+			runtimeFilter.Typ = message.RuntimeFilter_PASS
+			hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+			return nil
+		}
 		if hashBuild.fallbackOptionalRuntimeFilter(
 			err, runtimeFilter, spec, proc,
 		) {
@@ -1054,17 +1129,52 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 	full := spec.KeyEncoding ==
 		plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1
 
-	encoders := make([]planfunction.SerialValueEncoder, len(slots))
-	for i, slot := range slots {
-		encoders[i], err =
-			planfunction.NewSerialValueEncoder(keys[slot])
+	components := keys
+	componentSlots := append([]int(nil), slots...)
+	buildArgs := runtimefilter.BuildKeyExpr(spec).GetF().Args
+	var executors []colexec.ExpressionExecutor
+	if slices.ContainsFunc(buildArgs, func(arg *plan.Expr) bool { return arg.GetF() != nil }) {
+		evalArgs := make([]*plan.Expr, len(buildArgs))
+		for i, arg := range buildArgs {
+			evalArgs[i] = serializedRuntimeFilterEvalArg(arg)
+			if evalArgs[i] == nil {
+				return nil, nil, 0, false, nil
+			}
+		}
+		executors, err = NewExpressionExecutors(
+			proc, evalArgs, hashBuild.ctr.hashmapBuilder.mapAllocationAccount)
+		if err != nil {
+			return nil, nil, 0, false, err
+		}
+		defer func() {
+			for _, executor := range executors {
+				executor.Free()
+			}
+		}()
+		keyBatch := batch.NewWithSize(len(keys))
+		keyBatch.Vecs = keys
+		keyBatch.SetRowCount(rowCount)
+		components = make([]*vector.Vector, len(executors))
+		componentSlots = make([]int, len(executors))
+		for i, executor := range executors {
+			components[i], err = executor.Eval(proc, []*batch.Batch{keyBatch}, nil)
+			if err != nil {
+				return nil, nil, 0, false, err
+			}
+			componentSlots[i] = i
+		}
+	}
+
+	encoders := make([]planfunction.SerialValueEncoder, len(componentSlots))
+	for i, slot := range componentSlots {
+		encoders[i], err = planfunction.NewSerialValueEncoder(components[slot])
 		if err != nil {
 			return nil, nil, 0, false, err
 		}
 	}
 
 	areaBound, maxRowBound, err := serializedRuntimeFilterBounds(
-		proc, keys, slots, rowCount, full)
+		proc, components, componentSlots, rowCount, full)
 	if err != nil {
 		return nil, nil, 0, false, err
 	}
@@ -1121,8 +1231,8 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 		}
 		packer.Reset()
 		rowIsNull := false
-		for i, slot := range slots {
-			component := keys[slot]
+		for i, slot := range componentSlots {
+			component := components[slot]
 			if component.IsNull(uint64(row)) {
 				if !full {
 					rowIsNull = true
