@@ -55,22 +55,29 @@ func TestOrTruncatesLongSourceForExternalResultWithTwoInputs(t *testing.T) {
 }
 
 func TestOrExternalResultBoundaryCases(t *testing.T) {
-	t.Run("empty sources reset the destination", func(t *testing.T) {
+	t.Run("empty sources clear within the destination bound", func(t *testing.T) {
 		dst := NewWithSize(4)
 		dst.Add(1)
 		dst.GetBitmap().InstallExternalStorage(make([]uint64, 1))
 
-		left := NewWithSize(128)
-		right := NewWithSize(128)
+		left := NewWithSize(8)
+		right := NewWithSize(8)
 		Or(left, right, dst)
 
 		require.False(t, dst.Contains(1))
-		require.EqualValues(t, 0, dst.GetBitmap().Len())
+		require.EqualValues(t, 4, dst.GetBitmap().Len())
+
+		src := NewWithSize(8)
+		src.Add(2, 7)
+		Or(dst, src, dst)
+		require.True(t, dst.Contains(2))
+		require.False(t, dst.Contains(7))
+		require.EqualValues(t, 4, dst.GetBitmap().Len())
 	})
 
 	t.Run("zero length destination ignores source rows", func(t *testing.T) {
 		dst := NewWithSize(0)
-		dst.GetBitmap().InstallExternalStorage(make([]uint64, 0))
+		dst.GetBitmap().InstallExternalStorage(make([]uint64, 1))
 		src := NewWithSize(1)
 		src.Add(0)
 
@@ -93,7 +100,7 @@ func TestOrExternalResultBoundaryCases(t *testing.T) {
 		require.EqualValues(t, 8, dst.GetBitmap().Len())
 	})
 
-	t.Run("reset external destination reuses available capacity", func(t *testing.T) {
+	t.Run("reset destination requires its owner to restore the bound", func(t *testing.T) {
 		dst := NewWithSize(8)
 		dst.Add(6)
 		dst.GetBitmap().InstallExternalStorage(make([]uint64, 1))
@@ -103,8 +110,8 @@ func TestOrExternalResultBoundaryCases(t *testing.T) {
 		src.Add(1)
 		Or(dst, src, dst)
 
-		require.True(t, dst.Contains(1))
-		require.EqualValues(t, 3, dst.GetBitmap().Len())
+		require.False(t, dst.Contains(1))
+		require.EqualValues(t, 0, dst.GetBitmap().Len())
 	})
 
 	t.Run("visible length bounds a longer source within spare capacity", func(t *testing.T) {
@@ -119,4 +126,46 @@ func TestOrExternalResultBoundaryCases(t *testing.T) {
 		require.False(t, dst.Contains(7))
 		require.EqualValues(t, 4, dst.GetBitmap().Len())
 	})
+
+	for _, tc := range []struct {
+		name  string
+		union func(dst, src *Nulls)
+	}{
+		{name: "method Or", union: func(dst, src *Nulls) { dst.Or(src) }},
+		{name: "Set", union: func(dst, src *Nulls) { Set(dst, src) }},
+		{name: "OrBitmap", union: func(dst, src *Nulls) { dst.OrBitmap(src.GetBitmap()) }},
+		{name: "Merge", union: func(dst, src *Nulls) { dst.Merge(src) }},
+	} {
+		t.Run(tc.name+" respects the external destination bound", func(t *testing.T) {
+			dst := NewWithSize(4)
+			dst.GetBitmap().InstallExternalStorage(make([]uint64, 1))
+			src := NewWithSize(128)
+			src.Add(2, 100)
+
+			require.NotPanics(t, func() {
+				tc.union(dst, src)
+			})
+			require.True(t, dst.Contains(2))
+			require.False(t, dst.Contains(100))
+			require.EqualValues(t, 4, dst.GetBitmap().Len())
+		})
+	}
+}
+
+func BenchmarkOrLongSourceIntoExternalResult(b *testing.B) {
+	const visibleRows = 8 << 10
+	const sourceRows = 64 << 10
+
+	dst := NewWithSize(visibleRows)
+	dst.GetBitmap().InstallExternalStorage(make([]uint64, visibleRows/64))
+	src := NewWithSize(sourceRows)
+	src.AddRange(0, sourceRows)
+
+	b.ReportAllocs()
+	b.SetBytes(visibleRows / 8)
+	b.ResetTimer()
+	for range b.N {
+		dst.Clear()
+		Or(dst, src, dst)
+	}
 }

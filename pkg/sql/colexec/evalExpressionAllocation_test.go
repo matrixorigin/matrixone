@@ -115,6 +115,34 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.IsNull(1))
 
+	// Exercise the nullable string comparison from issue #27432. The reused
+	// input deliberately retains a NULL beyond both the current four-row batch
+	// and the result's external bitmap capacity. The in-range NULL must still
+	// propagate without growing the result to the source's stale logical length.
+	equalLiteral := &plan.Expr{
+		Typ: plan.Type{Id: int32(typ.Oid), Width: typ.Width},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: "AA"},
+		}},
+	}
+	equalExecutor, err := NewExpressionExecutorWithAllocation(
+		proc, bindFunction("=", column, equalLiteral), selection,
+	)
+	require.NoError(t, err)
+	_, err = equalExecutor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	equalRoot := equalExecutor.(*FunctionExpressionExecutor)
+	capacityRows := uint64(equalRoot.resultVector.GetResultVector().
+		GetNulls().GetBitmap().ExternalStorageCapacity() * 64)
+	require.GreaterOrEqual(t, capacityRows, uint64(4))
+	second.Vecs[0].GetNulls().Add(capacityRows)
+
+	equalResult, err := equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
+	require.NoError(t, err)
+	require.True(t, equalResult.IsNull(1))
+	require.False(t, equalResult.IsNull(capacityRows))
+	equalExecutor.Free()
+
 	executor.Free()
 	require.Zero(t, account.Snapshot().Used)
 }

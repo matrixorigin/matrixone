@@ -70,66 +70,35 @@ func (nsp *Nulls) GetBitmap() *bitmap.Bitmap {
 // Or performs union operation on Nulls nsp,m and store the result in r
 func Or(nsp, m, r *Nulls) {
 	if nsp.EmptyByFlag() && m.EmptyByFlag() {
-		r.Reset()
-	}
-	// A result vector may own an externally allocated bitmap sized for its
-	// visible row count, while a reused source vector can retain a longer
-	// logical bitmap from its backing batch. If the destination storage can
-	// represent the source bitmap, restore its logical length and use the
-	// normal OR path. This matters after Reset: the external storage remains,
-	// but the logical length is zero even though the next result may have rows.
-	// A non-reset destination must retain its caller-provided visible row
-	// count, even when the backing storage has spare capacity.
-	if r != nil && r.np.HasExternalStorage() {
-		sourceLen := max(nsp.np.Len(), m.np.Len())
-		if sourceLen > r.np.Len() {
-			// A non-zero destination length is the caller's visible row
-			// bound. Never replace it with the larger physical capacity: a
-			// reused vector may retain spare words from a previous batch.
-			if r.np.Len() > 0 {
-				limit := uint64(r.np.Len())
-				if nsp != r {
-					orLimited(nsp, r, limit)
-				}
-				if m != r {
-					orLimited(m, r, limit)
-				}
-				return
-			}
-
-			// Reset external storage keeps capacity but clears logical
-			// length. In this one case the source length is the only
-			// available visible-row bound; grow only when that source fits.
-			capacity := int64(r.np.ExternalStorageCapacity()) * 64
-			if sourceLen <= capacity {
-				r.np.TryExpandWithSize(int(sourceLen))
-			} else {
-				return
-			}
+		if r.np.HasExternalStorage() {
+			// External capacity belongs to the result owner and is not a row
+			// count. Clear values while retaining the owner's current bound.
+			r.Clear()
+		} else {
+			r.Reset()
 		}
+		return
 	}
 
-	if !nsp.EmptyByFlag() {
-		r.np.Or(&nsp.np)
+	if nsp != nil {
+		orBitmapInto(r, &nsp.np)
 	}
-
-	if !m.EmptyByFlag() {
-		r.np.Or(&m.np)
+	if m != nil {
+		orBitmapInto(r, &m.np)
 	}
 }
 
-func orLimited(src, dst *Nulls, limit uint64) {
-	if src == nil || src.EmptyByFlag() || limit == 0 {
+func orBitmapInto(dst *Nulls, src *bitmap.Bitmap) {
+	if src == nil || src.EmptyByFlag() || src == &dst.np {
 		return
 	}
-	itr := src.np.Iterator()
-	for itr.HasNext() {
-		row := itr.Next()
-		if row >= limit {
-			break
-		}
-		dst.np.Add(row)
+	if dst.np.HasExternalStorage() {
+		// External storage capacity can exceed the destination's current row
+		// domain. The owner-established logical length is the only valid bound.
+		dst.np.OrBounded(src, dst.np.Len())
+		return
 	}
+	dst.np.Or(src)
 }
 
 func (nsp *Nulls) Build(size int, rows ...uint64) {
@@ -239,8 +208,8 @@ func Del(nsp *Nulls, sels ...uint64) {
 
 // Set performs union operation on Nulls nsp,m and store the result in nsp
 func Set(nsp, other *Nulls) {
-	if !other.np.EmptyByFlag() {
-		nsp.np.Or(&other.np)
+	if other != nil {
+		orBitmapInto(nsp, &other.np)
 	}
 }
 
@@ -509,15 +478,13 @@ func (nsp *Nulls) ReadNoCopyV1(data []byte) error {
 }
 
 func (nsp *Nulls) OrBitmap(m *bitmap.Bitmap) {
-	if m != nil && !m.IsEmpty() {
-		nsp.np.Or(m)
-	}
+	orBitmapInto(nsp, m)
 }
 
 // Or the m Nulls into nsp.
 func (nsp *Nulls) Or(m *Nulls) {
-	if m != nil && !m.np.EmptyByFlag() {
-		nsp.np.Or(&m.np)
+	if m != nil {
+		orBitmapInto(nsp, &m.np)
 	}
 }
 
@@ -564,10 +531,9 @@ func (nsp *Nulls) Foreach(fn func(uint64) bool) {
 }
 
 func (nsp *Nulls) Merge(other *Nulls) {
-	if other.Count() == 0 {
-		return
+	if other != nil {
+		orBitmapInto(nsp, &other.np)
 	}
-	nsp.np.Or(&other.np)
 }
 
 func (nsp *Nulls) String() string {

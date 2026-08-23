@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +53,65 @@ func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	transferred.Free(mp)
 	wrapper.Free()
 	require.Zero(t, account.Snapshot().Used)
+}
+
+func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	wrapper, err := NewFunctionResultWrapperWithAllocation(
+		types.T_int64.ToType(), mp, selection,
+	)
+	require.NoError(t, err)
+	require.NoError(t, wrapper.PreExtendAndReset(1))
+	result := MustFunctionResult[int64](wrapper)
+	require.NoError(t, result.Append(42, false))
+	result.vec.ToConst()
+	result.vec.SetLength(4)
+	require.True(t, result.vec.IsConst())
+
+	// A folded result resets before growing, while an ordinary reused result
+	// resets after capacity growth. Both generations must publish the same
+	// owner-provided NULL row bound.
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+	require.False(t, result.vec.IsConst())
+	require.EqualValues(t, 64, result.vec.GetNulls().GetBitmap().Len())
+	result.AddNullAt(63)
+	require.NoError(t, wrapper.PreExtendAndReset(4))
+
+	result = MustFunctionResult[int64](wrapper)
+	capacityRows := result.GetResultVector().GetNulls().GetBitmap().ExternalStorageCapacity() * 64
+	require.GreaterOrEqual(t, capacityRows, 4)
+	source := nulls.NewWithSize(capacityRows + 1)
+	source.Add(1, uint64(capacityRows))
+
+	require.NotPanics(t, func() {
+		result.AddNulls(source)
+	})
+	require.True(t, result.GetNullAt(1))
+	require.False(t, result.GetNullAt(uint64(capacityRows)))
+	require.EqualValues(t, 4, result.GetResultVector().GetNulls().GetBitmap().Len())
+
+	wrapper.Free()
+	require.Zero(t, account.Snapshot().Used)
+}
+
+func TestFunctionResultUnaccountedKeepsLazyNullBitmap(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+
+	bitmap := wrapper.GetResultVector().GetNulls().GetBitmap()
+	require.False(t, bitmap.HasExternalStorage())
+	require.Zero(t, bitmap.Len())
+	require.Zero(t, bitmap.Size())
+
+	wrapper.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestFunctionResultAppendMultiBytesSharesPayload(t *testing.T) {
