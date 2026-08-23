@@ -684,6 +684,28 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
 }
 
+func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
+	ctx := context.Background()
+	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
+
+	for _, target := range []plan.Type{
+		{Id: int32(types.T_varchar), Width: 3},
+		{Id: int32(types.T_year), Width: 4},
+	} {
+		expr, err := MakePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
+		require.NoError(t, err)
+		require.Equal(t, "cast_assign", expr.GetF().GetFunc().GetObjName())
+	}
+
+	dateExpr, err := MakePlan2AssignmentCastExpr(
+		ctx,
+		DeepCopyExpr(srcText),
+		plan.Type{Id: int32(types.T_date)},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "cast_strict", dateExpr.GetF().GetFunc().GetObjName())
+}
+
 func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
