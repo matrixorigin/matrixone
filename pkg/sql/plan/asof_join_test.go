@@ -51,6 +51,26 @@ func TestBuildAsofJoin(t *testing.T) {
 	require.NotNil(t, commuted)
 }
 
+func TestBuildAsofJoinAfterDerivedAliasColumnList(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		"select l.k, r.ts from "+
+			"(select 1 source_k, cast('2026-01-01 10:00:00' as timestamp) source_ts) l(k, ts) "+
+			"asof join "+
+			"(select 1 k, cast('2026-01-01 09:59:00' as timestamp) ts) r "+
+			"on l.k = r.k and l.ts >= r.ts")
+	require.NoError(t, err)
+
+	var join *planpb.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_ASOF {
+			join = node
+			break
+		}
+	}
+	require.NotNil(t, join)
+	require.Equal(t, int32(1), join.AsofRightCol)
+}
+
 func TestBuildAsofPreservesLegacyImplicitAliasJoin(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
 		"select asof.k from "+

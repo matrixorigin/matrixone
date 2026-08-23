@@ -45,6 +45,96 @@ func TestAsofJoinSyntaxRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAsofJoinAfterAliasedTableFactorSuffix(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		joinType string
+		alias    tree.Identifier
+		cols     tree.IdentifierList
+		hints    []*tree.IndexHint
+	}{
+		{
+			name:     "derived table alias column list",
+			sql:      "select * from (select 1 k, 2 ts) l(k, ts) asof join r r on l.k = r.k and l.ts >= r.ts",
+			joinType: tree.JOIN_TYPE_ASOF,
+			alias:    "l",
+			cols:     tree.IdentifierList{"k", "ts"},
+		},
+		{
+			name:     "derived table explicit quoted alias column list",
+			sql:      "select * from (select 1 k, 2 ts) AS `l`(`k`, `ts`) asof left outer join r r on l.k = r.k and l.ts >= r.ts",
+			joinType: tree.JOIN_TYPE_ASOF_LEFT,
+			alias:    "l",
+			cols:     tree.IdentifierList{"k", "ts"},
+		},
+		{
+			name:     "table alias index hint",
+			sql:      "select * from l l use index (idx) asof join r r on l.k = r.k and l.ts >= r.ts",
+			joinType: tree.JOIN_TYPE_ASOF,
+			alias:    "l",
+			hints: []*tree.IndexHint{{
+				IndexNames: []string{"idx"},
+				HintType:   tree.HintUse,
+				HintScope:  tree.HintForScan,
+			}},
+		},
+		{
+			name:     "table explicit alias multiple scoped index hints",
+			sql:      "select * from l AS data use index (idx1) force index for join (idx2) asof left join r r on data.k = r.k and data.ts >= r.ts",
+			joinType: tree.JOIN_TYPE_ASOF_LEFT,
+			alias:    "data",
+			hints: []*tree.IndexHint{
+				{IndexNames: []string{"idx1"}, HintType: tree.HintUse, HintScope: tree.HintForScan},
+				{IndexNames: []string{"idx2"}, HintType: tree.HintForce, HintScope: tree.HintForJoin},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err, test.sql)
+			defer stmt.Free()
+			join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
+			require.Equal(t, test.joinType, join.JoinType, test.sql)
+			left := join.Left.(*tree.AliasedTableExpr)
+			require.Equal(t, test.alias, left.As.Alias, test.sql)
+			require.Equal(t, test.cols, left.As.Cols, test.sql)
+			require.Equal(t, test.hints, left.IndexHints, test.sql)
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			roundTrip, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err, formatted)
+			defer roundTrip.Free()
+			require.Equal(t, formatted, tree.String(roundTrip, dialect.MYSQL))
+		})
+	}
+}
+
+func TestAsofNestedAliasKeepsLegacyInnerJoinSemantics(t *testing.T) {
+	sql := "select * from (select s.k from s s) asof join u on asof.k = u.k"
+	stmt, err := ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
+	require.Equal(t, tree.JOIN_TYPE_INNER, join.JoinType)
+	left := join.Left.(*tree.AliasedTableExpr)
+	require.Equal(t, tree.Identifier("asof"), left.As.Alias)
+}
+
+func TestAsofJoinStillRequiresAliasedLeftTableFactor(t *testing.T) {
+	stmt, err := ParseOne(
+		context.Background(),
+		"select * from l use index (idx) asof join r r on l.k = r.k and l.ts >= r.ts",
+		1,
+	)
+	if stmt != nil {
+		defer stmt.Free()
+	}
+	require.ErrorContains(t, err, "requires an aliased left table factor")
+}
+
 func TestAsofRemainsAnIdentifierOutsideJoin(t *testing.T) {
 	for _, sql := range []string{
 		"select asof from t",
@@ -102,6 +192,8 @@ func TestAsofLegacyImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
 		{sql: "select * from t asof join u on a = b where x > y", leftAlias: "asof", joinType: tree.JOIN_TYPE_INNER},
 		{sql: "select * from t asof left join u on asof.k = u.k", leftAlias: "asof", joinType: tree.JOIN_TYPE_LEFT},
 		{sql: "select * from (select 1 as k) asof join (select 1 as k) u on asof.k = u.k", leftAlias: "asof", joinType: tree.JOIN_TYPE_INNER},
+		{sql: "select * from (select 1 as k) asof(k) join u on asof.k = u.k", leftAlias: "asof", joinType: tree.JOIN_TYPE_INNER},
+		{sql: "select * from t asof use index (idx) join u on asof.k = u.k", leftAlias: "asof", joinType: tree.JOIN_TYPE_INNER},
 	}
 
 	for _, test := range tests {
@@ -118,6 +210,12 @@ func TestAsofLegacyImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
 func TestAsofJoinProducesAsofAst(t *testing.T) {
 	for _, sql := range []string{
 		"select * from l l asof join r on l.k = r.k and l.ts >= r.ts",
+		"select * from l data asof join r on data.k = r.k and data.ts >= r.ts",
+		"select * from l AS count asof join r on count.k = r.k and count.ts >= r.ts",
+		"select * from l 'left_alias' asof join r r on left_alias.k = r.k and left_alias.ts >= r.ts",
+		"select * from f() f asof join r r on f.k = r.k and f.ts >= r.ts",
+		"select * from l l join m m asof join r r on m.k = r.k and m.ts >= r.ts",
+		"select * from l l cross apply f() f asof join r r on l.k = r.k and f.ts >= r.ts",
 		"select * from (select 1 k, cast('2026-01-01' as timestamp) ts) l asof join r on l.k = r.k and l.ts >= r.ts",
 		"select * from l AS l asof join r on l.k = r.k and l.ts >= r.ts",
 		"select * from l AS l asof join r on l.k = r.k and r.ts <= l.ts",
@@ -141,6 +239,7 @@ func TestAsofJoinNamesDoNotChangeContext(t *testing.T) {
 		"select * from l AS l asof join asof on l.k = asof.k and l.ts >= asof.ts",
 		"select * from l AS l asof join r asof on l.k = r.k and l.ts >= r.ts",
 		"select * from l AS l asof join r asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from t asof asof join r r on asof.k = r.k and asof.ts >= r.ts",
 		"select * from t as `l` asof join r on `l`.k = r.k and `l`.ts >= r.ts",
 		"select * from l AS l asof join r AS asof on l.k = asof.k and l.ts >= asof.ts",
 		"select * from l AS l asof join r AS `asof` on l.k = `asof`.k and l.ts >= `asof`.ts",

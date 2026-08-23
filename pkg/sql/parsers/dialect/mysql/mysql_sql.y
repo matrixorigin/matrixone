@@ -975,6 +975,11 @@ func sqlTaskInt64(v any) int64 {
 // constants and downstream serialized plans.
 %token <str> WITHIN PERCENTILE_CONT PERCENTILE_DISC
 %token <str> ASOF TOLERANCE
+// ASOF has higher precedence than the empty table alias. In the only
+// ambiguous legacy form, `t asof JOIN u`, this shifts ASOF into table_alias.
+// Once an alias or table-factor suffix is complete, ASOF can only be reduced
+// as the native join modifier.
+%left ASOF
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -7657,6 +7662,10 @@ join_table:
     }
 |   table_reference asof_join table_factor join_condition tolerance_opt
     {
+		if !hasAsofLeftFactorAlias($1) {
+			yylex.Error("native ASOF JOIN requires an aliased left table factor")
+			goto ret1
+		}
         $$ = &tree.JoinTableExpr{
             Left: $1,
             JoinType: $2,
@@ -15920,6 +15929,7 @@ non_reserved_keyword:
 |	SUPER
 |	TABLESPACE
 |	TRUNCATE
+|   ASOF
 |   TOLERANCE
 |	VISIBLE
 |	WITHOUT

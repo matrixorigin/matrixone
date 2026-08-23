@@ -198,7 +198,6 @@ type Lexer struct {
 	paramIndex            int
 	lower                 int64
 	lastToken             int
-	previousToken         int
 	syntaxLastToken       int
 	syntaxDepth           int
 	syntaxInFrom          []bool
@@ -243,7 +242,6 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.paramIndex = 0
 	l.lower = lower
 	l.lastToken = 0
-	l.previousToken = 0
 	l.syntaxLastToken = 0
 	l.syntaxDepth = 0
 	l.syntaxInFrom = l.syntaxInFrom[:0]
@@ -312,35 +310,18 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
 		typ = ID
 	}
-	// `t asof JOIN u` was valid before native ASOF JOIN and means
-	// `t AS asof JOIN u`. A left factor that already has a distinct explicit or
-	// implicit alias makes the modifier unambiguous without inspecting relation
-	// names or ON predicates: `t l ASOF JOIN u` is native ASOF, while the legacy
-	// form stays INNER.
-	if typ == ID && strings.EqualFold(str, "asof") &&
-		l.hasUnambiguousAsofLeftAlias() && l.asofJoinPhraseAhead() {
+	// ASOF stays contextual. The grammar resolves whether the phrase starts a
+	// native join or whether ASOF still occupies the current table's alias slot.
+	// This preserves legacy `t asof JOIN u`, while an already completed alias or
+	// table-factor suffix makes the same phrase a native ASOF JOIN.
+	if typ == ID && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
 		typ = ASOF
 	}
 
-	l.previousToken = l.lastToken
 	l.lastToken = typ
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ
-}
-
-func (l *Lexer) hasUnambiguousAsofLeftAlias() bool {
-	if l.previousToken == AS {
-		return true
-	}
-	// For a bare alias, the token immediately before it is the final component
-	// of a simple table name or the closing parenthesis of a derived/function
-	// factor. With no alias, ASOF itself is the first token after FROM/JOIN/, or
-	// after a qualified-name dot, so none of these patterns match.
-	if l.lastToken != ID && l.lastToken != QUOTE_ID && l.lastToken != STRING {
-		return false
-	}
-	return l.previousToken == ID || l.previousToken == QUOTE_ID || l.previousToken == int(')')
 }
 
 func (l *Lexer) asofJoinPhraseAhead() bool {
@@ -364,6 +345,28 @@ func (l *Lexer) asofJoinPhraseAhead() bool {
 	}
 	next, _ = lookahead.Scan()
 	return next == JOIN
+}
+
+// hasAsofLeftFactorAlias follows the right edge of a table-reference chain,
+// which is the table factor immediately preceding an ASOF modifier.
+func hasAsofLeftFactorAlias(expr tree.TableExpr) bool {
+	for expr != nil {
+		switch e := expr.(type) {
+		case *tree.AliasedTableExpr:
+			return e.As.Alias != ""
+		case *tree.JoinTableExpr:
+			if e.Right != nil {
+				expr = e.Right
+			} else {
+				expr = e.Left
+			}
+		case *tree.ApplyTableExpr:
+			expr = e.Right
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (l *Lexer) recordSyntaxToken(token int) {
