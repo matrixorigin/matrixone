@@ -2215,3 +2215,14 @@ func TestInitInfileOrStageParam_NonStageFallsThrough(t *testing.T) {
 
 // Avoid unused import warning when some branches of types are not directly referenced.
 var _ = types.T_int32
+
+func TestGetRowSizeFromTableDefLongTextDoesNotOverflow(t *testing.T) {
+	tableDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Typ: plan.Type{Id: int32(types.T_text), Width: types.MaxLongTextLen}},
+		{Typ: plan.Type{Id: int32(types.T_int32)}},
+	}}
+
+	got := GetRowSizeFromTableDef(tableDef, true)
+	require.Equal(t, float64(math.MaxInt32), got)
+	require.GreaterOrEqual(t, got, float64(0))
+}
