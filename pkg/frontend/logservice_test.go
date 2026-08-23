@@ -32,6 +32,8 @@ import (
 
 type mockHAKeeperClient struct {
 	clusterState        pb.CheckerState
+	clusterDetails      pb.ClusterDetails
+	clusterDetailsErr   error
 	NonVotingReplicaNum uint64
 	NonVotingLocality   pb.Locality
 	allocateIDByKey     func(context.Context, string) (uint64, error)
@@ -65,7 +67,7 @@ func (c *mockHAKeeperClient) AllocateIDByKeyWithBatch(ctx context.Context, key s
 }
 
 func (c *mockHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
-	return pb.ClusterDetails{}, nil
+	return c.clusterDetails, c.clusterDetailsErr
 }
 
 func (c *mockHAKeeperClient) GetClusterState(ctx context.Context) (pb.CheckerState, error) {

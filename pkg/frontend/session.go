@@ -2586,6 +2586,12 @@ func (ses *Session) getCleanupContext() context.Context {
 	return context.Background()
 }
 
+var initializeCachedSessionSystemVariables = func(ctx context.Context, ses *Session) error {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	return ses.InitSystemVariables(ctx, bh)
+}
+
 // reset resets the ses instance and copy some fields of prev, then
 // close the prev.
 func (ses *Session) reset(ctx context.Context, prev *Session) error {
@@ -2651,6 +2657,16 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	if ctx != nil {
 		if cause := context.Cause(ctx); cause != nil {
 			return cause
+		}
+	}
+	// ResetSession represents a new external login on a cached backend
+	// connection. It bypasses normal authentication, so initialize a fresh
+	// account snapshot before Proxy can hand the connection to the new client.
+	// Rollback must happen first because the old transaction may hold a catalog
+	// lock required by this read.
+	if prev.gSysVars != nil {
+		if err := initializeCachedSessionSystemVariables(ctx, ses); err != nil {
+			return err
 		}
 	}
 	// close the previous session.

@@ -1172,6 +1172,17 @@ func TestMigrateConnectionFromV20KeepsLegacyUserVariableReplay(t *testing.T) {
 }
 
 func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
+	initialized := 0
+	stub := gostub.Stub(&initializeCachedSessionSystemVariables,
+		func(_ context.Context, ses *Session) error {
+			initialized++
+			ses.gSysVars = &SystemVariables{mp: map[string]interface{}{
+				PasswordHistory: int64(5),
+			}}
+			ses.sesSysVars = ses.gSysVars.Clone()
+			return nil
+		})
+	t.Cleanup(stub.Reset)
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
 	timeZone := time.FixedZone("reset-session-test", 8*60*60)
@@ -1202,10 +1213,48 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	_, err = newSession.GetUserDefinedVar("must_not_leak")
 	require.ErrorContains(t, err, "does not exist")
 	require.Same(t, timeZone, newSession.GetTimeZone())
+	require.Equal(t, 1, initialized)
+	value, err := newSession.GetSessionSysVar(PasswordHistory)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), value,
+		"a cached backend must initialize the new login from the current account snapshot")
 
 	registered := rm.sessionManager.GetAllSessions()
 	require.Len(t, registered, 1, "successful reset must keep the replacement session registered")
 	require.Same(t, newSession, registered[0])
+}
+
+func TestRoutineResetSessionInitializationFailureKeepsOldSession(t *testing.T) {
+	stub := gostub.Stub(&initializeCachedSessionSystemVariables,
+		func(context.Context, *Session) error { return assert.AnError })
+	t.Cleanup(stub.Reset)
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	t.Cleanup(func() {
+		rm.sessionManager.RemoveSession(oldSession)
+		oldSession.Close()
+		rm.cancelCtx()
+	})
+
+	protocol := oldSession.GetResponser().MysqlRrWr()
+	protocol.SetStr(DBNAME, "db1")
+	routine := NewRoutine(context.Background(), protocol, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+
+	err = routine.resetSession("", &query.ResetSessionResponse{})
+	require.ErrorIs(t, err, assert.AnError)
+	require.Same(t, oldSession, routine.getSession())
+	require.Equal(t, "db1", protocol.GetStr(DBNAME))
+	registered := rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1)
+	require.Same(t, oldSession, registered[0])
 }
 
 func TestRoutineResetSessionFailureRestoresProtocolState(t *testing.T) {

@@ -261,6 +261,71 @@ func (w *selectedSuccessTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestam
 func (*selectedSuccessTimestampWaiter) Close()                        {}
 func (*selectedSuccessTimestampWaiter) LatestTS() timestamp.Timestamp { return timestamp.Timestamp{} }
 
+func TestSyncLatestCommitTSWithContext(t *testing.T) {
+	serviceID := t.Name()
+	rt := runtime.NewRuntime(
+		metadata.ServiceType_CN,
+		serviceID,
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 { return 1 }, 0)),
+	)
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	c := NewTxnClient(
+		serviceID,
+		newTestTxnSender(),
+		WithTimestampWaiter(immediateTimestampWaiter{}),
+	).(*txnClient)
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+
+	ts := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	require.NoError(t, c.SyncLatestCommitTSWithContext(context.Background(), ts))
+	require.Equal(t, ts, c.GetLatestCommitTS())
+	require.Equal(t, uint64(1), c.GetSyncLatestCommitTSTimes())
+
+	older := timestamp.Timestamp{PhysicalTime: 99, LogicalTime: 100}
+	require.NoError(t, c.SyncLatestCommitTSWithContext(context.Background(), older))
+	require.Equal(t, ts, c.GetLatestCommitTS(), "syncing an older timestamp must not move the client backwards")
+	require.Equal(t, uint64(2), c.GetSyncLatestCommitTSTimes())
+}
+
+func TestSyncLatestCommitTSWithContextHonorsCancellation(t *testing.T) {
+	serviceID := t.Name()
+	rt := runtime.NewRuntime(
+		metadata.ServiceType_CN,
+		serviceID,
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 { return 1 }, 0)),
+	)
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	waiter := &blockingTimestampWaiter{entered: make(chan struct{}, 1)}
+	c := NewTxnClient(
+		serviceID,
+		newTestTxnSender(),
+		WithTimestampWaiter(waiter),
+	).(*txnClient)
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ts := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	done := make(chan error, 1)
+	go func() { done <- c.SyncLatestCommitTSWithContext(ctx, ts) }()
+
+	select {
+	case <-waiter.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timestamp synchronization did not enter the logtail wait")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("timestamp synchronization did not stop after cancellation")
+	}
+	require.Equal(t, ts, c.GetLatestCommitTS(), "the timestamp lower bound must remain monotonic after cancellation")
+	require.Equal(t, uint64(0), c.GetSyncLatestCommitTSTimes())
+}
+
 func TestAdjustClient(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := &txnClient{}

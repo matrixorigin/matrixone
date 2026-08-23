@@ -946,6 +946,13 @@ func receiveLegacyMigrationActionResult(t *testing.T, result <-chan error) error
 }
 
 func TestRoutineManagerResetSessionWaitsForRequestAfterResponseWrite(t *testing.T) {
+	previousInitializer := initializeCachedSessionSystemVariables
+	initializeCachedSessionSystemVariables = func(_ context.Context, ses *Session) error {
+		ses.gSysVars = &SystemVariables{mp: make(map[string]interface{})}
+		ses.sesSysVars = ses.gSysVars.Clone()
+		return nil
+	}
+	t.Cleanup(func() { initializeCachedSessionSystemVariables = previousInitializer })
 	const connID = uint32(1009)
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)

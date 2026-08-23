@@ -947,20 +947,38 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 }
 
 func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
-	client.updateLastCommitTS(context.TODO(), nil, TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}}, nil)
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(), time.Minute*5, moerr.CauseSyncLatestCommitT)
+	defer cancel()
+	if err := client.SyncLatestCommitTSWithContext(ctx, ts); err != nil {
+		client.logger.Fatal("wait latest commit ts failed", zap.Error(err))
+	}
+}
+
+func (client *txnClient) SyncLatestCommitTSWithContext(
+	ctx context.Context,
+	ts timestamp.Timestamp,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	client.updateLastCommitTS(ctx, nil, TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}}, nil)
 	if client.timestampWaiter != nil {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseSyncLatestCommitT)
+		waitCtx, cancel := client.withCloseContext(ctx)
 		defer cancel()
-		for {
-			_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
-			if err == nil {
-				break
+		if _, err := client.timestampWaiter.GetTimestamp(waitCtx, ts); err != nil {
+			if client.isClosed() {
+				return moerr.NewClientClosedNoCtx()
 			}
-			err = moerr.AttachCause(ctx, err)
-			client.logger.Fatal("wait latest commit ts failed", zap.Error(err))
+			return moerr.AttachCause(waitCtx, err)
 		}
 	}
 	client.atomic.forceSyncCommitTimes.Add(1)
+	return nil
 }
 
 func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {

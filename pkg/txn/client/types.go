@@ -47,6 +47,9 @@ type TxnTimestampAware interface {
 	GetLatestCommitTS() timestamp.Timestamp
 	// SyncLatestCommitTS sync latest commit timestamp
 	SyncLatestCommitTS(timestamp.Timestamp)
+	// SyncLatestCommitTSWithContext syncs the latest commit timestamp and waits
+	// until the local logtail has applied it or ctx ends.
+	SyncLatestCommitTSWithContext(context.Context, timestamp.Timestamp) error
 	// GetSyncLatestCommitTSTimes returns times of sync latest commit ts
 	GetSyncLatestCommitTSTimes() uint64
 }

@@ -441,8 +441,25 @@ func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp
 	return nil
 }
 
-func (s *service) handleSyncCommit(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	s._txnClient.SyncLatestCommitTS(req.SycnCommit.LatestCommitTS)
+func (s *service) handleSyncCommit(
+	ctx context.Context,
+	req *query.Request,
+	resp *query.Response,
+	_ *morpc.Buffer,
+) error {
+	if req == nil || req.SycnCommit == nil {
+		return moerr.NewInvalidInput(ctx, "missing sync commit request")
+	}
+	commitTS := req.SycnCommit.LatestCommitTS
+	if commitTS.IsEmpty() {
+		return moerr.NewInvalidInput(ctx, "empty sync commit timestamp")
+	}
+	if err := s._txnClient.SyncLatestCommitTSWithContext(ctx, commitTS); err != nil {
+		return err
+	}
+	resp.SyncCommit = &query.SyncCommitResponse{
+		CurrentCommitTS: s._txnClient.GetLatestCommitTS(),
+	}
 	return nil
 }
 
