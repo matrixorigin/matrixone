@@ -435,6 +435,22 @@ func TestFilterBarrierSurvivesCopiesAndSerialization(t *testing.T) {
 	require.True(t, roundTrip.EmitCompressedRowCount)
 }
 
+func TestDeepCopyNodePreservesSecondaryIndexPreInsertContext(t *testing.T) {
+	source := &planpb.Node{
+		NodeType: planpb.Node_PRE_INSERT_SK,
+		PreInsertSkCtx: &planpb.PreInsertUkCtx{
+			Columns:  []int32{1, 3},
+			PkColumn: 4,
+		},
+	}
+
+	cloned := DeepCopyNode(source)
+	require.Equal(t, source.PreInsertSkCtx, cloned.PreInsertSkCtx)
+	require.NotSame(t, source.PreInsertSkCtx, cloned.PreInsertSkCtx)
+	cloned.PreInsertSkCtx.Columns[0] = 2
+	require.Equal(t, int32(1), source.PreInsertSkCtx.Columns[0])
+}
+
 var clonedTableDef *planpb.TableDef
 
 func BenchmarkCloneTableDefForPlan(b *testing.B) {

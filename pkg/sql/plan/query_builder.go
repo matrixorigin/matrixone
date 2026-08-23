@@ -843,6 +843,68 @@ func releaseRetainedOrderRefs(colRefCnt map[[2]int32]int, refs [][2]int32) {
 	}
 }
 
+func (builder *QueryBuilder) remapRegularIndexPreInsert(
+	nodeID int32, step int32, colRefCnt map[[2]int32]int,
+	colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int,
+	preInsertCtx *plan.PreInsertUkCtx,
+) (*ColRefRemapping, error) {
+	node := builder.qry.Nodes[nodeID]
+	if preInsertCtx == nil || len(node.Children) != 1 {
+		return nil, moerr.NewInternalError(builder.GetContext(), "invalid regular index pre-insert node")
+	}
+	child := builder.qry.Nodes[node.Children[0]]
+	if len(child.BindingTags) != 1 {
+		return nil, moerr.NewInternalError(builder.GetContext(), "invalid regular index pre-insert input")
+	}
+	if len(node.BindingTags) == 0 {
+		node.BindingTags = []int32{builder.genNewBindTag()}
+	}
+
+	childTag := child.BindingTags[0]
+	preservedRefs := make([][2]int32, len(child.ProjectList))
+	for i := range child.ProjectList {
+		ref := [2]int32{childTag, int32(i)}
+		preservedRefs[i] = ref
+		colRefCnt[ref]++
+	}
+	pkRef := [2]int32{childTag, preInsertCtx.PkColumn}
+	childRemapping, err := builder.remapAllColRefs(
+		node.Children[0], step, colRefCnt, colRefBool, sinkColRef,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for _, ref := range preservedRefs {
+		colRefCnt[ref]--
+	}
+	for i, oldPos := range preInsertCtx.Columns {
+		pos, ok := childRemapping.globalToLocal[[2]int32{childTag, oldPos}]
+		if !ok {
+			return nil, moerr.NewInternalError(builder.GetContext(), "missing regular index key column")
+		}
+		preInsertCtx.Columns[i] = pos[1]
+	}
+	pkPos, ok := childRemapping.globalToLocal[pkRef]
+	if !ok {
+		return nil, moerr.NewInternalError(builder.GetContext(), "missing regular index primary key column")
+	}
+	preInsertCtx.PkColumn = pkPos[1]
+
+	remapping := &ColRefRemapping{
+		globalToLocal:    make(map[[2]int32][2]int32),
+		preserveRowCount: true,
+	}
+	for i, expr := range node.ProjectList {
+		if col := expr.GetCol(); col != nil && col.RelPos >= 0 {
+			col.RelPos = 0
+			col.ColPos = int32(len(child.ProjectList) - 1)
+		}
+		remapping.addColRef([2]int32{node.BindingTags[0], int32(i)})
+	}
+	node.BindingTags = nil
+	return remapping, nil
+}
+
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
 	return builder.remapAllColRefsForConsumer(
 		nodeID, step, colRefCnt, colRefBool, sinkColRef, false)
@@ -1295,6 +1357,10 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 	case plan.Node_JOIN:
 		node.EmitCompressedRowCount = false
 		node.SpillMem = builder.joinSpillMem
+		logicalOutputs := node.ProjectList
+		for _, expr := range logicalOutputs {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
 
 		var markOperandNotNullable [][]bool
 		if node.JoinType == plan.Node_MARK && len(node.Children) == 2 {
@@ -1443,6 +1509,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			node.DedupColTypes = []plan.Type{node.OnList[0].GetF().Args[0].Typ}
 		}
 
+		node.ProjectList = nil
 		childProjList := builder.qry.Nodes[leftID].ProjectList
 		for i, globalRef := range leftRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
@@ -1522,7 +1589,18 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				},
 			})
 		}
-
+		if len(node.BindingTags) > 0 {
+			for i, expr := range logicalOutputs {
+				if col := expr.GetCol(); col != nil {
+					if localRef, ok := remapping.globalToLocal[[2]int32{col.RelPos, col.ColPos}]; ok {
+						remapping.globalToLocal[[2]int32{node.BindingTags[0], int32(i)}] = localRef
+					}
+				}
+			}
+		}
+		for _, expr := range logicalOutputs {
+			increaseRefCnt(expr, -1, colRefCnt)
+		}
 	case plan.Node_AGG:
 		// Some DML duplicate-check aggregates intentionally expose positional
 		// output. They are already fully projected and cannot participate in the
@@ -2494,6 +2572,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 
 	case plan.Node_FILTER, plan.Node_ASSERT:
+		_, preserveProjection := builder.preserveFilterProjection[nodeID]
+		if preserveProjection && len(node.BindingTags) > 0 {
+			for i := range node.ProjectList {
+				colRefCnt[[2]int32{node.BindingTags[0], int32(i)}]++
+			}
+			node.ProjectList = nil
+		}
 		if node.NodeType == plan.Node_ASSERT || node.FilterIsBarrier {
 			// Semantic-boundary filters have identity output. Rebuild their
 			// projections from the parent reference counts so stale pre-pruning
@@ -2658,6 +2743,11 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 
 		node.ProjectList = newProjList
+
+	case plan.Node_PRE_INSERT_SK:
+		return builder.remapRegularIndexPreInsert(
+			nodeID, step, colRefCnt, colRefBool, sinkColRef, node.PreInsertSkCtx,
+		)
 
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
 		projectTag := node.BindingTags[0]
@@ -2935,16 +3025,39 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 
 	case plan.Node_INSERT, plan.Node_DELETE:
-		if _, preserve := builder.preserveInsertProjection[nodeID]; preserve {
+		_, preserveProjection := builder.preserveInsertProjection[nodeID]
+		if preserveProjection {
 			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {
 				increaseRefCnt(expr, 1, colRefCnt)
+			}
+		}
+		var deleteTag int32
+		hasDeleteTag := false
+		if preserveProjection && node.NodeType == plan.Node_DELETE && node.DeleteCtx != nil {
+			child := builder.qry.Nodes[node.Children[0]]
+			if len(child.BindingTags) > 0 {
+				deleteTag = child.BindingTags[0]
+				hasDeleteTag = true
+				colRefCnt[[2]int32{deleteTag, node.DeleteCtx.RowIdIdx}]++
+				colRefCnt[[2]int32{deleteTag, node.DeleteCtx.PrimaryKeyIdx}]++
 			}
 		}
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
-
+		if hasDeleteTag {
+			rowIDPos, ok := childRemapping.globalToLocal[[2]int32{deleteTag, node.DeleteCtx.RowIdIdx}]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "delete rowid column was pruned")
+			}
+			pkPos, ok := childRemapping.globalToLocal[[2]int32{deleteTag, node.DeleteCtx.PrimaryKeyIdx}]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "delete primary key column was pruned")
+			}
+			node.DeleteCtx.RowIdIdx = rowIDPos[1]
+			node.DeleteCtx.PrimaryKeyIdx = pkPos[1]
+		}
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
@@ -3193,7 +3306,6 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		if err != nil {
 			return nil, err
 		}
-
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		selectorOutputPos := [3]int32{-1, -1, -1}
 		for i, globalRef := range childRemapping.localToGlobal {
@@ -3261,8 +3373,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 
 	case plan.Node_PRE_INSERT_UK:
-		if node.PreInsertUkCtx == nil || !node.PreInsertUkCtx.InsertIgnoreMultiDedup {
-			return nil, moerr.NewInternalError(builder.GetContext(), "unsupported PRE_INSERT_UK node in query plan")
+		if node.PreInsertUkCtx == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT_UK node in query plan")
+		}
+		if !node.PreInsertUkCtx.InsertIgnoreMultiDedup {
+			return builder.remapRegularIndexPreInsert(
+				nodeID, step, colRefCnt, colRefBool, sinkColRef, node.PreInsertUkCtx,
+			)
 		}
 
 		child := builder.qry.Nodes[node.Children[0]]
@@ -3330,7 +3447,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		node.PreInsertUkCtx.OutputColumns = int32(len(newProjectList))
 
 	default:
-		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
+		return nil, moerr.NewInternalErrorf(builder.GetContext(), "unsupported node type %s", node.NodeType.String())
 	}
 
 	node.BindingTags = nil
