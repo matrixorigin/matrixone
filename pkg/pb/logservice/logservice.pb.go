@@ -5539,8 +5539,9 @@ type HAKeeperRSMState struct {
 	ViewMetadataAdmissionCNTargets    map[string]uint64 `protobuf:"bytes,38,rep,name=ViewMetadataAdmissionCNTargets,proto3" json:"ViewMetadataAdmissionCNTargets,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
 	ViewMetadataAdmissionProxyTargets map[string]uint64 `protobuf:"bytes,39,rep,name=ViewMetadataAdmissionProxyTargets,proto3" json:"ViewMetadataAdmissionProxyTargets,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
 	ViewMetadataAdmissionPending      bool              `protobuf:"varint,40,opt,name=ViewMetadataAdmissionPending,proto3" json:"ViewMetadataAdmissionPending,omitempty"`
-	// Target ticks belong to the generation captured above. A replacement
-	// generation must not refresh the liveness proof for the process it replaced.
+	// Target ticks conservatively cover every generation superseded while the
+	// target is pending. The current authoritative generation never refreshes
+	// this liveness proof for an older process.
 	ViewMetadataAdmissionCNTargetTicks    map[string]uint64 `protobuf:"bytes,41,rep,name=ViewMetadataAdmissionCNTargetTicks,proto3" json:"ViewMetadataAdmissionCNTargetTicks,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
 	ViewMetadataAdmissionProxyTargetTicks map[string]uint64 `protobuf:"bytes,42,rep,name=ViewMetadataAdmissionProxyTargetTicks,proto3" json:"ViewMetadataAdmissionProxyTargetTicks,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
 	XXX_NoUnkeyedLiteral                  struct{}          `json:"-"`
