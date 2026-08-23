@@ -112,6 +112,10 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			TargetUpdateCtxIdx:    ctx.TargetUpdateCtxIdx,
 			AffectedRowsCols:      slices.Clone(ctx.AffectedRowsCols),
 		}
+		if ctx.ChangedRowsCol != nil {
+			changedRowsCol := *ctx.ChangedRowsCol
+			result[i].ChangedRowsCol = &changedRowsCol
+		}
 	}
 
 	return result
@@ -1062,6 +1066,13 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		Typ:         expr.Typ,
 		Ndv:         expr.Ndv,
 		Selectivity: expr.Selectivity,
+	}
+	// Negative AuxId values are planner-local memo identities for volatile
+	// expressions that an equivalent predicate expansion must evaluate once.
+	// Positive AuxId values belong to later execution/zonemap numbering and
+	// intentionally remain reset across a semantic deep copy.
+	if expr.AuxId < 0 {
+		newExpr.AuxId = expr.AuxId
 	}
 
 	switch item := expr.Expr.(type) {

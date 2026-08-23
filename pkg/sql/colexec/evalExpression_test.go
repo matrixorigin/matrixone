@@ -70,6 +70,37 @@ func (e *failAfterFirstExpressionExecutor) Free()              { e.delegate.Free
 func (e *failAfterFirstExpressionExecutor) IsColumnExpr() bool { return false }
 func (e *failAfterFirstExpressionExecutor) TypeName() string   { return "failAfterFirst" }
 
+func TestMemoExpressionExecutorCachesOncePerRootEvaluation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	require.NoError(t, err)
+	delegate := &failAfterFirstExpressionExecutor{
+		delegate: NewFixedVectorExpressionExecutor(proc.Mp(), false, value),
+	}
+	state := &memoExpressionState{executor: delegate, refs: 2}
+	first := &memoExpressionExecutor{state: state}
+	second := &memoExpressionExecutor{state: state}
+	root := &memoRootExpressionExecutor{states: []*memoExpressionState{state}}
+	bat := batch.NewWithSize(0)
+	bat.SetRowCount(1)
+	batches := []*batch.Batch{bat}
+
+	firstResult, err := first.Eval(proc, batches, nil)
+	require.NoError(t, err)
+	secondResult, err := second.Eval(proc, batches, nil)
+	require.NoError(t, err)
+	require.Same(t, firstResult, secondResult)
+	require.Equal(t, 1, delegate.calls)
+
+	root.resetCachedValues()
+	_, err = second.Eval(proc, batches, nil)
+	require.Error(t, err)
+	require.Equal(t, 2, delegate.calls)
+
+	first.Free()
+	second.Free()
+}
+
 func TestListExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
