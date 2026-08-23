@@ -139,6 +139,37 @@ func TestImmutableBasePoolLoadFailureDoesNotRetainEntry(t *testing.T) {
 	require.Zero(t, p.totalBytes)
 }
 
+func TestImmutableBasePoolInvalidationDuringLoadRetriesWithoutRetainingStaleLease(t *testing.T) {
+	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
+	key := baseKey{index: "db.store", id: "base-0", checksum: "sum", filesize: 1}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var loads atomic.Int32
+	done := make(chan error, 1)
+	go func() {
+		view, err := p.acquire(context.Background(), key, func() (*Segment, error) {
+			if loads.Add(1) == 1 {
+				close(started)
+				<-release
+			}
+			return NewSegment(key.id, 0), nil
+		}, 0)
+		if view != nil {
+			view.Free()
+		}
+		done <- err
+	}()
+	<-started
+
+	p.clearIndex(key.index)
+	close(release)
+	require.NoError(t, <-done)
+	require.Equal(t, int32(2), loads.Load(), "the invalidated in-flight result must not be reused")
+	require.NotEmpty(t, p.entries, "the retry may install the current generation")
+	p.clearAll()
+	require.Empty(t, p.entries)
+}
+
 func TestLoadReasonRegistryIsDatabaseQualified(t *testing.T) {
 	cleanup := setLoadObserver(func(LoadEvent) {})
 	defer cleanup()

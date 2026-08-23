@@ -46,6 +46,7 @@ type baseEntry struct {
 	lease    *segmentLease
 	err      error
 	loading  bool
+	retired  bool
 	lastUsed time.Time
 }
 
@@ -207,6 +208,16 @@ func (p *immutableBasePool) evictLocked(now time.Time) (retire []*segmentLease) 
 	return retire
 }
 
+// retireLoadingLocked marks an in-flight entry so its loader will discard the
+// result when it completes. The entry stays in the map until the loader closes
+// ready; this keeps existing waiters from being stranded on a channel that can
+// never be signaled.
+func (p *immutableBasePool) retireLoadingLocked(entry *baseEntry) {
+	if entry != nil && entry.loading {
+		entry.retired = true
+	}
+}
+
 func retireBaseLeases(leases []*segmentLease) {
 	for _, lease := range leases {
 		lease.retire()
@@ -261,13 +272,11 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 			}()
 			return load()
 		}()
-		if err != nil && template != nil {
-			template.Free()
-		}
 		p.mu.Lock()
 		e.loading = false
 		e.err = err
-		if err == nil {
+		retired := e.retired
+		if err == nil && !retired {
 			if template == nil {
 				err = errBaseLeaseGone
 				e.err = err
@@ -278,10 +287,23 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 			}
 		}
 		close(e.ready)
-		if err != nil {
+		if retired {
+			delete(p.entries, key)
+			e.err = errBaseLeaseGone
+			err = e.err
+		} else if err != nil {
 			delete(p.entries, key)
 		}
 		p.mu.Unlock()
+		if template != nil && (retired || err != nil) {
+			template.Free()
+		}
+		if retired && err == errBaseLeaseGone {
+			if ctxErr := context.Cause(ctx); ctxErr != nil {
+				return nil, ctxErr
+			}
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -307,7 +329,11 @@ func (p *immutableBasePool) commit(index string, used map[baseKey]struct{}) {
 	var retire []*segmentLease
 	p.mu.Lock()
 	for key, entry := range p.entries {
-		if key.index != index || entry.loading {
+		if key.index != index {
+			continue
+		}
+		if entry.loading {
+			p.retireLoadingLocked(entry)
 			continue
 		}
 		if _, ok := used[key]; ok {
@@ -331,6 +357,10 @@ func (p *immutableBasePool) clearAll() {
 	p.mu.Lock()
 	retire := make([]*segmentLease, 0, len(p.entries))
 	for key, entry := range p.entries {
+		if entry.loading {
+			p.retireLoadingLocked(entry)
+			continue
+		}
 		delete(p.entries, key)
 		if entry.lease != nil {
 			retire = append(retire, entry.lease)

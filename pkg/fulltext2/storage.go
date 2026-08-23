@@ -359,6 +359,16 @@ func loadAllBasesUncached(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *l
 }
 
 func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace) ([]*Segment, error) {
+	indexKey := cfg.DbName + "." + cfg.IndexTable
+	committed := false
+	defer func() {
+		if !committed {
+			// A later base can fail after earlier segments have been acquired.
+			// Do not leave a partially assembled generation owning pool leases;
+			// a retry must either reuse a complete generation or load it anew.
+			loadedBasePool.clearIndex(indexKey)
+		}
+	}()
 	idSQL := fmt.Sprintf("SELECT %s FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
 	var sqlStart time.Time
@@ -406,7 +416,7 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 			freeSegs(bases)
 			return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s has empty filesize", id))
 		}
-		key := baseKey{index: cfg.DbName + "." + cfg.IndexTable, id: id, checksum: checksum, filesize: filesize}
+		key := baseKey{index: indexKey, id: id, checksum: checksum, filesize: filesize}
 		m, lerr := loadedBasePool.acquire(sqlproc.GetContext(), key, func() (*Segment, error) {
 			return loadFromStorageMetadata(sqlproc, cfg, id, checksum, filesize, recency, trace)
 		}, recency)
@@ -421,7 +431,8 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 		bases = append(bases, m)
 		used[key] = struct{}{}
 	}
-	loadedBasePool.commit(cfg.DbName+"."+cfg.IndexTable, used)
+	loadedBasePool.commit(indexKey, used)
+	committed = true
 	return bases, nil
 }
 
