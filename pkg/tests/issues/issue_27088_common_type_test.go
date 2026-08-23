@@ -68,7 +68,6 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		assertIDs := func(t *testing.T, rows *sql.Rows, queryErr error, want ...int) {
 			t.Helper()
 			require.NoError(t, queryErr)
-			defer rows.Close()
 			var got []int
 			for rows.Next() {
 				var id int
@@ -85,6 +84,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.NoError(t, prepareErr)
 			defer equality.Close()
 			rows, queryErr := equality.QueryContext(ctx, "9007199254740992.0000000002tail")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr, 2)
 			require.NoError(t, rows.Err())
 
@@ -94,6 +94,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer inList.Close()
 			rows, queryErr = inList.QueryContext(ctx,
 				"9007199254740992.0000000000first", "9007199254740992.0000000003second")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr, 1, 3)
 			require.NoError(t, rows.Err())
 		})
@@ -108,6 +109,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.NoError(t, prepareErr)
 			defer stmt.Close()
 			rows, queryErr := stmt.QueryContext(ctx, "0.000000000000000000000000000000000001e100")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr, 1)
 			require.NoError(t, rows.Err())
 		})
@@ -118,6 +120,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.NoError(t, prepareErr)
 			defer stmt.Close()
 			rows, queryErr := stmt.QueryContext(ctx, "9007199254740992.0000000001tail")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr, 2)
 			require.NoError(t, rows.Err())
 		})
@@ -137,9 +140,11 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.NoError(t, prepareErr)
 			defer nested.Close()
 			rows, queryErr := nested.QueryContext(ctx, "9007199254740992.0000000001tail")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr)
 			require.NoError(t, rows.Err())
 			rows, queryErr = nested.QueryContext(ctx, nil)
+			defer rows.Close()
 			assertIDs(t, rows, queryErr, 2)
 			require.NoError(t, rows.Err())
 
@@ -157,6 +162,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_sql") }()
 			mustExec(t, ctx, conn, "set @issue27088_value = '9007199254740992.0000000002tail'")
 			rows, queryErr := conn.QueryContext(ctx, "execute issue27088_sql using @issue27088_value")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr, 2)
 			require.NoError(t, rows.Err())
 
@@ -169,10 +175,12 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			mustExec(t, ctx, conn,
 				"set @issue27088_nested = cast('9007199254740992.0000000001' as decimal(38,10))")
 			rows, queryErr = conn.QueryContext(ctx, "execute issue27088_nested_sql using @issue27088_nested")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr)
 			require.NoError(t, rows.Err())
 			mustExec(t, ctx, conn, "set @issue27088_nested = null")
 			rows, queryErr = conn.QueryContext(ctx, "execute issue27088_nested_sql using @issue27088_nested")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr, 2)
 			require.NoError(t, rows.Err())
 		})
@@ -184,6 +192,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			mustExec(t, ctx, conn, "set @issue27088_ctas = '9007199254740992.0000000002tail'")
 			mustExec(t, ctx, conn, "execute issue27088_ctas using @issue27088_ctas")
 			rows, queryErr := conn.QueryContext(ctx, "select id from ctas_result order by id")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr, 2)
 			require.NoError(t, rows.Err())
 		})
@@ -222,6 +231,28 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.Equal(t, "12.5000000000", value)
 		})
 
+		t.Run("SQL EXECUTE SET specializes consumer inside subquery", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_set_inner from
+				'set @issue27088_inner_out = (select id from common_type where d = ?)'`)
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_inner") }()
+			mustExec(t, ctx, conn, "set @issue27088_inner_value = '9007199254740992.0000000002tail'")
+			mustExec(t, ctx, conn, "execute issue27088_set_inner using @issue27088_inner_value")
+			var value int
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_inner_out").Scan(&value))
+			require.Equal(t, 2, value)
+		})
+
+		t.Run("SQL EXECUTE SET specializes consumer outside subquery", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_set_outer from
+				'set @issue27088_outer_out = coalesce(?, (select cast(1 as decimal(38,10))))'`)
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_outer") }()
+			mustExec(t, ctx, conn, "set @issue27088_outer_value = '12.5tail'")
+			mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
+			var value string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_outer_out").Scan(&value))
+			require.Equal(t, "12.5000000000", value)
+		})
+
 		t.Run("SQL EXECUTE SET preserves scalar subquery execution", func(t *testing.T) {
 			mustExec(t, ctx, conn, "prepare issue27088_set_subquery from 'set @issue27088_subquery_out = (select ?)' ")
 			defer func() {
@@ -242,6 +273,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_integer") }()
 			mustExec(t, ctx, conn, "set @issue27088_integer = 9.0")
 			rows, queryErr := conn.QueryContext(ctx, "execute issue27088_integer using @issue27088_integer")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr, 1)
 			require.NoError(t, rows.Err())
 		})
@@ -255,6 +287,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_float") }()
 			mustExec(t, ctx, conn, "set @issue27088_float = 1.2345678")
 			rows, queryErr := conn.QueryContext(ctx, "execute issue27088_float using @issue27088_float")
+			defer rows.Close()
 			assertIDs(t, rows, queryErr, 1)
 			require.NoError(t, rows.Err())
 
@@ -283,7 +316,6 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			assertUUIDs := func(rows *sql.Rows, queryErr error, want ...string) {
 				t.Helper()
 				require.NoError(t, queryErr)
-				defer rows.Close()
 				var got []string
 				for rows.Next() {
 					var value string
@@ -298,6 +330,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				where u = cast('00000000-0000-0000-0000-000000000001' as uuid)
 				   or u in (cast('00000000-0000-0000-0000-000000000002' as uuid),
 				            cast('00000000-0000-0000-0000-000000000003' as uuid)) order by u`)
+			defer rows.Close()
 			assertUUIDs(rows, queryErr,
 				"00000000-0000-0000-0000-000000000001",
 				"00000000-0000-0000-0000-000000000002",
@@ -308,6 +341,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				where u between cast('00000000-0000-0000-0000-000000000002' as uuid)
 				            and cast('00000000-0000-0000-0000-000000000003' as uuid)
 				   or u >= cast('00000000-0000-0000-0000-000000000004' as uuid) order by u`)
+			defer rows.Close()
 			assertUUIDs(rows, queryErr,
 				"00000000-0000-0000-0000-000000000002",
 				"00000000-0000-0000-0000-000000000003",

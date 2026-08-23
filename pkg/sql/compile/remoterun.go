@@ -1686,7 +1686,7 @@ func validateRemoteStatementLastInsertIDProtocol(proc *process.Process, hasAutoC
 	}
 	if proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"remote auto-increment PRE_INSERT requires MORPC protocol version 27",
+			"remote auto-increment PRE_INSERT requires MORPC protocol version 26",
 		)
 	}
 	return nil

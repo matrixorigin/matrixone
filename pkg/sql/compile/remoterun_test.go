@@ -911,11 +911,11 @@ func TestPreparedNumericPrefixRemoteProtocolValidation(t *testing.T) {
 		}
 	}
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion25)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion26)
 	_, _, _, _, err := prepareRemoteRunSendingData("", makeScope(255), proc, nil, uuid.Nil)
-	require.ErrorContains(t, err, "require MORPC protocol version 26")
+	require.ErrorContains(t, err, "require MORPC protocol version 27")
 	compatibleData, _, _, _, err := prepareRemoteRunSendingData("", makeScope(0), proc, nil, uuid.Nil)
-	require.NoError(t, err, "ordinary casts remain compatible with version 25")
+	require.NoError(t, err, "ordinary casts remain compatible with version 26")
 	compatibleScope, err := decodeScope(compatibleData, proc, true, nil)
 	require.NoError(t, err)
 	compatibleScope.release()
@@ -927,9 +927,9 @@ func TestPreparedNumericPrefixRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, err)
 	prefixScope.release()
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion25)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion26)
 	_, err = decodeScope(prefixData, proc, true, nil)
-	require.ErrorContains(t, err, "require MORPC protocol version 26")
+	require.ErrorContains(t, err, "require MORPC protocol version 27")
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {

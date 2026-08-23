@@ -168,3 +168,26 @@
 - Prepared SET 检测到 `Expr_Sub` 时保留 synthetic SELECT/query 执行闭包；纯标量 specialized item 才使用 expression executor。
 - runtime numeric-prefix literal 记录 ParamRef provenance；CTAS 仅从实际 Charset=255 numeric-prefix cast 子树收集参数位置，Window 路径不再漏参，也不改无关字符串参数。
 - 新增 scalar-subquery SET 与 Window CTAS tail 黑盒；issue #26685 text/binary multi-SET 回归通过。
+
+---
+
+## PR #27483 第四轮阻塞评论修复计划
+
+### 基线更新
+
+- 已 merge 最新 `mo/main`。main 占用 MORPC v26（remote statement LAST_INSERT_ID），因此 numeric-prefix capability 顺延至 v27；相关边界测试与 PR 文档同步改为 v26/v27。
+
+### 不变量与步骤
+
+1. Prepared SET 含 subquery 时必须保留 query-aware synthetic SELECT，但其中的参数仍使用 runtime numeric-prefix specialization 后的值域；不能丢弃 specialized outer/inner consumer。
+2. 设计 query-aware 参数桥接：从 specialized DCL expression 的 numeric-prefix literal provenance 精确收集参数位置，在 synthetic SELECT 生命周期内为这些位置提供截取后的参数副本，执行后恢复原 process 参数所有权与 metadata。
+3. 增加 inner-subquery decimal comparison 与 outer COALESCE + scalar subquery 两个公开黑盒，并保留 `set @out=(select ?)` 控制组。
+4. 重构 issue 测试 rows helper：调用点显式 `defer/Close`，helper 只消费和断言，确保 sqlclosecheck/rowserrcheck 均可静态证明。
+5. 运行 issue #26685/#27088、frontend/plan/compile/pb 全包测试、build、vet、SCA，自审后推送。
+
+### 第四轮执行结果
+
+- SET scalar subquery 继续由 synthetic SELECT/query pipeline 执行；该 transient query 在 build 后使用当前 process 参数构造 runtime `ParamValue` 并执行 numeric-prefix specialization，因此 inner subquery consumer 获得同一契约。
+- 含 subquery 的 outer DECIMAL consumer 在 query 执行后按 specialized DCL result type 物化，保留 DECIMAL width/scale，而不是返回 suffix 文本域。
+- issue rows helper 不再拥有 Close；每个 QueryContext 调用作用域显式 defer `rows.Close()` 并检查 `rows.Err()`，sqlclosecheck/rowserrcheck 均为 0 issue。
+- merge main 后 numeric-prefix MORPC capability 顺延至 v27，v26 保留 statement LAST_INSERT_ID；发送/接收边界与文档需使用 v26/v27。

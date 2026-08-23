@@ -3772,6 +3772,13 @@ func isPositivePreparedInteger(value any) bool {
 // runtimeType.  Keeping only a numeric Expr.Typ is not sufficient: the
 // executor dispatches on Literal.Value, and a Sval always produces a VARCHAR
 // vector even when the surrounding expression advertises a numeric type.
+// PreparedRuntimeParamExpr materializes value as a typed prepared-parameter
+// expression. Frontend query-aware SET evaluation uses it to preserve the
+// specialized result domain after a scalar subquery is executed separately.
+func PreparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtimeType types.Type) (*Expr, error) {
+	return preparedRuntimeParamExpr(ctx, value, isBin, runtimeType)
+}
+
 func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtimeType types.Type) (*Expr, error) {
 	rawText := fmt.Sprintf("%v", value)
 	text := strings.TrimSpace(rawText)

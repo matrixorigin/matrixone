@@ -313,6 +313,14 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		if err != nil {
 			return nil, err
 		}
+		if execCtx.input.isPreparedExpr() {
+			runtimePlan, _, specializationErr := plan2.FillValuesOfParamsInPlanWithSpecialization(
+				execCtx.reqCtx, cwft.plan, preparedExpressionParamValues(cwft.proc))
+			if specializationErr != nil {
+				return nil, specializationErr
+			}
+			cwft.plan = runtimePlan
+		}
 	}
 
 	if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil && !cwft.ses.IsBackgroundSession() {
@@ -1247,6 +1255,26 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	default:
 		return false
 	}
+}
+
+func preparedExpressionParamValues(proc *process.Process) []any {
+	params := proc.GetPrepareParams()
+	if params == nil || params.Length() == 0 {
+		return nil
+	}
+	values := make([]any, params.Length())
+	for i := range values {
+		param := plan2.ParamValue{
+			IsBin:               proc.GetPrepareParamIsBin(i),
+			PrepareParamKind:    proc.GetPrepareParamKind(i),
+			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion27,
+		}
+		if !params.IsNull(uint64(i)) {
+			param.Value = string(params.GetRawBytesAt(i))
+		}
+		values[i] = param
+	}
+	return values
 }
 
 func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error) {
