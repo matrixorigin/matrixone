@@ -610,8 +610,11 @@ func getTablesFromPlan(p *plan.Plan) string {
 }
 
 func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, error) {
-	var err error
 	bat := batch.NewWithSize(len(catalog.MetaColTypes))
+	return populateQueryResultMetaBatch(bat, m, mp)
+}
+
+func populateQueryResultMetaBatch(bat *batch.Batch, m *catalog.Meta, mp *mpool.MPool) (_ *batch.Batch, err error) {
 	completed := false
 	defer func() {
 		if !completed {

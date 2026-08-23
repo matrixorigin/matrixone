@@ -126,11 +126,18 @@ func TestBuildQueryResultMetaBatchCleansPartialBatchOnAppendFailure(t *testing.T
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	bat, err := buildQueryResultMetaBatch(&catalog.Meta{
-		Statement: strings.Repeat("x", 256),
-	}, mp)
+	meta := &catalog.Meta{Statement: strings.Repeat("x", 256)}
+	result, err := buildQueryResultMetaBatch(meta, mp)
 	require.Error(t, err)
-	require.Nil(t, bat)
+	require.Nil(t, result)
+
+	// Retain the helper input so the test can observe Batch.Clean's terminal
+	// state directly; 4.2 does not account Go-heap-backed vectors in CurrNB.
+	bat := batch.NewWithSize(len(catalog.MetaColTypes))
+	_, err = populateQueryResultMetaBatch(bat, meta, mp)
+	require.Error(t, err)
+	require.Nil(t, bat.Vecs)
+	require.Nil(t, bat.Attrs)
 }
 
 func Test_saveQueryResultMeta(t *testing.T) {
