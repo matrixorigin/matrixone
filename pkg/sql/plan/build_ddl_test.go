@@ -4750,6 +4750,39 @@ func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
 	}
 }
 
+func TestDynamicStringIntervalCanProduceNullInCTASAndView(t *testing.T) {
+	const selectSQL = "select " +
+		"date_add(cast('2026-01-01' as date), interval n_name year_month) as add_result, " +
+		"date_sub(cast('2026-01-01' as date), interval n_name year_month) as sub_result " +
+		"from nation"
+
+	t.Run("CTAS", func(t *testing.T) {
+		mock := NewMockOptimizer(false)
+		logicPlan, err := buildSingleStmt(mock, t, "create table ctas_interval as "+selectSQL)
+		require.NoError(t, err)
+
+		for _, column := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[:2] {
+			require.True(t, column.GetDefault().GetNullAbility(),
+				"invalid values in NOT NULL n_name can make to_interval and date arithmetic return NULL")
+		}
+	})
+
+	t.Run("view", func(t *testing.T) {
+		ctx := NewMockCompilerContext(false)
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create view interval_view as "+selectSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		logicPlan, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+
+		for _, column := range logicPlan.GetDdl().GetCreateView().GetTableDef().GetCols()[:2] {
+			require.True(t, column.GetDefault().GetNullAbility(),
+				"view metadata must preserve date arithmetic nullability from dynamic interval normalization")
+		}
+	})
+}
+
 func TestCreateTableAsSelectPreservesSpecialTypeNullability(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	addMySQLSpecialTypeColumns(ctx)
