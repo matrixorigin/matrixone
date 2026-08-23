@@ -614,11 +614,6 @@ func (mp *MPool) destroy() {
 			globalOnHeapStats.recordFree(onHeapBytes, onHeapObjects)
 		}
 	}
-	if !mp.noLock && liveBytes != 0 {
-		// A normal pool may have handed allocations to another owner. Its
-		// global pointer metadata and account lease remain authoritative until
-		// a later physical Free, including after this pool is unregistered.
-	}
 }
 
 // New a MPool.   Tag is user supplied, used for debugging/diagnostics.
