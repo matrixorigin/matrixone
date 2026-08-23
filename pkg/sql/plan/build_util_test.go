@@ -665,6 +665,7 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 		{Id: int32(types.T_date), Width: 3},
 		{Id: int32(types.T_datetime), Width: 3},
 		{Id: int32(types.T_timestamp), Width: 3},
+		{Id: int32(types.T_year), Width: 4},
 	}
 	for _, target := range targets {
 
@@ -694,12 +695,13 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 		{Id: int32(types.T_date), Width: 3},
 		{Id: int32(types.T_datetime), Width: 3},
 		{Id: int32(types.T_timestamp), Width: 3},
+		{Id: int32(types.T_year), Width: 4},
 	}
 	for _, target := range targets {
 		strictExpr, err := forceAssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
 		want := "cast_strict"
-		if useSqlModeStringAssignmentCast(target) {
+		if useSqlModeAssignmentCast(target) {
 			want = "cast_assign"
 		}
 		require.Equal(t, want, strictExpr.GetF().GetFunc().GetObjName())
@@ -878,6 +880,9 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	for _, test := range tests {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
 		require.Equal(t, test.want, assignmentCastFunctionName(target, test.ignore, proc))
+		require.Equal(t, test.want, assignmentCastFunctionName(
+			plan.Type{Id: int32(types.T_year), Width: 4}, test.ignore, proc,
+		))
 
 		source := makePlan2Int64ConstExprWithType(1)
 		targetType := &plan.Expr{

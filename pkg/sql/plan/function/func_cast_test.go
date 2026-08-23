@@ -304,6 +304,94 @@ func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 	runYearCast("decimal256 invalid year becomes zero", NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: 2156}}, nil))
 }
 
+func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
+	newInput := func(kind string, value int64) FunctionTestInput {
+		switch kind {
+		case "string":
+			return NewFunctionTestInput(types.T_varchar.ToType(), []string{fmt.Sprint(value)}, nil)
+		case "uint64":
+			return NewFunctionTestInput(types.T_uint64.ToType(), []uint64{uint64(value)}, nil)
+		case "decimal64":
+			return NewFunctionTestInput(types.New(types.T_decimal64, 10, 0), []types.Decimal64{types.Decimal64(value)}, nil)
+		case "decimal128":
+			return NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: uint64(value)}}, nil)
+		case "decimal256":
+			return NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: uint64(value)}}, nil)
+		default:
+			return NewFunctionTestInput(types.T_int64.ToType(), []int64{value}, nil)
+		}
+	}
+	run := func(t *testing.T, kind string, value int64, sqlMode string, cast fEvalFn) (types.MoYear, bool, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		yearType := types.T_year.ToType()
+		tcc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				newInput(kind, value),
+				NewFunctionTestInput(yearType, []types.MoYear{}, nil),
+			},
+			NewFunctionTestResult(yearType, false, []types.MoYear{0}, nil),
+			cast,
+		)
+		require.NoError(t, tcc.result.PreExtendAndReset(1))
+		result, err := tcc.DebugRun()
+		if err != nil {
+			return 0, false, err
+		}
+		got, isNull := vector.GenerateFunctionFixedTypeParameter[types.MoYear](result).GetValue(0)
+		return got, isNull, nil
+	}
+
+	for _, kind := range []string{"integer", "uint64", "string", "decimal64", "decimal128", "decimal256"} {
+		for _, invalid := range []int64{1900, 2156} {
+			name := fmt.Sprintf("%s_%d", kind, invalid)
+			t.Run(name+"/strict_assignment_rejects", func(t *testing.T) {
+				_, _, err := run(t, kind, invalid, "STRICT_TRANS_TABLES", NewAssignCast)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "year")
+			})
+			t.Run(name+"/legacy_strict_assignment_rejects", func(t *testing.T) {
+				_, _, err := run(t, kind, invalid, "", NewStrictCast)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "year")
+			})
+			t.Run(name+"/nonstrict_assignment_adjusts_to_zero", func(t *testing.T) {
+				got, isNull, err := run(t, kind, invalid, "", NewAssignCast)
+				require.NoError(t, err)
+				require.False(t, isNull)
+				require.Zero(t, got)
+			})
+			t.Run(name+"/ignore_adjusts_to_zero", func(t *testing.T) {
+				got, isNull, err := run(t, kind, invalid, "STRICT_TRANS_TABLES", NewAssignIgnoreCast)
+				require.NoError(t, err)
+				require.False(t, isNull)
+				require.Zero(t, got)
+			})
+			if kind == "integer" || kind == "uint64" || kind == "string" {
+				t.Run(name+"/explicit_cast_remains_null", func(t *testing.T) {
+					_, isNull, err := run(t, kind, invalid, "STRICT_TRANS_TABLES", NewExplicitCast)
+					require.NoError(t, err)
+					require.True(t, isNull)
+				})
+			}
+		}
+
+		for _, valid := range []int64{1901, 2155} {
+			t.Run(fmt.Sprintf("%s_%d/strict_assignment_accepts", kind, valid), func(t *testing.T) {
+				got, isNull, err := run(t, kind, valid, "STRICT_TRANS_TABLES", NewAssignCast)
+				require.NoError(t, err)
+				require.False(t, isNull)
+				require.Equal(t, types.MoYear(valid), got)
+			})
+		}
+	}
+}
+
 func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	targetType := types.New(types.T_float32, 5, 2)

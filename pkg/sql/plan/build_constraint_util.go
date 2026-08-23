@@ -1252,7 +1252,7 @@ var ForceAssignmentCastExpr = forceAssignmentCastExpr
 
 func useAssignmentStrictCast(targetType Type) bool {
 	switch targetType.Id {
-	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_datetime), int32(types.T_timestamp):
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 		return true
 	case int32(types.T_text):
 		return targetType.Width == types.MaxTinyTextLen
@@ -1265,6 +1265,11 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 	return targetType.Id == int32(types.T_char) ||
 		targetType.Id == int32(types.T_varchar) ||
 		(targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen)
+}
+
+func useSqlModeAssignmentCast(targetType Type) bool {
+	return useSqlModeStringAssignmentCast(targetType) ||
+		targetType.Id == int32(types.T_year)
 }
 
 // needsSameTypeAssignmentCast reports whether values with the same planner
@@ -1282,9 +1287,9 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 }
 
 // forceCastExpr2WithIgnore builds the assignment cast for a DML write when the
-// target plan.Expr is already known. For width-constrained string targets it normally uses
-// cast_assign, which honors sql_mode at runtime (strict rejects over-length,
-// non-strict truncates). INSERT IGNORE and generic casts stay lenient.
+// target plan.Expr is already known. SQL-mode-sensitive targets normally use
+// cast_assign so width-constrained strings and YEAR values can apply strict,
+// non-strict, and IGNORE semantics at runtime.
 func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, isIgnore bool) (*Expr, error) {
 	return forceCastExpr2WithProcess(ctx, expr, t2, targetType, isIgnore, nil)
 }
@@ -1318,7 +1323,7 @@ func forceCastExpr2WithProcess(
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	// Width-constrained string assignments use the protocol-gated runtime assignment cast.
+	// SQL-mode-sensitive assignments use the protocol-gated runtime assignment cast.
 	// Temporal assignments retain main's cast_strict behavior, while other
 	// conversions continue to use the generic cast.
 	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
@@ -1362,7 +1367,7 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
-	if !useSqlModeStringAssignmentCast(targetType) {
+	if !useSqlModeAssignmentCast(targetType) {
 		if useAssignmentStrictCast(targetType) {
 			return "cast_strict"
 		}
@@ -1385,10 +1390,8 @@ func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Pr
 }
 
 // forceAssignmentCastExprWithIgnore builds the assignment cast for a DML write.
-// For width-constrained string targets it normally uses cast_assign (sql_mode-gated width
-// check). When isIgnore is true (INSERT IGNORE or UPDATE IGNORE), over-length
-// writes are downgraded to truncation regardless of sql_mode and warning 1265
-// is recorded.
+// SQL-mode-sensitive targets normally use cast_assign; IGNORE paths use
+// cast_ignore so invalid writes are adjusted regardless of sql_mode.
 func forceAssignmentCastExprWithIgnore(ctx context.Context, expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
 	return forceAssignmentCastExprWithProcess(ctx, expr, targetType, isIgnore, nil)
 }
