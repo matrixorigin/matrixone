@@ -222,3 +222,18 @@
 - scalar-subquery replacement 现在直接从 result vector 生成匹配 oneof 的 literal；JSON/UUID/Decimal256 等无直接 literal 路径的类型使用显式 CAST，不再以 `Sval + 非字符串 Expr.Typ` 冒充 typed vector。
 - 新增 nested JSON consumer、JSON metadata 和 DATE `date_add` direct/subquery 对照，均通过。
 - merge 后 frontend/plan/compile/pb 全包、issue #26685/#27088、build、vet 通过；sqlclosecheck/rowserrcheck 为 0 issue。
+
+## 第七轮 Review P1 性能修复方案
+
+1. 以 main 的 #27485 回滚为性能基线，恢复普通 COM_STMT Query cached plan/compile 快路径：不做 runtime inference、eligibility traversal、DeepCopyPlan 或 recompile。
+2. 在 PREPARE generation 上一次性缓存“实际 numeric-prefix consumer”标志；仅该标志为真时允许 binary Query execute-time specialization。binary SET/DDL typed-literal 路径独立保留。
+3. 增加白盒测试/benchmark：普通 TPCC 风格 Query 不调用 specialization 且复用 cached compile；numeric-prefix Query、SET、DDL 仍进入各自限定路径。
+4. 运行 issue #27477 可复现的 TPCC 10.10 对照（若仓库脚本/环境可用），并执行 frontend/plan/compile/pb、issue #26685/#27088、SCA、build/vet 与 self-review。
+
+### 第七轮执行结果
+
+- 普通 COM_STMT Query 的 execute path 现在只绑定 protocol vector，`cwft.paramVals` 保持 nil；不调用 runtime type inference、pagination/numeric-prefix traversal、DeepCopyPlan 或 specialization，并复用 cached plan/compile。
+- numeric-prefix consumer 与 pagination 标志在 PREPARE/rebuild generation 各计算一次；仅静态 DECIMAL peer 被缓存为 binary Query consumer，普通 INT TPCC predicate 不进入 specialization。
+- binary SET/DDL、prepared EXPLAIN、pagination 与 SQL EXECUTE 使用各自限定路径，不扩大普通 Query 热路径。
+- 新增 fast-path identity UT 和 microbenchmark；Apple M1 Pro 三轮结果为 583.7/586.4/602.1 ns/op，200 B/op，3 allocs/op，且每轮断言 cached plan/compile identity 与 nil paramVals。
+- issue #27477 的 TKE TPCC 10.10 harness 不在本地仓库；未伪造 TPCC 数字，使用结构性 fast-path oracle 与 microbenchmark 作为本地性能门禁。

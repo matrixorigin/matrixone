@@ -913,6 +913,9 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan = newPreparePlan
 		executionPlan = preparePlan.Plan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(
+			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+		prepareStmt.hasPaginationParams = plan2.PreparedPlanHasPaginationParams(newPreparePlan.Plan)
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -968,33 +971,49 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	numParams := len(preparePlan.ParamTypes)
+	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
+	binaryLiteralPlan := binaryExecute &&
+		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
+	preparedExplain := false
+	switch prepareStmt.PrepareStmt.(type) {
+	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+		preparedExplain = true
+	}
+	needsRuntimeParamVals := !binaryExecute || prepareStmt.numericPrefixConsumer ||
+		binaryLiteralPlan || prepareStmt.hasPaginationParams || preparedExplain
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		paramCount := prepareStmt.params.Length()
-		var kinds []vector.PrepareParamKind
-		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
-			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
-			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
-			kind := binaryProtocolPrepareParamKind(
-				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
-			if kind != vector.PrepareParamNone {
-				if kinds == nil {
-					kinds = make([]vector.PrepareParamKind, paramCount)
+		if needsRuntimeParamVals {
+			paramCount := prepareStmt.params.Length()
+			var kinds []vector.PrepareParamKind
+			for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
+				mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
+				isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
+				kind := binaryProtocolPrepareParamKind(
+					mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+				if kind != vector.PrepareParamNone {
+					if kinds == nil {
+						kinds = make([]vector.PrepareParamKind, paramCount)
+					}
+					kinds[i] = kind
 				}
-				kinds[i] = kind
 			}
-		}
-		if kinds == nil {
-			cwft.proc.SetPrepareParams(prepareStmt.params)
+			if kinds == nil {
+				cwft.proc.SetPrepareParams(prepareStmt.params)
+			} else {
+				cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
+			}
+			cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
+			if err != nil {
+				return nil, nil, nil, originSQL, false, err
+			}
 		} else {
-			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
-		}
-		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
-		if err != nil {
-			return nil, nil, nil, originSQL, false, err
+			// Preserve main's COM_STMT Query fast path: operators consume the
+			// protocol vector directly and the cached plan/compile stay untouched.
+			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
@@ -1011,20 +1030,26 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
-	if err := plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
-		return nil, nil, nil, originSQL, false, err
-	}
-	if err := normalizePreparedPaginationBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
-		return nil, nil, nil, originSQL, false, err
+	if prepareStmt.hasPaginationParams {
+		if err := plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		if err := normalizePreparedPaginationBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
 	}
 
-	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
-	// COM_STMT values retain the existing runtime-type specialization contract.
+	// Only cached numeric-prefix consumers and binary literal plans enter
+	// execute-time specialization. Ordinary COM_STMT Query executions retain
+	// main's cached plan/compile fast path.
 	// SQL EXECUTE first proves that a parameter reaches a decimal-aware
 	// common-type consumer; ordinary FLOAT, NULL, aggregate, and string paths
 	// keep the cached prepare-time plan without allocating a complete copy.
-	runtimePlan, runtimeSpecialized, runtimePlanApplied, err := specializePreparedExecutionPlan(
-		reqCtx, executionPlan, cwft.paramVals, binaryExecute)
+	runtimePlan, runtimeSpecialized, runtimePlanApplied := executionPlan, false, false
+	if !binaryExecute || prepareStmt.numericPrefixConsumer || binaryLiteralPlan || prepareStmt.hasPaginationParams {
+		runtimePlan, runtimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
+			reqCtx, executionPlan, cwft.paramVals, binaryExecute)
+	}
 	if err != nil {
 		return nil, nil, nil, originSQL, false, err
 	}
@@ -1054,7 +1079,7 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
-	if runtimeSpecialized || plan2.PreparedPlanHasPaginationParams(preparePlan.Plan) {
+	if runtimeSpecialized || prepareStmt.hasPaginationParams {
 		// The cached compile was built from the prepare-time parameter types and
 		// cannot execute a plan whose overloads, result metadata, or pagination
 		// values must be rebound for this execution.
@@ -1077,6 +1102,17 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
+}
+
+func preparedPlanHasNumericPrefixConsumer(preparePlan *plan2.Plan, paramCount int) bool {
+	if preparePlan == nil || preparePlan.GetQuery() == nil || paramCount == 0 {
+		return false
+	}
+	values := make([]any, paramCount)
+	for i := range values {
+		values[i] = plan2.ParamValue{EnableNumericPrefix: true}
+	}
+	return plan2.PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, values)
 }
 
 func specializePreparedExecutionPlan(

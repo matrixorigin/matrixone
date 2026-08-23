@@ -334,6 +334,10 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// numericPrefixConsumer is computed once per prepared-plan generation so
+	// ordinary COM_STMT Query executions never scan or copy the cached plan.
+	numericPrefixConsumer bool
+	hasPaginationParams   bool
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode

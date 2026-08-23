@@ -243,71 +243,6 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	cw.proc.SetPrepareParams(nil)
 }
 
-func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 104, "select ?, ?, ?, ?, ?, ?, ?, ?")
-	defer func() {
-		cw.proc.SetPrepareParams(nil)
-		prepareStmt.Close()
-	}()
-
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
-	for _, value := range []string{
-		"5", "18446744073709551615", "2024", "5.5", "5.5", "5.9", "5.9", "5",
-	} {
-		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
-	}
-	prepareStmt.ParamTypes = []byte{
-		byte(defines.MYSQL_TYPE_LONGLONG), 0,
-		byte(defines.MYSQL_TYPE_LONGLONG), 0x80,
-		byte(defines.MYSQL_TYPE_YEAR), 0,
-		byte(defines.MYSQL_TYPE_FLOAT), 0,
-		byte(defines.MYSQL_TYPE_DOUBLE), 0,
-		byte(defines.MYSQL_TYPE_DECIMAL), 0,
-		byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
-		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
-	}
-
-	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
-	require.NoError(t, err)
-	for i := 0; i < prepareStmt.params.Length(); i++ {
-		param, ok := cw.paramVals[i].(plan2.ParamValue)
-		require.True(t, ok)
-		require.True(t, param.IsBinaryProtocol, "parameter %d lost COM_STMT provenance", i)
-	}
-	for i, want := range []vector.PrepareParamKind{
-		vector.PrepareParamInteger,
-		vector.PrepareParamInteger,
-		vector.PrepareParamInteger,
-		vector.PrepareParamFloat,
-		vector.PrepareParamFloat,
-		vector.PrepareParamDecimal,
-		vector.PrepareParamDecimal,
-		vector.PrepareParamNone,
-	} {
-		require.Equal(t, want, cw.proc.GetPrepareParamKind(i), "parameter %d", i)
-	}
-	require.Equal(t, vector.PrepareParamNone, cw.proc.GetPrepareParamKind(8))
-	// An invalid parameter index must not bleed into another packed section.
-	require.False(t, cw.proc.GetPrepareParamIsBin(8))
-
-	prepareStmt.ParamTypes = []byte{
-		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
-		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
-		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
-		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
-		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
-		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
-		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
-		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
-	}
-	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
-	require.NoError(t, err)
-	for i := 0; i < prepareStmt.params.Length(); i++ {
-		require.Equal(t, vector.PrepareParamNone, cw.proc.GetPrepareParamKind(i),
-			"parameter %d retained stale numeric metadata", i)
-	}
-}
-
 func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 112, "select ?")
 	defer prepareStmt.Close()
@@ -333,7 +268,7 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 	}}, values)
 }
 
-func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
+func TestInitExecuteStmtParamKeepsOrdinaryBinaryQueryOnCachedFastPath(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 105, "select ?")
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
@@ -343,15 +278,46 @@ func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_TINY), 0}
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
 
-	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	require.Len(t, cw.paramVals, 1)
-	param, ok := cw.paramVals[0].(plan2.ParamValue)
-	require.True(t, ok)
-	require.Equal(t, vector.PrepareParamBoolean, param.PrepareParamKind)
-	require.True(t, param.HasRuntimeType)
-	require.Equal(t, types.T_bool.ToType(), param.RuntimeType)
+	require.Nil(t, cw.paramVals, "ordinary COM_STMT Query must not infer runtime parameter types")
+	require.Same(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, runtimePlan)
+	require.Same(t, sentinel, retComp, "ordinary COM_STMT Query must reuse the cached compile")
+	require.Equal(t, vector.PrepareParamNone, cw.proc.GetPrepareParamKind(0))
+}
+
+func BenchmarkInitExecuteStmtParamOrdinaryBinaryQueryFastPath(b *testing.B) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(b, 205, "select ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_TINY), 0}
+	prepareStmt.compile = compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	cachedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		retComp, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		if err != nil || retComp != prepareStmt.compile || runtimePlan != cachedPlan || cw.paramVals != nil {
+			b.Fatalf("ordinary COM_STMT Query left cached fast path: comp=%p plan=%p params=%d err=%v",
+				retComp, runtimePlan, len(cw.paramVals), err)
+		}
+		if owned && stmt != nil {
+			stmt.Free()
+		}
+	}
 }
 
 func TestBinaryProtocolPrepareParamKind(t *testing.T) {
@@ -415,54 +381,6 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 
 	_, ok = binaryProtocolPrepareParamType(defines.MYSQL_TYPE_NULL, false, nil)
 	require.False(t, ok)
-}
-
-func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 110, "select ?")
-	defer prepareStmt.Close()
-
-	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
-	params := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(
-		params,
-		[]byte("-12345678901234567890.123456789"),
-		false,
-		cw.proc.Mp(),
-	))
-	prepareStmt.params = params
-	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
-
-	var resultColumns []*plan.ColDef
-	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
-	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
-		resultColumns = columns
-		return [][]byte{[]byte("runtime-decimal")}, nil
-	}
-
-	_, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
-	require.NoError(t, err)
-	require.NotNil(t, runtimePlan)
-	require.NotSame(t, originalPlan, runtimePlan)
-	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
-	require.Equal(t, int32(types.T_decimal128), projectNode.ProjectList[0].Typ.Id)
-	require.Equal(t, int32(29), projectNode.ProjectList[0].Typ.Width)
-	require.Equal(t, int32(9), projectNode.ProjectList[0].Typ.Scale)
-	require.Len(t, resultColumns, 1)
-	require.Equal(t, int32(types.T_decimal128), resultColumns[0].Typ.Id)
-	require.Equal(t, [][]byte{[]byte("runtime-decimal")}, execCtx.prepareColDef)
-	value, parseErr := types.ParseDecimal128("-12345678901234567890.123456789", 29, 9)
-	require.NoError(t, parseErr)
-	executor, execErr := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
-	require.NoError(t, execErr)
-	defer executor.Free()
-	input := batch.New(nil)
-	input.SetRowCount(1)
-	vec, evalErr := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
-	require.NoError(t, evalErr)
-	require.Equal(t, types.T_decimal128, vec.GetType().Oid)
-	require.Equal(t, value, vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0))
-	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
-	require.Equal(t, int32(types.T_text), originalProjectNode.ProjectList[0].Typ.Id)
 }
 
 func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
@@ -583,6 +501,27 @@ func TestSpecializePreparedExecutionPlanSkipsIneligibleSQLPlan(t *testing.T) {
 	require.False(t, specialized)
 	require.False(t, applied)
 	require.Same(t, original, runtimePlan, "ineligible SQL EXECUTE must not deep-copy the cached plan")
+}
+
+func TestPreparedPlanHasNumericPrefixConsumerCachesOnlyStaticDecimalContexts(t *testing.T) {
+	ctx := context.Background()
+	makePlan := func(peerType types.T) *plan.Plan {
+		predicate, err := plan2.BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+			{Typ: plan.Type{Id: int32(peerType)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+			{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+		})
+		require.NoError(t, err)
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{
+				NodeType: plan.Node_VALUE_SCAN, FilterList: []*plan.Expr{predicate},
+			}},
+		}}, IsPrepare: true}
+	}
+
+	require.False(t, preparedPlanHasNumericPrefixConsumer(makePlan(types.T_int64), 1),
+		"ordinary COM_STMT integer predicates must retain the cached plan/compile fast path")
+	require.True(t, preparedPlanHasNumericPrefixConsumer(makePlan(types.T_decimal128), 1),
+		"a static DECIMAL peer is a cached numeric-prefix consumer")
 }
 
 func TestSQLVariablePrepareParamKind(t *testing.T) {
