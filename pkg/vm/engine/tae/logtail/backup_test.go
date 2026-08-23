@@ -167,7 +167,9 @@ func TestBackupTombstoneWriterBroadcastsConstantCommitTS(t *testing.T) {
 	require.Len(t, blocks, 1)
 
 	location := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
-	loaded := containers.NewVectors(len(objectio.TombstoneSeqnums_DN_Created))
+	loaded := containers.NewVectors(len(objectio.GetTombstoneSeqnums(
+		objectio.HiddenColumnSelection_Abort,
+	)))
 	_, release, err := ioutil.ReadDeletes(
 		ctx,
 		location,
