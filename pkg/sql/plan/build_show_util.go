@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -656,6 +657,16 @@ func constructCreateTableSQL(
 			}
 			return createStr, stmt, err
 		}
+		if dsCfg, found, parseErr := IsDataStreamTableDef(ctx.GetContext(), tableDef); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatDataStreamTableOptionsForShowCreate(dsCfg)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmt(ctx, createStr)
+			}
+			return createStr, stmt, err
+		}
 
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
@@ -1162,6 +1173,36 @@ func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope) st
 	}
 	var builder strings.Builder
 	builder.WriteString(" ENGINE = MONGODB WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotes(option.value))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "server", value: cfg.Server},
+		{key: "port", value: fmt.Sprintf("%d", cfg.Port)},
+		{key: "table", value: cfg.Table},
+		{key: "recheck", value: fmt.Sprintf("%t", cfg.Recheck)},
+		// cfg.APIKey is intentionally NOT emitted: SHOW CREATE output is
+		// widely visible and would leak the shared secret. A datastream table
+		// restored from SHOW CREATE (snapshot/PITR replay) must have its
+		// 'apikey' re-supplied if the server requires one.
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = DATASTREAM WITH (")
 	for i, option := range options {
 		if i > 0 {
 			builder.WriteString(", ")
