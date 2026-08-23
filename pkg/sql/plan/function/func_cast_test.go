@@ -321,7 +321,7 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 			return NewFunctionTestInput(types.T_int64.ToType(), []int64{value}, nil)
 		}
 	}
-	run := func(t *testing.T, kind string, value int64, sqlMode string, cast fEvalFn) (types.MoYear, bool, error) {
+	runInput := func(t *testing.T, input FunctionTestInput, sqlMode string, cast fEvalFn) (types.MoYear, bool, error) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
 		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
@@ -332,7 +332,7 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 		tcc := NewFunctionTestCase(
 			proc,
 			[]FunctionTestInput{
-				newInput(kind, value),
+				input,
 				NewFunctionTestInput(yearType, []types.MoYear{}, nil),
 			},
 			NewFunctionTestResult(yearType, false, []types.MoYear{0}, nil),
@@ -345,6 +345,30 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 		}
 		got, isNull := vector.GenerateFunctionFixedTypeParameter[types.MoYear](result).GetValue(0)
 		return got, isNull, nil
+	}
+	run := func(t *testing.T, kind string, value int64, sqlMode string, cast fEvalFn) (types.MoYear, bool, error) {
+		t.Helper()
+		return runInput(t, newInput(kind, value), sqlMode, cast)
+	}
+
+	emptyString := NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil)
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+		cast    fEvalFn
+		isNull  bool
+	}{
+		{name: "strict_assignment_remains_null", sqlMode: "STRICT_TRANS_TABLES", cast: NewAssignCast, isNull: true},
+		{name: "nonstrict_assignment_remains_null", cast: NewAssignCast, isNull: true},
+		{name: "ignore_adjusts_to_zero", sqlMode: "STRICT_TRANS_TABLES", cast: NewAssignIgnoreCast},
+		{name: "explicit_cast_remains_null", sqlMode: "STRICT_TRANS_TABLES", cast: NewExplicitCast, isNull: true},
+	} {
+		t.Run("empty_string/"+tc.name, func(t *testing.T) {
+			got, isNull, err := runInput(t, emptyString, tc.sqlMode, tc.cast)
+			require.NoError(t, err)
+			require.Equal(t, tc.isNull, isNull)
+			require.Zero(t, got)
+		})
 	}
 
 	for _, kind := range []string{"integer", "uint64", "string", "decimal64", "decimal128", "decimal256"} {

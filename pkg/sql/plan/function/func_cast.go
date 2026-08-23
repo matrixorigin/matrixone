@@ -9509,6 +9509,16 @@ func strToYear(ctx context.Context, proc *process.Process,
 				return err
 			}
 		} else {
+			// Preserve the established empty-string behavior. Ordinary casts and
+			// assignments produce SQL NULL, while INSERT/UPDATE IGNORE adjusts the
+			// value to YEAR 0000. Strict SQL mode only changes the handling of
+			// invalid non-empty YEAR values.
+			if len(v) == 0 {
+				if err := rs.Append(0, !(statementIgnore(proc) || mode == castModeAssignmentIgnore)); err != nil {
+					return err
+				}
+				continue
+			}
 			year, err := types.ParseMoYear(string(v))
 			if err != nil {
 				if err := handleInvalidYearCast(proc, mode, rs, err, true); err != nil {
