@@ -52,7 +52,7 @@ func AddColumn(
 	}
 	// same reservation as CREATE TABLE: these names are hidden by name in
 	// external-scan star expansion and readers.
-	if catalog.ContainExternalHidenCol(newColName) {
+	if catalog.IsReservedExternalColName(newColName) {
 		return false, moerr.NewInvalidInputf(ctx.GetContext(),
 			"column name %s is reserved for external table scans", newColName)
 	}

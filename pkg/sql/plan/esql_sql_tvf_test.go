@@ -294,3 +294,53 @@ func TestSelectAndAlterForeignTable(t *testing.T) {
 		`alter table nation add column __mo_query varchar(10)`,
 	})
 }
+
+// TestPreexistingMoQueryColumnStaysVisible: a REAL __mo_query column in a
+// pre-existing schema (small ColId) must keep working — visible in SELECT *
+// and directly selectable — while the synthetic foreign-scan column (reserved
+// ColId) stays hidden. New schemas cannot create the name (reservation), so
+// this covers upgrade compatibility only.
+func TestPreexistingMoQueryColumnStaysVisible(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mcc := mock.CurrentContext().(*MockCompilerContext)
+	mcc.tables["legacy_t"] = &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     990002,
+		Name:      "legacy_t",
+		Cols: []*plan.ColDef{
+			{Name: "a", ColId: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: catalog.ExternalQuery, ColId: 2, // REAL column, ordinary ColId
+				Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
+		},
+	}
+	mcc.objects["legacy_t"] = &ObjectRef{SchemaName: "tpch", ObjName: "legacy_t", Obj: 990002}
+
+	p, err := runOneStmt(mock, t, `select * from legacy_t`)
+	require.NoError(t, err)
+	q := p.GetQuery()
+	root := q.Nodes[q.Steps[len(q.Steps)-1]]
+	require.Len(t, root.ProjectList, 2, "SELECT * must keep the real __mo_query column")
+
+	// and it is directly addressable
+	_, err = runOneStmt(mock, t, `select __mo_query from legacy_t where __mo_query = 'x'`)
+	require.NoError(t, err)
+
+	// contrast: the foreign table's SYNTHETIC column stays hidden from *
+	env := foreignext.BuildCreateSQLEnvelope(foreignext.Config{Kind: "sql", ConfigJSON: "env:X"})
+	mcc.tables["foreign_t2"] = &TableDef{
+		TableType:   catalog.SystemExternalRel,
+		TblId:       990003,
+		Name:        "foreign_t2",
+		Createsql:   env,
+		FeatureFlag: features.ForeignExternal,
+		Cols: []*plan.ColDef{
+			{Name: "a", ColId: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	mcc.objects["foreign_t2"] = &ObjectRef{SchemaName: "tpch", ObjName: "foreign_t2", Obj: 990003}
+	p, err = runOneStmt(mock, t, `select * from foreign_t2 where __mo_query = 'q'`)
+	require.NoError(t, err)
+	q = p.GetQuery()
+	root = q.Nodes[q.Steps[len(q.Steps)-1]]
+	require.Len(t, root.ProjectList, 1, "synthetic __mo_query must stay hidden from *")
+}

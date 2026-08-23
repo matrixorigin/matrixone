@@ -2624,7 +2624,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			// external scans and are hidden BY NAME in star expansion and the
 			// external readers; a real column with either name would silently
 			// disappear from SELECT * or shadow the synthetic value.
-			if catalog.ContainExternalHidenCol(colName) {
+			if catalog.IsReservedExternalColName(colName) {
 				return moerr.NewInvalidInputf(ctx.GetContext(),
 					"column name %s is reserved for external table scans", colNameOrigin)
 			}

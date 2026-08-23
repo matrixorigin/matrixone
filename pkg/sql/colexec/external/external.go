@@ -452,7 +452,8 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name
-		if i == num-1 && catalog.ContainExternalHidenCol(bat.Attrs[i]) {
+		if i == num-1 && (catalog.ContainExternalHidenCol(bat.Attrs[i]) ||
+			catalog.IsForeignQueryCol(bat.Attrs[i], node.TableDef.Cols[i].ColId)) {
 			typ := types.T_varchar.ToType()
 			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)
 			if err != nil {
@@ -1191,7 +1192,11 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 }
 
 func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam, fieldIdx int32) csvparser.Field {
-	if catalog.ContainExternalHidenCol(colName) {
+	// __mo_filepath is synthesized by name (pre-existing behavior); __mo_query
+	// only on foreign scans, so a real __mo_query data column in a
+	// pre-existing generic external table still reads source data.
+	if catalog.ContainExternalHidenCol(colName) ||
+		(param.ForeignScan != nil && colName == catalog.ExternalQuery) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
 	return line[fieldIdx]

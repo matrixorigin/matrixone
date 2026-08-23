@@ -113,7 +113,24 @@ var InternalTableNames = map[string]int8{
 }
 
 func ContainExternalHidenCol(col string) bool {
-	return col == ExternalFilePath || col == ExternalQuery
+	// Only __mo_filepath is hidden globally BY NAME (pre-existing behavior).
+	// __mo_query is scoped: use IsForeignQueryCol (name + reserved ColId) so a
+	// real __mo_query column in a pre-existing schema keeps working.
+	return col == ExternalFilePath
+}
+
+// IsForeignQueryCol reports whether (name, colId) is the SYNTHETIC __mo_query
+// column of an ESQL/SQL foreign external scan, as opposed to a real user
+// column of the same name in a pre-existing schema (new schemas cannot create
+// one: see IsReservedExternalColName).
+func IsForeignQueryCol(name string, colId uint64) bool {
+	return name == ExternalQuery && colId == ExternalQueryColId
+}
+
+// IsReservedExternalColName reports whether a column name is reserved for the
+// synthetic external-scan columns and must be rejected at CREATE/ALTER.
+func IsReservedExternalColName(name string) bool {
+	return name == ExternalFilePath || name == ExternalQuery
 }
 
 func IsHiddenTable(name string) bool {

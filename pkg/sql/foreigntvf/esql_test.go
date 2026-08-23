@@ -133,3 +133,19 @@ func TestValidateESQLConfig(t *testing.T) {
 	require.Error(t, validateESQLConfig(ctx, `nope`))
 	require.Error(t, validateESQLConfig(ctx, `{}`)) // neither addresses nor cloudid
 }
+
+// TestConnectESQLRejectsEmptyConfig proves an empty/endpoint-less config
+// cannot inherit process defaults (ELASTICSEARCH_URL / localhost:9200): the
+// connect path itself validates, not just the DDL path.
+func TestConnectESQLRejectsEmptyConfig(t *testing.T) {
+	t.Setenv("ELASTICSEARCH_URL", "http://operator-secret-host:9200")
+	ctx := context.Background()
+	for _, cfg := range []string{`{}`, `{"username":"u","password":"p"}`} {
+		_, err := connectESQL(ctx, cfg)
+		require.ErrorContains(t, err, "needs addresses or a cloudid", cfg)
+	}
+	// and through the public connect-or-reuse path as well
+	cache := newFakeConnCache()
+	_, _, err := ResolveOrConnect(ctx, cache, KindESQL, `{}`)
+	require.ErrorContains(t, err, "needs addresses or a cloudid")
+}

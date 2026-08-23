@@ -6147,6 +6147,7 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 	cols := make([]*plan.ColDef, 0, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		if col == nil || col.Hidden || catalog.ContainExternalHidenCol(col.Name) ||
+			catalog.IsForeignQueryCol(col.Name, col.ColId) ||
 			(isTenantClusterTable && util.IsClusterTableAttribute(col.Name)) {
 			continue
 		}
@@ -11633,7 +11634,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			}
 			originCols[i] = cols[i]
 			cols[i] = strings.ToLower(cols[i])
-			colIsHidden[i] = col.Hidden
+			// The synthetic __mo_query column of a foreign scan is hidden from
+			// star expansion (identified by its reserved ColId, so a real
+			// __mo_query column in a pre-existing schema stays visible).
+			colIsHidden[i] = col.Hidden || catalog.IsForeignQueryCol(col.Name, col.ColId)
 			types[i] = &col.Typ
 			if col.Default != nil {
 				defaultVals[i] = col.Default.OriginString

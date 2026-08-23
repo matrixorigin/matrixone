@@ -21,7 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -127,4 +129,40 @@ func TestCompileForeignScan(t *testing.T) {
 	require.Equal(t, ">", node.FilterList[0].GetF().Func.GetObjName())
 	op = scopes[0].RootOp.(*external.External)
 	require.Equal(t, []string{"select 1"}, op.Es.FileList)
+}
+
+// TestShuffleStageNodesKeepForeignScanCN proves a session-pinned foreign
+// external scan participates in the shuffle receiver stage set like a
+// SINK_SCAN: when the scheduled query workers exclude the session CN, the
+// scan's CN is appended so a receiver tree exists to start the scope
+// (otherwise a distributed DEDUP shuffle would wait forever).
+func TestShuffleStageNodesKeepForeignScanCN(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-session:6001"
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	node := foreignTestNode("select 1")
+	scopes, err := c.compileForeignScan(node, true)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+
+	// scheduled query workers do NOT include the session CN
+	c.cnList = engine.Nodes{
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+	stageNodes, local := c.shuffleJoinStageNodes(scopes, nil)
+	require.True(t, local, "foreign scan must count as a local pinned source")
+	var hasSession bool
+	for _, n := range stageNodes {
+		if n.Addr == "cn-session:6001" {
+			hasSession = true
+			require.Equal(t, 1, n.Mcpu)
+		}
+	}
+	require.True(t, hasSession, "session CN must be in the receiver stage set")
+
+	// an ordinary (non-foreign) scope stays fully distributed
+	normalScope := &Scope{RootOp: merge.NewArgument()}
+	_, local = c.shuffleJoinStageNodes([]*Scope{normalScope}, nil)
+	require.False(t, local)
 }

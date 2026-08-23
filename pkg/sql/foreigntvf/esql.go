@@ -56,6 +56,14 @@ func validateESQLConfig(ctx context.Context, configJSON string) error {
 // connectESQL parses configJSON as an elasticsearch.Config, builds a client,
 // and verifies connectivity so connect() fails fast with a clear error.
 func connectESQL(ctx context.Context, configJSON string) (Conn, error) {
+	// Every runtime path must pass the same endpoint validation the DDL path
+	// uses: go-elasticsearch treats an empty config as "read ELASTICSEARCH_URL
+	// or default to localhost:9200" (including URL userinfo as credentials),
+	// so an unvalidated '{}' would inherit operator-configured process
+	// defaults and bypass the sys-only env: gate.
+	if err := validateESQLConfig(ctx, configJSON); err != nil {
+		return nil, err
+	}
 	var cfg elasticsearch.Config
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return nil, moerr.NewInvalidInputf(ctx, "esql_tvf: invalid elasticsearch config: %v", err)
