@@ -354,8 +354,10 @@ func TestStringSourcePrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	metadata, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 4})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{0, 4}, metadata)
-	_, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, 255})
-	require.ErrorContains(t, err, "invalid string source")
+	for _, rawSource := range []uint32{255, 256, 257, ^uint32(0)} {
+		_, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{0, rawSource})
+		require.ErrorContains(t, err, "invalid string source")
+	}
 	_, err = StringSourcePrepareParamMetadataForRemote("", 2, []uint32{4})
 	require.ErrorContains(t, err, "metadata length")
 

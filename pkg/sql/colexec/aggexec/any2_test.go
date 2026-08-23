@@ -86,6 +86,98 @@ func TestAnyValuePreservesFirstPrepareParamKind(t *testing.T) {
 	results[0].Free(mp)
 }
 
+func TestAnyValueIntermediateRoundTripAllStringSources(t *testing.T) {
+	for _, source := range []types.StringSource{
+		types.StringSourceExpression,
+		types.StringSourceLiteral,
+		types.StringSourceUserVariable,
+		types.StringSourceSQLPrepare,
+		types.StringSourceCOMStmt,
+	} {
+		for _, saveChunk := range []bool{false, true} {
+			mp := mpool.MustNewZero()
+			input := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(input, []byte("value"), false, mp))
+			require.NoError(t, input.SetStringSource(source))
+			exec := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			var wire bytes.Buffer
+			if saveChunk {
+				require.NoError(t, exec.SaveIntermediateResultOfChunk(0, &wire))
+			} else {
+				require.NoError(t, exec.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))
+			}
+
+			restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+			require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+			results, err := restored.Flush()
+			require.NoError(t, err)
+			require.Equal(t, source, results[0].GetStringSourceAt(0))
+			results[0].Free(mp)
+			restored.Free()
+			exec.Free()
+			input.Free(mp)
+			require.Zero(t, mp.CurrNB(), "source=%v saveChunk=%v", source, saveChunk)
+		}
+	}
+}
+
+func TestAnyValueIntermediateRejectsInvalidStringSourceAndReusesDecoder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("value"), false, mp))
+	require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
+	source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
+	var wire bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResultOfChunk(0, &wire))
+	valid := append([]byte(nil), wire.Bytes()...)
+	invalid := append([]byte(nil), valid...)
+	require.GreaterOrEqual(t, len(invalid), 9)
+	invalid[len(invalid)-9] = 0xfc // source=63, runtime-domain=inherit
+
+	restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	require.ErrorContains(t,
+		restored.UnmarshalFromReader(bytes.NewReader(invalid), mp),
+		"invalid aggregate binary provenance")
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(valid), mp))
+	results, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(0))
+	results[0].Free(mp)
+	restored.Free()
+	source.Free()
+	input.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMergeEqualAggregateCandidatesMergesStringSources(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	for _, test := range []struct {
+		left, right types.StringSource
+		want        types.StringSource
+	}{
+		{types.StringSourceLiteral, types.StringSourceLiteral, types.StringSourceLiteral},
+		{types.StringSourceCOMStmt, types.StringSourceCOMStmt, types.StringSourceCOMStmt},
+		{types.StringSourceLiteral, types.StringSourceCOMStmt, types.StringSourceExpression},
+		{types.StringSourceExpression, types.StringSourceSQLPrepare, types.StringSourceExpression},
+	} {
+		left := vector.NewVec(types.T_text.ToType())
+		right := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(left, []byte("same"), false, mp))
+		require.NoError(t, vector.AppendBytes(right, []byte("same"), false, mp))
+		require.NoError(t, left.SetStringSource(test.left))
+		require.NoError(t, right.SetStringSource(test.right))
+		require.NoError(t, mergeEqualRuntimeStringDomain(left, 0, right, 0, mp))
+		require.Equal(t, test.want, left.GetStringSourceAt(0))
+		left.Free(mp)
+		right.Free(mp)
+	}
+}
+
 func TestAnyValueIntermediateRoundTripPreservesStringSemantics(t *testing.T) {
 	mp := mpool.MustNewZero()
 	input := vector.NewVec(types.T_text.ToType())

@@ -1102,10 +1102,15 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	}
 	for row, selected := range selection {
 		if selected && (value.IsConst() || row < value.Length()) {
-			source := value.GetStringSourceAt(row)
-			if source != types.StringSourceExpression || len(expr.flowControlStringSources) != 0 {
-				expr.ensureFlowControlStringSourceRows(len(selection))
-				expr.flowControlStringSources[row] = source
+			// Source follows selected-value only for COALESCE. IF/CASE (including
+			// IFNULL rewritten to CASE) are common-domain expressions and own it.
+			// Runtime domain and conversion kind remain independent axes.
+			if expr.fid == function.COALESCE {
+				source := value.GetStringSourceAt(row)
+				if source != types.StringSourceExpression || len(expr.flowControlStringSources) != 0 {
+					expr.ensureFlowControlStringSourceRows(len(selection))
+					expr.flowControlStringSources[row] = source
+				}
 			}
 			if value.IsNull(uint64(row)) {
 				continue
@@ -1907,7 +1912,12 @@ func literalStringSource(literal *plan.Literal) (types.StringSource, error) {
 	if literal == nil || literal.GetStringSource() == 0 {
 		return types.StringSourceLiteral, nil
 	}
-	source := types.StringSource(literal.GetStringSource() - 1)
+	rawSource := literal.GetStringSource()
+	if rawSource > uint32(types.StringSourceCOMStmt)+1 {
+		return types.StringSourceExpression,
+			moerr.NewInvalidInputNoCtxf("invalid literal string source %d", rawSource)
+	}
+	source := types.StringSource(rawSource - 1)
 	if !source.Valid() {
 		return types.StringSourceExpression,
 			moerr.NewInvalidInputNoCtxf("invalid literal string source %d", literal.GetStringSource())

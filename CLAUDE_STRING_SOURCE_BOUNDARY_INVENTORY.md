@@ -13,7 +13,7 @@
 | implicit / explicit CAST | `evalExpression.go`、`evalExpressionReset.go` | overload 0 透明；overload 1 为 Expression；ordinary/selection/fold 一致 | CAST ordinary/selection/fold/reset UT |
 | arithmetic / string / general function wrapper | function executor 与各 kernel | kernel 生成新值时为 Expression；仅明确声明的透明 wrapper 传播 | expression consumer UT；BVT wrapper controls |
 | COALESCE | `evalExpression.go` | 每行采用 selected arm 来源 | 独立 selected-arm UT/BVT |
-| IF、CASE、IFNULL | `evalExpression.go` | 每行采用 active arm；common-domain 转换不改来源 | flow-control UT；独立 BVT controls |
+| IF、CASE、IFNULL | `evalExpression.go` | common-domain：结果 source 为 Expression；runtime domain仍按被选中值相对公共静态类型计算；IFNULL rewrite 为 CASE | normal/selection/fold/reset flow-control UT；独立 BVT controls |
 | vector → scalar literal | `rule.GetConstantValue` | 目标 row 来源编码进 `Literal.StringSource`，NULL 不例外；普通 Literal 使用兼容零值 | rule/compile protobuf round-trip UT |
 | scalar/list literal → vector | `GenerateConstExpressionExecutor`、`GenerateConstListExpressionExecutor` | 解码 uniform/逐项来源；非法值拒绝 | colexec UT；list-fold UT |
 | LiteralVec → scalar/list | `decodeLiteralVec`、`inRHSValues` | 先验证并恢复外层 uniform source，再拆行；stable `Data` 不提供来源 | Expression/Literal/COMStmt/NULL/invalid UT；OR-IN/composite rewrite UT |
@@ -30,8 +30,8 @@
 | SQL UNION / UNION ALL | set operator与vector union owner | UNION ALL逐行透明；UNION去重按完整语义状态，来源不同不能误合并 | union/vector compact UT |
 | DISTINCT | distinct/hash/group owner | row identity携带来源；输出代表行保留对应来源 | sort/compact/group UT |
 | GROUP BY | `pkg/sql/colexec/group` | key逐行透明；group merge使用显式贡献合并 | group codec/merge UT |
-| aggregate | `pkg/sql/colexec/aggexec` | 单一代表值保留来源；多贡献值按相同保持/不同→Expression | aggregate state UT |
-| window | window operator / aggregate state | partition/order输入透明；窗口聚合使用 aggregate merge | window/agg/vector-window UT |
+| aggregate | `pkg/sql/colexec/aggexec` | 单一代表值保留来源；多贡献值按相同保持/不同→Expression | 五类 source full/chunk state round-trip；same/mixed merge、invalid/reuse UT |
+| window | window operator / aggregate state | value window按实际 lag/lead/first/last/nth row透明；窗口聚合使用 aggregate merge | `TestValueWindowExecPreservesRowStringSources`；window/agg UT |
 
 ## Vector 边界
 
@@ -53,7 +53,7 @@
 | batch marshal/unmarshal | `pkg/container/batch/batch.go` | MORPC v27 trailer保留来源；旧 peer 对 source-only batch降级丢弃，旧 prepared metadata仍按旧 gate拒绝 | 五类来源 buffered round-trip；invalid/const-mixed/reuse UT |
 | CN dispatch / remote result | dispatch sender、remote-run receiver | 双向使用 MORPC v27 source gate | dispatch/remoterun version-matrix UT |
 | grouping batch codec | batch grouping codec | grouping bitmap与五类来源同时 round-trip | 五类来源 grouping streaming UT |
-| aggregate/group state encode/decode/merge | group/agg state owners | MORPC v27携带来源；merge使用贡献规则；未知值拒绝 | group/aggregate protocol UT |
+| aggregate/group state encode/decode/merge | `aggexec.SaveIntermediateResult*`、`group.saveAggregateChunkForProtocol` | MORPC v27携带来源；旧协议显式省略；merge使用贡献规则；未知值拒绝且decoder可复用 | 五类 full/chunk round-trip、group protocol gate、same/mixed merge、invalid/reuse UT |
 | Process parameters | Process/frontend codecs | SQLPrepare/COMStmt/UserVariable保留至 Param executor；v27远端携带 | process/frontend UT |
 | spill / selected-row materialization | selection/grouping codecs、spill owners | 精确行来源随payload写入/恢复 | selection/grouping/spill consumer UT |
 | storage / derived materialization | compile/storage operators | materialized vector逐行透明；重新计算表达式为Expression | local/materialized/remote BVT |
@@ -84,5 +84,6 @@
 
 - 五类合法来源：普通 batch 与 grouping codec typed round-trip。
 - 未知来源：vector、batch、Literal/LiteralVec planner入口确定性拒绝。
-- public BVT：projection、derived/materialized、flow control、prepare reuse；其余关系边界由对应 typed owner UT 与本清单明确映射。
+- public BVT：证明 projection、CTE、join、UNION、GROUP BY、DISTINCT、aggregate、materialization、flow-control、prepare-reuse 的 SQL 可达性和结果 bytes/NULL 等价；`HEX`/`COUNT`/`MAX` 不读取 source，因此不作为 source 传播 oracle。
+- source 传播由 typed owner oracle观察：planner rewrite、operator/vector、aggregate/group-state、value-window、dispatch sender、remote-result receiver分别直接断言 `GetStringSourceAt`。remote typed tests直接调用远端专用 `marshalRemoteBatch` 与 `messageReceiverOnServer.sendBatch`，从而确定性经过 v27 remote wire owner，不依赖本地 planner placement 或 BVT 调度概率。
 - 当前独立 StringSource wire capability：`MORPCVersion27`。

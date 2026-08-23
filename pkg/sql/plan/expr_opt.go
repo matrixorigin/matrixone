@@ -522,8 +522,11 @@ func decodeLiteralVec(literalVec *plan.LiteralVec) (vec vector.Vector, physicalL
 	// LiteralVec.Data is the stable Vector payload and deliberately omits
 	// runtime ownership. Restore the validated container-level source before
 	// any caller materializes scalar literals from the decoded rows.
+	if literalVec.StringSource > uint32(types.StringSourceCOMStmt) {
+		return vector.Vector{}, 0, false
+	}
 	source := types.StringSource(literalVec.StringSource)
-	if !source.Valid() || vec.SetStringSource(source) != nil {
+	if vec.SetStringSource(source) != nil {
 		return vector.Vector{}, 0, false
 	}
 

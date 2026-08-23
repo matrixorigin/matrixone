@@ -708,7 +708,7 @@ func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, err, "legacy MULTI_UPDATE stays wire-compatible")
 	require.NoError(t, validateRemoteUpdateChangedRowsPipelineProtocol(proc, &pipeline.Pipeline{}))
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion25)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion25)
 	_, instruction, err := convertToPipelineInstruction(changedRowsUpdate, proc, ctx, 1)
 	require.NoError(t, err)
 	require.NotNil(t, instruction.GetMultiUpdate().UpdateCtxList[0].ChangedRowsCol)

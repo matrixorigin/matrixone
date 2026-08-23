@@ -358,6 +358,10 @@ func StringSourcePrepareParamMetadataForRemote(
 	}
 	hasMetadata := false
 	for i, encoded := range metadata {
+		if encoded > uint32(types.StringSourceCOMStmt) {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"invalid string source %d at parameter %d", encoded, i)
+		}
 		source := types.StringSource(encoded)
 		if !source.Valid() {
 			return nil, moerr.NewInvalidInputNoCtxf(

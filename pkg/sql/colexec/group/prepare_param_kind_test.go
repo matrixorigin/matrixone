@@ -71,6 +71,41 @@ func makeSpillGroupBatchForTest(t *testing.T, mp *mpool.MPool, prepared bool) *b
 	return bat
 }
 
+func TestSaveAggregateChunkForProtocolStringSourceGate(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("value"), false, mp))
+	require.NoError(t, input.SetStringSource(types.StringSourceCOMStmt))
+	source, err := aggexec.MakeGroupAgg(
+		mp, aggexec.AggIdOfAny, false, nil, nil, types.T_text.ToType())
+	require.NoError(t, err)
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
+
+	for _, includeStringSource := range []bool{false, true} {
+		var wire bytes.Buffer
+		require.NoError(t, saveAggregateChunkForProtocol(
+			source, 0, &wire, includeStringSource))
+		restored, err := aggexec.MakeGroupAgg(
+			mp, aggexec.AggIdOfAny, false, nil, nil, types.T_text.ToType())
+		require.NoError(t, err)
+		require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+		results, err := restored.Flush()
+		require.NoError(t, err)
+		if includeStringSource {
+			require.Equal(t, types.StringSourceCOMStmt, results[0].GetStringSourceAt(0))
+		} else {
+			require.False(t, results[0].HasStringSourceMetadata())
+		}
+		results[0].Free(mp)
+		restored.Free()
+	}
+
+	source.Free()
+	input.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestPrepareParamKindWireUnknownServiceFailsClosed(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

@@ -481,13 +481,20 @@ func TestInRHSValuesRestoresLiteralVecStringSource(t *testing.T) {
 		})
 	}
 
-	invalid := makeVectorExpr(types.StringSourceExpression, false)
-	invalid.GetVec().StringSource = uint32(types.StringSourceCOMStmt) + 1
-	values, ok := inRHSValues(invalid, invalid.Typ)
-	require.False(t, ok)
-	require.Nil(t, values)
-	_, ok = blockFilterConstantSet(invalid)
-	require.False(t, ok)
+	for _, rawSource := range []uint32{
+		uint32(types.StringSourceCOMStmt) + 1,
+		256,
+		257,
+		^uint32(0),
+	} {
+		invalid := makeVectorExpr(types.StringSourceExpression, false)
+		invalid.GetVec().StringSource = rawSource
+		values, ok := inRHSValues(invalid, invalid.Typ)
+		require.False(t, ok, "raw source %d", rawSource)
+		require.Nil(t, values)
+		_, ok = blockFilterConstantSet(invalid)
+		require.False(t, ok, "raw source %d", rawSource)
+	}
 }
 
 func TestInRHSValuesRejectsOversizedFoldedVector(t *testing.T) {
