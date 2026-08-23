@@ -3232,6 +3232,266 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return filled, err
 }
 
+// PreparedPlanNeedsRuntimeSpecialization reports whether a binary prepared
+// execution can change a result-column domain or an overloaded expression.
+// Most prepared DML only needs the current parameter values.  Avoid copying
+// and walking those plans on every execute, but retain the correctness path
+// for predicates and expressions whose overload depends on the parameter
+// domain (for example, `? = ?` in an UPDATE filter).
+func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
+	if preparePlan == nil {
+		return false
+	}
+
+	scanPlan := DeepCopyPlan(preparePlan)
+	if scanPlan == nil {
+		return true
+	}
+	query := scanPlan.GetQuery()
+	if query == nil && scanPlan.GetDdl() != nil {
+		query = scanPlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return false
+	}
+	if scanPlan.GetQuery() == nil {
+		scanPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
+	}
+
+	rule := &preparedRuntimeSpecializationScanRule{
+		directResult: query.StmtType == plan.Query_SELECT,
+		seen:         make(map[*plan.Expr]struct{}),
+	}
+	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
+		// The scan is an optimization only. Preserve correctness if a newly
+		// added plan field cannot be visited here.
+		return true
+	}
+	// A mutation plan with parameterized write expressions must keep its
+	// prepare-time positional write projection and assignment casts intact.
+	// Rebinding the complete plan would make a fresh DML compile consume a
+	// different write layout. Predicate-only DML has no such write parameters,
+	// so it remains eligible for execute-time predicate specialization.
+	if isPreparedDMLStmt(query.StmtType) && preparedDMLWriteHasParams(query) {
+		return false
+	}
+	return rule.needs
+}
+
+func isPreparedDMLStmt(stmtType plan.Query_StatementType) bool {
+	switch stmtType {
+	case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE, plan.Query_MERGE:
+		return true
+	default:
+		return false
+	}
+}
+
+func preparedDMLWriteHasParams(query *plan.Query) bool {
+	if query == nil || !isPreparedDMLStmt(query.StmtType) {
+		return false
+	}
+	visited := make(map[int32]struct{})
+	var visit func(int32) bool
+	visit = func(nodeID int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			return false
+		}
+		if _, ok := visited[nodeID]; ok {
+			return false
+		}
+		visited[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return false
+		}
+		for _, expr := range node.ProjectList {
+			if preparedExprContainsParam(expr) {
+				return true
+			}
+		}
+		for _, expr := range node.OnUpdateExprs {
+			if preparedExprContainsParam(expr) {
+				return true
+			}
+		}
+		if node.DedupJoinCtx != nil {
+			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
+				if preparedExprContainsParam(expr) {
+					return true
+				}
+			}
+		}
+		if node.RowsetData != nil {
+			for _, col := range node.RowsetData.Cols {
+				for _, row := range col.Data {
+					if preparedExprContainsParam(row.Expr) {
+						return true
+					}
+				}
+			}
+		}
+		for _, childID := range node.Children {
+			if visit(childID) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, step := range query.Steps {
+		if visit(step) {
+			return true
+		}
+	}
+	return false
+}
+
+type preparedRuntimeSpecializationScanRule struct {
+	directResult bool
+	needs        bool
+	seen         map[*plan.Expr]struct{}
+}
+
+func (rule *preparedRuntimeSpecializationScanRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *preparedRuntimeSpecializationScanRule) IsApplyExpr() bool {
+	return true
+}
+
+func (rule *preparedRuntimeSpecializationScanRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *preparedRuntimeSpecializationScanRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
+	rule.scanExpr(expr, true)
+	return expr, nil
+}
+
+func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, root bool) {
+	if expr == nil || rule.needs {
+		return
+	}
+	if _, ok := rule.seen[expr]; ok {
+		return
+	}
+	rule.seen[expr] = struct{}{}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		if root && rule.directResult {
+			rule.needs = true
+		}
+	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil {
+			return
+		}
+		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if preparedRuntimeSpecializationFunction(name) {
+			for _, arg := range exprImpl.F.Args {
+				if preparedExprContainsParam(arg) {
+					rule.needs = true
+					return
+				}
+			}
+		}
+		for _, arg := range exprImpl.F.Args {
+			rule.scanExpr(arg, false)
+		}
+	case *plan.Expr_W:
+		if exprImpl.W == nil {
+			return
+		}
+		rule.scanExpr(exprImpl.W.WindowFunc, false)
+		for _, arg := range exprImpl.W.PartitionBy {
+			rule.scanExpr(arg, false)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if order != nil {
+				rule.scanExpr(order.Expr, false)
+			}
+		}
+		if exprImpl.W.Frame != nil {
+			if exprImpl.W.Frame.Start != nil {
+				rule.scanExpr(exprImpl.W.Frame.Start.Val, false)
+			}
+			if exprImpl.W.Frame.End != nil {
+				rule.scanExpr(exprImpl.W.Frame.End.Val, false)
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List != nil {
+			for _, item := range exprImpl.List.List {
+				rule.scanExpr(item, false)
+			}
+		}
+	}
+}
+
+func preparedExprContainsParam(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V:
+		return true
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return false
+		}
+		for _, arg := range exprImpl.F.Args {
+			if preparedExprContainsParam(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if exprImpl.W == nil {
+			return false
+		}
+		if preparedExprContainsParam(exprImpl.W.WindowFunc) {
+			return true
+		}
+		for _, arg := range exprImpl.W.PartitionBy {
+			if preparedExprContainsParam(arg) {
+				return true
+			}
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if order != nil && preparedExprContainsParam(order.Expr) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return false
+		}
+		for _, item := range exprImpl.List.List {
+			if preparedExprContainsParam(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedRuntimeSpecializationFunction(name string) bool {
+	if isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) {
+		return true
+	}
+	switch name {
+	case "case", "greatest", "least", "sum", "avg", "min", "max", "any_value",
+		"first_value", "last_value", "lag", "lead", "ntile", "nth_value", "sleep",
+		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
+		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
+		"like", "ilike", "regexp", "not_regexp", "between", "not_between",
+		"in", "not_in", "partition_in":
+		return true
+	default:
+		return false
+	}
+}
+
 // FillValuesOfParamsInPlanWithSpecialization replaces parameters in an
 // isolated plan copy and reports whether the replacement changed an overload
 // or a result-column domain. Callers that already have a cached compile must
@@ -3886,13 +4146,12 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 	return specialized, nil
 }
 
-// refreshPreparedPlanProjectionTypes repairs column expressions whose source
-// expression changed type while a prepared plan was rebound.  Aggregate
-// result columns are represented by synthetic column references, so the
-// expression visitor cannot update their cached type after AggList is
-// rebound.  Leaving those types stale makes the executor produce (for
-// example) DECIMAL128 while the protocol layer still decodes the result as
-// FLOAT64.
+// refreshPreparedPlanProjectionTypes repairs synthetic column expressions
+// whose source expression changed type while a prepared plan was rebound.
+// Aggregate and window nodes expose their computed values through positional
+// column references; the expression visitor updates the source expression but
+// cannot infer the cached type on those references. Downstream PROJECT nodes
+// must be refreshed as well so result metadata and vector decoding agree.
 func refreshPreparedPlanProjectionTypes(plan0 *Plan) {
 	query := plan0.GetQuery()
 	if query == nil {
@@ -3914,7 +4173,8 @@ func refreshPreparedPlanProjectionTypes(plan0 *Plan) {
 			refreshNode(childID)
 		}
 
-		if node.NodeType == plan.Node_AGG {
+		switch node.NodeType {
+		case plan.Node_AGG:
 			groupSize := int32(len(node.GroupBy))
 			for _, expr := range node.ProjectList {
 				if expr == nil {
@@ -3936,11 +4196,44 @@ func refreshPreparedPlanProjectionTypes(plan0 *Plan) {
 					}
 				}
 			}
+		case plan.Node_WINDOW:
+			// The outer W expression retains the type used by the original
+			// window function unless it is explicitly synchronized here.
+			for _, expr := range node.WinSpecList {
+				if expr == nil || expr.GetW() == nil || expr.GetW().WindowFunc == nil {
+					continue
+				}
+				expr.Typ = expr.GetW().WindowFunc.Typ
+			}
+			var child *plan.Node
+			if len(node.Children) == 1 {
+				childID := node.Children[0]
+				if childID >= 0 && int(childID) < len(query.Nodes) {
+					child = query.Nodes[childID]
+				}
+			}
+			childProjectSize := int32(0)
+			if child != nil {
+				childProjectSize = int32(len(child.ProjectList))
+			}
+			for _, expr := range node.ProjectList {
+				if expr == nil {
+					continue
+				}
+				col := expr.GetCol()
+				if col == nil || col.RelPos != -1 {
+					continue
+				}
+				winPos := col.ColPos - childProjectSize
+				if winPos >= 0 && int(winPos) < len(node.WinSpecList) {
+					expr.Typ = node.WinSpecList[winPos].Typ
+				}
+			}
 		}
 
 		// A projection node exposes its child columns through RelPos == 0.
-		// Propagate the child's refreshed type so the final result metadata and
-		// the vector decoder agree with the runtime expression domain.
+		// Propagate the child's refreshed type so final result metadata and the
+		// vector decoder agree with the runtime expression domain.
 		if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
 			childID := node.Children[0]
 			if childID >= 0 && int(childID) < len(query.Nodes) {
@@ -3979,23 +4272,30 @@ func (builder *QueryBuilder) addNameByColRef(tag int32, tableDef *plan.TableDef)
 }
 
 func GetRowSizeFromTableDef(tableDef *TableDef, ignoreHiddenKey bool) float64 {
-	size := int32(0)
+	// Column widths are protocol capacities and may use MaxLongTextLen
+	// (math.MaxInt32). Accumulate in float64 and cap the planner estimate so
+	// adding an ordinary column cannot wrap the old int32 accumulator negative.
+	const maxPlanningRowSize = float64(math.MaxInt32)
+	size := float64(0)
 	for _, col := range tableDef.Cols {
 		if col.Hidden && ignoreHiddenKey {
 			continue
 		}
 		if col.Typ.Width > 0 {
-			size += col.Typ.Width
-			continue
-		}
-		typ := types.T(col.Typ.Id).ToType()
-		if typ.Width > 0 {
-			size += typ.Width
+			size += float64(col.Typ.Width)
 		} else {
-			size += typ.Size
+			typ := types.T(col.Typ.Id).ToType()
+			if typ.Width > 0 {
+				size += float64(typ.Width)
+			} else {
+				size += float64(typ.Size)
+			}
+		}
+		if size >= maxPlanningRowSize {
+			return maxPlanningRowSize
 		}
 	}
-	return float64(size)
+	return size
 }
 
 type UnorderedSet[T ~string | ~int] map[T]int

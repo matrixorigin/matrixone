@@ -939,6 +939,16 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 		}
 	}
+	// Decide from the plan shape once per prepared-plan generation. This keeps
+	// ordinary write-only statements on their cached compile while allowing
+	// domain-sensitive predicates/expressions to be rebound for each binary
+	// execution.
+	if prepareStmt.runtimeSpecializationPlan != prepareStmt.PreparePlan {
+		prepareStmt.runtimeSpecializationNeeded = plan2.PreparedPlanNeedsRuntimeSpecialization(preparePlan.Plan)
+		prepareStmt.runtimeSpecializationPlan = prepareStmt.PreparePlan
+	}
+	needsRuntimeSpecialization := prepareStmt.runtimeSpecializationNeeded ||
+		(executionPlan != nil && executionPlan.GetDdl() != nil)
 	numParams := len(preparePlan.ParamTypes)
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
@@ -964,7 +974,7 @@ func initExecuteStmtParamWithResolverInSession(
 		} else {
 			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
 		}
-		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
+		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes, needsRuntimeSpecialization)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -997,20 +1007,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// SELECT ?.  Specialize an isolated copy after the values and protocol types
 	// are available; never mutate PrepareStmt.PreparePlan or its cached compile.
 	runtimeSpecialized := false
-	preparedDML := false
-	if executionPlan != nil && executionPlan.GetQuery() != nil {
-		switch executionPlan.GetQuery().StmtType {
-		case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE, plan.Query_MERGE:
-			preparedDML = true
-		}
-	}
-	// DML plans contain positional projections consumed by the write operator.
-	// Rebinding their parameter expressions on an execute-time copy can leave
-	// those projections inconsistent with UpdateCtx/InsertCtx column positions.
-	// The cached parameterized compile already receives the binary values through
-	// the execution batch, so keep DML on that path and specialize only reads.
-	if execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(cwft.paramVals) > 0 && executionPlan != nil &&
-		(executionPlan.GetQuery() != nil || executionPlan.GetDdl() != nil) && !preparedDML {
+	if needsRuntimeSpecialization && execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(cwft.paramVals) > 0 && executionPlan != nil &&
+		(executionPlan.GetQuery() != nil || executionPlan.GetDdl() != nil) {
 		runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
 			reqCtx, executionPlan, cwft.paramVals)
 		if err != nil {
@@ -1207,7 +1205,7 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error) {
+func preparedParamValues(proc *process.Process, paramTypes []byte, specialize bool) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
@@ -1226,7 +1224,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 			IsBin:            proc.GetPrepareParamIsBin(i),
 			PrepareParamKind: proc.GetPrepareParamKind(i),
 		}
-		if i*2+1 < len(paramTypes) {
+		if specialize && i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
 			isUnsigned := paramTypes[i*2+1]&0x80 != 0
 			// The MySQL binary protocol represents Go bool values as signed

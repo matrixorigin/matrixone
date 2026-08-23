@@ -337,6 +337,55 @@ func TestPreparedAggregateRuntimeTypeReachesResultProjection(t *testing.T) {
 	}
 }
 
+func TestPreparedWindowAggregateRuntimeTypeReachesResultProjection(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select sum(?) over () from nation")
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(),
+		prepare.Plan,
+		[]any{ParamValue{
+			Value:            "7",
+			RuntimeType:      types.T_int64.ToType(),
+			HasRuntimeType:   true,
+			IsBinaryProtocol: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	columns := GetResultColumnsFromPlan(filled)
+	require.Len(t, columns, 1)
+	require.Equal(t, int32(types.T_decimal128), columns[0].Typ.Id)
+	windowSeen := false
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_WINDOW {
+			continue
+		}
+		windowSeen = true
+		require.Len(t, node.WinSpecList, 1)
+		require.Equal(t, int32(types.T_decimal128), node.WinSpecList[0].Typ.Id)
+		for _, expr := range node.ProjectList {
+			if col := expr.GetCol(); col != nil && col.RelPos == -1 {
+				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+			}
+		}
+	}
+	require.True(t, windowSeen)
+}
+
+func TestPreparedDMLRuntimeSpecializationKeepsWriteParametersCached(t *testing.T) {
+	predicateOnly := buildPreparedAggregatePlan(t,
+		"update nation set n_comment = ''x'' where ? = ?")
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(predicateOnly.Plan))
+
+	withWriteParameter := buildPreparedAggregatePlan(t,
+		"update nation set n_comment = ? where ? = ?")
+	// A fresh DML compile cannot safely replace a positional write parameter.
+	// Keep that statement on its cached write path; predicate-only DML above
+	// still gets execute-time comparison specialization.
+	require.False(t, PreparedPlanNeedsRuntimeSpecialization(withWriteParameter.Plan))
+}
+
 func TestPreparedNtileParameter(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t,
 		"select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation")

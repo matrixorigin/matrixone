@@ -312,6 +312,11 @@ type PrepareStmt struct {
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
+	// cursorRequested is set by the current COM_STMT_EXECUTE packet. The
+	// materialized cursor is kept on the prepared statement because a later
+	// COM_STMT_FETCH only carries the statement id.
+	cursorRequested bool
+	cursor          *preparedStmtCursor
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
@@ -334,6 +339,52 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+
+	// runtimeSpecializationPlan records the plan for which the static
+	// execute-time specialization decision was made. Most prepared DML only
+	// needs parameter values and can reuse the prepare-time compile; keeping the
+	// decision with the plan avoids copying and walking the whole plan on every
+	// EXECUTE.
+	runtimeSpecializationPlan   *plan.Plan
+	runtimeSpecializationNeeded bool
+}
+
+// preparedStmtCursor is the server-side result retained between
+// COM_STMT_EXECUTE and COM_STMT_FETCH. MySQL sessions serialize commands, so
+// the cursor does not need an additional lock.
+type preparedStmtCursor struct {
+	result   *MysqlResultSet
+	offset   uint64
+	bytes    uint64
+	maxBytes uint64
+	// maxBytesSet distinguishes an explicit zero query_result_maxsize from
+	// an in-memory test/legacy cursor that has not been initialized yet.
+	maxBytesSet bool
+	maxRows     uint64
+	owner       *Session
+}
+
+func (cursor *preparedStmtCursor) close() {
+	if cursor == nil {
+		return
+	}
+	if cursor.owner != nil && cursor.bytes > 0 {
+		cursor.owner.releasePreparedCursorBytes(cursor.bytes)
+	}
+	cursor.result = nil
+	cursor.offset = 0
+	cursor.bytes = 0
+	cursor.owner = nil
+}
+
+func (prepareStmt *PrepareStmt) closeCursor() {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.cursor != nil {
+		prepareStmt.cursor.close()
+		prepareStmt.cursor = nil
+	}
 }
 
 /*
@@ -675,6 +726,7 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //}
 
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.closeCursor()
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
@@ -724,6 +776,7 @@ func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	for k := range prepareStmt.getFromSendLongData {
 		delete(prepareStmt.getFromSendLongData, k)
 	}
+	prepareStmt.cursorRequested = false
 }
 
 type Allocator interface {
@@ -940,6 +993,7 @@ type ExecCtx struct {
 	resper            Responser
 	results           []ExecResult
 	prepareColDef     [][]byte
+	cursorResultSaver StagedBinaryWriter
 	returning         *returningState
 	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
@@ -966,6 +1020,10 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
+	if execCtx.cursorResultSaver != nil && execCtx.reqCtx != nil && execCtx.ses != nil {
+		_ = execCtx.cursorResultSaver.Abort(execCtx)
+	}
+	execCtx.cursorResultSaver = nil
 	if execCtx.returning != nil {
 		_ = execCtx.returning.Close(execCtx)
 		execCtx.returning = nil

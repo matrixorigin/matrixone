@@ -19,6 +19,7 @@ import (
 	"context"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -472,6 +473,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		needResetFunction := false
 		compareArgTypes := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
+		binaryTextParamArgs := make(map[int]struct{})
+		functionName := ""
+		if exprImpl.F.Func != nil {
+			functionName = strings.ToLower(exprImpl.F.Func.GetObjName())
+		}
 		for i, arg := range exprImpl.F.Args {
 			originalArgTyp := plan.Type{}
 			originalArgFuncObj := int64(0)
@@ -516,6 +522,48 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					(hasParamPos && rule.inferTextParamPositions[paramPos])
 				if unwrapped, ok := unwrapImplicitPreparedParamCast(rule.ctx, rewrittenArg, inferText); ok {
 					boundArgs[i] = unwrapped
+					compareArgTypes = true
+				}
+			}
+			if arg.GetP() != nil && arg.GetP().Pos >= 0 &&
+				rule.inferTextParamPositions[int(arg.GetP().Pos)] &&
+				rewrittenArg.Typ.Id == int32(types.T_text) {
+				binaryTextParamArgs[i] = struct{}{}
+			}
+		}
+		// A comparison with at least one numeric binary parameter follows MySQL's
+		// numeric coercion rules even when its other parameter was sent as
+		// VAR_STRING.  The prepare-time binder sees TEXT/TEXT and would otherwise
+		// insert an INT cast around values such as "1.00", which fails at execute
+		// time.  Infer only these per-position COM_STMT text arguments; direct text
+		// projections and ordinary string predicates keep their TEXT domain.
+		if isPreparedNumericComparison(functionName) && len(binaryTextParamArgs) > 0 {
+			hasNumericArg := false
+			for i, arg := range boundArgs {
+				if _, ok := binaryTextParamArgs[i]; ok {
+					continue
+				}
+				if arg != nil && types.T(arg.Typ.Id).ToType().IsNumeric() {
+					hasNumericArg = true
+					break
+				}
+			}
+			if hasNumericArg {
+				for i := range binaryTextParamArgs {
+					literal := boundArgs[i].GetLit()
+					if literal == nil {
+						continue
+					}
+					runtimeType, ok := PreparedRuntimeTypeFromString(literal.GetSval())
+					if !ok || !runtimeType.IsNumeric() {
+						continue
+					}
+					inferred, inferErr := preparedRuntimeParamExpr(rule.ctx, literal.GetSval(), literal.IsBin, runtimeType)
+					if inferErr != nil {
+						continue
+					}
+					boundArgs[i] = inferred
+					needResetFunction = true
 					compareArgTypes = true
 				}
 			}
@@ -588,6 +636,15 @@ func preparedExprBindingChanged(originalTyp plan.Type, originalFuncObj int64, re
 		return true
 	}
 	return preparedExprFunctionObj(rewritten) != originalFuncObj
+}
+
+func isPreparedNumericComparison(name string) bool {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		return true
+	default:
+		return false
+	}
 }
 
 func functionBindingChanged(

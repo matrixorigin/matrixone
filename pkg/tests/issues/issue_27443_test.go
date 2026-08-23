@@ -102,6 +102,22 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.Equal(t, []byte("b2"), bin)
 		require.Equal(t, uint64(42), unsigned)
 
+		// DML predicates still need execute-time numeric binding. The first
+		// parameter is a binary integer while the second is a text value that
+		// represents the same number; a cached TEXT/TEXT comparison would be
+		// false and leave the row unchanged.
+		execSQLRequire(t, ctx, db, "create table `"+dbName+"`.predicate_dst (id int primary key, status int)")
+		execSQLRequire(t, ctx, db, "insert into `"+dbName+"`.predicate_dst values (1, 0)")
+		predicateStmt, err := db.PrepareContext(ctx, "update `"+dbName+"`.predicate_dst set status = 1 where ? = ?")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, predicateStmt.Close())
+		}()
+		_, err = predicateStmt.ExecContext(ctx, int64(1), "1.00")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(1), status)
+
 		sumStmt, err := db.PrepareContext(ctx, "select sum(?)")
 		require.NoError(t, err)
 		defer func() {
@@ -110,5 +126,13 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		var sum int64
 		require.NoError(t, sumStmt.QueryRowContext(ctx, int64(7)).Scan(&sum))
 		require.Equal(t, int64(7), sum)
+
+		windowStmt, err := db.PrepareContext(ctx, "select sum(?) over () from `"+dbName+"`.src")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, windowStmt.Close())
+		}()
+		require.NoError(t, windowStmt.QueryRowContext(ctx, int64(7)).Scan(&sum))
+		require.Equal(t, int64(14), sum)
 	})
 }
