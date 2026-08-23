@@ -88,12 +88,12 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		tableDef   *TableDef
-		updateCols map[string]tree.Expr
-		wantInline int
-		wantLegacy bool
-		wantReject bool
+		name            string
+		tableDef        *TableDef
+		updateCols      map[string]tree.Expr
+		wantInline      int
+		wantUnsupported bool
+		wantReject      bool
 	}{
 		{
 			name:       "synchronous ivfflat indexed part",
@@ -172,11 +172,19 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			updateCols: map[string]tree.Expr{"id": nil},
 			wantInline: 1,
 		},
+		{
+			name:            "unknown affected algorithm is rejected",
+			tableDef:        newTableDef(newIndex("unknown", "UNKNOWN", "", "body")),
+			updateCols:      map[string]tree.Expr{"body": nil},
+			wantUnsupported: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inline, legacy, err := classifyIrregularIndexesForUpdate(context.Background(), tt.tableDef, tt.updateCols)
+			inline, unsupported, err := classifyIrregularIndexesForUpdate(
+				context.Background(), tt.tableDef, tt.updateCols,
+			)
 			if tt.wantReject {
 				require.Error(t, err)
 				var routeErr *updatePlannerRouteError
@@ -186,7 +194,7 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, tt.wantLegacy, legacy)
+			require.Equal(t, tt.wantUnsupported, unsupported)
 			require.Len(t, inline, tt.wantInline)
 		})
 	}
