@@ -146,6 +146,7 @@ func TestCNViewMetadataAdmissionRejectsSupersededResponse(t *testing.T) {
 
 func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) {
 	mo := &admissionRevocationMOServer{stopped: make(chan struct{})}
+	closeRequested := make(chan struct{})
 	s := &service{
 		cfg:                             &Config{UUID: "superseded-cn"},
 		logger:                          zap.NewNop(),
@@ -153,6 +154,10 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 		viewMetadataAdmissionGeneration: 8,
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		viewMetadataCloseFn: func() error {
+			close(closeRequested)
+			return errors.New("expected close error")
+		},
 	}
 	s.viewMetadataIngressReady.Store(true)
 	pipelineCtx, releasePipeline, admitted := s.admitPipelineHandler(context.Background())
@@ -177,6 +182,11 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 	case <-mo.stopped:
 	default:
 		t.Fatal("SQL frontend and active direct sessions were not stopped")
+	}
+	select {
+	case <-closeRequested:
+	case <-time.After(time.Second):
+		t.Fatal("superseded CN did not request full service closure")
 	}
 	_, _, admitted = s.admitPipelineHandler(context.Background())
 	require.False(t, admitted)

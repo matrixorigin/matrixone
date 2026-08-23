@@ -129,6 +129,7 @@ func TestProxyAdmissionRefreshesMembershipBeforeEpochAck(t *testing.T) {
 func TestProxyAdmissionRevokesIngressForHigherGeneration(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	app := &admissionProxyApplication{stopped: make(chan struct{})}
+	closeRequested := make(chan struct{})
 	s := &Server{
 		config:                          Config{UUID: "superseded-proxy"},
 		runtime:                         runtime.DefaultRuntime(),
@@ -137,6 +138,10 @@ func TestProxyAdmissionRevokesIngressForHigherGeneration(t *testing.T) {
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
 		viewMetadataAdmissionContext:    ctx,
 		viewMetadataAdmissionCancel:     cancel,
+		viewMetadataCloseFn: func() error {
+			close(closeRequested)
+			return errors.New("expected close error")
+		},
 	}
 
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(),
@@ -152,6 +157,29 @@ func TestProxyAdmissionRevokesIngressForHigherGeneration(t *testing.T) {
 		t.Fatal("superseded Proxy ingress and active sessions were not stopped")
 	}
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	select {
+	case <-closeRequested:
+	case <-time.After(time.Second):
+		t.Fatal("superseded Proxy did not request full service closure")
+	}
+}
+
+func TestProxyCloseIsIdempotent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	app := &admissionProxyApplication{stopped: make(chan struct{})}
+	s := &Server{
+		app:                          app,
+		viewMetadataAdmissionCancel:  cancel,
+		viewMetadataAdmissionContext: ctx,
+	}
+	require.NoError(t, s.Close())
+	require.NoError(t, s.Close())
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	select {
+	case <-app.stopped:
+	default:
+		t.Fatal("Proxy application was not stopped")
+	}
 }
 
 func TestProxyAdmissionWaitsForAuthoritativeResponse(t *testing.T) {

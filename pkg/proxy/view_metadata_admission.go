@@ -134,9 +134,13 @@ func (s *Server) revokeViewMetadataGeneration(authoritative uint64) {
 					zap.Error(err))
 			}
 		}
-		if s.stopper != nil {
+		if s.stopper != nil || s.viewMetadataCloseFn != nil {
+			closeFn := s.Close
+			if s.viewMetadataCloseFn != nil {
+				closeFn = s.viewMetadataCloseFn
+			}
 			go func() {
-				if err := s.Close(); err != nil && s.runtime != nil {
+				if err := closeFn(); err != nil && s.runtime != nil {
 					s.runtime.Logger().Error("failed to close superseded proxy",
 						zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
 						zap.Uint64("authoritative-generation", authoritative),

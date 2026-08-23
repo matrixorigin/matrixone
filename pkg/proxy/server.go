@@ -74,6 +74,7 @@ type Server struct {
 	viewMetadataAdmissionContext    context.Context
 	viewMetadataAdmissionCancel     context.CancelFunc
 	viewMetadataRevocationOnce      sync.Once
+	viewMetadataCloseFn             func() error
 	closeOnce                       sync.Once
 	closeErr                        error
 	test                            bool
