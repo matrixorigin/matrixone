@@ -899,7 +899,19 @@ func TestGetExprValue(t *testing.T) {
 					cvey.So(value, cvey.ShouldEqual, kase.want)
 				}
 			}
+			// Evaluating a SET expression runs a synthetic SELECT.  It must
+			// not leave the compiler context pointing at the closed temporary
+			// execution context, because the next statement in the packet
+			// reuses it for planning.
+			cvey.So(ses.txnCompileCtx.execCtx, cvey.ShouldEqual, ec)
 		}
+
+		// The next statement in the same packet must still be able to plan
+		// through the session compiler context after SET evaluation.
+		nextStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select 1", 1)
+		cvey.So(err, cvey.ShouldBeNil)
+		_, err = buildPlanWithPrepareMode(ctx, ses, ses.txnCompileCtx, nextStmt, false)
+		cvey.So(err, cvey.ShouldBeNil)
 
 	})
 
@@ -1975,6 +1987,48 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 			packetFlags, _, ok := proto.io.ReadUint16(packet, next)
 			require.True(t, ok)
 			require.Equal(t, tt.flags, packetFlags)
+		})
+	}
+}
+
+func TestJdbcResultMetadataForTextTemporalAndYear(t *testing.T) {
+	cases := []struct {
+		name      string
+		typ       types.Type
+		mysqlType defines.MysqlType
+		length    uint32
+	}{
+		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), mysqlType: defines.MYSQL_TYPE_TINY_BLOB, length: types.MaxTinyTextLen},
+		{name: "text", typ: types.New(types.T_text, 0, 0), mysqlType: defines.MYSQL_TYPE_BLOB, length: types.MaxStringSize},
+		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), mysqlType: defines.MYSQL_TYPE_MEDIUM_BLOB, length: types.MaxMediumTextLen},
+		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), mysqlType: defines.MYSQL_TYPE_LONG_BLOB, length: types.MaxLongTextLen},
+		{name: "date", typ: types.New(types.T_date, 0, 0), mysqlType: defines.MYSQL_TYPE_DATE, length: 10},
+		{name: "time", typ: types.New(types.T_time, 0, 0), mysqlType: defines.MYSQL_TYPE_TIME, length: 10},
+		{name: "time(6)", typ: types.New(types.T_time, 0, 6), mysqlType: defines.MYSQL_TYPE_TIME, length: 17},
+		{name: "datetime", typ: types.New(types.T_datetime, 0, 0), mysqlType: defines.MYSQL_TYPE_DATETIME, length: 19},
+		{name: "datetime(6)", typ: types.New(types.T_datetime, 0, 6), mysqlType: defines.MYSQL_TYPE_DATETIME, length: 26},
+		{name: "timestamp", typ: types.New(types.T_timestamp, 0, 0), mysqlType: defines.MYSQL_TYPE_TIMESTAMP, length: 19},
+		{name: "timestamp(6)", typ: types.New(types.T_timestamp, 0, 6), mysqlType: defines.MYSQL_TYPE_TIMESTAMP, length: 26},
+		{name: "year", typ: types.New(types.T_year, 4, 0), mysqlType: defines.MYSQL_TYPE_YEAR, length: 4},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			col, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+				Name: "c",
+				Typ: plan2.Type{
+					Id:    int32(tc.typ.Oid),
+					Width: tc.typ.Width,
+					Scale: tc.typ.Scale,
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.mysqlType, col.ColumnType())
+			require.Equal(t, tc.length, col.Length())
+			if tc.typ.Oid == types.T_text {
+				require.Equal(t, uint16(defines.BLOB_FLAG), col.Flag()&uint16(defines.BLOB_FLAG))
+				require.Equal(t, uint16(charsetVarchar), col.Charset())
+			}
 		})
 	}
 }

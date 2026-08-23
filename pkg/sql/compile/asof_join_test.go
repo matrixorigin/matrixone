@@ -69,18 +69,22 @@ func TestRemoteAsofJoinProtocolGate(t *testing.T) {
 	arg.JoinType = plan.Node_ASOF
 	arg.EqConds = [][]*plan.Expr{{}, {}}
 	defer arg.Release()
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
-	_, _, err := convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
-	require.ErrorContains(t, err, "protocol version 23")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
-	_, _, err = convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
-	require.ErrorContains(t, err, "protocol version 23")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
-	_, _, err = convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
-	require.ErrorContains(t, err, "protocol version 23")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion23)
+	for _, version := range []int64{
+		defines.MORPCVersion17,
+		defines.MORPCVersion20,
+		defines.MORPCVersion22,
+		defines.MORPCVersion23,
+		defines.MORPCVersion24,
+		defines.MORPCVersion25,
+		defines.MORPCVersion26,
+	} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		_, _, err := convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
+		require.ErrorContains(t, err, "protocol version 27")
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion27)
 	arg.JoinType = plan.Node_ASOF_LEFT
-	_, _, err = convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
+	_, _, err := convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
 	require.NoError(t, err)
 	require.NoError(t, validateRemoteJoinProtocol(proc, plan.Node_ASOF_LEFT))
 	require.NoError(t, validateRemoteJoinProtocol(proc, plan.Node_INNER))

@@ -80,6 +80,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -652,19 +653,6 @@ func normalizeScopeRunError(
 	// attach the cause after observing DeadlineExceeded.
 	if queryCtx != nil {
 		if queryErr := queryCtx.Err(); queryErr != nil {
-			// A remote-run query context belongs to one RPC fragment. StopSending
-			// cancels it as internal teardown when another fragment has finished or
-			// failed. Do not let that generic cancellation mask a substantive child
-			// result collected while the remote fragment is draining; the origin
-			// query context still owns user cancellation and deadline classification.
-			if remoteRun, _ := queryCtx.Value(defines.RemoteRunContext{}).(bool); remoteRun &&
-				isScopeCancellationFrom(err, queryErr) {
-				if cause := context.Cause(pipelineCtx); cause != nil &&
-					!isScopeCancellationError(cause) {
-					return cause, true
-				}
-				return nil, true
-			}
 			if errors.Is(queryErr, context.DeadlineExceeded) {
 				return queryErr, true
 			}
@@ -1694,7 +1682,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
-		anyDistinctAgg := groupInfo.AnyDistinctAgg()
+		distinctRequiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
@@ -1713,7 +1701,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
 			return ss, nil
 		} else {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileMergeGroup(node, ss, nodes, anyDistinctAgg))))
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node,
+				c.compileMergeGroup(node, ss, nodes, distinctRequiresSingleStage))))
 			return ss, nil
 		}
 	case plan.Node_SAMPLE:
@@ -2447,7 +2436,7 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		if err := c.hydrateMongoScan(node); err != nil {
 			return nil, err
 		}
-		scope := c.constructScopeForExternal(c.addr, false)
+		scope := c.constructMongoScanScope()
 		currentFirstFlag := c.anal.isFirst
 		op := mongoscan.NewArgument().WithScan(node.ExternScan.MongodbScan)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -2459,6 +2448,10 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	err, strictSqlMode := StrictSqlMode(c.proc)
 	if err != nil {
 		return nil, err
+	}
+
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_DATASTREAM_TB) {
+		return c.compileDatastreamScan(node, strictSqlMode)
 	}
 
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_ICEBERG_TB) {
@@ -2534,6 +2527,81 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	} else {
 		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode)
 	}
+}
+
+// compileDatastreamScan builds the single-scope pipeline for a datastream
+// external table: deparse the pushable filter conjuncts into the pushdown
+// hint, optionally drop them from local rechecking (recheck=false), and run
+// the external operator with a DataStreamReader.  node is the compile-owned
+// deep copy, so trimming its FilterList only affects this pipeline's
+// downstream restrict.
+func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	ds := node.ExternScan.GetDatastreamScan()
+	if ds == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "datastream external table is missing scan metadata")
+	}
+	// The pushed filter can only be sent to the server when the user has
+	// opted into trusting the server's predicate semantics (recheck=false).
+	//
+	// A pushed predicate is NOT provably superset-preserving across engines:
+	// the server may drop a row MO would keep under a different collation,
+	// time zone, or coercion (e.g. a case-insensitive source evaluating
+	// `s <> 'a'` drops both 'a' and 'A', but MO distinguishes them and wants
+	// the 'A' row). Local recheck can only *remove* over-returned rows, never
+	// restore ones the source already filtered out — so pushing in the
+	// recheck=true default would under-return. Therefore recheck=true (the
+	// safe default) sends no narrowing filter: the server returns the full
+	// datasource and MO applies every predicate locally, which is correct
+	// under any server semantics. recheck=false trusts the server for exactly
+	// the conjuncts that were pushed; conjuncts the deparser could not express
+	// always stay local.
+	if !ds.Recheck {
+		pushedText, pushed := sqldatastream.DeparseFilters(node.FilterList, node.TableDef.Cols, c.proc.GetSessionInfo().TimeZone)
+		ds.PushedFilter = pushedText
+		if pushedText != "" {
+			kept := make([]*plan.Expr, 0, len(node.FilterList))
+			for i, expr := range node.FilterList {
+				if !pushed[i] {
+					kept = append(kept, expr)
+				}
+			}
+			node.FilterList = kept
+		}
+	}
+
+	param := external.DatastreamExternParam()
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
+}
+
+// constructMongoScanScope keeps the single MongoDB reader in the scheduled
+// query-worker set. This matters when a downstream DEDUP join builds a
+// distributed shuffle: a coordinator-local source outside that set has no
+// receiver tree to start it, leaving every shuffle receiver waiting forever.
+func (c *Compile) constructMongoScanScope() *Scope {
+	current := c.materializeScheduledWorker(c.currentCNWorker())
+	node := current
+	stageNodes := c.queryWorkerStageNodes()
+	if len(stageNodes) > 0 {
+		node = stageNodes[0]
+		for _, candidate := range stageNodes {
+			if sameExecutionNode(candidate, current) {
+				node = candidate
+				break
+			}
+		}
+	}
+
+	scope := c.constructScopeForExternalNode(node, !sameExecutionNode(node, current))
+	scope.NodeInfo.Mcpu = 1
+	return scope
 }
 
 func (c *Compile) hydrateMongoScan(node *plan.Node) error {
@@ -4104,8 +4172,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
-	if len(node.FilterList) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
+	storageFilters := filterScanStorageExprs(node.FilterList)
+	if len(storageFilters) != len(s.DataSource.FilterList) {
+		s.DataSource.FilterList = plan2.DeepCopyExprList(storageFilters)
 		for _, e := range s.DataSource.FilterList {
 			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
@@ -4143,6 +4212,25 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.RecvMsgList = node.RecvMsgList
 
 	return nil
+}
+
+// filterScanStorageExprs excludes row-dependent predicates from the engine
+// reader. The complete node.FilterList remains owned by TableScan or Restrict,
+// so these predicates are still evaluated once at the row-level boundary.
+func filterScanStorageExprs(exprs []*plan.Expr) []*plan.Expr {
+	for i, expr := range exprs {
+		if plan2.ContainsVolatileFunction(expr) {
+			filtered := make([]*plan.Expr, 0, len(exprs)-1)
+			filtered = append(filtered, exprs[:i]...)
+			for _, remaining := range exprs[i+1:] {
+				if !plan2.ContainsVolatileFunction(remaining) {
+					filtered = append(filtered, remaining)
+				}
+			}
+			return filtered
+		}
+	}
+	return exprs
 }
 
 func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
@@ -5600,16 +5688,16 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return ss
 }
 
-func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Node, hasDistinct bool) []*Scope {
-	// for less memory usage while merge group,
-	// we do not run the group-operator in parallel once this has a distinct aggregation.
-	// because the parallel need to store all the source data in the memory for merging.
-	// we construct a pipeline like the following description for this case:
-	//
-	// all the operators from ss[0] to ss[last] send the data to only one group-operator.
-	// this group-operator sends its result to the merge-group-operator.
-	// todo: I cannot remove the merge-group action directly, because the merge-group action is used to fill the partial result.
-	if hasDistinct {
+func (c *Compile) compileMergeGroup(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+	distinctRequiresSingleStage bool,
+) []*Scope {
+	// DISTINCT aggregates without an exact state-merge contract run one Group
+	// operator before MergeGroup. Parallel-mergeable DISTINCT aggregates use the
+	// ordinary local Group + MergeGroup pipeline below.
+	if distinctRequiresSingleStage {
 		ss = c.mergeShuffleScopesIfNeeded(ss, false)
 		mergeToGroup := c.newMergeScope(ss)
 
@@ -5752,7 +5840,7 @@ func supportsRemoteAsofJoin(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion23
+	return ok && protocolVersion >= defines.MORPCVersion27
 }
 
 func supportsRemoteTargetAwareUpdate(service string) bool {
@@ -5779,6 +5867,58 @@ func supportsRemoteRightDedupInputKeysUnique(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion21
+}
+
+func supportsRemoteAffectedRowsSelectors(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion24
+}
+
+func supportsRemoteCrossDomainStringLiterals(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion23
+}
+
+func supportsRemoteStatementLastInsertID(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion26
+}
+
+func supportsRemoteUpdateChangedRows(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion25
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {

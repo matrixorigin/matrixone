@@ -491,6 +491,7 @@ message ExternalScan {
   IcebergPlanningStats iceberg_planning_stats = 21;
   int64 iceberg_delete_max_memory_bytes = 22;
   bool iceberg_delete_spill_enabled = 23;
+  plan.DataStreamScan datastream_scan = 24;
 }
 
 message TableScan {

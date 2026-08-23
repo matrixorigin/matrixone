@@ -95,7 +95,8 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		"create external table mongodb_ci.events(mongo_id char(24) mongodb_path '_id', device_id varchar(20), site_id varchar(10), ts datetime(3) mongodb_convert 'try_null', measurement double mongodb_convert 'try_null', source_batch varchar(50)) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='events','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.temporal_edges(ts datetime(0) mongodb_convert 'try_null') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='temporal_edges','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.decoded_budget(payload_1 text mongodb_path 'payload', payload_2 text mongodb_path 'payload', payload_3 text mongodb_path 'payload', payload_4 text mongodb_path 'payload', payload_5 text mongodb_path 'payload', payload_6 text mongodb_path 'payload', payload_7 text mongodb_path 'payload', payload_8 text mongodb_path 'payload') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='decoded_budget','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
-		"create external table mongodb_ci.json_scalar(value json) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='json_scalar','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
+		"create external table mongodb_ci.json_scalar(value json, payload json, arr json) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='json_scalar','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
+		"create external table mongodb_ci.binary_padding(id varchar(2) mongodb_path '_id', value binary(4)) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='binary_padding','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -120,7 +121,20 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	if err := expectScalar(ctx, db, "select cast(value as char) from mongodb_ci.json_scalar", `"text"`); err != nil {
 		return err
 	}
-	r.Cases = append(r.Cases, "json-scalar-conversion")
+	if err := expectScalar(ctx, db, "select json_unquote(json_extract(payload, '$.a')) from mongodb_ci.json_scalar", "2"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select json_contains(arr, '2', '$') from mongodb_ci.json_scalar", "1"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "json-relaxed-extended-conversion")
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.binary_padding where octet_length(value) = 4", "4"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.binary_padding where binary value = _binary'a'", "0"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "fixed-binary-padding")
 
 	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
 		return err
@@ -137,6 +151,11 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		return err
 	}
 	r.Cases = append(r.Cases, "scan-projection-pushdown-null-conversion")
+
+	if err := verifyPrimaryKeyInsertSelect(ctx, db); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "insert-select-primary-key-target")
 
 	// BSON DateTime preserves milliseconds, while DATETIME(0) truncates them.
 	// The source predicate must therefore remain residual-only: an exact MongoDB
@@ -277,6 +296,20 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	}
 	r.Cases = append(r.Cases, "connection-disable-enable")
 	return nil
+}
+
+func verifyPrimaryKeyInsertSelect(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx,
+		"create table mongodb_ci.events_insert_target(mongo_id char(24) primary key, device_id varchar(20), site_id varchar(10), ts datetime(3), measurement double, source_batch varchar(50))"); err != nil {
+		return fmt.Errorf("create primary-key insert target: %w", err)
+	}
+	insertCtx, cancelInsert := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelInsert()
+	if _, err := db.ExecContext(insertCtx,
+		"insert into mongodb_ci.events_insert_target select mongo_id,device_id,site_id,ts,measurement,source_batch from mongodb_ci.events where mongo_id='66a7b7000000000000000001'"); err != nil {
+		return fmt.Errorf("insert-select into primary-key target: %w", err)
+	}
+	return expectScalar(ctx, db, "select count(*) from mongodb_ci.events_insert_target", "1")
 }
 
 func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn string) error {

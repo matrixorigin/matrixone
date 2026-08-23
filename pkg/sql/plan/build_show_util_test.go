@@ -288,7 +288,7 @@ func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
 	require.False(t, visibility["uq_invisible"])
 
 	got, _, err := constructCreateTableSQL(
-		&mock.ctxt, tableDef, nil, true, nil, true,
+		&mock.ctxt, tableDef, nil, true, nil, true, nil,
 	)
 	require.NoError(t, err)
 	require.Contains(t, got, "UNIQUE KEY `uq_invisible` (`b`) INVISIBLE")
@@ -1101,11 +1101,20 @@ func TestFormatColTypeGeometrySubtype(t *testing.T) {
 }
 
 func TestFormatColTypeTinyText(t *testing.T) {
-	require.Equal(t, "TINYTEXT", FormatColType(plan.Type{
-		Id:    int32(types.T_text),
-		Width: types.MaxTinyTextLen,
-	}))
-	require.Equal(t, "TEXT", FormatColType(plan.Type{Id: int32(types.T_text)}))
+	for _, tc := range []struct {
+		width int32
+		want  string
+	}{
+		{types.MaxTinyTextLen, "TINYTEXT"},
+		{types.MaxMediumTextLen, "MEDIUMTEXT"},
+		{types.MaxLongTextLen, "LONGTEXT"},
+		{0, "TEXT"},
+	} {
+		require.Equal(t, tc.want, FormatColType(plan.Type{
+			Id:    int32(types.T_text),
+			Width: tc.width,
+		}))
+	}
 }
 
 func TestFormatColTypeArrayMetadata(t *testing.T) {

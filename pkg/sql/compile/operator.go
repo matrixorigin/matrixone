@@ -957,6 +957,10 @@ func constructMultiUpdate(
 		for j, col := range updateCtx.PartitionCols {
 			partitionCols[j] = int(col.ColPos)
 		}
+		affectedRowsCols := make([]int, len(updateCtx.AffectedRowsCols))
+		for j, col := range updateCtx.AffectedRowsCols {
+			affectedRowsCols[j] = int(col.ColPos)
+		}
 
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 			ObjRef:             updateCtx.ObjRef,
@@ -970,6 +974,11 @@ func constructMultiUpdate(
 			DedupByTargetRowID: updateCtx.DedupByTargetRowId,
 			TargetUpdateCtxIdx: int(updateCtx.TargetUpdateCtxIdx),
 			TargetTableID:      updateCtx.TableDef.TblId,
+			AffectedRowsCols:   affectedRowsCols,
+		}
+		if updateCtx.ChangedRowsCol != nil {
+			changedRowsCol := int(updateCtx.ChangedRowsCol.ColPos)
+			arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
 		}
 	}
 	arg.Action = action
@@ -1348,6 +1357,7 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 				FileSize:        FileSize,
 				ClusterTable:    node.GetClusterTable(),
 				StrictSqlMode:   strictSqlMode,
+				DatastreamScan:  node.ExternScan.GetDatastreamScan(),
 				LoadEmptyNumericAsZero: param.ExternType == int32(plan.ExternType_LOAD) &&
 					(param.Parallel || param.ParallelLoadRequested),
 			},

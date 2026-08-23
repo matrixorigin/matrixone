@@ -93,6 +93,17 @@ func encodeScope(s *Scope) ([]byte, error) {
 	return p.Marshal()
 }
 
+func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
+	p, err := fillPipeline(s)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	return p.Marshal()
+}
+
 func icebergPlanningStatsToPipeline(stats process.ParquetProfileStats) *pipeline.IcebergPlanningStats {
 	if stats.Empty() {
 		return nil
@@ -151,12 +162,23 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteUpdateChangedRowsPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
+		return nil, err
 	}
 	ctx := &scopeContext{
 		parent: nil,
@@ -548,6 +570,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
+		if err := validateRemoteStatementLastInsertIDProtocol(proc, t.HasAutoCol); err != nil {
+			return ctxId, nil, err
+		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
@@ -789,6 +814,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IcebergPlanningStats:        icebergPlanningStatsToPipeline(t.Es.IcebergPlanningStats),
 			IcebergDeleteMaxMemoryBytes: t.Es.IcebergDeleteMaxMemoryBytes,
 			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
+			DatastreamScan:              t.Es.DatastreamScan,
 		}
 		in.ProjectList = t.ProjectList
 	case *mongoscan.MongoScan:
@@ -920,13 +946,24 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *multi_update.MultiUpdate:
 		targetAware := false
+		changedRows := false
+		affectedRowsSelectors := false
 		for _, muCtx := range t.MultiUpdateCtx {
 			if muCtx.DedupByTargetRowID || muCtx.TargetUpdateCtxIdx != 0 {
 				targetAware = true
-				break
 			}
+			if muCtx.ChangedRowsCol != nil {
+				changedRows = true
+			}
+			affectedRowsSelectors = affectedRowsSelectors || len(muCtx.AffectedRowsCols) > 0
 		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, targetAware); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteUpdateChangedRowsProtocol(proc, changedRows); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteAffectedRowsSelectorsProtocol(proc, affectedRowsSelectors); err != nil {
 			return ctxId, nil, err
 		}
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -940,6 +977,13 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				CountDeleteAffectRows: t.CountDeleteAffectRows,
 				DedupByTargetRowId:    muCtx.DedupByTargetRowID,
 				TargetUpdateCtxIdx:    int32(muCtx.TargetUpdateCtxIdx),
+				AffectedRowsCols:      make([]plan.ColRef, len(muCtx.AffectedRowsCols)),
+			}
+			for j, pos := range muCtx.AffectedRowsCols {
+				updateCtxList[i].AffectedRowsCols[j].ColPos = int32(pos)
+			}
+			if muCtx.ChangedRowsCol != nil {
+				updateCtxList[i].ChangedRowsCol = &plan.ColRef{ColPos: int32(*muCtx.ChangedRowsCol)}
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1328,6 +1372,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					IcebergPlanningStats:        icebergPlanningStatsFromPipeline(t.IcebergPlanningStats),
 					IcebergDeleteMaxMemoryBytes: t.IcebergDeleteMaxMemoryBytes,
 					IcebergDeleteSpillEnabled:   t.IcebergDeleteSpillEnabled,
+					DatastreamScan:              t.DatastreamScan,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
@@ -1477,6 +1522,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				DedupByTargetRowID: muCtx.DedupByTargetRowId,
 				TargetUpdateCtxIdx: int(muCtx.TargetUpdateCtxIdx),
 				TargetTableID:      muCtx.TableDef.TblId,
+				AffectedRowsCols:   make([]int, len(muCtx.AffectedRowsCols)),
+			}
+			for j, pos := range muCtx.AffectedRowsCols {
+				arg.MultiUpdateCtx[i].AffectedRowsCols[j] = int(pos.ColPos)
+			}
+			if muCtx.ChangedRowsCol != nil {
+				changedRowsCol := int(muCtx.ChangedRowsCol.ColPos)
+				arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
@@ -1596,7 +1649,7 @@ func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinTy
 	}
 	if proc == nil || !supportsRemoteAsofJoin(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"native ASOF join remote execution requires MORPC protocol version 23",
+			"native ASOF join remote execution requires MORPC protocol version 27",
 		)
 	}
 	return nil
@@ -1614,6 +1667,18 @@ func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware 
 	return nil
 }
 
+func validateRemoteUpdateChangedRowsProtocol(proc *process.Process, changedRows bool) error {
+	if !changedRows {
+		return nil
+	}
+	if proc == nil || !supportsRemoteUpdateChangedRows(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"UPDATE changed-row counting requires MORPC protocol version 25",
+		)
+	}
+	return nil
+}
+
 func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inputKeysUnique bool) error {
 	if !inputKeysUnique {
 		return nil
@@ -1626,7 +1691,41 @@ func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inpu
 	return nil
 }
 
-func validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+func validateRemoteStatementLastInsertIDProtocol(proc *process.Process, hasAutoCol bool) error {
+	if !hasAutoCol {
+		return nil
+	}
+	if proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"remote auto-increment PRE_INSERT requires MORPC protocol version 26",
+		)
+	}
+	return nil
+}
+
+func validateRemoteStringProvenancePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	requiresVersion23, err := plan.RequiresMORPCVersion23StringProvenance(p)
+	if err != nil {
+		return err
+	}
+	if !requiresVersion23 {
+		return nil
+	}
+	if proc == nil || !supportsRemoteCrossDomainStringLiterals(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"cross-domain string provenance requires MORPC protocol version 23",
+		)
+	}
+	return nil
+}
+
+func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
 	if p == nil {
 		return nil
 	}
@@ -1645,24 +1744,94 @@ func validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc *process.Proce
 	return nil
 }
 
-func validateRemoteTargetAwareUpdatePipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+func validateRemoteStatementLastInsertIDPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsert(); preInsert != nil {
+			if err := validateRemoteStatementLastInsertIDProtocol(proc, preInsert.HasAutoCol); err != nil {
+				return err
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteStatementLastInsertIDPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAffectedRowsSelectors(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"per-target affected-row selector metadata requires MORPC protocol version 24",
+		)
+	}
+	return nil
+}
+
+func validateRemoteTargetAwareUpdatePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
 	if p == nil {
 		return nil
 	}
 	for _, instruction := range p.InstructionList {
 		if preInsert := instruction.GetPreInsert(); preInsert != nil && preInsert.HasTargetSelector {
-			return validateRemoteTargetAwareUpdateProtocol(proc, true)
+			if err := validateRemoteTargetAwareUpdateProtocol(proc, true); err != nil {
+				return err
+			}
 		}
 		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
 			for _, updateCtx := range multiUpdate.UpdateCtxList {
 				if updateCtx.DedupByTargetRowId || updateCtx.TargetUpdateCtxIdx != 0 {
-					return validateRemoteTargetAwareUpdateProtocol(proc, true)
+					if err := validateRemoteTargetAwareUpdateProtocol(proc, true); err != nil {
+						return err
+					}
+				}
+				if len(updateCtx.AffectedRowsCols) > 0 {
+					if err := validateRemoteAffectedRowsSelectorsProtocol(proc, true); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteTargetAwareUpdatePipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteUpdateChangedRowsPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
+			for _, updateCtx := range multiUpdate.UpdateCtxList {
+				if updateCtx.ChangedRowsCol != nil {
+					return validateRemoteUpdateChangedRowsProtocol(proc, true)
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteUpdateChangedRowsPipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}

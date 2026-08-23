@@ -1099,6 +1099,7 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "out of range elt index", fid: ELT, argCount: 3},
 		{name: "invalid hex input", fid: UNHEX, argCount: 1},
 		{name: "invalid day of year", fid: MAKEDATE, argCount: 2},
+		{name: "invalid interval string", fid: TO_INTERVAL, argCount: 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			args := make([]*plan.Expr, tt.argCount)
