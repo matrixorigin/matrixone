@@ -1,0 +1,39 @@
+-- @suite
+-- @case
+drop database if exists pk_filter_nested_boolean;
+create database pk_filter_nested_boolean;
+use pk_filter_nested_boolean;
+
+create table v (a varchar(20) primary key);
+insert into v values (''), ('a'), ('b'), ('c'), ('z'), ('zz');
+
+set @upper = 'z';
+set @equal = 'a';
+set @lower = 'm';
+
+prepare atomic_first from 'select a from v where a <= ? and (a = ? or a > ?) order by a';
+execute atomic_first using @upper, @equal, @lower;
+deallocate prepare atomic_first;
+
+prepare container_first from 'select a from v where (a = ? or a > ?) and a <= ? order by a';
+execute container_first using @equal, @lower, @upper;
+deallocate prepare container_first;
+
+create table t001 (id int primary key);
+create table t002 (id int primary key);
+create table t003 (id int primary key);
+create table t004 (id int primary key);
+create table t005 (id int primary key);
+
+set @schema_name = 'pk_filter_nested_boolean';
+set @n1 = 't001';
+set @n2 = 't002';
+set @n3 = 't003';
+set @n4 = 't004';
+set @n5 = 't005';
+
+prepare nested_or from 'select table_name from information_schema.tables where table_schema = ? and table_name in (?,?,?,?,?) order by table_name';
+execute nested_or using @schema_name, @n1, @n2, @n3, @n4, @n5;
+deallocate prepare nested_or;
+
+drop database pk_filter_nested_boolean;
