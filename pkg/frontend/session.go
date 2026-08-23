@@ -199,6 +199,11 @@ type Session struct {
 	// session_foreignconn.go for the process.ForeignConnCache implementation.
 	foreignConnMu sync.Mutex
 	foreignConns  map[string]process.ForeignConn // handle -> connection
+	// foreignConnsClosed is the terminal tombstone set by closeForeignConns:
+	// a connector racing with session close (KILL CONNECTION during a slow
+	// connect handshake) must have its late connection rejected and closed,
+	// not silently re-admitted into a cache nobody will ever clean up again.
+	foreignConnsClosed bool
 
 	// rewriteEnabled caches the enable_remap_hint system variable state
 	// to avoid expensive GetSessionSysVar calls on every SQL query

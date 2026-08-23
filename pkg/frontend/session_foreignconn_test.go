@@ -49,7 +49,12 @@ func TestSessionForeignConnCache(t *testing.T) {
 	require.False(t, ok)
 	_, ok = ses.RemoveForeignConn("h1")
 	require.False(t, ok)
-	ses.closeForeignConns() // no-op on empty
+	// close on an empty session is safe — but terminal — so prove it on a
+	// throwaway session rather than the one the rest of the test uses.
+	empty := &Session{}
+	empty.closeForeignConns()
+	_, err := empty.PutForeignConn(context.TODO(), "h", &fakeForeignConn{})
+	require.ErrorContains(t, err, "session is closing")
 
 	// put + get; Put returns the stored conn
 	c1 := &fakeForeignConn{}
@@ -99,13 +104,44 @@ func TestSessionForeignConnCache(t *testing.T) {
 	_, ok = ses.GetForeignConn("h3")
 	require.False(t, ok)
 
-	// cache remains usable after closeForeignConns
+	// close is TERMINAL: a late Put (a connector racing session close, e.g.
+	// KILL CONNECTION during a slow handshake) is rejected so the caller
+	// closes its own conn — nothing can resurrect a cache nobody will clean.
 	c5 := &fakeForeignConn{}
-	ses.PutForeignConn(context.TODO(), "h5", c5)
+	_, err = ses.PutForeignConn(context.TODO(), "h5", c5)
+	require.ErrorContains(t, err, "session is closing")
 	_, ok = ses.GetForeignConn("h5")
-	require.True(t, ok)
+	require.False(t, ok)
+}
+
+// TestSessionForeignConnCloseVsDelayedConnect is the delayed-connect-versus-
+// session-close race: the session closes while a connect is in flight; the
+// late admission must be rejected and the connector must close its conn.
+func TestSessionForeignConnCloseVsDelayedConnect(t *testing.T) {
+	ses := &Session{}
+	pre := &fakeForeignConn{}
+	_, err := ses.PutForeignConn(context.TODO(), "pre", pre)
+	require.NoError(t, err)
+
+	started := make(chan struct{})
+	admitted := make(chan error, 1)
+	go func() {
+		<-started // "handshake finished" after the session began closing
+		late := &fakeForeignConn{}
+		_, err := ses.PutForeignConn(context.TODO(), "late", late)
+		if err != nil {
+			_ = late.Close() // ResolveOrConnect's contract for a rejected conn
+		}
+		admitted <- err
+	}()
+
 	ses.closeForeignConns()
-	require.Equal(t, 1, c5.closeCount())
+	require.Equal(t, 1, pre.closeCount())
+	close(started)
+	require.ErrorContains(t, <-admitted, "session is closing")
+	// the late handle is nowhere in the cache
+	_, ok := ses.GetForeignConn("late")
+	require.False(t, ok)
 }
 
 // TestSessionForeignConnCacheConcurrent exercises the cache from many

@@ -108,6 +108,12 @@ func BuildForeignTVFExternParam(proc *process.Process, outCols []*plan.ColDef, f
 	return param
 }
 
+// MaxBatchSize exposes the batch byte budget so the schema-less TVF path can
+// apply the same bound CsvReader.makeBatchRows enforces for schema mode.
+func (param *ExternalParam) MaxBatchSize() uint64 {
+	return param.maxBatchSize
+}
+
 // ForeignTVFReader materializes batches from a foreign-TVF CSV byte stream
 // (an ES|QL response body or an encoded sql.Rows stream) using the shared
 // external CSV machinery. It owns the stream and closes it.

@@ -284,3 +284,63 @@ func TestForeignTvfSessionVarFallback(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported driver")
 	arg.ctr.cleanExecutors()
 }
+
+// TestForeignTvfNoSchemaByteBudget proves the schema-less path is bounded by
+// bytes as well as rows: a foreign result of large text values must split
+// across multiple batches at the configured budget instead of retaining
+// everything in one call (regression: only the 8192-row bound applied).
+func TestForeignTvfNoSchemaByteBudget(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// budget = MaxMsgSize * 0.6 = 600KB
+	proc.Base.Lim.MaxMsgSize = 1 << 20
+	ses := &fakeTvfCacheSession{}
+	proc.Session = ses
+
+	// 20 rows of ~100KB each (~2MB total, >3x the budget)
+	bigVal := strings.Repeat("x", 100*1024)
+	var csv strings.Builder
+	const totalRows = 20
+	for i := 0; i < totalRows; i++ {
+		csv.WriteString("\"" + bigVal + "\"\n")
+	}
+	ses.PutForeignConn(context.TODO(), "sql:big", &fakeForeignConn{
+		kind: foreigntvf.KindSQL, csv: csv.String(),
+	})
+
+	jsonCol := &plan.ColDef{Name: "result", Typ: plan.Type{Id: int32(types.T_json)}}
+	arg := mkForeignTvfArg(t, plan2.ForeignTVFKindSQL, true, nil,
+		[]*plan.ColDef{jsonCol}, []string{"result"}, "q", "sql:big")
+
+	retSchema := []types.Type{types.T_json.ToType()}
+	arg.ctr.retSchema = retSchema
+	st, err := sqlTvfPrepare(proc, arg)
+	require.NoError(t, err)
+	inputBat := batch.EmptyForConstFoldBatch
+	for i := range arg.ctr.executorsForArgs {
+		arg.ctr.argVecs[i], err = arg.ctr.executorsForArgs[i].Eval(proc, []*batch.Batch{inputBat}, nil)
+		require.NoError(t, err)
+	}
+	require.NoError(t, st.start(arg, proc, 0, nil))
+
+	total, calls, maxRows := 0, 0, 0
+	for {
+		res, err := st.call(arg, proc)
+		require.NoError(t, err)
+		if res.Batch.IsDone() {
+			break
+		}
+		rows := res.Batch.RowCount()
+		total += rows
+		calls++
+		if rows > maxRows {
+			maxRows = rows
+		}
+	}
+	require.Equal(t, totalRows, total)
+	require.Greater(t, calls, 1, "one call retained the whole oversized result")
+	// ~600KB budget / ~100KB rows: each batch stays in the budget's ballpark
+	require.LessOrEqual(t, maxRows, 7)
+	st.reset(arg, proc)
+	st.free(arg, proc, false, nil)
+	arg.ctr.cleanExecutors()
+}

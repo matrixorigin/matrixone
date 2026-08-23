@@ -44,6 +44,12 @@ var _ process.ForeignConnCache = (*Session)(nil)
 func (ses *Session) PutForeignConn(ctx context.Context, handle string, conn process.ForeignConn) (process.ForeignConn, error) {
 	ses.foreignConnMu.Lock()
 	defer ses.foreignConnMu.Unlock()
+	if ses.foreignConnsClosed {
+		// Terminal: the session already tore its connections down; admitting a
+		// late connection would leak it (nothing will close the cache again).
+		// The caller owns the rejected conn and closes it.
+		return nil, moerr.NewInvalidInput(ctx, "session is closing; foreign connection rejected")
+	}
 	if ses.foreignConns == nil {
 		ses.foreignConns = make(map[string]process.ForeignConn)
 	}
@@ -86,6 +92,7 @@ func (ses *Session) closeForeignConns() {
 	ses.foreignConnMu.Lock()
 	conns := ses.foreignConns
 	ses.foreignConns = nil
+	ses.foreignConnsClosed = true
 	ses.foreignConnMu.Unlock()
 
 	for handle, c := range conns {

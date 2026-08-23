@@ -43,6 +43,8 @@ type foreignTVFState struct {
 	batch     *batch.Batch
 	reader    *external.ForeignTVFReader    // schema mode
 	rawReader *external.ForeignTVFRawReader // no-schema mode
+	// rawParam carries the batch byte budget for the no-schema path.
+	rawParam  *external.ExternalParam
 	exhausted bool
 }
 
@@ -145,6 +147,7 @@ func (st *foreignTVFState) start(tf *TableFunction, proc *process.Process, nthRo
 	}
 	param := external.BuildForeignTVFExternParam(proc, tf.Rets, st.fullSchemaNames, src)
 	if st.noSchema {
+		st.rawParam = param
 		st.rawReader, err = external.NewForeignTVFRawReader(param, stream)
 	} else {
 		st.reader, err = external.NewForeignTVFReader(param, stream)
@@ -169,8 +172,13 @@ func (st *foreignTVFState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 	}
 
 	if st.noSchema {
+		// Bounded by rows AND bytes: schema mode inherits makeBatchRows'
+		// maxBatchSize budget, and a valid foreign result of huge text values
+		// must not retain gigabytes in one raw batch either.
+		byteBudget := st.rawParam.MaxBatchSize()
+		var batchBytes uint64
 		cnt := 0
-		for cnt < 8192 {
+		for cnt < 8192 && (batchBytes < byteBudget || cnt == 0) {
 			fields, ok, err := st.rawReader.ReadRow()
 			if err != nil {
 				return vm.CallResult{}, err
@@ -190,6 +198,7 @@ func (st *foreignTVFState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 			if err := vector.AppendByteJson(st.batch.Vecs[0], bj, false, proc.Mp()); err != nil {
 				return vm.CallResult{}, err
 			}
+			batchBytes += uint64(len(encoded))
 			cnt++
 		}
 		if cnt == 0 {

@@ -122,6 +122,13 @@ func TestBuildTVFColDefs(t *testing.T) {
 		{Name: "a", Type: ParseJsonlTypeInt64}, {Name: "a", Type: ParseJsonlTypeString}}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "duplicate column name")
+
+	// case-insensitive: binding lowercases names, so "A" and "a" would become
+	// one ambiguous binding downstream.
+	_, err = buildTVFColDefs(ctx, ParseJsonlOptions{Cols: []ParseJsonlOptionsCol{
+		{Name: "A", Type: ParseJsonlTypeInt64}, {Name: "a", Type: ParseJsonlTypeString}}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate column name")
 }
 
 func TestForeignTVFParamRoundTrip(t *testing.T) {

@@ -80,11 +80,14 @@ func buildTVFColDefs(ctx context.Context, opts ParseJsonlOptions) ([]*plan.ColDe
 	seen := make(map[string]bool, len(opts.Cols))
 	for _, col := range opts.Cols {
 		// A duplicate name would silently alias two output columns to one
-		// source field position in the foreign TVF field mapping.
-		if seen[col.Name] {
+		// source field position in the foreign TVF field mapping. The check is
+		// case-insensitive because binding lowercases column names, so "A" and
+		// "a" would collide into one ambiguous binding downstream.
+		lower := strings.ToLower(col.Name)
+		if seen[lower] {
 			return nil, moerr.NewInvalidInputf(ctx, "duplicate column name %q in options", col.Name)
 		}
-		seen[col.Name] = true
+		seen[lower] = true
 		var t types.T
 		switch col.Type {
 		case ParseJsonlTypeBool:
