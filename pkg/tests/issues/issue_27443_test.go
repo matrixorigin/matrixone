@@ -58,9 +58,11 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 
 		replaceStmt, err := db.PrepareContext(ctx, "replace into `"+dbName+"`.dst (id, tenant, payload, amount) select id, tenant, payload, amount from `"+dbName+"`.src where tenant = ?")
 		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, replaceStmt.Close())
+		}()
 		_, err = replaceStmt.ExecContext(ctx, int64(7))
 		require.NoError(t, err)
-		require.NoError(t, replaceStmt.Close())
 
 		var payload string
 		var amount string
@@ -70,9 +72,11 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 
 		updateStmt, err := db.PrepareContext(ctx, "update `"+dbName+"`.dst set payload = ?, amount = ? where tenant = ? and id = ?")
 		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, updateStmt.Close())
+		}()
 		_, err = updateStmt.ExecContext(ctx, "updated", "23.45", int64(7), int64(1))
 		require.NoError(t, err)
-		require.NoError(t, updateStmt.Close())
 		require.NoError(t, db.QueryRowContext(ctx, "select payload, amount from `"+dbName+"`.dst where id = 1").Scan(&payload, &amount))
 		require.Equal(t, "updated", payload)
 		require.Equal(t, "23.45", amount)
@@ -81,9 +85,11 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		execSQLRequire(t, ctx, db, "insert into `"+dbName+"`.pp_dst values (1, 1, 999, 1.00, '2026-08-21 01:02:03', '01:02:03', x'6131', 7)")
 		ppStmt, err := db.PrepareContext(ctx, "update `"+dbName+"`.pp_dst set status=?, amount=?, dt=?, tm=?, bin=?, u=? where tenant=? and id=?")
 		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, ppStmt.Close())
+		}()
 		_, err = ppStmt.ExecContext(ctx, int64(200), "2.50", "2026-08-22 04:05:06", "04:05:06", []byte("b2"), uint64(42), int64(1), int64(1))
 		require.NoError(t, err)
-		require.NoError(t, ppStmt.Close())
 		var status int64
 		var dt, tm string
 		var bin []byte
@@ -98,9 +104,11 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 
 		sumStmt, err := db.PrepareContext(ctx, "select sum(?)")
 		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, sumStmt.Close())
+		}()
 		var sum int64
 		require.NoError(t, sumStmt.QueryRowContext(ctx, int64(7)).Scan(&sum))
 		require.Equal(t, int64(7), sum)
-		require.NoError(t, sumStmt.Close())
 	})
 }
