@@ -1186,8 +1186,15 @@ func FormatColType(colType plan.Type) string {
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
-	if typ.Oid == types.T_text && colType.Width == types.MaxTinyTextLen {
-		ts = "TINYTEXT"
+	if typ.Oid == types.T_text {
+		switch colType.Width {
+		case types.MaxTinyTextLen:
+			ts = "TINYTEXT"
+		case types.MaxMediumTextLen:
+			ts = "MEDIUMTEXT"
+		case types.MaxLongTextLen:
+			ts = "LONGTEXT"
+		}
 	}
 	// after decimal fix, remove this
 	if typ.Oid.IsDecimal() {

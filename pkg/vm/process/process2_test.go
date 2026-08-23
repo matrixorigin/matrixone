@@ -135,6 +135,52 @@ func TestAffectedRows(t *testing.T) {
 	assert.Equal(t, int64(0), proc.GetAffectedRows())
 }
 
+func TestStatementLastInsertIDSemantics(t *testing.T) {
+	// Partially initialized processes are used by a few frontend unit tests;
+	// the setters must remain no-ops until a BaseProcess is attached.
+	nilBase := &Process{}
+	nilBase.SetLastInsertID(7)
+	nilBase.SetStatementLastInsertID(7)
+	require.Zero(t, nilBase.SetStatementLastInsertIDIfEarlier(0))
+	require.Equal(t, uint64(7), nilBase.SetStatementLastInsertIDIfEarlier(7))
+
+	last := uint64(3)
+	statement := uint64(0)
+	proc := &Process{Base: &BaseProcess{
+		LastInsertID:          &last,
+		StatementLastInsertID: &statement,
+	}}
+	proc.SetLastInsertID(11)
+	proc.SetStatementLastInsertID(5)
+	require.Equal(t, uint64(11), proc.GetLastInsertID())
+	require.Equal(t, uint64(5), proc.GetStatementLastInsertID())
+	empty := &Process{Base: &BaseProcess{}}
+	empty.SetLastInsertID(9)
+	empty.SetStatementLastInsertID(9)
+	require.Zero(t, empty.GetLastInsertID())
+	require.Zero(t, empty.GetStatementLastInsertID())
+	require.Equal(t, uint64(6), empty.SetStatementLastInsertIDIfEarlier(6))
+
+	// The statement coordinator keeps the smallest generated key seen by
+	// parallel materialization scopes and mirrors it to the session value.
+	require.Equal(t, uint64(4), proc.SetStatementLastInsertIDIfEarlier(4))
+	require.Equal(t, uint64(4), proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(4), proc.GetLastInsertID())
+	require.Equal(t, uint64(4), proc.SetStatementLastInsertIDIfEarlier(9))
+	require.Equal(t, uint64(4), proc.GetLastInsertID())
+	require.Equal(t, uint64(2), proc.SetStatementLastInsertIDIfEarlier(2))
+	require.Equal(t, uint64(2), proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(2), proc.GetLastInsertID())
+	require.Equal(t, uint64(2), proc.SetStatementLastInsertIDIfEarlier(0))
+
+	// A process with only the legacy session field still publishes the first
+	// generated key without requiring the new statement field.
+	legacy := uint64(0)
+	legacyProc := &Process{Base: &BaseProcess{LastInsertID: &legacy}}
+	require.Equal(t, uint64(8), legacyProc.SetStatementLastInsertIDIfEarlier(8))
+	require.Equal(t, uint64(8), legacyProc.GetLastInsertID())
+}
+
 func TestGetSpillFileService(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()

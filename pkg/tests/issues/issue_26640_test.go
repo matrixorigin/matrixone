@@ -221,8 +221,12 @@ func TestIssue26640AccountPITRUsesCatalogRestoreHandlers(t *testing.T) {
 		var slept int
 		require.NoError(t, adminDB.QueryRowContext(ctx, "select sleep(1)").Scan(&slept))
 		var restoreAt string
+		// The PITR parser accepts second-precision timestamps.  Derive the
+		// boundary by truncating a microsecond timestamp instead of casting the
+		// session's default-FSP CURRENT_TIMESTAMP: the latter is rounded to the
+		// nearest second and can occasionally point one second into the future.
 		require.NoError(t, adminDB.QueryRowContext(ctx,
-			"select cast(current_timestamp as char)").Scan(&restoreAt))
+			"select date_format(current_timestamp(6), '%Y-%m-%d %H:%i:%s')").Scan(&restoreAt))
 
 		execSQLRequire(t, ctx, adminDB,
 			"revoke select on table `"+databaseName+"`.orders from pitr_reader")
