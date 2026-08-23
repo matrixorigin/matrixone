@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,8 @@ import (
 )
 
 type ProcOptions func(proc *process.Process)
+
+var autoIncrServiceMu sync.Mutex
 
 func WithMPool(pool *mpool.MPool) ProcOptions {
 	return func(proc *process.Process) {
@@ -70,10 +73,20 @@ func NewProcess(t testing.TB, opts ...ProcOptions) *process.Process {
 }
 
 func SetupAutoIncrService(sid string) {
+	autoIncrServiceMu.Lock()
+	defer autoIncrServiceMu.Unlock()
+
 	rt := runtime.ServiceRuntime(sid)
 	if rt == nil {
 		rt = runtime.DefaultRuntime()
 		runtime.SetupServiceBasedRuntime(sid, rt)
+	}
+	// An auto-increment service belongs to a service runtime, not to an
+	// individual Process. Replacing it for every test Process leaks the old
+	// service's background workers and their caches because the runtime is the
+	// only owner that could close it.
+	if _, ok := rt.GetGlobalVariables(runtime.AutoIncrementService); ok {
+		return
 	}
 	rt.SetGlobalVariables(
 		runtime.AutoIncrementService,
@@ -83,8 +96,24 @@ func SetupAutoIncrService(sid string) {
 			incrservice.Config{}))
 }
 
-func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Process {
+// ensureAutoIncrService initializes the runtime-owned service without
+// replacing an existing instance. Processes are short-lived and are created
+// repeatedly by planner tests, while the auto-increment service owns a
+// background allocator and must be shared for the lifetime of its runtime.
+func ensureAutoIncrService(sid string) {
+	rt := runtime.ServiceRuntime(sid)
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
+		runtime.SetupServiceBasedRuntime(sid, rt)
+	}
+	if _, ok := rt.GetGlobalVariables(runtime.AutoIncrementService); ok {
+		return
+	}
 	SetupAutoIncrService(sid)
+}
+
+func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Process {
+	ensureAutoIncrService(sid)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := process.NewTopProcess(
 		ctx,
