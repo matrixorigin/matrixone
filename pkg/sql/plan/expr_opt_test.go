@@ -247,9 +247,11 @@ func TestDoMergeFiltersOnCompositeKeyMergesFoldedInVectorInsideOr(t *testing.T) 
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	tag := builder.genNewBindTag()
+	foldedValues := MakePlan2Int64VecExprWithType(ctx.GetProcess().Mp(), 1, 2)
+	foldedValues.GetVec().StringSource = uint32(types.StringSourceCOMStmt)
 	bIn, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "in", []*planpb.Expr{
 		makeExprOptInt64Col(tag, 1, "b"),
-		MakePlan2Int64VecExprWithType(ctx.GetProcess().Mp(), 1, 2),
+		foldedValues,
 	})
 	require.NoError(t, err)
 	bEq := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 1, "b"), 3)
@@ -259,7 +261,10 @@ func TestDoMergeFiltersOnCompositeKeyMergesFoldedInVectorInsideOr(t *testing.T) 
 	ret := builder.doMergeFiltersOnCompositeKey(makeExprOptCompositeSortKeyTableDef(), tag, orExpr)
 	require.Len(t, ret, 1)
 	require.Equal(t, "in", ret[0].GetF().Func.ObjName)
-	require.Len(t, ret[0].GetF().Args[1].GetList().List, 3)
+	mergedValues := ret[0].GetF().Args[1].GetList().List
+	require.Len(t, mergedValues, 3)
+	require.Equal(t, uint32(types.StringSourceCOMStmt)+1, mergedValues[0].GetLit().GetStringSource())
+	require.Equal(t, uint32(types.StringSourceCOMStmt)+1, mergedValues[1].GetLit().GetStringSource())
 }
 
 func TestDoMergeFiltersOnCompositeKeyRejectsMalformedFoldedInVector(t *testing.T) {
@@ -431,6 +436,58 @@ func TestInRHSValuesMaterializesFoldedVectorValues(t *testing.T) {
 		expr.GetVec().Data[i] = 0
 	}
 	require.Equal(t, "safe value", values[0].GetLit().GetSval())
+}
+
+func TestInRHSValuesRestoresLiteralVecStringSource(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	makeVectorExpr := func(source types.StringSource, null bool) *planpb.Expr {
+		vec := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(vec, []byte("value"), null, mp))
+		data, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		typ := makePlan2Type(vec.GetType())
+		vec.Free(mp)
+		return &planpb.Expr{
+			Typ: typ,
+			Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+				Len:          1,
+				Data:         data,
+				StringSource: uint32(source),
+			}},
+		}
+	}
+
+	for _, test := range []struct {
+		name   string
+		source types.StringSource
+		null   bool
+	}{
+		{name: "expression", source: types.StringSourceExpression},
+		{name: "literal", source: types.StringSourceLiteral},
+		{name: "COM_STMT", source: types.StringSourceCOMStmt},
+		{name: "NULL SQL PREPARE", source: types.StringSourceSQLPrepare, null: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr := makeVectorExpr(test.source, test.null)
+			values, ok := inRHSValues(expr, expr.Typ)
+			require.True(t, ok)
+			require.Len(t, values, 1)
+			require.Equal(t, test.null, values[0].GetLit().GetIsnull())
+			wantEncoded := uint32(0)
+			if test.source != types.StringSourceLiteral {
+				wantEncoded = uint32(test.source) + 1
+			}
+			require.Equal(t, wantEncoded, values[0].GetLit().GetStringSource())
+		})
+	}
+
+	invalid := makeVectorExpr(types.StringSourceExpression, false)
+	invalid.GetVec().StringSource = uint32(types.StringSourceCOMStmt) + 1
+	values, ok := inRHSValues(invalid, invalid.Typ)
+	require.False(t, ok)
+	require.Nil(t, values)
+	_, ok = blockFilterConstantSet(invalid)
+	require.False(t, ok)
 }
 
 func TestInRHSValuesRejectsOversizedFoldedVector(t *testing.T) {

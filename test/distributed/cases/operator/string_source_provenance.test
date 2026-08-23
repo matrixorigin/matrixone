@@ -10,13 +10,26 @@ use string_source_provenance;
 
 set @source_value = binary 'A\0B';
 select hex(@source_value) as local_user_variable;
+select hex(concat(@source_value, binary 'C')) as projected_string_wrapper;
 select hex(v) as derived_user_variable from (select @source_value as v) dt;
+with source_cte as (select @source_value as v)
+select hex(v) as cte_user_variable from source_cte;
+select hex(l.v) as joined_user_variable
+from (select @source_value as v) l join (select 1 as id) r on l.v is not null;
+select hex(v) as union_all_user_variable
+from (select @source_value as v union all select @source_value as v) u order by v;
+select hex(v) as union_distinct_user_variable
+from (select @source_value as v union select @source_value as v) u;
+select hex(v) as grouped_user_variable, count(*) as grouped_count
+from (select @source_value as v union all select @source_value as v) u group by v;
 
 create table source_materialized(id int primary key, payload varbinary(8));
 insert into source_materialized values (1, @source_value), (2, null);
 select id, hex(payload) as materialized_value from source_materialized order by id;
 select id, hex(coalesce(payload, @source_value)) as remote_selected_value
 from source_materialized order by id;
+select hex(max(payload)) as aggregate_materialized_value from source_materialized;
+select count(distinct payload) as distinct_materialized_count from source_materialized;
 
 select hex(coalesce(@source_value, binary 'fallback')) as coalesce_first_arm;
 set @source_value = null;

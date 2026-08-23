@@ -550,6 +550,75 @@ func TestFoldedCastStringSourceOwnership(t *testing.T) {
 	}
 }
 
+func TestStringSourceConsumerTotality(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	sources := []types.StringSource{
+		types.StringSourceExpression,
+		types.StringSourceLiteral,
+		types.StringSourceUserVariable,
+		types.StringSourceSQLPrepare,
+		types.StringSourceCOMStmt,
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for range sources {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("5"), false, proc.Mp()))
+	}
+	require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(sources, proc.Mp()))
+	input.SetRowCount(len(sources))
+	defer input.Clean(proc.Mp())
+
+	column := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	literal := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: "x"},
+		}},
+	}
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		argTypes := make([]types.Type, len(args))
+		for i := range args {
+			argTypes[i] = types.New(types.T(args[i].Typ.Id), args[i].Typ.Width, args[i].Typ.Scale)
+		}
+		fn, err := function.GetFunctionByName(proc.Ctx, name, argTypes)
+		require.NoError(t, err)
+		retType := fn.GetReturnType()
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(retType.Oid), Width: retType.Width, Scale: retType.Scale},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: name},
+				Args: args,
+			}},
+		}
+	}
+	castTo := func(targetType types.Type) *plan.Expr {
+		return bind("cast", column, &plan.Expr{
+			Typ:  plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale},
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		})
+	}
+
+	for name, expression := range map[string]*plan.Expr{
+		"numeric": castTo(types.T_int64.ToType()),
+		"bit":     castTo(types.New(types.T_bit, 8, 0)),
+		"json":    bind("json_valid", column),
+		"string":  bind("concat", column, literal),
+	} {
+		t.Run(name, func(t *testing.T) {
+			executor, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, len(sources), result.Length())
+		})
+	}
+}
+
 func TestEvalIffSkipsUnselectedBranch(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bat := batch.New(nil)

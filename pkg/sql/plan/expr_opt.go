@@ -519,6 +519,13 @@ func decodeLiteralVec(literalVec *plan.LiteralVec) (vec vector.Vector, physicalL
 	if err := vec.UnmarshalBinary(literalVec.Data); err != nil || int64(vec.Length()) != int64(literalVec.Len) {
 		return vector.Vector{}, 0, false
 	}
+	// LiteralVec.Data is the stable Vector payload and deliberately omits
+	// runtime ownership. Restore the validated container-level source before
+	// any caller materializes scalar literals from the decoded rows.
+	source := types.StringSource(literalVec.StringSource)
+	if !source.Valid() || vec.SetStringSource(source) != nil {
+		return vector.Vector{}, 0, false
+	}
 
 	physicalLength = vec.Length()
 	if vec.IsConst() && physicalLength > 0 {

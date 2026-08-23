@@ -884,6 +884,46 @@ func TestPrepareParamKindDecoderRejectsMixedConstStringSources(t *testing.T) {
 	streaming.Clean(mp)
 }
 
+func TestAllStringSourcesRoundTripBatchAndGroupingCodecs(t *testing.T) {
+	mp := mpool.MustNewZero()
+	sources := []types.StringSource{
+		types.StringSourceExpression,
+		types.StringSourceLiteral,
+		types.StringSourceUserVariable,
+		types.StringSourceSQLPrepare,
+		types.StringSourceCOMStmt,
+	}
+	bat := NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for range sources {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("value"), false, mp))
+	}
+	require.NoError(t, bat.Vecs[0].SetStringSourcesWithMP(sources, mp))
+	bat.Vecs[0].GetGrouping().Add(1, 3)
+	bat.SetRowCount(len(sources))
+	defer bat.Clean(mp)
+
+	var wire bytes.Buffer
+	encoded, err := bat.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	decoded := NewOffHeapEmpty()
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))
+	for row, source := range sources {
+		require.Equal(t, source, decoded.Vecs[0].GetStringSourceAt(row))
+	}
+	decoded.Clean(mp)
+
+	wire.Reset()
+	require.NoError(t, bat.MarshalBinaryWithGroupingTo(&wire))
+	grouped := NewOffHeapEmpty()
+	require.NoError(t, grouped.UnmarshalFromReaderWithGrouping(&wire, mp))
+	for row, source := range sources {
+		require.Equal(t, source, grouped.Vecs[0].GetStringSourceAt(row))
+	}
+	require.True(t, grouped.Vecs[0].GetGrouping().IsSame(bat.Vecs[0].GetGrouping()))
+	grouped.Clean(mp)
+}
+
 func TestPrepareParamKindTransportMixedBinaryKeepsUniformKind(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(1)
