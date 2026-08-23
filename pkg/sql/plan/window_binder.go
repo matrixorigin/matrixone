@@ -529,8 +529,7 @@ func snapshotWindowValidationCTEState(ctx *BindContext) func() {
 	contextSnapshots := make(map[*BindContext]windowValidationContextSnapshot)
 
 	var collectContext func(*BindContext)
-	var collectCTE func(*CTERef)
-	collectCTE = func(ref *CTERef) {
+	collectCTE := func(ref *CTERef) {
 		if ref == nil {
 			return
 		}

@@ -471,7 +471,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> MAX_ROWS MIN_ROWS PACK_KEYS ROW_FORMAT STATS_AUTO_RECALC STATS_PERSISTENT STATS_SAMPLE_PAGES
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM ENGINE_ATTRIBUTE SECONDARY_ENGINE_ATTRIBUTE INSERT_METHOD
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
-%token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
+%nonassoc <str> RANGE
+%token <str> LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS CLUSTER
 %token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
@@ -1031,6 +1032,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Named window clause. Keep new tokens at the end of the token declarations
 // so regenerating the parser does not renumber every existing token.
 %token <str> WINDOW
+%nonassoc WINDOW_NAME_EMPTY
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -13336,6 +13338,10 @@ window_spec_body:
     }
 
 window_name_opt:
+    // RANGE remains a non-reserved identifier outside a window specification.
+    // Here it must start a frame instead of being consumed as a base-window
+    // name; a named window called `range` can still be quoted.
+    %prec WINDOW_NAME_EMPTY
     {
         $$ = nil
     }
@@ -16016,6 +16022,7 @@ non_reserved_keyword:
 |   ROLE
 |   RULE
 |   RULES
+|   RANGE
 |   READ
 |   REAL
 |   REORGANIZE
