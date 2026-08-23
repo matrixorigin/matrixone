@@ -4811,14 +4811,19 @@ func controlFlowMaxBytesPerCharacter(charset uint8) int32 {
 	case types.CharsetBinary:
 		return 1
 	case types.CharsetLegacy:
-		// Legacy text metadata is exposed as utf8_general_ci, which has the
-		// utf8mb3 three-byte maximum. Keep this bound for pre-collation plans.
+		// CharsetLegacy is the zero value in plans written before collation
+		// metadata became meaningful. Its protocol fallback is utf8_general_ci,
+		// so retain the utf8mb3 three-byte bound for those historical plans.
 		return 3
 	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
+		// Both explicit text identities are utf8mb4 in MatrixOne. This is the
+		// effective charset of newly bound literals and view expressions, so a
+		// two-character literal has an eight-byte VARBINARY capacity.
 		return int32(utf8.UTFMax)
 	default:
-		// Unknown text identities must not understate a value that may contain
-		// four-byte UTF-8 code points.
+		// Unknown identities can come from a plan produced by a newer node. Keep
+		// the public utf8mb4 capacity until that identity is understood rather
+		// than understate a value that may contain four-byte UTF-8 code points.
 		return int32(utf8.UTFMax)
 	}
 }

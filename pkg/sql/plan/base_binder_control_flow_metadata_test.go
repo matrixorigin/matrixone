@@ -432,6 +432,8 @@ func TestBindControlFlowBinaryCharacterCharsetWidth(t *testing.T) {
 		{name: "utf8mb3-compatible legacy text", charset: types.CharsetLegacy, width: 6},
 		{name: "utf8mb4 general text", charset: types.CharsetUTF8, width: 8},
 		{name: "utf8mb4 binary collation", charset: types.CharsetUTF8MB4Bin, width: 8},
+		{name: "binary payload", charset: types.CharsetBinary, width: 2},
+		{name: "unknown text identity uses utf8mb4 bound", charset: 255, width: 8},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			character := makePlan2StringConstExprWithType("bc")
@@ -523,6 +525,7 @@ func TestBuildControlFlowBinaryCharacterLiteralWidth(t *testing.T) {
 		{sql: `select case when 1 then _binary 'a' else 'bc' end as c`, width: 8},
 		{sql: `select if(1, _binary 'a', 'bc') as c`, width: 8},
 		{sql: `select case when 1 then _binary 'a' else '中文' end as c`, width: 8},
+		{sql: `select case when 1 then _binary 'a' else '😀' end as c`, width: 4},
 	} {
 		t.Run(test.sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
