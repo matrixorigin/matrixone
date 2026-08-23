@@ -1118,6 +1118,26 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 			},
 		},
 		{
+			name: "nested eq or keeps every branch",
+			expr: MakeFunctionExprForTest("or", []*plan.Expr{
+				MakeFunctionExprForTest("or", []*plan.Expr{
+					MakeFunctionExprForTest("or", []*plan.Expr{makeEq(1), makeEq(2)}),
+					MakeFunctionExprForTest("or", []*plan.Expr{makeEq(3), makeEq(4)}),
+				}),
+				makeEq(5),
+			}),
+			expect: expect{
+				valid: true,
+				disjuncts: []BasePKFilter{
+					{Valid: true, Op: function.EQUAL, LB: encodeVal(1), Oid: types.T_int64},
+					{Valid: true, Op: function.EQUAL, LB: encodeVal(2), Oid: types.T_int64},
+					{Valid: true, Op: function.EQUAL, LB: encodeVal(3), Oid: types.T_int64},
+					{Valid: true, Op: function.EQUAL, LB: encodeVal(4), Oid: types.T_int64},
+					{Valid: true, Op: function.EQUAL, LB: encodeVal(5), Oid: types.T_int64},
+				},
+			},
+		},
+		{
 			name: "eq or in",
 			expr: MakeFunctionExprForTest("or", []*plan.Expr{
 				makeEq(1),
