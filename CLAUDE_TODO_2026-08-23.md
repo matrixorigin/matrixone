@@ -46,3 +46,17 @@
 - merge 最新 `mo/main` 时发现 v25 已由 #27442 用于 UPDATE changed-row counting。保留 main 的
   v25 契约，将 prepared numeric-prefix 的首次可用版本顺延为 v26；v25 worker 必须拒绝携带
   numeric-prefix sentinel 的远程计划，v26 同时兼容 v25 changed-row 能力。
+
+## 最终验证与自审
+
+- 最终 merge 头 `5a7d3930be` 上，三个核心黑盒测试共同通过：
+  `TestIssue25753PreparedNumericProtocolLifecycle`、
+  `TestIssue26873BinaryPreparedEnumAndYearCoveringIndex`、
+  `TestIssue27088PreparedDecimalCommonType`。
+- `pkg/sql/plan`、`pkg/frontend`、`pkg/pb/plan`、`pkg/sql/compile`、
+  `pkg/sql/plan/function`、`pkg/sql/plan/rule`、`pkg/tests/issues`、`pkg/defines`
+  全包测试通过；`pkg/frontend` 与 `pkg/sql/plan` 全包 race 通过。
+- v25/v26 边界测试覆盖 numeric-prefix upgrade/rollback、远程发送端和接收端拒绝，以及普通 cast
+  在 v25 下仍可执行；UPDATE changed-row 的 v24/v25 边界保持不变。
+- 完整 diff 的功能闭包、retry 快照所有权、远程版本门禁及失败路径已复核；本轮改动不新增 goroutine、
+  wait-for 边或资源所有权，未发现新的 correctness/lifecycle blocker。`git diff --check` 通过。
