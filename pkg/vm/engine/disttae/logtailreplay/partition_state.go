@@ -1840,12 +1840,16 @@ type tombstoneBlockIterator struct {
 	inMemEntry   *PrimaryIndexEntry
 }
 
-func (it *tombstoneBlockIterator) loadNextBlock() bool {
-	// Release previous block
-	if it.release != nil {
-		it.release()
-		it.release = nil
+func (it *tombstoneBlockIterator) releaseCurrentBlock() {
+	release := it.release
+	it.release = nil
+	if release != nil {
+		release()
 	}
+}
+
+func (it *tombstoneBlockIterator) loadNextBlock() bool {
+	it.releaseCurrentBlock()
 
 	if it.blockIdx >= len(it.blocks) {
 		return false
@@ -1977,6 +1981,11 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 	stats TombstoneStats,
 ) (TombstoneStats, error) {
 	iterators := make([]*tombstoneBlockIterator, 0, len(objects))
+	defer func() {
+		for _, it := range iterators {
+			it.releaseCurrentBlock()
+		}
+	}()
 
 	for _, obj := range objects {
 		cnCreated := obj.GetCNCreated()
@@ -2015,14 +2024,17 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 			p:            p,
 		}
 
+		// Transfer ownership before the first read so the function-level cleanup
+		// also covers panics and future early-return branches inside next.
+		iterators = append(iterators, it)
 		if it.next() {
-			iterators = append(iterators, it)
-		} else if it.err != nil {
-			if it.release != nil {
-				it.release()
-			}
+			continue
+		}
+		if it.err != nil {
 			return stats, it.err
 		}
+		it.releaseCurrentBlock()
+		iterators = iterators[:len(iterators)-1]
 	}
 
 	// Add in-memory tombstones as an iterator
@@ -2060,15 +2072,8 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 		item.iter.advance()
 		if item.iter.next() {
 			heap.Push(&h, heapItem{rowId: item.iter.current(), iter: item.iter})
-		}
-	}
-
-	for _, it := range iterators {
-		if it.release != nil {
-			it.release()
-		}
-		if it.err != nil {
-			return stats, it.err
+		} else if item.iter.err != nil {
+			return stats, item.iter.err
 		}
 	}
 

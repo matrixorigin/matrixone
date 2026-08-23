@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -1632,6 +1635,184 @@ func TestCountTombstoneStatsWithMergeReturnsInitialReaderError(t *testing.T) {
 		TombstoneStats{},
 	)
 	require.ErrorContains(t, err, "commit-ts column is unavailable")
+}
+
+type tombstoneStatsTrackingFS struct {
+	fileservice.FileService
+	targetPath      string
+	tracked         atomic.Int32
+	outstanding     atomic.Int32
+	targetDataReads atomic.Int32
+}
+
+func (f *tombstoneStatsTrackingFS) Read(
+	ctx context.Context,
+	ioVector *fileservice.IOVector,
+) error {
+	if err := f.FileService.Read(ctx, ioVector); err != nil {
+		return err
+	}
+	if f.targetPath != "" &&
+		ioVector.FilePath == f.targetPath &&
+		len(ioVector.Entries) > 1 {
+		f.targetDataReads.Add(1)
+	}
+	for i := range ioVector.Entries {
+		data := ioVector.Entries[i].CachedData
+		if data == nil {
+			continue
+		}
+		f.tracked.Add(1)
+		f.outstanding.Add(1)
+		ioVector.Entries[i].CachedData = &tombstoneStatsTrackingData{
+			Data:        data,
+			outstanding: &f.outstanding,
+		}
+	}
+	return nil
+}
+
+type tombstoneStatsTrackingData struct {
+	fscache.Data
+	outstanding *atomic.Int32
+}
+
+func (d *tombstoneStatsTrackingData) Slice(length int) fscache.Data {
+	d.Data = d.Data.Slice(length)
+	return d
+}
+
+func (d *tombstoneStatsTrackingData) Retain() {
+	d.Data.Retain()
+	d.outstanding.Add(1)
+}
+
+func (d *tombstoneStatsTrackingData) Release() {
+	d.Data.Release()
+	d.outstanding.Add(-1)
+}
+
+func addTombstoneStatsVisibleDataObject(
+	t *testing.T,
+	state *PartitionState,
+	dataObjID *types.Objectid,
+) {
+	t.Helper()
+	stats := objectio.NewObjectStatsWithObjectID(dataObjID, false, true, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  types.BuildTS(1, 0),
+	})
+}
+
+func writeTombstoneStatsTestObject(
+	t *testing.T,
+	ctx context.Context,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+	dataObjID *types.Objectid,
+	firstOffset uint32,
+	abortRowsPerBlock ...int,
+) objectio.ObjectEntry {
+	t.Helper()
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1,
+		false,
+		true,
+		fs,
+	)
+	for blockIdx, abortRows := range abortRowsPerBlock {
+		require.LessOrEqual(t, abortRows, 3)
+		input := batch.NewWithSize(3)
+		input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+		defer input.Clean(mp)
+
+		blockID := objectio.NewBlockidWithObjectID(dataObjID, 0)
+		for row := 0; row < 3; row++ {
+			offset := firstOffset + uint32(blockIdx*3+row)
+			require.NoError(t, vector.AppendFixed(
+				input.Vecs[0], types.NewRowid(&blockID, offset), false, mp,
+			))
+			require.NoError(t, vector.AppendFixed(
+				input.Vecs[1], types.BuildTS(5, 0), false, mp,
+			))
+		}
+		for row := 0; row < abortRows; row++ {
+			require.NoError(t, vector.AppendFixed(
+				input.Vecs[2], false, false, mp,
+			))
+		}
+		input.SetRowCount(3)
+		_, err := writer.WriteBatch(input)
+		require.NoError(t, err)
+	}
+
+	_, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	return objectio.ObjectEntry{
+		ObjectStats: writer.GetObjectStats(),
+		CreateTime:  types.BuildTS(1, 0),
+	}
+}
+
+func TestCountTombstoneStatsWithMergeReleasesReadersOnInitialError(t *testing.T) {
+	ctx := context.Background()
+	baseFS := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state := NewPartitionState("", false, 42, false)
+
+	dataObjID := objectio.NewObjectid()
+	addTombstoneStatsVisibleDataObject(t, state, &dataObjID)
+	valid := writeTombstoneStatsTestObject(t, ctx, baseFS, mp, &dataObjID, 0, 3)
+	malformed := writeTombstoneStatsTestObject(t, ctx, baseFS, mp, &dataObjID, 10, 1)
+	trackingFS := &tombstoneStatsTrackingFS{FileService: baseFS}
+
+	_, err := state.countTombstoneStatsWithMerge(
+		ctx,
+		types.BuildTS(10, 0),
+		trackingFS,
+		[]objectio.ObjectEntry{valid, malformed},
+		TombstoneStats{},
+	)
+	require.ErrorContains(t, err, "abort column has 1 rows, expected 3")
+	require.Positive(t, trackingFS.tracked.Load())
+	require.Zero(t, trackingFS.outstanding.Load(), "all cached data leases must be released")
+}
+
+func TestCountTombstoneStatsWithMergeStopsAndReleasesReadersOnIterationError(t *testing.T) {
+	ctx := context.Background()
+	baseFS := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state := NewPartitionState("", false, 42, false)
+
+	dataObjID := objectio.NewObjectid()
+	addTombstoneStatsVisibleDataObject(t, state, &dataObjID)
+	failing := writeTombstoneStatsTestObject(t, ctx, baseFS, mp, &dataObjID, 0, 3, 1)
+	peer := writeTombstoneStatsTestObject(t, ctx, baseFS, mp, &dataObjID, 100, 3, 3)
+	trackingFS := &tombstoneStatsTrackingFS{
+		FileService: baseFS,
+		targetPath:  peer.ObjectStats.ObjectName().UnsafeString(),
+	}
+
+	_, err := state.countTombstoneStatsWithMerge(
+		ctx,
+		types.BuildTS(10, 0),
+		trackingFS,
+		[]objectio.ObjectEntry{failing, peer},
+		TombstoneStats{},
+	)
+	require.ErrorContains(t, err, "abort column has 1 rows, expected 3")
+	require.Equal(t, int32(1), trackingFS.targetDataReads.Load(),
+		"a fatal iterator error must not trigger reads of peer blocks")
+	require.Zero(t, trackingFS.outstanding.Load(), "all cached data leases must be released")
 }
 
 func TestCollectTombstoneStats_MultiObjectMultiBlock(t *testing.T) {
