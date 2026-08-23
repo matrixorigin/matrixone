@@ -2150,12 +2150,13 @@ func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 
 	t.Run("returns nil when Database fails with ExpectedEOB", func(t *testing.T) {
 		mockEngine.EXPECT().Database(gomock.Any(), "invisible_db", mockTxn).Return(nil, moerr.GetOkExpectedEOB())
-		silentSes := mock_frontend.NewMockFeSession(ctrl)
-		silentSes.EXPECT().GetService().Return(ses.GetService())
+		silentSes, logs := newObservedProtocolSession()
+		silentSes.service = ses.GetService()
 
 		sub, err := getSubscriptionMeta(ctx, "invisible_db", silentSes, mockTxn, mockBh)
 		require.NoError(t, err, "ExpectedEOB should return nil — database not visible means not a subscription")
 		require.Nil(t, sub)
+		require.Equal(t, 0, logs.Len())
 	})
 
 	t.Run("returns NoDB when Database fails with internal error", func(t *testing.T) {
