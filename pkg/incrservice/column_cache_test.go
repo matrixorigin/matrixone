@@ -99,7 +99,7 @@ func TestInsertInt8(t *testing.T) {
 	testColumnCacheInsert[int8](
 		t,
 		8,
-		8,
+		1,
 		newTestVector[int8](8, types.New(types.T_int8, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_int8, 0, 0), fillValues, fillRows),
 	)
@@ -114,7 +114,7 @@ func TestInsertInt8WithManual(t *testing.T) {
 	testColumnCacheInsert[int8](
 		t,
 		8,
-		15,
+		10,
 		newTestVector(8, types.New(types.T_int8, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_int8, 0, 0), fillValues, fillRows),
 	)
@@ -126,7 +126,7 @@ func TestInsertInt16(t *testing.T) {
 	testColumnCacheInsert[int16](
 		t,
 		8,
-		8,
+		1,
 		newTestVector[int16](8, types.New(types.T_int16, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_int16, 0, 0), fillValues, fillRows),
 	)
@@ -141,7 +141,7 @@ func TestInsertInt16WithManual(t *testing.T) {
 	testColumnCacheInsert[int16](
 		t,
 		8,
-		15,
+		10,
 		newTestVector(8, types.New(types.T_int16, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_int16, 0, 0), fillValues, fillRows),
 	)
@@ -153,7 +153,7 @@ func TestInsertInt32(t *testing.T) {
 	testColumnCacheInsert[int32](
 		t,
 		8,
-		8,
+		1,
 		newTestVector[int32](8, types.New(types.T_int32, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_int32, 0, 0), fillValues, fillRows),
 	)
@@ -168,7 +168,7 @@ func TestInsertInt32WithManual(t *testing.T) {
 	testColumnCacheInsert[int32](
 		t,
 		8,
-		15,
+		10,
 		newTestVector(8, types.New(types.T_int32, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_int32, 0, 0), fillValues, fillRows),
 	)
@@ -180,7 +180,7 @@ func TestInsertInt64(t *testing.T) {
 	testColumnCacheInsert[int64](
 		t,
 		8,
-		8,
+		1,
 		newTestVector[int64](8, types.New(types.T_int64, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_int64, 0, 0), fillValues, fillRows),
 	)
@@ -195,7 +195,7 @@ func TestInsertInt64WithManual(t *testing.T) {
 	testColumnCacheInsert[int64](
 		t,
 		8,
-		15,
+		10,
 		newTestVector(8, types.New(types.T_int64, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_int64, 0, 0), fillValues, fillRows),
 	)
@@ -207,7 +207,7 @@ func TestInsertUint8(t *testing.T) {
 	testColumnCacheInsert[uint8](
 		t,
 		8,
-		8,
+		1,
 		newTestVector[uint8](8, types.New(types.T_uint8, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_uint8, 0, 0), fillValues, fillRows),
 	)
@@ -222,7 +222,7 @@ func TestInsertUint8WithManual(t *testing.T) {
 	testColumnCacheInsert[uint8](
 		t,
 		8,
-		15,
+		10,
 		newTestVector(8, types.New(types.T_uint8, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_uint8, 0, 0), fillValues, fillRows),
 	)
@@ -234,7 +234,7 @@ func TestInsertUint16(t *testing.T) {
 	testColumnCacheInsert[uint16](
 		t,
 		8,
-		8,
+		1,
 		newTestVector[uint16](8, types.New(types.T_uint16, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_uint16, 0, 0), fillValues, fillRows),
 	)
@@ -249,7 +249,7 @@ func TestInsertUint16WithManual(t *testing.T) {
 	testColumnCacheInsert[uint16](
 		t,
 		8,
-		15,
+		10,
 		newTestVector(8, types.New(types.T_uint16, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_uint16, 0, 0), fillValues, fillRows),
 	)
@@ -261,7 +261,7 @@ func TestInsertUint32(t *testing.T) {
 	testColumnCacheInsert[uint32](
 		t,
 		8,
-		8,
+		1,
 		newTestVector[uint32](8, types.New(types.T_uint32, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_uint32, 0, 0), fillValues, fillRows),
 	)
@@ -276,7 +276,7 @@ func TestInsertUint32WithManual(t *testing.T) {
 	testColumnCacheInsert[uint32](
 		t,
 		8,
-		15,
+		10,
 		newTestVector(8, types.New(types.T_uint32, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_uint32, 0, 0), fillValues, fillRows),
 	)
@@ -288,7 +288,7 @@ func TestInsertUint64(t *testing.T) {
 	testColumnCacheInsert[uint64](
 		t,
 		8,
-		8,
+		1,
 		newTestVector[uint64](8, types.New(types.T_uint64, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
 	)
@@ -303,7 +303,7 @@ func TestInsertUint64WithManual(t *testing.T) {
 	testColumnCacheInsert[uint64](
 		t,
 		8,
-		15,
+		10,
 		newTestVector(8, types.New(types.T_uint64, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
 	)
@@ -318,7 +318,7 @@ func TestInsertWithManualMixed(t *testing.T) {
 	testColumnCacheInsert[uint64](
 		t,
 		8,
-		10,
+		1,
 		newTestVector(8, types.New(types.T_uint64, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
 	)
@@ -444,7 +444,7 @@ func TestIssue9840(t *testing.T) {
 	testColumnCacheInsert[uint64](
 		t,
 		8,
-		8,
+		2,
 		input,
 		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
 	)

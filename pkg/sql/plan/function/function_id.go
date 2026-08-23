@@ -830,15 +830,18 @@ const (
 	// numbering intact leaves the next merge clean. Ids are referenced by name.
 	L1_DISTANCE = 570
 
+	// JSON_ARRAY_APPEND appends values to arrays within a JSON document.
+	JSON_ARRAY_APPEND = 571
+
 	// Foreign-data TVF connection management (esql_tvf / sql_tvf).
-	ESQL_TVF_CONNECT    = 571
-	ESQL_TVF_DISCONNECT = 572
-	SQL_TVF_CONNECT     = 573
-	SQL_TVF_DISCONNECT  = 574
+	ESQL_TVF_CONNECT    = 572
+	ESQL_TVF_DISCONNECT = 573
+	SQL_TVF_CONNECT     = 574
+	SQL_TVF_DISCONNECT  = 575
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 575
+	FUNCTION_END_NUMBER = 576
 )
 
 // functionIdRegister is what function we have registered already.
@@ -964,6 +967,7 @@ var functionIdRegister = map[string]int32{
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,
+	"to_interval": TO_INTERVAL,
 	"str_to_date": STR_TO_DATE,
 	"ts_to_time":  TS_TO_TIME,
 	"date_format": DATE_FORMAT,
@@ -1127,6 +1131,7 @@ var functionIdRegister = map[string]int32{
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
+	"json_array_append":              JSON_ARRAY_APPEND,
 	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,

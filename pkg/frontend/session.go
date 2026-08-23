@@ -182,6 +182,12 @@ type Session struct {
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
 
+	// preparedCursorBytes accounts for rows retained by all active server-side
+	// cursors in this session. Cursor results live on the prepared statement,
+	// so a session-level budget is required in addition to a per-cursor bound.
+	preparedCursorBytes atomic.Uint64
+	preparedCursorLimit atomic.Uint64
+
 	priv *privilege
 
 	ddlOwnerRoleID uint32
@@ -1341,6 +1347,8 @@ func (ses *Session) Close() {
 		stmt.Close()
 	}
 	ses.prepareStmts = nil
+	ses.preparedCursorBytes.Store(0)
+	ses.preparedCursorLimit.Store(0)
 	ses.allResultSet = nil
 	ses.tenant = nil
 	ses.priv = nil
@@ -1638,6 +1646,12 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute {
+			if err := capturePreparedCursorBatch(ses, execCtx, bat); err != nil {
+				return err
+			}
+			return stagePreparedCursorQueryResult(execCtx, crs, bat)
+		}
 		return ses.outputCallback(ses, execCtx, bat, crs)
 	}
 }

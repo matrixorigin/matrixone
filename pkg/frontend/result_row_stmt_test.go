@@ -16,19 +16,26 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func TestPrebuiltResultRowsFollowRequestProtocol(t *testing.T) {
@@ -75,6 +82,207 @@ func TestPrebuiltResultRowsFollowRequestProtocol(t *testing.T) {
 			require.Equal(t, tc.wantRow, packets[3])
 		})
 	}
+}
+
+type cursorMetadataProtocolWriter struct {
+	testMysqlWriter
+	metadataStatus uint16
+	resultStatus   uint16
+}
+
+func (w *cursorMetadataProtocolWriter) WriteLengthEncodedNumber(uint64) error { return nil }
+func (w *cursorMetadataProtocolWriter) WriteColumnDef(context.Context, Column, int) error {
+	return nil
+}
+func (w *cursorMetadataProtocolWriter) WriteEOFIFAndNoFlush(_, status uint16) error {
+	w.metadataStatus = status
+	return nil
+}
+func (w *cursorMetadataProtocolWriter) WriteEOFOrOK(_, status uint16) error {
+	w.resultStatus = status
+	return nil
+}
+
+func TestPreparedCursorMetadataAndEmptyResultTerminators(t *testing.T) {
+	writer := &cursorMetadataProtocolWriter{}
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().SeqLastValue = []string{""}
+	ses := &Session{feSessionImpl: feSessionImpl{
+		respr:      NewMysqlResp(writer),
+		txnHandler: &TxnHandler{},
+		mrs:        &MysqlResultSet{},
+	}, proc: proc, seqLastValue: new(string)}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{result: &MysqlResultSet{}}}
+	execCtx := &ExecCtx{
+		reqCtx:      context.Background(),
+		ses:         ses,
+		proc:        proc,
+		stmt:        &tree.Select{},
+		prepareStmt: stmt,
+		input:       &UserInput{isCursorExecute: true},
+	}
+	column := &MysqlColumn{}
+	column.SetName("v")
+	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	NewMysqlResp(writer).setPreparedCursorColumns(execCtx, []any{column})
+	require.NotNil(t, stmt.cursor.result)
+
+	// The execute response is emitted after the result has been materialized.
+	// The first FETCH then observes the zero-row result and emits LAST_ROW_SENT.
+	require.NoError(t, NewMysqlResp(writer).respStreamResultRow(ses, execCtx))
+	require.Equal(t, uint16(SERVER_STATUS_CURSOR_EXISTS), writer.resultStatus&SERVER_STATUS_CURSOR_EXISTS)
+	require.Zero(t, writer.resultStatus&SERVER_STATUS_LAST_ROW_SENT)
+	require.Zero(t, writer.metadataStatus)
+}
+
+func TestPreparedCursorPacketSequence(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		deprecateEOF    bool
+		expectedPackets int
+	}{
+		{name: "legacy EOF", expectedPackets: 3},
+		{name: "deprecate EOF", deprecateEOF: true, expectedPackets: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			require.NoError(t, err)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			pu.SV.SkipCheckUser = true
+			pu.SV.KillRountinesInterval = 0
+			setPu("", pu)
+			setSessionAlloc("", NewLeakCheckAllocator())
+
+			conn := &prepareResponseCaptureConn{}
+			ioses, err := NewIOSession(conn, pu, "")
+			require.NoError(t, err)
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+			if !tc.deprecateEOF {
+				proto.capability &^= CLIENT_DEPRECATE_EOF
+			}
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().SeqLastValue = []string{""}
+			ses := &Session{feSessionImpl: feSessionImpl{
+				txnHandler: &TxnHandler{},
+				mrs:        &MysqlResultSet{},
+			}, proc: proc, seqLastValue: new(string)}
+			ses.SetCmd(COM_STMT_EXECUTE)
+			proto.SetSession(ses)
+
+			stmt := &PrepareStmt{cursor: &preparedStmtCursor{result: &MysqlResultSet{}}}
+			execCtx := &ExecCtx{
+				reqCtx:      context.Background(),
+				ses:         ses,
+				proc:        proc,
+				stmt:        &tree.Select{},
+				prepareStmt: stmt,
+				input:       &UserInput{isCursorExecute: true},
+			}
+			column := &MysqlColumn{}
+			column.SetName("v")
+			column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+			NewMysqlResp(proto).setPreparedCursorColumns(execCtx, []any{column})
+			require.NoError(t, NewMysqlResp(proto).respStreamResultRow(ses, execCtx))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, tc.expectedPackets)
+			if !tc.deprecateEOF {
+				// The sole cursor status is on the EOF following column
+				// definitions; there is no second execute terminator.
+				require.Equal(t, byte(defines.EOFHeader), packets[2][0])
+			}
+			finalPacket := packets[len(packets)-1]
+			require.NotZero(t, binary.LittleEndian.Uint16(finalPacket[3:5])&SERVER_STATUS_CURSOR_EXISTS)
+		})
+	}
+}
+
+func TestPreparedCursorExecutionErrorDoesNotAdvertiseCursor(t *testing.T) {
+	wantErr := fmt.Errorf("cursor materialization failed")
+	writer := &cursorMetadataProtocolWriter{}
+	resper := NewMysqlResp(writer)
+	ses := &Session{feSessionImpl: feSessionImpl{
+		respr:      resper,
+		txnHandler: &TxnHandler{},
+		mrs:        &MysqlResultSet{},
+	}}
+	stmt := &tree.Select{}
+	prepareStmt := &PrepareStmt{cursor: &preparedStmtCursor{result: &MysqlResultSet{}}}
+	execCtx := &ExecCtx{
+		reqCtx:      context.Background(),
+		ses:         ses,
+		stmt:        stmt,
+		cw:          &TxnComputationWrapper{stmt: stmt, plan: newResultColumnTestPlan(1)},
+		runner:      &performTestRunner{err: wantErr},
+		resper:      resper,
+		prepareStmt: prepareStmt,
+		input:       &UserInput{isCursorExecute: true},
+	}
+
+	err := executeResultRowStmt(ses, execCtx)
+	require.ErrorIs(t, err, wantErr)
+	// Column metadata may be retained for decoding, but no protocol packet is
+	// written until Run succeeds, so a failed execute cannot advertise a live
+	// cursor.
+	require.Zero(t, writer.metadataStatus)
+	require.Zero(t, writer.resultStatus)
+}
+
+func TestPreparedCursorCommitFailureDoesNotAdvertiseCursor(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	writer := &cursorMetadataProtocolWriter{}
+	resper := NewMysqlResp(writer)
+	ses.respr = resper
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	ses.txnHandler.storage = eng
+	commitErr := fmt.Errorf("commit failed")
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{ID: []byte{1, 2, 3, 4}, Status: txn.TxnStatus_Active}
+	txnOp.commitErr = commitErr
+	txnOp.wp.readonly = false
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	ses.txnHandler.shareTxn = false
+
+	stmt := &tree.Select{}
+	prepareStmt := &PrepareStmt{cursor: &preparedStmtCursor{result: &MysqlResultSet{}}}
+	execCtx := &ExecCtx{
+		reqCtx:      ctx,
+		ses:         ses,
+		stmt:        stmt,
+		cw:          &TxnComputationWrapper{stmt: stmt, plan: newResultColumnTestPlan(1)},
+		runner:      &performTestRunner{result: &util.RunResult{}},
+		resper:      resper,
+		prepareStmt: prepareStmt,
+		input:       &UserInput{isCursorExecute: true},
+		txnOpt:      FeTxnOption{autoCommit: true},
+	}
+
+	// The pipeline succeeds, but it must not write the cursor response yet.
+	require.NoError(t, executeResultRowStmt(ses, execCtx))
+	require.Zero(t, writer.metadataStatus)
+	require.Zero(t, writer.resultStatus)
+
+	// A commit/finalization error prevents respClientWhenSuccess from reaching
+	// respStreamResultRow, so the client receives only the statement error.
+	require.ErrorContains(t, finishTxnFunc(ses, nil, execCtx), "commit failed")
+	require.Zero(t, writer.metadataStatus)
+	require.Zero(t, writer.resultStatus)
+}
+
+func TestCursorExecuteStatusClearsTerminalFlags(t *testing.T) {
+	status := uint16(SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT | SERVER_STATUS_AUTOCOMMIT)
+	got := cursorExecuteStatus(status)
+	require.Equal(t, uint16(SERVER_STATUS_CURSOR_EXISTS), got&SERVER_STATUS_CURSOR_EXISTS)
+	require.Zero(t, got&SERVER_STATUS_LAST_ROW_SENT)
+	require.Equal(t, uint16(SERVER_STATUS_AUTOCOMMIT), got&SERVER_STATUS_AUTOCOMMIT)
 }
 
 var (

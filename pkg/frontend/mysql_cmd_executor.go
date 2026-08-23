@@ -66,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -84,6 +85,13 @@ import (
 )
 
 const schedulingPreviewTimeout = 100 * time.Millisecond
+
+const (
+	preparedCursorDefaultMaxBytes  uint64 = 100 << 20
+	preparedCursorHardMaxBytes     uint64 = 1 << 30
+	preparedCursorMaxRows          uint64 = 1 << 20
+	preparedCursorBytesPerMegabyte uint64 = 1 << 20
+)
 
 func createDropDatabaseErrorInfo() string {
 	return "CREATE/DROP of database is not supported in transactions"
@@ -796,6 +804,383 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs 
 
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 	stats.AddOutputTimeConsumption(tTime)
+	return nil
+}
+
+// newPreparedStmtCursor creates the bounded result retained for COM_STMT_FETCH.
+// query_result_maxsize is already the account-level result budget used by the
+// frontend. Reusing it keeps cursor retention configurable without introducing
+// a second session variable; the hard cap prevents an accidentally huge value
+// from turning the prepared-statement quota into an unbounded heap multiplier.
+func newPreparedStmtCursor(ses *Session) *preparedStmtCursor {
+	limit := currentPreparedCursorLimit(ses, preparedCursorDefaultMaxBytes)
+	return &preparedStmtCursor{
+		result:      &MysqlResultSet{},
+		maxBytes:    limit,
+		maxBytesSet: ses != nil && ses.sesSysVars != nil,
+		maxRows:     preparedCursorMaxRows,
+		owner:       ses,
+	}
+}
+
+func currentPreparedCursorLimit(ses *Session, fallback uint64) uint64 {
+	limit := fallback
+	if limit == 0 {
+		limit = preparedCursorDefaultMaxBytes
+	}
+	if ses == nil {
+		return limit
+	}
+
+	// A live session owns the dynamic query_result_maxsize value. Do not cache
+	// it in preparedCursorLimit: clients can lower or raise the variable after
+	// closing a cursor, and the next cursor must observe the new budget.
+	if ses.sesSysVars != nil {
+		if value, err := ses.GetSessionSysVar(QueryResultMaxsize); err == nil {
+			var megabytes uint64
+			valid := false
+			switch v := value.(type) {
+			case uint64:
+				megabytes = v
+				valid = true
+			case int64:
+				if v >= 0 {
+					megabytes = uint64(v)
+					valid = true
+				}
+			case uint32:
+				megabytes = uint64(v)
+				valid = true
+			case int32:
+				if v >= 0 {
+					megabytes = uint64(v)
+					valid = true
+				}
+			}
+			if valid {
+				maxMegabytes := preparedCursorHardMaxBytes / preparedCursorBytesPerMegabyte
+				if megabytes > maxMegabytes {
+					megabytes = maxMegabytes
+				}
+				return megabytes * preparedCursorBytesPerMegabyte
+			}
+		}
+		return limit
+	}
+
+	// Partially initialized sessions in unit tests do not have a sysvar map.
+	// Keep the atomic field as a compatibility fallback for those callers; it
+	// is never populated by a live session anymore.
+	if existing := ses.preparedCursorLimit.Load(); existing != 0 {
+		return existing
+	}
+	return limit
+}
+
+func (ses *Session) tryReservePreparedCursorBytes(bytes, fallbackLimit uint64) bool {
+	if ses == nil || bytes == 0 {
+		return true
+	}
+	limit := currentPreparedCursorLimit(ses, fallbackLimit)
+	for {
+		current := ses.preparedCursorBytes.Load()
+		if current > limit || bytes > limit-current {
+			return false
+		}
+		if ses.preparedCursorBytes.CompareAndSwap(current, current+bytes) {
+			return true
+		}
+	}
+}
+
+func (ses *Session) releasePreparedCursorBytes(bytes uint64) {
+	if ses == nil || bytes == 0 {
+		return
+	}
+	for {
+		current := ses.preparedCursorBytes.Load()
+		if current == 0 {
+			return
+		}
+		next := uint64(0)
+		if bytes < current {
+			next = current - bytes
+		}
+		if ses.preparedCursorBytes.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
+func estimatePreparedCursorBatchBytes(bat *batch.Batch) (uint64, error) {
+	if bat == nil || bat.RowCount() == 0 {
+		return 0, nil
+	}
+	dataBytes := bat.Size()
+	if allocated := bat.Allocated(); allocated > dataBytes {
+		dataBytes = allocated
+	}
+	if dataBytes < 0 {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	// Each retained row owns a []any backing array and may also own converted
+	// strings/arrays (for example DECIMAL and temporal values). Charge a
+	// conservative per-column allowance in addition to the source vector bytes.
+	rowBytes := uint64(len(bat.Vecs))*32 + 64
+	rows := uint64(bat.RowCount())
+	if rows > math.MaxUint64/rowBytes {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	overhead := rows * rowBytes
+	if uint64(dataBytes) > math.MaxUint64-overhead {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	total := uint64(dataBytes) + overhead
+	materialized, err := estimatePreparedCursorMaterializedBytes(bat)
+	if err != nil {
+		return 0, err
+	}
+	if materialized > math.MaxUint64-total {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	return total + materialized, nil
+}
+
+// estimatePreparedCursorMaterializedBytes charges allocations that are created
+// while fillResultSet converts vectors into retained []any rows. In
+// particular, vecuint8 values are rendered with ArrayToString and decimal
+// values with Format, so their retained representations can be several times
+// larger than the raw vector.
+// Other array families are copied into a new typed slice and are charged for
+// that second backing store as well.
+func estimatePreparedCursorMaterializedBytes(bat *batch.Batch) (uint64, error) {
+	if bat == nil || bat.RowCount() == 0 {
+		return 0, nil
+	}
+	var total uint64
+	add := func(value uint64) error {
+		if value > math.MaxUint64-total {
+			return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+		}
+		total += value
+		return nil
+	}
+	for _, vec := range bat.Vecs {
+		if vec == nil || vec.IsConstNull() {
+			continue
+		}
+		rows := bat.RowCount()
+		switch vec.GetType().Oid {
+		case types.T_array_uint8:
+			for row := 0; row < rows; row++ {
+				if vec.GetNulls().Contains(uint64(row)) {
+					continue
+				}
+				arr := vector.GetArrayAt[uint8](vec, row)
+				// ArrayToString uses at most three decimal digits per
+				// uint8 plus ", " separators and two brackets.
+				displayBytes := uint64(2)
+				if len(arr) > 0 {
+					if uint64(len(arr)) > math.MaxUint64/5 {
+						return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+					}
+					displayBytes = uint64(len(arr)) * 5
+				}
+				// Include the string header/allocation slack in addition to
+				// the character bytes. The row/column overhead above covers
+				// the []any slot itself.
+				if displayBytes > math.MaxUint64-16 {
+					return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+				}
+				if err := add(displayBytes + 16); err != nil {
+					return 0, err
+				}
+			}
+		case types.T_array_float32:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 4, add); err != nil {
+				return 0, err
+			}
+		case types.T_array_float64:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 8, add); err != nil {
+				return 0, err
+			}
+		case types.T_array_bf16, types.T_array_float16:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 2, add); err != nil {
+				return 0, err
+			}
+		case types.T_array_int8:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 1, add); err != nil {
+				return 0, err
+			}
+		case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			for row := 0; row < rows; row++ {
+				if vec.GetNulls().Contains(uint64(row)) {
+					continue
+				}
+				var display string
+				switch vec.GetType().Oid {
+				case types.T_decimal64:
+					display = vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, row).Format(vec.GetType().Scale)
+				case types.T_decimal128:
+					display = vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, row).Format(vec.GetType().Scale)
+				case types.T_decimal256:
+					display = vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, row).Format(vec.GetType().Scale)
+				}
+				if err := addFormattedPreparedCursorValueBytes(uint64(len(display)), add); err != nil {
+					return 0, err
+				}
+			}
+		case types.T_geometry, types.T_geometry32:
+			// fillResultSet exposes geometry values as WKT bytes rather than
+			// retaining the compact WKB payload.  A WKB point uses 16 bytes
+			// per coordinate pair (8 for GEOMETRY32), while the rendered WKT
+			// can be substantially larger for large LINESTRING/POLYGON values.
+			// Decode the same payload before reserving the cursor budget so the
+			// retained representation cannot exceed the reservation.
+			for row := 0; row < rows; row++ {
+				if vec.GetNulls().Contains(uint64(row)) {
+					continue
+				}
+				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(row))
+				if err != nil {
+					return 0, err
+				}
+				// Include the []byte backing allocation and allocator/header
+				// slack in addition to the WKT characters.
+				textBytes := uint64(len(text))
+				if textBytes > math.MaxUint64-32 {
+					return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+				}
+				if err := add(textBytes + 32); err != nil {
+					return 0, err
+				}
+			}
+		}
+	}
+	return total, nil
+}
+
+func addFormattedPreparedCursorValueBytes(displayBytes uint64, add func(uint64) error) error {
+	// fillResultSet retains a separately allocated string for formatted values.
+	// Include the string backing allocation and allocator/header slack in
+	// addition to the displayed bytes; the []any slot is charged by the row
+	// overhead in estimatePreparedCursorBatchBytes.
+	if displayBytes > math.MaxUint64-32 {
+		return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	return add(displayBytes + 32)
+}
+
+func estimatePreparedCursorArrayCopyBytes(
+	vec *vector.Vector,
+	rows int,
+	elementBytes uint64,
+	add func(uint64) error,
+) error {
+	for row := 0; row < rows; row++ {
+		if vec.GetNulls().Contains(uint64(row)) {
+			continue
+		}
+		var length int
+		switch vec.GetType().Oid {
+		case types.T_array_float32:
+			length = len(vector.GetArrayAt[float32](vec, row))
+		case types.T_array_float64:
+			length = len(vector.GetArrayAt[float64](vec, row))
+		case types.T_array_bf16:
+			length = len(vector.GetArrayAt[types.BF16](vec, row))
+		case types.T_array_float16:
+			length = len(vector.GetArrayAt[types.Float16](vec, row))
+		case types.T_array_int8:
+			length = len(vector.GetArrayAt[int8](vec, row))
+		}
+		bytes := uint64(length)
+		if bytes > math.MaxUint64/elementBytes {
+			return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+		}
+		bytes *= elementBytes
+		// Account for the slice header and allocator slack in the copied
+		// value. The raw element bytes are the dominant component.
+		if bytes > math.MaxUint64-24 {
+			return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+		}
+		if err := add(bytes + 24); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// capturePreparedCursorBatch materializes a binary prepared-statement result
+// for COM_STMT_FETCH. The ordinary output callback sends each batch directly
+// to the client; a read-only server cursor must retain those rows until the
+// client asks for them. Retention is bounded and accounted across all active
+// cursors in the session. The result metadata is installed before the pipeline
+// starts; wire column definitions and the cursor terminator are sent only
+// after successful materialization.
+func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch) error {
+	if bat == nil {
+		return nil
+	}
+	if execCtx == nil {
+		return moerr.NewInternalErrorNoCtx("prepared cursor execution context is missing")
+	}
+	if execCtx.prepareStmt == nil || execCtx.prepareStmt.cursor == nil {
+		return moerr.NewInternalError(execCtx.reqCtx, "prepared cursor state is missing")
+	}
+	cursor := execCtx.prepareStmt.cursor
+	if cursor.result == nil {
+		cursor.result = &MysqlResultSet{}
+	}
+	if cursor.owner == nil {
+		cursor.owner = ses
+	}
+	if !cursor.maxBytesSet {
+		if cursor.maxBytes == 0 {
+			cursor.maxBytes = preparedCursorDefaultMaxBytes
+		}
+		cursor.maxBytesSet = true
+	}
+	if cursor.maxRows == 0 {
+		cursor.maxRows = preparedCursorMaxRows
+	}
+	rowCount := cursor.result.GetRowCount()
+	if rowCount > cursor.maxRows || uint64(bat.RowCount()) > cursor.maxRows-rowCount {
+		return moerr.NewInvalidInputf(execCtx.reqCtx,
+			"prepared cursor result exceeds the %d-row limit", cursor.maxRows)
+	}
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	if err != nil {
+		return err
+	}
+	// query_result_maxsize is dynamic. Apply its current value to an active
+	// cursor as well as to newly created cursors: a decrease takes effect
+	// before more rows are retained, and an increase is not stranded behind a
+	// stale per-cursor snapshot.
+	effectiveLimit := currentPreparedCursorLimit(ses, cursor.maxBytes)
+	if cursor.bytes > effectiveLimit || estimated > effectiveLimit-cursor.bytes {
+		return moerr.NewInvalidInputf(execCtx.reqCtx,
+			"prepared cursor result exceeds the %d MB memory limit", effectiveLimit/preparedCursorBytesPerMegabyte)
+	}
+	if !ses.tryReservePreparedCursorBytes(estimated, effectiveLimit) {
+		return moerr.NewInvalidInputf(execCtx.reqCtx,
+			"prepared cursor session result exceeds the %d MB memory limit", effectiveLimit/preparedCursorBytesPerMegabyte)
+	}
+	startRows := len(cursor.result.Data)
+	committed := false
+	defer func() {
+		if !committed {
+			// Keep the result set unchanged if extraction returns an error or
+			// panics after appending a partial row prefix.
+			cursor.result.Data = cursor.result.Data[:startRows]
+			ses.releasePreparedCursorBytes(estimated)
+		}
+	}()
+	if err = fillResultSet(execCtx.reqCtx, bat, ses, cursor.result); err != nil {
+		return err
+	}
+	cursor.bytes += estimated
+	committed = true
 	return nil
 }
 
@@ -4400,9 +4785,14 @@ func executeStmtWithResponse(ses *Session,
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
+	// executeStmtWithMaxExecutionTime returns only after
+	// executeStmtWithWorkspace has run its deferred transaction finalizer.
+	// Cursor responses are staged by executeResultRowStmt and emitted by
+	// RespPostMeta below, so a commit error can never follow an advertised
+	// cursor on the wire.
 	err = executeStmtWithMaxExecutionTime(ses, execCtx)
 	if err != nil {
-		return abortStagedReturning(execCtx, err)
+		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}
 
 	// Record the rows affected by this statement so the ROW_COUNT() builtin in a
@@ -5161,6 +5551,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// clear the previous statement's run result so a statement that does not
 		// set it (e.g. a status statement) does not inherit a stale AffectRows.
 		execCtx.runResult = nil
+		// The process is reused for every statement in a multi-statement
+		// COM_QUERY.  The generated-key field belongs to this statement's OK
+		// packet, so clear it before executing each statement while leaving the
+		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
+		proc.SetStatementLastInsertID(0)
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
@@ -5438,6 +5833,12 @@ func validateNativePrepareJSONHints(ctx context.Context, materializedSQL string,
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
+			// A cursor callback may panic after reserving its batch budget. Close
+			// the statement-owned spool before converting the panic to a client
+			// error so retained rows and the session accounting are released.
+			if execCtx != nil && execCtx.prepareStmt != nil {
+				execCtx.prepareStmt.closeCursor()
+			}
 			markRowCountFailed(ses, ses.GetProc())
 			var serverStatus uint16
 			if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
@@ -5573,6 +5974,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			ses.resetDiagnostics()
 			if prepareStmt != nil {
+				prepareStmt.closeCursor()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 			}
 			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
@@ -5581,14 +5983,43 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
+		cursorRequested := prepareStmt.cursorRequested
+		// A new execute invalidates any rows retained by the previous cursor,
+		// including a normal (non-cursor) execute of the same statement.
+		prepareStmt.closeCursor()
+		if cursorRequested {
+			if _, ok := prepareStmt.PrepareStmt.(*tree.Select); !ok {
+				prepareStmt.clearBinaryParamState(ses.GetProc())
+				markRowCountFailed(ses, ses.GetProc())
+				return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(),
+					moerr.NewNotSupported(execCtx.reqCtx, "server-side cursors require a SELECT statement")), nil
+			}
+		}
+		if cursorRequested {
+			prepareStmt.cursor = newPreparedStmtCursor(ses)
+		}
+		execCtx.prepareStmt = prepareStmt
 		execCtx.prepareColDef = prepareStmt.ColDefData
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, remapDb: prepareStmt.remapDb})
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, isCursorExecute: cursorRequested, remapDb: prepareStmt.remapDb})
 		if err != nil {
+			prepareStmt.closeCursor()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
+		} else if cursorRequested && (prepareStmt.cursor == nil || prepareStmt.cursor.result == nil || prepareStmt.cursor.result.GetColumnCount() == 0) {
+			// Defensive cleanup for a statement shape that does not use the
+			// streaming result-row response path.
+			prepareStmt.closeCursor()
 		}
 		prepareStmt.clearBinaryParamState(ses.GetProc())
 		return resp, nil
+
+	case COM_STMT_FETCH:
+		ses.SetCmd(COM_STMT_FETCH)
+		resp, err = executeStmtFetch(execCtx.reqCtx, ses, req.GetData().([]byte))
+		if err != nil || resp != nil && resp.category == ErrorResponse {
+			markRowCountFailed(ses, ses.GetProc())
+		}
+		return resp, err
 
 	case COM_STMT_SEND_LONG_DATA:
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
@@ -5617,6 +6048,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
+		preStmt.closeCursor()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -5652,6 +6084,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
+		preStmt.closeCursor()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -5715,6 +6148,63 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 		return "", preStmt, err
 	}
 	return sql, preStmt, nil
+}
+
+// executeStmtFetch sends the next batch from a read-only prepared cursor.
+// COM_STMT_FETCH carries only the statement id and requested row count; result
+// metadata was sent by the preceding COM_STMT_EXECUTE response.
+func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response, error) {
+	if len(data) < 8 {
+		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(),
+			moerr.NewInvalidInput(ctx, "invalid COM_STMT_FETCH packet")), nil
+	}
+	stmtID := binary.LittleEndian.Uint32(data[:4])
+	fetchRows := uint64(binary.LittleEndian.Uint32(data[4:8]))
+	stmt, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(stmtID))
+	if err != nil {
+		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(), err), nil
+	}
+	if stmt.cursor == nil || stmt.cursor.result == nil {
+		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(),
+			moerr.NewInvalidState(ctx, "prepared statement has no active cursor")), nil
+	}
+
+	cursor := stmt.cursor
+	total := cursor.result.GetRowCount()
+	start := cursor.offset
+	if start > total {
+		start = total
+	}
+	end := total
+	if fetchRows < total-start {
+		end = start + fetchRows
+	}
+	rows := &MysqlResultSet{
+		Columns: cursor.result.Columns,
+		Data:    cursor.result.Data[start:end],
+	}
+	if end > start {
+		if err = ses.GetResponser().MysqlRrWr().WriteResultSetRow(rows, end-start); err != nil {
+			stmt.closeCursor()
+			return nil, err
+		}
+	}
+	cursor.offset = end
+
+	status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), true)
+	status &^= SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT
+	if end >= total {
+		status |= SERVER_STATUS_LAST_ROW_SENT
+		stmt.closeCursor()
+	} else {
+		status |= SERVER_STATUS_CURSOR_EXISTS
+	}
+	if err = ses.GetResponser().MysqlRrWr().WriteEOFOrOK(0, status); err != nil {
+		stmt.closeCursor()
+		return nil, err
+	}
+	setRowCount(ses, ses.GetProc(), -1)
+	return nil, nil
 }
 
 func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) error {
@@ -5846,7 +6336,19 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 
 func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 	if col.ColumnType() == defines.MYSQL_TYPE_TEXT {
-		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		// MySQL sends the TEXT family using the corresponding BLOB protocol
+		// type while retaining the text charset. The length determines which
+		// family member the client should expose.
+		switch {
+		case col.Length() <= types.MaxTinyTextLen:
+			col.SetColumnType(defines.MYSQL_TYPE_TINY_BLOB)
+		case col.Length() <= types.MaxStringSize:
+			col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		case col.Length() <= types.MaxMediumTextLen:
+			col.SetColumnType(defines.MYSQL_TYPE_MEDIUM_BLOB)
+		default:
+			col.SetColumnType(defines.MYSQL_TYPE_LONG_BLOB)
+		}
 		col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG))
 	}
 }
