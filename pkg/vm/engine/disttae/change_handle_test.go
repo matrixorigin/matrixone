@@ -18,78 +18,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/require"
 )
-
-func TestNewPartitionChangesHandlePreservesLogicalPrimaryIndex(t *testing.T) {
-	table := newTxnTableForTest()
-	table.fake = true
-	table.primarySeqnum = 3
-	table.primaryIdx = 1
-	table.relKind = "V"
-	table.eng.(*Engine).partitions = make(map[[2]uint64]*logtailreplay.Partition)
-
-	originalFactory := NewPartitionStateChangesHandler
-	t.Cleanup(func() { NewPartitionStateChangesHandler = originalFactory })
-	NewPartitionStateChangesHandler = func(
-		context.Context,
-		*logtailreplay.PartitionState,
-		types.TS,
-		types.TS,
-		bool,
-		uint32,
-		int,
-		*mpool.MPool,
-		fileservice.FileService,
-	) (*logtailreplay.ChangeHandler, error) {
-		return &logtailreplay.ChangeHandler{}, nil
-	}
-
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	h, err := NewPartitionChangesHandle(
-		context.Background(), table, types.MaxTs(), types.MaxTs(), false,
-		engine.SnapshotReadPolicyCheckpointReplay, mp,
-	)
-	require.NoError(t, err)
-	require.Equal(t, table.primarySeqnum, h.primarySeqnum)
-	require.Equal(t, table.primaryIdx, h.primaryIdx)
-	require.NoError(t, h.Close())
-}
-
-func TestSwapSnapshotRangePreservesLogicalPrimaryIndex(t *testing.T) {
-	table := newTxnTableForTest()
-	table.fake = true
-	table.relKind = "V"
-	table.primarySeqnum = 3
-	table.primaryIdx = 1
-	table.eng.(*Engine).partitions = make(map[[2]uint64]*logtailreplay.Partition)
-
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	h := &PartitionChangesHandle{
-		tbl:                 table,
-		currentChangeHandle: &logtailreplay.ChangeHandler{},
-		currentPSFrom:       types.BuildTS(10, 0),
-		currentPSTo:         types.BuildTS(20, 0),
-		primarySeqnum:       table.primarySeqnum,
-		primaryIdx:          table.primaryIdx,
-		mp:                  mp,
-	}
-
-	require.NoError(t, h.swapCurrentHandleToSnapshotStateRangeWithTable(context.Background(), table))
-	require.NotNil(t, h.currentChangeHandle)
-	_, ok := h.currentChangeHandle.(*logtailreplay.ChangeHandler)
-	require.True(t, ok)
-	require.NoError(t, h.Close())
-}
 
 func TestPartitionChangesHandleCloseWithTypedNil(t *testing.T) {
 	var handle engine.ChangesHandle = (*PartitionChangesHandle)(nil)
@@ -111,12 +47,14 @@ func TestPartitionChangesHandleClose_CleansBufferedBatches(t *testing.T) {
 	tombstone.SetRowCount(1)
 
 	stub := &stubChangesHandle{}
+	resources := newTestVisibleStateResources()
+	resources.reserved = 123
 	handle := &PartitionChangesHandle{
 		mp:                  mp,
+		visibleResources:    resources,
 		currentChangeHandle: stub,
 		bufferedBatches: []queuedChangeBatch{{
-			data:      data,
-			tombstone: tombstone,
+			data: data, tombstone: tombstone, reservedBytes: 123,
 		}},
 	}
 
@@ -124,6 +62,7 @@ func TestPartitionChangesHandleClose_CleansBufferedBatches(t *testing.T) {
 	require.True(t, stub.closed)
 	require.Nil(t, handle.currentChangeHandle)
 	require.Nil(t, handle.bufferedBatches)
+	require.Zero(t, resources.reserved)
 }
 
 func TestPartitionChangesHandleNextWithSnapshotRecovery_UsesBufferedBatch(t *testing.T) {
@@ -136,11 +75,13 @@ func TestPartitionChangesHandleNextWithSnapshotRecovery_UsesBufferedBatch(t *tes
 	data.SetRowCount(1)
 	defer data.Clean(mp)
 
+	resources := newTestVisibleStateResources()
+	resources.reserved = 77
 	handle := &PartitionChangesHandle{
 		snapshotReadPolicy: engine.SnapshotReadPolicyVisibleState,
+		visibleResources:   resources,
 		bufferedBatches: []queuedChangeBatch{{
-			data: data,
-			hint: engine.ChangesHandle_Snapshot,
+			data: data, hint: engine.ChangesHandle_Snapshot, reservedBytes: 77,
 		}},
 	}
 
@@ -150,10 +91,135 @@ func TestPartitionChangesHandleNextWithSnapshotRecovery_UsesBufferedBatch(t *tes
 	require.Nil(t, gotTombstone)
 	require.Equal(t, engine.ChangesHandle_Snapshot, hint)
 	require.Empty(t, handle.bufferedBatches)
+	require.Zero(t, resources.reserved)
+}
+
+func TestPartitionChangesHandleBufferCurrentRangeCapacity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	baseline := mp.CurrNB()
+
+	first := makeBufferedTestBatch(t, mp, 7)
+	second := makeBufferedTestBatch(t, mp, 8)
+	resources := newTestVisibleStateResources()
+	resources.reserveErr = moerr.NewMPoolCapacityNoCtxf("test visible-state buffer limit")
+	resources.failAt = 2
+	handle := &PartitionChangesHandle{
+		mp: mp, visibleResources: resources,
+		currentChangeHandle: &batchSequenceChangesHandle{data: []*batch.Batch{first, second}},
+	}
+
+	err := handle.bufferCurrentRange(context.Background(), mp)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity))
+	require.Empty(t, handle.bufferedBatches)
+	require.Zero(t, resources.reserved)
+	require.Equal(t, 2, resources.reserveCnt)
+	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestPartitionChangesHandleCollectChangesContext(t *testing.T) {
+	ctx := context.Background()
+	require.False(t, engine.CollectChangesPreserveAllVersionsFromContext(
+		(&PartitionChangesHandle{}).collectChangesContext(ctx),
+	))
+	require.True(t, engine.CollectChangesPreserveAllVersionsFromContext(
+		(&PartitionChangesHandle{preserveAllVersions: true}).collectChangesContext(ctx),
+	))
+}
+
+func TestInitializeVisibleStateRangeRecoversConstructorFileNotFound(t *testing.T) {
+	fileNotFound := moerr.NewFileNotFoundNoCtx("gc-ed-object")
+	visibleStateCalls := 0
+	usedVisibleState, err := initializeVisibleStateRange(
+		func() error {
+			return fileNotFound
+		},
+		func(snapshotErr error) error {
+			visibleStateCalls++
+			require.Equal(t, fileNotFound, snapshotErr)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, usedVisibleState)
+	require.Equal(t, 1, visibleStateCalls)
+}
+
+func TestInitializeVisibleStateRangePreservesNonRecoveryError(t *testing.T) {
+	initErr := moerr.NewInternalErrorNoCtx("snapshot initialization failed")
+	visibleStateCalls := 0
+	usedVisibleState, err := initializeVisibleStateRange(
+		func() error {
+			return initErr
+		},
+		func(error) error {
+			visibleStateCalls++
+			return nil
+		},
+	)
+	require.Equal(t, initErr, err)
+	require.False(t, usedVisibleState)
+	require.Zero(t, visibleStateCalls)
+}
+
+func TestInitializeVisibleStateRangeKeepsSnapshotReaderOnSuccess(t *testing.T) {
+	visibleStateCalls := 0
+	usedVisibleState, err := initializeVisibleStateRange(
+		func() error {
+			return nil
+		},
+		func(error) error {
+			visibleStateCalls++
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.False(t, usedVisibleState)
+	require.Zero(t, visibleStateCalls)
+}
+
+func TestInitializeVisibleStateRangePropagatesRecoveryFailure(t *testing.T) {
+	visibleStateErr := moerr.NewInternalErrorNoCtx("visible-state initialization failed")
+	usedVisibleState, err := initializeVisibleStateRange(
+		func() error {
+			return moerr.NewFileNotFoundNoCtx("gc-ed-object")
+		},
+		func(error) error {
+			return visibleStateErr
+		},
+	)
+	require.Equal(t, visibleStateErr, err)
+	require.True(t, usedVisibleState)
 }
 
 type stubChangesHandle struct {
 	closed bool
+}
+
+type batchSequenceChangesHandle struct {
+	data []*batch.Batch
+	idx  int
+}
+
+func (s *batchSequenceChangesHandle) Next(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	if s.idx >= len(s.data) {
+		return nil, nil, engine.ChangesHandle_Tail_done, nil
+	}
+	data := s.data[s.idx]
+	s.idx++
+	return data, nil, engine.ChangesHandle_Tail_done, nil
+}
+
+func (s *batchSequenceChangesHandle) Close() error { return nil }
+
+func makeBufferedTestBatch(t *testing.T, mp *mpool.MPool, value int64) *batch.Batch {
+	t.Helper()
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(data.Vecs[0], value, false, mp))
+	data.SetRowCount(1)
+	return data
 }
 
 func (s *stubChangesHandle) Next(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {

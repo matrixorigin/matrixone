@@ -121,4 +121,139 @@ data branch diff t2 against t1;
 drop table t1;
 drop table t2;
 
+-- Case 4: branch-side compaction rewrites both pre-branch rows and post-branch
+-- changes into a TN object without per-row commit timestamps. Once GC removes
+-- the post-branch predecessor objects, DIFF must reconstruct the exact net
+-- delta from the protected clone snapshot and the live endpoint snapshots.
+create table c4_root(id int primary key, v int, note varchar(20));
+insert into c4_root select result, result, concat('v-', result) from generate_series(1, 2000) g;
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+insert into c4_root select result, result, concat('v-', result) from generate_series(2001, 4000) g;
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+insert into c4_root select result, result, concat('v-', result) from generate_series(4001, 6000) g;
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+insert into c4_root select result, result, concat('v-', result) from generate_series(6001, 8000) g;
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+insert into c4_root select result, result, concat('v-', result) from generate_series(8001, 10000) g;
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+insert into c4_root select result, result, concat('v-', result) from generate_series(10001, 12000) g;
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+
+data branch create table c4_leaf from c4_root;
+update c4_root set v = 100001, note = 'root-update' where id = 1;
+delete from c4_root where id = 2;
+update c4_leaf set v = 300003, note = 'leaf-update' where id = 3;
+insert into c4_leaf values (13001, 13001, 'leaf-insert');
+
+data branch diff c4_leaf against c4_root;
+data branch diff c4_leaf against c4_root output count;
+select count(*) as root_rows_before_gc from c4_root;
+select count(*) as leaf_rows_before_gc from c4_leaf;
+select count(*) as branch_protect_before_gc
+from mo_catalog.mo_snapshots
+where kind = 'branch' and database_name = 'test_gc_diff' and table_name = 'c4_root';
+
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c4_leaf');
+-- @ignore:0
+select mo_ctl('cn', 'mergeobjects', 't:test_gc_diff.c4_leaf:overlap');
+data branch diff c4_leaf against c4_root;
+
+-- Cycle 1.
+-- @ignore:0
+select mo_ctl('dn', 'globalcheckpoint', '');
+-- @ignore:0
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+data branch diff c4_leaf against c4_root;
+
+-- Cycle 2.
+-- @ignore:0
+select mo_ctl('dn', 'globalcheckpoint', '');
+-- @ignore:0
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+data branch diff c4_leaf against c4_root;
+
+-- Cycle 3: the pre-fix failure reproduces by this cycle.
+-- @ignore:0
+select mo_ctl('dn', 'globalcheckpoint', '');
+-- @ignore:0
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+data branch diff c4_leaf against c4_root;
+data branch diff c4_leaf against c4_root output count;
+
+select count(*) as root_rows_after_gc from c4_root;
+select count(*) as leaf_rows_after_gc from c4_leaf;
+select count(*) as branch_protect_after_gc
+from mo_catalog.mo_snapshots
+where kind = 'branch' and database_name = 'test_gc_diff' and table_name = 'c4_root';
+
+drop table c4_leaf;
+drop table c4_root;
+
+-- Case 5: the exact compaction/GC recovery path must read the clone boundary
+-- with its historical schema. A column added only to the branch is projected
+-- into output, but it must not be requested from the older snapshot reader or
+-- turn an otherwise unchanged row into an UPDATE.
+create table c5_root(id int primary key, v int);
+insert into c5_root select result, result from generate_series(1, 2000) g;
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_root');
+insert into c5_root select result, result from generate_series(2001, 4000) g;
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_root');
+
+data branch create table c5_leaf from c5_root;
+alter table c5_leaf add column branch_only int default 7 after id;
+update c5_root set v = 100001 where id = 1;
+delete from c5_root where id = 2;
+update c5_leaf set v = 300003, branch_only = 33 where id = 3;
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_leaf');
+update c5_leaf set branch_only = 44 where id = 4;
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_leaf');
+insert into c5_leaf(id, branch_only, v) values (5001, 51, 5001);
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_leaf');
+
+data branch diff c5_leaf against c5_root;
+data branch diff c5_leaf against c5_root output count;
+
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_root');
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'test_gc_diff.c5_leaf');
+-- @ignore:0
+select mo_ctl('cn', 'mergeobjects', 't:test_gc_diff.c5_leaf:overlap');
+
+-- Advance past the compacted predecessor objects.
+-- @ignore:0
+select mo_ctl('dn', 'globalcheckpoint', '');
+-- @ignore:0
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+-- @ignore:0
+select mo_ctl('dn', 'globalcheckpoint', '');
+-- @ignore:0
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+-- @ignore:0
+select mo_ctl('dn', 'globalcheckpoint', '');
+-- @ignore:0
+select mo_ctl('dn', 'diskcleaner', 'force_gc');
+
+data branch diff c5_leaf against c5_root;
+data branch diff c5_leaf against c5_root output count;
+select count(*) as c5_root_rows_after_gc from c5_root;
+select count(*) as c5_leaf_rows_after_gc from c5_leaf;
+
+drop table c5_leaf;
+drop table c5_root;
+
 drop database test_gc_diff;

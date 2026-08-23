@@ -3135,9 +3135,6 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid path expression")
 		}
-		if !path.IsSimple() {
-			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid path expression")
-		}
 		// Extract value at path.
 		var bj bytejson.ByteJson
 		if isStr {
@@ -3148,7 +3145,21 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid JSON document")
 		}
-		val := bj.Query([]*bytejson.Path{&path})
+		val, exists := bj.QueryWithExists([]*bytejson.Path{&path})
+		if !exists {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		if !path.IsSimple() {
+			// QueryWithExists wraps every match of a potentially multi-valued
+			// path in an array. JSON_VALUE accepts a non-simple path only when
+			// it selects exactly one value; zero or multiple matches are NULL.
+			if val.Type != bytejson.TpCodeArray || val.GetElemCnt() != 1 {
+				rs.AppendMustNullForBytesResult()
+				continue
+			}
+			val = val.GetArrayElem(0)
+		}
 		if val.IsNull() {
 			rs.AppendMustNullForBytesResult()
 			continue

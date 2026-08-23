@@ -983,6 +983,12 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	if err := plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
+	if err := normalizePreparedPaginationBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
 
 	// Parameter markers are kept in the cached plan so ordinary prepared
 	// executions can reuse it.  A binary execution may nevertheless change the
@@ -1029,10 +1035,10 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
-	if runtimeSpecialized {
+	if runtimeSpecialized || plan2.PreparedPlanHasPaginationParams(preparePlan.Plan) {
 		// The cached compile was built from the prepare-time parameter types and
-		// cannot execute a plan whose overloads or result metadata were rebound
-		// for this execution.
+		// cannot execute a plan whose overloads, result metadata, or pagination
+		// values must be rebound for this execution.
 		retComp = nil
 	}
 	if executionSes.IsBackgroundSession() {
@@ -1052,6 +1058,34 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
+}
+
+func normalizePreparedPaginationBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
+	params := proc.GetPrepareParams()
+	if params == nil {
+		return nil
+	}
+	for _, position := range plan2.PreparedPaginationParamPositions(preparePlan) {
+		if position < 0 || int(position) >= len(paramVals) {
+			continue
+		}
+		param, ok := paramVals[position].(plan2.ParamValue)
+		if !ok || param.PrepareParamKind != vector.PrepareParamBoolean {
+			continue
+		}
+		value, ok := param.Value.(bool)
+		if !ok {
+			continue
+		}
+		encoded := "0"
+		if value {
+			encoded = "1"
+		}
+		if err := vector.SetStringAt(params, int(position), encoded, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {

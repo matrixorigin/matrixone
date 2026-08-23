@@ -87,6 +87,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_timestamp, types.T_time:
 	case types.T_blob, types.T_text, types.T_datalink:
 	case types.T_binary, types.T_varbinary:
+	case types.T_geometry, types.T_geometry32:
 	case types.T_json:
 	case types.T_uuid:
 	case types.T_Rowid:
@@ -304,7 +305,8 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) == 0
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink,
+		types.T_geometry, types.T_geometry32:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Equal(a, b)
 		}, selectList)
@@ -466,7 +468,8 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) == 0
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink,
+		types.T_geometry, types.T_geometry32:
 		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
 			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
 		}

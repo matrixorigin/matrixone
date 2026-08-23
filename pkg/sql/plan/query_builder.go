@@ -30,11 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -874,7 +876,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 	}
 
 	switch node.NodeType {
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -2861,8 +2863,12 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		right := builder.qry.Nodes[node.Children[1]]
 		rightTag := right.BindingTags[0]
+		rightArgs := right.TblFuncExprList
+		if right.NodeType == plan.Node_VECTOR_INDEX_SCAN && right.VectorIndexScan != nil {
+			rightArgs = []*plan.Expr{right.VectorIndexScan.QueryVector, right.VectorIndexScan.CandidateLimit}
+		}
 
-		for _, expr := range right.TblFuncExprList {
+		for _, expr := range rightArgs {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
@@ -2914,7 +2920,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			})
 		}
 
-		for idx, expr := range right.TblFuncExprList {
+		for idx, expr := range rightArgs {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
 			err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
@@ -2983,6 +2989,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			for _, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
 			}
+			if updateCtx.ChangedRowsCol != nil {
+				colRefCnt[[2]int32{updateCtx.ChangedRowsCol.RelPos, updateCtx.ChangedRowsCol.ColPos}]++
+			}
+
+			for _, col := range updateCtx.AffectedRowsCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+			}
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -3012,6 +3025,22 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			for i, col := range updateCtx.PartitionCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
 				err := builder.remapSingleColRef(&updateCtx.PartitionCols[i], childRemapping.globalToLocal, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if updateCtx.ChangedRowsCol != nil {
+				col := updateCtx.ChangedRowsCol
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				err := builder.remapSingleColRef(col, childRemapping.globalToLocal, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			for i, col := range updateCtx.AffectedRowsCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				err := builder.remapSingleColRef(&updateCtx.AffectedRowsCols[i], childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
 					return nil, err
 				}
@@ -3055,6 +3084,71 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 
 	case plan.Node_PRE_INSERT:
+		if node.PreInsertCtx.IsNewUpdate && len(node.BindingTags) == 1 && len(node.ProjectList) > 0 {
+			outputTag := node.BindingTags[0]
+			selectorPositions := [3]int32{-1, -1, -1}
+			if node.PreInsertCtx.HasTargetSelector {
+				selectorPositions = [3]int32{
+					node.PreInsertCtx.TargetRowNumberCol,
+					node.PreInsertCtx.TargetActiveCol,
+					node.PreInsertCtx.TargetRowIdCol,
+				}
+				for _, pos := range selectorPositions {
+					if pos < 0 || int(pos) >= len(node.ProjectList) {
+						return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector")
+					}
+				}
+			}
+
+			// UPDATE PRE_INSERT uses ColOffset to mutate the target table's columns
+			// in place. Preserve the complete positional projection across a chain
+			// of AUTO_INCREMENT targets so pruning cannot move another target (or
+			// row_id) into that fixed slice.
+			neededOutputs := make([]int32, 0, len(node.ProjectList))
+			for pos, expr := range node.ProjectList {
+				neededOutputs = append(neededOutputs, int32(pos))
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+
+			childRemapping, err := builder.remapAllColRefs(
+				node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+			if err != nil {
+				return nil, err
+			}
+			childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+			newProjectList := make([]*plan.Expr, 0, len(neededOutputs))
+			selectorOutputPos := [3]int32{-1, -1, -1}
+			remapInfo.tip = "PreInsertUpdateProjection"
+			for outputPos, needed := range neededOutputs {
+				expr := node.ProjectList[needed]
+				increaseRefCnt(expr, -1, colRefCnt)
+				remapInfo.srcExprIdx = int(needed)
+				if err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo); err != nil {
+					return nil, err
+				}
+				refreshExprNullabilityFromInputs(expr, childProjList)
+				remapping.addColRef([2]int32{outputTag, needed})
+				newProjectList = append(newProjectList, expr)
+				for selectorIdx, selectorPos := range selectorPositions {
+					if needed == selectorPos {
+						selectorOutputPos[selectorIdx] = int32(outputPos)
+					}
+				}
+			}
+			node.ProjectList = newProjectList
+			if node.PreInsertCtx.HasTargetSelector {
+				for _, pos := range selectorOutputPos {
+					if pos < 0 {
+						return nil, moerr.NewInternalError(builder.GetContext(), "PRE_INSERT target selector was pruned")
+					}
+				}
+				node.PreInsertCtx.TargetRowNumberCol = selectorOutputPos[0]
+				node.PreInsertCtx.TargetActiveCol = selectorOutputPos[1]
+				node.PreInsertCtx.TargetRowIdCol = selectorOutputPos[2]
+			}
+			break
+		}
+
 		var selectorRefs [3][2]int32
 		if node.PreInsertCtx.HasTargetSelector {
 			selectorInput := builder.qry.Nodes[node.Children[0]]
@@ -3379,10 +3473,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 	builder.parseOptimizeHints()
 	for i, rootID := range builder.qry.Steps {
+		if err = builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
+		if err = builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		builder.annotatePartitionTopN(rootID)
 		builder.pushdownLimitToTableScan(rootID)
 		builder.determineGroupByHashKeys(rootID)
@@ -3390,6 +3490,19 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		// Seed base-relation statistics so the early vector access-path builder
+		// can cost the hidden entries work before replacing the source scan.
+		ReCalcNodeStats(rootID, builder, true, false, true)
+		// Vector access paths must participate in the global cost/join/distribution
+		// passes. Build only those paths here; regular/fulltext index rewrites keep
+		// their established late placement below.
+		builder.prepareSpecialIndexGuards(rootID)
+		earlyIndexColMap := make(map[[2]int32]*plan.Expr)
+		rootID, err = builder.applyVectorIndicesEarly(rootID, colRefCnt, earlyIndexColMap)
+		builder.resetSpecialIndexGuards()
+		if err != nil {
+			return nil, err
+		}
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.determineBuildAndProbeSide(rootID, true)
 		determineHashOnPK(rootID, builder)
@@ -3401,6 +3514,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.determineJoinOrder(rootID)
+		if err = builder.checkPlanningCanceled(); err != nil {
+			return nil, err
+		}
 		colMap := make(map[[2]int32]int)
 		colGroup := make([]int, 0)
 		builder.removeRedundantJoinCond(rootID, colMap, colGroup)
@@ -10342,6 +10458,18 @@ func (builder *QueryBuilder) bindView(
 	defaultDatabase := viewData.DefaultDatabase
 	if obj.PubInfo != nil {
 		defaultDatabase = obj.SubscriptionName
+		subscription := builder.compCtx.GetQueryingSubscription()
+		if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
+			subscription = &SubscriptionMeta{
+				AccountId: obj.PubInfo.TenantId,
+				DbName:    viewData.DefaultDatabase,
+				SubName:   obj.SubscriptionName,
+				Tables:    pubsub.TableAll,
+			}
+		}
+		previousSubscription := builder.compCtx.GetQueryingSubscription()
+		builder.compCtx.SetQueryingSubscription(subscription)
+		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
 	viewCtx.defaultDatabase = defaultDatabase
 	viewKey := objectkey.Encode(schema, table)
@@ -10934,6 +11062,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			externType := plan.ExternType_EXTERNAL_TB
 			var icebergEnv sqliceberg.CreateSQLEnvelope
 			var mongoEnv sqlmongodb.CreateSQLEnvelope
+			var datastreamCfg sqldatastream.Config
 			if env, found, err := sqliceberg.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
 				return 0, err
 			} else if found {
@@ -10952,6 +11081,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					externType = plan.ExternType_MONGODB_TB
 					if builder.isPrepareStatement {
 						return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+					}
+				} else {
+					cfg, isDataStream, err := IsDataStreamTableDef(builder.GetContext(), tableDef)
+					if err != nil {
+						return 0, err
+					}
+					if isDataStream {
+						datastreamCfg = cfg
+						externType = plan.ExternType_DATASTREAM_TB
 					}
 				}
 			}
@@ -10980,6 +11118,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Columns:        sqlmongodb.ColumnsToPlan(mongoEnv.Columns),
 					ProjectedPaths: projectedMongoPaths(mongoEnv.Columns),
 					MaxParallelism: 1,
+				}
+			} else if externType == plan.ExternType_DATASTREAM_TB {
+				externScan.DatastreamScan = &plan.DataStreamScan{
+					Server:  datastreamCfg.Server,
+					Port:    datastreamCfg.Port,
+					Table:   datastreamCfg.Table,
+					Recheck: datastreamCfg.Recheck,
+					ApiKey:  datastreamCfg.APIKey,
 				}
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
@@ -11724,7 +11870,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	id := tbl.Id()
 
 	// Plugin-registered table functions (hnsw_create / hnsw_search /
-	// ivf_create / ivf_search / cagra_create / cagra_search /
+	// ivf_create / cagra_create / cagra_search /
 	// ivfpq_create / ivfpq_search) live under
 	// pkg/vectorindex/<algo>/plugin/plan/tablefunc.go. The plugin
 	// registers each builder via planplugin.RegisterTableFunc at init
@@ -11827,6 +11973,19 @@ func (builder *QueryBuilder) GetContext() context.Context {
 	return builder.compCtx.GetContext()
 }
 
+func (builder *QueryBuilder) checkPlanningCanceled() error {
+	ctx := builder.GetContext()
+	select {
+	case <-ctx.Done():
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+
 // parseRankOption parses rank options from a map of option key-value pairs.
 // It extracts the "mode" option case-insensitively and validates it.
 // Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
@@ -11872,7 +12031,7 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 
 func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 	switch node.NodeType {
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		if onlyContainsTag(expr, node.BindingTags[0]) {
 			return true
 		}

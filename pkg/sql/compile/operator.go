@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -605,19 +606,24 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.TableFunction = table_function.NewArgument()
-		op.TableFunction.FuncName = t.TableFunction.FuncName
-		op.TableFunction.Args = t.TableFunction.Args
-		op.TableFunction.Rets = t.TableFunction.Rets
-		op.TableFunction.Attrs = t.TableFunction.Attrs
-		op.TableFunction.Params = t.TableFunction.Params
-		op.TableFunction.IsSingle = t.TableFunction.IsSingle
-		op.TableFunction.Limit = t.TableFunction.Limit
-		op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
-		op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
-		op.TableFunction.FulltextSourceRef = t.TableFunction.FulltextSourceRef
-		op.TableFunction.FulltextIndexRef = t.TableFunction.FulltextIndexRef
-		op.TableFunction.SetInfo(&info)
+		op.VectorIndexScan = plan2.DeepCopyVectorIndexScan(t.VectorIndexScan)
+		op.VectorAttrs = slices.Clone(t.VectorAttrs)
+		op.TxnOffset = t.TxnOffset
+		if t.TableFunction != nil {
+			op.TableFunction = table_function.NewArgument()
+			op.TableFunction.FuncName = t.TableFunction.FuncName
+			op.TableFunction.Args = t.TableFunction.Args
+			op.TableFunction.Rets = t.TableFunction.Rets
+			op.TableFunction.Attrs = t.TableFunction.Attrs
+			op.TableFunction.Params = t.TableFunction.Params
+			op.TableFunction.IsSingle = t.TableFunction.IsSingle
+			op.TableFunction.Limit = t.TableFunction.Limit
+			op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
+			op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
+			op.TableFunction.FulltextSourceRef = t.TableFunction.FulltextSourceRef
+			op.TableFunction.FulltextIndexRef = t.TableFunction.FulltextIndexRef
+			op.TableFunction.SetInfo(&info)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.MultiUpdate:
@@ -951,6 +957,10 @@ func constructMultiUpdate(
 		for j, col := range updateCtx.PartitionCols {
 			partitionCols[j] = int(col.ColPos)
 		}
+		affectedRowsCols := make([]int, len(updateCtx.AffectedRowsCols))
+		for j, col := range updateCtx.AffectedRowsCols {
+			affectedRowsCols[j] = int(col.ColPos)
+		}
 
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 			ObjRef:             updateCtx.ObjRef,
@@ -964,6 +974,11 @@ func constructMultiUpdate(
 			DedupByTargetRowID: updateCtx.DedupByTargetRowId,
 			TargetUpdateCtxIdx: int(updateCtx.TargetUpdateCtxIdx),
 			TargetTableID:      updateCtx.TableDef.TblId,
+			AffectedRowsCols:   affectedRowsCols,
+		}
+		if updateCtx.ChangedRowsCol != nil {
+			changedRowsCol := int(updateCtx.ChangedRowsCol.ColPos)
+			arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
 		}
 	}
 	arg.Action = action
@@ -1342,6 +1357,7 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 				FileSize:        FileSize,
 				ClusterTable:    node.GetClusterTable(),
 				StrictSqlMode:   strictSqlMode,
+				DatastreamScan:  node.ExternScan.GetDatastreamScan(),
 				LoadEmptyNumericAsZero: param.ExternType == int32(plan.ExternType_LOAD) &&
 					(param.Parallel || param.ParallelLoadRequested),
 			},
@@ -2389,7 +2405,15 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	arg.TableFunction = constructTableFunction(right, nil)
+	if right.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		arg.VectorIndexScan = plan2.DeepCopyVectorIndexScan(right.VectorIndexScan)
+		arg.VectorAttrs = make([]string, len(right.TableDef.Cols))
+		for i, col := range right.TableDef.Cols {
+			arg.VectorAttrs[i] = col.GetOriginCaseName()
+		}
+	} else {
+		arg.TableFunction = constructTableFunction(right, nil)
+	}
 	return arg
 }
 

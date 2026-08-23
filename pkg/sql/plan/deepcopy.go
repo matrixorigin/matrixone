@@ -110,6 +110,11 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			IgnoreAffectedRows:    ctx.IgnoreAffectedRows,
 			DedupByTargetRowId:    ctx.DedupByTargetRowId,
 			TargetUpdateCtxIdx:    ctx.TargetUpdateCtxIdx,
+			AffectedRowsCols:      slices.Clone(ctx.AffectedRowsCols),
+		}
+		if ctx.ChangedRowsCol != nil {
+			changedRowsCol := *ctx.ChangedRowsCol
+			result[i].ChangedRowsCol = &changedRowsCol
 		}
 	}
 
@@ -296,11 +301,12 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		UpdateCtxList:          DeepCopyUpdateCtxList(node.UpdateCtxList),
 		DedupJoinCtx:           DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam:       DeepCopyIndexReaderParam(node.IndexReaderParam),
+		ScanSnapshot:           DeepCopySnapshot(node.ScanSnapshot),
+		VectorIndexScan:        DeepCopyVectorIndexScan(node.VectorIndexScan),
 		OriginViews:            slices.Clone(node.OriginViews),
 		DirectView:             node.DirectView,
 		RankOption:             DeepCopyRankOption(node.RankOption),
 		WindowIdx:              node.WindowIdx,
-		ScanSnapshot:           DeepCopySnapshot(node.ScanSnapshot),
 		RecursiveCte:           node.RecursiveCte,
 		ApplyType:              node.ApplyType,
 		PostDmlCtx:             DeepCopyPostDmlCtx(node.PostDmlCtx),
@@ -407,6 +413,54 @@ func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReader
 	}
 
 	return ret
+}
+
+func DeepCopyDistRange(old *plan.DistRange) *plan.DistRange {
+	if old == nil {
+		return nil
+	}
+	return &plan.DistRange{
+		LowerBoundType: old.LowerBoundType,
+		UpperBoundType: old.UpperBoundType,
+		LowerBound:     DeepCopyExpr(old.LowerBound),
+		UpperBound:     DeepCopyExpr(old.UpperBound),
+	}
+}
+
+func DeepCopyVectorIndexScan(old *plan.VectorIndexScan) *plan.VectorIndexScan {
+	if old == nil {
+		return nil
+	}
+	hidden := make([]*plan.VectorIndexTableRef, len(old.HiddenTables))
+	for i, table := range old.HiddenTables {
+		if table == nil {
+			continue
+		}
+		hidden[i] = &plan.VectorIndexTableRef{
+			Role:   table.Role,
+			Object: DeepCopyObjectRef(table.Object),
+			Table:  DeepCopyTableDef(table.Table, true),
+		}
+	}
+	return &plan.VectorIndexScan{
+		SourceTable:         DeepCopyObjectRef(old.SourceTable),
+		SourceTableDef:      DeepCopyTableDef(old.SourceTableDef, true),
+		Index:               DeepCopyIndexDef(old.Index),
+		HiddenTables:        hidden,
+		QueryVector:         DeepCopyExpr(old.QueryVector),
+		DistanceFunction:    old.DistanceFunction,
+		Direction:           old.Direction,
+		CandidateLimit:      DeepCopyExpr(old.CandidateLimit),
+		DistanceRange:       DeepCopyDistRange(old.DistanceRange),
+		PreFilters:          DeepCopyExprList(old.PreFilters),
+		IncludedColumns:     slices.Clone(old.IncludedColumns),
+		InitialProbeCount:   old.InitialProbeCount,
+		FirstRoundLimit:     DeepCopyExpr(old.FirstRoundLimit),
+		BucketExpandStep:    old.BucketExpandStep,
+		ThreadsSearch:       old.ThreadsSearch,
+		ScanSnapshot:        DeepCopySnapshot(old.ScanSnapshot),
+		PostFilterOverFetch: old.PostFilterOverFetch,
+	}
 }
 
 func DeepCopyDefault(def *plan.Default) *plan.Default {
@@ -1014,6 +1068,13 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		Ndv:         expr.Ndv,
 		Selectivity: expr.Selectivity,
 	}
+	// Negative AuxId values are planner-local memo identities for volatile
+	// expressions that an equivalent predicate expansion must evaluate once.
+	// Positive AuxId values belong to later execution/zonemap numbering and
+	// intentionally remain reset across a semantic deep copy.
+	if expr.AuxId < 0 {
+		newExpr.AuxId = expr.AuxId
+	}
 
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Lit:
@@ -1022,6 +1083,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			IsBin:        item.Lit.GetIsBin(),
 			Src:          DeepCopyExpr(item.Lit.Src),
 			IsSerialized: item.Lit.GetIsSerialized(),
+			LiteralForm:  item.Lit.GetLiteralForm(),
 		}
 
 		switch c := item.Lit.Value.(type) {

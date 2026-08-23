@@ -1082,6 +1082,13 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 	}
+	// Source collection validates public clone requests. Keep the persistence
+	// boundary defensive too: resolved sources can come from data-branch flow,
+	// and no path may create a target database for an imported package UDF whose
+	// external lifecycle is unsupported by database clone.
+	if err = validateCloneUserDefinedFunctions(source.userDefinedFuncs); err != nil {
+		return
+	}
 	fromAccountID := source.opAccountId
 	if source.snapshot != nil && source.snapshot.Tenant != nil {
 		fromAccountID = source.snapshot.Tenant.TenantID
@@ -1095,6 +1102,24 @@ func handleCloneDatabaseWithSource(
 		return
 	}
 	if err = revalidateTimestampDataBranchCloneDatabaseSource(reqCtx, ses, bh, source); err != nil {
+		return
+	}
+	if source.userDefinedFuncs, err = rewriteCloneUserDefinedFunctionBodies(
+		reqCtx,
+		source.userDefinedFuncs,
+		source.srcResolveDBName,
+		stmt.DstDatabase.String(),
+		parserLowerCaseTableNames(ses),
+	); err != nil {
+		return
+	}
+	if source.storedProcedures, err = rewriteCloneStoredProcedureBodies(
+		reqCtx,
+		source.storedProcedures,
+		source.srcResolveDBName,
+		stmt.DstDatabase.String(),
+		parserLowerCaseTableNames(ses),
+	); err != nil {
 		return
 	}
 
@@ -1148,6 +1173,34 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 	restoreSnapshotTS := generatedCloneRestoreSnapshotTS(ses, snapshotTS)
+	sequenceSnapshotTS := restoreSnapshotTS
+	if source.snapshot != nil && source.snapshot.TS != nil {
+		sequenceSnapshotTS = source.snapshot.TS.PhysicalTime
+	}
+
+	cloneSequence := func(srcTbl *tableInfo) error {
+		createSQL, rewriteErr := rewriteCloneSequenceCreateSQL(
+			srcTbl.createSql,
+			stmt.DstDatabase.String(),
+			srcTbl.tblName,
+			parserLowerCaseTableNames(ses),
+		)
+		if rewriteErr != nil {
+			return rewriteErr
+		}
+		return restoreSequence(
+			reqCtx,
+			bh,
+			createSQL,
+			source.srcResolveDBName,
+			srcTbl.tblName,
+			stmt.DstDatabase.String(),
+			srcTbl.tblName,
+			sequenceSnapshotTS,
+			fromAccountID,
+			source.toAccountId,
+		)
+	}
 
 	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
 		srcTable := newQualifiedCloneTableName(srcDb, srcTbl, stmt.AtTsExpr)
@@ -1193,13 +1246,21 @@ func handleCloneDatabaseWithSource(
 	}
 
 	for _, srcTbl := range source.srcTblInfos {
+		if isSequence(srcTbl) {
+			if err = cloneSequence(srcTbl); err != nil {
+				return
+			}
+		}
+	}
+
+	for _, srcTbl := range source.srcTblInfos {
 
 		key := genKey(srcTbl.dbName, srcTbl.tblName)
 		if _, ok := source.fkTableMap[key]; ok {
 			continue
 		}
 
-		if srcTbl.typ == view {
+		if srcTbl.typ == view || isSequence(srcTbl) {
 			continue
 		}
 
@@ -1221,6 +1282,28 @@ func handleCloneDatabaseWithSource(
 				return
 			}
 		}
+	}
+
+	// Routines are catalog metadata rather than mo_tables. Restore functions
+	// before views so view binding can resolve function dependencies.
+	routineTenant := ses.GetTenantInfo()
+	if len(source.userDefinedFuncs) != 0 || len(source.storedProcedures) != 0 {
+		routineTenant, err = resolveCloneDatabaseRoutineTenant(
+			reqCtx, bh, ses.GetTenantInfo(), source.toAccountId,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err = restoreCloneDatabaseUserDefinedFunctions(
+		ctx1, bh, routineTenant, source.userDefinedFuncs, stmt.DstDatabase.String(),
+	); err != nil {
+		return
+	}
+	if err = restoreCloneDatabaseStoredProcedures(
+		ctx1, bh, routineTenant, source.storedProcedures, stmt.DstDatabase.String(),
+	); err != nil {
+		return
 	}
 
 	// clone view table
@@ -1250,7 +1333,10 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 
-		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
+		// The function metadata above is intentionally still uncommitted: the
+		// clone must remain atomic. Mark view restoration so ResolveUdf uses the
+		// same clone transaction and can bind newly restored functions.
+		if err = restoreViews(withResolveUdfInCallerTxn(reqCtx), ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
 			return
 		}
 	}
@@ -1354,6 +1440,31 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 		rewritten += ";"
 	}
 	return rewritten, nil
+}
+
+func rewriteCloneSequenceCreateSQL(
+	sql string,
+	dstDBName string,
+	dstTblName string,
+	lowerCaseTableNames int64,
+) (string, error) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, lowerCaseTableNames)
+	if err != nil {
+		return "", err
+	}
+	createSequence, ok := stmt.(*tree.CreateSequence)
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtxf(
+			"clone sequence SQL is %T, expected *tree.CreateSequence", stmt)
+	}
+	targetName := newQualifiedCloneTableName(dstDBName, dstTblName, nil)
+	createSequence.Name = &targetName
+	return tree.StringWithOpts(
+		createSequence,
+		dialect.MYSQL,
+		tree.WithSingleQuoteString(),
+		tree.WithQuoteIdentifier(),
+	), nil
 }
 
 func tryToIncreaseTxnPhysicalTS(
