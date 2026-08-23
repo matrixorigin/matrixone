@@ -16,6 +16,7 @@ package external
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,6 +26,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// foreignScanKindESQL mirrors foreignext.KindESQL for the getColData fast path
+// (a local const avoids re-evaluating a cross-package selector per field).
+const foreignScanKindESQL = foreignext.KindESQL
+
+// trimISO8601Zulu strips the trailing 'Z' from an ISO 8601 UTC datetime
+// ("2026-01-15T10:20:30.123Z" -> "2026-01-15T10:20:30.123"), which MO's
+// temporal parsers accept. Values without the T...Z shape pass through.
+func trimISO8601Zulu(v string) string {
+	if strings.HasSuffix(v, "Z") && strings.Contains(v, "T") {
+		return v[:len(v)-1]
+	}
+	return v
+}
 
 // ForeignExternParam builds the synthetic tree.ExternParam an ESQL/SQL foreign
 // external table scans with. Unlike the datastream INLINE param, the scan type

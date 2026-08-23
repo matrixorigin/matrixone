@@ -136,3 +136,16 @@ func TestResolveConfig(t *testing.T) {
 	_, err = ResolveConfig(ctx, "env:")
 	require.Error(t, err)
 }
+
+// TestRedactedConfigRejectedClearly proves replaying SHOW CREATE output (whose
+// inline config is redacted) fails with an explanation, not a JSON error.
+func TestRedactedConfigRejectedClearly(t *testing.T) {
+	ctx := context.Background()
+	p := &tree.ForeignTableParam{Kind: "sql", Options: tree.ForeignTableOptions{
+		{Key: "config", Val: "<redacted>"},
+	}}
+	_, err := ParseTableOptions(ctx, p)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "SHOW CREATE")
+	require.Contains(t, err.Error(), "env:NAME")
+}

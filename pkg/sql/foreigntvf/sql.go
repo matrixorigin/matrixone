@@ -110,6 +110,16 @@ func (c *SqlConn) Query(ctx context.Context, queryText string) (io.ReadCloser, e
 		encErr := encodeRowsCSV(pw, rows)
 		// Closing rows after encoding releases the pooled connection.
 		_ = rows.Close()
+		if encErr != nil {
+			// Attribute mid-stream driver errors (Scan/rows.Err/network) to
+			// sql_tvf; raw driver errors like "invalid connection" would
+			// otherwise reach the user with no hint of their origin. A write
+			// error caused by the reader closing the pipe early keeps its
+			// io.ErrClosedPipe identity (the reader is gone; nobody sees it).
+			if encErr != io.ErrClosedPipe {
+				encErr = moerr.NewInternalErrorf(ctx, "sql_tvf: reading foreign result: %v", encErr)
+			}
+		}
 		// A nil error closes the pipe with io.EOF for the reader.
 		_ = pw.CloseWithError(encErr)
 	}()

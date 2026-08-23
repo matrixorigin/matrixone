@@ -49,28 +49,37 @@ func TestSessionForeignConnCache(t *testing.T) {
 	require.False(t, ok)
 	ses.closeForeignConns() // no-op on empty
 
-	// put + get
+	// put + get; Put returns the stored conn
 	c1 := &fakeForeignConn{}
-	ses.PutForeignConn("h1", c1)
+	require.Same(t, c1, ses.PutForeignConn("h1", c1))
 	got, ok := ses.GetForeignConn("h1")
 	require.True(t, ok)
 	require.Same(t, c1, got)
 
-	// re-register same handle with a new conn closes the superseded one
+	// first-wins: a racing Put under the same handle keeps the existing entry
+	// and returns it; the cache never closes either connection (the losing
+	// caller closes its own).
 	c2 := &fakeForeignConn{}
-	ses.PutForeignConn("h1", c2)
-	require.Equal(t, 1, c1.closeCount())
+	require.Same(t, c1, ses.PutForeignConn("h1", c2))
+	require.Equal(t, 0, c1.closeCount())
+	require.Equal(t, 0, c2.closeCount())
 	got, ok = ses.GetForeignConn("h1")
 	require.True(t, ok)
-	require.Same(t, c2, got)
+	require.Same(t, c1, got)
 
 	// remove detaches without closing (caller closes)
 	removed, ok := ses.RemoveForeignConn("h1")
 	require.True(t, ok)
-	require.Same(t, c2, removed)
-	require.Equal(t, 0, c2.closeCount())
+	require.Same(t, c1, removed)
+	require.Equal(t, 0, c1.closeCount())
 	_, ok = ses.GetForeignConn("h1")
 	require.False(t, ok)
+
+	// after remove, a new Put stores the new conn
+	require.Same(t, c2, ses.PutForeignConn("h1", c2))
+	removed, ok = ses.RemoveForeignConn("h1")
+	require.True(t, ok)
+	require.Same(t, c2, removed)
 
 	// closeForeignConns closes everything left and clears the cache
 	c3, c4 := &fakeForeignConn{}, &fakeForeignConn{}

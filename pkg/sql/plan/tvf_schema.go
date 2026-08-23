@@ -77,7 +77,14 @@ func parseTVFColumnSchema(ctx context.Context, optstr string) (ParseJsonlOptions
 // than silently producing an untyped column.
 func buildTVFColDefs(ctx context.Context, opts ParseJsonlOptions) ([]*plan.ColDef, error) {
 	cols := make([]*plan.ColDef, 0, len(opts.Cols))
+	seen := make(map[string]bool, len(opts.Cols))
 	for _, col := range opts.Cols {
+		// A duplicate name would silently alias two output columns to one
+		// source field position in the foreign TVF field mapping.
+		if seen[col.Name] {
+			return nil, moerr.NewInvalidInputf(ctx, "duplicate column name %q in options", col.Name)
+		}
+		seen[col.Name] = true
 		var t types.T
 		switch col.Type {
 		case ParseJsonlTypeBool:

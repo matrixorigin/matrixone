@@ -139,7 +139,17 @@ func ResolveOrConnect(ctx context.Context, cache process.ForeignConnCache, kind 
 	if err != nil {
 		return nil, "", err
 	}
-	cache.PutForeignConn(handle, c)
+	// First-wins: another operator may have connected concurrently under the
+	// same config-derived handle. Use the cached winner and close our loser —
+	// the cache never closes a connection someone else may be using.
+	winner := cache.PutForeignConn(handle, c)
+	if winner != process.ForeignConn(c) {
+		_ = c.Close()
+		if fc, ok := winner.(Conn); ok {
+			return fc, handle, nil
+		}
+		return nil, "", moerr.NewInternalErrorf(ctx, "foreigntvf: cached handle %q is not a foreign connection", handle)
+	}
 	return c, handle, nil
 }
 
@@ -173,22 +183,27 @@ func ConfigFromSessionVar(ctx context.Context, proc *process.Process, kind Kind)
 	if err != nil {
 		return "", err
 	}
-	s := valueToString(v)
+	s, ok := valueToString(v)
+	if !ok {
+		return "", moerr.NewInvalidInputf(ctx, "foreigntvf: session variable @%s must be a string config, not %T", varName, v)
+	}
 	if s == "" {
 		return "", moerr.NewInvalidInputf(ctx, "foreigntvf: no connection given and session variable @%s is not set", varName)
 	}
 	return s, nil
 }
 
-func valueToString(v any) string {
+// valueToString converts a session-variable value into a config string;
+// ok=false means the variable holds a non-string value.
+func valueToString(v any) (string, bool) {
 	switch t := v.(type) {
 	case nil:
-		return ""
+		return "", true
 	case string:
-		return t
+		return t, true
 	case []byte:
-		return string(t)
+		return string(t), true
 	default:
-		return ""
+		return "", false
 	}
 }

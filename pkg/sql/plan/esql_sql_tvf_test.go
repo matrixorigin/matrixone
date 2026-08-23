@@ -101,6 +101,13 @@ func TestBuildTVFColDefs(t *testing.T) {
 	// unknown type name is rejected, not silently untyped.
 	_, err = buildTVFColDefs(ctx, ParseJsonlOptions{Cols: []ParseJsonlOptionsCol{{Name: "x", Type: "nosuch"}}})
 	require.Error(t, err)
+
+	// duplicate column names would silently alias two outputs to one source
+	// field position in the foreign TVF mapping; rejected instead.
+	_, err = buildTVFColDefs(ctx, ParseJsonlOptions{Cols: []ParseJsonlOptionsCol{
+		{Name: "a", Type: ParseJsonlTypeInt64}, {Name: "a", Type: ParseJsonlTypeString}}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate column name")
 }
 
 func TestForeignTVFParamRoundTrip(t *testing.T) {

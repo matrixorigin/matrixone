@@ -180,7 +180,12 @@ type ForeignConn interface {
 // A handle is derived from the connection config, so reconnecting with the same
 // config yields the same handle and reuses the cached connection.
 type ForeignConnCache interface {
-	PutForeignConn(handle string, conn ForeignConn)
+	// PutForeignConn stores conn under handle unless an entry already exists,
+	// and returns the entry that is cached after the call (first-wins). Two
+	// scans sharing one config can race to connect; the loser must close its
+	// own conn and use the returned winner — the cache never closes a
+	// connection another operator may already be using.
+	PutForeignConn(handle string, conn ForeignConn) ForeignConn
 	GetForeignConn(handle string) (ForeignConn, bool)
 	// RemoveForeignConn detaches and returns the connection for handle so the
 	// caller can close it; ok=false if no such handle.

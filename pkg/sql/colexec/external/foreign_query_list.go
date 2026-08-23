@@ -80,6 +80,12 @@ func deriveQueryCandidates(ctx context.Context, node *plan.Node, proc *process.P
 		// one side is the hidden column, the other the candidate text
 		for i := 0; i < 2; i++ {
 			if col, ok := fn.F.Args[i].Expr.(*plan.Expr_Col); ok && isFileLevelColumn(node, col.Col) {
+				if !isColumnFreeExpr(node, fn.F.Args[1-i]) {
+					// e.g. `__mo_query = __mo_query`: the conjunct is
+					// query-level but generates nothing; it still prunes in
+					// FilterFileList, which has a real materialized batch.
+					return nil, nil
+				}
 				return evalQueryTexts(ctx, proc, fn.F.Args[1-i])
 			}
 		}
@@ -89,6 +95,9 @@ func deriveQueryCandidates(ctx context.Context, node *plan.Node, proc *process.P
 			return nil, nil
 		}
 		if col, ok := fn.F.Args[0].Expr.(*plan.Expr_Col); !ok || !isFileLevelColumn(node, col.Col) {
+			return nil, nil
+		}
+		if !isColumnFreeExpr(node, fn.F.Args[1]) {
 			return nil, nil
 		}
 		if list, ok := fn.F.Args[1].Expr.(*plan.Expr_List); ok && list.List != nil {
@@ -123,6 +132,17 @@ func deriveQueryCandidates(ctx context.Context, node *plan.Node, proc *process.P
 	default:
 		return nil, nil
 	}
+}
+
+// isColumnFreeExpr reports whether expr references no column at all — the
+// requirement for evaluating it on the zero-vector const-fold batch. The
+// conjunct-level classifier is not enough: it accepts the hidden column on
+// BOTH sides of a comparison (`__mo_query = __mo_query` is a valid query-level
+// conjunct), and evaluating a column reference against the const-fold batch
+// panics.
+func isColumnFreeExpr(node *plan.Node, expr *plan.Expr) bool {
+	hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, expr)
+	return !hasFileLevel && !hasUnsupported
 }
 
 // evalQueryTexts evaluates a column-free, compile-time-safe expression (the

@@ -35,11 +35,15 @@ func (s *fakeTvfSession) RemoveTempTable(dbName, alias string)             {}
 func (s *fakeTvfSession) RemoveTempTableByRealName(realName string)        {}
 func (s *fakeTvfSession) GetSqlModeNoAutoValueOnZero() (bool, bool)        { return false, false }
 
-func (s *fakeTvfSession) PutForeignConn(handle string, conn process.ForeignConn) {
+func (s *fakeTvfSession) PutForeignConn(handle string, conn process.ForeignConn) process.ForeignConn {
 	if s.conns == nil {
 		s.conns = make(map[string]process.ForeignConn)
 	}
+	if existing, ok := s.conns[handle]; ok && existing != nil {
+		return existing
+	}
 	s.conns[handle] = conn
+	return conn
 }
 func (s *fakeTvfSession) GetForeignConn(handle string) (process.ForeignConn, bool) {
 	c, ok := s.conns[handle]

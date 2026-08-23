@@ -50,4 +50,19 @@ select sql_tvf_disconnect(@h) as disconnected_again;
 0
 select count(*) from sql_tvf('select 1', '{"cols":[{"name":"x","type":"int64"}]}', 'sql:deadbeefdeadbeef') x;
 invalid input: foreigntvf: connection handle "sql:deadbeefdeadbeef" not found or disconnected; check the conn argument
+set @h = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/sql_tvf_test"}');
+create table typed(b bool, i32 int, f32 float, f64 double, ts timestamp, txt varchar(100));
+insert into typed values
+(true, 42, 1.5, 2.25, '2026-01-15 10:20:30', 'line1\nline2 unicode 中文'),
+(false, NULL, NULL, -0.5, NULL, NULL);
+select * from sql_tvf('select b,i32,f32,f64,ts,txt from typed order by i32', '{"cols":[{"name":"b","type":"bool"},{"name":"i32","type":"int32"},{"name":"f32","type":"float32"},{"name":"f64","type":"float64"},{"name":"ts","type":"timestamp"},{"name":"txt","type":"string"}]}', @h) x;
+➤ b[-7,1,0]  ¦  i32[4,32,0]  ¦  f32[7,23,31]  ¦  f64[8,53,31]  ¦  ts[93,64,0]  ¦  txt[12,536870911,0]  𝄀
+0  ¦  null  ¦  null  ¦  -0.5  ¦  null  ¦  null  𝄀
+1  ¦  42  ¦  1.5  ¦  2.25  ¦  2026-01-15 10:20:30  ¦  line1
+line2 unicode 中文
+select * from sql_tvf('select b,i32,f32,f64,ts from typed where i32 is not null', 'bifFt', @h) x;
+➤ col0[-7,1,0]  ¦  col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[8,53,31]  ¦  col4[93,64,0]  𝄀
+1  ¦  42  ¦  1.5  ¦  2.25  ¦  2026-01-15 10:20:30
+select * from sql_tvf('select 1,2', '{"cols":[{"name":"a","type":"int64"},{"name":"a","type":"int64"}]}', @h) x;
+invalid input: duplicate column name "a" in options
 drop database sql_tvf_test;

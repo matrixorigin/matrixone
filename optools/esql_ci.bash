@@ -112,12 +112,13 @@ seed() {
         "name": {"type": "keyword"},
         "dept": {"type": "keyword"},
         "salary": {"type": "long"},
-        "active": {"type": "boolean"}
+        "active": {"type": "boolean"},
+        "hired": {"type": "date"}
       }}
     }' >/dev/null || die "create index failed"
 
   curl -s -u "elastic:$ES_PASSWORD" -X POST "http://127.0.0.1:$ES_PORT/employees/_bulk" \
-    -H 'Content-Type: application/x-ndjson' --data-binary $'{"index":{"_id":"1"}}\n{"name":"Alice","dept":"eng","salary":90000,"active":true}\n{"index":{"_id":"2"}}\n{"name":"Bob","dept":"eng","salary":150000,"active":true}\n{"index":{"_id":"3"}}\n{"name":"Carol","dept":"sales","salary":80000,"active":false}\n{"index":{"_id":"4"}}\n{"name":"Dave","dept":"sales","salary":120000,"active":true}\n{"index":{"_id":"5"}}\n{"name":"Eve","dept":"ops","salary":null,"active":false}\n' \
+    -H 'Content-Type: application/x-ndjson' --data-binary $'{"index":{"_id":"1"}}\n{"name":"Alice","dept":"eng","salary":90000,"active":true,"hired":"2020-01-15T09:00:00Z"}\n{"index":{"_id":"2"}}\n{"name":"Bob","dept":"eng","salary":150000,"active":true,"hired":"2020-06-01T10:30:00Z"}\n{"index":{"_id":"3"}}\n{"name":"Carol","dept":"sales","salary":80000,"active":false,"hired":"2021-03-20T14:00:00Z"}\n{"index":{"_id":"4"}}\n{"name":"Dave","dept":"sales","salary":120000,"active":true,"hired":"2023-06-15T08:30:00.123Z"}\n{"index":{"_id":"5"}}\n{"name":"Eve","dept":"ops","salary":null,"active":false,"hired":"2024-11-05T16:45:00Z"}\n' \
     >/dev/null || die "bulk seed failed"
 
   curl -s -u "elastic:$ES_PASSWORD" -X POST "http://127.0.0.1:$ES_PORT/employees/_refresh" >/dev/null || die "refresh failed"

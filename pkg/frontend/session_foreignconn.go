@@ -26,22 +26,22 @@ import (
 // connection config, so reconnecting with the same config reuses the entry.
 var _ process.ForeignConnCache = (*Session)(nil)
 
-// PutForeignConn stores conn under handle. If a connection already exists for
-// the handle it is closed first, so a re-registered handle never leaks.
-func (ses *Session) PutForeignConn(handle string, conn process.ForeignConn) {
+// PutForeignConn stores conn under handle unless an entry already exists and
+// returns the cached entry (first-wins). Handles are config-derived, so two
+// concurrent scans with the same config can race to connect; keeping the
+// first entry (instead of superseding) means the cache never closes a
+// connection another operator may already be using — the loser closes its own.
+func (ses *Session) PutForeignConn(handle string, conn process.ForeignConn) process.ForeignConn {
 	ses.foreignConnMu.Lock()
+	defer ses.foreignConnMu.Unlock()
 	if ses.foreignConns == nil {
 		ses.foreignConns = make(map[string]process.ForeignConn)
 	}
-	old, exists := ses.foreignConns[handle]
-	ses.foreignConns[handle] = conn
-	ses.foreignConnMu.Unlock()
-
-	if exists && old != nil && old != conn {
-		if err := old.Close(); err != nil {
-			logutil.Warnf("close superseded foreign connection %q: %v", handle, err)
-		}
+	if existing, ok := ses.foreignConns[handle]; ok && existing != nil {
+		return existing
 	}
+	ses.foreignConns[handle] = conn
+	return conn
 }
 
 // GetForeignConn returns the connection registered for handle.

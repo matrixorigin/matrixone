@@ -30,9 +30,12 @@ import (
 
 // EsqlConn is a connection to an Elasticsearch cluster used to run ES|QL
 // queries. The go-elasticsearch client is safe for concurrent use and pools
-// HTTP connections internally; there is no explicit close, so Close is a no-op.
+// HTTP connections in its private transport.
 type EsqlConn struct {
 	es *elasticsearch.Client
+	// transport is the client's private http.Transport, kept so Close can
+	// release its idle keep-alive sockets (the client itself has no Close).
+	transport *http.Transport
 }
 
 var _ Conn = (*EsqlConn)(nil)
@@ -45,7 +48,7 @@ func validateESQLConfig(ctx context.Context, configJSON string) error {
 		return moerr.NewInvalidInputf(ctx, "esql: invalid elasticsearch config: %v", err)
 	}
 	if len(cfg.Addresses) == 0 && cfg.CloudID == "" {
-		return moerr.NewInvalidInput(ctx, "esql: elasticsearch config needs addresses or a cloud_id")
+		return moerr.NewInvalidInput(ctx, "esql: elasticsearch config needs addresses or a cloudid")
 	}
 	return nil
 }
@@ -60,7 +63,7 @@ func connectESQL(ctx context.Context, configJSON string) (Conn, error) {
 	// MO's fileservice replaces http.DefaultTransport with a custom
 	// RoundTripper, so the ES client cannot clone it. Always provide an
 	// explicit transport (Transport is not settable from the JSON config).
-	cfg.Transport = &http.Transport{
+	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
@@ -71,6 +74,7 @@ func connectESQL(ctx context.Context, configJSON string) (Conn, error) {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
+	cfg.Transport = transport
 	es, err := elasticsearch.NewClient(cfg)
 	if err != nil {
 		return nil, moerr.NewInvalidInputf(ctx, "esql_tvf: cannot create elasticsearch client: %v", err)
@@ -83,12 +87,20 @@ func connectESQL(ctx context.Context, configJSON string) (Conn, error) {
 	if res.IsError() {
 		return nil, moerr.NewInternalErrorf(ctx, "esql_tvf: elasticsearch returned %s", res.Status())
 	}
-	return &EsqlConn{es: es}, nil
+	return &EsqlConn{es: es, transport: transport}, nil
 }
 
 func (c *EsqlConn) Kind() Kind { return KindESQL }
 
-func (c *EsqlConn) Close() error { return nil }
+// Close releases the idle keep-alive sockets of the connection's private
+// transport. In-flight requests are unaffected (their sockets close when the
+// response body is closed).
+func (c *EsqlConn) Close() error {
+	if c.transport != nil {
+		c.transport.CloseIdleConnections()
+	}
+	return nil
+}
 
 // Query sends esql to the ES|QL _query API requesting CSV output and returns
 // the response body (a CSV stream with a header row). ES renders NULL as an
@@ -107,9 +119,34 @@ func (c *EsqlConn) Query(ctx context.Context, esql string) (io.ReadCloser, error
 		return nil, moerr.NewInternalErrorf(ctx, "esql_tvf: query failed: %v", err)
 	}
 	if res.IsError() {
-		msg, _ := io.ReadAll(res.Body)
+		// Bound the error-body read: a misconfigured endpoint could stream an
+		// unbounded body on its error path.
+		msg, _ := io.ReadAll(io.LimitReader(res.Body, 8192))
 		res.Body.Close()
 		return nil, moerr.NewInvalidInputf(ctx, "esql_tvf: query error %s: %s", res.Status(), string(msg))
 	}
-	return res.Body, nil
+	// The CSV parser must treat io.ErrUnexpectedEOF as its own normal
+	// final-partial-block signal, but net/http also reports a PREMATURELY
+	// CLOSED response body (node restart, LB idle timeout) as
+	// io.ErrUnexpectedEOF — which would silently truncate the result. Remap
+	// the transport-level one to a real error before the parser can see it.
+	return &truncationGuard{ctx: ctx, body: res.Body}, nil
 }
+
+// truncationGuard converts a transport-level io.ErrUnexpectedEOF from the ES
+// response body into a hard error so a dropped connection can never be
+// mistaken for end-of-data.
+type truncationGuard struct {
+	ctx  context.Context
+	body io.ReadCloser
+}
+
+func (g *truncationGuard) Read(p []byte) (int, error) {
+	n, err := g.body.Read(p)
+	if err == io.ErrUnexpectedEOF {
+		return n, moerr.NewInternalError(g.ctx, "esql: response truncated (connection to elasticsearch closed mid-stream)")
+	}
+	return n, err
+}
+
+func (g *truncationGuard) Close() error { return g.body.Close() }

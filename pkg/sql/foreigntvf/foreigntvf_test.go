@@ -114,8 +114,12 @@ func newFakeConnCache() *fakeConnCache {
 	return &fakeConnCache{conns: make(map[string]process.ForeignConn)}
 }
 
-func (c *fakeConnCache) PutForeignConn(handle string, conn process.ForeignConn) {
+func (c *fakeConnCache) PutForeignConn(handle string, conn process.ForeignConn) process.ForeignConn {
+	if existing, ok := c.conns[handle]; ok && existing != nil {
+		return existing
+	}
 	c.conns[handle] = conn
+	return conn
 }
 func (c *fakeConnCache) GetForeignConn(handle string) (process.ForeignConn, bool) {
 	v, ok := c.conns[handle]
@@ -169,4 +173,39 @@ func (c *seedConn) Close() error { return nil }
 func (c *seedConn) Kind() Kind   { return KindSQL }
 func (c *seedConn) Query(ctx context.Context, q string) (io.ReadCloser, error) {
 	return nil, nil
+}
+
+// errReadCloser yields data then a chosen error.
+type errReadCloser struct {
+	data []byte
+	err  error
+}
+
+func (r *errReadCloser) Read(p []byte) (int, error) {
+	if len(r.data) > 0 {
+		n := copy(p, r.data)
+		r.data = r.data[n:]
+		return n, nil
+	}
+	return 0, r.err
+}
+func (r *errReadCloser) Close() error { return nil }
+
+// TestTruncationGuard proves a transport-level io.ErrUnexpectedEOF (premature
+// connection close) becomes a hard error instead of end-of-data, while a clean
+// EOF passes through.
+func TestTruncationGuard(t *testing.T) {
+	g := &truncationGuard{ctx: context.Background(),
+		body: &errReadCloser{data: []byte("a,b\n"), err: io.ErrUnexpectedEOF}}
+	buf, err := io.ReadAll(g)
+	require.Equal(t, "a,b\n", string(buf))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "response truncated")
+
+	g = &truncationGuard{ctx: context.Background(),
+		body: &errReadCloser{data: []byte("a,b\n"), err: io.EOF}}
+	buf, err = io.ReadAll(g)
+	require.NoError(t, err) // io.ReadAll swallows clean EOF
+	require.Equal(t, "a,b\n", string(buf))
+	require.NoError(t, g.Close())
 }

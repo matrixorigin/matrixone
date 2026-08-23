@@ -266,6 +266,31 @@ func runExternalTable(ctx context.Context, db *sql.DB, cfgStr string, r *report)
 	}
 	r.Cases = append(r.Cases, "exttab-inline-config")
 
+	// ES renders dates as ISO 8601 UTC ("...T...Z"); a declared timestamp
+	// column must parse them natively (regression: strict-mode coercion
+	// rejected the trailing 'Z'), including millisecond precision, and typed
+	// predicates must work on the parsed values.
+	if _, err := db.ExecContext(ctx,
+		"create external table emp_ts (name varchar(100), hired timestamp(3)) engine = esql with ('config' = 'env:MO_ESQL_E2E_CFG')"); err != nil {
+		return fmt.Errorf("exttab ts create: %w", err)
+	}
+	qTS := "FROM employees | KEEP name, hired | SORT name"
+	if err := expectScalar(ctx, db,
+		"select count(*) from emp_ts where __mo_query = '"+sqlEscape(qTS)+"'", "5"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db,
+		"select count(*) from emp_ts where __mo_query = '"+sqlEscape(qTS)+"' and hired >= '2021-01-01'", "3"); err != nil {
+		return err
+	}
+	// millisecond precision survives (Dave hired ...T08:30:00.123Z)
+	if err := expectScalar(ctx, db,
+		"select cast(hired as char) from emp_ts where __mo_query = '"+sqlEscape(qTS)+"' and name = 'Dave'",
+		"2023-06-15 08:30:00.123"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "exttab-iso8601-timestamp")
+
 	if _, err := db.ExecContext(ctx, "drop database esql_ext"); err != nil {
 		return err
 	}

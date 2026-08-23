@@ -101,4 +101,32 @@ create external table badopt (id int) engine = sql with ('recheck'='true');
 -- error: bad driver in an inline config is rejected at CREATE time.
 create external table badcfg (id int) engine = sql with ('config'='{"driver":"nope","dsn":"x"}');
 
+-- type matrix: every interesting MO type round-trips exactly through the
+-- foreign CSV transport (incl. binary with NUL bytes, json with embedded
+-- commas, temporal types, unicode text with newlines/quotes/backslashes).
+create table typed(
+  id int, b bool, f32 float, f64 double, dec decimal(18,4),
+  d date, dt datetime(3), ts timestamp(3), js json, vb varbinary(64), txt text);
+insert into typed values
+ (1, true,  1.5, 2.25, 12345.6789, '2026-01-15', '2026-01-15 10:20:30.123', '2026-01-15 10:20:30.456',
+  '{"a": 1, "arr": [1,2,3], "s": "x,y"}', x'DEADBEEF00FF', 'line1\nline2 unicode 中文'),
+ (2, false, NULL, -0.5, -0.0001, '1970-01-01', '1970-01-01 00:00:01.000', '2038-01-19 03:14:07.000',
+  '[1, "two", null, {"k": true}]', x'00', NULL),
+ (3, NULL, 3.14, 1e10, 99999999999999.9999, NULL, NULL, NULL, NULL, NULL, 'has "quote" and \\ backslash');
+create external table typed_ext (
+  id int, b bool, f32 float, f64 double, dec decimal(18,4),
+  d date, dt datetime(3), ts timestamp(3), js json, vb varbinary(64), txt text
+) engine = sql with (
+  'config' = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_exttab"}',
+  'query'  = 'select id,b,f32,f64,dec,d,dt,ts,js,vb,txt from typed');
+select id, b, f32, f64, dec from typed_ext order by id;
+select id, d, dt, ts from typed_ext order by id;
+select id, js, json_extract(js, '$.a') as ja from typed_ext order by id;
+select id, hex(vb) as vbhex from typed_ext order by id;
+-- exact-equality proof: every column NULL-safe-equal to the source.
+select count(*) as mismatches from typed_ext x join typed s on x.id = s.id
+where not (x.b <=> s.b) or not (x.f32 <=> s.f32) or not (x.f64 <=> s.f64)
+   or not (x.dec <=> s.dec) or not (x.d <=> s.d) or not (x.dt <=> s.dt)
+   or not (x.ts <=> s.ts) or not (x.vb <=> s.vb) or not (x.txt <=> s.txt);
+
 drop database foreign_exttab;

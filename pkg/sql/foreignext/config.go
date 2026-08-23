@@ -102,6 +102,13 @@ func ParseTableOptions(ctx context.Context, param *tree.ForeignTableParam) (Conf
 		}
 		switch key {
 		case optionConfig:
+			if value == "<redacted>" {
+				// SHOW CREATE redacts an inline config; replaying its output
+				// (snapshot/PITR restore, copy-paste) must say why it cannot
+				// work instead of failing on unparseable JSON.
+				return Config{}, moerr.NewInvalidInputf(ctx,
+					"the 'config' option is '<redacted>' (SHOW CREATE hides inline credentials); re-supply the real config, or use an env:NAME reference which is never redacted")
+			}
 			cfg.ConfigJSON = value
 		case optionQuery:
 			cfg.DefaultQuery = value

@@ -155,6 +155,21 @@ func TestDeriveForeignQueryList(t *testing.T) {
 	got, err = DeriveForeignQueryList(ctx, node, proc)
 	require.NoError(t, err)
 	require.Empty(t, got)
+
+	// self-referential predicates are query-level but must NOT be evaluated on
+	// the const-fold batch (regression: index-out-of-range panic). They
+	// generate nothing and prune later in FilterFileList.
+	node.FilterList = []*plan.Expr{eq(queryCol, queryCol)}
+	got, err = DeriveForeignQueryList(ctx, node, proc)
+	require.NoError(t, err)
+	require.Empty(t, got)
+
+	node.FilterList = []*plan.Expr{
+		foreignQueryFn("in", inID, queryCol, foreignQueryExprList(lit("q1"), queryCol)),
+	}
+	got, err = DeriveForeignQueryList(ctx, node, proc)
+	require.NoError(t, err)
+	require.Empty(t, got)
 }
 
 // TestForeignQueryIsFileLevel proves the generalized classifier accepts
@@ -169,4 +184,14 @@ func TestForeignQueryIsFileLevel(t *testing.T) {
 	badNode := foreignQueryTestNode("id")
 	badNode.TableDef.Cols[1].ColId = 42
 	require.False(t, isFileLevelColumn(badNode, queryCol))
+}
+
+func TestTrimISO8601Zulu(t *testing.T) {
+	require.Equal(t, "2026-01-15T10:20:30.123", trimISO8601Zulu("2026-01-15T10:20:30.123Z"))
+	require.Equal(t, "2026-01-15T10:20:30", trimISO8601Zulu("2026-01-15T10:20:30Z"))
+	// no 'T' separator -> untouched (a bare 'Z' suffix on non-ISO text is
+	// data; the trim only ever applies to temporal-typed columns anyway)
+	require.Equal(t, "abc Z", trimISO8601Zulu("abc Z"))
+	require.Equal(t, "2026-01-15 10:20:30", trimISO8601Zulu("2026-01-15 10:20:30"))
+	require.Equal(t, "", trimISO8601Zulu(""))
 }
