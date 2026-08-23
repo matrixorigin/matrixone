@@ -92,6 +92,90 @@ type ExpressionExecutor interface {
 	TypeName() string
 }
 
+type memoExpressionState struct {
+	executor ExpressionExecutor
+	cached   *vector.Vector
+	refs     int
+}
+
+type memoExpressionExecutor struct {
+	state *memoExpressionState
+}
+
+func (expr *memoExpressionExecutor) Eval(
+	proc *process.Process, batches []*batch.Batch, selectList []bool,
+) (*vector.Vector, error) {
+	if expr.state.cached != nil {
+		return expr.state.cached, nil
+	}
+	result, err := expr.state.executor.Eval(proc, batches, selectList)
+	if err == nil {
+		expr.state.cached = result
+	}
+	return result, err
+}
+
+func (expr *memoExpressionExecutor) EvalWithoutResultReusing(
+	proc *process.Process, batches []*batch.Batch, selectList []bool,
+) (*vector.Vector, error) {
+	return expr.Eval(proc, batches, selectList)
+}
+
+func (expr *memoExpressionExecutor) ResetForNextQuery() {}
+
+func (expr *memoExpressionExecutor) Free() {
+	expr.state.refs--
+	if expr.state.refs == 0 {
+		expr.state.executor.Free()
+		expr.state.executor = nil
+		expr.state.cached = nil
+	}
+}
+
+func (expr *memoExpressionExecutor) IsColumnExpr() bool { return false }
+func (expr *memoExpressionExecutor) TypeName() string   { return "memo expression" }
+
+type memoRootExpressionExecutor struct {
+	executor ExpressionExecutor
+	states   []*memoExpressionState
+}
+
+func (expr *memoRootExpressionExecutor) resetCachedValues() {
+	for _, state := range expr.states {
+		state.cached = nil
+	}
+}
+
+func (expr *memoRootExpressionExecutor) Eval(
+	proc *process.Process, batches []*batch.Batch, selectList []bool,
+) (*vector.Vector, error) {
+	expr.resetCachedValues()
+	return expr.executor.Eval(proc, batches, selectList)
+}
+
+func (expr *memoRootExpressionExecutor) EvalWithoutResultReusing(
+	proc *process.Process, batches []*batch.Batch, selectList []bool,
+) (*vector.Vector, error) {
+	expr.resetCachedValues()
+	return expr.executor.EvalWithoutResultReusing(proc, batches, selectList)
+}
+
+func (expr *memoRootExpressionExecutor) ResetForNextQuery() {
+	expr.executor.ResetForNextQuery()
+	for _, state := range expr.states {
+		state.executor.ResetForNextQuery()
+	}
+}
+
+func (expr *memoRootExpressionExecutor) Free()              { expr.executor.Free() }
+func (expr *memoRootExpressionExecutor) IsColumnExpr() bool { return expr.executor.IsColumnExpr() }
+func (expr *memoRootExpressionExecutor) TypeName() string   { return expr.executor.TypeName() }
+
+type expressionExecutorBuildContext struct {
+	memos  map[int32]*memoExpressionState
+	states []*memoExpressionState
+}
+
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
 	return NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, planExprs, nil)
 }
@@ -126,6 +210,39 @@ func NewExpressionExecutorWithAllocation(
 	planExpr *plan.Expr,
 	selection *vector.AllocationAccountSelection,
 ) (ExpressionExecutor, error) {
+	buildCtx := &expressionExecutorBuildContext{}
+	executor, err := newExpressionExecutorWithAllocation(proc, planExpr, selection, buildCtx)
+	if err != nil || len(buildCtx.states) == 0 {
+		return executor, err
+	}
+	return &memoRootExpressionExecutor{executor: executor, states: buildCtx.states}, nil
+}
+
+func newExpressionExecutorWithAllocation(
+	proc *process.Process,
+	planExpr *plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	buildCtx *expressionExecutorBuildContext,
+) (ExpressionExecutor, error) {
+	if planExpr.AuxId < 0 {
+		if buildCtx.memos == nil {
+			buildCtx.memos = make(map[int32]*memoExpressionState)
+		}
+		if state, ok := buildCtx.memos[planExpr.AuxId]; ok {
+			state.refs++
+			return &memoExpressionExecutor{state: state}, nil
+		}
+		withoutMemo := *planExpr
+		withoutMemo.AuxId = 0
+		executor, err := newExpressionExecutorWithAllocation(proc, &withoutMemo, selection, buildCtx)
+		if err != nil {
+			return nil, err
+		}
+		state := &memoExpressionState{executor: executor, refs: 1}
+		buildCtx.memos[planExpr.AuxId] = state
+		buildCtx.states = append(buildCtx.states, state)
+		return &memoExpressionExecutor{state: state}, nil
+	}
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
 		typ := types.NewWithCharset(
@@ -209,7 +326,7 @@ func NewExpressionExecutorWithAllocation(
 			return nil, err
 		}
 		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := NewExpressionExecutorWithAllocation(proc, t.List.List[i], selection)
+			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.List.List[i], selection, buildCtx)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr
@@ -252,7 +369,7 @@ func NewExpressionExecutorWithAllocation(
 		}
 
 		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := NewExpressionExecutorWithAllocation(proc, t.F.Args[i], selection)
+			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr

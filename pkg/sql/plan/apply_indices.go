@@ -1157,6 +1157,8 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 	}
 
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		return true
 	case *plan.Expr_F:
 		if exprImpl.F == nil || exprImpl.F.Func == nil {
 			return true
@@ -1182,6 +1184,13 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 	}
 
 	return false
+}
+
+// ContainsVolatileFunction reports whether an expression can produce a new
+// value on repeated evaluation. Storage-side filtering uses it to keep such
+// predicates at the row-level execution boundary.
+func ContainsVolatileFunction(expr *plan.Expr) bool {
+	return containsVolatileFunction(expr)
 }
 
 type forceIndexScope int
