@@ -17,7 +17,6 @@ package compile
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -67,14 +66,7 @@ func forceSingleScan(node *plan.Node) bool {
 	if node.Stats != nil && node.Stats.ForceOneCN {
 		return true
 	}
-	for _, agg := range node.AggList {
-		if f, ok := agg.Expr.(*plan.Expr_F); ok {
-			if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
-				return true
-			}
-		}
-	}
-	return false
+	return plan2.RequiresSingleStageDistinctAgg(node)
 }
 
 func (c *Compile) localScanNodes(
