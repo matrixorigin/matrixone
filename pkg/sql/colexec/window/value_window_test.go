@@ -603,6 +603,7 @@ func TestProcessValueFunc_LeadWithMaxInt64Offset(t *testing.T) {
 	ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec}
 
 	ap := &Window{WinSpecList: []*plan.Expr{spec}}
+	require.NoError(t, ctr.validateLagLeadOffsets(0, ap, proc))
 	result, err := ctr.processValueFunc(0, ap, proc)
 	require.NoError(t, err)
 	require.Equal(t, 3, result.Length())
@@ -1185,6 +1186,70 @@ func TestProcessValueFunc_RejectsNegativeLagLeadOffset(t *testing.T) {
 			if defaultVec != nil {
 				defaultVec.Free(mp)
 			}
+			offsetVec.Free(mp)
+			bat.Clean(mp)
+			proc.Free()
+			require.Equal(t, int64(0), mp.CurrNB())
+		})
+	}
+}
+
+func TestProcessValueFunc_RejectsNonIntegralOrNullLagLeadOffset(t *testing.T) {
+	tests := []struct {
+		name       string
+		makeSpec   func() *plan.Expr
+		makeOffset func(*mpool.MPool, int) (*vector.Vector, error)
+	}{
+		{
+			name:     "lag float",
+			makeSpec: makeLagWindowSpec,
+			makeOffset: func(mp *mpool.MPool, _ int) (*vector.Vector, error) {
+				return testutil.MakeFloat64Vector([]float64{-1.5, -0.5, -1.5, -0.5}, nil, mp), nil
+			},
+		},
+		{
+			name:     "lead decimal",
+			makeSpec: makeLeadWindowSpec,
+			makeOffset: func(mp *mpool.MPool, rows int) (*vector.Vector, error) {
+				typ := types.T_decimal64.ToType()
+				typ.Width = 18
+				typ.Scale = 1
+				value, err := types.ParseDecimal64("-1.5", typ.Width, typ.Scale)
+				if err != nil {
+					return nil, err
+				}
+				return vector.NewConstFixed(typ, value, rows, mp)
+			},
+		},
+		{
+			name:     "lag row-dependent null",
+			makeSpec: makeLagWindowSpec,
+			makeOffset: func(mp *mpool.MPool, _ int) (*vector.Vector, error) {
+				return testutil.MakeInt64Vector([]int64{1, 0, 1, 1}, []uint64{1}, mp), nil
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			bat := makeInt32Batch(mp, []int32{10, 20, 30, 40})
+			offsetVec, err := test.makeOffset(mp, bat.RowCount())
+			require.NoError(t, err)
+			defaultVec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(99), bat.RowCount(), mp)
+			require.NoError(t, err)
+
+			ctr := &container{bat: bat, aggVecs: make([]colexec.ExprEvalVector, 1)}
+			ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0], offsetVec, defaultVec}
+			ap := &Window{WinSpecList: []*plan.Expr{test.makeSpec()}}
+
+			require.ErrorContains(t, ctr.validateLagLeadOffsets(0, ap, proc), "Incorrect arguments to")
+			result, err := ctr.processValueFunc(0, ap, proc)
+			require.Nil(t, result)
+			require.ErrorContains(t, err, "Incorrect arguments to")
+
+			defaultVec.Free(mp)
 			offsetVec.Free(mp)
 			bat.Clean(mp)
 			proc.Free()

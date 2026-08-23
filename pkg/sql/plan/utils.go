@@ -3452,6 +3452,26 @@ func isPositivePreparedInteger(value any) bool {
 	}
 }
 
+func isNonNegativePreparedInteger(value any) bool {
+	kind := vector.PrepareParamNone
+	if paramValue, ok := value.(ParamValue); ok {
+		value = paramValue.Value
+		kind = paramValue.PrepareParamKind
+	}
+	if value == nil || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal ||
+		kind == vector.PrepareParamBoolean {
+		return false
+	}
+	if _, ok := value.(bool); ok {
+		return false
+	}
+	valid, negative := validatePreparedPaginationValue(ParamValue{
+		Value:            value,
+		PrepareParamKind: kind,
+	})
+	return valid && !negative
+}
+
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
@@ -3508,8 +3528,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 			if pos < 0 || int(pos) >= len(paramVals) {
 				return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
 			}
-			_, negative := validatePreparedPaginationValue(paramVals[pos])
-			if negative {
+			if !isNonNegativePreparedInteger(paramVals[pos]) {
 				return moerr.NewWrongArguments(ctx, name)
 			}
 		}

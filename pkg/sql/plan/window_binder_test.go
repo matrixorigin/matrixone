@@ -236,10 +236,17 @@ func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 	}
 }
 
-func TestLagLeadRejectNegativeConstantOffset(t *testing.T) {
+func TestLagLeadRejectInvalidConstantOffset(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	for _, name := range []string{"lag", "lead"} {
-		for _, offset := range []string{"-1", "0 - 1"} {
+		for _, offset := range []string{
+			"-1",
+			"0 - 1",
+			"-1.5",
+			"cast(-1 as decimal)",
+			"null",
+			"cast(null as signed)",
+		} {
 			t.Run(name+"/"+offset, func(t *testing.T) {
 				sql := "select " + name + "(a, " + offset + ") over (order by a) from select_test.bind_select"
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
@@ -253,7 +260,7 @@ func TestLagLeadRejectNegativeConstantOffset(t *testing.T) {
 			})
 		}
 
-		for _, offset := range []string{"0", "1"} {
+		for _, offset := range []string{"0", "1", "9223372036854775807"} {
 			t.Run(name+"/valid/"+offset, func(t *testing.T) {
 				sql := "select " + name + "(a, " + offset + ") over (order by a) from select_test.bind_select"
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)

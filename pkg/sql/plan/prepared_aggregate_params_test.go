@@ -348,12 +348,21 @@ func TestPreparedLagLeadOffsetParameter(t *testing.T) {
 
 			_, err = FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{int64(0)})
 			require.NoError(t, err)
+			_, err = FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{
+				ParamValue{Value: "9223372036854775807", PrepareParamKind: vector.PrepareParamInteger},
+			})
+			require.NoError(t, err)
 
-			for _, negative := range []any{
+			for _, invalid := range []any{
 				int64(-1),
+				nil,
+				float64(-1.5),
 				ParamValue{Value: "-1", PrepareParamKind: vector.PrepareParamInteger},
+				ParamValue{Value: "-1.5", PrepareParamKind: vector.PrepareParamFloat},
+				ParamValue{Value: "-1.5", PrepareParamKind: vector.PrepareParamDecimal},
+				ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamBoolean},
 			} {
-				_, err = FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{negative})
+				_, err = FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{invalid})
 				require.Error(t, err)
 				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
 			}
