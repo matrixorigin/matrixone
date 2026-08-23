@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2720,6 +2721,170 @@ func TestCalculateTableStatsIntegration(t *testing.T) {
 
 	assert.Equal(t, 1, stats.DataObjectCnt)
 	assert.Equal(t, 0, stats.TombstoneObjectCnt)
+}
+
+func writeConstantCommitTSTombstone(
+	t *testing.T,
+	ctx context.Context,
+	fs fileservice.FileService,
+	dataObjectID types.Objectid,
+	rowOffsets []uint32,
+	commitTS types.TS,
+) objectio.ObjectStats {
+	t.Helper()
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for _, offset := range rowOffsets {
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, offset)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(offset), false, mp))
+	}
+	var err error
+	bat.Vecs[2], err = vector.NewConstFixed(types.T_TS.ToType(), commitTS, len(rowOffsets), mp)
+	require.NoError(t, err)
+	bat.SetRowCount(len(rowOffsets))
+	defer bat.Clean(mp)
+
+	// Use the object-format writer directly so the persisted artifact retains
+	// its non-null constant encoding instead of being materialized by a producer.
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := objectio.NewObjectWriter(
+		name,
+		fs,
+		0,
+		objectio.GetTombstoneSeqnums(objectio.HiddenColumnSelection_CommitTS),
+		nil,
+	)
+	require.NoError(t, err)
+	_, err = writer.Write(bat)
+	require.NoError(t, err)
+	_, err = writer.WriteEnd(ctx)
+	require.NoError(t, err)
+
+	stats := writer.GetObjectStats()
+	// The low-level writer does not aggregate object-level row counts; the
+	// catalog metadata that points at the object does.
+	require.NoError(t, objectio.SetObjectStatsRowCnt(&stats, uint32(len(rowOffsets))))
+	require.Equal(t, uint32(len(rowOffsets)), stats.Rows())
+	require.Equal(t, uint32(1), stats.BlkCnt())
+	return stats
+}
+
+func assertPersistedCommitTSIsConstant(
+	t *testing.T,
+	ctx context.Context,
+	fs fileservice.FileService,
+	stats objectio.ObjectStats,
+	expectedRows int,
+) {
+	t.Helper()
+
+	vectors := containers.NewVectors(3)
+	_, release, err := ioutil.ReadDeletes(
+		ctx,
+		stats.BlockLocation(0, objectio.BlockMaxRows),
+		fs,
+		false,
+		vectors,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	defer release()
+	require.True(t, vectors[1].IsConst())
+	require.Equal(t, expectedRows, vectors[1].Length())
+	// This assertion intentionally inspects physical shape. Production code
+	// must use TombstoneCommitTSColumn.At for logical-row access.
+	require.Len(t, vector.MustFixedColNoTypeCheck[types.TS](&vectors[1]), 1)
+}
+
+func TestTombstoneStatsBroadcastConstantCommitTS(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	snapshot := types.BuildTS(10, 0)
+
+	newState := func(t *testing.T, objectCount int, commitTS types.TS) (*PartitionState, []objectio.ObjectEntry) {
+		t.Helper()
+		state := NewPartitionState("", false, 42, false)
+		dataObjectID := objectio.NewObjectid()
+		dataStats := objectio.NewObjectStatsWithObjectID(&dataObjectID, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(dataStats, uint32(objectCount*2)))
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: *dataStats,
+			CreateTime:  types.BuildTS(1, 0),
+		})
+
+		objects := make([]objectio.ObjectEntry, 0, objectCount)
+		for i := 0; i < objectCount; i++ {
+			stats := writeConstantCommitTSTombstone(
+				t,
+				ctx,
+				fs,
+				dataObjectID,
+				[]uint32{uint32(i * 2), uint32(i*2 + 1)},
+				commitTS,
+			)
+			entry := objectio.ObjectEntry{
+				ObjectStats: stats,
+				CreateTime:  types.BuildTS(1, uint32(i)),
+			}
+			state.tombstoneObjectsNameIndex.Set(entry)
+			objects = append(objects, entry)
+		}
+		return state, objects
+	}
+
+	tests := []struct {
+		name        string
+		objectCount int
+		collect     func(*PartitionState, []objectio.ObjectEntry) (TombstoneStats, error)
+	}{
+		{
+			name:        "linear",
+			objectCount: 1,
+			collect: func(state *PartitionState, _ []objectio.ObjectEntry) (TombstoneStats, error) {
+				return state.CollectTombstoneStats(ctx, snapshot, fs)
+			},
+		},
+		{
+			name:        "map",
+			objectCount: 2,
+			collect: func(state *PartitionState, _ []objectio.ObjectEntry) (TombstoneStats, error) {
+				return state.CollectTombstoneStats(ctx, snapshot, fs)
+			},
+		},
+		{
+			name:        "merge",
+			objectCount: 4,
+			collect: func(state *PartitionState, objects []objectio.ObjectEntry) (TombstoneStats, error) {
+				return state.countTombstoneStatsWithMerge(ctx, snapshot, fs, objects, TombstoneStats{})
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state, objects := newState(t, test.objectCount, types.BuildTS(5, 0))
+			assertPersistedCommitTSIsConstant(t, ctx, fs, objects[0].ObjectStats, 2)
+
+			stats, err := test.collect(state, objects)
+			require.NoError(t, err)
+			require.Equal(t, uint64(test.objectCount*2), stats.Rows)
+		})
+	}
+
+	t.Run("future commits are invisible", func(t *testing.T) {
+		state, objects := newState(t, 1, types.BuildTS(11, 0))
+		assertPersistedCommitTSIsConstant(t, ctx, fs, objects[0].ObjectStats, 2)
+
+		stats, err := state.CollectTombstoneStats(ctx, snapshot, fs)
+		require.NoError(t, err)
+		require.Zero(t, stats.Rows)
+	})
 }
 
 // TestCollectTombstoneStats_DNCreatedWithCommitTs tests DN created tombstone with CommitTs check

@@ -96,3 +96,25 @@ func TestEvalDeleteMaskFromDNCreatedTombstonesAbortColumnCompatibility(t *testin
 		require.False(t, rows.IsValid())
 	})
 }
+
+func TestTombstoneCommitTSColumnAtDoesNotAllocate(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	const rowCount = 1024
+	commitTS := types.BuildTS(42, 0)
+	vec, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, rowCount, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	column, err := ValidateTombstoneCommitTSColumn(rowCount, vec)
+	require.NoError(t, err)
+	var got types.TS
+	allocs := testing.AllocsPerRun(100, func() {
+		for row := 0; row < rowCount; row++ {
+			got = column.At(row)
+		}
+	})
+	require.Equal(t, commitTS, got)
+	require.Zero(t, allocs)
+}

@@ -1611,12 +1611,16 @@ func (p *PartitionState) countTombstoneStatsLinear(
 
 			rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
 
-			var commitTSs []types.TS
+			var commitTSs ioutil.TombstoneCommitTSColumn
 			var aborts ioutil.TombstoneAbortColumn
-			// When cnCreated=false (TN created), ReadDeletes reads [Rowid, CommitTS] at indices [0, 1]
-			// When cnCreated=true (CN created), ReadDeletes only reads [Rowid] at index [0], no CommitTS
-			if needCheckCommitTs && len(persistedDeletes) > 2 {
-				commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[1])
+			// ReadDeletes exposes commitTS only for TN-created tombstones.
+			if needCheckCommitTs && !cnCreated && len(persistedDeletes) > 2 {
+				commitTSs, readErr = ioutil.ValidateTombstoneCommitTSColumn(
+					len(rowIds), &persistedDeletes[1],
+				)
+				if readErr != nil {
+					return false
+				}
 				if persistedDeletes[2].GetType().Oid != types.T_any {
 					var abortErr error
 					aborts, abortErr = ioutil.ValidateTombstoneAbortColumn(len(rowIds), &persistedDeletes[2])
@@ -1637,8 +1641,12 @@ func (p *PartitionState) countTombstoneStatsLinear(
 					continue
 				}
 
-				if (aborts.IsPresent() && aborts.At(j)) ||
-					(needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot)) {
+				commitVisible := true
+				if commitTSs.IsPresent() {
+					commitTS := commitTSs.At(j)
+					commitVisible = !commitTS.GT(&snapshot)
+				}
+				if (aborts.IsPresent() && aborts.At(j)) || !commitVisible {
 					continue
 				}
 
@@ -1720,12 +1728,16 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 
 				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](&persistedDeletes[0])
 
-				var commitTSs []types.TS
+				var commitTSs ioutil.TombstoneCommitTSColumn
 				var aborts ioutil.TombstoneAbortColumn
-				// When cnCreated=false (TN created), ReadDeletes reads [Rowid, CommitTS] at indices [0, 1]
-				// When cnCreated=true (CN created), ReadDeletes only reads [Rowid] at index [0], no CommitTS
-				if needCheckCommitTs && len(persistedDeletes) > 2 {
-					commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&persistedDeletes[1])
+				// ReadDeletes exposes commitTS only for TN-created tombstones.
+				if needCheckCommitTs && !cnCreated && len(persistedDeletes) > 2 {
+					commitTSs, readErr = ioutil.ValidateTombstoneCommitTSColumn(
+						len(rowIds), &persistedDeletes[1],
+					)
+					if readErr != nil {
+						return false
+					}
 					if persistedDeletes[2].GetType().Oid != types.T_any {
 						var abortErr error
 						aborts, abortErr = ioutil.ValidateTombstoneAbortColumn(len(rowIds), &persistedDeletes[2])
@@ -1745,8 +1757,12 @@ func (p *PartitionState) countTombstoneStatsWithMap(
 						continue
 					}
 
-					if (aborts.IsPresent() && aborts.At(j)) ||
-						(needCheckCommitTs && len(commitTSs) > 0 && commitTSs[j].GT(&snapshot)) {
+					commitVisible := true
+					if commitTSs.IsPresent() {
+						commitTS := commitTSs.At(j)
+						commitVisible = !commitTS.GT(&snapshot)
+					}
+					if (aborts.IsPresent() && aborts.At(j)) || !commitVisible {
 						continue
 					}
 
@@ -1824,7 +1840,7 @@ type tombstoneBlockIterator struct {
 	blocks       []objectio.BlockInfo
 	blockIdx     int
 	rowIds       []types.Rowid
-	commitTSs    []types.TS
+	commitTSs    ioutil.TombstoneCommitTSColumn
 	aborts       ioutil.TombstoneAbortColumn
 	rowIdx       int
 	needCheckTS  bool
@@ -1867,8 +1883,13 @@ func (it *tombstoneBlockIterator) loadNextBlock() bool {
 
 	it.rowIds = vector.MustFixedColNoTypeCheck[types.Rowid](&it.persistedDel[0])
 
-	if it.needCheckTS && len(it.persistedDel) > 2 {
-		it.commitTSs = vector.MustFixedColNoTypeCheck[types.TS](&it.persistedDel[1])
+	if it.needCheckTS && !cnCreated && len(it.persistedDel) > 2 {
+		it.commitTSs, it.err = ioutil.ValidateTombstoneCommitTSColumn(
+			len(it.rowIds), &it.persistedDel[1],
+		)
+		if it.err != nil {
+			return false
+		}
 		if it.persistedDel[2].GetType().Oid != types.T_any {
 			it.aborts, it.err = ioutil.ValidateTombstoneAbortColumn(
 				len(it.rowIds), &it.persistedDel[2],
@@ -1880,7 +1901,7 @@ func (it *tombstoneBlockIterator) loadNextBlock() bool {
 			it.aborts = ioutil.TombstoneAbortColumn{}
 		}
 	} else {
-		it.commitTSs = nil
+		it.commitTSs = ioutil.TombstoneCommitTSColumn{}
 		it.aborts = ioutil.TombstoneAbortColumn{}
 	}
 
@@ -1913,8 +1934,12 @@ func (it *tombstoneBlockIterator) next() bool {
 	// Persisted tombstone iterator
 	for {
 		for it.rowIdx < len(it.rowIds) {
-			if (it.aborts.IsPresent() && it.aborts.At(it.rowIdx)) ||
-				(it.needCheckTS && len(it.commitTSs) > 0 && it.commitTSs[it.rowIdx].GT(&it.snapshot)) {
+			commitVisible := true
+			if it.commitTSs.IsPresent() {
+				commitTS := it.commitTSs.At(it.rowIdx)
+				commitVisible = !commitTS.GT(&it.snapshot)
+			}
+			if (it.aborts.IsPresent() && it.aborts.At(it.rowIdx)) || !commitVisible {
 				it.rowIdx++
 				continue
 			}

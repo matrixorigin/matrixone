@@ -129,6 +129,114 @@ func TestLocalDisttaeDataSourceUsesTombstoneObjectIndex(t *testing.T) {
 	require.Len(t, ls.pStateTombstoneObjects.index.objects, 1)
 }
 
+func writeLocalConstantCommitTSTombstone(
+	t *testing.T,
+	ctx context.Context,
+	fs fileservice.FileService,
+	dataObjectID types.Objectid,
+	rowOffsets []uint32,
+	commitTS types.TS,
+) objectio.ObjectStats {
+	t.Helper()
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	for _, offset := range rowOffsets {
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, offset)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(offset), false, mp))
+	}
+	var err error
+	bat.Vecs[2], err = vector.NewConstFixed(types.T_TS.ToType(), commitTS, len(rowOffsets), mp)
+	require.NoError(t, err)
+	bat.SetRowCount(len(rowOffsets))
+	defer bat.Clean(mp)
+
+	// Preserve the non-null constant encoding in the persisted test artifact.
+	writer, err := objectio.NewObjectWriter(
+		objectio.BuildObjectName(objectio.NewSegmentid(), 0),
+		fs,
+		0,
+		objectio.GetTombstoneSeqnums(objectio.HiddenColumnSelection_CommitTS),
+		nil,
+	)
+	require.NoError(t, err)
+	_, err = writer.Write(bat)
+	require.NoError(t, err)
+	_, err = writer.WriteEnd(ctx)
+	require.NoError(t, err)
+
+	stats := writer.GetObjectStats()
+	// Simulate the catalog-level row count associated with this raw object.
+	require.NoError(t, objectio.SetObjectStatsRowCnt(&stats, uint32(len(rowOffsets))))
+	return stats
+}
+
+func TestBatchApplyTombstoneObjectsBroadcastConstantCommitTS(t *testing.T) {
+	tests := []struct {
+		name          string
+		commitTS      types.TS
+		expectedCount int
+	}{
+		{name: "visible", commitTS: types.BuildTS(5, 0), expectedCount: 2},
+		{name: "future", commitTS: types.BuildTS(11, 0), expectedCount: 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			fs := testutil.NewSharedFS()
+			dataObjectID := objectio.NewObjectid()
+			stats := writeLocalConstantCommitTSTombstone(
+				t,
+				ctx,
+				fs,
+				dataObjectID,
+				[]uint32{0, 1},
+				test.commitTS,
+			)
+
+			pState := logtailreplay.NewPartitionState("", true, 42, false)
+			pState.UpdateDuration(types.BuildTS(0, 0), types.MaxTs())
+			require.NoError(t, pState.HandleObjectEntry(
+				ctx,
+				fs,
+				objectio.ObjectEntry{
+					ObjectStats: stats,
+					CreateTime:  types.BuildTS(1, 0),
+				},
+				true,
+			))
+
+			rowIDs := []objectio.Rowid{
+				types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, 0),
+				types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, 1),
+				types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, 2),
+			}
+			deletedMask := objectio.GetReusableBitmap()
+			defer deletedMask.Release()
+
+			ls := LocalDisttaeDataSource{
+				ctx:        ctx,
+				fs:         fs,
+				pState:     pState,
+				snapshotTS: types.BuildTS(10, 0),
+			}
+			err := ls.batchApplyTombstoneObjects(types.TS{}, rowIDs, &deletedMask)
+			require.NoError(t, err)
+			require.Equal(t, test.expectedCount, deletedMask.Count())
+			if test.expectedCount > 0 {
+				require.True(t, deletedMask.Contains(0))
+				require.True(t, deletedMask.Contains(1))
+			}
+			require.False(t, deletedMask.Contains(2))
+		})
+	}
+}
+
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	location := objectio.NewRandomLocation(0, 0)
 	objID := location.ObjectId()

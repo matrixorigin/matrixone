@@ -29,6 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
+// TombstoneCommitTSColumn is the validated logical-row access contract for the
+// persisted commitTS special column. Const vectors have one physical value but
+// can represent many logical rows, so callers must use At rather than indexing
+// the backing slice.
 type TombstoneCommitTSColumn struct {
 	vec *vector.Vector
 }
