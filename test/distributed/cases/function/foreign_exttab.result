@@ -143,4 +143,6 @@ or not (x.dec <=> s.dec) or not (x.d <=> s.d) or not (x.dt <=> s.dt)
 or not (x.ts <=> s.ts) or not (x.vb <=> s.vb) or not (x.txt <=> s.txt);
 ➤ mismatches[-5,64,0]  𝄀
 0
+create external table bad_ext (id int, __mo_query varchar(10)) engine = sql with ('config'='{"driver":"mysql","dsn":"x@tcp(h)/d"}');
+invalid input: column name __mo_query is reserved for external table scans
 drop database foreign_exttab;

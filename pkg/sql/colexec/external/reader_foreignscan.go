@@ -17,6 +17,7 @@ package external
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,14 +32,24 @@ import (
 // (a local const avoids re-evaluating a cross-package selector per field).
 const foreignScanKindESQL = foreignext.KindESQL
 
-// trimISO8601Zulu strips the trailing 'Z' from an ISO 8601 UTC datetime
-// ("2026-01-15T10:20:30.123Z" -> "2026-01-15T10:20:30.123"), which MO's
-// temporal parsers accept. Values without the T...Z shape pass through.
-func trimISO8601Zulu(v string) string {
-	if strings.HasSuffix(v, "Z") && strings.Contains(v, "T") {
-		return v[:len(v)-1]
+// normalizeISO8601Zulu converts an ISO 8601 UTC datetime ("...T...Z", the
+// format ES|QL CSV emits) into the equivalent wall-clock text in loc,
+// PRESERVING THE INSTANT: MO's temporal parsers interpret zone-less text in
+// the session time zone, so merely stripping the 'Z' would shift the stored
+// instant by the session offset. Values without the T...Z shape (or that fail
+// RFC 3339 parsing) pass through unchanged and take the ordinary parse path.
+func normalizeISO8601Zulu(v string, loc *time.Location) string {
+	if !strings.HasSuffix(v, "Z") || !strings.Contains(v, "T") {
+		return v
 	}
-	return v
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		return v
+	}
+	if loc == nil {
+		loc = time.UTC
+	}
+	return t.In(loc).Format("2006-01-02 15:04:05.999999999")
 }
 
 // ForeignExternParam builds the synthetic tree.ExternParam an ESQL/SQL foreign

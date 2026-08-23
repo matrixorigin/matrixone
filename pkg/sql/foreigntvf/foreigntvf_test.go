@@ -115,12 +115,12 @@ func newFakeConnCache() *fakeConnCache {
 	return &fakeConnCache{conns: make(map[string]process.ForeignConn)}
 }
 
-func (c *fakeConnCache) PutForeignConn(handle string, conn process.ForeignConn) process.ForeignConn {
+func (c *fakeConnCache) PutForeignConn(handle string, conn process.ForeignConn) (process.ForeignConn, error) {
 	if existing, ok := c.conns[handle]; ok && existing != nil {
-		return existing
+		return existing, nil
 	}
 	c.conns[handle] = conn
-	return conn
+	return conn, nil
 }
 func (c *fakeConnCache) GetForeignConn(handle string) (process.ForeignConn, bool) {
 	v, ok := c.conns[handle]

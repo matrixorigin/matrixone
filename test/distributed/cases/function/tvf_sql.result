@@ -65,4 +65,16 @@ select * from sql_tvf('select b,i32,f32,f64,ts from typed where i32 is not null'
 1  ¦  42  ¦  1.5  ¦  2.25  ¦  2026-01-15 10:20:30
 select * from sql_tvf('select 1,2', '{"cols":[{"name":"a","type":"int64"},{"name":"a","type":"int64"}]}', @h) x;
 invalid input: duplicate column name "a" in options
+select * from sql_tvf(1, 'I', @h) x;
+invalid input: the query (1st) argument of sql_tvf must be a string, not BIGINT
+select * from sql_tvf('select 1', 'I', 42) x;
+invalid input: the conn (3rd) argument of sql_tvf must be a string, not BIGINT
+select * from typed t, sql_tvf(t.txt, 'I', @h) x;
+not supported: the query (1st) argument of sql_tvf must not reference columns; use a constant, parameter, or session variable
+select * from esql_tvf('FROM idx', 'I', @h) x;
+invalid input: connection handle "sql:1108129e3e966f3a" is a sql connection; esql_tvf accepts only esql connections
+create table bad_col (id int, __mo_query varchar(10));
+invalid input: column name __mo_query is reserved for external table scans
+create table bad_col2 (id int, __mo_filepath varchar(10));
+invalid input: column name __mo_filepath is reserved for external table scans
 drop database sql_tvf_test;

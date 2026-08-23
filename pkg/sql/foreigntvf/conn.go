@@ -22,9 +22,11 @@
 package foreigntvf
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
@@ -62,8 +64,14 @@ var _ process.ForeignConn = (Conn)(nil)
 
 // MakeHandle derives the session cache handle for a (kind, config) pair. The
 // handle is deterministic, so reconnecting with the same config reuses the
-// cached connection.
+// cached connection. The config JSON is compacted first, so whitespace-only
+// variants of the same config map to one handle (and one cached connection);
+// non-JSON input hashes as-is.
 func MakeHandle(kind Kind, configJSON string) string {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, []byte(configJSON)); err == nil {
+		configJSON = compact.String()
+	}
 	sum := sha256.Sum256([]byte(configJSON))
 	return string(kind) + ":" + hex.EncodeToString(sum[:8])
 }
@@ -139,10 +147,16 @@ func ResolveOrConnect(ctx context.Context, cache process.ForeignConnCache, kind 
 	if err != nil {
 		return nil, "", err
 	}
-	// First-wins: another operator may have connected concurrently under the
-	// same config-derived handle. Use the cached winner and close our loser —
-	// the cache never closes a connection someone else may be using.
-	winner := cache.PutForeignConn(handle, c)
+	// First-wins bounded admission: another operator may have connected
+	// concurrently under the same config-derived handle, and the session caps
+	// how many connections it retains. In both non-winning cases our freshly
+	// opened conn must be closed — the cache never closes a connection someone
+	// else may be using.
+	winner, admitErr := cache.PutForeignConn(handle, c)
+	if admitErr != nil {
+		_ = c.Close()
+		return nil, "", admitErr
+	}
 	if winner != process.ForeignConn(c) {
 		_ = c.Close()
 		if fc, ok := winner.(Conn); ok {

@@ -43,15 +43,15 @@ func (s *fakeTvfCacheSession) AddTempTable(dbName, alias, realName string)      
 func (s *fakeTvfCacheSession) RemoveTempTable(dbName, alias string)             {}
 func (s *fakeTvfCacheSession) RemoveTempTableByRealName(realName string)        {}
 func (s *fakeTvfCacheSession) GetSqlModeNoAutoValueOnZero() (bool, bool)        { return false, false }
-func (s *fakeTvfCacheSession) PutForeignConn(handle string, c process.ForeignConn) process.ForeignConn {
+func (s *fakeTvfCacheSession) PutForeignConn(handle string, c process.ForeignConn) (process.ForeignConn, error) {
 	if s.conns == nil {
 		s.conns = make(map[string]process.ForeignConn)
 	}
 	if existing, ok := s.conns[handle]; ok && existing != nil {
-		return existing
+		return existing, nil
 	}
 	s.conns[handle] = c
-	return c
+	return c, nil
 }
 func (s *fakeTvfCacheSession) GetForeignConn(handle string) (process.ForeignConn, bool) {
 	c, ok := s.conns[handle]

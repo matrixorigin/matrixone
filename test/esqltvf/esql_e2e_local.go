@@ -40,6 +40,9 @@ type esConfig struct {
 // schema spec (long form) shared with parse_jsonl_data: name/type per column.
 const employeesSchema = `{"cols":[{"name":"name","type":"string"},{"name":"dept","type":"string"},{"name":"salary","type":"int64"}]}`
 
+// hiredSchema declares a timestamp column for the native ES date tests.
+const hiredSchema = `{"cols":[{"name":"name","type":"string"},{"name":"hired","type":"timestamp"}]}`
+
 func main() {
 	var dsn, esEndpoint, esUser, esPassword, reportDir string
 	flag.StringVar(&dsn, "dsn", "root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s", "MO DSN")
@@ -275,6 +278,11 @@ func runExternalTable(ctx context.Context, db *sql.DB, cfgStr string, r *report)
 		return fmt.Errorf("exttab ts create: %w", err)
 	}
 	qTS := "FROM employees | KEEP name, hired | SORT name"
+	// Pin the session zone: the default is the server host's zone, and every
+	// assertion below is an instant rendered as session-zone wall clock.
+	if _, err := db.ExecContext(ctx, "set time_zone = '+00:00'"); err != nil {
+		return err
+	}
 	if err := expectScalar(ctx, db,
 		"select count(*) from emp_ts where __mo_query = '"+sqlEscape(qTS)+"'", "5"); err != nil {
 		return err
@@ -290,6 +298,48 @@ func runExternalTable(ctx context.Context, db *sql.DB, cfgStr string, r *report)
 		return err
 	}
 	r.Cases = append(r.Cases, "exttab-iso8601-timestamp")
+
+	// A non-UTC session must preserve the UTC INSTANT: the same value renders
+	// as the session zone's wall clock (+8h), and typed predicates select the
+	// same rows. This is the regression for the strip-the-Z-only bug.
+	if _, err := db.ExecContext(ctx, "set time_zone = '+08:00'"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db,
+		"select cast(hired as char) from emp_ts where __mo_query = '"+sqlEscape(qTS)+"' and name = 'Dave'",
+		"2023-06-15 16:30:00.123"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db,
+		"select count(*) from emp_ts where __mo_query = '"+sqlEscape(qTS)+"' and hired >= '2021-01-01 08:00:00'", "3"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "exttab-timestamp-non-utc-session")
+
+	// Schema-mode esql_tvf must accept the same native ES value (it has no
+	// ForeignScan; the TVF param carries the normalization flag).
+	if err := expectScalar(ctx, db,
+		"select count(*) from esql_tvf('"+sqlEscape(qTS)+"', '"+hiredSchema+"') t", "5"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db,
+		"select cast(hired as char) from esql_tvf('"+sqlEscape(qTS)+"', '"+hiredSchema+"') t where name = 'Dave'",
+		"2023-06-15 16:30:00"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "tvf-iso8601-timestamp")
+	if _, err := db.ExecContext(ctx, "set time_zone = '+00:00'"); err != nil {
+		return err
+	}
+
+	// A handle of the wrong kind is rejected before any query is sent.
+	var one int
+	err := db.QueryRowContext(ctx,
+		"select count(*) from esql_tvf('FROM employees', 'I', sql_tvf_connect('env:MO_ESQL_E2E_CFG')) t").Scan(&one)
+	if err == nil {
+		return fmt.Errorf("cross-kind handle should be rejected")
+	}
+	r.Cases = append(r.Cases, "cross-kind-handle-rejected")
 
 	if _, err := db.ExecContext(ctx, "drop database esql_ext"); err != nil {
 		return err

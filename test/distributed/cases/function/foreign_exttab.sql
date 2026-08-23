@@ -129,4 +129,7 @@ where not (x.b <=> s.b) or not (x.f32 <=> s.f32) or not (x.f64 <=> s.f64)
    or not (x.dec <=> s.dec) or not (x.d <=> s.d) or not (x.dt <=> s.dt)
    or not (x.ts <=> s.ts) or not (x.vb <=> s.vb) or not (x.txt <=> s.txt);
 
+-- reserved hidden-column names are rejected on external tables too.
+create external table bad_ext (id int, __mo_query varchar(10)) engine = sql with ('config'='{"driver":"mysql","dsn":"x@tcp(h)/d"}');
+
 drop database foreign_exttab;

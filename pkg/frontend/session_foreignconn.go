@@ -15,9 +15,19 @@
 package frontend
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// maxForeignConns bounds the number of foreign connections one session may
+// cache. Each entry owns real resources (a sql.DB pool or an HTTP transport),
+// and entries live until explicit disconnect or session close, so admission
+// must be bounded (Q3). The cap is per session and generous for interactive
+// use; exceeding it is a usage error with an actionable message.
+const maxForeignConns = 16
 
 // Session implements process.ForeignConnCache so that esql_tvf / sql_tvf and
 // their connect/disconnect builtins can cache foreign-data-source connections
@@ -31,17 +41,22 @@ var _ process.ForeignConnCache = (*Session)(nil)
 // concurrent scans with the same config can race to connect; keeping the
 // first entry (instead of superseding) means the cache never closes a
 // connection another operator may already be using — the loser closes its own.
-func (ses *Session) PutForeignConn(handle string, conn process.ForeignConn) process.ForeignConn {
+func (ses *Session) PutForeignConn(handle string, conn process.ForeignConn) (process.ForeignConn, error) {
 	ses.foreignConnMu.Lock()
 	defer ses.foreignConnMu.Unlock()
 	if ses.foreignConns == nil {
 		ses.foreignConns = make(map[string]process.ForeignConn)
 	}
 	if existing, ok := ses.foreignConns[handle]; ok && existing != nil {
-		return existing
+		return existing, nil
+	}
+	if len(ses.foreignConns) >= maxForeignConns {
+		return nil, moerr.NewInvalidInputf(context.TODO(),
+			"this session already caches %d foreign connections; disconnect unused handles with esql_tvf_disconnect/sql_tvf_disconnect or reuse an existing config",
+			maxForeignConns)
 	}
 	ses.foreignConns[handle] = conn
-	return conn
+	return conn, nil
 }
 
 // GetForeignConn returns the connection registered for handle.

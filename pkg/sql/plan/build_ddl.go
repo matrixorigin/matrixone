@@ -2620,6 +2620,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colName := def.Name.ColName()
 			// only used in error message and ColDef.OriginName
 			colNameOrigin := def.Name.ColNameOrigin()
+			// __mo_filepath / __mo_query are the synthetic hidden columns of
+			// external scans and are hidden BY NAME in star expansion and the
+			// external readers; a real column with either name would silently
+			// disappear from SELECT * or shadow the synthetic value.
+			if catalog.ContainExternalHidenCol(colName) {
+				return moerr.NewInvalidInputf(ctx.GetContext(),
+					"column name %s is reserved for external table scans", colNameOrigin)
+			}
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
 				case *tree.AttributeCheckConstraint:

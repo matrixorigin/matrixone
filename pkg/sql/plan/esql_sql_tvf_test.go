@@ -269,4 +269,11 @@ func TestSelectAndAlterForeignTable(t *testing.T) {
 
 	// ALTER is cleanly rejected.
 	runTestShouldError(mock, t, []string{`alter table foreign_t add column c int`})
+
+	// reserved hidden-column names are rejected on CREATE and ALTER ADD.
+	runTestShouldError(mock, t, []string{
+		`create table t_res (a int, __mo_query varchar(10))`,
+		`create table t_res2 (a int, __mo_filepath varchar(10))`,
+		`alter table nation add column __mo_query varchar(10)`,
+	})
 }

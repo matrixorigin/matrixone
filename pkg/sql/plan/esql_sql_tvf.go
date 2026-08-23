@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -101,6 +102,16 @@ func (builder *QueryBuilder) buildForeignTVF(tvfName, kind string, tbl *tree.Tab
 	if len(exprs) >= 3 {
 		runtimeArgs = append(runtimeArgs, exprs[2])
 	}
+	// Both runtime arguments must be strings (the operator reads them as
+	// varlen vectors), and must not reference columns: a column-dependent
+	// query/handle would make this a correlated (CROSS APPLY) scan, which can
+	// be placed on a CN without the session's connection cache.
+	argName := [2]string{"query (1st)", "conn (3rd)"}
+	for i, e := range runtimeArgs {
+		if err := validateForeignTVFRuntimeArg(builder.GetContext(), tvfName, argName[i], e); err != nil {
+			return 0, err
+		}
+	}
 
 	paramData, err := json.Marshal(ForeignTVFParam{Kind: kind, NoSchema: noSchema, Cols: schemaCols})
 	if err != nil {
@@ -124,6 +135,56 @@ func (builder *QueryBuilder) buildForeignTVF(tvfName, kind string, tbl *tree.Tab
 		Children:        children,
 	}
 	return builder.appendNode(node, ctx), nil
+}
+
+// validateForeignTVFRuntimeArg enforces the runtime-argument contract of
+// esql_tvf / sql_tvf: a string-typed expression (NULL and parameters allowed)
+// with no column references.
+func validateForeignTVFRuntimeArg(ctx context.Context, tvfName, argName string, e *plan.Expr) error {
+	if foreignTVFArgHasColumn(e) {
+		return moerr.NewNotSupportedf(ctx,
+			"the %s argument of %s must not reference columns; use a constant, parameter, or session variable", argName, tvfName)
+	}
+	switch types.T(e.Typ.Id) {
+	case types.T_varchar, types.T_char, types.T_text, types.T_blob, types.T_any:
+		return nil
+	default:
+		return moerr.NewInvalidInputf(ctx,
+			"the %s argument of %s must be a string, not %s", argName, tvfName, types.T(e.Typ.Id).String())
+	}
+}
+
+// foreignTVFArgHasColumn reports whether e contains any column reference.
+func foreignTVFArgHasColumn(e *plan.Expr) bool {
+	if e == nil {
+		return false
+	}
+	switch t := e.Expr.(type) {
+	case *plan.Expr_Col, *plan.Expr_Corr, *plan.Expr_Raw:
+		return true
+	case *plan.Expr_F:
+		if t.F == nil {
+			return false
+		}
+		for _, arg := range t.F.Args {
+			if foreignTVFArgHasColumn(arg) {
+				return true
+			}
+		}
+		return false
+	case *plan.Expr_List:
+		if t.List == nil {
+			return false
+		}
+		for _, item := range t.List.List {
+			if foreignTVFArgHasColumn(item) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
 }
 
 // isNullConstExpr reports whether e is a NULL constant literal.

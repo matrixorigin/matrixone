@@ -81,10 +81,15 @@ func (st *foreignTVFState) start(tf *TableFunction, proc *process.Process, nthRo
 	st.closeReaders()
 	st.exhausted = false
 
-	// arg 0: query text (required, non-null).
+	// arg 0: query text (required, non-null). The binder enforces a string
+	// type, but a prepare parameter is bound as T_any there, so re-check the
+	// runtime vector before the varlen accessor.
 	queryVec := tf.ctr.argVecs[0]
-	if queryVec == nil || queryVec.GetNulls().Contains(uint64(nthRow)) {
+	if queryVec == nil || queryVec.IsConstNull() || queryVec.GetNulls().Contains(uint64(nthRow)) {
 		return moerr.NewInvalidInput(proc.Ctx, "esql_tvf/sql_tvf: the query argument must not be NULL")
+	}
+	if !queryVec.GetType().IsVarlen() {
+		return moerr.NewInvalidInputf(proc.Ctx, "esql_tvf/sql_tvf: the query argument must be a string, not %s", queryVec.GetType().Oid.String())
 	}
 	queryStr := queryVec.GetStringAt(nthRow)
 
@@ -100,10 +105,21 @@ func (st *foreignTVFState) start(tf *TableFunction, proc *process.Process, nthRo
 	connGiven := false
 	if len(tf.ctr.argVecs) >= 2 {
 		cv := tf.ctr.argVecs[1]
-		if cv != nil && !cv.GetNulls().Contains(uint64(nthRow)) {
+		if cv != nil && !cv.IsConstNull() && !cv.GetNulls().Contains(uint64(nthRow)) {
+			if !cv.GetType().IsVarlen() {
+				return moerr.NewInvalidInputf(proc.Ctx, "esql_tvf/sql_tvf: the conn argument must be a string handle, not %s", cv.GetType().Oid.String())
+			}
 			handle := cv.GetStringAt(nthRow)
 			if conn, err = foreigntvf.ByHandle(proc.Ctx, cache, handle); err != nil {
 				return err
+			}
+			// The CSV dialect and header handling are selected by the TVF's
+			// kind; a handle of the other kind would silently drop or invent a
+			// header row.
+			if conn.Kind() != st.kind {
+				return moerr.NewInvalidInputf(proc.Ctx,
+					"connection handle %q is a %s connection; %s_tvf accepts only %s connections",
+					handle, conn.Kind(), st.kind, st.kind)
 			}
 			connGiven = true
 		}

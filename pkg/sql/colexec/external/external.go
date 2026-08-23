@@ -107,6 +107,9 @@ func (external *External) Prepare(proc *process.Process) error {
 			param.Extern.FileService = proc.Base.FileService
 		}
 	}
+	if param.ForeignScan != nil && param.ForeignScan.Kind == foreignScanKindESQL {
+		param.ESQLTemporalUTC = true
+	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
 	}
@@ -1252,11 +1255,13 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		trimSpace = true
 	}
 	// ES|QL CSV renders dates as ISO 8601 UTC ("2026-01-15T10:20:30.123Z");
-	// MO's temporal parsers accept the 'T' separator but not the trailing 'Z',
-	// so an ESQL foreign scan normalizes it away (values are UTC either way).
-	if param.ForeignScan != nil && param.ForeignScan.Kind == foreignScanKindESQL &&
+	// MO's temporal parsers reject the trailing 'Z' and interpret zone-less
+	// text in the session time zone, so both ESQL paths (foreign table and
+	// schema-mode esql_tvf) rewrite the value as session-zone wall clock,
+	// preserving the UTC instant.
+	if param.ESQLTemporalUTC &&
 		(id == types.T_timestamp || id == types.T_datetime || id == types.T_date) {
-		field.Val = trimISO8601Zulu(field.Val)
+		field.Val = normalizeISO8601Zulu(field.Val, proc.GetSessionInfo().TimeZone)
 	}
 	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
 	isNullOrEmpty := field.IsNull || mappedNull

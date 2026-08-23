@@ -184,8 +184,10 @@ type ForeignConnCache interface {
 	// and returns the entry that is cached after the call (first-wins). Two
 	// scans sharing one config can race to connect; the loser must close its
 	// own conn and use the returned winner — the cache never closes a
-	// connection another operator may already be using.
-	PutForeignConn(handle string, conn ForeignConn) ForeignConn
+	// connection another operator may already be using. Admission is bounded:
+	// when the cache is full a non-nil error is returned and nothing is
+	// stored; the caller owns (and must close) the rejected conn.
+	PutForeignConn(handle string, conn ForeignConn) (ForeignConn, error)
 	GetForeignConn(handle string) (ForeignConn, bool)
 	// RemoveForeignConn detaches and returns the connection for handle so the
 	// caller can close it; ok=false if no such handle.

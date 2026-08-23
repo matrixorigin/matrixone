@@ -94,10 +94,15 @@ type ExParamConst struct {
 	DatastreamScan *plan.DataStreamScan
 	// ForeignScan marks this scan as an ESQL/SQL foreign external table read
 	// and carries the connection config reference and default query.
-	ForeignScan  *plan.ForeignScan
-	Ctx          context.Context
-	Extern       *tree.ExternParam
-	ClusterTable *plan.ClusterTable
+	ForeignScan *plan.ForeignScan
+	// ESQLTemporalUTC marks a scan whose CSV source renders temporal values as
+	// ISO 8601 UTC (ES|QL); getColData then rewrites them as session-zone wall
+	// clock, preserving the instant. Set for ESQL foreign tables (Prepare) and
+	// schema-mode esql_tvf (BuildForeignTVFExternParam).
+	ESQLTemporalUTC bool
+	Ctx             context.Context
+	Extern          *tree.ExternParam
+	ClusterTable    *plan.ClusterTable
 }
 
 type ExParam struct {

@@ -58,4 +58,16 @@ select * from sql_tvf('select b,i32,f32,f64,ts from typed where i32 is not null'
 -- duplicate schema names are rejected.
 select * from sql_tvf('select 1,2', '{"cols":[{"name":"a","type":"int64"},{"name":"a","type":"int64"}]}', @h) x;
 
+-- non-string runtime arguments are rejected at bind time.
+select * from sql_tvf(1, 'I', @h) x;
+select * from sql_tvf('select 1', 'I', 42) x;
+-- column-referencing runtime arguments (correlated/CROSS APPLY shape) are rejected:
+-- the scan must stay on the session CN where the connection cache lives.
+select * from typed t, sql_tvf(t.txt, 'I', @h) x;
+-- a handle of the wrong kind is rejected before any query is sent.
+select * from esql_tvf('FROM idx', 'I', @h) x;
+-- the hidden-column names are reserved.
+create table bad_col (id int, __mo_query varchar(10));
+create table bad_col2 (id int, __mo_filepath varchar(10));
+
 drop database sql_tvf_test;

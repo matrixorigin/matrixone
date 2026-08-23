@@ -50,6 +50,12 @@ func AddColumn(
 	if col := FindColumn(tableDef.Cols, newColName); col != nil {
 		return false, moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
 	}
+	// same reservation as CREATE TABLE: these names are hidden by name in
+	// external-scan star expansion and readers.
+	if catalog.ContainExternalHidenCol(newColName) {
+		return false, moerr.NewInvalidInputf(ctx.GetContext(),
+			"column name %s is reserved for external table scans", newColName)
+	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
 	if err != nil {

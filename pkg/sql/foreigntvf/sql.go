@@ -100,13 +100,21 @@ func (c *SqlConn) Close() error { return c.db.Close() }
 // external CSV reader can materialize them: fields are double-quote enclosed
 // with backslash escaping, and SQL NULL is written as an unquoted \N.
 func (c *SqlConn) Query(ctx context.Context, queryText string) (io.ReadCloser, error) {
+	// The stream owns a derived context: closing the returned reader cancels
+	// it, which unblocks an encoder stalled inside rows.Next() on a slow or
+	// hung remote query (drivers watch the query context). Without this, an
+	// early consumer close (LIMIT satisfied, operator reset) would retain the
+	// goroutine and its pooled connection until remote I/O happened to return.
+	qctx, cancel := context.WithCancel(ctx)
 	//nolint:rowserrcheck // rows.Err is checked in encodeRowsCSV, which the goroutine below runs.
-	rows, err := c.db.QueryContext(ctx, queryText)
+	rows, err := c.db.QueryContext(qctx, queryText)
 	if err != nil {
+		cancel()
 		return nil, moerr.NewInvalidInputf(ctx, "sql_tvf: query failed: %v", err)
 	}
 	pr, pw := io.Pipe()
 	go func() {
+		defer cancel()
 		encErr := encodeRowsCSV(pw, rows)
 		// Closing rows after encoding releases the pooled connection.
 		_ = rows.Close()
@@ -123,7 +131,22 @@ func (c *SqlConn) Query(ctx context.Context, queryText string) (io.ReadCloser, e
 		// A nil error closes the pipe with io.EOF for the reader.
 		_ = pw.CloseWithError(encErr)
 	}()
-	return pr, nil
+	return &cancelOnCloseReader{pr: pr, cancel: cancel}, nil
+}
+
+// cancelOnCloseReader ties the life of the SQL stream to its consumer: Close
+// cancels the query context (unblocking a stalled encoder) and then closes the
+// pipe's read end.
+type cancelOnCloseReader struct {
+	pr     *io.PipeReader
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnCloseReader) Read(p []byte) (int, error) { return r.pr.Read(p) }
+
+func (r *cancelOnCloseReader) Close() error {
+	r.cancel()
+	return r.pr.Close()
 }
 
 // encodeRowsCSV writes rows as MySQL-dialect CSV to w. It uses sql.RawBytes to

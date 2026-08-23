@@ -93,6 +93,8 @@ func BuildForeignTVFExternParam(proc *process.Process, outCols []*plan.ColDef, f
 	param.Attrs = attrs
 	param.ColumnListLen = int32(columnListLen)
 	param.Extern = extern
+	// ES|QL emits temporal values as ISO 8601 UTC; preserve the instant.
+	param.ESQLTemporalUTC = src == ForeignTVFSourceESQL
 	// Non-strict, non-parallel single virtual "file": takes the simple row
 	// path in getOneRowData and skips the header on every batch.
 	param.StrictSqlMode = false

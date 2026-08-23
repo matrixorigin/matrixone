@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -51,7 +52,9 @@ func TestSessionForeignConnCache(t *testing.T) {
 
 	// put + get; Put returns the stored conn
 	c1 := &fakeForeignConn{}
-	require.Same(t, c1, ses.PutForeignConn("h1", c1))
+	w, err := ses.PutForeignConn("h1", c1)
+	require.NoError(t, err)
+	require.Same(t, c1, w)
 	got, ok := ses.GetForeignConn("h1")
 	require.True(t, ok)
 	require.Same(t, c1, got)
@@ -60,7 +63,9 @@ func TestSessionForeignConnCache(t *testing.T) {
 	// and returns it; the cache never closes either connection (the losing
 	// caller closes its own).
 	c2 := &fakeForeignConn{}
-	require.Same(t, c1, ses.PutForeignConn("h1", c2))
+	w, err = ses.PutForeignConn("h1", c2)
+	require.NoError(t, err)
+	require.Same(t, c1, w)
 	require.Equal(t, 0, c1.closeCount())
 	require.Equal(t, 0, c2.closeCount())
 	got, ok = ses.GetForeignConn("h1")
@@ -76,7 +81,9 @@ func TestSessionForeignConnCache(t *testing.T) {
 	require.False(t, ok)
 
 	// after remove, a new Put stores the new conn
-	require.Same(t, c2, ses.PutForeignConn("h1", c2))
+	w, err = ses.PutForeignConn("h1", c2)
+	require.NoError(t, err)
+	require.Same(t, c2, w)
 	removed, ok = ses.RemoveForeignConn("h1")
 	require.True(t, ok)
 	require.Same(t, c2, removed)
@@ -127,5 +134,32 @@ func TestSessionForeignConnCacheConcurrent(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+	ses.closeForeignConns()
+}
+
+// TestSessionForeignConnCacheBound proves admission is bounded: the cap'th+1
+// distinct handle is rejected with an actionable error and nothing is stored,
+// and removing an entry frees a slot.
+func TestSessionForeignConnCacheBound(t *testing.T) {
+	ses := &Session{}
+	for i := 0; i < maxForeignConns; i++ {
+		_, err := ses.PutForeignConn(fmt.Sprintf("h%d", i), &fakeForeignConn{})
+		require.NoError(t, err)
+	}
+	// over the cap: rejected, not stored
+	rejected := &fakeForeignConn{}
+	_, err := ses.PutForeignConn("overflow", rejected)
+	require.ErrorContains(t, err, "disconnect unused handles")
+	_, ok := ses.GetForeignConn("overflow")
+	require.False(t, ok)
+	// an existing handle still resolves (first-wins path is not an admission)
+	w, err := ses.PutForeignConn("h0", &fakeForeignConn{})
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	// removing one frees a slot
+	_, ok = ses.RemoveForeignConn("h1")
+	require.True(t, ok)
+	_, err = ses.PutForeignConn("overflow", rejected)
+	require.NoError(t, err)
 	ses.closeForeignConns()
 }

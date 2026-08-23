@@ -17,6 +17,7 @@ package external
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -186,14 +187,20 @@ func TestForeignQueryIsFileLevel(t *testing.T) {
 	require.False(t, isFileLevelColumn(badNode, queryCol))
 }
 
-func TestTrimISO8601Zulu(t *testing.T) {
-	require.Equal(t, "2026-01-15T10:20:30.123", trimISO8601Zulu("2026-01-15T10:20:30.123Z"))
-	require.Equal(t, "2026-01-15T10:20:30", trimISO8601Zulu("2026-01-15T10:20:30Z"))
-	// no 'T' separator -> untouched (a bare 'Z' suffix on non-ISO text is
-	// data; the trim only ever applies to temporal-typed columns anyway)
-	require.Equal(t, "abc Z", trimISO8601Zulu("abc Z"))
-	require.Equal(t, "2026-01-15 10:20:30", trimISO8601Zulu("2026-01-15 10:20:30"))
-	require.Equal(t, "", trimISO8601Zulu(""))
+func TestNormalizeISO8601Zulu(t *testing.T) {
+	// UTC location: wall clock unchanged, Z dropped, instant preserved.
+	require.Equal(t, "2026-01-15 10:20:30.123", normalizeISO8601Zulu("2026-01-15T10:20:30.123Z", time.UTC))
+	require.Equal(t, "2026-01-15 10:20:30", normalizeISO8601Zulu("2026-01-15T10:20:30Z", time.UTC))
+	// non-UTC session: the SAME instant, rewritten as that zone's wall clock.
+	sh := time.FixedZone("Asia/Shanghai", 8*3600)
+	require.Equal(t, "2026-01-15 18:20:30.123", normalizeISO8601Zulu("2026-01-15T10:20:30.123Z", sh))
+	// nil location falls back to UTC.
+	require.Equal(t, "2026-01-15 10:20:30", normalizeISO8601Zulu("2026-01-15T10:20:30Z", nil))
+	// non-ISO shapes pass through untouched (data, or ordinary parse errors).
+	require.Equal(t, "abc Z", normalizeISO8601Zulu("abc Z", time.UTC))
+	require.Equal(t, "2026-01-15 10:20:30", normalizeISO8601Zulu("2026-01-15 10:20:30", time.UTC))
+	require.Equal(t, "notTa-dateZ", normalizeISO8601Zulu("notTa-dateZ", time.UTC))
+	require.Equal(t, "", normalizeISO8601Zulu("", time.UTC))
 }
 
 // TestEvalQueryTextsRejectsNonString proves a non-string candidate expression
