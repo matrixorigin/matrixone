@@ -127,6 +127,26 @@ func TestImmutableBasePoolBoundsEntriesAndEvictsIdle(t *testing.T) {
 	p.clearAll()
 }
 
+func TestImmutableBasePoolBoundsBytes(t *testing.T) {
+	p := &immutableBasePool{
+		entries:    make(map[baseKey]*baseEntry),
+		maxEntries: 8,
+		maxBytes:   2,
+		idleTTL:    time.Hour,
+	}
+	for i := 0; i < 2; i++ {
+		key := baseKey{index: "db.store", id: string(rune('a' + i)), checksum: "sum", filesize: 2}
+		view, err := p.acquire(context.Background(), key, func() (*Segment, error) {
+			return NewSegment(key.id, 0), nil
+		}, 0)
+		require.NoError(t, err)
+		view.Free()
+	}
+	require.LessOrEqual(t, p.totalBytes, int64(2))
+	require.LessOrEqual(t, len(p.entries), 1)
+	p.clearAll()
+}
+
 func TestImmutableBasePoolLoadFailureDoesNotRetainEntry(t *testing.T) {
 	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
 	key := baseKey{index: "db.store", id: "broken", checksum: "sum", filesize: 1}
