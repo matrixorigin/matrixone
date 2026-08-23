@@ -3411,7 +3411,14 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	switch name {
 	case "case", "greatest", "least", "sum", "avg", "min", "max", "any_value",
 		"first_value", "last_value", "lag", "lead", "ntile", "nth_value", "sleep",
-		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff":
+		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
+		// Comparison binding can depend on the execute-time parameter domains.
+		// For example, `? = ?` must be rebound when one parameter is LONG and
+		// the other is NEWDECIMAL; otherwise the cached TEXT comparison changes
+		// the result instead of merely avoiding a compile rebuild.
+		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
+		"like", "ilike", "regexp", "not_regexp", "between", "not_between",
+		"in", "not_in", "partition_in":
 		return true
 	default:
 		return false

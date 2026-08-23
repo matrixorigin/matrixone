@@ -436,6 +436,43 @@ func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
 	require.Equal(t, int32(types.T_text), originalProjectNode.ProjectList[0].Typ.Id)
 }
 
+func TestInitExecuteStmtParamSpecializesMixedNumericComparison(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 111, "select ? = ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("1.00"), false, cw.proc.Mp()))
+	prepareStmt.params = params
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_LONG), 0,
+		byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
+	}
+
+	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	_, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, runtimePlan)
+	require.NotSame(t, originalPlan, runtimePlan)
+	require.True(t, prepareStmt.runtimeSpecializationNeeded)
+
+	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	executor, err := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_bool, result.GetType().Oid)
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0),
+		"LONG 1 and NEWDECIMAL 1.00 must use numeric comparison semantics")
+}
+
 func TestSQLVariablePrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
 		oid  types.T

@@ -340,7 +340,10 @@ func TestPreparedPlanNeedsRuntimeSpecialization(t *testing.T) {
 		{name: "numeric overload", plan: makePlan(plan.Query_SELECT, fn("abs", param())), want: true},
 		{name: "sleep overload", plan: makePlan(plan.Query_SELECT, fn("sleep", param())), want: true},
 		{name: "aggregate result domain", plan: makePlan(plan.Query_SELECT, fn("min", param())), want: true},
-		{name: "ordinary predicate", plan: makePlan(plan.Query_SELECT, fn("=", param(), param())), want: false},
+		{name: "comparison predicate", plan: makePlan(plan.Query_SELECT, fn("=", param(), param())), want: true},
+		{name: "null-safe comparison", plan: makePlan(plan.Query_SELECT, fn("<=>", param(), param())), want: true},
+		{name: "range comparison", plan: makePlan(plan.Query_SELECT, fn(">", param(), param())), want: true},
+		{name: "membership comparison", plan: makePlan(plan.Query_SELECT, fn("in", param(), param())), want: true},
 		{name: "explicit cast", plan: makePlan(plan.Query_SELECT, fn("cast", param())), want: false},
 		{name: "dml value parameter", plan: makePlan(plan.Query_INSERT, param()), want: false},
 	}
