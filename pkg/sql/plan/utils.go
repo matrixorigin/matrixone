@@ -354,6 +354,36 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 	return expr
 }
 
+func replaceColRefsIntroducesVolatile(expr *plan.Expr, tag int32, projects []*plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if replaceColRefsIntroducesVolatile(arg, tag, projects) {
+				return true
+			}
+		}
+	case *plan.Expr_Col:
+		colRef := exprImpl.Col
+		return colRef.RelPos == tag && ContainsVolatileFunction(projects[colRef.ColPos])
+	case *plan.Expr_W:
+		if replaceColRefsIntroducesVolatile(exprImpl.W.WindowFunc, tag, projects) {
+			return true
+		}
+		for _, arg := range exprImpl.W.PartitionBy {
+			if replaceColRefsIntroducesVolatile(arg, tag, projects) {
+				return true
+			}
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if replaceColRefsIntroducesVolatile(order.Expr, tag, projects) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -881,7 +911,7 @@ func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	var exprs []*plan.Expr
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if exprImpl.F.Func.ObjName == "and" {
+		if exprImpl.F.Func.ObjName == "and" && !conjunctionSharesMemoAcrossBranches(exprImpl.F.Args) {
 			exprs = append(exprs, splitPlanConjunction(exprImpl.F.Args[0])...)
 			exprs = append(exprs, splitPlanConjunction(exprImpl.F.Args[1])...)
 		} else {
@@ -893,6 +923,54 @@ func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	}
 
 	return exprs
+}
+
+// conjunctionSharesMemoAcrossBranches reports whether splitting an AND would
+// separate occurrences that must share one volatile-expression memo cache.
+func conjunctionSharesMemoAcrossBranches(args []*plan.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	left := make(map[int32]struct{})
+	collectNegativeAuxIDs(args[0], left)
+	if len(left) == 0 {
+		return false
+	}
+	right := make(map[int32]struct{})
+	collectNegativeAuxIDs(args[1], right)
+	for id := range left {
+		if _, ok := right[id]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func collectNegativeAuxIDs(expr *plan.Expr, ids map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	if expr.AuxId < 0 {
+		ids[expr.AuxId] = struct{}{}
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F != nil {
+			for _, arg := range e.F.Args {
+				collectNegativeAuxIDs(arg, ids)
+			}
+		}
+	case *plan.Expr_List:
+		if e.List != nil {
+			for _, item := range e.List.List {
+				collectNegativeAuxIDs(item, ids)
+			}
+		}
+	case *plan.Expr_Lit:
+		if e.Lit != nil {
+			collectNegativeAuxIDs(e.Lit.Src, ids)
+		}
+	}
 }
 
 func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan.Expr, err error) {
@@ -1187,6 +1265,16 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
+	// Column-free is not the same as scan-invariant. A volatile function can
+	// produce a new value for every row and must not be evaluated once more by
+	// block pruning before the row-level filter runs.
+	if containsVolatileFunction(expr) {
+		return false
+	}
+	return exprIsZonemappable(ctx, expr)
+}
+
+func exprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		isConst := true
@@ -1196,7 +1284,7 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 			} else {
 				isConst = false
 			}
-			isZonemappable := ExprIsZonemappable(ctx, arg)
+			isZonemappable := exprIsZonemappable(ctx, arg)
 			if !isZonemappable {
 				return false
 			}
