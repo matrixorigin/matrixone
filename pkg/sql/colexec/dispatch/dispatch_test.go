@@ -134,6 +134,37 @@ func TestMarshalRemoteBatchPrepareParamProtocolGate(t *testing.T) {
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
 }
 
+func TestMarshalRemoteBatchOldProtocolDropsStringSourceOnly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("literal"), false, proc.Mp()))
+	require.NoError(t, bat.Vecs[0].SetStringSource(types.StringSourceLiteral))
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
+
+	var buf bytes.Buffer
+	encoded, err := marshalRemoteBatch(proc, bat, &buf)
+	require.NoError(t, err)
+	decoded := batch.NewOffHeapEmpty()
+	defer decoded.Clean(proc.Mp())
+	require.NoError(t, decoded.UnmarshalBinary(encoded))
+	require.False(t, decoded.Vecs[0].HasStringSourceMetadata())
+}
+
 func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

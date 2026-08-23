@@ -142,6 +142,7 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 		writeByte(h, tagVec)
 		if v.Vec != nil {
 			writeUint32(h, uint32(v.Vec.Len))
+			writeUint32(h, v.Vec.StringSource)
 			writeUint64(h, uint64(len(v.Vec.Data)))
 			_, _ = h.Write(v.Vec.Data)
 		}
@@ -351,7 +352,8 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		}
 		// IsSerialized is diagnostic provenance and must not affect execution
 		// identity, just like Literal.IsSerialized.
-		return av.Vec.Len == bv.Vec.Len && bytes.Equal(av.Vec.Data, bv.Vec.Data)
+		return av.Vec.Len == bv.Vec.Len &&
+			av.Vec.StringSource == bv.Vec.StringSource && bytes.Equal(av.Vec.Data, bv.Vec.Data)
 	default:
 		// Fallback: compare proto bytes.
 		ab, aerr := a.Marshal()

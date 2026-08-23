@@ -398,6 +398,75 @@ func TestFlowControlKeepsExplicitCastAsSemanticBoundary(t *testing.T) {
 	require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(0))
 }
 
+func TestCastStringSourceOwnershipAcrossSelectionAndReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"5", "6"} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(value), false, proc.Mp()))
+	}
+	input.SetRowCount(2)
+	defer input.Clean(proc.Mp())
+
+	column := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	target := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varbinary)},
+		Expr: &plan.Expr_T{T: &plan.TargetType{}},
+	}
+
+	for _, test := range []struct {
+		name     string
+		overload int32
+		want     types.StringSource
+	}{
+		{name: "implicit cast is transparent", overload: 0, want: types.StringSourceSQLPrepare},
+		{name: "explicit cast owns result", overload: 1, want: types.StringSourceExpression},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expression := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varbinary)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{
+						Obj:     function.EncodeOverloadID(function.CAST, test.overload),
+						ObjName: "cast",
+					},
+					Args: []*plan.Expr{column, target},
+				}},
+			}
+			executor, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			defer executor.Free()
+
+			require.NoError(t, input.Vecs[0].SetStringSource(types.StringSourceSQLPrepare))
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.GetStringSourceAt(0))
+			require.Equal(t, test.want, result.GetStringSourceAt(1))
+
+			result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{true, false})
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.GetStringSourceAt(0))
+			require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(1))
+
+			executor.ResetForNextQuery()
+			require.NoError(t, input.Vecs[0].SetStringSource(types.StringSourceLiteral))
+			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			wantAfterReset := types.StringSourceLiteral
+			if test.overload == 1 {
+				wantAfterReset = types.StringSourceExpression
+			}
+			require.Equal(t, wantAfterReset, result.GetStringSourceAt(0))
+			require.Equal(t, wantAfterReset, result.GetStringSourceAt(1))
+		})
+	}
+}
+
 func TestEvalIffSkipsUnselectedBranch(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bat := batch.New(nil)

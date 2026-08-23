@@ -970,8 +970,12 @@ func TestPrepareParamKindMetadataSizeMatchesTrailer(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(plainStatic.Vecs[0], []byte("v"), false, mp))
 	plainStatic.SetRowCount(1)
 	require.False(t, plainStatic.HasBinaryStringMetadata())
+	require.NoError(t, plainStatic.Vecs[0].SetStringSource(types.StringSourceLiteral))
+	require.True(t, plainStatic.HasPrepareParamKindMetadata())
+	require.False(t, plainStatic.HasPrepareParamKindMetadataWithoutStringSources())
 	plainStatic.Vecs[0].SetPrepareParamKind(vector.PrepareParamInteger)
 	require.True(t, plainStatic.HasPrepareParamKindMetadata())
+	require.True(t, plainStatic.HasPrepareParamKindMetadataWithoutStringSources())
 	require.False(t, plainStatic.HasBinaryStringMetadata(),
 		"static binary semantics are already carried by the vector type")
 	plainStatic.Clean(mp)

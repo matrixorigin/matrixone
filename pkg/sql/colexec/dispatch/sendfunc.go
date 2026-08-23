@@ -101,7 +101,7 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 		return nil, moerr.NewInvalidStateNoCtx(
 			"explicit-text provenance requires MORPCVersion23 for remote dispatch")
 	}
-	if bat.HasPrepareParamKindMetadata() && !wireEnabled {
+	if bat.HasPrepareParamKindMetadataWithoutStringSources() && !wireEnabled {
 		return nil, moerr.NewInvalidStateNoCtx(
 			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")
 	}

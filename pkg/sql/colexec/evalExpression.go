@@ -1196,6 +1196,14 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	return nil
 }
 
+func (expr *FunctionExpressionExecutor) isImplicitCast() bool {
+	if expr.fid != function.CAST {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(expr.overloadID)
+	return overload == 0
+}
+
 func applyTransparentStringSource(
 	result *vector.Vector,
 	source *vector.Vector,
@@ -1421,7 +1429,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedParameterResults, expr.selectedResult, proc, selectedCount, nil); err != nil {
 		return nil, err
 	}
-	if expr.fid == function.CAST && len(expr.selectedParameterResults) > 0 {
+	if expr.isImplicitCast() && len(expr.selectedParameterResults) > 0 {
 		if err := applyTransparentStringSource(
 			expr.selectedResult.GetResultVector(), expr.selectedParameterResults[0], selectedCount, proc.Mp()); err != nil {
 			return nil, err
@@ -1566,7 +1574,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
-	if expr.fid == function.CAST && len(expr.parameterResults) > 0 {
+	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
 		if err := applyTransparentStringSource(
 			expr.resultVector.GetResultVector(), expr.parameterResults[0], rowCount, proc.Mp()); err != nil {
 			return nil, err

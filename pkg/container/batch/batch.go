@@ -173,6 +173,13 @@ func (bat *Batch) HasPrepareParamKindMetadata() bool {
 	return bat.hasPrepareParamKindMetadata(true)
 }
 
+// HasPrepareParamKindMetadataWithoutStringSources reports whether the batch
+// contains provenance understood before string-source transport was added.
+// Protocol gates use this to let older peers drop only string sources.
+func (bat *Batch) HasPrepareParamKindMetadataWithoutStringSources() bool {
+	return bat.hasPrepareParamKindMetadata(false)
+}
+
 func (bat *Batch) hasPrepareParamKindMetadata(includeStringSources bool) bool {
 	if bat == nil {
 		return false
