@@ -73,7 +73,7 @@ SPECIFIC_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 ORDINAL_POSITION  ¦  BIGINT UNSIGNED(64)  ¦  null  ¦  null  𝄀
 PARAMETER_MODE  ¦  VARCHAR(5)  ¦  null  ¦  null  𝄀
 PARAMETER_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-DATA_TYPE  ¦  TEXT(0)  ¦  null  ¦  null  𝄀
+DATA_TYPE  ¦  LONGTEXT  ¦  null  ¦  null  𝄀
 CHARACTER_MAXIMUM_LENGTH  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
 CHARACTER_OCTET_LENGTH  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
 NUMERIC_PRECISION  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
@@ -81,7 +81,7 @@ NUMERIC_SCALE  ¦  BIGINT(64)  ¦  null  ¦  null  𝄀
 DATETIME_PRECISION  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 CHARACTER_SET_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
 COLLATION_NAME  ¦  VARCHAR(64)  ¦  null  ¦  null  𝄀
-DTD_IDENTIFIER  ¦  TEXT(0)  ¦  null  ¦  null  𝄀
+DTD_IDENTIFIER  ¦  MEDIUMTEXT  ¦  null  ¦  null  𝄀
 ROUTINE_TYPE  ¦  VARCHAR(64)  ¦  null  ¦  null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='mo_catalog' and att_relname='mo_columns' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 invalid input: mo_table_col_max has bad input table mo_columns
@@ -244,7 +244,7 @@ parameters  ¦  CREATE TABLE `parameters` (
   `ORDINAL_POSITION` bigint unsigned DEFAULT NULL,
   `PARAMETER_MODE` varchar(5) DEFAULT NULL,
   `PARAMETER_NAME` varchar(64) DEFAULT NULL,
-  `DATA_TYPE` text DEFAULT NULL,
+  `DATA_TYPE` longtext DEFAULT NULL,
   `CHARACTER_MAXIMUM_LENGTH` bigint DEFAULT NULL,
   `CHARACTER_OCTET_LENGTH` bigint DEFAULT NULL,
   `NUMERIC_PRECISION` int unsigned DEFAULT NULL,
@@ -252,7 +252,7 @@ parameters  ¦  CREATE TABLE `parameters` (
   `DATETIME_PRECISION` int unsigned DEFAULT NULL,
   `CHARACTER_SET_NAME` varchar(64) DEFAULT NULL,
   `COLLATION_NAME` varchar(64) DEFAULT NULL,
-  `DTD_IDENTIFIER` text DEFAULT NULL,
+  `DTD_IDENTIFIER` mediumtext DEFAULT NULL,
   `ROUTINE_TYPE` varchar(64) DEFAULT NULL
 )
 SHOW CREATE TABLE mo_catalog.mo_columns;
@@ -523,7 +523,7 @@ SPECIFIC_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ORDINAL_POSITION  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 PARAMETER_MODE  ¦  VARCHAR(5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 PARAMETER_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DATA_TYPE  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DATA_TYPE  ¦  LONGTEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 CHARACTER_MAXIMUM_LENGTH  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 CHARACTER_OCTET_LENGTH  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 NUMERIC_PRECISION  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -531,7 +531,7 @@ NUMERIC_SCALE  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DATETIME_PRECISION  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 CHARACTER_SET_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 COLLATION_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-DTD_IDENTIFIER  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+DTD_IDENTIFIER  ¦  MEDIUMTEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ROUTINE_TYPE  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DESC `mo_catalog`.`mo_columns` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀

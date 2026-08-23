@@ -9,7 +9,10 @@ select uuid('2026-01-01 00:00:00') = uuid_v7('2026-01-01 00:00:00');
 select uuid_v7('2026-01-01 00:00:00') < uuid_v7('2026-01-02 00:00:00');
 select is_uuid(uuid_v7('2026-01-01 00:00:00')), substring(cast(uuid_v7('2026-01-01 00:00:00') as varchar), 15, 1);
 select substring(cast(uuid_v7('2026-01-01 00:00:00') as varchar), 20, 17);
-select uuid_v7(now()) <= uuid_v7();
+-- Keep the boundary at the exact statement timestamp; NOW() defaults to FSP=0
+-- and rounds to a nearby second, which can otherwise make this comparison
+-- transiently false when the fractional part is at least .5.
+select uuid_v7(now(6)) <= uuid_v7();
 select uuid_v7('9999-01-01') > uuid_v7();
 -- uuid_v1(ts)/uuid_v6(ts) boundaries; v6 sorts by time in string order, v1 does not (time_low comes first)
 select uuid_v1('2026-01-01 00:00:00') = uuid_v1('2026-01-01 00:00:00'), uuid_v6('2026-01-01 00:00:00') = uuid_v6('2026-01-01 00:00:00');
