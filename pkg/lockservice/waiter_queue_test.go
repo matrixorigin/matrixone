@@ -267,7 +267,7 @@ func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 
 func TestNotifySharedHolderChange(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		q := newWaiterQueue()
+		q := newWaiterQueue().(*sliceBasedWaiterQueue)
 
 		mergeWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("merge")}, "", nil)
 		mergeWaiter.notifyOnSharedHolderChange = true
@@ -293,6 +293,13 @@ func TestNotifySharedHolderChange(t *testing.T) {
 		require.Equal(t, 1, q.size())
 		require.Same(t, ordinaryWaiter, q.first())
 		require.Equal(t, blocking, ordinaryWaiter.getStatus())
+		// Compaction must release every removed queue reference from the
+		// backing array. The queue can live much longer than these waiters, so
+		// merely reducing len would retain pooled waiter objects at the queue's
+		// historical high-water mark.
+		retainedSlots := q.waiters[:3]
+		require.Nil(t, retainedSlots[1])
+		require.Nil(t, retainedSlots[2])
 
 		q.close(notifyValue{})
 		ordinaryWaiter.wait(context.Background(), nil)

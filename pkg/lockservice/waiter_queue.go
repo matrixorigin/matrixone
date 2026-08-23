@@ -162,6 +162,7 @@ func (q *sliceBasedWaiterQueue) notifySharedHolderChange(value notifyValue) {
 		}
 		w.close("sliceBasedWaiterQueue notifySharedHolderChange", q.logger)
 	}
+	clear(q.waiters[len(newWaiters):])
 	q.waiters = newWaiters
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
@@ -195,7 +196,9 @@ func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 		skipAt = i
 		q.waiters[i] = nil
 	}
-	q.waiters = append(q.waiters[:0], q.waiters[skipAt+1:]...)
+	newWaiters := append(q.waiters[:0], q.waiters[skipAt+1:]...)
+	clear(q.waiters[len(newWaiters):])
+	q.waiters = newWaiters
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
@@ -222,6 +225,7 @@ func (q *sliceBasedWaiterQueue) removeByTxnID(txnID []byte) {
 		}
 		newWaiters = append(newWaiters, w)
 	}
+	clear(q.waiters[len(newWaiters):])
 	q.waiters = newWaiters
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }

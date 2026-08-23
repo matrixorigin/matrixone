@@ -1099,6 +1099,7 @@ func (txn *activeTxn) reset() {
 
 	txn.txnID = nil
 	txn.txnKey = ""
+	clear(txn.blockedWaiters)
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 	txn.remoteService = ""
 	txn.deadlockFound = false
@@ -1182,6 +1183,7 @@ func (txn *activeTxn) cancelBlocks(
 		w.notify(notifyValue{err: ErrTxnNotFound}, logger)
 		w.close("cancelBlocks", logger)
 	}
+	clear(txn.blockedWaiters)
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 }
 
@@ -1203,6 +1205,7 @@ func (txn *activeTxn) clearBlocked(w *waiter, logger *log.MOLogger) {
 			w.close("clearBlocked", logger)
 		}
 	}
+	clear(txn.blockedWaiters[len(newBlockedWaiters):])
 	txn.blockedWaiters = newBlockedWaiters
 }
 
@@ -1210,6 +1213,7 @@ func (txn *activeTxn) closeBlockWaiters(logger *log.MOLogger) {
 	for _, w := range txn.blockedWaiters {
 		w.close("closeBlockWaiters", logger)
 	}
+	clear(txn.blockedWaiters)
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 }
 

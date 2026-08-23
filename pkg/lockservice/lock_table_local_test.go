@@ -929,6 +929,20 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 		})
 }
 
+func TestMergeContextRestartReleasesWaiterQueues(t *testing.T) {
+	destination := newWaiterQueue()
+	merged := newWaiterQueue()
+	ctx := newMergeContext(destination)
+	ctx.mergedWaiters = append(ctx.mergedWaiters, merged)
+
+	ctx.restart()
+	require.Empty(t, ctx.mergedWaiters)
+	require.Nil(t, ctx.mergedWaiters[:1][0])
+
+	ctx.rollback()
+	ctx.close()
+}
+
 func TestLocalLockTableMultipleRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
 	runLockServiceTests(
 		t,

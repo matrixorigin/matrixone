@@ -668,6 +668,44 @@ func TestClose(t *testing.T) {
 	})
 }
 
+func TestBlockedWaiterCleanupReleasesBackingReferences(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		logger := getLogger("")
+		txnID := []byte("blocked-waiter-cleanup")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(2), "")
+
+		first := acquireWaiter(pb.WaitTxn{TxnID: []byte("first")}, "test", logger)
+		second := acquireWaiter(pb.WaitTxn{TxnID: []byte("second")}, "test", logger)
+		txn.Lock()
+		txn.setBlocked(first, logger)
+		txn.setBlocked(second, logger)
+		txn.clearBlocked(first, logger)
+
+		retainedSlots := txn.blockedWaiters[:2]
+		require.Same(t, second, retainedSlots[0])
+		require.Nil(t, retainedSlots[1])
+
+		txn.closeBlockWaiters(logger)
+		retainedSlots = txn.blockedWaiters[:2]
+		require.Nil(t, retainedSlots[0])
+		require.Nil(t, retainedSlots[1])
+		txn.Unlock()
+		first.close("test", logger)
+		second.close("test", logger)
+
+		terminal := acquireWaiter(pb.WaitTxn{TxnID: []byte("terminal")}, "test", logger)
+		txn.Lock()
+		txn.setBlocked(terminal, logger)
+		txn.cancelBlocks(logger)
+		require.Nil(t, txn.blockedWaiters[:1][0])
+		txn.Unlock()
+		terminal.wait(context.Background(), logger)
+		terminal.close("test", logger)
+
+		reuse.Free(txn, nil)
+	})
+}
+
 func TestCloseWithoutFreeWithContextRetriesOnlyFailedTables(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		id := []byte("unknown-commit")

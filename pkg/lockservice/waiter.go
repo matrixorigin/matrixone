@@ -375,6 +375,7 @@ func (w *waiter) reset() {
 
 	w.txn = pb.WaitTxn{}
 	w.event = event{}
+	clear(w.waitFor)
 	w.waitFor = w.waitFor[:0]
 	w.conflictKey.Store(nil)
 	w.lt.Store(nil)

@@ -1038,6 +1038,7 @@ func (l *localLockTable) handleLockConflictLocked(
 
 	c.w.conflictKey.Store(&key)
 	c.w.lt.Store(l)
+	clear(c.w.waitFor)
 	c.w.waitFor = c.w.waitFor[:0]
 	waitForSharedHolderChange :=
 		conflictWith.isShared() &&
@@ -1846,6 +1847,7 @@ func (c *mergeContext) restart() {
 	for k := range c.mergedLocks {
 		delete(c.mergedLocks, k)
 	}
+	clear(c.mergedWaiters)
 	c.mergedWaiters = c.mergedWaiters[:0]
 	c.to.beginChange()
 }
@@ -1855,6 +1857,7 @@ func (c *mergeContext) close() {
 		delete(c.mergedLocks, k)
 	}
 	c.to = nil
+	clear(c.mergedWaiters)
 	c.mergedWaiters = c.mergedWaiters[:0]
 	mergePool.Put(c)
 }
