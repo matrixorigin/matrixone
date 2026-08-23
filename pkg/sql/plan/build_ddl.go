@@ -1313,6 +1313,10 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.
+		inheritedAutoIncr := typ.AutoIncr
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			inheritedAutoIncr = inheritedAutoIncr || provenance.Source.Metadata.Typ.AutoIncr
+		}
 		typ.AutoIncr = false
 		nullAbility := ctasExprCanBeNull(expr)
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
@@ -1338,6 +1342,18 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 				if err != nil {
 					return nil, nil, err
 				}
+			}
+		}
+
+		// AUTO_INCREMENT columns have no ordinary source default. Once the
+		// generated attribute is removed from the CTAS target, preserve the
+		// non-null insert contract with the type's default (for example,
+		// DEFAULT 0 for integer columns). An explicit target declaration is
+		// applied later by buildTableDefs and remains authoritative.
+		if inheritedAutoIncr && defaultDef.Expr == nil && defaultDef.OriginString == "" {
+			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
+			if err != nil {
+				return nil, nil, err
 			}
 		}
 

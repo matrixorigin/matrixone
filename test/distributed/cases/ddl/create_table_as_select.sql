@@ -1503,4 +1503,10 @@ where table_schema = database() and table_name = 'source_ai'
 select count(*) from information_schema.columns
 where table_schema = database() and table_name = 'target_ctas'
   and column_name = 'id' and extra = 'auto_increment';
+insert into target_ctas(payload) values ('omitted-id');
+select id, payload from target_ctas where payload = 'omitted-id';
+create table target_explicit (id int not null default 42, payload varchar(20))
+as select id, payload from source_ai;
+insert into target_explicit(payload) values ('explicit-default');
+select id, payload from target_explicit where payload = 'explicit-default';
 drop database ctas_auto_increment_24436;

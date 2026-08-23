@@ -2183,4 +2183,14 @@ where table_schema = database() and table_name = 'target_ctas'
 and column_name = 'id' and extra = 'auto_increment';
 ➤ count(*)[-5,64,0]  𝄀
 0
+insert into target_ctas(payload) values ('omitted-id');
+select id, payload from target_ctas where payload = 'omitted-id';
+➤ id[4,32,0]  ¦  payload[12,20,0]  𝄀
+0  ¦  omitted-id
+create table target_explicit (id int not null default 42, payload varchar(20))
+as select id, payload from source_ai;
+insert into target_explicit(payload) values ('explicit-default');
+select id, payload from target_explicit where payload = 'explicit-default';
+➤ id[4,32,0]  ¦  payload[12,20,0]  𝄀
+42  ¦  explicit-default
 drop database ctas_auto_increment_24436;
