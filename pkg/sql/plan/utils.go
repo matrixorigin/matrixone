@@ -3283,25 +3283,32 @@ func FillValuesOfParamsInPlanWithSpecialization(
 	paramVals []any,
 ) (*Plan, bool, error) {
 	switch preparePlan.Plan.(type) {
-	case *plan.Plan_Tcl, *plan.Plan_Dcl:
-		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+	case *plan.Plan_Tcl:
+		return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare TCL statement")
+	case *plan.Plan_Dcl:
+		if preparePlan.GetDcl().GetSetVariables() == nil {
+			return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare this DCL statement")
+		}
 	}
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, false, err
 	}
+	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, paramVals)
 	copied := DeepCopyPlan(preparePlan)
 	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, paramVals)
 	switch pp := copied.Plan.(type) {
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			_, err := replaceParamVals(ctx, copied, paramVals)
+			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: pp.Ddl.Query}}
+			specialized, err := replaceParamVals(ctx, queryPlan, paramVals)
 			if err != nil {
 				return nil, false, err
 			}
+			return copied, specialized || numericPrefixSpecialization, nil
 		}
 
-	case *plan.Plan_Query:
+	case *plan.Plan_Query, *plan.Plan_Dcl:
 		specialized, err := replaceParamVals(ctx, copied, paramVals)
 		if err != nil {
 			return nil, false, err
@@ -3533,15 +3540,15 @@ func PreparedNumericPrefixTypeFromString(value string) types.Type {
 	if pointAt := strings.IndexByte(mantissa, '.'); pointAt >= 0 {
 		fractionalDigits = int64(len(mantissa) - pointAt - 1)
 	}
-	exponent, bounded := preparedBoundedDecimalExponent(exponentText)
+	trailingZeros := len(nonZero) - len(strings.TrimRight(nonZero, "0"))
+	exponentCompensation := -fractionalDigits + int64(trailingZeros)
+	exponent, bounded := preparedBoundedDecimalExponent(exponentText, exponentCompensation)
 	if !bounded {
 		return types.T_float64.ToType()
 	}
 
-	coefficient := nonZero
-	trailingZeros := len(coefficient) - len(strings.TrimRight(coefficient, "0"))
-	coefficient = coefficient[:len(coefficient)-trailingZeros]
-	decimalExponent := exponent - fractionalDigits + int64(trailingZeros)
+	coefficient := nonZero[:len(nonZero)-trailingZeros]
+	decimalExponent := exponent
 
 	integralWidth := int64(0)
 	scale := int64(0)
@@ -3573,9 +3580,9 @@ func PreparedNumericPrefixTypeFromString(value string) types.Type {
 	}
 }
 
-func preparedBoundedDecimalExponent(value string) (int64, bool) {
+func preparedBoundedDecimalExponent(value string, compensation int64) (int64, bool) {
 	if value == "" {
-		return 0, true
+		return compensation, absInt64Within(compensation, int64(types.T_decimal256.ToType().Width))
 	}
 	negative := value[0] == '-'
 	if value[0] == '+' || value[0] == '-' {
@@ -3583,21 +3590,32 @@ func preparedBoundedDecimalExponent(value string) (int64, bool) {
 	}
 	value = strings.TrimLeft(value, "0")
 	if value == "" {
-		return 0, true
+		return compensation, absInt64Within(compensation, int64(types.T_decimal256.ToType().Width))
 	}
-	// Only exponents in [-76, 76] can contribute to a representable
-	// Decimal256 domain. Avoid parsing attacker-sized exponent strings.
-	if len(value) > 2 {
+	// Parse at most an int64-sized exponent after discarding leading zeroes.
+	// This keeps attacker-sized inputs O(n) and avoids big integers or
+	// input-length allocations. Any larger magnitude cannot be compensated by
+	// the bounded mantissa length into a Decimal256 domain.
+	if len(value) > 19 {
 		return 0, false
 	}
 	exponent, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || exponent > int64(types.T_decimal256.ToType().Width) {
+	if err != nil {
 		return 0, false
 	}
 	if negative {
 		exponent = -exponent
 	}
-	return exponent, true
+	if compensation > 0 && exponent > math.MaxInt64-compensation ||
+		compensation < 0 && exponent < math.MinInt64-compensation {
+		return 0, false
+	}
+	netExponent := exponent + compensation
+	return netExponent, absInt64Within(netExponent, int64(types.T_decimal256.ToType().Width))
+}
+
+func absInt64Within(value, limit int64) bool {
+	return value >= -limit && value <= limit
 }
 
 func preparedDecimalType(value string) (types.Type, bool) {
@@ -4016,10 +4034,27 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		}
 		return nil
 	}
-	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
-	err = VisitQuery.Visit(ctx)
-	if err != nil {
-		return false, err
+	if setVariables := plan0.GetDcl().GetSetVariables(); setVariables != nil {
+		for _, item := range setVariables.Items {
+			if item.Value != nil {
+				item.Value, err = paramRule.ApplyExpr(item.Value)
+				if err != nil {
+					return false, err
+				}
+			}
+			if item.Reserved != nil {
+				item.Reserved, err = paramRule.ApplyExpr(item.Reserved)
+				if err != nil {
+					return false, err
+				}
+			}
+		}
+	} else {
+		visitPlan := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
+		err = visitPlan.Visit(ctx)
+		if err != nil {
+			return false, err
+		}
 	}
 
 	// A direct SELECT parameter is part of the result-column contract. Its

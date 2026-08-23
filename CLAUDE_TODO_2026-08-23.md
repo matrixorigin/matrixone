@@ -106,3 +106,40 @@
 - issue 黑盒新增带二级索引的 SQL EXECUTE 验收格，`9.0` 正确返回 `id=1`。
 - 所有 `Rows` 查询调用作用域均显式检查 `rows.Err()`，targeted `rowserrcheck` 为 0 issue。
 - 验证：`pkg/sql/plan` full test、issue #27088 embedded test、build、vet 均通过。
+
+---
+
+## PR #27483 第二轮阻塞评论修复计划
+
+### 不变量与根因
+
+1. 科学计数法是否可由 DECIMAL256 精确表示，必须依据 `exponent - fractionalDigits + trailingZeros` 的净指数，而不是原始指数；超长指数扫描仍须 O(n)、无大整数解析和无输入长度级分配。
+2. DDL 内嵌 Query（CTAS）的 `replaceParamVals` specialization 结果必须向 frontend 传播；SQL EXECUTE 命中 eligibility 后必须采用 isolated runtime plan。
+3. Prepared SET 的表达式计划必须进入与 SELECT/CTAS 相同的 runtime common-type rebinding，且不得修改 cached prepared plan。
+
+### 步骤
+
+1. 重构 bounded exponent：先以饱和/O(n)方式解析原始指数，再与小数位和 coefficient 尾零做有界净化，最后判断 DECIMAL256 width/scale。
+2. 增加补偿指数白盒边界测试及 COM_STMT 黑盒反例，保留真正越界和超长指数控制组。
+3. 让 DDL Query 返回 `replaceParamVals` 的 specialized 标志，并验证 frontend 对 SQL CTAS 采用副本。
+4. 调研 SET 的实际 Plan variant/表达式 owner，扩展 eligibility、DeepCopy 与 replace 入口，增加 SQL EXECUTE SET 黑盒测试。
+5. 运行 plan/frontend/issues 的 focused/full test、build、vet、SCA；完整 diff 自审后 commit、push。
+
+### 测试矩阵
+
+| 场景 | 预期 |
+|---|---|
+| `0.000000000000000000000000000000000001e100` | DECIMAL(65,0)，区分 1e64 与 1e64+1 |
+| 未补偿的净指数 > DECIMAL256 | FLOAT64 |
+| 攻击者长度指数文本 | O(n) 有界处理，FLOAT64 |
+| SQL EXECUTE CTAS + DECIMAL prefix tail | isolated DDL query specialization 被采用，结果精确 |
+| SQL EXECUTE SET + COALESCE DECIMAL | `@out = 12.5000000000` |
+| FLOAT peer controls | 不进入精确 DECIMAL specialization |
+
+### 第二轮执行结果
+
+- 指数解析改为先结合 fractional digits 与 coefficient trailing zeros 得到净指数，再做 Decimal256 边界判断；超长指数仍仅线性扫描并拒绝进入大整数解析。
+- CTAS DDL Query 现在传播 specialization 标志；内部 follow-up INSERT 仅对 runtime plan 中 numeric-prefix cast 对应的参数位置传递已截取的数值前缀。
+- DeepCopyPlan 支持 DCL；Prepared SET 的 specialized `SetVariablesItem.Value` 由表达式执行器直接求值，不再回退到未特化 AST synthetic SELECT。
+- 新增补偿指数 COM_STMT、SQL EXECUTE CTAS、SQL EXECUTE SET 黑盒回归及净指数白盒测试。
+- 验证通过：plan/frontend/compile 全包测试，issue #27088 embedded 黑盒，受影响包 list/build/vet，targeted rowserrcheck。

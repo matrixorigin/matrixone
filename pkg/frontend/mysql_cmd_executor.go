@@ -984,11 +984,27 @@ func doSetVar(
 			captureSystemReplayability(assign.Name)
 		}
 	}
-	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
+	var preparedItems []*plan.SetVariablesItem
+	if preparedExpression {
+		if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok && cw.plan != nil {
+			if setVariables := cw.plan.GetDcl().GetSetVariables(); setVariables != nil {
+				preparedItems = setVariables.Items
+			}
+		}
+	}
+	evaluateAssignment := func(index int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		prepareParamKind := vector.PrepareParamNone
-		value, valueType, evalErr := getExprValueWithPrepareMeta(
-			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
+		var value interface{}
+		var valueType plan.Type
+		var evalErr error
+		if index < len(preparedItems) && preparedItems[index].Value != nil {
+			value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
+				preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
+		} else {
+			value, valueType, evalErr = getExprValueWithPrepareMeta(
+				assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
+		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
@@ -1265,8 +1281,8 @@ func doSetVar(
 			}
 		}()
 
-		for _, assign := range sv.Assignments {
-			item, evalErr := evaluateAssignment(assign)
+		for index, assign := range sv.Assignments {
+			item, evalErr := evaluateAssignment(index, assign)
 			if evalErr != nil {
 				return evalErr
 			}
@@ -1279,8 +1295,8 @@ func doSetVar(
 		return nil
 	}
 
-	for _, assign := range sv.Assignments {
-		item, evalErr := evaluateAssignment(assign)
+	for index, assign := range sv.Assignments {
+		item, evalErr := evaluateAssignment(index, assign)
 		if evalErr != nil {
 			return evalErr
 		}

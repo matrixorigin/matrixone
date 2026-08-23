@@ -98,6 +98,20 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.NoError(t, rows.Err())
 		})
 
+		t.Run("COM_STMT compensated exponent remains exact", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table exponent_exact(id int primary key, d decimal(65,0))")
+			mustExec(t, ctx, conn, `insert into exponent_exact values
+				(1, 10000000000000000000000000000000000000000000000000000000000000000),
+				(2, 10000000000000000000000000000000000000000000000000000000000000001)`)
+			stmt, prepareErr := conn.PrepareContext(ctx,
+				"select id from exponent_exact where d = ? order by id")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			rows, queryErr := stmt.QueryContext(ctx, "0.000000000000000000000000000000000001e100")
+			assertIDs(t, rows, queryErr, 1)
+			require.NoError(t, rows.Err())
+		})
+
 		t.Run("COM_STMT row dependent between", func(t *testing.T) {
 			stmt, prepareErr := conn.PrepareContext(ctx,
 				"select id from common_type where ? between low_bound and high_bound order by id")
@@ -161,6 +175,28 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			rows, queryErr = conn.QueryContext(ctx, "execute issue27088_nested_sql using @issue27088_nested")
 			assertIDs(t, rows, queryErr, 2)
 			require.NoError(t, rows.Err())
+		})
+
+		t.Run("SQL EXECUTE specializes CTAS query", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_ctas from
+				'create table ctas_result as select id from common_type where d = ?'`)
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_ctas") }()
+			mustExec(t, ctx, conn, "set @issue27088_ctas = '9007199254740992.0000000002tail'")
+			mustExec(t, ctx, conn, "execute issue27088_ctas using @issue27088_ctas")
+			rows, queryErr := conn.QueryContext(ctx, "select id from ctas_result order by id")
+			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
+		})
+
+		t.Run("SQL EXECUTE specializes SET expression", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_set from
+				'set @issue27088_out = coalesce(?, cast(1 as decimal(38,10)))'`)
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set") }()
+			mustExec(t, ctx, conn, "set @issue27088_set_value = '12.5tail'")
+			mustExec(t, ctx, conn, "execute issue27088_set using @issue27088_set_value")
+			var value string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_out").Scan(&value))
+			require.Equal(t, "12.5000000000", value)
 		})
 
 		t.Run("SQL EXECUTE specializes integer comparison for decimal variable", func(t *testing.T) {

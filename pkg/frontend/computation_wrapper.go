@@ -1073,7 +1073,8 @@ func specializePreparedExecutionPlan(
 	binaryExecute bool,
 ) (*plan2.Plan, bool, bool, error) {
 	if len(paramVals) == 0 || executionPlan == nil ||
-		(executionPlan.GetQuery() == nil && executionPlan.GetDdl() == nil) {
+		(executionPlan.GetQuery() == nil && executionPlan.GetDdl() == nil &&
+			executionPlan.GetDcl().GetSetVariables() == nil) {
 		return executionPlan, false, false, nil
 	}
 	if !binaryExecute && !plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, paramVals) {

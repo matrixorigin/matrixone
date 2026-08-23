@@ -341,6 +341,38 @@ func getExprValueWithPrepareMeta(
 	return value, plan2.MakePlan2Type(resultVec.GetType()), err
 }
 
+func getPreparedPlanExprValueWithMeta(
+	expr *plan.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	prepareParamKind *vector.PrepareParamKind,
+	isBin *bool,
+) (interface{}, plan.Type, error) {
+	executor, err := colexec.NewExpressionExecutor(execCtx.proc, expr)
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	defer executor.Free()
+	input := batch.NewWithSize(0)
+	input.SetRowCount(1)
+	defer input.Clean(execCtx.proc.Mp())
+	result, err := executor.Eval(execCtx.proc, []*batch.Batch{input}, nil)
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	if isBin != nil {
+		*isBin = result.GetIsBin()
+	}
+	if prepareParamKind != nil {
+		*prepareParamKind = result.GetPrepareParamKind()
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)
+		}
+	}
+	value, err := getValueFromVector(execCtx.reqCtx, result, ses, expr)
+	return value, plan2.MakePlan2Type(result.GetType()), err
+}
+
 // transparentPrepareParamKind closes the metadata boundary introduced by SET's
 // synthetic SELECT evaluation. A direct parameter or variable retains its
 // source conversion category even if projection materialization drops vector-

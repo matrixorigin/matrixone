@@ -1382,6 +1382,45 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	return nil
 }
 
+func collectParamPositions(expr *plan.Expr, positions map[int]bool) {
+	if expr == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		positions[int(param.Pos)] = true
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			collectParamPositions(arg, positions)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			collectParamPositions(item, positions)
+		}
+	}
+}
+
+func collectDecimalParamPositions(expr *plan.Expr, positions map[int]bool) {
+	if expr == nil {
+		return
+	}
+	if types.T(expr.Typ.Id).IsDecimal() {
+		collectParamPositions(expr, positions)
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			collectDecimalParamPositions(arg, positions)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			collectDecimalParamPositions(item, positions)
+		}
+	}
+}
+
 func (s *Scope) CreateTable(c *Compile) error {
 	return s.createTable(c, nil)
 }
@@ -2113,6 +2152,24 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		// so internal SQL stays on one CN and can see uncommitted table metadata.
 		c.setHaveDDL(true)
 		statementOption := executor.StatementOption{}.WithDisableLog()
+		numericPrefixPlan := false
+		numericPrefixPositions := make(map[int]bool)
+		if c.pn.GetDdl().GetQuery() != nil {
+			scanErr := plan.VisitExpressionsInOwner(c.pn.GetDdl().GetQuery(), func(expr *plan.Expr) error {
+				requiresV26, err := plan.RequiresMORPCVersion26NumericPrefix(expr)
+				if err == nil && requiresV26 {
+					numericPrefixPlan = true
+				}
+				collectDecimalParamPositions(expr, numericPrefixPositions)
+				return err
+			})
+			if scanErr != nil {
+				return scanErr
+			}
+		}
+		if !numericPrefixPlan {
+			clear(numericPrefixPositions)
+		}
 		if params := c.proc.GetPrepareParams(); c.pn.IsPrepare && params != nil && params.Length() > 0 {
 			values := make([]string, params.Length())
 			nulls := make([]bool, params.Length())
@@ -2120,6 +2177,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 				nulls[i] = params.IsNull(uint64(i))
 				if !nulls[i] {
 					values[i] = string(params.GetRawBytesAt(i))
+					if numericPrefixPositions[i] {
+						if prefix, ok := function.GetNumericStringPrefix(values[i]); ok {
+							values[i] = prefix
+						}
+					}
 				}
 			}
 			statementOption = statementOption.WithParamsAndNulls(values, nulls)

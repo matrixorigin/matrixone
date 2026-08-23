@@ -497,6 +497,12 @@ func TestPreparedNumericPrefixTypeFromString(t *testing.T) {
 			wantWidth: 59,
 			wantScale: 20,
 		},
+		{
+			name:      "large exponent compensated by fractional digits",
+			value:     "0.000000000000000000000000000000000001e100",
+			wantOID:   types.T_decimal256,
+			wantWidth: 65,
+		},
 		{name: "positive overflow", value: "1e76", wantOID: types.T_float64},
 		{name: "negative overflow", value: "1e-77", wantOID: types.T_float64},
 		{name: "huge exponent", value: "1e999999999999suffix", wantOID: types.T_float64},
