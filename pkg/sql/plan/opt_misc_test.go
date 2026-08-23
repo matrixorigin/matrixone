@@ -61,6 +61,21 @@ func TestDetermineHashOnPKRequiresNonNullableJoinKeys(t *testing.T) {
 	}
 }
 
+func TestDetermineHashOnPKAllowsUntaggedInternalScan(t *testing.T) {
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{
+			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
+			Name2ColIndex: map[string]int32{"id": 0},
+		},
+	}}}}
+
+	require.NotPanics(t, func() {
+		require.Nil(t, determineHashOnPK(0, builder))
+		require.Nil(t, findHashOnPKTable(0, 1, builder))
+	})
+}
+
 func buildHashOnPKTestBuilder(leftNotNullable bool, rightNotNullable bool) *QueryBuilder {
 	leftType := plan.Type{Id: int32(types.T_int64), NotNullable: leftNotNullable}
 	rightType := plan.Type{Id: int32(types.T_int64), NotNullable: rightNotNullable}
