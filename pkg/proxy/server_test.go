@@ -16,10 +16,12 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +36,24 @@ func WithHAKeeperClient(c logservice.ProxyHAKeeperClient) Option {
 	return func(s *Server) {
 		s.haKeeperClient = c
 	}
+}
+
+type constructionCleanupHAKeeperClient struct {
+	mockHAKeeperClient
+	allocationErr error
+	closeCount    atomic.Int32
+}
+
+func (c *constructionCleanupHAKeeperClient) AllocateIDByKey(context.Context, string) (uint64, error) {
+	if c.allocationErr != nil {
+		return 0, c.allocationErr
+	}
+	return 9, nil
+}
+
+func (c *constructionCleanupHAKeeperClient) Close() error {
+	c.closeCount.Add(1)
+	return nil
 }
 
 type immediateProxyRevocationClient struct {
@@ -56,6 +76,29 @@ func (c *immediateProxyRevocationClient) SendProxyHeartbeat(
 		Epoch:      1,
 		Generation: 10,
 	}}, nil
+}
+
+func TestNewServerClosesHAKeeperClientOnAdmissionInitializationFailure(t *testing.T) {
+	client := &constructionCleanupHAKeeperClient{allocationErr: errors.New("allocate generation failed")}
+	runtime.SetupServiceBasedRuntime(t.Name(), runtime.DefaultRuntime())
+	_, err := NewServer(context.Background(), Config{UUID: t.Name()},
+		WithRuntime(runtime.ServiceRuntime(t.Name())), WithHAKeeperClient(client))
+	require.ErrorIs(t, err, client.allocationErr)
+	require.Equal(t, int32(1), client.closeCount.Load())
+}
+
+func TestNewServerClosesHAKeeperClientOnHandlerConstructionFailure(t *testing.T) {
+	client := &constructionCleanupHAKeeperClient{}
+	runtime.SetupServiceBasedRuntime(t.Name(), runtime.DefaultRuntime())
+	_, err := NewServer(context.Background(), Config{
+		UUID: t.Name(),
+		Plugin: &PluginConfig{
+			Backend: "://",
+			Timeout: time.Second,
+		},
+	}, WithRuntime(runtime.ServiceRuntime(t.Name())), WithHAKeeperClient(client))
+	require.Error(t, err)
+	require.Equal(t, int32(1), client.closeCount.Load())
 }
 
 func TestNewServerImmediatelyRevokedReleasesListener(t *testing.T) {

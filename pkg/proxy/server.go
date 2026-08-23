@@ -108,6 +108,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	s.viewMetadataAdmissionContext, s.viewMetadataAdmissionCancel = context.WithCancel(ctx)
 	initialized := false
 	statsRegistered := false
+	haKeeperClientOwned := false
 	defer func() {
 		if initialized {
 			return
@@ -116,6 +117,8 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		_ = s.closeIngress()
 		if s.handler != nil {
 			_ = s.handler.Close()
+		} else if haKeeperClientOwned && s.haKeeperClient != nil {
+			_ = s.haKeeperClient.Close()
 		}
 		if s.stopper != nil {
 			s.stopper.Stop()
@@ -127,6 +130,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	for _, opt := range opts {
 		opt(s)
 	}
+	haKeeperClientOwned = s.haKeeperClient != nil
 	if s.runtime == nil {
 		panic("runtime of proxy is not set")
 	}
@@ -140,6 +144,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		if err != nil {
 			return nil, err
 		}
+		haKeeperClientOwned = true
 	}
 	if err = s.initViewMetadataAdmission(ctx); err != nil {
 		return nil, err
@@ -167,6 +172,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	}
 
 	s.handler = h
+	haKeeperClientOwned = false
 	if err := runBootstrapTask(ctx, s.stopper, h); err != nil {
 		return nil, err
 	}
