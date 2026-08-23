@@ -313,11 +313,16 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		connectorAnalyze.Network(bat)
 
 		var receiverDone bool
-		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil || receiverDone {
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil {
 			return err
 		}
+		// A stopped receiver intentionally discarded the decoded batch, but the
+		// remote sender still owns its credit until this ACK is sent.
 		if err = sender.acknowledgeRemoteBatch(); err != nil {
 			return err
+		}
+		if receiverDone {
+			return nil
 		}
 	}
 }
@@ -359,11 +364,16 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 
 		result, errCall := vm.Exec(dispatchRunner, s.Proc)
 		bat.Clean(mp)
-		if errCall != nil || result.Status == vm.ExecStop {
+		if errCall != nil {
 			return errCall
 		}
+		// ExecStop can mean that every receiver has already stopped. Release the
+		// decoded batch's remote credit before ending the receive loop.
 		if err = sender.acknowledgeRemoteBatch(); err != nil {
 			return err
+		}
+		if result.Status == vm.ExecStop {
+			return nil
 		}
 	}
 }

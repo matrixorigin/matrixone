@@ -16,11 +16,35 @@ package compile
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/stretchr/testify/require"
 )
+
+type selectEntryContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func newSelectEntryContext(t *testing.T) *selectEntryContext {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return &selectEntryContext{
+		Context: ctx,
+		entered: make(chan struct{}),
+	}
+}
+
+func (c *selectEntryContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
 
 func TestPipelineBatchFlowNegotiation(t *testing.T) {
 	require.Nil(t, newPipelineBatchFlow(0, 1))
@@ -112,6 +136,49 @@ func TestPipelineBatchFlowWaitsForCreditAndObservesConnectionClose(t *testing.T)
 	flow.rollback(0)
 	require.NoError(t, flow.acknowledge(0))
 	require.NoError(t, flow.acknowledge(seq))
+}
+
+func TestPipelineBatchFlowAbortWakesWaitersAndReleasesAccounting(t *testing.T) {
+	flow := newPipelineBatchFlow(1, 1024)
+	seq, err := flow.reserve(context.Background(), context.Background(), 10)
+	require.NoError(t, err)
+
+	reserveCtx := newSelectEntryContext(t)
+	reserveDone := make(chan error, 1)
+	go func() {
+		_, err := flow.reserve(reserveCtx, context.Background(), 1)
+		reserveDone <- err
+	}()
+	waitCtx := newSelectEntryContext(t)
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- flow.waitUntilDrained(waitCtx, context.Background(), nil)
+	}()
+	<-reserveCtx.entered
+	<-waitCtx.entered
+
+	firstCause := errors.New("stop sending")
+	flow.abort(firstCause)
+	flow.abort(errors.New("later abort"))
+
+	select {
+	case err := <-reserveDone:
+		require.ErrorIs(t, err, firstCause)
+	case <-time.After(time.Second):
+		t.Fatal("abort did not wake a blocked credit reservation")
+	}
+	select {
+	case err := <-waitDone:
+		require.ErrorIs(t, err, firstCause)
+	case <-time.After(time.Second):
+		t.Fatal("abort did not wake the terminal-response drain barrier")
+	}
+
+	flow.mu.Lock()
+	require.Empty(t, flow.pending)
+	require.Zero(t, flow.bytes)
+	flow.mu.Unlock()
+	require.NoError(t, flow.acknowledge(seq), "an ACK already in flight must be harmless after abort")
 }
 
 func TestHandlePipelineBatchAck(t *testing.T) {
