@@ -1260,7 +1260,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 			IsBin:               proc.GetPrepareParamIsBin(i),
 			IsBinaryProtocol:    true,
 			PrepareParamKind:    proc.GetPrepareParamKind(i),
-			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion26,
+			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion27,
 		}
 		if params.IsNull(uint64(i)) {
 			// NULL has no runtime value type, but it must retain its parameter
@@ -1352,7 +1352,7 @@ func buildExecuteUserParams(
 			Value:               param,
 			IsBin:               paramIsBin[i],
 			PrepareParamKind:    paramKinds[i],
-			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion26,
+			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion27,
 		}
 	}
 	return
