@@ -5,3 +5,29 @@ select * from t1;
 ➤ a[-7,1,0]  ¦  b[-7,1,0]  ¦  c[-7,1,0]  𝄀
 1  ¦  1  ¦  1  𝄀
 0  ¦  0  ¦  0
+drop table if exists jdbc_result_metadata;
+create table jdbc_result_metadata (
+tt tinytext,
+t text,
+mt mediumtext,
+lt longtext,
+dt date,
+tm time,
+tm6 time(6),
+dtt datetime,
+dtt6 datetime(6),
+ts timestamp,
+ts6 timestamp(6),
+yr year
+);
+select * from jdbc_result_metadata where 1 = 0;
+➤ tt[-1,63,0]  ¦  t[-1,16383,0]  ¦  mt[-1,4194303,0]  ¦  lt[-1,536870911,0]  ¦  dt[91,10,0]  ¦  tm[92,10,0]  ¦  tm6[92,17,6]  ¦  dtt[93,19,0]  ¦  dtt6[93,26,6]  ¦  ts[93,19,0]  ¦  ts6[93,26,6]  ¦  yr[91,4,0]  𝄀
+drop table jdbc_result_metadata;
+drop table if exists jdbc_conditional_text_metadata;
+create table jdbc_conditional_text_metadata (mt mediumtext, lt longtext);
+select case when true then mt else mt end as case_mt,
+if(true, lt, lt) as if_lt,
+coalesce(mt, mt) as coalesce_mt
+from jdbc_conditional_text_metadata where 1 = 0;
+➤ case_mt[-1,4194303,0]  ¦  if_lt[-1,536870911,0]  ¦  coalesce_mt[-1,4194303,0]  𝄀
+drop table jdbc_conditional_text_metadata;
