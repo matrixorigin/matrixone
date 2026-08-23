@@ -75,6 +75,7 @@ select x.col0 from typed t cross apply sql_tvf(t.txt, 'I', @h) x;
 not supported: the query (1st) argument of sql_tvf must not reference columns; use a constant, parameter, or session variable
 select x.col0 from typed t cross apply sql_tvf(concat(t.txt, ''), 'I', @h) x;
 not supported: the query (1st) argument of sql_tvf must not reference columns; use a constant, parameter, or session variable
+-- @regex("is a sql connection; esql_tvf accepts only esql connections", true)
 select * from esql_tvf('FROM idx', 'I', @h) x;
 invalid input: connection handle "sql:1108129e3e966f3a" is a sql connection; esql_tvf accepts only esql connections
 create table bad_col (id int, __mo_query varchar(10));

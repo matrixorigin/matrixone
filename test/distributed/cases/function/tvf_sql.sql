@@ -66,7 +66,10 @@ select * from sql_tvf('select 1', 'I', 42) x;
 select * from typed t, sql_tvf(t.txt, 'I', @h) x;
 select x.col0 from typed t cross apply sql_tvf(t.txt, 'I', @h) x;
 select x.col0 from typed t cross apply sql_tvf(concat(t.txt, ''), 'I', @h) x;
--- a handle of the wrong kind is rejected before any query is sent.
+-- a handle of the wrong kind is rejected before any query is sent. The
+-- handle text embeds a config hash (differs per server address), so match by
+-- regex instead of exact text.
+-- @regex("is a sql connection; esql_tvf accepts only esql connections", true)
 select * from esql_tvf('FROM idx', 'I', @h) x;
 -- the hidden-column names are reserved.
 create table bad_col (id int, __mo_query varchar(10));
