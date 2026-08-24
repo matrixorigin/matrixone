@@ -237,3 +237,18 @@
 - binary SET/DDL、prepared EXPLAIN、pagination 与 SQL EXECUTE 使用各自限定路径，不扩大普通 Query 热路径。
 - 新增 fast-path identity UT 和 microbenchmark；Apple M1 Pro 三轮结果为 583.7/586.4/602.1 ns/op，200 B/op，3 allocs/op，且每轮断言 cached plan/compile identity 与 nil paramVals。
 - issue #27477 的 TKE TPCC 10.10 harness 不在本地仓库；未伪造 TPCC 数字，使用结构性 fast-path oracle 与 microbenchmark 作为本地性能门禁。
+
+## 第八轮：修复普通 COM_STMT 快路径转换域 metadata 丢失
+
+1. 将 binary protocol parameter kind 推断和 `SetPrepareParamsWithMeta` 与昂贵的 runtime `paramVals` 构造解耦。
+2. 所有 binary execute 均向 `Process` vector 恢复 Integer/Decimal/Float/Boolean metadata；普通 Query 仍不构造 `paramVals`，也不 specialization/deep-copy/recompile。
+3. 扩展 cached fast-path UT，同时断言 conversion-domain metadata、nil `paramVals`、cached plan/compile identity。
+4. 重跑 frontend、issue #26685/#27088、microbenchmark、build/vet/SCA，并推送 review 修复。
+
+### 第八轮执行结果
+
+- 所有 binary COM_STMT execution 均恢复 conversion-domain metadata；昂贵的 `preparedParamValues` 仍只在 specialization/SET/DDL/EXPLAIN/pagination 路径构建。
+- `PrepareStmt` 复用 kind 与 packed metadata scratch，避免普通数值参数每次执行新增 metadata allocation。
+- fast-path UT 同时覆盖 Boolean、Integer、Decimal、Float，并断言 nil `paramVals` 与 cached plan/compile identity。
+- CI 三个实际失败 `TestIssue26725PreparedBit64Numeric`、`TestIssue26866BinaryPreparedNthValueOffsetValidation`、`TestIssue26840PreparedJSONModifyPreservesValueTypes` 均由 metadata 丢失导致，本地修复后通过。
+- microbenchmark 三轮为 616.6/613.2/608.8 ns/op，200 B/op，3 allocs/op；恢复 metadata 后 allocation 与修复前 fast path 相同。

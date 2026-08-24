@@ -986,34 +986,33 @@ func initExecuteStmtParamWithResolverInSession(
 		if prepareStmt.params.Length() != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
+		paramCount := prepareStmt.params.Length()
+		if cap(prepareStmt.paramKinds) < paramCount {
+			prepareStmt.paramKinds = make([]vector.PrepareParamKind, paramCount)
+		} else {
+			prepareStmt.paramKinds = prepareStmt.paramKinds[:paramCount]
+			clear(prepareStmt.paramKinds)
+		}
+		hasParamKind := false
+		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
+			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
+			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
+			kind := binaryProtocolPrepareParamKind(
+				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+			prepareStmt.paramKinds[i] = kind
+			hasParamKind = hasParamKind || kind != vector.PrepareParamNone
+		}
+		if hasParamKind {
+			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableMeta(
+				prepareStmt.params, nil, prepareStmt.paramKinds, prepareStmt.paramMetadata)
+		} else {
+			cwft.proc.SetPrepareParams(prepareStmt.params)
+		}
 		if needsRuntimeParamVals {
-			paramCount := prepareStmt.params.Length()
-			var kinds []vector.PrepareParamKind
-			for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
-				mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
-				isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
-				kind := binaryProtocolPrepareParamKind(
-					mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
-				if kind != vector.PrepareParamNone {
-					if kinds == nil {
-						kinds = make([]vector.PrepareParamKind, paramCount)
-					}
-					kinds[i] = kind
-				}
-			}
-			if kinds == nil {
-				cwft.proc.SetPrepareParams(prepareStmt.params)
-			} else {
-				cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
-			}
 			cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
 			if err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
-		} else {
-			// Preserve main's COM_STMT Query fast path: operators consume the
-			// protocol vector directly and the cached plan/compile stay untouched.
-			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {

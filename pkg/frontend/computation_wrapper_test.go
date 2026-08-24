@@ -269,15 +269,22 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 }
 
 func TestInitExecuteStmtParamKeepsOrdinaryBinaryQueryOnCachedFastPath(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 105, "select ?")
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 105, "select ?, ?, ?, ?")
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
 		prepareStmt.Close()
 	}()
 
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
-	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_TINY), 0}
+	for _, value := range []string{"1", "42", "12.5", "3.5"} {
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	}
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_TINY), 0,
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
+		byte(defines.MYSQL_TYPE_DOUBLE), 0,
+	}
 	sentinel := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
@@ -288,7 +295,14 @@ func TestInitExecuteStmtParamKeepsOrdinaryBinaryQueryOnCachedFastPath(t *testing
 	require.Nil(t, cw.paramVals, "ordinary COM_STMT Query must not infer runtime parameter types")
 	require.Same(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, runtimePlan)
 	require.Same(t, sentinel, retComp, "ordinary COM_STMT Query must reuse the cached compile")
-	require.Equal(t, vector.PrepareParamNone, cw.proc.GetPrepareParamKind(0))
+	for i, want := range []vector.PrepareParamKind{
+		vector.PrepareParamBoolean,
+		vector.PrepareParamInteger,
+		vector.PrepareParamDecimal,
+		vector.PrepareParamFloat,
+	} {
+		require.Equal(t, want, cw.proc.GetPrepareParamKind(i), "parameter %d", i)
+	}
 }
 
 func BenchmarkInitExecuteStmtParamOrdinaryBinaryQueryFastPath(b *testing.B) {

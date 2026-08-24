@@ -338,6 +338,8 @@ type PrepareStmt struct {
 	// ordinary COM_STMT Query executions never scan or copy the cached plan.
 	numericPrefixConsumer bool
 	hasPaginationParams   bool
+	paramKinds            []vector.PrepareParamKind
+	paramMetadata         []bool
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
