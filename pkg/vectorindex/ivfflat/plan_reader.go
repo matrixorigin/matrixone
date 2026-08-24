@@ -256,6 +256,7 @@ func (r *planReader) initialize() error {
 	sqlproc.IvfHasMembershipFilter = r.req.HasMembershipFilter
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
 		Limit:        ivfUint64Expr(r.req.CandidateBudget),
+		OrderBy:      []*plan.OrderBySpec{{Flag: r.spec.Direction}},
 		OrigFuncName: r.spec.DistanceFunction,
 		DistRange:    r.req.DistanceRange,
 	}

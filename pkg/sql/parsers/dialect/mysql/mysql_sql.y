@@ -120,6 +120,9 @@ func sqlTaskInt64(v any) int64 {
     datastreamOption *tree.DataStreamOption
     datastreamOptions tree.DataStreamOptions
     datastreamTableParam *tree.DataStreamTableParam
+    foreignTableOption tree.ForeignTableOption
+    foreignTableOptions tree.ForeignTableOptions
+    foreignTableParam *tree.ForeignTableParam
 
     functionName *tree.FunctionName
     funcArg tree.FunctionArg
@@ -596,7 +599,7 @@ func sqlTaskInt64(v any) int64 {
 // Iceberg
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
-%token <str> DATASTREAM
+%token <str> DATASTREAM ESQL
 
 // ROLLUP
 %token <str> GROUPING SETS CUBE ROLLUP 
@@ -756,6 +759,10 @@ func sqlTaskInt64(v any) int64 {
 %type <datastreamOptions> datastream_option_list_opt datastream_option_list
 %type <datastreamOption> datastream_option
 %type <str> datastream_option_key datastream_option_value
+%type <foreignTableParam> foreign_table_param
+%type <foreignTableOptions> foreign_option_list_opt foreign_option_list
+%type <foreignTableOption> foreign_option
+%type <str> foreign_engine_kind
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -10215,6 +10222,15 @@ create_table_stmt:
         t.DataStreamParam = $9
         $$ = t
     }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' foreign_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.ForeignParam = $9
+        $$ = t
+    }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name iceberg_table_param
     {
         t := tree.NewCreateTable()
@@ -11073,6 +11089,47 @@ datastream_option:
     datastream_option_key '=' datastream_option_value
     {
         $$ = tree.NewDataStreamOption(tree.Identifier($1), $3)
+    }
+
+foreign_table_param:
+    ENGINE equal_opt foreign_engine_kind foreign_option_list_opt
+    {
+        $$ = tree.NewForeignTableParam($3, $4)
+    }
+
+foreign_engine_kind:
+    ESQL
+    {
+        $$ = "esql"
+    }
+|   SQL
+    {
+        $$ = "sql"
+    }
+
+foreign_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' foreign_option_list ')'
+    {
+        $$ = $3
+    }
+
+foreign_option_list:
+    foreign_option
+    {
+        $$ = tree.ForeignTableOptions{$1}
+    }
+|   foreign_option_list ',' foreign_option
+    {
+        $$ = append($1, $3)
+    }
+
+foreign_option:
+    datastream_option_key '=' datastream_option_value
+    {
+        $$ = tree.NewForeignTableOption(tree.Identifier($1), $3)
     }
 
 datastream_option_key:
@@ -15625,6 +15682,7 @@ non_reserved_keyword:
 |   MONGODB_PATH
 |   MONGODB_CONVERT
 |   DATASTREAM
+|   ESQL
 |   CONNECTIONS
 |   INTERMEDIATE_GRAPH_DEGREE
 |   ISOLATION

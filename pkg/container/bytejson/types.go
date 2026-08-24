@@ -211,6 +211,9 @@ const (
 	JsonModifyReplace JsonModifyType = 0x02
 	// JsonModifySet = JsonModifyInsert | JsonModifyReplace
 	JsonModifySet JsonModifyType = 0x03
+	// JsonModifyArrayAppend appends a value to the array selected by a path.
+	// A selected scalar or object is autowrapped as an array first.
+	JsonModifyArrayAppend JsonModifyType = 0x04
 )
 
 func CompareByteJson(left, right ByteJson) int {

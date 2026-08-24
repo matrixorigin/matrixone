@@ -121,26 +121,66 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 		require.Equal(t, "entries1", req.Table)
 		require.NotNil(t, req.Filter)
 		require.NotNil(t, req.IndexParam)
-		require.True(t, req.PostFilterTopOnly)
+		require.False(t, req.PostFilterTopOnly)
 		require.Equal(t, uint64(3), req.IndexParam.GetLimit().GetLit().GetU64Val())
+		require.Equal(t, plan.OrderBySpec_ASC, req.IndexParam.OrderBy[0].Flag)
 		require.Empty(t, req.FilterHint.MembershipFilterBytes)
+		require.Equal(t, []string{
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			catalog.SystemSI_IVFFLAT_IncludeColPrefix + "payload",
+			catalog.CPrimaryKeyColName,
+		}, req.Columns)
 
-		bat := batch.NewWithSize(5) // version, centroid, pk, entry, include
+		filterFn := req.Filter.GetF()
+		require.NotNil(t, filterFn)
+		require.Equal(t, function.PrefixInFunctionName, filterFn.Func.ObjName)
+		require.Equal(t, []*plan.Expr{req.Filter}, req.BlockFilters)
+		require.Equal(t, catalog.CPrimaryKeyColName, filterFn.Args[0].GetCol().Name)
+		require.Equal(t, int32(5), filterFn.Args[0].GetCol().ColPos)
+		prefixes := new(vector.Vector)
+		require.NoError(t, prefixes.UnmarshalBinary(filterFn.Args[1].GetVec().Data))
+		require.Equal(t, 2, prefixes.Length())
+		packer := types.NewPacker()
+		defer packer.Close()
+		for row, centroidID := range []int64{2, 3} {
+			packer.Reset()
+			packer.EncodeInt64(4)
+			packer.EncodeInt64(centroidID)
+			require.Equal(t, packer.Bytes(), prefixes.GetBytesAt(row))
+		}
+
+		orderFn := req.IndexParam.OrderBy[0].Expr.GetF()
+		require.NotNil(t, orderFn)
+		require.Equal(t, metric.MetricTypeToDistFuncName[metric.Metric_L2sqDistance], orderFn.Func.ObjName)
+		require.Equal(t, int32(3), orderFn.Args[0].GetCol().ColPos)
+		require.Equal(t, types.ArrayToBytes([]float32{0, 0}), []byte(orderFn.Args[1].GetLit().GetVecVal()))
+
+		bat := batch.NewWithSize(7) // version, centroid, pk, entry, include, cpkey, distance
 		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
 		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
 		bat.Vecs[4] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(4), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
 		require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{1, 2}, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[4], int32(9), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("cpkey"), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[6], float64(5), false, mp))
 		bat.SetRowCount(1)
 		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
 	}
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	sqlproc.RelationScanner = scanner
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC}},
+	}
 	idx := &IvfflatSearchIndex[float32]{Version: 4, QuantMul: 1}
 	idxcfg := vectorindex.IndexConfig{}
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
@@ -158,6 +198,189 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[0], 0))
 	require.Equal(t, float64(5), vector.GetFixedAtNoTypeCheck[float64](res.Batches[0].Vecs[1], 0))
 	require.Equal(t, int32(9), vector.GetFixedAtNoTypeCheck[int32](res.Batches[0].Vecs[2], 0))
+}
+
+func TestScanEntriesKeepsPostFilterTopKForResiduals(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
+	require.NoError(t, err)
+	scanner := &scriptedRelationScanner{t: t}
+	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+		require.True(t, req.PostFilterTopOnly)
+		require.Nil(t, req.IndexParam.OrderBy[0].Expr)
+		require.Equal(t, plan.OrderBySpec_DESC, req.IndexParam.OrderBy[0].Flag)
+		require.NotNil(t, req.Filter)
+		require.Empty(t, req.BlockFilters)
+		require.NotContains(t, req.Columns, catalog.CPrimaryKeyColName)
+
+		bat := batch.NewWithSize(4)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(4), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
+		require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{1, 2}, false, mp))
+		bat.SetRowCount(1)
+		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+	}
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.RelationScanner = scanner
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
+	}
+	idx := &IvfflatSearchIndex[float32]{QuantMul: 1}
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
+
+	res, err := idx.scanEntries(sqlproc, idxcfg, vectorindex.IndexTableConfig{
+		DbName:       "db1",
+		EntriesTable: "entries1",
+	}, []float32{0, 0}, 4, []int64{2, 3}, nil, []*plan.Expr{residual}, 3)
+	require.NoError(t, err)
+	defer res.Close()
+	require.Len(t, res.Batches, 1)
+	require.Len(t, res.Batches[0].Vecs, 2)
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[0], 0))
+	require.Equal(t, float64(5), vector.GetFixedAtNoTypeCheck[float64](res.Batches[0].Vecs[1], 0))
+}
+
+func TestStorageTopKEligibility(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	centroids := []int64{1}
+	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+	require.False(t, canUseStorageTopK(nil, centroids, nil, 1))
+	require.False(t, canUseStorageTopK(sqlproc, nil, nil, 1))
+	require.False(t, canUseStorageTopK(sqlproc, centroids, []*plan.Expr{ivfInt64Expr(1)}, 1))
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 0))
+
+	sqlproc.IvfHasMembershipFilter = true
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+	sqlproc.IvfHasMembershipFilter = false
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
+		LowerBoundType: plan.BoundType_INCLUSIVE,
+	}}
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+	sqlproc.IndexReaderParam.DistRange = &plan.DistRange{
+		LowerBoundType: plan.BoundType_UNBOUNDED,
+		UpperBoundType: plan.BoundType_UNBOUNDED,
+	}
+	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+
+	require.Equal(t, plan.OrderBySpec_ASC, ivfOrderFlag(nil))
+	sqlproc.IndexReaderParam.OrderBy = []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
+	require.Equal(t, plan.OrderBySpec_DESC, ivfOrderFlag(sqlproc.IndexReaderParam))
+	require.False(t, canUseStorageTopK(sqlproc, centroids, nil, 1))
+}
+
+func TestStorageTopKEligibilityMatchesVectorTopNDirection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	defer entries.Free(mp)
+	for _, entry := range [][]float32{{1}, {10}} {
+		require.NoError(t, vector.AppendArray(entries, entry, false, mp))
+	}
+
+	storageTop := &objectio.IndexReaderTopOp{
+		Typ:        types.T_array_float32,
+		MetricType: metric.Metric_L2sqDistance,
+		NumVec:     types.ArrayToBytes([]float32{0}),
+		Limit:      1,
+		Desc:       true,
+	}
+	rows, distances, err := objectio.TopNVector(context.Background(), nil, entries, storageTop)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0}, rows)
+	require.Equal(t, []float64{1}, distances)
+
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
+	}
+	require.False(t, canUseStorageTopK(sqlproc, []int64{1}, nil, 1),
+		"descending requests must use local Top-K until storage implements descending vector selection")
+}
+
+func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	baseConfig := func() vectorindex.IndexConfig {
+		cfg := vectorindex.IndexConfig{}
+		cfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+		cfg.Ivfflat.VectorType = int32(types.T_array_float32)
+		return cfg
+	}
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", EntriesTable: "entries", PKeyType: int32(types.T_int64)}
+	query := []float32{0, 0}
+
+	t.Run("malformed membership", func(t *testing.T) {
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.IvfHasMembershipFilter = true
+		sqlproc.IvfRuntimeFilterData = []byte("not-a-vector")
+		_, err := (&IvfflatSearchIndex[float32]{}).scanEntries(
+			sqlproc, baseConfig(), tblcfg, query, 1, []int64{2}, nil, nil, 1)
+		require.Error(t, err)
+	})
+
+	t.Run("unknown storage metric", func(t *testing.T) {
+		cfg := baseConfig()
+		cfg.Ivfflat.Metric = math.MaxUint16
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		_, err := (&IvfflatSearchIndex[float32]{}).scanEntries(
+			sqlproc, cfg, tblcfg, query, 1, []int64{2}, nil, nil, 1)
+		require.Error(t, err)
+	})
+
+	t.Run("storage omits distance", func(t *testing.T) {
+		scanner := &scriptedRelationScanner{t: t, run: func(req sqlexec.RelationScanRequest) executor.Result {
+			bat := batch.NewWithSize(len(req.Columns))
+			for i := range bat.Vecs {
+				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(bat.Vecs[i], int64(0), false, mp))
+			}
+			bat.SetRowCount(1)
+			return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+		}}
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.RelationScanner = scanner
+		_, err := (&IvfflatSearchIndex[float32]{}).scanEntries(
+			sqlproc, baseConfig(), tblcfg, query, 1, []int64{2}, nil, nil, 1)
+		require.ErrorContains(t, err, "storage Top-K returned")
+	})
+
+	t.Run("local distance evaluation fails", func(t *testing.T) {
+		residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
+		require.NoError(t, err)
+		scanner := &scriptedRelationScanner{t: t, run: func(sqlexec.RelationScanRequest) executor.Result {
+			bat := batch.NewWithSize(4)
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(3), false, mp))
+			require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{1, 2}, false, mp))
+			bat.SetRowCount(1)
+			return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+		}}
+		cfg := baseConfig()
+		cfg.Ivfflat.Metric = math.MaxUint16
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.RelationScanner = scanner
+		_, err = (&IvfflatSearchIndex[float32]{}).scanEntries(
+			sqlproc, cfg, tblcfg, query, 1, []int64{2}, nil, []*plan.Expr{residual}, 1)
+		require.Error(t, err)
+	})
+
+	_, err := ivfCentroidPrefixFilter(proc.Ctx, mp, 1, nil, 4)
+	require.ErrorContains(t, err, "requires at least one centroid")
 }
 
 func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
@@ -256,6 +479,14 @@ func TestCompactRelationTopBoundsRowsWithClearedEntryVector(t *testing.T) {
 	require.Equal(t, []int64{2, 3}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
 	require.Zero(t, res.Batches[0].Vecs[1].Length())
 	require.Equal(t, []float64{1, 2}, vector.MustFixedColWithTypeCheck[float64](res.Batches[0].Vecs[2]))
+
+	desc := executor.Result{Mp: mp, Batches: []*batch.Batch{
+		makeBatch(1, 3), makeBatch(2, 1), makeBatch(3, 2),
+	}}
+	require.NoError(t, compactRelationTop(&desc, 2, true))
+	defer desc.Close()
+	require.Equal(t, []int64{1, 3}, vector.MustFixedColWithTypeCheck[int64](desc.Batches[0].Vecs[0]))
+	require.Equal(t, []float64{3, 2}, vector.MustFixedColWithTypeCheck[float64](desc.Batches[0].Vecs[2]))
 }
 
 func TestDistanceRangeFiltersBeforeTopInSourceUnits(t *testing.T) {
@@ -1044,12 +1275,15 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 		case "entries_plan_reader":
 			require.NotNil(t, req.IndexParam)
 			require.Equal(t, uint64(12), req.IndexParam.GetLimit().GetLit().GetU64Val())
-			bat := batch.NewWithSize(5)
+			require.False(t, req.PostFilterTopOnly)
+			bat := batch.NewWithSize(7)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
 			bat.Vecs[4] = vector.NewVec(types.T_int32.ToType())
+			bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
+			bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
 			for _, row := range []struct {
 				pk  int64
 				vec []float32
@@ -1059,6 +1293,8 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[2], row.pk, false, mp))
 				require.NoError(t, vector.AppendArray(bat.Vecs[3], row.vec, false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[4], int32(row.pk*10), false, mp))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("cpkey"), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[6], float64((row.pk-1)*(row.pk-1)), false, mp))
 			}
 			bat.SetRowCount(5)
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
@@ -1150,12 +1386,24 @@ func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id, Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_entry, Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2}},
+			{Name: catalog.CPrimaryKeyColName, Typ: plan.Type{
+				Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Charset: uint32(types.CharsetBinary),
+			}},
 		},
 		Name2ColIndex: map[string]int32{
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_version: 0,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_id:      1,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk:      2,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry:   3,
+			catalog.CPrimaryKeyColName:                      4,
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names: []string{
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+			},
+			PkeyColName: catalog.CPrimaryKeyColName,
 		},
 	}
 	metadataReader := &fillRelationReader{fill: func(out *batch.Batch, mp *mpool.MPool) error {
@@ -1181,7 +1429,10 @@ func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {
 		out.SetRowCount(1)
 		return nil
 	}}
+	entryPacker := types.NewPacker()
+	defer entryPacker.Close()
 	entriesReader := &fillRelationReader{fill: func(out *batch.Batch, mp *mpool.MPool) error {
+		out.Vecs = append(out.Vecs, vector.NewVec(types.T_float64.ToType()))
 		for _, row := range []struct {
 			pk  int64
 			vec []float32
@@ -1196,6 +1447,16 @@ func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {
 				return err
 			}
 			if err := vector.AppendArray(out.Vecs[3], row.vec, false, mp); err != nil {
+				return err
+			}
+			entryPacker.Reset()
+			entryPacker.EncodeInt64(991)
+			entryPacker.EncodeInt64(0)
+			entryPacker.EncodeInt64(row.pk)
+			if err := vector.AppendBytes(out.Vecs[4], entryPacker.Bytes(), false, mp); err != nil {
+				return err
+			}
+			if err := vector.AppendFixed(out.Vecs[5], float64((row.pk-1)*(row.pk-1)), false, mp); err != nil {
 				return err
 			}
 		}
