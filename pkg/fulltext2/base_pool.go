@@ -256,6 +256,12 @@ func (p *immutableBasePool) acquireOwned(ctx context.Context, key baseKey, load 
 			defer p.mu.Unlock()
 			if e, ok := p.entries[key]; ok {
 				if e.loading {
+					if owner != 0 {
+						if e.owners == nil {
+							e.owners = make(map[uint64]struct{}, 1)
+						}
+						e.owners[owner] = struct{}{}
+					}
 					return nil, e.ready, nil, true
 				}
 				if owner != 0 {

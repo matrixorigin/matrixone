@@ -123,6 +123,133 @@ func TestImmutableBasePoolWaiterCancellationDoesNotCancelLoader(t *testing.T) {
 	p.clearAll()
 }
 
+type doneSignalContext struct {
+	context.Context
+	doneCalled chan struct{}
+	once       sync.Once
+}
+
+func (c *doneSignalContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.doneCalled) })
+	return c.Context.Done()
+}
+
+func TestImmutableBasePoolWaitingOwnerSurvivesObsoleteRollback(t *testing.T) {
+	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
+	key := baseKey{index: "db.store", id: "base-0", checksum: "sum", filesize: 1}
+	loaderStarted := make(chan struct{})
+	releaseLoader := make(chan struct{})
+	loaderDone := make(chan error, 1)
+	var loads atomic.Int32
+	go func() {
+		view, err := p.acquireOwned(context.Background(), key, func() (*Segment, error) {
+			if loads.Add(1) == 1 {
+				close(loaderStarted)
+				<-releaseLoader
+			}
+			return NewSegment(key.id, 0), nil
+		}, 0, 11)
+		if view != nil {
+			view.Free()
+		}
+		loaderDone <- err
+	}()
+	<-loaderStarted
+
+	waiting := &doneSignalContext{Context: context.Background(), doneCalled: make(chan struct{})}
+	replacementDone := make(chan error, 1)
+	go func() {
+		view, err := p.acquireOwned(waiting, key, func() (*Segment, error) {
+			loads.Add(1)
+			return NewSegment("replacement", 0), nil
+		}, 0, 22)
+		if view != nil {
+			view.Free()
+		}
+		replacementDone <- err
+	}()
+	select {
+	case <-waiting.doneCalled:
+	case <-time.After(time.Second):
+		t.Fatal("replacement did not reach the in-flight wait")
+	}
+
+	p.mu.Lock()
+	_, claimed := p.entries[key].owners[22]
+	p.mu.Unlock()
+	require.True(t, claimed, "a waiting generation must claim the in-flight entry")
+
+	p.rollback(11)
+	close(releaseLoader)
+	require.NoError(t, <-loaderDone)
+	require.NoError(t, <-replacementDone)
+	require.Equal(t, int32(1), loads.Load(), "the replacement must reuse the completed base")
+	require.Contains(t, p.entries, key)
+
+	p.rollback(22)
+	p.clearAll()
+}
+
+func TestImmutableBasePoolCanceledWaiterReleasesProvisionalOwner(t *testing.T) {
+	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
+	key := baseKey{index: "db.store", id: "base-0", checksum: "sum", filesize: 1}
+	loaderStarted := make(chan struct{})
+	releaseLoader := make(chan struct{})
+	loaderDone := make(chan error, 1)
+	go func() {
+		view, err := p.acquireOwned(context.Background(), key, func() (*Segment, error) {
+			close(loaderStarted)
+			<-releaseLoader
+			return NewSegment(key.id, 0), nil
+		}, 0, 11)
+		if view != nil {
+			view.Free()
+		}
+		loaderDone <- err
+	}()
+	<-loaderStarted
+
+	ctx, cancel := context.WithCancel(context.Background())
+	waiting := &doneSignalContext{Context: ctx, doneCalled: make(chan struct{})}
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := p.acquireOwned(waiting, key, func() (*Segment, error) {
+			return nil, errors.New("canceled waiter became the loader")
+		}, 0, 22)
+		waiterDone <- err
+	}()
+	select {
+	case <-waiting.doneCalled:
+	case <-time.After(time.Second):
+		t.Fatal("waiter did not reach the in-flight wait")
+	}
+
+	p.mu.Lock()
+	_, claimed := p.entries[key].owners[22]
+	p.mu.Unlock()
+	require.True(t, claimed, "the canceled waiter must have a provisional claim to release")
+
+	cancel()
+	select {
+	case err := <-waiterDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("canceled waiter did not return")
+	}
+	p.rollback(22)
+	p.mu.Lock()
+	_, claimed = p.entries[key].owners[22]
+	_, loaderClaimed := p.entries[key].owners[11]
+	p.mu.Unlock()
+	require.False(t, claimed)
+	require.True(t, loaderClaimed)
+
+	p.rollback(11)
+	close(releaseLoader)
+	require.NoError(t, <-loaderDone)
+	p.clearAll()
+}
+
 func TestImmutableBasePoolBoundsEntriesAndEvictsIdle(t *testing.T) {
 	p := &immutableBasePool{
 		entries:    make(map[baseKey]*baseEntry),
