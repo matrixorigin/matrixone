@@ -1135,7 +1135,7 @@ func TestTerminalLivenessProbeFailureClosesDataGeneration(t *testing.T) {
 	rb.options.livenessProbe = func(context.Context, string) error {
 		return errors.New("peer endpoint is gone")
 	}
-	rb.options.livenessProbeFailureIsTerminal = true
+	WithBackendLivenessProbeFailureIsTerminal()(rb)
 	rb.livenessMu.pendingSince = rb.livenessTick() - 2*int64(time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

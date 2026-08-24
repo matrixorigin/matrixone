@@ -53,3 +53,12 @@ func TestPipelineClient_NewStreamAllowsLocalBackend(t *testing.T) {
 	require.Equal(t, "127.0.0.1:1234", rpcClient.backend)
 	require.True(t, rpcClient.lock)
 }
+
+func TestNewPipelineClientCreatesIndependentControlClient(t *testing.T) {
+	client, err := NewPipelineClient(t.Name(), "127.0.0.1:6001", &PipelineConfig{})
+	require.NoError(t, err)
+	pc := client.(*pipelineClient)
+	require.NotNil(t, pc.client)
+	require.NotNil(t, pc.controlClient)
+	require.NoError(t, pc.Close())
+}
