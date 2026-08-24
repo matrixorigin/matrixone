@@ -129,9 +129,14 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(ctr.eqCondVecs) == 0 {
+		probeConditions := hashJoin.EqConds[0]
+		if hashJoin.AsofBuildLeft {
+			// The physical probe is the logical right input in this mode.
+			probeConditions = hashJoin.EqConds[1]
+		}
 		eqCondExecs, err := hashbuild.NewExpressionExecutors(
 			proc,
-			hashJoin.EqConds[0],
+			probeConditions,
 			hashJoin.allocationAccount,
 		)
 		if err != nil {
@@ -195,6 +200,9 @@ func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
 }
 
 func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
+	if hashJoin.AsofBuildLeft {
+		return hashJoin.callAsofBuildLeft(proc)
+	}
 	analyzer := hashJoin.OpAnalyzer
 
 	ctr := &hashJoin.ctr
@@ -440,6 +448,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	// JoinMap. Reset normally makes this empty; keeping the transition local
 	// also makes restart and spill/error reuse fail-safe.
 	ctr.cleanAsofIndexes(proc)
+	ctr.cleanAsofBuildLeftState(proc)
 	ctr.mp = dep.JoinMap()
 
 	// Pre-compute per-query flags for the probe loop.
@@ -471,12 +480,20 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				ctr.mp = nil
 				return mpool.ErrAllocationAccountInvalid
 			}
+			buildKeyExprs, probeKeyExprs := hashJoin.EqConds[1], hashJoin.EqConds[0]
+			needsProbeForEmptyBuild := hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark()
+			needsBuildForEmptyProbe := hashJoin.EmitUnmatchedBuild()
+			if hashJoin.AsofBuildLeft {
+				buildKeyExprs, probeKeyExprs = hashJoin.EqConds[0], hashJoin.EqConds[1]
+				needsProbeForEmptyBuild = false
+				needsBuildForEmptyProbe = hashJoin.JoinType == plan.Node_ASOF_LEFT
+			}
 			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
-				BuildKeyExprs:           hashJoin.EqConds[1],
-				ProbeKeyExprs:           hashJoin.EqConds[0],
+				BuildKeyExprs:           buildKeyExprs,
+				ProbeKeyExprs:           probeKeyExprs,
 				SpillThreshold:          ctr.spillThreshold,
-				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark(),
-				NeedsBuildForEmptyProbe: hashJoin.EmitUnmatchedBuild(),
+				NeedsProbeForEmptyBuild: needsProbeForEmptyBuild,
+				NeedsBuildForEmptyProbe: needsBuildForEmptyProbe,
 				HashOnPK:                hashJoin.HashOnPK,
 				NeedAllocateSels:        !hashJoin.HashOnPK,
 				NeedBatches:             hashJoin.NeedBuildBatches(),
@@ -567,6 +584,9 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 			// EOF on probe file.
 			engine.FinishBucket()
 			ctr.probeBucketActive = false
+			if hashJoin.AsofBuildLeft && ctr.asofBuildLeftInitialized {
+				return result, nil // finalize this logical-left build bucket
+			}
 			if ctr.rightRowsMatched != nil {
 				return result, nil // trigger Finalize for unmatched right rows
 			}
@@ -574,6 +594,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 			// before the spill engine allocates the next bucket's JoinMap so the
 			// two generations cannot overlap in the query memory account.
 			ctr.cleanAsofIndexes(proc)
+			ctr.cleanAsofBuildLeftState(proc)
 			ctr.cleanHashMap()
 		}
 
@@ -584,6 +605,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 				func(jm *message.JoinMap, res spillutil.BucketResult) {
 					if res == spillutil.BucketReady {
 						ctr.cleanAsofIndexes(proc)
+						ctr.cleanAsofBuildLeftState(proc)
 						ctr.mp = jm
 						ctr.rightBats = jm.GetBatches()
 						ctr.rightRowCnt = jm.GetRowCount()
@@ -615,6 +637,14 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 			ctr.probeState = psNextBatch
 			ctr.lastIdx = 0
 			ctr.vsIdx = 0
+			if hashJoin.AsofBuildLeft && ctr.mp != nil && !engine.IsProbing() {
+				// A build-only spill bucket still owns logical-left rows for
+				// ASOF LEFT. Return EOF to the build-left state machine so it can
+				// initialize and finalize those rows instead of silently advancing
+				// to the next bucket before candidate state exists.
+				ctr.probeBucketActive = false
+				return result, nil
+			}
 			ctr.probeBucketActive = true
 		}
 	}

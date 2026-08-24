@@ -687,6 +687,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:             t.JoinMapTag,
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 			AsofRightCol:           t.AsofRightCol,
+			AsofBuildLeft:          t.AsofBuildLeft,
 		}
 		in.SpillMem = t.SpillThreshold
 	case *loopjoin.LoopJoin:
@@ -1230,6 +1231,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.SpillThreshold = opr.SpillMem
 		arg.AsofRightCol = t.AsofRightCol
+		arg.AsofBuildLeft = t.AsofBuildLeft
 		op = arg
 	case vm.Limit:
 		op = limit.NewArgument().WithLimit(opr.Limit)

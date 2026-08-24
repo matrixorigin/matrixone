@@ -288,6 +288,7 @@ message HashJoin {
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 15;
   bool emit_compressed_row_count = 16;
   int32 asof_right_col = 17;
+  bool asof_build_left = 18;
 }
 
 message LoopJoin {

@@ -4709,7 +4709,38 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 	return branches
 }
 
+const asofBuildLeftMaxRows = 64
+
+// shouldBuildLeftForAsof chooses the streaming-retention path only when the
+// logical left input is both absolutely small and no larger in estimated bytes
+// than the logical right input. The absolute cap bounds the per-right-row
+// comparison work even when statistics badly underestimate the right side.
+func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
+	if node == nil || left == nil || right == nil ||
+		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
+		left.Stats == nil {
+		return false
+	}
+	leftRows := left.Stats.Outcnt
+	if leftRows <= 0 || leftRows > asofBuildLeftMaxRows {
+		return false
+	}
+	if right.Stats == nil || right.Stats.Outcnt <= 0 {
+		return false
+	}
+	leftRowSize := max(left.Stats.Rowsize, 1)
+	rightRowSize := max(right.Stats.Rowsize, 1)
+	return leftRows*leftRowSize <= right.Stats.Outcnt*rightRowSize
+}
+
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	if shouldBuildLeftForAsof(node, left, right) {
+		if node.Stats.HashmapStats.Shuffle {
+			return c.compileShuffleJoinWithBuildLeft(
+				node, left, right, probeScopes, buildScopes, true)
+		}
+		return c.compileBroadcastAsofBuildLeft(node, left, right, probeScopes, buildScopes)
+	}
 	if node.Stats.HashmapStats.Shuffle {
 		if node.JoinType == plan.Node_MARK && !canUseShuffleHashMarkJoinWithInputs(node, left, right) {
 			node.Stats.HashmapStats.Shuffle = false
@@ -4723,17 +4754,59 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
 
-func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, leftscopes, rightscopes []*Scope) []*Scope {
+func (c *Compile) compileBroadcastAsofBuildLeft(
+	node, left, right *plan.Node,
+	leftScopes, rightScopes []*Scope,
+) []*Scope {
+	// Independent right scan scopes would each produce one local predecessor
+	// for every broadcast left row. Merge them into one stream so finalization
+	// happens exactly once. Shuffle ASOF keeps parallelism by key instead.
+	rightScopes = c.mergeShuffleScopesIfNeeded(rightScopes, false)
+	if len(rightScopes) != 1 || rightScopes[0].NodeInfo.Mcpu != 1 {
+		rightScopes = []*Scope{c.newMergeScope(rightScopes)}
+	}
+
+	leftTypes := make([]types.Type, len(left.ProjectList))
+	for i, expr := range left.ProjectList {
+		leftTypes[i] = dupType(&expr.Typ)
+	}
+	rightTypes := make([]types.Type, len(right.ProjectList))
+	for i, expr := range right.ProjectList {
+		rightTypes[i] = dupType(&expr.Typ)
+	}
+	op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+	op.AsofBuildLeft = true
+	op.RuntimeFilterSpecs = nil
+	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rightScopes[0].setRootOperator(op)
+	c.anal.isFirst = false
+	return c.compileBuildSideForBroadcastJoin(node, rightScopes, leftScopes)
+}
+
+func (c *Compile) compileShuffleJoin(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+) []*Scope {
+	return c.compileShuffleJoinWithBuildLeft(
+		node, left, right, leftscopes, rightscopes, false)
+}
+
+func (c *Compile) compileShuffleJoinWithBuildLeft(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+	asofBuildLeft bool,
+) []*Scope {
 	stageNodes, hasLocalDependency := c.shuffleJoinStageNodes(leftscopes, rightscopes)
 	if !hasLocalDependency &&
 		len(stageNodes) == 1 && len(leftscopes) == 1 && len(rightscopes) == 1 &&
 		sameExecutionNode(leftscopes[0].NodeInfo, rightscopes[0].NodeInfo) &&
 		leftscopes[0].NodeInfo.Mcpu == int(left.Stats.Dop) &&
 		rightscopes[0].NodeInfo.Mcpu == int(right.Stats.Dop) {
-		return c.compileLocalShuffleJoin(node, left, right, leftscopes, rightscopes)
+		return c.compileLocalShuffleJoinWithBuildLeft(
+			node, left, right, leftscopes, rightscopes, asofBuildLeft)
 	}
 	return c.compileDistributedShuffleJoin(
-		node, left, right, leftscopes, rightscopes, stageNodes, hasLocalDependency)
+		node, left, right, leftscopes, rightscopes, stageNodes, hasLocalDependency, asofBuildLeft)
 }
 
 // canReuseDistributedShuffleJoin reports whether probeScopes already use the
@@ -4774,7 +4847,19 @@ func (c *Compile) shuffleStageNodes(scopes []*Scope) engine.Nodes {
 	return stageNodes
 }
 
-func (c *Compile) compileLocalShuffleJoin(node, left, right *plan.Node, leftscopes, rightscopes []*Scope) []*Scope {
+func (c *Compile) compileLocalShuffleJoin(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+) []*Scope {
+	return c.compileLocalShuffleJoinWithBuildLeft(
+		node, left, right, leftscopes, rightscopes, false)
+}
+
+func (c *Compile) compileLocalShuffleJoinWithBuildLeft(
+	node, left, right *plan.Node,
+	leftscopes, rightscopes []*Scope,
+	asofBuildLeft bool,
+) []*Scope {
 	if node.Stats.Dop != left.Stats.Dop || node.Stats.Dop != right.Stats.Dop {
 		panic("wrong dop for shuffle join!")
 	}
@@ -4782,33 +4867,70 @@ func (c *Compile) compileLocalShuffleJoin(node, left, right *plan.Node, leftscop
 		panic("wrong scopes for shuffle join!")
 	}
 
-	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
+	probeScopes, buildScopes := leftscopes, rightscopes
+	probeIsLogicalLeft := true
+	if asofBuildLeft {
+		probeScopes, buildScopes = rightscopes, leftscopes
+		probeIsLogicalLeft = false
+	}
+	reuse := !asofBuildLeft &&
+		node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	bucketNum := len(c.shuffleStageNodes(leftscopes)) * int(node.Stats.Dop)
-	for i := range leftscopes {
-		leftscopes[i].PreScopes = append(leftscopes[i].PreScopes, rightscopes[i])
+	for i := range probeScopes {
+		probeScopes[i].PreScopes = append(probeScopes[i].PreScopes, buildScopes[i])
 		if !reuse {
-			shuffleOpForProbe := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
+			shuffleOpForProbe := constructShuffleOperatorForJoin(
+				int32(bucketNum), node, probeIsLogicalLeft)
+			if asofBuildLeft && len(node.RuntimeFilterProbeList) > 0 {
+				// Shuffle HashBuild publishes PASS as its build-completion signal.
+				// After swapping the physical sides, move that wait to the logical
+				// right (physical probe); waiting on the logical-left build stream
+				// would create a self-dependency.
+				shuffleOpForProbe.RuntimeFilterSpec =
+					plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
+			}
 			shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
-			leftscopes[i].setRootOperator(shuffleOpForProbe)
+			probeScopes[i].setRootOperator(shuffleOpForProbe)
 		}
 
-		shuffleOpForBuild := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
+		shuffleOpForBuild := constructShuffleOperatorForJoin(
+			int32(bucketNum), node, !probeIsLogicalLeft)
+		if asofBuildLeft {
+			shuffleOpForBuild.RuntimeFilterSpec = nil
+		}
 		shuffleOpForBuild.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		rightscopes[i].setRootOperator(shuffleOpForBuild)
+		buildScopes[i].setRootOperator(shuffleOpForBuild)
 	}
 
-	constructShuffleJoinOP(c, leftscopes, node, left, right, true)
+	constructShuffleJoinOPWithBuildLeft(
+		c, probeScopes, node, left, right, true, asofBuildLeft)
 
-	for i := range leftscopes {
-		buildOp := constructShuffleHashBuild(node, leftscopes[i].RootOp, c.proc)
+	for i := range probeScopes {
+		buildOp := constructShuffleHashBuild(node, probeScopes[i].RootOp, c.proc)
 		buildOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
-		rightscopes[i].setRootOperator(buildOp)
+		buildScopes[i].setRootOperator(buildOp)
 	}
 
-	return leftscopes
+	return probeScopes
 }
 
-func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right *plan.Node, sharedPool bool) {
+func constructShuffleJoinOP(
+	c *Compile,
+	shuffleJoins []*Scope,
+	node, left, right *plan.Node,
+	sharedPool bool,
+) {
+	constructShuffleJoinOPWithBuildLeft(
+		c, shuffleJoins, node, left, right, sharedPool, false)
+}
+
+func constructShuffleJoinOPWithBuildLeft(
+	c *Compile,
+	shuffleJoins []*Scope,
+	node, left, right *plan.Node,
+	sharedPool bool,
+	asofBuildLeft bool,
+) {
 	rightTypes := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
 		rightTypes[i] = dupType(&expr.Typ)
@@ -4825,6 +4947,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 		plan.Node_ASOF, plan.Node_ASOF_LEFT:
 		for i := range shuffleJoins {
 			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+			op.AsofBuildLeft = asofBuildLeft
 			op.ShuffleIdx = int32(i)
 			if sharedPool {
 				op.ShuffleIdx = -1
@@ -4870,9 +4993,18 @@ func (c *Compile) compileDistributedShuffleJoin(
 	lefts, rights []*Scope,
 	stageNodes engine.Nodes,
 	attachRemoteSources bool,
+	asofBuildLeft bool,
 ) []*Scope {
-	shuffleJoins := c.newShuffleJoinScopeListAt(lefts, rights, node, stageNodes, attachRemoteSources)
-	constructShuffleJoinOP(c, shuffleJoins, node, left, right, false)
+	probeScopes, buildScopes := lefts, rights
+	probeIsLogicalLeft := true
+	if asofBuildLeft {
+		probeScopes, buildScopes = rights, lefts
+		probeIsLogicalLeft = false
+	}
+	shuffleJoins := c.newShuffleJoinScopeListAtSides(
+		probeScopes, buildScopes, node, stageNodes, attachRemoteSources, probeIsLogicalLeft)
+	constructShuffleJoinOPWithBuildLeft(
+		c, shuffleJoins, node, left, right, false, asofBuildLeft)
 
 	//construct shuffle build
 	currentFirstFlag := c.anal.isFirst
@@ -7052,6 +7184,17 @@ func (c *Compile) newShuffleJoinScopeListAt(
 	cnlist engine.Nodes,
 	attachRemoteSources bool,
 ) []*Scope {
+	return c.newShuffleJoinScopeListAtSides(
+		probeScopes, buildScopes, node, cnlist, attachRemoteSources, true)
+}
+
+func (c *Compile) newShuffleJoinScopeListAtSides(
+	probeScopes, buildScopes []*Scope,
+	node *plan.Node,
+	cnlist engine.Nodes,
+	attachRemoteSources bool,
+	probeIsLogicalLeft bool,
+) []*Scope {
 	if len(cnlist) == 0 {
 		cnlist = c.shuffleStageNodes(probeScopes)
 	}
@@ -7061,7 +7204,8 @@ func (c *Compile) newShuffleJoinScopeListAt(
 
 	dop := int(node.Stats.Dop)
 	bucketNum := len(cnlist) * dop
-	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse &&
+	reuse := probeIsLogicalLeft &&
+		node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse &&
 		canReuseDistributedShuffleJoin(probeScopes, cnlist, dop)
 	// Multi-CN DEDUP normalizes the probe scopes below by merging them, so the
 	// per-bucket layout cannot be reused by the distributed join.
@@ -7131,7 +7275,12 @@ func (c *Compile) newShuffleJoinScopeListAt(
 	currentFirstFlag := c.anal.isFirst
 	if !reuse {
 		for i := range probeScopes {
-			shuffleProbeOp := constructShuffleOperatorForJoin(int32(bucketNum), node, true)
+			shuffleProbeOp := constructShuffleOperatorForJoin(
+				int32(bucketNum), node, probeIsLogicalLeft)
+			if !probeIsLogicalLeft && len(node.RuntimeFilterProbeList) > 0 {
+				shuffleProbeOp.RuntimeFilterSpec =
+					plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
+			}
 			shuffleProbeOp.DrainAllBuckets = true
 			//shuffleProbeOp.SetIdx(c.anal.curNodeIdx)
 			shuffleProbeOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -7152,7 +7301,11 @@ func (c *Compile) newShuffleJoinScopeListAt(
 
 	c.anal.isFirst = currentFirstFlag
 	for i := range buildScopes {
-		shuffleBuildOp := constructShuffleOperatorForJoin(int32(bucketNum), node, false)
+		shuffleBuildOp := constructShuffleOperatorForJoin(
+			int32(bucketNum), node, !probeIsLogicalLeft)
+		if !probeIsLogicalLeft {
+			shuffleBuildOp.RuntimeFilterSpec = nil
+		}
 		shuffleBuildOp.DrainAllBuckets = true
 		//shuffleBuildOp.SetIdx(c.anal.curNodeIdx)
 		shuffleBuildOp.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)

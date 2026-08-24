@@ -17,6 +17,7 @@ package hashjoin
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -1280,6 +1281,273 @@ func TestAsofLeftJoinEndToEnd(t *testing.T) {
 	require.False(t, result.Batch.Vecs[1].GetNulls().Contains(0))
 	require.True(t, result.Batch.Vecs[1].GetNulls().Contains(1))
 	require.True(t, result.Batch.Vecs[1].GetNulls().Contains(2))
+}
+
+func TestAsofBuildLeftStreamsRightAndKeepsOneCandidate(t *testing.T) {
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	textType := types.T_varchar.ToType()
+	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
+	tc := newTestCase(t,
+		[]bool{false, true},
+		[]types.Type{keyType, keyType},
+		[]colexec.ResultPos{
+			colexec.NewResultPos(0, 1),
+			colexec.NewResultPos(1, 1),
+			colexec.NewResultPos(1, 2),
+		},
+		equality,
+	)
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	}()
+
+	tc.arg.JoinType = plan.Node_ASOF_LEFT
+	tc.arg.LeftTypes = []types.Type{keyType, timeType}
+	tc.arg.RightTypes = []types.Type{keyType, timeType, textType}
+	tc.arg.AsofRightCol = 1
+	tc.arg.AsofBuildLeft = true
+	tc.arg.NonEqCond = makeAsofCondition(t, timeType, ">=")
+	tc.barg.Conditions = equality[0]
+
+	logicalLeft := makeAsofBatch(tc.proc, []int32{1, 1}, []string{
+		"2026-01-01 10:00:00", "2026-01-01 15:00:00",
+	})
+	logicalRight := makeAsofPayloadBatch(
+		tc.proc,
+		[]int32{1, 1, 1, 1, 1, 1},
+		[]types.Timestamp{20, 7, 14, 9, 9, 16},
+		[]string{"p20", "p07", "p14", "p09", "p09-later", "p16"},
+	)
+	// Use the same small integer timestamp domain on both sides so the expected
+	// predecessor is obvious and independent of time-zone parsing.
+	logicalLeft.Vecs[1].Free(tc.proc.Mp())
+	logicalLeft.Vecs[1] = vector.NewVec(timeType)
+	require.NoError(t, vector.AppendFixedList(
+		logicalLeft.Vecs[1], []types.Timestamp{10, 15}, nil, tc.proc.Mp()))
+
+	resetHashBuildChildrenWithBatch(tc.barg, logicalLeft)
+	resetChildrenWithBatch(tc.arg, logicalRight)
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 2, result.Batch.RowCount())
+	require.Equal(t, []types.Timestamp{10, 15},
+		vector.MustFixedColWithTypeCheck[types.Timestamp](result.Batch.Vecs[0]))
+	require.Equal(t, []types.Timestamp{9, 14},
+		vector.MustFixedColWithTypeCheck[types.Timestamp](result.Batch.Vecs[1]))
+	require.Equal(t, []string{"p09", "p14"},
+		vector.InefficientMustStrCol(result.Batch.Vecs[2]))
+	require.Empty(t, tc.arg.ctr.asofIndexes)
+	require.Len(t, tc.arg.ctr.asofBuildLeftMatched, 2)
+	require.Equal(t, []uint8{1, 1}, tc.arg.ctr.asofBuildLeftMatched)
+}
+
+func TestAsofBuildLeftEmptyLeftSkipsRightScan(t *testing.T) {
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
+	tc := newTestCase(t,
+		[]bool{false},
+		[]types.Type{keyType, keyType},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		equality,
+	)
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+
+	tc.arg.JoinType = plan.Node_ASOF_LEFT
+	tc.arg.LeftTypes = []types.Type{keyType, timeType}
+	tc.arg.RightTypes = []types.Type{keyType, timeType}
+	tc.arg.AsofRightCol = 1
+	tc.arg.AsofBuildLeft = true
+	tc.arg.NonEqCond = makeAsofCondition(t, timeType, ">=")
+	tc.barg.Conditions = equality[0]
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+
+	probeCalls := 0
+	logicalRight := makeAsofPayloadBatch(
+		tc.proc, []int32{1}, []types.Timestamp{1}, []string{"unused"})
+	logicalRight.Vecs[2].Free(tc.proc.Mp())
+	logicalRight.Vecs = logicalRight.Vecs[:2]
+	tc.arg.Children = nil
+	tc.arg.AppendChild(colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{logicalRight}).
+		WithBatchCallback(func(int) { probeCalls++ }))
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Nil(t, result.Batch)
+	require.Zero(t, probeCalls, "an empty logical left must short-circuit the huge right scan")
+}
+
+func TestAsofBuildLeftStrictPredicateRejectsEqualTimestamp(t *testing.T) {
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
+	tc := newTestCase(t,
+		[]bool{false},
+		[]types.Type{keyType, keyType},
+		[]colexec.ResultPos{colexec.NewResultPos(1, 1)},
+		equality,
+	)
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+
+	tc.arg.JoinType = plan.Node_ASOF
+	tc.arg.LeftTypes = []types.Type{keyType, timeType}
+	tc.arg.RightTypes = []types.Type{keyType, timeType}
+	tc.arg.AsofRightCol = 1
+	tc.arg.AsofBuildLeft = true
+	tc.arg.NonEqCond = makeAsofCondition(t, timeType, ">")
+	tc.barg.Conditions = equality[0]
+	logicalLeft := makeAsofPayloadBatch(
+		tc.proc, []int32{1}, []types.Timestamp{10}, []string{"unused"})
+	logicalLeft.Vecs[2].Free(tc.proc.Mp())
+	logicalLeft.Vecs = logicalLeft.Vecs[:2]
+	logicalRight := makeAsofPayloadBatch(
+		tc.proc, []int32{1, 1}, []types.Timestamp{10, 9}, []string{"unused", "unused"})
+	logicalRight.Vecs[2].Free(tc.proc.Mp())
+	logicalRight.Vecs = logicalRight.Vecs[:2]
+	resetHashBuildChildrenWithBatch(tc.barg, logicalLeft)
+	resetChildrenWithBatch(tc.arg, logicalRight)
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []types.Timestamp{9},
+		vector.MustFixedColWithTypeCheck[types.Timestamp](result.Batch.Vecs[0]))
+}
+
+func TestAsofBuildLeftCompactsRepeatedVarlenaReplacement(t *testing.T) {
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	textType := types.T_varchar.ToType()
+	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
+	tc := newTestCase(t,
+		[]bool{false},
+		[]types.Type{keyType, keyType},
+		[]colexec.ResultPos{colexec.NewResultPos(1, 2)},
+		equality,
+	)
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	}()
+
+	tc.arg.JoinType = plan.Node_ASOF
+	tc.arg.LeftTypes = []types.Type{keyType, timeType}
+	tc.arg.RightTypes = []types.Type{keyType, timeType, textType}
+	tc.arg.AsofRightCol = 1
+	tc.arg.AsofBuildLeft = true
+	tc.arg.NonEqCond = makeAsofCondition(t, timeType, ">=")
+	tc.barg.Conditions = equality[0]
+
+	logicalLeft := makeAsofPayloadBatch(
+		tc.proc,
+		[]int32{1, 1},
+		[]types.Timestamp{10000, 10000},
+		[]string{"unused", "unused"},
+	)
+	logicalLeft.Vecs[2].Free(tc.proc.Mp())
+	logicalLeft.Vecs = logicalLeft.Vecs[:2]
+	const (
+		rightBatchCount = 5
+		rightBatchRows  = 1024
+		rightRows       = rightBatchCount * rightBatchRows
+	)
+	payloads := make([]string, rightRows)
+	rightBatches := make([]*batch.Batch, 0, rightBatchCount)
+	for batchIndex := range rightBatchCount {
+		keys := make([]int32, rightBatchRows)
+		timestamps := make([]types.Timestamp, rightBatchRows)
+		batchPayloads := make([]string, rightBatchRows)
+		for row := range rightBatchRows {
+			globalRow := batchIndex*rightBatchRows + row
+			keys[row] = 1
+			timestamps[row] = types.Timestamp(globalRow)
+			payloads[globalRow] = strings.Repeat("x", 1000) + string(rune('a'+globalRow%26))
+			batchPayloads[row] = payloads[globalRow]
+		}
+		rightBatches = append(rightBatches,
+			makeAsofPayloadBatch(tc.proc, keys, timestamps, batchPayloads))
+	}
+	resetHashBuildChildrenWithBatch(tc.barg, logicalLeft)
+	tc.arg.Children = nil
+	tc.arg.AppendChild(colexec.NewMockOperator().WithBatchs(rightBatches))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 2, result.Batch.RowCount())
+	require.Equal(t, []string{payloads[rightRows-1], payloads[rightRows-1]},
+		vector.InefficientMustStrCol(result.Batch.Vecs[0]))
+	require.Zero(t, tc.arg.ctr.asofBuildLeftDeadBytes)
+	require.Equal(t, int64(2*len(payloads[rightRows-1])),
+		tc.arg.ctr.asofBuildLeftLiveBytes)
+	require.LessOrEqual(t,
+		len(tc.arg.ctr.asofBuildLeftBestRight.Vecs[0].GetArea()),
+		2*len(payloads[rightRows-1]))
+}
+
+func makeAsofPayloadBatch(
+	proc *process.Process,
+	keys []int32,
+	timestamps []types.Timestamp,
+	payloads []string,
+) *batch.Batch {
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_timestamp.ToType())
+	if err := vector.AppendFixedList(bat.Vecs[1], timestamps, nil, proc.Mp()); err != nil {
+		panic(err)
+	}
+	bat.Vecs[2] = testutil.MakeVarcharVector(payloads, nil, proc.Mp())
+	bat.SetRowCount(len(keys))
+	return bat
 }
 
 func makeAsofBatch(proc *process.Process, keys []int32, timestamps []string) *batch.Batch {

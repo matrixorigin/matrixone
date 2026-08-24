@@ -58,6 +58,14 @@ const (
 	hashJoinAllocationSiteResultGrouping
 )
 
+const (
+	hashJoinAllocationSiteAsofCandidateData mpool.AllocationSite = iota + 107
+	hashJoinAllocationSiteAsofCandidateArea
+	hashJoinAllocationSiteAsofCandidateNulls
+	hashJoinAllocationSiteAsofCandidateGrouping
+	hashJoinAllocationSiteAsofCandidateState
+)
+
 type container struct {
 	state       int
 	itr         hashmap.Iterator
@@ -97,6 +105,21 @@ type container struct {
 	asofStrict             bool
 	asofIndexes            []asofIndex
 	asofIndexCount         int
+	// The build-left ASOF path retains the logical left input and scans the
+	// logical right input once. bestTimes/matched and bestRight are aligned by
+	// the materialized left-row ordinal. Only projected right columns are kept.
+	asofBuildLeftBestTimes []int64
+	asofBuildLeftMatched   []uint8
+	// asofBuildLeftBatchRows records at most one source row per logical-left
+	// row for the current physical-right input batch. Deferring the payload copy
+	// until the batch winner is known avoids repeatedly appending varlen values
+	// when many right rows improve the same predecessor in one scan batch.
+	asofBuildLeftBatchRows   []int32
+	asofBuildLeftBestRight   *batch.Batch
+	asofBuildLeftInitialized bool
+	asofBuildLeftFinalRow    int64
+	asofBuildLeftLiveBytes   int64
+	asofBuildLeftDeadBytes   int64
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -187,8 +210,13 @@ type HashJoin struct {
 	JoinMapTag         int32
 	SpillThreshold     int64
 	AsofRightCol       int32
-	allocationAccount  *mpool.AllocationAccount
-	resultAllocation   *vector.AllocationAccountSelection
+	// AsofBuildLeft selects the bounded-memory physical path for a small logical
+	// left input: build/hash the left rows, stream the logical right input, keep
+	// one replaceable right candidate per left row, then finalize the left rows.
+	AsofBuildLeft           bool
+	allocationAccount       *mpool.AllocationAccount
+	resultAllocation        *vector.AllocationAccountSelection
+	asofCandidateAllocation *vector.AllocationAccountSelection
 	// recursiveProbe is derived from the operator tree during Prepare. An empty
 	// build must still drain a recursive probe until its round marker.
 	recursiveProbe bool
@@ -220,8 +248,20 @@ func (hashJoin *HashJoin) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
+	asofCandidateSelection, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerHashBuild,
+		hashJoinAllocationSiteAsofCandidateData,
+		hashJoinAllocationSiteAsofCandidateArea,
+		hashJoinAllocationSiteAsofCandidateNulls,
+		hashJoinAllocationSiteAsofCandidateGrouping,
+	)
+	if err != nil {
+		return err
+	}
 	hashJoin.allocationAccount = account
 	hashJoin.resultAllocation = selection
+	hashJoin.asofCandidateAllocation = asofCandidateSelection
 	return nil
 }
 
@@ -236,6 +276,11 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 	}
 	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
 		len(hashJoin.ctr.asofIndexes) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftBestTimes) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftMatched) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftBatchRows) != 0 ||
+		hashJoin.ctr.asofBuildLeftBestRight != nil ||
+		hashJoin.ctr.asofBuildLeftInitialized ||
 		len(hashJoin.ctr.eqCondExecs) != 0 ||
 		hashJoin.ctr.nonEqCondExec != nil ||
 		hashJoin.ctr.rightRowsMatched != nil ||
@@ -247,6 +292,7 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 	}
 	hashJoin.allocationAccount = nil
 	hashJoin.resultAllocation = nil
+	hashJoin.asofCandidateAllocation = nil
 	return nil
 }
 
@@ -312,6 +358,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	}
 	ctr.cleanBucketBatches(proc)
 	ctr.cleanAsofIndexes(proc)
+	ctr.cleanAsofBuildLeftState(proc)
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
@@ -341,6 +388,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
 	ctr.cleanAsofIndexes(proc)
+	ctr.cleanAsofBuildLeftState(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanBucketBatches(proc)
 	ctr.cleanEqCondExecutors()
@@ -357,6 +405,25 @@ func (ctr *container) cleanAsofIndexes(proc *process.Process) {
 	}
 	ctr.asofIndexes = nil
 	ctr.asofIndexCount = 0
+}
+
+func (ctr *container) cleanAsofBuildLeftState(proc *process.Process) {
+	if ctr.asofBuildLeftBestRight != nil && proc != nil {
+		ctr.asofBuildLeftBestRight.Clean(proc.Mp())
+	}
+	if proc != nil {
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftBestTimes)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftMatched)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftBatchRows)
+	}
+	ctr.asofBuildLeftBestTimes = nil
+	ctr.asofBuildLeftMatched = nil
+	ctr.asofBuildLeftBatchRows = nil
+	ctr.asofBuildLeftBestRight = nil
+	ctr.asofBuildLeftInitialized = false
+	ctr.asofBuildLeftFinalRow = 0
+	ctr.asofBuildLeftLiveBytes = 0
+	ctr.asofBuildLeftDeadBytes = 0
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {

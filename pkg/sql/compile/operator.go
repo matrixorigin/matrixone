@@ -231,6 +231,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CanSkipProbe = t.CanSkipProbe
 		op.EmitCompressedRowCount = t.EmitCompressedRowCount
 		op.IsShuffle = t.IsShuffle
+		op.AsofRightCol = t.AsofRightCol
+		op.AsofBuildLeft = t.AsofBuildLeft
 		if !t.IsShuffle {
 			mailbox := dupCtx.hashJoinMailboxes[t]
 			if mailbox == nil {
@@ -2214,14 +2216,18 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 	case vm.HashJoin:
 		arg := op.(*hashjoin.HashJoin)
 		ret.NeedHashMap = true
-		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
+		buildConditions := arg.EqConds[1]
+		if arg.AsofBuildLeft {
+			buildConditions = arg.EqConds[0]
+		}
+		ret.Conditions = rewriteJoinExprToHashBuildExpr(buildConditions)
 
 		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
 		ret.NeedAllocateSels = !arg.HashOnPK && !arg.IsMark()
 		ret.TrackNullKeys = arg.IsMark()
-		if len(arg.RuntimeFilterSpecs) > 0 {
+		if !arg.AsofBuildLeft && len(arg.RuntimeFilterSpecs) > 0 {
 			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
 		}
 		ret.JoinMapTag = arg.JoinMapTag
@@ -2299,7 +2305,11 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 	switch op.OpType() {
 	case vm.HashJoin:
 		arg := op.(*hashjoin.HashJoin)
-		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
+		buildConditions := arg.EqConds[1]
+		if arg.AsofBuildLeft {
+			buildConditions = arg.EqConds[0]
+		}
+		ret.Conditions = rewriteJoinExprToHashBuildExpr(buildConditions)
 		ret.NeedBatches = arg.NeedBuildBatches()
 
 		ret.HashOnPK = arg.HashOnPK
