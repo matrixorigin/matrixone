@@ -35,20 +35,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLockProtocolV27CapabilityFollowsProtocolVersion(t *testing.T) {
+func TestLockProtocolV28CapabilityFollowsProtocolVersion(t *testing.T) {
 	moruntime.RunTest("", func(rt moruntime.Runtime) {
 		value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 		require.True(t, ok)
 		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, value)
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion26)
-		require.False(t, supportsLockProtocolV27(""))
+		// v27 belongs to ASOF JOIN and must not accidentally enable the lock
+		// capability introduced by this PR.
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
+		require.False(t, supportsLockProtocolV28(""))
 		err := checkMethodVersion(context.Background(), "", &pb.Request{
 			Method: pb.Method_GetTxnWaitingListOnLockTable,
 		})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
-		require.True(t, supportsLockProtocolV27(""))
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion28)
+		require.True(t, supportsLockProtocolV28(""))
 
 		s := &service{
 			serviceID: "",
@@ -64,12 +66,12 @@ func TestLockProtocolV27CapabilityFollowsProtocolVersion(t *testing.T) {
 			Valid:     true,
 		}
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
 		legacy := s.createLockTableByBind(bind)
 		require.IsType(t, &remoteLockTable{}, legacy,
 			"mixed versions must not create table-scoped proxy handoffs")
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion28)
 		negotiated := s.createLockTableByBind(bind)
 		require.IsType(t, &localLockTableProxy{}, negotiated)
 	})
@@ -351,7 +353,7 @@ func TestOwnerLocalSnapshotsDoNotCrossSaturateWaitingListWorkers(t *testing.T) {
 				}
 				txn.RUnlock()
 				require.True(t, negotiated,
-					"test requires the v27 owner-local capability")
+					"test requires the v28 owner-local capability")
 			}
 
 			start := make(chan struct{})

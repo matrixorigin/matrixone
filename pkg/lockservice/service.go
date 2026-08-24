@@ -2184,9 +2184,9 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 		remote.allocatorStateProvider = s.allocatorStateSnapshot
 		remote.allocatorBindChangedHandler = s.handleBindChangedFromAllocator
 		if !s.cfg.EnableRemoteLocalProxy ||
-			!supportsLockProtocolV27(s.cfg.ServiceID) {
+			!supportsLockProtocolV28(s.cfg.ServiceID) {
 			// Proxy holder handoff relies on one owner-side Unlock per physical
-			// table. Before protocol v27 an old owner interprets the first request
+			// table. Before protocol v28 an old owner interprets the first request
 			// as transaction-wide, so a multi-table proxy transaction would release
 			// later tables without applying their replacement mutations.
 			return remote

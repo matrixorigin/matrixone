@@ -78,10 +78,10 @@ func (lp *localLockTableProxy) lock(
 		lp.remote.lock(ctx, txn, rows, options, cb)
 		return
 	}
-	if !supportsLockProtocolV27(lp.protocolServiceID) {
+	if !supportsLockProtocolV28(lp.protocolServiceID) {
 		// An existing proxy can outlive a process-wide protocol transition. Stop
-		// admitting new cache-only sharers while v27 is unavailable; a direct
-		// owner lock/unlock remains compatible with pre-v27 peers and is tracked by
+		// admitting new cache-only sharers while v28 is unavailable; a direct
+		// owner lock/unlock remains compatible with pre-v28 peers and is tracked by
 		// remoteUnlockRequired in the transaction ledger.
 		lp.remote.lock(ctx, txn, rows, options, cb)
 		return

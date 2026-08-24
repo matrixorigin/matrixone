@@ -248,7 +248,7 @@ func (c *legacyLockOwnerClient) Send(
 		}
 		resp := acquireResponse()
 		resp.Lock.Result.NewLockAdd = c.lockCalls == 1
-		// A pre-v27 owner has no capability field on the wire, which decodes
+		// A pre-v28 owner has no capability field on the wire, which decodes
 		// to false in the new client.
 		return resp, nil
 	case pb.Method_GetTxnLock:
@@ -457,7 +457,7 @@ func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
 				txn.RUnlock()
 				expected := newTestRows(1, 2)
 				if idx == 1 {
-					// A v27 origin owns only the bounded route; the physical owner
+					// A v28 origin owns only the bounded route; the physical owner
 					// keeps the complete range representation and wait-for graph.
 					expected = expected[:1]
 				}
@@ -622,7 +622,7 @@ func TestRemoteOwnerSnapshotCompactsOriginLedgerAcrossCapacitySkew(t *testing.T)
 			owner, origin := services[0], services[1]
 			// Model two independently valid rolling configurations. Shared locks
 			// stay exact at the owner, whose fixed slice can hold this request; the
-			// v27 origin needs only a bounded table route because owner-side state
+			// v28 origin needs only a bounded table route because owner-side state
 			// is authoritative for both wait-for traversal and transaction unlock.
 			origin.cfg.MaxFixedSliceSize = 4
 			origin.fsp = newFixedSlicePool(4)
@@ -1158,7 +1158,7 @@ func TestNegotiatedOwnerSnapshotCapabilityCannotDowngradeInTxn(t *testing.T) {
 	})
 }
 
-func TestProxyPhysicalHolderRequiresV27OwnerCapability(t *testing.T) {
+func TestProxyPhysicalHolderRequiresV28OwnerCapability(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		bind := pb.LockTable{
 			Group:       0,

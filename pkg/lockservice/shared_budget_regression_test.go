@@ -152,7 +152,7 @@ func TestRemoteMixedModeBudgetKeepsOwnerExactWithCompactOriginRoute(t *testing.T
 			_, err = origin.Lock(ctx, table, newTestRows(5), txnA, exclusive)
 			require.NoError(t, err)
 
-			// The v27 owner is authoritative for both physical ownership and wait-for
+			// The v28 owner is authoritative for both physical ownership and wait-for
 			// traversal. The origin needs one table-scoped cleanup route, while the
 			// owner retains the complete exact mixed-mode ledger.
 			requireExactTxnTableBookkeeping(t, origin, txnA, table, 1)
@@ -345,7 +345,7 @@ func TestWaitingReplacementPreservesConcurrentSameTxnLocks(t *testing.T) {
 
 					// The committed range may replace only the keys it physically
 					// subsumes. Row 9 completed while the range was asleep and must
-					// remain in the authoritative owner ledger. A v27 origin needs only
+					// remain in the authoritative owner ledger. A v28 origin needs only
 					// its bounded table-scoped cleanup route.
 					bookkeepingServices := []*service{owner}
 					if !tt.forward && origin != owner {

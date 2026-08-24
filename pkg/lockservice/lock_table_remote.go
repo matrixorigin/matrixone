@@ -212,7 +212,7 @@ func (l *remoteLockTable) lock(
 		}
 		if opts.requireOwnerLocalWaitSnapshot && !ownerLocalSnapshot {
 			// This request is the physical holder generation for a local Shared
-			// proxy. Without the v27 owner-local snapshot/table-scoped-unlock
+			// proxy. Without the v28 owner-local snapshot/table-scoped-unlock
 			// contract the proxy must not publish cache-only holders. The owner has
 			// already granted the lock, so retain a confirmed cleanup route before
 			// fencing the transaction.
@@ -258,7 +258,7 @@ func (l *remoteLockTable) lock(
 				l.logger,
 			)
 		} else if !opts.requireOwnerLocalWaitSnapshot {
-			// With v27 the physical owner is authoritative for wait-for traversal,
+			// With v28 the physical owner is authoritative for wait-for traversal,
 			// and remote Unlock releases the whole table by transaction ID. Record
 			// that bounded route directly instead of first trying to mirror an
 			// arbitrarily large owner ledger and turning physical success into a

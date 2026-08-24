@@ -99,7 +99,7 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_GetTxnLock:                   defines.MORPCVersion1,
 	pb.Method_GetLockHolder:                defines.MORPCVersion2,
 	pb.Method_GetWaitingList:               defines.MORPCVersion1,
-	pb.Method_GetTxnWaitingListOnLockTable: defines.MORPCVersion27,
+	pb.Method_GetTxnWaitingListOnLockTable: defines.MORPCVersion28,
 	pb.Method_KeepRemoteLock:               defines.MORPCVersion1,
 	pb.Method_GetBind:                      defines.MORPCVersion1,
 	pb.Method_KeepLockTableBind:            defines.MORPCVersion1,
@@ -116,7 +116,7 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_AbortRemoteDeadlockTxn:       defines.MORPCVersion2,
 }
 
-func supportsLockProtocolV27(serviceID string) bool {
+func supportsLockProtocolV28(serviceID string) bool {
 	rt := moruntime.ServiceRuntime(serviceID)
 	if rt == nil {
 		return false
@@ -126,7 +126,7 @@ func supportsLockProtocolV27(serviceID string) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion27
+	return ok && version >= defines.MORPCVersion28
 }
 
 func (s *service) initRemote() {
@@ -491,7 +491,7 @@ func (s *service) handleRemoteLock(
 			}
 			resp.Lock.Result = result
 			resp.Lock.TxnWaitingListOnLockTableSupported =
-				err == nil && supportsLockProtocolV27(s.cfg.ServiceID)
+				err == nil && supportsLockProtocolV28(s.cfg.ServiceID)
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		})
 	handlerOwnsAdmission = !completion.transferToCallbackIfPending()

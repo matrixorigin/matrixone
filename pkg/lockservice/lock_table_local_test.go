@@ -2155,7 +2155,7 @@ func TestExclusiveLockBudgetAppliesAcrossRequests(t *testing.T) {
 					require.NoError(t, err)
 
 					// The budget is transaction/table scoped: the owner compacts four
-					// individually small requests to one bounded physical range. A v27
+					// individually small requests to one bounded physical range. A v28
 					// remote origin retains only its table-scoped cleanup route.
 					for _, service := range []*service{caller, owner} {
 						txn := service.activeTxnHolder.getActiveTxn(txnID, false, "")

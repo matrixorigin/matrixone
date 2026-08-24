@@ -287,7 +287,7 @@ func checkMethodVersion(
 	err := runtime.CheckMethodVersion(ctx, service, methodVersions, req)
 	if err != nil && req.Method == pb.Method_GetTxnWaitingListOnLockTable {
 		// This method has an explicit Lock-response capability handshake. If the
-		// process-wide deployment protocol later moves below v27, surface the
+		// process-wide deployment protocol later moves below v28, surface the
 		// loss as a terminal capability error instead of an Internal error that
 		// remote snapshot retry loops would treat as transport-transient.
 		return moerr.NewNotSupportedNoCtx(
