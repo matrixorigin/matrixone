@@ -1312,6 +1312,14 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
+		// CTAS creates a new table from the query result.  A source column's
+		// AUTO_INCREMENT attribute is not part of that result schema and must
+		// not be copied to the new table.
+		inheritedAutoIncr := typ.AutoIncr
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			inheritedAutoIncr = inheritedAutoIncr || provenance.Source.Metadata.Typ.AutoIncr
+		}
+		typ.AutoIncr = false
 		nullAbility := ctasExprCanBeNull(expr)
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			nullAbility = nullAbility || provenance.Source.Metadata.NullAbility
@@ -1336,6 +1344,18 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 				if err != nil {
 					return nil, nil, err
 				}
+			}
+		}
+
+		// AUTO_INCREMENT columns have no ordinary source default. Once the
+		// generated attribute is removed from the CTAS target, preserve the
+		// non-null insert contract with the type's default (for example,
+		// DEFAULT 0 for integer columns). An explicit target declaration is
+		// applied later by buildTableDefs and remains authoritative.
+		if inheritedAutoIncr && defaultDef.Expr == nil && defaultDef.OriginString == "" {
+			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
+			if err != nil {
+				return nil, nil, err
 			}
 		}
 
@@ -1449,6 +1469,9 @@ func ctasExprCanBeNull(expr *Expr) bool {
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
 	viewName := stmt.Name.ObjectName
+	if err := validateIdentifier(ctx.GetContext(), string(viewName)); err != nil {
+		return nil, err
+	}
 
 	createView := &plan.CreateView{
 		Replace:     stmt.Replace,
@@ -1486,6 +1509,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
+		return nil, err
+	}
+	if err := validatePersistedTableIdentifiers(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
 
@@ -2027,6 +2053,13 @@ func buildCreateTable(
 	cloneStmt *tree.CloneTable,
 	isPrepareStmt bool,
 ) (*Plan, error) {
+	tableName := string(stmt.Table.ObjectName)
+	if err := validateCreateTableIdentifier(ctx, tableName); err != nil {
+		return nil, err
+	}
+	if err := validateTableDefinitionIdentifiers(ctx.GetContext(), stmt.Defs); err != nil {
+		return nil, err
+	}
 
 	if stmt.IsAsLike {
 		var err error
@@ -2471,6 +2504,9 @@ func buildCreateTable(
 	if !isPrepareStmt {
 		asSelectQuery = nil
 	}
+	if err := validatePersistedTableIdentifiers(ctx.GetContext(), createTable.TableDef); err != nil {
+		return nil, err
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -2483,6 +2519,139 @@ func buildCreateTable(
 			},
 		},
 	}, nil
+}
+
+func validateIdentifier(ctx context.Context, name string) error {
+	if getNumOfCharacters(name) <= MaxIdentifierLength {
+		return nil
+	}
+
+	return moerr.NewTooLongIdent(ctx, name)
+}
+
+func validateCreateTableIdentifier(ctx CompilerContext, name string) error {
+	err := validateIdentifier(ctx.GetContext(), name)
+	if err == nil {
+		return nil
+	}
+
+	// Internal DDL and session-scoped temporary tables can materialize generated
+	// physical names with UUID prefixes or suffixes.
+	if defines.IsInternalExecutor(ctx.GetContext()) || isGeneratedSessionTempTableName(ctx, name) {
+		return nil
+	}
+
+	return err
+}
+
+func validateTableDefinitionIdentifiers(ctx context.Context, defs tree.TableDefs) error {
+	for _, def := range defs {
+		if err := validateTableDefinitionIdentifier(ctx, def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTableDefinitionIdentifier(ctx context.Context, def tree.TableDef) error {
+	validateNames := func(names ...string) error {
+		for _, name := range names {
+			if err := validateIdentifier(ctx, name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	switch def := def.(type) {
+	case *tree.ColumnTableDef:
+		if err := validateNames(def.Name.ColNameOrigin()); err != nil {
+			return err
+		}
+		for _, attr := range def.Attributes {
+			if check, ok := attr.(*tree.AttributeCheckConstraint); ok {
+				if err := validateNames(check.Name); err != nil {
+					return err
+				}
+			}
+		}
+	case *tree.PrimaryKeyIndex:
+		return validateNames(def.Name, def.ConstraintSymbol)
+	case *tree.Index:
+		return validateNames(def.Name)
+	case *tree.UniqueIndex:
+		return validateNames(def.Name, def.ConstraintSymbol)
+	case *tree.ForeignKey:
+		return validateNames(def.Name, def.ConstraintSymbol)
+	case *tree.FullTextIndex:
+		return validateNames(def.Name)
+	case *tree.CheckIndex:
+		return validateNames(def.ConstraintSymbol)
+	}
+	return nil
+}
+
+func validatePersistedTableIdentifiers(ctx context.Context, tableDef *plan.TableDef) error {
+	if tableDef == nil {
+		return nil
+	}
+	for _, col := range tableDef.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		name := col.OriginName
+		if name == "" {
+			name = col.Name
+		}
+		if err := validateIdentifier(ctx, name); err != nil {
+			return err
+		}
+	}
+	for _, index := range tableDef.Indexes {
+		if index != nil {
+			if err := validateIdentifier(ctx, index.IndexName); err != nil {
+				return err
+			}
+		}
+	}
+	for _, foreignKey := range tableDef.Fkeys {
+		if foreignKey != nil {
+			if err := validateIdentifier(ctx, foreignKey.Name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, check := range tableDef.Checks {
+		if check != nil {
+			if err := validateIdentifier(ctx, check.Name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func isGeneratedSessionTempTableName(ctx CompilerContext, name string) bool {
+	rootStmt, err := parsers.ParseOne(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		ctx.GetRootSql(),
+		ctx.GetLowerCaseTableNames(),
+	)
+	if err != nil {
+		return false
+	}
+	defer rootStmt.Free()
+	if _, isCreateTable := rootStmt.(*tree.CreateTable); isCreateTable {
+		return false
+	}
+
+	proc := ctx.GetProcess()
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return false
+	}
+	sessionID := strings.ReplaceAll(proc.GetSessionInfo().SessionId.String(), "-", "")
+	return strings.HasPrefix(name, defines.TempTableNamePrefix+sessionID+"_")
 }
 
 func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.TableDef {
@@ -4788,6 +4957,9 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
+	if err := validateIdentifier(ctx.GetContext(), string(stmt.Name)); err != nil {
+		return nil, err
+	}
 
 	createDB := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,
@@ -4864,6 +5036,9 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 
 // In MySQL, the CREATE INDEX syntax can only create one index instance at a time
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
+	if err := validateIdentifier(ctx.GetContext(), string(stmt.Name)); err != nil {
+		return nil, err
+	}
 	createIndex := &plan.CreateIndex{}
 	if len(stmt.Table.SchemaName) == 0 {
 		createIndex.Database = ctx.DefaultDatabase()
@@ -5235,6 +5410,9 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validatePersistedTableIdentifiers(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 
 	alterView.TableDef.Cols = tableDef.Cols
 	alterView.TableDef.ViewSql = tableDef.ViewSql
@@ -5348,6 +5526,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 			case *tree.AlterOptionTableName:
 				oldName := tableName
 				newName := string(opt.Name.ToTableName().ObjectName)
+				if err := validateIdentifier(ctx.GetContext(), newName); err != nil {
+					return nil, err
+				}
 				dstKey := schemaName + "." + newName
 				if oldName != newName {
 					if _, ok := nameMapping[dstKey]; ok {

@@ -352,11 +352,19 @@ func HasName(
 func GetDatabaseName(
 	t *testing.T,
 ) string {
-	return fmt.Sprintf(
-		"db_%s_%d",
-		t.Name(),
-		time.Now().Nanosecond(),
+	const (
+		prefix              = "db_"
+		maxIdentifierLength = 64
 	)
+
+	suffix := fmt.Sprintf("_%d", time.Now().Nanosecond())
+	testName := []rune(t.Name())
+	maxTestNameLength := maxIdentifierLength - len([]rune(prefix)) - len([]rune(suffix))
+	if len(testName) > maxTestNameLength {
+		testName = testName[:maxTestNameLength]
+	}
+
+	return prefix + string(testName) + suffix
 }
 
 func GetSQLExecutor(
