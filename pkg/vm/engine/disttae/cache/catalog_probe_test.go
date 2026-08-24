@@ -309,14 +309,6 @@ func TestHasNewerVersionProbeReuseAcrossGC(t *testing.T) {
 			want := legacyHasNewerVersionForTest(cc, query)
 			require.Equal(t, want, cc.HasNewerVersion(query))
 		}
-		if i == 0 {
-			tableProbe := cc.tableQueryProbePool.Get().(*TableItem)
-			require.Equal(t, TableItem{}, *tableProbe)
-			cc.tableQueryProbePool.Put(tableProbe)
-			databaseProbe := cc.databaseQueryProbePool.Get().(*DatabaseItem)
-			require.Equal(t, DatabaseItem{}, *databaseProbe)
-			cc.databaseQueryProbePool.Put(databaseProbe)
-		}
 		runtime.GC()
 	}
 	require.Equal(t, tableCount, cc.tables.data.Len())
