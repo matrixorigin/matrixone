@@ -189,6 +189,29 @@ func TestRewriteAutoModeToPre_Insert(t *testing.T) {
 	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
 }
 
+func TestRewriteAutoModeToPre_MultiInsert(t *testing.T) {
+	// Test INSERT ALL ... SELECT with mode=auto: the rewrite reaches the source query.
+	innerSelect := &tree.Select{
+		RankOption: &tree.RankOption{
+			Option: map[string]string{"mode": "auto"},
+		},
+	}
+	multiInsert := &tree.MultiInsert{
+		Targets: []*tree.MultiInsertTarget{{Table: tree.NewTableName("t", tree.ObjectNamePrefix{}, nil)}},
+		Source:  innerSelect,
+	}
+
+	result := rewriteAutoModeToPre(multiInsert)
+	assert.True(t, result)
+	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
+
+	forced := &tree.Select{}
+	multiInsert.Source = forced
+	assert.True(t, forceModePre(multiInsert))
+	assert.NotNil(t, forced.RankOption)
+	assert.Equal(t, "pre", forced.RankOption.Option["mode"])
+}
+
 func TestRewriteAutoModeToPre_Replace(t *testing.T) {
 	// Test REPLACE ... SELECT with mode=auto
 	innerSelect := &tree.Select{

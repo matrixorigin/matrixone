@@ -206,7 +206,7 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		remapDbInWith(s.With, remap)
 		for _, target := range s.AllTargets() {
 			remapDbInTableExpr(target.Table, remap)
-			remapInsertTarget(target.ColumnNames, &target.Table.SchemaName, remap)
+			remapInsertTarget(target.ColumnNames, nil, remap)
 			remapDbInExprs(target.Values, remap)
 		}
 		for _, when := range s.Whens {
