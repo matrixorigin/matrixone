@@ -2241,6 +2241,22 @@ protected:
                 throw std::runtime_error(std::string(fn_name) + ": index not built");
             }
             if (n_rows == 0) return;
+            // The other half of the all-ids-or-all-id-less contract enforced by the
+            // writers (see add_chunk). Those catch a hole BEFORE the ids; this catches
+            // one after: extending an id-bearing index without ids leaves the new rows
+            // with no entry in host_ids, so search resolves them to -1 (map_neighbor_id
+            // falls back when global_pos runs past host_ids) and delete_id can never
+            // address them. Checked before any GPU work so the refusal costs nothing.
+            //
+            // An all-id-less extend of an all-id-less index is unaffected and stays
+            // supported -- host_ids is empty on both sides, and run_extend skips
+            // set_ids_internal entirely when new_ids is null.
+            if (!new_ids && !this->host_ids.empty()) {
+                throw std::runtime_error(
+                    std::string(fn_name) + ": index has ids for its existing " +
+                    std::to_string(this->host_ids.size()) + " rows, so the extension must "
+                    "supply them too; an index is either all-ids or all-id-less, not a mix");
+            }
             old_count = this->count;
         }
 
