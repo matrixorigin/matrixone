@@ -4571,17 +4571,23 @@ func (c *Compile) setProjection(node *plan.Node, s *Scope) {
 func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) []*Scope {
 	left = c.mergeShuffleScopesIfNeeded(left, false)
 	right = c.mergeShuffleScopesIfNeeded(right, false)
-	left = append(left, right...)
-	rs := c.newMergeScope(left)
+	return c.mergeDistinctSetScopes(node, append(left, right...), c.anal.isFirst)
+}
+
+// mergeDistinctSetScopes applies the global distinct phase required after a
+// parallel distinct set operation.  INTERSECT and MINUS may each produce one
+// copy of a set key per worker, so their local operator-level deduplication is
+// insufficient once those worker outputs are merged.
+func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFirst bool) []*Scope {
+	rs := c.newMergeScope(scopes)
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(node.ProjectList))
 	for i := range gn.GroupBy {
 		gn.GroupBy[i] = plan2.DeepCopyExpr(node.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
-	currentFirstFlag := c.anal.isFirst
 	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
-	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, isFirst)
 	rs.setRootOperator(op)
 	c.anal.isFirst = false
 	return []*Scope{rs}
@@ -4666,6 +4672,9 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
 		}
+	}
+	if nodeType != plan.Node_INTERSECT_ALL {
+		return c.mergeDistinctSetScopes(node, rs, currentFirstFlag)
 	}
 	c.anal.isFirst = false
 	return rs
