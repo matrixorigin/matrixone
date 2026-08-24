@@ -55,6 +55,12 @@ func NewCatalog() *CatalogCache {
 			end   types.TS
 		}{start: types.MaxTs()},
 	}
+	cc.tableQueryProbePool.New = func() any {
+		return new(TableItem)
+	}
+	cc.databaseQueryProbePool.New = func() any {
+		return new(DatabaseItem)
+	}
 	return cc
 }
 
@@ -409,7 +415,8 @@ func (cc *CatalogCache) GetPreparedMetadataTS() timestamp.Timestamp {
 func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 	var find bool
 	if qry.DatabaseName != "" {
-		key := &DatabaseItem{
+		key := cc.databaseQueryProbePool.Get().(*DatabaseItem)
+		*key = DatabaseItem{
 			AccountId: qry.AccountId,
 			Name:      qry.DatabaseName,
 			Ts:        types.MaxTs().ToTimestamp(),
@@ -423,6 +430,8 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 			}
 			return false
 		})
+		*key = DatabaseItem{}
+		cc.databaseQueryProbePool.Put(key)
 		if find {
 			return true
 		}
@@ -440,7 +449,8 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		return false
 	}
 
-	key := &TableItem{
+	key := cc.tableQueryProbePool.Get().(*TableItem)
+	*key = TableItem{
 		AccountId:  qry.AccountId,
 		DatabaseId: qry.DatabaseId,
 		Name:       qry.Name,
@@ -458,6 +468,8 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		}
 		return false
 	})
+	*key = TableItem{}
+	cc.tableQueryProbePool.Put(key)
 	return find
 }
 
