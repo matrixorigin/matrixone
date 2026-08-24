@@ -20,6 +20,7 @@ const (
 	Partition          = 1 << iota
 	MongoDBExternal    = 1 << iota
 	DataStreamExternal = 1 << iota
+	ForeignExternal    = 1 << iota
 )
 
 func IsPartitioned(f uint64) bool {
@@ -40,4 +41,8 @@ func IsMongoDBExternal(f uint64) bool {
 
 func IsDataStreamExternal(f uint64) bool {
 	return f&DataStreamExternal != 0
+}
+
+func IsForeignExternal(f uint64) bool {
+	return f&ForeignExternal != 0
 }

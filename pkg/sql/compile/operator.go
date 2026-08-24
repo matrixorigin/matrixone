@@ -1360,6 +1360,7 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 				ClusterTable:    node.GetClusterTable(),
 				StrictSqlMode:   strictSqlMode,
 				DatastreamScan:  node.ExternScan.GetDatastreamScan(),
+				ForeignScan:     node.ExternScan.GetForeignScan(),
 				LoadEmptyNumericAsZero: param.ExternType == int32(plan.ExternType_LOAD) &&
 					(param.Parallel || param.ParallelLoadRequested),
 			},
