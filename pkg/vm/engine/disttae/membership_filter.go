@@ -60,3 +60,48 @@ func membershipFilterAdmissionForProcess(p any) docfilter.MemoryAdmission {
 	}
 	return docfilter.AdmissionForService(proc.GetService())
 }
+
+// buildReadersWithMembershipFilter centralizes the partial-construction
+// ownership contract for a set of reader shards. Any source returned by
+// buildSource belongs to this helper; buildSource has not consumed the current
+// filter share when it returns an error. buildReader, like readutil.NewReader,
+// consumes both source and hint.BF on every return.
+func buildReadersWithMembershipFilter(
+	readers []engine.Reader,
+	readerCount int,
+	preparedHint engine.FilterHint,
+	mainFilter docfilter.MembershipFilter,
+	buildSource func(int) (engine.DataSource, error),
+	buildReader func(engine.DataSource, engine.FilterHint) (engine.Reader, error),
+) ([]engine.Reader, error) {
+	for i := 0; i < readerCount; i++ {
+		hint := preparedHint
+		var readerFilter docfilter.MembershipFilter
+		if mainFilter != nil {
+			readerFilter = mainFilter.Share()
+			hint.BF = readerFilter
+		}
+
+		source, err := buildSource(i)
+		if err != nil {
+			if source != nil {
+				source.Close()
+			}
+			if readerFilter != nil {
+				readerFilter.Free()
+			}
+			closeReaders(readers)
+			return nil, err
+		}
+
+		reader, err := buildReader(source, hint)
+		if err != nil {
+			// buildReader owns the current source and filter share even on
+			// failure. Only completed readers remain ours to close here.
+			closeReaders(readers)
+			return nil, err
+		}
+		readers = append(readers, reader)
+	}
+	return readers, nil
+}

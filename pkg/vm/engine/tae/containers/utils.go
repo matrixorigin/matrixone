@@ -996,6 +996,38 @@ func ForeachWindowBytes(
 	op ItOpT[[]byte],
 	sels *nulls.Bitmap,
 ) (err error) {
+	if vec.IsConst() {
+		var value []byte
+		isNull := vec.IsConstNull()
+		if !isNull {
+			value = vec.GetRawBytesAt(0)
+		}
+		if sels.IsEmpty() {
+			for i := 0; i < length; i++ {
+				if err = op(value, isNull, i+start); err != nil {
+					break
+				}
+			}
+			return
+		}
+
+		end := start + length
+		it := sels.GetBitmap().Iterator()
+		for it.HasNext() {
+			idx := int(it.Next())
+			if idx < start {
+				continue
+			}
+			if idx >= end {
+				break
+			}
+			if err = op(value, isNull, idx); err != nil {
+				break
+			}
+		}
+		return
+	}
+
 	typ := vec.GetType()
 	if typ.IsVarlen() {
 		return ForeachWindowVarlen(vec, start, length, false, op, nil, sels)

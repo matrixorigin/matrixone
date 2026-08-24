@@ -496,6 +496,59 @@ func TestForeachWindowBytes(t *testing.T) {
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
+func TestForeachWindowBytesBroadcastsConstFixed(t *testing.T) {
+	vec := NewConstFixed(types.T_TS.ToType(), types.BuildTS(42, 7), 4)
+	defer vec.Close()
+	expected := vec.GetDownstreamVector().GetRawBytesAt(0)
+
+	var rows []int
+	err := ForeachWindowBytes(
+		vec.GetDownstreamVector(),
+		1,
+		3,
+		func(value []byte, isNull bool, row int) error {
+			require.False(t, isNull)
+			require.Equal(t, expected, value)
+			rows = append(rows, row)
+			return nil
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int{1, 2, 3}, rows)
+
+	rows = rows[:0]
+	sels := nulls.NewWithSize(4)
+	sels.Add(0, 2, 3)
+	err = ForeachWindowBytes(
+		vec.GetDownstreamVector(),
+		1,
+		2,
+		func(value []byte, isNull bool, row int) error {
+			require.False(t, isNull)
+			require.Equal(t, expected, value)
+			rows = append(rows, row)
+			return nil
+		},
+		sels,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int{2}, rows)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := ForeachWindowBytes(
+			vec.GetDownstreamVector(),
+			0,
+			vec.Length(),
+			func([]byte, bool, int) error { return nil },
+			nil,
+		); err != nil {
+			panic(err)
+		}
+	})
+	require.Zero(t, allocs)
+}
+
 func BenchmarkForeachVector(b *testing.B) {
 	rows := 1000
 	int64s := MockVector2(types.T_int64.ToType(), rows, 0)

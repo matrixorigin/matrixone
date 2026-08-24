@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -216,11 +217,21 @@ func TestPersistedNodeFiltersCanonicalTombstoneByCommitTS(t *testing.T) {
 	)
 
 	targetObject := objectio.NewObjectid()
-	input := batch.NewWithSize(len(objectio.TombstoneSeqnums_DN_Created))
+	const rowCount = 2
+	seqnums := []uint16{0, 1, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}
+	input := batch.NewWithSize(len(seqnums))
 	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
-	for row, commitTS := range []types.TS{types.BuildTS(10, 0), types.BuildTS(20, 0)} {
+	var err error
+	input.Vecs[2], err = vector.NewConstFixed(
+		types.T_TS.ToType(), types.BuildTS(10, 0), rowCount, mp,
+	)
+	require.NoError(t, err)
+	input.Vecs[3], err = vector.NewConstFixed(
+		types.T_bool.ToType(), false, rowCount, mp,
+	)
+	require.NoError(t, err)
+	for row := 0; row < rowCount; row++ {
 		require.NoError(t, vector.AppendFixed(
 			input.Vecs[0],
 			types.NewRowIDWithObjectIDBlkNumAndRowID(targetObject, 0, uint32(row+1)),
@@ -228,9 +239,8 @@ func TestPersistedNodeFiltersCanonicalTombstoneByCommitTS(t *testing.T) {
 			mp,
 		))
 		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(row+1), false, mp))
-		require.NoError(t, vector.AppendFixed(input.Vecs[2], commitTS, false, mp))
 	}
-	input.SetRowCount(2)
+	input.SetRowCount(rowCount)
 	defer input.Clean(mp)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -238,7 +248,7 @@ func TestPersistedNodeFiltersCanonicalTombstoneByCommitTS(t *testing.T) {
 		fs,
 		name,
 		0,
-		objectio.TombstoneSeqnums_DN_Created,
+		seqnums,
 		true,
 	)
 	require.NoError(t, err)
@@ -253,7 +263,7 @@ func TestPersistedNodeFiltersCanonicalTombstoneByCommitTS(t *testing.T) {
 	blocks, _, err := writer.Sync(ctx)
 	require.NoError(t, err)
 	require.Len(t, blocks, 1)
-	require.Equal(t, uint16(3), blocks[0].GetMetaColumnCount())
+	require.Equal(t, uint16(4), blocks[0].GetMetaColumnCount())
 
 	stats := writer.GetObjectStats()
 	require.False(t, stats.GetCNCreated())
@@ -270,6 +280,31 @@ func TestPersistedNodeFiltersCanonicalTombstoneByCommitTS(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	t.Run("range collection broadcasts constant MVCC columns", func(t *testing.T) {
+		var result *containers.Batch
+		err := entry.GetObjectData().CollectObjectTombstoneInRange(
+			ctx,
+			types.BuildTS(5, 0),
+			types.BuildTS(15, 0),
+			&targetObject,
+			&result,
+			mp,
+			transientPool,
+		)
+		require.NoError(t, err)
+		if result != nil {
+			defer result.Close()
+		}
+		require.NotNil(t, result)
+		require.Equal(t, rowCount, result.Length())
+		for row := 0; row < rowCount; row++ {
+			require.Equal(
+				t, types.BuildTS(10, 0),
+				result.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(row),
+			)
+		}
+	})
+
 	blockID := types.NewBlockidWithObjectID(&targetObject, 0)
 	for _, test := range []struct {
 		name        string
@@ -277,8 +312,7 @@ func TestPersistedNodeFiltersCanonicalTombstoneByCommitTS(t *testing.T) {
 		wantOffsets []uint64
 	}{
 		{name: "before object creation", startTS: types.BuildTS(5, 0)},
-		{name: "between row commits", startTS: types.BuildTS(15, 0), wantOffsets: []uint64{101}},
-		{name: "after row commits", startTS: types.BuildTS(25, 0), wantOffsets: []uint64{101, 102}},
+		{name: "after constant commit", startTS: types.BuildTS(15, 0), wantOffsets: []uint64{101, 102}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var deletes *nulls.Nulls
@@ -297,6 +331,43 @@ func TestPersistedNodeFiltersCanonicalTombstoneByCommitTS(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadPersistedColumnDataClosesPhysicalAddressOnMetadataError(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	smallPool := containers.NewVectorPool("metadata-error-small", 4, containers.WithMPool(mp))
+	transientPool := containers.NewVectorPool("metadata-error-transient", 4, containers.WithMPool(mp))
+	defer smallPool.Destory()
+	defer transientPool.Destory()
+	rt := dbutils.NewRuntime(
+		dbutils.WithRuntimeObjectFS(fs),
+		dbutils.WithRuntimeSmallPool(smallPool),
+		dbutils.WithRuntimeTransientPool(transientPool),
+	)
+
+	schema := catalog.MockSchema(1, 0)
+	physicalAddress := schema.GetColIdx(catalog.PhyAddrColumnName)
+	usedBefore, _ := transientPool.Used(false)
+	require.Zero(t, usedBefore)
+
+	_, _, _, err := LoadPersistedColumnData(
+		ctx,
+		schema,
+		rt,
+		&common.ID{},
+		[]int{physicalAddress, objectio.SEQNUM_COMMITTS},
+		objectio.NewRandomLocation(0, 3),
+		mp,
+		nil,
+		true,
+	)
+	require.Error(t, err)
+	usedAfter, _ := transientPool.Used(false)
+	require.Zero(t, usedAfter)
 }
 
 func TestPersistedNodeReadsCNCreatedTombstone(t *testing.T) {

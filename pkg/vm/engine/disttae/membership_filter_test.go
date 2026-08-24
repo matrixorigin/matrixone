@@ -15,9 +15,11 @@
 package disttae
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -65,4 +67,102 @@ func TestPrepareMembershipFilterOwnsOneAdmissionLease(t *testing.T) {
 	readerShare.Free()
 	require.Equal(t, 1, admission.releaseCalls)
 	require.Equal(t, int64(8), admission.released)
+}
+
+type trackingMembershipFilter struct {
+	shares    *[]*trackingMembershipFilter
+	freeCalls int
+}
+
+func newTrackingMembershipFilter() *trackingMembershipFilter {
+	shares := make([]*trackingMembershipFilter, 0, 2)
+	return &trackingMembershipFilter{shares: &shares}
+}
+
+func (*trackingMembershipFilter) Test([]byte) bool { return true }
+
+func (*trackingMembershipFilter) TestVector(
+	*vector.Vector,
+	func(bool, bool, int),
+) []uint8 {
+	return nil
+}
+
+func (f *trackingMembershipFilter) Valid() bool { return f.freeCalls == 0 }
+func (*trackingMembershipFilter) Exact() bool   { return true }
+
+func (f *trackingMembershipFilter) Free() {
+	f.freeCalls++
+}
+
+func (f *trackingMembershipFilter) Share() docfilter.MembershipFilter {
+	share := &trackingMembershipFilter{shares: f.shares}
+	*f.shares = append(*f.shares, share)
+	return share
+}
+
+type trackingMembershipReader struct {
+	*mockReader
+	closeCalls int
+}
+
+func (r *trackingMembershipReader) Close() error {
+	r.closeCalls++
+	return r.mockReader.Close()
+}
+
+func TestBuildReadersWithMembershipFilterClosesPartialConstruction(t *testing.T) {
+	errNthReader := errors.New("nth reader failed")
+
+	for _, test := range []struct {
+		name       string
+		failSource bool
+	}{
+		{name: "source fails before consuming current share", failSource: true},
+		{name: "reader fails after consuming current share"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mainFilter := newTrackingMembershipFilter()
+			var firstReader *trackingMembershipReader
+			var failedSource *stubSnapshotDataSource
+
+			readers, err := buildReadersWithMembershipFilter(
+				nil,
+				2,
+				engine.FilterHint{BF: mainFilter},
+				mainFilter,
+				func(reader int) (engine.DataSource, error) {
+					if test.failSource && reader == 1 {
+						failedSource = new(stubSnapshotDataSource)
+						return failedSource, errNthReader
+					}
+					return nil, nil
+				},
+				func(_ engine.DataSource, hint engine.FilterHint) (engine.Reader, error) {
+					filter := hint.BF.(*trackingMembershipFilter)
+					if !test.failSource && len(*mainFilter.shares) == 2 {
+						// Match readutil.NewReader's contract: the current share is
+						// consumed even when construction fails.
+						filter.Free()
+						return nil, errNthReader
+					}
+					firstReader = &trackingMembershipReader{
+						mockReader: &mockReader{filter: filter},
+					}
+					return firstReader, nil
+				},
+			)
+			require.ErrorIs(t, err, errNthReader)
+			require.Nil(t, readers)
+			require.NotNil(t, firstReader)
+			require.Equal(t, 1, firstReader.closeCalls)
+			require.Len(t, *mainFilter.shares, 2)
+			require.Equal(t, 1, (*mainFilter.shares)[0].freeCalls)
+			require.Equal(t, 1, (*mainFilter.shares)[1].freeCalls)
+			require.Zero(t, mainFilter.freeCalls, "the outer builder still owns the main filter")
+			if test.failSource {
+				require.True(t, failedSource.closed)
+			}
+		})
+	}
 }

@@ -2416,44 +2416,35 @@ func (tbl *txnTable) BuildReaders(
 		defer mainFilter.Free()
 	}
 
-	for i := 0; i < newNum; i++ {
-		hint := preparedHint
-		var readerFilter docfilter.MembershipFilter
-		if mainFilter != nil {
-			readerFilter = mainFilter.Share()
-			hint.BF = readerFilter
-		}
-		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
-		if err != nil {
-			if readerFilter != nil {
-				readerFilter.Free()
-			}
-			closeReaders(rds)
-			return nil, err
-		}
-		rd, err := readutil.NewReader(
-			ctx,
-			proc.Mp(),
-			tbl.getTxn().engine.packerPool,
-			tbl.getTxn().engine.fs,
-			def,
-			tbl.db.op.SnapshotTS(),
-			expr,
-			ds,
-			readutil.GetThresholdForReader(newNum),
-			hint,
-		)
-		if err != nil {
-			// NewReader consumes the current source and filter share on every
-			// return. Close only the readers that completed earlier iterations.
-			closeReaders(rds)
-			return nil, err
-		}
-
-		rds = append(rds, rd)
-	}
-
-	return rds, nil
+	return buildReadersWithMembershipFilter(
+		rds,
+		newNum,
+		preparedHint,
+		mainFilter,
+		func(i int) (engine.DataSource, error) {
+			return tbl.buildLocalDataSource(
+				ctx,
+				txnOffset,
+				shards[i],
+				tombstonePolicy,
+				engine.GeneralLocalDataSource,
+			)
+		},
+		func(ds engine.DataSource, hint engine.FilterHint) (engine.Reader, error) {
+			return readutil.NewReader(
+				ctx,
+				proc.Mp(),
+				tbl.getTxn().engine.packerPool,
+				tbl.getTxn().engine.fs,
+				def,
+				tbl.db.op.SnapshotTS(),
+				expr,
+				ds,
+				readutil.GetThresholdForReader(newNum),
+				hint,
+			)
+		},
+	)
 }
 
 func (tbl *txnTable) BuildShardingReaders(

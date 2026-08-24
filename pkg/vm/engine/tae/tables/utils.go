@@ -116,6 +116,11 @@ func LoadPersistedColumnData(
 	if commitTSIdx >= 0 {
 		meta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, rt.Fs)
 		if metaErr != nil {
+			for _, vec := range vectors {
+				if vec != nil {
+					vec.Close()
+				}
+			}
 			return nil, deletes, nil, metaErr
 		}
 		block := meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(uint32(location.ID()))
