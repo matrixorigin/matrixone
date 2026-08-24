@@ -345,10 +345,12 @@ resolves tables by bare name, so names must be unique across mock schemas.
 | `TestMultiInsertKeepsIrregularIndexMaintenance` | for a fulltext target, single-clause and merged two-clause forms both produce exactly one `fulltext_index_tokenize` FUNCTION_SCAN and more than 2 steps. |
 | `TestMultiInsertRejectsUnsupportedTargets` | FK target ("foreign key"), VALUES/column count mismatch, positional width mismatch, unknown source column in VALUES and in WHEN, unknown target column. |
 
-### Layer 3 — BVT: `test/distributed/cases/dml/insert/multi_insert.sql`
+### Layer 3 — BVT: `test/distributed/cases/dml/insert/multi_insert*.sql`
 
-79 statements with checked-in expected results (`multi_insert.result`,
-generated with mo-tester `-m genrs`, then verified in compare mode).
+Four files, 333 statements, with checked-in expected results (generated with
+mo-tester `-m genrs`, then verified in compare mode `-n -g`).
+
+**`multi_insert.sql` (79) — smoke coverage of every feature.**
 
 | Group | Cases |
 |---|---|
@@ -363,11 +365,56 @@ generated with mo-tester `-m genrs`, then verified in compare mode).
 | Errors | value-count mismatch (explicit and positional), unknown source column in VALUES / WHEN, unknown target column, missing table, `INSERT FIRST` without WHEN, foreign-key target, external-table target. |
 | EXPLAIN | one `Sink`, one `Sink Scan → Filter → Lock → DEDUP → Multi Update` per target. Targets without unique indexes are used on purpose: unique-index table names embed a UUID and would make the expected output non-deterministic. |
 
+**`multi_insert_conditional.sql` (107) — routing semantics on a 1000-row
+deterministic source** (`generate_series`; `cat = id % 5`, `val = 3*id`,
+`score` NULL for every 10th row). Every assertion is self-checking: the
+target count is compared with the equivalent plain filtered `SELECT`, or the
+targets are joined to prove overlap/disjointness.
+
+| Group | Cases |
+|---|---|
+| `INSERT ALL`, overlapping WHENs | three overlapping conditions (`val % 2`, `val % 3`, `id > 900`) + ELSE: each target equals its filtered SELECT; joins between targets prove rows landed in several; the always-true middle WHEN makes ELSE empty; total written = 1600 for 1000 source rows. |
+| `INSERT FIRST`, same WHENs | targets are pairwise disjoint, their union covers the source exactly once, the shadowed third WHEN gets nothing. |
+| ELSE and NULL conditions | `score > 90` / `score < 10` / ELSE: the 100 NULL scores all reach ELSE (`coalesce(score, -1)`); with `INSERT ALL` and no ELSE the NULL rows are dropped; an ELSE-only statement (`WHEN id < 0`). |
+| Condition shapes | `IN (subquery)`, `LIKE ... AND ... BETWEEN`, `IS NULL OR mod()`, conditions on computed source aliases (`bucket`, `doubled`), `CASE` in VALUES. |
+| Clause layout | several INTOs under one WHEN, the same table under several WHENs (one gets `val`, the other `-val`), an auto-increment audit table under every branch. |
+| Source shapes | `GROUP BY` aggregate, `LEFT JOIN` (and the negative case: WHEN sees output columns, not table aliases — `v.id` is an error, `vid` works), `UNION ALL`, `ORDER BY ... LIMIT`, `DISTINCT`, empty source. |
+| Atomicity / transactions | a duplicate in the second branch rolls back the first branch; `BEGIN ... ROLLBACK` and `BEGIN ... COMMIT` with counts checked inside and after the transaction. |
+
+**`multi_insert_schema.sql` (74) — destination tables with different
+schemas** from one 6-column source (`int`, `varchar`, `decimal`, `datetime`,
+`bool`, `text`, with NULLs).
+
+| Group | Cases |
+|---|---|
+| Shape | narrower, wider (defaults, `current_timestamp`), re-ordered, and re-typed targets (`char`, `int` from `decimal`, `varchar` from `datetime`/`decimal`, `day()`), all in one statement. |
+| Constraints per target | unique + secondary index, composite pk, no pk (fake pk, written by two clauses), auto-increment, NOT NULL with default, CHECK, stored generated column, CLUSTER BY. CHECK violation on one target fails the whole statement; NOT NULL enforced; a generated column cannot be a target column. |
+| Conversions | `json_object`/`json_array` into JSON, strings into ENUM (and an out-of-range enum rejected), `varbinary`, `date`/`time` from `datetime`, `float`; too-long string rejected, `left()` accepted. |
+| Placement | target in another database, temporary table target, a target that is also the source (source rows are read once, before the writes). |
+| Names | case-insensitive column lists, table-qualified column lists accepted, wrong qualifier rejected. |
+| Same table, four column lists | widened to the union of the lists; unset columns get their defaults. |
+| Errors | value count mismatch, unknown column, missing table, view target. |
+
+**`multi_insert_big.sql` (73) — a source big enough to make every target
+flush S3 objects.** 300k rows × ~520 bytes ≈ 150 MB per target, well above
+`InsertWriteS3Threshold` (64 MB); runs in ~8 s.
+
+| Group | Cases |
+|---|---|
+| Unconditional, 4 targets | pk-only, pk + unique + secondary index, composite pk, and a narrow (id, cat) table that stays far below the threshold. Counts, sums, min/max and `sum(length(pad))` per target. |
+| S3 objects really written | `metadata_scan('db.t', 'id')` reports committed objects: `count(*) > 0` and `sum(rows_cnt) = 300000` for the three big targets, `0` objects for the narrow one (its rows stay in the in-memory/TN path). |
+| Indexes at scale | point lookup through the unique key, counts through the secondary key and the composite pk. |
+| FIRST vs ALL at scale | `cat = 0` / `cat < 3` / ELSE over 300k rows: FIRST partitions the source (42857 / 85715 / 171428, checked against filtered SELECTs), ALL overlaps (the `cat = 0` rows appear in two targets). |
+| Same big table, two clauses | 600k rows through one merged pipeline, objects present; a duplicate-key variant is rejected and adds nothing. |
+| Late failure rolls back written objects | a duplicate at id 299999 fails the statement after the other target has already flushed; that target ends with 0 rows and 0 objects. |
+| Durability | `mo_ctl('dn','flush', ...)` on the targets, then counts/sums/lookups re-read. |
+| Transaction | a big multi-insert inside `BEGIN ... ROLLBACK` leaves the targets unchanged. |
+
 Run it with:
 
 ```
-(cd $HOME/m/mo-tester; ./run.sh -p ../matrixone/test/distributed/cases/dml/insert/multi_insert.sql \
-   -s ../matrixone/test/distributed/resources/ -n -g)
+(cd $HOME/m/mo-tester; ./run.sh -p ../matrixone/test/distributed/cases/dml/insert \
+   -s ../matrixone/test/distributed/resources/ -n -g)      # whole directory, or one multi_insert*.sql
 ```
 
 ### Regression protection for the shared insert path
@@ -412,14 +459,20 @@ On the isolated single-node server:
 - A BVT privilege case (needs an account/role fixture like
   `test/distributed/cases/prepare/prepare.test`) and a BVT `PREPARE`/`EXECUTE`
   case, to turn the manual checks into checked-in ones.
+- The S3-object assertions in `multi_insert_big.sql` rely on the write
+  pipelines running on one CN (the sink dispatch is local), so each target
+  sees the full 150 MB; if a future change splits a target's writes across
+  CNs the per-CN volume could fall under the 64 MB threshold and the
+  `has_objects` checks would need a larger source.
 - A run on the multi-CN docker cluster (`make dev-up`): all server-side
   testing was on the single-node instance. The design is per-CN pipelines
   fed by local channels, the same mechanism the IVF/fulltext maintenance
   already relies on, but the remote-scope path
   (`Remote` scopes with a `Multi Update` root, `addAllAffectedRows`) has not
   been exercised by this feature's tests.
-- Large-source behaviour (memory stays at one batch per consumer edge by
-  construction — see "Runtime" — but no benchmark was run).
+- Large-source performance: `multi_insert_big.sql` proves the S3 path and
+  correctness at 300k rows (memory stays at one batch per consumer edge by
+  construction — see "Runtime"), but no throughput benchmark was run.
 
 ## Possible follow-ups
 
