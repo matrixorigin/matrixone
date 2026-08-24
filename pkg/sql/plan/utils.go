@@ -3494,7 +3494,7 @@ func PreparedRuntimeTypeFromString(value string) (types.Type, bool) {
 	}
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil {
-		return types.Type{}, false
+		return preparedDecimalType(value)
 	}
 	if negative {
 		if parsed <= uint64(math.MaxInt64)+1 {
@@ -3623,56 +3623,29 @@ func preparedDecimalType(value string) (types.Type, bool) {
 	if value == "" {
 		return types.Type{}, false
 	}
-	if value[0] == '+' || value[0] == '-' {
-		value = value[1:]
+	unsigned := value
+	if unsigned[0] == '+' || unsigned[0] == '-' {
+		unsigned = unsigned[1:]
 	}
-	if value == "" {
+	if unsigned == "" {
 		return types.Type{}, false
 	}
-	if strings.ContainsAny(value, "eE") {
-		// Exponent notation is accepted by the expression parser, but its
-		// textual precision is not available without evaluating it.  DECIMAL128
-		// is a safe overload domain and preserves the ordinary prepared values
-		// used by the protocol path.
-		parts := strings.FieldsFunc(value, func(r rune) bool { return r == 'e' || r == 'E' })
-		if len(parts) != 2 || !isDecimalMantissa(parts[0]) || !isDecimalExponent(parts[1]) {
+	mantissa := unsigned
+	if exponentAt := strings.IndexAny(unsigned, "eE"); exponentAt >= 0 {
+		if strings.IndexAny(unsigned[exponentAt+1:], "eE") >= 0 ||
+			!isDecimalExponent(unsigned[exponentAt+1:]) {
 			return types.Type{}, false
 		}
-		return types.New(types.T_decimal128, 38, 18), true
+		mantissa = unsigned[:exponentAt]
 	}
-	parts := strings.SplitN(value, ".", 2)
-	if !isDecimalMantissa(value) {
+	if !isDecimalMantissa(mantissa) {
 		return types.Type{}, false
 	}
-	integral := strings.TrimLeft(parts[0], "0")
-	if integral == "" {
-		integral = "0"
+	typ := PreparedNumericPrefixTypeFromString(value)
+	if !typ.IsDecimal() {
+		return types.Type{}, false
 	}
-	scale := int32(0)
-	if len(parts) == 2 {
-		scale = int32(len(parts[1]))
-	}
-	width := int32(len(integral)) + scale
-	if width < 1 {
-		width = 1
-	}
-	if width < scale {
-		width = scale
-	}
-	if width > types.T_decimal256.ToType().Width {
-		width = types.T_decimal256.ToType().Width
-	}
-	if scale > width {
-		scale = width
-	}
-	switch {
-	case width <= types.T_decimal64.ToType().Width:
-		return types.New(types.T_decimal64, width, scale), true
-	case width <= types.T_decimal128.ToType().Width:
-		return types.New(types.T_decimal128, width, scale), true
-	default:
-		return types.New(types.T_decimal256, width, scale), true
-	}
+	return typ, true
 }
 
 func isDecimalMantissa(value string) bool {

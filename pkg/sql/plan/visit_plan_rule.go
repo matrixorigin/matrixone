@@ -1610,3 +1610,45 @@ func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (
 	}
 	return e, nil
 }
+
+// RestorePreparedRuntimeParamRefs converts runtime literals carrying ParamRef
+// provenance back to typed parameter references after overload specialization.
+// The surrounding casts/functions remain specialized, while the resulting plan
+// can safely be compiled once and reused with different values in the same
+// semantic category.
+func RestorePreparedRuntimeParamRefs(ctx context.Context, preparePlan *Plan) error {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	return NewVisitPlan(preparePlan, []VisitPlanRule{restorePreparedRuntimeParamRefRule{ctx: ctx}}).Visit(ctx)
+}
+
+type restorePreparedRuntimeParamRefRule struct{ ctx context.Context }
+
+func (restorePreparedRuntimeParamRefRule) MatchNode(*Node) bool  { return false }
+func (restorePreparedRuntimeParamRefRule) IsApplyExpr() bool     { return true }
+func (restorePreparedRuntimeParamRefRule) ApplyNode(*Node) error { return nil }
+func (restore restorePreparedRuntimeParamRefRule) ApplyExpr(expr *Expr) (*Expr, error) {
+	err := plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+		lit := candidate.GetLit()
+		if lit == nil || lit.Src == nil || lit.Src.GetP() == nil {
+			return nil
+		}
+		restored := DeepCopyExpr(lit.Src)
+		if candidate.Typ.Id != int32(types.T_text) {
+			// Process stores COM_STMT payloads in a TEXT vector. Keep the
+			// parameter source physical type honest and retain the runtime domain
+			// as an explicit cast in the reusable specialized plan.
+			restored.Typ = plan.Type{Id: int32(types.T_text)}
+			target := types.New(types.T(candidate.Typ.Id), candidate.Typ.Width, candidate.Typ.Scale)
+			cast, err := makePlan2CastExpr(restore.ctx, restored, makePlan2Type(&target))
+			if err != nil {
+				return err
+			}
+			restored = cast
+		}
+		*candidate = *restored
+		return nil
+	})
+	return expr, err
+}

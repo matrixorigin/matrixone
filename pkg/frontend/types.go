@@ -340,6 +340,13 @@ type PrepareStmt struct {
 	hasPaginationParams   bool
 	paramKinds            []vector.PrepareParamKind
 	paramMetadata         []bool
+	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
+	// stable parameter semantic category. The cached runtime plan retains
+	// ParamRefs, so equivalent values reuse the compile without embedding the
+	// preceding execution's literal.
+	runtimeSpecializationKey string
+	runtimePlan              *plan.Plan
+	runtimeCompile           *compile.Compile
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
@@ -723,6 +730,17 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //	tableInfos map[string][]ColumnInfo
 //}
 
+func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
+	if prepareStmt.runtimeCompile != nil && prepareStmt.runtimeCompile != prepareStmt.compile {
+		prepareStmt.runtimeCompile.FreeOperator()
+		prepareStmt.runtimeCompile.SetIsPrepare(false)
+		prepareStmt.runtimeCompile.Release()
+	}
+	prepareStmt.runtimeSpecializationKey = ""
+	prepareStmt.runtimePlan = nil
+	prepareStmt.runtimeCompile = nil
+}
+
 func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.closeCursor()
 	if prepareStmt.params != nil {
@@ -735,6 +753,7 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 	}
+	prepareStmt.clearRuntimeSpecializationCache()
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
 	}

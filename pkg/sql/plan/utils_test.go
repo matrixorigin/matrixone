@@ -431,7 +431,8 @@ func TestIsPositivePreparedInteger(t *testing.T) {
 
 func TestPreparedRuntimeTypeFromString(t *testing.T) {
 	largeInteger := strings.Repeat("9", 80)
-	largeFraction := "." + strings.Repeat("1", 80)
+	decimal256Integer := strings.Repeat("9", 65)
+	decimal256Fraction := "." + strings.Repeat("1", 65)
 	tests := []struct {
 		name  string
 		value string
@@ -452,12 +453,14 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 		{name: "decimal64", value: "12.340", want: types.T_decimal64, ok: true},
 		{name: "decimal with leading dot", value: ".125", want: types.T_decimal64, ok: true},
 		{name: "decimal with trailing dot", value: "12.", want: types.T_decimal64, ok: true},
-		{name: "decimal128 exponent", value: "1e3", want: types.T_decimal128, ok: true},
-		{name: "signed exponent", value: "1.2E-3", want: types.T_decimal128, ok: true},
-		{name: "decimal256 integer", value: largeInteger + ".", want: types.T_decimal256, ok: true},
-		{name: "decimal256 fraction", value: largeFraction, want: types.T_decimal256, ok: true},
+		{name: "decimal64 exponent", value: "1e3", want: types.T_decimal64, ok: true},
+		{name: "signed exponent", value: "1.2E-3", want: types.T_decimal64, ok: true},
+		{name: "decimal256 integer", value: decimal256Integer, want: types.T_decimal256, ok: true},
+		{name: "decimal256 fraction", value: decimal256Fraction, want: types.T_decimal256, ok: true},
 		{name: "invalid exponent", value: "1e+"},
 		{name: "invalid mantissa", value: "1.2.3"},
+		{name: "decimal overflow integer", value: largeInteger},
+		{name: "decimal overflow fraction", value: "." + largeInteger},
 		{name: "invalid text", value: "not-a-number"},
 	}
 	for _, test := range tests {
@@ -469,6 +472,33 @@ func TestPreparedRuntimeTypeFromString(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreparedRuntimeDecimalTypeBoundaries(t *testing.T) {
+	for _, digits := range []int{65, 66, 67, 76} {
+		value := strings.Repeat("9", digits)
+		for _, signed := range []string{value, "-" + value} {
+			typ, ok := PreparedRuntimeTypeFromString(signed)
+			require.True(t, ok, "digits=%d value=%s", digits, signed)
+			require.Equal(t, types.T_decimal256, typ.Oid)
+			require.Equal(t, int32(digits), typ.Width)
+			require.Zero(t, typ.Scale)
+		}
+	}
+	_, ok := PreparedRuntimeTypeFromString(strings.Repeat("9", 77))
+	require.False(t, ok)
+
+	typ, ok := PreparedRuntimeTypeFromString("." + strings.Repeat("0", 75) + "1")
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, typ.Oid)
+	require.Equal(t, int32(76), typ.Width)
+	require.Equal(t, int32(76), typ.Scale)
+
+	typ, ok = PreparedRuntimeTypeFromString("0.000000000000000000000000000000000001e100")
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, typ.Oid)
+	require.Equal(t, int32(65), typ.Width)
+	require.Zero(t, typ.Scale)
 }
 
 func TestPreparedNumericPrefixTypeFromString(t *testing.T) {

@@ -30,6 +30,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRestorePreparedRuntimeParamRefsKeepsTypedCast(t *testing.T) {
+	literal := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: 90}},
+			Src: &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1},
+				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+			},
+		}},
+	}
+	prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0}, Nodes: []*planpb.Node{{NodeType: planpb.Node_VALUE_SCAN, ProjectList: []*planpb.Expr{literal}}},
+	}}}
+	require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), prepared))
+	project := prepared.GetQuery().Nodes[0].ProjectList[0]
+	require.Nil(t, project.GetLit())
+	param := project.GetP()
+	if param == nil && project.GetF() != nil && len(project.GetF().GetArgs()) > 0 {
+		param = project.GetF().GetArgs()[0].GetP()
+	}
+	require.NotNil(t, param)
+	require.Equal(t, int32(0), param.GetPos())
+}
+
 var errWindowParameterVisit = errors.New("window parameter visit failed")
 
 type failWindowParameterVisitRule struct {

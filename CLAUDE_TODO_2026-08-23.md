@@ -252,3 +252,19 @@
 - fast-path UT 同时覆盖 Boolean、Integer、Decimal、Float，并断言 nil `paramVals` 与 cached plan/compile identity。
 - CI 三个实际失败 `TestIssue26725PreparedBit64Numeric`、`TestIssue26866BinaryPreparedNthValueOffsetValidation`、`TestIssue26840PreparedJSONModifyPreservesValueTypes` 均由 metadata 丢失导致，本地修复后通过。
 - microbenchmark 三轮为 616.6/613.2/608.8 ns/op，200 B/op，3 allocs/op；恢复 metadata 后 allocation 与修复前 fast path 相同。
+
+## 第九轮：处理 head 21d9a06c93 的 CHANGES_REQUESTED
+
+1. 修正 binary COM_STMT admission：PREPARE 阶段缓存“可能受 runtime DECIMAL/text numeric-prefix 影响”的参数位置/consumer，而不是用无 DECIMAL kind 的假值做最终否决；执行时只对候选 statement 读取已恢复的 protocol kind/value并做最终 specialization。补 heap/index、NEWDECIMAL/text、fresh/reuse 回归。
+2. 修正 protocol DECIMAL 精确类型推断：统一整数、小数、科学计数法的 width/scale 推导，支持 Decimal256 边界与 exponent compensation；明确拒绝超出 DECIMAL(76) 的输入。覆盖 65/66/67/76/77 位、符号、极端 scale、SET/CTAS/retry。
+3. 为 eligible prepared execution 增加按稳定 runtime semantic category 的有界 plan/compile cache；相同 category 复用 specialized plan/compile，category 变化重建，且不修改 prepare-time cached plan。增加 fresh/reuse correctness 和 end-to-end repeated execute benchmark。
+4. 运行相关反例、frontend/plan/compile/process/issues 全包、benchmark、build/vet/SCA；执行完整 diff self-review 后推送。
+
+### 第九轮执行结果
+
+- PREPARE generation 现在缓存 exact numeric/static DECIMAL 与 index prefix 的潜在 consumer；普通 integer packet 不扫描 plan，只有 DECIMAL/text/NULL packet 在旧/生成式 plan shape 未命中缓存时执行一次 fallback admission。
+- binary text `9.0` 对 heap/index INT predicate 均 specialization，fresh/reuse 回归通过；纯字符串 `greatest(?, ?)` 与 FLOAT 边界保持原语义。
+- protocol DECIMAL 使用严格语法与精确 width/scale 推导，65/66/67/76 位进入 Decimal256，77 位显式报超出 DECIMAL(76)；覆盖符号、极端 scale、补偿 exponent 与 prepared SET。
+- 新增一项 bounded semantic-category cache：仅对显式 binary DECIMAL query 生效；specialized plan 恢复为 TEXT ParamRef + typed cast，避免嵌入上一轮 literal；相同 OID/width/scale category 复用 plan/compile，category/definition generation 变化清理。
+- repeated DECIMAL category benchmark 三轮 4097/4190/4098 ns/op、376 B/op、12 allocs/op；普通 COM_STMT 仍为 606.2-616.0 ns/op、200 B/op、3 allocs/op。前者不再包含每轮 5.5us plan copy/specialization及后续完整 recompile。
+- frontend/plan/compile/process/pb 全包、issue #26725/#26866/#26840/#26685/#27088、build、vet、sqlclosecheck、rowserrcheck 均通过。

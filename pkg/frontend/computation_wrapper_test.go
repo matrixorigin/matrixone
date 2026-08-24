@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -393,6 +394,15 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 		})
 	}
 
+	decimal256, ok := binaryProtocolPrepareParamType(
+		defines.MYSQL_TYPE_NEWDECIMAL, false, []byte(strings.Repeat("9", 65)))
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, decimal256.Oid)
+	require.Equal(t, int32(65), decimal256.Width)
+	_, ok = binaryProtocolPrepareParamType(
+		defines.MYSQL_TYPE_NEWDECIMAL, false, []byte(strings.Repeat("9", 77)))
+	require.False(t, ok)
+
 	_, ok = binaryProtocolPrepareParamType(defines.MYSQL_TYPE_NULL, false, nil)
 	require.False(t, ok)
 }
@@ -532,10 +542,118 @@ func TestPreparedPlanHasNumericPrefixConsumerCachesOnlyStaticDecimalContexts(t *
 		}}, IsPrepare: true}
 	}
 
-	require.False(t, preparedPlanHasNumericPrefixConsumer(makePlan(types.T_int64), 1),
-		"ordinary COM_STMT integer predicates must retain the cached plan/compile fast path")
+	require.True(t, preparedPlanHasNumericPrefixConsumer(makePlan(types.T_int64), 1),
+		"an exact-integer peer must admit a potential runtime DECIMAL packet")
 	require.True(t, preparedPlanHasNumericPrefixConsumer(makePlan(types.T_decimal128), 1),
 		"a static DECIMAL peer is a cached numeric-prefix consumer")
+	require.False(t, preparedPlanHasNumericPrefixConsumer(makePlan(types.T_float64), 1),
+		"an approximate FLOAT peer must remain outside numeric-prefix specialization")
+}
+
+func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 206, "select ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+	})
+	require.NoError(t, err)
+	manualPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{
+			NodeType: plan.Node_VALUE_SCAN, FilterList: []*plan.Expr{predicate},
+		}},
+	}}, IsPrepare: true}
+	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
+	prepareStmt.numericPrefixConsumer = preparedPlanHasNumericPrefixConsumer(manualPlan, 1)
+	require.True(t, prepareStmt.numericPrefixConsumer)
+
+	install := func(value string) *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+		return params
+	}
+	firstParams := install("9.0")
+	retComp, firstPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, manualPlan, firstPlan)
+	require.NotEmpty(t, prepareStmt.runtimeSpecializationKey)
+	require.Same(t, firstPlan, prepareStmt.runtimePlan)
+	require.NotNil(t, cw.paramVals)
+
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	sentinel.SetIsPrepare(true)
+	prepareStmt.runtimeCompile = sentinel
+	cw.proc.SetPrepareParams(nil)
+	secondParams := install("8.0")
+	firstParams.Free(cw.proc.Mp())
+	retComp, secondPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, sentinel, retComp)
+	require.Same(t, firstPlan, secondPlan)
+	require.Same(t, secondParams, cw.proc.GetPrepareParams())
+
+	cw.proc.SetPrepareParams(nil)
+	prepareStmt.clearRuntimeSpecializationCache()
+	textParams := install("9.0")
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+	secondParams.Free(cw.proc.Mp())
+	retComp, textPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, manualPlan, textPlan)
+	require.Same(t, textParams, cw.proc.GetPrepareParams())
+}
+
+func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategory(b *testing.B) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(b, 207, "select ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	predicate, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+	})
+	require.NoError(b, err)
+	manualPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{
+			NodeType: plan.Node_VALUE_SCAN, FilterList: []*plan.Expr{predicate},
+		}},
+	}}, IsPrepare: true}
+	prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan = manualPlan
+	prepareStmt.numericPrefixConsumer = true
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	_, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(b, err)
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	sentinel.SetIsPrepare(true)
+	prepareStmt.runtimeCompile = sentinel
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		retComp, currentPlan, stmt, _, owned, runErr := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		if runErr != nil || retComp != sentinel || currentPlan != runtimePlan {
+			b.Fatalf("runtime cache miss: comp=%p plan=%p err=%v", retComp, currentPlan, runErr)
+		}
+		if owned && stmt != nil {
+			stmt.Free()
+		}
+	}
 }
 
 func TestSQLVariablePrepareParamKind(t *testing.T) {
@@ -611,6 +729,23 @@ func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	first.Free(cw.proc.Mp())
 	require.Equal(t, "9", cw.proc.GetPrepareParams().GetStringAt(0))
 	require.Same(t, second, prepareStmt.params)
+
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	wide := strings.Repeat("9", 65)
+	third := install(wide)
+	second.Free(cw.proc.Mp())
+	require.Same(t, third, prepareStmt.params)
+	require.Len(t, cw.paramVals, 1)
+	param := cw.paramVals[0].(plan2.ParamValue)
+	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
+	require.Equal(t, int32(65), param.RuntimeType.Width)
+
+	overflow := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(overflow, []byte(strings.Repeat("9", 77)), false, cw.proc.Mp()))
+	prepareStmt.params = overflow
+	third.Free(cw.proc.Mp())
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.ErrorContains(t, err, "exceeds DECIMAL(76)")
 }
 
 func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {

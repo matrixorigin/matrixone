@@ -385,8 +385,8 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		})
 
 		t.Run("SQL EXECUTE specializes integer comparison for decimal variable", func(t *testing.T) {
-			mustExec(t, ctx, conn, "create table execute_integer(id int primary key, vi int, key idx_i(vi))")
-			mustExec(t, ctx, conn, "insert into execute_integer values (1, 9), (2, 10), (3, null)")
+			mustExec(t, ctx, conn, "create table execute_integer(id int primary key, vi int, vh int, key idx_i(vi))")
+			mustExec(t, ctx, conn, "insert into execute_integer values (1, 9, 9), (2, 10, 10), (3, null, null)")
 			mustExec(t, ctx, conn,
 				"prepare issue27088_integer from 'select id from execute_integer where vi = ? order by id'")
 			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_integer") }()
@@ -395,6 +395,24 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer rows.Close()
 			assertIDs(t, rows, queryErr, 1)
 			require.NoError(t, rows.Err())
+
+			for _, column := range []string{"vh", "vi"} {
+				func() {
+					binaryStmt, prepareErr := conn.PrepareContext(ctx,
+						"select id from execute_integer where "+column+" = ? order by id")
+					require.NoError(t, prepareErr)
+					defer binaryStmt.Close()
+					for range 2 {
+						func() {
+							binaryRows, binaryErr := binaryStmt.QueryContext(ctx, "9.0")
+							require.NoError(t, binaryErr)
+							defer binaryRows.Close()
+							assertIDs(t, binaryRows, nil, 1)
+							require.NoError(t, binaryRows.Err())
+						}()
+					}
+				}()
+			}
 		})
 
 		t.Run("SQL EXECUTE preserves legacy float and null domains", func(t *testing.T) {
