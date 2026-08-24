@@ -42,13 +42,14 @@ type baseKey struct {
 }
 
 type baseEntry struct {
-	ready    chan struct{}
-	lease    *segmentLease
-	err      error
-	loading  bool
-	retired  bool
-	owners   map[uint64]struct{}
-	lastUsed time.Time
+	ready     chan struct{}
+	lease     *segmentLease
+	err       error
+	loading   bool
+	retired   bool
+	published bool
+	owners    map[uint64]struct{}
+	lastUsed  time.Time
 }
 
 // segmentLease owns one mmap and hands out shallow Segment views. The views
@@ -410,6 +411,7 @@ func (p *immutableBasePool) commitOwnedIfCurrent(index string, used map[baseKey]
 			}
 			if _, ok := used[key]; ok {
 				entry.owners = nil
+				entry.published = true
 				entry.lastUsed = time.Now()
 				continue
 			}
@@ -438,7 +440,10 @@ func (p *immutableBasePool) rollback(owner uint64) {
 				continue
 			}
 			delete(entry.owners, owner)
-			if len(entry.owners) != 0 {
+			if len(entry.owners) != 0 || entry.published {
+				if entry.published && len(entry.owners) == 0 {
+					entry.owners = nil
+				}
 				continue
 			}
 			if entry.loading {

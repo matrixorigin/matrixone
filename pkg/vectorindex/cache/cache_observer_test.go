@@ -73,6 +73,29 @@ func TestVectorIndexCacheLifecycleHookRunsForEmptyShutdown(t *testing.T) {
 	require.True(t, shutdown.Load())
 }
 
+func TestVectorIndexCacheLifecycleHookPanicDoesNotStopLaterHooks(t *testing.T) {
+	var laterCalled atomic.Bool
+	lifecycleHooks.Lock()
+	previous := lifecycleHooks.hooks
+	lifecycleHooks.hooks = []func(bool){
+		func(bool) { panic("synthetic lifecycle hook panic") },
+		func(shutdown bool) {
+			if shutdown {
+				laterCalled.Store(true)
+			}
+		},
+	}
+	lifecycleHooks.Unlock()
+	t.Cleanup(func() {
+		lifecycleHooks.Lock()
+		lifecycleHooks.hooks = previous
+		lifecycleHooks.Unlock()
+	})
+
+	require.NotPanics(t, func() { NewVectorIndexCache().Destroy() })
+	require.True(t, laterCalled.Load())
+}
+
 type blockingInvalidationMock struct {
 	invalidationMock
 	started chan struct{}

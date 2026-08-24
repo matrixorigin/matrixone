@@ -83,7 +83,14 @@ func runLifecycleHooks(shutdown bool) {
 	hooks := append([]func(bool){}, lifecycleHooks.hooks...)
 	lifecycleHooks.RUnlock()
 	for _, hook := range hooks {
-		hook(shutdown)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logutil.Errorf("[veccache] lifecycle hook panicked (shutdown=%v): %v", shutdown, r)
+				}
+			}()
+			hook(shutdown)
+		}()
 	}
 }
 

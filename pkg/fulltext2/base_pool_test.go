@@ -388,6 +388,28 @@ func TestImmutableBasePoolReusedClaimSurvivesObsoleteRollback(t *testing.T) {
 	require.Contains(t, p.entries, key)
 }
 
+func TestImmutableBasePoolPublishedReuseFailureKeepsEntry(t *testing.T) {
+	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
+	key := baseKey{index: "db.store", id: "base-0", checksum: "sum", filesize: 1}
+
+	first, err := p.acquireOwned(context.Background(), key, func() (*Segment, error) {
+		return NewSegment("base-0", 0), nil
+	}, 0, 11)
+	require.NoError(t, err)
+	first.Free()
+	p.commitOwned(key.index, map[baseKey]struct{}{key: {}}, 11)
+
+	replacement, err := p.acquireOwned(context.Background(), key, func() (*Segment, error) {
+		return nil, errors.New("published entry unexpectedly became the loader")
+	}, 0, 22)
+	require.NoError(t, err)
+	replacement.Free()
+	p.rollback(22)
+
+	require.Contains(t, p.entries, key, "a failed reuse must not retire a published base")
+	p.clearAll()
+}
+
 func TestImmutableBasePoolRollbackOwnerIsGlobalAcrossIndexes(t *testing.T) {
 	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
 	firstGeneration := beginLoadGeneration("db.a")
