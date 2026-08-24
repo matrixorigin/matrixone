@@ -1128,6 +1128,7 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 func TestTerminalLivenessProbeFailureClosesDataGeneration(t *testing.T) {
 	rb := &remoteBackend{
 		metrics:       newMetrics(""),
+		logger:        zap.NewNop(),
 		livenessEpoch: time.Now(),
 	}
 	rb.options.readTimeout = time.Second
