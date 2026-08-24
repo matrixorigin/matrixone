@@ -542,6 +542,7 @@ func init() {
 		"triggers":                   TRIGGERS,
 		"true":                       TRUE,
 		"truncate":                   TRUNCATE,
+		"tolerance":                  TOLERANCE,
 		"uncommitted":                UNCOMMITTED,
 		"undo":                       UNUSED,
 		"unknown":                    UNKNOWN,
