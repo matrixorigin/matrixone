@@ -364,8 +364,8 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 	defer func() {
 		if !committed {
 			// A later base can fail after earlier segments have been acquired.
-			// Roll back only entries created by this load; another generation may
-			// have committed reusable state for the same index in the meantime.
+			// Roll back only claims held by this load; another generation may have
+			// reused or committed the same immutable base in the meantime.
 			loadedBasePool.rollback(generation.owner)
 		}
 	}()

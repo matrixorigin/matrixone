@@ -234,6 +234,33 @@ func TestImmutableBasePoolCommittedReplacementSurvivesObsoleteRollback(t *testin
 	p.clearAll()
 }
 
+func TestImmutableBasePoolReusedClaimSurvivesObsoleteRollback(t *testing.T) {
+	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
+	key := baseKey{index: "db.store", id: "base-0", checksum: "sum", filesize: 1}
+
+	first, err := p.acquireOwned(context.Background(), key, func() (*Segment, error) {
+		return NewSegment("base-0", 0), nil
+	}, 0, 11)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		first.Free()
+		p.clearAll()
+	})
+
+	replacement, err := p.acquireOwned(context.Background(), key, func() (*Segment, error) {
+		return nil, errors.New("replacement unexpectedly became the loader")
+	}, 0, 22)
+	require.NoError(t, err)
+	t.Cleanup(replacement.Free)
+
+	// The replacement has claimed the reused lease but has not published its
+	// generation yet. The obsolete loader must not retire that lease first.
+	p.rollback(11)
+	p.commitOwned(key.index, map[baseKey]struct{}{key: {}}, 22)
+
+	require.Contains(t, p.entries, key)
+}
+
 func TestImmutableBasePoolRollbackOwnerIsGlobalAcrossIndexes(t *testing.T) {
 	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
 	firstGeneration := beginLoadGeneration("db.a")

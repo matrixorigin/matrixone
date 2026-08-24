@@ -47,7 +47,7 @@ type baseEntry struct {
 	err      error
 	loading  bool
 	retired  bool
-	owner    uint64
+	owners   map[uint64]struct{}
 	lastUsed time.Time
 }
 
@@ -239,9 +239,9 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 	return p.acquireOwned(ctx, key, load, recency, 0)
 }
 
-// acquireOwned is the load-path variant. A newly created pooled entry is
-// attributed to the load attempt that created it, allowing an obsolete failed
-// load to roll back only its own unpublished entries.
+// acquireOwned is the load-path variant. Each load attempt claims the pooled
+// entry it creates or reuses, allowing an obsolete failed load to roll back
+// only its own unpublished claims.
 func (p *immutableBasePool) acquireOwned(ctx context.Context, key baseKey, load func() (*Segment, error), recency int64, owner uint64) (*Segment, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -258,10 +258,20 @@ func (p *immutableBasePool) acquireOwned(ctx context.Context, key baseKey, load 
 				if e.loading {
 					return nil, e.ready, nil, true
 				}
+				if owner != 0 {
+					if e.owners == nil {
+						e.owners = make(map[uint64]struct{}, 1)
+					}
+					e.owners[owner] = struct{}{}
+				}
 				e.lastUsed = time.Now()
 				return nil, nil, e.lease.acquire(recency), true
 			}
-			e := &baseEntry{ready: make(chan struct{}), loading: true, owner: owner, lastUsed: time.Now()}
+			owners := make(map[uint64]struct{}, 1)
+			if owner != 0 {
+				owners[owner] = struct{}{}
+			}
+			e := &baseEntry{ready: make(chan struct{}), loading: true, owners: owners, lastUsed: time.Now()}
 			p.entries[key] = e
 			return e, nil, nil, false
 		}()
@@ -393,7 +403,7 @@ func (p *immutableBasePool) commitOwnedIfCurrent(index string, used map[baseKey]
 				continue
 			}
 			if _, ok := used[key]; ok {
-				entry.owner = 0
+				entry.owners = nil
 				entry.lastUsed = time.Now()
 				continue
 			}
@@ -407,8 +417,8 @@ func (p *immutableBasePool) commitOwnedIfCurrent(index string, used map[baseKey]
 	return published
 }
 
-// rollback removes only entries created by owner. Entries committed by a newer
-// load transfer ownership to zero before an obsolete loader can reach here.
+// rollback removes only entries still claimed by owner. Reused entries retain
+// claims from concurrent loads until one of them publishes or rolls back.
 func (p *immutableBasePool) rollback(owner uint64) {
 	if owner == 0 {
 		return
@@ -418,7 +428,11 @@ func (p *immutableBasePool) rollback(owner uint64) {
 		defer p.mu.Unlock()
 		retire := make([]*segmentLease, 0)
 		for key, entry := range p.entries {
-			if entry.owner != owner {
+			if _, ok := entry.owners[owner]; !ok {
+				continue
+			}
+			delete(entry.owners, owner)
+			if len(entry.owners) != 0 {
 				continue
 			}
 			if entry.loading {
