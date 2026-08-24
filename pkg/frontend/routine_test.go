@@ -1571,3 +1571,27 @@ func Test_ConnectionCount(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestMigrateConnectionFromRejectsForeignConns(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	// Foreign connections are session-CN-local; a migration snapshot while any
+	// exist would strand the client's handle strings on the target CN.
+	conn := &fakeForeignConn{}
+	_, err := ses.PutForeignConn(context.Background(), "sql:mig", conn)
+	require.NoError(t, err)
+
+	err = rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+
+	// disconnecting clears the block
+	removed, ok := ses.RemoveForeignConn("sql:mig")
+	require.True(t, ok)
+	require.NoError(t, removed.Close())
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+}

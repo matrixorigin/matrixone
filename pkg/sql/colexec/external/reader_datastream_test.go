@@ -210,6 +210,19 @@ func TestDataStreamReaderSendsApiKey(t *testing.T) {
 	require.NoError(t, r2.Close())
 }
 
+// TestDataStreamReaderRejectsEnvAPIKeyRef proves a pre-existing table whose
+// persisted definition still carries the retired "env:NAME" apikey syntax
+// fails closed with a clear error, instead of silently sending the literal
+// string "env:NAME" as the credential (query processing no longer reads the
+// CN process environment).
+func TestDataStreamReaderRejectsEnvAPIKeyRef(t *testing.T) {
+	param, proc, _ := newDatastreamTestParam(t, "127.0.0.1", 1, "")
+	param.DatastreamScan.ApiKey = "env:DS_KEY"
+	r := NewDataStreamReader(param)
+	_, err := r.Open(param, proc)
+	require.ErrorContains(t, err, "no longer supported")
+}
+
 func TestDataStreamReaderServerErrorFrame(t *testing.T) {
 	fake := &fakeDataStreamServer{script: func(*datastream.ReadRequest) []*datastream.ReadResponse {
 		return []*datastream.ReadResponse{
