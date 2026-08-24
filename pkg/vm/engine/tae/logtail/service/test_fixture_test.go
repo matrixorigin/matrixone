@@ -132,6 +132,9 @@ func (s *captureSession) AsyncWrite(message morpc.Message) error {
 func (*captureSession) CreateCache(context.Context, uint64) (morpc.MessageCache, error) {
 	panic("not used in logtail service tests")
 }
+func (*captureSession) CreateCacheWithCancel(context.Context, uint64, context.CancelFunc) (morpc.MessageCache, error) {
+	panic("not used in logtail service tests")
+}
 func (*captureSession) DeleteCache(uint64) { panic("not used in logtail service tests") }
 func (*captureSession) GetCache(uint64) (morpc.MessageCache, error) {
 	panic("not used in logtail service tests")

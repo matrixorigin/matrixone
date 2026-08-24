@@ -90,6 +90,33 @@ func TestOperatorFixedInConstNullListUsesThreeValuedLogic(t *testing.T) {
 	require.True(t, ok, errInfo)
 }
 
+func TestOperatorEnumInUsesOrdinalEquality(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_enum.ToType(),
+				[]types.Enum{1, 2, 3, 0},
+				[]bool{false, false, false, true}),
+			NewFunctionTestInput(
+				types.T_enum.ToType(),
+				[]types.Enum{1, 3},
+				[]bool{false, false}),
+		},
+		NewFunctionTestResult(
+			types.T_bool.ToType(),
+			false,
+			[]bool{true, false, true, false},
+			[]bool{false, false, false, true}),
+		newOpOperatorFixedIn[types.Enum]().operatorIn,
+	)
+
+	ok, errInfo := tc.Run()
+	require.True(t, ok, errInfo)
+}
+
 func TestOperatorFixedNotInNullableListUsesThreeValuedLogic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

@@ -570,13 +570,8 @@ func TestCreateDaemonTask(t *testing.T) {
 			AccountID: 10,
 			Account:   "a1",
 			Username:  "u1",
-			Details: &task.Details_Connector{
-				Connector: &task.ConnectorDetails{
-					TableName: "d1.t1",
-					Options: map[string]string{
-						"k1": "v1",
-					},
-				},
+			Details: &task.Details_ISCP{
+				ISCP: &task.ISCPDetails{TaskId: "id-1", TaskName: "task-1"},
 			},
 		}))
 
@@ -587,14 +582,33 @@ func TestCreateDaemonTask(t *testing.T) {
 	assert.Equal(t, "", v.TaskRunner)
 	assert.True(t, v.LastHeartbeat.IsZero())
 	assert.Equal(t, newTestTaskMetadata("t1"), v.Metadata)
-	assert.Equal(t, task.TaskType_TypeKafkaSinkConnector, v.TaskType)
+	assert.Equal(t, task.TaskType_ISCP, v.TaskType)
 	assert.Equal(t, uint32(10), v.Details.AccountID)
 	assert.Equal(t, "a1", v.Details.Account)
 	assert.Equal(t, "u1", v.Details.Username)
-	details, ok := v.Details.Details.(*task.Details_Connector)
+	details, ok := v.Details.Details.(*task.Details_ISCP)
 	assert.True(t, ok)
-	assert.Equal(t, "d1.t1", details.Connector.TableName)
-	assert.Equal(t, "v1", details.Connector.Options["k1"])
+	assert.Equal(t, "id-1", details.ISCP.TaskId)
+	assert.Equal(t, "task-1", details.ISCP.TaskName)
+}
+
+func TestDaemonTaskCreationRejectsUnsupportedDetails(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	t.Cleanup(func() { assert.NoError(t, s.Close()) })
+
+	ctx := context.Background()
+	assert.Error(t, s.CreateDaemonTask(ctx, newTestTaskMetadata("nil-details"), nil))
+	assert.Error(t, s.CreateDaemonTask(ctx, newTestTaskMetadata("empty-details"), &task.Details{}))
+	_, err := s.AddCDCTask(
+		ctx,
+		newTestTaskMetadata("not-cdc"),
+		&task.Details{Details: &task.Details_ISCP{}},
+		nil,
+	)
+	assert.Error(t, err)
+	got := mustGetTestDaemonTask(t, store, 0)
+	assert.Empty(t, got)
 }
 
 func TestQueryDaemonTask(t *testing.T) {
@@ -656,14 +670,29 @@ func TestHeartbeatDaemonTask(t *testing.T) {
 	mustAddTestDaemonTask(t, store, 1, v1)
 
 	v1.LastHeartbeat = time.Now()
+	updateAt := time.Now()
+	updated, err := store.UpdateDaemonTaskStatus(
+		ctx,
+		v1.ID,
+		task.TaskStatus_CancelRequested,
+		updateAt,
+		time.Time{},
+		WithTaskStatusCond(task.TaskStatus_Running),
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, updated)
 
-	err := s.HeartbeatDaemonTask(ctx, v1)
+	// A runner heartbeats from its local task snapshot. The heartbeat mutation
+	// must not restore stale control state from that snapshot.
+	err = s.HeartbeatDaemonTask(ctx, v1)
 	assert.NoError(t, err)
 
 	ts, err := s.QueryDaemonTask(ctx)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(ts))
 	assert.False(t, ts[0].LastHeartbeat.IsZero())
+	assert.Equal(t, task.TaskStatus_CancelRequested, ts[0].TaskStatus)
+	assert.Equal(t, updateAt, ts[0].UpdateAt)
 }
 
 func TestAddCdcTask1(t *testing.T) {

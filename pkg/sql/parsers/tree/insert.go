@@ -20,11 +20,16 @@ import "strings"
 type Insert struct {
 	statementImpl
 	Table TableExpr
+	// TargetDatabaseName and TargetTableName preserve the user-visible target
+	// identity even when resolution rewrites Table to a temporary physical name.
+	TargetDatabaseName Identifier
+	TargetTableName    Identifier
 
 	Accounts          IdentifierList
 	PartitionNames    IdentifierList
 	PartitionValues   PartitionValues
 	Columns           IdentifierList
+	ColumnNames       []*UnresolvedName
 	Rows              *Select
 	OnDuplicateUpdate UpdateExprs
 	Overwrite         bool
@@ -32,6 +37,7 @@ type Insert struct {
 	IsRestoreByTs     bool
 	FromDataTenantID  uint32
 	With              *With
+	Returning         SelectExprs
 }
 
 func (node *Insert) Format(ctx *FmtCtx) {
@@ -39,8 +45,11 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		node.With.Format(ctx)
 		ctx.WriteByte(' ')
 	}
+	ignore := len(node.OnDuplicateUpdate) == 1 && node.OnDuplicateUpdate[0] == nil
 	if node.Overwrite {
 		ctx.WriteString("insert overwrite ")
+	} else if ignore {
+		ctx.WriteString("insert ignore into ")
 	} else {
 		ctx.WriteString("insert into ")
 	}
@@ -56,7 +65,11 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		ctx.WriteByte(')')
 	}
 
-	if node.Columns != nil {
+	if node.ColumnNames != nil {
+		ctx.WriteString(" (")
+		formatUnresolvedNames(ctx, node.ColumnNames)
+		ctx.WriteByte(')')
+	} else if node.Columns != nil {
 		ctx.WriteString(" (")
 		node.Columns.Format(ctx)
 		ctx.WriteByte(')')
@@ -70,11 +83,17 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Rows.Format(ctx)
 	}
-	if len(node.OnDuplicateUpdate) > 0 {
+	if len(node.OnDuplicateUpdate) > 0 && !ignore {
 		ctx.WriteString(" on duplicate key update ")
 		node.OnDuplicateUpdate.Format(ctx)
 	}
+	if node.HasReturning() {
+		ctx.WriteString(" returning ")
+		node.Returning.Format(ctx)
+	}
 }
+
+func (node *Insert) HasReturning() bool { return len(node.Returning) > 0 }
 
 func (node *Insert) GetStatementType() string { return "Insert" }
 func (node *Insert) GetQueryType() string     { return QueryTypeDML }
@@ -89,8 +108,23 @@ func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Inse
 }
 
 type Assignment struct {
-	Column Identifier
-	Expr   Expr
+	Column     Identifier
+	ColumnName *UnresolvedName
+	Expr       Expr
+}
+
+type InsertColumns struct {
+	Identifiers IdentifierList
+	Names       []*UnresolvedName
+}
+
+func formatUnresolvedNames(ctx *FmtCtx, names []*UnresolvedName) {
+	for i, name := range names {
+		if i > 0 {
+			ctx.WriteString(", ")
+		}
+		name.Format(ctx)
+	}
 }
 
 type InsertPartitionClause struct {

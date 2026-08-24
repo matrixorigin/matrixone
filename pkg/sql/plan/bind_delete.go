@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,9 +72,20 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	if err != nil {
 		return 0, err
 	}
+	if err = validateDeleteTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
+		return 0, err
+	}
+	if stmt.HasReturning() {
+		if len(dmlCtx.tableDefs) != 1 {
+			return 0, returningNotSupported(builder, "multi-table DELETE")
+		}
+		if err = validateReturningTarget(builder, dmlCtx.tableDefs[0], dmlCtx.objRefs[0]); err != nil {
+			return 0, err
+		}
+	}
 
 	//FIXME: optimize truncate table?
-	if stmt.Where == nil && stmt.Limit == nil && len(stmt.TableRefs) == 0 {
+	if !stmt.HasReturning() && stmt.Where == nil && stmt.Limit == nil && len(stmt.TableRefs) == 0 {
 		var cantrucate bool
 		cantrucate, err = canDeleteRewriteToTruncate(ctx, dmlCtx)
 		if err != nil {
@@ -82,6 +94,11 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 		if cantrucate {
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "rewrite to truncate table")
+		}
+	}
+	for _, tableDef := range dmlCtx.tableDefs {
+		if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
+			return 0, err
 		}
 	}
 
@@ -151,6 +168,39 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		lastNodeID = builder.appendDistinctNode(selectCtx, lastNodeID)
 	}
 
+	var returningIrregularIndexes []*plan.IndexDef
+	if stmt.HasReturning() {
+		tableDef := dmlCtx.tableDefs[0]
+		returningIrregularIndexes = getIrregularIndexes(tableDef)
+		alias := dmlCtx.aliases[0]
+		colPos := make(map[string]int32, len(tableDef.Cols))
+		for _, col := range tableDef.Cols {
+			pos, ok := colName2Idx[0][col.Name]
+			if !ok {
+				return 0, moerr.NewInternalErrorf(
+					builder.GetContext(), "DML RETURNING cannot locate old image column %s", col.Name,
+				)
+			}
+			colPos[strings.ToLower(col.Name)] = pos
+		}
+		lastNodeID = builder.materializeReturningSource(
+			bindCtx, lastNodeID, selectNodeTag, tableDef, dmlCtx.objRefs[0], tableDef.Name, alias, colPos,
+		)
+		if len(returningIrregularIndexes) > 0 {
+			pkPos, ok := colPos[strings.ToLower(tableDef.Pkey.PkeyColName)]
+			if !ok {
+				return 0, moerr.NewInternalError(builder.GetContext(), "DML RETURNING cannot locate delete primary key image")
+			}
+			if err = builder.recordReturningIrregularMaintenance(
+				returningIrregularIndexes, tableDef, dmlCtx.objRefs[0], pkPos, true,
+			); err != nil {
+				return 0, err
+			}
+		}
+		selectNode = builder.qry.Nodes[lastNodeID]
+		selectNodeTag = selectNode.BindingTags[0]
+	}
+
 	makeDeleteIndexPartExpr := func(colPos int32, partName string, prefixLengths map[string]int) (*plan.Expr, error) {
 		partName = catalog.ResolveAlias(partName)
 		inputExpr := &plan.Expr{
@@ -170,7 +220,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 	for i, tableDef := range dmlCtx.tableDefs {
 		validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
-		if hasIrregularIndex {
+		if hasIrregularIndex && !stmt.HasReturning() {
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
 		}
 		tableDef.Indexes = validIndexes

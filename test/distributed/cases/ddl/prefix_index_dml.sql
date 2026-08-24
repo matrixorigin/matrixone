@@ -17,6 +17,7 @@ insert into prefix_idx_dml_uk values (2, 'abcdef-new', 20);
 delete from prefix_idx_dml_uk where id = 1;
 insert into prefix_idx_dml_uk values (3, 'uvwxyz-new', 30);
 select id, a, b from prefix_idx_dml_uk order by id;
+select a from prefix_idx_dml_uk force index(uq_a) where a = 'abcdef-new';
 drop table prefix_idx_dml_uk;
 
 drop table if exists prefix_idx_dml_create_backfill;
@@ -38,3 +39,30 @@ select id, a, b from prefix_idx_dml_alter_add where a = 'uvwxyz-long';
 delete from prefix_idx_dml_alter_add where id = 2;
 select count(*) from prefix_idx_dml_alter_add where a = 'lmnopq-long';
 drop table prefix_idx_dml_alter_add;
+
+-- Regression for #26813: a prefix index cannot reconstruct a full value for
+-- an index-only scan. Exercise the prefix boundary and keep a lookup control.
+drop table if exists prefix_idx_covering_scan;
+create table prefix_idx_covering_scan(id int primary key, a varchar(32), b int, index idx_a(a(4)));
+insert into prefix_idx_covering_scan values
+    (1, 'abc', 10),
+    (2, 'abcd', 20),
+    (3, 'abcdx', 30),
+    (4, 'abcdy', 40),
+    (5, '中中中中甲', 50),
+    (6, '中中中中乙', 60);
+select count(*) from prefix_idx_covering_scan force index(idx_a) where a = 'abc';
+select count(*) from prefix_idx_covering_scan ignore index(idx_a) where a = 'abc';
+select count(*) from prefix_idx_covering_scan force index(idx_a) where a = 'abcd';
+select count(*) from prefix_idx_covering_scan ignore index(idx_a) where a = 'abcd';
+select count(*) from prefix_idx_covering_scan force index(idx_a) where a = 'abcdx';
+select count(*) from prefix_idx_covering_scan ignore index(idx_a) where a = 'abcdx';
+select a from prefix_idx_covering_scan force index(idx_a) where a = 'abcdx';
+select a from prefix_idx_covering_scan ignore index(idx_a) where a = 'abcdx';
+select a from prefix_idx_covering_scan force index(idx_a) where a = '中中中中甲';
+select a from prefix_idx_covering_scan ignore index(idx_a) where a = '中中中中甲';
+select id, a, b from prefix_idx_covering_scan force index(idx_a) where a = 'abcdx';
+select mo_ctl('dn', 'flush', 'prefix_index_dml.prefix_idx_covering_scan');
+select a from prefix_idx_covering_scan force index(idx_a) where a = 'abcdx';
+select a from prefix_idx_covering_scan force index(idx_a) where a = '中中中中甲';
+drop table prefix_idx_covering_scan;

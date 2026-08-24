@@ -26,9 +26,13 @@ const (
 	CDCWatermarkErrMsgMaxLen = 256
 
 	CDCState_Running = "running"
-	CDCState_Pausing = "pausing"
-	CDCState_Paused  = "paused"
-	CDCState_Failed  = "failed"
+	// CDCState_Restarting is the durable admission marker for a restart. It
+	// distinguishes the state observed by a replacement startup from a later
+	// pause, which may also end in paused.
+	CDCState_Restarting = "restarting"
+	CDCState_Pausing    = "pausing"
+	CDCState_Paused     = "paused"
+	CDCState_Failed     = "failed"
 )
 
 var CDCSQLBuilder = cdcSQLBuilder{}
@@ -101,7 +105,7 @@ const (
 		"WHERE 1=1 AND account_id = %d"
 
 	CDCGetCdcTaskStateSqlTemplate = "SELECT " +
-		"state " +
+		"state, err_msg " +
 		"FROM `mo_catalog`.`mo_cdc_task` " +
 		"WHERE 1=1 AND account_id = %d AND task_id = '%s'"
 
@@ -422,7 +426,7 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCGetTaskStateSqlTemplate_Idx: {
 		SQL:         CDCGetCdcTaskStateSqlTemplate,
-		OutputAttrs: []string{"state"},
+		OutputAttrs: []string{"state", "err_msg"},
 	},
 	CDCInsertWatermarkSqlTemplate_Idx: {
 		SQL: CDCInsertWatermarkSqlTemplate,

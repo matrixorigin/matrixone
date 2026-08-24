@@ -137,7 +137,7 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {
 		typ := tblArg.Rets[i].Typ
-		retSchema[i] = types.New(types.T(typ.Id), typ.Width, typ.Scale)
+		retSchema[i] = types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
 	}
 	tblArg.ctr.retSchema = retSchema
 
@@ -168,10 +168,16 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = moTransactionsPrepare(proc, tblArg)
 	case "mo_cache":
 		tblArg.ctr.state, err = moCachePrepare(proc, tblArg)
+	case "mo_check_constraints":
+		tblArg.ctr.state, err = checkConstraintsPrepare(proc, tblArg)
 	case "fulltext_index_scan":
 		tblArg.ctr.state, err = fulltextIndexScanPrepare(proc, tblArg)
 	case "fulltext_index_tokenize":
 		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
+	case "fulltext2_create":
+		tblArg.ctr.state, err = fulltext2CreatePrepare(proc, tblArg)
+	case "fulltext2_compact":
+		tblArg.ctr.state, err = fulltext2CompactPrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
 	case "moplugin_table":
@@ -182,12 +188,16 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = hnswSearchPrepare(proc, tblArg)
 	case "ivf_create":
 		tblArg.ctr.state, err = ivfCreatePrepare(proc, tblArg)
-	case "ivf_search":
-		tblArg.ctr.state, err = ivfSearchPrepare(proc, tblArg)
+	case "fulltext2_search":
+		tblArg.ctr.state, err = fulltext2SearchPrepare(proc, tblArg)
 	case "parse_jsonl_data":
 		tblArg.ctr.state, err = parseJsonlDataPrepare(proc, tblArg)
 	case "parse_jsonl_file":
 		tblArg.ctr.state, err = parseJsonlFilePrepare(proc, tblArg)
+	case "esql_tvf":
+		tblArg.ctr.state, err = esqlTvfPrepare(proc, tblArg)
+	case "sql_tvf":
+		tblArg.ctr.state, err = sqlTvfPrepare(proc, tblArg)
 	case "table_stats":
 		tblArg.ctr.state, err = tableStatsPrepare(proc, tblArg)
 	case "load_file_chunks":

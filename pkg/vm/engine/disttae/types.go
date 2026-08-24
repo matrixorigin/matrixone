@@ -727,6 +727,21 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	return txn
 }
 
+// SupportsAutoIncrEpochFence reports the capability of the exact TN snapshot
+// captured by this transaction. Missing or legacy targets fail closed. The
+// V7-only terminal commit remains the authoritative mixed-version boundary.
+func (txn *Transaction) SupportsAutoIncrEpochFence() bool {
+	if len(txn.tnStores) == 0 {
+		return false
+	}
+	for _, store := range txn.tnStores {
+		if !store.AutoIncrEpochFenceSupported {
+			return false
+		}
+	}
+	return true
+}
+
 func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
 	txn.cn_flushed_s3_tombstone_object_stats_list.Store(stats, nil)
 }
@@ -1189,8 +1204,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			if txn.writes[i].bat == nil {
 				continue
 			}
-			txn.workspaceSize -= uint64(txn.writes[i].bat.Size())
-			txn.writes[i].bat.Clean(txn.proc.Mp())
+			txn.releaseWorkspaceEntryBatchLocked(i)
 		}
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
@@ -1207,6 +1221,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			}
 		}
 	}
+	txn.assertWorkspaceAccountingLocked()
 	// rollback current statement's writes info
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
@@ -1280,9 +1295,13 @@ type Entry struct {
 	// blockName for s3 file
 	fileName string
 	//tuples would be applied to the table which belongs to the tenant(accountId)
-	bat       *batch.Batch
-	tnStore   DNStore
-	pkChkByTN int8
+	bat *batch.Batch
+	// accountedSize is the batch size currently included in workspaceSize.
+	// Keeping it on the entry lets in-place mutations remove the old
+	// contribution before accounting for the batch's new state.
+	accountedSize uint64
+	tnStore       DNStore
+	pkChkByTN     int8
 	// autoIncrEpoch is the allocator epoch used to plan this user-table write.
 	// autoIncrEpochKnown distinguishes a valid initial zero epoch from an
 	// old CN that did not send the dependency.

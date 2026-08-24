@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -384,6 +385,99 @@ func TestZoneMapAnyInConstNull(t *testing.T) {
 	lower, upper := zm.SubVecIn(vec)
 	require.Equal(t, 0, lower)
 	require.Equal(t, 0, upper)
+}
+
+func TestZoneMapFloatNaNPruningContract(t *testing.T) {
+	t.Run("float32", func(t *testing.T) {
+		testZoneMapFloatNaNPruningContract(
+			t, types.T_float32, float32(math.NaN()))
+	})
+	t.Run("float64", func(t *testing.T) {
+		testZoneMapFloatNaNPruningContract(
+			t, types.T_float64, math.NaN())
+	})
+}
+
+func testZoneMapFloatNaNPruningContract[T ~float32 | ~float64](
+	t *testing.T,
+	oid types.T,
+	nan T,
+) {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	// New metadata ignores NaN regardless of its batch position.
+	for _, values := range [][]T{{nan, 7}, {7, nan}} {
+		input := newSortedFloatTestVector(t, mp, oid, values, false)
+		zm := NewZM(oid, 0)
+		require.NoError(t, BatchUpdateZM(zm, input))
+		input.Free(mp)
+		require.True(t, zm.IsInited())
+		require.Equal(t, T(7), zm.GetMin())
+		require.Equal(t, T(7), zm.GetMax())
+	}
+
+	allNaN := newSortedFloatTestVector(t, mp, oid, []T{nan, nan}, false)
+	allNaNZM := NewZM(oid, 0)
+	require.NoError(t, BatchUpdateZM(allNaNZM, allNaN))
+	allNaN.Free(mp)
+	require.False(t, allNaNZM.IsInited())
+
+	// A legacy [NaN, NaN] summary might have hidden ordinary values. It must
+	// disable every negative pruning decision, including the Bloom subrange
+	// and the sorted seek/quick-break predicates.
+	legacyPoisoned := NewZM(oid, 0)
+	UpdateZM(legacyPoisoned, types.EncodeValue(nan, oid))
+	keys := newSortedFloatTestVector(
+		t, mp, oid, []T{-100, 7, 100, 200}, true)
+	require.True(t, legacyPoisoned.AnyIn(keys))
+	lower, upper := legacyPoisoned.SubVecIn(keys)
+	require.Equal(t, 0, lower)
+	require.Equal(t, keys.Length(), upper)
+	seven := types.EncodeValue(T(7), oid)
+	require.True(t, legacyPoisoned.AnyGEByValue(seven))
+	require.True(t, legacyPoisoned.AnyLEByValue(seven))
+	keys.Free(mp)
+
+	// Current vectors use slices' total float order (NaN first). Zonemap
+	// binary searches must use the same order and narrow Bloom's window to the
+	// one ordinary candidate which can overlap [1, 9].
+	ordinary := NewZM(oid, 0)
+	UpdateZM(ordinary, types.EncodeValue(T(1), oid))
+	UpdateZM(ordinary, types.EncodeValue(T(9), oid))
+	sortedKeys := newSortedFloatTestVector(
+		t, mp, oid, []T{nan, -5, 7, 10}, true)
+	require.True(t, ordinary.AnyIn(sortedKeys))
+	lower, upper = ordinary.SubVecIn(sortedKeys)
+	require.Equal(t, 2, lower)
+	require.Equal(t, 3, upper)
+	sortedKeys.Free(mp)
+
+	onlyNaNKeys := newSortedFloatTestVector(
+		t, mp, oid, []T{nan, nan, nan, nan}, true)
+	require.False(t, ordinary.AnyIn(onlyNaNKeys))
+	onlyNaNKeys.Free(mp)
+}
+
+func newSortedFloatTestVector[T ~float32 | ~float64](
+	t *testing.T,
+	mp *mpool.MPool,
+	oid types.T,
+	values []T,
+	sortValues bool,
+) *vector.Vector {
+	t.Helper()
+	vec := vector.NewVec(oid.ToType())
+	for _, value := range values {
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	}
+	if sortValues {
+		vec.InplaceSort()
+	}
+	return vec
 }
 
 func TestZMArray(t *testing.T) {

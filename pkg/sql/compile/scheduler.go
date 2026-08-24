@@ -446,11 +446,11 @@ func (c *Compile) evaluateQueryPlacement(
 	if c.pn != nil {
 		qry = c.pn.GetQuery()
 	}
-	isIvfEntriesScan := queryHasIvfSearchEntriesInternalScan(qry)
+	isVectorIndexScan := queryHasVectorIndexScan(qry)
 	// The local partition is the only one that can see the coordinator's
 	// appendable IVF ranges. Keep it at partition zero; persisted ranges remain
 	// distributed by ObjectID across all selected workers.
-	if isIvfEntriesScan {
+	if isVectorIndexScan {
 		req.CurrentCNPolicy = schedule.CurrentCNRequired
 		req.CurrentCNOrdinalZero = true
 	}
@@ -645,12 +645,12 @@ func droppedWorkerReasonCounts(dropped schedule.DroppedWorkers) map[string]int {
 	return counts
 }
 
-func queryHasIvfSearchEntriesInternalScan(qry *plan.Query) bool {
+func queryHasVectorIndexScan(qry *plan.Query) bool {
 	if qry == nil {
 		return false
 	}
 	for _, node := range qry.GetNodes() {
-		if plan2.IsIvfSearchEntriesInternalScan(node) {
+		if node.GetNodeType() == plan.Node_VECTOR_INDEX_SCAN {
 			return true
 		}
 	}

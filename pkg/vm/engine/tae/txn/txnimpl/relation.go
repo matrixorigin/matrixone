@@ -212,6 +212,12 @@ func (h *txnRelation) SoftDeleteObject(id *types.Objectid, isTombstone bool) (er
 	return h.Txn.GetStore().SoftDeleteObject(isTombstone, fp)
 }
 
+func (h *txnRelation) SoftDeleteObjectByCN(id *types.Objectid, isTombstone bool) (err error) {
+	fp := h.table.entry.AsCommonID()
+	fp.SetObjectID(id)
+	return h.Txn.GetStore().SoftDeleteObjectByCN(isTombstone, fp)
+}
+
 func (h *txnRelation) MakeObjectItOnSnap(isTombstone bool) handle.ObjectIt {
 	return newObjectItOnSnap(h.table, isTombstone)
 }

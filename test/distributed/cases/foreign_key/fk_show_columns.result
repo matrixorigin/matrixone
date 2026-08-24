@@ -310,7 +310,10 @@ refer_table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    �
 refer_column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 refer_column_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    𝄀
 on_delete  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦
+on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_index_name  ¦  VARCHAR(5000)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+on_delete_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦    𝄀
+on_update_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦
 desc	mo_catalog.mo_snapshots               ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 snapshot_id  ¦  UUID(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
@@ -632,7 +635,10 @@ refer_table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    �
 refer_column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 refer_column_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    𝄀
 on_delete  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦
+on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_index_name  ¦  VARCHAR(5000)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+on_delete_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦    𝄀
+on_update_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦
 show columns from	mo_catalog.mo_snapshots           ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 snapshot_id  ¦  UUID(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
@@ -932,7 +938,10 @@ refer_table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    �
 refer_column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 refer_column_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    𝄀
 on_delete  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦
+on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_index_name  ¦  VARCHAR(5000)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+on_delete_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦    𝄀
+on_update_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦
 desc	mo_catalog.mo_snapshots               ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 snapshot_id  ¦  UUID(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
@@ -1232,7 +1241,10 @@ refer_table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    �
 refer_column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 refer_column_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  0  ¦    ¦    𝄀
 on_delete  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦
+on_update  ¦  VARCHAR(128)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+referenced_index_name  ¦  VARCHAR(5000)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
+on_delete_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦    𝄀
+on_update_origin  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  ACTION_ORIGIN_EXPLICIT  ¦    ¦
 show columns from	mo_catalog.mo_snapshots           ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 snapshot_id  ¦  UUID(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀

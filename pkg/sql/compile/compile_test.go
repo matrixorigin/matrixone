@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -30,8 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 
@@ -42,14 +47,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -58,11 +68,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestHasOrderedGroupConcat(t *testing.T) {
+	ordered := &plan.Node{
+		AggList: []*plan.Expr{{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func:          &plan.ObjectRef{ObjName: "group_concat"},
+				AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+			}},
+		}},
+	}
+	require.True(t, hasOrderedGroupConcat(ordered))
+
+	ordered.GroupBy = []*plan.Expr{{}}
+	require.True(t, hasOrderedGroupConcat(ordered))
+	ordered.GroupBy = nil
+	ordered.AggList[0].GetF().AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
+	require.False(t, hasOrderedGroupConcat(ordered))
+}
+
+func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	volatile := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+		Obj: randFn.GetEncodedOverloadID(), ObjName: "rand",
+	}}}}
+	stable := plan2.MakePlan2Int64ConstExprWithType(1)
+
+	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs([]*plan.Expr{stable, volatile}))
+}
+
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
 	proc.GetSessionInfo().Buf = buffer.New()
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return ^uint64(0), nil
+		}
 		return "STRICT_TRANS_TABLES", nil
 	})
 	compilerCtx := plan2.NewEmptyCompilerContext()
@@ -111,6 +154,448 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
 	require.Nil(t, params.GetArea())
+	c.Release()
+	proc.Free()
+	proc.GetSessionInfo().Buf.Free()
+}
+
+func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.GetSessionInfo().Buf = buffer.New()
+	t.Cleanup(func() {
+		proc.Free()
+		proc.GetSessionInfo().Buf.Free()
+	})
+	limitValue := uint64(1)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return limitValue, nil
+		}
+		return "STRICT_TRANS_TABLES", nil
+	})
+
+	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx.SetContext(ctx)
+	const sql = "select 1 union all select 2"
+	stmts, err := mysql.Parse(ctx, sql, 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+
+	ctrl := gomock.NewController(t)
+	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	rows := 0
+	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat != nil {
+			rows += bat.RowCount()
+		}
+		return nil
+	}
+	c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	t.Cleanup(c.Release)
+	c.SetIsPrepare(true)
+	require.NoError(t, c.Compile(ctx, pn, fill))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, 1, rows)
+
+	limitValue = 0
+	rows = 0
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Zero(t, rows)
+}
+
+func TestSQLSelectLimitOperatorSelection(t *testing.T) {
+	resolverErr := errors.New("sql_select_limit resolver failed")
+	tests := []struct {
+		name       string
+		limit      uint64
+		resolveErr error
+		isPrepare  bool
+		wantLimit  bool
+	}{
+		{name: "ordinary default is a no-op", limit: ^uint64(0), wantLimit: false},
+		{name: "ordinary finite value is enforced", limit: 1, wantLimit: true},
+		{name: "prepared default remains dynamic", limit: ^uint64(0), isPrepare: true, wantLimit: true},
+		{name: "resolver error fails compilation", resolveErr: resolverErr},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.ApplySQLSelectLimit = true
+			proc.GetSessionInfo().Buf = buffer.New()
+			t.Cleanup(func() {
+				proc.Free()
+				proc.GetSessionInfo().Buf.Free()
+			})
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == plan2.SQLSelectLimitVariable {
+					return tc.limit, tc.resolveErr
+				}
+				return "STRICT_TRANS_TABLES", nil
+			})
+
+			compilerCtx := plan2.NewEmptyCompilerContext()
+			compilerCtx.SetContext(ctx)
+			const sql = "select 1 union all select 2"
+			stmts, err := mysql.Parse(ctx, sql, 1)
+			require.NoError(t, err)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+			require.NoError(t, err)
+			pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+
+			ctrl := gomock.NewController(t)
+			txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+			proc.Base.TxnClient = txnCli
+			proc.Base.TxnOperator = txnOp
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+
+			c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+			t.Cleanup(c.Release)
+			c.SetIsPrepare(tc.isPrepare)
+			err = c.Compile(ctx, pn, func(*batch.Batch, *perfcounter.CounterSet) error {
+				return nil
+			})
+			if tc.resolveErr != nil {
+				require.ErrorIs(t, err, tc.resolveErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLimit, compiledScopesContainOperator(c.scopes, vm.Limit))
+		})
+	}
+}
+
+func TestSQLSelectLimitIsResolvedForEachCachedPlanReuse(t *testing.T) {
+	tests := []struct {
+		name   string
+		limits []uint64
+	}{
+		{name: "finite to finite", limits: []uint64{2, 4}},
+		{name: "unlimited to finite", limits: []uint64{^uint64(0), 3}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.ApplySQLSelectLimit = true
+			limitIndex := 0
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == plan2.SQLSelectLimitVariable {
+					return tc.limits[limitIndex], nil
+				}
+				return "STRICT_TRANS_TABLES", nil
+			})
+			t.Cleanup(proc.Free)
+
+			query := &plan.Query{
+				StmtType:            plan.Query_SELECT,
+				ApplySqlSelectLimit: true,
+				Steps:               []int32{0},
+				Nodes:               []*plan.Node{{NodeId: 0, NodeType: plan.Node_PROJECT}},
+			}
+			queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+			compiler := &Compile{proc: proc}
+
+			for i, want := range tc.limits {
+				limitIndex = i
+				materialization, err := compiler.materializeSQLSelectLimit(queryPlan)
+				require.NoError(t, err)
+				require.False(t, query.ApplySqlSelectLimit)
+				if want == ^uint64(0) {
+					require.Nil(t, query.Nodes[0].Limit)
+				} else {
+					require.Equal(t, want, query.Nodes[0].Limit.GetLit().GetU64Val())
+				}
+				materialization.restore()
+				require.True(t, query.ApplySqlSelectLimit)
+				require.Nil(t, query.Nodes[0].Limit)
+			}
+		})
+	}
+}
+
+type sqlSelectLimitReleaseOperator struct {
+	*colexec.MockOperator
+	released bool
+}
+
+func (op *sqlSelectLimitReleaseOperator) Release() {
+	op.released = true
+}
+
+func TestSQLSelectLimitResolverFailureReleasesCompileStepsTree(t *testing.T) {
+	resolverErr := errors.New("sql_select_limit resolver failed")
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return nil, resolverErr
+		}
+		return "STRICT_TRANS_TABLES", nil
+	})
+	t.Cleanup(proc.Free)
+
+	c := &Compile{
+		proc: proc, anal: &AnalyzeModule{}, ncpu: 1,
+		execType: plan2.ExecTypeAP_ONECN,
+	}
+	owners := []*sqlSelectLimitReleaseOperator{
+		{MockOperator: colexec.NewMockOperator()},
+		{MockOperator: colexec.NewMockOperator()},
+	}
+	scopes := make([]*Scope, len(owners))
+	for i, owner := range owners {
+		scope := newScope(Normal)
+		scope.NodeInfo.Mcpu = 1
+		scope.Proc = proc.NewNoContextChildProc(0)
+		scope.RootOp = owner
+		scopes[i] = scope
+	}
+
+	qry := &plan.Query{
+		StmtType:            plan.Query_SELECT,
+		ApplySqlSelectLimit: true,
+		Steps:               []int32{0},
+		Nodes:               []*plan.Node{{NodeId: 0, NodeType: plan.Node_PROJECT}},
+	}
+	compiled, err := c.compileSteps(qry, scopes, 0)
+	require.ErrorIs(t, err, resolverErr)
+	require.Nil(t, compiled)
+	for _, owner := range owners {
+		require.True(t, owner.released)
+	}
+}
+
+func TestCompileStepsKeepsOutputOnCurrentCNForSingleRemoteScope(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local-cn:6001"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+
+	remote := newScope(Remote)
+	remote.NodeInfo = engine.Node{Addr: "remote-cn:6001", Mcpu: 1}
+	remote.Proc = c.proc.NewNoContextChildProc(0)
+	remote.setRootOperator(projection.NewArgument())
+
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_PROJECT,
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{remote}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	t.Cleanup(func() { ReleaseScopes(compiled) })
+
+	resultScope := compiled[0]
+	require.Equal(t, Merge, resultScope.Magic)
+	require.Equal(t, c.addr, resultScope.NodeInfo.Addr)
+	require.Equal(t, vm.Output, resultScope.RootOp.OpType())
+	require.Equal(t, vm.Merge, resultScope.RootOp.GetOperatorBase().GetChildren(0).OpType())
+	require.Len(t, resultScope.PreScopes, 1)
+
+	remote = resultScope.PreScopes[0]
+	require.Equal(t, Remote, remote.Magic)
+	require.Equal(t, vm.Connector, remote.RootOp.OpType())
+	require.Equal(t, vm.Projection, remote.RootOp.GetOperatorBase().GetChildren(0).OpType())
+
+	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(remote)
+	require.False(t, withoutOutput)
+	require.Equal(t, vm.Projection, encodedScope.RootOp.OpType())
+	_, err = encodeScope(encodedScope)
+	require.NoError(t, err)
+}
+
+func TestCompileStepsReusesSingleScopeExecutingOnCurrentCNForOutput(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local-cn:6001"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+
+	local := newScope(Remote)
+	local.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	local.Proc = c.proc.NewNoContextChildProc(0)
+	local.setRootOperator(projection.NewArgument())
+
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_PROJECT,
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{local}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	t.Cleanup(func() { ReleaseScopes(compiled) })
+
+	require.Same(t, local, compiled[0])
+	require.Empty(t, compiled[0].PreScopes)
+	require.Equal(t, vm.Output, compiled[0].RootOp.OpType())
+	require.Equal(t, vm.Projection, compiled[0].RootOp.GetOperatorBase().GetChildren(0).OpType())
+}
+
+func compiledScopesContainOperator(scopes []*Scope, opType vm.OpType) bool {
+	for _, scope := range scopes {
+		found := false
+		_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			found = found || op.OpType() == opType
+			return nil
+		})
+		if found || compiledScopesContainOperator(scope.PreScopes, opType) {
+			return true
+		}
+	}
+	return false
+}
+
+type retryRecordingResultSink struct {
+	events []string
+	rows   map[uint64]int
+}
+
+type generationCheckingResultSink struct {
+	activeGeneration uint64
+	events           []string
+}
+
+func (s *generationCheckingResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
+	s.activeGeneration = generation
+	s.events = append(s.events, fmt.Sprintf("begin:%d", generation))
+	return nil
+}
+
+func (s *generationCheckingResultSink) Write(generation uint64, bat *batch.Batch, _ *perfcounter.CounterSet) error {
+	if bat == nil {
+		return nil
+	}
+	s.events = append(s.events, fmt.Sprintf("write:%d", generation))
+	if generation != s.activeGeneration {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("result sink generation mismatch: active=%d write=%d", s.activeGeneration, generation))
+	}
+	return nil
+}
+
+func (s *generationCheckingResultSink) SealAttempt(generation uint64) error {
+	s.events = append(s.events, fmt.Sprintf("seal:%d", generation))
+	return nil
+}
+
+func (s *generationCheckingResultSink) AbortAttempt(generation uint64, _ error) error {
+	s.events = append(s.events, fmt.Sprintf("abort:%d", generation))
+	return nil
+}
+
+func (s *retryRecordingResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
+	s.events = append(s.events, fmt.Sprintf("begin:%d", generation))
+	if s.rows == nil {
+		s.rows = make(map[uint64]int)
+	}
+	return nil
+}
+
+func (s *retryRecordingResultSink) Write(generation uint64, bat *batch.Batch, _ *perfcounter.CounterSet) error {
+	if bat == nil {
+		return nil
+	}
+	s.events = append(s.events, fmt.Sprintf("write:%d", generation))
+	s.rows[generation] += bat.RowCount()
+	if generation < 2 {
+		return moerr.NewTxnNeedRetryNoCtx()
+	}
+	return nil
+}
+
+func (s *retryRecordingResultSink) SealAttempt(generation uint64) error {
+	s.events = append(s.events, fmt.Sprintf("seal:%d", generation))
+	return nil
+}
+
+func (s *retryRecordingResultSink) AbortAttempt(generation uint64, _ error) error {
+	s.events = append(s.events, fmt.Sprintf("abort:%d", generation))
+	delete(s.rows, generation)
+	return nil
+}
+
+func TestResultWriterCapturesExecutionGeneration(t *testing.T) {
+	sink := &retryRecordingResultSink{rows: make(map[uint64]int)}
+	c := &Compile{resultSink: sink, executionGeneration: 3}
+	writer := c.resultWriter()
+	c.executionGeneration = 4
+	require.NoError(t, writer(batch.EmptyBatch, nil))
+	require.Equal(t, []string{"write:3"}, sink.events)
+}
+
+func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().Buf = buffer.New()
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return ^uint64(0), nil
+		}
+		return "STRICT_TRANS_TABLES", nil
+	})
+	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx.SetContext(ctx)
+	stmts, err := mysql.Parse(ctx, "select 1", 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+
+	ctrl := gomock.NewController(t)
+	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	c := NewCompile("test", "test", "select 1", "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	require.NoError(t, c.Compile(ctx, pn, func(*batch.Batch, *perfcounter.CounterSet) error {
+		return errors.New("streaming callback must not be used when ResultSink is installed")
+	}))
+	sink := &retryRecordingResultSink{}
+	c.SetResultSink(sink)
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"begin:0", "write:0", "abort:0",
+		"begin:1", "write:1", "abort:1",
+		"begin:2", "write:2", "seal:2",
+	}, sink.events)
+	require.Equal(t, map[uint64]int{2: 1}, sink.rows)
+	require.Equal(t, uint64(2), c.executionGeneration)
+
+	// Compile.Reset is the prepared-statement reuse boundary. The next execution
+	// must rebuild its output callback for generation zero even when the previous
+	// execution succeeded after retries on a later generation.
+	nextSink := &generationCheckingResultSink{}
+	c.SetResultSink(nextSink)
+	require.NoError(t, c.Reset(proc, time.Now(), func(*batch.Batch, *perfcounter.CounterSet) error {
+		return errors.New("streaming callback must not be used when ResultSink is installed")
+	}, "select 1"))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"begin:0", "write:0", "seal:0"}, nextSink.events)
 
 	c.Release()
 	proc.Free()
@@ -285,6 +770,44 @@ func TestShouldPrePipelineLockTable(t *testing.T) {
 	require.False(t, target.LockTableAtTheEnd)
 }
 
+func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {
+	for _, lockTable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("table=%t", lockTable), func(t *testing.T) {
+			node := &plan.Node{LockTargets: []*plan.LockTarget{{
+				TableId: 42, PrimaryColTyp: plan.Type{Id: int32(types.T_int64)},
+				Mode: lockpb.LockMode_Shared, LockTable: lockTable,
+			}}}
+
+			op, err := constructLockOp(node, nil)
+			require.NoError(t, err)
+			targets := op.CopyToPipelineTarget()
+			require.Len(t, targets, 1)
+			assert.Equal(t, lockTable, targets[0].LockTable)
+			assert.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
+		})
+	}
+}
+
+func TestValidateForeignKeyParentTxnMode(t *testing.T) {
+	ctx := context.Background()
+	query := &plan.Query{DetectSqls: []string{"REPLACE_PARENT_LOCK:select 1 for update"}}
+
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
+		"optimistic transaction mode")
+	query.DetectSqls = []string{"REPLACE_PARENT_PLAN:"}
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
+		"optimistic transaction mode")
+	query.DetectSqls = []string{"UPDATE_PARENT_PLAN:"}
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
+		"UPDATE on a referenced parent table")
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx,
+		&plan.Query{DetectSqls: []string{"select true"}}, false))
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, nil, false))
+}
+
 func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 	runtime.RunTest(
 		"",
@@ -330,7 +853,8 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 					c := &Compile{
 						proc: proc,
 						lockTables: map[uint64]*plan.LockTarget{
-							10: {TableId: 10, PrimaryColTyp: plan.Type{Id: int32(types.T_int32)}},
+							10: {TableId: 10, PrimaryColTyp: plan.Type{Id: int32(types.T_int32)},
+								Mode: lockpb.LockMode_Shared},
 							11: {TableId: 11, PrimaryColTyp: plan.Type{Id: int32(types.T_int32)}},
 						},
 					}
@@ -338,24 +862,40 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 					require.NoError(t, c.lockTable())
 					require.True(t, txnOp.HasLockTable(10))
 					require.True(t, txnOp.HasLockTable(11))
+
+					sharedTxn, err := txnClient.New(ctx, timestamp.Timestamp{})
+					require.NoError(t, err)
+					defer func() { require.NoError(t, sharedTxn.Rollback(ctx)) }()
+					sharedProc := process.NewTopProcess(ctx, mpool.MustNewZero(), txnClient, sharedTxn,
+						nil, services[0], nil, nil, nil, nil, nil)
+					require.NoError(t, lockop.LockTableWithMode(nil, sharedProc, 10,
+						types.T_int32.ToType(), lockpb.LockMode_Shared, false))
 				},
 				nil,
 			)
 		},
 	)
 }
-func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
-	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI)
+func newTestTxnClientAndOp(
+	ctrl *gomock.Controller,
+	workspaces ...client.Workspace,
+) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI, workspaces...)
 }
 
 func newTestTxnClientAndOpWithIsolation(
 	ctrl *gomock.Controller,
 	isolation txn.TxnIsolation,
+	workspaces ...client.Workspace,
 ) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := client.Workspace(&Ws{})
+	if len(workspaces) > 0 {
+		workspace = workspaces[0]
+	}
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
@@ -367,6 +907,52 @@ func newTestTxnClientAndOpWithIsolation(
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	return txnClient, txnOperator
+}
+
+func TestPlanSnapshotGenerationCaptureAndScopeReuse(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	currentSnapshot := timestamp.Timestamp{PhysicalTime: 10}
+	txnOperator.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
+		return txn.TxnMeta{SnapshotTS: currentSnapshot}
+	}).AnyTimes()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.TxnOperator = txnOperator
+	c := &Compile{proc: proc}
+	c.capturePlanSnapshot()
+
+	child := proc.NewNoContextChildProc(0)
+	got, ok := child.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, currentSnapshot, got)
+
+	// Prepared scope reuse is a new execution generation. Refresh both the top
+	// process and every retained pipeline process before locks can run.
+	currentSnapshot = timestamp.Timestamp{PhysicalTime: 20}
+	c.capturePlanSnapshot()
+	scope := &Scope{Proc: child}
+	require.NoError(t, scope.resetForReuse(c))
+	got, ok = child.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, currentSnapshot, got)
+
+	// A data-only retry recompiles pipelines from the same logical plan. It
+	// retains the original binding even after the transaction snapshot moves.
+	currentSnapshot = timestamp.Timestamp{PhysicalTime: 30}
+	c.reusePlanSnapshot = true
+	c.bindPlanSnapshotForCompile()
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 20}, got)
+
+	// A definition-change retry rebuilds the logical plan and starts a new plan
+	// generation at the transaction's refreshed snapshot.
+	c.reusePlanSnapshot = false
+	c.bindPlanSnapshotForCompile()
+	got, ok = proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, currentSnapshot, got)
 }
 
 var (
@@ -467,6 +1053,212 @@ func TestDebugLogFor19288(t *testing.T) {
 	}
 }
 
+func TestPreferPrimaryScopeResult(t *testing.T) {
+	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
+	executionErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	joinedExecutionErr := errors.Join(executionErr, context.Canceled)
+	joinedDeadlineErr := errors.Join(context.DeadlineExceeded, context.Canceled)
+	queryInterrupted := moerr.NewQueryInterrupted(context.Background())
+	joinedCancellationErr := errors.Join(context.Canceled, queryInterrupted)
+	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
+	cancelInternal(executionErr)
+	internalNormalCancelCtx, cancelInternalNormal := context.WithCancelCause(context.Background())
+	cancelInternalNormal(nil)
+	activeQueryCtx := context.Background()
+	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
+	cancelExternal()
+	externalDeadlineCtx, cancelExternalDeadline := context.WithTimeout(context.Background(), 0)
+	defer cancelExternalDeadline()
+	queryDeadlineCauseCtx, cancelQueryDeadlineCause := context.WithTimeoutCause(
+		context.Background(), 0, moerr.CauseInternalExecutorExec)
+	defer cancelQueryDeadlineCause()
+	pipelineDeadlineCauseCtx, cancelPipelineDeadlineCause := context.WithCancelCause(queryDeadlineCauseCtx)
+	defer cancelPipelineDeadlineCause(nil)
+	externalCause := moerr.NewInternalErrorNoCtx("client canceled query")
+	externalCauseCtx, cancelExternalCause := context.WithCancelCause(context.Background())
+	cancelExternalCause(externalCause)
+	remoteQueryCtx, cancelRemoteQuery := context.WithCancel(
+		context.WithValue(context.Background(), defines.RemoteRunContext{}, true))
+	remotePipelineCtx, cancelRemotePipeline := context.WithCancelCause(remoteQueryCtx)
+	cancelRemoteQuery()
+	defer cancelRemotePipeline(nil)
+
+	tests := []struct {
+		name      string
+		current   scopeRunResult
+		candidate scopeRunResult
+		want      error
+	}{
+		{name: "first error", candidate: scopeRunResult{err: cleanupErr}, want: cleanupErr},
+		{name: "execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "joined execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedExecutionErr}, want: joinedExecutionErr},
+		{name: "joined independent deadline replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedDeadlineErr}, want: context.DeadlineExceeded},
+		{name: "causal cancellation replaces cleanup fallback with execution error", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, want: executionErr},
+		{name: "external cancellation replaces cleanup fallback with external cause", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx}, want: externalCause},
+		{name: "cleanup fallback does not replace execution error", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: cleanupErr}, want: executionErr},
+		{name: "unresolved canceled sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled}, want: cleanupErr},
+		{name: "unresolved interrupted sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: cleanupErr},
+		{name: "unresolved joined cancellation is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: cleanupErr},
+		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "remote query cancellation remains primary", current: scopeRunResult{err: queryInterrupted, ctx: remotePipelineCtx, queryCtx: remoteQueryCtx}, want: context.Canceled},
+		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx, queryCtx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
+		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
+		{name: "query deadline classification survives custom timeout cause", current: scopeRunResult{err: context.DeadlineExceeded, ctx: pipelineDeadlineCauseCtx, queryCtx: queryDeadlineCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
+		{name: "external cancellation cause remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx, queryCtx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
+		{name: "first substantive error remains", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: moerr.NewInternalErrorNoCtx("later")}, want: executionErr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := preferPrimaryScopeResult(tt.current, tt.candidate)
+			got, _ = got.resolveCancelCause()
+			if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
+				require.ErrorIs(t, got.err, tt.want)
+			} else {
+				require.Same(t, tt.want, got.err)
+			}
+		})
+	}
+}
+
+type scopeRunCancelErrorOperator struct {
+	*colexec.MockOperator
+	cancelCause error
+	runErr      error
+}
+
+func (op *scopeRunCancelErrorOperator) Call(proc *process.Process) (vm.CallResult, error) {
+	proc.Cancel(op.cancelCause)
+	return vm.NewCallResult(), op.runErr
+}
+
+func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
+	primaryErr := moerr.NewInternalErrorNoCtx("hash build memory budget exceeded")
+	tests := []struct {
+		name        string
+		cancelCause error
+		runErr      error
+		want        error
+	}{
+		{
+			name:        "substantive execution error survives normal sibling cancellation",
+			cancelCause: nil,
+			runErr:      primaryErr,
+			want:        primaryErr,
+		},
+		{
+			name:        "joined execution error survives normal sibling cancellation",
+			cancelCause: nil,
+			runErr:      errors.Join(primaryErr, context.Canceled),
+			want:        primaryErr,
+		},
+		{
+			name:        "cancellation resolves to substantive pipeline cause",
+			cancelCause: primaryErr,
+			runErr:      context.Canceled,
+			want:        primaryErr,
+		},
+		{
+			name:        "normal internal cancellation remains secondary",
+			cancelCause: nil,
+			runErr:      context.Canceled,
+			want:        nil,
+		},
+		{
+			name:        "independent operator deadline survives normal cancellation",
+			cancelCause: nil,
+			runErr:      context.DeadlineExceeded,
+			want:        context.DeadlineExceeded,
+		},
+		{
+			name:        "joined independent deadline survives normal cancellation",
+			cancelCause: nil,
+			runErr:      errors.Join(context.DeadlineExceeded, context.Canceled),
+			want:        context.DeadlineExceeded,
+		},
+		{
+			name:        "joined cancellation fallout remains secondary",
+			cancelCause: nil,
+			runErr: errors.Join(
+				context.Canceled,
+				moerr.NewQueryInterrupted(context.Background())),
+			want: nil,
+		},
+		{
+			name:        "joined cancellation fallout resolves to substantive cause",
+			cancelCause: primaryErr,
+			runErr: errors.Join(
+				context.Canceled,
+				moerr.NewQueryInterrupted(context.Background())),
+			want: primaryErr,
+		},
+		{
+			name:        "joined independent deadline survives substantive cancellation cause",
+			cancelCause: primaryErr,
+			runErr:      errors.Join(context.DeadlineExceeded, context.Canceled),
+			want:        context.DeadlineExceeded,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			op := &scopeRunCancelErrorOperator{
+				MockOperator: colexec.NewMockOperator(),
+				cancelCause:  test.cancelCause,
+				runErr:       test.runErr,
+			}
+			scope := &Scope{RootOp: op, Proc: proc}
+			compile := &Compile{proc: proc}
+
+			got := scope.Run(compile)
+			if test.want == nil {
+				require.NoError(t, got)
+			} else {
+				require.ErrorIs(t, got, test.want)
+			}
+		})
+	}
+}
+
+func TestScopeRunPreservesQueryDeadlineClassification(t *testing.T) {
+	tests := []struct {
+		name   string
+		runErr error
+	}{
+		{name: "deadline", runErr: context.DeadlineExceeded},
+		{name: "canceled child", runErr: context.Canceled},
+		{name: "query interrupted", runErr: moerr.NewQueryInterrupted(context.Background())},
+		{name: "joined deadline and cancellation", runErr: errors.Join(context.DeadlineExceeded, context.Canceled)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			deadlineCtx, cancelDeadline := context.WithTimeoutCause(
+				context.Background(), 0, moerr.CauseInternalExecutorExec)
+			defer cancelDeadline()
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(deadlineCtx)
+			proc.BuildPipelineContext(queryCtx)
+
+			op := &scopeRunCancelErrorOperator{
+				MockOperator: colexec.NewMockOperator(),
+				runErr:       test.runErr,
+			}
+			got := (&Scope{RootOp: op, Proc: proc}).Run(&Compile{proc: proc})
+			require.ErrorIs(t, got, context.DeadlineExceeded)
+			require.NotErrorIs(t, got, moerr.CauseInternalExecutorExec)
+
+			attached := moerr.AttachCause(deadlineCtx, got)
+			require.ErrorIs(t, attached, context.DeadlineExceeded)
+			require.ErrorIs(t, attached, moerr.CauseInternalExecutorExec)
+		})
+	}
+}
+
 func TestLockMeta_doLock(t *testing.T) {
 	lm := &LockMeta{
 		database_table_id: 11230,
@@ -553,6 +1345,187 @@ func TestCompileShuffleGroupUsesDistributedPathWhenScopeMcpuDiffersFromDop(t *te
 	}
 	require.Len(t, result[0].PreScopes, 1)
 	require.IsType(t, &shuffle.Shuffle{}, result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+}
+
+func TestCompileShuffleGroupSupportsOrderedGroupConcat(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	c.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(1024), nil
+	})
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NameGroupConcat,
+			},
+			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}}
+	scope := newShuffleGroupInputScope(t, 1)
+
+	require.True(t, hasOrderedGroupConcat(aggNode))
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 16)
+	for _, resultScope := range result {
+		groupOp, ok := resultScope.RootOp.(*group.Group)
+		require.True(t, ok)
+		require.True(t, groupOp.NeedEval)
+	}
+	require.IsType(t, &shuffle.Shuffle{}, result[0].PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+}
+
+func TestCompileShuffleGroupGatesOrderedAggregateByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NameGroupConcat,
+			},
+			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
+	require.False(t, c.supportsRemoteOrderedAggregates())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"mixed-version clusters must keep the final ordered aggregate local")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
+	require.True(t, c.supportsRemoteOrderedAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"rollback must disable the v6 pipeline field before contacting old CNs")
+
+	aggNode.AggList = nil
+	require.True(t, c.canCompileShuffleGroup(aggNode),
+		"legacy shuffle aggregates remain safe on protocol v5")
+}
+
+func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NamePercentileCont,
+			},
+			Args: []*plan.Expr{
+				aggNode.GroupBy[0],
+				plan2.MakePlan2Float64ConstExprWithType(0.5),
+			},
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	require.False(t, c.supportsRemoteOrderedSetAggregates())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"mixed-version clusters must keep ordered-set percentile aggregates local")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.True(t, c.supportsRemoteOrderedSetAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.False(t, c.supportsRemotePartitionTopN())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion19)
+	require.True(t, c.supportsRemotePartitionTopN())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.False(t, c.supportsRemotePartitionTopN(), "rollback must select the legacy partition path")
+}
+
+func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
+	newNode := func() *plan.Node {
+		return &plan.Node{
+			NodeType: plan.Node_PARTITION,
+			OrderBy: []*plan.OrderBySpec{
+				{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+				{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}},
+			},
+			Limit:            plan2.MakePlan2Uint64ConstExprWithType(1),
+			PartitionByCount: 1,
+		}
+	}
+
+	t.Run("v18 coalesces candidates for window", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		rt := runtime.ServiceRuntime(c.proc.GetService())
+		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion19)
+
+		partitionScopes := c.compilePartition(newNode(), []*Scope{newShuffleGroupInputScope(t, 1)})
+		require.Len(t, partitionScopes, 1)
+		physicalPartition := partitionScopes[0].RootOp.(*partitionop.Partition)
+		require.NotNil(t, physicalPartition.Limit)
+		require.True(t, physicalPartition.PreReduce)
+		partitionScopes[0].setRootOperator(projection.NewArgument())
+
+		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
+		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
+		require.True(t, physicalWindow.PartitionTopN)
+	})
+
+	t.Run("v17 keeps legacy window contract", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		rt := runtime.ServiceRuntime(c.proc.GetService())
+		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+
+		partitionScopes := c.compilePartition(newNode(), []*Scope{newShuffleGroupInputScope(t, 1)})
+		physicalPartition := partitionScopes[0].RootOp.(*partitionop.Partition)
+		require.Nil(t, physicalPartition.Limit)
+		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
+		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
+		require.False(t, physicalWindow.PartitionTopN)
+	})
+}
+
+func TestCompileOrderedSetPercentileUsesSingleStageForNonShuffleMerge(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	aggNode.Stats.HashmapStats = nil
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NamePercentileCont,
+			},
+			Args: []*plan.Expr{
+				aggNode.GroupBy[0],
+				plan2.MakePlan2Float64ConstExprWithType(0.5),
+			},
+		}},
+	}}
+	scope1 := newShuffleGroupInputScope(t, 1)
+	scope2 := newShuffleGroupInputScope(t, 1)
+
+	require.True(t, hasOrderedSetPercentile(aggNode))
+	result := c.compileOrderedAggregateSingleStage(aggNode, []*Scope{scope1, scope2}, nodes)
+
+	require.Len(t, result, 1)
+	groupOp, ok := result[0].RootOp.(*group.Group)
+	require.True(t, ok)
+	require.True(t, groupOp.NeedEval)
+	require.Len(t, result[0].PreScopes, 2)
+	require.Contains(t, result[0].PreScopes, scope1)
+	require.Contains(t, result[0].PreScopes, scope2)
 }
 
 func TestCompileShuffleGroupUsesDistributedPathWhenInputScopesNotSingle(t *testing.T) {
@@ -665,6 +1638,296 @@ func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
 		"reusing an existing probe partition must keep the single local fast path")
 }
 
+func TestCompileLocalShuffleJoinOnlySkipsProvenProbeShuffle(t *testing.T) {
+	const dop = int32(4)
+	tests := []struct {
+		name             string
+		method           plan.ShuffleMethod
+		shuffleType      plan.ShuffleType
+		wantProbeShuffle bool
+	}{
+		{
+			name:             "normal strategy repartitions probe",
+			method:           plan.ShuffleMethod_Normal,
+			wantProbeShuffle: true,
+		},
+		{
+			name:             "normal range strategy repartitions probe",
+			method:           plan.ShuffleMethod_Normal,
+			shuffleType:      plan.ShuffleType_Range,
+			wantProbeShuffle: true,
+		},
+		{
+			name:   "proved reuse keeps probe partition",
+			method: plan.ShuffleMethod_Reuse,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cn := engine.Node{Addr: "cn1:6001", Mcpu: int(dop)}
+			c := newCompileForShuffleJoinTest(t, engine.Nodes{cn})
+			node := newShuffleJoinTestNode(dop)
+			node.Stats.HashmapStats.ShuffleMethod = tt.method
+			node.Stats.HashmapStats.ShuffleType = tt.shuffleType
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			probe := newShuffleJoinTestScope(t, cn, int(dop))
+			build := newShuffleJoinTestScope(t, cn, int(dop))
+			originalProbeRoot := probe.RootOp
+
+			result := c.compileLocalShuffleJoin(
+				node, left, right, []*Scope{probe}, []*Scope{build},
+			)
+
+			require.Len(t, result, 1)
+			probeInput := result[0].RootOp.GetOperatorBase().GetChildren(0)
+			if tt.wantProbeShuffle {
+				require.IsType(t, &shuffle.Shuffle{}, probeInput)
+				probeShuffle := probeInput.(*shuffle.Shuffle)
+				require.Equal(t, int32(tt.shuffleType), probeShuffle.ShuffleType)
+				require.Same(t, originalProbeRoot, probeInput.GetOperatorBase().GetChildren(0))
+			} else {
+				require.Same(t, originalProbeRoot, probeInput)
+			}
+		})
+	}
+}
+
+func TestCompileShuffleJoinDistributesSinkScanHashbuild(t *testing.T) {
+	const dop = int32(2)
+	tests := []struct {
+		name        string
+		joinType    plan.Node_JoinType
+		isRightJoin bool
+		sinkOnBuild bool
+	}{
+		{
+			name:     "probe-side sink inner join",
+			joinType: plan.Node_INNER,
+		},
+		{
+			name:        "build-side sink right dedup join",
+			joinType:    plan.Node_DEDUP,
+			isRightJoin: true,
+			sinkOnBuild: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			nodes := engine.Nodes{
+				{Id: "cn-local", Addr: "cn-local:6001", Mcpu: int(dop)},
+				{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: int(dop)},
+			}
+			c := newCompileForShuffleJoinTest(t, nodes)
+			c.execType = plan2.ExecTypeAP_MULTICN
+			node := newShuffleJoinTestNode(dop)
+			node.JoinType = test.joinType
+			node.IsRightJoin = test.isRightJoin
+			if test.joinType == plan.Node_DEDUP {
+				node.DedupJoinCtx = &plan.DedupJoinCtx{}
+			}
+			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+
+			sinkMerge := merge.NewArgument().WithSinkScan(true)
+			sinkRoot := projection.NewArgument()
+			sinkRoot.AppendChild(sinkMerge)
+			probe := newShuffleJoinTestScope(t, nodes[1], 1)
+			build := newShuffleJoinTestScope(t, nodes[1], 1)
+			var sinkScope *Scope
+			if test.sinkOnBuild {
+				build = newShuffleJoinTestScope(t, nodes[0], 1)
+				sinkScope = build
+			} else {
+				probe = newShuffleJoinTestScope(t, nodes[0], 1)
+				sinkScope = probe
+			}
+			sinkScope.RootOp = sinkRoot
+
+			result := c.compileShuffleJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+
+			require.Len(t, result, len(nodes)*int(dop))
+			hashbuildByCN := make(map[string]int)
+			for _, scope := range result {
+				require.NotNil(t, scope)
+				require.NotEmpty(t, scope.PreScopes)
+				require.IsType(t, &hashbuild.HashBuild{}, scope.PreScopes[0].RootOp)
+				hashbuildByCN[scope.NodeInfo.Addr]++
+				if scope.NodeInfo.Addr == nodes[1].Addr {
+					_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+					require.False(t, hasSinkScan,
+						"the in-process SINK_SCAN dependency must never enter a remote scope tree")
+				}
+			}
+			require.Equal(t, int(dop), hashbuildByCN[nodes[0].Addr])
+			require.Equal(t, int(dop), hashbuildByCN[nodes[1].Addr])
+
+			sinkDispatch, ok := sinkScope.RootOp.(*dispatch.Dispatch)
+			require.True(t, ok)
+			require.Len(t, sinkDispatch.LocalRegs, int(dop))
+			require.Len(t, sinkDispatch.RemoteRegs, int(dop))
+
+			localSinkOwners := 0
+			for _, scope := range result {
+				_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+				if hasSinkScan {
+					localSinkOwners++
+					require.Equal(t, nodes[0].Addr, scope.NodeInfo.Addr)
+				}
+			}
+			require.Equal(t, 1, localSinkOwners,
+				"the local SINK_SCAN producer must be started by exactly one receiver tree")
+
+			grouped := c.groupShuffleBucketsByCNIfNeeded(result)
+			require.Len(t, grouped, len(nodes))
+			for _, scope := range grouped {
+				if scope.NodeInfo.Addr == nodes[1].Addr {
+					require.True(t, checkPipelineStandaloneExecutableAtRemote(scope),
+						"the remote CN bucket group must own every local receiver targeted by its dispatch")
+				}
+			}
+		})
+	}
+}
+
+func TestCompileJoinGroupsExternalSinkScanOwner(t *testing.T) {
+	const dop = int32(2)
+	for _, workerCount := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d scheduled workers", workerCount), func(t *testing.T) {
+			workers := make(engine.Nodes, workerCount)
+			for i := range workers {
+				workers[i] = engine.Node{
+					Id:   fmt.Sprintf("cn-remote-%d", i),
+					Addr: fmt.Sprintf("cn-remote-%d:6001", i),
+					Mcpu: int(dop),
+				}
+			}
+			owner := engine.Node{
+				Id:   "cn-sink-owner",
+				Addr: "cn-sink-owner:6001",
+				Mcpu: int(dop),
+			}
+			c := newCompileForShuffleJoinTest(t, workers)
+			c.addr = owner.Addr
+			c.execType = plan2.ExecTypeAP_MULTICN
+
+			node := newShuffleJoinTestNode(dop)
+			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			sinkMerge := merge.NewArgument().WithSinkScan(true)
+			sinkRoot := projection.NewArgument()
+			sinkRoot.AppendChild(sinkMerge)
+			probe := newShuffleJoinTestScope(t, owner, 1)
+			probe.RootOp = sinkRoot
+			build := newShuffleJoinTestScope(t, workers[0], 1)
+
+			buckets := c.compileJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+			require.Len(t, buckets, (workerCount+1)*int(dop))
+
+			grouped := c.groupShuffleBucketsByCNIfNeeded(buckets)
+			require.Len(t, grouped, workerCount+1)
+
+			groupedByCN := make(map[string]*Scope, len(grouped))
+			sinkOwnerGroups := 0
+			for _, scope := range grouped {
+				groupedByCN[scope.NodeInfo.Addr] = scope
+				_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+				if hasSinkScan {
+					sinkOwnerGroups++
+					require.Equal(t, owner.Addr, scope.NodeInfo.Addr)
+				}
+			}
+			require.Equal(t, 1, sinkOwnerGroups)
+			require.Contains(t, groupedByCN, owner.Addr)
+			for _, worker := range workers {
+				remoteGroup, ok := groupedByCN[worker.Addr]
+				require.True(t, ok)
+				require.True(t, checkPipelineStandaloneExecutableAtRemote(remoteGroup),
+					"each remote CN group must own every receiver targeted by its local dispatches")
+			}
+		})
+	}
+}
+
+func TestCompileMergeGroupDistinctTopology(t *testing.T) {
+	var containsGroup func(vm.Operator) bool
+	containsGroup = func(op vm.Operator) bool {
+		if _, ok := op.(*group.Group); ok {
+			return true
+		}
+		for _, child := range op.GetOperatorBase().Children {
+			if containsGroup(child) {
+				return true
+			}
+		}
+		return false
+	}
+	makeAgg := func(name string, id int32, distinct bool, arg *plan.Expr) *plan.Expr {
+		encoded := function.EncodeOverloadID(id, 0)
+		if distinct {
+			encoded = int64(uint64(encoded) | uint64(function.Distinct))
+		}
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: encoded, ObjName: name},
+				Args: []*plan.Expr{arg},
+			}},
+		}
+	}
+
+	t.Run("mixed count distinct uses local parallel groups", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		node, nodes := newShuffleGroupTestNodes(2)
+		arg := nodes[0].ProjectList[0]
+		node.AggList = []*plan.Expr{
+			makeAgg("count", function.COUNT, false, arg),
+			makeAgg("count", function.COUNT, true, arg),
+		}
+		scopes := []*Scope{
+			newShuffleGroupInputScope(t, 1),
+			newShuffleGroupInputScope(t, 1),
+		}
+
+		requiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
+		require.False(t, requiresSingleStage)
+		result := c.compileMergeGroup(node, scopes, nodes, requiresSingleStage)
+
+		require.Len(t, result, 1)
+		for _, scope := range scopes {
+			require.True(t, containsGroup(scope.RootOp),
+				"each input worker should aggregate before MergeGroup")
+		}
+	})
+
+	t.Run("unsupported distinct keeps one group", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		node, nodes := newShuffleGroupTestNodes(2)
+		arg := nodes[0].ProjectList[0]
+		node.AggList = []*plan.Expr{makeAgg("avg", function.AVG, true, arg)}
+		scopes := []*Scope{
+			newShuffleGroupInputScope(t, 1),
+			newShuffleGroupInputScope(t, 1),
+		}
+
+		requiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
+		require.True(t, requiresSingleStage)
+		result := c.compileMergeGroup(node, scopes, nodes, requiresSingleStage)
+
+		require.Len(t, result, 1)
+		for _, scope := range scopes {
+			require.False(t, containsGroup(scope.RootOp))
+		}
+		require.Len(t, result[0].PreScopes, 1)
+		require.True(t, containsGroup(result[0].PreScopes[0].RootOp),
+			"non-mergeable DISTINCT states must share one Group operator")
+	})
+}
+
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {
 	c := NewMockCompile(t)
 	c.execType = plan2.ExecTypeAP_ONECN
@@ -678,6 +1941,23 @@ func newShuffleGroupInputScope(t *testing.T, mcpu int) *Scope {
 	scope.Proc = testutil.NewProcess(t)
 	scope.setRootOperator(colexec.NewMockOperator())
 	return scope
+}
+
+func TestCompilePreInsertUkMergesParallelMultiKeyIgnoreInput(t *testing.T) {
+	c := NewMockCompile(t)
+	c.anal = &AnalyzeModule{}
+	input := newScope(Merge)
+	input.NodeInfo = engine.Node{Addr: "127.0.0.1:18000", Mcpu: 4}
+	input.Proc = c.proc.NewNoContextChildProc(0)
+	input.setRootOperator(colexec.NewMockOperator())
+
+	node := &plan.Node{PreInsertUkCtx: &plan.PreInsertUkCtx{InsertIgnoreMultiDedup: true}}
+	result := c.compilePreInsertUk(node, []*Scope{input})
+
+	require.Len(t, result, 1)
+	require.NotSame(t, input, result[0])
+	require.Equal(t, 1, result[0].NodeInfo.Mcpu)
+	require.Contains(t, result[0].PreScopes, input)
 }
 
 func newShuffleGroupTestNodes(dop int32) (*plan.Node, []*plan.Node) {

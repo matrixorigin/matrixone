@@ -132,25 +132,19 @@ drop database test_temp_db;
 select * from test_temp_db.temp_in_db;
 Unknown database test_temp_db
 drop database if exists temp_view;
-[unknown result because it is related to issue#23700]
 create database temp_view;
-[unknown result because it is related to issue#23700]
 use temp_view;
-[unknown result because it is related to issue#23700]
 create temporary table temp_for_view (
 id int,
 name varchar(50)
 );
-[unknown result because it is related to issue#23700]
 insert into temp_for_view values (1, 'alice');
-[unknown result because it is related to issue#23700]
 create view view_on_temp as
 select * from temp_for_view;
-[unknown result because it is related to issue#23700]
+View's SELECT refers to a temporary table 'temp_for_view'
 drop view if exists view_on_temp;
-[unknown result because it is related to issue#23700]
 drop table temp_for_view;
-[unknown result because it is related to issue#23700]
+drop database temp_view;
 delimiter //
 create procedure test_temp_in_proc()
 begin
@@ -209,10 +203,12 @@ drop table if exists `temp-table-with-dash`;
 create temporary table temp_very_long_table_name_that_exceeds_normal_limits_and_might_cause_issues (
 id int
 );
+Identifier name 'temp_very_long_table_name_that_exceeds_normal_limits_and_might_cause_issues' is too long
 drop table if exists temp_very_long_table_name_that_exceeds_normal_limits_and_might_cause_issues;
 create temporary table temp_long_column (
 very_long_column_name_that_exceeds_normal_limits_and_might_cause_issues int
 );
+Identifier name 'very_long_column_name_that_exceeds_normal_limits_and_might_cause_issues' is too long
 drop table if exists temp_long_column;
 drop database unnormal_db;
 drop database temporary_table_limitation;

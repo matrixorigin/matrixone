@@ -23,6 +23,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func makeIvfHelperColExpr(relPos, colPos int32, tableDef *TableDef) *Expr {
+	colDef := tableDef.Cols[colPos]
+	return &Expr{
+		Typ: colDef.Typ,
+		Expr: &planpb.Expr_Col{Col: &ColRef{
+			RelPos: relPos,
+			ColPos: colPos,
+			Name:   colDef.Name,
+		}},
+	}
+}
+
+func makeIvfHelperFnExpr(name string, typ Type, args ...*Expr) *Expr {
+	return &Expr{
+		Typ: typ,
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &ObjectRef{ObjName: name},
+			Args: args,
+		}},
+	}
+}
+
 func TestSplitFiltersByVectorIndexCoverageBooleanTreesAndDistance(t *testing.T) {
 	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
 	scanTag := scanNode.BindingTags[0]
@@ -138,4 +160,25 @@ func TestVectorIndexCoverageDoesNotTreatCompositePkHiddenColumnAsCovered(t *test
 	require.Equal(t, []*Expr{categoryEq}, pushdown)
 	require.Equal(t, []*Expr{cpkeyEq}, remaining)
 	require.False(t, canDoIndexOnlyScan(map[string]struct{}{catalog.CPrimaryKeyColName: {}}, tableDef, []string{"title", "category"}))
+}
+
+func TestVectorIndexCoverageAcceptsPreparedParameterOnIncludedColumn(t *testing.T) {
+	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
+	scanTag := scanNode.BindingTags[0]
+	parameter := &Expr{
+		Typ:  Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	filter := makeIvfHelperFnExpr(
+		">=",
+		Type{Id: int32(types.T_bool)},
+		makeIvfHelperColExpr(scanTag, 3, scanNode.TableDef),
+		parameter,
+	)
+
+	pushdown, remaining := splitFiltersByVectorIndexCoverage(
+		[]*Expr{filter}, scanNode, []string{"title", "category"}, 1)
+
+	require.Equal(t, []*Expr{filter}, pushdown)
+	require.Empty(t, remaining)
 }

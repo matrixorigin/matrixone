@@ -471,7 +471,7 @@ func TestCountTombstoneRows(t *testing.T) {
 	_, _, err = writer1.Sync(ctx)
 	require.NoError(t, err)
 
-	ss1 := writer1.GetObjectStats()
+	ss1 := writer1.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss1,
 		CreateTime:  types.BuildTS(1, 0),
@@ -502,7 +502,7 @@ func TestCountTombstoneRows(t *testing.T) {
 	_, _, err = writer2.Sync(ctx)
 	require.NoError(t, err)
 
-	ss2 := writer2.GetObjectStats()
+	ss2 := writer2.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss2,
 		CreateTime:  types.BuildTS(2, 0),
@@ -577,7 +577,7 @@ func TestCountTombstoneRows(t *testing.T) {
 	_, _, err = writer3.Sync(ctx)
 	require.NoError(t, err)
 
-	ss3 := writer3.GetObjectStats()
+	ss3 := writer3.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss3,
 		CreateTime:  types.BuildTS(4, 0),
@@ -987,7 +987,7 @@ func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 
-	ss := writer.GetObjectStats()
+	ss := writer.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(2, 0),
@@ -1069,7 +1069,7 @@ func TestCountTombstoneRowsObjectVisibility(t *testing.T) {
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 
-	ss := writer.GetObjectStats()
+	ss := writer.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(3, 0),
@@ -1208,7 +1208,7 @@ func TestCountTombstoneRowsComprehensive(t *testing.T) {
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 
-	ss := writer.GetObjectStats()
+	ss := writer.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(3, 0),
@@ -1281,7 +1281,7 @@ func TestCollectTombstoneStats_CrossObjectDuplicates(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = writer1.Sync(ctx)
 	require.NoError(t, err)
-	ss1 := writer1.GetObjectStats()
+	ss1 := writer1.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss1,
 		CreateTime:  types.BuildTS(2, 0),
@@ -1303,7 +1303,7 @@ func TestCollectTombstoneStats_CrossObjectDuplicates(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = writer2.Sync(ctx)
 	require.NoError(t, err)
-	ss2 := writer2.GetObjectStats()
+	ss2 := writer2.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss2,
 		CreateTime:  types.BuildTS(3, 0),
@@ -1325,7 +1325,7 @@ func TestCollectTombstoneStats_CrossObjectDuplicates(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = writer3.Sync(ctx)
 	require.NoError(t, err)
-	ss3 := writer3.GetObjectStats()
+	ss3 := writer3.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss3,
 		CreateTime:  types.BuildTS(4, 0),
@@ -1380,7 +1380,7 @@ func TestCollectTombstoneStats_CrossObjectAndInMemoryDuplicates(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
-	ss := writer.GetObjectStats()
+	ss := writer.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(2, 0),
@@ -1468,7 +1468,7 @@ func TestCountTombstoneRowsCNCreatedWithAppendable(t *testing.T) {
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 
-	ss := writer.GetObjectStats()
+	ss := writer.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(2, 0),
@@ -1567,7 +1567,7 @@ func TestCollectTombstoneStats_MergeVsMapConsistency(t *testing.T) {
 		_, _, err = writer.Sync(ctx)
 		require.NoError(t, err)
 
-		ss := writer.GetObjectStats()
+		ss := writer.GetObjectStats(objectio.WithCNCreated())
 		state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 			ObjectStats: *ss.Clone(),
 			CreateTime:  types.BuildTS(2, 0),
@@ -1650,7 +1650,7 @@ func TestCollectTombstoneStats_MultiObjectMultiBlock(t *testing.T) {
 		_, _, err := writer.Sync(ctx)
 		require.NoError(t, err)
 
-		ss := writer.GetObjectStats()
+		ss := writer.GetObjectStats(objectio.WithCNCreated())
 		state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 			ObjectStats: *ss.Clone(),
 			CreateTime:  types.BuildTS(2, 0),
@@ -1764,7 +1764,7 @@ func TestCollectTombstoneStats_ComprehensiveAllScenarios(t *testing.T) {
 	_, _, err = writer1.Sync(ctx)
 	require.NoError(t, err)
 
-	ss1 := writer1.GetObjectStats()
+	ss1 := writer1.GetObjectStats(objectio.WithCNCreated())
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: *ss1.Clone(),
 		CreateTime:  types.BuildTS(3, 0),
@@ -1973,6 +1973,48 @@ func TestCountTombstoneRowsReadError(t *testing.T) {
 	}
 }
 
+func TestCountTombstoneStatsWithMergePropagatesInitialReadError(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	blockID := types.Blockid{}
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	for offset := uint32(1); offset <= 3; offset++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(&blockID, offset), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(1, 0), false, mp))
+	}
+	// Persist a malformed abort column shorter than the rowid/commit columns.
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], false, false, mp))
+	bat.SetRowCount(3)
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1,
+		false,
+		false,
+		fs,
+	)
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	objects := []objectio.ObjectEntry{{
+		ObjectStats: writer.GetObjectStats(),
+		CreateTime:  types.BuildTS(1, 0),
+	}}
+	_, err = NewPartitionState("", false, 42, false).countTombstoneStatsWithMerge(
+		ctx, types.BuildTS(10, 0), fs, objects, TombstoneStats{},
+	)
+	require.Error(t, err)
+}
+
 func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 	// Test various edge cases for CountTombstoneRows
 	ctx := context.Background()
@@ -2009,7 +2051,7 @@ func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 
-	ss := writer.GetObjectStats()
+	ss := writer.GetObjectStats(objectio.WithCNCreated())
 
 	// Test 1: Tombstone created after snapshot - should not be visible
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
@@ -2586,9 +2628,10 @@ func TestCollectTombstoneStats_AppendableTombstone(t *testing.T) {
 		DeleteTime:  types.TS{},
 	})
 
-	// Create appendable tombstone (CN created, appendable) at TS=10
+	// Create appendable TN tombstone at TS=10.
 	// Contains deletions from different commit times
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
+	writer.SetAppendable()
 	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
@@ -2615,8 +2658,8 @@ func TestCollectTombstoneStats_AppendableTombstone(t *testing.T) {
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 
-	ss := writer.GetObjectStats()
-	// Mark as appendable and CN created
+	ss := writer.GetObjectStats(objectio.WithAppendable())
+	// Mark as appendable and keep the default TN-created classification.
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(10, 0),
@@ -2660,8 +2703,9 @@ func TestCollectTombstoneStats_AppendableDataWithAppendableTombstone(t *testing.
 		state.rows.Set(entry)
 	}
 
-	// Create appendable tombstone (flushed to S3) with deletions at different commit times
+	// Create an appendable TN tombstone with deletions at different commit times.
 	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_CommitTS, fs)
+	writer.SetAppendable()
 	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
@@ -2688,8 +2732,8 @@ func TestCollectTombstoneStats_AppendableDataWithAppendableTombstone(t *testing.
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 
-	ss := writer.GetObjectStats()
-	// Appendable tombstone (CNCreated=true, Appendable=true)
+	ss := writer.GetObjectStats(objectio.WithAppendable())
+	// Appendable TN tombstone (CNCreated=false, Appendable=true).
 	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
 		ObjectStats: ss,
 		CreateTime:  types.BuildTS(10, 0),

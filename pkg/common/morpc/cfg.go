@@ -15,7 +15,6 @@
 package morpc
 
 import (
-	"math"
 	"runtime"
 	"time"
 
@@ -24,6 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap"
+)
+
+const (
+	defaultMinServerWorkers    = 100
+	defaultServerWorkersPerCPU = 8
 )
 
 var (
@@ -72,7 +76,7 @@ type Config struct {
 	// idle backends, not the idle timeout (which is controlled by MaxIdleDuration).
 	GCIdleCheckInterval toml.Duration `toml:"gc-idle-check-interval"`
 	// GCChannelBufferSize buffer size for GC task channels (gcInactiveC and createC).
-	// Default is 1024. When channel is full, requests are dropped to avoid blocking.
+	// Default is 4096. When channel is full, requests are dropped to avoid blocking.
 	GCChannelBufferSize int `toml:"gc-channel-buffer-size"`
 
 	// BackendOptions extra backend options
@@ -110,7 +114,9 @@ func (c *Config) Adjust() {
 		c.SendQueueSize = 100000
 	}
 	if c.ServerWorkers == 0 {
-		c.ServerWorkers = int(math.Max(100, float64(8*runtime.NumCPU())))
+		// GOMAXPROCS reflects container CPU quotas and explicit scheduler limits,
+		// while NumCPU can expose all CPUs on the host.
+		c.ServerWorkers = defaultServerWorkers(runtime.GOMAXPROCS(0))
 	}
 	if c.ServerBufferQueueSize == 0 {
 		c.ServerBufferQueueSize = 100000
@@ -124,6 +130,14 @@ func (c *Config) Adjust() {
 	if c.GCChannelBufferSize == 0 {
 		c.GCChannelBufferSize = DefaultGCChannelBufferSize
 	}
+}
+
+func defaultServerWorkers(maxProcs int) int {
+	workers := defaultServerWorkersPerCPU * maxProcs
+	if workers < defaultMinServerWorkers {
+		return defaultMinServerWorkers
+	}
+	return workers
 }
 
 // NewClient create client from config

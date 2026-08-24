@@ -1,13 +1,9 @@
 ---
 name: mo-bug-triage
-description: Systematic MatrixOne kind/bug lifecycle triage — intake normalization with `needs-triage`, conservative promotion to active severity (`severity/s-1`, `severity/s0`, `severity/s1`), immediate downgrade to `deferred` with explanatory comments, optional five-level AI effort labeling (`ai-easy`, `ai-light`, `ai-medium`, `ai-heavy`, `ai-manual`) only when explicitly requested for issues/PRs, batched GitHub metadata updates, rollback-safe processing, and drift prevention. Use when asked to triage, classify, review, downgrade, defer, label, AI-effort-assess, or bulk-update MO bugs and related PRs.
-metadata:
-  project: matrixone
-  repository: matrixorigin/matrixone
-  workflow: bug-triage
+description: Systematic MatrixOne kind/bug lifecycle triage — intake normalization with `needs-triage`, conservative promotion to active severity (`severity/s-1`, `severity/s0`, `severity/s1`), immediate downgrade to `deferred` with explanatory comments, optional five-level AI effort labeling (`ai-easy`, `ai-light`, `ai-medium`, `ai-heavy`, `ai-manual`) only when explicitly requested for issues/PRs, and frozen-candidate, drift-safe, resumable GitHub metadata updates. Use when asked to triage, classify, review, downgrade, defer, label, AI-effort-assess, or bulk-update MO bugs and related PRs.
 ---
 
-Compatibility: designed for Codex CLI and compatible agents. Requires GitHub CLI (`gh`) with authenticated access (5000 req/hr) and repo write scope.
+Compatibility: designed for Codex CLI and compatible agents on macOS and Linux. Requires authenticated GitHub CLI (`gh`) and `jq`; inspect the token's actual scopes and current rate-limit response instead of assuming a fixed quota. Read-only triage needs no write scope.
 
 ## Enforcement Gates
 
@@ -19,10 +15,10 @@ Compatibility: designed for Codex CLI and compatible agents. Requires GitHub CLI
 | **G-AI-REQUEST** | Before assessing or applying any AI effort label | User must explicitly request AI effort assessment, or the run mode must be `ai-assess`/`ai-final`. Plain `needs-triage` intake must not infer or apply `ai-*`. |
 | **G-AI-SOURCE** | Before applying any AI effort label | Record assessment stage (`issue-initial`, `pr-review`, or `user-assisted`), confidence, and one-sentence rationale. |
 | **G-AI-FINAL** | During explicit `ai-final` or PR AI-label review | Recheck five-level AI effort against actual implementation effort and update issue + PR labels if stale. |
-| **G-STANDARDS** | Before any GitHub write | STANDARDS.md must exist with `Approved: true`. Scripts exit(1) if missing. |
-| **G-SNAPSHOT** | Before batch update | `batch_N_before_snapshot.json` must be saved. Rollback requires it. |
-| **G-DRYRUN** | Before full batch update | First 5 issues updated + verified. Mismatch → stop. |
-| **G-DRIFT** | Before declaring "done" | Phase 3 drift detection must pass. If file edited after generation → re-run classifier. |
+| **G-STANDARDS** | Before any GitHub write | Policy approval must bind repository, run ID, standards hash, and frozen-candidate hash; apply authorization must additionally bind the exact classified write-plan hash and scope. A bare mutable `Approved: true` is insufficient. |
+| **G-SNAPSHOT** | Before batch update | Save current `updated_at`, labels, milestone number/null, and every explicitly in-scope project field plus the exact proposed delta. Writes stop on drift. |
+| **G-DRYRUN** | Before any apply | Dry-run performs zero writes and emits exact requests/deltas. A real five-item canary is a separate, explicitly authorized apply. |
+| **G-DRIFT** | Before each write and before declaring "done" | Re-fetch `updated_at` and relevant fields; drift means skip/reclassify, never overwrite concurrent maintainer work. |
 
 ---
 
@@ -41,14 +37,16 @@ Phase 1: LOCK STANDARDS   (~15min, 0 writes)
   → Sample 8-12 bugs by domain → lock lifecycle/severity/defer rules
 
 Phase 2: BATCHED PROCESS  (~5min per batch of 50)
-  → Each batch: fetch→classify action→report→snapshot→dry-run→update→progress
+  → Freeze issue IDs once → hydrate evidence → classify → zero-write dry-run
+    → optional authorized canary → drift-check → serial/idempotent apply → progress
   → Batch N failure never touches Batch 1..N-1 (already committed)
 
 Phase 3: FINAL VERIFY      (~10min)
   → Lifecycle audit + label count cross-check + defer-comment check; AI-label checks only for explicit AI modes
 ```
 
-~310 issues ≈ 7 batches ≈ **30-45 min** (limited by GitHub rate limit: 5000 req/hr).
+Estimate runtime from the frozen candidate count and the authenticated token's
+live primary/secondary rate-limit state. Do not encode a universal request quota.
 
 ---
 
@@ -129,7 +127,9 @@ These keywords are investigation triggers. They justify a closer look, not autom
    - `keep-needs-triage`: insufficient information and no owner analysis yet
    - `exclude`: feature request or non-bug; remove from bug triage path per repo convention
 6. Skip AI effort assessment by default. If and only if explicitly requested or running `ai-assess`/`ai-final`, estimate one AI effort label and record stage (`issue-initial`, `pr-review`, or `user-assisted`), confidence, and evidence in the report
-7. Project: `MOEngine-Compute` default; `MOEngine-Storage` if `logservice|tn|wal|replica|storage` in title
+7. Treat project routing as a separate, explicitly approved policy. Do not assign
+   ProjectV2 from title keywords alone; if project writes are in scope, snapshot
+   and restore item/field/option IDs exactly.
 8. If the user requested `ai-final` or PR AI-label review, re-evaluate AI label using actual code changes/tests/review complexity and update issue + PR labels
 
 **Key invariant**: no issue leaves `needs-triage` for active severity without evidence and an owner/impact rationale. Keywords alone are never sufficient.
@@ -139,18 +139,18 @@ These keywords are investigation triggers. They justify a closer look, not autom
 When moving to `deferred`, write a short, concrete comment:
 
 ```markdown
-Deferred after triage.
+Triage decision: defer.
 
 Reason: <unstable repro | missing dependency | non-critical path | consolidated into #NNNNN | feature request / not a bug | insufficient impact signal>
 Current evidence: <one sentence>
 To promote later: <specific signal needed, owner action, or linked issue/PR>
 ```
 
-### Skip List
+### Run-Specific Exclusions
 
-Skip entirely — do not classify, do not update:
-- `heni02`
-- `Ariznawlll`
+Do not hard-code exclusions as timeless workflow facts. If maintainers request
+an exclusion, record its subject, owner, rationale, approval date, and
+expiry/review date in the run's locked standards.
 
 ### Severity Inflation Guard
 
@@ -196,19 +196,44 @@ Assessment rules:
 
 ## Phase 1: LOCK STANDARDS (Read-Only, ~15 min)
 
-### Step 1.1: Discover Total Count
+### Step 1.1: Freeze The Candidate Set
 
 ```bash
-gh issue list -R matrixorigin/matrixone -l kind/bug -s open --limit 1 --json totalCount
+state_parent=${MO_TRIAGE_STATE_PARENT:-${TMPDIR:-/tmp}}
+run_dir=$(mktemp -d "$state_parent/mo-triage.XXXXXX")
+capture_cutoff=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+gh api --paginate -H 'Accept: application/vnd.github+json' \
+  '/repos/matrixorigin/matrixone/issues?state=open&labels=kind%2Fbug&per_page=100&sort=created&direction=asc' \
+  | jq -s --arg cutoff "$capture_cutoff" \
+  '[.[][] | select(has("pull_request") | not)
+    | select(.created_at <= $cutoff) | {
+    number, title, body, created_at, updated_at,
+    labels:[.labels[].name], assignees:[.assignees[].login],
+    milestone_number:(.milestone.number // null), comments
+  }] | unique_by(.number)' > "$run_dir/candidates.json"
 ```
 
-Record `total_count`. Plan batches: `ceil(total_count / 50)`.
+REST `/issues` also returns pull requests, so rejecting `pull_request` is
+mandatory. Record a content hash and derive the count from this immutable local
+snapshot. Apply the selected mode filter and 50-item batching locally; never
+page a live query whose labels the run will remove. Oldest-first ordering plus a
+capture cutoff keeps new intake out of the run, and `unique_by(.number)` removes
+duplicates. Offset pagination can still omit an older issue that closes or
+loses the label mid-capture: run a bounded issue-ID-only reconciliation until
+two consecutive sets match. Record attempts/window and stop if it cannot
+stabilize; do not call an unstable capture complete.
+
+An ephemeral default is acceptable for read-only analysis. Before canary/full
+apply, require `MO_TRIAGE_STATE_PARENT` to name persistent, backed-up storage;
+`mktemp` still creates a unique child so a new run cannot overwrite an old one.
+Resume sets `run_dir=$MO_TRIAGE_RESUME_DIR` only after validating that existing
+run's manifest/hashes, and skips Step 1.1 entirely; it must not recapture or
+truncate artifacts.
 
 ### Step 1.2: Query Existing Lifecycle Distribution
 
 ```bash
-gh issue list -R matrixorigin/matrixone -l kind/bug -s open --limit 500 --json labels \
-  --jq '.[].labels[].name' \
+jq -r '.[].labels[]' "$run_dir/candidates.json" \
   | grep -E '^(needs-triage|deferred|severity/|ai-easy|ai-light|ai-medium|ai-heavy|ai-manual)$' \
   | sort | uniq -c | sort -rn
 ```
@@ -234,10 +259,8 @@ Fetch 8-12 issues covering **every major domain** (1-2 each):
 | Backup/Restore | `backup`, `restore`, `dump` |
 | Access Control | `role`, `grant`, `privilege`, `account` |
 
-```bash
-gh issue list -R matrixorigin/matrixone -l kind/bug -s open --limit 100 \
-  --json number,title,labels,assignees
-```
+Select the domain-stratified sample from `candidates.json`; hydrate only the
+sampled issues needed to lock policy.
 
 ### Step 1.4: STANDARDS.md → User Approval Gate
 
@@ -246,7 +269,8 @@ Present sampled issues with proposed lifecycle actions. Produce file:
 ```markdown
 # MO Bug Triage Standards — [Date]
 
-## Approved: false   ← MUST be set to true before Phase 2
+Repository: matrixorigin/matrixone
+Run ID: <immutable run ID>
 
 ## Lifecycle + Severity Rules (locked after approval)
 ... (Core Rules tables above)
@@ -258,54 +282,61 @@ Present sampled issues with proposed lifecycle actions. Produce file:
 | 2 | ... | Partition | defer | not requested | yes: non-critical path, no owner | approved |
 ```
 
-**Wait for explicit user "approved"/"looks good"**, then:
-```bash
-sed -i 's/Approved: false/Approved: true/' STANDARDS.md
-```
+Wait for explicit user approval, then create a separate immutable approval
+artifact containing `approved=true`, repository, run ID, standards SHA-256, and
+candidate SHA-256. Generate it with a portable JSON/hash tool (for example the
+Python standard library), not platform-specific `sed -i`. Any changed hash
+invalidates policy approval. This does not yet authorize Phase 2 writes; apply
+authorization is bound to the later zero-write plan hash.
 
-### Step 1.5: Technical Gate (scripts MUST enforce)
+### Step 1.5: Technical Gate
 
-All Phase 2 scripts must call before any GitHub write:
-
-```python
-import sys, re
-content = open("STANDARDS.md").read()
-m = re.search(r'^## Approved:\s*(true|false)', content, re.MULTILINE)
-if not m or m.group(1) != "true":
-    print("FATAL: STANDARDS.md not approved. Run Phase 1 first.")
-    sys.exit(1)
-```
+Before materializing any write command, validate the approval artifact's exact
+repository/run ID/hashes against the current files. This skill does not ship a
+mutation script, so do not claim an unenforced gate: show the validation and
+exact write plan in the dry-run output. Before execution, require a second
+authorization bound to that plan's content hash and explicit canary/full scope.
 
 ---
 
 ## Phase 2: BATCHED PROCESS (~5 min/batch)
 
-Each batch is a sealed unit: fetch → classify action → report → **snapshot** → dry-run → update → progress. Batch N failure never touches Batch 1..N-1.
+Each batch is a local slice of the frozen candidate set: hydrate → classify →
+report → snapshot/delta → zero-write dry-run → optional canary → serial apply →
+progress. Apply is resumable and idempotent; GitHub mutations are not a
+transaction, so never promise that a later batch can make earlier notifications
+or automation disappear.
 
-### Step 2a: Select Mode + Fetch One Batch
+### Step 2a: Select Mode + Slice One Frozen Batch
 
 Choose the mode explicitly:
 
-| Mode | Use When | Label Query |
+| Mode | Use When | Local frozen-candidate filter |
 |------|----------|-------------|
-| `intake` | Normalize new bugs into the candidate pool | `kind/bug` then filter out issues already carrying `needs-triage`, `deferred`, or active severity |
-| `triage` | Analyze the candidate pool; do not assess AI effort unless explicitly requested | `kind/bug,needs-triage` |
-| `active-review` | Audit active work for downgrade or stale labels | Run separate batches for `kind/bug,severity/s0` and `kind/bug,severity/s1` |
+| `intake` | Normalize new bugs into the candidate pool | filter out issues already carrying `needs-triage`, `deferred`, or active severity |
+| `triage` | Analyze the candidate pool; do not assess AI effort unless explicitly requested | contains `needs-triage` |
+| `active-review` | Audit active work for downgrade or stale labels | separate local sets containing `severity/s0` and `severity/s1` |
 | `ai-assess` | User explicitly asks to estimate AI effort for issues | Query the user-requested issue set; may include `needs-triage` but must not be implicit |
 | `ai-final` | Recheck PR-close AI labels | Run separate linked issue/PR batches for `ai-easy`, `ai-light`, `ai-medium`, `ai-heavy`, and `ai-manual` |
 
-```bash
-PAGE=$1
-LABEL_QUERY="${LABEL_QUERY:-kind/bug,needs-triage}"
-gh api -H "Accept: application/vnd.github+json" \
-  "/repos/matrixorigin/matrixone/issues?state=open&labels=${LABEL_QUERY}&per_page=50&page=${PAGE}&sort=created&direction=desc" \
-  --jq '.[] | {number,title,body,labels:[.labels[].name],assignees:[.assignees[].login],state,comments:.comments}' \
-  > batch_${PAGE}_raw.json
-```
+Filter and slice `candidates.json` locally, preserving each issue's frozen
+`updated_at`. The list response is only a candidate index: before an issue can
+leave `needs-triage`, hydrate the body, comment bodies, timeline/linked-PR
+evidence, and project state needed by the chosen action. Use REST for ordinary
+issue evidence and GraphQL only where ProjectV2 data requires it.
 
-**Fallback**: per_page=50 → 30 if rate-limited. Log actual page size.
+Retry 403/429 only when `Retry-After`, `X-RateLimit-Remaining: 0` plus
+`X-RateLimit-Reset`, or an explicit secondary-rate-limit response identifies a
+rate limit. Honor those bounds; otherwise use bounded exponential backoff only
+for a confirmed secondary limit. Authentication/permission 401/403 and
+validation 422 are terminal. Reducing `per_page` increases request count and is
+not recovery. Keep writes serial and stop when the bounded budget is exhausted.
 
-> Prefer REST API over GraphQL for reads — returns full data, no N+1 rate limit issues. GraphQL only for ProjectV2 writes.
+For `ai-final`, freeze a separate, deduplicated `prs.json` before classification
+from the explicitly requested or linked PR set. Include repository, number,
+`updated_at`, state, labels, head OID, and linked issue IDs; hash-bind it to the
+write plan and apply the same hydration, snapshot, drift, WAL, and resume rules.
+An issue-only candidate hash never authorizes PR writes.
 
 ### Step 2b: Classify This Batch
 
@@ -323,7 +354,8 @@ Only when AI assessment is explicitly enabled, also output:
 - `ai_confidence`: `low`, `medium`, or `high`
 - `ai_rationale`: one sentence explaining expected human vs AI effort
 
-**Skip checking**: filter out heni02 and Ariznawlll issues before classification.
+Apply only exclusions present in the approved run standards; do not inherit an
+expired skip list silently.
 
 ### Step 2c: Generate Batch Report
 
@@ -338,7 +370,7 @@ Only when AI assessment is explicitly enabled, also output:
 |--------|-------|
 | Range | #25260 → #24997 |
 | Total fetched | 50 |
-| Skipped (heni02/Ariznawlll) | 3 |
+| Skipped (approved run exclusions) | 3 |
 | Classified actions | 47 |
 
 ## Action Distribution
@@ -372,7 +404,7 @@ When AI assessment is explicitly enabled, replace `AI Effort` with `ai-medium/is
 
 Include `generated_at` timestamp + file checksum for drift detection.
 
-### Step 2d: Save Before-Snapshot (Rollback Safety)
+### Step 2d: Save Before-State And Proposed Delta
 
 Fetch current GitHub state for every issue in this batch → `batch_N_before_snapshot.json`:
 
@@ -382,25 +414,50 @@ Fetch current GitHub state for every issue in this batch → `batch_N_before_sna
   "issues": [
     {
       "number": 25260,
-      "old_milestone": "MO-v1.1",
+      "updated_at": "2026-07-01T10:20:00Z",
+      "old_milestone_number": 42,
       "old_labels": ["kind/bug", "needs-triage"],
       "old_assignees": ["owner"],
-      "old_comments_count": 3
+      "old_comments_count": 3,
+      "project_state": null,
+      "proposed_delta": {
+        "add_labels": ["severity/s0"],
+        "remove_labels": ["needs-triage"]
+      }
     }
   ]
 }
 ```
 
-### Step 2e: Dry-Run (5 issues)
+`project_state` may remain null only when project writes are out of scope. If
+they are in scope, record the ProjectV2 item, field, and previous option IDs.
 
-Update first 5 issues. Verify labels and deferred comments on 2 of them:
+### Step 2e: Zero-Write Dry-Run And Optional Canary
+
+Dry-run must perform no mutation: REST uses no POST/PATCH/PUT/DELETE, and any
+GraphQL document used for hydration contains no `mutation`. Render the exact
+before/after state, request method/path/body, comment marker, and drift
+precondition for every item.
+After explicit authorization, a separately named canary may apply at most five
+items serially. Re-fetch and compare `updated_at` plus relevant fields
+immediately before each write; drift skips the item for reclassification.
+Before every operation, persist a pending intent containing its exact request
+and expected generation. After success or failure, append the response/result
+and new `updated_at`/relevant post-state to the write-ahead log; that post-state becomes
+the expected generation for the next operation on the same issue. Otherwise the
+run would mistake its own first mutation for external drift.
+
+Verify canary labels and deferred comments:
 
 ```bash
-gh issue view 25260 --json milestone,labels,comments \
+gh issue view 25260 -R matrixorigin/matrixone --json milestone,labels,comments \
   --jq '{milestone:.milestone.title,labels:[.labels[].name],last_comment:(.comments[-1].body // "")}'
 ```
 
-**Mismatch, missing deferred comment, or stale AI label in explicit AI mode → stop batch, investigate. Do not proceed.**
+**Mismatch, missing deferred comment, stale AI label in explicit AI mode, or
+concurrent drift → stop batch. Do not proceed.** Comment writes must include a
+stable run/item marker and check for that marker before retry, so resume cannot
+duplicate comments.
 
 ### Step 2f: Full Batch Update + Progress
 
@@ -415,19 +472,31 @@ Next: Batch 4 (#24510 → #24320)
 ========================================
 ```
 
-### Rollback Procedure (batch fails mid-update)
+### Conditional Compensation (batch fails mid-update)
 
-1. Read `batch_N_before_snapshot.json`
-2. Restore each already-updated issue's old milestone and labels exactly
-3. If the update log recorded newly-created deferred comment IDs, delete those comments; if deletion is not permitted, append a correction comment and stop
-4. **Never "fix forward"** — always rollback and restart batch from clean state
+Primary recovery is a serial, idempotent resume from the write-ahead log.
+Compensation is limited to this run's own deltas:
+
+1. Read `batch_N_before_snapshot.json` and the write-ahead operation log.
+2. Re-fetch current state. If it changed after this run's write, stop for manual
+   reconciliation instead of overwriting a maintainer.
+3. Reverse only labels/milestone/project options changed by this run. Restore a
+   milestone by numeric number or null, never by title.
+4. Delete only comments whose IDs and stable run markers were logged; if deletion
+   is not permitted, append one correction and stop.
+5. Remember that notifications and automation are not transactional and cannot
+   be rolled back; do not claim full rollback safety.
 
 ```bash
-# Restore old milestone
-gh api -X PATCH /repos/matrixorigin/matrixone/issues/$NUMBER -f milestone="$OLD_MILESTONE"
+# Restore old milestone by number (or send null with a JSON body)
+gh api -X PATCH "/repos/matrixorigin/matrixone/issues/$NUMBER" -F milestone="$OLD_MILESTONE_NUMBER"
 
-# Restore labels: compute existing labels first, then remove labels not in snapshot and add labels from snapshot
-gh issue edit $NUMBER --remove-label "$LABELS_TO_REMOVE" --add-label "$LABELS_TO_ADD"
+# Reverse only this run's label delta. Log each inverse operation before sending
+# it, re-read immediately before it, and stop if the scoped labels drifted.
+gh api -X POST "/repos/matrixorigin/matrixone/issues/$NUMBER/labels" \
+  -f 'labels[]=needs-triage'
+gh api -X DELETE \
+  "/repos/matrixorigin/matrixone/issues/$NUMBER/labels/severity%2Fs0"
 
 # Delete a comment created by this failed batch when comment_id was logged
 gh api -X DELETE /repos/matrixorigin/matrixone/issues/comments/$COMMENT_ID
@@ -452,7 +521,9 @@ Automated checks:
 
 **Assert**: report counts match GitHub for `needs-triage`, `deferred`, `severity/s-1`, `severity/s0`, and `severity/s1`. In explicit AI modes, also assert counts for `ai-easy`, `ai-light`, `ai-medium`, `ai-heavy`, and `ai-manual`.
 
-Mismatch → drift → regenerate + re-update affected batches.
+Mismatch means external or local drift: report the changed IDs, re-fetch and
+reclassify them, invalidate the old plan authorization, and never automatically
+re-update from stale output.
 
 ### Step 3c: Full Batch Spot-Check
 
@@ -460,12 +531,11 @@ Scan ALL 50 issues in one complete batch report. 100% of one batch catches syste
 
 ### Step 3d: Sampled API Verify
 
-```bash
-for num in $(shuf -e <all_numbers> | head -5); do
-  gh issue view $num --json milestone,labels \
-    --jq '{milestone:.milestone.title,labels:[.labels[].name]}'
-done
-```
+Select a deterministic sample from the frozen, sorted candidate IDs (for
+example first, quartiles, middle, and last) or use Python's standard-library
+`random.Random(recorded_seed)`. Do not require GNU `shuf`, which is absent on a
+default macOS installation. Re-fetch each sample's milestone, labels, comments,
+and any in-scope project field.
 
 ### Step 3e: AI Effort Final Check (explicit AI modes only)
 
@@ -480,7 +550,10 @@ Run this only when the user requests AI effort review or when existing AI labels
 
 ### Step 3f: Drift Detection
 
-Compare `generated_at` in report headers vs file mtime. If file was edited after generation (mtime > generated_at + 5min) → the file was manually tampered → re-run classifier, re-update GitHub.
+Recompute the standards, frozen-candidate, classified-output, and report content
+hashes and compare them with the approval/run manifest. File mtimes are not
+portable integrity evidence. A hash mismatch invalidates approval and requires
+reclassification; never automatically re-update GitHub from drifted files.
 
 ### Step 3g: Final Summary
 
@@ -490,7 +563,7 @@ TRIAGE COMPLETE
 ========================================
 Total open kind/bug: NNN
 Actions applied:     NNN
-Skipped:              XX (heni02/Ariznawlll)
+Skipped:              XX (approved run exclusions)
 
 Lifecycle Distribution (on GitHub):
   needs-triage: NNN
@@ -516,39 +589,68 @@ All updated issues have explicit lifecycle state; deferred issues have comments;
 
 ### Rate Limit Budget
 
-| Auth | Limit | Capacity |
-|------|-------|----------|
-| Unauthenticated | 60/hr | ❌ Impossible |
-| Authenticated (`gh`) | 5000/hr | ✅ ~16 batches/hr |
-
-300 issues × 2 calls = 600 requests. **Realistic: 15-20 min** with batch overhead.
+Inspect `gh api rate_limit` and response headers for the authenticated identity;
+GitHub App, user, and Enterprise limits differ. Use large read pages, hydrate
+only evidence required for a decision, serialize writes, honor `Retry-After` /
+`X-RateLimit-Reset`, and use bounded retries. Reducing page size is not a
+rate-limit recovery strategy.
 
 ### Set Lifecycle Labels + Milestone
 
+Validate that `add_labels` and `remove_labels` are disjoint, but do **not** send
+the complete label array in an issue PATCH: GitHub implements that as
+replace-all and offers no compare-and-swap, so a maintainer's unrelated label
+change between pre-read and PATCH can be silently lost. Preserve unrelated
+labels with serial delta operations instead:
+
+1. For a deferral, first create the explanatory comment with a stable run/item
+   marker, verify that exact marker is present, and record its own pending/result
+   WAL entries. On resume, reuse the verified comment instead of duplicating it.
+   The wording describes the triage decision, so it remains truthful if a later
+   label operation fails and the item needs resume or correction.
+2. Re-read and compare the in-scope lifecycle labels immediately before every
+   label request. Stop when they differ from the WAL's expected state.
+3. Add the new lifecycle label first with the add-labels endpoint. Record one
+   pending WAL intent before the request and its result/post-state afterward.
+4. Re-read, then remove the old lifecycle label by name. Give that request its
+   own pending/result WAL records. A failure may temporarily leave both labels,
+   which is explicit and recoverable; it must never trigger an unlogged retry.
+5. If a maintainer concurrently touches the same lifecycle label, automatic
+   attribution is impossible because the API has no conditional mutation.
+   Stop for manual reconciliation rather than compensating or claiming that the
+   update was atomic.
+
+Do not combine `--add-label` and `--remove-label` in one `gh issue/pr edit`:
+current `gh` may execute those as concurrent sub-operations and leave an
+unlogged half-success. Compensation uses the same per-label delta endpoints in
+reverse order and only when the WAL plus drift checks prove ownership. PR
+labels use the same issue-label endpoints, but only for PRs in the
+frozen/hash-bound PR manifest.
+
 ```bash
-# Set milestone
-gh issue edit $NUMBER --milestone "MO-202607"
+# For a deferral, write and verify this idempotent marker-bearing comment before
+# either label request. Resume checks the marker instead of posting a duplicate.
+gh issue comment "$NUMBER" -R matrixorigin/matrixone \
+  --body-file "deferred_comment_${NUMBER}.md"
 
-# Intake normalization
-gh issue edit $NUMBER --add-label "kind/bug,needs-triage"
+# Each request has a separate pending/result WAL record and an immediate
+# pre-read/post-read. URL-encode label names used as path components.
+gh api -X POST "/repos/matrixorigin/matrixone/issues/$NUMBER/labels" \
+  -f 'labels[]=severity/s0'
+gh api -X DELETE \
+  "/repos/matrixorigin/matrixone/issues/$NUMBER/labels/needs-triage"
 
-# Promote to active severity: remove only labels that are actually present
-gh issue edit $NUMBER --add-label "severity/s0" --remove-label "needs-triage,deferred,severity/s-1,severity/s1"
+# If milestone is separately in scope, use its numeric number or JSON null.
+jq -n --argjson milestone "$MILESTONE_NUMBER_OR_NULL" '{milestone:$milestone}' \
+  | gh api -X PATCH "/repos/matrixorigin/matrixone/issues/$NUMBER" --input -
 
-# Defer after analysis
-gh issue edit $NUMBER --add-label "deferred" --remove-label "needs-triage,severity/s0,severity/s1,severity/s-1"
-gh issue comment $NUMBER --body-file deferred_comment_${NUMBER}.md
-
-# Revise AI effort label on issue or PR: add one, remove the other four
-gh issue edit $NUMBER --add-label "ai-medium" --remove-label "ai-easy,ai-light,ai-heavy,ai-manual"
-gh pr edit $PR_NUMBER --add-label "ai-medium" --remove-label "ai-easy,ai-light,ai-heavy,ai-manual"
 ```
-
-> `gh issue edit` with `--add-label`/`--remove-label` is simpler than REST PATCH. Prefer it.
 
 ### Set Project (GraphQL — requires `project` OAuth scope)
 
-Field IDs and Option IDs are project-specific. Query them once and cache.
+Field IDs and Option IDs are project-specific. Query and snapshot them per run;
+validate them again before write rather than treating a long-lived cache as
+authoritative.
 
 ```graphql
 mutation {
@@ -563,26 +665,16 @@ mutation {
 
 If token lacks `project` scope: document assignment in report for manual allocation. Do not attempt and fail silently.
 
-### Fallback: curl (no `gh` CLI)
-
-```bash
-curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-  -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/matrixorigin/matrixone/issues?state=open&labels=kind/bug&per_page=100&page=1"
-```
-
----
-
 ## Common Pitfalls (All from Real Sessions)
 
 | # | Pitfall | Symptom | Root Cause | Fix |
 |---|---------|---------|------------|-----|
-| 1 | **Page size mismatch** | 139 issues silently missed | per_page=50 vs 100 misalignment | Phase 1: query total_count first. Fallback 50→30 |
+| 1 | **Mutable pagination** | Issues silently missed after labels change | Paging a live candidate set while removing its query label | Freeze all issue-only candidates once, then filter and batch locally |
 | 2 | **Severity inflation** | New bugs jump straight to s0/s1 | Title keywords treated as priority commitment | G-INTAKE + G-PROMOTION: start with `needs-triage`, promote only after evidence |
 | 3 | **Whole-batch failure** | User changes rule → all 300+ redone | No rule lock-in before writes | Phase 1 gate: STANDARDS.md approval first |
 | 4 | **Severity drift** | Reports say s0, GitHub says s1 | Manual edits after generation | generated_at + checksum. Phase 3f drift detection |
-| 5 | **Half-updated batch** | 23/50 updated, 27 not | No rollback safety | Step 2d: before_snapshot. Rollback procedure |
-| 6 | **Rate limit blind spot** | Script hangs, user thinks stuck | No rate limit estimation | Progress display. 300 issues ≈ 15-20 min |
+| 5 | **Half-updated batch** | 23/50 updated, 27 not | No idempotent operation log | Resume serially; compensate only this run's drift-free deltas |
+| 6 | **Rate limit blind spot** | Run appears stuck | No live quota/backoff accounting | Inspect response headers, bound retries, and display completed/pending operations |
 | 7 | **Project writes fail** | Token missing `project` scope | Did not verify scope | Document requirement. Fallback: mark in report |
 | 8 | **Title is N/A** | Batch 7 titles all N/A | GraphQL N+1 rate limit | Prefer REST API. GraphQL only for project writes |
 | 9 | **Cross-batch duplicates** | Same issue in batch 3 and 5 | Pagination race during triage | Track seen numbers globally. Deduplicate |
@@ -595,21 +687,21 @@ curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
 
 ---
 
-## Script Checklist
+## Executor / Command-Plan Checklist
 
-Scripts accompanying this skill must:
+Any executor or materialized command plan used with this skill must:
 
-- [ ] Check `STANDARDS.md` `Approved: true` gate before any GitHub write
+- [ ] Freeze issue-only candidates once; bind approval to repository, run ID, standards hash, and candidate hash
 - [ ] Normalize new `kind/bug` issues into `needs-triage` before assigning priority labels
 - [ ] Require promotion rationale before adding `severity/s-1`, `severity/s0`, or `severity/s1`
 - [ ] Require a deferred comment body before adding `deferred`
 - [ ] Leave `ai-*` untouched during normal `needs-triage`; only in explicit AI modes, track exactly one of `ai-easy`, `ai-light`, `ai-medium`, `ai-heavy`, `ai-manual` with stage/confidence/rationale
-- [ ] Accept `--dry-run` flag (default: first 5 issues per batch)
-- [ ] Save `batch_N_before_snapshot.json` before updating each batch
+- [ ] Make `--dry-run` strictly zero-write; expose a separately authorized `--apply --limit 5` canary
+- [ ] Save `batch_N_before_snapshot.json` plus a write-ahead delta log before updating each batch
 - [ ] Print progress bar + running totals after each batch
-- [ ] Detect `generated_at` vs file mtime drift (warn, don't block)
+- [ ] Block on content-hash or `updated_at` drift; never overwrite concurrent changes
 - [ ] Cross-validate lifecycle label counts in Phase 3; cross-validate AI label counts only for explicit AI modes
-- [ ] Support `--rollback batch_N` to restore from snapshot
+- [ ] Support resumable idempotent apply and conditional compensation of this run's own deltas
 - [ ] Log created comment IDs so rollback can delete or correct failed-batch comments
 - [ ] Log every API call to `triage_YYYYMMDD.log`
 
@@ -630,6 +722,7 @@ Scripts accompanying this skill must:
     Proceed? [y/N]
 ```
 
-4. **Re-classify affected batches** only, regenerate reports (new timestamps)
-5. **Re-update GitHub** for affected batches (snapshot → update labels/comments → verify)
-6. **Resume** from next unprocessed batch
+4. **Re-classify affected batches** only and regenerate reports/content hashes
+5. Invalidate the old approval; obtain approval bound to the new standards and classified-output hashes
+6. Re-apply only drift-free deltas (snapshot → serial update → verify)
+7. **Resume** from next unprocessed batch

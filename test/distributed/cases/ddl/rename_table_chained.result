@@ -12,6 +12,12 @@ id
 select * from t_shadow;
 id
 100
+create table t1 (a int, b int);
+insert into t1 values (24499, 3);
+rename table t1 to t2, t2 to t3;
+select * from t3;
+a    b
+24499    3
 drop table t_live, t_shadow;
 create table a (id int);
 create table b (id int);

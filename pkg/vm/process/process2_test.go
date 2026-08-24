@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,6 +27,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type childProcessSession struct{}
+
+func (*childProcessSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*childProcessSession) AddTempTable(string, string, string)        {}
+func (*childProcessSession) RemoveTempTable(string, string)             {}
+func (*childProcessSession) RemoveTempTableByRealName(string)           {}
+func (*childProcessSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+
+func TestChildProcessesInheritSession(t *testing.T) {
+	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	parent.Session = &childProcessSession{}
+
+	child := parent.NewNoContextChildProc(0)
+	channelChild := parent.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
+	contextChild := parent.NewContextChildProc(0)
+
+	require.Same(t, parent.Session, child.Session)
+	require.Same(t, parent.Session, channelChild.Session)
+	require.Same(t, parent.Session, contextChild.Session)
+}
 
 func TestBuildPipelineContext(t *testing.T) {
 	// Create a parent context
@@ -58,6 +80,22 @@ func TestBuildPipelineContext(t *testing.T) {
 	// Cancel the context and check if it is canceled
 	proc.Cancel(nil)
 	assert.Error(t, proc.Ctx.Err())
+}
+
+func TestNewBatchFromSrcWithUntypedNull(t *testing.T) {
+	proc := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	src := batch.NewWithSize(1)
+	src.Vecs[0] = vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
+	src.SetRowCount(1)
+	defer src.Clean(proc.Mp())
+
+	dst, err := proc.NewBatchFromSrc(src, 1)
+	require.NoError(t, err)
+	defer dst.Clean(proc.Mp())
+	require.Equal(t, types.T_any, dst.Vecs[0].GetType().Oid)
+	require.NoError(t, dst.Vecs[0].UnionBatch(src.Vecs[0], 0, 1, nil, proc.Mp()))
+	require.Equal(t, 1, dst.Vecs[0].Length())
+	require.True(t, dst.Vecs[0].IsNull(0))
 }
 
 func TestGetTaskService(t *testing.T) {
@@ -97,22 +135,87 @@ func TestAffectedRows(t *testing.T) {
 	assert.Equal(t, int64(0), proc.GetAffectedRows())
 }
 
+func TestStatementLastInsertIDSemantics(t *testing.T) {
+	// Partially initialized processes are used by a few frontend unit tests;
+	// the setters must remain no-ops until a BaseProcess is attached.
+	nilBase := &Process{}
+	nilBase.SetLastInsertID(7)
+	nilBase.SetStatementLastInsertID(7)
+	require.Zero(t, nilBase.SetStatementLastInsertIDIfEarlier(0))
+	require.Equal(t, uint64(7), nilBase.SetStatementLastInsertIDIfEarlier(7))
+
+	last := uint64(3)
+	statement := uint64(0)
+	proc := &Process{Base: &BaseProcess{
+		LastInsertID:          &last,
+		StatementLastInsertID: &statement,
+	}}
+	proc.SetLastInsertID(11)
+	proc.SetStatementLastInsertID(5)
+	require.Equal(t, uint64(11), proc.GetLastInsertID())
+	require.Equal(t, uint64(5), proc.GetStatementLastInsertID())
+	empty := &Process{Base: &BaseProcess{}}
+	empty.SetLastInsertID(9)
+	empty.SetStatementLastInsertID(9)
+	require.Zero(t, empty.GetLastInsertID())
+	require.Zero(t, empty.GetStatementLastInsertID())
+	require.Equal(t, uint64(6), empty.SetStatementLastInsertIDIfEarlier(6))
+
+	// The statement coordinator keeps the smallest generated key seen by
+	// parallel materialization scopes and mirrors it to the session value.
+	require.Equal(t, uint64(4), proc.SetStatementLastInsertIDIfEarlier(4))
+	require.Equal(t, uint64(4), proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(4), proc.GetLastInsertID())
+	require.Equal(t, uint64(4), proc.SetStatementLastInsertIDIfEarlier(9))
+	require.Equal(t, uint64(4), proc.GetLastInsertID())
+	require.Equal(t, uint64(2), proc.SetStatementLastInsertIDIfEarlier(2))
+	require.Equal(t, uint64(2), proc.GetStatementLastInsertID())
+	require.Equal(t, uint64(2), proc.GetLastInsertID())
+	require.Equal(t, uint64(2), proc.SetStatementLastInsertIDIfEarlier(0))
+
+	// A process with only the legacy session field still publishes the first
+	// generated key without requiring the new statement field.
+	legacy := uint64(0)
+	legacyProc := &Process{Base: &BaseProcess{LastInsertID: &legacy}}
+	require.Equal(t, uint64(8), legacyProc.SetStatementLastInsertIDIfEarlier(8))
+	require.Equal(t, uint64(8), legacyProc.GetLastInsertID())
+}
+
 func TestGetSpillFileService(t *testing.T) {
-	localFS, err := fileservice.NewLocalFS(
-		context.Background(),
-		defines.LocalFileServiceName,
-		t.TempDir(),
-		fileservice.DisabledCacheConfig,
-		nil,
-	)
-	assert.Nil(t, err)
-	proc := &Process{
-		Base: &BaseProcess{
-			FileService: localFS,
-		},
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tc := range []struct {
+		name    string
+		procCtx context.Context
+	}{
+		{name: "nil process context"},
+		{name: "canceled process context", procCtx: canceledCtx},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			localFS, err := fileservice.NewLocalFS(
+				context.Background(),
+				defines.LocalFileServiceName,
+				t.TempDir(),
+				fileservice.DisabledCacheConfig,
+				nil,
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { localFS.Close(context.Background()) })
+			proc := &Process{
+				Ctx: tc.procCtx,
+				Base: &BaseProcess{
+					FileService: localFS,
+				},
+			}
+
+			spillFS, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			file, err := spillFS.CreateAndRemoveFile(context.Background(), "probe")
+			require.NoError(t, err)
+			require.NoError(t, file.Close())
+		})
 	}
-	_, err = proc.GetSpillFileService()
-	assert.Nil(t, err)
 }
 
 func TestGetSpillFileServiceError(t *testing.T) {
@@ -139,8 +242,23 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 		return params
 	}
 
+	plain := newParams("plain")
+	proc.SetOwnedPrepareParamsWithMeta(
+		plain,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamNone},
+	)
+	require.Nil(t, proc.Base.prepareParamsIsBin, "default metadata must keep the zero-allocation path")
+
 	first := newParams("first")
-	proc.SetOwnedPrepareParamsWithIsBin(first, []bool{true})
+	proc.SetOwnedPrepareParamsWithMeta(
+		first,
+		[]bool{true},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
+	require.Zero(t, plain.Length(), "replacing owned default-metadata params must release them")
 	proc.SetPrepareParamsWithIsBin(first, []bool{false})
 	require.Equal(t, 1, first.Length(), "setting the same pointer must not release it")
 	require.True(t, proc.Base.prepareParamsOwned, "setting the same pointer must preserve ownership")
@@ -169,22 +287,37 @@ func TestDetachAndRestorePrepareParams(t *testing.T) {
 	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("binary"), false, proc.Mp()))
-	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+	proc.SetOwnedPrepareParamsWithMetadata(params, []bool{true}, []bool{true})
 
 	state := proc.DetachPrepareParams()
 	require.Nil(t, proc.GetPrepareParams())
 	require.False(t, proc.GetPrepareParamIsBin(0))
+	require.False(t, proc.GetPrepareParamIsBinaryString(0))
 	require.Equal(t, 1, params.Length(), "detach must not release owned params")
 
+	proc.BorrowPrepareParams(state)
+	require.Same(t, params, proc.GetPrepareParams())
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
+	require.False(t, proc.Base.prepareParamsOwned)
+
 	proc.Free()
-	require.Equal(t, 1, params.Length(), "transient Process.Free must not release detached params")
+	require.Equal(t, 1, params.Length(), "transient Process.Free must not release borrowed params")
 
 	proc.RestorePrepareParams(state)
 	require.Same(t, params, proc.GetPrepareParams())
 	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
 	require.True(t, proc.Base.prepareParamsOwned)
 
 	proc.Free()
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
+}
+
+func TestGetPrepareParamsAtWithoutParams(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	value, err := proc.GetPrepareParamsAt(0)
+	require.Error(t, err)
+	require.Nil(t, value)
 }

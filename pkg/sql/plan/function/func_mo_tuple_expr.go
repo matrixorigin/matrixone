@@ -25,54 +25,73 @@ import (
 // MoTupleExpr decodes a tuple bytes representation and returns a human-readable string.
 // It uses DecodeTuple to decode the bytes and SQLStrings to format the output.
 func MoTupleExpr(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	p := vector.GenerateFunctionStrParameter(params[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
+	p := vector.GenerateFunctionStrParameter(params[0])
 
 	// special case: ignore all rows
 	if selectList.IgnoreAllRow() {
-		rs.AddNullRange(0, uint64(length))
+		rs.SetNullResult(uint64(length))
 		return nil
+	}
+	if params[0].IsConst() {
+		v, null := p.GetStrValue(0)
+		if null {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		output, ok := formatMoTupleExpr(v)
+		if !ok {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		return appendRepeatedBytesResultWithSelection(rs, output, length, selectList)
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := p.GetStrValue(i)
 		if null {
-			rs.AppendMustNull()
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
 		}
 
-		// Decode the tuple bytes
-		tuple, _, schema, err := types.DecodeTuple(v)
-		if err != nil {
-			rs.AppendMustNull()
+		output, ok := formatMoTupleExpr(v)
+		if !ok {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
 			continue
 		}
-
-		// Generate scales array from schema
-		// Note: Tuple encoding doesn't contain scale information for decimal types,
-		// so we use scale=0 which displays decimals as their internal scaled integer values.
-		// For example, decimal(10,2) value 12.50 will be displayed as 1250.
-		scales := make([]int32, len(schema))
-		for idx := range scales {
-			scales[idx] = 0 // Default scale (displays decimals as scaled integers)
-		}
-
-		// Convert tuple to SQL strings
-		sqlStrings := tuple.SQLStrings(scales)
-
-		// Format the output
-		var output string
-		if len(sqlStrings) == 1 {
-			output = sqlStrings[0]
-		} else {
-			output = "(" + strings.Join(sqlStrings, ", ") + ")"
-		}
-
-		// Append to result
-		if err := rs.AppendMustBytesValue([]byte(output)); err != nil {
+		if err := rs.AppendMustBytesValue(output); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func formatMoTupleExpr(value []byte) ([]byte, bool) {
+	tuple, _, schema, err := types.DecodeTuple(value)
+	if err != nil {
+		return nil, false
+	}
+
+	// Tuple encoding doesn't contain scale information for decimal types, so
+	// scale=0 displays decimals as their internal scaled integer values.
+	scales := make([]int32, len(schema))
+	sqlStrings := tuple.SQLStrings(scales)
+	if len(sqlStrings) == 1 {
+		return []byte(sqlStrings[0]), true
+	}
+	return []byte("(" + strings.Join(sqlStrings, ", ") + ")"), true
 }

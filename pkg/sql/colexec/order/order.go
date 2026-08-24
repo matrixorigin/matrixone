@@ -17,12 +17,14 @@ package order
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/partition"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/ordersites"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,17 +32,76 @@ import (
 const opName = "order"
 
 func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enoughToSend bool, err error) {
+	if len(bat.ExtraBuf) != 0 {
+		return false, moerr.NewInternalError(proc.Ctx,
+			"order build should not have extra buffers")
+	}
 	s1, s2 := 0, bat.Size()
 	if ctr.batWaitForSort != nil {
 		s1 = ctr.batWaitForSort.Size()
 	}
 	all := s1 + s2
 
-	ctr.batWaitForSort, err = ctr.batWaitForSort.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+	if ctr.batWaitForSort == nil && ctr.retainedAllocation != nil {
+		ctr.batWaitForSort, err = proc.NewBatchFromSrcWithAllocation(
+			bat,
+			0,
+			ctr.retainedAllocation,
+		)
+		if err != nil {
+			return false, err
+		}
+		// NewBatchFromSrcWithAllocation creates an empty destination, so copy
+		// the shuffle routing metadata explicitly before appending the rows.
+		// The legacy Dup path preserves the same field through CloneTo.
+		ctr.batWaitForSort.ShuffleIDX = bat.ShuffleIDX
+	}
+	if ctr.batWaitForSort == nil {
+		ctr.batWaitForSort, err = bat.Dup(proc.Mp())
+	} else if ctr.allocationAccount == nil {
+		ctr.batWaitForSort, err = ctr.batWaitForSort.AppendWithCopy(
+			proc.Ctx, proc.Mp(), bat)
+	} else {
+		err = ctr.appendBatchAccounted(proc, bat)
+	}
 	if err != nil {
 		return false, err
 	}
 	return all >= maxBatchSizeToSort, nil
+}
+
+func (ctr *container) appendBatchAccounted(
+	proc *process.Process,
+	bat *batch.Batch,
+) error {
+	if ctr == nil || ctr.batWaitForSort == nil || bat == nil ||
+		len(ctr.batWaitForSort.Vecs) != len(bat.Vecs) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if len(bat.Vecs) == 0 {
+		ctr.batWaitForSort.AddRowCount(bat.RowCount())
+		return nil
+	}
+	checkpoints, err := ctr.appendCheckpoints(len(ctr.batWaitForSort.Vecs), proc)
+	if err != nil {
+		return err
+	}
+	for i := range ctr.batWaitForSort.Vecs {
+		checkpoints[i] = ctr.batWaitForSort.Vecs[i].MakeAppendCheckpoint()
+	}
+	for i := range ctr.batWaitForSort.Vecs {
+		if err = ctr.batWaitForSort.Vecs[i].UnionBatch(
+			bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.Mp()); err != nil {
+			for j := range ctr.batWaitForSort.Vecs {
+				ctr.batWaitForSort.Vecs[j].RollbackAppend(
+					checkpoints[j], bat.Vecs[j].Length())
+			}
+			return err
+		}
+		ctr.batWaitForSort.Vecs[i].SetSorted(false)
+	}
+	ctr.batWaitForSort.AddRowCount(bat.RowCount())
+	return nil
 }
 
 func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) (err error) {
@@ -52,52 +113,59 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			}
 		}
 
-		firstVec := ctr.sortVectors[0]
-		if cap(ctr.resultOrderList) >= ctr.batWaitForSort.RowCount() {
-			ctr.resultOrderList = ctr.resultOrderList[:ctr.batWaitForSort.RowCount()]
-		} else {
-			ctr.resultOrderList = make([]int64, ctr.batWaitForSort.RowCount())
+		rowCount := ctr.batWaitForSort.RowCount()
+		ctr.resultOrderList, ctr.resultOrderMP, err = growOrderSlice(
+			ctr.resultOrderList,
+			ctr.resultOrderMP,
+			rowCount,
+			proc,
+			ctr.allocationAccount,
+			ordersites.OrderSelections,
+		)
+		if err != nil {
+			return err
+		}
+		if len(ctr.sortVectors) > 1 && ctr.allocationAccount != nil {
+			ctr.sortScratch.Partitions, ctr.sortPartitionsMP, err = growOrderSlice(
+				ctr.sortScratch.Partitions,
+				ctr.sortPartitionsMP,
+				rowCount,
+				proc,
+				ctr.allocationAccount,
+				ordersites.OrderSortPartitions,
+			)
+			if err != nil {
+				return err
+			}
+			ctr.sortScratch.Partitions = ctr.sortScratch.Partitions[:0]
+			ctr.sortScratch.Diffs, ctr.sortDiffsMP, err = growOrderSlice(
+				ctr.sortScratch.Diffs,
+				ctr.sortDiffsMP,
+				rowCount,
+				proc,
+				ctr.allocationAccount,
+				ordersites.OrderSortDiffs,
+			)
+			if err != nil {
+				return err
+			}
 		}
 
 		for i := range ctr.resultOrderList {
 			ctr.resultOrderList[i] = int64(i)
 		}
 
-		// skip sort for const vector
-		if !firstVec.IsConst() {
-			nullCnt := firstVec.GetNulls().Count()
-			if nullCnt < firstVec.Length() {
-				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.resultOrderList, firstVec)
-			}
-		}
-
-		sels := ctr.resultOrderList
-		ovec := firstVec
-		if len(ctr.sortVectors) != 1 {
-			ps := make([]int64, 0, 16)
-			ds := make([]bool, len(sels))
-			for i, j := 1, len(ctr.sortVectors); i < j; i++ {
-				vec := ctr.sortVectors[i]
-				ps = partition.Partition(sels, ds, ps, ovec)
-
-				// skip sort for const vector
-				if !vec.IsConst() {
-					desc := ctr.desc[i]
-					nullsLast := ctr.nullsLast[i]
-
-					nullCnt := vec.GetNulls().Count()
-					if nullCnt < vec.Length() {
-						for m, n := 0, len(ps); m < n; m++ {
-							if m == n-1 {
-								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:], vec)
-							} else {
-								sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[m]:ps[m+1]], vec)
-							}
-						}
-					}
-				}
-				ovec = vec
-			}
+		if ctr.allocationAccount == nil {
+			sort.SortByVectors(
+				ctr.resultOrderList, ctr.sortVectors, ctr.desc, ctr.nullsLast)
+		} else {
+			sort.SortByVectorsWithScratch(
+				ctr.resultOrderList,
+				ctr.sortVectors,
+				ctr.desc,
+				ctr.nullsLast,
+				&ctr.sortScratch,
+			)
 		}
 
 		if err = ctr.batWaitForSort.Shuffle(ctr.resultOrderList, proc.Mp()); err != nil {
@@ -128,6 +196,9 @@ func (order *Order) OpType() vm.OpType {
 }
 
 func (order *Order) Prepare(proc *process.Process) (err error) {
+	defer func() {
+		err = orderTerminalCapacityError(proc.Ctx, err)
+	}()
 	if order.OpAnalyzer == nil {
 		order.OpAnalyzer = process.NewAnalyzer(order.GetIdx(), order.IsFirst, order.IsLast, "order")
 	} else {
@@ -150,20 +221,34 @@ func (order *Order) Prepare(proc *process.Process) (err error) {
 			}
 		}
 
-		ctr.sortVectors = make([]*vector.Vector, len(order.OrderBySpec))
-		ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(order.OrderBySpec))
-		for i := range ctr.sortVectors {
-			ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, order.OrderBySpec[i].Expr)
-			if err != nil {
-				return err
-			}
+		planExprs := make([]*pbplan.Expr, len(order.OrderBySpec))
+		for i := range order.OrderBySpec {
+			planExprs[i] = order.OrderBySpec[i].Expr
+		}
+		ctr.sortExprExecutor, err =
+			colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+				proc,
+				planExprs,
+				ctr.expressionAllocation,
+			)
+		if err != nil {
+			ctr.releaseExpressionExecutors()
+			ctr.desc = nil
+			ctr.nullsLast = nil
+			return err
 		}
 	}
 
 	return nil
 }
 
-func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
+func (order *Order) Call(proc *process.Process) (
+	result vm.CallResult,
+	err error,
+) {
+	defer func() {
+		err = orderTerminalCapacityError(proc.Ctx, err)
+	}()
 	analyzer := order.OpAnalyzer
 
 	ctr := &order.ctr
@@ -179,6 +264,9 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 				return vm.CancelResult, err
 			}
 			if input.Batch == nil {
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return vm.CancelResult, err
+				}
 				ctr.state = vm.Eval
 				break
 			}
@@ -201,7 +289,7 @@ func (order *Order) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
-	result := vm.NewCallResult()
+	result = vm.NewCallResult()
 	if ctr.state == vm.Eval {
 		err := ctr.sortAndSend(proc, &result)
 		if err != nil {

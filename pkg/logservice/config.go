@@ -41,12 +41,13 @@ const (
 	defaultRaftPort          = 32000
 	defaultGossipPort        = 32002
 
-	defaultGossipProbeInterval = 5 * time.Second
-	defaultHeartbeatInterval   = time.Second
-	defaultLogDBBufferSize     = 768 * 1024
-	defaultTruncateInterval    = 10 * time.Second
-	defaultMaxExportedSnapshot = 20
-	defaultMaxMessageSize      = 1024 * 1024 * 100
+	defaultGossipProbeInterval            = 5 * time.Second
+	defaultHeartbeatInterval              = time.Second
+	defaultHAKeeperBootstrapRetryInterval = time.Second
+	defaultLogDBBufferSize                = 768 * 1024
+	defaultTruncateInterval               = 10 * time.Second
+	defaultMaxExportedSnapshot            = 20
+	defaultMaxMessageSize                 = 1024 * 1024 * 100
 	// The default value for HAKeeper truncate interval.
 	defaultHAKeeperTruncateInterval = 2 * time.Hour
 
@@ -146,6 +147,9 @@ type Config struct {
 	// HAKeeperCheckInterval is the interval of how often HAKeeper should run
 	// cluster health checks.
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
+	// HAKeeperBootstrapRetryInterval is the retry backoff used when the initial
+	// HAKeeper cluster information cannot yet be proposed.
+	HAKeeperBootstrapRetryInterval toml.Duration `toml:"hakeeper-bootstrap-retry-interval"`
 	// TruncateInterval is the interval of how often log service should
 	// process truncate for regular shards.
 	TruncateInterval toml.Duration `toml:"truncate-interval"`
@@ -371,6 +375,11 @@ func (c *Config) Validate() error {
 	if c.GossipProbeInterval.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("GossipProbeInterval not set")
 	}
+	if c.HAKeeperBootstrapRetryInterval.Duration == 0 {
+		c.HAKeeperBootstrapRetryInterval.Duration = defaultHAKeeperBootstrapRetryInterval
+	} else if c.HAKeeperBootstrapRetryInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("HAKeeperBootstrapRetryInterval not set")
+	}
 	if c.TruncateInterval.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("TruncateInterval not set")
 	}
@@ -438,30 +447,31 @@ func (c *Config) UpdateAddresses(
 func DefaultConfig() Config {
 	uid := "7c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 	return Config{
-		FS:                       vfs.Default,
-		DeploymentID:             defaultDeploymentID,
-		UUID:                     uid,
-		RTTMillisecond:           200,
-		DataDir:                  defaultDataDir,
-		SnapshotExportDir:        defaultSnapshotExportDir,
-		MaxExportedSnapshot:      defaultMaxExportedSnapshot,
-		ServiceAddress:           defaultServiceAddress,
-		RaftAddress:              defaultRaftAddress,
-		ServiceHost:              DefaultServiceHost,
-		UseTeeLogDB:              false,
-		LogDBBufferSize:          defaultLogDBBufferSize,
-		LogDBMaxLogFileSize:      defaultLogDBMaxLogFileSize,
-		GossipAddress:            defaultGossipAddress,
-		GossipSeedAddresses:      []string{DefaultGossipServiceAddress},
-		GossipProbeInterval:      toml.Duration{Duration: defaultGossipProbeInterval},
-		GossipAllowSelfAsSeed:    true,
-		HeartbeatInterval:        toml.Duration{Duration: defaultHeartbeatInterval},
-		HAKeeperTickInterval:     toml.Duration{Duration: time.Second / hakeeper.DefaultTickPerSecond},
-		HAKeeperCheckInterval:    toml.Duration{Duration: hakeeper.CheckDuration},
-		TruncateInterval:         toml.Duration{Duration: defaultTruncateInterval},
-		HAKeeperTruncateInterval: toml.Duration{Duration: defaultHAKeeperTruncateInterval},
-		IsNonVoting:              false,
-		MembershipImmovable:      true,
+		FS:                             vfs.Default,
+		DeploymentID:                   defaultDeploymentID,
+		UUID:                           uid,
+		RTTMillisecond:                 200,
+		DataDir:                        defaultDataDir,
+		SnapshotExportDir:              defaultSnapshotExportDir,
+		MaxExportedSnapshot:            defaultMaxExportedSnapshot,
+		ServiceAddress:                 defaultServiceAddress,
+		RaftAddress:                    defaultRaftAddress,
+		ServiceHost:                    DefaultServiceHost,
+		UseTeeLogDB:                    false,
+		LogDBBufferSize:                defaultLogDBBufferSize,
+		LogDBMaxLogFileSize:            defaultLogDBMaxLogFileSize,
+		GossipAddress:                  defaultGossipAddress,
+		GossipSeedAddresses:            []string{DefaultGossipServiceAddress},
+		GossipProbeInterval:            toml.Duration{Duration: defaultGossipProbeInterval},
+		GossipAllowSelfAsSeed:          true,
+		HeartbeatInterval:              toml.Duration{Duration: defaultHeartbeatInterval},
+		HAKeeperTickInterval:           toml.Duration{Duration: time.Second / hakeeper.DefaultTickPerSecond},
+		HAKeeperCheckInterval:          toml.Duration{Duration: hakeeper.CheckDuration},
+		HAKeeperBootstrapRetryInterval: toml.Duration{Duration: defaultHAKeeperBootstrapRetryInterval},
+		TruncateInterval:               toml.Duration{Duration: defaultTruncateInterval},
+		HAKeeperTruncateInterval:       toml.Duration{Duration: defaultHAKeeperTruncateInterval},
+		IsNonVoting:                    false,
+		MembershipImmovable:            true,
 		RPC: struct {
 			MaxMessageSize toml.ByteSize `toml:"max-message-size"`
 			EnableCompress bool          `toml:"enable-compress"`

@@ -250,6 +250,58 @@ func (ts Timestamp) ToDatetime(loc *time.Location) Datetime {
 	return Datetime(ts) + Datetime(offset)*MicroSecsPerSec
 }
 
+// DatetimeRangeToTimestampRange converts a DATETIME range to a TIMESTAMP range
+// only when the session time zone is order-preserving for every value in the
+// range.  A range that intersects a UTC-offset transition is rejected because
+// local times in a DST fold or gap are ambiguous or nonexistent.  Callers use
+// the boolean result as a proof boundary for min/max based pruning; ordinary
+// scalar casts should continue to use Datetime.ToTimestamp.
+func DatetimeRangeToTimestampRange(
+	minValue, maxValue Datetime,
+	loc *time.Location,
+) (minTimestamp, maxTimestamp Timestamp, ok bool) {
+	if loc == nil || minValue == ZeroDatetime || maxValue == ZeroDatetime || minValue > maxValue {
+		return 0, 0, false
+	}
+
+	minTimestamp = minValue.ToTimestamp(loc)
+	maxTimestamp = maxValue.ToTimestamp(loc)
+	if minTimestamp > maxTimestamp {
+		return 0, 0, false
+	}
+
+	// The UTC candidates produced from the endpoints are within one zone
+	// offset of the relevant transitions.  Include a generous margin so a
+	// fold or gap adjacent to either endpoint is also checked.
+	const transitionMargin = int64(2 * SecsPerDay)
+	loUnix := minTimestamp.Unix() - transitionMargin
+	hiUnix := maxTimestamp.Unix() + transitionMargin
+
+	// ZoneBounds includes transitions synthesized by a location's recurring
+	// extension rules, without depending on time.Location's private layout.
+	for probe := time.Unix(loUnix, 0).In(loc); ; {
+		_, next := probe.ZoneBounds()
+		if next.IsZero() || next.Unix() > hiUnix {
+			break
+		}
+		if !next.After(probe) {
+			return 0, 0, false
+		}
+		transition := next.Unix()
+		before := Timestamp(UnixToTimestamp(transition) - 1).ToDatetime(loc)
+		after := UnixToTimestamp(transition).ToDatetime(loc)
+		if before > after {
+			before, after = after, before
+		}
+		if minValue <= after && maxValue >= before {
+			return 0, 0, false
+		}
+		probe = next.In(loc)
+	}
+
+	return minTimestamp, maxTimestamp, true
+}
+
 // TruncateToScale truncates a timestamp to the given scale (0-6).
 // Scale represents fractional seconds precision:
 //   - 0: seconds (no fractional part)

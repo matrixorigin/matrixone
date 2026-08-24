@@ -45,6 +45,37 @@ func TestExtractRowFromVector(t *testing.T) {
 	}
 }
 
+func TestConvertYearVectorToSlice(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_year.ToType())
+	for _, value := range []types.MoYear{0, 2024} {
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	colSlices := &ColumnSlices{
+		ctx:             t.Context(),
+		dataSet:         bat,
+		colIdx2SliceIdx: make([]int, 1),
+	}
+	t.Cleanup(func() { bat.Clean(mp) })
+	t.Cleanup(colSlices.Close)
+
+	require.NoError(t, convertVectorToSlice(t.Context(), nil, vec, 0, colSlices))
+	require.Equal(t, []types.MoYear{0, 2024}, colSlices.arrYear[0])
+	for rowIndex, want := range []types.MoYear{0, 2024} {
+		row := make([]any, 1)
+		require.NoError(t, extractRowFromVector2(t.Context(), nil, vec, 0, row, rowIndex, false, colSlices))
+		require.Equal(t, want, row[0])
+		gotInt64, err := colSlices.GetInt64(uint64(rowIndex), 0)
+		require.NoError(t, err)
+		require.Equal(t, int64(want), gotInt64)
+		gotUint64, err := colSlices.GetUint64(uint64(rowIndex), 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(want), gotUint64)
+	}
+}
+
 // TestExtractRowFromVectorNarrowVec guards the row-based (GetValue) display path
 // for the narrow vector types. vecuint8 in particular must NOT be stored as
 // []uint8: that is the same Go type as a raw []byte (binary/varbinary) value once

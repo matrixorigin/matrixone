@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -88,7 +89,6 @@ const (
 	FPUse
 	FPPrepareStmt
 	FPPrepareString
-	FPCreateConnector
 	FPPauseDaemonTask
 	FPCancelDaemonTask
 	FPResumeDaemonTask
@@ -98,8 +98,6 @@ const (
 	FPExecuteSQLTask
 	FPShowSQLTasks
 	FPShowSQLTaskRuns
-	FPDropConnector
-	FPShowConnectors
 	FPDeallocate
 	FPReset
 	FPSetVar
@@ -301,21 +299,38 @@ type PrepareStmt struct {
 	PreparePlan     *plan.Plan
 	PrepareStmt     tree.Statement
 	NativeMode      bool
-	ParamTypes      []byte
-	ColDefData      [][]byte
-	IsCloudNonuser  bool
-	proc            *process.Process
-	remapDb         map[string]string
-	defaultDatabase string
+	OnlyFullGroupBy bool
+	// onlyFullGroupBySet distinguishes a captured disabled mode from legacy or
+	// minimal in-memory fixtures that predate this plan dependency.
+	onlyFullGroupBySet bool
+	ParamTypes         []byte
+	ColDefData         [][]byte
+	IsCloudNonuser     bool
+	proc               *process.Process
+	remapDb            map[string]string
+	defaultDatabase    string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
+	// cursorRequested is set by the current COM_STMT_EXECUTE packet. The
+	// materialized cursor is kept on the prepared statement because a later
+	// COM_STMT_FETCH only carries the statement id.
+	cursorRequested bool
+	cursor          *preparedStmtCursor
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
 	// tempTableVersion is the session temporary-table mapping version used to
 	// build PreparePlan and compile.
 	tempTableVersion uint64
+	// ddlVersion is the session DDL generation used to build the cached plan.
+	ddlVersion uint64
+	// preparedMetadataCheckTS stores the catalog metadata high-watermark
+	// observed by the last successful dependency validation.
+	preparedMetadataCheckTS timestamp.Timestamp
+	// cloneSQL is an immutable, fully qualified SQL representation captured
+	// before clone planning can mutate the parsed AST.
+	cloneSQL string
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
@@ -324,6 +339,44 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+}
+
+// preparedStmtCursor is the server-side result retained between
+// COM_STMT_EXECUTE and COM_STMT_FETCH. MySQL sessions serialize commands, so
+// the cursor does not need an additional lock.
+type preparedStmtCursor struct {
+	result   *MysqlResultSet
+	offset   uint64
+	bytes    uint64
+	maxBytes uint64
+	// maxBytesSet distinguishes an explicit zero query_result_maxsize from
+	// an in-memory test/legacy cursor that has not been initialized yet.
+	maxBytesSet bool
+	maxRows     uint64
+	owner       *Session
+}
+
+func (cursor *preparedStmtCursor) close() {
+	if cursor == nil {
+		return
+	}
+	if cursor.owner != nil && cursor.bytes > 0 {
+		cursor.owner.releasePreparedCursorBytes(cursor.bytes)
+	}
+	cursor.result = nil
+	cursor.offset = 0
+	cursor.bytes = 0
+	cursor.owner = nil
+}
+
+func (prepareStmt *PrepareStmt) closeCursor() {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.cursor != nil {
+		prepareStmt.cursor.close()
+		prepareStmt.cursor = nil
+	}
 }
 
 /*
@@ -665,6 +718,7 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //}
 
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.closeCursor()
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
@@ -699,6 +753,10 @@ func (prepareStmt *PrepareStmt) resetBinaryParamState() {
 	}
 }
 
+func (prepareStmt *PrepareStmt) hasPendingLongData() bool {
+	return prepareStmt != nil && len(prepareStmt.getFromSendLongData) > 0
+}
+
 func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	if prepareStmt == nil {
 		return
@@ -710,6 +768,7 @@ func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	for k := range prepareStmt.getFromSendLongData {
 		delete(prepareStmt.getFromSendLongData, k)
 	}
+	prepareStmt.cursorRequested = false
 }
 
 type Allocator interface {
@@ -815,7 +874,7 @@ type FeSession interface {
 	IsBackgroundSession() bool
 	GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error)
 	CountPayload(i int)
-	RemovePrepareStmt(name string)
+	RemovePrepareStmt(name string) bool
 	SetShowStmtType(statement ShowStatementType)
 	SetSql(sql string)
 	GetMemPool() *mpool.MPool
@@ -896,8 +955,16 @@ type ExecCtx struct {
 	rootSQLOverride *string
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
+	// persistentDropTableTargets captures the per-target classification before
+	// DROP TABLE executes. Temporary aliases are removed during execution, so
+	// post-execution persistent side effects must consume this snapshot instead
+	// of resolving the statement names again.
+	persistentDropTableTargets tree.TableNames
 	//isLastStmt : true denotes the last statement in the query
 	isLastStmt bool
+	// singleStatementQuery is true only for a raw COM_QUERY containing one
+	// statement, which is the only input the proxy records for raw replay.
+	singleStatementQuery bool
 	// tenant name
 	tenant          string
 	userName        string
@@ -918,6 +985,9 @@ type ExecCtx struct {
 	resper            Responser
 	results           []ExecResult
 	prepareColDef     [][]byte
+	cursorResultSaver StagedBinaryWriter
+	returning         *returningState
+	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
@@ -942,11 +1012,21 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
+	if execCtx.cursorResultSaver != nil && execCtx.reqCtx != nil && execCtx.ses != nil {
+		_ = execCtx.cursorResultSaver.Abort(execCtx)
+	}
+	execCtx.cursorResultSaver = nil
+	if execCtx.returning != nil {
+		_ = execCtx.returning.Close(execCtx)
+		execCtx.returning = nil
+	}
 	execCtx.reqCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
+	execCtx.persistentDropTableTargets = nil
+	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -961,6 +1041,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.selectInto = nil
 	execCtx.rewriteEnabled = false
 }
 
@@ -1348,7 +1429,9 @@ func (ses *feSessionImpl) GetResultBatches() []*batch.Batch {
 }
 
 func (ses *feSessionImpl) AppendResultBatch(bat *batch.Batch) error {
-	copied, err := bat.Dup(ses.pool)
+	// Result batches belong to the session and can remain reachable after the
+	// producing statement has sealed its allocation account.
+	copied, err := bat.DupWithoutAllocationAccount(ses.pool)
 	if err != nil {
 		return err
 	}
@@ -1370,9 +1453,23 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 
 	// If global vars have not been initialized, fall back to default.
 	if ses.gSysVars == nil {
-		return gSysVarsDefs[name].Default, nil
+		if isTransactionIsolationSystemVariable(name) {
+			if value, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+				return value, nil
+			}
+		}
+		return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 	}
-	return ses.gSysVars.Get(name), nil
+	value := ses.gSysVars.Get(name)
+	if isTransactionIsolationSystemVariable(name) {
+		normalized, _, err := normalizeTxnIsolationSystemValue(
+			context.Background(), ses.service, value)
+		if err != nil {
+			return nil, err
+		}
+		return normalized, nil
+	}
+	return value, nil
 }
 
 func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
@@ -1413,6 +1510,11 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
 	}
+	if isTransactionIsolationSystemVariable(name) {
+		if _, err = txnIsolationFromSystemValue(ctx, val); err != nil {
+			return err
+		}
+	}
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
 		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
@@ -1430,10 +1532,15 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	}
 
 	// save to table first
-	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
+	canonicalName := canonicalSystemVariableName(name)
+	persistNames := []string{canonicalName}
+	if isTransactionIsolationSystemVariable(name) {
+		persistNames = append(persistNames, transactionIsolationSystemVariableAlias)
+	}
+	if err = doSetGlobalSystemVariables(ctx, ses, persistNames, val); err != nil {
 		return
 	}
-	ses.gSysVars.Set(name, val)
+	ses.gSysVars.Set(canonicalName, val)
 	return
 }
 
@@ -1451,7 +1558,12 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	// when ses.sesSysVars is nil
 	// in this scenario, use Default value in gSysVarsDefs
 	if ses.sesSysVars == nil {
-		return gSysVarsDefs[name].Default, nil
+		if isTransactionIsolationSystemVariable(name) {
+			if value, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+				return value, nil
+			}
+		}
+		return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 	}
 	// sesSysVars is a clone of gSysVars (the per-account catalog
 	// snapshot from mo_mysql_compatibility_mode). Sysvars added to
@@ -1465,16 +1577,26 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	// vector-index sysvars (ivf_threads_build, kmeans_train_percent,
 	// …) and trip BuildIdxcronMetadata or similar nil-rejecting paths.
 	if v := ses.sesSysVars.Get(name); v != nil {
+		if isTransactionIsolationSystemVariable(name) {
+			normalized, _, err := normalizeTxnIsolationSystemValue(
+				context.Background(), ses.service, v)
+			if err != nil {
+				return nil, err
+			}
+			return normalized, nil
+		}
 		return v, nil
 	}
-	return gSysVarsDefs[name].Default, nil
+	return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 }
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
 	oldMatrixOneNative := false
+	oldOnlyFullGroupBy := false
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1494,6 +1616,14 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		return
 	}
 
+	var txnIsolation pbtxn.TxnIsolation
+	setTxnIsolation := isTransactionIsolationSystemVariable(name)
+	if setTxnIsolation {
+		if txnIsolation, err = txnIsolationFromSystemValue(ctx, val); err != nil {
+			return err
+		}
+	}
+
 	if name == "wait_timeout" || name == "interactive_timeout" {
 		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
 			return err
@@ -1505,7 +1635,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// later in rewriteSQL, which runs on every statement and would make the
 	// session unable to even clear the bad value.
 	if name == "remap_rewrites" {
-		if err = validateRemapRewrites(ctx, val); err != nil {
+		if err = validateRemapRewrites(ctx, val, parserLowerCaseTableNames(ses)); err != nil {
 			return err
 		}
 	}
@@ -1519,13 +1649,20 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars = ses.gSysVars.Clone()
 	}
 
+	canonicalName := canonicalSystemVariableName(name)
 	if def.UpdateSessVar != nil {
-		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, name, val)
+		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, canonicalName, val)
 	} else {
-		ses.sesSysVars.Set(name, val)
+		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, val)
+	}
+	if err == nil && setTxnIsolation {
+		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
+			txnHandler.setSessionTxnIsolation(txnIsolation)
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
+		}
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed
@@ -1541,6 +1678,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
 	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
 		ses.RemoveAllPrepareStmts()
+	}
+	if err == nil {
+		ses.markMigrationSystemVarReplayable(canonicalName, false)
 	}
 	return
 }
@@ -1786,6 +1926,16 @@ type MysqlPayloadWriter interface {
 // BinaryWriter write batch into fileservice
 type BinaryWriter interface {
 	MediaWriter
+}
+
+// StagedBinaryWriter keeps query-result data invisible until Publish writes
+// the metadata marker. DML RETURNING stages before database commit and
+// publishes only after commit succeeds.
+type StagedBinaryWriter interface {
+	Stage(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error
+	FinishStage(*ExecCtx) error
+	Publish(*ExecCtx) error
+	Abort(*ExecCtx) error
 }
 
 // CsvWriter write batch into csv file

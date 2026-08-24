@@ -182,6 +182,57 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer proc.Free()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	sp := NewShufflePool(1, 1, true)
+	unaccounted := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, false, 2, mp)
+	done, err := writeBatchToBucketForTest(sp, unaccounted, proc, 0)
+	require.NoError(t, err)
+	require.True(t, done)
+	require.Zero(t, sp.readyCount)
+
+	accounted := batch.NewWithSchema(
+		true,
+		nil,
+		[]types.Type{types.T_int64.ToType()},
+	)
+	require.NoError(t, accounted.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(accounted.Vecs[0], int64(7), false, mp))
+	accounted.SetRowCount(1)
+	done, err = writeBatchToBucketForTest(sp, accounted, proc, 0)
+	require.NoError(t, err)
+	require.True(t, done)
+	require.Equal(t, 1, sp.readyCount)
+
+	ready := sp.getAnyFullBatch()
+	require.NotNil(t, ready)
+	require.Equal(t, 2, ready.RowCount())
+	sp.discardBatch(ready, mp)
+	require.Zero(t, sp.readyCount)
+	tail := sp.getAnyLastBatch()
+	require.NotNil(t, tail)
+	require.Equal(t, 1, tail.RowCount())
+	require.Same(t, selection, tail.AllocationAccountSelection())
+	sp.discardBatch(tail, mp)
+
+	unaccounted.Clean(mp)
+	accounted.Clean(mp)
+	sp.abort(mp)
+	require.Zero(t, account.Seal().Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestShufflePoolFixedBucketsHaveIndependentBackpressure(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

@@ -541,24 +541,36 @@ func listFilterExpr(
 	expr *plan.Expr,
 	metadata partition.PartitionMetadata,
 ) ([]int, bool, error) {
-	var err error
 	expr = p.DeepCopyExpr(expr)
-	expr, err = ConvertFoldExprToNormal(expr)
+	expr, err := ConvertFoldExprToNormal(expr)
 	if err != nil {
 		return nil, false, err
 	}
+	return listFilterExprNormalized(proc, colPosition, expr, metadata)
+}
+
+// listFilterExprNormalized evaluates an expression that has already been
+// cloned and normalized by listFilterExpr. Recursive calls must use this
+// helper directly: cloning the remaining subtree at every OR/AND node turns a
+// large CDC batch predicate into quadratic allocation growth.
+func listFilterExprNormalized(
+	proc *process.Process,
+	colPosition int32,
+	expr *plan.Expr,
+	metadata partition.PartitionMetadata,
+) ([]int, bool, error) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "or":
-			left, can, err := listFilterExpr(proc, colPosition, exprImpl.F.Args[0], metadata)
+			left, can, err := listFilterExprNormalized(proc, colPosition, exprImpl.F.Args[0], metadata)
 			if err != nil {
 				return nil, false, err
 			}
 			if !can {
 				return nil, false, nil
 			}
-			right, can, err := listFilterExpr(proc, colPosition, exprImpl.F.Args[1], metadata)
+			right, can, err := listFilterExprNormalized(proc, colPosition, exprImpl.F.Args[1], metadata)
 			if err != nil {
 				return nil, false, err
 			}
@@ -570,14 +582,14 @@ func listFilterExpr(
 			return mergeSortedSlices(left, right), true, nil
 
 		case "and":
-			left, can, err := listFilterExpr(proc, colPosition, exprImpl.F.Args[0], metadata)
+			left, can, err := listFilterExprNormalized(proc, colPosition, exprImpl.F.Args[0], metadata)
 			if err != nil {
 				return nil, false, err
 			}
 			if !can {
 				return nil, false, nil
 			}
-			right, can, err := listFilterExpr(proc, colPosition, exprImpl.F.Args[1], metadata)
+			right, can, err := listFilterExprNormalized(proc, colPosition, exprImpl.F.Args[1], metadata)
 			if err != nil {
 				return nil, false, err
 			}

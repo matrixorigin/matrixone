@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -48,7 +49,7 @@ func IsParameterModificationStatement(stmt tree.Statement) bool {
 // IsPrepareStatement checks the statement is the Prepare statement.
 func IsPrepareStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.PrepareStmt, *tree.PrepareString:
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar:
 		return true
 	}
 	return false
@@ -65,6 +66,58 @@ func IsDDL(stmt tree.Statement) bool {
 		return true
 	}
 	return false
+}
+
+// changesSessionCatalog reports statements whose successful execution can
+// invalidate a prepared plan before their catalog changes reach CatalogCache.
+func changesSessionCatalog(stmt tree.Statement, queryPlan *plan.Plan) bool {
+	if planChangesCatalog(queryPlan) {
+		return true
+	}
+	switch stmt.(type) {
+	case *tree.CloneTable,
+		*tree.CloneDatabase,
+		*tree.RestoreSnapShot,
+		*tree.RestorePitr,
+		*tree.DataBranchCreateTable,
+		*tree.DataBranchCreateDatabase,
+		*tree.DataBranchDeleteTable,
+		*tree.DataBranchDeleteDatabase,
+		*tree.DataBranchMerge,
+		*tree.DataBranchPick:
+		return true
+	}
+	return false
+}
+
+func planChangesCatalog(queryPlan *plan.Plan) bool {
+	ddl := queryPlan.GetDdl()
+	if ddl == nil {
+		return false
+	}
+	switch ddl.GetDdlType() {
+	case plan.DataDefinition_SHOW_CREATEDATABASE,
+		plan.DataDefinition_SHOW_CREATETABLE,
+		plan.DataDefinition_SHOW_DATABASES,
+		plan.DataDefinition_SHOW_TABLES,
+		plan.DataDefinition_SHOW_COLUMNS,
+		plan.DataDefinition_SHOW_INDEX,
+		plan.DataDefinition_SHOW_VARIABLES,
+		plan.DataDefinition_SHOW_WARNINGS,
+		plan.DataDefinition_SHOW_ERRORS,
+		plan.DataDefinition_SHOW_STATUS,
+		plan.DataDefinition_SHOW_PROCESSLIST,
+		plan.DataDefinition_SHOW_TABLE_STATUS,
+		plan.DataDefinition_SHOW_TARGET,
+		plan.DataDefinition_SHOW_COLLATION,
+		plan.DataDefinition_LOCK_TABLES,
+		plan.DataDefinition_UNLOCK_TABLES,
+		plan.DataDefinition_SHOW_SEQUENCES,
+		plan.DataDefinition_SHOW_UPGRADE:
+		return false
+	default:
+		return true
+	}
 }
 
 // IsDropStatement checks the statement is the drop statement.
@@ -93,18 +146,16 @@ func IsCreateDropSequence(stmt tree.Statement) bool {
 }
 
 /*
-NeedToBeCommittedInActiveTransaction checks the statement that need to be committed
-in an active transaction.
-
-Currently, it includes the drop statement, the administration statement ,
-
-	the parameter modification statement.
+NeedToBeCommittedInActiveTransaction checks statements whose execution must commit
+an already active transaction. Ordinary SET statements are intentionally excluded;
+their session state changes must not commit a user's explicit transaction. The
+SET autocommit OFF -> ON transition commits through TxnHandler.SetAutocommit.
 */
 func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}
-	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt) || isLockTableStatement(stmt)
+	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || isLockTableStatement(stmt)
 }
 
 func isLockTableStatement(stmt tree.Statement) bool {
@@ -196,7 +247,6 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers,
 		*tree.ShowAccountUpgrade,
-		*tree.ShowConnectors,
 		*tree.ShowIcebergCatalogs,
 		*tree.ShowIcebergNamespaces,
 		*tree.ShowIcebergTables,
@@ -206,21 +256,18 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.SetLogserviceSettings:
 		return true, nil
 		//others
-	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
+	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *tree.ExplainPhyPlan, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
 		return true, nil
 	case *tree.PrepareStmt:
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, st.Stmt)
 	case *tree.PrepareString:
-		v, err := ses.GetSessionSysVar("lower_case_table_names")
-		if err != nil {
-			v = int64(1)
-		}
-		preStmt, err := mysql.ParseOneWithSQLMode(ctx, st.Sql, v.(int64), sessionSQLModeForParser(ses))
+		return preparedSQLCanBeExecutedInUncommittedTransaction(ctx, ses, st.Sql)
+	case *tree.PrepareVar:
+		prepareSQL, err := prepareSQLFromUserVar(ses, st.Var)
 		if err != nil {
 			return false, err
 		}
-		defer preStmt.Free()
-		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
+		return preparedSQLCanBeExecutedInUncommittedTransaction(ctx, ses, prepareSQL)
 	case *tree.Execute:
 		preName := string(st.Name)
 		preStmt, err := ses.GetPrepareStmt(ctx, preName)
@@ -244,7 +291,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 	case *tree.DropSequence: //Case1, Case3 above
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
-	case *tree.SetVar:
+	case *tree.SetVar, *tree.SetTransaction:
 		return true, nil
 	case *tree.CloneTable,
 		*tree.CloneDatabase,
@@ -278,4 +325,29 @@ func statementCanBeExecutedInUncommittedTransaction(
 	}
 
 	return false, nil
+}
+
+func preparedSQLCanBeExecutedInUncommittedTransaction(
+	ctx context.Context,
+	ses FeSession,
+	sql string,
+) (bool, error) {
+	parserSes := ses
+	if ses.IsBackgroundSession() {
+		owner, err := preparedStatementOwner(ctx, ses)
+		if err != nil {
+			return false, err
+		}
+		parserSes = owner
+	}
+	v, err := parserSes.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		v = int64(1)
+	}
+	preStmt, err := mysql.ParseOneWithSQLMode(ctx, sql, v.(int64), sessionSQLModeForParser(parserSes))
+	if err != nil {
+		return false, err
+	}
+	defer preStmt.Free()
+	return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
 }

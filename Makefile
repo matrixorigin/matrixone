@@ -281,6 +281,11 @@ ifeq ("$(UNAME_S)","darwin")
 GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
+# Keep all mo-service build variants on one compiler/feature contract. Targets
+# may differ in how native dependencies are produced, never in the Go binary
+# they emit.
+MO_SERVICE_BUILD=$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
 ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
 endif
@@ -309,17 +314,17 @@ jieba-dict:
 .PHONY: build
 build: config cgo thirdparties jieba-dict
 	$(info [Build binary])
-	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(MO_SERVICE_BUILD)
 
-# Build with native libraries supplied by a prebuilt image. This target is for
-# CI image builds: unlike build, it must not rebuild cgo or thirdparties after
-# the source tree has been copied into the builder.
+# Build with native libraries supplied by a prebuilt stage or image. This target
+# is for CI image builds: unlike build, it must not rebuild cgo or thirdparties
+# after the source tree has been copied into the builder.
 .PHONY: build-with-prebuilt-native
 build-with-prebuilt-native: config jieba-dict
 	@test -f "$(CGO_DIR)/libmo.so" || test -f "$(CGO_DIR)/libmo.dylib"
 	@test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.so" || test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.dylib"
 	$(info [Build binary with prebuilt native libraries])
-	$(CGO_OPTS) go build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(MO_SERVICE_BUILD)
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -357,6 +362,19 @@ mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
 	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
+# Build the jstfu datastream gRPC server (xtool/jstfu/target/jstfu.jar), the
+# reference server for ENGINE = DATASTREAM external tables.  Requires only a
+# JDK: the build uses the committed Maven wrapper (xtool/jstfu/mvnw), which
+# bootstraps its own Maven, so a missing system `mvn` does NOT silently skip
+# the build.  Override with MVN=/path/to/mvn to use a preinstalled Maven.  The
+# jar targets Java 8 bytecode so it runs on the BVT tester image's JDK 8.
+MVN ?= ./mvnw
+.PHONY: jstfu
+jstfu:
+	$(info [Build jstfu datastream server])
+	@cd xtool/jstfu && $(MVN) -q -B -DskipTests package
+	@echo "built xtool/jstfu/target/jstfu.jar"
+
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug
@@ -383,7 +401,10 @@ ut: config cgo thirdparties
 ifeq ($(UNAME_S),darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
-	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
+	# The race suite is split into light, exclusive, heavy, and plan shards.
+	# Keep the outer budget above the per-package timeout so an expanded main
+	# branch cannot be killed while later shards are still making progress.
+	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 ###############################################################################
@@ -391,7 +412,9 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 ENABLE_UT ?= "false"
-GOPROXY ?= https://proxy.golang.com.cn,https://goproxy.cn,https://proxy.golang.org
+# These are public mirrors, not policy gatekeepers. Fall through on transient
+# errors as well as 404/410 responses so one unhealthy mirror cannot block CI.
+GOPROXY ?= https://proxy.golang.com.cn|https://goproxy.cn|https://proxy.golang.org
 export GOPROXY
 LAUNCH ?= "launch"
 
@@ -399,7 +422,7 @@ LAUNCH ?= "launch"
 ci:
 	@rm -rf $(ROOT_DIR)/tester-log
 	@docker image prune -f
-	@docker build -f optools/bvt_ut/Dockerfile . -t matrixorigin/matrixone:local-ci --build-arg GOPROXY=$(GOPROXY)
+	@docker build -f optools/bvt_ut/Dockerfile . -t matrixorigin/matrixone:local-ci --build-arg GOPROXY="$(GOPROXY)"
 	@docker run --name tester -it \
 			-e LAUNCH=$(LAUNCH) \
 			-e UT_PARALLEL=$(UT_PARALLEL) \
@@ -462,6 +485,18 @@ test-iceberg-readiness:
 .PHONY: test-iceberg-e2e-local
 test-iceberg-e2e-local:
 	@optools/iceberg_ci.bash e2e-local
+
+.PHONY: test-mongodb-e2e-local
+test-mongodb-e2e-local:
+	@optools/mongodb_ci.bash e2e-local
+
+.PHONY: test-mongodb-unit
+test-mongodb-unit:
+	@optools/mongodb_ci.bash unit
+
+.PHONY: test-esql-tvf-e2e-local
+test-esql-tvf-e2e-local:
+	@optools/esql_ci.bash e2e-local
 
 .PHONY: test-iceberg-local
 test-iceberg-local:
@@ -1259,7 +1294,7 @@ fmt:
 .PHONY: install-static-check-tools
 install-static-check-tools:
 	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
-	@go install github.com/matrixorigin/linter/cmd/molint@latest
+	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check

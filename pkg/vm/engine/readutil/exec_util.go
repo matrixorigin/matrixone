@@ -254,7 +254,28 @@ func TryFastFilterBlocks(
 	metaPrefetcher func(context.Context) bool,
 	fs fileservice.FileService,
 ) (ok bool, err error) {
-	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := CompileFilterExprs(rangesParam.BlockFilters, tableDef, fs)
+	return TryFastFilterBlocksWithZone(
+		ctx, snapshotTS, tableDef, rangesParam, objectList,
+		extraCommittedObjects, uncommittedObjects, outBlocks, metaPrefetcher, fs, nil,
+	)
+}
+
+func TryFastFilterBlocksWithZone(
+	ctx context.Context,
+	snapshotTS timestamp.Timestamp,
+	tableDef *plan.TableDef,
+	rangesParam engine.RangesParam,
+	objectList objectio.ObjectList,
+	extraCommittedObjects []objectio.ObjectStats,
+	uncommittedObjects []objectio.ObjectStats,
+	outBlocks *objectio.BlockInfoSlice,
+	metaPrefetcher func(context.Context) bool,
+	fs fileservice.FileService,
+	zone *time.Location,
+) (ok bool, err error) {
+	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, seekOp, ok, highSelectivityHint := compileFilterExprs(
+		rangesParam.BlockFilters, tableDef, fs, zone,
+	)
 	if !ok {
 		return false, nil
 	}

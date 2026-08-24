@@ -997,6 +997,46 @@ commit;
 select * from su_fu_main where id = 5;
 drop view if exists su_fu_view;
 
+-- correlated non-aggregate HAVING + FOR UPDATE: only the included outer row
+-- is locked; the excluded row remains writable from another session.
+drop table if exists su_fu_having_outer;
+drop table if exists su_fu_having_inner;
+create table su_fu_having_outer(id int primary key, note varchar(32));
+create table su_fu_having_inner(k int);
+insert into su_fu_having_outer values (1, 'original-1'), (2, 'original-2');
+insert into su_fu_having_inner values (10);
+set @@sql_mode = 'ONLY_FULL_GROUP_BY';
+begin;
+select o.id
+from su_fu_having_outer o
+having exists (
+  select i.k
+  from su_fu_having_inner i
+  group by i.k
+  having count(*) >= o.id
+)
+order by o.id
+for update;
+-- @session:id=1{
+use select_for_update;
+set session lock_wait_timeout = 1;
+update su_fu_having_outer set note = 'updated-excluded' where id = 2;
+commit;
+-- @session}
+-- @session:id=2{
+use select_for_update;
+set session lock_wait_timeout = 1;
+begin;
+-- @pattern
+update su_fu_having_outer set note = 'updated-included' where id = 1;
+rollback;
+-- @session}
+commit;
+set @@sql_mode = default;
+select * from su_fu_having_outer order by id;
+drop table if exists su_fu_having_outer;
+drop table if exists su_fu_having_inner;
+
 -- cleanup
 drop table if exists su_fu_main;
 drop table if exists su_fu_ref;

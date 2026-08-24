@@ -43,41 +43,44 @@ type LocalETLFS struct {
 var _ FileService = new(LocalETLFS)
 
 func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
+	// An empty root historically meant the current working directory for final
+	// paths, but os.CreateTemp("", ...) uses the system temporary directory.
+	// Canonicalize the root first so temporary writes and their atomic rename
+	// target always belong to the same configured filesystem tree.
+	if rootPath == "" {
+		rootPath = "."
+	}
+	var err error
+	rootPath, err = filepath.Abs(rootPath)
+	if err != nil {
+		return nil, err
+	}
 
-	// get absolute path
-	if rootPath != "" {
-		var err error
-		rootPath, err = filepath.Abs(rootPath)
+	// ensure dir
+	f, err := os.Open(rootPath)
+	if os.IsNotExist(err) {
+		// not exists, create
+		err := os.MkdirAll(rootPath, 0755)
 		if err != nil {
 			return nil, err
 		}
 
-		// ensure dir
-		f, err := os.Open(rootPath)
-		if os.IsNotExist(err) {
-			// not exists, create
-			err := os.MkdirAll(rootPath, 0755)
-			if err != nil {
-				return nil, err
-			}
+	} else if err != nil {
+		// stat error
+		return nil, err
 
-		} else if err != nil {
-			// stat error
-			return nil, err
-
-		} else {
-			defer f.Close()
-		}
-
-		// resolve symlinks in the path to get the canonical path
-		// This is best-effort: if EvalSymlinks fails (e.g., due to race conditions
-		// in concurrent tests), we fall back to using the original path
-		if resolved, err := filepath.EvalSymlinks(rootPath); err == nil {
-			rootPath = resolved
-		}
-		// If EvalSymlinks fails, continue with the original rootPath
-		// This makes the code more resilient to race conditions in test environments
+	} else {
+		defer f.Close()
 	}
+
+	// resolve symlinks in the path to get the canonical path
+	// This is best-effort: if EvalSymlinks fails (e.g., due to race conditions
+	// in concurrent tests), we fall back to using the original path
+	if resolved, err := filepath.EvalSymlinks(rootPath); err == nil {
+		rootPath = resolved
+	}
+	// If EvalSymlinks fails, continue with the original rootPath
+	// This makes the code more resilient to race conditions in test environments
 
 	return &LocalETLFS{
 		name:     name,
@@ -91,6 +94,7 @@ func (l *LocalETLFS) Name() string {
 }
 
 func (l *LocalETLFS) Close(ctx context.Context) {
+	closeDirFiles(&l.RWMutex, l.dirFiles)
 }
 
 func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
@@ -100,7 +104,7 @@ func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
 	default:
 	}
 
-	path, err := ParsePathAtService(vector.FilePath, l.name)
+	path, err := parseFilePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -117,7 +121,7 @@ func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
-	path, err := ParsePathAtService(vector.FilePath, l.name)
+	path, err := parseFilePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -205,7 +209,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
-	path, err := ParsePathAtService(vector.FilePath, l.name)
+	path, err := parseFilePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -376,7 +380,11 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (l *LocalETLFS) ReadCache(ctx context.Context, vector *IOVector) error {
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := parseFilePathAtService(vector.FilePath, l.name)
+	return err
 }
 
 func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
@@ -386,7 +394,7 @@ func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, 
 	default:
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +420,11 @@ func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, 
 }
 
 func (l *LocalETLFS) PrefetchFile(ctx context.Context, filePath string) error {
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := parseFilePathAtService(filePath, l.name)
+	return err
 }
 
 func (l *LocalETLFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
@@ -493,7 +505,7 @@ func (l *LocalETLFS) Delete(ctx context.Context, filePaths ...string) error {
 }
 
 func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -531,7 +543,7 @@ func (l *LocalETLFS) NewReader(ctx context.Context, filePath string) (io.ReadClo
 	default:
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +577,7 @@ func (l *LocalETLFS) NewWriter(ctx context.Context, filePath string) (io.WriteCl
 	default:
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -708,7 +720,10 @@ func (l *LocalETLFS) ETLCompatible() {}
 var _ MutableFileService = new(LocalETLFS)
 
 func (l *LocalETLFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
-	path, err := ParsePathAtService(filePath, l.name)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -797,7 +812,14 @@ func (l *LocalETLFSMutator) Close() error {
 
 // open for read and write, raw os.File API.
 func (l *LocalETLFS) EnsureDir(ctx context.Context, filePath string) error {
-	return l.ensureDir(l.toNativeFilePath(filePath))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return err
+	}
+	return l.ensureDir(l.toNativeFilePath(path.File))
 }
 
 func (l *LocalETLFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
@@ -806,7 +828,7 @@ func (l *LocalETLFS) OpenFile(ctx context.Context, filePath string) (*os.File, e
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -821,7 +843,7 @@ func (l *LocalETLFS) CreateFile(ctx context.Context, filePath string) (*os.File,
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -836,7 +858,7 @@ func (l *LocalETLFS) RemoveFile(ctx context.Context, filePath string) error {
 		return err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -851,7 +873,7 @@ func (l *LocalETLFS) CreateAndRemoveFile(ctx context.Context, filePath string) (
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}

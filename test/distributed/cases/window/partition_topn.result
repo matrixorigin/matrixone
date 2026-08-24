@@ -1,0 +1,99 @@
+drop database if exists partition_topn;
+create database partition_topn;
+use partition_topn;
+create table t_partition_topn (
+g int,
+score int,
+tie_key int,
+payload varchar(20)
+);
+insert into t_partition_topn values
+(1, 10, 1, 'a'),
+(1, 10, 2, 'b'),
+(1, 20, 3, 'c'),
+(2, null, 1, 'null-score'),
+(2, 5, 2, 'e'),
+(2, 7, 3, 'f'),
+(null, 3, 1, 'x'),
+(null, 1, 2, 'y');
+select g, score, tie_key, payload, rn
+from (
+select g, score, tie_key, payload,
+row_number() over (partition by g order by score desc, tie_key desc) rn
+from t_partition_topn
+) ranked
+where rn = 1
+order by g is null, g;
+g    score    tie_key    payload    rn
+1    20    3    c    1
+2    7    3    f    1
+NULL    3    1    x    1
+select g, score, tie_key, payload, rn
+from (
+select g, score, tie_key, payload,
+row_number() over (partition by g order by score desc, tie_key desc) rn
+from t_partition_topn
+) ranked
+where rn <= 2
+order by g is null, g, rn;
+g    score    tie_key    payload    rn
+1    20    3    c    1
+1    10    2    b    2
+2    7    3    f    1
+2    5    2    e    2
+NULL    3    1    x    1
+NULL    1    2    y    2
+select g, score, tie_key, payload, rn
+from (
+select g, score, tie_key, payload,
+row_number() over (partition by g order by score desc, tie_key desc) rn
+from t_partition_topn
+) ranked
+where 2 >= rn and rn >= 2
+order by g is null, g;
+g    score    tie_key    payload    rn
+1    10    2    b    2
+2    5    2    e    2
+NULL    1    2    y    2
+select g, score, tie_key, payload, rn
+from (
+select g, score, tie_key, payload,
+row_number() over (
+partition by g
+order by score desc, tie_key desc
+rows between unbounded preceding and current row
+) rn
+from t_partition_topn
+) ranked
+where rn < 3
+order by g is null, g, rn;
+g    score    tie_key    payload    rn
+1    20    3    c    1
+1    10    2    b    2
+2    7    3    f    1
+2    5    2    e    2
+NULL    3    1    x    1
+NULL    1    2    y    2
+select g, score, tie_key, payload, rnk
+from (
+select g, score, tie_key, payload,
+rank() over (partition by g order by score asc) rnk
+from t_partition_topn
+) ranked
+where rnk <= 1
+order by g is null, g, tie_key;
+g    score    tie_key    payload    rnk
+1    10    1    a    1
+1    10    2    b    1
+2    NULL    1    null-score    1
+NULL    1    2    y    1
+create table t_partition_topn_empty like t_partition_topn;
+select count(*)
+from (
+select row_number() over (partition by g order by score) rn
+from t_partition_topn_empty
+) ranked
+where rn <= 2;
+count(*)
+0
+drop database partition_topn;

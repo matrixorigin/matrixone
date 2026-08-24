@@ -232,22 +232,28 @@ func filterIndexesByHintScope(indexes []*plan.IndexDef, scope indexHintScopeSet)
 		if idx == nil {
 			continue
 		}
-		name := strings.ToLower(idx.IndexName)
-		if _, ignored := scope.ignore[name]; ignored {
+		if !indexAllowedByHintScope(idx.IndexName, scope) {
 			continue
-		}
-		if scope.forceSpecified {
-			if _, ok := scope.force[name]; !ok {
-				continue
-			}
-		} else if scope.useSpecified {
-			if _, ok := scope.use[name]; !ok {
-				continue
-			}
 		}
 		filtered = append(filtered, idx)
 	}
 	return filtered
+}
+
+func indexAllowedByHintScope(indexName string, scope indexHintScopeSet) bool {
+	name := strings.ToLower(indexName)
+	if _, ignored := scope.ignore[name]; ignored {
+		return false
+	}
+	if scope.forceSpecified {
+		_, ok := scope.force[name]
+		return ok
+	}
+	if scope.useSpecified {
+		_, ok := scope.use[name]
+		return ok
+	}
+	return true
 }
 
 func (builder *QueryBuilder) regularIndexScanAllowedByOrderHints(node *plan.Node) bool {
@@ -258,19 +264,7 @@ func (builder *QueryBuilder) regularIndexScanAllowedByOrderHints(node *plan.Node
 	if hintSet == nil || hintSet.order.empty() {
 		return true
 	}
-	name := strings.ToLower(node.IndexScanInfo.IndexName)
-	if _, ignored := hintSet.order.ignore[name]; ignored {
-		return false
-	}
-	if hintSet.order.forceSpecified {
-		_, ok := hintSet.order.force[name]
-		return ok
-	}
-	if hintSet.order.useSpecified {
-		_, ok := hintSet.order.use[name]
-		return ok
-	}
-	return true
+	return indexAllowedByHintScope(node.IndexScanInfo.IndexName, hintSet.order)
 }
 
 func (builder *QueryBuilder) inheritIndexHints(dstNodeID, srcNodeID int32) {

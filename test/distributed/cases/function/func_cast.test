@@ -36,6 +36,8 @@ select cast(cast(1.4 as decimal(10,2)) as signed), cast(cast(1.5 as decimal(10,2
 select cast(cast(10000 as signed) as decimal(6,2)), cast(cast(-10000 as signed) as decimal(6,2));
 select cast(cast(0.5 as double) as signed), cast(cast(1.5 as double) as signed), cast(cast(2.5 as double) as signed),
        cast(cast(-0.5 as double) as signed), cast(cast(-1.5 as double) as signed), cast(cast(-2.5 as double) as signed);
+select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), cast('7e2' as unsigned);
+select cast('.5e0' as signed), cast('-.5e0' as signed), cast('+.5e+2' as signed);
 
 # String numeric cast with sign and radix prefixes.
 # 0b/0B is binary, 0o/0O is octal, 0x/0X is hexadecimal, and no prefix is decimal.
@@ -353,6 +355,20 @@ create table t1(s1 timestamp);
 insert into t1 values ('2020-12-03 11:11:11');
 select cast(s1 as decimal(7,2)) from t1;
 drop table t1;
+
+set time_zone="+00:00";
+create table ts_cast_time(id int primary key, event_ts timestamp(6));
+insert into ts_cast_time values
+    (1, '2024-02-29 12:34:56.123456'),
+    (2, null),
+    (3, cast(date_add(cast(concat(cast(current_date() as char), ' 03:04:05.654321') as datetime(6)), interval 1 day) as timestamp(6))),
+    (4, cast(concat(cast(current_date() as char), ' 20:04:05.654321') as timestamp(6)));
+select id, cast(event_ts as time(6)) as event_time6, cast(event_ts as time(3)) as event_time3 from ts_cast_time order by id;
+set time_zone="+08:00";
+select id, cast(event_ts as time(6)) as event_time6, cast(event_ts as time(3)) as event_time3 from ts_cast_time order by id;
+select cast(cast('2024-02-29 12:34:56.123456' as timestamp(6)) as time(6)) as literal_time;
+drop table ts_cast_time;
+set time_zone='SYSTEM';
 
 #
 # Test for bug #11283: field conversion from varchar, and text types to decimal

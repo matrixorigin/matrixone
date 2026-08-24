@@ -56,8 +56,12 @@ func consumeEntry(
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
-	// Try to handle the memory records of the three tables
-	if !catalog.IsSystemTable(e.TableId) || logtailreplay.IsMetaEntry(e.TableName) || e.EntryType == api.Entry_DataObject || e.EntryType == api.Entry_TombstoneObject {
+	// Maintain catalog identities and prepared-plan metadata generations.
+	if (!catalog.IsSystemTable(e.TableId) &&
+		!isPreparedMetadataTable(e.DatabaseName, e.TableName)) ||
+		logtailreplay.IsMetaEntry(e.TableName) ||
+		e.EntryType == api.Entry_DataObject ||
+		e.EntryType == api.Entry_TombstoneObject {
 		return nil
 	}
 
@@ -71,6 +75,14 @@ func consumeEntry(
 
 func applyToCatalogCache(cache *cache.CatalogCache, e *api.Entry) {
 	t0 := time.Now()
+	if isPreparedMetadataTable(e.DatabaseName, e.TableName) {
+		if cache != nil {
+			bat, _ := batch.ProtoBatchToBatch(e.Bat)
+			cache.UpdatePreparedMetadata(bat)
+		}
+		v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
+		return
+	}
 	if e.EntryType == api.Entry_Insert {
 		switch e.TableId {
 		case catalog.MO_TABLES_ID:
@@ -106,4 +118,12 @@ func applyToCatalogCache(cache *cache.CatalogCache, e *api.Entry) {
 		}
 	}
 	v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
+}
+
+func isPreparedMetadataTable(databaseName, tableName string) bool {
+	return databaseName == catalog.MO_CATALOG &&
+		(tableName == catalog.MO_PUBS ||
+			tableName == catalog.MO_SUBS ||
+			tableName == catalog.MOAccountTable ||
+			tableName == catalog.MO_SNAPSHOTS)
 }

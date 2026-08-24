@@ -26,11 +26,25 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 )
 
 type closeErrorListener struct {
 	net.Listener
 	err error
+}
+
+type testMOServerBaseService struct {
+	MockBaseService
+	id string
+}
+
+func (s *testMOServerBaseService) ID() string {
+	return s.id
+}
+
+func (s *testMOServerBaseService) SessionMgr() *queryservice.SessionManager {
+	return nil
 }
 
 func (l closeErrorListener) Close() error {
@@ -76,6 +90,23 @@ func TestMOServerStopCompletesCleanupAfterListenerCloseError(t *testing.T) {
 	}
 	_, err = clientConn.Read(make([]byte, 1))
 	require.Error(t, err)
+}
+
+func TestMOServerStopBeforeStartReleasesListener(t *testing.T) {
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mo := NewMOServer(ctx, "127.0.0.1:0", pu, nil, &testMOServerBaseService{id: t.Name()})
+	addr := mo.listeners[0].Addr().String()
+
+	require.NoError(t, mo.Stop())
+	require.NoError(t, mo.Stop())
+
+	rebound, err := net.Listen("tcp", addr)
+	require.NoError(t, err)
+	require.NoError(t, rebound.Close())
 }
 
 func Test_handshake(t *testing.T) {

@@ -4,6 +4,7 @@
 -- @desc: MySQL compatibility cases for CAST/CONVERT target type matrix
 -- @label:bvt
 
+set session sql_mode = default;
 drop database if exists mysql_compat_cast_convert_matrix;
 create database mysql_compat_cast_convert_matrix;
 use mysql_compat_cast_convert_matrix;

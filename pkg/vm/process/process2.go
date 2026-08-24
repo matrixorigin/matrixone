@@ -86,8 +86,9 @@ func NewTopProcess(
 		TaskService:      taskService,
 
 		// 2. fields from make.
-		LastInsertID: new(uint64),
-		AffectedRows: new(int64),
+		LastInsertID:          new(uint64),
+		StatementLastInsertID: new(uint64),
+		AffectedRows:          new(int64),
 
 		// 3. other fields.
 		logger:             util.GetLogger(sid),
@@ -108,8 +109,10 @@ func NewTopProcess(
 // This is used for the compile-process, which doesn't need to pass the context.
 func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
-		Base: proc.Base,
+		Base:    proc.Base,
+		Session: proc.Session,
 	}
+	child.CopyPlanSnapshotFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
@@ -124,8 +127,10 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 // channelBufferSize and nilbatchCnt is the extra information for Reg.
 func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channelBufferSize []int32, nilbatchCnt []int32) *Process {
 	child := &Process{
-		Base: proc.Base,
+		Base:    proc.Base,
+		Session: proc.Session,
 	}
+	child.CopyPlanSnapshotFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
@@ -240,7 +245,13 @@ func (proc *Process) Free() {
 		proc.Base.messageBoard.Reset()
 		proc.Base.messageBoard = nil
 	}
-	proc.setPrepareParams(nil, nil, false)
+	proc.Base.cteMemoryBudgetMu.Lock()
+	if proc.Base.cteMemoryBudget != nil {
+		proc.Base.cteMemoryBudget.Close()
+		proc.Base.cteMemoryBudget = nil
+	}
+	proc.Base.cteMemoryBudgetMu.Unlock()
+	proc.setPrepareParams(nil, nil, nil, false)
 }
 
 type QueryBaseContext struct {

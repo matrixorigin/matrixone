@@ -119,9 +119,13 @@ Lift code into the sub-package matching the original SQL layer:
 6. Add exactly one blank import:
    - CPU-safe algo -> `pkg/indexplugin/all/all.go`
    - GPU-only algo -> `pkg/indexplugin/all/all_gpu.go`
-7. Add SQL tests under `test/distributed/cases/vector/` for create, ANN query, reindex, drop index, and drop table.
+7. If the algorithm participates in ISCP/CDC synchronization, wire its importer
+   in `pkg/indexplugin/iscp/import.go` or the matching build-tagged file.
+8. Add SQL tests under `test/distributed/cases/vector/` for create, ANN query, reindex, drop index, and drop table.
 
-If the plugin compiles and all hooks are implemented, you did not miss a dispatch site. Do not add manual dispatch "to be safe."
+Plugin compilation proves interface conformance, not complete registration,
+ISCP/CDC wiring, or public-path behavior. Verify each applicable seam; do not add
+manual dispatch "to be safe."
 
 ## 6. CPU vs GPU Registration
 
@@ -132,7 +136,9 @@ If the plugin compiles and all hooks are implemented, you did not miss a dispatc
 
 CAGRA / IVF-PQ table functions exist only under `//go:build gpu`. Registering them on CPU would let `CREATE INDEX ... USING cagra|ivfpq` proceed until BUILD SQL fails mid-flight after hidden table side effects. GPU-tagged registration makes plan-build fail cleanly with `unsupported index type: <algo>`.
 
-Pairing rule: an algo with `build_gpu.go` must have a `//go:build !gpu` CPU counterpart stub, and the plugin blank import belongs in `all_gpu.go`, never `all.go`.
+GPU-only plugin registration belongs in `all_gpu.go`, never `all.go`. A CPU
+counterpart file is required only when CPU code must reference the same package
+API; algorithms omitted entirely from the CPU registry need no artificial stub.
 
 ## 7. Forbidden Patterns
 
@@ -151,44 +157,60 @@ Completion checklist:
 
 ```
 □ CPU unit tests exist for plan/schema/runtime hooks  -> run, exit 0
-□ GPU-only hooks also run with `-tags gpu`             -> exit 0
-□ grep: NO new `switch algo` / `IsXxxIndexAlgo ||` added in pkg/sql/*
-□ git diff --stat: the ONLY all.go/all_gpu.go edit is one blank import
+□ when GPU-only hooks change, supported Linux x86_64 local/CI `-tags gpu` evidence exists -> exit 0
+□ inspect production diff plus candidate searches; no new per-algorithm SQL/catalog dispatch is proven
+□ all.go/all_gpu.go registration diff exactly matches the intended add/remove/split and build tags
+□ recorded REVIEW_BASE, REVIEW_HEAD, merge-base, plus staged/unstaged/untracked scope
 ```
 
 Known in-progress seams: a few DML-sync sites still call `catalog.IsIvfIndexAlgo` directly (`pkg/sql/plan/build_dml_util.go`, `pkg/sql/plan/bind_insert.go`). These are legacy, not a license to add more. When touching one, prefer moving it behind a hook.
 
 ## 9. Reviewing An Index-Plugin Change
 
-Apply this when reviewing a diff that touches index-algorithm dispatch, any `pkg/vectorindex/<algo>/plugin/`, `pkg/fulltext/plugin`, or `pkg/indexplugin`. Request changes if a check fails.
+Apply this when reviewing a diff that touches index-algorithm dispatch, any
+`pkg/vectorindex/<algo>/plugin/`, `pkg/fulltext/plugin`, or `pkg/indexplugin`.
+The greps below discover candidates; they are not standalone pass/fail oracles.
+Inspect matched production code and prove final completeness with interface
+compilation plus hook, registration, ISCP/CDC (when applicable), and public-path
+tests. Exclude comments and test fixtures before classifying a match.
+
+Resolve and record the review range first: `REVIEW_BASE` is the verified PR
+merge-base object ID and `REVIEW_HEAD` is the candidate commit object ID. The
+commands below intentionally inspect committed changes with
+`$REVIEW_BASE...$REVIEW_HEAD`. If staged or unstaged work is also in scope,
+repeat each relevant search with `git diff --cached -- <paths>` and
+`git diff -- <paths>`. Enumerate and directly inspect every in-scope untracked
+file from `git ls-files --others --exclude-standard -- <paths>`; no diff range
+contains it.
 
 1. No new per-algo dispatch:
 
 ```bash
-git diff -U0 pkg/sql pkg/catalog | grep -E '^\+' \
+git diff -U0 "$REVIEW_BASE...$REVIEW_HEAD" -- pkg/sql pkg/catalog | grep -E '^\+' \
   | grep -E 'IsIvfIndexAlgo|IsHnswIndexAlgo|IsCagraIndexAlgo|IsIvfpqIndexAlgo|IndexAlgo *==|case .*Algo\b'
 ```
 
 2. No import cycle:
 
 ```bash
-git diff pkg/vectorindex/*/plugin pkg/fulltext/plugin \
+git diff "$REVIEW_BASE...$REVIEW_HEAD" -- pkg/vectorindex/*/plugin pkg/fulltext/plugin \
   | grep -E '^\+.*matrixorigin/matrixone/pkg/sql/(plan|compile)"'
 ```
 
 3. `indexplugin` not polluted:
 
 ```bash
-git diff pkg/indexplugin \
+git diff "$REVIEW_BASE...$REVIEW_HEAD" -- pkg/indexplugin \
   | grep -E '^\+.*(vectorindex/(ivfflat|ivfpq|cagra|hnsw)/plugin|fulltext/plugin)'
 ```
 
-4. GPU registration correct: GPU-only imports in `all_gpu.go`, not `all.go`; each `build_gpu.go` has CPU counterpart.
+4. GPU registration correct: GPU-only imports in `all_gpu.go`, not `all.go`; a CPU counterpart exists only when CPU code references that API.
 5. Assertions intact:
 
 ```bash
-git diff | grep -E '^-.*var _ (plugin\.)?(AlgoPlugin|Hooks)'
+git diff "$REVIEW_BASE...$REVIEW_HEAD" -- \
+  | grep -E '^-.*var _ .*\.(AlgoPlugin|Hooks)|^-.*var _ (AlgoPlugin|Hooks)'
 ```
 
 6. Runtime kept out: no build/search kernel logic copied into plugin.
-7. New-algo completeness: registered in `all/` or `all_gpu/`, SQL case added under `test/distributed/cases/vector/`, CPU unit tests cover plan/schema/runtime hooks.
+7. New-algo completeness: registered in `all/` or `all_gpu/`, ISCP/CDC importer wired when applicable, SQL case added under `test/distributed/cases/vector/`, and CPU-runnable unit tests cover every CPU-safe plan/schema/runtime hook.

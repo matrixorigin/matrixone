@@ -159,6 +159,7 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 		Width:      col.Typ.Width,
 		Scale:      col.Typ.Scale,
 		Enumvalues: col.Typ.Enumvalues,
+		Charset:    col.Typ.Charset,
 	}
 }
 
@@ -166,8 +167,9 @@ func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {
 	switch colType.Id {
 	case int32(types.T_text):
 		return Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
+			Id:      int32(types.T_varchar),
+			Width:   types.MaxVarcharLen,
+			Charset: colType.Charset,
 		}, true
 	case int32(types.T_blob):
 		return Type{

@@ -70,6 +70,37 @@ func (e *failAfterFirstExpressionExecutor) Free()              { e.delegate.Free
 func (e *failAfterFirstExpressionExecutor) IsColumnExpr() bool { return false }
 func (e *failAfterFirstExpressionExecutor) TypeName() string   { return "failAfterFirst" }
 
+func TestMemoExpressionExecutorCachesOncePerRootEvaluation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	require.NoError(t, err)
+	delegate := &failAfterFirstExpressionExecutor{
+		delegate: NewFixedVectorExpressionExecutor(proc.Mp(), false, value),
+	}
+	state := &memoExpressionState{executor: delegate, refs: 2}
+	first := &memoExpressionExecutor{state: state}
+	second := &memoExpressionExecutor{state: state}
+	root := &memoRootExpressionExecutor{states: []*memoExpressionState{state}}
+	bat := batch.NewWithSize(0)
+	bat.SetRowCount(1)
+	batches := []*batch.Batch{bat}
+
+	firstResult, err := first.Eval(proc, batches, nil)
+	require.NoError(t, err)
+	secondResult, err := second.Eval(proc, batches, nil)
+	require.NoError(t, err)
+	require.Same(t, firstResult, secondResult)
+	require.Equal(t, 1, delegate.calls)
+
+	root.resetCachedValues()
+	_, err = second.Eval(proc, batches, nil)
+	require.Error(t, err)
+	require.Equal(t, 2, delegate.calls)
+
+	first.Free()
+	second.Free()
+}
+
 func TestListExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -131,6 +162,174 @@ func TestListExpressionExecutor(t *testing.T) {
 	listExprExecutor.Free()
 
 	require.Equal(t, curr, proc.Mp().CurrNB())
+}
+
+func TestFlowControlPreservesSelectedBinaryStringRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	binary := vector.NewVec(types.T_varchar.ToType())
+	text := vector.NewVec(types.T_varchar.ToType())
+	result := vector.NewVec(types.T_varchar.ToType())
+	defer binary.Free(proc.Mp())
+	defer text.Free(proc.Mp())
+	defer result.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(binary, []byte("binary"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(binary, []byte("inactive"), false, proc.Mp()))
+	require.NoError(t, binary.SetIsBinaryStringAt(0, true, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(text, []byte("inactive"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(text, []byte("text"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(result, []byte("binary"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(result, []byte("text"), false, proc.Mp()))
+
+	expr := &FunctionExpressionExecutor{resultType: types.T_varchar.ToType()}
+	expr.resetFlowControlPrepareParamKind()
+	expr.observeFlowControlPrepareParamKind(binary, nil, []bool{true, false})
+	expr.observeFlowControlPrepareParamKind(text, nil, []bool{false, true})
+	require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 2, proc.Mp()))
+	require.True(t, result.GetBinaryStringMetadataAt(0))
+	require.False(t, result.GetBinaryStringMetadataAt(1))
+}
+
+func TestFlowControlPromotesSelectedStaticTextUnderBinaryResult(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := vector.NewVec(types.T_varchar.ToType())
+	result := vector.NewVec(types.T_varbinary.ToType())
+	defer text.Free(proc.Mp())
+	defer result.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(text, []byte("text"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(result, []byte("text"), false, proc.Mp()))
+
+	expr := &FunctionExpressionExecutor{resultType: types.T_varbinary.ToType()}
+	expr.resetFlowControlPrepareParamKind()
+	expr.observeFlowControlPrepareParamKind(text, nil, []bool{true})
+	require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 1, proc.Mp()))
+	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
+}
+
+func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name          string
+		typ           types.Type
+		form          plan.StringLiteralForm
+		want          types.RuntimeStringDomain
+		wantEffective types.StringDomain
+		wantVarchar   bool
+	}{
+		{name: "text on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText},
+		{name: "text on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringText, wantEffective: types.StringDomainText},
+		{name: "binary on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringBinary, wantEffective: types.StringDomainBinary},
+		{name: "binary on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary},
+		{name: "raw hex", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_HEX, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary, wantVarchar: true},
+		{name: "raw bit", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_BIT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary, wantVarchar: true},
+		{name: "empty text uses varchar container", typ: types.NewWithCharset(types.T_char, 0, 0, types.CharsetUTF8), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText, wantVarchar: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec, err := generateConstExpressionExecutor(proc, test.typ, &plan.Literal{
+				Value:       &plan.Literal_Sval{Sval: "selected"},
+				LiteralForm: test.form,
+			}, nil)
+			require.NoError(t, err)
+			defer vec.Free(proc.Mp())
+			require.Equal(t, test.want, vec.GetRuntimeStringDomainAt(0))
+			effective := types.StaticStringDomain(*vec.GetType())
+			if test.want == types.RuntimeStringText {
+				effective = types.StringDomainText
+			} else if test.want == types.RuntimeStringBinary {
+				effective = types.StringDomainBinary
+			}
+			require.Equal(t, test.wantEffective, effective)
+			if test.wantVarchar {
+				require.Equal(t, types.T_varchar, vec.GetType().Oid)
+			}
+		})
+	}
+}
+
+func TestFlowControlSameDomainWithoutProvenanceKeepsFastPath(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value, err := vector.NewConstBytes(
+		types.T_varchar.ToType(), []byte("ordinary"), 65536, proc.Mp())
+	require.NoError(t, err)
+	defer value.Free(proc.Mp())
+	selection := make([]bool, value.Length())
+	for i := range selection {
+		selection[i] = true
+	}
+
+	for _, fid := range []int32{function.IFF, function.CASE, function.COALESCE} {
+		expr := &FunctionExpressionExecutor{resultType: types.T_varchar.ToType()}
+		expr.fid = fid
+		expr.observeFlowControlPrepareParamKind(value, nil, selection)
+		require.Nil(t, expr.flowControlStringDomains)
+		require.Nil(t, expr.flowControlKinds)
+		require.True(t, expr.flowControlKindSeen)
+		require.Equal(t, vector.PrepareParamNone, expr.flowControlKind)
+	}
+}
+
+func TestFlowControlUsesSourceDomainBeforeImplicitCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name       string
+		sourceType types.Type
+		castType   types.Type
+		want       types.RuntimeStringDomain
+	}{
+		{name: "text under binary result", sourceType: types.T_varchar.ToType(), castType: types.T_varbinary.ToType(), want: types.RuntimeStringText},
+		{name: "binary under text result", sourceType: types.T_varbinary.ToType(), castType: types.T_varchar.ToType(), want: types.RuntimeStringBinary},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := vector.NewVec(tt.sourceType)
+			casted := vector.NewVec(tt.castType)
+			result := vector.NewVec(tt.castType)
+			defer source.Free(proc.Mp())
+			defer casted.Free(proc.Mp())
+			defer result.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(source, []byte("selected"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(casted, []byte("selected"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(result, []byte("selected"), false, proc.Mp()))
+
+			castExecutor := &FunctionExpressionExecutor{
+				functionInformationForEval: functionInformationForEval{
+					fid:        function.CAST,
+					overloadID: function.EncodeOverloadID(function.CAST, 0),
+				},
+				parameterResults:  []*vector.Vector{source},
+				parameterExecutor: []ExpressionExecutor{nil},
+			}
+			expr := &FunctionExpressionExecutor{resultType: tt.castType}
+			expr.observeFlowControlPrepareParamKind(casted, castExecutor, []bool{true})
+			require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 1, proc.Mp()))
+			require.Equal(t, tt.want, result.GetRuntimeStringDomainAt(0))
+		})
+	}
+}
+
+func TestFlowControlKeepsExplicitCastAsSemanticBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := vector.NewVec(types.T_varchar.ToType())
+	casted := vector.NewVec(types.T_varbinary.ToType())
+	result := vector.NewVec(types.T_varbinary.ToType())
+	defer source.Free(proc.Mp())
+	defer casted.Free(proc.Mp())
+	defer result.Free(proc.Mp())
+	for _, vec := range []*vector.Vector{source, casted, result} {
+		require.NoError(t, vector.AppendBytes(vec, []byte("selected"), false, proc.Mp()))
+	}
+	castExecutor := &FunctionExpressionExecutor{
+		functionInformationForEval: functionInformationForEval{
+			fid:        function.CAST,
+			overloadID: function.EncodeOverloadID(function.CAST, 1),
+		},
+		parameterResults:  []*vector.Vector{source},
+		parameterExecutor: []ExpressionExecutor{nil},
+	}
+	expr := &FunctionExpressionExecutor{resultType: types.T_varbinary.ToType()}
+	expr.observeFlowControlPrepareParamKind(casted, castExecutor, []bool{true})
+	require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 1, proc.Mp()))
+	require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(0))
 }
 
 func TestEvalIffSkipsUnselectedBranch(t *testing.T) {
@@ -295,28 +494,347 @@ func TestIffConstantFoldingSkipsUnselectedBranch(t *testing.T) {
 
 }
 
-func TestParamExpressionExecutorPreservesBinaryFlagPerParameter(t *testing.T) {
+func TestFlowControlConstantFoldingPreservesSelectedMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name          string
+		fid           int32
+		sourceType    types.Type
+		resultType    types.Type
+		selectedIndex int
+		wantDomain    types.RuntimeStringDomain
+	}{
+		{name: "if text to binary", fid: function.IFF, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType(), selectedIndex: 1, wantDomain: types.RuntimeStringText},
+		{name: "case text to binary", fid: function.CASE, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType(), selectedIndex: 1, wantDomain: types.RuntimeStringText},
+		{name: "coalesce text to binary", fid: function.COALESCE, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType(), selectedIndex: 0, wantDomain: types.RuntimeStringText},
+		{name: "if binary to text", fid: function.IFF, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType(), selectedIndex: 1, wantDomain: types.RuntimeStringBinary},
+		{name: "case binary to text", fid: function.CASE, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType(), selectedIndex: 1, wantDomain: types.RuntimeStringBinary},
+		{name: "coalesce binary to text", fid: function.COALESCE, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType(), selectedIndex: 0, wantDomain: types.RuntimeStringBinary},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			selected, err := vector.NewConstBytes(test.sourceType, []byte("selected"), 1, proc.Mp())
+			require.NoError(t, err)
+			selected.SetPrepareParamKind(vector.PrepareParamFloat)
+			fallback, err := vector.NewConstBytes(test.resultType, []byte("fallback"), 1, proc.Mp())
+			require.NoError(t, err)
+			condition, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+			require.NoError(t, err)
+
+			parameterVectors := []*vector.Vector{selected, fallback}
+			switch test.fid {
+			case function.IFF:
+				parameterVectors = []*vector.Vector{condition, selected, fallback}
+			case function.CASE:
+				parameterVectors = []*vector.Vector{condition, selected, fallback}
+			default:
+				condition.Free(proc.Mp())
+			}
+			expr := &FunctionExpressionExecutor{}
+			require.NoError(t, expr.Init(proc, len(parameterVectors), test.resultType))
+			expr.fid = test.fid
+			expr.folded.needFoldingCheck = true
+			expr.evalFn = func(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, _ int, _ *function.FunctionSelectList) error {
+				rs := vector.MustFunctionResult[types.Varlena](result)
+				return rs.AppendBytes(params[test.selectedIndex].GetBytesAt(0), false)
+			}
+			for i, vec := range parameterVectors {
+				expr.SetParameter(i, NewFixedVectorExpressionExecutor(proc.Mp(), false, vec))
+			}
+			defer expr.Free()
+
+			result, err := expr.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.True(t, expr.folded.canFold)
+			require.Equal(t, "selected", result.GetStringAt(0))
+			require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(0))
+			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKindAt(0))
+
+			zeroBatch := batch.New(nil)
+			zeroBatch.SetRowCount(0)
+			result, err = expr.Eval(proc, []*batch.Batch{zeroBatch}, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Length())
+
+			nonemptyBatch := batch.New(nil)
+			nonemptyBatch.SetRowCount(4)
+			result, err = expr.Eval(proc, []*batch.Batch{nonemptyBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, 4, result.Length())
+			for row := 0; row < result.Length(); row++ {
+				require.Equal(t, "selected", result.GetStringAt(row))
+				require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(row))
+				require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKindAt(row))
+			}
+		})
+	}
+}
+
+func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("5.5"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("5.9"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("true"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
-	proc.SetPrepareParamsWithIsBin(params, []bool{true, false})
+	proc.SetPrepareParamsWithMeta(params, []bool{true, false, false, false, false, false}, []vector.PrepareParamKind{
+		vector.PrepareParamNone,
+		vector.PrepareParamInteger,
+		vector.PrepareParamFloat,
+		vector.PrepareParamDecimal,
+		vector.PrepareParamBoolean,
+		vector.PrepareParamNone,
+	})
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 
 	binaryExpr := NewParamExpressionExecutor(proc.Mp(), 0, types.T_text.ToType())
-	textExpr := NewParamExpressionExecutor(proc.Mp(), 1, types.T_text.ToType())
+	integerExpr := NewParamExpressionExecutor(proc.Mp(), 1, types.T_text.ToType())
+	floatExpr := NewParamExpressionExecutor(proc.Mp(), 2, types.T_text.ToType())
+	decimalExpr := NewParamExpressionExecutor(proc.Mp(), 3, types.T_text.ToType())
+	booleanExpr := NewParamExpressionExecutor(proc.Mp(), 4, types.T_text.ToType())
+	textExpr := NewParamExpressionExecutor(proc.Mp(), 5, types.T_text.ToType())
 	t.Cleanup(binaryExpr.Free)
+	t.Cleanup(integerExpr.Free)
+	t.Cleanup(floatExpr.Free)
+	t.Cleanup(decimalExpr.Free)
+	t.Cleanup(booleanExpr.Free)
 	t.Cleanup(textExpr.Free)
 
 	binaryVec, err := binaryExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.True(t, binaryVec.GetIsBin())
+	require.Equal(t, vector.PrepareParamNone, binaryVec.GetPrepareParamKind())
 	require.Equal(t, "AB\x00\x00", binaryVec.GetStringAt(0))
+
+	integerVec, err := integerExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.False(t, integerVec.GetIsBin())
+	require.Equal(t, vector.PrepareParamInteger, integerVec.GetPrepareParamKind())
+	require.Equal(t, "5", integerVec.GetStringAt(0))
+
+	floatVec, err := floatExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamFloat, floatVec.GetPrepareParamKind())
+	require.Equal(t, "5.5", floatVec.GetStringAt(0))
+
+	decimalVec, err := decimalExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamDecimal, decimalVec.GetPrepareParamKind())
+	require.Equal(t, "5.9", decimalVec.GetStringAt(0))
+
+	booleanVec, err := booleanExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamBoolean, booleanVec.GetPrepareParamKind())
+	require.Equal(t, "true", booleanVec.GetStringAt(0))
 
 	textVec, err := textExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.False(t, textVec.GetIsBin())
+	require.Equal(t, vector.PrepareParamNone, textVec.GetPrepareParamKind())
 	require.Equal(t, "text", textVec.GetStringAt(0))
+}
+
+func TestGenerateConstExpressionExecutorYear(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.New(nil)
+	bat.SetRowCount(1)
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_year)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{
+			I32Val: 2026,
+		}}},
+	}
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_year, vec.GetType().Oid)
+	require.Equal(t, types.MoYear(2026), vector.GetFixedAtNoTypeCheck[types.MoYear](vec, 0))
+}
+
+func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("5.5"), false, proc.Mp()))
+	params.SetPrepareParamKind(vector.PrepareParamFloat)
+	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamFloat}, []bool{true})
+	defer params.Free(proc.Mp())
+
+	column := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	stringConst := func(value string) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: value},
+			}},
+		}
+	}
+	bindFunction := func(name string, args ...*plan.Expr) *plan.Expr {
+		argTypes := make([]types.Type, len(args))
+		for i := range args {
+			argTypes[i] = types.New(types.T(args[i].Typ.Id), args[i].Typ.Width, args[i].Typ.Scale)
+		}
+		fn, err := function.GetFunctionByName(proc.Ctx, name, argTypes)
+		require.NoError(t, err)
+		retType := fn.GetReturnType()
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(retType.Oid), Width: retType.Width, Scale: retType.Scale},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: name},
+				Args: args,
+			}},
+		}
+	}
+
+	input := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, true}),
+	}, nil)
+	defer input.Clean(proc.Mp())
+	for name, expression := range map[string]*plan.Expr{
+		"if":       bindFunction("if", column, parameter, stringConst("fallback")),
+		"case":     bindFunction("case", column, parameter),
+		"coalesce": bindFunction("coalesce", parameter, stringConst("fallback")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			executor, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			defer executor.Free()
+
+			result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false})
+			require.NoError(t, err)
+			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKind())
+			require.Equal(t, "5.5", result.GetStringAt(0))
+			require.True(t, result.GetBinaryStringMetadataAt(0))
+			require.True(t, result.IsNull(1))
+
+			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKind(),
+				"full selection must retain the active prepared branch")
+			require.True(t, result.GetBinaryStringMetadataAt(0))
+			require.True(t, result.GetBinaryStringMetadataAt(1))
+
+			result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true})
+			require.NoError(t, err)
+			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKind(),
+				"reused selection buffers must retain only the active branch lineage")
+			require.Equal(t, "5.5", result.GetStringAt(1))
+			require.True(t, result.GetBinaryStringMetadataAt(1))
+			require.True(t, result.IsNull(0))
+		})
+	}
+
+	mixedInput := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, false}),
+	}, nil)
+	defer mixedInput.Clean(proc.Mp())
+	for name, expression := range map[string]*plan.Expr{
+		"if-mixed":   bindFunction("if", column, parameter, stringConst("fallback")),
+		"case-mixed": bindFunction("case", column, parameter, stringConst("fallback")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			executor, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{mixedInput}, nil)
+			require.NoError(t, err)
+			require.Equal(t, vector.PrepareParamNone, result.GetPrepareParamKind(),
+				"active branches with mixed source categories must be conservative")
+			require.True(t, result.GetBinaryStringMetadataAt(0))
+			require.False(t, result.GetBinaryStringMetadataAt(1))
+		})
+	}
+
+	t.Run("mixed materialization keeps row lineage for a later bit cast", func(t *testing.T) {
+		flowExpr := bindFunction("if", column, parameter, stringConst("5"))
+		flowExecutor, err := NewExpressionExecutor(proc, flowExpr)
+		require.NoError(t, err)
+		defer flowExecutor.Free()
+		flowResult, err := flowExecutor.Eval(proc, []*batch.Batch{mixedInput}, nil)
+		require.NoError(t, err)
+		require.Equal(t, vector.PrepareParamFloat, flowResult.GetPrepareParamKindAt(0))
+		require.Equal(t, vector.PrepareParamNone, flowResult.GetPrepareParamKindAt(1))
+
+		materialized := batch.NewWithSize(1)
+		materialized.Vecs[0] = flowResult
+		materialized.SetRowCount(flowResult.Length())
+		textColumn := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}
+		target := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_bit), Width: 64, NotNullable: true},
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		}
+		castExpr := bindFunction("cast", textColumn, target)
+		castExecutor, err := NewExpressionExecutor(proc, castExpr)
+		require.NoError(t, err)
+		defer castExecutor.Free()
+		castResult, err := castExecutor.Eval(proc, []*batch.Batch{materialized}, nil)
+		require.NoError(t, err)
+		require.Equal(t, []uint64{6, 53}, vector.MustFixedColWithTypeCheck[uint64](castResult))
+		materialized.Vecs[0] = nil
+	})
+
+	maskedBranchColumn := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	maskedBranchInput := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, false}),
+		testutil.MakeVarcharVector([]string{"", "outside-selection"}, []uint64{0}, proc.Mp()),
+	}, nil)
+	defer maskedBranchInput.Clean(proc.Mp())
+	maskedBranchExecutor, err := NewExpressionExecutor(
+		proc,
+		bindFunction("if", column, maskedBranchColumn, parameter),
+	)
+	require.NoError(t, err)
+	maskedResult, err := maskedBranchExecutor.Eval(proc, []*batch.Batch{maskedBranchInput}, nil)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamFloat, maskedResult.GetPrepareParamKind(),
+		"non-NULL values outside an IF arm's selected rows must be ignored")
+	require.True(t, maskedResult.IsNull(0))
+	require.Equal(t, "5.5", maskedResult.GetStringAt(1))
+	maskedResult, err = maskedBranchExecutor.Eval(
+		proc, []*batch.Batch{maskedBranchInput}, []bool{true, false})
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamNone, maskedResult.GetPrepareParamKind())
+	maskedBranchExecutor.Free()
+
+	coalesceColumn := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	coalesceInput := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, true}),
+		testutil.MakeVarcharVector([]string{"", "ordinary"}, []uint64{0}, proc.Mp()),
+	}, nil)
+	defer coalesceInput.Clean(proc.Mp())
+	executor, err := NewExpressionExecutor(
+		proc,
+		bindFunction("coalesce", coalesceColumn, parameter),
+	)
+	require.NoError(t, err)
+	result, err := executor.Eval(proc, []*batch.Batch{coalesceInput}, nil)
+	executor.Free()
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamNone, result.GetPrepareParamKind(),
+		"coalesce must fold all active source categories")
 }
 
 func TestFixedExpressionExecutor(t *testing.T) {
@@ -443,40 +961,226 @@ func TestVarExpressionExecutor(t *testing.T) {
 	require.NoError(t, err)
 	t.Log(tree)
 
-	// after vector.SetConstBytes pass go test -v, can comment out below line
-	// vec, err := varExprExecutor.Eval(proc, []*batch.Batch{nil}, nil)
-	// require.NoError(t, err)
-	// curr := proc.Mp().CurrNB()
-	// {
-	// 	require.Equal(t, 1, vec.Length())
-	// 	require.Equal(t, types.T_int64.ToType(), *vec.GetType())
-	// 	val := string(vec.GetBytesAt(0))
-	// 	result, err := strconv.ParseInt(val, 10, 64)
-	// 	require.NoError(t, err)
-	// 	require.Equal(t, int64(12345), result)
-	// 	require.Equal(t, false, vec.GetNulls().Contains(0))
-	// }
+	input := &batch.Batch{}
+	input.SetRowCount(4)
+	vec, err := varExprExecutor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, input.RowCount(), vec.Length())
+	require.Equal(t, types.T_int64.ToType(), *vec.GetType())
+	require.Equal(t, int64(12345), vector.MustFixedColNoTypeCheck[int64](vec)[0])
+	require.False(t, vec.GetNulls().Contains(0))
 
-	// varExprExecutor.ResetForNextQuery()
-	// _, err = varExprExecutor.Eval(proc, []*batch.Batch{nil}, nil)
-	// require.NoError(t, err)
-	// tree, err = DebugShowExecutor(varExprExecutor)
-	// require.NoError(t, err)
-	// t.Log(tree)
-	// require.Equal(t, curr, proc.Mp().CurrNB()) // check memory reuse
-	// varExprExecutor.Free()
-	// require.Equal(t, int64(0), proc.Mp().CurrNB())
+	// A reused executor must reparse the new value into the fixed-width vector,
+	// rather than treating its backing memory as a varlena descriptor.
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(67890), nil
+	})
+	input.SetRowCount(2)
+	vec, err = varExprExecutor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, input.RowCount(), vec.Length())
+	require.Equal(t, int64(67890), vector.MustFixedColNoTypeCheck[int64](vec)[0])
 }
 
-func TestVarExpressionExecutorPreservesBinaryFlagOnReuse(t *testing.T) {
+func TestParamExpressionExecutorMatchesBatchRowCount(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("UTC"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() {
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+	})
+
+	executor := NewParamExpressionExecutor(proc.Mp(), 0, types.T_varchar.ToType())
+	t.Cleanup(executor.Free)
+	input := batch.New(nil)
+	input.SetRowCount(4)
+
+	vec, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.True(t, vec.IsConst())
+	require.Equal(t, input.RowCount(), vec.Length())
+	require.Equal(t, "UTC", vec.GetStringAt(3))
+
+	input.SetRowCount(2)
+	vec, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, input.RowCount(), vec.Length())
+}
+
+func TestVarExpressionExecutorTypedJSONAndUUID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	var value any = `{"a":1}`
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return value, nil
+	})
+
+	jsonExpr := &plan.Expr{
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "json_var"}},
+		Typ:  plan.Type{Id: int32(types.T_json)},
+	}
+	jsonExecutor, err := NewExpressionExecutor(proc, jsonExpr)
+	require.NoError(t, err)
+	t.Cleanup(jsonExecutor.Free)
+
+	vec, err := jsonExecutor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, `{"a": 1}`, types.DecodeJson(vec.GetBytesAt(0)).String())
+
+	value = `{"a":2}`
+	vec, err = jsonExecutor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, `{"a": 2}`, types.DecodeJson(vec.GetBytesAt(0)).String())
+
+	uuid, err := types.ParseUuid("ffffffff-ffff-ffff-ffff-ffffffffffff")
+	require.NoError(t, err)
+	value = uuid.String()
+	uuidExpr := &plan.Expr{
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "uuid_var"}},
+		Typ:  plan.Type{Id: int32(types.T_uuid)},
+	}
+	uuidExecutor, err := NewExpressionExecutor(proc, uuidExpr)
+	require.NoError(t, err)
+	t.Cleanup(uuidExecutor.Free)
+
+	vec, err = uuidExecutor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, uuid, vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0])
+}
+
+func TestVarExpressionExecutorReencodesTypedArraysOnReuse(t *testing.T) {
+	testCases := []struct {
+		name   string
+		typ    types.Type
+		first  any
+		second any
+		check  func(t *testing.T, vec *vector.Vector, second bool)
+	}{
+		{
+			name:   "vecf32",
+			typ:    types.New(types.T_array_float32, 3, 0),
+			first:  []float32{1, 2, 3},
+			second: []float32{4, 5, 6},
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []float32{1, 2, 3}
+				if second {
+					want = []float32{4, 5, 6}
+				}
+				require.Equal(t, want, vector.GetArrayAt[float32](vec, 0))
+			},
+		},
+		{
+			name:   "vecf64",
+			typ:    types.New(types.T_array_float64, 3, 0),
+			first:  []float64{1, 2, 3},
+			second: []float64{4, 5, 6},
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []float64{1, 2, 3}
+				if second {
+					want = []float64{4, 5, 6}
+				}
+				require.Equal(t, want, vector.GetArrayAt[float64](vec, 0))
+			},
+		},
+		{
+			name:   "vecbf16",
+			typ:    types.New(types.T_array_bf16, 3, 0),
+			first:  types.Float32ToBF16Slice([]float32{1, 2, 3}),
+			second: types.Float32ToBF16Slice([]float32{4, 5, 6}),
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []float32{1, 2, 3}
+				if second {
+					want = []float32{4, 5, 6}
+				}
+				require.Equal(t, want, types.BF16ToFloat32Slice(vector.GetArrayAt[types.BF16](vec, 0)))
+			},
+		},
+		{
+			name:   "vecf16",
+			typ:    types.New(types.T_array_float16, 3, 0),
+			first:  types.Float32ToFloat16Slice([]float32{1, 2, 3}),
+			second: types.Float32ToFloat16Slice([]float32{4, 5, 6}),
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []float32{1, 2, 3}
+				if second {
+					want = []float32{4, 5, 6}
+				}
+				require.Equal(t, want, types.Float16ToFloat32Slice(vector.GetArrayAt[types.Float16](vec, 0)))
+			},
+		},
+		{
+			name:   "vecint8",
+			typ:    types.New(types.T_array_int8, 3, 0),
+			first:  []int8{1, 2, 3},
+			second: []int8{4, 5, 6},
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []int8{1, 2, 3}
+				if second {
+					want = []int8{4, 5, 6}
+				}
+				require.Equal(t, want, vector.GetArrayAt[int8](vec, 0))
+			},
+		},
+		{
+			name:   "vecuint8",
+			typ:    types.New(types.T_array_uint8, 3, 0),
+			first:  []uint8{1, 128, 255},
+			second: []uint8{4, 5, 6},
+			check: func(t *testing.T, vec *vector.Vector, second bool) {
+				want := []uint8{1, 128, 255}
+				if second {
+					want = []uint8{4, 5, 6}
+				}
+				require.Equal(t, want, vector.GetArrayAt[uint8](vec, 0))
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			value := testCase.first
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+				return value, nil
+			})
+			expr := &plan.Expr{
+				Expr: &plan.Expr_V{V: &plan.VarRef{Name: testCase.name}},
+				Typ: plan.Type{
+					Id:    int32(testCase.typ.Oid),
+					Width: testCase.typ.Width,
+					Scale: testCase.typ.Scale,
+				},
+			}
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+
+			vec, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			testCase.check(t, vec, false)
+
+			value = testCase.second
+			vec, err = executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			testCase.check(t, vec, true)
+		})
+	}
+}
+
+func TestVarExpressionExecutorPreservesProtocolMetadataOnReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	value := "AB\x00\x00"
 	isBin := true
+	prepareParamKind := vector.PrepareParamNone
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return value, nil
 	})
 	proc.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) {
 		return isBin, nil
+	})
+	proc.SetResolveVariablePrepareParamKindFunc(func(string, bool, bool) (vector.PrepareParamKind, error) {
+		return prepareParamKind, nil
 	})
 	expr := &plan.Expr{
 		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "copied_var"}},
@@ -489,18 +1193,28 @@ func TestVarExpressionExecutorPreservesBinaryFlagOnReuse(t *testing.T) {
 	vec, err := executor.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.True(t, vec.GetIsBin())
+	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
 	require.Equal(t, "AB\x00\x00", vec.GetStringAt(0))
 
-	value, isBin = "text", false
+	value, isBin, prepareParamKind = "5.0", false, vector.PrepareParamFloat
 	vec, err = executor.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.False(t, vec.GetIsBin())
+	require.Equal(t, vector.PrepareParamFloat, vec.GetPrepareParamKind())
+	require.Equal(t, "5.0", vec.GetStringAt(0))
+
+	value, prepareParamKind = "text", vector.PrepareParamNone
+	vec, err = executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.False(t, vec.GetIsBin())
+	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
 	require.Equal(t, "text", vec.GetStringAt(0))
 
 	value, isBin = "CD\x00\x00", true
 	vec, err = executor.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.True(t, vec.GetIsBin())
+	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
 	require.Equal(t, "CD\x00\x00", vec.GetStringAt(0))
 }
 
@@ -1692,6 +2406,157 @@ func TestExpressionReset(t *testing.T) {
 		executor.Free()
 		proc.Free()
 		require.Equal(t, originNb, proc.Mp().CurrNB())
+	}
+}
+
+func TestVolatileStringAssignmentCastReset(t *testing.T) {
+	targets := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "char", typ: types.New(types.T_char, 20, 0)},
+		{name: "varchar", typ: types.New(types.T_varchar, 20, 0)},
+		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0)},
+	}
+	for _, target := range targets {
+		t.Run(target.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.SetBaseProcessRunningStatus(true)
+			proc.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES"
+
+			sourceType := types.T_text.ToType()
+			fn, err := function.GetFunctionByName(proc.Ctx, "cast_assign", []types.Type{sourceType, target.typ})
+			require.NoError(t, err)
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(target.typ.Oid), Width: target.typ.Width, Scale: target.typ.Scale},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast_assign"},
+					Args: []*plan.Expr{
+						{
+							Typ:  plan.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale},
+							Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+						},
+						{
+							Typ:  plan.Type{Id: int32(target.typ.Oid), Width: target.typ.Width, Scale: target.typ.Scale},
+							Expr: &plan.Expr_T{T: &plan.TargetType{}},
+						},
+					},
+				}},
+			}
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+
+			eval := func(value *string, kind vector.PrepareParamKind) *vector.Vector {
+				t.Helper()
+				params := vector.NewVec(sourceType)
+				if value == nil {
+					require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
+				} else {
+					require.NoError(t, vector.AppendBytes(params, []byte(*value), false, proc.Mp()))
+					params.SetPrepareParamKind(kind)
+				}
+				proc.SetPrepareParams(params)
+				result, evalErr := executor.Eval(proc, nil, nil)
+				require.NoError(t, evalErr)
+				require.False(t, executor.(*FunctionExpressionExecutor).folded.canFold)
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+				return result
+			}
+
+			first := "before"
+			result := eval(&first, vector.PrepareParamNone)
+			require.False(t, result.IsNull(0))
+			require.Equal(t, first, result.GetStringAt(0))
+
+			executor.ResetForNextQuery()
+			result = eval(nil, vector.PrepareParamNone)
+			require.True(t, result.IsNull(0))
+
+			executor.ResetForNextQuery()
+			after := "after"
+			result = eval(&after, vector.PrepareParamNone)
+			require.False(t, result.IsNull(0))
+			require.Equal(t, after, result.GetStringAt(0))
+
+			executor.ResetForNextQuery()
+			result = eval(nil, vector.PrepareParamNone)
+			require.True(t, result.IsNull(0))
+
+			executor.ResetForNextQuery()
+			integer := "7"
+			result = eval(&integer, vector.PrepareParamInteger)
+			require.False(t, result.IsNull(0))
+			require.Equal(t, integer, result.GetStringAt(0))
+		})
+	}
+}
+
+func TestParamExpressionExecutorDoesNotCacheLookupFailure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	executor := NewParamExpressionExecutor(proc.Mp(), 0, types.T_varchar.ToType())
+	defer executor.Free()
+
+	result, err := executor.Eval(proc, nil, nil)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.False(t, executor.folded)
+
+	params := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("recovered"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	defer func() {
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+	}()
+
+	result, err = executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.True(t, executor.folded)
+	require.False(t, executor.foldedNull)
+	require.Equal(t, "recovered", result.GetStringAt(0))
+}
+
+func TestParamExpressionExecutorReevaluatesAfterResultTransfer(t *testing.T) {
+	tests := []struct {
+		name  string
+		null  bool
+		value string
+	}{
+		{name: "non-null", value: "repeated"},
+		{name: "null", null: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			params := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte(test.value), test.null, proc.Mp()))
+			proc.SetPrepareParams(params)
+			defer func() {
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+			}()
+
+			executor := NewParamExpressionExecutor(proc.Mp(), 0, types.T_varchar.ToType())
+			defer executor.Free()
+
+			for i := 0; i < 2; i++ {
+				result, err := executor.EvalWithoutResultReusing(proc, nil, nil)
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Equal(t, test.null, result.IsNull(0))
+				if !test.null {
+					require.Equal(t, test.value, result.GetStringAt(0))
+				}
+				result.Free(proc.Mp())
+			}
+		})
 	}
 }
 

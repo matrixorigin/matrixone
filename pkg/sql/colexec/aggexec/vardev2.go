@@ -220,7 +220,11 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	}()
 	for i := range vecs {
-		vecs[i] = vector.NewOffHeapVecWithType(resultType)
+		var err error
+		vecs[i], err = exec.allocation.newVector(resultType)
+		if err != nil {
+			return nil, err
+		}
 		if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 			return nil, err
 		}

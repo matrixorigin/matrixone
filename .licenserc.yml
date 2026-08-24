@@ -34,3 +34,7 @@ dependency:
   licenses:
     - name: github.com/mattn/go-localereader
       license: MIT
+    # The generated Go submodule carries Apache-2.0 SPDX headers but omits
+    # the repository-level LICENSE file from its module zip.
+    - name: github.com/substrait-io/substrait-protobuf/go
+      license: Apache-2.0

@@ -126,6 +126,14 @@ type IndexTableConfig struct {
 	IncludeColumns     []string `json:"include_columns,omitempty"`
 	IncludeColumnTypes []int32  `json:"include_column_types,omitempty"`
 
+	// PostFilterOverFetch tells the search to grow the candidate budget so that
+	// k rows still survive a residual filter applied after the search. The plan
+	// sets it when a residual post-filter is present but the LIMIT is a prepared
+	// parameter (LIMIT ?), whose value is unknown until EXECUTE — the search
+	// resolves k there and over-fetches via pkg/vectorindex/overfetch. A literal
+	// LIMIT is over-fetched at plan time instead, and leaves this false.
+	PostFilterOverFetch bool `json:"post_filter_overfetch,omitempty"`
+
 	// GPU related
 	BatchWindow int64 `json:"batch_window"`
 	// GpuMultiSimulation is a test-only knob: when >= 2, the device list is
@@ -269,6 +277,24 @@ type RuntimeConfig struct {
 	// consumed by the C++ eval_filter_bitmap_cpu.
 	FilterJSON string
 
+	// Emit, when non-nil, requests a STREAMING search: instead of returning all
+	// results at once, the index yields them in bounded batches by calling Emit once
+	// per batch with a *SearchOutput (Search then returns empty keys/distances). Only
+	// the fulltext2 index honors it, and only for the no-LIMIT case (return every
+	// matching doc, ranked by an upstream ORDER BY) — so it walks and streams without a
+	// top-K heap. Other algorithms ignore this field.
+	//
+	// Emit hands the consumer the SAME box-free container SearchInto fills (see
+	// SearchOutput), so the two result paths share one consumer. Ownership differs by
+	// path: SearchInto's out is caller-OWNED and reused across queries; an Emit batch is
+	// PRODUCER-owned per flush — its out.Keys is a pooled ColumnBuffer the consumer must
+	// recycle (PutColumnBuffer) once it has copied the batch out, and out.Include/out.Dists
+	// are per-batch and dropped. out.Dists is float32 (matching the T_float32 score column),
+	// out.Include is column-major (one nullable ColumnBuffer per FULL index INCLUDE column,
+	// segment order) or empty when the caller requested no include columns — so a
+	// million-row stream boxes nothing.
+	Emit func(out *SearchOutput) error
+
 	// Optional raw runtime-filter payload from the build side. IVF search turns
 	// this into either an exact-pk filter or a membership filter for entries.
 	RuntimeFilterData []byte
@@ -285,17 +311,43 @@ type RuntimeConfig struct {
 	// copied into Search and do not propagate caller-visible mutations back out.
 	RequestedIncludeColumns []string
 	PushdownFilterSQL       string
-	IncludeResult           *IvfIncludeResult
-	TargetRows              uint
-	SearchRoundLimit        uint
-	BucketExpandStep        uint
-	SearchCursor            *IvfSearchCursor
+	// PushdownFilters is the typed VECTOR_INDEX_SCAN equivalent of
+	// PushdownFilterSQL. Expressions are already rebound to entries-table
+	// columns and are applied before the physical round top-k.
+	PushdownFilters  []*plan.Expr
+	IncludeResult    *IvfIncludeResult
+	TargetRows       uint
+	SearchRoundLimit uint
+	BucketExpandStep uint
+	SearchCursor     *IvfSearchCursor
 }
 
 type IvfIncludeResult struct {
 	ColNames []string
 	Data     map[string][]any
 	Nulls    map[string][]bool
+}
+
+// SearchOutput is the box-free result container shared by BOTH fulltext2 result paths:
+// the pull path (LIMIT) fills a caller-owned one via VectorIndexSearchIf.SearchInto, and
+// the push path (no-LIMIT streaming) hands one per batch through RuntimeConfig.Emit. One
+// shape, one consumer. Fields (len(Dists) == Keys.N on both paths):
+//   - Keys: the pk column, box-free for EVERY pk type (unlike SearchFloat32's []int64).
+//   - Dists: scores aligned to Keys (float32 matches the T_float32 score column).
+//   - Include: one nullable ColumnBuffer per FULL index INCLUDE column (segment order), or
+//     empty when rt.RequestedIncludeColumns is empty; the TVF maps its projected columns to
+//     segment positions the same way on both paths.
+//
+// Two ownership modes:
+//   - SearchInto (pull): the caller pools the SearchOutput and its buffers and Resets them
+//     per query, so a warm LIMIT query allocates nothing for its results. SearchInto Resets
+//     before filling.
+//   - Emit (push): each batch's SearchOutput is producer-owned; its Keys is a pooled
+//     ColumnBuffer the consumer must recycle after copying, and Dists/Include are per-batch.
+type SearchOutput struct {
+	Keys    *ColumnBuffer
+	Dists   []float32
+	Include []*ColumnBuffer
 }
 
 type IvfSearchCursor struct {
@@ -305,6 +357,9 @@ type IvfSearchCursor struct {
 	Round              uint
 	Exhausted          bool
 }
+
+// ColumnBuffer (the typed, box-free streaming key batch used by Emit) lives in
+// columnbuffer.go.
 
 type VectorIndexCdc[T types.RealNumbers] struct {
 	Data []VectorIndexCdcEntry[T] `json:"cdc"`

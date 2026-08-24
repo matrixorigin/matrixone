@@ -16,6 +16,9 @@ package fill
 
 import (
 	"bytes"
+	"math/big"
+	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,6 +37,18 @@ import (
 type fillTestCase struct {
 	arg  *Fill
 	proc *process.Process
+}
+
+func TestAppendValuePreservesBinaryStringProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := vector.NewVec(types.T_text.ToType())
+	target := vector.NewVec(types.T_text.ToType())
+	defer source.Free(proc.Mp())
+	defer target.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(source, []byte("value"), false, proc.Mp()))
+	source.SetIsBinaryString(true)
+	require.NoError(t, appendValue(target, source, 0, proc))
+	require.True(t, target.GetBinaryStringMetadataAt(0))
 }
 
 func makeTestCases(t *testing.T) []fillTestCase {
@@ -233,6 +248,321 @@ func TestProcessLinearDecimal128(t *testing.T) {
 	require.NoError(t, ctr.consumeLinear(arg, bat, 0, proc))
 	require.False(t, vec.IsNull(1))
 	require.Equal(t, types.Decimal128FromInt64(200), vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 1))
+}
+
+func TestLinearExactValueUsesEveryPositionAndAvoidsEndpointOverflow(t *testing.T) {
+	tests := []struct {
+		name        string
+		left, right types.Decimal128
+		step, total uint64
+		want        types.Decimal128
+	}{
+		{
+			name: "increasing first third", left: types.Decimal128FromInt64(100),
+			right: types.Decimal128FromInt64(130), step: 1, total: 3,
+			want: types.Decimal128FromInt64(110),
+		},
+		{
+			name: "decreasing first third", left: types.Decimal128FromInt64(130),
+			right: types.Decimal128FromInt64(100), step: 1, total: 3,
+			want: types.Decimal128FromInt64(120),
+		},
+		{
+			name: "negative half rounds away from zero", left: types.Decimal128FromInt64(-3),
+			right: types.Decimal128FromInt64(2), step: 1, total: 2,
+			want: types.Decimal128FromInt64(-1),
+		},
+		{
+			name: "opposite decimal128 limits", left: types.Decimal128{B64_127: uint64(1) << 63},
+			right: types.Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0) >> 1},
+			step:  1, total: 2, want: types.Decimal128FromInt64(-1),
+		},
+		{
+			name: "equal decimal128 maxima", left: types.Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0) >> 1},
+			right: types.Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0) >> 1},
+			step:  1, total: 3,
+			want: types.Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0) >> 1},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := linearExactValue(test.left, test.right, test.step, test.total)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestLinearExactValue256UsesLogicalDecimalRange(t *testing.T) {
+	maximum, err := types.ParseDecimal256(strings.Repeat("9", 65), 65, 0)
+	require.NoError(t, err)
+
+	got, err := linearExactValue256(maximum, maximum, 500_000, 1_000_001)
+	require.NoError(t, err)
+	require.Equal(t, maximum, got)
+	// The final convex value is representable even when either weighted term
+	// needs more than 256 bits. A long non-GAPFILL input can reach this state.
+	total := ^uint64(0)
+	got, err = linearExactValue256(maximum, maximum, total/2, total)
+	require.NoError(t, err)
+	require.Equal(t, maximum, got)
+
+	got, err = linearExactValue256(
+		types.Decimal256FromInt64(-3), types.Decimal256FromInt64(2), 1, 2)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal256FromInt64(-1), got)
+
+	_, err = linearExactValue256(types.Decimal256{}, types.Decimal256{}, 0, 2)
+	require.ErrorContains(t, err, "invalid exact linear interpolation position")
+}
+
+func TestLinearExactValue256MatchesBigIntegerOracle(t *testing.T) {
+	rng := rand.New(rand.NewSource(27061))
+	for i := 0; i < 1_000; i++ {
+		left := randomSignedDecimal256(rng)
+		right := randomSignedDecimal256(rng)
+		total := rng.Uint64()
+		if total < 2 {
+			total = 2
+		}
+		step := rng.Uint64()%(total-1) + 1
+
+		got, err := linearExactValue256(left, right, step, total)
+		require.NoError(t, err)
+
+		leftWeight := new(big.Int).SetUint64(total - step)
+		rightWeight := new(big.Int).SetUint64(step)
+		numerator := new(big.Int).Mul(decimal256BigIntForTest(left), leftWeight)
+		numerator.Add(numerator,
+			new(big.Int).Mul(decimal256BigIntForTest(right), rightWeight))
+		want := divideBigIntHalfAwayForTest(numerator, total)
+		require.Zero(t, decimal256BigIntForTest(got).Cmp(want),
+			"case %d: step=%d total=%d", i, step, total)
+	}
+}
+
+func randomSignedDecimal256(rng *rand.Rand) types.Decimal256 {
+	value := types.Decimal256{
+		B0_63: rng.Uint64(), B64_127: rng.Uint64(),
+		B128_191: rng.Uint64(), B192_255: rng.Uint64() & (^uint64(0) >> 1),
+	}
+	if rng.Intn(2) != 0 {
+		value = value.Minus()
+	}
+	return value
+}
+
+func decimal256BigIntForTest(value types.Decimal256) *big.Int {
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	result := new(big.Int).SetUint64(value.B192_255)
+	for _, limb := range [...]uint64{value.B128_191, value.B64_127, value.B0_63} {
+		result.Lsh(result, 64)
+		result.Or(result, new(big.Int).SetUint64(limb))
+	}
+	if negative {
+		result.Neg(result)
+	}
+	return result
+}
+
+func divideBigIntHalfAwayForTest(numerator *big.Int, denominator uint64) *big.Int {
+	negative := numerator.Sign() < 0
+	magnitude := new(big.Int).Abs(new(big.Int).Set(numerator))
+	den := new(big.Int).SetUint64(denominator)
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(magnitude, den, remainder)
+	if remainder.Lsh(remainder, 1).Cmp(den) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if negative {
+		quotient.Neg(quotient)
+	}
+	return quotient
+}
+
+func TestSetLinearInterpolatedValueNumericRepresentations(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	t.Run("int64", func(t *testing.T) {
+		left := testutil.MakeInt64Vector([]int64{-30}, nil, proc.Mp())
+		right := testutil.MakeInt64Vector([]int64{30}, nil, proc.Mp())
+		dst := testutil.MakeInt64Vector([]int64{0}, []uint64{0}, proc.Mp())
+		defer left.Free(proc.Mp())
+		defer right.Free(proc.Mp())
+		defer dst.Free(proc.Mp())
+
+		require.NoError(t, setLinearInterpolatedValue(dst, 0, left, 0, right, 0, 1, 3))
+		require.False(t, dst.IsNull(0))
+		require.Equal(t, int64(-10), vector.GetFixedAtNoTypeCheck[int64](dst, 0))
+	})
+
+	t.Run("float64 opposite limits", func(t *testing.T) {
+		left := vector.NewVec(types.T_float64.ToType())
+		right := vector.NewVec(types.T_float64.ToType())
+		dst := vector.NewVec(types.T_float64.ToType())
+		defer left.Free(proc.Mp())
+		defer right.Free(proc.Mp())
+		defer dst.Free(proc.Mp())
+		require.NoError(t, vector.AppendFixed(left, -1.7e308, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(right, 1.7e308, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(dst, float64(0), true, proc.Mp()))
+
+		require.NoError(t, setLinearInterpolatedValue(dst, 0, left, 0, right, 0, 1, 2))
+		require.False(t, dst.IsNull(0))
+		require.Zero(t, vector.GetFixedAtNoTypeCheck[float64](dst, 0))
+	})
+
+	t.Run("decimal256", func(t *testing.T) {
+		typ := types.New(types.T_decimal256, 65, 0)
+		left := vector.NewVec(typ)
+		right := vector.NewVec(typ)
+		dst := vector.NewVec(typ)
+		defer left.Free(proc.Mp())
+		defer right.Free(proc.Mp())
+		defer dst.Free(proc.Mp())
+		require.NoError(t, vector.AppendFixed(left, types.Decimal256FromInt64(100), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(right, types.Decimal256FromInt64(130), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(dst, types.Decimal256{}, true, proc.Mp()))
+
+		require.NoError(t, setLinearInterpolatedValue(dst, 0, left, 0, right, 0, 1, 3))
+		require.False(t, dst.IsNull(0))
+		require.Equal(t, types.Decimal256FromInt64(110),
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](dst, 0))
+	})
+}
+
+func TestSetLinearInterpolatedValueNumericTypeClosure(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	assertLinearFixedValue(t, proc, types.T_bit.ToType(), uint64(0), uint64(30), uint64(10))
+	assertLinearFixedValue(t, proc, types.T_int8.ToType(), int8(-30), int8(30), int8(-10))
+	assertLinearFixedValue(t, proc, types.T_int16.ToType(), int16(-30), int16(30), int16(-10))
+	assertLinearFixedValue(t, proc, types.T_int32.ToType(), int32(-30), int32(30), int32(-10))
+	assertLinearFixedValue(t, proc, types.T_int64.ToType(), int64(-30), int64(30), int64(-10))
+	assertLinearFixedValue(t, proc, types.T_uint8.ToType(), uint8(0), uint8(30), uint8(10))
+	assertLinearFixedValue(t, proc, types.T_uint16.ToType(), uint16(0), uint16(30), uint16(10))
+	assertLinearFixedValue(t, proc, types.T_uint32.ToType(), uint32(0), uint32(30), uint32(10))
+	assertLinearFixedValue(t, proc, types.T_uint64.ToType(), uint64(0), uint64(30), uint64(10))
+	assertLinearFixedValue(t, proc, types.T_float32.ToType(), float32(0), float32(30), float32(10))
+	assertLinearFixedValue(t, proc, types.T_float64.ToType(), float64(0), float64(30), float64(10))
+	assertLinearFixedValue(t, proc, types.New(types.T_decimal64, 18, 0),
+		types.Decimal64(30).Minus(), types.Decimal64(30), types.Decimal64(10).Minus())
+	assertLinearFixedValue(t, proc, types.New(types.T_decimal128, 38, 0),
+		types.Decimal128FromInt64(-30), types.Decimal128FromInt64(30), types.Decimal128FromInt64(-10))
+	assertLinearFixedValue(t, proc, types.New(types.T_decimal256, 65, 0),
+		types.Decimal256FromInt64(-30), types.Decimal256FromInt64(30), types.Decimal256FromInt64(-10))
+}
+
+func assertLinearFixedValue[T types.FixedSizeT](
+	t *testing.T,
+	proc *process.Process,
+	typ types.Type,
+	leftValue, rightValue, expected T,
+) {
+	t.Helper()
+	left := vector.NewVec(typ)
+	right := vector.NewVec(typ)
+	dst := vector.NewVec(typ)
+	defer left.Free(proc.Mp())
+	defer right.Free(proc.Mp())
+	defer dst.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(left, leftValue, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(right, rightValue, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(dst, expected, true, proc.Mp()))
+
+	require.NoError(t, setLinearInterpolatedValue(dst, 0, left, 0, right, 0, 1, 3))
+	require.False(t, dst.IsNull(0))
+	require.Equal(t, expected, vector.GetFixedAtNoTypeCheck[T](dst, 0))
+}
+
+func TestSetLinearInterpolatedValueRejectsInvalidState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	left := testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
+	right := testutil.MakeInt64Vector([]int64{30}, nil, proc.Mp())
+	dst := testutil.MakeInt64Vector([]int64{0}, []uint64{0}, proc.Mp())
+	defer left.Free(proc.Mp())
+	defer right.Free(proc.Mp())
+	defer dst.Free(proc.Mp())
+
+	require.ErrorContains(t,
+		setLinearInterpolatedValue(dst, 0, left, 0, right, 0, 0, 3),
+		"invalid linear interpolation position")
+	require.ErrorContains(t,
+		setLinearInterpolatedValue(dst, 0, left, 0, right, 0, 3, 3),
+		"invalid linear interpolation position")
+
+	right32 := testutil.MakeInt32Vector([]int32{30}, nil, proc.Mp())
+	defer right32.Free(proc.Mp())
+	require.ErrorContains(t,
+		setLinearInterpolatedValue(dst, 0, left, 0, right32, 0, 1, 3),
+		"linear interpolation type mismatch")
+
+	boolType := types.T_bool.ToType()
+	boolLeft := vector.NewVec(boolType)
+	boolRight := vector.NewVec(boolType)
+	boolDst := vector.NewVec(boolType)
+	defer boolLeft.Free(proc.Mp())
+	defer boolRight.Free(proc.Mp())
+	defer boolDst.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(boolLeft, false, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(boolRight, true, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(boolDst, false, true, proc.Mp()))
+	require.ErrorContains(t,
+		setLinearInterpolatedValue(boolDst, 0, boolLeft, 0, boolRight, 0, 1, 3),
+		"linear interpolation does not support result type")
+}
+
+func BenchmarkSetLinearInterpolatedValueInt64(b *testing.B) {
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	defer proc.Free()
+	left := testutil.MakeInt64Vector([]int64{-1_000_000}, nil, proc.Mp())
+	right := testutil.MakeInt64Vector([]int64{1_000_000}, nil, proc.Mp())
+	dst := testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
+	defer left.Free(proc.Mp())
+	defer right.Free(proc.Mp())
+	defer dst.Free(proc.Mp())
+
+	for i := 0; i < b.N; i++ {
+		step := uint64(i%999_999 + 1)
+		if err := setLinearInterpolatedValue(dst, 0, left, 0, right, 0, step, 1_000_000); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSetLinearInterpolatedValueDecimal256(b *testing.B) {
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	defer proc.Free()
+	typ := types.New(types.T_decimal256, 65, 0)
+	left := vector.NewVec(typ)
+	right := vector.NewVec(typ)
+	dst := vector.NewVec(typ)
+	defer left.Free(proc.Mp())
+	defer right.Free(proc.Mp())
+	defer dst.Free(proc.Mp())
+	if err := vector.AppendFixed(left, types.Decimal256FromInt64(-1_000_000), false, proc.Mp()); err != nil {
+		b.Fatal(err)
+	}
+	if err := vector.AppendFixed(right, types.Decimal256FromInt64(1_000_000), false, proc.Mp()); err != nil {
+		b.Fatal(err)
+	}
+	if err := vector.AppendFixed(dst, types.Decimal256{}, false, proc.Mp()); err != nil {
+		b.Fatal(err)
+	}
+
+	for i := 0; i < b.N; i++ {
+		step := uint64(i%999_999 + 1)
+		if err := setLinearInterpolatedValue(dst, 0, left, 0, right, 0, step, 1_000_000); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func resetChildren(arg *Fill, m *mpool.MPool) {
@@ -1175,6 +1505,120 @@ func (s *fillStubExpressionExecutor) Free() {}
 
 func (s *fillStubExpressionExecutor) IsColumnExpr() bool {
 	return false
+}
+
+func TestConsumeNextStabilizesSelfAliasedVarlenSources(t *testing.T) {
+	mpool.EnableDebugPoisonOnFree()
+	defer mpool.DisableDebugPoisonOnFree()
+
+	varlenTypes := []types.Type{
+		types.T_char.ToType(), types.T_varchar.ToType(),
+		types.T_binary.ToType(), types.T_varbinary.ToType(),
+		types.T_json.ToType(), types.T_blob.ToType(), types.T_text.ToType(),
+		types.T_array_float32.ToType(), types.T_array_float64.ToType(),
+		types.T_array_bf16.ToType(), types.T_array_float16.ToType(),
+		types.T_array_int8.ToType(), types.T_array_uint8.ToType(),
+		types.T_datalink.ToType(),
+	}
+	for _, typ := range varlenTypes {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			const rows = 1001
+			payload := bytes.Repeat([]byte("b"), 256)
+			vec := vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, vec.PreExtend(rows, proc.Mp()))
+			vec.SetLength(rows)
+			for i := 0; i < rows-1; i++ {
+				vec.SetNull(uint64(i))
+			}
+			require.NoError(t, vector.SetBytesAt(vec, rows-1, payload, proc.Mp()))
+
+			bat := batch.NewWithSize(1)
+			bat.SetVector(0, vec)
+			bat.SetRowCount(rows)
+			defer bat.Clean(proc.Mp())
+
+			ctr := &container{
+				bats:    []*batch.Batch{bat},
+				nextRun: make([][]fillCoord, 1),
+			}
+			ap := &Fill{ColLen: 1}
+
+			require.NoError(t, ctr.consumeNext(ap, bat, 0, proc))
+			require.Empty(t, ctr.nextRun[0])
+			for i := 0; i < rows; i++ {
+				require.False(t, vec.IsNull(uint64(i)))
+				require.Equal(t, payload, vec.GetBytesAt(i))
+			}
+		})
+	}
+}
+
+func TestConsumeNextReleasesSnapshotOnAllocationFailure(t *testing.T) {
+	mp, err := mpool.NewMPool("fill-next-snapshot-oom", mpool.MB, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer proc.Free()
+
+	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, vec.PreExtend(2, mp))
+	vec.SetLength(2)
+	vec.SetNull(0)
+	require.NoError(t, vector.SetBytesAt(vec, 1, bytes.Repeat([]byte("b"), 256), mp))
+
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	reserved, err := mp.Alloc(int(mp.Cap()-mp.CurrNB()), true)
+	require.NoError(t, err)
+	defer mp.Free(reserved)
+
+	ctr := &container{
+		bats:    []*batch.Batch{bat},
+		nextRun: make([][]fillCoord, 1),
+	}
+	err = ctr.consumeNext(&Fill{ColLen: 1}, bat, 0, proc)
+	require.ErrorContains(t, err, "mpool out of space")
+	require.Equal(t, mp.Cap(), mp.CurrNB())
+}
+
+func TestConsumeNextReleasesSnapshotOnWriteFailure(t *testing.T) {
+	mp, err := mpool.NewMPool("fill-next-write-error", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer proc.Free()
+
+	payload := bytes.Repeat([]byte("b"), types.VarlenaInlineSize+1)
+	previousVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, previousVec.PreExtend(1, mp))
+	previousVec.SetLength(1)
+	previousVec.SetNull(0)
+	previous := batch.NewWithSize(1)
+	previous.SetVector(0, previousVec)
+	previous.SetRowCount(1)
+
+	currentVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, currentVec.PreExtend(2, mp))
+	currentVec.SetLength(2)
+	currentVec.SetNull(0)
+	require.NoError(t, vector.SetBytesAt(currentVec, 1, payload, mp))
+	current := batch.NewWithSize(1)
+	current.SetVector(0, currentVec)
+	current.SetRowCount(2)
+
+	ctr := &container{
+		bats:    []*batch.Batch{previous, current},
+		nextRun: [][]fillCoord{{{seq: 0, row: 1}}},
+	}
+	err = ctr.consumeNext(&Fill{ColLen: 1}, current, 1, proc)
+	require.ErrorContains(t, err, "vector idx out of range")
+	previous.Clean(mp)
+	current.Clean(mp)
+	require.Zero(t, mp.CurrNB())
 }
 
 func (s *fillStubExpressionExecutor) TypeName() string {

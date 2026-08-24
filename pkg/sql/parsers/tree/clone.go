@@ -151,6 +151,7 @@ func (node *CloneTable) reset() {
 
 type CloneDatabase struct {
 	statementImpl
+	IfNotExists  bool
 	SrcDatabase  Identifier
 	DstDatabase  Identifier
 	AtTsExpr     *AtTimeStamp
@@ -173,6 +174,9 @@ func (node *CloneDatabase) StmtKind() StmtKind {
 
 func (node *CloneDatabase) Format(ctx *FmtCtx) {
 	ctx.WriteString("create database ")
+	if node.IfNotExists {
+		ctx.WriteString("if not exists ")
+	}
 	ctx.WriteIdentifier(node.DstDatabase)
 	ctx.WriteString(" clone ")
 	ctx.WriteIdentifier(node.SrcDatabase)

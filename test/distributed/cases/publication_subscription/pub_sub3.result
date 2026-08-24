@@ -26,10 +26,10 @@ create publication account database db01 table table01,table02 account acc01;
 drop publication if exists `$$$`;
 create publication `$$$` database db01 account all;
 show publications;
-publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-$$$    db01    *    *        2024-08-14 18:34:51    null    
-account    db01    table01,table02    acc01        2024-08-14 18:34:51    null    
-add    db01    *    *        2024-08-14 18:34:51    null    
+➤ publication[12,0,0]  ¦  database[12,0,0]  ¦  tables[1111,0,0]  ¦  sub_account[1111,0,0]  ¦  subscribed_accounts[1111,0,0]  ¦  create_time[93,0,0]  ¦  update_time[93,0,0]  ¦  comments[1111,0,0]  𝄀
+$$$  ¦  db01  ¦  *  ¦  *  ¦    ¦  2026-08-13 22:17:04  ¦  null  ¦    𝄀
+account  ¦  db01  ¦  table01,table02  ¦  acc01  ¦    ¦  2026-08-13 22:17:04  ¦  null  ¦    𝄀
+add  ¦  db01  ¦  *  ¦  *  ¦    ¦  2026-08-13 22:17:04  ¦  null  ¦  
 drop database if exists sub01;
 create database sub01 from sys publication `add`;
 drop database if exists sub02;
@@ -37,10 +37,10 @@ create database sub02 from sys publication account;
 drop database if exists sub03;
 create database sub03 from sys publication `$$$`;
 show subscriptions;
-pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-$$$    sys    db01    *        2024-08-14 18:34:51    sub03    2024-08-14 18:34:51    0
-account    sys    db01    table01,table02        2024-08-14 18:34:51    sub02    2024-08-14 18:34:51    0
-add    sys    db01    *        2024-08-14 18:34:51    sub01    2024-08-14 18:34:51    0
+➤ pub_name[12,0,0]  ¦  pub_account[12,0,0]  ¦  pub_database[12,0,0]  ¦  pub_tables[1111,0,0]  ¦  pub_comment[1111,0,0]  ¦  pub_time[93,0,0]  ¦  sub_name[12,0,0]  ¦  sub_time[93,0,0]  ¦  status[-6,0,0]  𝄀
+add  ¦  sys  ¦  db01  ¦  *  ¦    ¦  2026-08-13 22:17:04  ¦  sub01  ¦  2026-08-13 22:17:04  ¦  0  𝄀
+account  ¦  sys  ¦  db01  ¦  table01,table02  ¦    ¦  2026-08-13 22:17:04  ¦  sub02  ¦  2026-08-13 22:17:04  ¦  0  𝄀
+$$$  ¦  sys  ¦  db01  ¦  *  ¦    ¦  2026-08-13 22:17:04  ¦  sub03  ¦  2026-08-13 22:17:04  ¦  0
 drop publication `add`;
 drop publication account;
 drop publication `$$$`;
@@ -68,12 +68,13 @@ drop publication if exists pub03;
 create publication pub03 database db02 table t1, t2 account acc02 comment 'publish to acc02';
 drop database if exists sub02;
 create database sub02 from acc01 publication pub01;
-select * from mo_catalog.mo_subs;
-sub_account_id    sub_account_name    sub_name    sub_time    pub_account_id    pub_account_name    pub_name    pub_database    pub_tables    pub_time    pub_comment    status
-4    acc02    null    null    3    acc01    pub02    db02    *    2024-12-31 18:14:15    publish to acc01 and acc03    0
-5    acc03    null    null    3    acc01    pub02    db02    *    2024-12-31 18:14:15    publish to acc01 and acc03    0
-4    acc02    null    null    3    acc01    pub03    db02    t1,t2    2024-12-31 18:14:15    publish to acc02    0
-4    acc02    sub02    2024-12-31 18:14:15    3    acc01    pub01    db02    *    2024-12-31 18:14:15    publish to acc01    0
+select * from mo_catalog.mo_subs
+order by sub_account_name, pub_name;
+➤ sub_account_id[4,32,0]  ¦  sub_account_name[12,225,0]  ¦  sub_name[12,3750,0]  ¦  sub_time[93,64,0]  ¦  pub_account_id[4,32,0]  ¦  pub_account_name[12,225,0]  ¦  pub_name[12,48,0]  ¦  pub_database[12,3750,0]  ¦  pub_tables[12,0,0]  ¦  pub_time[93,64,0]  ¦  pub_comment[12,0,0]  ¦  status[-6,8,0]  𝄀
+2  ¦  acc02  ¦  sub02  ¦  2026-08-13 22:17:04  ¦  1  ¦  acc01  ¦  pub01  ¦  db02  ¦  *  ¦  2026-08-13 22:17:04  ¦  publish to acc01  ¦  0  𝄀
+2  ¦  acc02  ¦  null  ¦  null  ¦  1  ¦  acc01  ¦  pub02  ¦  db02  ¦  *  ¦  2026-08-13 22:17:04  ¦  publish to acc01 and acc03  ¦  0  𝄀
+2  ¦  acc02  ¦  null  ¦  null  ¦  1  ¦  acc01  ¦  pub03  ¦  db02  ¦  t1,t2  ¦  2026-08-13 22:17:04  ¦  publish to acc02  ¦  0  𝄀
+3  ¦  acc03  ¦  null  ¦  null  ¦  1  ¦  acc01  ¦  pub02  ¦  db02  ¦  *  ¦  2026-08-13 22:17:04  ¦  publish to acc01 and acc03  ¦  0
 drop database sub02;
 drop publication pub01;
 drop publication pub02;

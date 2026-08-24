@@ -29,76 +29,91 @@ import (
 var (
 	minUUID = [16]byte{}
 	maxUUID = [16]byte{
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8,
-		math.MaxInt8}
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8,
+		math.MaxUint8}
 )
 
 // GetFetchRowsFunc get FetchLockRowsFunc based on primary key type
 func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
+	var fetcher FetchLockRowsFunc
 	switch t.Oid {
 	case types.T_bool:
-		return fetchBoolRows
+		fetcher = fetchBoolRows
 	case types.T_bit:
-		return fetchUint64Rows
+		fetcher = fetchUint64Rows
 	case types.T_int8:
-		return fetchInt8Rows
+		fetcher = fetchInt8Rows
 	case types.T_int16:
-		return fetchInt16Rows
+		fetcher = fetchInt16Rows
 	case types.T_int32:
-		return fetchInt32Rows
+		fetcher = fetchInt32Rows
 	case types.T_int64:
-		return fetchInt64Rows
+		fetcher = fetchInt64Rows
 	case types.T_uint8:
-		return fetchUint8Rows
+		fetcher = fetchUint8Rows
 	case types.T_uint16:
-		return fetchUint16Rows
+		fetcher = fetchUint16Rows
 	case types.T_uint32:
-		return fetchUint32Rows
+		fetcher = fetchUint32Rows
 	case types.T_uint64:
-		return fetchUint64Rows
+		fetcher = fetchUint64Rows
 	case types.T_float32:
-		return fetchFloat32Rows
+		fetcher = fetchFloat32Rows
 	case types.T_float64:
-		return fetchFloat64Rows
+		fetcher = fetchFloat64Rows
 	case types.T_date:
-		return fetchDateRows
+		fetcher = fetchDateRows
 	case types.T_year:
-		return fetchYearRows
+		fetcher = fetchYearRows
 	case types.T_time:
-		return fetchTimeRows
+		fetcher = fetchTimeRows
 	case types.T_datetime:
-		return fetchDateTimeRows
+		fetcher = fetchDateTimeRows
 	case types.T_timestamp:
-		return fetchTimestampRows
+		fetcher = fetchTimestampRows
 	case types.T_decimal64:
-		return fetchDecimal64Rows
+		fetcher = fetchDecimal64Rows
 	case types.T_decimal128:
-		return fetchDecimal128Rows
+		fetcher = fetchDecimal128Rows
 	case types.T_decimal256:
-		return fetchDecimal256Rows
+		fetcher = fetchDecimal256Rows
 	case types.T_uuid:
-		return fetchUUIDRows
+		fetcher = fetchUUIDRows
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
-		return fetchVarlenaRows
+		fetcher = fetchVarlenaRows
 		// T_json, T_blob, T_array_float32 etc. cannot be PK.
 	case types.T_enum:
-		return fetchEnumRows
+		fetcher = fetchEnumRows
 	default:
 		panic(fmt.Sprintf("not support for %s", t.String()))
+	}
+	return func(
+		vec *vector.Vector,
+		packer *types.Packer,
+		tp types.Type,
+		max int,
+		lockTable bool,
+		filter RowsFilter,
+		filterCols []int32,
+	) (bool, [][]byte, lock.Granularity) {
+		if !lockTable && vec.IsConstNull() {
+			return false, nil, lock.Granularity_Row
+		}
+		return fetcher(vec, packer, tp, max, lockTable, filter, filterCols)
 	}
 }
 
@@ -349,7 +364,7 @@ func fetchFloat32Rows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(math.SmallestNonzeroFloat32)
+		min := fn(-math.MaxFloat32)
 		max := fn(math.MaxFloat32)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
@@ -376,7 +391,7 @@ func fetchFloat64Rows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(math.SmallestNonzeroFloat64)
+		min := fn(-math.MaxFloat64)
 		max := fn(math.MaxFloat64)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
@@ -705,7 +720,7 @@ func fetchVarlenaRows(
 	}
 
 	if lockTable {
-		min := fn([]byte{0})
+		min := fn([]byte{})
 		max := fn(nil)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
@@ -714,7 +729,7 @@ func fetchVarlenaRows(
 	n := vec.Length()
 	data, area := vector.MustVarlenaRawData(vec)
 	if n == 1 {
-		if filter != nil &&
+		if vec.GetNulls().Contains(0) || filter != nil &&
 			!filter(0, filterCols) {
 			return false, nil, lock.Granularity_Row
 		}
@@ -727,7 +742,7 @@ func fetchVarlenaRows(
 		initialized := false
 		applied := 0
 		for i := 0; i < n; i++ {
-			if filter != nil &&
+			if vec.GetNulls().Contains(uint64(i)) || filter != nil &&
 				!filter(i, filterCols) {
 				continue
 			}
@@ -757,7 +772,7 @@ func fetchVarlenaRows(
 	}
 	rows := make([][]byte, 0, n)
 	for idx := range data {
-		if filter != nil &&
+		if vec.GetNulls().Contains(uint64(idx)) || filter != nil &&
 			!filter(idx, filterCols) {
 			continue
 		}
@@ -799,7 +814,7 @@ func fetchFixedRowsWithCompare[T any](
 	n := vec.Length()
 	values := vector.MustFixedColWithTypeCheck[T](vec)
 	if n == 1 {
-		if filter != nil && !filter(0, filterCols) {
+		if vec.GetNulls().Contains(0) || filter != nil && !filter(0, filterCols) {
 			return false, nil, lock.Granularity_Row
 		}
 		return true, [][]byte{fn(values[0])}, lock.Granularity_Row
@@ -809,7 +824,7 @@ func fetchFixedRowsWithCompare[T any](
 		initialized := false
 		applied := 0
 		for row, v := range values {
-			if filter != nil &&
+			if vec.GetNulls().Contains(uint64(row)) || filter != nil &&
 				!filter(row, filterCols) {
 				continue
 			}
@@ -838,7 +853,7 @@ func fetchFixedRowsWithCompare[T any](
 	}
 	rows := make([][]byte, 0, n)
 	for row, v := range values {
-		if filter != nil &&
+		if vec.GetNulls().Contains(uint64(row)) || filter != nil &&
 			!filter(row, filterCols) {
 			continue
 		}

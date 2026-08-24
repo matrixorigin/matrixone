@@ -30,10 +30,12 @@ import (
 // mockFileService is a mock implementation of fileservice.FileService for testing
 type mockFileService struct {
 	fileservice.FileService
-	deletedFiles sync.Map // map[string]int to track delete count per file
-	deleteCount  atomic.Int64
-	deleteCalls  atomic.Int64
-	deleteDelay  time.Duration
+	deletedFiles      sync.Map // map[string]int to track delete count per file
+	deleteCount       atomic.Int64
+	deleteCalls       atomic.Int64
+	deleteDelay       time.Duration
+	deleteBarrier     chan struct{}
+	deleteBarrierSize int64
 }
 
 func newMockFileService() *mockFileService {
@@ -41,7 +43,17 @@ func newMockFileService() *mockFileService {
 }
 
 func (m *mockFileService) Delete(ctx context.Context, filePaths ...string) error {
-	m.deleteCalls.Add(1)
+	deleteCalls := m.deleteCalls.Add(1)
+	if m.deleteBarrier != nil {
+		if deleteCalls == m.deleteBarrierSize {
+			close(m.deleteBarrier)
+		}
+		select {
+		case <-m.deleteBarrier:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
 	if m.deleteDelay > 0 {
 		time.Sleep(m.deleteDelay)
 	}
@@ -119,7 +131,9 @@ func TestDeleterDeduplication(t *testing.T) {
 // TestDeleterConcurrentDelete tests concurrent deletion with multiple workers
 func TestDeleterConcurrentDelete(t *testing.T) {
 	mockFS := newMockFileService()
-	mockFS.deleteDelay = 10 * time.Millisecond // Add delay to simulate S3 latency
+	const batchCount = int64(4)
+	mockFS.deleteBarrier = make(chan struct{})
+	mockFS.deleteBarrierSize = batchCount
 
 	// Save original values and restore after test
 	origBatchSize := deleteBatchSize
@@ -140,21 +154,17 @@ func TestDeleterConcurrentDelete(t *testing.T) {
 		paths[i] = fmt.Sprintf("object%d.data", i)
 	}
 
-	ctx := context.Background()
-	start := time.Now()
+	// No batch can finish until all four Delete calls have entered the barrier.
+	// This proves that the batches overlap without relying on scheduler timing.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	err := deleter.DeleteMany(ctx, "test-concurrent", paths)
-	duration := time.Since(start)
 
 	require.NoError(t, err)
 
-	// Verify all files were deleted
+	// Verify all four batches ran and all files were deleted.
+	assert.Equal(t, batchCount, mockFS.deleteCalls.Load())
 	assert.Equal(t, int64(20), mockFS.deleteCount.Load())
-
-	// With 4 workers and 4 batches, concurrent execution should be faster
-	// than sequential (4 * 10ms = 40ms sequential vs ~10ms concurrent)
-	// Allow some margin for test stability
-	assert.Less(t, duration, 35*time.Millisecond,
-		"Concurrent deletion should be faster than sequential")
 
 	// Verify each file was deleted exactly once
 	deletedFiles := mockFS.getDeletedFiles()

@@ -10,6 +10,22 @@ CHAR_LENGTH("にほんご")
 SELECT CHAR_LENGTH("Español");
 CHAR_LENGTH("Español")
 7
+SELECT LENGTH(_binary '你好'),
+CHAR_LENGTH(_binary '你好'),
+CHARACTER_LENGTH(_binary '你好');
+LENGTH(_binary '你好')	CHAR_LENGTH(_binary '你好')	CHARACTER_LENGTH(_binary '你好')
+6	6	6
+CREATE TABLE binary_char_length (
+b BINARY(8),
+vb VARBINARY(8),
+bl BLOB
+);
+INSERT INTO binary_char_length VALUES ('你好', '你好', '你好');
+SELECT CHAR_LENGTH(b), CHAR_LENGTH(vb), CHAR_LENGTH(bl)
+FROM binary_char_length;
+CHAR_LENGTH(b)	CHAR_LENGTH(vb)	CHAR_LENGTH(bl)
+8	6	6
+DROP TABLE binary_char_length;
 SELECT CHAR_LENGTH(NULL);
 CHAR_LENGTH(NULL)
 null

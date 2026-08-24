@@ -28,11 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func runTestWithQueryService(
@@ -47,6 +50,25 @@ func runTestWithQueryServiceHandler(
 	t *testing.T,
 	cn metadata.CNService,
 	migrateConnToHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	fn func(cc *clientConn, addr string),
+) {
+	runTestWithQueryServiceHandlers(t, cn, migrateConnToHandler, nil, fn)
+}
+
+func runTestWithQueryServiceResetHandler(
+	t *testing.T,
+	cn metadata.CNService,
+	resetSessionHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	fn func(cc *clientConn, addr string),
+) {
+	runTestWithQueryServiceHandlers(t, cn, nil, resetSessionHandler, fn)
+}
+
+func runTestWithQueryServiceHandlers(
+	t *testing.T,
+	cn metadata.CNService,
+	migrateConnToHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	resetSessionHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
 	fn func(cc *clientConn, addr string),
 ) {
 	sid := ""
@@ -108,7 +130,10 @@ func runTestWithQueryServiceHandler(
 				}
 			}
 			qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, migrateConnToHandler, false)
-			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, buf *morpc.Buffer) error {
+				if resetSessionHandler != nil {
+					return resetSessionHandler(ctx, req, resp, buf)
+				}
 				if req.ResetSessionRequest == nil {
 					return moerr.NewInternalError(ctx, "bad request")
 				}
@@ -161,6 +186,337 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 		cc.migration.setVarStmts = append(cc.migration.setVarStmts, "set a=1")
 		err = cc.migrateConnTo(sc, resp)
 		assert.NoError(t, err)
+	})
+}
+
+func TestQueryServiceMigrateToClearsReadDeadlineAfterControlReads(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		raw := &phaseDeadlineConn{Conn: local}
+		statements := make([]string, 0, 2)
+		sc := &deadlineRearmingServerConn{
+			ServerConn: newMockServerConn(raw),
+			raw:        raw,
+			statements: &statements,
+		}
+		defer sc.Close()
+
+		cc.migration.setVarStmts = []string{"set @mode = 'PIPES_AS_CONCAT'"}
+		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastAffectedRows: 7}))
+		assert.Equal(t, []string{
+			"/* cloud_nonuser */ set transferred=1;",
+			"set @mode = 'PIPES_AS_CONCAT'",
+		}, statements)
+		assert.True(t, raw.readDeadline().IsZero(),
+			"migration must clear the deadline armed by its final control read")
+	})
+}
+
+func TestQueryServiceMigrateToRejectsReadDeadlineClearFailure(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		raw := &phaseDeadlineConn{Conn: local, failClear: true}
+		sc := &deadlineRearmingServerConn{
+			ServerConn: newMockServerConn(raw),
+			raw:        raw,
+		}
+		defer sc.Close()
+
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{})
+		assert.ErrorContains(t, err, "read deadline clear failed")
+		assert.False(t, raw.readDeadline().IsZero(),
+			"a failed clear must not make the backend eligible for handoff")
+	})
+}
+
+func TestQueryServiceMigrateToCarriesTypedUserVariables(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		migration := req.MigrateConnToRequest
+		if migration == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		assert.True(t, migration.UserDefinedVarsExported)
+		assert.True(t, migration.UserDefinedVarsReplayable)
+		assert.True(t, migration.SystemVariablesReplayable)
+		assert.Len(t, migration.UserDefinedVars, 1)
+		assert.Equal(t, "ts0", migration.UserDefinedVars[0].Name)
+		assert.Equal(t, []string{"set time_zone = @ts0"}, migration.SetVarStmts)
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
+		c1, _ := net.Pipe()
+		sc := newMockServerConn(c1)
+		cc.migration.setVarStmts = []string{"set @ts0 = now()"}
+		cc.migration.systemSetVarStmts = []string{"set time_zone = @ts0"}
+		info := &pb.MigrateConnFromResponse{
+			UserDefinedVarsExported:       true,
+			UserDefinedVarsReplayable:     true,
+			SystemVariablesReplayable:     true,
+			UserLevelLockReleaseSupported: true,
+			UserDefinedVars: []*pb.MigrateUserDefinedVar{{
+				Name:  "ts0",
+				Value: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "stable-value"}}}},
+			}},
+		}
+		assert.NoError(t, cc.migrateConnTo(sc, info))
+	})
+}
+
+func TestQueryServiceMigrateToCarriesTypedSystemVariables(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		migration := req.MigrateConnToRequest
+		if migration == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		assert.True(t, migration.UserDefinedVarsExported)
+		assert.True(t, migration.SystemVariablesExported)
+		assert.Len(t, migration.SystemVariables, 1)
+		assert.Equal(t, "sql_mode", migration.SystemVariables[0].Name)
+		assert.Empty(t, migration.SetVarStmts)
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
+		c1, _ := net.Pipe()
+		sc := newMockServerConn(c1)
+		cc.migration.systemSetVarStmts = []string{"set sql_mode = @mode"}
+		info := &pb.MigrateConnFromResponse{
+			UserDefinedVarsExported:       true,
+			SystemVariablesExported:       true,
+			UserLevelLockReleaseSupported: true,
+			UserDefinedVars: []*pb.MigrateUserDefinedVar{{
+				Name:  "mode",
+				Value: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "PIPES_AS_CONCAT"}}}},
+			}},
+			SystemVariables: []*pb.MigrateSystemVariable{{
+				Name:  "sql_mode",
+				Value: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "ANSI_QUOTES"}}}},
+			}},
+		}
+		assert.NoError(t, cc.migrateConnTo(sc, info))
+	})
+}
+
+type recordingMigrationServerConn struct {
+	*mockServerConn
+	statements []string
+}
+
+func (s *recordingMigrationServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
+	s.statements = append(s.statements, stmt.s)
+	return s.mockServerConn.ExecStmt(stmt, resp)
+}
+
+func TestQueryServiceMigrateToFallsBackForPreV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		migration := req.MigrateConnToRequest
+		if migration == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		assert.False(t, migration.UserDefinedVarsExported)
+		assert.False(t, migration.SystemVariablesExported)
+		assert.Empty(t, migration.UserDefinedVars)
+		assert.Empty(t, migration.SystemVariables)
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		cc.migration.setVarStmts = []string{"set @mode = 'PIPES_AS_CONCAT'"}
+		info := &pb.MigrateConnFromResponse{
+			UserDefinedVarsExported:   true,
+			SystemVariablesExported:   true,
+			UserDefinedVarsReplayable: true,
+			SystemVariablesReplayable: true,
+		}
+		assert.NoError(t, cc.migrateConnTo(sc, info))
+		assert.Equal(t, []string{
+			"/* cloud_nonuser */ set transferred=1;",
+			"set @mode = 'PIPES_AS_CONCAT'",
+		}, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToAllowsOversizedSystemSnapshotForPreV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		cc.migration.setVarStmts = []string{"set optimizer_hints = 'legacy'"}
+		info := &pb.MigrateConnFromResponse{
+			LastAffectedRows:                7,
+			SystemVariablesSnapshotTooLarge: true,
+			SystemVariablesReplayable:       true,
+			UserLevelLockReleaseSupported:   true,
+		}
+		assert.NoError(t, cc.migrateConnTo(sc, info))
+		assert.Equal(t, []string{
+			"/* cloud_nonuser */ set transferred=1;",
+			"set optimizer_hints = 'legacy'",
+		}, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToRejectsOversizedSystemSnapshotForV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		info := &pb.MigrateConnFromResponse{
+			LastAffectedRows:                7,
+			SystemVariablesSnapshotTooLarge: true,
+			SystemVariablesReplayable:       true,
+			UserLevelLockReleaseSupported:   true,
+		}
+		err := cc.migrateConnTo(sc, info)
+		assert.ErrorContains(t, err, "snapshot exceeds the connection migration size limit")
+		assert.Empty(t, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToRejectsOversizedUserSnapshotForV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		info := &pb.MigrateConnFromResponse{
+			LastAffectedRows:                7,
+			UserDefinedVarsSnapshotTooLarge: true,
+			UserDefinedVarsReplayable:       true,
+			UserLevelLockReleaseSupported:   true,
+		}
+		err := cc.migrateConnTo(sc, info)
+		assert.ErrorContains(t, err, "typed user variables because the snapshot exceeds")
+		assert.Empty(t, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToRejectsUnreplayableTypedStateForPreV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		info := &pb.MigrateConnFromResponse{
+			UserDefinedVarsExported:       true,
+			UserDefinedVarsReplayable:     false,
+			UserDefinedVars:               []*pb.MigrateUserDefinedVar{{Name: "v"}},
+			UserLevelLockReleaseSupported: true,
+		}
+		err := cc.migrateConnTo(sc, info)
+		assert.ErrorContains(t, err, "complete raw replay")
+		assert.Empty(t, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToRejectsUnreplayableTypedSystemStateForPreV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		info := &pb.MigrateConnFromResponse{
+			SystemVariablesExported:       true,
+			SystemVariablesReplayable:     false,
+			SystemVariables:               []*pb.MigrateSystemVariable{{Name: "optimizer_hints"}},
+			UserLevelLockReleaseSupported: true,
+		}
+		err := cc.migrateConnTo(sc, info)
+		assert.ErrorContains(t, err, "complete raw replay")
+		assert.Empty(t, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToReplaysRawUserStateWhenTypedUserSnapshotMissing(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		migration := req.MigrateConnToRequest
+		if migration == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		assert.False(t, migration.UserDefinedVarsExported)
+		assert.True(t, migration.SystemVariablesExported)
+		assert.Empty(t, migration.SetVarStmts)
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		cc.migration.setVarStmts = []string{"set @mode = 'PIPES_AS_CONCAT'"}
+		info := &pb.MigrateConnFromResponse{
+			SystemVariablesExported: true,
+		}
+		assert.NoError(t, cc.migrateConnTo(sc, info))
+		assert.Equal(t, []string{
+			"/* cloud_nonuser */ set transferred=1;",
+			"set @mode = 'PIPES_AS_CONCAT'",
+		}, sc.statements)
 	})
 }
 
@@ -287,6 +643,11 @@ func TestMigrateConnToContextCancelsReplay(t *testing.T) {
 type migrationUserLockQueryClient struct {
 	userLevelLocks                []*pb.UserLevelLock
 	userLevelLockReleaseSupported bool
+	prepareStmts                  []*pb.PrepareStmt
+	migrateToPrepareStmts         []*pb.PrepareStmt
+	migrateFromErr                error
+	preparedStmtLongDataChecked   bool
+	releaseCount                  int
 }
 
 func (c *migrationUserLockQueryClient) ServiceID() string {
@@ -296,24 +657,175 @@ func (c *migrationUserLockQueryClient) ServiceID() string {
 func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error) {
 	switch req.CmdMethod {
 	case pb.CmdMethod_MigrateConnFrom:
+		if c.migrateFromErr != nil {
+			return nil, c.migrateFromErr
+		}
 		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{
 			DB:                            "d1",
+			PrepareStmts:                  append([]*pb.PrepareStmt(nil), c.prepareStmts...),
 			UserLevelLocks:                c.userLevelLocks,
 			UserLevelLockReleaseSupported: c.userLevelLockReleaseSupported,
+			PreparedStmtLongDataChecked:   c.preparedStmtLongDataChecked,
 		}}, nil
+	case pb.CmdMethod_MigrateConnTo:
+		c.migrateToPrepareStmts = append(
+			[]*pb.PrepareStmt(nil), req.MigrateConnToRequest.PrepareStmts...)
+		return &pb.Response{MigrateConnToResponse: &pb.MigrateConnToResponse{Success: true}}, nil
 	default:
 		return nil, moerr.NewInternalError(ctx, "unexpected request")
 	}
+}
+
+func TestMigrateConnFromReblocksLongDataRejectedByOldCN(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	for _, test := range []struct {
+		name             string
+		queryClient      *migrationUserLockQueryClient
+		wantReleaseCount int
+	}{
+		{
+			name: "current CN reports staged data",
+			queryClient: &migrationUserLockQueryClient{
+				migrateFromErr: moerr.GetOkExpectedNotSafeToStartTransfer(),
+			},
+		},
+		{
+			name:             "older CN lacks authoritative check",
+			queryClient:      &migrationUserLockQueryClient{},
+			wantReleaseCount: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tun := &tunnel{}
+			tun.trackClientRequest(makeStmtCommandPacket(
+				frontend.COM_STMT_SEND_LONG_DATA, 41, 0, 0, 'x'))
+			tun.trackClientRequest(makeSimplePacket("select 1"))
+			tun.trackServerResponse(makeOKPacket(8))
+			require.False(t, tun.hasUntransferableClientState())
+
+			cc, closeFn := createNewClientConn(t)
+			defer closeFn()
+			ccc := cc.(*clientConn)
+			ccc.tun = tun
+			ccc.queryClient = test.queryClient
+			ccc.moCluster = cluster
+
+			_, err := ccc.migrateConnFromContext(context.Background(), "pipe")
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+			require.True(t, tun.hasUntransferableClientState(),
+				"the old CN did not prove staged data absent, so another response fence is required")
+			require.Equal(t, test.wantReleaseCount, test.queryClient.releaseCount)
+		})
+	}
+}
+
+func TestMigrateConnFromAcceptsAuthoritativelyReconciledLongData(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	tun := &tunnel{}
+	tun.trackClientRequest(makeStmtCommandPacket(
+		frontend.COM_STMT_SEND_LONG_DATA, 41, 0, 0, 'x'))
+	tun.trackClientRequest(makeSimplePacket("deallocate prepare __mo_stmt_id_41"))
+	tun.trackServerResponse(makeOKPacket(8))
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	ccc.tun = tun
+	ccc.queryClient = &migrationUserLockQueryClient{
+		preparedStmtLongDataChecked: true,
+	}
+	ccc.moCluster = cluster
+
+	_, err := ccc.migrateConnFromContext(context.Background(), "pipe")
+	require.NoError(t, err)
+	require.Equal(t, 1, ccc.queryClient.(*migrationUserLockQueryClient).releaseCount)
+	require.True(t, tun.hasUnsafeClientState(),
+		"staged-data bookkeeping remains non-cacheable until migration commits")
+	tun.clearMigratedStatementState()
+	require.False(t, tun.hasUnsafeClientState())
 }
 
 func (c *migrationUserLockQueryClient) NewRequest(method pb.CmdMethod) *pb.Request {
 	return &pb.Request{CmdMethod: method}
 }
 
-func (c *migrationUserLockQueryClient) Release(response *pb.Response) {}
+func (c *migrationUserLockQueryClient) Release(response *pb.Response) {
+	c.releaseCount++
+}
 
 func (c *migrationUserLockQueryClient) Close() error {
 	return nil
+}
+
+func TestMigrateConnFromFiltersCloseThatBackendHasNotDispatched(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	const closedID uint32 = 41
+	const liveID uint32 = 42
+	tun := &tunnel{}
+	commit := tun.trackClientRequest(
+		makeStmtCommandPacket(frontend.COM_STMT_CLOSE, closedID))
+	tun.commitClientRequest(commit)
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	ccc.tun = tun
+	queryClient := &migrationUserLockQueryClient{
+		userLevelLockReleaseSupported: true,
+		prepareStmts: []*pb.PrepareStmt{
+			{Name: frontend.GetPrepareStmtName(closedID), SQL: "select 41"},
+			{Name: frontend.GetPrepareStmtName(liveID), SQL: "select 42"},
+		},
+	}
+	ccc.queryClient = queryClient
+	ccc.moCluster = cluster
+
+	// Model the ordering where MigrateConnFrom exports the old session before
+	// the backend dispatches the already-forwarded COM_STMT_CLOSE.
+	resp, err := ccc.migrateConnFromContext(context.Background(), "pipe")
+	assert.NoError(t, err)
+	if assert.Len(t, resp.PrepareStmts, 1) {
+		assert.Equal(t, frontend.GetPrepareStmtName(liveID), resp.PrepareStmts[0].Name)
+	}
+	assert.True(t, tun.hasUnsafeClientState(),
+		"the old backend must remain non-cacheable until migration completes")
+
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	assert.NoError(t, ccc.migrateConnContext(
+		context.Background(), "pipe", newMockServerConn(local)))
+	if assert.Len(t, queryClient.migrateToPrepareStmts, 1) {
+		assert.Equal(t, frontend.GetPrepareStmtName(liveID),
+			queryClient.migrateToPrepareStmts[0].Name)
+	}
+	assert.False(t, tun.hasUnsafeClientState(),
+		"successful migration carried the CLOSE into the new backend generation")
 }
 
 func TestMigrateConnContextRejectsUserLevelLocks(t *testing.T) {

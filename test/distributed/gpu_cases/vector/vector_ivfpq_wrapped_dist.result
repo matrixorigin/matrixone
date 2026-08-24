@@ -1,0 +1,41 @@
+SET experimental_ivfpq_index = 1;
+SET ivfpq_threads_build = 6;
+SET kmeans_train_percent = 100;
+SET probe_limit = 16;
+drop database if exists ivfpq_wrapped;
+create database ivfpq_wrapped;
+use ivfpq_wrapped;
+create table t (id bigint primary key, v vecf32(8));
+insert into t values
+(1,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),
+(2,'[0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]'),
+(3,'[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]'),
+(4,'[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5]'),
+(5,'[0.11,0.21,0.31,0.41,0.51,0.61,0.71,0.81]');
+create index idx using ivfpq on t(v) lists=10 op_type 'vector_l2_ops' m=8;
+select id from t order by l2_distance(v,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') limit 1;
+➤ id[-5,64,0]  𝄀
+1
+select id, cast(l2_distance(v,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') as decimal(10,3)) as d
+from t order by l2_distance(v,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') limit 1;
+➤ id[-5,64,0]  ¦  d[3,10,3]  𝄀
+1  ¦  0.000
+select id, round(l2_distance(v,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),3) as d
+from t order by l2_distance(v,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') limit 1;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0
+select id, round(l2_distance(v,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]')+1,3) as d
+from t order by l2_distance(v,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') limit 1;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  1.0
+select id, round(l2_distance(v,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]'),3) as d from t order by d limit 1;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0
+select id from t order by cast(l2_distance(v,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') as decimal(10,3)) limit 1;
+➤ id[-5,64,0]  𝄀
+1
+select id, round(l2_distance(v,'[0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2]'),4) as d_to_b
+from t order by l2_distance(v,'[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8]') limit 1;
+➤ id[-5,64,0]  ¦  d_to_b[8,53,31]  𝄀
+1  ¦  1.3266
+drop database ivfpq_wrapped;

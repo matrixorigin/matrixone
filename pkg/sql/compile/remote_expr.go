@@ -119,6 +119,51 @@ func foldVarExprsInRemoteRunScope(s *Scope, proc *process.Process) (*Scope, bool
 	return copied, folded, err
 }
 
+func copyBlockFiltersForRemoteRun(s *Scope) *Scope {
+	if s == nil {
+		return nil
+	}
+	var copied *Scope
+	preScopesCopied := false
+	var blockFilters []*plan.Expr
+	if s.DataSource != nil {
+		// DataSource.BlockFilterList contains coordinator-owned Fold IDs after
+		// InitAllDataSource. Send the original expressions from the plan node so
+		// the remote Compile can create and evaluate its own Fold executors. This
+		// also preserves empty scalar literals across protobuf serialization.
+		if s.DataSource.node != nil && len(s.DataSource.node.BlockFilterList) > 0 {
+			blockFilters = s.DataSource.node.BlockFilterList
+		} else {
+			blockFilters = s.DataSource.BlockFilterList
+		}
+	}
+	if len(blockFilters) > 0 {
+		value := *s
+		dataSource := *s.DataSource
+		dataSource.BlockFilterList = plan2.DeepCopyExprList(blockFilters)
+		value.DataSource = &dataSource
+		copied = &value
+	}
+	for i := range s.PreScopes {
+		pre := copyBlockFiltersForRemoteRun(s.PreScopes[i])
+		if pre != s.PreScopes[i] {
+			if copied == nil {
+				value := *s
+				copied = &value
+			}
+			if !preScopesCopied {
+				copied.PreScopes = append([]*Scope(nil), s.PreScopes...)
+				preScopesCopied = true
+			}
+			copied.PreScopes[i] = pre
+		}
+	}
+	if copied == nil {
+		return s
+	}
+	return copied
+}
+
 func copyScopeForVarExprFold(s *Scope) *Scope {
 	if s == nil {
 		return nil

@@ -43,6 +43,9 @@ type RemoteCache struct {
 	keyRouter client.KeyRouter[query.CacheKey]
 	// We only init the key router for the first time.
 	init sync.Once
+	// allocator gives validated remote data independent ownership and applies
+	// the destination FileService's existing cache-capacity guard.
+	allocator CacheDataAllocator
 }
 
 var _ IOVectorCache = new(RemoteCache)
@@ -51,6 +54,13 @@ func NewRemoteCache(client client.QueryClient, factory KeyRouterFactory[query.Ca
 	return &RemoteCache{
 		client:           client,
 		keyRouterFactory: factory,
+		allocator:        DefaultCacheDataAllocator(),
+	}
+}
+
+func (r *RemoteCache) setAllocator(allocator CacheDataAllocator) {
+	if allocator != nil {
+		r.allocator = allocator
 	}
 }
 
@@ -145,12 +155,33 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 						continue
 					}
 					if cacheData.Hit {
-						if int64(len(cacheData.Data)) != vector.Entries[idx].Size {
+						entry := &vector.Entries[idx]
+						expectedSize := entry.Size
+						if entry.CachedDataSize > 0 {
+							expectedSize = entry.CachedDataSize
+						}
+						if int64(len(cacheData.Data)) != expectedSize {
 							continue
 						}
-						vector.Entries[idx].done = true
-						vector.Entries[idx].CachedData = &Bytes{bytes: cacheData.Data}
-						vector.Entries[idx].fromCache = r
+
+						var data fscache.Data
+						if entry.ValidateCacheData == nil {
+							data = NewBytes(cacheData.Data)
+						} else {
+							// The RPC response is released below. Give validated cache
+							// representations independent storage before sealing them.
+							owned := r.allocator.CopyToCacheData(ctx, cacheData.Data)
+							validated, validateErr := entry.ValidateCacheData(owned)
+							if validateErr != nil || validated == nil {
+								owned.Release()
+								continue
+							}
+							data = validated
+						}
+
+						entry.done = true
+						entry.CachedData = data
+						entry.fromCache = r
 						numHit++
 					}
 					seen[idx] = struct{}{}

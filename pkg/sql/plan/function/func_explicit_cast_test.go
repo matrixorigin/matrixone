@@ -20,8 +20,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,6 +62,93 @@ func TestExplicitCastStringIntegerOverflow(t *testing.T) {
 			succeed, info := testCase.Run()
 			require.True(t, succeed, info)
 		})
+	}
+}
+
+func TestExplicitCastStringIntegerPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name   string
+		target types.Type
+		zero   any
+		expect any
+	}{
+		{
+			name:   "signed",
+			target: types.T_int64.ToType(),
+			zero:   []int64{},
+			expect: []int64{7, 7, 1, -10, 0, 0, 0},
+		},
+		{
+			name:   "unsigned",
+			target: types.T_uint64.ToType(),
+			zero:   []uint64{},
+			expect: []uint64{7, 7, 1, math.MaxUint64 - 9, 0, 0, 0},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"7e0", "7e+2", "1.5e0", "  -10suffix  ", ".5e0", "-.5e0", "+.5e+2"}, nil),
+				NewFunctionTestInput(test.target, test.zero, nil),
+			}
+			expect := NewFunctionTestResult(test.target, false, test.expect, nil)
+			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	_, err := parseSignedExplicitCastString("0x", 64)
+	require.Error(t, err)
+	_, err = parseUnsignedExplicitCastString("-0b", 64)
+	require.Error(t, err)
+}
+
+func TestExplicitCastStringFloatPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"  -1.5x  ", "12abc"}, nil),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{-1.5, 12}, nil)
+	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
+
+type numericWarning struct {
+	code uint16
+	msg  string
+}
+
+type numericWarningSession struct {
+	warnings []numericWarning
+}
+
+func (*numericWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*numericWarningSession) AddTempTable(string, string, string)        {}
+func (*numericWarningSession) RemoveTempTable(string, string)             {}
+func (*numericWarningSession) RemoveTempTableByRealName(string)           {}
+func (*numericWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+func (s *numericWarningSession) AppendWarningDiagnostic(code uint16, msg string) {
+	s.warnings = append(s.warnings, numericWarning{code: code, msg: msg})
+}
+
+func TestNumericStringPrefixWarning(t *testing.T) {
+	session := &numericWarningSession{}
+	proc := &process.Process{Session: session}
+
+	appendNumericCoercionWarning(proc, "12abc")
+	appendNumericCoercionWarning(proc, "abc")
+	appendNumericCoercionWarning(proc, "")
+	appendNumericCoercionWarning(proc, "12")
+
+	require.Len(t, session.warnings, 2)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+		require.Contains(t, warning.msg, "Truncated incorrect DOUBLE value")
 	}
 }
 

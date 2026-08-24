@@ -114,10 +114,19 @@ func (store *replayTxnStore) registerPreparedDMLTables(txn txnif.AsyncTxn) {
 	for _, record := range dirty.Tables {
 		db, err := store.catalog.GetDatabaseByID(record.DbID)
 		if err != nil {
+			// The checkpoint-restored catalog may have GCed a database that
+			// an idempotently replayed dirty-table memo still references.
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				continue
+			}
 			panic(err)
 		}
 		table, err := db.GetTableEntryByID(record.ID)
 		if err != nil {
+			// Keep replay idempotent for tables removed by the checkpoint.
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				continue
+			}
 			panic(err)
 		}
 		table.RegisterReplayedPreparedDML(store.preparedTxnID)

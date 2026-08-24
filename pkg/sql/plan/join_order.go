@@ -171,7 +171,16 @@ func isEquiCond2(expr *plan.Expr) bool {
 		return false
 	}
 	lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
-	return lpos != -1 && rpos != -1 && lpos != rpos
+	if lpos == 0 && rpos == 1 {
+		return true
+	}
+	if lpos == 1 && rpos == 0 {
+		// Keep the executor contract identical before and after remapping: the
+		// probe/left expression is always argument 0.
+		e.F.Args[0], e.F.Args[1] = e.F.Args[1], e.F.Args[0]
+		return true
+	}
+	return false
 }
 
 func IsEqualFunc(id int64) bool {

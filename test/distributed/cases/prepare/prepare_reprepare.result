@@ -1,0 +1,52 @@
+prepare stale_stmt from 'select 77';
+set @bad_prepare_sql = 'select * from missing_prepare_table';
+prepare stale_stmt from @bad_prepare_sql;
+SQL parser error: table "missing_prepare_table" does not exist
+execute stale_stmt;
+invalid state prepared statement 'stale_stmt' does not exist
+prepare stale_stmt from 'select 88';
+execute stale_stmt;
+➤ 88[-5,64,0]  𝄀
+88
+set @bad_prepare_sql = 'select from';
+prepare stale_stmt from @bad_prepare_sql;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from";
+execute stale_stmt;
+invalid state prepared statement 'stale_stmt' does not exist
+prepare stale_stmt from 'select 99';
+prepare stale_stmt from @missing_prepare_sql;
+internal error: the user variable missing_prepare_sql does not exist
+execute stale_stmt;
+invalid state prepared statement 'stale_stmt' does not exist
+prepare stale_stmt from 'select 100';
+execute stale_stmt;
+➤ 100[-5,64,0]  𝄀
+100
+deallocate prepare stale_stmt;
+prepare S from 'select 77';
+set @bad_prepare_sql = 'select * from missing_prepare_table';
+prepare s from @bad_prepare_sql;
+SQL parser error: table "missing_prepare_table" does not exist
+execute S;
+invalid state prepared statement 's' does not exist
+prepare active_direct from 'select 101';
+begin;
+prepare active_direct from select * from missing_prepare_table;
+SQL parser error: table "missing_prepare_table" does not exist
+execute active_direct;
+invalid state prepared statement 'active_direct' does not exist
+rollback;
+prepare active_string from 'select 102';
+begin;
+prepare active_string from 'select from';
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from";
+execute active_string;
+invalid state prepared statement 'active_string' does not exist
+rollback;
+prepare active_variable from 'select 103';
+begin;
+prepare active_variable from @bad_prepare_sql;
+SQL parser error: table "missing_prepare_table" does not exist
+execute active_variable;
+invalid state prepared statement 'active_variable' does not exist
+rollback;

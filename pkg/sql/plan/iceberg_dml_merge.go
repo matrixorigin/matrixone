@@ -471,7 +471,10 @@ func rewriteIcebergMergeProjection(ctx CompilerContext, query *planpb.Query, cla
 	tableDef := DeepCopyTableDef(dmlTableDef, true)
 	actionCol := &planpb.ColDef{
 		Name: icebergapi.DMLMergeActionColumnName,
-		Typ:  planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: tableDef.Name},
+		Typ: planpb.Type{
+			Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: tableDef.Name,
+			Charset: uint32(types.CharsetUTF8),
+		},
 	}
 	tableDef.Cols = append(tableDef.Cols, actionCol)
 	root.TableDef = tableDef

@@ -147,6 +147,14 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			if cannotFold {
 				return expr
 			}
+			requiresStringProvenance, err := plan.RequiresMORPCVersion23StringProvenance(exprList)
+			if err != nil || requiresStringProvenance {
+				// LiteralVec uses the stable Vector wire format, which cannot carry
+				// per-item runtime string domains. Keep the literal list executable
+				// and visible to the remote protocol capability analysis.
+				return expr
+			}
+			isSerialized := ContainsSerializedLiteral(exprList)
 
 			vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
 			if err != nil {
@@ -168,8 +176,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Vec{
 					Vec: &plan.LiteralVec{
-						Len:  int32(vec.Length()),
-						Data: data,
+						Len:          int32(vec.Length()),
+						Data:         data,
+						IsSerialized: isSerialized,
 					},
 				},
 			}
@@ -237,6 +246,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if c == nil {
 		return expr
 	}
+	PreserveFoldedLiteralStringDomain(expr, c)
+
+	MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 
 	if f.IsRealTimeRelated() {
 		c.Src = &plan.Expr{
@@ -300,10 +312,58 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	// For example, TIMESTAMPADD with DATE input returns DATETIME type (from retType),
 	// but the actual vector type might be DATETIME (after TempSetType) or DATE (before TempSetType)
 	// We should preserve the retType (DATETIME) to ensure consistency
-	expr.Typ = plan.Type{Id: expr.Typ.Id, Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+	expr.Typ.Scale = vec.GetType().Scale
+	expr.Typ.Width = vec.GetType().Width
 	expr.Expr = ec
 
 	return expr
+}
+
+// PreserveFoldedLiteralStringDomain keeps a binder-inserted cast transparent to
+// selected-value provenance when the cast itself is materialized as a literal.
+// Explicit CAST uses overload 1 and remains a semantic boundary.
+func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
+	if expr == nil || literal == nil || literal.Isnull {
+		return
+	}
+	if _, ok := literal.Value.(*plan.Literal_Sval); !ok {
+		return
+	}
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) == 0 {
+		return
+	}
+	fid, overload := function.DecodeOverloadID(fn.GetFunc().GetObj())
+	if fid != function.CAST || overload != 0 {
+		return
+	}
+	source := fn.Args[0]
+	if source == nil || !types.T(source.Typ.Id).IsMySQLString() ||
+		!types.T(expr.Typ.Id).IsMySQLString() {
+		return
+	}
+
+	sourceDomain := types.StaticStringDomain(types.NewWithCharset(
+		types.T(source.Typ.Id), source.Typ.Width, source.Typ.Scale, uint8(source.Typ.Charset)))
+	if sourceLiteral := source.GetLit(); sourceLiteral != nil {
+		switch sourceLiteral.LiteralForm {
+		case plan.StringLiteralForm_STRING_LITERAL_TEXT:
+			sourceDomain = types.StringDomainText
+		case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+			plan.StringLiteralForm_STRING_LITERAL_HEX,
+			plan.StringLiteralForm_STRING_LITERAL_BIT:
+			sourceDomain = types.StringDomainBinary
+		}
+	}
+	targetDomain := types.StaticStringDomain(types.NewWithCharset(
+		types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset)))
+	if sourceDomain == targetDomain {
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_NONE
+	} else if sourceDomain == types.StringDomainBinary {
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	} else {
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+	}
 }
 
 func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Literal {
@@ -385,11 +445,20 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		}
 	case types.T_varchar, types.T_char,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink, types.T_geometry:
-		return &plan.Literal{
+		literal := &plan.Literal{
 			Value: &plan.Literal_Sval{
 				Sval: vec.GetStringAt(int(row)),
 			},
 		}
+		if vec.GetType().Oid.IsMySQLString() {
+			switch vec.GetRuntimeStringDomainAt(int(row)) {
+			case types.RuntimeStringText:
+				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+			case types.RuntimeStringBinary:
+				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+			}
+		}
+		return literal
 	case types.T_json:
 		if !transAll {
 			return nil
@@ -629,7 +698,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 			}
 		case types.T_enum:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_EnumVal); ok {
-				val := val.EnumVal
+				val := types.Enum(val.EnumVal)
 				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
 				return true, err
 			} else {
@@ -661,6 +730,52 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 		return false, err
 	}
+}
+
+// MarkFoldedLiteralSerialized preserves tuple-encoding provenance across
+// constant folding. A direct serial result always acquires provenance. An
+// outer function retains it only when its output bytes exactly match a marked
+// input literal, which covers representation-preserving casts and selectors
+// without incorrectly marking transformed values. IsBin remains reserved for
+// SQL hex and bit literal execution semantics.
+func MarkFoldedLiteralSerialized(overloadID int64, args []*plan.Expr, literal *plan.Literal) {
+	if literal == nil || literal.Isnull {
+		return
+	}
+
+	canonicalOverloadID := overloadID & function.DistinctMask
+	if canonicalOverloadID == function.SerialFunctionEncodeID ||
+		canonicalOverloadID == function.SerialFullFunctionEncodeID {
+		literal.IsSerialized = true
+		return
+	}
+
+	result, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok {
+		return
+	}
+	for _, arg := range args {
+		input := arg.GetLit()
+		if input == nil || !input.IsSerialized {
+			continue
+		}
+		if serialized, ok := input.Value.(*plan.Literal_Sval); ok &&
+			serialized.Sval == result.Sval {
+			literal.IsSerialized = true
+			return
+		}
+	}
+}
+
+// ContainsSerializedLiteral reports whether folding a literal list into a
+// LiteralVec must retain tuple-encoding provenance for diagnostic consumers.
+func ContainsSerializedLiteral(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if literal := expr.GetLit(); literal != nil && literal.IsSerialized {
+			return true
+		}
+	}
+	return false
 }
 
 func isSqlModeDependentTemporalCast(fn *plan.Function) bool {

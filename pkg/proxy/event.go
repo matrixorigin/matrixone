@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -109,7 +110,7 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 			return makeKillEvent(sql, s.ConnectionId), true
 		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
-			return makeSetVarEvent(sql), false
+			return makeSetVarEvent(sql, s), false
 		case *tree.UpgradeStatement:
 			return makeUpgradeEvent(sql), true
 		default:
@@ -158,18 +159,68 @@ type setVarEvent struct {
 	baseEvent
 	// stmt is the statement that will be sent to server.
 	stmt string
+	// systemStmt excludes user-variable assignments. On protocol v22 it is
+	// replayed only after the target CN has installed the evaluated user values.
+	systemStmt string
 }
 
 // makeSetVarEvent creates an event with TypeSetVar type.
-func makeSetVarEvent(stmt string) IEvent {
+func makeSetVarEvent(stmt string, parsed *tree.SetVar) IEvent {
+	systemAssignments := make([]*tree.VarAssignmentExpr, 0, len(parsed.Assignments))
+	for _, assignment := range parsed.Assignments {
+		if assignment.System || assignment.SetNames {
+			systemAssignments = append(systemAssignments, assignment)
+		}
+	}
+	systemStmt := ""
+	if len(systemAssignments) > 0 {
+		systemStmt = formatSystemSetVarStmt(systemAssignments)
+	}
 	e := &setVarEvent{
 		baseEvent: baseEvent{
 			waitC: make(chan struct{}),
 		},
-		stmt: stmt,
+		stmt:       stmt,
+		systemStmt: systemStmt,
 	}
 	e.typ = TypeSetVar
 	return e
+}
+
+func formatSystemSetVarStmt(assignments []*tree.VarAssignmentExpr) string {
+	parts := make([]string, 0, len(assignments))
+	for _, assignment := range assignments {
+		if assignment.SetNames {
+			part := "names"
+			if assignment.Value != nil {
+				part += " " + tree.String(assignment.Value, dialect.MYSQL)
+			}
+			if assignment.Reserved != nil {
+				part += " collate " + tree.String(assignment.Reserved, dialect.MYSQL)
+			}
+			parts = append(parts, part)
+			continue
+		}
+
+		copy := *assignment
+		if strings.EqualFold(strings.TrimPrefix(copy.Name, "@@"), "transaction_isolation") ||
+			strings.EqualFold(strings.TrimPrefix(copy.Name, "@@"), "tx_isolation") {
+			name := strings.TrimPrefix(copy.Name, "@@")
+			switch copy.TxnScope {
+			case tree.TransactionScopeNext:
+				copy.Name = "@@" + name
+			case tree.TransactionScopeSession:
+				copy.Name = "session " + name
+			case tree.TransactionScopeGlobal:
+				copy.Global = true
+			}
+		}
+		parts = append(parts, tree.String(&copy, dialect.MYSQL))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "set " + strings.Join(parts, ", ")
 }
 
 type quitEvent struct {

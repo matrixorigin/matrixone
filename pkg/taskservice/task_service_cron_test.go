@@ -73,15 +73,17 @@ func TestRetryScheduleCronTaskAllFailed(t *testing.T) {
 
 		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
 
-		s.StartScheduleCronTask()
-		defer s.StopScheduleCronTask()
+		cronTasks, err := s.QueryCronTask(ctx)
+		require.NoError(t, err)
+		require.Len(t, cronTasks, 1)
+		job, err := newCronJob(cronTasks[0], s)
+		require.NoError(t, err)
 
-		// Wait for the cron job to trigger and exhaust all retries
-		time.Sleep(time.Second * 10)
-
-		// Verify that retries were attempted (should be cronTaskTriggerMaxRetries = 3)
-		assert.GreaterOrEqual(t, int(failCount.Load()), cronTaskTriggerMaxRetries,
-			"should have attempted at least %d retries", cronTaskTriggerMaxRetries)
+		// Exercise one trigger synchronously so another scheduler tick cannot
+		// race the exact retry-count assertion. Backoff duration is orthogonal
+		// to retry behavior and is zero only for this focused test.
+		job.doRunWithRetryBackoff(0)
+		require.Equal(t, int32(cronTaskTriggerMaxRetries), failCount.Load())
 
 		// Verify that no async task was created due to persistent failure
 		tasks, err := store.QueryAsyncTask(ctx, WithTaskParentTaskIDCond(EQ, "t1"))

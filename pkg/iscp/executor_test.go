@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -69,27 +71,53 @@ func TestRetryReturnsCanceledContextDuringAttempt(t *testing.T) {
 }
 
 func TestRetryBackoffInterruptedByContextCancellation(t *testing.T) {
+	const firstInterval = 20 * time.Millisecond
+
 	for _, cancelAfterCalls := range []int{1, 2} {
 		t.Run(fmt.Sprintf("backoff-%d", cancelAfterCalls), func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
 
-			calls := 0
-			start := time.Now()
-			err := retry(ctx, func() error {
-				calls++
-				if calls == cancelAfterCalls {
-					go func() {
-						time.Sleep(10 * time.Millisecond)
-						cancel()
-					}()
+				type retryResult struct {
+					err   error
+					calls int
 				}
-				return errors.New("retryable")
-			}, 3, 20*time.Millisecond, time.Hour)
+				attemptC := make(chan int)
+				resultC := make(chan retryResult, 1)
+				start := time.Now()
+				go func() {
+					calls := 0
+					err := retry(ctx, func() error {
+						calls++
+						attemptC <- calls
+						return errors.New("retryable")
+					}, 3, firstInterval, time.Hour)
+					resultC <- retryResult{err: err, calls: calls}
+				}()
 
-			require.Equal(t, cancelAfterCalls, calls)
-			require.ErrorIs(t, err, context.Canceled)
-			require.Less(t, time.Since(start), time.Second)
+				for completedCalls := 1; completedCalls <= cancelAfterCalls; completedCalls++ {
+					require.Equal(t, completedCalls, <-attemptC)
+					if completedCalls < cancelAfterCalls {
+						time.Sleep(firstInterval << (completedCalls - 1))
+					}
+				}
+
+				// Freeze virtual time after the target attempt has entered its
+				// backoff, then cancel without allowing that timer to elapse.
+				synctest.Wait()
+				cancel()
+
+				result := <-resultC
+				require.Equal(t, cancelAfterCalls, result.calls)
+				require.ErrorIs(t, result.err, context.Canceled)
+
+				wantElapsed := time.Duration(0)
+				for completedCalls := 1; completedCalls < cancelAfterCalls; completedCalls++ {
+					wantElapsed += firstInterval << (completedCalls - 1)
+				}
+				require.Equal(t, wantElapsed, time.Since(start))
+			})
 		})
 	}
 }
@@ -228,6 +256,64 @@ func TestMarkIterationPendingIsAtomic(t *testing.T) {
 	require.Equal(t, ISCPJobState_Pending, table.jobs[JobKey{JobName: "job-1", JobID: 1}].state)
 	require.Equal(t, uint64(7), table.jobs[JobKey{JobName: "job-2", JobID: 2}].currentLSN)
 	require.Equal(t, ISCPJobState_Pending, table.jobs[JobKey{JobName: "job-2", JobID: 2}].state)
+}
+
+func TestTryFlushWatermarkSerializesWithReaders(t *testing.T) {
+	table := NewTableEntry(nil, 1, 2, 3, "db", "table")
+	jobKey := JobKey{JobName: "job", JobID: 1}
+	table.jobs[jobKey] = NewJobEntry(
+		table,
+		jobKey.JobName,
+		&JobSpec{},
+		jobKey.JobID,
+		types.BuildTS(1, 0),
+		ISCPJobState_Pending,
+		0,
+	)
+	table.mu.RLock()
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		table.tryFlushWatermark(context.Background(), nil, time.Hour)
+		close(done)
+	}()
+	<-started
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-done:
+			table.mu.RUnlock()
+			t.Fatal("watermark flush completed while a reader held the table lock")
+		case <-deadline.C:
+			table.mu.RUnlock()
+			t.Fatal("watermark flush did not wait as an exclusive writer")
+		default:
+			if table.mu.TryRLock() {
+				table.mu.RUnlock()
+				runtime.Gosched()
+				continue
+			}
+		}
+		break
+	}
+
+	select {
+	case <-done:
+		table.mu.RUnlock()
+		t.Fatal("watermark flush completed before the existing reader released the table lock")
+	default:
+	}
+
+	table.mu.RUnlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watermark flush did not complete after the reader released the table lock")
+	}
 }
 
 func TestISCPRecoveryNormalizesPreRepairSnapshot(t *testing.T) {

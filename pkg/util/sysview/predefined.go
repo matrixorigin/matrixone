@@ -16,6 +16,7 @@ package sysview
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
@@ -155,20 +156,21 @@ var (
 // `information_schema` database
 // They are all Tenant level system tables/system views
 var (
-	InformationSchemaKeyColumnUsageDDL = "CREATE TABLE information_schema.KEY_COLUMN_USAGE (" +
-		"CONSTRAINT_CATALOG varchar(64)," +
-		"CONSTRAINT_SCHEMA varchar(64)," +
-		"CONSTRAINT_NAME varchar(64)," +
-		"TABLE_CATALOG varchar(64)," +
-		"TABLE_SCHEMA varchar(64)," +
-		"TABLE_NAME varchar(64)," +
-		"COLUMN_NAME varchar(64)," +
-		"ORDINAL_POSITION int unsigned," +
-		"POSITION_IN_UNIQUE_CONSTRAINT int unsigned," +
-		"REFERENCED_TABLE_SCHEMA varchar(64)," +
-		"REFERENCED_TABLE_NAME varchar(64)," +
-		"REFERENCED_COLUMN_NAME varchar(64)" +
-		")"
+	InformationSchemaKeyColumnUsageDDL = "CREATE VIEW information_schema.KEY_COLUMN_USAGE AS " +
+		"SELECT " +
+		"CAST('def' AS varchar(64)) AS CONSTRAINT_CATALOG, " +
+		"CAST(fk.db_name AS varchar(64)) AS CONSTRAINT_SCHEMA, " +
+		"CAST(fk.constraint_name AS varchar(64)) AS CONSTRAINT_NAME, " +
+		"CAST('def' AS varchar(64)) AS TABLE_CATALOG, " +
+		"CAST(fk.db_name AS varchar(64)) AS TABLE_SCHEMA, " +
+		"CAST(fk.table_name AS varchar(64)) AS TABLE_NAME, " +
+		"CAST(fk.column_name AS varchar(64)) AS COLUMN_NAME, " +
+		"CAST(fk.constraint_id AS int unsigned) AS ORDINAL_POSITION, " +
+		"CAST(fk.constraint_id AS int unsigned) AS POSITION_IN_UNIQUE_CONSTRAINT, " +
+		"CAST(fk.refer_db_name AS varchar(64)) AS REFERENCED_TABLE_SCHEMA, " +
+		"CAST(fk.refer_table_name AS varchar(64)) AS REFERENCED_TABLE_NAME, " +
+		"CAST(fk.refer_column_name AS varchar(64)) AS REFERENCED_COLUMN_NAME " +
+		"FROM mo_catalog.mo_foreign_keys fk"
 
 	InformationSchemaColumnsDDL = fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
 		"'def' as TABLE_CATALOG,"+
@@ -178,11 +180,12 @@ var (
 		"mc.attnum AS ORDINAL_POSITION,"+
 		"mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,"+
 		"(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
-		"(case when length(mc.attr_enum) > 0 then "+
+		"lower(case when length(mc.attr_enum) > 0 then "+
 		"  (case when mo_show_visible_bin(mc.atttyp,2) = 'GEOMETRY' then "+
 		"    upper(case when upper(split_part(mc.attr_enum, ';', 1)) like 'SRID=%%' then 'GEOMETRY' else split_part(mc.attr_enum, ';', 1) end) "+
 		"  else upper(split_part(mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum), '(', 1)) end) "+
-		" else mo_show_visible_bin(mc.atttyp,2) end) as DATA_TYPE,"+
+		" else (case when upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' "+
+		"  else split_part(mo_show_visible_bin(mc.atttyp,2), ' ', 1) end) end) as DATA_TYPE,"+
 		"internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
 		"internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,"+
 		"internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,"+
@@ -200,8 +203,8 @@ var (
 		" then cast(split_part(upper(mo_show_visible_bin(mc.atttyp,3)), ' SRID ', 2) as bigint) else NULL end) as SRS_ID "+
 		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
 		"where mc.account_id = current_account_id() "+
-		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s'",
-		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK)
+		"and mc.att_is_hidden = 0 and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and %s",
+		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.NonTemporaryTableSQLPredicate("mt"))
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -241,7 +244,7 @@ var (
 		"'def' AS CATALOG_NAME," +
 		"datname AS SCHEMA_NAME," +
 		"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
-		"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
+		"'" + DefaultCollationForCharset("utf8mb4") + "' AS DEFAULT_COLLATION_NAME," +
 		"if(true, NULL, '') AS SQL_PATH," +
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 		"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))"
@@ -252,6 +255,8 @@ var (
 		"DESCRIPTION varchar(2048)," +
 		"MAXLEN int unsigned" +
 		")"
+
+	InformationSchemaCharacterSetsData = informationSchemaCharacterSetsDataSQL()
 
 	InformationSchemaTriggersDDL = "CREATE TABLE information_schema.TRIGGERS (" +
 		"TRIGGER_CATALOG varchar(64)," +
@@ -300,13 +305,13 @@ var (
 		"created_time AS CREATE_TIME,"+
 		"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,"+
 		"if(relkind = 'v', NULL, created_time) AS CHECK_TIME,"+
-		"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION,"+
+		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION,"+
 		"if(relkind = 'v', NULL, 0) AS CHECKSUM,"+
 		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
 		"FROM mo_catalog.mo_tables tbl "+
-		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relname != '%s' and tbl.relkind != '%s'",
-		catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
+		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and %s and tbl.relname != '%s' and tbl.relkind != '%s'",
+		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		"SELECT " +
@@ -373,50 +378,64 @@ var (
 		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
 		"'DEFINER' AS `SECURITY_TYPE`," +
 		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
-		"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` " +
+		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
 		"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
 		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
 
-	InformationSchemaStatisticsDDL = "CREATE VIEW information_schema.`STATISTICS` AS " +
-		"select 'def' AS `TABLE_CATALOG`," +
-		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
-		"`tbl`.`relname` AS `TABLE_NAME`," +
-		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),0,1) AS `NON_UNIQUE`," +
-		"`tbl`.`reldatabase` AS `INDEX_SCHEMA`," +
-		"`idx`.`name` AS `INDEX_NAME`," +
-		"`idx`.`ordinal_position` AS `SEQ_IN_INDEX`," +
-		"`idx`.`column_name` AS `COLUMN_NAME`," +
-		"'A' AS `COLLATION`," +
-		"0 AS `CARDINALITY`," +
-		"NULL AS `SUB_PART`," +
-		"NULL AS `PACKED`," +
-		"if((`tcl`.`attnotnull` = 0),'YES','') AS `NULLABLE`," +
-		"`idx`.`algo` AS `INDEX_TYPE`," +
-		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`," +
-		"`idx`.`comment` AS `INDEX_COMMENT`," +
-		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`," +
-		"NULL AS `EXPRESSION` " +
-		"from (`mo_catalog`.`mo_indexes` `idx` " +
-		"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)) " +
-		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname` " +
-		"and `tcl`.`account_id` = `tbl`.`account_id` and `tcl`.`att_database` = `tbl`.`reldatabase` and `tcl`.`att_relname` = `tbl`.`relname`) " +
-		"where `tbl`.`account_id` = current_account_id()"
+	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+
+		"select 'def' AS `TABLE_CATALOG`,"+
+		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`,"+
+		"`tbl`.`relname` AS `TABLE_NAME`,"+
+		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),0,1) AS `NON_UNIQUE`,"+
+		"`tbl`.`reldatabase` AS `INDEX_SCHEMA`,"+
+		"`idx`.`name` AS `INDEX_NAME`,"+
+		"`idx`.`ordinal_position` AS `SEQ_IN_INDEX`,"+
+		"`idx`.`column_name` AS `COLUMN_NAME`,"+
+		"'A' AS `COLLATION`,"+
+		"0 AS `CARDINALITY`,"+
+		"NULL AS `SUB_PART`,"+
+		"NULL AS `PACKED`,"+
+		"if((`tcl`.`attnotnull` = 0),'YES','') AS `NULLABLE`,"+
+		"`idx`.`algo` AS `INDEX_TYPE`,"+
+		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`,"+
+		"`idx`.`comment` AS `INDEX_COMMENT`,"+
+		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`,"+
+		"NULL AS `EXPRESSION` "+
+		"from (`mo_catalog`.`mo_indexes` `idx` "+
+		"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)) "+
+		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname` "+
+		"and `tcl`.`account_id` = `tbl`.`account_id` and `tcl`.`att_database` = `tbl`.`reldatabase` and `tcl`.`att_relname` = `tbl`.`relname`) "+
+		"where `tbl`.`account_id` = current_account_id() and %s", catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
-		"SELECT DISTINCT " +
+		"SELECT " +
 		"'def' AS CONSTRAINT_CATALOG, " +
 		"fk.db_name AS CONSTRAINT_SCHEMA, " +
 		"fk.constraint_name AS CONSTRAINT_NAME, " +
 		"'def' AS UNIQUE_CONSTRAINT_CATALOG, " +
 		"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, " +
-		"idx.type AS UNIQUE_CONSTRAINT_NAME," +
+		"fk.referenced_index_name AS UNIQUE_CONSTRAINT_NAME," +
 		"'NONE' AS MATCH_OPTION, " +
-		"fk.on_update AS UPDATE_RULE, " +
-		"fk.on_delete AS DELETE_RULE, " +
+		"replace(fk.on_update, '_', ' ') AS UPDATE_RULE, " +
+		"replace(fk.on_delete, '_', ' ') AS DELETE_RULE, " +
 		"fk.table_name AS TABLE_NAME, " +
 		"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
-		"FROM mo_catalog.mo_foreign_keys fk " +
-		"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)"
+		"FROM (" +
+		"SELECT db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name " +
+		"FROM mo_catalog.mo_foreign_keys " +
+		"GROUP BY db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name" +
+		") fk"
+
+	// CHECK_CONSTRAINTS is backed by a table function because CHECK metadata is
+	// stored in the serialized SchemaExtra of each table.  The function decodes
+	// that metadata at query time and applies the current tenant's visibility.
+	InformationSchemaCheckConstraintsDDL = "CREATE VIEW information_schema.CHECK_CONSTRAINTS AS " +
+		"SELECT " +
+		"cc.constraint_catalog AS CONSTRAINT_CATALOG, " +
+		"cc.constraint_schema AS CONSTRAINT_SCHEMA, " +
+		"cc.constraint_name AS CONSTRAINT_NAME, " +
+		"cc.check_clause AS CHECK_CLAUSE " +
+		"FROM mo_check_constraints() cc"
 
 	InformationSchemaEnginesDDL = "CREATE TABLE information_schema.ENGINES (" +
 		"ENGINE varchar(64)," +
@@ -522,16 +541,46 @@ var (
 		"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') NOT NULL" +
 		")"
 
-	InformationSchemaTableConstraintsDDL = "CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT " +
-		"'def' AS CONSTRAINT_CATALOG, " +
-		"tbl.reldatabase AS CONSTRAINT_SCHEMA, " +
-		"idx.name AS CONSTRAINT_NAME, " +
-		"tbl.reldatabase AS TABLE_SCHEMA, " +
-		"tbl.relname AS TABLE_NAME, " +
-		"idx.type AS CONSTRAINT_TYPE, " +
-		"'YES' AS ENFORCED " +
-		"FROM mo_catalog.mo_indexes idx " +
-		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id"
+	InformationSchemaCollationsData = informationSchemaCollationsDataSQL()
+
+	// MySQL exposes the collation-to-character-set mapping as a separate
+	// information_schema object.  Keep it derived from COLLATIONS so the two
+	// metadata surfaces cannot disagree when collation rows are populated.
+	InformationSchemaCollationCharacterSetApplicabilityDDL = "CREATE VIEW information_schema.COLLATION_CHARACTER_SET_APPLICABILITY AS " +
+		"SELECT COLLATION_NAME, CHARACTER_SET_NAME " +
+		"FROM information_schema.COLLATIONS"
+
+	InformationSchemaTableConstraintsDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
+		"'def' AS CONSTRAINT_CATALOG, "+
+		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
+		"idx.name AS CONSTRAINT_NAME, "+
+		"tbl.reldatabase AS TABLE_SCHEMA, "+
+		"tbl.relname AS TABLE_NAME, "+
+		"idx.type AS CONSTRAINT_TYPE, "+
+		"'YES' AS ENFORCED "+
+		"FROM mo_catalog.mo_indexes idx "+
+		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
+		"where %s UNION ALL "+
+		"SELECT cc.constraint_catalog AS CONSTRAINT_CATALOG, "+
+		"cc.constraint_schema AS CONSTRAINT_SCHEMA, "+
+		"cc.constraint_name AS CONSTRAINT_NAME, "+
+		"cc.constraint_schema AS TABLE_SCHEMA, "+
+		"cc.table_name AS TABLE_NAME, "+
+		"cc.constraint_type AS CONSTRAINT_TYPE, "+
+		"cc.enforced AS ENFORCED "+
+		"FROM mo_check_constraints() cc", catalog.NonTemporaryTableSQLPredicate("tbl"))
+
+	InformationSchemaTableConstraintsLegacyDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
+		"'def' AS CONSTRAINT_CATALOG, "+
+		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
+		"idx.name AS CONSTRAINT_NAME, "+
+		"tbl.reldatabase AS TABLE_SCHEMA, "+
+		"tbl.relname AS TABLE_NAME, "+
+		"idx.type AS CONSTRAINT_TYPE, "+
+		"'YES' AS ENFORCED "+
+		"FROM mo_catalog.mo_indexes idx "+
+		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
+		"where %s", catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaEventsDDL = "CREATE TABLE information_schema.EVENTS (" +
 		"EVENT_CATALOG varchar(64)," +
@@ -601,3 +650,28 @@ var (
 		"EXTRA  varchar(256)" +
 		")"
 )
+
+func informationSchemaCollationsDataSQL() string {
+	values := make([]string, 0, len(SupportedCollationDefinitions))
+	for _, collation := range SupportedCollationDefinitions {
+		values = append(values, fmt.Sprintf("('%s', '%s', %d, '%s', '%s', %d, '%s')",
+			collation.Name,
+			collation.Charset,
+			collation.ID,
+			collation.IsDefault,
+			collation.IsCompiled,
+			collation.SortLen,
+			collation.PadAttribute,
+		))
+	}
+	return "INSERT INTO information_schema.COLLATIONS VALUES " + strings.Join(values, ",")
+}
+
+func informationSchemaCharacterSetsDataSQL() string {
+	values := []string{
+		fmt.Sprintf("('binary','%s','Binary pseudo charset',1)", DefaultCollationForCharset("binary")),
+		fmt.Sprintf("('utf8','%s','UTF-8 Unicode',4)", DefaultCollationForCharset("utf8")),
+		fmt.Sprintf("('utf8mb4','%s','UTF-8 Unicode',4)", DefaultCollationForCharset("utf8mb4")),
+	}
+	return "INSERT INTO information_schema.CHARACTER_SETS VALUES " + strings.Join(values, ",")
+}

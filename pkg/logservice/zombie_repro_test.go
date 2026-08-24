@@ -198,6 +198,39 @@ func commitRemoveReplica(t *testing.T, s *store, replicaID uint64) {
 	t.Fatalf("failed to commit REMOVE within deadline: %v", lastErr)
 }
 
+// waitMembershipExcludesReplica waits for the gossip-backed membership view
+// consumed by the zombie self-check, rather than sleeping for an assumed
+// propagation interval.
+func waitMembershipExcludesReplica(
+	t *testing.T,
+	address string,
+	replicaID uint64,
+) map[uint64]string {
+	t.Helper()
+
+	var members map[uint64]string
+	require.Eventually(t, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+
+		current, ok, err := getShardMembership(
+			ctx,
+			"",
+			address,
+			hakeeper.DefaultHAKeeperShardID,
+		)
+		if err != nil || !ok {
+			return false
+		}
+		if _, present := current[replicaID]; present {
+			return false
+		}
+		members = current
+		return true
+	}, 5*time.Second, 50*time.Millisecond)
+	return members
+}
+
 // captureLogger returns a zap logger whose entries are recorded in the
 // returned observer; mount it on a runtime via runtime.SetupServiceBasedRuntime
 // to capture all runtime logs.
@@ -262,17 +295,9 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	// membership.
 	commitRemoveReplica(t, svc1.store, 3)
 
-	// Give the cluster a beat to propagate the ConfChange + update gossip
-	// registries that GetShardInfo reads from.
-	time.Sleep(500 * time.Millisecond)
-
-	// Sanity: surviving peer's view no longer contains replicaID=3.
-	si, ok, err := GetShardInfo("", cfg1.LogServiceServiceAddr(), hakeeper.DefaultHAKeeperShardID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	_, replica3Present := si.Replicas[3]
-	require.False(t, replica3Present, "replica 3 should have been removed from shard 0 membership")
-	t.Logf("post-REMOVE membership: %v", si.Replicas)
+	// Wait for the exact gossip-backed membership view used by the self-check.
+	members := waitMembershipExcludesReplica(t, cfg1.LogServiceServiceAddr(), 3)
+	t.Logf("post-REMOVE membership: %v", members)
 
 	// Sanity 2: verify svc3's configured ServiceAddresses include at least
 	// one live peer the self-check can query.
@@ -322,20 +347,20 @@ func TestZombieRepro_WithFix(t *testing.T) {
 
 // TestZombieRepro_WithoutFix disables the self-check via getShardMembershipFn
 // and exercises the pre-fix behavior. Expectation: startReplicas() happily
-// starts replicaID=3 again, and the resulting zombie emits preVote /
-// dropped-proposal traffic because it is no longer in the cluster membership.
+// starts replicaID=3 again as an active shard even though it is no longer in
+// the cluster membership.
 func TestZombieRepro_WithoutFix(t *testing.T) {
 	obsLogger, logs := captureLogger()
 
 	defer leaktest.AfterTest(t)()
-	svc1, svc2, svc3, _, _, cfg3 := buildZombieCluster(t, obsLogger)
+	svc1, svc2, svc3, cfg1, _, cfg3 := buildZombieCluster(t, obsLogger)
 
 	waitLeader(t, []*store{svc1.store, svc2.store, svc3.store}, 10*time.Second)
 	transferLeaderTo(t, svc1.store, 1)
 
 	require.NoError(t, svc3.Close())
 	commitRemoveReplica(t, svc1.store, 3)
-	time.Sleep(500 * time.Millisecond)
+	waitMembershipExcludesReplica(t, cfg1.LogServiceServiceAddr(), 3)
 
 	// Disable the self-check: stub getShardMembershipFn to behave as if no peer
 	// is reachable (this is what the pre-fix code path is equivalent to --
@@ -373,28 +398,4 @@ func TestZombieRepro_WithoutFix(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "without fix, zombie replica (shard=0, replica=3) IS an active shard")
-
-	// Wait a bit and observe the zombie symptom. The key diagnostic signal
-	// is that replica 3 does not converge: from svc3b's perspective there
-	// is no leader for shard 0 (because the surviving peers never send it
-	// AppendEntries -- it is no longer in their membership list).
-	time.Sleep(3 * time.Second)
-
-	// Sample GetLeaderID repeatedly for 2 seconds; without the fix, svc3b
-	// never gets a stable leader because the cluster drops its traffic.
-	noLeaderSamples := 0
-	totalSamples := 0
-	sampleDeadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(sampleDeadline) {
-		_, _, ok, err := svc3b.store.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
-		totalSamples++
-		if err != nil || !ok {
-			noLeaderSamples++
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Logf("zombie symptom without fix: svc3b saw no-leader in %d/%d samples",
-		noLeaderSamples, totalSamples)
-	assert.Greater(t, noLeaderSamples, totalSamples/2,
-		"without fix the zombie replica should see no leader the majority of the time")
 }

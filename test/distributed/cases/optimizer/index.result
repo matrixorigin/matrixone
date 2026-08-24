@@ -40,9 +40,7 @@ Project  𝄀
   ->  Join  𝄀
         Join Type: INNER   hashOnPK  𝄀
         Join Cond: (t2.c0 = t1.c1)  𝄀
-        Runtime Filter Build: serial(#[-1,0])  𝄀
         ->  Table Scan on d1.t2  𝄀
-              Runtime Filter Probe: t2.__mo_cpkey_col Match Prefix  𝄀
         ->  Join  𝄀
               Join Type: INDEX  𝄀
               Join Cond: (t1.c1 = __mo_index_pri_col)  𝄀
@@ -324,7 +322,7 @@ explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t14.pseudo  𝄀
-        Filter Cond: prefix_eq(__mo_index_idx_col)
+        Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, CHAR)) = 'joce')
 SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 ➤ pseudo1[1,35,0]  𝄀
 testtt  𝄀

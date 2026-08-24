@@ -28,6 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,6 +57,65 @@ func TestAcquireReleaseBuffer(t *testing.T) {
 		require.Zero(t, reused.Len())
 		releaseBuffer(pool, reused)
 	})
+}
+
+func TestDataBranchSQLKeyEqual(t *testing.T) {
+	require.Equal(t, "left_key = right_key",
+		dataBranchSQLKeyEqual("left_key", "right_key", types.T_int64.ToType()))
+
+	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_float64.ToType()} {
+		require.Equal(t, "serial(left_key) = serial(right_key)",
+			dataBranchSQLKeyEqual("left_key", "right_key", typ),
+		)
+	}
+}
+
+func TestValidateDataBranchNamedSnapshotScope(t *testing.T) {
+	ctx := context.Background()
+	snapshot := &plan2.Snapshot{ExtraInfo: &planpb.SnapshotExtraInfo{
+		Name:  "snapshot",
+		Level: tree.SNAPSHOTLEVELTABLE.String(),
+		ObjId: 7,
+	}}
+	namedSnapshot := &tree.AtTimeStamp{Type: tree.ATTIMESTAMPSNAPSHOT}
+
+	t.Run("unnamed source does not require a relation", func(t *testing.T) {
+		require.NoError(t, validateDataBranchNamedSnapshotScope(
+			ctx, nil, snapshot, "db", "table", nil,
+		))
+	})
+
+	tests := []struct {
+		name     string
+		tableDef *planpb.TableDef
+		err      string
+	}{
+		{
+			name:     "matches logical table identity",
+			tableDef: &planpb.TableDef{DbId: 1, TblId: 8, LogicalId: 7},
+		},
+		{
+			name:     "rejects another table",
+			tableDef: &planpb.TableDef{DbId: 1, TblId: 8, LogicalId: 9},
+			err:      "internal error: table-level snapshot(snapshot) does not belong to the table(db-table)",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			relation := mock_frontend.NewMockRelation(ctrl)
+			relation.EXPECT().GetTableDef(ctx).Return(test.tableDef)
+
+			err := validateDataBranchNamedSnapshotScope(
+				ctx, namedSnapshot, snapshot, "db", "table", relation,
+			)
+			if test.err == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, test.err)
+		})
+	}
 }
 
 func TestNewEmitter(t *testing.T) {
@@ -299,6 +361,47 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 			ses,
 			7,
 			types.BuildTS(20, 0),
+			[]string{"id"},
+			[]types.Type{types.T_int64.ToType()},
+			nil,
+			0,
+			func(*batch.Batch) error { return nil },
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("uses historical fallback when current relation is gone", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
+
+		currentLookupErr := moerr.NewInternalErrorNoCtx("can not find table by id 7")
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
+			Return("", "", nil, currentLookupErr).
+			Times(1)
+
+		historicalRel := mock_frontend.NewMockRelation(ctrl)
+		wantErr := moerr.NewInternalErrorNoCtx("historical ranges reached")
+		historicalRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).
+			Return(nil, wantErr).
+			Times(1)
+
+		ses.txnHandler = &TxnHandler{
+			storage: eng,
+			txnOp:   txnOp,
+		}
+
+		err := scanSnapshotRelationByIDWithFallback(
+			context.Background(),
+			"unit-test",
+			ses,
+			7,
+			types.BuildTS(20, 0),
+			historicalRel,
 			[]string{"id"},
 			[]types.Type{types.T_int64.ToType()},
 			nil,

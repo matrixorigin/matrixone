@@ -57,6 +57,98 @@ type MemoryTotals struct {
 	CrossPoolFreeCount          uint64
 }
 
+// AllocationAccountTotals is the terminal observation of accounted allocation
+// generations. Owner detail is immutable and sparse so owner-less statements
+// retain only one pointer. It is diagnostic only: these bytes are a subset of
+// allocator memory and are never added to MemoryTotals or fed back into
+// admission.
+type AllocationAccountTotals struct {
+	GenerationCount       uint64
+	ValidGenerationCount  uint64
+	FailedGenerationCount uint64
+	MaxGenerationPeak     uint64
+	SumGenerationPeak     uint64
+	LiveBytesAtTerminal   uint64
+
+	owners *allocationOwnerSet
+}
+
+func (t *AllocationAccountTotals) AddGeneration(
+	peak uint64,
+	liveAtTerminal uint64,
+	valid bool,
+) QualityFlags {
+	var quality QualityFlags
+	t.GenerationCount, quality = addChecked(t.GenerationCount, 1, quality)
+	if valid {
+		t.ValidGenerationCount, quality = addChecked(
+			t.ValidGenerationCount,
+			1,
+			quality,
+		)
+	} else {
+		t.FailedGenerationCount, quality = addChecked(
+			t.FailedGenerationCount,
+			1,
+			quality|QualityInvariantFailure,
+		)
+	}
+	if peak > t.MaxGenerationPeak {
+		t.MaxGenerationPeak = peak
+	}
+	t.SumGenerationPeak, quality = addChecked(
+		t.SumGenerationPeak,
+		peak,
+		quality,
+	)
+	t.LiveBytesAtTerminal, quality = addChecked(
+		t.LiveBytesAtTerminal,
+		liveAtTerminal,
+		quality,
+	)
+	if liveAtTerminal != 0 {
+		quality |= QualityNonZeroLiveAtSeal | QualityInvariantFailure
+	}
+	return quality
+}
+
+func MergeAllocationAccountTotals(
+	dst *AllocationAccountTotals,
+	delta AllocationAccountTotals,
+) QualityFlags {
+	quality := delta.Validate()
+	dst.GenerationCount, quality = addChecked(
+		dst.GenerationCount,
+		delta.GenerationCount,
+		quality,
+	)
+	dst.ValidGenerationCount, quality = addChecked(
+		dst.ValidGenerationCount,
+		delta.ValidGenerationCount,
+		quality,
+	)
+	dst.FailedGenerationCount, quality = addChecked(
+		dst.FailedGenerationCount,
+		delta.FailedGenerationCount,
+		quality,
+	)
+	dst.SumGenerationPeak, quality = addChecked(
+		dst.SumGenerationPeak,
+		delta.SumGenerationPeak,
+		quality,
+	)
+	dst.LiveBytesAtTerminal, quality = addChecked(
+		dst.LiveBytesAtTerminal,
+		delta.LiveBytesAtTerminal,
+		quality,
+	)
+	if delta.MaxGenerationPeak > dst.MaxGenerationPeak {
+		dst.MaxGenerationPeak = delta.MaxGenerationPeak
+	}
+	quality |= mergeAllocationOwnerTotals(dst, &delta)
+	return quality | dst.Validate()
+}
+
 // MergeMemoryDomain merges one physical domain exactly once.
 func MergeMemoryDomain(dst *MemoryTotals, domain MemoryDomainSummary) QualityFlags {
 	flags := domain.Validate()
@@ -74,8 +166,9 @@ func MergeMemoryDomain(dst *MemoryTotals, domain MemoryDomainSummary) QualityFla
 
 // AttemptSummary is the immutable result of one compile/run generation.
 type AttemptSummary struct {
-	Usage  Usage
-	Memory MemoryTotals
+	Usage      Usage
+	Memory     MemoryTotals
+	Allocation AllocationAccountTotals
 
 	WallNS                   uint64
 	MissingFragmentCount     uint64
@@ -85,8 +178,9 @@ type AttemptSummary struct {
 
 // ExecutionSummary is fixed-size in retry count.
 type ExecutionSummary struct {
-	Usage  Usage
-	Memory MemoryTotals
+	Usage      Usage
+	Memory     MemoryTotals
+	Allocation AllocationAccountTotals
 
 	AttemptCount             uint64
 	RetryWallNS              uint64
@@ -100,6 +194,7 @@ type ExecutionSummary struct {
 func (s *ExecutionSummary) AddAttempt(attempt AttemptSummary, retried bool) {
 	s.Quality |= attempt.Quality | MergeUsage(&s.Usage, attempt.Usage)
 	s.Quality |= MergeMemoryTotals(&s.Memory, attempt.Memory)
+	s.Quality |= MergeAllocationAccountTotals(&s.Allocation, attempt.Allocation)
 	s.AttemptCount, s.Quality = addChecked(s.AttemptCount, 1, s.Quality)
 	if retried {
 		s.RetryWallNS, s.Quality = addChecked(s.RetryWallNS, attempt.WallNS, s.Quality)
@@ -123,8 +218,9 @@ const (
 // algebra. Serialization and plan diagnostics consume this value but never add
 // resources independently.
 type StatementResourceSummary struct {
-	Usage  Usage
-	Memory MemoryTotals
+	Usage      Usage
+	Memory     MemoryTotals
+	Allocation AllocationAccountTotals
 
 	StatementWallNS          uint64
 	AttemptCount             uint64
@@ -136,10 +232,17 @@ type StatementResourceSummary struct {
 	ConnType                 ConnType
 }
 
+// Clone returns a fully reference-independent statement summary.
+func (s StatementResourceSummary) Clone() StatementResourceSummary {
+	s.Allocation = s.Allocation.Clone()
+	return s
+}
+
 // MergeExecution merges one sealed logical execution into its root.
 func (s *StatementResourceSummary) MergeExecution(execution ExecutionSummary) {
 	s.Quality |= execution.Quality | MergeUsage(&s.Usage, execution.Usage)
 	s.Quality |= MergeMemoryTotals(&s.Memory, execution.Memory)
+	s.Quality |= MergeAllocationAccountTotals(&s.Allocation, execution.Allocation)
 	s.AttemptCount, s.Quality = addChecked(s.AttemptCount, execution.AttemptCount, s.Quality)
 	s.RetryWallNS, s.Quality = addChecked(s.RetryWallNS, execution.RetryWallNS, s.Quality)
 	s.MissingFragmentCount, s.Quality = addChecked(
@@ -154,6 +257,7 @@ func (s *StatementResourceSummary) MergeExecution(execution ExecutionSummary) {
 func (s *StatementResourceSummary) Merge(other StatementResourceSummary) {
 	s.Quality |= other.Quality | QualityAggregated | MergeUsage(&s.Usage, other.Usage)
 	s.Quality |= MergeMemoryTotals(&s.Memory, other.Memory)
+	s.Quality |= MergeAllocationAccountTotals(&s.Allocation, other.Allocation)
 	s.StatementWallNS, s.Quality = addChecked(s.StatementWallNS, other.StatementWallNS, s.Quality)
 	s.AttemptCount, s.Quality = addChecked(s.AttemptCount, other.AttemptCount, s.Quality)
 	s.RetryWallNS, s.Quality = addChecked(s.RetryWallNS, other.RetryWallNS, s.Quality)

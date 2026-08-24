@@ -56,6 +56,11 @@ func TestExecutorStateMachine_ValidTransitions(t *testing.T) {
 			finalState:  StateRunning,
 		},
 		{
+			name:        "Resume table error failure from recorded watermark",
+			transitions: []Transition{TransitionStart, TransitionStartFail, TransitionResume, TransitionStartSuccess},
+			finalState:  StateRunning,
+		},
+		{
 			name:        "Restart from Running",
 			transitions: []Transition{TransitionStart, TransitionStartSuccess, TransitionRestart, TransitionRestartBegin, TransitionStartSuccess},
 			finalState:  StateRunning,
@@ -161,6 +166,9 @@ func TestExecutorStateMachine_CanTransition(t *testing.T) {
 	assert.True(t, sm.CanTransition(TransitionCancel))
 	assert.False(t, sm.CanTransition(TransitionStart))
 	assert.False(t, sm.CanTransition(TransitionResume))
+
+	require.NoError(t, sm.SetFailed("table error"))
+	assert.True(t, sm.CanTransition(TransitionResume))
 }
 
 func TestExecutorStateMachine_IsRunning(t *testing.T) {

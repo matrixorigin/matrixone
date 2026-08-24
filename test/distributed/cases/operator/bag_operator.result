@@ -106,3 +106,22 @@ country    city
 country    city
 t1 intersect all select * from t2 ;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 2 near "t1 intersect all select * from t2 ;";
+drop table if exists intersect_all_digits;
+drop table if exists intersect_all_batch;
+create table intersect_all_digits(d int primary key);
+insert into intersect_all_digits values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table intersect_all_batch(id int primary key);
+insert into intersect_all_batch
+select a.d + 10 * b.d + 100 * c.d + 1
+from intersect_all_digits a cross join intersect_all_digits b cross join intersect_all_digits c
+where a.d + 10 * b.d + 100 * c.d < 768;
+insert into intersect_all_batch values (769);
+select count(*) as row_count, sum(id) as checksum
+from (select id from intersect_all_batch intersect all select id from intersect_all_batch) q;
+row_count    checksum
+769    296065
+select 1 as session_healthy;
+session_healthy
+1
+drop table intersect_all_batch;
+drop table intersect_all_digits;

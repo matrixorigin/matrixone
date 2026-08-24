@@ -225,3 +225,8 @@ func TestIvfpqSearchLoad(t *testing.T) {
 	s.Destroy()
 	require.Empty(t, s.Indexes)
 }
+
+// TestSearchIntoUnsupported covers the SearchInto stub (ivfpq has not migrated to SearchOutput).
+func TestSearchIntoUnsupported(t *testing.T) {
+	require.ErrorContains(t, (&IvfpqSearch[float32, float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+}

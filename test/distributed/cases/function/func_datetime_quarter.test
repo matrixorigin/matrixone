@@ -50,3 +50,11 @@ DROP TABLE t1;
 # Range check (should return 1-4)
 SELECT QUARTER('2024-01-01') AS q1, QUARTER('2024-04-01') AS q2, QUARTER('2024-07-01') AS q3, QUARTER('2024-10-01') AS q4;
 
+# Regression: VARCHAR input must resolve without an implicit unsupported cast.
+SELECT QUARTER('2024-01-15') AS string_quarter;
+
+-- Incomplete VARCHAR dates preserve the regular date-cast grammar.
+SELECT QUARTER('2001-11-00 12:34:56') AS incomplete_datetime,
+       QUARTER('20011100') AS incomplete_compact,
+       QUARTER('2001-11-0') AS incomplete_variable,
+       QUARTER('0000-00-00 12:34:56') AS zero_datetime;

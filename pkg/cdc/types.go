@@ -73,6 +73,7 @@ const (
 	CDCDefaultRetryDuration                  = 10 * time.Minute
 	CDCDefaultTaskExtra_InitSnapshotSplitTxn = true
 	CDCDefaultTaskExtra_MaxSQLLen            = 4 * 1024 * 1024
+	CDCDefaultInitialSnapshotConcurrency     = 2
 )
 
 const (
@@ -251,6 +252,7 @@ type DecoderOutput struct {
 	insertAtmBatch *AtomicBatch
 	deleteAtmBatch *AtomicBatch
 	mp             *mpool.MPool // mpool for snapshot batch cleanup
+	snapshotPermit *snapshotPermit
 }
 
 // Close releases batch resources held by the DecoderOutput.
@@ -273,6 +275,10 @@ func (d *DecoderOutput) Close() {
 	if d.deleteAtmBatch != nil {
 		d.deleteAtmBatch.Close()
 		d.deleteAtmBatch = nil
+	}
+	if d.snapshotPermit != nil {
+		d.snapshotPermit.Release()
+		d.snapshotPermit = nil
 	}
 }
 

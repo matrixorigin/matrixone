@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -43,6 +44,8 @@ func TestDeepCopyNodeTimeWindowFields(t *testing.T) {
 		WEnd:                  twTestColExpr(1, 3),
 		FillType:              plan.Node_PREV,
 		FillVal:               []*plan.Expr{twTestColExpr(2, 0)},
+		GapFillStart:          twTestColExpr(2, 1),
+		GapFillEnd:            twTestColExpr(2, 2),
 		TimeWindowPartitionBy: []*plan.Expr{twTestColExpr(3, 0), twTestColExpr(3, 1)},
 	}
 
@@ -54,15 +57,21 @@ func TestDeepCopyNodeTimeWindowFields(t *testing.T) {
 	require.Equal(t, node.WEnd, copied.WEnd)
 	require.Equal(t, node.FillType, copied.FillType)
 	require.Equal(t, node.FillVal, copied.FillVal)
+	require.Equal(t, node.GapFillStart, copied.GapFillStart)
+	require.Equal(t, node.GapFillEnd, copied.GapFillEnd)
 	require.Equal(t, node.TimeWindowPartitionBy, copied.TimeWindowPartitionBy)
 
 	// Deep, not shallow: the copy must not alias the original's expressions.
 	copied.TimeWindowPartitionBy[0].GetCol().ColPos = 99
 	copied.WEnd.GetCol().ColPos = 99
 	copied.FillVal[0].GetCol().ColPos = 99
+	copied.GapFillStart.GetCol().ColPos = 99
+	copied.GapFillEnd.GetCol().ColPos = 99
 	require.Equal(t, int32(0), node.TimeWindowPartitionBy[0].GetCol().ColPos)
 	require.Equal(t, int32(3), node.WEnd.GetCol().ColPos)
 	require.Equal(t, int32(0), node.FillVal[0].GetCol().ColPos)
+	require.Equal(t, int32(1), node.GapFillStart.GetCol().ColPos)
+	require.Equal(t, int32(2), node.GapFillEnd.GetCol().ColPos)
 }
 
 // twMarkVisitRule flags every expression it is offered, so a test can prove a
@@ -83,9 +92,13 @@ func (r *twMarkVisitRule) ApplyExpr(e *Expr) (*Expr, error) {
 // folding); a partition key it cannot reach would keep stale references.
 func TestVisitPlanReachesTimeWindowPartitionBy(t *testing.T) {
 	partExpr := twTestColExpr(3, 0)
+	startExpr := twTestColExpr(3, 1)
+	endExpr := twTestColExpr(3, 2)
 	node := &plan.Node{
 		NodeType:              plan.Node_TIME_WINDOW,
 		TimeWindowPartitionBy: []*plan.Expr{partExpr},
+		GapFillStart:          startExpr,
+		GapFillEnd:            endExpr,
 	}
 	pl := &Plan{Plan: &plan.Plan_Query{Query: &Query{
 		Steps: []int32{0},
@@ -95,6 +108,37 @@ func TestVisitPlanReachesTimeWindowPartitionBy(t *testing.T) {
 	rule := &twMarkVisitRule{seen: make(map[*plan.Expr]bool)}
 	require.NoError(t, NewVisitPlan(pl, []VisitPlanRule{rule}).Visit(t.Context()))
 	require.True(t, rule.seen[partExpr], "partition keys must be visited")
+	require.True(t, rule.seen[startExpr], "GAPFILL start must be visited")
+	require.True(t, rule.seen[endExpr], "GAPFILL finish must be visited")
+}
+
+type twFailVisitRule struct{}
+
+func (*twFailVisitRule) MatchNode(*Node) bool  { return false }
+func (*twFailVisitRule) IsApplyExpr() bool     { return true }
+func (*twFailVisitRule) ApplyNode(*Node) error { return nil }
+func (*twFailVisitRule) ApplyExpr(*Expr) (*Expr, error) {
+	return nil, errors.New("time-window expression visit failed")
+}
+
+func TestVisitPlanPropagatesGapFillBoundErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		node *plan.Node
+	}{
+		{name: "start", node: &plan.Node{NodeType: plan.Node_TIME_WINDOW, GapFillStart: twTestColExpr(3, 1)}},
+		{name: "finish", node: &plan.Node{NodeType: plan.Node_TIME_WINDOW, GapFillEnd: twTestColExpr(3, 2)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pl := &Plan{Plan: &plan.Plan_Query{Query: &Query{
+				Steps: []int32{0},
+				Nodes: []*plan.Node{tc.node},
+			}}}
+
+			err := NewVisitPlan(pl, []VisitPlanRule{&twFailVisitRule{}}).Visit(t.Context())
+			require.EqualError(t, err, "time-window expression visit failed")
+		})
+	}
 }
 
 // replaceColumnsForNode rewrites column references when a projection is

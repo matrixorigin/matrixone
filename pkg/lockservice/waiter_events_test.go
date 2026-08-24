@@ -110,3 +110,22 @@ func TestWaiterEventsCloseDropsBlockedWaiters(t *testing.T) {
 	events.removeBlockedWaiter(w)
 	require.Equal(t, int32(1), w.refCount.Load())
 }
+
+func TestWaiterEventsCloseDrainsAdmittedContextsWithoutWorkers(t *testing.T) {
+	events := newWaiterEvents(0, nil, nil, time.Second, nil, getLogger(""))
+	handled := make(chan struct{}, 1)
+	events.eventC <- &lockContext{
+		txn: &activeTxn{RWMutex: &sync.RWMutex{}},
+		lockFunc: func(_ *lockContext, _ bool) {
+			handled <- struct{}{}
+		},
+	}
+
+	events.close()
+
+	select {
+	case <-handled:
+	default:
+		t.Fatal("waiter events close left an admitted lock context unhandled")
+	}
+}

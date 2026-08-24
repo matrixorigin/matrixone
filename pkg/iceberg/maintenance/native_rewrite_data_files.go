@@ -311,6 +311,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 		OrphanPaths:        dedupeNonEmptyStrings(compacted.OrphanPaths),
 		PostCommitOrphans:  dedupeNonEmptyStrings(rewriteDataFilesSourcePaths(compacted.Rewrites)),
 		RewrittenFileCount: materialized.RewrittenFiles,
+		RemovedFileCount:   materialized.RewrittenFiles,
 	}, nil
 }
 

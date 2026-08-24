@@ -647,7 +647,7 @@ type ShowTableNumber struct {
 }
 
 func (node *ShowTableNumber) Format(ctx *FmtCtx) {
-	ctx.WriteString("show table number")
+	ctx.WriteString("show table_number")
 	if node.DbName != "" {
 		ctx.WriteString(" from ")
 		ctx.WriteString(node.DbName)
@@ -876,20 +876,6 @@ func (node *ShowBackendServers) Format(ctx *FmtCtx) {
 
 func (node *ShowBackendServers) GetStatementType() string { return "Show Backend Servers" }
 func (node *ShowBackendServers) GetQueryType() string     { return QueryTypeOth }
-
-type ShowConnectors struct {
-	showImpl
-}
-
-func (node *ShowConnectors) Format(ctx *FmtCtx) {
-	ctx.WriteString("show connectors")
-}
-func (node *ShowConnectors) GetStatementType() string { return "Show Connectors" }
-func (node *ShowConnectors) GetQueryType() string     { return QueryTypeOth }
-
-func NewShowConnectors(f bool) *ShowConnectors {
-	return &ShowConnectors{}
-}
 
 type ShowLogserviceReplicas struct {
 	showImpl

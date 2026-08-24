@@ -1,51 +1,56 @@
 create table fk_01(col1 varchar(30) not null primary key,col2 int);
 create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(col1));
 show create table fk_02;
-Table    Create Table
-fk_02    CREATE TABLE `fk_02` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` tinyint DEFAULT NULL,\n  CONSTRAINT `ck` FOREIGN KEY (`col2`) REFERENCES `fk_01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+fk_02  ¦  CREATE TABLE `fk_02` (
+  `col1` int DEFAULT NULL,
+  `col2` varchar(25) DEFAULT NULL,
+  `col3` tinyint DEFAULT NULL,
+  CONSTRAINT `ck` FOREIGN KEY (`col2`) REFERENCES `fk_01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 insert into fk_01 values ('90',5983),('100',734),('190',50);
 insert into fk_02(col2,col3) values ('90',5),('90',4),('100',0),(NULL,80);
 select * from fk_01;
-col1    col2
-90    5983
-100    734
-190    50
+➤ col1[12,-1,0]  ¦  col2[4,32,0]  𝄀
+90  ¦  5983  𝄀
+100  ¦  734  𝄀
+190  ¦  50
 select * from fk_02;
-col1    col2    col3
-null    90    5
-null    90    4
-null    100    0
-null    null    80
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+null  ¦  90  ¦  5  𝄀
+null  ¦  90  ¦  4  𝄀
+null  ¦  100  ¦  0  𝄀
+null  ¦  null  ¦  80
 insert into fk_02(col2,col3) values ('200',5);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 update fk_02 set col2='80' where col2='90';
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update fk_01 set col1=5 where col2=734;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from fk_01 where col1='90';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from fk_01 where col1='190';
 select * from fk_01;
-col1    col2
-90    5983
-100    734
+➤ col1[12,-1,0]  ¦  col2[4,32,0]  𝄀
+90  ¦  5983  𝄀
+100  ¦  734
 select * from fk_02;
-col1    col2    col3
-null    90    5
-null    90    4
-null    100    0
-null    null    80
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+null  ¦  90  ¦  5  𝄀
+null  ¦  90  ¦  4  𝄀
+null  ¦  100  ¦  0  𝄀
+null  ¦  null  ¦  80
 update fk_01 set col2=500 where col2=734;
 delete from fk_02 where col2='100';
 select * from fk_01;
-col1    col2
-90    5983
-100    500
+➤ col1[12,-1,0]  ¦  col2[4,32,0]  𝄀
+90  ¦  5983  𝄀
+100  ¦  500
 select * from fk_02;
-col1    col2    col3
-null    90    5
-null    90    4
-null    null    80
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+null  ¦  90  ¦  5  𝄀
+null  ¦  90  ¦  4  𝄀
+null  ¦  null  ¦  80
 drop table fk_02;
 drop table fk_01;
 create table fk_01(col1 char(30) primary key,col2 int);
@@ -57,15 +62,15 @@ insert into fk_02(col2,col3) values ('90',5),('90',4),('100',0);
 truncate table fk_01;
 internal error: can not truncate table 'fk_01' referenced by some foreign key constraint
 select * from fk_01;
-col1    col2
-90    5983
-100    734
-190    50
+➤ col1[1,30,0]  ¦  col2[4,32,0]  𝄀
+90  ¦  5983  𝄀
+100  ¦  734  𝄀
+190  ¦  50
 select * from fk_02;
-col1    col2    col3
-null    90    5
-null    90    4
-null    100    0
+➤ col1[4,32,0]  ¦  col2[1,25,0]  ¦  col3[-6,8,0]  𝄀
+null  ¦  90  ¦  5  𝄀
+null  ¦  90  ¦  4  𝄀
+null  ¦  100  ¦  0
 drop table fk_02;
 drop table fk_01;
 create table fk_01(col1 int auto_increment primary key,col2 varchar(25),col3 tinyint);
@@ -78,38 +83,38 @@ insert into fk_01 values (2,'yellow',20),(10,'apple',50),(11,'opppo',51);
 insert into fk_02 values(2,'score',1),(2,'student',4),(10,'goods',2);
 insert into fk_02 values(NULL,NULL,NULL);
 select * from fk_01;
-col1    col2    col3
-2    yellow    20
-10    apple    50
-11    opppo    51
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  yellow  ¦  20  𝄀
+10  ¦  apple  ¦  50  𝄀
+11  ¦  opppo  ¦  51
 select * from fk_02;
-col1    col2    col3
-2    score    1
-2    student    4
-10    goods    2
-null    null    null
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  score  ¦  1  𝄀
+2  ¦  student  ¦  4  𝄀
+10  ¦  goods  ¦  2  𝄀
+null  ¦  null  ¦  null
 update fk_02 set col1=10 where col3=4;
 select * from fk_02;
-col1    col2    col3
-2    score    1
-10    goods    2
-null    null    null
-10    student    4
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  score  ¦  1  𝄀
+10  ¦  goods  ¦  2  𝄀
+null  ¦  null  ¦  null  𝄀
+10  ¦  student  ¦  4
 update fk_02 set col1=20 where col3=4;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(15,'ssss',10);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01 where col1=11;
 select * from fk_01;
-col1    col2    col3
-2    yellow    20
-10    apple    50
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  yellow  ¦  20  𝄀
+10  ¦  apple  ¦  50
 select * from fk_02;
-col1    col2    col3
-2    score    1
-10    goods    2
-null    null    null
-10    student    4
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  score  ¦  1  𝄀
+10  ¦  goods  ¦  2  𝄀
+null  ¦  null  ¦  null  𝄀
+10  ¦  student  ¦  4
 update fk_01 set col3=110 where col1=10;
 delete from fk_01 where col1=2;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
@@ -117,7 +122,7 @@ truncate table fk_01;
 internal error: can not truncate table 'fk_01' referenced by some foreign key constraint
 truncate table fk_02;
 select * from fk_02;
-col1    col2    col3
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]
 drop table fk_01;
 internal error: can not drop table 'fk_01' referenced by some foreign key constraint
 drop table fk_02;
@@ -129,43 +134,43 @@ insert into fk_02 values(2,'apple',1),(2,'apple',4),(1,'opppo',2);
 insert into fk_02 values(20,'score',1),(12,'apple',4),(1,'yellow',2);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
-col1    col2    col3
-2    yellow    20
-2    apple    50
-1    opppo    51
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  yellow  ¦  20  𝄀
+2  ¦  apple  ¦  50  𝄀
+1  ¦  opppo  ¦  51
 select * from fk_02;
-col1    col2    col3
-2    apple    1
-2    apple    4
-1    opppo    2
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  apple  ¦  1  𝄀
+2  ¦  apple  ¦  4  𝄀
+1  ¦  opppo  ¦  2
 update fk_02 set col1=3 where col1=2;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01 where col1=2 and col2='apple';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 update fk_01 set col1=3 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update fk_01 set col1=1 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
-col1    col2    col3
-2    yellow    20
-2    apple    50
-1    opppo    51
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  yellow  ¦  20  𝄀
+2  ¦  apple  ¦  50  𝄀
+1  ¦  opppo  ¦  51
 select * from fk_02;
-col1    col2    col3
-2    apple    1
-2    apple    4
-1    opppo    2
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  apple  ¦  1  𝄀
+2  ¦  apple  ¦  4  𝄀
+1  ¦  opppo  ¦  2
 delete from fk_01 where col1=1;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from fk_02;
 select * from fk_01;
-col1    col2    col3
-2    yellow    20
-2    apple    50
-1    opppo    51
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  yellow  ¦  20  𝄀
+2  ¦  apple  ¦  50  𝄀
+1  ¦  opppo  ¦  51
 select * from fk_02;
-col1    col2    col3
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]
 drop table fk_02;
 drop table fk_01;
 create table fk_01(col1 bigint primary key,col2 varchar(25),col3 tinyint);
@@ -177,35 +182,35 @@ insert into fk_02 values(4,'age',3);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(1,'score',1),(2,'student',NULL);
 select * from fk_01;
-col1    col2    col3
-1    yellow    20
-2    apple    50
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+1  ¦  yellow  ¦  20  𝄀
+2  ¦  apple  ¦  50
 select * from fk_02;
-col1    col2    col3
-1    score    1
-2    student    null
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+1  ¦  score  ¦  1  𝄀
+2  ¦  student  ¦  null
 update fk_02 set col3=4 where col3=1;
 select * from fk_01;
-col1    col2    col3
-1    yellow    20
-2    apple    50
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+1  ¦  yellow  ¦  20  𝄀
+2  ¦  apple  ¦  50
 delete from fk_01 where col1=1;
 select * from fk_02;
-col1    col2    col3
-2    student    null
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  student  ¦  null
 update fk_01 set col1=5 where col2='apple';
 select * from fk_01;
-col1    col2    col3
-5    apple    50
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+5  ¦  apple  ¦  50
 select * from fk_02;
-col1    col2    col3
-5    student    null
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+5  ¦  student  ¦  null
 delete from fk_02 where col1=5;
 select * from fk_02;
-col1    col2    col3
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]
 select * from fk_01;
-col1    col2    col3
-5    apple    50
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+5  ¦  apple  ¦  50
 drop table fk_02;
 drop table fk_01;
 create table fk_01(col1 decimal(38,18),col2 char(25),col3 int,col4 date,primary key(col1,col3,col4));
@@ -217,35 +222,35 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(0.001,'b',20,'2022-10-01'),(4.5,'a',21,'2022-10-01'),(56,'a',20,'2022-10-02');
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
-col1    col2    col3    col4
-23.100000000000000000    a    20    2022-10-01
-23.100000000000000000    a    21    2022-10-01
-23.100000000000000000    a    20    2022-10-02
+➤ col1[3,38,18]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100000000000000000  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+23.100000000000000000  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+23.100000000000000000  ¦  a  ¦  20  ¦  2022-10-02
 select * from fk_02;
-col1    col2    col3    col4
-23.100000000000000000    a    20    2022-10-01
-23.100000000000000000    a    21    2022-10-01
-23.100000000000000000    a    20    2022-10-02
+➤ col1[3,38,18]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100000000000000000  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+23.100000000000000000  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+23.100000000000000000  ¦  a  ¦  20  ¦  2022-10-02
 update fk_02 set col3=19 where col3=20;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01  where col3=20;
 select * from fk_01;
-col1    col2    col3    col4
-23.100000000000000000    a    21    2022-10-01
+➤ col1[3,38,18]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100000000000000000  ¦  a  ¦  21  ¦  2022-10-01
 select * from fk_02;
-col1    col2    col3    col4
-23.100000000000000000    a    21    2022-10-01
-null    a    null    null
-null    a    null    null
+➤ col1[3,38,18]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100000000000000000  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+null  ¦  a  ¦  null  ¦  null  𝄀
+null  ¦  a  ¦  null  ¦  null
 update fk_01 set col3=19 where col2='a';
 select * from fk_01;
-col1    col2    col3    col4
-23.100000000000000000    a    19    2022-10-01
+➤ col1[3,38,18]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100000000000000000  ¦  a  ¦  19  ¦  2022-10-01
 select * from fk_02;
-col1    col2    col3    col4
-null    a    null    null
-null    a    null    null
-null    a    null    null
+➤ col1[3,38,18]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+null  ¦  a  ¦  null  ¦  null  𝄀
+null  ¦  a  ¦  null  ¦  null  𝄀
+null  ¦  a  ¦  null  ¦  null
 drop table fk_02;
 drop table fk_01;
 create table fk_01(col1 int primary key auto_increment,col2 varchar(25),col3 varchar(50));
@@ -255,43 +260,43 @@ insert into fk_02(col2,col3,col4) values('aa','bb',2),('cc','dd',1),('ee','ff',1
 insert into fk_02(col2,col3,col4) values('aa','bb',4);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 update fk_02 set col4=5 where col3='ff';
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01 where col1=1;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
-col1    col2    col3
-1    non-failing    deli
-2    safer    prow
-3    ultra    strong
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  𝄀
+1  ¦  non-failing  ¦  deli  𝄀
+2  ¦  safer  ¦  prow  𝄀
+3  ¦  ultra  ¦  strong
 select * from fk_02;
-col1    col2    col3    col4
-1    aa    bb    2
-2    cc    dd    1
-3    ee    ff    1
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[1,5,0]  ¦  col4[4,32,0]  𝄀
+1  ¦  aa  ¦  bb  ¦  2  𝄀
+2  ¦  cc  ¦  dd  ¦  1  𝄀
+3  ¦  ee  ¦  ff  ¦  1
 delete from fk_02 where col4=1;
 delete from fk_01 where col1=1;
 select * from fk_01;
-col1    col2    col3
-2    safer    prow
-3    ultra    strong
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  𝄀
+2  ¦  safer  ¦  prow  𝄀
+3  ¦  ultra  ¦  strong
 select * from fk_02;
-col1    col2    col3    col4
-1    aa    bb    2
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[1,5,0]  ¦  col4[4,32,0]  𝄀
+1  ¦  aa  ¦  bb  ¦  2
 update fk_01 set col1=8 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
-col1    col2    col3
-2    safer    prow
-3    ultra    strong
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  𝄀
+2  ¦  safer  ¦  prow  𝄀
+3  ¦  ultra  ¦  strong
 select * from fk_02;
-col1    col2    col3    col4
-1    aa    bb    2
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[1,5,0]  ¦  col4[4,32,0]  𝄀
+1  ¦  aa  ¦  bb  ¦  2
 truncate table fk_01;
 internal error: can not truncate table 'fk_01' referenced by some foreign key constraint
 select * from fk_01;
-col1    col2    col3
-2    safer    prow
-3    ultra    strong
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  𝄀
+2  ¦  safer  ¦  prow  𝄀
+3  ¦  ultra  ¦  strong
 drop table fk_01;
 internal error: can not drop table 'fk_01' referenced by some foreign key constraint
 drop table fk_02;
@@ -302,71 +307,71 @@ insert into fk_01(col2,col3) values ('non-failing','deli'),('safer','prow'),('ul
 insert into fk_02(col2,col3,col4) values('aa','bb',2),('cc','dd',1),('ee','ff',1);
 insert into fk_02(col2,col3,col4) values('aa','bb',3);
 select * from fk_01;
-col1    col2    col3
-1    non-failing    deli
-2    safer    prow
-3    ultra    strong
-4    aaa    bbb
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  𝄀
+1  ¦  non-failing  ¦  deli  𝄀
+2  ¦  safer  ¦  prow  𝄀
+3  ¦  ultra  ¦  strong  𝄀
+4  ¦  aaa  ¦  bbb
 select * from fk_02;
-col1    col2    col3    col4
-1    aa    bb    2
-2    cc    dd    1
-3    ee    ff    1
-4    aa    bb    3
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[1,5,0]  ¦  col4[4,32,0]  𝄀
+1  ¦  aa  ¦  bb  ¦  2  𝄀
+2  ¦  cc  ¦  dd  ¦  1  𝄀
+3  ¦  ee  ¦  ff  ¦  1  𝄀
+4  ¦  aa  ¦  bb  ¦  3
 delete from fk_01 where col1=1;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from fk_02 where col4=1;
 select * from fk_02;
-col1    col2    col3    col4
-1    aa    bb    2
-4    aa    bb    3
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[1,5,0]  ¦  col4[4,32,0]  𝄀
+1  ¦  aa  ¦  bb  ¦  2  𝄀
+4  ¦  aa  ¦  bb  ¦  3
 select * from fk_01;
-col1    col2    col3
-1    non-failing    deli
-2    safer    prow
-3    ultra    strong
-4    aaa    bbb
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  𝄀
+1  ¦  non-failing  ¦  deli  𝄀
+2  ¦  safer  ¦  prow  𝄀
+3  ¦  ultra  ¦  strong  𝄀
+4  ¦  aaa  ¦  bbb
 update fk_01 set col1=8 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update fk_02 set col4=5 where col3='ff';
 select * from fk_01;
-col1    col2    col3
-1    non-failing    deli
-2    safer    prow
-3    ultra    strong
-4    aaa    bbb
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  𝄀
+1  ¦  non-failing  ¦  deli  𝄀
+2  ¦  safer  ¦  prow  𝄀
+3  ¦  ultra  ¦  strong  𝄀
+4  ¦  aaa  ¦  bbb
 select * from fk_02;
-col1    col2    col3    col4
-1    aa    bb    2
-4    aa    bb    3
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[1,5,0]  ¦  col4[4,32,0]  𝄀
+1  ¦  aa  ¦  bb  ¦  2  𝄀
+4  ¦  aa  ¦  bb  ¦  3
 update fk_01 set col2='window' where col1=1;
 delete from fk_01 where col1=3;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
-col1    col2    col3
-2    safer    prow
-3    ultra    strong
-4    aaa    bbb
-1    window    deli
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  𝄀
+2  ¦  safer  ¦  prow  𝄀
+3  ¦  ultra  ¦  strong  𝄀
+4  ¦  aaa  ¦  bbb  𝄀
+1  ¦  window  ¦  deli
 select * from fk_02;
-col1    col2    col3    col4
-1    aa    bb    2
-4    aa    bb    3
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[1,5,0]  ¦  col4[4,32,0]  𝄀
+1  ¦  aa  ¦  bb  ¦  2  𝄀
+4  ¦  aa  ¦  bb  ¦  3
 truncate table fk_01;
 internal error: can not truncate table 'fk_01' referenced by some foreign key constraint
 insert into fk_01(col2,col3) values ('zhi','gao'),('er','li');
 select * from fk_01 order by col1;
-col1    col2    col3
-1    window    deli
-2    safer    prow
-3    ultra    strong
-4    aaa    bbb
-9    zhi    gao
-10    er    li
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[12,-1,0]  𝄀
+1  ¦  window  ¦  deli  𝄀
+2  ¦  safer  ¦  prow  𝄀
+3  ¦  ultra  ¦  strong  𝄀
+4  ¦  aaa  ¦  bbb  𝄀
+9  ¦  zhi  ¦  gao  𝄀
+10  ¦  er  ¦  li
 select * from fk_02;
-col1    col2    col3    col4
-1    aa    bb    2
-4    aa    bb    3
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[1,5,0]  ¦  col4[4,32,0]  𝄀
+1  ¦  aa  ¦  bb  ¦  2  𝄀
+4  ¦  aa  ¦  bb  ¦  3
 drop table fk_01;
 internal error: can not drop table 'fk_01' referenced by some foreign key constraint
 drop table fk_02;
@@ -380,35 +385,35 @@ insert into fk_02 values(4,'age',3);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(1,'score',1),(2,'student',NULL);
 select * from fk_01;
-col1    col2    col3
-1    yellow    20
-2    apple    50
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+1  ¦  yellow  ¦  20  𝄀
+2  ¦  apple  ¦  50
 select * from fk_02;
-col1    col2    col3
-1    score    1
-2    student    null
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+1  ¦  score  ¦  1  𝄀
+2  ¦  student  ¦  null
 update fk_02 set col3=4 where col3=1;
 select * from fk_01;
-col1    col2    col3
-1    yellow    20
-2    apple    50
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+1  ¦  yellow  ¦  20  𝄀
+2  ¦  apple  ¦  50
 delete from fk_01 where col1=1;
 select * from fk_02;
-col1    col2    col3
-2    student    null
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+2  ¦  student  ¦  null
 update fk_01 set col1=5 where col2='apple';
 select * from fk_01;
-col1    col2    col3
-5    apple    50
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+5  ¦  apple  ¦  50
 select * from fk_02;
-col1    col2    col3
-5    student    null
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+5  ¦  student  ¦  null
 delete from fk_02 where col1=5;
 select * from fk_02;
-col1    col2    col3
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]
 select * from fk_01;
-col1    col2    col3
-5    apple    50
+➤ col1[-5,64,0]  ¦  col2[12,-1,0]  ¦  col3[-6,8,0]  𝄀
+5  ¦  apple  ¦  50
 drop table fk_02;
 drop table fk_01;
 create table fk_01(id int primary key auto_increment,title varchar(25));
@@ -420,37 +425,37 @@ insert into fk_03(book_id,author_id) values (1,2),(2,2),(3,1);
 insert into fk_03(book_id,author_id) values (4,3);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 update fk_03 set book_id=6 where book_id=2;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update fk_03 set book_id=3 where book_id=2;
 select * from fk_03;
-id    book_id    author_id
-1    1    2
-3    3    1
-2    3    2
+➤ id[4,32,0]  ¦  book_id[4,32,0]  ¦  author_id[4,32,0]  𝄀
+1  ¦  1  ¦  2  𝄀
+3  ¦  3  ¦  1  𝄀
+2  ¦  3  ¦  2
 update fk_01 set id=5 where title='self';
 select * from fk_03;
-id    book_id    author_id
-3    3    1
-2    3    2
-1    5    2
+➤ id[4,32,0]  ¦  book_id[4,32,0]  ¦  author_id[4,32,0]  𝄀
+3  ¦  3  ¦  1  𝄀
+2  ¦  3  ¦  2  𝄀
+1  ¦  5  ¦  2
 select * from fk_01;
-id    title
-2    method
-3    console
-5    self
+➤ id[4,32,0]  ¦  title[12,-1,0]  𝄀
+2  ¦  method  𝄀
+3  ¦  console  𝄀
+5  ¦  self
 delete from fk_02 where id=1;
 select * from fk_02;
-id    name
-2    wulan
+➤ id[4,32,0]  ¦  name[12,-1,0]  𝄀
+2  ¦  wulan
 select * from fk_03;
-id    book_id    author_id
-2    3    2
-1    5    2
+➤ id[4,32,0]  ¦  book_id[4,32,0]  ¦  author_id[4,32,0]  𝄀
+2  ¦  3  ¦  2  𝄀
+1  ¦  5  ¦  2
 delete from fk_03;
 drop table fk_01;
 internal error: can not drop table 'fk_01' referenced by some foreign key constraint
 select * from fk_03;
-id    book_id    author_id
+➤ id[4,32,0]  ¦  book_id[4,32,0]  ¦  author_id[4,32,0]
 drop table fk_02;
 internal error: can not drop table 'fk_02' referenced by some foreign key constraint
 drop table fk_03;
@@ -465,14 +470,14 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01 where col3='2001-10-09 01:00:09';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
-col1    col2    col3
-9    2001-10-19 00:00:00    2001-10-09 01:00:09
-10    2011-12-09 00:00:00    2001-10-09 01:00:09
-11    2011-12-09 00:00:00    2001-10-09 01:00:09
+➤ col1[4,32,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  𝄀
+9  ¦  2001-10-19 00:00:00  ¦  2001-10-09 01:00:09  𝄀
+10  ¦  2011-12-09 00:00:00  ¦  2001-10-09 01:00:09  𝄀
+11  ¦  2011-12-09 00:00:00  ¦  2001-10-09 01:00:09
 select * from fk_02;
-col1    col2    col3    col4
-9    2001-10-19 00:00:00    left    2001-10-09 01:00:09
-11    2011-12-09 00:00:00    right    2001-10-09 01:00:09
+➤ col1[4,32,0]  ¦  col2[93,64,0]  ¦  col3[1,25,0]  ¦  col4[93,64,0]  𝄀
+9  ¦  2001-10-19 00:00:00  ¦  left  ¦  2001-10-09 01:00:09  𝄀
+11  ¦  2011-12-09 00:00:00  ¦  right  ¦  2001-10-09 01:00:09
 drop table fk_02;
 drop table fk_01;
 create table fk_an_01(col1 int,col2 varchar(25),col3 tinyint,primary key(col2));
@@ -487,9 +492,9 @@ create table f1 (fa int primary key);
 CREATE TABLE c1 (ca INT, cb INT);
 ALTER TABLE c1 ADD CONSTRAINT ffa FOREIGN KEY (ca) REFERENCES f1(fa);
 desc c1;
-Field    Type    Null    Key    Default    Extra    Comment
-ca    INT(32)    YES    MUL    null        
-cb    INT(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+ca  ¦  INT(32)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+cb  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table if exists c1;
 drop table if exists f1;
 create table f1 (a int, b int, c int, d int, e int, primary key(a,b), unique key(c,d));
@@ -503,7 +508,7 @@ create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constrai
 insert into c1 values (1,1,1,1,1);
 delete from f1 where a=1 and b=2;
 select * from c1;
-a    f_a    f_b    f_c    f_d
+➤ a[4,32,0]  ¦  f_a[4,32,0]  ¦  f_b[4,32,0]  ¦  f_c[4,32,0]  ¦  f_d[4,32,0]
 drop table c1;
 create table c1 (a int primary key, f_a int, f_b int, f_c int, f_d int, constraint ck foreign key(f_a,f_b) REFERENCES f1(a,b));
 drop table c1;
@@ -519,30 +524,30 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(0.001,'b',20,'2022-10-01'),(4.5,'a',21,'2022-10-01'),(56,'a',20,'2022-10-02');
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
-col1    col2    col3    col4
-23.100    a    20    2022-10-01
-23.100    a    21    2022-10-01
-23.100    a    20    2022-10-02
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  20  ¦  2022-10-02
 select * from fk_02;
-col1    col2    col3    col4
-23.100    a    20    2022-10-01
-23.100    a    21    2022-10-01
-23.100    a    20    2022-10-02
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  20  ¦  2022-10-02
 update fk_02 set col3=19 where col3=20;
 select * from fk_02;
-col1    col2    col3    col4
-23.100    a    21    2022-10-01
-23.100    a    19    2022-10-01
-23.100    a    19    2022-10-02
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  19  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  19  ¦  2022-10-02
 delete from fk_01 where col3=20;
 select * from fk_01;
-col1    col2    col3    col4
-23.100    a    21    2022-10-01
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100  ¦  a  ¦  21  ¦  2022-10-01
 select * from fk_02;
-col1    col2    col3    col4
-null    a    21    2022-10-01
-null    a    19    2022-10-01
-null    a    19    2022-10-02
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+null  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+null  ¦  a  ¦  19  ¦  2022-10-01  𝄀
+null  ¦  a  ¦  19  ¦  2022-10-02
 drop table if exists c1;
 drop table if exists f1;
 create table f1(a int, b int, c int, primary key(a,b));
@@ -551,24 +556,24 @@ create table c1(a int primary key, c_a int, c_b int, constraint c1_ck foreign ke
 insert into c1 values (1,2,1),(2,2,2),(3,2,3);
 update f1 set a=111 where b=1;
 select * from f1;
-a    b    c
-2    2    2
-2    3    3
-111    1    1
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+2  ¦  2  ¦  2  𝄀
+2  ¦  3  ¦  3  𝄀
+111  ¦  1  ¦  1
 select * from c1;
-a    c_a    c_b
-1    111    1
-2    111    2
-3    111    3
+➤ a[4,32,0]  ¦  c_a[4,32,0]  ¦  c_b[4,32,0]  𝄀
+1  ¦  111  ¦  1  𝄀
+2  ¦  111  ¦  2  𝄀
+3  ¦  111  ¦  3
 delete from c1;
 insert into c1 values (1,2,1),(2,2,2),(3,2,3);
 delete from f1 where b=2;
 select * from f1;
-a    b    c
-2    3    3
-111    1    1
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+2  ¦  3  ¦  3  𝄀
+111  ¦  1  ¦  1
 select * from c1;
-a    c_a    c_b
+➤ a[4,32,0]  ¦  c_a[4,32,0]  ¦  c_b[4,32,0]
 drop table if exists fk_02;
 drop table if exists fk_01;
 create table fk_01(col1 decimal(38,3),col2 char(25),col3 int,col4 date,primary key(col1,col3,col4));
@@ -580,32 +585,32 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(0.001,'b',20,'2022-10-01'),(4.5,'a',21,'2022-10-01'),(56,'a',20,'2022-10-02');
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
-col1    col2    col3    col4
-23.100    a    20    2022-10-01
-23.100    a    21    2022-10-01
-23.100    a    20    2022-10-02
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  20  ¦  2022-10-02
 select * from fk_02;
-col1    col2    col3    col4
-23.100    a    20    2022-10-01
-23.100    a    21    2022-10-01
-23.100    a    20    2022-10-02
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  20  ¦  2022-10-02
 update fk_02 set col3=19 where col3=20;
 select * from fk_02;
-col1    col2    col3    col4
-23.100    a    21    2022-10-01
-23.100    a    19    2022-10-01
-23.100    a    19    2022-10-02
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  19  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  19  ¦  2022-10-02
 delete from fk_01  where col3=19;
 select * from fk_01;
-col1    col2    col3    col4
-23.100    a    20    2022-10-01
-23.100    a    21    2022-10-01
-23.100    a    20    2022-10-02
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  20  ¦  2022-10-02
 select * from fk_02;
-col1    col2    col3    col4
-23.100    a    21    2022-10-01
-23.100    a    19    2022-10-01
-23.100    a    19    2022-10-02
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+23.100  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  19  ¦  2022-10-01  𝄀
+23.100  ¦  a  ¦  19  ¦  2022-10-02
 drop table fk_02;
 drop table fk_01;
 create table fk_01(col1 decimal(38,3),col2 char(25),col3 int,col4 date,primary key(col1,col2), unique key(col3));
@@ -620,38 +625,38 @@ insert into fk_02 values(8.9,'c',20,'2022-10-01'),(null,'a',21,'2022-10-01');
 insert into fk_02 values(3.5,'e',20,'2022-10-01'),(8.9,'a',21,'2022-10-01');
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from fk_01;
-col1    col2    col3    col4
-8.900    a    20    2022-10-01
-6.000    a    21    2022-10-01
-4.300    c    20    2022-10-02
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+8.900  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+6.000  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+4.300  ¦  c  ¦  20  ¦  2022-10-02
 select * from fk_02;
-col1    col2    col3    col4
-8.900    a    20    2022-10-01
-8.900    a    21    2022-10-01
-6.000    a    20    2022-10-02
-8.900    c    20    2022-10-01
-null    a    21    2022-10-01
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+8.900  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+8.900  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+6.000  ¦  a  ¦  20  ¦  2022-10-02  𝄀
+8.900  ¦  c  ¦  20  ¦  2022-10-01  𝄀
+null  ¦  a  ¦  21  ¦  2022-10-01
 update fk_02 set col1=6.0 where col3=21;
 select * from fk_02;
-col1    col2    col3    col4
-8.900    a    20    2022-10-01
-6.000    a    20    2022-10-02
-8.900    c    20    2022-10-01
-6.000    a    21    2022-10-01
-6.000    a    21    2022-10-01
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+8.900  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+6.000  ¦  a  ¦  20  ¦  2022-10-02  𝄀
+8.900  ¦  c  ¦  20  ¦  2022-10-01  𝄀
+6.000  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+6.000  ¦  a  ¦  21  ¦  2022-10-01
 update fk_01 set col2='d' where col1=6.0;
 select * from fk_01;
-col1    col2    col3    col4
-8.900    a    20    2022-10-01
-4.300    c    20    2022-10-02
-6.000    d    21    2022-10-01
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+8.900  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+4.300  ¦  c  ¦  20  ¦  2022-10-02  𝄀
+6.000  ¦  d  ¦  21  ¦  2022-10-01
 select * from fk_02;
-col1    col2    col3    col4
-8.900    a    20    2022-10-01
-6.000    a    20    2022-10-02
-8.900    c    20    2022-10-01
-6.000    a    21    2022-10-01
-6.000    a    21    2022-10-01
+➤ col1[3,38,3]  ¦  col2[1,25,0]  ¦  col3[4,32,0]  ¦  col4[91,64,0]  𝄀
+8.900  ¦  a  ¦  20  ¦  2022-10-01  𝄀
+6.000  ¦  a  ¦  20  ¦  2022-10-02  𝄀
+8.900  ¦  c  ¦  20  ¦  2022-10-01  𝄀
+6.000  ¦  a  ¦  21  ¦  2022-10-01  𝄀
+6.000  ¦  a  ¦  21  ¦  2022-10-01
 set autocommit=0;
 create table t1(a int primary key);
 insert into t1 values (1);

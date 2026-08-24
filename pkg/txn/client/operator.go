@@ -933,6 +933,12 @@ func (tc *txnOperator) Status() txn.TxnStatus {
 	return tc.mu.txn.Status
 }
 
+func (tc *txnOperator) RequireAutoIncrEpochFenceCommit() {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.txn.RequireAutoIncrEpochFenceCommit = true
+}
+
 func (tc *txnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -983,13 +989,20 @@ func (tc *txnOperator) updateSnapshot(
 		time.Time{},
 		UpdateSnapshotEvent,
 		func() error {
-			var err error
+			var (
+				next timestamp.Timestamp
+				err  error
+			)
 			if waiter, ok := tc.timestampWaiter.(closeAwareTimestampWaiter); ok {
-				tc.mu.txn.SnapshotTS, err = waiter.GetTimestampWithClose(ctx, ts, closeC)
+				next, err = waiter.GetTimestampWithClose(ctx, ts, closeC)
 			} else {
-				tc.mu.txn.SnapshotTS, err = tc.timestampWaiter.GetTimestamp(ctx, ts)
+				next, err = tc.timestampWaiter.GetTimestamp(ctx, ts)
 			}
-			return err
+			if err != nil {
+				return err
+			}
+			tc.mu.txn.SnapshotTS = next
+			return nil
 		},
 		true)
 	return err
@@ -1038,6 +1051,9 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 	}
 	if tc.mu.txn.SnapshotTS.Less(snapshot.Txn.SnapshotTS) {
 		tc.mu.txn.SnapshotTS = snapshot.Txn.SnapshotTS
+	}
+	if snapshot.Txn.RequireAutoIncrEpochFenceCommit {
+		tc.mu.txn.RequireAutoIncrEpochFenceCommit = true
 	}
 	util.LogTxnUpdated(tc.logger, tc.mu.txn)
 	return nil
@@ -1569,8 +1585,12 @@ func (tc *txnOperator) doWrite(
 		if sequencer, ok := tc.lockService.(lockservice.CommitSequenceProvider); ok {
 			commitSequence = sequencer.NextCommitSequence()
 		}
+		commitMethod := txn.TxnMethod_Commit
+		if tc.mu.txn.RequireAutoIncrEpochFenceCommit {
+			commitMethod = txn.TxnMethod_CommitAutoIncrEpochFence
+		}
 		requests = append(requests, txn.TxnRequest{
-			Method: txn.TxnMethod_Commit,
+			Method: commitMethod,
 			Flag:   txn.SkipResponseFlag,
 			CommitRequest: &txn.TxnCommitRequest{
 				Payload:          txnReqs,
@@ -1623,7 +1643,7 @@ func (tc *txnOperator) addPartitionLocked(tn metadata.TNShard) {
 
 func (tc *txnOperator) validate(ctx context.Context, locked bool) error {
 	if _, ok := ctx.Deadline(); !ok {
-		tc.logger.Fatal("context deadline not set")
+		return moerr.NewInvalidInput(ctx, "txn operation context deadline not set")
 	}
 
 	return tc.checkStatus(locked)
@@ -1799,7 +1819,7 @@ func (tc *txnOperator) handleErrorResponse(ctx context.Context, resp txn.TxnResp
 			return err
 		}
 		return tc.checkTxnError(resp.TxnError, writeTxnErrors)
-	case txn.TxnMethod_Commit:
+	case txn.TxnMethod_Commit, txn.TxnMethod_CommitAutoIncrEpochFence:
 		tc.triggerEventLocked(
 			ctx,
 			newCostEvent(
@@ -1973,6 +1993,23 @@ func (tc *txnOperator) unlock(ctx context.Context) error {
 			tc.reset.commitSequence,
 			tc.reset.unknownCommitResolved,
 		); err != nil {
+			if done, scheduled := lockservice.UnknownCommitResolutionDone(err); scheduled {
+				// Lockservice owns cleanup but deliberately retained no external
+				// callback capacity. Keep this transaction's existing admission as
+				// the bound and invoke the still caller-owned callback only after the
+				// terminal signal. Close also closes the signal, so the waiter has a
+				// lifecycle owner and cannot outlive both components.
+				tc.reset.unknownCommitResolutionTransferred = true
+				tc.reset.internalUnknownCommitAdmissionHeld = false
+				onResolved := tc.reset.unknownCommitResolved
+				go func() {
+					<-done
+					if onResolved != nil {
+						onResolved()
+					}
+				}()
+				return nil
+			}
 			tc.logger.Error("failed to schedule unknown commit resolution",
 				util.TxnField(tc.mu.txn),
 				zap.Error(err))

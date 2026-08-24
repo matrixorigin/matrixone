@@ -231,6 +231,12 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 			node.ArrayContents.InternalType.Format(ctx)
 			ctx.WriteByte(')')
 		}
+	case "time", "timestamp", "datetime":
+		if node.Scale > 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(node.Scale), 10))
+			ctx.WriteByte(')')
+		}
 	default:
 		if node.Scale > 0 {
 			ctx.WriteByte('(')

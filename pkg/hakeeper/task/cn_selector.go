@@ -61,9 +61,11 @@ func (p *cnPool) selectCNs(rules ...rule) *cnPool {
 	newPool := newCNPool()
 	for _, cn := range p.sortedCN {
 		if matchAllRules(cn.info, rules...) {
-			heap.Push(newPool, cn)
+			newPool.freq[cn.uuid] = p.getFreq(cn.uuid)
+			newPool.sortedCN = append(newPool.sortedCN, cn)
 		}
 	}
+	heap.Init(newPool)
 	return newPool
 }
 

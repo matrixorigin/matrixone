@@ -40,6 +40,46 @@ func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
 
 	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_UPDATE, true)))
 	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_DELETE, true)))
+	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_INSERT, true)))
+
+	require.True(t, checkNodeCanCache(makePlan(plan.Query_INSERT, false)))
+	require.False(t, checkNodeCanCache(makePlan(plan.Query_INSERT, true)))
+
+	require.False(t, shouldRebuildPreparePlan(false, nil))
+	require.False(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, false)))
+	require.True(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, true)))
+	require.True(t, shouldRebuildPreparePlan(true, makePlan(plan.Query_INSERT, false)))
+}
+
+func TestInitExecuteStmtParamRebuildsAcrossForeignKeyChecksTransitions(t *testing.T) {
+	for i, test := range []struct {
+		name string
+		from int64
+		to   int64
+	}{
+		{name: "disabled to enabled", from: 0, to: 1},
+		{name: "enabled to disabled", from: 1, to: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, uint32(120+i))
+			defer prepareStmt.Close()
+
+			require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "foreign_key_checks", test.from))
+			oldPlan := prepareStmt.PreparePlan
+			oldQuery := oldPlan.GetDcl().GetPrepare().GetPlan().GetQuery()
+			require.NotNil(t, oldQuery)
+			oldQuery.HasForeignKeyAction = true
+
+			require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "foreign_key_checks", test.to))
+			_, rebuiltPlan, rebuiltStmt, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, rebuiltPlan)
+			require.NotNil(t, rebuiltStmt)
+			require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
+		})
+	}
 }
 
 func TestShouldCachePrepareCompileRejectsIcebergScan(t *testing.T) {

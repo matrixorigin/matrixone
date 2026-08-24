@@ -53,6 +53,10 @@ type PreInsert struct {
 	ClusterByExpr      *plan.Expr
 	ColOffset          int32
 	RejectZeroTemporal bool
+	HasTargetSelector  bool
+	TargetRowNumberCol int32
+	TargetActiveCol    int32
+	TargetRowIDCol     int32
 
 	vm.OperatorBase
 }

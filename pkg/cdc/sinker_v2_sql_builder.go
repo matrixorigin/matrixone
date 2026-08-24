@@ -123,6 +123,31 @@ func (b *CDCStatementBuilder) BuildInsertSQL(
 	if bat == nil || bat.RowCount() == 0 {
 		return nil, nil
 	}
+	return b.buildInsertSQL(ctx, newBatchRowIterator(bat), fromTs, toTs)
+}
+
+// buildAtomicInsertSQL constructs bounded INSERT statements from the ordered,
+// deduplicated rows in an AtomicBatch. It intentionally does not iterate
+// AtomicBatch.Batches: a tail range can contain one source batch per commit
+// timestamp, and processing those independently would turn one sink command
+// back into one SQL statement per timestamp.
+func (b *CDCStatementBuilder) buildAtomicInsertSQL(
+	ctx context.Context,
+	bat *AtomicBatch,
+	fromTs, toTs types.TS,
+) ([][]byte, error) {
+	if bat == nil || bat.RowCount() == 0 {
+		return nil, nil
+	}
+	return b.buildInsertSQL(ctx, bat.GetRowIterator(), fromTs, toTs)
+}
+
+func (b *CDCStatementBuilder) buildInsertSQL(
+	ctx context.Context,
+	iter RowIterator,
+	fromTs, toTs types.TS,
+) ([][]byte, error) {
+	defer iter.Close()
 
 	var sqls [][]byte
 	var currentSQL []byte
@@ -136,12 +161,9 @@ func (b *CDCStatementBuilder) BuildInsertSQL(
 	currentSQL = append(currentSQL, prefix...)
 	firstRow := true
 
-	// Process each row
-	rowCount := bat.RowCount()
-	for i := 0; i < rowCount; i++ {
-		// Extract row data
-		row := make([]any, len(b.insertColTypes))
-		if err := extractRowFromEveryVector(ctx, bat, i, row); err != nil {
+	row := make([]any, len(b.insertColTypes))
+	for iter.Next() {
+		if err := iter.Row(ctx, row); err != nil {
 			return nil, err
 		}
 
@@ -192,6 +214,26 @@ func (b *CDCStatementBuilder) BuildInsertSQL(
 
 	return sqls, nil
 }
+
+type batchRowIterator struct {
+	bat    *batch.Batch
+	offset int
+}
+
+func newBatchRowIterator(bat *batch.Batch) *batchRowIterator {
+	return &batchRowIterator{bat: bat, offset: -1}
+}
+
+func (iter *batchRowIterator) Next() bool {
+	iter.offset++
+	return iter.offset < iter.bat.RowCount()
+}
+
+func (iter *batchRowIterator) Row(ctx context.Context, row []any) error {
+	return extractRowFromEveryVector(ctx, iter.bat, iter.offset, row)
+}
+
+func (iter *batchRowIterator) Close() {}
 
 // BuildDeleteSQL constructs DELETE SQL statements from atomic batches
 //

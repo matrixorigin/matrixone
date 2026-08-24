@@ -39,3 +39,10 @@ func (op *opSerial) Reset() error {
 	op.packer.Reset()
 	return nil
 }
+
+func (op *opSerial) RetainedBytes() uint64 {
+	if op == nil {
+		return 0
+	}
+	return op.packer.Allocated()
+}

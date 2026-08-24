@@ -142,6 +142,11 @@ var (
 		"last_run=?, " +
 		"details=? where task_id=?"
 
+	updateDaemonTaskStatus = "update sys_daemon_task set " +
+		"task_status=?, " +
+		"update_at=?, " +
+		"end_at=? where task_id=?"
+
 	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=?"
 
 	deleteDaemonTask = "delete from sys_daemon_task where 1=1"
@@ -304,7 +309,11 @@ func newMysqlTaskStorage(dsn string) (TaskStorage, error) {
 }
 
 func (m *mysqlTaskStorage) Close() error {
-	return m.db.Close()
+	// database/sql closes the DB before collecting errors from the driver
+	// connections. The MySQL driver also cleans up each connection even when
+	// writing COM_QUIT fails, so there is no remaining cleanup to retry here.
+	_ = m.db.Close()
+	return nil
 }
 
 func (m *mysqlTaskStorage) PingContext(ctx context.Context) error {
@@ -1559,9 +1568,12 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 			if err != nil {
 				return err
 			}
-			details, err := t.Details.Marshal()
-			if err != nil {
-				return err
+			var details any
+			if t.Details != nil {
+				details, err = t.Details.Marshal()
+				if err != nil {
+					return err
+				}
 			}
 
 			var lastHeartbeat, updateAt, endAt, lastRun any
@@ -1607,6 +1619,49 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 		}
 	}
 	return n, nil
+}
+
+func (m *mysqlTaskStorage) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conditions ...Condition,
+) (int, error) {
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+	return m.RunUpdateDaemonTaskStatus(
+		ctx,
+		taskID,
+		status,
+		updateAt,
+		endAt,
+		m.db,
+		conditions...,
+	)
+}
+
+func (m *mysqlTaskStorage) RunUpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	db SqlExecutor,
+	conditions ...Condition,
+) (int, error) {
+	updateSQL := updateDaemonTaskStatus + buildDaemonTaskWhereClause(newConditions(conditions...))
+	exec, err := db.ExecContext(ctx, updateSQL, status, updateAt, nullTime(endAt), taskID)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := exec.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
 func (m *mysqlTaskStorage) DeleteDaemonTask(ctx context.Context, condition ...Condition) (int, error) {
@@ -1904,8 +1959,15 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 			continue
 		}
 		if dTask.TaskStatus != task.TaskStatus_Canceled {
-			if targetStatus == task.TaskStatus_ResumeRequested && dTask.TaskStatus != task.TaskStatus_Paused ||
-				targetStatus == task.TaskStatus_PauseRequested && dTask.TaskStatus != task.TaskStatus_Running {
+			pauseAllowed := dTask.TaskStatus == task.TaskStatus_Running ||
+				// Resume is admitted before the asynchronous executor replacement
+				// completes. Accepting PAUSE here queues it behind that resume and
+				// keeps the daemon lifecycle consistent with the public CDC state,
+				// which is already running at this point.
+				(targetStatus == task.TaskStatus_PauseRequested && dTask.TaskStatus == task.TaskStatus_ResumeRequested)
+			if targetStatus == task.TaskStatus_ResumeRequested &&
+				(dTask.TaskStatus != task.TaskStatus_Paused && !pauseAllowed) ||
+				targetStatus == task.TaskStatus_PauseRequested && !pauseAllowed {
 				createCdc := details.CreateCdc
 				logutil.Warn("cdc.task.state.mismatch",
 					zap.String("task-name", createCdc.TaskName),
@@ -1921,13 +1983,22 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 				return 0, err
 			}
 			if dTask.TaskStatus != targetStatus {
-				logutil.Info("cdc.task.state.transition",
-					zap.String("task-name", details.CreateCdc.TaskName),
-					zap.Uint64("task-id", dTask.ID),
-					zap.Uint64("account-id", uint64(dTask.AccountID)),
-					zap.String("from-status", dTask.TaskStatus.String()),
-					zap.String("to-status", targetStatus.String()),
-				)
+				if targetStatus == task.TaskStatus_RestartRequested {
+					eventCDCRestartRequestStateUpdated.InfoLazy(func() []zap.Field {
+						return cdcRestartEventFields(dTask,
+							zap.String("from-status", dTask.TaskStatus.String()),
+							zap.String("to-status", targetStatus.String()),
+						)
+					})
+				} else {
+					logutil.Info("cdc.task.state.transition",
+						zap.String("task-name", details.CreateCdc.TaskName),
+						zap.Uint64("task-id", dTask.ID),
+						zap.Uint64("account-id", uint64(dTask.AccountID)),
+						zap.String("from-status", dTask.TaskStatus.String()),
+						zap.String("to-status", targetStatus.String()),
+					)
+				}
 			}
 			dTask.TaskStatus = targetStatus
 			updateTasks = append(updateTasks, dTask)

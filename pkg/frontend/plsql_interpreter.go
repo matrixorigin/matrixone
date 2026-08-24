@@ -22,9 +22,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type SpStatus int
@@ -38,18 +38,76 @@ const (
 )
 
 type Interpreter struct {
-	ctx         context.Context
-	ses         FeSession
-	bh          BackgroundExec
-	varScope    *[]map[string]interface{}
-	fmtctx      *tree.FmtCtx
-	result      []ExecResult
-	argsAttr    map[string]tree.InOutArgType // used for IN, OUT, IN/OUT check
-	argsMap     map[string]tree.Expr         // used for argument to parameter mapping
-	outParamMap map[string]interface{}       // used for storing and updating OUT type arg
+	ctx          context.Context
+	ses          FeSession
+	bh           BackgroundExec
+	varScope     *[]map[string]interface{}
+	varTypeScope *[]map[string]plan.Type
+	fmtctx       *tree.FmtCtx
+	result       []ExecResult
+	argsAttr     map[string]tree.InOutArgType // used for IN, OUT, IN/OUT check
+	argsMap      map[string]tree.Expr         // used for argument to parameter mapping
+	argsType     map[string]plan.Type         // declared SQL type for every parameter
+	outParamMap  map[string]interface{}       // used for storing and updating OUT type arg
 
 	lastAffectedRows    int64
 	initialAffectedRows int64
+}
+
+func (interpreter *Interpreter) ensureVariableScopes() {
+	if interpreter.varScope == nil {
+		var scopes []map[string]interface{}
+		interpreter.varScope = &scopes
+	}
+	if interpreter.varTypeScope == nil {
+		var scopes []map[string]plan.Type
+		interpreter.varTypeScope = &scopes
+	}
+	for len(*interpreter.varTypeScope) < len(*interpreter.varScope) {
+		*interpreter.varTypeScope = append(*interpreter.varTypeScope, make(map[string]plan.Type))
+	}
+	if len(*interpreter.varTypeScope) > len(*interpreter.varScope) {
+		*interpreter.varTypeScope = (*interpreter.varTypeScope)[:len(*interpreter.varScope)]
+	}
+	for i := range *interpreter.varTypeScope {
+		if (*interpreter.varTypeScope)[i] == nil {
+			(*interpreter.varTypeScope)[i] = make(map[string]plan.Type)
+		}
+	}
+}
+
+func (interpreter *Interpreter) storedProcedureContext() context.Context {
+	interpreter.ensureVariableScopes()
+	if interpreter.ctx == nil {
+		interpreter.ctx = context.Background()
+	}
+	if scopes, ok := interpreter.ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{}); ok && scopes == interpreter.varScope {
+		if typeScopes, ok := interpreter.ctx.Value(defines.VarScopeTypeKey{}).(*[]map[string]plan.Type); ok && typeScopes == interpreter.varTypeScope {
+			if inSp, _ := interpreter.ctx.Value(defines.InSp{}).(bool); inSp {
+				return interpreter.ctx
+			}
+		}
+	}
+	ctx := context.WithValue(interpreter.ctx, defines.VarScopeKey{}, interpreter.varScope)
+	ctx = context.WithValue(ctx, defines.VarScopeTypeKey{}, interpreter.varTypeScope)
+	return context.WithValue(ctx, defines.InSp{}, true)
+}
+
+func (interpreter *Interpreter) evaluateStoredProcedureExpr(e tree.Expr, targetType *plan.Type) (interface{}, error) {
+	ctx := interpreter.storedProcedureContext()
+	interpreter.ctx = ctx
+	return interpreter.evaluateExprInContext(ctx, e, targetType)
+}
+
+func (interpreter *Interpreter) evaluateExprInContext(ctx context.Context, e tree.Expr, targetType *plan.Type) (interface{}, error) {
+	txnCompileCtx := interpreter.ses.GetTxnCompileCtx()
+	previousCtx := txnCompileCtx.GetContext()
+	txnCompileCtx.SetContext(ctx)
+	defer txnCompileCtx.SetContext(previousCtx)
+	if targetType != nil {
+		return GetSimpleExprValueWithType(ctx, e, interpreter.ses, *targetType)
+	}
+	return GetSimpleExprValue(ctx, e, interpreter.ses)
 }
 
 func (interpreter *Interpreter) recordAffectedRows() {
@@ -81,10 +139,29 @@ func (interpreter *Interpreter) GetStatementString(input tree.Statement) string 
 	return interpreter.fmtctx.String()
 }
 
+func (interpreter *Interpreter) executeSQL(sql string) (SpStatus, error) {
+	interpreter.bh.ClearExecResultSet()
+	interpreter.ctx = interpreter.storedProcedureContext()
+	if err := interpreter.bh.Exec(interpreter.ctx, sql); err != nil {
+		return SpNotOk, err
+	}
+	interpreter.recordAffectedRows()
+	erArray, err := getResultSet(interpreter.ctx, interpreter.bh)
+	if err != nil {
+		return SpNotOk, err
+	}
+	if execResultArrayHasData(erArray) {
+		interpreter.result = append(interpreter.result, erArray...)
+	}
+	return SpOk, nil
+}
+
 func (interpreter *Interpreter) GetSpVar(varName string) (interface{}, error) {
+	interpreter.ensureVariableScopes()
+	varName = strings.ToLower(varName)
 	for i := len(*interpreter.varScope) - 1; i >= 0; i-- {
 		curScope := (*interpreter.varScope)[i]
-		val, ok := curScope[strings.ToLower(varName)]
+		val, ok := curScope[varName]
 		if ok {
 			return val, nil
 		}
@@ -92,12 +169,26 @@ func (interpreter *Interpreter) GetSpVar(varName string) (interface{}, error) {
 	return "", nil
 }
 
+func (interpreter *Interpreter) GetSpVarType(varName string) (plan.Type, bool) {
+	interpreter.ensureVariableScopes()
+	varName = strings.ToLower(varName)
+	for i := len(*interpreter.varScope) - 1; i >= 0; i-- {
+		if _, ok := (*interpreter.varScope)[i][varName]; ok {
+			typ, typeOK := (*interpreter.varTypeScope)[i][varName]
+			return typ, typeOK
+		}
+	}
+	return plan.Type{}, false
+}
+
 // Return error if variable is not declared yet. PARAM is an exception!
 func (interpreter *Interpreter) SetSpVar(name string, value interface{}) error {
+	interpreter.ensureVariableScopes()
+	name = strings.ToLower(name)
 	for i := len(*interpreter.varScope) - 1; i >= 0; i-- {
 		curScope := (*interpreter.varScope)[i]
-		if _, ok := curScope[strings.ToLower(name)]; ok {
-			curScope[strings.ToLower(name)] = value
+		if _, ok := curScope[name]; ok {
+			curScope[name] = value
 			return nil
 		}
 	}
@@ -112,7 +203,7 @@ func (interpreter *Interpreter) SetSpVar(name string, value interface{}) error {
 
 func (interpreter *Interpreter) FlushParam() error {
 	for k, v := range (*interpreter.varScope)[0] {
-		if _, ok := interpreter.argsMap[k]; ok && interpreter.argsAttr[k] == tree.TYPE_INOUT {
+		if _, ok := interpreter.argsMap[k]; ok && (interpreter.argsAttr[k] == tree.TYPE_INOUT || interpreter.argsAttr[k] == tree.TYPE_OUT) {
 			// save INOUT at session
 			interpreter.bh.ClearExecResultSet()
 			// system setvar execution
@@ -123,30 +214,11 @@ func (interpreter *Interpreter) FlushParam() error {
 		}
 	}
 
-	for k, v := range interpreter.outParamMap {
-		// save at session
-		interpreter.bh.ClearExecResultSet()
-		// system setvar execution
-		err := interpreter.ses.SetUserDefinedVar(interpreter.argsMap[k].(*tree.VarExpr).Name, v, "")
-		if err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
 func (interpreter *Interpreter) GetSimpleExprValueWithSpVar(e tree.Expr) (interface{}, error) {
-	newExpr, err := interpreter.MatchExpr(e)
-	if err != nil {
-		return nil, err
-	}
-	retStmt, err := parsers.ParseOne(interpreter.ctx, dialect.MYSQL, "select "+interpreter.GetExprString(newExpr), 1)
-	if err != nil {
-		return nil, err
-	}
-	retExpr := retStmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-	return GetSimpleExprValue(interpreter.ctx, retExpr, interpreter.ses)
+	return interpreter.evaluateStoredProcedureExpr(e, nil)
 }
 
 // Currently we support only binary, unary and comparison expression.
@@ -221,8 +293,7 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 	defer interpreter.setAffectedRows(savedAffectedRows)
 
 	interpreter.bh.ClearExecResultSet()
-	interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey{}, interpreter.varScope)
-	interpreter.ctx = context.WithValue(interpreter.ctx, defines.InSp{}, true)
+	interpreter.ctx = interpreter.storedProcedureContext()
 	err := interpreter.bh.Exec(interpreter.ctx, "select "+cond)
 	if err != nil {
 		return 0, err
@@ -244,6 +315,9 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 
 func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string, bg bool) (err error) {
 	curScope := make(map[string]interface{})
+	curTypeScope := make(map[string]plan.Type)
+	interpreter.ensureVariableScopes()
+	argumentCtx := interpreter.ctx
 	interpreter.bh.ClearExecResultSet()
 
 	// use current database as default
@@ -266,34 +340,53 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string, bg
 
 	// save parameters as local variables
 	*interpreter.varScope = append(*interpreter.varScope, curScope)
+	*interpreter.varTypeScope = append(*interpreter.varTypeScope, curTypeScope)
+	interpreter.ctx = interpreter.storedProcedureContext()
 	for k, v := range interpreter.argsMap {
+		name := strings.ToLower(k)
+		argType, hasArgType := interpreter.argsType[name]
+		if hasArgType {
+			curTypeScope[name] = argType
+		}
 		var value interface{}
 		if varParam, ok := v.(*tree.VarExpr); ok {
-			// For OUT type, store it in a separate map only for SET to update it and flush at the end
-			if interpreter.argsAttr[k] == tree.TYPE_OUT {
-				interpreter.outParamMap[k] = 0
+			if interpreter.argsAttr[name] == tree.TYPE_OUT {
+				curScope[name] = nil
 			} else { // For INOUT and IN type, fetch store its previous value
 				interpreter.bh.ClearExecResultSet()
-				value, _ := interpreter.ses.GetUserDefinedVar(varParam.Name)
-				if value == nil {
-					// raise an error as INOUT / IN type param has to have a value
-					return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or IN has to have a specified value.", k))
+				userVar, getErr := interpreter.ses.GetUserDefinedVar(varParam.Name)
+				if getErr != nil {
+					return getErr
 				}
-				// save param to local var scope
-				(*interpreter.varScope)[len(*interpreter.varScope)-1][strings.ToLower(k)] = value.Value
+				if userVar == nil {
+					// raise an error as INOUT / IN type param has to have a value
+					return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or IN has to have a specified value.", name))
+				}
+				if hasArgType {
+					value, err = interpreter.evaluateExprInContext(argumentCtx, v, &argType)
+				} else {
+					value, err = interpreter.evaluateExprInContext(argumentCtx, v, nil)
+				}
+				if err != nil {
+					return err
+				}
+				curScope[name] = value
 			}
 		} else {
 			// if param type is INOUT or OUT and the param is not provided with variable expr, raise an error
-			if interpreter.argsAttr[k] == tree.TYPE_INOUT || interpreter.argsAttr[k] == tree.TYPE_OUT {
-				return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or OUT has to be passed in using @.", k))
+			if interpreter.argsAttr[name] == tree.TYPE_INOUT || interpreter.argsAttr[name] == tree.TYPE_OUT {
+				return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or OUT has to be passed in using @.", name))
 			}
 			// evaluate the param
-			value, err = interpreter.GetSimpleExprValueWithSpVar(v)
+			if hasArgType {
+				value, err = interpreter.evaluateExprInContext(argumentCtx, v, &argType)
+			} else {
+				value, err = interpreter.evaluateExprInContext(argumentCtx, v, nil)
+			}
 			if err != nil {
 				return err
 			}
-			// save param to local var scope
-			(*interpreter.varScope)[len(*interpreter.varScope)-1][strings.ToLower(k)] = value
+			curScope[name] = value
 		}
 	}
 
@@ -331,7 +424,14 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 	case *tree.CompoundStmt:
 		// create new variable scope and push it
 		curScope := make(map[string]interface{})
+		curTypeScope := make(map[string]plan.Type)
+		interpreter.ensureVariableScopes()
 		*interpreter.varScope = append(*interpreter.varScope, curScope)
+		*interpreter.varTypeScope = append(*interpreter.varTypeScope, curTypeScope)
+		defer func() {
+			*interpreter.varScope = (*interpreter.varScope)[:len(*interpreter.varScope)-1]
+			*interpreter.varTypeScope = (*interpreter.varTypeScope)[:len(*interpreter.varTypeScope)-1]
+		}()
 		interpreter.ses.Info(interpreter.ctx, "current scope level: "+strconv.Itoa(len(*interpreter.varScope)))
 		// recursively execute
 		for _, innerSt := range st.Stmts {
@@ -340,8 +440,6 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 				return SpNotOk, err
 			}
 		}
-		// pop current scope
-		*interpreter.varScope = (*interpreter.varScope)[:len(*interpreter.varScope)-1]
 		return SpOk, nil
 	case *tree.RepeatStmt:
 		for {
@@ -516,38 +614,47 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		}
 		return SpOk, nil
 	case *tree.Declare:
-		var err error
+		interpreter.ensureVariableScopes()
+		declaredType, err := plan2.GetTypeFromAst(interpreter.ctx, st.ColumnType)
+		if err != nil {
+			return SpNotOk, err
+		}
 		var value interface{}
 		// store variables into current scope
 		if st.DefaultVal != nil {
-			value, err = GetSimpleExprValue(interpreter.ctx, st.DefaultVal, interpreter.ses)
+			value, err = interpreter.evaluateStoredProcedureExpr(st.DefaultVal, &declaredType)
 			if err != nil {
-				return SpNotOk, nil
+				return SpNotOk, err
 			}
 		}
 		for _, v := range st.Variables {
-			(*interpreter.varScope)[len(*interpreter.varScope)-1][v] = value
+			name := strings.ToLower(v)
+			(*interpreter.varScope)[len(*interpreter.varScope)-1][name] = value
+			(*interpreter.varTypeScope)[len(*interpreter.varTypeScope)-1][name] = declaredType
 		}
 		return SpOk, nil
 	case *tree.SetVar:
 		for _, assign := range st.Assignments {
 			name := assign.Name
 
-			// if this is a system set, ignore if it's not a INOUT/OUT arg
-			if strings.Contains(interpreter.GetExprString(st), "@") {
-				str := interpreter.GetExprString(st)
-				interpreter.bh.ClearExecResultSet()
-				// system setvar execution
-				err := interpreter.bh.Exec(interpreter.ctx, str)
+			if !assign.System {
+				value, err := interpreter.GetSimpleExprValueWithSpVar(assign.Value)
 				if err != nil {
 					return SpNotOk, err
 				}
-				interpreter.recordAffectedRows()
+				setSQL := "set @" + name + " = " + interpreter.GetExprString(assign.Value)
+				if err = interpreter.ses.SetUserDefinedVar(name, value, setSQL); err != nil {
+					return SpNotOk, err
+				}
+				interpreter.setAffectedRows(0)
 			} else {
 				// custom defined variable
-				var value interface{}
+				declaredType, ok := interpreter.GetSpVarType(name)
+				if !ok {
+					return SpNotOk, moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("variable %s has to be declared using DECLARE.", name))
+				}
 				// get updated value
-				value, err := interpreter.GetSimpleExprValueWithSpVar(assign.Value)
+				value, err := interpreter.evaluateStoredProcedureExpr(assign.Value, &declaredType)
 				if err != nil {
 					return SpNotOk, err
 				}
@@ -560,24 +667,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 			}
 		}
 	default: // normal sql. Since we don't support SELECT INTO for now, we don't have to worry about updating variables
-		str := interpreter.GetStatementString(st)
-		interpreter.bh.ClearExecResultSet()
-		// For sp variable replacement
-		interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey{}, interpreter.varScope)
-		interpreter.ctx = context.WithValue(interpreter.ctx, defines.InSp{}, true)
-		err := interpreter.bh.Exec(interpreter.ctx, str)
-		if err != nil {
-			return SpNotOk, err
-		}
-		interpreter.recordAffectedRows()
-		erArray, err := getResultSet(interpreter.ctx, interpreter.bh)
-		if err != nil {
-			return SpNotOk, err
-		}
-		if execResultArrayHasData(erArray) {
-			interpreter.result = append(interpreter.result, erArray...)
-		}
-		return SpOk, nil
+		return interpreter.executeSQL(interpreter.GetStatementString(st))
 	}
 	return SpOk, nil
 }

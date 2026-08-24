@@ -18,11 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math/rand/v2"
-	"runtime"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -199,32 +196,32 @@ func TestFuzzingDiskS3(t *testing.T) {
 		func(
 			op func(t *testing.T, input uint64),
 		) {
+			const (
+				numWorkers    = 8
+				opsPerWorker  = 128
+				operationSeed = uint64(1)
+			)
 
-			done := make(chan struct{})
+			// Guarantee a readable object before concurrent operations begin.
+			op(t, 0)
 
-			numCPU := runtime.GOMAXPROCS(0)
-			wg := new(sync.WaitGroup)
-			for i := 0; i < numCPU; i++ {
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			for worker := 0; worker < numWorkers; worker++ {
 				wg.Add(1)
-				go func() {
+				go func(worker int) {
 					defer wg.Done()
-					t.Run(fmt.Sprintf("proc %v", i), func(t *testing.T) {
-						for {
-							select {
-							case <-done:
-								return
-							default:
-								op(t, rand.Uint64())
-							}
+					t.Run(fmt.Sprintf("worker-%d", worker), func(t *testing.T) {
+						<-start
+						base := operationSeed + uint64(worker*opsPerWorker)
+						for i := 0; i < opsPerWorker; i++ {
+							op(t, base+uint64(i))
 						}
 					})
-				}()
+				}(worker)
 			}
-
-			<-time.After(time.Second * 5)
-			close(done)
+			close(start)
 			wg.Wait()
-
 		},
 	)
 }

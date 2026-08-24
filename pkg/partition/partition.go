@@ -73,6 +73,54 @@ func genericPartition[T types.FixedSizeT](sels []int64, diffs []bool, partitions
 	return partitions
 }
 
+func floatOrderPartition[T types.FixedSizeT](
+	sels []int64,
+	diffs []bool,
+	partitions []int64,
+	vec *vector.Vector,
+	compare func(T, T) int,
+) []int64 {
+	partitions = partitions[:0]
+	if len(sels) == 0 {
+		return partitions
+	}
+	diffs[0] = true
+	diffs = diffs[:len(sels)]
+
+	if !vec.IsConst() {
+		var n bool
+		var v T
+		vs := vector.MustFixedColWithTypeCheck[T](vec)
+		nsp := vec.GetNulls()
+		if nsp.Any() {
+			for i, sel := range sels {
+				w := vs[sel]
+				isNull := nulls.Contains(nsp, uint64(sel))
+				if n != isNull {
+					diffs[i] = true
+				} else if !isNull {
+					diffs[i] = diffs[i] || compare(v, w) != 0
+				}
+				n = isNull
+				v = w
+			}
+		} else {
+			for i, sel := range sels {
+				w := vs[sel]
+				diffs[i] = diffs[i] || compare(v, w) != 0
+				v = w
+			}
+		}
+	}
+
+	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
+		if diffs[i] {
+			partitions = append(partitions, i)
+		}
+	}
+	return partitions
+}
+
 func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
 	partitions = partitions[:0]
 	if len(sels) == 0 {
@@ -185,5 +233,19 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		//Hence, we can use bytesPartition here.
 	default:
 		panic(moerr.NewNotSupportedNoCtx(vec.GetType().Oid.String()))
+	}
+}
+
+// PartitionForOrder returns peer-group boundaries for SQL ORDER BY. Generic
+// Partition intentionally retains value-identity semantics for GROUP BY,
+// PARTITION BY, and storage callers; only scalar NaN equality differs here.
+func PartitionForOrder(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		return floatOrderPartition(sels, diffs, partitions, vec, types.Float32OrderAscCompare)
+	case types.T_float64:
+		return floatOrderPartition(sels, diffs, partitions, vec, types.Float64OrderAscCompare)
+	default:
+		return Partition(sels, diffs, partitions, vec)
 	}
 }

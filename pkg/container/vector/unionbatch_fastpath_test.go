@@ -83,6 +83,300 @@ func TestUnionBatchVarlenFastPath(t *testing.T) {
 	ref.Free(mp)
 }
 
+// TestUnionBatchVarlenContiguousRangeFastPath covers the partial-range shape
+// used when a wide loop-join result is split into bounded output batches. The
+// source payload is contiguous, but offset != 0 and cnt < source length, so it
+// cannot use the whole-vector fast path.
+func TestUnionBatchVarlenContiguousRangeFastPath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const (
+		rows  = 300
+		dims  = 768
+		start = 41
+		count = 173
+	)
+
+	src := NewVec(types.T_array_float32.ToType())
+	for row := 0; row < rows; row++ {
+		isNull := row%29 == 0
+		value := make([]float32, dims)
+		if !isNull {
+			for col := range value {
+				value[col] = float32(row*1000 + col)
+			}
+		}
+		require.NoError(t, AppendArray(src, value, isNull, mp))
+	}
+	nulls.Add(&src.gsp, uint64(start+3), uint64(start+count-1))
+
+	dst := NewVec(types.T_array_float32.ToType())
+	require.NoError(t, AppendArray(dst, []float32{1, 2, 3}, false, mp))
+	require.NoError(t, dst.UnionBatch(src, start, count, nil, mp))
+
+	ref := NewVec(types.T_array_float32.ToType())
+	require.NoError(t, AppendArray(ref, []float32{1, 2, 3}, false, mp))
+	for row := start; row < start+count; row++ {
+		require.NoError(t, ref.UnionOne(src, int64(row), mp))
+	}
+
+	require.Equal(t, ref.Length(), dst.Length())
+	for row := 0; row < dst.Length(); row++ {
+		isNull := ref.IsNull(uint64(row))
+		require.Equalf(t, isNull, dst.IsNull(uint64(row)), "null row %d", row)
+		require.Equalf(t,
+			ref.GetGrouping().Contains(uint64(row)),
+			dst.GetGrouping().Contains(uint64(row)),
+			"grouping row %d", row)
+		if !isNull {
+			require.Equalf(t,
+				GetArrayAt[float32](ref, row),
+				GetArrayAt[float32](dst, row),
+				"value row %d", row)
+		}
+	}
+
+	src.Free(mp)
+	dst.Free(mp)
+	ref.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+// TestUnionBatchVarlenWindowCopiesOnlyLiveArea is the regression guard for
+// borrowed windows retaining their parent's complete area. UnionBatch receives
+// the window as a whole vector (offset 0, cnt == length), but must copy only the
+// payload referenced by the window's live descriptors.
+func TestUnionBatchVarlenWindowCopiesOnlyLiveArea(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const (
+		rows  = 300
+		dims  = 64
+		start = 101
+		count = 37
+	)
+	src := NewVec(types.T_array_float32.ToType())
+	value := make([]float32, dims)
+	for row := 0; row < rows; row++ {
+		value[0] = float32(row)
+		require.NoError(t, AppendArray(src, value, false, mp))
+	}
+	window, err := src.Window(start, start+count)
+	require.NoError(t, err)
+	require.Len(t, window.GetArea(), rows*dims*4)
+
+	dst := NewVec(types.T_array_float32.ToType())
+	require.NoError(t, dst.UnionBatch(window, 0, window.Length(), nil, mp))
+	require.Len(t, dst.GetArea(), count*dims*4)
+	for row := 0; row < count; row++ {
+		require.Equal(t,
+			GetArrayAt[float32](src, start+row),
+			GetArrayAt[float32](dst, row))
+	}
+
+	window.Free(mp)
+	src.Free(mp)
+	dst.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+// TestUnionBatchVarlenRangeFallsBackForReorderedArea verifies that a valid
+// vector whose row headers do not follow area order still uses the general
+// per-row path and preserves its logical values.
+func TestUnionBatchVarlenRangeFallsBackForReorderedArea(t *testing.T) {
+	mp := mpool.MustNewZero()
+	src := NewVec(types.T_varchar.ToType())
+	for i := 0; i < 8; i++ {
+		require.NoError(t, AppendBytes(src,
+			[]byte(fmt.Sprintf("row-%d-", i)+string(make([]byte, 128))),
+			false, mp))
+	}
+	var headers []types.Varlena
+	ToSliceNoTypeCheck(src, &headers)
+	headers[3], headers[4] = headers[4], headers[3]
+
+	dst := NewVec(types.T_varchar.ToType())
+	require.NoError(t, dst.UnionBatch(src, 2, 4, nil, mp))
+	require.Equal(t, 4, dst.Length())
+	for i := 0; i < 4; i++ {
+		require.Equal(t, src.GetBytesAt(2+i), dst.GetBytesAt(i))
+	}
+
+	src.Free(mp)
+	dst.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestUnionBatchVarlenPartialSelfAppendForcedGrowth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, values, isNull := newForcedGrowthAliasVector(t, mp)
+	const offset = 1
+	cnt := vec.Length() - offset
+	requireUnionBatchAliasGrowth(t, vec, values, isNull, offset, cnt)
+
+	oldLength := vec.Length()
+	require.NoError(t, vec.UnionBatch(vec, offset, cnt, nil, mp))
+	assertUnionBatchAliasResult(t, vec, values, isNull, oldLength, offset, cnt)
+
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestUnionBatchVarlenWindowAliasForcedGrowth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, values, isNull := newForcedGrowthAliasVector(t, mp)
+	const offset = 1
+	cnt := vec.Length() - offset
+	requireUnionBatchAliasGrowth(t, vec, values, isNull, offset, cnt)
+
+	window, err := vec.Window(offset, offset+cnt)
+	require.NoError(t, err)
+	oldLength := vec.Length()
+	require.NoError(t, vec.UnionBatch(window, 0, window.Length(), nil, mp))
+	assertUnionBatchAliasResult(t, vec, values, isNull, oldLength, offset, cnt)
+
+	window.Free(mp)
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestUnionBatchVarlenSelfAliasSparseFlagsPreservesMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, values, isNull := newForcedGrowthAliasVector(t, mp)
+	selected := vec.Length() - 1
+	require.False(t, isNull[selected])
+	require.NoError(t, vec.SetIsBinaryStringAt(selected, true, mp))
+	flags := make([]uint8, vec.Length())
+	flags[selected] = 1
+	oldLength := vec.Length()
+
+	require.NoError(t, vec.UnionBatch(vec, 0, 1, flags, mp))
+	require.Equal(t, oldLength+1, vec.Length())
+	require.Equal(t, values[selected], string(vec.GetBytesAt(oldLength)))
+	require.True(t, vec.GetBinaryStringMetadataAt(oldLength))
+
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func newForcedGrowthAliasVector(
+	t *testing.T,
+	mp *mpool.MPool,
+) (*Vector, []string, []bool) {
+	t.Helper()
+	vec := NewVec(types.T_varchar.ToType())
+	values := make([]string, 0, 128)
+	isNull := make([]bool, 0, 128)
+	for row := 0; row < 128; row++ {
+		null := row%7 == 3
+		value := fmt.Sprintf("row-%03d-", row) + string(make([]byte, 256+row%13))
+		require.NoError(t, AppendBytes(vec, []byte(value), null, mp))
+		values = append(values, value)
+		isNull = append(isNull, null)
+		if row < 7 {
+			continue
+		}
+		payloadBytes := 0
+		for i := 1; i < len(values); i++ {
+			if !isNull[i] {
+				payloadBytes += len(values[i])
+			}
+		}
+		selectedRows := len(values) - 1
+		if len(vec.area)+payloadBytes > cap(vec.area) &&
+			len(vec.data)+selectedRows*vec.typ.TypeSize() > cap(vec.data) {
+			nulls.Add(&vec.gsp, 2)
+			return vec, values, isNull
+		}
+	}
+	vec.Free(mp)
+	t.Fatal("failed to construct a vector that forces data and area growth")
+	return nil, nil, nil
+}
+
+func requireUnionBatchAliasGrowth(
+	t *testing.T,
+	vec *Vector,
+	values []string,
+	isNull []bool,
+	offset int,
+	cnt int,
+) {
+	t.Helper()
+	payloadBytes := 0
+	for row := offset; row < offset+cnt; row++ {
+		if !isNull[row] {
+			payloadBytes += len(values[row])
+		}
+	}
+	require.Greater(t, len(vec.area)+payloadBytes, cap(vec.area))
+	require.Greater(t, len(vec.data)+cnt*vec.typ.TypeSize(), cap(vec.data))
+}
+
+func assertUnionBatchAliasResult(
+	t *testing.T,
+	vec *Vector,
+	values []string,
+	isNull []bool,
+	oldLength int,
+	offset int,
+	cnt int,
+) {
+	t.Helper()
+	require.Equal(t, oldLength+cnt, vec.Length())
+	for i := 0; i < cnt; i++ {
+		sourceRow := offset + i
+		targetRow := oldLength + i
+		require.Equalf(t, isNull[sourceRow], vec.IsNull(uint64(targetRow)),
+			"null row %d", targetRow)
+		require.Equalf(t,
+			vec.GetGrouping().Contains(uint64(sourceRow)),
+			vec.GetGrouping().Contains(uint64(targetRow)),
+			"grouping row %d", targetRow)
+		if !isNull[sourceRow] {
+			require.Equalf(t, values[sourceRow], string(vec.GetBytesAt(targetRow)),
+				"value row %d", targetRow)
+		}
+	}
+}
+
+func BenchmarkUnionBatchVarlenWindow768(b *testing.B) {
+	mp := mpool.MustNewZero()
+	const (
+		rows  = 16384
+		dims  = 768
+		start = 4096
+		count = 8192
+	)
+	src := NewVec(types.T_array_float32.ToType())
+	value := make([]float32, dims)
+	for row := 0; row < rows; row++ {
+		value[0] = float32(row)
+		if err := AppendArray(src, value, false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	window, err := src.Window(start, start+count)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(count * dims * 4)
+	dst := NewVec(types.T_array_float32.ToType())
+	if err := dst.UnionBatch(window, 0, count, nil, mp); err != nil {
+		b.Fatal(err)
+	}
+	dst.CleanOnlyData()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := dst.UnionBatch(window, 0, count, nil, mp); err != nil {
+			b.Fatal(err)
+		}
+		dst.CleanOnlyData()
+	}
+	b.StopTimer()
+	dst.Free(mp)
+	window.Free(mp)
+	src.Free(mp)
+}
+
 // TestUnionBroadcastAndPregrow covers the const-broadcast doubling fill and the
 // sels-gather area pre-grow (UnionMulti / Union / UnionBatch / AppendMultiFixed),
 // with mixed inline+non-inline values and nulls, cross-checked against per-row

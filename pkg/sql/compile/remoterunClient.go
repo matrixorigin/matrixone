@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -69,7 +71,13 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
-	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(c.sql, s, c.proc)
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
+		c.sql,
+		s,
+		c.proc,
+		c.remoteFragmentCounts,
+		c.remoteExecutionID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +102,10 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 		return nil, err
 	}
+	sender.proc = s.Proc
+	if sink, ok := s.Proc.GetSession().(warningDiagnosticSink); ok {
+		sender.warningSink = sink
+	}
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -115,6 +127,35 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 //
 // it returns true if the pipeline has only the root operator capable of sending data to other outer pipeline.
 func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
+	offender := findPipelineExternalLocalReceiver(s)
+	if offender == nil {
+		return true
+	}
+
+	switch offender.OpType() {
+	case vm.Dispatch:
+		s.Proc.Infof(
+			s.Proc.Ctx,
+			"txn id : %s, the pipeline %p cannot execute remotely because its dispatch operator targets another local pipeline tree.",
+			s.Proc.GetTxnOperator().Txn().ID, s)
+	case vm.Connector:
+		s.Proc.Infof(
+			s.Proc.Ctx,
+			"txn id : %s, the pipeline %p cannot execute remotely because its connector targets another local pipeline tree.",
+			s.Proc.GetTxnOperator().Txn().ID, s)
+	}
+	return false
+}
+
+// findPipelineExternalLocalReceiver returns the first non-root output operator
+// whose in-process receiver is not owned by the scope tree. The root output is
+// intentionally excluded: RemoteRun retains it on the caller and forwards the
+// remotely executed child tree back through that output.
+func findPipelineExternalLocalReceiver(s *Scope) vm.Operator {
+	if s == nil {
+		return nil
+	}
+
 	var regs = make(map[*process.WaitRegister]struct{})
 	var toScan []*Scope
 	// record which mergeReceivers this scope tree holds.
@@ -123,13 +164,18 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 		for len(toScan) > 0 {
 			node := toScan[len(toScan)-1]
 			toScan = toScan[:len(toScan)-1]
+			if node == nil {
+				continue
+			}
 
 			if len(node.PreScopes) > 0 {
 				toScan = append(toScan, node.PreScopes...)
 			}
 
-			for i := range node.Proc.Reg.MergeReceivers {
-				regs[node.Proc.Reg.MergeReceivers[i]] = struct{}{}
+			if node.Proc != nil {
+				for i := range node.Proc.Reg.MergeReceivers {
+					regs[node.Proc.Reg.MergeReceivers[i]] = struct{}{}
+				}
 			}
 		}
 	}
@@ -143,21 +189,22 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 		for len(toScan) > 0 {
 			node := toScan[len(toScan)-1]
 			toScan = toScan[:len(toScan)-1]
+			if node == nil {
+				continue
+			}
 
 			if len(node.PreScopes) > 0 {
 				toScan = append(toScan, node.PreScopes...)
+			}
+			if node.RootOp == nil {
+				continue
 			}
 
 			if node.RootOp.OpType() == vm.Dispatch {
 				t := node.RootOp.(*dispatch.Dispatch)
 				for i := range t.LocalRegs {
 					if _, ok := regs[t.LocalRegs[i]]; !ok {
-						s.Proc.Infof(
-							s.Proc.Ctx,
-							"txn id : %s, the pipeline %p cannot execute remotely because its dispatch operator targets another local pipeline tree.",
-							s.Proc.GetTxnOperator().Txn().ID, s)
-
-						return false
+						return node.RootOp
 					}
 				}
 				continue
@@ -165,35 +212,42 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 			if node.RootOp.OpType() == vm.Connector {
 				t := node.RootOp.(*connector.Connector)
 				if _, ok := regs[t.Reg]; !ok {
-					s.Proc.Infof(
-						s.Proc.Ctx,
-						"txn id : %s, the pipeline %p cannot execute remotely because its connector targets another local pipeline tree.",
-						s.Proc.GetTxnOperator().Txn().ID, s)
-
-					return false
+					return node.RootOp
 				}
 				continue
 			}
 		}
 	}
 
-	return true
+	return nil
 }
 
-func prepareRemoteRunSendingData(sqlStr string, s *Scope, proc *process.Process) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+func prepareRemoteRunSendingData(
+	sqlStr string,
+	s *Scope,
+	proc *process.Process,
+	remoteFragmentCounts map[string]uint32,
+	remoteExecutionID uuid.UUID,
+) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
+	encodedScope = copyBlockFiltersForRemoteRun(encodedScope)
 	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)
 	if err != nil {
 		return nil, false, nil, false, err
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeScope(encodedScope); err != nil {
+	if scopeData, err = encodeRemoteScope(encodedScope, proc); err != nil {
 		return nil, false, nil, false, err
 	}
 
 	// Encode the Process related information.
-	if processData, err = encodeProcessInfo(s.Proc, sqlStr); err != nil {
+	if processData, err = encodeProcessInfo(
+		s.Proc,
+		sqlStr,
+		remoteFragmentCounts,
+		remoteExecutionID,
+	); err != nil {
 		return nil, false, nil, false, err
 	}
 
@@ -239,6 +293,9 @@ func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient
 			return err
 		}
 		bat.Clean(mp)
+		if err = sender.acknowledgeRemoteBatch(); err != nil {
+			return err
+		}
 	}
 }
 
@@ -261,8 +318,16 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		connectorAnalyze.Network(bat)
 
 		var receiverDone bool
-		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil || receiverDone {
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil {
 			return err
+		}
+		// A stopped receiver intentionally discarded the decoded batch, but the
+		// remote sender still owns its credit until this ACK is sent.
+		if err = sender.acknowledgeRemoteBatch(); err != nil {
+			return err
+		}
+		if receiverDone {
+			return nil
 		}
 	}
 }
@@ -304,8 +369,16 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 
 		result, errCall := vm.Exec(dispatchRunner, s.Proc)
 		bat.Clean(mp)
-		if errCall != nil || result.Status == vm.ExecStop {
+		if errCall != nil {
 			return errCall
+		}
+		// ExecStop can mean that every receiver has already stopped. Release the
+		// decoded batch's remote credit before ending the receive loop.
+		if err = sender.acknowledgeRemoteBatch(); err != nil {
+			return err
+		}
+		if result.Status == vm.ExecStop {
+			return nil
 		}
 	}
 }
@@ -358,6 +431,12 @@ type messageSenderOnClient struct {
 
 	// anal was used to merge remote-run's cost analysis information.
 	anal *AnalyzeModule
+	proc *process.Process
+
+	// warningSink is the session-owned diagnostic destination on the initiating
+	// process. Remote terminal warnings are applied here only after the remote
+	// pipeline has finished, preserving one warning per actual evaluated row.
+	warningSink warningDiagnosticSink
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -380,6 +459,7 @@ type messageSenderOnClient struct {
 	stateMu            sync.Mutex
 	closeOnce          sync.Once
 	requestFinishAck   bool
+	pendingBatchAck    uint64
 	// allowCleanupCancellation is set after successful local cleanup. Pipeline
 	// and query contexts may be intentionally cancelled by that cleanup; FIN
 	// then runs on its own bounded context. Cancellation before this transition
@@ -474,6 +554,15 @@ func pipelineStreamReuseEnabled(serviceID string) bool {
 	return ok && enabled
 }
 
+func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Message) {
+	if !sender.requestFinishAck {
+		return
+	}
+	message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
+	message.RequestedBatchCreditCount = pipelineBatchCreditCount
+	message.RequestedBatchCreditBytes = pipelineBatchCreditBytes
+}
+
 func (sender *messageSenderOnClient) sendPipeline(
 	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
 	sdLen := len(scopeData)
@@ -485,9 +574,7 @@ func (sender *messageSenderOnClient) sendPipeline(
 		message.SetData(scopeData)
 		message.SetProcData(procData)
 		message.SetSid(pipeline.Status_Last)
-		if sender.requestFinishAck {
-			message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
-		}
+		sender.requestStreamProtocols(message)
 		message.NeedNotReply = noDataBack
 		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
@@ -513,9 +600,7 @@ func (sender *messageSenderOnClient) sendPipeline(
 			message.SetSid(pipeline.Status_WaitingNext)
 		}
 		message.NeedNotReply = noDataBack
-		if sender.requestFinishAck {
-			message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
-		}
+		sender.requestStreamProtocols(message)
 
 		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
@@ -583,6 +668,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 	var val morpc.Message
 	var m *pipeline.Message
 	var dataBuffer []byte
+	var batchSequence uint64
 
 	for {
 		val, err = sender.receiveMessage()
@@ -597,6 +683,14 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 
 		m = val.(*pipeline.Message)
+		if sequence := m.GetBatchSequence(); sequence != 0 {
+			if batchSequence != 0 && batchSequence != sequence {
+				return nil, false, moerr.NewInvalidStateNoCtxf(
+					"remote batch fragments changed sequence from %d to %d",
+					batchSequence, sequence)
+			}
+			batchSequence = sequence
+		}
 		if m.IsEndMessage() && len(m.GetAnalyse()) > 0 {
 			if err = sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
 				return nil, false, err
@@ -627,8 +721,33 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		   			bat.Clean(sender.mp)
 		   			return bat, false, err
 		   		} */
+		if err == nil {
+			if sender.pendingBatchAck != 0 {
+				bat.Clean(sender.mp)
+				return nil, false, moerr.NewInvalidStateNoCtx(
+					"remote batch ACK was not sent before receiving the next batch")
+			}
+			sender.pendingBatchAck = batchSequence
+		}
 		return bat, false, err
 	}
+}
+
+func (sender *messageSenderOnClient) acknowledgeRemoteBatch() error {
+	sequence := sender.pendingBatchAck
+	if sequence == 0 {
+		return nil
+	}
+	message := cnclient.AcquireMessage()
+	message.SetID(sender.streamSender.ID())
+	message.SetMessageType(pipeline.Method_PipelineBatchAck)
+	message.SetSid(pipeline.Status_Last)
+	message.BatchAckSequence = sequence
+	if err := sender.streamSender.Send(sender.ctx, message); err != nil {
+		return err
+	}
+	sender.pendingBatchAck = 0
+	return nil
 }
 
 func (sender *messageSenderOnClient) contextDoneError() error {
@@ -798,15 +917,52 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
 	}
+	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
+		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
+	}
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
 	}
+	if sender.warningSink != nil {
+		if sink, ok := sender.warningSink.(warningDiagnosticBatchSink); ok {
+			codes := make([]uint16, 0, len(envelope.WarningDiagnostics))
+			messages := make([]string, 0, len(envelope.WarningDiagnostics))
+			for _, warning := range envelope.WarningDiagnostics {
+				codes = append(codes, warning.Code)
+				messages = append(messages, warning.Message)
+			}
+			sink.AppendWarningBatch(envelope.WarningCount, codes, messages)
+		} else {
+			for _, warning := range envelope.WarningDiagnostics {
+				sender.warningSink.AppendWarningDiagnostic(warning.Code, warning.Message)
+			}
+		}
+	}
 	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
+		if envelope.Allocation.GenerationCount != 0 {
+			if envelope.TerminalResourceVersion <
+				remoteAllocationOwnerResourceVersion {
+				envelope.Delta.Quality |= resource.QualityPartial |
+					resource.QualityMissingAllocationOwner
+			} else if envelope.Delta.Quality&
+				resource.QualityMissingAllocationOwner == 0 &&
+				!envelope.Allocation.OwnerAttributionCoversTotals() {
+				// A mixed-version intermediate propagates an explicit missing-
+				// owner fact. Without it, absent or partial v4 attribution
+				// violates the terminal protocol contract.
+				envelope.Delta.Quality |= resource.QualityInvariantFailure
+				envelope.Delta.Quality |= resource.QualityPartial |
+					resource.QualityMissingAllocationOwner
+			}
+		}
 		sender.anal.appendRemoteResource(
 			envelope.Delta,
 			envelope.Memory,
+			envelope.Allocation,
 			envelope.MissingFragmentCount,
 			envelope.MissingMemoryDomainCount,
+			envelope.PendingAllocationGroups,
+			envelope.CompletedAllocationGroups,
 		)
 	}
 	sender.terminalSeen = true

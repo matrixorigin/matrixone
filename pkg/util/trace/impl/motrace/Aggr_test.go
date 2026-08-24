@@ -298,8 +298,19 @@ func TestAggregator(t *testing.T) {
 
 }
 
+func TestStatementInfoFilterIncludesPerform(t *testing.T) {
+	statement := &StatementInfo{
+		StatementType: "Perform",
+		SqlSourceType: "internal_sql",
+		Status:        StatementStatusSuccess,
+	}
+	require.True(t, StatementInfoFilter(statement))
+}
+
 func TestAggregatorWithStmtMerge(t *testing.T) {
 	c := GetTracerProvider()
+	oldEnableStmtMerge := c.enableStmtMerge
+	t.Cleanup(func() { c.enableStmtMerge = oldEnableStmtMerge })
 	c.enableStmtMerge = true
 
 	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
@@ -510,6 +521,8 @@ func TestAggregator_MarkExported(t *testing.T) {
 
 func TestAggregator_PopResultsBeforeWindow(t *testing.T) {
 	c := GetTracerProvider()
+	oldEnableStmtMerge := c.enableStmtMerge
+	t.Cleanup(func() { c.enableStmtMerge = oldEnableStmtMerge })
 	c.enableStmtMerge = true
 
 	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}

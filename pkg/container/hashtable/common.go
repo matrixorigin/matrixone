@@ -15,6 +15,7 @@
 package hashtable
 
 import (
+	"io"
 	"math/bits"
 	"unsafe"
 )
@@ -29,6 +30,20 @@ const (
 	maxBlockSize = 4 * (1 << 20)
 	MB           = 1 << 20
 )
+
+func readerRemainingBytes(reader io.Reader) (int64, bool) {
+	switch value := reader.(type) {
+	case *io.LimitedReader:
+		if value.N < 0 {
+			return 0, false
+		}
+		return value.N, true
+	case interface{ Len() int }:
+		return int64(value.Len()), true
+	default:
+		return 0, false
+	}
+}
 
 func maxElemCnt(cellCnt, cellSize uint64) uint64 {
 	totalSize := cellCnt * cellSize

@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -121,6 +122,7 @@ func TestCagraParamsFromTree_NegativeIntermediate(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{IntermediateGraphDegree: -1}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.Contains(t, err.Error(), "intermediate_graph_degree")
 }
 
@@ -128,6 +130,7 @@ func TestCagraParamsFromTree_NegativeGraphDegree(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{GraphDegree: -1}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.Contains(t, err.Error(), "graph_degree")
 }
 
@@ -135,6 +138,7 @@ func TestCagraParamsFromTree_NegativeITopkSize(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{ITopkSize: -1}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.Contains(t, err.Error(), "itopk_size")
 }
 
@@ -142,6 +146,7 @@ func TestCagraParamsFromTree_InvalidOpType(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{AlgoParamVectorOpType: "not_real"}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Contains(t, err.Error(), "invalid op_type")
 }
 
@@ -149,13 +154,15 @@ func TestCagraParamsFromTree_InvalidQuantization(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{Quantization: "not_real"}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "quantization is invalid")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.Equal(t, "not supported: invalid quantization. quantization is invalid. f32, f16, int8, uint8", err.Error())
 }
 
 func TestCagraParamsFromTree_InvalidDistributionMode(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{DistributionMode: "not_real"}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 	require.Contains(t, err.Error(), "distribution_mode is invalid")
 }
 

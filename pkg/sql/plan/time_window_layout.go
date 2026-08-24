@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -75,6 +76,19 @@ func BuildTimeWindowLayout(node *plan.Node) TimeWindowLayout {
 		layout.ColCnt++
 	}
 	return layout
+}
+
+// TimeWindowBoundaryType is the logical type exposed by `_wstart` and `_wend`.
+// DATE input windows can have sub-day boundaries, so their boundaries are
+// DATETIME. DATETIME and TIMESTAMP keep their wall-clock/instant semantics and
+// fractional scale.
+func TimeWindowBoundaryType(tsType plan.Type) plan.Type {
+	typ := *DeepCopyType(&tsType)
+	if types.T(typ.Id) == types.T_date {
+		typ.Id = int32(types.T_datetime)
+	}
+	typ.NotNullable = true
+	return typ
 }
 
 // buildTimeWindowAggLayout lays out the aggregate and boundary slots, which

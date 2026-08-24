@@ -89,9 +89,20 @@ type ExParamConst struct {
 	NeedRowOrdinal              bool
 	IcebergDeleteMaxMemoryBytes int64
 	IcebergDeleteSpillEnabled   bool
-	Ctx                         context.Context
-	Extern                      *tree.ExternParam
-	ClusterTable                *plan.ClusterTable
+	// DatastreamScan marks this scan as a datastream external table read and
+	// carries the gRPC endpoint plus the pushed-down filter text.
+	DatastreamScan *plan.DataStreamScan
+	// ForeignScan marks this scan as an ESQL/SQL foreign external table read
+	// and carries the connection config reference and default query.
+	ForeignScan *plan.ForeignScan
+	// ESQLTemporalUTC marks a scan whose CSV source renders temporal values as
+	// ISO 8601 UTC (ES|QL); getColData then rewrites them as session-zone wall
+	// clock, preserving the instant. Set for ESQL foreign tables (Prepare) and
+	// schema-mode esql_tvf (BuildForeignTVFExternParam).
+	ESQLTemporalUTC bool
+	Ctx             context.Context
+	Extern          *tree.ExternParam
+	ClusterTable    *plan.ClusterTable
 }
 
 type ExParam struct {

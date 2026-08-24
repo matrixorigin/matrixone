@@ -291,11 +291,12 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	task.tnDataBats[objIdx] = data
 
 	if task.isTombstone {
+		mergeStartTS := task.txn.GetStartTS()
 		err = data.Vecs[0].Foreach(func(v any, isNull bool, row int) error {
 			rowID := v.(types.Rowid)
 			objectID := rowID.BorrowObjectID()
 			obj, err := task.tableEntry.GetObjectByID(objectID, false)
-			if err != nil || obj.HasDropCommitted() {
+			if err != nil || canPruneTombstoneTarget(obj, mergeStartTS) {
 				if data.Deletes == nil {
 					data.Deletes = &nulls.Nulls{}
 				}
@@ -339,6 +340,18 @@ func (task *mergeObjectsTask) LoadNextBatch(
 
 	retBatch.SetRowCount(data.Length())
 	return retBatch, data.Deletes, releaseF, nil
+}
+
+// canPruneTombstoneTarget reports whether a target data object was already
+// dropped at the tombstone merge's snapshot. A later drop belongs to a
+// concurrent data-object generation, so this merge must retain the tombstone;
+// a subsequent merge can prune it after the drop enters its snapshot.
+func canPruneTombstoneTarget(target *catalog.ObjectEntry, mergeStartTS types.TS) bool {
+	if !target.HasDropCommitted() {
+		return false
+	}
+	dropTS := target.GetDeleteAt()
+	return dropTS.LE(&mergeStartTS)
 }
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
@@ -522,7 +535,14 @@ func HandleMergeEntryInTxn(
 	transferTable *mergesort.TransferTable,
 	rt *dbutils.Runtime,
 	isTombstone bool,
-) ([]*catalog.ObjectEntry, error) {
+) (createdObjs []*catalog.ObjectEntry, err error) {
+	transferTableOwned := true
+	defer func() {
+		if err != nil && transferTableOwned && transferTable != nil {
+			transferTable.Release()
+		}
+	}()
+
 	database, err := txn.GetDatabaseByID(entry.DbId)
 	if err != nil {
 		return nil, err
@@ -533,7 +553,7 @@ func HandleMergeEntryInTxn(
 	}
 
 	mergedObjs := make([]*catalog.ObjectEntry, 0, len(entry.MergedObjs))
-	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjs))
+	createdObjs = make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjs))
 	ids := make([]*common.ID, 0, len(entry.MergedObjs)*2)
 
 	// drop merged blocks and objects
@@ -597,6 +617,9 @@ func HandleMergeEntryInTxn(
 		isTombstone,
 		rt,
 	)
+	// NewMergeObjectsEntry owns transferTable even when its preparation fails:
+	// its error path rolls the transfer state back before returning.
+	transferTableOwned = false
 	if err != nil {
 		return nil, err
 	}
@@ -605,12 +628,14 @@ func HandleMergeEntryInTxn(
 		if err = txn.LogTxnEntry(
 			entry.DbId, entry.TblId, txnEntry, nil, ids,
 		); err != nil {
+			txnEntry.RollbackTransferState()
 			return nil, err
 		}
 	} else {
 		if err = txn.LogTxnEntry(
 			entry.DbId, entry.TblId, txnEntry, ids, nil,
 		); err != nil {
+			txnEntry.RollbackTransferState()
 			return nil, err
 		}
 	}

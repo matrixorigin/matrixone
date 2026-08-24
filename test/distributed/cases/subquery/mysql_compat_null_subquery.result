@@ -47,6 +47,21 @@ id    k_label    exists_eq    not_exists_eq    exists_null_safe    not_exists_nu
 3    3    0    1    0    1
 4    NULL    0    1    1    0
 5    4    1    0    1    0
+select id, if(k is null, 'NULL', cast(k as char)) as k_label
+from t_outer
+where exists (select 1 from t_inner i where i.val = t_outer.k)
+order by id;
+id    k_label
+1    1
+2    2
+5    4
+select id, if(k is null, 'NULL', cast(k as char)) as k_label
+from t_outer
+where not exists (select 1 from t_inner i where i.val = t_outer.k)
+order by id;
+id    k_label
+3    3
+4    NULL
 select id, if(k is null, 'NULL', cast(k as char)) as k_label,
 k = (select max(val) from t_inner where grp = 3) as eq_scalar_nonnull,
 k = (select max(val) from t_inner where grp = 2) as eq_scalar_all_null,

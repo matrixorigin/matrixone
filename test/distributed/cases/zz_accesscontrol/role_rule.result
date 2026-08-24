@@ -36,30 +36,30 @@ insert into db1.t_dup values (1,1),(1,2),(2,3);
 create role test_rule_role;
 alter role test_rule_role add rule "select * from db1.t1 where age > 28" on table db1.t1;
 show rules on role test_rule_role;
-rule_name    rule
-db1.t1    select * from db1.t1 where age > 28
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t1  ¦  select * from db1.t1 where age > 28
 alter role non_existent_role add rule "select * from db1.t1" on table db1.t1;
 internal error: there is no role non_existent_role
 alter role test_rule_role add rule "select * from db1.t1 where age > 50" on table db1.t1;
 show rules on role test_rule_role;
-rule_name    rule
-db1.t1    select * from db1.t1 where age > 50
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t1  ¦  select * from db1.t1 where age > 50
 alter role test_rule_role add rule "select id from db2.t2_new" on table db2.t2;
 show rules on role test_rule_role;
-rule_name    rule
-db1.t1    select * from db1.t1 where age > 50
-db2.t2    select id from db2.t2_new
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t1  ¦  select * from db1.t1 where age > 50  𝄀
+db2.t2  ¦  select id from db2.t2_new
 alter role test_rule_role drop rule on table db1.t1;
 show rules on role test_rule_role;
-rule_name    rule
-db2.t2    select id from db2.t2_new
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db2.t2  ¦  select id from db2.t2_new
 alter role non_existent_role drop rule on table db1.t1;
 internal error: there is no role non_existent_role
 alter role test_rule_role drop rule on table no_such.rule;
 internal error: rule 'no_such.rule' does not exist for role 'test_rule_role'
 alter role test_rule_role drop rule on table db2.t2;
 show rules on role test_rule_role;
-rule_name    rule
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]
 show rules on role non_existent_role;
 internal error: there is no role non_existent_role
 alter role test_rule_role add rule "select * from db1.t1 where age > 28" on table db1.t1;
@@ -68,8 +68,8 @@ grant connect on account * to test_rule_role;
 grant select on table *.* to test_rule_role;
 set enable_remap_hint = 1;
 select * from db1.t1;
-a    age
-100    30
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+100  ¦  30
 create database db2;
 create table db2.t2(a int, age int);
 insert into db2.t2 values (10,10),(20,35),(200,60);
@@ -86,24 +86,21 @@ grant select on table db2.t2 to test_rule_role_multi_b;
 grant test_rule_role_multi_b to test_rule_user_multi;
 set enable_remap_hint = 1;
 select * from db1.t1 order by a;
-a    age
-2    2
-100    30
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+2  ¦  2  𝄀
+100  ¦  30
 set secondary role all;
 select * from db1.t1 order by a;
-a    age
-1    1
-2    2
-100    30
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+2  ¦  2  𝄀
+100  ¦  30
 select * from db2.t2 order by a;
-a    age
-20    35
-200    60
+internal error: do not have privilege to execute the statement
 set secondary role none;
 select * from db1.t1 order by a;
-a    age
-2    2
-100    30
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+2  ¦  2  𝄀
+100  ¦  30
 create role test_rule_role_multi_c;
 create role test_rule_role_multi_d;
 alter role test_rule_role_multi_c add rule "select * from db1.t1 where age > 28" on table db1.t1;
@@ -116,8 +113,8 @@ grant test_rule_role_multi_d to test_rule_user_multi_diff;
 set enable_remap_hint = 1;
 set secondary role all;
 select * from db1.t1 order by a;
-a
-2
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+100  ¦  30
 create role test_rule_role_inherit_a;
 create role test_rule_role_inherit_b;
 alter role test_rule_role_inherit_b add rule "select a, age from db2.t2 where age > 30" on table db2.t2;
@@ -127,16 +124,16 @@ grant select on table db2.t2 to test_rule_role_inherit_b;
 grant test_rule_role_inherit_b to test_rule_role_inherit_a;
 set enable_remap_hint = 1;
 select * from db2.t2 order by a;
-a    age
-20    35
-200    60
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+20  ¦  35  𝄀
+200  ¦  60
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;
 alter role test_rule_role_validate add rule "delete from db1.t1 where a = 1" on table db1.t1;
 invalid input: invalid rewrite rule SQL "delete from db1.t1 where a = 1": only accept SELECT-like statements as rewrites
 show rules on role test_rule_role_validate;
-rule_name    rule
-db1.t1    select a, age from db1.t1 where age > 28
+➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
+db1.t1  ¦  select a, age from db1.t1 where age > 28
 create role test_rule_role_unmergeable_a;
 create role test_rule_role_unmergeable_b;
 alter role test_rule_role_unmergeable_a add rule "select a, age from db1.t1 where age > 28 order by a limit 1" on table db1.t1;
@@ -149,9 +146,8 @@ grant test_rule_role_unmergeable_b to test_rule_user_unmergeable;
 set enable_remap_hint = 1;
 set secondary role all;
 select * from db1.t1 order by a;
-a    age
-1    1
-2    2
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+100  ¦  30
 create role test_rule_role_alias_a;
 create role test_rule_role_alias_b;
 alter role test_rule_role_alias_a add rule "select a, age from db1.t1 where age >= 1" on table db1.t1;
@@ -164,8 +160,10 @@ grant test_rule_role_alias_b to test_rule_user_alias;
 set enable_remap_hint = 1;
 set secondary role all;
 select * from db1.t1 order by a;
-a    age
-30    100
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+100  ¦  30
 create role test_rule_role_where_a;
 create role test_rule_role_where_b;
 alter role test_rule_role_where_a add rule "select * from db1.t1 where age > 28" on table db1.t1;
@@ -178,10 +176,8 @@ grant test_rule_role_where_b to test_rule_user_where;
 set enable_remap_hint = 1;
 set secondary role all;
 select * from db1.t1 order by a;
-a    age
-1    1
-2    2
-100    30
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+100  ¦  30
 create role test_rule_role_dup_projection_a;
 create role test_rule_role_dup_projection_b;
 alter role test_rule_role_dup_projection_a add rule "select a from db1.t_dup where marker = 1" on table db1.t_dup;
@@ -193,15 +189,15 @@ grant select on table db1.t_dup to test_rule_role_dup_projection_b;
 grant test_rule_role_dup_projection_b to test_rule_user_dup_projection;
 set enable_remap_hint = 1;
 select count(*) from db1.t_dup;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 1
 set secondary role all;
 select a, count(*) from db1.t_dup group by a order by a;
-a    count(*)
-1    2
+➤ a[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  1
 select count(*) from db1.t_dup;
-count(*)
-2
+➤ count(*)[-5,64,0]  𝄀
+1
 create role test_rule_role_expr_projection_a;
 create role test_rule_role_expr_projection_b;
 alter role test_rule_role_expr_projection_a add rule "select a + 1 as b from db1.t_dup where marker = 1" on table db1.t_dup;
@@ -214,8 +210,8 @@ grant test_rule_role_expr_projection_b to test_rule_user_expr_projection;
 set enable_remap_hint = 1;
 set secondary role all;
 select b, count(*) from db1.t_dup group by b order by b;
-b    count(*)
-2    2
+➤ b[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+2  ¦  1
 drop user if exists test_rule_user;
 drop user if exists test_rule_user_multi;
 drop user if exists test_rule_user_multi_diff;

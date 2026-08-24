@@ -365,13 +365,13 @@ preflight() {
   fi
 
   if contains_profile tier-d; then
-    require_env MO_ICEBERG_NESR
-    [[ "$MO_ICEBERG_NESR" == "1" ]] || die "MO_ICEBERG_NESR must be 1 for tier-d profile"
-    require_file MO_ICEBERG_NESR_SCENARIOS
-    require_sql_template MO_ICEBERG_NESR_MO_SQL_CMD
-    require_sql_template MO_ICEBERG_NESR_EXTERNAL_SQL_CMD
-    require_file MO_ICEBERG_NESR_EXPECTED_KPI
-    require_env MO_ICEBERG_NESR_RESIDENCY_ERROR
+    require_env MO_ICEBERG_REFERENCE
+    [[ "$MO_ICEBERG_REFERENCE" == "1" ]] || die "MO_ICEBERG_REFERENCE must be 1 for tier-d profile"
+    require_file MO_ICEBERG_REFERENCE_SCENARIOS
+    require_sql_template MO_ICEBERG_REFERENCE_MO_SQL_CMD
+    require_sql_template MO_ICEBERG_REFERENCE_EXTERNAL_SQL_CMD
+    require_file MO_ICEBERG_REFERENCE_EXPECTED_KPI
+    require_env MO_ICEBERG_REFERENCE_RESIDENCY_ERROR
   fi
 
   log "preflight passed for MO_ICEBERG_CI_PROFILE=${profile}"
@@ -432,9 +432,9 @@ run_remaining_external_if_enabled() {
   fi
 
   if contains_profile tier-d; then
-    run_external_profile tier-d "$MO_ICEBERG_NESR_SCENARIOS"
+    run_external_profile tier-d "$MO_ICEBERG_REFERENCE_SCENARIOS"
   else
-    log "tier-d profile not enabled; skipping NESR scenarios"
+    log "tier-d profile not enabled; skipping reference scenarios"
   fi
 }
 
@@ -444,7 +444,7 @@ validate_external_templates() {
     "${ROOT_DIR}/test/iceberg/credential_vending_scenarios.example.json" \
     "${ROOT_DIR}/test/iceberg/tier_b_public_dataset_scenarios.example.json" \
     "${ROOT_DIR}/test/iceberg/tier_c_sandbox_scenarios.example.json" \
-    "${ROOT_DIR}/test/iceberg/tier_d_nesr_scenarios.example.json"; do
+    "${ROOT_DIR}/test/iceberg/tier_d_reference_scenarios.example.json"; do
     run python3 "${ROOT_DIR}/optools/iceberg_external_runner.py" \
       --profile template \
       --scenario-file "$template" \
@@ -876,14 +876,14 @@ profiles = [
         "name": "tier-d",
         "tests": ["ICE-TEST-135"],
         "required_env": [
-            "MO_ICEBERG_NESR",
-            "MO_ICEBERG_NESR_SCENARIOS",
-            "MO_ICEBERG_NESR_MO_SQL_CMD",
-            "MO_ICEBERG_NESR_EXTERNAL_SQL_CMD",
-            "MO_ICEBERG_NESR_EXPECTED_KPI",
-            "MO_ICEBERG_NESR_RESIDENCY_ERROR",
+            "MO_ICEBERG_REFERENCE",
+            "MO_ICEBERG_REFERENCE_SCENARIOS",
+            "MO_ICEBERG_REFERENCE_MO_SQL_CMD",
+            "MO_ICEBERG_REFERENCE_EXTERNAL_SQL_CMD",
+            "MO_ICEBERG_REFERENCE_EXPECTED_KPI",
+            "MO_ICEBERG_REFERENCE_RESIDENCY_ERROR",
         ],
-        "help": "NESR de-identified demo data and expected KPI file are required.",
+        "help": "Reference-profile de-identified demo data and expected KPI file are required.",
     },
     {
         "name": "golden-real",

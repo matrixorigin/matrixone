@@ -123,7 +123,7 @@ func (exec *countStarExec) BatchMerge(next AggFuncExec, offset int, groups []uin
 		x2 := int(g2 >> aggBatchSizeShift)
 		y2 := g2 & aggBatchSizeMask
 		vals1 := chunkArr[int64](exec.state[x1].vecs[0])
-		vals2 := chunkArr[int64](other.state[x2].vecs[0])
+		vals2 := chunkRows[int64](other.state[x2].vecs[0])
 		vals1[y1] += vals2[y2]
 	}
 	return nil
@@ -262,7 +262,7 @@ func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []u
 		x2 := int(g2 >> aggBatchSizeShift)
 		y2 := g2 & aggBatchSizeMask
 		vals1 := chunkArr[int64](exec.state[x1].vecs[0])
-		vals2 := chunkArr[int64](other.state[x2].vecs[0])
+		vals2 := chunkRows[int64](other.state[x2].vecs[0])
 		vals1[y1] += vals2[y2]
 	}
 	return nil
@@ -290,7 +290,11 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			var err error
+			vecs[i], err = exec.allocation.newVector(types.T_int64.ToType())
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}

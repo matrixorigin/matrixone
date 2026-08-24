@@ -30,9 +30,169 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/tidwall/btree"
 )
+
+func TestRangeCoalescingUsesPhysicalPrimarySeqnum(t *testing.T) {
+	const (
+		logicalPrimaryIdx = 1
+		primarySeqnum     = 3
+	)
+	require.NotEqual(t, logicalPrimaryIdx, primarySeqnum)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	newInt32Vec := func(t *testing.T, value int32) *vector.Vector {
+		t.Helper()
+		vec := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+		return vec
+	}
+	newTSVec := func(t *testing.T, value types.TS) *vector.Vector {
+		t.Helper()
+		vec := vector.NewVec(types.T_TS.ToType())
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+		return vec
+	}
+	newRowIDVec := func(t *testing.T, value types.Rowid) *vector.Vector {
+		t.Helper()
+		vec := vector.NewVec(types.T_Rowid.ToType())
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+		return vec
+	}
+
+	t.Run("partition state range", func(t *testing.T) {
+		state := NewPartitionState("", false, 42, false)
+		state.start = types.BuildTS(0, 0)
+		packer := types.NewPacker()
+		defer packer.Close()
+
+		blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+		rowID := objectio.NewRowid(blockID, 0)
+		insertVecs := []*vector.Vector{
+			newRowIDVec(t, rowID),
+			newTSVec(t, types.BuildTS(10, 0)),
+			newInt32Vec(t, 111),
+			newInt32Vec(t, 222), // current logical index after positioned schema change
+			newInt32Vec(t, 333),
+			newInt32Vec(t, 999), // stable physical primary-key seqnum
+		}
+		defer func() {
+			for _, vec := range insertVecs {
+				vec.Free(mp)
+			}
+		}()
+		state.HandleRowsInsert(context.Background(), &api.Batch{
+			Attrs: []string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "c0", "c1", "c2", "pk"},
+			Vecs: []api.Vector{
+				mustVectorToProto(insertVecs[0]),
+				mustVectorToProto(insertVecs[1]),
+				mustVectorToProto(insertVecs[2]),
+				mustVectorToProto(insertVecs[3]),
+				mustVectorToProto(insertVecs[4]),
+				mustVectorToProto(insertVecs[5]),
+			},
+		}, primarySeqnum, packer, mp)
+
+		deleteVecs := []*vector.Vector{
+			newRowIDVec(t, rowID),
+			newTSVec(t, types.BuildTS(20, 0)),
+			newInt32Vec(t, 999),
+			newRowIDVec(t, types.RandomRowid()),
+		}
+		defer func() {
+			for _, vec := range deleteVecs {
+				vec.Free(mp)
+			}
+		}()
+		state.HandleRowsDelete(context.Background(), &api.Batch{
+			Attrs: []string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, objectio.TombstoneAttr_PK_Attr, "tombstone_rowid"},
+			Vecs: []api.Vector{
+				mustVectorToProto(deleteVecs[0]),
+				mustVectorToProto(deleteVecs[1]),
+				mustVectorToProto(deleteVecs[2]),
+				mustVectorToProto(deleteVecs[3]),
+			},
+		}, packer, mp)
+
+		controlCtx := engine.WithCollectChangesPreserveAllVersions(context.Background())
+		control, err := NewChangesHandlerWithPartitionStateRange(
+			controlCtx, state,
+			types.BuildTS(5, 0), types.BuildTS(25, 0),
+			false, 16, primarySeqnum, mp, nil,
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, control.Close()) }()
+		controlData, controlTombstone, _, err := control.Next(controlCtx, mp)
+		require.NoError(t, err)
+		require.NotNil(t, controlData)
+		defer controlData.Clean(mp)
+		require.NotNil(t, controlTombstone)
+		defer controlTombstone.Clean(mp)
+		require.Equal(t, 1, controlData.RowCount())
+		require.Equal(t, int32(999), vector.GetFixedAtNoTypeCheck[int32](controlData.Vecs[primarySeqnum], 0))
+		require.Equal(t, 1, controlTombstone.RowCount())
+		require.Equal(t, int32(999), vector.GetFixedAtNoTypeCheck[int32](controlTombstone.Vecs[0], 0))
+
+		h, err := NewChangesHandlerWithPartitionStateRange(
+			context.Background(), state,
+			types.BuildTS(5, 0), types.BuildTS(25, 0),
+			false, 16, primarySeqnum, mp, nil,
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, h.Close()) }()
+
+		data, tombstone, _, err := h.Next(context.Background(), mp)
+		require.NoError(t, err)
+		if data != nil {
+			defer data.Clean(mp)
+		}
+		if tombstone != nil {
+			defer tombstone.Clean(mp)
+		}
+		require.Nil(t, data)
+		require.Nil(t, tombstone)
+	})
+
+	t.Run("persisted object normalization", func(t *testing.T) {
+		data := batch.NewWithSize(7)
+		data.SetAttributes([]string{
+			"c0", "c1", "c2", "pk",
+			catalog.Row_ID, objectio.DefaultCommitTS_Attr, objectio.DefaultAbort_Attr,
+		})
+		data.Vecs[0] = newInt32Vec(t, 111)
+		data.Vecs[logicalPrimaryIdx] = newInt32Vec(t, 222)
+		data.Vecs[2] = newInt32Vec(t, 333)
+		data.Vecs[primarySeqnum] = newInt32Vec(t, 999)
+		data.Vecs[4] = newRowIDVec(t, types.RandomRowid())
+		data.Vecs[5] = newTSVec(t, types.BuildTS(10, 0))
+		data.Vecs[6] = vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixed(data.Vecs[6], false, false, mp))
+		data.SetRowCount(1)
+		defer data.Clean(mp)
+
+		layout := objectio.SpecialColumnLayout{PhysicalAddr: 4, CommitTS: 5, Abort: 6}
+		require.NoError(t, updateDataBatch(
+			data, types.BuildTS(5, 0), types.BuildTS(25, 0), nil, &layout, false, mp,
+		))
+		require.Equal(t, int32(999), vector.GetFixedAtNoTypeCheck[int32](data.Vecs[primarySeqnum], 0))
+
+		tombstone := batch.NewWithSize(2)
+		tombstone.Vecs[0] = newInt32Vec(t, 999)
+		tombstone.Vecs[1] = newTSVec(t, types.BuildTS(20, 0))
+		tombstone.SetRowCount(1)
+		defer tombstone.Clean(mp)
+
+		h := &ChangeHandler{primarySeqnum: primarySeqnum}
+		require.NoError(t, h.coalesceBatch(data, tombstone))
+		require.Zero(t, data.RowCount())
+		require.Zero(t, tombstone.RowCount())
+	})
+}
 
 func TestBatchHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -297,7 +457,7 @@ func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	bat.Vecs[3] = commitTS
 	bat.SetRowCount(1)
 
-	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, mp))
+	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, nil, false, mp))
 
 	require.Equal(t, 4, len(bat.Vecs))
 	require.Equal(t, []string{"id", "created_at", "updated_at", objectio.DefaultCommitTS_Attr}, bat.Attrs)
@@ -334,7 +494,7 @@ func TestUpdateDataBatch_RetainsSynthesizedRowID(t *testing.T) {
 	bat.SetRowCount(2)
 
 	blk := types.Blockid{}
-	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), &blk, true, mp))
+	require.NoError(t, updateDataBatch(bat, types.BuildTS(50, 0), types.BuildTS(150, 0), &blk, nil, true, mp))
 
 	require.Equal(t, 4, len(bat.Vecs))
 	require.Equal(t, catalog.Row_ID, bat.Attrs[0])
@@ -343,6 +503,57 @@ func TestUpdateDataBatch_RetainsSynthesizedRowID(t *testing.T) {
 
 	rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](bat.Vecs[0])
 	require.Equal(t, types.NewRowid(&blk, 0), rowIDs[0])
+
+	bat.Clean(mp)
+}
+
+func TestUpdatePersistedDataBatch_RetainsLeadingRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	bat := batch.NewWithSize(5)
+	bat.SetAttributes([]string{"a", "b", catalog.Row_ID, objectio.DefaultCommitTS_Attr, objectio.DefaultAbort_Attr})
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	blk := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+	for i, aborted := range []bool{false, true, false} {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(i+1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32((i+1)*10), false, mp))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[2], types.NewRowid(blk, uint32(i)), false, mp))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[3], types.BuildTS(int64(100+i), 0), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[4], aborted, false, mp))
+	}
+	bat.SetRowCount(3)
+
+	layout := objectio.SpecialColumnLayout{
+		PhysicalAddr: 2,
+		CommitTS:     3,
+		Abort:        4,
+	}
+	require.NoError(t, updatePersistedDataBatch(
+		bat, types.BuildTS(50, 0), types.BuildTS(150, 0), blk, layout, true, mp))
+
+	require.Equal(t, []string{
+		catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr,
+	}, bat.Attrs)
+	require.Equal(t, []types.T{
+		types.T_Rowid, types.T_int32, types.T_int32, types.T_TS,
+	}, []types.T{
+		bat.Vecs[0].GetType().Oid,
+		bat.Vecs[1].GetType().Oid,
+		bat.Vecs[2].GetType().Oid,
+		bat.Vecs[3].GetType().Oid,
+	})
+	require.Equal(t, 2, bat.RowCount())
+	rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](bat.Vecs[0])
+	require.Equal(t, uint32(0), rowIDs[0].GetRowOffset())
+	require.Equal(t, uint32(2), rowIDs[1].GetRowOffset())
+	require.Equal(t, []int32{1, 3}, vector.MustFixedColNoTypeCheck[int32](bat.Vecs[1]))
 
 	bat.Clean(mp)
 }
@@ -396,7 +607,7 @@ func TestAObjectHandleShouldReadBlock_NonEvaluablePlanFallback(t *testing.T) {
 		require.True(t, ok)
 	})
 
-	t.Run("strict non evaluable returns file not found", func(t *testing.T) {
+	t.Run("strict non evaluable returns distinct error", func(t *testing.T) {
 		handle := &AObjectHandle{
 			p: &baseHandle{changesHandle: &ChangeHandler{
 				enableCommitTSBlockPrune: true,
@@ -414,7 +625,8 @@ func TestAObjectHandleShouldReadBlock_NonEvaluablePlanFallback(t *testing.T) {
 		ok, err := handle.shouldReadBlock(context.Background(), obj, 0)
 		require.False(t, ok)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+		require.True(t, IsCommitTSBlockNotEvaluable(err))
+		require.False(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 	})
 }
 
@@ -1780,7 +1992,8 @@ func TestShouldReadBlock(t *testing.T) {
 		ch.strictCommitTSBlockPrune = true
 		ok, err := h.shouldReadBlock(context.Background(), obj, 0)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+		require.True(t, IsCommitTSBlockNotEvaluable(err))
+		require.False(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 		require.False(t, ok)
 		delete(h.blockPlans, key)
 		ch.strictCommitTSBlockPrune = false
@@ -1887,6 +2100,89 @@ func writeTestObjectWithCommitTS(
 		CreateTime:  types.BuildTS(50, 0),
 	}
 	return entry, fs
+}
+
+func writeTestObjectWithAbort(
+	t *testing.T,
+	mp *mpool.MPool,
+	tsValues []types.TS,
+	abortValues []bool,
+) (*objectio.ObjectEntry, fileservice.FileService) {
+	t.Helper()
+	require.Len(t, abortValues, len(tsValues))
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName,
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1, false, false, fs,
+	)
+	writer.SetAppendable()
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+	defer bat.Clean(mp)
+
+	var blk types.Blockid
+	for i, ts := range tsValues {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(i), false, mp))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[1], types.NewRowid(&blk, uint32(i+1)), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], ts, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[3], abortValues[i], false, mp))
+	}
+	bat.SetRowCount(len(tsValues))
+	_, err = writer.WriteBatch(bat)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, blocks)
+
+	stats := writer.Stats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats, uint32(len(blocks))))
+	return &objectio.ObjectEntry{
+		ObjectStats: stats,
+		CreateTime:  types.BuildTS(50, 0),
+	}, fs
+}
+
+func TestAObjectHandlePersistedAbortColumnIsHidden(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	obj, fs := writeTestObjectWithAbort(
+		t,
+		mp,
+		[]types.TS{types.BuildTS(100, 0), types.BuildTS(110, 0)},
+		[]bool{false, true},
+	)
+	scheduler := tasks.NewParallelJobScheduler(1)
+	defer scheduler.Stop()
+	handle := NewAObjectHandle(
+		context.Background(),
+		&baseHandle{changesHandle: &ChangeHandler{scheduler: scheduler}},
+		false,
+		types.BuildTS(50, 0),
+		types.BuildTS(150, 0),
+		[]*objectio.ObjectEntry{obj},
+		fs,
+		mp,
+	)
+	require.NoError(t, handle.init(context.Background(), false))
+	require.NotNil(t, handle.currentBatch)
+	defer handle.currentBatch.Clean(mp)
+
+	require.Len(t, handle.currentBatch.Vecs, 2)
+	require.Equal(t, types.T_int32, handle.currentBatch.Vecs[0].GetType().Oid)
+	require.Equal(t, types.T_TS, handle.currentBatch.Vecs[1].GetType().Oid)
+	require.Equal(t, 1, handle.currentBatch.RowCount())
+	require.Equal(t, int32(0), vector.GetFixedAtNoTypeCheck[int32](handle.currentBatch.Vecs[0], 0))
 }
 
 func TestBlockCommitTSOverlapsRange_WithRealZonemap(t *testing.T) {
@@ -2114,7 +2410,7 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		bat.SetRowCount(1)
 
 		require.NoError(t, updateTombstoneBatch(
-			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, nil, false, mp))
+			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, nil, nil, false, mp))
 
 		require.Equal(t, []string{
 			objectio.TombstoneAttr_PK_Attr,
@@ -2122,6 +2418,46 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		}, bat.Attrs)
 		require.Equal(t, 2, len(bat.Vecs))
 		assertNoRowID(t, bat)
+		bat.Clean(mp)
+	})
+
+	t.Run("persisted tombstone drops and filters abort vec", func(t *testing.T) {
+		bat := batch.NewWithSize(4)
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+		var blk types.Blockid
+		for i, aborted := range []bool{false, true} {
+			require.NoError(t, vector.AppendFixed(
+				bat.Vecs[0], types.NewRowid(&blk, uint32(i)), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(i+1), false, mp))
+			require.NoError(t, vector.AppendFixed(
+				bat.Vecs[2], types.BuildTS(int64(100+i), 0), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[3], aborted, false, mp))
+		}
+		bat.SetRowCount(2)
+		layout := objectio.SpecialColumnLayout{
+			PhysicalAddr: objectio.InvalidSpecialColumnPosition,
+			CommitTS:     2,
+			Abort:        3,
+		}
+		require.NoError(t, updateTombstoneBatch(
+			bat,
+			types.BuildTS(50, 0),
+			types.BuildTS(150, 0),
+			nil,
+			false,
+			nil,
+			&layout,
+			false,
+			mp,
+		))
+		require.Len(t, bat.Vecs, 2)
+		require.Equal(t, types.T_int64, bat.Vecs[0].GetType().Oid)
+		require.Equal(t, types.T_TS, bat.Vecs[1].GetType().Oid)
+		require.Equal(t, 1, bat.RowCount())
+		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0))
 		bat.Clean(mp)
 	})
 
@@ -2144,7 +2480,7 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		bat.SetRowCount(1)
 
 		require.NoError(t, updateDataBatch(
-			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, mp))
+			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, nil, false, mp))
 
 		assertNoRowID(t, bat)
 		// Trailing column must remain commit_ts.

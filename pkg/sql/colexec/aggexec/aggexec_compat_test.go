@@ -65,6 +65,55 @@ func TestGroupConcatIntermediateRoundTrip(t *testing.T) {
 	restored.Free()
 }
 
+func TestOrderedGroupConcatIntermediateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	info := multiAggInfo{
+		aggID:     AggIdOfGroupConcat,
+		distinct:  true,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	config := testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, "|")
+
+	values := vector.NewVec(types.T_varchar.ToType())
+	orderKeys := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendBytes(values, []byte("b"), false, mp))
+	require.NoError(t, vector.AppendBytes(values, []byte("a"), false, mp))
+	require.NoError(t, vector.AppendBytes(values, []byte("a"), false, mp))
+	require.NoError(t, vector.AppendFixedList(orderKeys, []int64{2, 3, 1}, nil, mp))
+	defer values.Free(mp)
+	defer orderKeys.Free(mp)
+
+	exec := newGroupConcatExec(mp, info, ",")
+	require.NoError(t, exec.SetExtraInformation(config, 0))
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BatchFill(
+		0,
+		[]uint64{1, 1, 1},
+		[]*vector.Vector{values, orderKeys},
+	))
+
+	var buf bytes.Buffer
+	require.NoError(t, exec.SaveIntermediateResult(1, [][]uint8{{1}}, &buf))
+
+	restored := newGroupConcatExec(mp, info, ",")
+	require.NoError(t, restored.SetExtraInformation(config, 0))
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+
+	results, err := restored.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "a|b", string(results[0].GetBytesAt(0)))
+	results[0].Free(mp)
+	exec.Free()
+	restored.Free()
+}
+
 func TestJsonObjectAggIntermediateRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() {

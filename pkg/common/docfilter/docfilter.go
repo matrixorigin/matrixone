@@ -16,10 +16,10 @@
 // to prune the fulltext / IVF index scan to the candidate documents that pass a
 // surrounding relational predicate.
 //
-// For an integer PK it builds an exact bitset — a dense cbitmap for a bounded
-// id range (cbitmap.go), else the compact C CRoaring bitset (croaring.go, via
-// pkg cgo). Both are cheaper to build than a bloom filter (no hashing) and exact
-// (no false positives, so no re-verification is needed). For non-integer PKs the
+// For an integer PK it builds an exact set — a dense cbitmap for a bounded
+// id range (cbitmap.go), else a sorted uint64 set (sorted64.go). Both are exact
+// (no false positives), and the sparse representation is Go-owned with a strict
+// 8-byte-per-key payload instead of opaque C growth. For non-integer PKs the
 // caller falls back to a CBloomFilter. Build produces a tagged payload and New
 // reconstructs the right structure from the tag; callers hold the result behind
 // the MembershipFilter interface and never see the concrete structure.
@@ -27,11 +27,12 @@
 // WARNING — transport endianness: the cbitmap payload (TagCbitmap) is serialized
 // in HOST byte order (a raw memcpy of [base][nbits][bitmap words]) for speed, so
 // it is only valid when exchanged between MO nodes of the SAME endianness. The
-// CRoaring (TagCRoaring) and CBloomFilter (TagBloom) payloads use portable
-// serialization and are endianness-independent. All current MO targets are
-// little-endian and a big-endian build fails to compile (see the static guard in
-// cgo/cbitmap.c). Before deploying MO on a big-endian or mixed-endian cluster,
-// switch cbitmap (de)serialization to an explicit little-endian format.
+// CRoaring (legacy TagCRoaring) and CBloomFilter (TagBloom) payloads use portable
+// serialization and are endianness-independent. Sorted64 is little-endian. All
+// current MO targets are little-endian and a big-endian build fails to compile
+// (see the static guard in cgo/cbitmap.c). Before deploying MO on a big-endian
+// or mixed-endian cluster, switch cbitmap (de)serialization to an explicit
+// little-endian format.
 package docfilter
 
 import (
@@ -40,12 +41,12 @@ import (
 
 // TagBloom marks a payload serialized by the CBloomFilter fallback (non-integer
 // PKs). It shares the reader-side transport channel
-// (defines.FulltextMembershipFilter -> FilterHint.MembershipFilterBytes) with TagCRoaring
-// (croaring.go) and TagCbitmap (cbitmap.go); New dispatches on the tag.
+// (defines.FulltextMembershipFilter -> FilterHint.MembershipFilterBytes) with
+// TagCRoaring (legacy), TagCbitmap, and TagSorted64; New dispatches on the tag.
 const TagBloom byte = 0
 
 // SupportsBitset reports whether a doc_id column type can be filtered with an
-// exact integer bitset (cbitmap / CRoaring), i.e. it is a fixed-width integer
+// exact integer bitset (cbitmap / Sorted64), i.e. it is a fixed-width integer
 // type. Non-integer PKs (varchar/uuid/decimal/composite) use the CBloomFilter
 // fallback.
 func SupportsBitset(t types.Type) bool {

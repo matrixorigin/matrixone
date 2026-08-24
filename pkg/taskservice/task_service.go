@@ -117,17 +117,21 @@ func (s *taskService) CreateCronTask(ctx context.Context, value task.TaskMetadat
 }
 
 func (s *taskService) CreateDaemonTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details) error {
+	taskType, err := daemonTaskType(ctx, details)
+	if err != nil {
+		return err
+	}
 	now := time.Now()
 
 	dt := task.DaemonTask{
 		Metadata:   metadata,
-		TaskType:   details.Type(),
+		TaskType:   taskType,
 		TaskStatus: task.TaskStatus_Created,
 		Details:    details,
 		CreateAt:   now,
 		UpdateAt:   now,
 	}
-	_, err := s.store.AddDaemonTask(ctx, dt)
+	_, err = s.store.AddDaemonTask(ctx, dt)
 	return err
 }
 
@@ -282,16 +286,34 @@ func (s *taskService) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonT
 	return s.store.UpdateDaemonTask(ctx, tasks, conds...)
 }
 
+func (s *taskService) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conds ...Condition,
+) (int, error) {
+	return s.store.UpdateDaemonTaskStatus(ctx, taskID, status, updateAt, endAt, conds...)
+}
+
 func (s *taskService) QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error) {
 	return s.store.QueryDaemonTask(ctx, conds...)
 }
 
 func (s *taskService) AddCDCTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
+	taskType, err := daemonTaskType(ctx, details)
+	if err != nil {
+		return 0, err
+	}
+	if taskType != task.TaskType_CreateCdc {
+		return 0, moerr.NewInvalidInput(ctx, "CDC task details must be CreateCdc")
+	}
 	now := time.Now()
 
 	dt := task.DaemonTask{
 		Metadata:   metadata,
-		TaskType:   details.Type(),
+		TaskType:   taskType,
 		TaskStatus: task.TaskStatus_Created,
 		Details:    details,
 		CreateAt:   now,
@@ -299,6 +321,14 @@ func (s *taskService) AddCDCTask(ctx context.Context, metadata task.TaskMetadata
 	}
 
 	return s.store.AddCDCTask(ctx, dt, callback)
+}
+
+func daemonTaskType(ctx context.Context, details *task.Details) (task.TaskType, error) {
+	taskType := details.Type()
+	if taskType == task.TaskType_TypeUnknown {
+		return taskType, moerr.NewInvalidInput(ctx, "daemon task details must have a known type")
+	}
+	return taskType, nil
 }
 
 func (s *taskService) UpdateCDCTask(

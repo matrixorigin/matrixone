@@ -25,6 +25,7 @@ select * from src2 where match(body, title) against('red');
 id1    id2    body    title
 id0    0    red    t1
 id3    3    blue red    t4
+id4    4    bright red null    NULL
 show create table src2;
 Table    Create Table
 src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT `ftidx`(`body`,`title`) ASYNC\n)

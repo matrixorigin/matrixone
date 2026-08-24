@@ -25,10 +25,17 @@ import (
 )
 
 func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
-	var cfg Config
-	genCfg := func() Config {
-		cfg = DefaultConfig()
-		cfg.UUID = uuid.New().String()
+	return newTestService(newTestServiceConfigGenerator(fs))
+}
+
+func newTestServiceConfigGenerator(fs vfs.FS) func() Config {
+	// Dragonboat persists the NodeHost ID before all network listeners have
+	// necessarily been created. Keep the identity stable when
+	// NewServiceWithRetry regenerates ports after an address collision.
+	serviceID := uuid.New().String()
+	return func() Config {
+		cfg := DefaultConfig()
+		cfg.UUID = serviceID
 		cfg.RTTMillisecond = 10
 		cfg.RaftAddress = getTestRaftAddress()
 		cfg.GossipPort = getTestGossipPort()
@@ -41,8 +48,16 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 		runtime.SetupServiceBasedRuntime(cfg.UUID, runtime.ServiceRuntime(""))
 		return cfg
 	}
+}
 
-	service, err := NewServiceWithRetry(genCfg,
+func newTestService(genCfg func() Config) (*Service, ClientConfig, error) {
+	var cfg Config
+	generate := func() Config {
+		cfg = genCfg()
+		return cfg
+	}
+
+	service, err := NewServiceWithRetry(generate,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {

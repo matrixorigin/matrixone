@@ -1,0 +1,29 @@
+-- @suite
+-- @case
+-- @desc:DATE_ADD must not constant-fold row-dependent INTERVAL expressions whose first operator argument is a literal.
+-- @label:bvt
+
+drop database if exists date_add_dynamic_interval;
+create database date_add_dynamic_interval;
+use date_add_dynamic_interval;
+
+select result,
+       timestampdiff(second, '2026-01-01', date_add('2026-01-01', interval floor(result / 1000) second)) as direct_offset,
+       timestampdiff(second, '2026-01-01', date_add('2026-01-01', interval (1000 + floor(result / 1000)) second)) as literal_first_offset,
+       timestampdiff(second, '2026-01-01', date_add('2026-01-01', interval (floor(result / 1000) + 1000) second)) as literal_second_offset
+from generate_series(0, 2000, 1000) g
+order by result;
+
+create table t_dynamic_interval as
+select result,
+       date_add('2026-01-01', interval (1000 + floor(result / 1000)) second) as ts
+from generate_series(0, 2000, 1000) g;
+
+select result,
+       timestampdiff(second, '2026-01-01', ts) as persisted_offset
+from t_dynamic_interval
+order by result;
+
+select count(distinct ts) as distinct_ts from t_dynamic_interval;
+
+drop database date_add_dynamic_interval;

@@ -21,6 +21,7 @@ import (
 	"path"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func TestStageCache(t *testing.T) {
@@ -84,6 +86,78 @@ func TestStageFail(t *testing.T) {
 
 	_, err = UrlToStageDef("not a url", proc)
 	require.NotNil(t, err)
+}
+
+// setStage seeds the process stage cache so resolution runs entirely off the cache — the same
+// state a repeated lookup reaches in production, and the state in which a cycle spins without
+// issuing any SQL.
+func setStage(t *testing.T, proc *process.Process, name, rawurl string) {
+	u, err := url.Parse(rawurl)
+	require.NoError(t, err)
+	proc.GetStageCache().Set(name, stage.StageDef{Id: 1, Name: name, Url: u})
+}
+
+// TestStageCyclicReference: a stage:// cycle has no concrete URL to resolve to, so resolution must
+// fail with a bounded error instead of walking the cycle forever (#26890). Self-cycle, two-node and
+// three-node cycles are all reached through the normal UrlToStageDef entry point.
+func TestStageCyclicReference(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stages map[string]string
+		furl   string
+	}{
+		{
+			name:   "self",
+			stages: map[string]string{"selfa": "stage://selfa/loop"},
+			furl:   "stage://selfa/a.csv",
+		},
+		{
+			name:   "two-node",
+			stages: map[string]string{"twoa": "stage://twob/x", "twob": "stage://twoa/y"},
+			furl:   "stage://twoa/a.csv",
+		},
+		{
+			name: "three-node",
+			stages: map[string]string{
+				"tria": "stage://trib/x", "trib": "stage://tric/y", "tric": "stage://tria/z",
+			},
+			furl: "stage://tria/a.csv",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			for name, u := range tc.stages {
+				setStage(t, proc, name, u)
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := UrlToStageDef(tc.furl, proc)
+				done <- err
+			}()
+
+			select {
+			case err := <-done:
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "cyclic stage reference")
+			case <-time.After(30 * time.Second):
+				t.Fatal("UrlToStageDef hung on a cyclic stage reference")
+			}
+		})
+	}
+}
+
+// TestStageChainNoFalseCycle: a legal multi-hop chain that revisits no stage must still resolve —
+// the cycle check must not reject repeated path segments or a long acyclic chain.
+func TestStageChainNoFalseCycle(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	setStage(t, proc, "chaina", "stage://chainb/one")
+	setStage(t, proc, "chainb", "stage://chainc/one")
+	setStage(t, proc, "chainc", "file:///tmp")
+
+	s, err := UrlToStageDef("stage://chaina/a.csv", proc)
+	require.NoError(t, err)
+	require.Equal(t, "file:///tmp/one/one/a.csv", s.Url.String())
 }
 
 func Test_runSql(t *testing.T) {

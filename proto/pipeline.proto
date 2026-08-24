@@ -35,6 +35,7 @@ enum Method {
   StopSending = 4;
   PipelineStreamFinish = 5;
   PipelineStreamFinishAck = 6;
+  PipelineBatchAck = 7;
 }
 
 // StreamTeardownMode negotiates whether a completed logical pipeline stream can
@@ -66,6 +67,12 @@ message Message {
   string debugMsg = 10;
   StreamTeardownMode requested_teardown_mode = 11;
   StreamTeardownMode accepted_teardown_mode = 12;
+  uint32 requested_batch_credit_count = 13;
+  uint64 requested_batch_credit_bytes = 14;
+  uint32 accepted_batch_credit_count = 15;
+  uint64 accepted_batch_credit_bytes = 16;
+  uint64 batch_sequence = 17;
+  uint64 batch_ack_sequence = 18;
 }
 
 message Connector {
@@ -118,6 +125,7 @@ message Aggregate {
   bool dist = 2;
   repeated plan.Expr expr = 3;
   bytes config = 4;
+  plan.AggregateConfigType config_type = 5;
 }
 
 message Group {
@@ -132,6 +140,8 @@ message Group {
   repeated uint32 PartialResultTypes = 9;
   repeated bool grouping_flag = 10;
   int64 spill_mem = 11;
+  // Positions in exprs used for physical hash/equality. Empty means all exprs.
+  repeated int32 group_by_hash_key = 12;
 }
 
 message Insert {
@@ -204,6 +214,10 @@ message PreInsert {
   bool is_old_update = 10;
   bool is_new_update = 11;
   bool reject_zero_temporal = 12;
+  bool has_target_selector = 13;
+  int32 target_row_number_col = 14;
+  int32 target_active_col = 15;
+  int32 target_row_id_col = 16;
 }
 
 message PostDml {
@@ -253,6 +267,7 @@ message FuzzyFilter {
   plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
   int32 BuildIdx = 4;
   bool IfInsertFromUnique = 5;
+  plan.RuntimeFilterSpec runtime_filter_spec = 6;
 }
 
 message HashJoin {
@@ -271,6 +286,7 @@ message HashJoin {
   repeated plan.Type right_types = 13 [(gogoproto.nullable) = false];
   int32 join_map_tag = 14;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 15;
+  bool emit_compressed_row_count = 16;
 }
 
 message LoopJoin {
@@ -330,6 +346,7 @@ message RightDedupJoin {
   repeated int32 update_col_idx_list = 14;
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
+  bool input_keys_unique = 17;
 }
 
 message Product {
@@ -361,6 +378,8 @@ message TableFunction {
   bool is_single = 6;
   plan.IndexReaderParam index_reader_param = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 8;
+  plan.ObjectRef fulltext_source_ref = 9;
+  plan.ObjectRef fulltext_index_ref = 10;
 }
 
 message ExternalName2ColIndex {
@@ -471,12 +490,8 @@ message ExternalScan {
   IcebergPlanningStats iceberg_planning_stats = 21;
   int64 iceberg_delete_max_memory_bytes = 22;
   bool iceberg_delete_spill_enabled = 23;
-}
-
-message StreamScan {
-  plan.TableDef tbl_def = 1;
-  int64 offset = 2;
-  int64 limit = 3;
+  plan.DataStreamScan datastream_scan = 24;
+  plan.ForeignScan foreign_scan = 25;
 }
 
 message TableScan {
@@ -567,7 +582,8 @@ message Instruction {
   LockOp lock_op = 33;
   Shuffle shuffle = 34;
   Merge merge = 35;
-  StreamScan stream_scan = 36;
+  reserved 36; // former stream_scan
+  reserved "stream_scan";
   PreInsertSecondaryIndex pre_insert_secondary_index = 37;
   SampleFunc sample_func = 38;
   FuzzyFilter fuzzy_filter = 39;
@@ -587,6 +603,15 @@ message Instruction {
   MultiUpdate multi_update = 52;
   PostDml post_dml = 53;
   int64 spill_mem = 54;
+  plan.MongoScan mongodb_scan = 55;
+  // FILTER only: execute assertion expressions for their error side effect and
+  // pass the input batch through without building a selection vector.
+  bool filter_is_assert = 56;
+  // PARTITION only: number of leading order_by entries used as partition keys.
+  int32 partition_by_count = 57;
+  // PARTITION Top-N only: emit local candidates in dense batches for the
+  // global hash reduction rather than as one logical partition per batch.
+  bool partition_top_n_pre_reduce = 58;
 }
 
 message AnalysisList {
@@ -634,6 +659,7 @@ message PrepareParamInfo {
   bytes area = 3;
   repeated bool nulls = 4;
   repeated bool is_bin = 5;
+  repeated bool is_binary_string = 6;
 }
 
 message ProcessInfo {
@@ -647,6 +673,20 @@ message ProcessInfo {
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
   int64 affected_rows = 10;
+  // Planned PipelineMessage RPCs per target CN for statement-level remote
+  // MessageBoard and resource-account terminal ownership.
+  map<string, uint32> remote_fragment_counts = 11;
+  // Unique physical execution attempt. Unlike the SQL statement ID, this
+  // changes across retries and prepared-statement executions.
+  bytes remote_execution_id = 12;
+  // Statement-level INSERT IGNORE semantics used by casts in remote pipelines.
+  // Absent in messages from older CNs, which safely decodes as false.
+  bool statement_runtime_ignore = 13;
+  // Snapshot against which this execution generation's plan was bound. It is
+  // immutable for the generation even when RC lock handling advances the
+  // transaction snapshot. Absent on older senders, receivers fall back to the
+  // transaction snapshot for rolling-upgrade compatibility.
+  timestamp.Timestamp plan_snapshot_ts = 14;
 }
 
 message SessionInfo {
@@ -725,4 +765,7 @@ message Apply {
   repeated int32 rel_list = 2;
   repeated int32 col_list = 3;
   repeated plan.Type types = 4 [(gogoproto.nullable) = false];
+  plan.VectorIndexScan vector_index_scan = 5;
+  repeated string vector_attrs = 6;
+  int64 txn_offset = 7;
 }

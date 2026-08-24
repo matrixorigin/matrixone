@@ -48,10 +48,13 @@ set secondary role all;
 grant test to rx,bill;
 internal error: do not have privilege to execute the statement
 grant dev to rx,bill;
+internal error: do not have privilege to execute the statement
 grant intern to rx,bill;
 internal error: do not have privilege to execute the statement
 grant lead to rx,bill;
+internal error: do not have privilege to execute the statement
 grant newrole to rx,bill;
+internal error: do not have privilege to execute the statement
 grant rolex to rx,bill;
 internal error: do not have privilege to execute the statement
 set role lead;
@@ -113,7 +116,9 @@ grant dev to rx,bill;
 grant intern to rx,bill;
 internal error: do not have privilege to execute the statement
 grant lead to rx,bill;
+internal error: do not have privilege to execute the statement
 grant newrole to rx,bill;
+internal error: do not have privilege to execute the statement
 grant rolex to rx,bill;
 internal error: do not have privilege to execute the statement
 set role rolex;
@@ -144,6 +149,7 @@ grant dev to rx,bill;
 grant intern to rx,bill;
 internal error: do not have privilege to execute the statement
 grant lead to rx,bill;
+internal error: do not have privilege to execute the statement
 grant newrole to rx,bill;
 grant rolex to rx,bill;
 internal error: do not have privilege to execute the statement

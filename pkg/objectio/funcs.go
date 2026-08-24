@@ -127,7 +127,7 @@ func ReadOneBlock(
 	fs fileservice.FileService,
 	policy fileservice.Policy,
 ) (ioVec fileservice.IOVector, err error) {
-	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, constructorFactory, policy)
+	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy)
 }
 
 func ReadOneBlockWithMeta(
@@ -168,38 +168,21 @@ func ReadOneBlockWithMeta(
 
 	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
+	specialLayout := ResolveSpecialColumnLayout(blkmeta)
 	for i, seqnum := range seqnums {
 		// special columns
 		if seqnum >= SEQNUM_UPPER {
-			metaColCnt := blkmeta.GetMetaColumnCount()
-			switch seqnum {
-			case SEQNUM_COMMITTS:
-				if metaColCnt == 0 {
-					putFillHolder(i, 0)
-					continue
-				}
-				seqnum = metaColCnt - 1
-			case SEQNUM_ABORT:
-				panic("not support")
-			default:
+			var ok bool
+			if seqnum != SEQNUM_COMMITTS && seqnum != SEQNUM_ABORT {
 				panic(fmt.Sprintf("bad path to read special column %d", seqnum))
 			}
-			// Type alone is insufficient: the last user column may itself be
-			// T_TS. A hidden commit-TS column must sit beyond MaxSeqnum.
-			// If the last column is not commits, do not read it:
-			//  1. created by cn
-			//  2. old version tn nonappendable block
-			col := blkmeta.ColumnMeta(seqnum)
-			hasHiddenColumn := metaColCnt > maxSeqnum+1
-			if !hasHiddenColumn || col.DataType() != uint8(types.T_TS) {
+			seqnum, ok = specialLayout.Resolve(seqnum)
+			if !ok {
 				putFillHolder(i, seqnum)
 			} else {
+				col := blkmeta.ColumnMeta(seqnum)
 				ext := col.Location()
-				ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-					Offset:      int64(ext.Offset()),
-					Size:        int64(ext.Length()),
-					ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
-				})
+				ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(ext, factory))
 			}
 			continue
 		}
@@ -213,11 +196,7 @@ func ReadOneBlockWithMeta(
 		// read written normal column
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
-		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-			Offset:      int64(ext.Offset()),
-			Size:        int64(ext.Length()),
-			ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
-		})
+		ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(ext, factory))
 	}
 	if len(ioVec.Entries) > 0 {
 		err = fs.Read(ctx, &ioVec)
@@ -296,12 +275,7 @@ func ReadAllBlocksWithMeta(
 			}
 			col := blkmeta.ColumnMeta(seqnum)
 			ext := col.Location()
-			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-				Offset: int64(ext.Offset()),
-				Size:   int64(ext.Length()),
-
-				ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
-			})
+			ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(ext, factory))
 
 		}
 	}
@@ -335,10 +309,10 @@ func ReadOneBlockAllColumns(
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-			Offset: int64(ext.Offset()),
-			Size:   int64(ext.Length()),
-
-			ToCacheData: constructorFactory(int64(ext.OriginSize()), ext.Alg()),
+			Offset:         int64(ext.Offset()),
+			Size:           int64(ext.Length()),
+			CachedDataSize: int64(ext.OriginSize()),
+			ToCacheData:    constructorFactory(int64(ext.OriginSize()), ext.Alg()),
 		})
 	}
 

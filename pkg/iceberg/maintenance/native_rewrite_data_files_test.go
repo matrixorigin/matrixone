@@ -495,6 +495,7 @@ func TestNativeRewriteDataFilesPlannerBuildsCommitPlanWithInjectedCompactor(t *t
 	require.Equal(t, "1", plan.Attempt.Summary["added-files"])
 	require.Equal(t, "2", plan.Attempt.Summary["candidate-files"])
 	require.Equal(t, uint64(2), plan.RewrittenFileCount)
+	require.Equal(t, uint64(2), plan.RemovedFileCount)
 	require.Len(t, plan.Objects, 4)
 	require.Equal(t, replacement.FilePath, plan.Objects[0].Location)
 	require.Contains(t, plan.Objects[1].Location, "/metadata/mo-rewrite-data-files/rw-"+api.PathHash("idem-1")+"/preserved-manifest-00001.avro")

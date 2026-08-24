@@ -1,0 +1,95 @@
+drop database if exists data_branch_pick_numeric_literal_forms;
+create database data_branch_pick_numeric_literal_forms;
+use data_branch_pick_numeric_literal_forms;
+create table base_int(k int primary key, v int);
+insert into base_int values (-6, 60), (-4, 40), (2, 20), (3, 30), (5, 50);
+data branch create table src_int from base_int;
+data branch create table dst_hex from base_int;
+data branch create table dst_sci from base_int;
+data branch create table dst_negative_hex from base_int;
+update src_int set v = v + 100;
+select k from src_int where k in (0x2, 3e0, -4e0, +5e0, -0x6) order by k;
+➤ k[4,32,0]  𝄀
+-6  𝄀
+-4  𝄀
+2  𝄀
+3  𝄀
+5
+data branch pick src_int into dst_hex keys(0x2);
+select * from dst_hex order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+-6  ¦  60  𝄀
+-4  ¦  40  𝄀
+2  ¦  120  𝄀
+3  ¦  30  𝄀
+5  ¦  50
+data branch pick src_int into dst_sci keys(3e0, -4e0, +5e0);
+select * from dst_sci order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+-6  ¦  60  𝄀
+-4  ¦  140  𝄀
+2  ¦  20  𝄀
+3  ¦  130  𝄀
+5  ¦  150
+data branch pick src_int into dst_negative_hex keys(-0x6);
+select * from dst_negative_hex order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+-6  ¦  160  𝄀
+-4  ¦  40  𝄀
+2  ¦  20  𝄀
+3  ¦  30  𝄀
+5  ¦  50
+create table base_tinyint(k tinyint primary key, v int);
+insert into base_tinyint values (-128, 10), (1, 20), (127, 30);
+data branch create table src_tinyint from base_tinyint;
+data branch create table dst_tinyint from base_tinyint;
+update src_tinyint set v = v + 100;
+data branch pick src_tinyint into dst_tinyint keys(-1.28e2, +1.27e2);
+select * from dst_tinyint order by k;
+➤ k[-6,8,0]  ¦  v[4,32,0]  𝄀
+-128  ¦  110  𝄀
+1  ¦  20  𝄀
+127  ¦  130
+data branch pick src_tinyint into dst_tinyint keys(1.1e0);
+invalid input: numeric literal "1.1e0" is not an integer for primary key type TINYINT
+data branch pick src_tinyint into dst_tinyint keys(-1.29e2);
+strconv.ParseInt: parsing "-129": value out of range
+data branch pick src_tinyint into dst_tinyint keys(1.28e2);
+strconv.ParseInt: parsing "128": value out of range
+select * from dst_tinyint order by k;
+➤ k[-6,8,0]  ¦  v[4,32,0]  𝄀
+-128  ¦  110  𝄀
+1  ¦  20  𝄀
+127  ¦  130
+create table base_utinyint(k tinyint unsigned primary key, v int);
+insert into base_utinyint values (0, 10), (255, 20);
+data branch create table src_utinyint from base_utinyint;
+data branch create table dst_utinyint from base_utinyint;
+update src_utinyint set v = v + 100;
+data branch pick src_utinyint into dst_utinyint keys(-0x0, 0xff);
+select * from dst_utinyint order by k;
+➤ k[-6,8,0]  ¦  v[4,32,0]  𝄀
+0  ¦  110  𝄀
+255  ¦  120
+data branch pick src_utinyint into dst_utinyint keys(-1e0);
+strconv.ParseUint: parsing "-1": invalid syntax
+data branch pick src_utinyint into dst_utinyint keys(0x100);
+strconv.ParseUint: parsing "256": value out of range
+select * from dst_utinyint order by k;
+➤ k[-6,8,0]  ¦  v[4,32,0]  𝄀
+0  ¦  110  𝄀
+255  ¦  120
+create table base_uint(k bigint unsigned primary key, v int);
+insert into base_uint values (1, 10), (18446744073709551615, 20);
+data branch create table src_uint from base_uint;
+data branch create table dst_uint from base_uint;
+update src_uint set v = v + 100 where k = 18446744073709551615;
+select k from src_uint where k = 0xffffffffffffffff;
+➤ k[-5,64,0]  𝄀
+18446744073709551615
+data branch pick src_uint into dst_uint keys(0xffffffffffffffff);
+select * from dst_uint order by k;
+➤ k[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+18446744073709551615  ¦  120
+drop database data_branch_pick_numeric_literal_forms;

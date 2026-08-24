@@ -23,8 +23,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -32,6 +34,112 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type localBlockingDataCache struct {
+	fscache.DataCache
+	updateStarted chan struct{}
+	releaseUpdate chan struct{}
+	once          sync.Once
+}
+
+func requireDirFilesClosed(
+	t *testing.T,
+	dirFiles map[string]*os.File,
+	closeFn func(),
+) {
+	t.Helper()
+	handles := make([]*os.File, 0, len(dirFiles))
+	for _, file := range dirFiles {
+		handles = append(handles, file)
+	}
+	require.NotEmpty(t, handles)
+
+	closeFn()
+	require.Empty(t, dirFiles)
+	for _, file := range handles {
+		require.Error(t, file.Sync())
+	}
+
+	// Close must remain safe when cleanup paths are duplicated.
+	closeFn()
+}
+
+func TestLocalFSCanonicalizesEmptyRoot(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Chdir(root)
+
+	local, err := NewLocalFS(ctx, "local", "", DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { local.Close(ctx) })
+	require.Equal(t, root, local.RootPath())
+	require.NoError(t, local.Write(ctx, IOVector{
+		FilePath: "nested/file",
+		Entries:  []IOEntry{{Size: 1, Data: []byte{1}}},
+		Policy:   SkipAllCache,
+	}))
+	_, err = os.Stat(filepath.Join(root, "nested", "file"))
+	require.NoError(t, err)
+	requireDirFilesClosed(t, local.dirFiles, func() { local.Close(ctx) })
+}
+
+func TestLocalFSEmptyRootAcrossFilesystems(t *testing.T) {
+	if _, err := os.Stat("/dev/shm"); err != nil {
+		t.Skipf("/dev/shm is unavailable: %v", err)
+	}
+
+	destDir, err := os.MkdirTemp("/dev/shm", "matrixone-local-fs-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(destDir))
+	})
+
+	systemTempDir, err := os.MkdirTemp("/tmp", "matrixone-local-fs-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(systemTempDir))
+	})
+	destInfo, err := os.Stat(destDir)
+	require.NoError(t, err)
+	tempInfo, err := os.Stat(systemTempDir)
+	require.NoError(t, err)
+	if destInfo.Sys().(*syscall.Stat_t).Dev == tempInfo.Sys().(*syscall.Stat_t).Dev {
+		t.Skip("test requires the destination and system temp directory on different filesystems")
+	}
+
+	t.Setenv("TMPDIR", systemTempDir)
+	t.Chdir(destDir)
+
+	ctx := context.Background()
+	local, err := NewLocalFS(ctx, "local", "", DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { local.Close(ctx) })
+	require.Equal(t, destDir, local.RootPath())
+
+	require.NoError(t, local.Write(ctx, IOVector{
+		FilePath: "transfer/page",
+		Entries:  []IOEntry{{Size: 4, Data: []byte("page")}},
+		Policy:   SkipAllCache,
+	}))
+	require.FileExists(t, filepath.Join(destDir, "transfer", "page"))
+
+	writer, err := local.NewWriter(ctx, "stream/page")
+	require.NoError(t, err)
+	_, err = writer.Write([]byte("page"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.FileExists(t, filepath.Join(destDir, "stream", "page"))
+}
+
+func (c *localBlockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) (bool, error) {
+	c.once.Do(func() { close(c.updateStarted) })
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-c.releaseUpdate:
+	}
+	return c.DataCache.Set(ctx, key, data)
+}
 
 func TestLocalFSStatFileReturnsNonNotExistError(t *testing.T) {
 	ctx := context.Background()
@@ -42,6 +150,106 @@ func TestLocalFSStatFileReturnsNonNotExistError(t *testing.T) {
 
 	_, err = fs.StatFile(ctx, "file/child")
 	require.ErrorIs(t, err, syscall.ENOTDIR)
+}
+
+func TestLocalFSMergeWaitHasBoundedFallback(t *testing.T) {
+	ctx := context.Background()
+	originalMaxWait := maxIOWaitDuration
+	maxIOWaitDuration = 5 * time.Millisecond
+	t.Cleanup(func() { maxIOWaitDuration = originalMaxWait })
+
+	local, err := NewLocalFS(ctx, "local", t.TempDir(), DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, local.Write(ctx, IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Size: 3, Data: []byte("foo")}},
+		Policy:   SkipAllCache,
+	}))
+
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Offset: 0, Size: 3}},
+	}
+	t.Cleanup(vector.Release)
+	finishMerge, waitMerge := local.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
+	require.NotNil(t, finishMerge)
+	require.Nil(t, waitMerge)
+	releaseMerge := sync.OnceFunc(finishMerge)
+	t.Cleanup(releaseMerge)
+
+	readDone := make(chan error, 1)
+	go func() { readDone <- local.Read(context.Background(), vector) }()
+	select {
+	case err := <-readDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		releaseMerge()
+		select {
+		case <-readDone:
+		case <-time.After(time.Second):
+			t.Fatal("local follower did not terminate after merge release")
+		}
+		t.Fatal("local follower rejoined a timed-out merge generation")
+	}
+	require.Equal(t, []byte("foo"), vector.Entries[0].Data)
+}
+
+func TestLocalFSMergeCompletesAfterCacheUpdate(t *testing.T) {
+	ctx := context.Background()
+	local, err := NewLocalFS(ctx, "local", t.TempDir(), CacheConfig{
+		MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
+	}, nil)
+	require.NoError(t, err)
+	require.NoError(t, local.Write(ctx, IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Size: 3, Data: []byte("foo")}},
+		Policy:   SkipAllCache,
+	}))
+
+	cache := &localBlockingDataCache{
+		DataCache:     local.memCache.cache,
+		updateStarted: make(chan struct{}),
+		releaseUpdate: make(chan struct{}),
+	}
+	local.memCache.cache = cache
+	releaseUpdate := sync.OnceFunc(func() { close(cache.releaseUpdate) })
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	var wg sync.WaitGroup
+	vector := &IOVector{
+		FilePath: "foo",
+		Policy:   SkipFullFilePreloads,
+		Entries: []IOEntry{{
+			Offset:      0,
+			Size:        3,
+			ToCacheData: CacheOriginalData,
+		}},
+	}
+	t.Cleanup(func() {
+		cancel()
+		releaseUpdate()
+		wg.Wait()
+		vector.Release()
+	})
+
+	readDone := make(chan error, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		readDone <- local.Read(readCtx, vector)
+	}()
+	select {
+	case <-cache.updateStarted:
+	case <-readCtx.Done():
+		t.Fatalf("cache update did not start: %v", readCtx.Err())
+	}
+	require.True(t, local.ioMerger.IsMerging(vector.ioMergeKey()))
+	releaseUpdate()
+	select {
+	case err := <-readDone:
+		require.NoError(t, err)
+	case <-readCtx.Done():
+		t.Fatalf("local read did not finish: %v", readCtx.Err())
+	}
 }
 
 func TestLocalFS(t *testing.T) {
@@ -178,6 +386,36 @@ func BenchmarkLocalFS(b *testing.B) {
 	})
 }
 
+func BenchmarkLocalFSAllocateCacheData(b *testing.B) {
+	ctx := context.Background()
+	fs, err := NewLocalFS(
+		ctx,
+		"local",
+		b.TempDir(),
+		CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024)},
+		nil,
+	)
+	assert.NoError(b, err)
+	b.Cleanup(func() { fs.Close(ctx) })
+
+	benchmarkFileServiceAllocateCacheData(b, fs.AllocateCacheData, 42, 1)
+}
+
+func BenchmarkLocalFSAllocateCacheDataHighCardinality(b *testing.B) {
+	ctx := context.Background()
+	fs, err := NewLocalFS(
+		ctx,
+		"local",
+		b.TempDir(),
+		CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024)},
+		nil,
+	)
+	assert.NoError(b, err)
+	b.Cleanup(func() { fs.Close(ctx) })
+
+	benchmarkFileServiceAllocateCacheData(b, fs.AllocateCacheData, 1, 1024)
+}
+
 func TestLocalFSWithDiskCache(t *testing.T) {
 	ctx := context.Background()
 	var counter perfcounter.CounterSet
@@ -200,6 +438,7 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 		nil,
 	)
 	assert.Nil(t, err)
+	defer fs.Close(ctx)
 
 	// prepare data
 	datas := make([][]byte, 0, n)
@@ -308,8 +547,9 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 	assert.Nil(t, err)
 	vec.Release()
 
-	assert.Equal(t, int64(8), memCache1.cache.Used())
-	assert.Equal(t, int64(8), memCache2.cache.Used())
+	backingSize := int64(DefaultCacheDataAllocator().BackingSize(8))
+	assert.Equal(t, backingSize, memCache1.cache.Used())
+	assert.Equal(t, backingSize, memCache2.cache.Used())
 	memCache1.cache.Flush(ctx)
 	memCache2.cache.Flush(ctx)
 	fs.FlushCache(ctx)

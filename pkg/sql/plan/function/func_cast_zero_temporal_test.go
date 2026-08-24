@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -268,6 +269,49 @@ func TestAssignmentCastZeroTemporalStringsPreserveSentinels(t *testing.T) {
 	}
 }
 
+func TestAssignmentDateCastRejectsInvalidStrings(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	for _, input := range []string{"2020-00-00", "2024-02-31"} {
+		t.Run(input, func(t *testing.T) {
+			// Invalid DATE values in an expression keep the existing CAST
+			// behavior and evaluate to SQL NULL.
+			expression := runStringTemporalCast(
+				t,
+				proc,
+				NewCast,
+				input,
+				types.T_date.ToType(),
+				nil,
+			)
+			require.True(t, expression.nulls[0])
+
+			// Runtime DML assignments, including prepared parameters, use
+			// cast_strict and must not silently persist the invalid value as
+			// NULL when the equivalent literal assignment is rejected.
+			inputVec := testutil.MakeVarcharVector([]string{input}, nil, proc.Mp())
+			defer inputVec.Free(proc.Mp())
+			targetType := vector.NewConstNull(types.T_date.ToType(), 1, proc.Mp())
+			defer targetType.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			err := NewStrictCast(
+				[]*vector.Vector{inputVec, targetType},
+				result,
+				proc,
+				1,
+				nil,
+			)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
+			require.Contains(t, err.Error(), input)
+		})
+	}
+}
+
 func TestExplicitCastZeroTemporalResolverErrorPropagates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC
@@ -388,6 +432,14 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 			fn:     builtInUnixTimestamp,
 		},
 		{
+			name: "typed timestamp decimal",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{types.ZeroTimestamp}, nil),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false, []types.Decimal128{{}}, []bool{true}),
+			fn:     builtInUnixTimestamp,
+		},
+		{
 			name:   "varchar int64",
 			inputs: varcharInput,
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
@@ -412,6 +464,87 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 			require.True(t, succeed, info)
 		})
 	}
+}
+
+func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ts, err := types.ParseTimestamp(time.UTC, "2024-02-29 23:59:59.999999", 6)
+	require.NoError(t, err)
+	ts0, err := types.ParseTimestamp(time.UTC, "2024-02-29 23:59:59", 0)
+	require.NoError(t, err)
+
+	fcTC := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, nil),
+		},
+		NewFunctionTestResult(
+			types.New(types.T_decimal128, 38, 6),
+			false,
+			[]types.Decimal128{mustDecimal128(t, "1709251199.999999", 38, 6)},
+			[]bool{false},
+		),
+		builtInUnixTimestamp,
+	)
+	succeed, info := fcTC.Run()
+	require.True(t, succeed, info)
+
+	fcTC = NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts0}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1709251199}, []bool{false}),
+		builtInUnixTimestamp,
+	)
+	succeed, info = fcTC.Run()
+	require.True(t, succeed, info)
+}
+
+func TestUnixTimestampTypedTimestampDecimalNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ts, err := types.ParseTimestamp(time.UTC, "2024-02-29 23:59:59.999999", 6)
+	require.NoError(t, err)
+	preEpoch := types.Timestamp(types.UnixToTimestamp(0) - 1)
+
+	fcTC := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_timestamp.ToTypeWithScale(6),
+				[]types.Timestamp{preEpoch, ts},
+				[]bool{false, true},
+			),
+		},
+		NewFunctionTestResult(
+			types.New(types.T_decimal128, 38, 6),
+			false,
+			[]types.Decimal128{{}, {}},
+			[]bool{true, true},
+		),
+		builtInUnixTimestamp,
+	)
+	succeed, info := fcTC.Run()
+	require.True(t, succeed, info)
+}
+
+func TestUnixTimestampNoArgReturnsCurrentSecond(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	before := time.Now().Unix()
+	require.NoError(t, builtInUnixTimestamp(nil, result, proc, 1, nil))
+	after := time.Now().Unix()
+
+	vec := result.GetResultVector()
+	require.False(t, vec.IsNull(0))
+	got := vector.MustFixedColNoTypeCheck[int64](vec)[0]
+	require.GreaterOrEqual(t, got, before)
+	require.LessOrEqual(t, got, after)
 }
 
 func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {

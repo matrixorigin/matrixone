@@ -74,14 +74,22 @@ func init() {
 func NewFixedSizeMmapAllocator(
 	size uint64,
 ) (ret *fixedSizeMmapAllocator) {
+	return newFixedSizeMmapAllocator(
+		size,
+		int(min(smallClassCap/size, maxBuffer1Cap)),
+		buffer2Cap,
+	)
+}
 
-	// if size is larger than smallClassCap, num1 will be zero, buffer1 will be empty
-	num1 := min(smallClassCap/size, maxBuffer1Cap)
-
+func newFixedSizeMmapAllocator(
+	size uint64,
+	residentBufferCap int,
+	releasedBufferCap int,
+) (ret *fixedSizeMmapAllocator) {
 	ret = &fixedSizeMmapAllocator{
 		size:    size,
-		buffer1: make(chan unsafe.Pointer, num1),
-		buffer2: make(chan unsafe.Pointer, buffer2Cap),
+		buffer1: make(chan unsafe.Pointer, residentBufferCap),
+		buffer2: make(chan unsafe.Pointer, releasedBufferCap),
 
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *fixedSizeMmapDeallocatorArgs) {

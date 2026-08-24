@@ -51,22 +51,39 @@ func NewClassAllocator[T FixedSizeAllocator](
 
 var _ Allocator = new(ClassAllocator[*fixedSizeMmapAllocator])
 
-func (c *ClassAllocator[T]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
+// ClassAllocationSize reports the backing allocation used by ClassAllocator
+// for a request. Callers which account memory before allocating can use the
+// same size-class contract instead of under-counting the requested slice as
+// though it were the backing allocation.
+func ClassAllocationSize(size uint64) (uint64, bool) {
 	if size == 0 {
-		return nil, nil, moerr.NewInternalErrorNoCtx("invalid allocate size: 0")
+		return 0, false
 	}
-	// class size factor is 2, so we can calculate the class index
-	var i int
+	var classSize uint64
 	if bits.OnesCount64(size) > 1 {
-		// round to next bucket
-		i = bits.Len64(size)
+		shift := bits.Len64(size)
+		if shift >= 64 {
+			return 0, false
+		}
+		classSize = uint64(1) << shift
 	} else {
-		// power of two
-		i = bits.Len64(size) - 1
+		classSize = size
 	}
-	if i >= len(c.classes) {
+	if classSize > maxClassSize {
+		return 0, false
+	}
+	return classSize, true
+}
+
+func (c *ClassAllocator[T]) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
+	classSize, ok := ClassAllocationSize(size)
+	if !ok {
+		if size == 0 {
+			return nil, nil, moerr.NewInternalErrorNoCtx("invalid allocate size: 0")
+		}
 		return nil, nil, moerr.NewInternalErrorNoCtxf("cannot allocate %v bytes: too large", size)
 	}
+	i := bits.TrailingZeros64(classSize)
 	slice, dec, err := c.classes[i].allocator.Allocate(hints, size)
 	if err != nil {
 		return nil, nil, err

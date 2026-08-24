@@ -688,13 +688,13 @@ select * from t1 where second(a) between 10 and 36;
 drop table if exists t1;
 drop table if exists t1;
 create table t1(a int, b int);
-select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);
+select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name) as current_db;
 ➤ mo_table_rows(db_name, t1)[-5,64,0]  ¦  mo_table_size(db_name, t1)[-5,64,0]  𝄀
 0  ¦  0
 insert into t1 values(1, 2);
 insert into t1 values(3, 4);
 set mo_table_stats.use_old_impl = yes;
-select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);
+select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name) as current_db;
 ➤ mo_table_rows(db_name, t1)[-5,64,0]  ¦  mo_table_size(db_name, t1)[-5,64,0]  𝄀
 2  ¦  80
 set mo_table_stats.use_old_impl = no;

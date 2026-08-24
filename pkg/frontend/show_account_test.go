@@ -22,6 +22,9 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
@@ -152,6 +156,91 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 	}
 }
 
+func TestBuildShowAccountsSQL(t *testing.T) {
+	sysAccount := &TenantInfo{Tenant: GetDefaultTenant()}
+	tenantAccount := &TenantInfo{Tenant: "tenant", TenantID: 42}
+	allAccounts := &tree.ShowAccounts{}
+	filtered, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "show accounts like 'tenant%'", 1)
+	require.NoError(t, err)
+	filteredAccounts := filtered.(*tree.ShowAccounts)
+
+	tests := []struct {
+		name            string
+		account         *TenantInfo
+		statement       *tree.ShowAccounts
+		database        string
+		wantObjectCount bool
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name:            "metrics cron query",
+			account:         sysAccount,
+			statement:       allAccounts,
+			database:        mometric.MetricDBConst,
+			wantObjectCount: true,
+			wantContains: []string{
+				"CAST(0 AS BIGINT) AS object_count",
+			},
+			wantNotContains: []string{
+				"where ma.account_id =",
+			},
+		},
+		{
+			name:      "non metrics database",
+			account:   sysAccount,
+			statement: allAccounts,
+			database:  "mo_catalog",
+			wantNotContains: []string{
+				"AS object_count",
+			},
+		},
+		{
+			name:      "filtered sys query",
+			account:   sysAccount,
+			statement: filteredAccounts,
+			database:  mometric.MetricDBConst,
+			wantContains: []string{
+				"where ma.account_name like 'tenant%'",
+			},
+			wantNotContains: []string{
+				"AS object_count",
+			},
+		},
+		{
+			name:      "tenant query",
+			account:   tenantAccount,
+			statement: filteredAccounts,
+			database:  mometric.MetricDBConst,
+			wantContains: []string{
+				"WHERE md.account_id = 42",
+				"AND mt.account_id = 42",
+				"where ma.account_id = 42",
+			},
+			wantNotContains: []string{
+				"AS object_count",
+				"account_name like",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rawSQL, needObjectCount := buildShowAccountsSQL(test.account, test.statement, test.database)
+			sql := normalizeSQL(rawSQL)
+			require.Equal(t, test.wantObjectCount, needObjectCount)
+			for _, fragment := range test.wantContains {
+				require.Contains(t, sql, normalizeSQL(fragment))
+			}
+			for _, fragment := range test.wantNotContains {
+				require.NotContains(t, sql, normalizeSQL(fragment))
+			}
+			_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func Test_updateStorageSize(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -178,6 +267,30 @@ func Test_updateCount(t *testing.T) {
 	vector.AppendFixed[int64](bat.Vecs[0], ori, false, proc.GetMPool())
 	updateCount(bat.Vecs[0], add, 0)
 	require.Equal(t, ori+add, vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], 0))
+}
+
+func TestRequestStorageUsageWithNoTN(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldCluster, hadOldCluster := rt.GetGlobalVariables(moruntime.ClusterService)
+	emptyCluster := clusterservice.NewMOCluster("", nil, 0, clusterservice.WithDisableRefresh())
+	rt.SetGlobalVariables(moruntime.ClusterService, emptyCluster)
+	t.Cleanup(func() {
+		if hadOldCluster {
+			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.ClusterService, emptyCluster)
+		}
+		emptyCluster.Close()
+	})
+
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	response, tried, err := requestStorageUsage(context.Background(), ses, nil)
+	require.Nil(t, response)
+	require.False(t, tried)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend), err)
 }
 
 func Test_updateStorageUsageCache_V2(t *testing.T) {

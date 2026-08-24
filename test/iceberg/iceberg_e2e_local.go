@@ -147,6 +147,7 @@ func main() {
 		runner.catalogAndMappingCase,
 		runner.appendReadAndTimeTravelCase,
 		runner.partitionFilterCase,
+		runner.yearPartitionDateCase,
 		runner.mergeOnReadDeleteCase,
 	}
 	failed := false
@@ -199,6 +200,12 @@ func (r *caseRunner) setup(ctx context.Context) error {
 ) ENGINE = ICEBERG WITH ('catalog'=%s,'namespace'=%s,'table'='partition_orders','ref'='main','read_mode'='append_only','write_mode'='append_only')`,
 			ident(r.cfg.Database), ident("partition_orders"), sqlString(r.cfg.Catalog), sqlString(r.cfg.Namespace)),
 		fmt.Sprintf(`CREATE EXTERNAL TABLE %s.%s (
+  id BIGINT,
+  obs_date DATE,
+  value BIGINT
+) ENGINE = ICEBERG WITH ('catalog'=%s,'namespace'=%s,'table'='year_partition_tiny','ref'='main','read_mode'='append_only','write_mode'='append_only')`,
+			ident(r.cfg.Database), ident("year_partition_tiny"), sqlString(r.cfg.Catalog), sqlString(r.cfg.Namespace)),
+		fmt.Sprintf(`CREATE EXTERNAL TABLE %s.%s (
   account_id BIGINT,
   balance BIGINT,
   region TEXT
@@ -240,7 +247,7 @@ func (r *caseRunner) catalogAndMappingCase(ctx context.Context) caseResult {
 	if err != nil {
 		return failedCase("ICE-CI-E2E-010", "catalog-ddl-and-discovery", sqls, nil, tables, err.Error())
 	}
-	for _, table := range []string{"append_orders", "partition_orders", "mor_accounts"} {
+	for _, table := range []string{"append_orders", "partition_orders", "year_partition_tiny", "mor_accounts"} {
 		if !linesContain(tables, table) {
 			return failedCase("ICE-CI-E2E-010", "catalog-ddl-and-discovery", sqls, []string{table}, tables, "seed table not listed")
 		}
@@ -379,6 +386,60 @@ func (r *caseRunner) partitionFilterCase(ctx context.Context) caseResult {
 	return passedCase("ICE-CI-E2E-030", "partition-filter", sqls, expected, actual, nil)
 }
 
+func (r *caseRunner) yearPartitionDateCase(ctx context.Context) caseResult {
+	table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("year_partition_tiny"))
+	rangeSQL := fmt.Sprintf("SELECT COUNT(*), SUM(value) FROM %s WHERE obs_date >= DATE '2020-01-01' AND obs_date < DATE '2021-01-01'", table)
+	sqls := []string{
+		fmt.Sprintf("INSERT INTO %s VALUES (0,DATE '1969-06-01',5),(1,DATE '2019-06-01',10),(2,DATE '2020-02-01',20),(3,DATE '2020-12-31',30),(4,DATE '2021-01-01',40),(5,NULL,50)", table),
+		fmt.Sprintf("SELECT COUNT(*), SUM(value) FROM %s", table),
+		fmt.Sprintf("SELECT COUNT(*), SUM(value) FROM %s WHERE obs_date = DATE '2020-02-01'", table),
+		rangeSQL,
+		rangeSQL,
+		rangeSQL,
+		fmt.Sprintf("SELECT COUNT(*), SUM(value) FROM %s WHERE obs_date IN (DATE '2019-06-01', DATE '2021-01-01')", table),
+		fmt.Sprintf("SELECT COUNT(*), SUM(value) FROM %s WHERE obs_date < DATE '1970-01-01'", table),
+		fmt.Sprintf("SELECT COUNT(*), SUM(value) FROM %s WHERE obs_date IS NULL", table),
+		fmt.Sprintf("SELECT COUNT(*), SUM(value) FROM %s WHERE obs_date >= DATE '2030-01-01'", table),
+		"EXPLAIN " + rangeSQL,
+	}
+	if _, err := r.db.ExecContext(ctx, sqls[0]); err != nil {
+		return failedCase("ICE-CI-E2E-035", "year-partition-date-filter", sqls, nil, nil, err.Error())
+	}
+	expected := []string{
+		"6\t155",
+		"1\t20",
+		"2\t50",
+		"2\t50",
+		"2\t50",
+		"2\t50",
+		"1\t5",
+		"1\t50",
+		"0\tNULL",
+	}
+	actual := make([]string, 0, len(expected))
+	for _, stmt := range sqls[1 : len(sqls)-1] {
+		lines, err := queryLines(ctx, r.db, stmt)
+		actual = append(actual, lines...)
+		if err != nil {
+			return failedCase("ICE-CI-E2E-035", "year-partition-date-filter", sqls, expected, actual, err.Error())
+		}
+	}
+	if !sameLines(expected, actual) {
+		return failedCase("ICE-CI-E2E-035", "year-partition-date-filter", sqls, expected, actual, "year partition date filter result mismatch")
+	}
+	explain, err := queryLines(ctx, r.db, sqls[len(sqls)-1])
+	if err != nil {
+		return failedCase("ICE-CI-E2E-035", "year-partition-date-filter", sqls, expected, actual, err.Error())
+	}
+	if !linesContain(explain, "Iceberg:") || !linesContain(explain, "residual_filter=true") {
+		return failedCase("ICE-CI-E2E-035", "year-partition-date-filter", sqls, expected, actual, "EXPLAIN omitted Iceberg residual filter")
+	}
+	return passedCase("ICE-CI-E2E-035", "year-partition-date-filter", sqls, expected, actual, map[string]string{
+		"range_repetitions": "3",
+		"explain":           strings.Join(explain, "\n"),
+	})
+}
+
 func (r *caseRunner) mergeOnReadDeleteCase(ctx context.Context) caseResult {
 	table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("mor_accounts"))
 	sqls := []string{
@@ -474,9 +535,18 @@ func e2eTableSpecs(namespace string) []e2eTableSpec {
 		{ID: 2, Name: "balance", Required: false, Type: api.IcebergType{Kind: api.TypeLong}},
 		{ID: 3, Name: "region", Required: false, Type: api.IcebergType{Kind: api.TypeString}},
 	}}
+	yearPartitionSchema := api.Schema{SchemaID: 0, Fields: []api.SchemaField{
+		{ID: 1, Name: "id", Required: true, Type: api.IcebergType{Kind: api.TypeLong}},
+		{ID: 2, Name: "obs_date", Required: false, Type: api.IcebergType{Kind: api.TypeDate}},
+		{ID: 3, Name: "value", Required: false, Type: api.IcebergType{Kind: api.TypeLong}},
+	}}
+	yearPartitioned := api.PartitionSpec{SpecID: 0, Fields: []api.PartitionField{
+		{SourceID: 2, FieldID: 1000, Name: "obs_year", Transform: "year"},
+	}}
 	return []e2eTableSpec{
 		{name: "append_orders", schema: orderSchema, partitionSpec: api.PartitionSpec{SpecID: 0}},
 		{name: "partition_orders", schema: orderSchema, partitionSpec: partitioned},
+		{name: "year_partition_tiny", schema: yearPartitionSchema, partitionSpec: yearPartitioned},
 		{name: "mor_accounts", schema: accountSchema, partitionSpec: api.PartitionSpec{SpecID: 0}},
 	}
 }

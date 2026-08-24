@@ -125,6 +125,46 @@ func TestParseDateCast(t *testing.T) {
 			args: args{s: "2005-02-23 10:20:30"},
 			want: "2005-02-23",
 		},
+		{
+			name: "punctuation_delimited_date",
+			args: args{s: "2005/02/23"},
+			want: "2005-02-23",
+		},
+		{
+			name: "punctuation_delimited_datetime",
+			args: args{s: "2005:02:23T10:20:30"},
+			want: "2005-02-23",
+		},
+		{
+			name: "two_digit_year_colon_date",
+			args: args{s: "10:11:12"},
+			want: "2010-11-12",
+		},
+		{
+			name: "two_digit_year_dash_date",
+			args: args{s: "10-11-12"},
+			want: "2010-11-12",
+		},
+		{
+			name: "two_digit_year_upper_window",
+			args: args{s: "69:01:01"},
+			want: "2069-01-01",
+		},
+		{
+			name: "two_digit_year_lower_window",
+			args: args{s: "70:01:01"},
+			want: "1970-01-01",
+		},
+		{
+			name: "punctuation_delimited_time",
+			args: args{s: "2024/01/15 12*34*56"},
+			want: "2024-01-15",
+		},
+		{
+			name:    "non-midnight zero datetime remains invalid",
+			args:    args{s: "0000-00-00 12:34:56"},
+			wantErr: true,
+		},
 		// 10. leading/trailing whitespace trimmed
 		{
 			name: "whitespace_trimmed",
@@ -144,6 +184,99 @@ func TestParseDateCast(t *testing.T) {
 			}
 			if got.String() != tt.want {
 				t.Errorf("ParseDateCast() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseDateCastComponents(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		year    int32
+		month   uint8
+		day     uint8
+		wantErr bool
+	}{
+		{name: "incomplete dashed", input: "2001-11-00", year: 2001, month: 11, day: 0},
+		{name: "incomplete datetime", input: "2001-11-00 12:34:56", year: 2001, month: 11, day: 0},
+		{name: "incomplete compact", input: "20011100", year: 2001, month: 11, day: 0},
+		{name: "incomplete variable width", input: "2001-11-0", year: 2001, month: 11, day: 0},
+		{name: "zero datetime", input: "0000-00-00 12:34:56", year: 0, month: 0, day: 0},
+		{name: "complete variable width datetime", input: "2001-1-2 12:34:56", year: 2001, month: 1, day: 2},
+		{name: "ISO datetime", input: "2024-01-01T12:34:56", year: 2024, month: 1, day: 1},
+		{name: "slash date", input: "2024/01/15", year: 2024, month: 1, day: 15},
+		{name: "colon datetime", input: "2024:01:15 12:34:56", year: 2024, month: 1, day: 15},
+		{name: "mixed punctuation separators", input: "2024/01-15", year: 2024, month: 1, day: 15},
+		{name: "dot date", input: "2024.01.15", year: 2024, month: 1, day: 15},
+		{name: "two digit colon date", input: "10:11:12", year: 2010, month: 11, day: 12},
+		{name: "two digit dashed date", input: "10-11-12", year: 2010, month: 11, day: 12},
+		{name: "two digit year upper window", input: "69:01:01", year: 2069, month: 1, day: 1},
+		{name: "two digit year lower window", input: "70:01:01", year: 1970, month: 1, day: 1},
+		{name: "punctuation delimited time", input: "2024/01/15 12*34*56", year: 2024, month: 1, day: 15},
+		{name: "year zero date", input: "0000-01-01", year: 0, month: 1, day: 1},
+		{name: "malformed", input: "2001-11-x", wantErr: true},
+		{name: "malformed month separator", input: "2024-0x-01", wantErr: true},
+		{name: "invalid hour", input: "2024-01-01 24:00:00", wantErr: true},
+		{name: "invalid minute", input: "2024-01-01 23:60:00", wantErr: true},
+		{name: "oversized year", input: "4294967297-01-01", wantErr: true},
+		{name: "dangling ISO separator", input: "2024-01-01T", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			year, month, day, err := ParseDateCastComponents(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.year, year)
+			assert.Equal(t, tt.month, month)
+			assert.Equal(t, tt.day, day)
+		})
+	}
+}
+
+func TestValidCalendarDateYearZero(t *testing.T) {
+	require.True(t, ValidCalendarDate(0, 1, 1))
+	require.False(t, ValidCalendarDate(0, 2, 29))
+	require.False(t, ValidDate(0, 1, 1))
+	require.Equal(t, Sunday, DayOfWeekFromCalendar(0, 1, 1))
+	require.Equal(t, 52, WeekFromCalendar(0, 1, 1, 3))
+}
+
+func TestParseDateCastStrictValidation(t *testing.T) {
+	for _, input := range []string{
+		"2024-01x-02",
+		"2024-01-01 12:3x:56",
+		"2024-01-01 24:00:00",
+		"4294967297-01-01",
+	} {
+		t.Run(input, func(t *testing.T) {
+			_, err := ParseDateCast(input)
+			require.Error(t, err)
+		})
+	}
+}
+
+func BenchmarkParseDateCast(b *testing.B) {
+	inputs := []struct {
+		name  string
+		value string
+	}{
+		{name: "dashed", value: "2024-01-15"},
+		{name: "compact", value: "20240115"},
+		{name: "datetime with fraction", value: "2024-01-15 12:34:56.123456"},
+	}
+
+	for _, input := range inputs {
+		b.Run(input.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if _, err := ParseDateCast(input.value); err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}

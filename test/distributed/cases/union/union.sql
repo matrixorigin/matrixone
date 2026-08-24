@@ -1,3 +1,6 @@
+-- @desc: issue #27034, preserve scalar UNION ALL branch order for ODBC parameter arrays
+SELECT 3 UNION ALL SELECT 1 UNION ALL SELECT 2;
+
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int);

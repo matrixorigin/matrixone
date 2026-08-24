@@ -129,8 +129,8 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 				if err != nil {
 					return err
 				}
-				if uint64(cap(ctr.counter)) < ctr.hashTable.GroupCount() {
-					gap := ctr.hashTable.GroupCount() - uint64(cap(ctr.counter))
+				if uint64(len(ctr.counter)) < ctr.hashTable.GroupCount() {
+					gap := ctr.hashTable.GroupCount() - uint64(len(ctr.counter))
 					ctr.counter = append(ctr.counter, make([]uint64, gap)...)
 				}
 				for _, v := range vs {
@@ -194,7 +194,10 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 				copy(ctr.inserted[:n], ctr.resetInserted[:n])
 				cnt = 0
 
-				vs, _ := itr.Find(i, n, input.Batch.Vecs)
+				vs, _, err := itr.Find(i, n, input.Batch.Vecs)
+				if err != nil {
+					return false, err
+				}
 
 				for j, v := range vs {
 					// not found

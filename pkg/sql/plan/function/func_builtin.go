@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"math/rand"
@@ -72,16 +73,46 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	return nil
 }
 
+// ToInterval normalizes dynamic string interval values per row. Invalid values
+// become NULL, matching DATE_ADD/DATE_SUB invalid-interval behavior.
+func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	values := vector.GenerateFunctionStrParameter(ivecs[0])
+	units := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := values.GetStrValue(i)
+		unit, unitNull := units.GetValue(i)
+		if valueNull || unitNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		number, _, err := types.NormalizeInterval(string(value), types.IntervalType(unit))
+		if err != nil {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.Append(number, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 
-	// TODO: not a good way to solve this problem. and will be fixed by file `specialRule.go`
-	scale := int32(6)
+	// MySQL defaults omitted fractional-seconds precision to zero. An explicit
+	// FSP is supplied as the single argument and overrides this below.
+	scale := int32(0)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "now", 6)
+			return moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "now", 6)
 		}
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
@@ -99,12 +130,14 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 
-	scale := int32(6)
+	// SYSDATE() follows the same default FSP=0 rule as NOW() and
+	// CURRENT_TIMESTAMP(); an explicit argument still selects 0..6.
+	scale := int32(0)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "sysdate", 6)
+			return moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "sysdate", 6)
 		}
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
@@ -157,16 +190,9 @@ func builtInCurrentTime(ivecs []*vector.Vector, result vector.FunctionResultWrap
 func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
 
-	// Get scale from optional parameter (default 0 for TIME type)
-	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
-		// Clamp scale to valid range [0, 6]
-		if scale < 0 {
-			scale = 0
-		} else if scale > 6 {
-			scale = 6
-		}
+	scale, err := utcFunctionScale(ivecs, proc, "utc_time")
+	if err != nil {
+		return err
 	}
 	rs.TempSetType(types.New(types.T_time, 0, scale))
 
@@ -184,6 +210,27 @@ func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}
 
 	return nil
+}
+
+func utcFunctionScale(ivecs []*vector.Vector, proc *process.Process, name string) (int32, error) {
+	if len(ivecs) == 0 {
+		return 0, nil
+	}
+	if len(ivecs) != 1 || ivecs[0] == nil || ivecs[0].IsConstNull() || ivecs[0].Length() == 0 {
+		return 0, moerr.NewInvalidArg(proc.Ctx, name, "fractional seconds precision must be a constant integer between 0 and 6")
+	}
+
+	scale := vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0]
+	if scale < 0 {
+		return 0, moerr.NewInvalidArg(proc.Ctx, name, fmt.Sprintf("negative precision %d specified", scale))
+	}
+	if scale > 6 {
+		return 0, moerr.NewErrTooBigPrecision(proc.Ctx, scale, name, 6)
+	}
+	if !ivecs[0].IsConst() {
+		return 0, moerr.NewInvalidArg(proc.Ctx, name, "fractional seconds precision must be a constant integer between 0 and 6")
+	}
+	return int32(scale), nil
 }
 
 // parseLeadingInteger extracts and parses the longest leading integer prefix
@@ -357,6 +404,17 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
 				ret = geometryShowColumnType(typ)
+			} else if typ.Oid == types.T_text {
+				switch typ.Width {
+				case types.MaxTinyTextLen:
+					ret = "TINYTEXT"
+				case types.MaxMediumTextLen:
+					ret = "MEDIUMTEXT"
+				case types.MaxLongTextLen:
+					ret = "LONGTEXT"
+				default:
+					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				}
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
@@ -594,6 +652,12 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
+			if typ.Oid == types.T_text {
+				if err := rs.Append(internalTextMetadataLength(typ), false); err != nil {
+					return err
+				}
+				continue
+			}
 			if typ.Oid.IsMySQLString() {
 				if err := rs.Append(int64(typ.Width), false); err != nil {
 					return err
@@ -622,8 +686,26 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid.IsMySQLString() {
-				if err := rs.Append(int64(typ.GetSize()*typ.Width), false); err != nil {
+			switch typ.Oid {
+			case types.T_char, types.T_varchar:
+				// Width is measured in characters for character strings. The
+				// information schema needs the maximum encoded byte length, not
+				// the size of MatrixOne's internal Varlena storage slot.
+				if err := rs.Append(int64(typ.Width)*utf8.UTFMax, false); err != nil {
+					return err
+				}
+				continue
+			case types.T_text:
+				// MySQL TEXT-family limits are byte limits. Width zero is
+				// MatrixOne's persisted marker for ordinary TEXT, not a zero-byte
+				// column, so expose the MySQL-compatible 64 KiB catalog bound.
+				if err := rs.Append(internalTextMetadataLength(typ), false); err != nil {
+					return err
+				}
+				continue
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				// Binary string widths are already measured in octets.
+				if err := rs.Append(int64(typ.Width), false); err != nil {
 					return err
 				}
 				continue
@@ -634,6 +716,13 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 		}
 	}
 	return nil
+}
+
+func internalTextMetadataLength(typ types.Type) int64 {
+	if typ.Width > 0 {
+		return int64(typ.Width)
+	}
+	return int64(types.MaxStringSize)
 }
 
 func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1556,7 +1645,10 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
 		// and there is no documentation about the limit of the result length.
 		sourceLen := int64(len(base))
-		if sourceLen*n > types.MaxVarcharLen {
+		if sourceLen == 0 {
+			return "", false
+		}
+		if n > types.MaxVarcharLen/sourceLen {
 			return "", true
 		}
 		return strings.Repeat(base, int(n)), false
@@ -1640,10 +1732,10 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func generateUUIDs(result vector.FunctionResultWrapper, proc *process.Process, length int, newUUID func() (uuid.UUID, error)) error {
 	rs := vector.MustFunctionResult[types.Uuid](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		val, err := uuid.NewV7()
+	for i := 0; i < length; i++ {
+		val, err := newUUID()
 		if err != nil {
 			return moerr.NewInternalError(proc.Ctx, "newuuid failed")
 		}
@@ -1652,6 +1744,317 @@ func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		}
 	}
 	return nil
+}
+
+func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return generateUUIDs(result, proc, length, uuid.NewV7)
+}
+
+// seconds from the UUID Gregorian epoch (1582-10-15) to the unix epoch
+const uuidGregorianToUnixSecs = 12219292800
+
+// rfcV6EncodeTime writes ts (a 60-bit count of 100ns intervals since
+// 1582-10-15) into u[0:8] per RFC 9562 section 5.6: time_high (bits 59-28) in
+// octets 0-3, time_mid (bits 27-12) in octets 4-5, then the version nibble and
+// time_low (bits 11-0) in octets 6-7.
+func rfcV6EncodeTime(u *types.Uuid, ts int64) {
+	u[0] = byte(ts >> 52)
+	u[1] = byte(ts >> 44)
+	u[2] = byte(ts >> 36)
+	u[3] = byte(ts >> 28)
+	u[4] = byte(ts >> 20)
+	u[5] = byte(ts >> 12)
+	u[6] = 0x60 | byte(ts>>8)&0x0f
+	u[7] = byte(ts)
+}
+
+// rfcV6DecodeTime is the inverse of rfcV6EncodeTime.
+func rfcV6DecodeTime(u types.Uuid) int64 {
+	hi := int64(binary.BigEndian.Uint32(u[0:4]))
+	mid := int64(binary.BigEndian.Uint16(u[4:6]))
+	low := int64(u[6]&0x0f)<<8 | int64(u[7])
+	return hi<<28 | mid<<12 | low
+}
+
+// newRFCUUIDV6 generates an RFC 9562-compliant UUIDv6. google/uuid's NewV6 is
+// known to deviate from the RFC field layout (it writes the timestamp as a
+// plain 64-bit BE value, losing bits 15-12 to the version nibble), so instead
+// we take a v1 from uuid.NewUUID — which manages the monotonic timestamp,
+// clock sequence, and node id correctly — and reorder its timestamp fields
+// into the v6 layout, the field-compatible transformation the RFC defines.
+func newRFCUUIDV6() (uuid.UUID, error) {
+	v1, err := uuid.NewUUID()
+	if err != nil {
+		return v1, err
+	}
+	ts := int64(binary.BigEndian.Uint32(v1[0:4])) |
+		int64(binary.BigEndian.Uint16(v1[4:6]))<<32 |
+		int64(binary.BigEndian.Uint16(v1[6:8])&0x0fff)<<48
+	u := types.Uuid(v1)
+	rfcV6EncodeTime(&u, ts)
+	return uuid.UUID(u), nil
+}
+
+// makeBuiltInUUIDBoundary implements uuid_v1/uuid_v6/uuid_v7 (and uuid, the
+// uuid_v7 alias) with an explicit datetime argument: the result is the
+// deterministic minimal UUID of that version for that instant — timestamp and
+// version/variant bits set, all random/clock-seq/node bits zero. It is a
+// boundary value for range predicates over time-ordered keys, e.g.
+// `id < uuid_v7('2026-01-01')`, not a unique ID. v7 and v6 sort by time in
+// string/byte order, but v1 does not (its timestamp is stored low-word first),
+// so a v1 boundary is only useful for equality and Time() extraction.
+func makeBuiltInUUIDBoundary(version int) executeLogicOfOverload {
+	return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		p1 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
+		rs := vector.MustFunctionResult[types.Uuid](result)
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		for i := uint64(0); i < uint64(length); i++ {
+			v, null := p1.GetValue(i)
+			if null {
+				if err := rs.Append(types.Uuid{}, true); err != nil {
+					return err
+				}
+				continue
+			}
+			var u types.Uuid
+			if version == 7 {
+				u[6] = 0x70 // version 7; rand_a bits zero (v1/v6 versions are set by setUUIDTimestamp)
+			}
+			u[8] = 0x80 // RFC 4122 variant; random/clock-seq/node bits zero
+			if !setUUIDTimestamp(&u, version, v.ConvertToGoTime(loc)) {
+				return moerr.NewInvalidInputf(proc.Ctx, "uuid_v%d timestamp out of range: %s", version, v.String())
+			}
+			if err := rs.Append(u, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+// setUUIDTimestamp encodes the absolute instant t into u's timestamp field,
+// preserving all non-time bits (rand_a/rand_b for v7 in the untouched nibbles,
+// clock-seq and node for v1/v6). For v1/v6 the version nibble lives inside the
+// encoded field and is written here; for v7 only octets 0-5 are timestamp, so
+// the caller's byte 6 (version + rand_a) is preserved. Reports false if t is
+// outside the version's representable range.
+func setUUIDTimestamp(u *types.Uuid, version int, t time.Time) bool {
+	switch version {
+	case 7:
+		// 48-bit unix-millisecond timestamp in octets 0-5
+		ms := t.UnixMilli()
+		if ms < 0 || ms >= 1<<48 {
+			return false
+		}
+		u[0] = byte(ms >> 40)
+		u[1] = byte(ms >> 32)
+		u[2] = byte(ms >> 24)
+		u[3] = byte(ms >> 16)
+		u[4] = byte(ms >> 8)
+		u[5] = byte(ms)
+	case 1, 6:
+		// 60-bit count of 100ns intervals since 1582-10-15 (keep the sub-µs
+		// 100ns digit — consecutive v1/v6 timestamps differ only there)
+		ts := t.UnixMicro()*10 + int64(t.Nanosecond()%1000)/100 + uuidGregorianToUnixSecs*10_000_000
+		if ts < 0 || ts >= 1<<60 {
+			return false
+		}
+		if version == 6 {
+			rfcV6EncodeTime(u, ts)
+		} else {
+			// v1: time_low(32) | time_mid(16) | version(4) | time_high(12)
+			binary.BigEndian.PutUint32(u[0:4], uint32(ts))
+			binary.BigEndian.PutUint16(u[4:6], uint16(ts>>32))
+			binary.BigEndian.PutUint16(u[6:8], 0x1000|uint16(ts>>48)&0x0fff)
+		}
+	}
+	return true
+}
+
+// uuidEmbeddedTime decodes the absolute instant embedded in a v1/v6/v7 UUID.
+// v6 is decoded via the RFC 9562 field layout (google/uuid's Time() assumes
+// its own non-standard v6 layout); v1 and v7 use google/uuid's RFC-correct
+// decoder.
+func uuidEmbeddedTime(u types.Uuid, version int) time.Time {
+	if version == 6 {
+		rel := rfcV6DecodeTime(u) - uuidGregorianToUnixSecs*10_000_000
+		sec, frac := rel/10_000_000, rel%10_000_000
+		if frac < 0 {
+			sec--
+			frac += 10_000_000
+		}
+		return time.Unix(sec, frac*100).UTC()
+	}
+	sec, nsec := uuid.UUID(u).Time().UnixTime()
+	return time.Unix(sec, nsec).UTC()
+}
+
+// addIntervalInZone applies (num, unit) to the instant t with date_add
+// calendar semantics in loc: the shift is computed on t's local wall clock and
+// the shifted wall clock is converted back to an absolute instant in loc, so
+// across a DST transition the absolute delta absorbs the UTC-offset change
+// (e.g. a 3-month shift over an EDT->EST boundary is 1 hour longer than its
+// nominal length, keeping the same local time of day).
+func addIntervalInZone(t time.Time, num int64, unit types.IntervalType, loc *time.Location) (time.Time, bool) {
+	tl := t.In(loc)
+	y, mo, d := tl.Date()
+	h, mi, s := tl.Clock()
+	dt := types.DatetimeFromClock(int32(y), uint8(mo), uint8(d), uint8(h), uint8(mi), uint8(s), uint32(tl.Nanosecond()/1000))
+	shifted, ok := dt.AddInterval(num, unit, types.DateTimeType)
+	if !ok {
+		return time.Time{}, false
+	}
+	// Datetime only holds microseconds; carry t's sub-microsecond residue
+	// through so v1/v6 inputs 100ns apart stay distinct after the shift
+	// (their per-call uniqueness lives in those timestamp bits).
+	return shifted.ConvertToGoTime(loc).Add(time.Duration(tl.Nanosecond() % 1000)), true
+}
+
+// makeBuiltInUUIDShifted implements uuid_v1/uuid_v6/uuid_v7 (and uuid, the
+// uuid_v7 alias) with an INTERVAL argument, like PostgreSQL's
+// uuidv7(shift interval): each evaluation generates a fresh random UUID whose
+// embedded timestamp is the wall clock AT EVALUATION TIME shifted by the
+// interval. Unlike uuid_v7(now() + interval ...), the clock is re-read per
+// call. The binder rewrites the INTERVAL expression to (count, unit) int64
+// args; calendar units (month/year) shift via Datetime.AddInterval in the
+// session timezone, matching date_add semantics. Like date_add, an invalid or
+// overflowing interval yields NULL.
+func makeBuiltInUUIDShifted(version int) executeLogicOfOverload {
+	var newFn func() (uuid.UUID, error)
+	switch version {
+	case 1:
+		newFn = uuid.NewUUID
+	case 6:
+		newFn = newRFCUUIDV6
+	default:
+		newFn = uuid.NewV7
+	}
+	return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		nums := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+		units := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+		rs := vector.MustFunctionResult[types.Uuid](result)
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		for i := uint64(0); i < uint64(length); i++ {
+			num, null1 := nums.GetValue(i)
+			unit, null2 := units.GetValue(i)
+			// math.MaxInt64 is the binder's invalid-interval marker;
+			// math.MinInt64 must be rejected explicitly because
+			// JudgeIntervalNumOverflow negates num, which overflows there and
+			// lets the value through to wrapping interval arithmetic.
+			if null1 || null2 || num == math.MaxInt64 || num == math.MinInt64 ||
+				types.JudgeIntervalNumOverflow(num, types.IntervalType(unit)) != nil {
+				if err := rs.Append(types.Uuid{}, true); err != nil {
+					return err
+				}
+				continue
+			}
+			val, err := newFn()
+			if err != nil {
+				return moerr.NewInternalError(proc.Ctx, "newuuid failed")
+			}
+			u := types.Uuid(val)
+			// shift the instant the generated UUID actually embeds, in the
+			// session timezone, so DST transitions keep local wall-clock
+			// semantics like date_add
+			target, ok := addIntervalInZone(uuidEmbeddedTime(u, version), num, types.IntervalType(unit), loc)
+			if !ok {
+				if err := rs.Append(types.Uuid{}, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if !setUUIDTimestamp(&u, version, target) {
+				return moerr.NewInvalidInputf(proc.Ctx, "uuid_v%d shifted timestamp out of range", version)
+			}
+			if err := rs.Append(u, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+// builtInUUIDExtractVersion implements uuid_extract_version(uuid): the version
+// number of an RFC 4122-variant UUID as a smallint, NULL for other variants
+// (PostgreSQL semantics).
+func builtInUUIDExtractVersion(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Uuid](parameters[0])
+	rs := vector.MustFunctionResult[int16](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if u := uuid.UUID(v); null || u.Variant() != uuid.RFC4122 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.Append(int16(uuid.UUID(v).Version()), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// builtInUUIDExtractTimestamp implements uuid_extract_timestamp(uuid): the
+// timestamp embedded in a v1/v6/v7 UUID, NULL for versions without a time
+// source (v4 etc.) and for non-RFC-4122 variants. The result is a TIMESTAMP,
+// so like current_timestamp it renders in the session timezone.
+func builtInUUIDExtractTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Uuid](parameters[0])
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	appendNull := func() error { return rs.Append(0, true) }
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		u := uuid.UUID(v)
+		if null || u.Variant() != uuid.RFC4122 {
+			if err := appendNull(); err != nil {
+				return err
+			}
+			continue
+		}
+		var t time.Time
+		switch u.Version() {
+		case 1, 6, 7:
+			t = uuidEmbeddedTime(v, int(u.Version()))
+		default:
+			if err := appendNull(); err != nil {
+				return err
+			}
+			continue
+		}
+		y, mo, d := t.Date()
+		if y < 1 || y > 9999 {
+			// a crafted UUID can encode a timestamp outside the TIMESTAMP range
+			if err := appendNull(); err != nil {
+				return err
+			}
+			continue
+		}
+		h, mi, s := t.Clock()
+		ts := types.FromClockUTC(int32(y), uint8(mo), uint8(d), uint8(h), uint8(mi), uint8(s), uint32(t.Nanosecond()/1000))
+		if err := rs.Append(ts, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInUUIDV1(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return generateUUIDs(result, proc, length, uuid.NewUUID)
+}
+
+func builtInUUIDV4(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return generateUUIDs(result, proc, length, uuid.NewRandom)
+}
+
+func builtInUUIDV6(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return generateUUIDs(result, proc, length, newRFCUUIDV6)
 }
 
 func builtInIsUUID(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1941,8 +2344,8 @@ func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
 }
 
 func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[int64](result)
 	if len(parameters) == 0 {
+		rs := vector.MustFunctionResult[int64](result)
 		val := types.CurrentTimestamp().Unix()
 		for i := uint64(0); i < uint64(length); i++ {
 			if err := rs.Append(val, false); err != nil {
@@ -1953,6 +2356,27 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	}
 
 	p1 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[0])
+	if result.GetResultVector().GetType().Oid == types.T_decimal128 {
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		var zero types.Decimal128
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			unixMicro := int64(v1) - int64(types.UnixToTimestamp(0))
+			if v1 == types.ZeroTimestamp || unixMicro < 0 || null1 {
+				if err := rs.Append(zero, true); err != nil {
+					return err
+				}
+			} else {
+				val := types.Decimal128{B0_63: uint64(unixMicro), B64_127: 0}
+				if err := rs.Append(val, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		val := v1.Unix()
@@ -3006,6 +3430,12 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_enum:
+		rs := vector.MustFunctionResult[types.Enum](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_uuid:
 		rs := vector.MustFunctionResult[types.Uuid](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
@@ -3032,7 +3462,7 @@ func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
 	return 0, false
 }
 
-func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid](
+func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | types.Enum | types.MoYear](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -3788,7 +4218,9 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 }
 
 func isUTF8Charset(charset []byte) bool {
-	return strings.EqualFold(string(charset), "utf8") || strings.EqualFold(string(charset), "utf8mb4")
+	return strings.EqualFold(string(charset), "utf8") ||
+		strings.EqualFold(string(charset), "utf8mb3") ||
+		strings.EqualFold(string(charset), "utf8mb4")
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

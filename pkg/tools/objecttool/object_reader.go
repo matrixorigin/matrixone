@@ -261,7 +261,11 @@ func decodeObjectColumn(data []byte) (obj any, err error) {
 			err = moerr.NewInternalErrorNoCtxf("decode object column: %v", recovered)
 		}
 	}()
-	return objectio.Decode(data)
+	obj, err = objectio.Decode(data)
+	if err != nil && len(data) < objectio.IOEntryHeaderSize {
+		return nil, moerr.NewInternalErrorNoCtxf("decode object column: %v", err)
+	}
+	return obj, err
 }
 
 // ReadBlockCommitTS reads the hidden commit timestamp column for a block.

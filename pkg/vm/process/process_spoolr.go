@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"slices"
 	"time"
@@ -35,7 +36,7 @@ var (
 	PipelineSignalSendTimeout = 30 * time.Second
 
 	// ErrPipelineEndSignalDeliveryFailed marks a successful cleanup path that
-	// could not enqueue its normal End signal and had to fall back to abort.
+	// could not durably record its normal End and had to fall back to abort.
 	ErrPipelineEndSignalDeliveryFailed = moerr.NewInternalErrorNoCtx("pipeline end signal delivery failed")
 
 	// ErrPipelineTerminalWithoutCause marks a failure/abort terminal event whose
@@ -176,6 +177,23 @@ func NormalizePipelineCleanupError(pipelineFailed bool, err error) error {
 		return ErrPipelineTerminalWithoutCause
 	}
 	return nil
+}
+
+// ResolvePipelineSpoolAbortError preserves an error already recorded on a
+// receiver edge when normal End delivery fails and the spool must be aborted.
+// The synthetic delivery error is only used when none of the edges has a more
+// specific terminal cause.
+func ResolvePipelineSpoolAbortError(regs ...*WaitRegister) error {
+	for _, reg := range regs {
+		if reg == nil {
+			continue
+		}
+		if err := reg.Err(); err != nil &&
+			!errors.Is(err, ErrPipelineEndSignalDeliveryFailed) {
+			return err
+		}
+	}
+	return ErrPipelineEndSignalDeliveryFailed
 }
 
 // BuildCleanupSignal returns the appropriate terminal signal for pipeline cleanup.
@@ -346,7 +364,7 @@ type PipelineSignalReceiverState struct {
 
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
 	nbs := make([]int, len(regs))
-	srcRegs := make([]*WaitRegister, len(regs))
+	srcRegs := slices.Clone(regs)
 	doneCh := make([]<-chan struct{}, len(regs))
 
 	for i, reg := range regs {
@@ -356,7 +374,6 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 		} else {
 			nbs[i] = reg.NilBatchCnt
 		}
-		srcRegs[i] = reg
 		doneCh[i] = reg.Done()
 	}
 
@@ -548,18 +565,16 @@ func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
 
 // receiveSignalOrTerminal handles an edge whose Done channel is ready. Ch2
 // remains the ordered source of truth: buffered data and successfully enqueued
-// terminal signals must be consumed before a terminal that failed to enqueue is
-// synthesized from the edge's durable terminal state.
+// terminal signals must be consumed before a terminal recorded only in the
+// edge's durable state is synthesized.
 func (receiver *PipelineSignalReceiver) receiveSignalOrTerminal(idx int) (int, PipelineSignal) {
 	reg := receiver.srcReg[idx]
 	if signal, ok := tryReceivePipelineSignal(reg.Ch2); ok {
 		return idx + 1, signal
 	}
 
-	// Synchronize with an in-flight terminal sender. The sender closes Done
-	// before attempting a fatal enqueue, so it may enqueue after our first
-	// non-blocking receive. Recheck Ch2 after taking the snapshot to avoid
-	// synthesizing a duplicate terminal.
+	// Synchronize with an in-flight terminal sender. Recheck Ch2 after taking
+	// the snapshot to avoid synthesizing a duplicate terminal.
 	terminal := reg.terminalSignalSnapshot()
 	if signal, ok := tryReceivePipelineSignal(reg.Ch2); ok {
 		return idx + 1, signal

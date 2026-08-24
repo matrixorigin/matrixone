@@ -44,6 +44,12 @@ var (
 	defaultRPCEnqueueTimeout   = time.Second * 5
 	defaultHandleWorkers       = 12
 	defaultHandleGetTxnWorkers = 4
+	// Recovery identity and validation probes must fail fast when a remote lock
+	// service is gone. Factory execution and process-local queue admission are
+	// different failure domains: the former is peer health, while the latter is
+	// transient local congestion and must not trip the peer circuit breaker.
+	recoveryBackendCreateWaitTimeout = 500 * time.Millisecond
+	backendCreateQueueWaitTimeout    = 5 * time.Second
 	// Recovery endpoints are hints: eviction safely falls back to service
 	// discovery and the negative-response confirmation path. Keep a hard bound
 	// so historical CN UUID churn cannot grow the client for its whole lifetime.
@@ -80,10 +86,14 @@ type client struct {
 	// data read timeout can therefore verify peer liveness without queueing
 	// behind the data TCP, writer, Flush, or reconnect lifecycle it diagnoses.
 	controlClient morpc.ControlClient
-	// Active-txn identity probes may deliberately reset their transport after
-	// detecting a stale CN incarnation. Keep them isolated so recovery cannot
-	// interrupt concurrent Lock/Unlock traffic on the normal client.
+	// Recovery identity/liveness probes may deliberately reset their transport
+	// after detecting a stale CN incarnation. Keep them isolated so recovery
+	// cannot interrupt concurrent Lock/Unlock traffic on the normal client.
 	activeTxnClient morpc.RPCClient
+	// Service validation is evidence for disabling allocator binds. Keep it off
+	// the actively reset recovery transport and always route it to the address
+	// returned by discovery, rather than a cached recovery endpoint.
+	validationClient morpc.RPCClient
 	// Periodic remote-lock keepalives use an independent MORPC client so their
 	// queue, writer, Flush, read timeout, and reconnect lifecycle cannot be
 	// blocked by Lock/Unlock traffic on the normal client.
@@ -94,6 +104,9 @@ type client struct {
 	recoveryMu        sync.RWMutex
 	recoveryBackends  map[string]recoveryBackend // CN UUID -> recovery endpoint
 	resolveBackend    func(context.Context, string) (string, error)
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 type recoveryBackend struct {
@@ -113,13 +126,19 @@ func NewClient(
 	service string,
 	cfg morpc.Config,
 	opts ...ClientOption,
-) (Client, error) {
+) (_ Client, err error) {
 	c := &client{
 		logger:           getLogger(service),
 		service:          service,
 		cfg:              &cfg,
 		recoveryBackends: make(map[string]recoveryBackend),
 	}
+	var createdClients []io.Closer
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, closeCreatedClients(createdClients))
+		}
+	}()
 	c.resolveBackend = resolveTCP4Endpoint
 	for _, applyFn := range opts {
 		applyFn(c)
@@ -134,17 +153,11 @@ func NewClient(
 		morpc.WithBackendReadTimeout(defaultRPCTimeout),
 		morpc.WithBackendFreeOrphansResponse(releaseResponse))
 
-	// Set bounded wait for auto-create to enable fast failure detection in lockservice.
-	// This is specifically needed for orphan transaction cleanup, where we need to quickly
-	// detect that a remote service is down (not just slow to start).
-	// 500ms is chosen to balance between:
-	// - Fast failure detection for down services (critical for orphan cleanup)
-	// - Enough time for legitimate backend creation in normal cases
-	// Note: This only affects auto-create wait time. Normal lock operations use their own
-	// timeouts (e.g., RemoteLockTimeout) and are not affected by this setting.
-	c.cfg.ClientOptions = append(c.cfg.ClientOptions,
-		morpc.WithClientAutoCreateWaitTimeout(500*time.Millisecond))
-
+	// Bound process-local create-queue congestion for every transport. Normal
+	// Lock/Unlock, keepalive, and control traffic must otherwise follow the
+	// caller's context: a healthy peer can legitimately take more than 500ms to
+	// establish a cold connection when a CN is CPU saturated.
+	*c.cfg = withBackendCreateQueueWaitTimeout(*c.cfg)
 	controlClient, err := c.cfg.NewControlClient(
 		service,
 		"lock-control-client",
@@ -153,32 +166,42 @@ func NewClient(
 		return nil, err
 	}
 	c.controlClient = controlClient
+	createdClients = append(createdClients, controlClient)
 	c.cfg.BackendOptions = append(
 		c.cfg.BackendOptions,
 		morpc.WithBackendLivenessProbe(func(ctx context.Context, remote string) error {
 			return controlClient.Ping(ctx, remote)
 		}),
 	)
+	recoveryConfig := withBackendCreateWaitTimeout(*c.cfg)
 
 	client, err := c.cfg.NewClient(
 		service,
 		"lock-client",
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
-		_ = controlClient.Close()
 		return nil, err
 	}
 	c.client = client
-	activeTxnClient, err := c.cfg.NewClient(
+	createdClients = append(createdClients, client)
+	activeTxnClient, err := recoveryConfig.NewClient(
 		service,
 		"lock-active-txn-client",
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
-		_ = client.Close()
-		_ = controlClient.Close()
 		return nil, err
 	}
 	c.activeTxnClient = activeTxnClient
+	createdClients = append(createdClients, activeTxnClient)
+	validationClient, err := recoveryConfig.NewClient(
+		service,
+		"lock-validation-client",
+		func() morpc.Message { return acquireResponse() })
+	if err != nil {
+		return nil, err
+	}
+	c.validationClient = validationClient
+	createdClients = append(createdClients, validationClient)
 	keeperConfig := *c.cfg
 	keeperConfig.BackendOptions = append(
 		append([]morpc.BackendOption(nil), c.cfg.BackendOptions...),
@@ -191,13 +214,39 @@ func NewClient(
 		"lock-keeper-client",
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
-		_ = activeTxnClient.Close()
-		_ = client.Close()
-		_ = controlClient.Close()
 		return nil, err
 	}
 	c.keeperClient = keeperClient
+	createdClients = append(createdClients, keeperClient)
 	return c, nil
+}
+
+func withBackendCreateWaitTimeout(cfg morpc.Config) morpc.Config {
+	cfg.ClientOptions = append(
+		append([]morpc.ClientOption(nil), cfg.ClientOptions...),
+		morpc.WithClientAutoCreateWaitTimeout(
+			recoveryBackendCreateWaitTimeout,
+		),
+	)
+	return cfg
+}
+
+func withBackendCreateQueueWaitTimeout(cfg morpc.Config) morpc.Config {
+	cfg.ClientOptions = append(
+		append([]morpc.ClientOption(nil), cfg.ClientOptions...),
+		morpc.WithClientAutoCreateQueueWaitTimeout(
+			backendCreateQueueWaitTimeout,
+		),
+	)
+	return cfg
+}
+
+func closeCreatedClients(clients []io.Closer) error {
+	var err error
+	for idx := len(clients) - 1; idx >= 0; idx-- {
+		err = errors.Join(err, clients[idx].Close())
+	}
+	return err
 }
 
 func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, error) {
@@ -383,6 +432,8 @@ func (c *client) asyncSend(
 	transport := c.client
 	if keeperOwnsRequest {
 		transport = c.keeperTransport()
+	} else if request.Method == pb.Method_ValidateService {
+		transport = c.validationTransport()
 	} else if isActiveTxnMethod(request.Method) {
 		address = c.activeTxnBackend(sid, address)
 		transport = c.activeTxnTransport()
@@ -409,6 +460,9 @@ func lockserviceRemoteRPCErrorType(err error) string {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 		return "backend_cannot_connect"
+	}
+	if errors.Is(err, morpc.ErrBackendCreateTimeout) {
+		return "backend_create_timeout"
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
 		return "backend_closed"
@@ -444,22 +498,52 @@ func lockserviceRemoteRPCErrorType(err error) string {
 }
 
 func (c *client) Close() error {
-	var normalErr, activeTxnErr, keeperErr, controlErr error
-	if c.client != nil {
-		normalErr = c.client.Close()
+	c.closeOnce.Do(func() {
+		clients := make([]io.Closer, 0, 5)
+		if c.client != nil {
+			clients = append(clients, c.client)
+		}
+		if c.activeTxnClient != nil && c.activeTxnClient != c.client {
+			clients = append(clients, c.activeTxnClient)
+		}
+		if c.validationClient != nil &&
+			c.validationClient != c.client &&
+			c.validationClient != c.activeTxnClient {
+			clients = append(clients, c.validationClient)
+		}
+		if c.keeperClient != nil &&
+			c.keeperClient != c.client &&
+			c.keeperClient != c.activeTxnClient &&
+			c.keeperClient != c.validationClient {
+			clients = append(clients, c.keeperClient)
+		}
+		if c.controlClient != nil {
+			controlRPCClient, isRPCClient := c.controlClient.(morpc.RPCClient)
+			if !isRPCClient ||
+				(controlRPCClient != c.client &&
+					controlRPCClient != c.activeTxnClient &&
+					controlRPCClient != c.validationClient &&
+					controlRPCClient != c.keeperClient) {
+				clients = append(clients, c.controlClient)
+			}
+		}
+		c.closeErr = closeClientsConcurrently(clients)
+	})
+	return c.closeErr
+}
+
+func closeClientsConcurrently(clients []io.Closer) error {
+	errs := make([]error, len(clients))
+	var wg sync.WaitGroup
+	wg.Add(len(clients))
+	for idx, client := range clients {
+		go func() {
+			defer wg.Done()
+			errs[idx] = client.Close()
+		}()
 	}
-	if c.activeTxnClient != nil && c.activeTxnClient != c.client {
-		activeTxnErr = c.activeTxnClient.Close()
-	}
-	if c.keeperClient != nil &&
-		c.keeperClient != c.client &&
-		c.keeperClient != c.activeTxnClient {
-		keeperErr = c.keeperClient.Close()
-	}
-	if c.controlClient != nil {
-		controlErr = c.controlClient.Close()
-	}
-	return errors.Join(normalErr, activeTxnErr, keeperErr, controlErr)
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 func isActiveTxnMethod(method pb.Method) bool {
@@ -469,6 +553,15 @@ func isActiveTxnMethod(method pb.Method) bool {
 func (c *client) activeTxnTransport() morpc.RPCClient {
 	if c.activeTxnClient != nil {
 		return c.activeTxnClient
+	}
+	// Preserve compatibility for tests and embedders that construct client
+	// directly. Production NewClient always installs the isolated transport.
+	return c.client
+}
+
+func (c *client) validationTransport() morpc.RPCClient {
+	if c.validationClient != nil {
+		return c.validationClient
 	}
 	// Preserve compatibility for tests and embedders that construct client
 	// directly. Production NewClient always installs the isolated transport.
@@ -664,6 +757,108 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) (err err
 	return nil
 }
 
+// ResetValidationBackend discards every validation route that could have
+// produced a stale negative identity result, refreshes discovery
+// authoritatively, and leaves the next ValidateService send to create a fresh
+// connection (and therefore perform fresh DNS resolution).
+func (c *client) ResetValidationBackend(
+	parent context.Context,
+	serviceID string,
+) error {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeoutCause(
+		parent,
+		defaultRPCTimeout,
+		moerr.CauseResetLockServiceBackend,
+	)
+	defer cancel()
+
+	if err := c.acquireRecoveryReset(ctx); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	defer c.releaseRecoveryReset()
+
+	resetter, ok := c.validationTransport().(interface {
+		CloseBackendFor(string) error
+	})
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(
+			"validation morpc client does not support targeted backend reset",
+		)
+	}
+	sid := getUUIDFromServiceIdentifier(serviceID)
+	lookupAddress := func() (string, error) {
+		var address string
+		err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+			ctx,
+			c.cluster,
+			clusterservice.NewServiceIDSelector(sid),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			},
+		)
+		if err != nil {
+			return "", moerr.AttachCause(ctx, err)
+		}
+		return address, nil
+	}
+
+	seen := make(map[string]struct{}, 2)
+	var closeErr error
+	closeCandidate := func(address string) {
+		if address == "" {
+			return
+		}
+		if _, exists := seen[address]; exists {
+			return
+		}
+		seen[address] = struct{}{}
+		closeErr = errors.Join(closeErr, resetter.CloseBackendFor(address))
+	}
+
+	// The pre-refresh lookup is best effort. Even if the cluster cache cannot
+	// answer it, an authoritative refresh may recover the current address.
+	staleAddress, staleLookupErr := lookupAddress()
+	if staleLookupErr == nil {
+		closeCandidate(staleAddress)
+	}
+
+	refresher, ok := c.cluster.(clusterservice.AuthoritativeRefresher)
+	if !ok {
+		return errors.Join(
+			closeErr,
+			staleLookupErr,
+			moerr.NewInternalErrorNoCtx(
+				"cluster service does not support authoritative refresh"),
+		)
+	}
+	if err := refresher.Refresh(ctx); err != nil {
+		return errors.Join(closeErr, staleLookupErr, err)
+	}
+
+	address, err := lookupAddress()
+	if err != nil {
+		return errors.Join(closeErr, err)
+	}
+	// Refresh and discovery can block long enough for another validation to
+	// recreate a route closed in the first phase. Start a new de-duplication
+	// generation and detach both candidates at the final barrier.
+	seen = make(map[string]struct{}, 2)
+	closeCandidate(staleAddress)
+	closeCandidate(address)
+	if address == "" {
+		return errors.Join(
+			closeErr,
+			moerr.NewInternalErrorNoCtx(
+				"cannot find validation lockservice address for "+sid),
+		)
+	}
+	return closeErr
+}
+
 func (c *client) acquireRecoveryReset(ctx context.Context) error {
 	c.recoveryResetOnce.Do(func() {
 		c.recoveryResetC = make(chan struct{}, 1)
@@ -771,6 +966,13 @@ type server struct {
 	rpc      morpc.RPCServer
 	handlers map[pb.Method]RequestHandleFunc
 
+	lifecycle struct {
+		sync.RWMutex
+		closing  bool
+		closingC chan struct{}
+	}
+	closeOnce             sync.Once
+	closeErr              error
 	requests              chan requestCtx
 	getActiveTxnRequests  chan requestCtx
 	requestEnqueueTimeout time.Duration
@@ -800,6 +1002,7 @@ func NewServer(
 		stopper: stopper.NewStopper("lock-service-rpc-server",
 			stopper.WithLogger(logger.RawLogger())),
 	}
+	s.lifecycle.closingC = make(chan struct{})
 	s.cfg.Adjust()
 	for _, opt := range opts {
 		opt(s)
@@ -827,15 +1030,25 @@ func (s *server) Start() error {
 }
 
 func (s *server) Close() error {
-	if err := s.rpc.Close(); err != nil {
-		return err
-	}
-	s.stopper.Stop()
-	releaseQueuedRequests(s.requests)
-	releaseQueuedRequests(s.getActiveTxnRequests)
-	close(s.requests)
-	close(s.getActiveTxnRequests)
-	return nil
+	s.closeOnce.Do(func() {
+		// Publish shutdown before waiting for the admission write lock. Queue
+		// waiters select on closingC, release their read locks, and therefore
+		// cannot make Close wait for the enqueue timeout.
+		if s.lifecycle.closingC != nil {
+			close(s.lifecycle.closingC)
+		}
+		s.lifecycle.Lock()
+		s.lifecycle.closing = true
+		s.lifecycle.Unlock()
+
+		s.closeErr = s.rpc.Close()
+		s.stopper.Stop()
+		releaseQueuedRequests(s.requests)
+		releaseQueuedRequests(s.getActiveTxnRequests)
+		close(s.requests)
+		close(s.getActiveTxnRequests)
+	})
+	return s.closeErr
 }
 
 func (s *server) RegisterMethodHandler(m pb.Method, h RequestHandleFunc) {
@@ -855,6 +1068,14 @@ func (s *server) onMessage(
 	if !ok {
 		s.logger.Fatal("received invalid message",
 			zap.Any("message", request))
+	}
+	// A callback can outlive a failed listener close. Reject an already sealed
+	// server before logging, filtering, or looking up handlers; the admission
+	// check below repeats this after those potentially slow operations.
+	select {
+	case <-s.lifecycle.closingC:
+		return rejectRequestForServerClose(msg.Cancel, req)
+	default:
 	}
 
 	if s.logger.Enabled(zap.DebugLevel) {
@@ -918,8 +1139,25 @@ func (s *server) onMessage(
 		cancel:  msg.Cancel,
 		ctx:     ctx,
 	}
+
+	// The lifecycle read lock protects only admission. Close first closes
+	// closingC to wake a saturated enqueue, then takes the write lock to join
+	// every send that could still target the request channels.
+	s.lifecycle.RLock()
+	closingC := s.lifecycle.closingC
+	if s.lifecycle.closing {
+		s.lifecycle.RUnlock()
+		return rejectRequestForServerClose(msg.Cancel, req)
+	}
+	select {
+	case <-closingC:
+		s.lifecycle.RUnlock()
+		return rejectRequestForServerClose(msg.Cancel, req)
+	default:
+	}
 	select {
 	case c <- queuedRequest:
+		s.lifecycle.RUnlock()
 		v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
 		return nil
 	default:
@@ -937,9 +1175,15 @@ func (s *server) onMessage(
 	}
 	select {
 	case c <- queuedRequest:
+		s.lifecycle.RUnlock()
 		v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
 		return nil
+	case <-closingC:
+		s.lifecycle.RUnlock()
+		v2.TxnLockRPCQueueRejectCounter.WithLabelValues("server-closing").Inc()
+		return rejectRequestForServerClose(msg.Cancel, req)
 	case <-ctx.Done():
+		s.lifecycle.RUnlock()
 		v2.TxnLockRPCQueueRejectCounter.WithLabelValues("request-canceled").Inc()
 		if msg.Cancel != nil {
 			msg.Cancel()
@@ -947,6 +1191,7 @@ func (s *server) onMessage(
 		releaseRequest(req)
 		return nil
 	case <-sessionDone:
+		s.lifecycle.RUnlock()
 		v2.TxnLockRPCQueueRejectCounter.WithLabelValues("session-closed").Inc()
 		if msg.Cancel != nil {
 			msg.Cancel()
@@ -954,6 +1199,7 @@ func (s *server) onMessage(
 		releaseRequest(req)
 		return nil
 	case <-timer.C:
+		s.lifecycle.RUnlock()
 		v2.TxnLockRPCQueueRejectCounter.WithLabelValues("queue-timeout").Inc()
 		writeResponse(
 			s.logger,
@@ -965,6 +1211,20 @@ func (s *server) onMessage(
 		releaseRequest(req)
 		return nil
 	}
+}
+
+func rejectRequestForServerClose(
+	cancel context.CancelFunc,
+	req *pb.Request,
+) error {
+	if cancel != nil {
+		cancel()
+	}
+	releaseRequest(req)
+	// Returning an error asks MORPC to retire a session that survived an
+	// underlying listener-close failure. The request has already been released
+	// and cannot reach the closed worker queues.
+	return moerr.NewInternalErrorNoCtx("lock service rpc server is closing")
 }
 
 func releaseQueuedRequests(requests chan requestCtx) {

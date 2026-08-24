@@ -16,15 +16,49 @@ package ivfflat
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 func GetVersion(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) (int64, error) {
+	if sqlproc != nil && sqlproc.RelationScanner != nil {
+		keyCol := ivfColExpr(0, plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
+		filter, err := ivfFuncExpr(sqlproc.GetContext(), "=", keyCol, ivfStringExpr("version"))
+		if err != nil {
+			return 0, err
+		}
+		res, err := sqlproc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
+			Schema: tblcfg.DbName,
+			Table:  tblcfg.MetadataTable,
+			Columns: []string{
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			},
+			Filter:         filter,
+			PartitionCount: 1,
+		})
+		if err != nil {
+			return 0, err
+		}
+		defer res.Close()
+		if len(res.Batches) == 0 || res.Batches[0].RowCount() == 0 {
+			return 0, moerr.NewInternalError(sqlproc.GetContext(), "version not found")
+		}
+		value := res.Batches[0].Vecs[1].GetStringAt(0)
+		version, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return version, nil
+	}
+
 	sql := fmt.Sprintf("SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'",
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 		tblcfg.DbName,

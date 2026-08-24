@@ -68,7 +68,7 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 
 // HandleReindex runs the same body as HandleCreateIndex with forceSync
 // threaded into centroid building. Matches ddl.go:980-987 dispatch.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
 	return runCreateOrReindex(ctx, indexDefs, forceSync)
 }
 
@@ -203,7 +203,7 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 		return nil
 	}
 
-	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -400,7 +400,7 @@ func ivfIndexCentroidsTable(
 			sqlquote.EscapeString(indexDef.IndexAlgoParams), sqlquote.EscapeString(string(cfgbytes)))
 	}
 
-	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}

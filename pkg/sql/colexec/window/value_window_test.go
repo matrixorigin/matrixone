@@ -757,6 +757,39 @@ func TestGetInt64FromVec(t *testing.T) {
 	v12.Free(mp)
 }
 
+func TestGetNthValueOffsetFromPreparedParam(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	valid := testutil.MakeVarcharVector([]string{"2"}, nil, mp)
+	valid.SetPrepareParamKind(vector.PrepareParamInteger)
+	value, ok, err := getNthValueOffsetFromVec(context.Background(), valid, 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(2), value)
+	valid.Free(mp)
+
+	for _, test := range []struct {
+		name  string
+		value string
+		kind  vector.PrepareParamKind
+		nulls []uint64
+	}{
+		{name: "zero", value: "0", kind: vector.PrepareParamInteger},
+		{name: "negative", value: "-1", kind: vector.PrepareParamInteger},
+		{name: "float", value: "2.5", kind: vector.PrepareParamFloat},
+		{name: "string", value: "2", kind: vector.PrepareParamNone},
+		{name: "null", kind: vector.PrepareParamInteger, nulls: []uint64{0}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			vec := testutil.MakeVarcharVector([]string{test.value}, test.nulls, mp)
+			vec.SetPrepareParamKind(test.kind)
+			_, _, err := getNthValueOffsetFromVec(context.Background(), vec, 0)
+			require.ErrorContains(t, err, "Incorrect arguments to nth_value")
+			vec.Free(mp)
+		})
+	}
+}
+
 func TestAppendDefaultOrNull(t *testing.T) {
 	mp := mpool.MustNewZero()
 

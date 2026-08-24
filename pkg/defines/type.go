@@ -257,8 +257,6 @@ var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
 type IsMoLogger struct{}
 
-type SourceScanResKey struct{}
-
 type IgnoreForeignKey struct{}
 
 type AlterCopyOpt struct{}
@@ -269,12 +267,16 @@ type BgKey struct{}
 // Sp variable scope
 type VarScopeKey struct{}
 
+// Sp variable declared SQL type scope. It is kept parallel to VarScopeKey so
+// runtime values do not have to encode SQL type metadata such as DECIMAL scale.
+type VarScopeTypeKey struct{}
+
 // Determine if it is a stored procedure
 type InSp struct{}
 
 // IvfMembershipFilter carries doc_id membership-filter bytes (tagged docfilter
 // payload) for the ivf entries scan in the internal SQL executor.
-// This key is set on context when invoking internal SQL from ivf_search.
+// This key is used by the legacy IVF internal-SQL maintenance/search adapter.
 type IvfMembershipFilter struct{}
 
 // FulltextMembershipFilter carries doc_id membership-filter bytes (tagged
@@ -283,7 +285,7 @@ type IvfMembershipFilter struct{}
 type FulltextMembershipFilter struct{}
 
 // IvfReaderParam carries DistRange for ivf entries scan in internal SQL executor.
-// This key is set on context when invoking internal SQL from ivf_search.
+// This key is used by the legacy IVF internal-SQL maintenance/search adapter.
 type IvfReaderParam struct{}
 
 // RemoteRunContext marks a pipeline executing through remote-run RPC.

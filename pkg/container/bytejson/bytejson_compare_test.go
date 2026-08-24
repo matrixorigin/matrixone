@@ -15,6 +15,8 @@
 package bytejson
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"testing"
 
@@ -35,6 +37,85 @@ func makeDecimalJson(s string) ByteJson {
 	n := binary.PutUvarint(data, uint64(l))
 	copy(data[n:], s)
 	return ByteJson{Type: TpCodeDecimal, Data: data[:n+l]}
+}
+
+func makeBinaryJson(tp TpCode, payload []byte) ByteJson {
+	data := make([]byte, binary.MaxVarintLen64+len(payload))
+	n := binary.PutUvarint(data, uint64(len(payload)))
+	copy(data[n:], payload)
+	return ByteJson{Type: tp, Data: data[:n+len(payload)]}
+}
+
+func TestCompareByteJsonOpaqueBinaryUsesRawBytes(t *testing.T) {
+	zero := makeBinaryJson(TpCodeOpaque, []byte{0x00})
+	d0 := makeBinaryJson(TpCodeOpaque, []byte{0xd0})
+	bitZero := makeBinaryJson(TpCodeBit, []byte{0x00})
+	bitD0 := makeBinaryJson(TpCodeBit, []byte{0xd0})
+	bit := makeBinaryJson(TpCodeBit, []byte{0x01})
+	legacyZero := makeBinaryJson(TpCodeBlob, []byte("AA=="))
+
+	require.Less(t, CompareByteJson(zero, d0), 0)
+	require.Less(t, CompareByteJson(bitZero, bitD0), 0)
+	require.Zero(t, CompareByteJson(legacyZero, zero))
+	require.Less(t, CompareByteJson(bit, makeBinaryJson(TpCodeOpaque, []byte{0x01})), 0)
+	require.Equal(t, "BLOB", zero.TYPE())
+	require.Equal(t, "BIT", bit.TYPE())
+	require.Equal(t, `"AA=="`, zero.String())
+	require.Equal(t, "AA==", mustUnquote(t, zero))
+	require.Equal(t, "AQ==", mustUnquote(t, bit))
+}
+
+func TestCompareByteJsonLegacyBlobLargePayloadAllocations(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xab}, 1<<20)
+	legacy := makeBinaryJson(TpCodeBlob, []byte(base64.StdEncoding.EncodeToString(payload)))
+	raw := makeBinaryJson(TpCodeOpaque, payload)
+
+	allocs := testing.AllocsPerRun(10, func() {
+		if cmp := CompareByteJson(legacy, raw); cmp != 0 {
+			t.Fatalf("unexpected compare result: %d", cmp)
+		}
+	})
+	require.Zero(t, allocs, "legacy blob compare should not allocate decoded payload buffers")
+}
+
+func TestCompareByteJsonLegacyBlobPreservesBase64Newlines(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xab}, 16*1024)
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	legacyWithNewlines := makeBinaryJson(TpCodeBlob, []byte(encoded[:4095]+"\r\n"+encoded[4095:]))
+	raw := makeBinaryJson(TpCodeOpaque, payload)
+
+	require.Zero(t, CompareByteJson(legacyWithNewlines, raw))
+}
+
+func TestCompareByteJsonLegacyBitPreservesBase64Newlines(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x01}, 16*1024)
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	legacyWithNewlines := makeBinaryJson(TpCodeBlob, []byte(persistedBitPrefix+encoded[:4095]+"\r\n"+encoded[4095:]))
+	raw := makeBinaryJson(TpCodeBit, payload)
+
+	require.Equal(t, "BIT", legacyWithNewlines.TYPE())
+	require.Zero(t, CompareByteJson(legacyWithNewlines, raw))
+}
+
+func BenchmarkCompareByteJsonLegacyBlobLargePayload(b *testing.B) {
+	payload := bytes.Repeat([]byte{0xcd}, 1<<20)
+	legacyLeft := makeBinaryJson(TpCodeBlob, []byte(base64.StdEncoding.EncodeToString(payload)))
+	legacyRight := makeBinaryJson(TpCodeBlob, []byte(base64.StdEncoding.EncodeToString(payload)))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if cmp := CompareByteJson(legacyLeft, legacyRight); cmp != 0 {
+			b.Fatalf("unexpected compare result: %d", cmp)
+		}
+	}
+}
+
+func mustUnquote(t *testing.T, bj ByteJson) string {
+	t.Helper()
+	value, err := bj.Unquote()
+	require.NoError(t, err)
+	return value
 }
 
 // TestCompareByteJson_DecimalCrossType tests that DECIMAL vs numeric types
@@ -118,4 +199,75 @@ func TestCompareByteJson_Int64Uint64CrossType(t *testing.T) {
 
 	// UINT64 > smaller UINT64
 	require.Greater(t, CompareByteJson(makeJson(t, "100"), makeJson(t, "99")), 0)
+}
+
+func TestCompareByteJsonNumericEqualityIsTransitive(t *testing.T) {
+	values := []ByteJson{
+		makeDecimalJson("-1e2147483647"),
+		makeJson(t, "-9223372036854775808"),
+		makeJson(t, "-9.223372036854776e18"),
+		makeJson(t, "0"),
+		makeJson(t, "1"),
+		makeJson(t, "1.0"),
+		makeJson(t, "1.000000001"),
+		makeDecimalJson("1.00"),
+		makeJson(t, "18446744073709551615"),
+		makeJson(t, "1.8446744073709552e19"),
+		makeDecimalJson("1e2147483647"),
+	}
+
+	for i := range values {
+		for j := range values {
+			cmp := CompareByteJson(values[i], values[j])
+			reverse := CompareByteJson(values[j], values[i])
+			require.Equal(t, compareSign(cmp), -compareSign(reverse),
+				"numeric ordering must be antisymmetric for indexes %d, %d", i, j)
+			for k := range values {
+				if cmp == 0 &&
+					CompareByteJson(values[j], values[k]) == 0 {
+					require.Zero(t, CompareByteJson(values[i], values[k]),
+						"numeric equality must be transitive for indexes %d, %d, %d", i, j, k)
+				}
+				if cmp < 0 && CompareByteJson(values[j], values[k]) < 0 {
+					require.Less(t, CompareByteJson(values[i], values[k]), 0,
+						"numeric ordering must be transitive for indexes %d, %d, %d", i, j, k)
+				}
+			}
+		}
+	}
+
+	require.NotZero(t, CompareByteJson(makeJson(t, "1"), makeJson(t, "1.000000001")),
+		"nearby JSON numbers are ordered exactly, not by an equality tolerance")
+}
+
+func compareSign(value int) int {
+	if value < 0 {
+		return -1
+	}
+	if value > 0 {
+		return 1
+	}
+	return 0
+}
+
+func TestCompareByteJsonArrayLengthAfterEqualPrefix(t *testing.T) {
+	tests := []struct {
+		left  string
+		right string
+	}{
+		{left: "[]", right: "[0]"},
+		{left: "[0]", right: "[]"},
+		{left: "[0]", right: "[0,1]"},
+	}
+	for _, test := range tests {
+		require.NotZero(t, CompareByteJson(makeJson(t, test.left), makeJson(t, test.right)),
+			"array lengths differ for %s and %s", test.left, test.right)
+	}
+}
+
+func TestCompareByteJsonMalformedDecimalFallback(t *testing.T) {
+	invalid := makeDecimalJson("invalid")
+	require.Zero(t, CompareByteJson(invalid, makeDecimalJson("invalid")))
+	require.NotZero(t, CompareByteJson(invalid, makeDecimalJson("invalid-2")))
+	require.NotZero(t, CompareByteJson(invalid, makeJson(t, "1")))
 }

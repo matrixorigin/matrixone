@@ -27,15 +27,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
 
-func skipPkDedup(old, new *TableDef) bool {
+func skipPkDedup(old, new *TableDef, sourceColumns map[string]selectExpr) bool {
 	oldPk := old.Pkey
 	newPk := new.Pkey
 
@@ -49,11 +51,20 @@ func skipPkDedup(old, new *TableDef) bool {
 		return false
 	}
 
-	// oldPk and newPk are not nil, check if the primary key is the same
-	return slices.Equal(oldPk.Names, newPk.Names)
+	// The copy INSERT can skip PK dedup only when every target key value is
+	// guaranteed to be identical to its source value. Matching column names are
+	// not enough: a type conversion can collapse distinct values during copy.
+	if !slices.Equal(oldPk.Names, newPk.Names) {
+		return false
+	}
+	parts := newPk.Names
+	if len(parts) == 0 {
+		parts = []string{newPk.PkeyColName}
+	}
+	return alterCopyKeyPartsValueUnchanged(old, new, parts, sourceColumns)
 }
 
-func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
+func skipUniqueIdxDedup(old, new *TableDef, sourceColumns map[string]selectExpr) map[string]bool {
 	var skip map[string]bool
 	// In spite of the O(n^2) complexity,
 	// it's rare for a table to have enough indexes to cause
@@ -67,7 +78,10 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 				continue
 			}
 			if oldidx.IndexName == idx.IndexName &&
-				slices.Equal(idx.Parts, oldidx.Parts) {
+				slices.Equal(idx.Parts, oldidx.Parts) &&
+				oldidx.IndexAlgo == idx.IndexAlgo &&
+				oldidx.IndexAlgoParams == idx.IndexAlgoParams &&
+				alterCopyKeyPartsValueUnchanged(old, new, idx.Parts, sourceColumns) {
 				if skip == nil {
 					skip = make(map[string]bool)
 				}
@@ -77,6 +91,150 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 		}
 	}
 	return skip
+}
+
+func alterCopyKeyPartsValueUnchanged(
+	old, new *TableDef,
+	parts []string,
+	sourceColumns map[string]selectExpr,
+) bool {
+	for _, part := range parts {
+		name := catalog.ResolveAlias(part)
+		source, ok := sourceColumns[name]
+		// A same-name DROP/ADD creates a new target column, even when its type is
+		// identical to the removed column. The copy INSERT then supplies a default
+		// (or generated) value instead of reading the old column. Dedup can only be
+		// skipped when the planner's source mapping proves this exact target key is
+		// copied from the corresponding old key column.
+		if !ok || source.sexprType != exprColumnName || !strings.EqualFold(source.sexprStr, name) {
+			return false
+		}
+		oldCol := FindColumn(old.Cols, name)
+		newCol := FindColumn(new.Cols, name)
+		if !alterCopyKeyColumnValueUnchanged(oldCol, newCol) {
+			return false
+		}
+	}
+	return true
+}
+
+func alterCopyKeyColumnValueUnchanged(oldCol, newCol *ColDef) bool {
+	if oldCol == nil || newCol == nil {
+		return false
+	}
+	// Generated columns are recomputed for the copy INSERT. Even an unchanged
+	// generated expression can produce different key values when one of its
+	// input columns is altered, so keep target-side dedup enabled.
+	if oldCol.GeneratedCol != nil || newCol.GeneratedCol != nil {
+		return false
+	}
+	oldTyp, newTyp := oldCol.Typ, newCol.Typ
+	return oldTyp.Id == newTyp.Id &&
+		oldTyp.NotNullable == newTyp.NotNullable &&
+		oldTyp.AutoIncr == newTyp.AutoIncr &&
+		oldTyp.Width == newTyp.Width &&
+		oldTyp.Scale == newTyp.Scale &&
+		oldTyp.Table == newTyp.Table &&
+		oldTyp.Enumvalues == newTyp.Enumvalues
+}
+
+func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
+	for _, col := range tableDef.Cols {
+		if col.Typ.AutoIncr && !col.Hidden {
+			return true
+		}
+	}
+	return false
+}
+
+func reconcileIndexVisibility(
+	ctx CompilerContext,
+	tableID uint64,
+	tableDef *TableDef,
+	snapshot *Snapshot,
+) error {
+	if tableDef == nil || len(tableDef.Indexes) == 0 {
+		return nil
+	}
+
+	for _, indexDef := range tableDef.Indexes {
+		if indexDef == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "nil index metadata")
+		}
+	}
+	if catalog.IsSystemTable(tableID) || isSystemDatabase(tableDef.DbName) {
+		// System schemas are fixed-visible bootstrap metadata and intentionally
+		// have no mo_indexes rows. Their absence is not incomplete user metadata.
+		for _, indexDef := range tableDef.Indexes {
+			catalog.SetIndexVisibility(indexDef, true)
+		}
+		return nil
+	}
+
+	result, err := runSqlWithSnapshot(ctx, fmt.Sprintf(
+		"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = %d",
+		tableID,
+	), snapshot)
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+
+	visibility := make(map[string]bool)
+	var readErr error
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if len(cols) != 2 {
+			readErr = moerr.NewInternalErrorf(ctx.GetContext(),
+				"invalid mo_indexes visibility result: expected 2 columns, got %d", len(cols))
+			return false
+		}
+		names := executor.GetStringRows(cols[0])
+		visible := executor.GetFixedRows[int8](cols[1])
+		if len(names) != rows || len(visible) != rows {
+			readErr = moerr.NewInternalErrorf(ctx.GetContext(),
+				"invalid mo_indexes visibility result: expected %d rows", rows)
+			return false
+		}
+		for i, name := range names {
+			value := visible[i] != 0
+			key := strings.ToLower(name)
+			if previous, ok := visibility[key]; ok && previous != value {
+				readErr = moerr.NewInternalErrorf(ctx.GetContext(),
+					"inconsistent visibility metadata for index '%s'", name)
+				return false
+			}
+			visibility[key] = value
+		}
+		return true
+	})
+	if readErr != nil {
+		return readErr
+	}
+
+	resolvedVisibility := make([]bool, len(tableDef.Indexes))
+	for i, indexDef := range tableDef.Indexes {
+		visible, ok := visibility[strings.ToLower(indexDef.IndexName)]
+		if !ok {
+			return moerr.NewInternalErrorf(ctx.GetContext(),
+				"missing visibility metadata for index %q on table %d", indexDef.IndexName, tableID)
+		}
+		resolvedVisibility[i] = visible
+	}
+	for i, indexDef := range tableDef.Indexes {
+		catalog.SetIndexVisibility(indexDef, resolvedVisibility[i])
+	}
+	return nil
+}
+
+func isSystemDatabase(dbName string) bool {
+	return slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName))
+}
+
+func autoIncrementValueToOffset(value uint64) uint64 {
+	if value > 0 {
+		return value - 1
+	}
+	return 0
 }
 
 func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
@@ -110,6 +268,18 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if err != nil {
 		return nil, err
 	}
+	// IndexDef.visible historically used the proto3 false zero value for both
+	// default-visible and explicitly invisible indexes. mo_indexes is the
+	// authoritative source, so normalize the copied definition before applying
+	// the ALTER actions and serializing the temporary CREATE TABLE statement.
+	if err := reconcileIndexVisibility(cctx, tableDef.TblId, copyTableDef, nil); err != nil {
+		return nil, err
+	}
+	// The copied definition contains the source allocator's cached offset. It
+	// is not a user request and can be far ahead of the actual rows. The copy
+	// executor reconciles the explicit request, copied maximum, and source
+	// allocator state after the rows are visible in this transaction.
+	copyTableDef.AutoIncrOffset = 0
 	alterTableCtx := initAlterTableContext(tableDef, copyTableDef, schemaName)
 
 	// 3. check alter_option list
@@ -134,7 +304,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}
 
 	var (
-		pkAffected bool
+		pkAffected             bool
+		hasAutoIncrementOption bool
 
 		affectedCols        = make([]string, 0, len(tableDef.Cols))
 		affectedIndexes     = make([]string, 0, len(tableDef.Indexes))
@@ -200,6 +371,16 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		case *tree.AlterTableAlterColumnClause:
 			pkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.ColumnName.String())
+		case *tree.TableOptionAutoIncrement:
+			hasAutoIncrementOption = true
+			copyTableDef.AutoIncrOffset = autoIncrementValueToOffset(option.Value)
+			alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterAutoIncrement{
+					AlterAutoIncrement: &plan.AlterTableAutoIncrement{
+						NewOffset: copyTableDef.AutoIncrOffset,
+					},
+				},
+			})
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
 			for _, order := range option.AlterOrderByList {
@@ -218,6 +399,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			return nil, err
 		}
 	}
+	if hasAutoIncrementOption && !tableHasAutoIncrementColumn(copyTableDef) {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
+	}
 
 	if pkAffected {
 		affectedAllIdxCols()
@@ -228,7 +413,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
-	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)
+	createTmpDdl, _, err := constructCreateTableSQL(
+		cctx, copyTableDef, snapshot, true, nil, true, nil,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -237,9 +424,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	alterTablePlan.AffectedCols = affectedCols
 
 	opt := &plan.AlterCopyOpt{
-		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef),
+		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
 		TargetTableName:    copyTableDef.Name,
-		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef),
+		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
 	}
 
 	opt.SkipIndexesCopy = make(map[string]bool)
@@ -273,8 +460,6 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
-	//delete copy table records from mo_catalog.mo_foreign_keys
-	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, getSqlForDeleteTable(schemaName, alterTableCtx.copyTableName))
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -367,7 +552,7 @@ const UnKnownColId uint64 = math.MaxUint64
 
 type AlterTableContext struct {
 	// key   --> Copy table column name, letter case: lower
-	// value --> Original table column name
+	// value --> Expression used to populate it from the original table
 	alterColMap     map[string]selectExpr
 	schemaName      string
 	originTableName string
@@ -375,6 +560,14 @@ type AlterTableContext struct {
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
 	UpdateSqls     []string
+}
+
+func (ctx *AlterTableContext) renameColumnSource(oldName, newName string) {
+	source, hasSource := ctx.alterColMap[oldName]
+	delete(ctx.alterColMap, oldName)
+	if hasSource {
+		ctx.alterColMap[newName] = source
+	}
 }
 
 type exprType int
@@ -443,6 +636,43 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
+	if err := validateAlterTableIdentifierDestinations(ctx.GetContext(), stmt.Options); err != nil {
+		return nil, err
+	}
+	for _, option := range stmt.Options {
+		if rename, ok := option.(*tree.AlterOptionTableName); ok {
+			if err := rejectCrossDatabaseTableRename(ctx.GetContext(), schemaName, rename); err != nil {
+				return nil, err
+			}
+		}
+	}
+	isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
+	if err != nil {
+		return nil, err
+	}
+	if isMongoDB {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a MongoDB external table; drop and recreate the external table to change its schema")
+	}
+	// The copy-based ALTER path cannot work for envelope-backed external
+	// tables: it recreates the table from SHOW CREATE output (whose inline
+	// config/secret is redacted) and would run the foreign/default query for
+	// the data-copy step. Same rationale as the MongoDB guard above.
+	if _, isForeign, err := IsForeignTableDef(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	} else if isForeign {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on an ESQL/SQL external table; drop and recreate the external table to change its schema")
+	}
+	if _, isDataStream, err := IsDataStreamTableDef(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	} else if isDataStream {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a datastream external table; drop and recreate the external table to change its schema")
+	}
 
 	if tableDef.IsTemporary {
 		// Only allow a safe subset of alter operations on temporary tables.
@@ -488,6 +718,44 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
+}
+
+func validateAlterTableIdentifierDestinations(ctx context.Context, options []tree.AlterTableOption) error {
+	for _, option := range options {
+		switch option := option.(type) {
+		case *tree.AlterOptionTableName:
+			if err := validateIdentifier(ctx, string(option.Name.ToTableName().ObjectName)); err != nil {
+				return err
+			}
+		case *tree.AlterOptionAdd:
+			if err := validateTableDefinitionIdentifier(ctx, option.Def); err != nil {
+				return err
+			}
+		case *tree.AlterAddCol:
+			if err := validateTableDefinitionIdentifier(ctx, option.Column); err != nil {
+				return err
+			}
+		case *tree.AlterTableAddColumnClause:
+			for _, column := range option.NewColumns {
+				if err := validateTableDefinitionIdentifier(ctx, column); err != nil {
+					return err
+				}
+			}
+		case *tree.AlterTableModifyColumnClause:
+			if err := validateTableDefinitionIdentifier(ctx, option.NewColumn); err != nil {
+				return err
+			}
+		case *tree.AlterTableChangeColumnClause:
+			if err := validateTableDefinitionIdentifier(ctx, option.NewColumn); err != nil {
+				return err
+			}
+		case *tree.AlterTableRenameColumnClause:
+			if err := validateIdentifier(ctx, option.NewColumnName.ColNameOrigin()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // allowTempTableAlterForIndex returns true if the alter table statement
@@ -587,6 +855,14 @@ Loop:
 			}
 		case *tree.AlterTableChangeColumnClause:
 			algorithm = plan.AlterTable_COPY
+			var ok bool
+			ok, err = isInplaceChangeColumn(ctx, option, tableDef)
+			if err != nil {
+				return
+			}
+			if ok {
+				algorithm = plan.AlterTable_INPLACE
+			}
 		case *tree.AlterTableRenameColumnClause:
 			requiresRebuild, err := renameColumnRequiresPluginIndexRebuild(tableDef, option.OldColumnName.ColName())
 			if err != nil {
@@ -671,14 +947,36 @@ func isInplaceModifyColumn(
 	clause *tree.AlterTableModifyColumnClause,
 	tableDef *TableDef,
 ) (ok bool, err error) {
-	oCol := FindColumn(tableDef.Cols, clause.NewColumn.Name.ColName())
+	return isInplaceColumnDefinition(ctx, clause.NewColumn, clause.Position, tableDef)
+}
+
+func isInplaceChangeColumn(
+	ctx context.Context,
+	clause *tree.AlterTableChangeColumnClause,
+	tableDef *TableDef,
+) (ok bool, err error) {
+	// CHANGE keeps the original spelling for catalog metadata. A case-only
+	// rename is therefore not equivalent to MODIFY when identifiers compare
+	// case-insensitively: it must use COPY to update foreign-key catalog rows.
+	if clause.OldColumnName.ColNameOrigin() != clause.NewColumn.Name.ColNameOrigin() {
+		return false, nil
+	}
+	return isInplaceColumnDefinition(ctx, clause.NewColumn, clause.Position, tableDef)
+}
+
+func isInplaceColumnDefinition(
+	ctx context.Context,
+	column *tree.ColumnTableDef,
+	position *tree.ColumnPosition,
+	tableDef *TableDef,
+) (ok bool, err error) {
+	oCol := FindColumn(tableDef.Cols, column.Name.ColName())
 	if oCol == nil {
-		err = moerr.NewBadFieldError(
-			ctx, clause.NewColumn.Name.ColNameOrigin(), tableDef.Name)
-		return
+		return false, moerr.NewBadFieldError(
+			ctx, column.Name.ColNameOrigin(), tableDef.Name)
 	}
 
-	ok, err = positionMatched(ctx, clause.Position, tableDef, oCol)
+	ok, err = positionMatched(ctx, position, tableDef, oCol)
 	if err != nil {
 		return
 	}
@@ -686,7 +984,7 @@ func isInplaceModifyColumn(
 		return
 	}
 
-	ok, err = storageAgnosticType(ctx, clause.NewColumn, oCol)
+	ok, err = storageAgnosticType(ctx, column, oCol, tableDef.DefaultCharset)
 	if err != nil {
 		return
 	}
@@ -694,7 +992,7 @@ func isInplaceModifyColumn(
 		return
 	}
 
-	ok, err = storageAgnosticAttrs(ctx, clause.NewColumn, oCol)
+	ok, err = storageAgnosticAttrs(ctx, column, oCol)
 	if err != nil {
 		return
 	}
@@ -731,42 +1029,36 @@ func storageAgnosticType(
 	ctx context.Context,
 	nCol *tree.ColumnTableDef,
 	oCol *ColDef,
+	defaultCharset uint32,
 ) (ok bool, err error) {
 
 	nTy, err := getTypeFromAst(ctx, nCol.Type)
 	if err != nil {
 		return
 	}
-	if err = applyColumnAttributesToType(ctx, &nTy, nCol.Attributes); err != nil {
+	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
+	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, defaultCharset, nCol.Attributes); err != nil {
 		return
 	}
 
 	oTy := oCol.Typ
 
-	if oTy.Id != nTy.Id {
+	if oTy.Id != nTy.Id ||
+		oTy.Scale != nTy.Scale ||
+		oTy.Enumvalues != nTy.Enumvalues ||
+		oTy.AutoIncr != nTy.AutoIncr ||
+		oTy.Charset != nTy.Charset {
 		return
 	}
 
-	if nTy.Id != int32(types.T_varchar) && nTy.Id != int32(types.T_char) {
+	if nTy.Id == int32(types.T_varchar) || nTy.Id == int32(types.T_char) {
+		ok = oTy.Width <= nTy.Width
 		return
 	}
 
-	// leave autoInrement check to storage agnostic attrs because the autoInrement
-	// in nTy should be determined by nCol.Attributes
-
-	scaleMatch := oTy.Scale == nTy.Scale
-	enumMatch := oTy.Enumvalues == nTy.Enumvalues
-
-	if !scaleMatch || !enumMatch {
-		return
-	}
-
-	widthIncrease := oTy.Width <= nTy.Width
-	if !widthIncrease {
-		return
-	}
-
-	ok = true
+	// For every other type, only a byte-for-byte identical storage layout can
+	// avoid a COPY. Attribute changes are checked separately below.
+	ok = oTy.Width == nTy.Width
 	return
 }
 

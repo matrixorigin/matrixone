@@ -516,6 +516,34 @@ func (t *CDCDao) PrepareUpdateTask(
 	return
 }
 
+// PrepareResumeTask publishes the legacy running admission only while the
+// catalog row has not already recorded a task failure. The state predicate is
+// evaluated by the same UPDATE that writes running, so a TableDetector failure
+// that commits before or concurrently with RESUME cannot be overwritten.
+func (t *CDCDao) PrepareResumeTask(
+	ctx context.Context,
+	accountId uint64,
+	taskName string,
+) (affectedRows int64, err error) {
+	var (
+		executor = t.MustGetSQLExecutor(ctx)
+		prepare  *sql.Stmt
+		result   sql.Result
+	)
+	sql := cdc.CDCSQLBuilder.UpdateTaskStateSQL(accountId, taskName) + " AND state <> ?"
+	if prepare, err = executor.PrepareContext(ctx, sql); err != nil {
+		return
+	}
+	defer prepare.Close()
+
+	if result, err = prepare.ExecContext(ctx, cdc.CDCState_Running, cdc.CDCState_Failed); err != nil {
+		return
+	}
+	affectedRows, err = result.RowsAffected()
+
+	return
+}
+
 func (t *CDCDao) syncCommitTimestamp(ctx context.Context) error {
 	if t.ses == nil || t.ses.proc == nil || t.ses.proc.Base == nil {
 		return moerr.NewInternalError(ctx, "session or process is nil")

@@ -1,0 +1,72 @@
+set experimental_fulltext2_index = 1;
+create table src_ins (id bigint primary key, body varchar(200), status varchar(20), prio int,
+FULLTEXT2 ftidx (body) INCLUDE (status, prio));
+insert into src_ins values
+(1, 'quick brown fox',  'active',   10),
+(2, 'lazy fox sleeps',  'archived', 20),
+(3, 'red fox runs',     'active',   30),
+(4, 'quiet sleepy cat', 'active',   40);
+create table src_upd (id bigint primary key, body varchar(200), status varchar(20), prio int,
+FULLTEXT2 ftidx (body) INCLUDE (status, prio));
+insert into src_upd values
+(10, 'silver fox hunts', 'active',   100),
+(11, 'golden fox naps',  'active',   200),
+(12, 'bronze fox digs',  'archived', 300);
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+select id, status, prio from src_ins where match(body) against('fox') order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
+1  ¦  active  ¦  10  𝄀
+2  ¦  archived  ¦  20  𝄀
+3  ¦  active  ¦  30
+select id from src_ins where match(body) against('fox') and status = 'active' order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3
+select id, prio from src_ins where match(body) against('fox') and prio > 15 order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+2  ¦  20  𝄀
+3  ¦  30
+update src_upd set status = 'archived', prio = 999 where id = 10;
+delete from src_upd where id = 11;
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+select id, status, prio from src_upd where match(body) against('fox') order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
+10  ¦  archived  ¦  999  𝄀
+12  ¦  archived  ¦  300
+select id from src_upd where match(body) against('fox') and status = 'active' order by id;
+➤ id[-5,64,0]
+select id from src_upd where match(body) against('fox') and status = 'archived' order by id;
+➤ id[-5,64,0]  𝄀
+10  𝄀
+12
+select id, prio from src_upd where match(body) against('fox') and prio > 500 order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+10  ¦  999
+create table src_phantom (id bigint primary key, body varchar(200), status varchar(20), prio int,
+FULLTEXT2 ftidx (body) INCLUDE (status, prio));
+insert into src_phantom values
+(20, 'silver fox alpha', 'active', 500),
+(21, 'golden fox beta',  'active', 600);
+begin;
+update src_phantom set body = 'silver fox gamma', status = 'updated', prio = 999 where id = 20;
+delete from src_phantom where id = 20;
+commit;
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+explain select id, status, prio from src_phantom where match(body) against('fox');
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Table Function on fulltext2_search
+select id, status, prio from src_phantom where match(body) against('fox') order by match(body) against('fox') desc, id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
+21  ¦  active  ¦  600
+drop table src_ins;
+drop table src_upd;
+drop table src_phantom;

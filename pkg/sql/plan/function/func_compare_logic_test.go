@@ -574,3 +574,40 @@ func Test_Float32WithScaleComparison(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 }
+
+func TestFloat32MixedScaleComparisonContract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	leftType := types.T_float32.ToType()
+	leftType.Scale = 2
+	rightType := types.T_float32.ToType()
+	rightType.Scale = 3
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(leftType, []float32{1.234, 1.234}, nil),
+		NewFunctionTestInput(rightType, []float32{1.2304, 1.2306}, nil),
+	}
+	tests := []struct {
+		name string
+		fn   fEvalFn
+		want []bool
+	}{
+		{name: "equal", fn: equalFn, want: []bool{true, false}},
+		{name: "null-safe-equal", fn: nullSafeEqualFn, want: []bool{true, false}},
+		{name: "not-equal", fn: notEqualFn, want: []bool{false, true}},
+		{name: "less-than", fn: lessThanFn, want: []bool{false, true}},
+		{name: "less-equal", fn: lessEqualFn, want: []bool{true, true}},
+		{name: "greater-than", fn: greatThanFn, want: []bool{false, false}},
+		{name: "greater-equal", fn: greatEqualFn, want: []bool{true, false}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				inputs,
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.want, nil),
+				test.fn,
+			)
+			ok, errInfo := tc.Run()
+			require.True(t, ok, errInfo)
+		})
+	}
+}

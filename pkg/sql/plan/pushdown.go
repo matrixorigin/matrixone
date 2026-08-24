@@ -18,9 +18,9 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -28,6 +28,9 @@ const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
+	if builder.checkPlanningCanceled() != nil {
+		return originalNodeID, filters
+	}
 	// Record before pushdownFilters
 	builder.optimizationHistory = append(builder.optimizationHistory,
 		fmt.Sprintf("pushdownFilters:before (nodeID: %d, nodeType: %s, filters: %d)", nodeID, builder.qry.Nodes[nodeID].NodeType, len(filters)))
@@ -37,17 +40,32 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	if node.Limit != nil {
 		// can not push down over limit
-		cantPushdown = filters
+		cantPushdown = append(cantPushdown, filters...)
 		filters = nil
 	}
 
 	switch node.NodeType {
 	case plan.Node_AGG:
+		// Legacy positional aggregates have no global binding tags. Keep filters
+		// above them because tag-based replacement cannot address their outputs.
+		if len(node.BindingTags) < 2 {
+			return originalNodeID, filters
+		}
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+			if ContainsVolatileFunction(filter) {
+				node.FilterList = append(node.FilterList, filter)
+				continue
+			}
+			// A predicate with no column references is not safe below a global
+			// aggregate. If it evaluates to false, filtering the aggregate input
+			// still leaves the single global-aggregate output row alive. This can
+			// happen after set-operation columns are replaced by branch literals.
+			if len(node.GroupBy) == 0 && !exprHasColRef(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
 				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
@@ -72,7 +90,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		sampleTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, sampleTag) {
+			if ContainsVolatileFunction(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, sampleTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -113,7 +133,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 		for _, filter := range filters {
-			if containsTag(filter, windowTag) {
+			if ContainsVolatileFunction(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if containsTag(filter, windowTag) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if exprColRefsSubsetOf(filter, partCols) {
 				canPushdown = append(canPushdown, filter)
@@ -138,7 +160,9 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		windowTag := node.BindingTags[0]
 
 		for _, filter := range filters {
-			if !containsTag(filter, windowTag) {
+			if ContainsVolatileFunction(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, windowTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -158,6 +182,28 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_FILTER:
+		// IsEnd filters are terminal assertions/action selectors. Moving their
+		// predicates below joins can change both assertion scope and marker layout.
+		// Barrier filters are cardinality-changing semantic boundaries over a
+		// final DML row image. Unlike ASSERT they discard rows, but have the same
+		// non-reorderability requirement.
+		if node.IsEnd {
+			cantPushdown = append(cantPushdown, filters...)
+			return originalNodeID, cantPushdown
+		}
+		if node.FilterIsBarrier {
+			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+			if len(cantPushdownChild) > 0 {
+				childID = builder.appendNode(&plan.Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{childID},
+					FilterList: cantPushdownChild,
+				}, nil)
+			}
+			node.Children[0] = childID
+			cantPushdown = append(cantPushdown, filters...)
+			return originalNodeID, cantPushdown
+		}
 		canPushdown = filters
 		if !node.RollupFilter {
 			for _, filter := range node.FilterList {
@@ -179,7 +225,45 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			nodeID = childID
 		}
 
+	case plan.Node_ASSERT:
+		// ASSERT is a row-preserving semantic boundary. Its predicates describe
+		// the row image at this exact point in the DML pipeline, so neither the
+		// assertion nor filters from its parent may cross it.
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{childID},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+		node.Children[0] = childID
+		cantPushdown = append(cantPushdown, filters...)
+
 	case plan.Node_JOIN:
+		dedupIgnoreHasReleaseRows := node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE && node.DedupJoinCtx != nil &&
+			len(node.DedupJoinCtx.OldColList) > 1
+		if node.JoinType == plan.Node_DEDUP &&
+			(node.OnDuplicateAction == plan.Node_UPDATE || dedupIgnoreHasReleaseRows) {
+			// DEDUP UPDATE mutates columns from its right input into the final row
+			// image. DEDUP IGNORE can also carry delete-only rows that release keys
+			// for later candidates. A predicate above either form must stay above
+			// the join or it can change conflict detection.
+			for i, child := range node.Children {
+				childID, cantPushdownChild := builder.pushdownFilters(child, nil, separateNonEquiConds)
+				if len(cantPushdownChild) > 0 {
+					childID = builder.appendNode(&plan.Node{
+						NodeType:   plan.Node_FILTER,
+						Children:   []int32{childID},
+						FilterList: cantPushdownChild,
+					}, nil)
+				}
+				node.Children[i] = childID
+			}
+			cantPushdown = append(cantPushdown, filters...)
+			break
+		}
 		// Record middle: processing JOIN node
 		builder.optimizationHistory = append(builder.optimizationHistory,
 			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, JOIN, filters: %d, onList: %d)", nodeID, len(filters), len(node.OnList)))
@@ -260,6 +344,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			for _, cond := range node.OnList {
 				conj := splitPlanConjunction(applyDistributivity(builder.GetContext(), cond))
 				for _, conjElem := range conj {
+					if ContainsVolatileFunction(conjElem) {
+						newOnList = append(newOnList, conjElem)
+						continue
+					}
 					side := getJoinSideForPushdown(conjElem, leftTags, rightTags, markTag)
 					if side&JoinSideLeft == 0 {
 						rightPushdown = append(rightPushdown, conjElem)
@@ -300,13 +388,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
+			if ContainsVolatileFunction(filter) {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
 
 			switch joinSides[i] {
 			case JoinSideNone:
 				if filter.GetLit().GetBval() {
 					break
 				}
-
 				switch node.JoinType {
 				case plan.Node_INNER:
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
@@ -358,6 +449,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				if tryMark := filter.GetCol(); tryMark != nil {
 					if tryMark.RelPos == node.BindingTags[0] {
 						node.JoinType = plan.Node_SEMI
+						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
 						node.BindingTags = nil
 						break
 					}
@@ -366,6 +458,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 					if tryMark := arg.GetCol(); tryMark != nil {
 						if tryMark.RelPos == node.BindingTags[0] {
 							node.JoinType = plan.Node_ANTI
+							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
 							node.BindingTags = nil
 							break
 						}
@@ -399,7 +492,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 				for _, cond := range node.OnList {
 					joinSide := getJoinSideForPushdown(cond, leftTags, rightTags, markTag)
-					if joinSide == JoinSideRight {
+					if joinSide == JoinSideRight && !ContainsVolatileFunction(cond) {
 						rightPushdown = append(rightPushdown, cond)
 					} else {
 						newOnList = append(newOnList, cond)
@@ -413,19 +506,30 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		switch node.JoinType {
 		case plan.Node_INNER, plan.Node_SEMI:
 			//inner and semi join can deduce new predicate from both side
-			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
-			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(rightPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[0], deduced, separateNonEquiConds)
+			}
+			if deduced := deduceNewFilterList(leftPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[1], deduced, separateNonEquiConds)
+			}
 		case plan.Node_RIGHT, plan.Node_ANTI:
 			//right join can deduce new predicate only from right side to left
-			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(rightPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[0], deduced, separateNonEquiConds)
+			}
 		case plan.Node_LEFT, plan.Node_SINGLE:
 			//left join can deduce new predicate only from left side to right
-			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(leftPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[1], deduced, separateNonEquiConds)
+			}
 		}
 
 		if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {
 
 			for _, filter := range filters {
+				if ContainsVolatileFunction(filter) {
+					continue
+				}
 				down := false
 				if builder.checkExprCanPushdown(filter, builder.qry.Nodes[node.Children[0]]) {
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
@@ -481,6 +585,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		var canPushDownRight []*plan.Expr
 
 		for _, filter := range filters {
+			if ContainsVolatileFunction(filter) {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
 			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
 			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
 		}
@@ -512,10 +620,19 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			break
 		}
 
+		if len(node.BindingTags) == 0 {
+			node.BindingTags = []int32{0}
+		}
 		projectTag := node.BindingTags[0]
 
 		for _, filter := range filters {
-			canPushdown = append(canPushdown, replaceColRefs(filter, projectTag, node.ProjectList))
+			introducesVolatile := replaceColRefsIntroducesVolatile(filter, projectTag, node.ProjectList)
+			rewritten := replaceColRefs(DeepCopyExpr(filter), projectTag, node.ProjectList)
+			if introducesVolatile {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
+			canPushdown = append(canPushdown, rewritten)
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
@@ -541,7 +658,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 			}
 		}
-	case plan.Node_FUNCTION_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		downFilters := make([]*plan.Expr, 0)
 		selfFilters := make([]*plan.Expr, 0)
 		for _, filter := range filters {
@@ -563,9 +680,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_APPLY:
-		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], filters, separateNonEquiConds)
+		for _, filter := range filters {
+			if ContainsVolatileFunction(filter) {
+				cantPushdown = append(cantPushdown, filter)
+			} else {
+				canPushdown = append(canPushdown, filter)
+			}
+		}
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
 
-		cantPushdown = cantPushdownChild
+		cantPushdown = append(cantPushdown, cantPushdownChild...)
 
 		node.Children[0] = childID
 	default:
@@ -595,6 +719,38 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			fmt.Sprintf("pushdownFilters:after (nodeID: %d, no change, cantPushdown: %d)", nodeID, len(cantPushdown)))
 	}
 	return nodeID, cantPushdown
+}
+
+func unwrapIsTrueFromMarkJoinEqualities(
+	conditions []*plan.Expr,
+	leftTags, rightTags map[int32]bool,
+	markTag int32,
+) []*plan.Expr {
+	for i, condition := range conditions {
+		isTrue := condition.GetF()
+		if isTrue == nil || isTrue.Func == nil || len(isTrue.Args) != 1 {
+			continue
+		}
+		funcID, _ := function.DecodeOverloadID(isTrue.Func.GetObj())
+		if funcID != function.ISTRUE {
+			continue
+		}
+
+		equality := isTrue.Args[0]
+		equalFunc := equality.GetF()
+		if equalFunc == nil || equalFunc.Func == nil || len(equalFunc.Args) != 2 || !IsEqualFunc(equalFunc.Func.GetObj()) {
+			continue
+		}
+
+		leftSide := getJoinSideWithOuterScope(equalFunc.Args[0], leftTags, rightTags, markTag)
+		rightSide := getJoinSideWithOuterScope(equalFunc.Args[1], leftTags, rightTags, markTag)
+		if leftSide == JoinSideLeft && rightSide == JoinSideRight ||
+			leftSide == JoinSideRight && rightSide == JoinSideLeft {
+			conditions[i] = equality
+		}
+	}
+
+	return conditions
 }
 
 // referencesSyntheticGroupKey reports whether expr cannot be rewritten below
@@ -718,6 +874,16 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
+		} else if node.Offset == nil &&
+			child.NodeType == plan.Node_FUNCTION_SCAN &&
+			child.TableDef != nil && child.TableDef.TblFunc != nil &&
+			child.TableDef.TblFunc.Name == "mo_check_constraints" {
+			// CHECK_CONSTRAINTS is a source function whose rows have no
+			// ordering contract.  A plain LIMIT can therefore be evaluated
+			// by the producer, but OFFSET (or a sort above it) must remain
+			// outside so that the result semantics are unchanged.
+			child.Limit = node.Limit
+			node.Limit = nil
 		}
 	}
 }
@@ -726,13 +892,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 	for _, childID := range node.Children {
 		builder.pushdownVectorIndexTopToTableScan(childID)
-	}
-	if node.NodeType == plan.Node_TABLE_SCAN && node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries {
-		if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
-			if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
-				applyIvfReaderParamToEntriesScan(node, readerParam)
-			}
-		}
 	}
 	if builder.optimizerHints != nil && builder.optimizerHints.pushDownLimitToScan != 0 {
 		return
@@ -756,6 +915,14 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		return
 	}
 
+	// The ORDER BY column indexes the child project's list, but the two can disagree:
+	// pruning a derived table's projection (`select count(*) from (<top-k>) t`) empties
+	// the list while the sort keeps its pre-pruning ColPos. This runs on the final plan,
+	// after applyIndices, and the entries-table gate that would reject such a shape is
+	// below — so check before dereferencing rather than panicking the CN.
+	if orderCol.ColPos < 0 || int(orderCol.ColPos) >= len(projNode.ProjectList) {
+		return
+	}
 	orderFunc := projNode.ProjectList[orderCol.ColPos]
 	if metric.DistFuncOpTypes[orderFunc.GetF().GetFunc().GetObjName()] == "" {
 		return
@@ -786,11 +953,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		},
 		Limit: DeepCopyExpr(node.Limit),
 	}
-	if ctxVal := builder.compCtx.GetProcess().Ctx.Value(defines.IvfReaderParam{}); ctxVal != nil {
-		if readerParam, ok := ctxVal.(*plan.IndexReaderParam); ok {
-			applyIvfReaderParamToEntriesScan(scanNode, readerParam)
-		}
-	}
 
 	// if there is a limit, outcnt is limit number
 	scanNode.Stats.Outcnt = float64(scanNode.Stats.BlockNum) * float64(limitVal)
@@ -809,21 +971,6 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 	}
 
 	builder.nameByColRef[[2]int32{orderFuncTag, 0}] = "__dist_func__"
-}
-
-func applyIvfReaderParamToEntriesScan(scanNode *plan.Node, readerParam *plan.IndexReaderParam) {
-	if scanNode == nil || scanNode.NodeType != plan.Node_TABLE_SCAN ||
-		scanNode.GetTableDef().GetTableType() != catalog.SystemSI_IVFFLAT_TblType_Entries ||
-		readerParam == nil || readerParam.GetOrigFuncName() == "" {
-		return
-	}
-	if scanNode.IndexReaderParam == nil {
-		scanNode.IndexReaderParam = &plan.IndexReaderParam{}
-	}
-	scanNode.IndexReaderParam.OrigFuncName = readerParam.OrigFuncName
-	scanNode.IndexReaderParam.DistRange = readerParam.DistRange
-	scanNode.IndexReaderParam.PartitionCnCnt = readerParam.PartitionCnCnt
-	scanNode.IndexReaderParam.PartitionCnIdx = readerParam.PartitionCnIdx
 }
 
 // exprColRefsSubsetOf returns true when every column reference in expr

@@ -149,7 +149,15 @@ SELECT distinct extracted_week from t1;
 ➤ extracted_week[4,32,0]  𝄀
 52
 select date from t1 having extract(day FROM date)=1;
-SQL syntax error: column "t1.date" must appear in the GROUP BY clause or be used in an aggregate function
+date
+2000-01-01
+2000-01-01
+2000-01-01
+2000-01-01
+2000-01-01
+2000-01-01
+2000-01-01
+2000-01-01
 drop table t1;
 CREATE TABLE t1
 (`date` date,
@@ -162,5 +170,6 @@ SELECT distinct extracted_week from t1;
 ➤ extracted_week[4,32,0]  𝄀
 52
 select date from t1 having extract(day FROM date)=1;
-SQL syntax error: column "t1.date" must appear in the GROUP BY clause or be used in an aggregate function
+date
+2000-01-01
 drop table t1;

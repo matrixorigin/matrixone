@@ -15,9 +15,13 @@
 package nulls
 
 import (
+	"bytes"
+	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestOr(t *testing.T) {
@@ -66,6 +70,24 @@ func TestAny(t *testing.T) {
 		}
 		assert.EqualValues(t, true, Any(&n))
 	})
+}
+
+func TestMarshalTo(t *testing.T) {
+	var n Nulls
+	var empty bytes.Buffer
+	require.NoError(t, n.MarshalTo(&empty))
+	require.Zero(t, n.MarshalSize())
+	require.Zero(t, empty.Len())
+
+	n.InitWithSize(128)
+	n.Add(3)
+	n.Add(65)
+	encoded, err := n.Show()
+	require.NoError(t, err)
+	var streamed bytes.Buffer
+	require.NoError(t, n.MarshalTo(&streamed))
+	require.Equal(t, encoded, streamed.Bytes())
+	require.Equal(t, len(encoded), n.MarshalSize())
 }
 
 func TestSize(t *testing.T) {
@@ -123,6 +145,28 @@ func TestAdd(t *testing.T) {
 		Add(&n, 2)
 		assert.EqualValues(t, true, Contains(&n, 2))
 	})
+}
+
+func TestAddRangeUsesExclusiveEndForExternalStorage(t *testing.T) {
+	var n Nulls
+	n.GetBitmap().InstallExternalStorage(make([]uint64, 2))
+	n.InitWithSize(128)
+	require.NotPanics(t, func() {
+		n.AddRange(0, 128)
+	})
+	require.Equal(t, 128, n.Count())
+}
+
+func TestRangeUsesExclusiveEndForExternalStorage(t *testing.T) {
+	var source, destination Nulls
+	source.Add(7, 63)
+	destination.GetBitmap().InstallExternalStorage(make([]uint64, 1))
+	destination.InitWithSize(64)
+	require.NotPanics(t, func() {
+		Range(&source, 0, 64, 0, &destination)
+	})
+	require.True(t, destination.Contains(7))
+	require.True(t, destination.Contains(63))
 }
 
 func TestDel(t *testing.T) {
@@ -208,6 +252,95 @@ func TestFilter(t *testing.T) {
 		Filter(&n, sels, true)
 		assert.Equal(t, 13, n.Count())
 	})
+}
+
+func TestFilterInPlaceOrderedMatchesFilter(t *testing.T) {
+	source := Build(130, 0, 2, 63, 64, 65, 128, 129)
+	for _, test := range []struct {
+		name   string
+		sels   []int64
+		negate bool
+	}{
+		{"select-across-words", []int64{0, 2, 64, 65, 129}, false},
+		{"select-trailing-clear", []int64{1, 63, 130, 131}, false},
+		{"remove-across-words", []int64{1, 63, 128}, true},
+		{"remove-after-bitmap", []int64{130, 131}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			legacy := source.Clone()
+			Filter(legacy, test.sels, test.negate)
+
+			var inPlace Nulls
+			inPlace.GetBitmap().InstallExternalStorage(make([]uint64, 4))
+			inPlace.InitWith(source)
+			FilterInPlaceOrdered(&inPlace, test.sels, test.negate)
+
+			require.True(t, inPlace.GetBitmap().IsSame(legacy.GetBitmap()))
+			require.Equal(t, legacy.GetBitmap().Len(), inPlace.GetBitmap().Len())
+			require.Equal(t, legacy.Count(), inPlace.Count())
+		})
+	}
+}
+
+func TestFilterByMaskInPlaceMatchesFilter(t *testing.T) {
+	source := Build(130, 0, 2, 63, 64, 65, 128, 129)
+	for _, negate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("negate=%t", negate), func(t *testing.T) {
+			var selection bitmap.Bitmap
+			selection.InitWithSize(132)
+			selection.AddMany([]uint64{1, 63, 128, 130, 131})
+
+			legacy := source.Clone()
+			FilterByMask(legacy, &selection, negate)
+
+			var inPlace Nulls
+			inPlace.GetBitmap().InstallExternalStorage(make([]uint64, 4))
+			inPlace.InitWith(source)
+			FilterByMaskInPlace(&inPlace, &selection, negate)
+
+			require.True(t, inPlace.GetBitmap().IsSame(legacy.GetBitmap()))
+			require.Equal(t, legacy.GetBitmap().Len(), inPlace.GetBitmap().Len())
+			require.Equal(t, legacy.Count(), inPlace.Count())
+		})
+	}
+}
+
+func TestFilterByMaskInPlaceWithOffsetMatchesAllocatingPath(t *testing.T) {
+	source := Build(130, 1, 63, 64, 127, 129)
+	var selection bitmap.Bitmap
+	selection.InitWithSize(129)
+	selection.AddMany([]uint64{0, 62, 128})
+
+	for _, negate := range []bool{false, true} {
+		for _, external := range []bool{false, true} {
+			t.Run(fmt.Sprintf("negate=%t/external=%t", negate, external), func(t *testing.T) {
+				legacy := source.Clone()
+				FilterByMaskWithOffset(legacy, &selection, negate, 1)
+
+				var inPlace Nulls
+				if external {
+					inPlace.GetBitmap().InstallExternalStorage(make([]uint64, 4))
+				}
+				inPlace.InitWith(source)
+				FilterByMaskInPlaceWithOffset(&inPlace, &selection, negate, 1)
+
+				require.True(t, inPlace.GetBitmap().IsSame(legacy.GetBitmap()))
+				require.Equal(t, legacy.GetBitmap().Len(), inPlace.GetBitmap().Len())
+				require.Equal(t, legacy.Count(), inPlace.Count())
+				if negate {
+					require.Equal(t, []uint64{62, 125}, inPlace.ToArray())
+					require.Equal(t, int64(130), inPlace.GetBitmap().Len())
+				} else {
+					require.Equal(t, []uint64{0, 1, 2}, inPlace.ToArray())
+					require.Equal(t, int64(3), inPlace.GetBitmap().Len())
+				}
+			})
+		}
+	}
+
+	var empty Nulls
+	FilterByMaskInPlaceWithOffset(&empty, &selection, true, 1)
+	require.True(t, empty.IsEmpty())
 }
 
 func TestMerge(t *testing.T) {

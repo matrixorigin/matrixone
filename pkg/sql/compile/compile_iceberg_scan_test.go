@@ -702,6 +702,29 @@ func TestIcebergTimestampLiteralNormalizationUsesUTCInstant(t *testing.T) {
 	require.Equal(t, time.Date(2025, 12, 31, 21, 0, 0, 0, time.UTC).UnixMicro(), lit.Int64)
 }
 
+func TestIcebergDateLiteralNormalizationUsesUnixEpochDays(t *testing.T) {
+	tests := []struct {
+		date string
+		want int64
+	}{
+		{date: "1969-12-31", want: -1},
+		{date: "1970-01-01", want: 0},
+		{date: "2020-01-01", want: 18262},
+	}
+	for _, test := range tests {
+		t.Run(test.date, func(t *testing.T) {
+			date, err := types.ParseDateCast(test.date)
+			require.NoError(t, err)
+			lit, ok := icebergPruneLiteralFromPlanLiteral(&plan.Literal{
+				Value: &plan.Literal_Dateval{Dateval: int32(date)},
+			})
+			require.True(t, ok)
+			require.Equal(t, api.TypeDate, lit.Kind)
+			require.Equal(t, test.want, lit.Int64)
+		})
+	}
+}
+
 func TestCompileIcebergScanWiresDeleteTasksToExternalRuntime(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}}

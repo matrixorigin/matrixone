@@ -1,5 +1,5 @@
-ARG BUILDER_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04
-ARG NATIVE_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04
+ARG BUILDER_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04-matrixone-native-1
+ARG NATIVE_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04-matrixone-native-1
 ARG GO_CACHE_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04
 ARG RUNTIME_IMAGE=matrixorigin/ubuntu:22.04
 
@@ -7,7 +7,7 @@ FROM ${BUILDER_IMAGE} AS native
 
 ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOWORK=off
-RUN go env -w GOPROXY=${GOPROXY}
+RUN go env -w GOPROXY="${GOPROXY}"
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
 COPY thirdparties thirdparties
@@ -21,7 +21,7 @@ FROM ${NATIVE_IMAGE} AS builder
 
 ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOWORK=off
-RUN go env -w GOPROXY=${GOPROXY}
+RUN go env -w GOPROXY="${GOPROXY}"
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
 

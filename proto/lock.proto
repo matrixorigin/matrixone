@@ -418,7 +418,11 @@ message Result {
   uint32              Waiters         = 9;  
   // NewLockAdd if true means new lock added, false means lock is added before by current 
   // txn
-  bool                NewLockAdd      = 10;                
+  bool                NewLockAdd      = 10;
+  // TableDefChangedAt is the latest committed table-definition change retained
+  // by this lock table. A CN whose statement snapshot is older must rebuild its
+  // plan before writing with the physical table generation it resolved.
+  timestamp.Timestamp TableDefChangedAt = 11;
 }
 
 message ExtraMutation {

@@ -16,6 +16,7 @@ package function
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -467,6 +468,22 @@ func TestIffCheck_PreservesSupportedConditionTypes(t *testing.T) {
 	}
 }
 
+func TestIffCheckPreservesMatchingTextCollation(t *testing.T) {
+	for _, charset := range []uint8{
+		types.CharsetLegacy,
+		types.CharsetUTF8MB4Bin,
+		types.CharsetUTF8,
+	} {
+		textType := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+		result := iffCheck(nil, []types.Type{
+			types.T_bool.ToType(),
+			textType,
+			textType,
+		})
+		require.Equal(t, succeedMatched, result.status)
+	}
+}
+
 func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 	for _, typ := range []types.Type{
 		types.New(types.T_array_float32, 3, 0),
@@ -505,6 +522,18 @@ func TestIffCheck_PreservesBinaryResultTypes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIffCheckDifferentFixedBinaryPromotesToVarbinary(t *testing.T) {
+	result := iffCheck(nil, []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_binary, 4, 0),
+		types.New(types.T_binary, 8, 0),
+	})
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, types.T_varbinary, result.finalType[1].Oid)
+	require.Equal(t, int32(8), result.finalType[1].Width)
+	require.Equal(t, result.finalType[1], result.finalType[2])
 }
 
 func TestIffCheck_VectorCommonType(t *testing.T) {
@@ -794,6 +823,235 @@ func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
 }
 
+func TestSignedUnsignedIntegerCommonTypeWithNull(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source []types.Type
+		wantOK bool
+	}{
+		{
+			name:   "leading null",
+			source: []types.Type{types.T_any.ToType(), types.T_uint64.ToType(), types.T_int64.ToType()},
+			wantOK: true,
+		},
+		{
+			name:   "middle null",
+			source: []types.Type{types.T_uint64.ToType(), types.T_any.ToType(), types.T_int64.ToType()},
+			wantOK: true,
+		},
+		{
+			name:   "trailing null",
+			source: []types.Type{types.T_uint64.ToType(), types.T_int64.ToType(), types.T_any.ToType()},
+			wantOK: true,
+		},
+		{
+			name:   "null and signed only",
+			source: []types.Type{types.T_any.ToType(), types.T_int64.ToType()},
+			wantOK: false,
+		},
+		{
+			name:   "null and unsigned only",
+			source: []types.Type{types.T_uint64.ToType(), types.T_any.ToType()},
+			wantOK: false,
+		},
+		{
+			name:   "only null",
+			source: []types.Type{types.T_any.ToType()},
+			wantOK: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, ok := signedUnsignedIntegerCommonType(test.source)
+			require.Equal(t, test.wantOK, ok)
+			if !test.wantOK {
+				return
+			}
+			require.Equal(t, types.T_decimal128, result.Oid)
+			require.Equal(t, int32(21), result.Width)
+			require.Zero(t, result.Scale)
+		})
+	}
+}
+
+func TestCaseCheckSignedUnsignedIntegerWithNull(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name: "leading null",
+			inputs: []types.Type{
+				types.T_bool.ToType(), types.T_any.ToType(),
+				types.T_bool.ToType(), types.T_uint64.ToType(),
+				types.T_int64.ToType(),
+			},
+		},
+		{
+			name: "middle null",
+			inputs: []types.Type{
+				types.T_bool.ToType(), types.T_uint64.ToType(),
+				types.T_bool.ToType(), types.T_any.ToType(),
+				types.T_int64.ToType(),
+			},
+		},
+		{
+			name: "trailing null",
+			inputs: []types.Type{
+				types.T_bool.ToType(), types.T_uint64.ToType(),
+				types.T_bool.ToType(), types.T_int64.ToType(),
+				types.T_any.ToType(),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := caseCheck(nil, test.inputs)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Len(t, result.finalType, len(test.inputs))
+			for i, typ := range result.finalType {
+				if i%2 == 0 && i != len(result.finalType)-1 {
+					require.Equal(t, types.T_bool, typ.Oid)
+					continue
+				}
+				require.Equal(t, types.T_decimal128, typ.Oid)
+				require.Equal(t, int32(21), typ.Width)
+				require.Zero(t, typ.Scale)
+			}
+		})
+	}
+}
+
+func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
+	tests := []struct {
+		name         string
+		varcharWidth int32
+		wantWidth    int32
+	}{
+		{name: "one character", varcharWidth: 1, wantWidth: utf8.UTFMax},
+		{name: "maximum varchar", varcharWidth: types.MaxVarcharLen, wantWidth: types.MaxVarBinaryLen},
+		{name: "unknown varchar", varcharWidth: -1, wantWidth: types.MaxVarBinaryLen},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, ok := binaryStringCommonType([]types.Type{
+				types.New(types.T_varbinary, 1, 0),
+				types.New(types.T_varchar, test.varcharWidth, 0),
+			})
+			require.True(t, ok)
+			require.Equal(t, types.T_varbinary, result.Oid)
+			require.Equal(t, test.wantWidth, result.Width)
+		})
+	}
+}
+
+func TestBinaryStringCommonTypePreservesSameFixedBinary(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		source    []types.Type
+		wantOK    bool
+		wantOid   types.T
+		wantWidth int32
+	}{
+		{
+			name: "same fixed binary",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.New(types.T_binary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "different fixed binary widths",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.New(types.T_binary, 8, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 8,
+		},
+		{
+			name: "leading null fixed binary",
+			source: []types.Type{
+				types.T_any.ToType(),
+				types.New(types.T_binary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "trailing null fixed binary",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.T_any.ToType(),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "middle null fixed binary",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.T_any.ToType(),
+				types.New(types.T_binary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "leading null varbinary",
+			source: []types.Type{
+				types.T_any.ToType(),
+				types.New(types.T_varbinary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 4,
+		},
+		{
+			name: "trailing null varbinary",
+			source: []types.Type{
+				types.New(types.T_varbinary, 4, 0),
+				types.T_any.ToType(),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 4,
+		},
+		{
+			name: "middle null varbinary",
+			source: []types.Type{
+				types.New(types.T_varbinary, 4, 0),
+				types.T_any.ToType(),
+				types.New(types.T_varbinary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 4,
+		},
+		{
+			name:   "only null is not binary",
+			source: []types.Type{types.T_any.ToType()},
+			wantOK: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, ok := binaryStringCommonType(test.source)
+			require.Equal(t, test.wantOK, ok)
+			if !test.wantOK {
+				return
+			}
+			require.Equal(t, test.wantOid, result.Oid)
+			require.Equal(t, test.wantWidth, result.Width)
+		})
+	}
+}
+
 func Test_CaseCheck_DifferentDecimalScale(t *testing.T) {
 	inputs := []types.Type{
 		types.T_bool.ToType(),
@@ -1064,6 +1322,8 @@ func Test_CaseCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Equal(t, types.T_bool, result.finalType[0].Oid)
 	require.Equal(t, types.T_text, result.finalType[1].Oid)
 	require.Equal(t, types.T_text, result.finalType[2].Oid)
+	require.Zero(t, result.finalType[1].Width)
+	require.Zero(t, result.finalType[2].Width)
 }
 
 func Test_IffCheck_TextStringBranchesStayText(t *testing.T) {
@@ -1078,6 +1338,78 @@ func Test_IffCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Equal(t, types.T_bool, result.finalType[0].Oid)
 	require.Equal(t, types.T_text, result.finalType[1].Oid)
 	require.Equal(t, types.T_text, result.finalType[2].Oid)
+	require.Zero(t, result.finalType[1].Width)
+	require.Zero(t, result.finalType[2].Width)
+}
+
+func TestConditionalTextFamilyMarkersStayBounded(t *testing.T) {
+	medium := types.New(types.T_text, types.MaxMediumTextLen, 0)
+	long := types.New(types.T_text, types.MaxLongTextLen, 0)
+	tiny := types.New(types.T_text, types.MaxTinyTextLen, 0)
+
+	for _, tc := range []struct {
+		name   string
+		result checkResult
+		width  int32
+		length int
+	}{
+		{
+			name:   "case mediumtext",
+			result: caseCheck(nil, []types.Type{types.T_bool.ToType(), medium, types.New(types.T_varchar, 10, 0)}),
+			width:  types.MaxMediumTextLen,
+			length: 3,
+		},
+		{
+			name:   "if longtext",
+			result: iffCheck(nil, []types.Type{types.T_bool.ToType(), long, long}),
+			width:  types.MaxLongTextLen,
+			length: 0,
+		},
+		{
+			name: "coalesce mediumtext",
+			result: coalesceCheck([]overload{
+				{args: []types.T{types.T_varchar}},
+				{args: []types.T{types.T_char}},
+				{args: []types.T{types.T_text}},
+			}, []types.Type{medium, medium}),
+			width:  types.MaxMediumTextLen,
+			length: 0,
+		},
+		{
+			name:   "case mixed text markers",
+			result: caseCheck(nil, []types.Type{types.T_bool.ToType(), tiny, types.T_bool.ToType(), medium, long}),
+			width:  types.MaxLongTextLen,
+			length: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.length == 0 {
+				require.Contains(t, []overloadCheckSituation{succeedMatched, succeedWithCast}, tc.result.status)
+				return
+			}
+			require.Equal(t, succeedWithCast, tc.result.status)
+			require.Len(t, tc.result.finalType, tc.length)
+			for i, typ := range tc.result.finalType {
+				if tc.length > 2 && i%2 == 0 && i < tc.length-1 {
+					continue
+				}
+				require.Equal(t, types.T_text, typ.Oid)
+				require.Equal(t, tc.width, typ.Width)
+			}
+		})
+	}
+	require.Equal(t, int32(types.MaxLongTextLen),
+		iffReturnType([]types.Type{types.T_bool.ToType(), long, long}).Width)
+	require.Equal(t, int32(types.MaxMediumTextLen),
+		caseReturnType([]types.Type{types.T_bool.ToType(), medium, medium}).Width)
+	require.Equal(t, int32(types.MaxMediumTextLen),
+		coalesceStringReturnType(types.T_text, []types.Type{medium, medium}).Width)
+
+	// Plain TEXT has no persisted subtype bound. It must keep the existing
+	// conservative width when combined with a bounded TEXT-family marker.
+	result := caseCheck(nil, []types.Type{types.T_bool.ToType(), types.T_text.ToType(), medium})
+	require.NotEqual(t, failedFunctionParametersWrong, result.status)
+	require.Zero(t, caseReturnType([]types.Type{types.T_bool.ToType(), types.T_text.ToType(), medium}).Width)
 }
 
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
@@ -1118,6 +1450,7 @@ func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Len(t, result.finalType, len(inputs))
 	for _, typ := range result.finalType {
 		require.Equal(t, types.T_text, typ.Oid)
+		require.Zero(t, typ.Width)
 	}
 }
 
@@ -1229,6 +1562,23 @@ func Test_CaseFn_Decimal256Execution(t *testing.T) {
 		},
 		expect: NewFunctionTestResult(retType, false,
 			[]types.Decimal256{d1, d2}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, caseFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
+func Test_CaseFn_VarBinaryExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	retType := types.New(types.T_varbinary, 6, 0)
+	tc := tcTemp{
+		info: "caseFn varbinary: CASE WHEN c THEN a ELSE bc",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+			NewFunctionTestInput(retType, []string{"a", "a"}, nil),
+			NewFunctionTestInput(retType, []string{"bc", "bc"}, nil),
+		},
+		expect: NewFunctionTestResult(retType, false, []string{"a", "bc"}, nil),
 	}
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, caseFn)
 	succeed, info := tcc.Run()

@@ -86,8 +86,20 @@ func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 			nil,
 			aggexec.EncodeGroupConcatConfig(separator, 1024))
 	}
+	orderConfig := []byte{1, 2, 3}
+	newOrderedGroupConcatExpr := func() aggexec.AggFuncExecExpression {
+		return aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024),
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER)
+	}
 	groupArg := group.NewArgument()
-	groupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("")}
+	groupArg.Aggs = []aggexec.AggFuncExecExpression{
+		newGroupConcatExpr(""),
+		newOrderedGroupConcatExpr(),
+	}
 	mergeGroupArg := group.NewArgumentMergeGroup()
 	mergeGroupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("|")}
 	windowArg := window.NewArgument()
@@ -100,12 +112,14 @@ func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 
 	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 5), groupArg.Aggs[1].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 5), mergeGroupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 5), windowArg.Aggs[0].GetExtraConfig())
 
 	sessionMaxLen = 1024
 	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
 
@@ -732,6 +746,37 @@ func TestNewParallelScope(t *testing.T) {
 		require.NotSame(t, firstPool, nextPool)
 		require.Nil(t, templateShuffle.GetShufflePool())
 	}
+}
+
+func TestParallelScopeGenerationsReleasedAtCompileResetBoundary(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.isPrepare = true
+	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{{}}
+	scopeToParallel := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector},
+	)
+	scopeToParallel.NodeInfo.Mcpu = 2
+
+	first, firstWorkers := newParallelScope(scopeToParallel)
+	require.Len(t, firstWorkers, 2)
+	require.Contains(t, scopeToParallel.PreScopes, first)
+	require.Equal(t, []*Scope{first}, scopeToParallel.parallelGenerations)
+
+	require.NoError(t, scopeToParallel.reset(testCompile, false))
+	require.NotContains(t, scopeToParallel.PreScopes, first)
+	require.Empty(t, scopeToParallel.parallelGenerations)
+
+	second, secondWorkers := newParallelScope(scopeToParallel)
+	require.Len(t, secondWorkers, 2)
+	require.Contains(t, scopeToParallel.PreScopes, second)
+	require.Equal(t, []*Scope{second}, scopeToParallel.parallelGenerations)
+	require.Len(t, scopeToParallel.PreScopes, 1,
+		"reused execution must retain only its current physical generation")
+
+	// The final generation remains attached for post-run physical-plan
+	// analysis and is released with the owning template.
+	scopeToParallel.release()
 }
 
 func TestCompileExternValueScan(t *testing.T) {
@@ -2074,41 +2119,6 @@ func TestNotifyMessageClean(t *testing.T) {
 	require.Equal(t, 1, ff.number)
 }
 
-func TestSuppressRemoteRunCancelError(t *testing.T) {
-	t.Run("suppress query interrupted after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx)))
-	})
-
-	t.Run("suppress raw context cancellation after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, fmt.Errorf("open remote stream: %w", context.Canceled)))
-	})
-
-	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		err := suppressRemoteRunCancelError(ctx, moerr.NewRPCTimeout(ctx))
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
-	})
-
-	t.Run("keep query interrupted while proc still active", func(t *testing.T) {
-		ctx := context.Background()
-		err := suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx))
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
-	})
-
-	t.Run("keep raw context cancellation while proc still active", func(t *testing.T) {
-		ctx := context.Background()
-		err := suppressRemoteRunCancelError(ctx, context.Canceled)
-		require.ErrorIs(t, err, context.Canceled)
-	})
-}
-
 func TestScopeHoldAnyCannotRemoteOperator(t *testing.T) {
 	s0 := &Scope{
 		RootOp: &dispatch.Dispatch{RecCTE: false},
@@ -2237,6 +2247,84 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 	}
 }
 
+func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
+	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
+	producerErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	notifyErr := moerr.NewInternalErrorNoCtx("remote producer failed")
+	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
+	cancelInternal(producerErr)
+	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
+	cancelExternal()
+
+	tests := []struct {
+		name     string
+		current  scopeRunResult
+		preScope []scopeRunResult
+		notify   []error
+		want     error
+	}{
+		{
+			name:     "producer error replaces cleanup fallback",
+			current:  scopeRunResult{err: cleanupErr},
+			preScope: []scopeRunResult{{err: context.Canceled}, {err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:    "remote notifier error replaces cleanup fallback",
+			current: scopeRunResult{err: cleanupErr},
+			notify:  []error{notifyErr},
+			want:    notifyErr,
+		},
+		{
+			name:     "cleanup fallback does not replace producer error",
+			current:  scopeRunResult{err: producerErr},
+			preScope: []scopeRunResult{{err: cleanupErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "internally canceled merge resolves to producer error",
+			current:  scopeRunResult{err: context.Canceled, ctx: internalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "internally interrupted merge resolves to producer error",
+			current:  scopeRunResult{err: moerr.NewQueryInterrupted(context.Background()), ctx: internalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "externally canceled merge remains canceled",
+			current:  scopeRunResult{err: context.Canceled, ctx: externalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     context.Canceled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preScopeResults := make(chan scopeRunResult, len(tt.preScope))
+			for _, result := range tt.preScope {
+				preScopeResults <- result
+			}
+			notifyResults := make(chan notifyMessageResult, len(tt.notify))
+			for _, err := range tt.notify {
+				notifyResults <- notifyMessageResult{err: err}
+			}
+
+			got := collectMergeRunResults(
+				testutil.NewProcess(t),
+				tt.current,
+				preScopeResults,
+				notifyResults)
+
+			require.Same(t, tt.want, got)
+			require.Empty(t, preScopeResults)
+			require.Empty(t, notifyResults)
+		})
+	}
+}
+
 func TestScopeGetRelDataError(t *testing.T) {
 	// Create a new scope
 	s := newScope(Normal)
@@ -2333,250 +2421,6 @@ func (m *mockRelationForParallelOrderBy) BuildReaders(
 	return m.readers, nil
 }
 
-func TestBuildReadersMembershipFilterHint(t *testing.T) {
-	t.Run("MembershipFilter set when node is IVFFLAT Entries and context has membership filter", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr: nil,
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		// Use MakeFalseExpr to make emptyScan = true, skipping getRelData
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when node is nil", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                mockRel,
-				node:               nil, // node is nil
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when TableDef is nil", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: nil, // TableDef is nil
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when TableType is not IVFFLAT Entries", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata, // different type
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when context has no IvfMembershipFilter", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		// No IvfMembershipFilter in context
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when context value is not []byte", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, "not a byte slice")
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when context value is empty []byte", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, []byte{}) // empty byte slice
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-			TxnOffset: 0,
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-}
-
 func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 	c := NewMockCompile(t)
 	scope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.Projection})
@@ -2603,22 +2447,6 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 		require.Equal(t, 1, reader.orderByCalls)
 		require.Equal(t, orderBy, reader.orderBy)
 	}
-}
-
-func TestLocalRangesPolicyForPartitionedIvfEntries(t *testing.T) {
-	ivfNode := &plan.Node{
-		NodeType: plan.Node_TABLE_SCAN,
-		TableDef: &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
-		IndexReaderParam: &plan.IndexReaderParam{
-			Limit:        &plan.Expr{},
-			OrigFuncName: "l2_distance",
-		},
-	}
-	ordinaryNode := &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{}}
-
-	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ivfNode, 0))
-	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), localRangesPolicy(ivfNode, 1))
-	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ordinaryNode, 1))
 }
 
 func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
@@ -2694,7 +2522,146 @@ func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
 	}
 }
 
-func TestShuffleJoinStageNodesKeepsSinkScanReceiversLocal(t *testing.T) {
+func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	spec := &plan.RuntimeFilterSpec{Tag: 109, UseMembershipFilter: true}
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+		},
+	}
+	payload := []byte{1, 3, 5, 7}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag:  spec.Tag,
+		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
+		Data: payload,
+	}, board)
+
+	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	require.NoError(t, err)
+	require.False(t, empty)
+	require.Len(t, filters, 1)
+	require.Same(t, spec, filters[0].spec)
+	require.Nil(t, filters[0].expr)
+	require.Equal(t, payload, filters[0].data)
+}
+
+func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
+	payload := []byte{2, 4, 6, 8}
+	spec := &plan.RuntimeFilterSpec{UseMembershipFilter: true}
+	filter := receivedRuntimeFilter{
+		spec: spec,
+		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			{},
+			{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: payload}}},
+		}}}},
+	}
+
+	membership, hasMembership := vectorScanMembershipFilter([]receivedRuntimeFilter{filter})
+
+	require.True(t, hasMembership)
+	require.Equal(t, payload, membership)
+}
+
+func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	newScopeFor := func(spec *plan.VectorIndexScan) *Scope {
+		return &Scope{
+			Proc: proc,
+			DataSource: &Source{node: &plan.Node{
+				NodeType:        plan.Node_VECTOR_INDEX_SCAN,
+				VectorIndexScan: spec,
+			}},
+		}
+	}
+
+	_, err := newScopeFor(nil).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "missing index metadata")
+	_, err = newScopeFor(&plan.VectorIndexScan{}).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "missing index metadata")
+
+	nullQuery := &plan.VectorIndexScan{
+		Index:       &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	}
+	readers, err := newScopeFor(nullQuery).buildVectorIndexReaders(nil)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+
+	query := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 2}))},
+		}},
+	}
+	nullLimit := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector:    query,
+		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	}
+	_, err = newScopeFor(nullLimit).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "result limit did not fold")
+
+	wrongLimitType := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Int64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(wrongLimitType).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "result limit is not uint64")
+
+	noReaderPlugin := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(noReaderPlugin).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "has no scan reader")
+
+	ivfflatPlugin := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(ivfflatPlugin).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "requires a process, transaction, and storage engine")
+
+	unknownPlugin := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "missing"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "is not registered")
+
+	membership, hasMembership := vectorScanMembershipFilter(nil)
+	require.Nil(t, membership)
+	require.False(t, hasMembership)
+	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		spec: &plan.RuntimeFilterSpec{UseMembershipFilter: true},
+		expr: &plan.Expr{},
+	}})
+	require.Nil(t, membership)
+	require.True(t, hasMembership)
+	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}},
+	}})
+	require.Nil(t, membership)
+	require.False(t, hasMembership)
+	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			{}, {Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{9, 8, 7}}}},
+		}}}},
+	}})
+	require.Equal(t, []byte{9, 8, 7}, membership)
+	require.False(t, hasMembership)
+}
+
+func TestShuffleJoinStageNodesDistributesReceiversAndKeepsSinkScanWorker(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
 	c.cnList = engine.Nodes{
@@ -2712,13 +2679,29 @@ func TestShuffleJoinStageNodesKeepsSinkScanReceiversLocal(t *testing.T) {
 
 	stageNodes, local := c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
 	require.True(t, local)
-	require.Len(t, stageNodes, 1)
+	require.Len(t, stageNodes, 2)
 	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
+	require.Equal(t, "cn-remote:6001", stageNodes[1].Addr)
 
 	normalScope := &Scope{RootOp: merge.NewArgument()}
 	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{normalScope}, nil)
 	require.False(t, local)
 	require.Len(t, stageNodes, 2)
+
+	c.cnList = engine.Nodes{
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 2)
+	require.Equal(t, "cn-remote:6001", stageNodes[0].Addr)
+	require.Equal(t, "cn-local:6001", stageNodes[1].Addr)
+
+	c.cnList = nil
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 1)
+	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
 }
 
 func TestAttachShuffleDispatchSourceFallsBackToFirstReceiver(t *testing.T) {

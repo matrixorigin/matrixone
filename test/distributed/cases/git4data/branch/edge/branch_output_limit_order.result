@@ -1,0 +1,33 @@
+drop database if exists branch_output_limit_order;
+create database branch_output_limit_order;
+use branch_output_limit_order;
+create table base(id int primary key, v varchar(20));
+insert into base values (50, 'root');
+data branch create table child from base;
+insert into base values (1, 'base-low');
+insert into child values (100, 'child-high');
+data branch diff child against base;
+➤ diff child against base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
+base  ¦  INSERT  ¦  1  ¦  base-low  𝄀
+child  ¦  INSERT  ¦  100  ¦  child-high
+data branch diff child against base output limit 1;
+➤ diff child against base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
+base  ¦  INSERT  ¦  1  ¦  base-low
+data branch diff child against base columns (v) output limit 1;
+➤ diff child against base[12,0,0]  ¦  flag[12,0,0]  ¦  v[12,-1,0]  𝄀
+base  ¦  INSERT  ¦  base-low
+insert into base values (2, 'base-mid');
+insert into child values (99, 'child-mid');
+data branch diff child against base output limit 2;
+➤ diff child against base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
+base  ¦  INSERT  ¦  1  ¦  base-low  𝄀
+base  ¦  INSERT  ¦  2  ¦  base-mid
+create table composite_base(grp int, id int, v varchar(20), primary key(grp, id));
+insert into composite_base values (0, 0, 'root');
+data branch create table composite_child from composite_base;
+insert into composite_base values (1, 1, 'base-low');
+insert into composite_child values (1, 2, 'child-high');
+data branch diff composite_child against composite_base output limit 1;
+➤ diff composite_child against composite_base[12,0,0]  ¦  flag[12,0,0]  ¦  grp[4,32,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
+composite_base  ¦  INSERT  ¦  1  ¦  1  ¦  base-low
+drop database branch_output_limit_order;

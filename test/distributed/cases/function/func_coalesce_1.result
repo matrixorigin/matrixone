@@ -8,28 +8,28 @@ insert into  t1 values (1, NULL);
 insert into  t1 values (NULL, NULL);
 insert into  t1 values (null, 'b');
 select * from t1;
-a    b
-0    a
-1    null
-null    null
-null    b
+➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
+0  ¦  a  𝄀
+1  ¦  null  𝄀
+null  ¦  null  𝄀
+null  ¦  b
 select coalesce(a, 1) from t1;
-coalesce(a, 1)
-0
-1
-1
+➤ coalesce(a, 1)[-5,64,0]  𝄀
+0  𝄀
+1  𝄀
+1  𝄀
 1
 select coalesce(b, 1) from t1;
-coalesce(b, 1)
-a
-1
-1
+➤ coalesce(b, 1)[12,-1,0]  𝄀
+a  𝄀
+1  𝄀
+1  𝄀
 b
 select coalesce(b, '1') from t1;
-coalesce(b, 1)
-a
-1
-1
+➤ coalesce(b, 1)[12,-1,0]  𝄀
+a  𝄀
+1  𝄀
+1  𝄀
 b
 drop table t1;
 drop table if exists t2;
@@ -42,64 +42,64 @@ insert into t2 values (3.45646, NULL);
 insert into t2 values(NULL, '2023-04-03 22:10:29.999999');
 insert into t2 values (NULL, NULL);
 select * from t2;
-a    b
-12.345    2022-02-20 10:10:11
-3.45646    null
-null    2023-04-03 22:10:30
-null    null
+➤ a[7,24,0]  ¦  b[93,64,0]  𝄀
+12.345  ¦  2022-02-20 10:10:11  𝄀
+3.45646  ¦  null  𝄀
+null  ¦  2023-04-03 22:10:30  𝄀
+null  ¦  null
 select coalesce(a, 1.0) from t2;
-coalesce(a, 1.0)
-12.345000267028809
-3.4564599990844727
-1.0
+➤ coalesce(a, 1.0)[8,54,0]  𝄀
+12.345000267028809  𝄀
+3.4564599990844727  𝄀
+1.0  𝄀
 1.0
 select coalesce(a, 1) from t2;
-coalesce(a, 1)
-12.345000267028809
-3.4564599990844727
-1.0
+➤ coalesce(a, 1)[8,54,0]  𝄀
+12.345000267028809  𝄀
+3.4564599990844727  𝄀
+1.0  𝄀
 1.0
 select coalesce(b, 2022-01-01) from t2;
-coalesce(b, 2022 - 1 - 1)
-2022-02-20 10:10:11
-2020
-2023-04-03 22:10:30
+➤ coalesce(b, 2022 - 1 - 1)[12,-1,0]  𝄀
+2022-02-20 10:10:11  𝄀
+2020  𝄀
+2023-04-03 22:10:30  𝄀
 2020
 select coalesce(b, 2022) from t2;
-coalesce(b, 2022)
-2022-02-20 10:10:11
-2022
-2023-04-03 22:10:30
+➤ coalesce(b, 2022)[12,-1,0]  𝄀
+2022-02-20 10:10:11  𝄀
+2022  𝄀
+2023-04-03 22:10:30  𝄀
 2022
 select coalesce(b, 2) from t2;
-coalesce(b, 2)
-2022-02-20 10:10:11
-2
-2023-04-03 22:10:30
+➤ coalesce(b, 2)[12,-1,0]  𝄀
+2022-02-20 10:10:11  𝄀
+2  𝄀
+2023-04-03 22:10:30  𝄀
 2
 select coalesce(b, '2022-10-01') from t2;
-coalesce(b, 2022-10-01)
-2022-02-20 10:10:11
-2022-10-01
-2023-04-03 22:10:30
+➤ coalesce(b, 2022-10-01)[12,-1,0]  𝄀
+2022-02-20 10:10:11  𝄀
+2022-10-01  𝄀
+2023-04-03 22:10:30  𝄀
 2022-10-01
 select coalesce(b, '2022-10-01 10:10:10.999999') from t2;
-coalesce(b, 2022-10-01 10:10:10.999999)
-2022-02-20 10:10:11
-2022-10-01 10:10:10.999999
-2023-04-03 22:10:30
+➤ coalesce(b, 2022-10-01 10:10:10.999999)[12,-1,0]  𝄀
+2022-02-20 10:10:11  𝄀
+2022-10-01 10:10:10.999999  𝄀
+2023-04-03 22:10:30  𝄀
 2022-10-01 10:10:10.999999
 select coalesce(b, '2022') from t2;
-coalesce(b, 2022)
-2022-02-20 10:10:11
-2022
-2023-04-03 22:10:30
+➤ coalesce(b, 2022)[12,-1,0]  𝄀
+2022-02-20 10:10:11  𝄀
+2022  𝄀
+2023-04-03 22:10:30  𝄀
 2022
 select coalesce(b, '2022/10/01') from t2;
-coalesce(b, 2022/10/01)
-2022-02-20 10:10:11
-2022/10/01
-2023-04-03 22:10:30
+➤ coalesce(b, 2022/10/01)[12,-1,0]  𝄀
+2022-02-20 10:10:11  𝄀
+2022/10/01  𝄀
+2023-04-03 22:10:30  𝄀
 2022/10/01
 drop table t2;
 drop table if exists t3;
@@ -113,46 +113,46 @@ insert into t3 values (NULL, 'c');
 insert into t3 values (TRUE, NULL);
 insert into t3 values (NULL, NULL);
 select * from t3;
-a    b
-0    a
-1    b
-null    c
-1    null
-null    null
+➤ a[-7,1,0]  ¦  b[12,0,0]  𝄀
+0  ¦  a  𝄀
+1  ¦  b  𝄀
+null  ¦  c  𝄀
+1  ¦  null  𝄀
+null  ¦  null
 select coalesce(a, 1) from t3;
-coalesce(a, 1)
-0
-1
-1
-1
+➤ coalesce(a, 1)[-7,1,0]  𝄀
+0  𝄀
+1  𝄀
+1  𝄀
+1  𝄀
 1
 select coalesce(a, 0) from t3;
-coalesce(a, 0)
-0
-1
-0
-1
+➤ coalesce(a, 0)[-7,1,0]  𝄀
+0  𝄀
+1  𝄀
+0  𝄀
+1  𝄀
 0
 select coalesce(a, 200) from t3;
-coalesce(a, 200)
-0
-1
-1
-1
+➤ coalesce(a, 200)[-7,1,0]  𝄀
+0  𝄀
+1  𝄀
+1  𝄀
+1  𝄀
 1
 select coalesce(b, '1') from t3;
-coalesce(b, 1)
-a
-b
-c
-1
+➤ coalesce(b, 1)[12,0,0]  𝄀
+a  𝄀
+b  𝄀
+c  𝄀
+1  𝄀
 1
 select coalesce(b, 'bull') from t3;
-coalesce(b, bull)
-a
-b
-c
-bull
+➤ coalesce(b, bull)[12,0,0]  𝄀
+a  𝄀
+b  𝄀
+c  𝄀
+bull  𝄀
 bull
 drop table t3;
 drop table if exists t4;
@@ -160,39 +160,39 @@ create table t4 (f1 date, f2 datetime, f3 varchar(20));
 drop view if exists view_t1;
 create view view_t1 as select coalesce(f1,f1) as f4 from t4;
 desc view_t1;
-Field    Type    Null    Key    Default    Extra    Comment
-f4    DATE(0)    YES        null
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+f4  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop view view_t1;
 drop view if exists view_t2;
 create view view_t2 as select coalesce(f1,f2) as f4 from t4;
 desc view_t2;
-Field    Type    Null    Key    Default    Extra    Comment
-f4    DATETIME(0)    YES        null
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+f4  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop view view_t2;
 drop view if exists view_t3;
 create view view_t3 as select coalesce(f2,f2) as f4 from t4;
 desc view_t3;
-Field    Type    Null    Key    Default    Extra    Comment
-f4    DATETIME(0)    YES        null
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+f4  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop view view_t3;
 drop view if exists view_t4;
 create view view_t4 as select coalesce(f1,f3) as f4 from t4;
 desc view_t4;
-Field    Type    Null    Key    Default    Extra    Comment
-f4    VARCHAR(65535)    YES        NULL
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+f4  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop view view_t4;
 drop view if exists view_t5;
 create view view_t5 as select coalesce(f2,f3) as f4 from t4;
 desc view_t5;
-Field    Type    Null    Key    Default    Extra    Comment
-f4    VARCHAR(65535)    YES        NULL
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+f4  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop view view_t5;
 drop table t4;
 drop table if exists t5;
 CREATE TABLE t5 (b datetime);
 INSERT INTO t5 VALUES ('2010-01-01 00:00:00'), ('2010-01-01 00:00:00');
 SELECT * FROM t5 WHERE b <= coalesce(NULL, now());
-b
-2010-01-01 00:00:00
+➤ b[93,64,0]  𝄀
+2010-01-01 00:00:00  𝄀
 2010-01-01 00:00:00
 DROP TABLE t5;

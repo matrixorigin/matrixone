@@ -15,8 +15,10 @@
 package mergecte
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/cteaccount"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -35,20 +37,25 @@ const (
 )
 
 type container struct {
-	buf            *batch.Batch
-	bats           []*batch.Batch
-	curNodeCnt     int32
-	status         int32
-	last           bool
+	buf        *batch.Batch
+	bats       []*batch.Batch
+	curNodeCnt int32
+	status     int32
+	last       bool
+	// freeBats owns the cached batches. buf and bats are only aliases.
 	freeBats       []*batch.Batch
 	i              int
 	recursiveLevel int
+	hashTable      *hashmap.StrHashMap
+	insertedRows   []int64
+	memory         cteaccount.Accountant
 }
 
 type MergeCTE struct {
 	ctr container
 
-	NodeCnt int
+	NodeCnt  int
+	Distinct bool
 
 	vm.OperatorBase
 }
@@ -83,6 +90,11 @@ func (mergeCTE *MergeCTE) WithNodeCnt(nodeCnt int) *MergeCTE {
 	return mergeCTE
 }
 
+func (mergeCTE *MergeCTE) WithDistinct(distinct bool) *MergeCTE {
+	mergeCTE.Distinct = distinct
+	return mergeCTE
+}
+
 func (mergeCTE *MergeCTE) Release() {
 	if mergeCTE != nil {
 		reuse.Free[MergeCTE](mergeCTE, nil)
@@ -90,21 +102,42 @@ func (mergeCTE *MergeCTE) Release() {
 }
 
 func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
-	mergeCTE.ctr.status = sendInitial
-	mergeCTE.ctr.i = 0
-	mergeCTE.ctr.last = false
-	mergeCTE.ctr.recursiveLevel = 0
+	ctr := &mergeCTE.ctr
+	// Discard references from the previous execution without destroying the
+	// reusable cache owned by freeBats.
+	ctr.buf = nil
+	ctr.bats = nil
+	ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
+	ctr.status = sendInitial
+	ctr.i = 0
+	ctr.last = false
+	ctr.recursiveLevel = 0
+	ctr.cleanHashTable()
 }
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
-	for _, bat := range mergeCTE.ctr.freeBats {
+	ctr := &mergeCTE.ctr
+	ctr.memory.Release()
+	for _, bat := range ctr.freeBats {
 		if bat != nil {
 			bat.Clean(proc.Mp())
 		}
 	}
+	ctr.buf = nil
+	ctr.bats = nil
+	ctr.freeBats = nil
+	ctr.i = 0
+	ctr.cleanHashTable()
 }
 
 func (mergeCTE *MergeCTE) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
+}
+
+func (ctr *container) cleanHashTable() {
+	if ctr.hashTable != nil {
+		ctr.hashTable.Free()
+		ctr.hashTable = nil
+	}
+	ctr.insertedRows = nil
 }

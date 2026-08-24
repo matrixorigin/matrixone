@@ -99,6 +99,9 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 
 func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *AlterTableContext) error {
 	tableDef := alterPlan.CopyTableDef
+	if err := checkDropReferencedKeyForeignKeyDependency(ctx, tableDef, "PRIMARY", nil); err != nil {
+		return err
+	}
 	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), "PRIMARY")
 	}

@@ -962,7 +962,7 @@ select id, sum(id) over (partition by sex order by id
        rows between 2 preceding and 1 following), sex from row_number01;
 
 -- try the same as a view
-create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following), sex from row_number01;
+create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as window_sum, sex from row_number01;
 show create view v;
 select * from v;
 
@@ -1138,12 +1138,8 @@ select count(*) from td;
 -- @bvt:issue#13008
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
 -- @bvt:issue
--- @bvt:issue#23427
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
--- @bvt:issue
--- @bvt:issue#23427
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
--- @bvt:issue
 drop table td;
 
 drop table if exists `c`;
@@ -1658,9 +1654,12 @@ select id, name, rank() over (order by name) from t_win_varchar;
 select id, name, dense_rank() over (order by name) from t_win_varchar;
 select id, name, rank() over (partition by score order by name) from t_win_varchar;
 
--- aggregate window function + varchar ORDER BY should error (RANGE frame)
-select sum(score) over (order by name) from t_win_varchar;
-select avg(score) over (order by name range between unbounded preceding and current row) from t_win_varchar;
+-- issue #24816: aggregate window functions support the implicit RANGE frame
+-- on a varchar ORDER BY key and include all peers of the current row.
+with m as (select 1 id, '2026-01' ym, 100 rev union all select 2, '2026-02', 200 union all select 3, '2026-02', 50) select id, ym, sum(rev) over (order by ym) cum from m order by id;
+
+-- RANGE offsets still require a numeric or temporal ORDER BY expression.
+select avg(score) over (order by name range between 1 preceding and current row) from t_win_varchar;
 
 drop table t_win_varchar;
 
@@ -1699,8 +1698,7 @@ drop table t_range_null;
 drop database test_range_null_order_key;
 
 -- Test DESC RANGE frame with NULL ORDER BY key.
--- DESC NULLS FIRST (default for DESC): NULLs at start, then [4, 2, 1].
--- DESC NULLS LAST: [4, 2, 1] then NULLs at end.
+-- DESC uses MySQL ordering: [4, 2, 1] then NULLs.
 create database if not exists test_range_desc;
 use test_range_desc;
 
@@ -1713,37 +1711,51 @@ insert into t_desc values
   (5, null, 20),
   (6, null, 30);
 
--- DESC default (NULLS FIRST): NULLs first, then 4,2,2,1
+-- DESC default: 4,2,2,1, then NULLs
 select * from t_desc order by k desc;
 
--- DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW (NULLS FIRST)
+-- DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW
 select id, ifnull(cast(k as char), 'NULL') as k_label, v,
        count(*) over (order by k desc range between 1 preceding and current row) as cnt_rng,
        sum(v) over (order by k desc range between 1 preceding and current row) as sum_rng
 from t_desc order by k desc, id;
 
--- DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING (NULLS FIRST)
+-- DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING
 select id, ifnull(cast(k as char), 'NULL') as k_label, v,
        count(*) over (order by k desc range between current row and 1 following) as cnt_rng,
        sum(v) over (order by k desc range between current row and 1 following) as sum_rng
 from t_desc order by k desc, id;
 
--- DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW (NULLS FIRST)
+-- DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 select id, ifnull(cast(k as char), 'NULL') as k_label, v,
        count(*) over (order by k desc range between unbounded preceding and current row) as cnt_rng
 from t_desc order by k desc, id;
 
--- DESC NULLS LAST
-select id, ifnull(cast(k as char), 'NULL') as k_label, v,
-       count(*) over (order by k desc nulls last range between 1 preceding and current row) as cnt_rng,
-       sum(v) over (order by k desc nulls last range between 1 preceding and current row) as sum_rng
-from t_desc order by k desc nulls last, id;
+-- Regression for issue #23107: a very large finite PRECEDING bound covers the
+-- partition and must use the cumulative window path.
+create table t_window_23107(id int);
+insert into t_window_23107 values (1), (2), (3), (4), (5), (6),
+  (7), (8), (9), (10), (11), (12);
+select id,
+       sum(id) over (order by id rows between 2147483647 preceding and current row) as running_sum
+from t_window_23107 limit 10;
+drop table t_window_23107;
 
--- DESC NULLS LAST RANGE CURRENT ROW TO 1 FOLLOWING
-select id, ifnull(cast(k as char), 'NULL') as k_label, v,
-       count(*) over (order by k desc nulls last range between current row and 1 following) as cnt_rng,
-       sum(v) over (order by k desc nulls last range between current row and 1 following) as sum_rng
-from t_desc order by k desc nulls last, id;
+-- Regression for issue #27352: a normal finite PRECEDING frame is maintained
+-- incrementally, and a reused prepared statement observes each runtime bound.
+create table t_window_27352(id int primary key, v int);
+insert into t_window_27352 values (1, 10), (2, null), (3, 30), (4, 40), (5, null);
+prepare window_27352 from 'select id,
+       sum(coalesce(v, 0)) over (
+         order by id rows between ? preceding and current row
+       ) as sliding_sum
+from t_window_27352 order by id';
+set @window_bound = 2;
+execute window_27352 using @window_bound;
+set @window_bound = 1;
+execute window_27352 using @window_bound;
+deallocate prepare window_27352;
+drop table t_window_27352;
 
 drop table t_desc;
 drop database test_range_desc;

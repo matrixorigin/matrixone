@@ -15,6 +15,7 @@
 package partition
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -150,6 +151,24 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v15)
 	require.Equal(t, []int64{0, 1}, partitions)
 
+}
+
+func TestPartitionForOrderTreatsNaNPayloadsAsPeers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_float64.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(vec, []float64{
+		math.Copysign(0, -1), 0,
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(0x7ff8000000000002),
+	}, nil, mp))
+	sels := []int64{0, 1, 2, 3}
+
+	identityDiffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 2, 3}, Partition(sels, identityDiffs, nil, vec))
+
+	orderDiffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 2}, PartitionForOrder(sels, orderDiffs, nil, vec))
 }
 
 // TestPartitionAccumulatesDiffs verifies that successive Partition calls on

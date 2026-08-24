@@ -92,7 +92,7 @@ func (p *PhyPlan) CloneForExport() *PhyPlan {
 	clone.LocalScope = cloner.cloneScopes(p.LocalScope)
 	clone.RemoteScope = cloner.cloneScopes(p.RemoteScope)
 	if p.Resource != nil {
-		resource := *p.Resource
+		resource := p.Resource.Clone()
 		clone.Resource = &resource
 	}
 	return &clone

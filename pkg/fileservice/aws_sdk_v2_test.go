@@ -24,22 +24,33 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func Test_NewAwsSDKv2(t *testing.T) {
-	_, err := NewAwsSDKv2(context.Background(), ObjectStorageArguments{}, nil)
-	assert.Error(t, err)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	args := ObjectStorageArguments{
+		Bucket:    "bucket",
+		Endpoint:  server.URL,
+		Region:    "us-east-1",
+		KeyID:     "id",
+		KeySecret: "secret",
+	}
+	_, err := NewAwsSDKv2(context.Background(), args, nil)
+	require.ErrorContains(t, err, "bad s3 config")
 
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 0, moerr.NewInternalErrorNoCtx("ut tester"+
 		""))
 	defer cancel()
 
-	_, err = NewAwsSDKv2(ctx, ObjectStorageArguments{}, nil)
-	assert.Error(t, err)
+	_, err = NewAwsSDKv2(ctx, args, nil)
+	require.Error(t, err)
 }
 
 func TestAwsSDKv2BasicObjectOperations(t *testing.T) {

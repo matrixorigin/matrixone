@@ -192,3 +192,27 @@ func TestContains(t *testing.T) {
 	assert.True(t, contains([]string{"a"}, "a"))
 	assert.False(t, contains([]string{"a"}, "b"))
 }
+
+func TestSelectCNsPreservesFrequency(t *testing.T) {
+	matching := metadata.LabelList{Labels: []string{"etl"}}
+	pool := newCNPoolWithCNState(pb.CNState{Stores: map[string]pb.CNStoreInfo{
+		"a": {Labels: map[string]metadata.LabelList{"group": matching}},
+		"b": {Labels: map[string]metadata.LabelList{"group": matching}},
+		"c": {Labels: map[string]metadata.LabelList{
+			"group": {Labels: []string{"other"}},
+		}},
+	}})
+	storeA, ok := pool.getStore("a")
+	assert.True(t, ok)
+	storeB, ok := pool.getStore("b")
+	assert.True(t, ok)
+	pool.set(storeA, 3)
+	pool.set(storeB, 1)
+
+	selected := pool.selectCNs(containsLabel("group", "etl"))
+
+	assert.Equal(t, uint32(3), selected.getFreq("a"))
+	assert.Equal(t, uint32(1), selected.getFreq("b"))
+	assert.False(t, selected.contains("c"))
+	assert.Equal(t, "b", selected.min().uuid)
+}

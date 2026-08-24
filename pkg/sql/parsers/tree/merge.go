@@ -19,11 +19,12 @@ package tree
 // clauses explicit rather than lowering them back into UPDATE/INSERT text.
 type Merge struct {
 	statementImpl
-	Target  TableExpr
-	Source  TableExpr
-	On      Expr
-	Clauses MergeClauses
-	With    *With
+	Target    TableExpr
+	Source    TableExpr
+	On        Expr
+	Clauses   MergeClauses
+	With      *With
+	Returning SelectExprs
 }
 
 func (node *Merge) Format(ctx *FmtCtx) {
@@ -47,7 +48,13 @@ func (node *Merge) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		clause.Format(ctx)
 	}
+	if len(node.Returning) > 0 {
+		ctx.WriteString(" returning ")
+		node.Returning.Format(ctx)
+	}
 }
+
+func (node *Merge) HasReturning() bool { return len(node.Returning) > 0 }
 
 func (node *Merge) GetStatementType() string { return "Merge" }
 func (node *Merge) GetQueryType() string     { return QueryTypeDML }

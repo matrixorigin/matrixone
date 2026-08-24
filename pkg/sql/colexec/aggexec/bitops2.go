@@ -264,6 +264,29 @@ func (exec *bitOpExecBytes) SetExtraInformation(partialResult any, _ int) error 
 func (exec *bitOpExecBytes) Flush() ([]*vector.Vector, error) {
 	// transfer vector to result
 	vecs := make([]*vector.Vector, len(exec.state))
+	if exec.width < 0 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"invalid binary bit aggregate width %d", exec.width)
+	}
+	if int(exec.width) > types.VarlenaInlineSize {
+		for i := range exec.state {
+			empty := 0
+			for row := 0; row < int(exec.state[i].length); row++ {
+				if exec.state[i].vecs[0].IsNull(uint64(row)) {
+					empty++
+				}
+			}
+			if empty != 0 {
+				if int64(empty)*int64(exec.width) > int64(math.MaxInt) {
+					return nil, mpool.ErrAllocationAllocatorLimit
+				}
+				if err := exec.state[i].vecs[0].PreExtendWithArea(
+					0, empty*int(exec.width), exec.mp); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 
 	// Neutral values for empty or all-NULL groups, per MySQL binary-string
 	// aggregate semantics. The neutral value has the same byte length as the

@@ -90,6 +90,8 @@ func (CatalogHooks) SupportedVectorTypes() []types.T {
 	return []types.T{types.T_array_float32, types.T_array_float64}
 }
 
+func (CatalogHooks) IsVectorIndex() bool { return true }
+
 // SupportedPrimaryKeyTypes: requires an int64 primary key.
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return []types.T{types.T_int64} }
 
@@ -153,7 +155,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 		opType := catalog.ToLower(idx.IndexOption.AlgoParamVectorOpType)
 		if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
+			return nil, moerr.NewInvalidInputNoCtxf("invalid op_type. '%s'", opType)
 		}
 		res[catalog.IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 	} else {

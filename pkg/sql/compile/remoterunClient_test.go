@@ -169,6 +169,33 @@ func TestPipelineStreamReuseRuntimeGate(t *testing.T) {
 	require.True(t, pipelineStreamReuseEnabled(sid))
 }
 
+func TestMessageSenderBatchCreditProtocol(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	stream := mock_morpc.NewMockStream(ctrl)
+	stream.EXPECT().ID().Return(uint64(17))
+	stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, request morpc.Message) error {
+			message := request.(*pipeline.Message)
+			require.Equal(t, pipeline.Method_PipelineBatchAck, message.GetCmd())
+			require.Equal(t, uint64(9), message.GetBatchAckSequence())
+			return nil
+		})
+
+	sender := &messageSenderOnClient{
+		ctx:              context.Background(),
+		streamSender:     stream,
+		requestFinishAck: true,
+		pendingBatchAck:  9,
+	}
+	request := &pipeline.Message{}
+	sender.requestStreamProtocols(request)
+	require.Equal(t, pipeline.StreamTeardownMode_FinishAck, request.GetRequestedTeardownMode())
+	require.Equal(t, pipelineBatchCreditCount, request.GetRequestedBatchCreditCount())
+	require.Equal(t, pipelineBatchCreditBytes, request.GetRequestedBatchCreditBytes())
+	require.NoError(t, sender.acknowledgeRemoteBatch())
+	require.Zero(t, sender.pendingBatchAck)
+}
+
 func TestNewMessageSenderOnClientReturnsErrorOnNilStream(t *testing.T) {
 	sid := t.Name()
 	runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
@@ -493,6 +520,110 @@ func TestRemoteRun(t *testing.T) {
 
 	_, err := s1.remoteRun(c)
 	assert.Error(t, err)
+}
+
+func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
+	oldRuntime := runtime.ServiceRuntime("")
+	testRuntime := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", testRuntime)
+	t.Cleanup(func() {
+		runtime.SetupServiceBasedRuntime("", oldRuntime)
+	})
+	catalog.SetupDefines("")
+
+	duplicateErr := moerr.NewDuplicateEntryNoCtx("1", "primary")
+	tests := []struct {
+		name        string
+		cancelCause error
+		wantErr     error
+	}{
+		{
+			name:        "substantive cancellation cause survives",
+			cancelCause: duplicateErr,
+			wantErr:     duplicateErr,
+		},
+		{
+			name: "normal internal cancellation remains secondary",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+			proc.BuildPipelineContext(queryCtx)
+			txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+			proc.Base.TxnClient = txnCli
+			proc.Base.TxnOperator = txnOp
+
+			responses := make(chan morpc.Message, 1)
+			stream := mock_morpc.NewMockStream(ctrl)
+			stream.EXPECT().Receive().Return(responses, nil)
+			stream.EXPECT().ID().Return(uint64(3)).AnyTimes()
+			stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, request morpc.Message) error {
+					message := request.(*pipeline.Message)
+					switch message.GetCmd() {
+					case pipeline.Method_PipelineMessage:
+						proc.Cancel(tt.cancelCause)
+					case pipeline.Method_StopSending:
+						response := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+						response.SetMessageType(pipeline.Method_PipelineMessage)
+						responses <- response
+					}
+					return nil
+				}).AnyTimes()
+			stream.EXPECT().Close(true).Return(nil)
+			testRuntime.SetGlobalVariables(runtime.PipelineClient, &testPipelineClient{
+				genStream: func(context.Context, string) (morpc.Stream, error) {
+					return stream, nil
+				},
+			})
+
+			c := NewCompile(
+				"local-cn:6002",
+				"test",
+				"insert into test_tbl values (1, 1)",
+				"",
+				"",
+				newStubEngine(),
+				proc,
+				nil,
+				false,
+				nil,
+				time.Now(),
+			)
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+			reg := process.NewPipelineEdge(1, 0)
+			root := connector.NewArgument().WithReg(reg)
+			defer root.Release()
+			s := &Scope{
+				Magic:         Remote,
+				Proc:          proc,
+				RootOp:        root,
+				ScopeAnalyzer: &ScopeAnalyzer{},
+				NodeInfo:      engine.Node{Addr: "remote-cn:6002", Mcpu: 1},
+			}
+
+			err := s.RemoteRun(c)
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tt.wantErr)
+			}
+
+			select {
+			case signal := <-reg.Ch2:
+				_, terminalErr := signal.Action()
+				if tt.wantErr != nil {
+					require.ErrorIs(t, terminalErr, tt.wantErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("remote cleanup did not terminate its receiver")
+			}
+		})
+	}
 }
 
 func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {

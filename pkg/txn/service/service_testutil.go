@@ -188,6 +188,7 @@ func (s *TestSender) AddTxnService(ts TxnService) {
 	s.router[s.getRouteKey(txn.TxnMethod_Read, ts.Shard())] = ts.Read
 	s.router[s.getRouteKey(txn.TxnMethod_Write, ts.Shard())] = ts.Write
 	s.router[s.getRouteKey(txn.TxnMethod_Commit, ts.Shard())] = ts.Commit
+	s.router[s.getRouteKey(txn.TxnMethod_CommitAutoIncrEpochFence, ts.Shard())] = ts.Commit
 	s.router[s.getRouteKey(txn.TxnMethod_Rollback, ts.Shard())] = ts.Rollback
 	s.router[s.getRouteKey(txn.TxnMethod_DEBUG, ts.Shard())] = ts.Debug
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
@@ -49,13 +50,17 @@ func TestHandleTTLChecker(t *testing.T) {
 func TestHandleBackup(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
 
-	req := &cmd_util.Checkpoint{
-		FlushDuration: 10 * time.Second,
-	}
+	// The success path must not encode a machine-speed assumption as the
+	// request's flush deadline. The outer context bounds the test itself while
+	// HandleBackup remains responsible for completing all checkpoint phases.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	req := &cmd_util.Checkpoint{}
 	resp := &api.SyncLogTailResp{}
 
-	cb, err := h.HandleBackup(context.Background(), txn.TxnMeta{}, req, resp)
+	cb, err := h.HandleBackup(ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)
+	require.NotEmpty(t, resp.CkpLocation)
 	if cb != nil {
 		cb()
 	}
@@ -82,6 +87,54 @@ func TestContextForBackupCheckpoint(t *testing.T) {
 		require.True(t, hasDeadline)
 		require.WithinDuration(t, time.Now().Add(time.Minute), deadline, time.Second)
 	})
+}
+
+func TestTryGetChangedListFromTableIDBatchReadsCompleteIndex(t *testing.T) {
+	h := mockTAEHandle(context.Background(), t, &options.Options{})
+	defer func() { require.NoError(t, h.HandleClose(context.Background())) }()
+
+	end := h.db.TxnMgr.Now()
+	start := types.BuildTS(end.Physical()-time.Hour.Nanoseconds(), 0)
+	rowCount := logtail.BatchRowCountThreshold + 17
+	locations, err := logtail.MockTableIDBatch(
+		context.Background(),
+		start,
+		end,
+		64,
+		rowCount,
+		h.m,
+		h.db.Runtime.Fs,
+	)
+	require.NoError(t, err)
+
+	historyStart, historyEnd, historyKnown, err := logtail.ReadTableIDHistoryRange(
+		context.Background(), locations, h.m, h.db.Runtime.Fs,
+	)
+	require.NoError(t, err)
+	require.True(t, historyKnown)
+	require.Equal(t, start, historyStart)
+	require.Equal(t, end, historyEnd)
+
+	acceptAll := func([]uint64, uint64, types.TS, types.TS) bool { return true }
+	_, _, _, _, ok := tryGetChangedListFromTableIDBatch(
+		context.Background(), start.Prev(), end, locations, h.Handle, acceptAll,
+	)
+	require.False(t, ok, "an index must not be trusted before its declared history range")
+	_, _, _, _, ok = tryGetChangedListFromTableIDBatch(
+		context.Background(), start, end.Next(), locations, h.Handle, acceptAll,
+	)
+	require.False(t, ok, "an index must not be trusted past its declared history range")
+
+	accIDs, dbIDs, tableIDs, oldest, ok := tryGetChangedListFromTableIDBatch(
+		context.Background(), start, end, locations, h.Handle, acceptAll,
+	)
+	require.True(t, ok)
+	require.Equal(t, start, oldest)
+	require.Len(t, accIDs, rowCount)
+	require.Len(t, dbIDs, rowCount)
+	require.Len(t, tableIDs, rowCount)
+	require.Equal(t, uint64(1000), tableIDs[0])
+	require.Equal(t, uint64(1000+rowCount-1), tableIDs[rowCount-1])
 }
 
 func TestHandleDiskCleaner_AddCheckerTTL(t *testing.T) {

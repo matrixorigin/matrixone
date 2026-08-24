@@ -29,6 +29,7 @@ type container struct {
 	seen          uint64 // seen is the number of tuples seen so far
 	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
+	buf           *batch.Batch
 }
 type Limit struct {
 	ctr       container
@@ -77,6 +78,12 @@ func (limit *Limit) Reset(proc *process.Process, pipelineFailed bool, err error)
 	if limit.ctr.limitExecutor != nil {
 		limit.ctr.limitExecutor.ResetForNextQuery()
 	}
+	if limit.ctr.buf.HasAllocationAccount() {
+		// Prepared operators may reuse ordinary buffers across executions, but an
+		// accounted buffer belongs to exactly one execution generation.
+		limit.ctr.buf.Clean(proc.Mp())
+		limit.ctr.buf = nil
+	}
 	limit.ctr.seen = 0
 }
 
@@ -84,6 +91,10 @@ func (limit *Limit) Free(proc *process.Process, pipelineFailed bool, err error) 
 	if limit.ctr.limitExecutor != nil {
 		limit.ctr.limitExecutor.Free()
 		limit.ctr.limitExecutor = nil
+	}
+	if limit.ctr.buf != nil {
+		limit.ctr.buf.Clean(proc.Mp())
+		limit.ctr.buf = nil
 	}
 }
 

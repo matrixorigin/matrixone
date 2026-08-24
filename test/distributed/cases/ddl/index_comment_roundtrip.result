@@ -1,0 +1,48 @@
+DROP TABLE IF EXISTS index_comment_inline_replay;
+DROP TABLE IF EXISTS index_comment_inline;
+CREATE TABLE index_comment_inline (
+id INT PRIMARY KEY,
+note VARCHAR(64),
+KEY idx_note(note) COMMENT 'index''s comment\\with unicode 维度'
+);
+SHOW INDEX FROM index_comment_inline;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+index_comment_inline    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+index_comment_inline    1    idx_note    1    note    A    0    NULL    NULL    YES            index's comment\with unicode 维度        YES    note
+SHOW CREATE TABLE index_comment_inline;
+Table    Create Table
+index_comment_inline    CREATE TABLE `index_comment_inline` (\n  `id` int NOT NULL,\n  `note` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_note` (`note`) COMMENT 'index''s comment\\with unicode 维度'\n)
+CREATE TABLE index_comment_inline_replay LIKE index_comment_inline;
+SHOW INDEX FROM index_comment_inline_replay;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+index_comment_inline_replay    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+index_comment_inline_replay    1    idx_note    1    note    A    0    NULL    NULL    YES            index's comment\with unicode 维度        YES    note
+SHOW CREATE TABLE index_comment_inline_replay;
+Table    Create Table
+index_comment_inline_replay    CREATE TABLE `index_comment_inline_replay` (\n  `id` int NOT NULL,\n  `note` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_note` (`note`) COMMENT 'index''s comment\\with unicode 维度'\n)
+DROP TABLE IF EXISTS index_comment_alter_replay;
+DROP TABLE IF EXISTS index_comment_alter;
+CREATE TABLE index_comment_alter (
+id INT PRIMARY KEY,
+note VARCHAR(64)
+);
+ALTER TABLE index_comment_alter ADD KEY idx_note(note) COMMENT 'index''s comment\\with unicode 维度';
+SHOW INDEX FROM index_comment_alter;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+index_comment_alter    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+index_comment_alter    1    idx_note    1    note    A    0    NULL    NULL    YES            index's comment\with unicode 维度        YES    note
+SHOW CREATE TABLE index_comment_alter;
+Table    Create Table
+index_comment_alter    CREATE TABLE `index_comment_alter` (\n  `id` int NOT NULL,\n  `note` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_note` (`note`) COMMENT 'index''s comment\\with unicode 维度'\n)
+CREATE TABLE index_comment_alter_replay LIKE index_comment_alter;
+SHOW INDEX FROM index_comment_alter_replay;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+index_comment_alter_replay    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+index_comment_alter_replay    1    idx_note    1    note    A    0    NULL    NULL    YES            index's comment\with unicode 维度        YES    note
+SHOW CREATE TABLE index_comment_alter_replay;
+Table    Create Table
+index_comment_alter_replay    CREATE TABLE `index_comment_alter_replay` (\n  `id` int NOT NULL,\n  `note` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_note` (`note`) COMMENT 'index''s comment\\with unicode 维度'\n)
+DROP TABLE index_comment_inline_replay;
+DROP TABLE index_comment_inline;
+DROP TABLE index_comment_alter_replay;
+DROP TABLE index_comment_alter;

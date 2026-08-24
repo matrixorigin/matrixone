@@ -23,3 +23,11 @@ func sqlModeHasMatrixOneNativeValue(value interface{}) (bool, bool) {
 	}
 	return mysql.HasMatrixOneNativeSQLMode(mode), true
 }
+
+func sqlModeHasOnlyFullGroupByValue(value interface{}) (bool, bool) {
+	mode, ok := value.(string)
+	if !ok {
+		return false, false
+	}
+	return mysql.HasSQLMode(mode, "ONLY_FULL_GROUP_BY"), true
+}

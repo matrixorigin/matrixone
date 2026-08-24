@@ -64,6 +64,9 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	} else {
 		partition.OpAnalyzer.Reset()
 	}
+	if partition.Limit != nil {
+		return partition.prepareTopN(proc)
+	}
 
 	if len(partition.ctr.executors) > 0 {
 		return nil
@@ -85,6 +88,9 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 }
 
 func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
+	if partition.Limit != nil {
+		return partition.callTopN(proc)
+	}
 	analyzer := partition.OpAnalyzer
 
 	ctr := &partition.ctr
@@ -181,7 +187,7 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 		}
 
 		exprTyp := fs[i].Expr.Typ
-		typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
+		typ := types.NewWithCharset(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale, uint8(exprTyp.Charset))
 		ctr.compares[i] = compare.New(typ, desc, nullsLast)
 	}
 }

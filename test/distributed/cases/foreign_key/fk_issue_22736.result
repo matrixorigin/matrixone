@@ -1,0 +1,18 @@
+drop database if exists fk_issue_22736;
+create database fk_issue_22736;
+use fk_issue_22736;
+create table t (
+id int primary key,
+parent_id int,
+foreign key (parent_id) references t(id) on delete set null
+);
+insert into t values (1, null);
+insert into t values (2, 1);
+insert into t values (3, 2);
+delete from t where id = 2;
+select * from t order by id;
+id    parent_id
+1    NULL
+3    NULL
+drop table t;
+drop database fk_issue_22736;

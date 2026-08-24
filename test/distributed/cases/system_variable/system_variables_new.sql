@@ -50,6 +50,8 @@ show global variables like 'net_write_timeout';
 show global variables like 'wait_timeout';
 show global variables like 'sql_select_limit';
 show global variables like 'max_allowed_packet';
+-- transaction isolation follows the service configuration
+-- @ignore:1
 show global variables like 'tx_isolation';
 -- @session
 -- sys confirm
@@ -64,6 +66,8 @@ show global variables like 'net_write_timeout';
 show global variables like 'wait_timeout';
 show global variables like 'sql_select_limit';
 show global variables like 'max_allowed_packet';
+-- transaction isolation follows the service configuration
+-- @ignore:1
 show global variables like 'tx_isolation';
 
 -- acc2 set session variables
@@ -110,6 +114,8 @@ SELECT @@net_write_timeout;
 SELECT @@wait_timeout;
 SELECT @@sql_select_limit;
 SELECT @@max_allowed_packet;
+-- transaction isolation follows the service configuration
+-- @ignore:0
 SELECT @@tx_isolation;
 select @@SESSION.SQL_LOG_BIN;
 SELECT @@session.autocommit;
@@ -127,6 +133,8 @@ SELECT @@net_write_timeout;
 SELECT @@wait_timeout;
 SELECT @@sql_select_limit;
 SELECT @@max_allowed_packet;
+-- transaction isolation follows the service configuration
+-- @ignore:0
 SELECT @@tx_isolation;
 select @@SESSION.SQL_LOG_BIN;
 SELECT @@session.autocommit;
@@ -142,6 +150,8 @@ SELECT @@net_write_timeout;
 SELECT @@wait_timeout;
 SELECT @@sql_select_limit;
 SELECT @@max_allowed_packet;
+-- transaction isolation follows the service configuration
+-- @ignore:0
 SELECT @@tx_isolation;
 select @@SESSION.SQL_LOG_BIN;
 SELECT @@session.autocommit;

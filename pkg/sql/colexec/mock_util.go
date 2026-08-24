@@ -33,8 +33,11 @@ var _ vm.Operator = new(MockOperator)
 type MockOperator struct {
 	vm.OperatorBase
 
-	batchs  []*batch.Batch
-	current int
+	batchs             []*batch.Batch
+	current            int
+	batchCallback      func(int)
+	endCallback        func()
+	endCallbackInvoked bool
 }
 
 func (op *MockOperator) GetOperatorBase() *vm.OperatorBase {
@@ -56,6 +59,17 @@ func (op *MockOperator) WithBatchs(batchs []*batch.Batch) *MockOperator {
 	return op
 }
 
+func (op *MockOperator) WithEndOfDataCallback(callback func()) *MockOperator {
+	op.endCallback = callback
+	op.endCallbackInvoked = false
+	return op
+}
+
+func (op *MockOperator) WithBatchCallback(callback func(int)) *MockOperator {
+	op.batchCallback = callback
+	return op
+}
+
 func (op *MockOperator) GetBatchs() []*batch.Batch {
 	return op.batchs
 }
@@ -70,6 +84,7 @@ func (op *MockOperator) Reset(proc *process.Process, pipelineFailed bool, err er
 		}
 	}
 	op.current = 0
+	op.endCallbackInvoked = false
 }
 
 func (op *MockOperator) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -80,6 +95,9 @@ func (op *MockOperator) Free(proc *process.Process, pipelineFailed bool, err err
 	}
 	op.batchs = nil
 	op.current = 0
+	op.batchCallback = nil
+	op.endCallback = nil
+	op.endCallbackInvoked = false
 }
 
 func (op *MockOperator) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -102,10 +120,18 @@ func (op *MockOperator) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	if op.current >= len(op.batchs) {
 		result.Status = vm.ExecStop
+		if op.endCallback != nil && !op.endCallbackInvoked {
+			op.endCallbackInvoked = true
+			op.endCallback()
+		}
 		return result, nil
 	}
-	result.Batch = op.batchs[op.current]
+	batchIndex := op.current
+	result.Batch = op.batchs[batchIndex]
 	op.current = op.current + 1
+	if op.batchCallback != nil {
+		op.batchCallback(batchIndex)
+	}
 	return result, nil
 }
 

@@ -68,8 +68,6 @@ func (c *cache) Pop() (Message, bool, error) {
 func (c *cache) Close() {
 	c.Lock()
 	defer c.Unlock()
-	for idx := range c.queue {
-		c.queue[idx] = nil
-	}
+	c.queue = nil
 	c.closed = true
 }

@@ -1759,3 +1759,218 @@ ORDER BY r.id, l.id;
 2  ¦  12
 DROP TABLE decimal_join_left;
 DROP TABLE decimal_join_right;
+DROP TABLE IF EXISTS decimal_zm_scale_scan;
+CREATE TABLE decimal_zm_scale_scan (
+id BIGINT NOT NULL PRIMARY KEY,
+d64 DECIMAL(12,4),
+d128 DECIMAL(20,4)
+);
+INSERT INTO decimal_zm_scale_scan
+SELECT result,
+CAST((result - 20001) / 10.0 AS DECIMAL(12,4)),
+CAST((result - 20001) / 10.0 AS DECIMAL(20,4))
+FROM generate_series(1, 40001) g;
+INSERT INTO decimal_zm_scale_scan VALUES (40002, NULL, NULL);
+SELECT mo_ctl('dn','flush', concat(database(), '.decimal_zm_scale_scan'));
+➤ mo_ctl(dn, flush, concat(database(), .decimal_zm_scale_scan))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+SELECT COUNT(*) AS d64_lt_s0 FROM decimal_zm_scale_scan WHERE d64 < 1000;
+➤ d64_lt_s0[-5,64,0]  𝄀
+30000
+SELECT COUNT(*) AS d64_le_s0 FROM decimal_zm_scale_scan WHERE d64 <= 1000;
+➤ d64_le_s0[-5,64,0]  𝄀
+30001
+SELECT COUNT(*) AS d64_gt_s0 FROM decimal_zm_scale_scan WHERE d64 > 1000;
+➤ d64_gt_s0[-5,64,0]  𝄀
+10000
+SELECT COUNT(*) AS d64_ge_s0 FROM decimal_zm_scale_scan WHERE d64 >= 1000;
+➤ d64_ge_s0[-5,64,0]  𝄀
+10001
+SELECT COUNT(*) AS d64_eq_s0 FROM decimal_zm_scale_scan WHERE d64 = 0;
+➤ d64_eq_s0[-5,64,0]  𝄀
+1
+SELECT COUNT(*) AS d64_between_s0 FROM decimal_zm_scale_scan WHERE d64 BETWEEN -1000 AND 1000;
+➤ d64_between_s0[-5,64,0]  𝄀
+20001
+SELECT COUNT(*) AS d64_lt_lossy_upper FROM decimal_zm_scale_scan WHERE d64 < 1000.00001;
+➤ d64_lt_lossy_upper[-5,64,0]  𝄀
+30001
+SELECT COUNT(*) AS d64_between_lossy_lower FROM decimal_zm_scale_scan WHERE d64 BETWEEN -999.99999 AND 1000;
+➤ d64_between_lossy_lower[-5,64,0]  𝄀
+20000
+SELECT COUNT(*) AS d128_lt_s0 FROM decimal_zm_scale_scan WHERE d128 < 1000;
+➤ d128_lt_s0[-5,64,0]  𝄀
+30000
+SELECT COUNT(*) AS d128_lt_s1 FROM decimal_zm_scale_scan WHERE d128 < 1000.0;
+➤ d128_lt_s1[-5,64,0]  𝄀
+30000
+SELECT COUNT(*) AS d128_lt_s4 FROM decimal_zm_scale_scan WHERE d128 < 1000.0000;
+➤ d128_lt_s4[-5,64,0]  𝄀
+30000
+SELECT COUNT(*) AS d128_le_s0 FROM decimal_zm_scale_scan WHERE d128 <= 1000;
+➤ d128_le_s0[-5,64,0]  𝄀
+30001
+SELECT COUNT(*) AS d128_gt_s0 FROM decimal_zm_scale_scan WHERE d128 > 1000;
+➤ d128_gt_s0[-5,64,0]  𝄀
+10000
+SELECT COUNT(*) AS d128_ge_s0 FROM decimal_zm_scale_scan WHERE d128 >= 1000;
+➤ d128_ge_s0[-5,64,0]  𝄀
+10001
+SELECT COUNT(*) AS d128_eq_s0 FROM decimal_zm_scale_scan WHERE d128 = 0;
+➤ d128_eq_s0[-5,64,0]  𝄀
+1
+SELECT COUNT(*) AS d128_between_s0 FROM decimal_zm_scale_scan WHERE d128 BETWEEN -1000 AND 1000;
+➤ d128_between_s0[-5,64,0]  𝄀
+20001
+SELECT COUNT(*) AS d128_between_mixed FROM decimal_zm_scale_scan WHERE d128 BETWEEN -1000.0 AND 1000.0000;
+➤ d128_between_mixed[-5,64,0]  𝄀
+20001
+SELECT COUNT(*) AS d128_lt_lossy_upper FROM decimal_zm_scale_scan WHERE d128 < 1000.00001;
+➤ d128_lt_lossy_upper[-5,64,0]  𝄀
+30001
+SELECT COUNT(*) AS d128_between_lossy_lower FROM decimal_zm_scale_scan WHERE d128 BETWEEN -999.99999 AND 1000;
+➤ d128_between_lossy_lower[-5,64,0]  𝄀
+20000
+SELECT COUNT(*) AS d128_lt_oracle FROM decimal_zm_scale_scan WHERE d128 + 0 < 1000;
+➤ d128_lt_oracle[-5,64,0]  𝄀
+30000
+SELECT COUNT(*) AS decimal_nulls FROM decimal_zm_scale_scan WHERE d64 IS NULL AND d128 IS NULL;
+➤ decimal_nulls[-5,64,0]  𝄀
+1
+SELECT COUNT(*) AS int_control FROM decimal_zm_scale_scan WHERE id < 1000;
+➤ int_control[-5,64,0]  𝄀
+999
+DROP TABLE decimal_zm_scale_scan;
+DROP TABLE IF EXISTS nullable_decimal_cluster_zm;
+CREATE TABLE nullable_decimal_cluster_zm (
+id BIGINT NOT NULL,
+amount DECIMAL(20,4)
+) CLUSTER BY(amount);
+INSERT INTO nullable_decimal_cluster_zm
+SELECT result,
+CASE WHEN result <= 20000 THEN NULL
+ELSE CAST((result - 20000) / 10.0 AS DECIMAL(20,4)) END
+FROM generate_series(1, 50000) g;
+SELECT mo_ctl('dn','flush', concat(database(), '.nullable_decimal_cluster_zm'));
+➤ mo_ctl(dn, flush, concat(database(), .nullable_decimal_cluster_zm))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+SELECT COUNT(*), SUM(id), SUM(amount) FROM nullable_decimal_cluster_zm WHERE amount < 2000.0000;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(amount)[3,38,4]  𝄀
+19999  ¦  599970000  ¦  19999000.0000
+SELECT COUNT(*), SUM(id), SUM(amount) FROM nullable_decimal_cluster_zm WHERE amount + 0 < 2000.0000;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(amount)[3,38,4]  𝄀
+19999  ¦  599970000  ¦  19999000.0000
+SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount <= 2000.0000;
+➤ count(*)[-5,64,0]  𝄀
+20000
+SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount > 2000.0000;
+➤ count(*)[-5,64,0]  𝄀
+10000
+SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount IN (1000.0000, 2000.0000);
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM nullable_decimal_cluster_zm WHERE amount + 0 IN (1000.0000, 2000.0000);
+➤ count(*)[-5,64,0]  𝄀
+2
+DROP TABLE nullable_decimal_cluster_zm;
+DROP TABLE IF EXISTS nullable_bigint_cluster_zm;
+CREATE TABLE nullable_bigint_cluster_zm (
+id BIGINT NOT NULL,
+amount BIGINT
+) CLUSTER BY(amount);
+INSERT INTO nullable_bigint_cluster_zm
+SELECT result,
+CASE WHEN result <= 20000 THEN NULL ELSE result - 20000 END
+FROM generate_series(1, 50000) g;
+SELECT mo_ctl('dn','flush', concat(database(), '.nullable_bigint_cluster_zm'));
+➤ mo_ctl(dn, flush, concat(database(), .nullable_bigint_cluster_zm))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount < 20000;
+➤ count(*)[-5,64,0]  𝄀
+19999
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount + 0 < 20000;
+➤ count(*)[-5,64,0]  𝄀
+19999
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount <= 20000;
+➤ count(*)[-5,64,0]  𝄀
+20000
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount > 20000;
+➤ count(*)[-5,64,0]  𝄀
+10000
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount IN (10000, 20000);
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM nullable_bigint_cluster_zm WHERE amount + 0 IN (10000, 20000);
+➤ count(*)[-5,64,0]  𝄀
+2
+DROP TABLE nullable_bigint_cluster_zm;
+DROP TABLE IF EXISTS nullable_varchar_cluster_zm;
+CREATE TABLE nullable_varchar_cluster_zm (
+id BIGINT NOT NULL,
+amount VARCHAR(8)
+) CLUSTER BY(amount);
+INSERT INTO nullable_varchar_cluster_zm
+SELECT result,
+CASE WHEN result <= 20000 THEN NULL
+ELSE LPAD(CAST(result - 20000 AS VARCHAR), 8, '0') END
+FROM generate_series(1, 50000) g;
+SELECT mo_ctl('dn','flush', concat(database(), '.nullable_varchar_cluster_zm'));
+➤ mo_ctl(dn, flush, concat(database(), .nullable_varchar_cluster_zm))[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount < '00020000';
+➤ count(*)[-5,64,0]  𝄀
+19999
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE CONCAT(amount, '') < '00020000';
+➤ count(*)[-5,64,0]  𝄀
+19999
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount <= '00020000';
+➤ count(*)[-5,64,0]  𝄀
+20000
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount > '00020000';
+➤ count(*)[-5,64,0]  𝄀
+10000
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount IN ('00010000', '00020000');
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE CONCAT(amount, '') IN ('00010000', '00020000');
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE amount LIKE '0001%';
+➤ count(*)[-5,64,0]  𝄀
+10000
+SELECT COUNT(*) FROM nullable_varchar_cluster_zm WHERE CONCAT(amount, '') LIKE '0001%';
+➤ count(*)[-5,64,0]  𝄀
+10000
+DROP TABLE nullable_varchar_cluster_zm;

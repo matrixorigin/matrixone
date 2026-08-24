@@ -38,7 +38,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -51,7 +53,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -1007,6 +1011,8 @@ var (
 		icebergsql.TablePublishJobs:     0,
 		icebergsql.TableOrphanFiles:     0,
 		icebergsql.TableMaintenanceJobs: 0,
+		mongodb.TableConnections:        0,
+		mongodb.TableMappings:           0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1032,6 +1038,8 @@ var (
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
 		MoCatalogMoSubsDDL,
+		MoCatalogMoViewDependenciesDDL,
+		MoCatalogMoViewRefreshDDL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
 		MoCatalogMoSessionsDDL,
@@ -1065,6 +1073,8 @@ var (
 		icebergsql.PublishJobsDDL,
 		icebergsql.OrphanFilesDDL,
 		icebergsql.MaintenanceJobsDDL,
+		mongodb.ConnectionsDDL,
+		mongodb.MappingsDDL,
 	}
 
 	// drop tables for the tenant
@@ -1096,6 +1106,10 @@ var (
 		`drop table if exists mo_catalog.mo_iceberg_principal_map;`,
 		`drop table if exists mo_catalog.mo_iceberg_catalogs;`,
 	}
+	dropMongoDBSqls = []string{
+		`drop table if exists mo_catalog.mo_mongodb_tables;`,
+		`drop table if exists mo_catalog.mo_mongodb_connections;`,
+	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
 	dropMoIndexes                   = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
@@ -1123,6 +1137,7 @@ var (
 			name,
 			owner,
 			args,
+			arg_types,
 			retType,
 			body,
 			language,
@@ -1136,11 +1151,12 @@ var (
 			character_set_client,
 			collation_connection,
 			database_collation,
-			sql_mode) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			sql_mode) values ("%s",%d,'%s','%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	updateMoUserDefinedFunctionFormat = `update mo_catalog.mo_user_defined_function
 			set owner = %d, 
 			    args = '%s',
+			    arg_types = '%s',
 			    retType = '%s',
 			    body = "%s",
 			    language = '%s',
@@ -1376,15 +1392,15 @@ const (
        									    and privilege_id = %d 
        									    and privilege_level = "%s";`
 
-	checkDatabaseFormat          = `select dat_id from mo_catalog.mo_database where datname = "%s";`
-	checkDatabaseByAccountFormat = `select dat_id from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
+	checkDatabaseFormat          = `select dat_id from mo_catalog.mo_database where datname = %s;`
+	checkDatabaseByAccountFormat = `select dat_id from mo_catalog.mo_database where datname = %s and account_id = %d;`
 
-	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
+	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = %s and account_id = %d;`
 
-	checkDatabaseViewFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
+	checkDatabaseViewFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = %s and reldatabase = %s and relkind = "v" and account_id = %d;`
 
-	getViewMetaFormat             = `select viewdef, owner from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
-	getViewMetaWithSnapshotFormat = `select viewdef, owner from mo_catalog.mo_tables {MO_TS = %d} where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
+	getViewMetaFormat             = `select viewdef, owner from mo_catalog.mo_tables where relname = %s and reldatabase = %s and relkind = "v" and account_id = %d;`
+	getViewMetaWithSnapshotFormat = `select viewdef, owner from mo_catalog.mo_tables {MO_TS = %d} where relname = %s and reldatabase = %s and relkind = "v" and account_id = %d;`
 
 	// TODO:fix privilege_level string and obj_type string
 	// For object_type : table, privilege_level : *.*
@@ -1407,7 +1423,7 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s"
-					and d.datname = "%s"
+					and d.datname = %s
 					and rp.with_grant_option = true;`
 
 	// For object_type : table, privilege_level : db.table
@@ -1419,8 +1435,8 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s"
-					and d.datname = "%s"
-					and t.relname = "%s"
+					and d.datname = %s
+					and t.relname = %s
 					and rp.with_grant_option = true;`
 
 	// For object_type : database, privilege_level : *
@@ -1454,7 +1470,7 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s"
-					and  d.datname = "%s"
+					and  d.datname = %s
 					and rp.with_grant_option = true;`
 
 	// For object_type : account, privilege_level : *
@@ -1478,8 +1494,8 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level in ("%s","%s")
-					and d.datname = "%s"
-					and t.relname = "%s";`
+					and d.datname = %s
+					and t.relname = %s;`
 
 	// for database.* or *
 	checkRoleHasTableLevelForDatabaseStarFormat = `select rp.privilege_id,rp.with_grant_option
@@ -1489,7 +1505,7 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level in ("%s","%s")
-					and d.datname = "%s";`
+					and d.datname = %s;`
 
 	// for *.*
 	checkRoleHasTableLevelForStarStarFormat = `select rp.privilege_id,rp.with_grant_option
@@ -1517,7 +1533,7 @@ const (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s"
-					and d.datname = "%s";`
+					and d.datname = %s;`
 
 	// for *
 	checkRoleHasAccountLevelForStarFormat = `select rp.privilege_id,rp.with_grant_option
@@ -1528,18 +1544,11 @@ const (
 					and rp.privilege_id in (%s)
 					and rp.privilege_level = "%s";`
 
-	getUserRolesExpectPublicRoleFormat = `select role.role_id, role.role_name 
-				from mo_catalog.mo_role role, mo_catalog.mo_user_grant mg 
-				where role.role_id = mg.role_id 
-					and role.role_id != %d  
-					and mg.user_id = %d 
-					order by role.created_time asc limit 1;`
-
 	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
 
 	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
 
-	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$[*].type') %s order by function_id;`
+	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and arg_types = %s order by function_id;`
 
 	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
@@ -1994,20 +2003,14 @@ func getSqlForCheckWithGrantOptionForTableStarStarWithObjType(objType objectType
 	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, objType, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckWithGrantOptionForTableDatabaseStarWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, objType, roleId, privId, privilegeLevelDatabaseStar, dbName), nil
+func getSqlForCheckWithGrantOptionForTableDatabaseStarWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, objType, roleId, privId,
+		privilegeLevelDatabaseStar, escapeSQLString(dbName)), nil
 }
 
-func getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, tableName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, objType, roleId, privId, privilegeLevelDatabaseTable, dbName, tableName), nil
+func getSqlForCheckWithGrantOptionForTableDatabaseTableWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, objType, roleId, privId,
+		privilegeLevelDatabaseTable, escapeSQLString(dbName), escapeSQLString(tableName)), nil
 }
 
 func getSqlForCheckWithGrantOptionForDatabaseStar(roleId int64, privId PrivilegeType) string {
@@ -2018,36 +2021,28 @@ func getSqlForCheckWithGrantOptionForDatabaseStarStar(roleId int64, privId Privi
 	return fmt.Sprintf(checkWithGrantOptionForDatabaseStarStar, objectTypeDatabase, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckWithGrantOptionForDatabaseDB(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkWithGrantOptionForDatabaseDB, objectTypeDatabase, roleId, privId, privilegeLevelDatabase, dbName), nil
+func getSqlForCheckWithGrantOptionForDatabaseDB(_ context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseDB, objectTypeDatabase, roleId, privId,
+		privilegeLevelDatabase, escapeSQLString(dbName)), nil
 }
 
 func getSqlForCheckWithGrantOptionForAccountStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkWithGrantOptionForAccountStar, objectTypeAccount, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, tableName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objType, roleId, privId, privilegeLevelDatabaseTable, privilegeLevelTable, dbName, tableName), nil
+func getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
+	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objType, roleId, privId,
+		privilegeLevelDatabaseTable, privilegeLevelTable,
+		escapeSQLString(dbName), escapeSQLString(tableName)), nil
 }
 
 func getSqlForCheckRoleHasTableLevelPrivilege(ctx context.Context, roleId int64, privId PrivilegeType, dbName string, tableName string) (string, error) {
 	return getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeTable, roleId, privId, dbName, tableName)
 }
 
-func getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(ctx context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objType, roleId, privId, privilegeLevelDatabaseStar, privilegeLevelStar, dbName), nil
+func getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(_ context.Context, objType objectType, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objType, roleId, privId,
+		privilegeLevelDatabaseStar, privilegeLevelStar, escapeSQLString(dbName)), nil
 }
 
 func getSqlForCheckRoleHasTableLevelForStarStarWithObjType(objType objectType, roleId int64, privId PrivilegeType) string {
@@ -2058,12 +2053,9 @@ func getSqlForCheckRoleHasDatabaseLevelForStarStar(roleId int64, privId Privileg
 	return fmt.Sprintf(checkRoleHasDatabaseLevelForStarStarFormat, objectTypeDatabase, roleId, privId, level)
 }
 
-func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkRoleHasDatabaseLevelForDatabaseFormat, objectTypeDatabase, roleId, privId, privilegeLevelDatabase, dbName), nil
+func getSqlForCheckRoleHasDatabaseLevelForDatabase(_ context.Context, roleId int64, privId PrivilegeType, dbName string) (string, error) {
+	return fmt.Sprintf(checkRoleHasDatabaseLevelForDatabaseFormat, objectTypeDatabase, roleId, privId,
+		privilegeLevelDatabase, escapeSQLString(dbName)), nil
 }
 
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
@@ -2105,40 +2097,24 @@ func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysSco
 	return strings.Join(parts, ",")
 }
 
-func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
-	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
-}
-
 func getTableColumnDefSql(accountId uint64, dbName, tableName string) (string, error) {
 	return fmt.Sprintf(getTableColumnDefFormat, accountId, dbName, tableName), nil
 }
 
-func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkDatabaseFormat, dbName), nil
+func getSqlForCheckDatabase(_ context.Context, dbName string) (string, error) {
+	return fmt.Sprintf(checkDatabaseFormat, escapeSQLString(dbName)), nil
 }
 
 func getSqlForCheckDatabaseByAccount(ctx context.Context, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkDatabaseByAccountFormat, dbName, accountID), nil
+	return fmt.Sprintf(checkDatabaseByAccountFormat, escapeSQLString(dbName), accountID), nil
 }
 
-func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string, accountId int64) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(checkDatabaseWithOwnerFormat, dbName, accountId), nil
+func getSqlForCheckDatabaseWithOwner(_ context.Context, dbName string, accountId int64) (string, error) {
+	return fmt.Sprintf(checkDatabaseWithOwnerFormat, escapeSQLString(dbName), accountId), nil
 }
 
 func getSqlForCheckDatabaseTable(
@@ -2160,17 +2136,12 @@ func getSqlForCheckDatabaseTable(
 }
 
 func getSqlForCheckDatabaseTableWithSnapshot(
-	ctx context.Context,
+	_ context.Context,
 	dbName string,
 	tableName string,
 	account uint32,
 	snapshotTS int64,
 ) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, tableName)
-	if err != nil {
-		return "", err
-	}
-
 	snapshotSpec := ""
 	if snapshotTS != 0 {
 		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
@@ -2178,8 +2149,8 @@ func getSqlForCheckDatabaseTableWithSnapshot(
 
 	// The account id disambiguates identical database/table names across tenants.
 	return fmt.Sprintf(
-		`select rel_logical_id from mo_catalog.mo_tables%s where relname = "%s" and reldatabase = "%s" and account_id = %d;`,
-		snapshotSpec, tableName, dbName, account,
+		`select rel_logical_id from mo_catalog.mo_tables%s where relname = %s and reldatabase = %s and account_id = %d;`,
+		snapshotSpec, escapeSQLString(tableName), escapeSQLString(dbName), account,
 	), nil
 }
 
@@ -2188,11 +2159,6 @@ func getSqlForCheckDatabaseView(
 	dbName string,
 	viewName string,
 ) (string, error) {
-
-	err := inputNameIsInvalid(ctx, dbName, viewName)
-	if err != nil {
-		return "", err
-	}
 
 	var (
 		account uint32
@@ -2206,7 +2172,8 @@ func getSqlForCheckDatabaseView(
 
 	// we need the account id here to filter out the same dbName and viewName that exist in the
 	// different accounts.
-	return fmt.Sprintf(checkDatabaseViewFormat, viewName, dbName, account), nil
+	return fmt.Sprintf(checkDatabaseViewFormat,
+		escapeSQLString(viewName), escapeSQLString(dbName), account), nil
 }
 
 func getSqlForCheckViewMeta(
@@ -2214,10 +2181,6 @@ func getSqlForCheckViewMeta(
 	dbName string,
 	viewName string,
 ) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, viewName)
-	if err != nil {
-		return "", err
-	}
 
 	var (
 		account uint32
@@ -2229,7 +2192,8 @@ func getSqlForCheckViewMeta(
 		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
 	}
 
-	return fmt.Sprintf(getViewMetaFormat, viewName, dbName, account), nil
+	return fmt.Sprintf(getViewMetaFormat,
+		escapeSQLString(viewName), escapeSQLString(dbName), account), nil
 }
 
 func getSqlForCheckViewMetaWithSnapshot(
@@ -2238,10 +2202,6 @@ func getSqlForCheckViewMetaWithSnapshot(
 	viewName string,
 	snapshotTs int64,
 ) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName, viewName)
-	if err != nil {
-		return "", err
-	}
 
 	var (
 		account uint32
@@ -2253,7 +2213,8 @@ func getSqlForCheckViewMetaWithSnapshot(
 		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
 	}
 
-	return fmt.Sprintf(getViewMetaWithSnapshotFormat, snapshotTs, viewName, dbName, account), nil
+	return fmt.Sprintf(getViewMetaWithSnapshotFormat, snapshotTs,
+		escapeSQLString(viewName), escapeSQLString(dbName), account), nil
 }
 
 func getSqlForDeleteRole(roleId int64) []string {
@@ -3601,61 +3562,21 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	return err
 }
 
-// doSetSecondaryRoleAll validates user role metadata before enabling all secondary roles.
-// The current primary role must not change; SET SECONDARY ROLE ALL only affects secondary roles.
-func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
-	var sql string
-	var userId uint32
-
-	account := ses.GetTenantInfo()
-	// get current user_id
-	userId = account.GetUserID()
-
-	// step1:get all roles expect public
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	sql = getSqlForgetUserRolesExpectPublicRole(publicRoleID, userId)
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-
-	_, err = getResultSet(ctx, bh)
-	return err
-}
-
-// doSwitchRole accomplishes the Use Role and Use Secondary Role statement
+// doSwitchRole changes the session's sole active role.
 func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err error) {
 	var sql string
 	var erArray []ExecResult
 	var roleId int64
 
+	if sr.SecondaryRole {
+		// Keep MySQL-compatible syntax accepted, but secondary roles are not
+		// active in MatrixOne. A session always has exactly one active role.
+		return nil
+	}
+
 	account := ses.GetTenantInfo()
 
-	if sr.SecondaryRole {
-		// use secondary role all or none
-		switch sr.SecondaryRoleType {
-		case tree.SecondaryRoleTypeAll:
-			if err = doSetSecondaryRoleAll(ctx, ses); err != nil {
-				return err
-			}
-			account.SetUseSecondaryRole(true)
-			ses.InvalidatePrivilegeCache()
-		case tree.SecondaryRoleTypeNone:
-			account.SetUseSecondaryRole(false)
-			ses.InvalidatePrivilegeCache()
-		}
-	} else if sr.Role != nil {
+	if sr.Role != nil {
 		err = normalizeNameOfRole(ctx, sr.Role)
 		if err != nil {
 			return err
@@ -4279,6 +4200,14 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		for _, sql = range dropMongoDBSqls {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			rtnErr = bh.Exec(deleteCtx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
+		}
+
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getSubsSql)
 		// alter sub_account field in mo_pubs which contains accountName
 		subInfos, rtnErr := getSubInfosFromSub(deleteCtx, bh, "")
@@ -4430,6 +4359,9 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 	if !hasAccount {
 		return err
+	}
+	if !inTxn {
+		retireMongoDBClients(ctx, ses.GetService(), mongodb.ClientRetirement{AccountID: uint32(accountId)})
 	}
 	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
@@ -4826,6 +4758,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	var checkDatabase string
 	var dbName string
 	var dbExists bool
+	var matched bool
 	var funcId int64
 	var erArray []ExecResult
 
@@ -4928,11 +4861,17 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 				if err != nil {
 					return err
 				}
+				matched = true
 			}
 		}
-		return err
+		if matched {
+			return nil
+		}
 	}
-	// no such function
+	// No function with the requested name and signature exists.
+	if df.IfExists {
+		return nil
+	}
 	return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
 }
 
@@ -6381,7 +6320,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 		dbName = string(st.Name)
 		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
-	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog,
+		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection, *tree.DropMongoDBConnection:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
@@ -6417,22 +6357,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
-		}
-	case *tree.CreateSource:
-		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDatabaseAndTableDirectly = true
-		appendWriteTableNameDatabaseName(st.SourceName)
-		if st.SourceName != nil {
-			dbName = string(st.SourceName.SchemaName)
-		}
-	case *tree.CreateConnector:
-		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDatabaseAndTableDirectly = true
-		appendWriteTableNameDatabaseName(st.TableName)
-		if st.TableName != nil {
-			dbName = string(st.TableName.SchemaName)
 		}
 	case *tree.CreateSequence:
 		objType = objectTypeDatabase
@@ -6642,7 +6566,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
-		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
+		*tree.ShowBackendServers, *tree.ShowStages,
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.ShowRules, *tree.CheckTableStmt, *tree.ShowProfileStmt,
@@ -6650,7 +6574,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
-	case *tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
+	case *tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables,
+		*tree.ShowMongoDBConnections:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
@@ -6904,6 +6829,13 @@ func getDbNameForPrivilege(objRef *plan2.ObjectRef) string {
 	return objRef.GetSchemaName()
 }
 
+func isMongoDBExternalTableScan(node *plan.Node) bool {
+	return node != nil &&
+		node.GetNodeType() == plan.Node_EXTERNAL_SCAN &&
+		node.GetExternScan() != nil &&
+		node.GetExternScan().GetType() == int32(plan.ExternType_MONGODB_TB)
+}
+
 func (pot privilegeTips) String() string {
 	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
 }
@@ -6917,6 +6849,80 @@ func (pota privilegeTipsArray) String() string {
 	return b.String()
 }
 
+func firstColumnChildIndex(expr *plan.Expr) (int32, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if col := expr.GetCol(); col != nil {
+		return col.RelPos, true
+	}
+	if function := expr.GetF(); function != nil {
+		for _, arg := range function.Args {
+			if childIndex, ok := firstColumnChildIndex(arg); ok {
+				return childIndex, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// insertDedupTargetScans returns the TABLE_SCAN nodes used only to probe an
+// INSERT target for duplicate keys. The INSERT/REPLACE binders set
+// DedupColName for these internal joins. A SQL-visible DEDUP JOIN uses the
+// same node type and defaults to FAIL, but has no DedupColName; it must retain
+// its SELECT privilege checks. During final plan remapping, BindingTags are
+// removed and DEDUP condition column RelPos values become physical child
+// indexes. The first operand remains the target side even if recursive-plan
+// optimization swaps children, so use that child index rather than stale tags
+// or IsRightJoin.
+func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
+	if q == nil || q.StmtType != plan.Query_INSERT {
+		return nil
+	}
+
+	scans := make(map[int32]struct{})
+	var collect func(int32, map[int32]struct{})
+	collect = func(nodeID int32, visited map[int32]struct{}) {
+		if nodeID < 0 || int(nodeID) >= len(q.Nodes) {
+			return
+		}
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+
+		node := q.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			scans[nodeID] = struct{}{}
+			return
+		}
+		for _, childID := range node.Children {
+			collect(childID, visited)
+		}
+	}
+
+	for _, node := range q.Nodes {
+		if node == nil || node.NodeType != plan.Node_JOIN ||
+			node.JoinType != plan.Node_DEDUP || len(node.Children) != 2 ||
+			node.DedupColName == "" ||
+			(node.OnDuplicateAction != plan.Node_FAIL && node.OnDuplicateAction != plan.Node_IGNORE) {
+			continue
+		}
+		if len(node.OnList) == 0 || node.OnList[0].GetF() == nil || len(node.OnList[0].GetF().Args) == 0 {
+			continue
+		}
+		targetChild, ok := firstColumnChildIndex(node.OnList[0].GetF().Args[0])
+		if !ok || targetChild < 0 || int(targetChild) >= len(node.Children) {
+			continue
+		}
+		collect(node.Children[targetChild], make(map[int32]struct{}))
+	}
+	return scans
+}
+
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 	// NOTE: the pts may be nil when the plan does operate any table.
@@ -6927,6 +6933,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 
 	if p.GetQuery() != nil { // select,insert select, update, delete
 		q := p.GetQuery()
+		insertDedupScans := insertDedupTargetScans(q)
 
 		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
@@ -6962,8 +6969,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			}
 		}
 
-		for _, node := range q.Nodes {
-			if node.NodeType == plan.Node_TABLE_SCAN {
+		for nodeID, node := range q.Nodes {
+			if node.NodeType == plan.Node_TABLE_SCAN || isMongoDBExternalTableScan(node) {
+				if _, ok := insertDedupScans[int32(nodeID)]; ok {
+					continue
+				}
 				if node.ObjRef != nil {
 					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
 						clusterTable = true
@@ -9945,6 +9955,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			*tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
 			yes, err := checkIcebergCatalogPrivilege()
 			return yes, stats, err
+		case *tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection, *tree.DropMongoDBConnection,
+			*tree.ShowMongoDBConnections:
+			return tenant.IsAdminRole(), stats, nil
 		}
 	}
 
@@ -9979,14 +9992,33 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName str
 }
 
 func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	return checkDatabaseExistsOrNotWithLock(ctx, bh, dbName, false)
+}
+
+// lockDatabaseForUDFCreation serializes function definitions in one database.
+// The caller must own a pessimistic transaction and keep it open through the
+// following exact-signature read and write.
+func lockDatabaseForUDFCreation(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	return checkDatabaseExistsOrNotWithLock(ctx, bh, dbName, true)
+}
+
+func checkDatabaseExistsOrNotWithLock(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	forUpdate bool,
+) (bool, error) {
 	var sqlForCheckDatabase string
 	var erArray []ExecResult
 	var err error
-	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
+	ctx, span := trace.Debug(ctx, "checkDatabaseExistsOrNot")
 	defer span.End()
 	sqlForCheckDatabase, err = getSqlForCheckDatabaseByAccount(ctx, dbName)
 	if err != nil {
 		return false, err
+	}
+	if forUpdate {
+		sqlForCheckDatabase = strings.TrimSuffix(sqlForCheckDatabase, ";") + " for update;"
 	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sqlForCheckDatabase)
@@ -10166,8 +10198,11 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh)
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService())
 		if rtnErr != nil {
+			return rtnErr
+		}
+		if rtnErr = inheritViewMetadataRevalidation(ctx, bh, ses.GetService(), newTenant.GetTenantID()); rtnErr != nil {
 			return rtnErr
 		}
 
@@ -10182,6 +10217,37 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if err = createSubscription(ctx, bh, newTenant); err != nil {
 			return err
 		}
+	}
+	return err
+}
+
+func inheritViewMetadataRevalidation(
+	ctx context.Context,
+	bh BackgroundExec,
+	serviceID string,
+	accountID uint32,
+) error {
+	if err := bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		if !compile.ViewMetadataRefreshEnabled(serviceID) &&
+			(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+			return nil
+		}
+		return err
+	}
+	err := bh.Exec(ctx, fmt.Sprintf(
+		"insert into %s.%s (%s) select %d,0,0,0,'%s','%s',0,0,0,0,0,'','','','',d.source_relation_kind,'',0,null,0,d.dependency_generation "+
+			"from %s.%s d where d.account_id=0 and d.target_relation_id=0 and d.dependency_ordinal=0 "+
+			"and d.source_relation_kind in ('%s','%s','%s','%s') and not exists (select 1 from %s.%s a "+
+			"where a.account_id=%d and a.target_relation_id=0 and a.dependency_ordinal=0)",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
+		accountID, catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+		catalog.ViewRefreshStatusRevalidateRequired, catalog.ViewRefreshStatusRevalidateScan,
+		catalog.ViewRefreshStatusActivated, catalog.ViewRefreshStatusLegacyScan,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID))
+	if !compile.ViewMetadataRefreshEnabled(serviceID) &&
+		(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+		return nil
 	}
 	return err
 }
@@ -10291,6 +10357,10 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_depend") ||
+			strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_refresh") {
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
@@ -10475,7 +10545,7 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, service string) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -10486,10 +10556,11 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	// TODO: when we have the auto_increment column, we need new strategy.
 
 	var err error
-	sqls := make([]string, 0, len(sysview.InitInformationSchemaSysTables)+len(sysview.InitMysqlSysTables)+4)
+	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersionForTenantInitialization(service))
+	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
-	sqls = append(sqls, sysview.InitInformationSchemaSysTables...)
+	sqls = append(sqls, informationSchemaTables...)
 	sqls = append(sqls, "use mysql;")
 	sqls = append(sqls, sysview.InitMysqlSysTables...)
 
@@ -10501,6 +10572,22 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 		}
 	}
 	return err
+}
+
+func protocolVersionForTenantInitialization(service string) int64 {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return defines.MORPCMinVersion
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCMinVersion
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return defines.MORPCMinVersion
+	}
+	return version
 }
 
 // createSubscription insert records into mo_subs of To-All-Publications
@@ -10960,7 +11047,6 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 }
 
 func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
-	var initMoUdf string
 	var retTypeStr string
 	var dbName string
 	var dbExists bool
@@ -10982,11 +11068,25 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		dbName = string(cf.Name.Name.SchemaName)
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	// Exact function signatures need an exclusion boundary in every deployment
+	// mode. The catalog unique index documents the identity, but optimistic/SI
+	// transactions do not acquire FOR UPDATE locks. This private transaction is
+	// therefore explicitly pessimistic RC, locks the target database row, then
+	// rechecks and writes the signature before releasing that lock.
+	bh := ses.GetBackgroundExec(execCtx.reqCtx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
-	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, bh, dbName)
+	err = bh.Exec(execCtx.reqCtx, "begin;")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(execCtx.reqCtx, bh, err)
+	}()
+
+	// Lock and authenticate the target database before the exact-signature
+	// read. The lock stays held through persistence and commit.
+	dbExists, err = lockDatabaseForUDFCreation(execCtx.reqCtx, bh, dbName)
 	if err != nil {
 		return err
 	}
@@ -11020,14 +11120,11 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		return err
 	}
 
-	if len(typeList) == 0 {
-		argsCondition = "is null"
-	} else if len(typeList) == 1 {
-		argsCondition = fmt.Sprintf(`= '"%v"'`, typeList[0])
-	} else {
-		typesJson, _ := json.Marshal(typeList)
-		argsCondition = fmt.Sprintf(`= '%v'`, string(typesJson))
+	argTypes, err := userDefinedFunctionArgumentTypes(typeList)
+	if err != nil {
+		return err
 	}
+	argsCondition = fmt.Sprintf("'%s'", argTypes)
 
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
@@ -11045,15 +11142,6 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	if execResultArrayHasData(erArray) && !cf.Replace {
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
-
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
 	var body string
 	if cf.Language == string(tree.SQL) {
 		body = cf.Body
@@ -11095,36 +11183,28 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		// in storage and break json.Unmarshal when invoking python UDFs.
 		body = string(byt)
 	}
-	body = escapeSQLStringForDoubleQuotes(body)
-	parserSQLMode := plan2.EscapeFormat(sessionSQLModeForParser(ses))
-
+	definition := userDefinedFunctionDefinition{
+		name:     string(cf.Name.Name.ObjectName),
+		args:     string(argsJson),
+		argTypes: argTypes,
+		retType:  retTypeStr,
+		body:     body,
+		lang:     cf.Language,
+		sqlMode:  sessionSQLModeForParser(ses),
+		dbName:   dbName,
+	}
 	if execResultArrayHasData(erArray) { // replace
-		var id int64
-		id, err = erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
+		id, err := erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
 		if err != nil {
 			return err
 		}
-		initMoUdf = fmt.Sprintf(updateMoUserDefinedFunctionFormat,
-			ses.GetTenantInfo().GetDefaultRoleID(),
-			string(argsJson),
-			retTypeStr, body, cf.Language,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", parserSQLMode,
-			int32(id))
-	} else { // create
-		initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
-			string(cf.Name.Name.ObjectName),
-			ses.GetTenantInfo().GetDefaultRoleID(),
-			string(argsJson),
-			retTypeStr, body, cf.Language, dbName,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", parserSQLMode)
+		return persistUserDefinedFunction(
+			execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, &id,
+		)
 	}
-
-	err = bh.Exec(execCtx.reqCtx, initMoUdf)
-	if err != nil {
-		return err
-	}
-
-	return err
+	return persistUserDefinedFunction(
+		execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, nil,
+	)
 }
 
 func escapeSQLStringForDoubleQuotes(s string) string {
@@ -11156,101 +11236,233 @@ func escapeSQLStringForDoubleQuotes(s string) string {
 	return b.String()
 }
 
-func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tree.CreateProcedure) (err error) {
-	var initMoProcedure string
-	var dbName string
-	var checkExistence string
-	parserSQLMode := sessionSQLModeForParser(ses)
-	var argsJson []byte
-	// var fmtctx *tree.FmtCtx
-	var erArray []ExecResult
+// userDefinedFunctionDefinition is the function metadata kept outside
+// mo_tables. Callers control the transaction that persists it.
+type userDefinedFunctionDefinition struct {
+	name     string
+	args     string
+	argTypes string
+	retType  string
+	body     string
+	lang     string
+	sqlMode  string
+	dbName   string
+}
 
-	// a database must be selected or specified as qualifier when create a function
-	if cp.Name.HasNoNameQualifier() {
-		if ses.DatabaseNameIsEmpty() {
-			return moerr.NewNoDBNoCtx()
-		}
-		dbName = ses.GetDatabaseName()
-	} else {
-		dbName = string(cp.Name.Name.SchemaName)
+// userDefinedFunctionArgumentTypes is the canonical identity of a function
+// overload. Argument names do not participate in function resolution, while
+// their ordered types do. Keep the zero-argument identity empty to match the
+// legacy json_extract(args, '$[*].type') IS NULL representation.
+func userDefinedFunctionArgumentTypes(argumentTypes []string) (string, error) {
+	if len(argumentTypes) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(argumentTypes)
+	if err != nil {
+		return "", err
+	}
+	value, err := bytejson.ParseFromByteSlice(encoded)
+	if err != nil {
+		return "", err
+	}
+	// JSON_EXTRACT renders arrays through ByteJson. Use that same rendering
+	// rather than encoding/json's compact form, otherwise a migrated
+	// multi-argument function receives a different overload identity from an
+	// equivalent CREATE FUNCTION issued after the upgrade.
+	canonical := value.String()
+	if len(canonical) > types.MaxStringSize {
+		return "", moerr.NewInvalidInputNoCtxf(
+			"function argument type signature exceeds the %d-byte catalog limit", types.MaxStringSize,
+		)
+	}
+	return canonical, nil
+}
+
+func userDefinedFunctionArgumentTypesFromJSON(args string) (string, error) {
+	if args == "" || args == "{}" {
+		return "", nil
+	}
+	var argList []function.Arg
+	if err := json.Unmarshal([]byte(args), &argList); err != nil {
+		return "", err
+	}
+	types := make([]string, len(argList))
+	for i := range argList {
+		types[i] = argList[i].Type
+	}
+	return userDefinedFunctionArgumentTypes(types)
+}
+
+// persistUserDefinedFunction writes function metadata into the caller-owned
+// transaction. A non-nil functionID replaces that existing definition.
+func persistUserDefinedFunction(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	ownerRoleID uint32,
+	definition userDefinedFunctionDefinition,
+	functionID *int64,
+) error {
+	body := escapeSQLStringForDoubleQuotes(definition.body)
+	sqlMode := plan2.EscapeFormat(definition.sqlMode)
+	if functionID != nil {
+		return bh.Exec(ctx, fmt.Sprintf(updateMoUserDefinedFunctionFormat,
+			ownerRoleID,
+			definition.args,
+			definition.argTypes, definition.retType, body, definition.lang,
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode,
+			int32(*functionID)))
+	}
+	return bh.Exec(ctx, fmt.Sprintf(initMoUserDefinedFunctionFormat,
+		definition.name,
+		ownerRoleID,
+		definition.args,
+		definition.argTypes, definition.retType, body, definition.lang, definition.dbName,
+		tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode))
+}
+
+// storedProcedureDefinition is the procedure metadata kept outside mo_tables.
+// Callers control the transaction that persists it.
+type storedProcedureDefinition struct {
+	name    string
+	args    string
+	lang    string
+	body    string
+	sqlMode string
+	dbName  string
+}
+
+func newStoredProcedureDefinition(ctx context.Context, ses *Session, cp *tree.CreateProcedure) (storedProcedureDefinition, error) {
+	definition := storedProcedureDefinition{
+		name:    string(cp.Name.Name.ObjectName),
+		lang:    cp.Lang,
+		body:    cp.Body,
+		sqlMode: sessionSQLModeForParser(ses),
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
+	if cp.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return storedProcedureDefinition{}, moerr.NewNoDBNoCtx()
+		}
+		definition.dbName = ses.GetDatabaseName()
+	} else {
+		definition.dbName = string(cp.Name.Name.SchemaName)
+	}
 
-	// build argmap and marshal as json
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-
-	// build argmap and marshal as json
 	argList := make([]tree.ProcedureArgForMarshal, len(cp.Args))
 	for i := 0; i < len(cp.Args); i++ {
 		curName := cp.Args[i].GetName(fmtctx)
 		fmtctx.Reset()
 
 		if curName == "mo" || strings.HasPrefix(curName, "mo.") || strings.HasPrefix(curName, "out_") {
-			return moerr.NewInvalidInput(ctx, "mo, mo.*, out_* are reserved and cannot be used as a procedure argument name")
+			return storedProcedureDefinition{}, moerr.NewInvalidInput(ctx, "mo, mo.*, out_* are reserved and cannot be used as a procedure argument name")
 		}
 
+		argType, ok := cp.Args[i].(*tree.ProcedureArgDecl).Type.(*tree.T)
+		if !ok {
+			return storedProcedureDefinition{}, moerr.NewInternalError(ctx, "unknown stored procedure argument type")
+		}
 		argList[i] = tree.ProcedureArgForMarshal{
 			ArgName:   curName,
 			Name:      cp.Args[i].(*tree.ProcedureArgDecl).Name,
-			Type:      cp.Args[i].(*tree.ProcedureArgDecl).Type,
+			Type:      argType,
 			InOutType: cp.Args[i].(*tree.ProcedureArgDecl).InOutType,
 		}
 	}
-	argsJson, err = json.Marshal(argList)
+
+	argsJSON, err := json.Marshal(argList)
+	if err != nil {
+		return storedProcedureDefinition{}, err
+	}
+	definition.args = string(argsJSON)
+	return definition, nil
+}
+
+// upsertStoredProcedure persists a procedure in the caller-owned transaction.
+func upsertStoredProcedure(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	definition storedProcedureDefinition,
+	replace bool,
+) error {
+	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, replace)
 	if err != nil {
 		return err
 	}
+	return persistStoredProcedure(ctx, bh, tenant, definition, erArray)
+}
 
-	// validate duplicate procedure declaration
+func prepareStoredProcedurePersistence(
+	ctx context.Context,
+	bh BackgroundExec,
+	definition storedProcedureDefinition,
+	replace bool,
+) ([]ExecResult, error) {
 	bh.ClearExecResultSet()
-	checkExistence = getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), dbName)
-	err = bh.Exec(ctx, checkExistence)
+	if err := bh.Exec(ctx, getSqlForCheckProcedureExistence(definition.name, definition.dbName)); err != nil {
+		return nil, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
+	if execResultArrayHasData(erArray) && !replace {
+		return nil, moerr.NewProcedureAlreadyExistsNoCtx(definition.name)
 	}
+	return erArray, nil
+}
 
-	if execResultArrayHasData(erArray) && !cp.Replace {
-		return moerr.NewProcedureAlreadyExistsNoCtx(string(cp.Name.Name.ObjectName))
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
+func persistStoredProcedure(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	definition storedProcedureDefinition,
+	erArray []ExecResult,
+) error {
+	var persistSQL string
 	if execResultArrayHasData(erArray) {
-		var id int64
-		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		id, err := erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			return err
 		}
-		initMoProcedure = fmt.Sprintf(updateMoStoredProcedureFormat,
-			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
+		persistSQL = fmt.Sprintf(updateMoStoredProcedureFormat,
+			definition.args,
+			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else {
-		initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
-			string(cp.Name.Name.ObjectName),
-			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
+		persistSQL = fmt.Sprintf(initMoStoredProcedureFormat,
+			definition.name,
+			definition.args,
+			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
-	err = bh.Exec(ctx, initMoProcedure)
+	return bh.Exec(ctx, persistSQL)
+}
+
+func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tree.CreateProcedure) (err error) {
+	definition, err := newStoredProcedureDefinition(ctx, ses, cp)
 	if err != nil {
 		return err
 	}
-	return err
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, cp.Replace)
+	if err != nil {
+		return err
+	}
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	return persistStoredProcedure(ctx, bh, tenant, definition, erArray)
 }
 
 func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
@@ -11560,8 +11772,10 @@ func doInterpretCall(
 	var argList []tree.ProcedureArgForMarshal
 	// execute related
 	var varScope [](map[string]interface{})
+	var varTypeScope [](map[string]plan.Type)
 	var argsMap map[string]tree.Expr
 	var argsAttr map[string]tree.InOutArgType
+	var argsType map[string]plan.Type
 
 	// a database must be selected or specified as qualifier when create a function
 	if call.Name.HasNoNameQualifier() {
@@ -11633,13 +11847,20 @@ func doInterpretCall(
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	argsAttr = make(map[string]tree.InOutArgType)
 	argsMap = make(map[string]tree.Expr) // map arg to param
+	argsType = make(map[string]plan.Type)
 
 	// build argsAttr and argsMap
 	ses.Info(ctx, "Interpret procedure call length:"+strconv.Itoa(len(argList)))
 	i := 0
 	for _, v := range argList {
-		argsAttr[v.ArgName] = v.InOutType
-		argsMap[v.ArgName] = call.Args[i]
+		name := strings.ToLower(v.ArgName)
+		argType, err := plan2.GetTypeFromAst(ctx, v.Type)
+		if err != nil {
+			return nil, err
+		}
+		argsAttr[name] = v.InOutType
+		argsMap[name] = call.Args[i]
+		argsType[name] = argType
 		i++
 	}
 
@@ -11648,10 +11869,12 @@ func doInterpretCall(
 	interpreter.fmtctx = fmtctx
 	interpreter.ses = ses
 	interpreter.varScope = &varScope
+	interpreter.varTypeScope = &varTypeScope
 	interpreter.bh = bh
 	interpreter.result = nil
 	interpreter.argsMap = argsMap
 	interpreter.argsAttr = argsAttr
+	interpreter.argsType = argsType
 	interpreter.outParamMap = make(map[string]interface{})
 	interpreter.initialAffectedRows = callerAffectedRows
 
@@ -11697,6 +11920,11 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	var err error
 	var sql string
 	var curRole string
+	if createTable, ok := stmt.(*tree.CreateTable); ok && createTable.Temporary {
+		// Temporary tables have no persistent ownership metadata. Granting the
+		// logical alias could otherwise target a same-named permanent table.
+		return nil
+	}
 	tenantInfo := ses.GetTenantInfo()
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
@@ -11755,8 +11983,16 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	return err
 }
 
-func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+func doRevokePrivilegeImplicitly(
+	ctx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+	persistentDropTableTargets tree.TableNames,
+) error {
 	var err error
+	if _, ok := stmt.(*tree.DropTable); ok && len(persistentDropTableTargets) == 0 {
+		return nil
+	}
 	tenantInfo := ses.GetTenantInfo()
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
@@ -11789,8 +12025,8 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		}
 		return doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh)
 	case *tree.DropTable:
-		sqls := make([]string, 0, len(st.Names))
-		for _, name := range st.Names {
+		sqls := make([]string, 0, len(persistentDropTableTargets))
+		for _, name := range persistentDropTableTargets {
 			dbName := string(name.SchemaName)
 			if len(dbName) == 0 {
 				dbName = ses.GetDatabaseName()
@@ -11820,10 +12056,18 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	return nil
 }
 
-func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
+// doSetGlobalSystemVariables persists equivalent compatibility names in one
+// catalog transaction. transaction_isolation uses this to update both the
+// canonical name and tx_isolation so old and new CNs agree during a rolling
+// upgrade.
+func doSetGlobalSystemVariables(
+	ctx context.Context,
+	ses *Session,
+	varNames []string,
+	varValue interface{},
+) (err error) {
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
-	varName = strings.ToLower(varName)
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -11834,24 +12078,29 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	// check if var exists
-	sql := getSqlForGetSysVarWithAccount(accountId, varName)
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
-		return
-	}
+	for _, varName := range varNames {
+		varName = strings.ToLower(varName)
+		// check if var exists
+		sql := getSqlForGetSysVarWithAccount(accountId, varName)
+		bh.ClearExecResultSet()
+		if err = bh.Exec(ctx, sql); err != nil {
+			return
+		}
 
-	var erArray []ExecResult
-	if erArray, err = getResultSet(ctx, bh); err != nil {
-		return
-	}
+		var erArray []ExecResult
+		if erArray, err = getResultSet(ctx, bh); err != nil {
+			return
+		}
 
-	if execResultArrayHasData(erArray) {
-		sql = getSqlForUpdateSysVarValue(getVariableValue(varValue), accountId, varName)
-	} else {
-		sql = getSqlForInsertSysVarWithAccount(accountId, accountName, varName, getVariableValue(varValue))
+		if execResultArrayHasData(erArray) {
+			sql = getSqlForUpdateSysVarValue(getVariableValue(varValue), accountId, varName)
+		} else {
+			sql = getSqlForInsertSysVarWithAccount(accountId, accountName, varName, getVariableValue(varValue))
+		}
+		if err = bh.Exec(ctx, sql); err != nil {
+			return
+		}
 	}
-	err = bh.Exec(ctx, sql)
 	return
 }
 

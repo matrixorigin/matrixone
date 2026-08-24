@@ -292,6 +292,18 @@ execute temporal_zero_insert;
 select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 40;
 deallocate prepare temporal_zero_insert;
 
+-- Runtime DATE assignments must not turn an invalid prepared parameter into
+-- SQL NULL. Literal and prepared assignments now reject the same input.
+truncate table mysql_compat_temporal_zero_dml;
+set sql_mode = '';
+prepare temporal_invalid_date_insert from
+    'insert into mysql_compat_temporal_zero_dml(id, d) values (?, ?)';
+set @invalid_date_id = 50;
+set @invalid_date_value = '2020-00-00';
+execute temporal_invalid_date_insert using @invalid_date_id, @invalid_date_value;
+select count(*) as invalid_prepared_date_rows from mysql_compat_temporal_zero_dml;
+deallocate prepare temporal_invalid_date_insert;
+
 set sql_mode = @old_sql_mode;
 set time_zone = @old_time_zone;
 drop table mysql_compat_temporal_zero;

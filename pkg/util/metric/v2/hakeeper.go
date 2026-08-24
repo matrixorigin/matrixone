@@ -36,6 +36,23 @@ var (
 			Help:      "hakeeper heartbeat failed count",
 		}, []string{"type"})
 
+	ScheduleCommandPollHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "hakeeper",
+			Subsystem: "command_poll",
+			Name:      "duration_seconds",
+			Help:      "hakeeper schedule command poll durations",
+			Buckets:   getDurationBuckets(),
+		}, []string{"type"})
+
+	ScheduleCommandPollFailureCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "hakeeper",
+			Subsystem: "command_poll",
+			Name:      "failed_total",
+			Help:      "hakeeper schedule command poll failed count",
+		}, []string{"type"})
+
 	HeartbeatRecvHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "hakeeper",
@@ -67,4 +84,9 @@ var (
 	LogHeartbeatFailureCounter     = HeartbeatFailureCounter.WithLabelValues("log")
 	LogHeartbeatRecvHistogram      = HeartbeatRecvHistogram.WithLabelValues("log")
 	LogHeartbeatRecvFailureCounter = HeartbeatRecvFailureCounter.WithLabelValues("log")
+
+	CNCommandPollHistogram      = ScheduleCommandPollHistogram.WithLabelValues("cn")
+	CNCommandPollFailureCounter = ScheduleCommandPollFailureCounter.WithLabelValues("cn")
+	TNCommandPollHistogram      = ScheduleCommandPollHistogram.WithLabelValues("tn")
+	TNCommandPollFailureCounter = ScheduleCommandPollFailureCounter.WithLabelValues("tn")
 )

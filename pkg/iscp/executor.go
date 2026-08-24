@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
@@ -85,6 +86,7 @@ func ISCPTaskExecutorFactory(
 	attachToTask func(context.Context, uint64, taskservice.ActiveRoutine) error,
 	cdUUID string,
 	mp *mpool.MPool,
+	rootFS fileservice.FileService,
 ) func(ctx context.Context, task task.Task) (err error) {
 	return func(ctx context.Context, task task.Task) (err error) {
 		var exec *ISCPTaskExecutor
@@ -108,6 +110,10 @@ func ISCPTaskExecutorFactory(
 		if err != nil {
 			return
 		}
+		// Publish the CN root FileService onto the executor BEFORE Start() (hence
+		// before RegisterExecutorRuntime and any worker iteration), so index CDC
+		// consumers can resolve the LOCAL SSD spill dir via GetExecutorRuntime.
+		exec.rootFS = rootFS
 		defer exec.terminateLifetime()
 		if err = attachToTask(ctx, task.GetID(), exec); err != nil {
 			return
@@ -476,6 +482,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "getDirtyTables" {
 				err = moerr.NewInternalErrorNoCtx(msg)
+				objectio.WaitForISCPExecutorFault(ctx, msg)
 			}
 			var getDirtyTablesFailed bool
 			if err != nil {
@@ -618,6 +625,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	}
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "invalid timestamp" {
 		to = types.TS{}
+		objectio.WaitForISCPExecutorFault(ctx, msg)
 	}
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
@@ -662,6 +670,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "applyISCPLog" {
 		err = moerr.NewInternalErrorNoCtx(msg)
+		objectio.WaitForISCPExecutorFault(ctx, msg)
 	}
 	if err != nil {
 		return

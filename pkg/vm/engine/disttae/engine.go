@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
@@ -1141,7 +1142,8 @@ func (e *Engine) BuildBlockReaders(
 	expr *plan.Expr,
 	def *plan.TableDef,
 	relData engine.RelData,
-	num int) ([]engine.Reader, error) {
+	num int,
+	filterHint ...engine.FilterHint) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
 	blkCnt := relData.DataCnt()
@@ -1160,8 +1162,30 @@ func (e *Engine) BuildBlockReaders(
 		return nil, err
 	}
 
+	hint := engine.FilterHint{}
+	if len(filterHint) > 0 {
+		hint = filterHint[0]
+	}
+
+	hint, mainFilter, owned, err := prepareMembershipFilter(
+		hint,
+		docfilter.AdmissionForService(e.service),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if owned {
+		defer mainFilter.Free()
+	}
+
 	shards := relData.Split(newNum)
 	for i := 0; i < newNum; i++ {
+		readerHint := hint
+		var readerFilter docfilter.MembershipFilter
+		if mainFilter != nil {
+			readerFilter = mainFilter.Share()
+			readerHint.BF = readerFilter
+		}
 		ds := readutil.NewRemoteDataSource(ctx, fs, ts, shards[i])
 		rd, err := readutil.NewReader(
 			ctx,
@@ -1173,9 +1197,12 @@ func (e *Engine) BuildBlockReaders(
 			expr,
 			ds,
 			readutil.GetThresholdForReader(newNum),
-			engine.FilterHint{},
+			readerHint,
 		)
 		if err != nil {
+			// NewReader owns the current source and filter share even when its
+			// construction fails.
+			closeReaders(rds)
 			return nil, err
 		}
 		rds = append(rds, rd)
@@ -1186,6 +1213,16 @@ func (e *Engine) BuildBlockReaders(
 func (e *Engine) GetTNServices() []DNStore {
 	cluster := clusterservice.GetMOCluster(e.service)
 	return cluster.GetAllTNServices()
+}
+
+// GetPrimaryTNShardID returns the shard selected by a transaction workspace.
+// A zero result makes durable cleanup ownership fail closed.
+func (e *Engine) GetPrimaryTNShardID(workspace client.Workspace) uint64 {
+	txn, ok := workspace.(*Transaction)
+	if !ok || len(txn.tnStores) == 0 || len(txn.tnStores[0].Shards) == 0 {
+		return 0
+	}
+	return txn.tnStores[0].Shards[0].ShardID
 }
 
 func (e *Engine) setPushClientStatus(ready bool) {

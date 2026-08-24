@@ -52,6 +52,10 @@ func (e *MetadataMVCCNode) CloneData() *MetadataMVCCNode {
 	}
 }
 
+func (e *MetadataMVCCNode) CloneForDelete() *MetadataMVCCNode {
+	return e.CloneData()
+}
+
 func (e *MetadataMVCCNode) String() string {
 
 	return fmt.Sprintf("[MetaLoc=\"%s\",DeltaLoc=\"%s\"]",
@@ -146,6 +150,9 @@ func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
 		ObjectStats: *e.ObjectStats.Clone(),
 	}
+}
+func (e *ObjectMVCCNode) CloneForDelete() *ObjectMVCCNode {
+	return e.CloneData()
 }
 func (e *ObjectMVCCNode) String() string {
 	if e == nil {

@@ -102,9 +102,10 @@ func evalValue(
 ) {
 	var val []byte
 	var col *plan.Expr_Col
+	var valExprs []*plan.Expr
 
 	if !isVec {
-		col, vals, ok = mustColConstValueFromBinaryFuncExpr(exprImpl)
+		col, vals, valExprs, ok = mustColConstValueWithTypeFromBinaryFuncExpr(exprImpl)
 	} else {
 		col, val, ok = mustColVecValueFromBinaryFuncExpr(exprImpl)
 	}
@@ -154,12 +155,40 @@ func evalValue(
 	if isVec {
 		return true, types.T(tblDef.Cols[colPos].Typ.Id), [][]byte{val}
 	}
+	if mixedTemporalColumnAndValues(types.T(tblDef.Cols[colPos].Typ.Id), valExprs) {
+		return false, 0, nil
+	}
 	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
+}
+
+// A BasePKFilter compares persisted primary-key bytes directly. DATETIME and
+// TIMESTAMP use different physical domains, so a cross-typed scalar predicate
+// cannot be represented without the session time zone. Keep it on the residual
+// expression path instead of constructing a filter that can drop matching rows.
+func mixedTemporalColumnAndValues(
+	columnType types.T,
+	values []*plan.Expr,
+) bool {
+	for _, value := range values {
+		valueType := types.T(value.Typ.Id)
+		if columnType == types.T_datetime && valueType == types.T_timestamp ||
+			columnType == types.T_timestamp && valueType == types.T_datetime {
+			return true
+		}
+	}
+	return false
 }
 
 func mustColConstValueFromBinaryFuncExpr(
 	expr *plan.Expr_F,
 ) (*plan.Expr_Col, [][]byte, bool) {
+	colExpr, vals, _, ok := mustColConstValueWithTypeFromBinaryFuncExpr(expr)
+	return colExpr, vals, ok
+}
+
+func mustColConstValueWithTypeFromBinaryFuncExpr(
+	expr *plan.Expr_F,
+) (*plan.Expr_Col, [][]byte, []*plan.Expr, bool) {
 	var (
 		colExpr  *plan.Expr_Col
 		tmpExpr  *plan.Expr_Col
@@ -176,14 +205,14 @@ func mustColConstValueFromBinaryFuncExpr(
 	}
 
 	if len(valExprs) == 0 || colExpr == nil {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 
 	vals, ok := getConstBytesFromExpr(valExprs)
 	if !ok {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
-	return colExpr, vals, true
+	return colExpr, vals, valExprs, true
 }
 
 func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {

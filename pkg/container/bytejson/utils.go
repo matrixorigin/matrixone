@@ -33,7 +33,7 @@ import (
 
 func ParseFromString(s string) (ret ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtxf("json text %s", s)
+		err = moerr.NewInvalidInputNoCtx("json text is empty")
 		return
 	}
 	data := util.UnsafeStringToBytes(s)
@@ -43,7 +43,7 @@ func ParseFromString(s string) (ret ByteJson, err error) {
 
 func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtxf("json text %s", string(s))
+		err = moerr.NewInvalidInputNoCtx("json text is empty")
 		return
 	}
 	if !json.Valid(s) {
@@ -587,6 +587,13 @@ func appendBinaryNumber(buf []byte, x json.Number) (TpCode, []byte, error) {
 	}
 	var typeCode TpCode
 	return typeCode, nil, moerr.NewInvalidArgNoCtx("invalid json number", x.String())
+}
+
+// AppendBinaryNumber appends a JSON number in MatrixOne's binary JSON wire
+// representation. Callers that construct containers directly use this to
+// preserve the same numeric semantics as CreateByteJSONWithCheck.
+func AppendBinaryNumber(buf []byte, x json.Number) (TpCode, []byte, error) {
+	return appendBinaryNumber(buf, x)
 }
 
 func appendBinaryString(buf []byte, v string) []byte {

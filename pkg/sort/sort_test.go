@@ -15,6 +15,7 @@
 package sort
 
 import (
+	"math"
 	"slices"
 	"sort"
 	"testing"
@@ -140,6 +141,136 @@ func TestSortDecimal256(t *testing.T) {
 	os = []int64{0, 1, 2}
 	Sort(true, false, false, os, vec)
 	require.Equal(t, []int64{0, 2, 1}, os)
+}
+
+func TestSortByVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.T_int64.ToType())
+	second := vector.NewVec(types.T_int64.ToType())
+	defer first.Free(mp)
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendFixedList(
+		first,
+		[]int64{1, 1, 1, 2, 2, 0},
+		[]bool{false, false, false, false, false, true},
+		mp,
+	))
+	require.NoError(t, vector.AppendFixedList(second, []int64{2, 1, 3, 2, 1, 0}, nil, mp))
+
+	selectors := []int64{0, 1, 2, 3, 4, 5}
+	SortByVectors(
+		selectors,
+		[]*vector.Vector{first, second},
+		[]bool{false, true},
+		[]bool{true, false},
+	)
+	require.Equal(t, []int64{2, 0, 1, 3, 4, 5}, selectors)
+}
+
+func TestSortByVectorsSortsNonNullPartitionWhenVectorHasNullElsewhere(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.T_bool.ToType())
+	second := vector.NewVec(types.T_enum.ToType())
+	defer first.Free(mp)
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendFixedList(first, []bool{false, false, true}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(
+		second,
+		[]types.Enum{1, 3, 0},
+		[]bool{false, false, true},
+		mp,
+	))
+
+	selectors := []int64{0, 1, 2}
+	SortByVectors(
+		selectors,
+		[]*vector.Vector{first, second},
+		[]bool{false, true},
+		[]bool{false, true},
+	)
+	require.Equal(t, []int64{1, 0, 2}, selectors)
+}
+
+func TestSortByVectorsFloatOrderPeersUseSecondaryKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.T_float64.ToType())
+	second := vector.NewVec(types.T_int64.ToType())
+	defer first.Free(mp)
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendFixedList(first, []float64{
+		math.Float64frombits(0x7ff8000000000002), math.Inf(1), math.Copysign(0, -1), 1,
+		math.Inf(-1), math.Float64frombits(0x7ff8000000000001), 0, -1,
+	}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(second, []int64{2, 30, 20, 40, 50, 1, 10, 60}, nil, mp))
+
+	for _, tc := range []struct {
+		name string
+		desc bool
+		want []int64
+	}{
+		{name: "ascending", want: []int64{4, 7, 6, 2, 3, 1, 5, 0}},
+		{name: "descending", desc: true, want: []int64{1, 3, 6, 2, 7, 4, 5, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selectors := []int64{0, 1, 2, 3, 4, 5, 6, 7}
+			SortByVectors(selectors, []*vector.Vector{first, second}, []bool{tc.desc, false}, []bool{false, false})
+			require.Equal(t, tc.want, selectors)
+		})
+	}
+}
+
+func TestSortForSQLOrderFloat32NaNLast(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_float32.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(vec, []float32{
+		math.Float32frombits(0x7fc00002), 1, float32(math.Inf(-1)),
+		math.Float32frombits(0x7fc00001), float32(math.Inf(1)), -1,
+	}, nil, mp))
+
+	for _, tc := range []struct {
+		desc bool
+		want []int64
+	}{
+		{want: []int64{2, 5, 1, 4, 0, 3}},
+		{desc: true, want: []int64{4, 1, 5, 2, 0, 3}},
+	} {
+		selectors := []int64{0, 1, 2, 3, 4, 5}
+		SortForSQLOrder(tc.desc, false, false, selectors, vec)
+		require.Equal(t, tc.want[:4], selectors[:4])
+		for _, sel := range selectors[4:] {
+			require.True(t, math.IsNaN(float64(vector.MustFixedColWithTypeCheck[float32](vec)[sel])))
+		}
+	}
+}
+
+func TestSortByVectorsWithScratchMatchesConveniencePath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.T_int64.ToType())
+	second := vector.NewVec(types.T_int64.ToType())
+	defer first.Free(mp)
+	defer second.Free(mp)
+	require.NoError(t, vector.AppendFixedList(
+		first, []int64{1, 1, 2, 2, 1, 0}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(
+		second, []int64{2, 1, 2, 1, 3, 0}, nil, mp))
+
+	want := []int64{0, 1, 2, 3, 4, 5}
+	SortByVectors(want, []*vector.Vector{first, second},
+		[]bool{false, true}, []bool{false, false})
+	got := []int64{0, 1, 2, 3, 4, 5}
+	scratch := ByVectorsScratch{
+		Partitions: make([]int64, 0, len(got)),
+		Diffs:      make([]bool, len(got)),
+	}
+	SortByVectorsWithScratch(got, []*vector.Vector{first, second},
+		[]bool{false, true}, []bool{false, false}, &scratch)
+	require.Equal(t, want, got)
+	require.LessOrEqual(t, len(scratch.Partitions), len(got))
+	require.Len(t, scratch.Diffs, len(got))
 }
 
 func BenchmarkSortInt(b *testing.B) {

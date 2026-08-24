@@ -126,7 +126,6 @@ alter table emp ALTER COLUMN deptno SET DEFAULT 10;
 desc emp;
 
 alter table emp ALTER COLUMN deptno SET INVISIBLE;
---success
 desc emp;
 
 alter table emp ALTER COLUMN deptno drop default;

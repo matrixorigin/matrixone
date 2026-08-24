@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -93,6 +94,214 @@ func TestStringToFloat32DefaultCompatibilityRange(t *testing.T) {
 			[]float32{math.MaxFloat32, -math.MaxFloat32, 0, float32(math.Copysign(0, -1))}, nil), NewCast)
 	succeed, info := tc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestCastEnumToNumericTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := []types.Enum{1, 3, 0}
+	nulls := []bool{false, false, true}
+
+	for _, tc := range []struct {
+		name   string
+		target types.Type
+		zero   any
+		want   any
+	}{
+		{"int8", types.T_int8.ToType(), []int8{}, []int8{1, 3, 0}},
+		{"int16", types.T_int16.ToType(), []int16{}, []int16{1, 3, 0}},
+		{"int32", types.T_int32.ToType(), []int32{}, []int32{1, 3, 0}},
+		{"int64", types.T_int64.ToType(), []int64{}, []int64{1, 3, 0}},
+		{"uint8", types.T_uint8.ToType(), []uint8{}, []uint8{1, 3, 0}},
+		{"uint16", types.T_uint16.ToType(), []uint16{}, []uint16{1, 3, 0}},
+		{"uint32", types.T_uint32.ToType(), []uint32{}, []uint32{1, 3, 0}},
+		{"uint64", types.T_uint64.ToType(), []uint64{}, []uint64{1, 3, 0}},
+		{"float32", types.T_float32.ToType(), []float32{}, []float32{1, 3, 0}},
+		{"float64", types.T_float64.ToType(), []float64{}, []float64{1, 3, 0}},
+		{"decimal64", types.New(types.T_decimal64, 18, 0), []types.Decimal64{}, []types.Decimal64{1, 3, 0}},
+		{"decimal128", types.New(types.T_decimal128, 38, 0), []types.Decimal128{}, []types.Decimal128{{B0_63: 1}, {B0_63: 3}, {}}},
+		{"decimal256", types.New(types.T_decimal256, 65, 0), []types.Decimal256{}, []types.Decimal256{{B0_63: 1}, {B0_63: 3}, {}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_enum.ToType(), source, nulls),
+					NewFunctionTestInput(tc.target, tc.zero, nil),
+				},
+				NewFunctionTestResult(tc.target, false, tc.want, nulls),
+				NewCast,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestSignedIntegerToBit64PreservesBitPattern(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit64 := types.New(types.T_bit, 64, 0)
+
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{"int8", NewFunctionTestInput(types.T_int8.ToType(), []int8{-1}, nil)},
+		{"int16", NewFunctionTestInput(types.T_int16.ToType(), []int16{-1}, nil)},
+		{"int32", NewFunctionTestInput(types.T_int32.ToType(), []int32{-1}, nil)},
+		{"int64", NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(bit64, []uint64{}, nil)},
+				NewFunctionTestResult(bit64, false, []uint64{math.MaxUint64}, nil), NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestPreparedTypedTextToBit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit64 := types.New(types.T_bit, 64, 0)
+	bit63 := types.New(types.T_bit, 63, 0)
+	bit3 := types.New(types.T_bit, 3, 0)
+
+	run := func(
+		name string,
+		kind vector.PrepareParamKind,
+		input []string,
+		bitType types.Type,
+		want []uint64,
+		wantError bool,
+	) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), input, nil),
+					NewFunctionTestInput(bitType, []uint64{}, nil),
+				},
+				NewFunctionTestResult(bitType, wantError, want, nil), NewCast)
+			tcc.parameters[0].SetPrepareParamKind(kind)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	run("integer bit64", vector.PrepareParamInteger, []string{
+		"-9223372036854775808", "-6109877384019645241", "-1",
+		"5", "2024", "9223372036854775807", "18446744073709551615",
+	}, bit64, []uint64{
+		uint64(1) << 63, 12336866689689906375, math.MaxUint64,
+		5, 2024, math.MaxInt64, math.MaxUint64,
+	}, false)
+	run("float rounds", vector.PrepareParamFloat, []string{"5", "5.6"}, bit64, []uint64{5, 6}, false)
+	run("decimal truncates", vector.PrepareParamDecimal,
+		[]string{"5.9", "18446744073709551615.9"}, bit64,
+		[]uint64{5, math.MaxUint64}, false)
+	run("decimal signed zero", vector.PrepareParamDecimal,
+		[]string{"-0.0", "+0.0"}, bit64, []uint64{0, 0}, false)
+	run("boolean", vector.PrepareParamBoolean,
+		[]string{"true", "false"}, bit64, []uint64{1, 0}, false)
+	run("string bytes", vector.PrepareParamNone, []string{"5"}, bit64, []uint64{53}, false)
+	mixed := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"5", "5"}, nil),
+			NewFunctionTestInput(bit64, []uint64{}, nil),
+		},
+		NewFunctionTestResult(bit64, false, []uint64{5, 53}, nil), NewCast)
+	mixed.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	})
+	succeed, info := mixed.Run()
+	require.True(t, succeed, info)
+	run("negative string rejected", vector.PrepareParamNone,
+		[]string{"-6109877384019645241"}, bit64, nil, true)
+	run("narrow integer rejected", vector.PrepareParamInteger, []string{"-1"}, bit63, nil, true)
+	run("integer width checked", vector.PrepareParamInteger, []string{"8"}, bit3, nil, true)
+	run("negative float rejected", vector.PrepareParamFloat, []string{"-1"}, bit64, nil, true)
+	run("negative decimal rejected", vector.PrepareParamDecimal, []string{"-1.5"}, bit64, nil, true)
+	run("malformed decimal rejected", vector.PrepareParamDecimal, []string{"5.9junk"}, bit64, nil, true)
+}
+
+func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	bit3 := types.New(types.T_bit, 3, 0)
+	bit4 := types.New(types.T_bit, 4, 0)
+	bit64 := types.New(types.T_bit, 64, 0)
+
+	runBitCast := func(name string, input FunctionTestInput, target types.Type, want uint64) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input, NewFunctionTestInput(target, []uint64{}, nil)},
+				NewFunctionTestResult(target, false, []uint64{want}, nil), NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	runBitCast("int8 saturates", NewFunctionTestInput(types.T_int8.ToType(), []int8{31}, nil), bit4, 15)
+	runBitCast("int16 saturates", NewFunctionTestInput(types.T_int16.ToType(), []int16{31}, nil), bit4, 15)
+	runBitCast("int32 saturates", NewFunctionTestInput(types.T_int32.ToType(), []int32{31}, nil), bit4, 15)
+	runBitCast("int64 saturates", NewFunctionTestInput(types.T_int64.ToType(), []int64{31}, nil), bit4, 15)
+	runBitCast("uint8 saturates", NewFunctionTestInput(types.T_uint8.ToType(), []uint8{31}, nil), bit4, 15)
+	runBitCast("uint16 saturates", NewFunctionTestInput(types.T_uint16.ToType(), []uint16{31}, nil), bit4, 15)
+	runBitCast("uint32 saturates", NewFunctionTestInput(types.T_uint32.ToType(), []uint32{31}, nil), bit4, 15)
+	runBitCast("uint64 saturates", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{31}, nil), bit4, 15)
+	runBitCast("float32 saturates", NewFunctionTestInput(types.T_float32.ToType(), []float32{31}, nil), bit4, 15)
+	runBitCast("float64 bit64 upper bound saturates", NewFunctionTestInput(types.T_float64.ToType(), []float64{math.Exp2(64)}, nil), bit64, math.MaxUint64)
+	runBitCast("decimal64 saturates", NewFunctionTestInput(types.New(types.T_decimal64, 10, 0), []types.Decimal64{31}, nil), bit4, 15)
+	runBitCast("decimal128 saturates", NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: 31}}, nil), bit4, 15)
+	runBitCast("decimal256 saturates", NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: 31}}, nil), bit4, 15)
+
+	runPreparedNumericBitCast := func(
+		name string,
+		kind vector.PrepareParamKind,
+		value string,
+		want uint64,
+	) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			input := NewFunctionTestInput(types.T_varchar.ToType(), []string{value}, nil)
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input, NewFunctionTestInput(bit3, []uint64{}, nil)},
+				NewFunctionTestResult(bit3, false, []uint64{want}, nil), NewCast)
+			tcc.parameters[0].SetPrepareParamKind(kind)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	runPreparedNumericBitCast("prepared integer positive saturates", vector.PrepareParamInteger, "8", 7)
+	runPreparedNumericBitCast("prepared integer negative becomes zero", vector.PrepareParamInteger, "-1", 0)
+	runPreparedNumericBitCast("prepared unsigned maximum saturates", vector.PrepareParamInteger, "18446744073709551615", 7)
+	runPreparedNumericBitCast("prepared float rounds before saturation", vector.PrepareParamFloat, "7.6", 7)
+	runPreparedNumericBitCast("prepared float negative becomes zero", vector.PrepareParamFloat, "-1", 0)
+	runPreparedNumericBitCast("prepared decimal truncates before saturation", vector.PrepareParamDecimal, "8.9", 7)
+
+	runYearCast := func(name string, input FunctionTestInput) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			year := types.T_year.ToType()
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input, NewFunctionTestInput(year, []types.MoYear{}, nil)},
+				NewFunctionTestResult(year, false, []types.MoYear{0}, nil), NewCast)
+			require.NoError(t, tcc.result.PreExtendAndReset(1))
+			result, err := tcc.DebugRun()
+			require.NoError(t, err)
+			got, isNull := vector.GenerateFunctionFixedTypeParameter[types.MoYear](result).GetValue(0)
+			require.False(t, isNull)
+			require.Equal(t, types.MoYear(0), got)
+		})
+	}
+
+	runYearCast("integer invalid year becomes zero", NewFunctionTestInput(types.T_int64.ToType(), []int64{2156}, nil))
+	runYearCast("string invalid year becomes zero", NewFunctionTestInput(types.T_varchar.ToType(), []string{"2156"}, nil))
+	runYearCast("decimal64 invalid year becomes zero", NewFunctionTestInput(types.New(types.T_decimal64, 10, 0), []types.Decimal64{2156}, nil))
+	runYearCast("decimal128 invalid year becomes zero", NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: 2156}}, nil))
+	runYearCast("decimal256 invalid year becomes zero", NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: 2156}}, nil))
 }
 
 func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
@@ -3625,6 +3834,82 @@ func TestCastJsonToNumeric(t *testing.T) {
 	})
 }
 
+func TestCastJsonToBool(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	require.True(t, IfTypeCastSupported(types.T_json, types.T_bool))
+	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_bool.ToType()})
+	require.NoError(t, err)
+
+	run := func(t *testing.T, name string, jsonTexts []string, nulls []bool,
+		expected []bool, expectedNulls []bool, wantErr bool) {
+		t.Helper()
+		if nulls == nil {
+			nulls = make([]bool, len(jsonTexts))
+		}
+		encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{}, []bool{}),
+		}
+		expect := NewFunctionTestResult(types.T_bool.ToType(), wantErr, expected, expectedNulls)
+		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+		succeed, info := fcTC.Run()
+		if wantErr {
+			require.True(t, succeed, "case %s: expected cast to fail with error, but: %s", name, info)
+			return
+		}
+		require.True(t, succeed, "case %s: %s", name, info)
+	}
+
+	run(t, "literal_and_numeric", []string{"true", "false", "0", "2", "-1"}, nil,
+		[]bool{true, false, false, true, true}, []bool{false, false, false, false, false}, false)
+	run(t, "string_values", []string{`"true"`, `"false"`, `"0"`, `"2"`}, nil,
+		[]bool{true, false, false, true}, []bool{false, false, false, false}, false)
+	run(t, "quoted_string_error", []string{`"\"true\""`}, nil, nil, nil, true)
+	run(t, "json_null", []string{"null", "true"}, []bool{false, true},
+		[]bool{false, false}, []bool{true, true}, false)
+	run(t, "object_error", []string{"{}"}, nil, nil, nil, true)
+	run(t, "array_error", []string{"[true]"}, nil, nil, nil, true)
+	run(t, "string_error", []string{`"not-a-bool"`}, nil, nil, nil, true)
+
+	decimalEncoded := []string{
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0.00")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1.20")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "-0.01")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1e100")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1e-300")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0e-2147483647")),
+	}
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_json.ToType(), decimalEncoded, nil),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false,
+		[]bool{false, true, true, true, true, false}, []bool{false, false, false, false, false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+	succeed, info := fcTC.Run()
+	require.True(t, succeed, "decimal values: %s", info)
+
+	for _, tc := range []struct {
+		name  string
+		value bytejson.ByteJson
+	}{
+		{name: "malformed_literal", value: bytejson.ByteJson{Type: bytejson.TpCodeLiteral}},
+		{name: "malformed_decimal", value: newTypedByteJson(bytejson.TpCodeDecimal, "not-a-decimal")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{encodeJSONCastValue(t, tc.value)}, nil),
+				NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
+			}
+			expect := NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil)
+			fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, "%s: %s", tc.name, info)
+		})
+	}
+}
+
 func TestCastJsonToJson(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	jsonTexts := []string{`{"a":1}`, `[1,true,{"b":"x"}]`, `null`}
@@ -3646,6 +3931,200 @@ func TestCastJsonToJsonOverloadResolution(t *testing.T) {
 
 	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_json.ToType()})
 	require.NoError(t, err)
+}
+
+func TestCastToJSONSupportedTypes(t *testing.T) {
+	for _, source := range []types.T{
+		types.T_any,
+		types.T_json,
+		types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_year,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_geometry, types.T_geometry32,
+	} {
+		require.Truef(t, IfTypeCastSupported(source, types.T_json), "%s -> JSON", source)
+	}
+
+	for _, source := range []types.T{
+		types.T_uuid, types.T_enum, types.T_Rowid, types.T_Blockid,
+		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_TS,
+	} {
+		require.Falsef(t, IfTypeCastSupported(source, types.T_json), "%s -> JSON", source)
+	}
+}
+
+func encodeJSONCastValue(t *testing.T, value bytejson.ByteJson) string {
+	t.Helper()
+	encoded, err := types.EncodeJson(value)
+	require.NoError(t, err)
+	return string(encoded)
+}
+
+func TestCastToJSONPreservesSourceCategories(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonType := types.T_json.ToType()
+
+	run := func(t *testing.T, sourceType types.Type, values any, nulls []bool, expected []string) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(sourceType, values, nulls),
+				NewFunctionTestInput(jsonType, []string{}, nil),
+			},
+			NewFunctionTestResult(jsonType, false, expected, nulls), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	t.Run("text parses a JSON document", func(t *testing.T) {
+		run(t, types.T_varchar.ToType(), []string{`1`, `"1"`, `{"a":1}`, ""}, []bool{false, false, false, true},
+			makeJSONEncodedFromText(t, []string{`1`, `"1"`, `{"a":1}`, ""}, []bool{false, false, false, true}))
+	})
+	t.Run("binary remains opaque including its payload", func(t *testing.T) {
+		run(t, types.T_blob.ToType(), []string{`{"a":1}`}, nil,
+			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeOpaque, `{"a":1}`))})
+	})
+	t.Run("signed and unsigned keep their numeric representation", func(t *testing.T) {
+		run(t, types.T_int64.ToType(), []int64{-1}, nil,
+			[]string{encodeJSONCastValue(t, mustCreateJSON(t, int64(-1)))})
+		run(t, types.T_uint64.ToType(), []uint64{math.MaxUint64}, nil,
+			[]string{encodeJSONCastValue(t, mustCreateJSON(t, uint64(math.MaxUint64)))})
+	})
+	t.Run("decimal and temporal use typed JSON values", func(t *testing.T) {
+		decimalType := types.New(types.T_decimal128, 20, 2)
+		decimal, err := types.ParseDecimal128("1.20", 20, 2)
+		require.NoError(t, err)
+		run(t, decimalType, []types.Decimal128{decimal}, nil,
+			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1.20"))})
+
+		date, err := types.ParseDateCast("2020-01-02")
+		require.NoError(t, err)
+		run(t, types.T_date.ToType(), []types.Date{date}, nil,
+			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDate, "2020-01-02"))})
+
+		timeValue, err := types.ParseTime("10:00:00.1", 1)
+		require.NoError(t, err)
+		timeType := types.New(types.T_time, 0, 1)
+		run(t, timeType, []types.Time{timeValue}, nil,
+			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeTime, "10:00:00.100000"))})
+	})
+	t.Run("geometry becomes a JSON object", func(t *testing.T) {
+		run(t, types.T_geometry.ToType(), []string{"POINT(1 1)"}, nil,
+			makeJSONEncodedFromText(t, []string{`{"type":"Point","coordinates":[1,1]}`}, nil))
+	})
+	t.Run("invalid geometry returns its decode error", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"not geometry"}, nil),
+				NewFunctionTestInput(jsonType, []string{}, nil),
+			},
+			NewFunctionTestResult(jsonType, true, nil, nil), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+}
+
+func TestExplicitCastToJSONUsesSameDispatcher(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := `{"long":"abcdefghijklmnopqrstuvwxyz0123456789"}`
+	expected := makeJSONEncodedFromText(t, []string{input}, nil)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil),
+			NewFunctionTestInput(types.T_json.ToType(), []string{}, nil),
+		},
+		NewFunctionTestResult(types.T_json.ToType(), false, expected, nil), NewExplicitCast)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func mustCreateJSON(t *testing.T, value any) bytejson.ByteJson {
+	t.Helper()
+	bj, err := bytejson.CreateByteJSON(value)
+	require.NoError(t, err)
+	return bj
+}
+
+func TestCastToJSONRejectsNonFiniteFloatAndSkipsInactiveRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonType := types.T_json.ToType()
+
+	t.Run("non-finite float fails", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{math.Inf(1)}, nil),
+				NewFunctionTestInput(jsonType, []string{}, nil),
+			},
+			NewFunctionTestResult(jsonType, true, nil, nil), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("inactive invalid JSON is not evaluated", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`, `not json`}, nil),
+				NewFunctionTestInput(jsonType, []string{}, nil),
+			},
+			NewFunctionTestResult(jsonType, false, nil, nil), NewCast)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		err := tc.fn(tc.parameters, tc.result, proc, tc.fnLength, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+		require.NoError(t, err)
+		out := tc.GetResultVectorDirectly()
+		require.Equal(t, 2, out.Length())
+		require.Equal(t, "1", types.DecodeJson(out.GetBytesAt(0)).String())
+		require.True(t, out.IsNull(1))
+	})
+}
+
+func TestCastToJSONAllNullPathsMaterializeVarlenaLength(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonTarget := vector.NewConstNull(types.T_json.ToType(), 1, proc.Mp())
+	defer jsonTarget.Free(proc.Mp())
+
+	t.Run("const null", func(t *testing.T) {
+		source := vector.NewConstNull(types.T_any.ToType(), 3, proc.Mp())
+		defer source.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(3))
+		require.NoError(t, NewCast([]*vector.Vector{source, jsonTarget}, result, proc, 3, nil))
+		out := result.GetResultVector()
+		require.Equal(t, 3, out.Length())
+		for row := uint64(0); row < 3; row++ {
+			require.True(t, out.IsNull(row))
+		}
+	})
+
+	t.Run("ignore all rows", func(t *testing.T) {
+		source := testutil.MakeVarcharVector([]string{`not json`, `also not json`}, nil, proc.Mp())
+		defer source.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(2))
+		require.NoError(t, NewCast([]*vector.Vector{source, jsonTarget}, result, proc, 2, &FunctionSelectList{AllNull: true}))
+		out := result.GetResultVector()
+		require.Equal(t, 2, out.Length())
+		for row := uint64(0); row < 2; row++ {
+			require.True(t, out.IsNull(row))
+		}
+	})
+}
+
+func TestBitToJSONRestoresDeclaredWidth(t *testing.T) {
+	value, err := bitToJSON(0x10a, 9, context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "BIT", value.TYPE())
+	require.Equal(t, `"AQo="`, value.String())
+
+	_, err = bitToJSON(1, 65, context.Background())
+	require.Error(t, err)
 }
 
 // TestCastJsonToVarchar verifies that casting a JSON value to VARCHAR uses JSON_UNQUOTE semantics,
@@ -3673,6 +4152,8 @@ func TestCastJsonToVarchar(t *testing.T) {
 // emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
 func emptySliceForCastTarget(oid types.T) any {
 	switch oid {
+	case types.T_bool:
+		return []bool{}
 	case types.T_int8:
 		return []int8{}
 	case types.T_int16:
@@ -4213,6 +4694,182 @@ func TestCompatibilityModeFromProcess(t *testing.T) {
 	require.Equal(t, SQLCompatibilityMySQL, CompatibilityModeFromProcess(proc))
 	proc.GetSessionInfo().MatrixOneNativeMode = true
 	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc))
+}
+
+func TestMySQLDecimalPrefix(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "abc", want: "0"},
+		{input: "", want: "0"},
+		{input: " \t\v\f\r\n", want: "0"},
+		{input: "12.5tail", want: "12.5"},
+		{input: "2026-08-10", want: "2026"},
+		{input: "9007199254740993e0tail", want: "9007199254740993e0"},
+		{input: "1E2", want: "1e2"},
+		{input: "1E-2tail", want: "1e-2"},
+		{input: "1e+tail", want: "1"},
+		{input: "-.5x", want: "-.5"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			require.Equal(t, test.want, mysqlDecimalPrefix(test.input))
+		})
+	}
+
+	value, err := parseMySQLDecimal256Prefix("9007199254740993tail", 65, 30)
+	require.NoError(t, err)
+	want, err := types.ParseDecimal256("9007199254740993", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, want, value)
+
+	clamped, err := parseMySQLDecimal256Prefix("1e100tail", 65, 30)
+	require.NoError(t, err)
+	maximum, err := clampDecimal256Value(false, 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, maximum, clamped)
+
+	wideClamped, err := parseMySQLDecimal256Prefix("1e100tail", 75, 10)
+	require.NoError(t, err)
+	wideMaximum, err := types.ParseDecimal256(strings.Repeat("9", 65)+".0000000000", 75, 10)
+	require.NoError(t, err)
+	require.Equal(t, wideMaximum, wideClamped)
+	wideClamped, err = parseMySQLDecimal256Prefix("1e100tail", 76, 30)
+	require.NoError(t, err)
+	wideMaximum, err = types.ParseDecimal256(strings.Repeat("9", 46)+"."+strings.Repeat("0", 30), 76, 30)
+	require.NoError(t, err)
+	require.Equal(t, wideMaximum, wideClamped)
+
+	uppercase, err := parseMySQLDecimal256Prefix("1E2tail", 65, 30)
+	require.NoError(t, err)
+	wantUppercase, err := types.ParseDecimal256("100", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, wantUppercase, uppercase)
+
+	underflow, err := parseMySQLDecimal256Prefix("1e-2147483648tail", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal256{}, underflow)
+	underflow, err = parseMySQLDecimal256Prefix("9999999999e-2147483648tail", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal256{}, underflow)
+
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: strings.Repeat("0", 77), want: "0"},
+		{input: strings.Repeat("0", 76) + "1", want: "1"},
+		{input: "-" + strings.Repeat("0", 76) + "1.25tail", want: "-1.25"},
+	} {
+		got, parseErr := parseMySQLDecimal256Prefix(test.input, 65, 30)
+		require.NoError(t, parseErr)
+		want, parseErr := types.ParseDecimal256(test.want, 65, 30)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+}
+
+func TestMySQLDecimalPrefixExtremeExponents(t *testing.T) {
+	const (
+		positiveOverflow  = "1e2147483648tail"
+		negativeUnderflow = "1e-2147483648tail"
+		zeroMantissa      = "0e2147483648tail"
+	)
+	started := time.Now()
+	require.False(t, mysqlDecimalPrefixOverflows("1", 18, 6))
+	require.False(t, mysqlDecimalPrefixOverflows("1e-1", 18, 6))
+	require.False(t, mysqlDecimalPrefixOverflows("1.25e+1", 18, 6))
+	require.True(t, mysqlDecimalPrefixOverflows("1234567890123e0", 18, 6))
+
+	max64, err := clampDecimal64Value(false, 18, 6)
+	require.NoError(t, err)
+	min64, err := clampDecimal64Value(true, 18, 6)
+	require.NoError(t, err)
+	for input, want := range map[string]types.Decimal64{
+		positiveOverflow:       max64,
+		"-" + positiveOverflow: min64,
+		"9999999999999999999":  max64,
+		negativeUnderflow:      0,
+		zeroMantissa:           0,
+		"1.25":                 1250000,
+	} {
+		got, parseErr := parseMySQLDecimal64Prefix(input, 18, 6)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+
+	max128, err := clampDecimal128Value(false, 38, 6)
+	require.NoError(t, err)
+	min128, err := clampDecimal128Value(true, 38, 6)
+	require.NoError(t, err)
+	normal128, err := types.ParseDecimal128("1.25", 38, 6)
+	require.NoError(t, err)
+	for input, want := range map[string]types.Decimal128{
+		positiveOverflow:        max128,
+		"-" + positiveOverflow:  min128,
+		strings.Repeat("9", 39): max128,
+		negativeUnderflow:       {},
+		zeroMantissa:            {},
+		"1.25":                  normal128,
+	} {
+		got, parseErr := parseMySQLDecimal128Prefix(input, 38, 6)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+
+	max256, err := clampDecimal256Value(false, 65, 30)
+	require.NoError(t, err)
+	min256, err := clampDecimal256Value(true, 65, 30)
+	require.NoError(t, err)
+	for input, want := range map[string]types.Decimal256{
+		positiveOverflow:       max256,
+		"-" + positiveOverflow: min256,
+		negativeUnderflow:      {},
+		zeroMantissa:           {},
+	} {
+		got, parseErr := parseMySQLDecimal256Prefix(input, 65, 30)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+
+	// The old Decimal64/128 path scaled by the wrapped exponent and took about
+	// one second for this matrix. The bounded prefix scan should finish with a
+	// large margin even on a loaded CI worker.
+	require.Less(t, time.Since(started), 250*time.Millisecond)
+}
+
+func TestMySQLDecimalPrefixHalfUpUnderflowBoundary(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "4e-3", want: "0.00"},
+		{input: "5e-3", want: "0.01"},
+		{input: "6e-3", want: "0.01"},
+		{input: "-4e-3", want: "0.00"},
+		{input: "-5e-3", want: "-0.01"},
+		{input: "-6e-3", want: "-0.01"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			want64, err := types.ParseDecimal64(test.want, 18, 2)
+			require.NoError(t, err)
+			got64, err := parseMySQLDecimal64Prefix(test.input, 18, 2)
+			require.NoError(t, err)
+			require.Equal(t, want64, got64)
+
+			want128, err := types.ParseDecimal128(test.want, 38, 2)
+			require.NoError(t, err)
+			got128, err := parseMySQLDecimal128Prefix(test.input, 38, 2)
+			require.NoError(t, err)
+			require.Equal(t, want128, got128)
+
+			want256, err := types.ParseDecimal256(test.want, 65, 2)
+			require.NoError(t, err)
+			got256, err := parseMySQLDecimal256Prefix(test.input, 65, 2)
+			require.NoError(t, err)
+			require.Equal(t, want256, got256)
+		})
+	}
 }
 
 func TestParseStringToFloatWithBitSize(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -54,6 +55,18 @@ func TestBindBackExecSession(t *testing.T) {
 	require.Equal(t, "real_tmp1", realName)
 }
 
+func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
+	ctx := context.Background()
+	ses := newFeatureLimitTestSession(t)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "foreign_key_checks", int64(0)))
+	backSes := &backSession{}
+	backSes.upstream = ses
+
+	value, err := backSes.GetSessionSysVar("foreign_key_checks")
+	require.NoError(t, err)
+	require.Equal(t, int8(0), value)
+}
+
 func TestBindBackExecSessionWithoutUpstream(t *testing.T) {
 	backSessionID := uuid.New()
 	backSes := &backSession{
@@ -65,6 +78,34 @@ func TestBindBackExecSessionWithoutUpstream(t *testing.T) {
 
 	require.Nil(t, proc.GetSession())
 	require.Equal(t, uuid.Nil, proc.Base.SessionInfo.SessionId)
+}
+
+func TestExecInFrontendInBackRequiresUpstreamForPreparedStatements(t *testing.T) {
+	ctx := context.Background()
+	varExpr := tree.NewVarExpr("sql", false, false, nil)
+	prepareVar := tree.NewPrepareVar("stmt", varExpr)
+
+	tests := []struct {
+		name string
+		stmt tree.Statement
+	}{
+		{name: "prepare statement", stmt: tree.NewPrepareStmt("stmt", &tree.Select{})},
+		{name: "prepare string", stmt: tree.NewPrepareString("stmt", "select 1")},
+		{name: "prepare variable", stmt: prepareVar},
+		{name: "deallocate", stmt: tree.NewDeallocate("stmt", false)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer test.stmt.Free()
+			backSes := &backSession{}
+			execCtx := &ExecCtx{reqCtx: ctx, ses: backSes, stmt: test.stmt}
+
+			err := execInFrontendInBack(backSes, execCtx)
+
+			require.ErrorContains(t, err, "requires an upstream session")
+		})
+	}
 }
 
 func TestInstallBackExecStatsInfoPreservesRootAndClaimsOnce(t *testing.T) {

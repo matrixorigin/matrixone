@@ -77,7 +77,9 @@ CREATE TABLE t1 (a varchar(10));
 INSERT INTO t1 VALUES ('abc'), ('xyz');
 SELECT a, CONCAT_WS(",",a,' ',a) AS c FROM t1
 HAVING find_in_set('a', c) =0;
-SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+➤ a[12,10,0]  ¦  c[12,65535,0]  𝄀
+abc  ¦  abc, ,abc  𝄀
+xyz  ¦  xyz, ,xyz
 DROP TABLE t1;
 select find_in_set("","a,b,c")*find_in_set("","a,b,c,")-find_in_set("bb","a,bbb,dd");
 find_in_set("","a,b,c")*find_in_set("","a,b,c,")-find_in_set("bb","a,bbb,dd")

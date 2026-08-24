@@ -365,3 +365,121 @@ func TestLocalScanPlannerMergeOnReadReadsDeleteManifest(t *testing.T) {
 		t.Fatalf("delete task applies to wrong file: %+v", plan.DeleteTasks[0])
 	}
 }
+
+func TestLocalScanPlannerRefreshesMutableRefAfterExternalEqualityDeleteCommit(t *testing.T) {
+	ctx := context.Background()
+	baseMetadata := strings.Replace(sampleMetadataJSON,
+		`"fields": [
+        {"source-id": 4, "field-id": 1000, "name": "created_day", "transform": "day"}
+      ]`,
+		`"fields": []`, 1)
+	updatedMetadata := strings.Replace(baseMetadata,
+		`"current-snapshot-id": 22`,
+		`"current-snapshot-id": 23`, 1)
+	updatedMetadata = strings.Replace(updatedMetadata,
+		`{"snapshot-id": 22, "parent-snapshot-id": 11, "sequence-number": 7, "timestamp-ms": 1710000200000, "manifest-list": "s3://warehouse/sales/orders/metadata/snap-22.avro", "schema-id": 1}`,
+		`{"snapshot-id": 22, "parent-snapshot-id": 11, "sequence-number": 7, "timestamp-ms": 1710000200000, "manifest-list": "s3://warehouse/sales/orders/metadata/snap-22.avro", "schema-id": 1},
+    {"snapshot-id": 23, "parent-snapshot-id": 22, "sequence-number": 8, "timestamp-ms": 1710000300000, "manifest-list": "s3://warehouse/sales/orders/metadata/snap-23.avro", "schema-id": 1}`,
+		1)
+	updatedMetadata = strings.Replace(updatedMetadata,
+		`"main": {"snapshot-id": 22, "type": "branch"}`,
+		`"main": {"snapshot-id": 23, "type": "branch"}`,
+		1)
+
+	fixture := newPlannerFixtureWithMetadata(t, 1, baseMetadata)
+	dataManifest := fixture.facade.manifests[0]
+	dataManifest.SequenceNumber = 7
+	deleteManifest := api.ManifestFile{
+		Path:            "s3://warehouse/sales/orders/metadata/delete-m0.avro",
+		PartitionSpecID: 0,
+		Content:         api.ManifestContentDeletes,
+		SequenceNumber:  8,
+	}
+	fixture.facade.manifestLists = map[string][]api.ManifestFile{
+		"manifest-list":    {dataManifest},
+		"manifest-list-23": {dataManifest, deleteManifest},
+	}
+	fixture.reader.data["s3://warehouse/sales/orders/metadata/snap-23.avro"] = []byte("manifest-list-23")
+	fixture.reader.data[deleteManifest.Path] = []byte(deleteManifest.Path)
+	fixture.facade.entries[dataManifest.Path][0].SequenceNumber = 7
+	fixture.facade.entries[dataManifest.Path][0].DataFile.SequenceNumber = 7
+	fixture.facade.entries[deleteManifest.Path] = []api.ManifestEntry{{
+		Status:         api.ManifestEntryAdded,
+		SnapshotID:     23,
+		SequenceNumber: 8,
+		DataFile: api.DataFile{
+			Content:         api.DataFileContentEqualityDelete,
+			FilePath:        "s3://warehouse/sales/orders/delete/eq-id.parquet",
+			FileFormat:      "parquet",
+			RecordCount:     1,
+			FileSizeInBytes: 10,
+			EqualityIDs:     []int{1},
+			SpecID:          0,
+		},
+	}}
+
+	fixture.client.LoadTableFunc = func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+		fixture.catalogLoads++
+		switch fixture.catalogLoads {
+		case 1:
+			if req.IfNoneMatch != "" {
+				t.Fatalf("initial load must not revalidate, got %q", req.IfNoneMatch)
+			}
+			return &api.LoadTableResponse{
+				MetadataLocation: "s3://warehouse/sales/orders/metadata/v2.metadata.json",
+				MetadataJSON:     []byte(baseMetadata),
+				ETag:             "etag-1",
+			}, nil
+		case 2:
+			if req.IfNoneMatch != "etag-1" {
+				t.Fatalf("external commit refresh should revalidate etag-1, got %q", req.IfNoneMatch)
+			}
+			return &api.LoadTableResponse{
+				MetadataLocation: "s3://warehouse/sales/orders/metadata/v3.metadata.json",
+				MetadataJSON:     []byte(updatedMetadata),
+				ETag:             "etag-2",
+			}, nil
+		case 3:
+			if req.IfNoneMatch != "etag-2" {
+				t.Fatalf("append-only refresh should revalidate etag-2, got %q", req.IfNoneMatch)
+			}
+			return &api.LoadTableResponse{NotModified: true, ETag: "etag-2"}, nil
+		default:
+			t.Fatalf("unexpected catalog load call %d", fixture.catalogLoads)
+			return nil, nil
+		}
+	}
+	planner := fixture.planner()
+	request := api.ScanPlanRequest{
+		CatalogRequest:    cacheLoadTableRequest().CatalogRequest,
+		Namespace:         api.Namespace{"sales"},
+		Table:             "orders",
+		Ref:               "main",
+		EnableDeleteApply: true,
+	}
+
+	beforeCommit, err := planner.PlanScan(ctx, request)
+	if err != nil {
+		t.Fatalf("plan before external commit: %v", err)
+	}
+	if beforeCommit.Snapshot.SnapshotID != 22 || len(beforeCommit.DeleteTasks) != 0 {
+		t.Fatalf("unexpected plan before external commit: %+v", beforeCommit)
+	}
+
+	afterCommit, err := planner.PlanScan(ctx, request)
+	if err != nil {
+		t.Fatalf("plan after external equality-delete commit: %v", err)
+	}
+	if afterCommit.Snapshot.SnapshotID != 23 || len(afterCommit.DeleteTasks) != 1 ||
+		afterCommit.DeleteTasks[0].DataFile.Content != api.DataFileContentEqualityDelete ||
+		len(afterCommit.DeleteTasks[0].DataFile.EqualityIDs) != 1 ||
+		afterCommit.DeleteTasks[0].DataFile.EqualityIDs[0] != 1 {
+		t.Fatalf("external equality delete was not planned: %+v", afterCommit)
+	}
+
+	request.EnableDeleteApply = false
+	_, err = planner.PlanScan(ctx, request)
+	if err == nil || !strings.Contains(err.Error(), "delete-manifest") {
+		t.Fatalf("append-only scan should reject the refreshed delete manifest, got %v", err)
+	}
+}

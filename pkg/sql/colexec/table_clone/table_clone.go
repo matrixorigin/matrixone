@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,8 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -101,8 +102,14 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 	tc.dstRel = nil
 	tc.dstIdxRel = nil
 
+	if tc.Ctx.SrcAutoIncrMaxValues != nil {
+		clear(tc.Ctx.SrcAutoIncrMaxValues)
+	}
 	if tc.Ctx.SrcAutoIncrOffsets != nil {
 		clear(tc.Ctx.SrcAutoIncrOffsets)
+	}
+	if tc.Ctx.IndexAutoIncrStates != nil {
+		clear(tc.Ctx.IndexAutoIncrStates)
 	}
 }
 
@@ -468,86 +475,117 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	proc *process.Process,
 ) error {
 
-	if tc.Ctx.SrcAutoIncrOffsets == nil {
+	if tc.Ctx.SrcAutoIncrMaxValues == nil &&
+		tc.Ctx.SrcAutoIncrOffsets == nil &&
+		len(tc.Ctx.IndexAutoIncrStates) == 0 {
 		return nil
 	}
-
-	var (
-		err      error
-		typs     []types.Type
-		incrCols []incrservice.AutoColumn
-
-		maxVal int64
-
-		dstTblDef *plan.TableDef
-	)
-
-	dstTblDef = tc.dstMasterRel.GetTableDef(dstCtx)
-	_, typs, _, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(dstTblDef)
-	incrCols = incrservice.GetAutoColumnFromDef(dstTblDef)
-
-	vecs := make([]*vector.Vector, len(typs))
-	for i, typ := range typs {
-		vecs[i] = vector.NewVec(typ)
+	if !engine.TxnSupportsAutoIncrEpochFence(proc.GetTxnOperator()) {
+		return moerr.NewNotSupported(
+			dstCtx,
+			"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
+		)
 	}
 
-	defer func() {
-		for i := range vecs {
-			vecs[i].Free(proc.Mp())
-		}
-	}()
-
-	rows := 0
-	for _, col := range incrCols {
-		maxVal = int64(tc.Ctx.SrcAutoIncrOffsets[int32(col.ColIndex)])
-
-		var val any
-		switch typs[col.ColIndex].Oid {
-		case types.T_uint8:
-			val = uint8(maxVal)
-		case types.T_uint16:
-			val = uint16(maxVal)
-		case types.T_uint32:
-			val = uint32(maxVal)
-		case types.T_uint64:
-			val = uint64(maxVal)
-		case types.T_int8:
-			val = int8(maxVal)
-		case types.T_int16:
-			val = int16(maxVal)
-		case types.T_int32:
-			val = int32(maxVal)
-		case types.T_int64:
-			val = int64(maxVal)
-		}
-
-		if err = vector.AppendAny(
-			vecs[col.ColIndex], val, false, proc.Mp(),
+	if tc.Ctx.SrcAutoIncrMaxValues != nil || tc.Ctx.SrcAutoIncrOffsets != nil {
+		if err := updateRelationAutoIncrement(
+			dstCtx,
+			proc,
+			tc.dstMasterRel,
+			AutoIncrementState{
+				MaxValues: tc.Ctx.SrcAutoIncrMaxValues,
+				Offsets:   tc.Ctx.SrcAutoIncrOffsets,
+			},
+			tc.Ctx.RequestedAutoIncrOffset,
+			true,
 		); err != nil {
 			return err
 		}
-		if rows == 0 {
-			rows = vecs[col.ColIndex].Length()
+	}
+
+	for key, rel := range tc.dstIdxRel {
+		state, ok := tc.Ctx.IndexAutoIncrStates[strings.ToLower(key)]
+		if !ok {
+			continue
+		}
+		if err := updateRelationAutoIncrement(dstCtx, proc, rel, state, 0, false); err != nil {
+			return err
 		}
 	}
 
-	if rows == 0 {
+	return nil
+}
+
+func updateRelationAutoIncrement(
+	ctx context.Context,
+	proc *process.Process,
+	rel engine.Relation,
+	state AutoIncrementState,
+	requestedOffset uint64,
+	separateUserColumns bool,
+) error {
+	def := rel.GetTableDef(ctx)
+	var typs []types.Type
+	_, typs, _, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(def)
+	tableID := rel.GetTableID(ctx)
+	databaseID := rel.GetDBID(ctx)
+	epochReqs := make([]*api.AlterTableReq, 0)
+	setOffset := func(col incrservice.AutoColumn, offset uint64) error {
+		if err := incrservice.ValidateAutoColumnOffset(ctx, typs[col.ColIndex].Oid, offset); err != nil {
+			return err
+		}
+		if err := proc.GetIncrService().SetOffset(
+			ctx,
+			tableID,
+			col.ColIndex,
+			col.ColName,
+			offset,
+			proc.GetTxnOperator(),
+		); err != nil {
+			return err
+		}
+		epochReqs = append(epochReqs, api.NewUpdateAutoIncrementReq(
+			databaseID,
+			tableID,
+			offset,
+			0,
+		))
 		return nil
 	}
 
-	if _, err = proc.GetIncrService().InsertValues(
-		dstCtx,
-		tc.dstMasterRel.GetTableID(dstCtx),
-		dstTblDef.AutoIncrEpoch,
-		proc.GetTxnOperator(),
-		vecs,
-		rows,
-		int64(rows),
-	); err != nil {
-		return err
+	if !separateUserColumns {
+		for _, col := range incrservice.GetAutoColumnFromDef(def) {
+			name := strings.ToLower(col.ColName)
+			if err := setOffset(col, max(state.MaxValues[name], state.Offsets[name])); err != nil {
+				return err
+			}
+		}
+		if len(epochReqs) == 0 {
+			return nil
+		}
+		return rel.AlterTable(ctx, nil, epochReqs)
 	}
 
-	return nil
+	for _, col := range incrservice.GetUserAutoColumnFromDef(def) {
+		name := strings.ToLower(col.ColName)
+		if err := setOffset(col, max(requestedOffset, state.MaxValues[name], state.Offsets[name])); err != nil {
+			return err
+		}
+	}
+	for _, col := range incrservice.GetInternalAutoColumnFromDef(def) {
+		name := strings.ToLower(col.ColName)
+		offset, ok := state.Offsets[name]
+		if !ok {
+			continue
+		}
+		if err := setOffset(col, offset); err != nil {
+			return err
+		}
+	}
+	if len(epochReqs) == 0 {
+		return nil
+	}
+	return rel.AlterTable(ctx, nil, epochReqs)
 }
 
 func (tc *TableClone) Release() {

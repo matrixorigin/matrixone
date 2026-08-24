@@ -65,6 +65,8 @@ const (
 	ErrQueryInterrupted            uint16 = 20104
 	ErrNotSupported                uint16 = 20105
 	ErrRemoteDispatchNotRegistered uint16 = 20106
+	ErrMPoolCapacity               uint16 = 20107
+	ErrQueryTimeout                uint16 = 20108
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -74,6 +76,7 @@ const (
 	ErrTruncatedWrongValueForField uint16 = 20204
 	ErrTooBigPrecision             uint16 = 20205
 	ErrRegexpIllegalArgument       uint16 = 20206
+	ErrPreparedParamOutOfRange     uint16 = 20207
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -93,6 +96,25 @@ const (
 	ErrOperandColumns       uint16 = 20314
 	ErrSubqueryNo1Row       uint16 = 20315
 	ErrInvalidTypeForJSON   uint16 = 20316
+	ErrUnknownStmtHandler   uint16 = 20317
+	ErrViewWrongList        uint16 = 20318
+	ErrWrongArguments       uint16 = 20319
+	ErrDerivedMustHaveAlias uint16 = 20320
+	ErrWrongUsage           uint16 = 20321
+	ErrUpdateTableUsed      uint16 = 20322
+	ErrWindowInvalidUse     uint16 = 20323
+	ErrViewSelectTmpTable   uint16 = 20324
+	ErrCantChangeTxn        uint16 = 20325
+	ErrInvalidGroupFuncUse  uint16 = 20326
+	// ErrFtMatchingKeyNotFound: a MATCH() AGAINST() that no FULLTEXT index can serve.
+	// Its own code, not a bare ErrInvalidInput, so callers can identify it precisely --
+	// snapshot restore / PITR / CLONE must skip a view refused for this reason instead of
+	// aborting, and matching on message text there would be fragile.
+	ErrFtMatchingKeyNotFound uint16 = 20327
+	// Keep ErrCantChangeTxn and the upstream fulltext error code stable; this code is
+	// allocated separately for SELECT ... INTO statements returning multiple rows.
+	ErrTooManyRows            uint16 = 20328
+	ErrMultiUpdateKeyConflict uint16 = 20329
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -172,6 +194,11 @@ const (
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 	ErrKeyDoesNotExist                          uint16 = 20475
 	ErrMaxPreparedStmtCountReached              uint16 = 20476
+	ErrFieldSpecifiedTwice                      uint16 = 20477
+	// Keep the error code added by the variables PR distinct from the
+	// field-duplicate code introduced on main.
+	ErrWrongNumberOfColumnsInSelect uint16 = 20478
+	ErrTooLongIdent                 uint16 = 20479
 
 	// Group 5: rpc errors
 	//
@@ -314,6 +341,7 @@ const (
 	ErrRowSinglePartitionField             uint16 = 20822
 	ErrTooManyPartitionFuncFields          uint16 = 20823
 	ErrTooManyParameter                    uint16 = 20824
+	ErrCteMemoryQuotaExceeded              uint16 = 20825
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -384,6 +412,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrQueryInterrupted:            {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
 	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
 	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
+	ErrMPoolCapacity:               {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "mpool physical capacity exceeded: %s"},
+	ErrQueryTimeout:                {ER_QUERY_TIMEOUT, []string{MySQLDefaultSqlState}, "Query execution was interrupted, maximum statement execution time exceeded"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
@@ -394,6 +424,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
+	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -405,13 +436,28 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRoleGrantedToSelf:    {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
 	ErrDuplicateEntry:       {ER_DUP_ENTRY, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
 	ErrWrongValueCountOnRow: {ER_WRONG_VALUE_COUNT_ON_ROW, []string{MySQLDefaultSqlState}, "Column count doesn't match value count at row %d"},
-	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
+	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{"42S22"}, "Unknown column '%s' in '%s'"},
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
 	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
 	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
 	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
 	ErrInvalidTypeForJSON:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
+	ErrUnknownStmtHandler:   {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
+	ErrViewWrongList:        {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
+	ErrWrongArguments:       {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
+	ErrDerivedMustHaveAlias: {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
+	ErrWrongUsage:           {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
+	ErrUpdateTableUsed:      {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
+	ErrWindowInvalidUse:     {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
+	ErrViewSelectTmpTable:   {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
+	ErrTooManyRows:          {ER_TOO_MANY_ROWS, []string{"42000"}, "Result consisted of more than one row"},
+	ErrCantChangeTxn:        {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
+	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
+	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
+	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
+	ErrFtMatchingKeyNotFound:  {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
+	ErrMultiUpdateKeyConflict: {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -490,6 +536,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
+	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
+	ErrWrongNumberOfColumnsInSelect:             {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"}, "The used SELECT statements have a different number of columns"},
+	ErrTooLongIdent:                             {ER_TOO_LONG_IDENT, []string{"42000", "S1009"}, "Identifier name '%-.100s' is too long"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -592,6 +641,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRowSinglePartitionField:             {ER_ROW_SINGLE_PARTITION_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Row expressions in VALUES IN only allowed for multi-field column partitioning"},
 	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
 	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
+	ErrCteMemoryQuotaExceeded:              {ErrCteMemoryQuotaExceeded, []string{MySQLDefaultSqlState}, "recursive CTE memory quota exceeded on this CN: projected %d bytes, query limit %d bytes; increase @@cte_max_memory_bytes or rewrite the query to converge"},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -935,8 +985,30 @@ func NewOOM(ctx context.Context) *Error {
 	return newError(ctx, ErrOOM)
 }
 
+// NewMPoolCapacity reports a physical allocator or MPool capacity failure.
+// Its dedicated wire code lets pressure recovery distinguish retryable
+// physical capacity from unrelated OOMs without wrapping the MO error.
+func NewMPoolCapacity(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrMPoolCapacity, msg)
+}
+
+// NewResourceExhaustedf preserves the existing resource-exhaustion wire code
+// while adding bounded, actionable context for guards that reject before the
+// allocator or operating system itself fails. The formatted message is
+// serialized with the error, so remote execution does not collapse the
+// diagnostic back to a generic internal error.
+func NewResourceExhaustedf(ctx context.Context, format string, args ...any) *Error {
+	err := newError(ctx, ErrOOM)
+	err.message = fmt.Sprintf("error: resource exhausted: %s", fmt.Sprintf(format, args...))
+	return err
+}
+
 func NewQueryInterrupted(ctx context.Context) *Error {
 	return newError(ctx, ErrQueryInterrupted)
+}
+
+func NewQueryTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrQueryTimeout)
 }
 
 func NewDivByZero(ctx context.Context) *Error {
@@ -954,6 +1026,10 @@ func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any)
 
 func NewOutOfRange(ctx context.Context, typ string, msg string) *Error {
 	return newError(ctx, ErrOutOfRange, typ, msg)
+}
+
+func NewPreparedParamOutOfRange(ctx context.Context, typ string, statement string) *Error {
+	return newError(ctx, ErrPreparedParamOutOfRange, typ, statement)
 }
 
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
@@ -988,8 +1064,46 @@ func NewInvalidInput(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInvalidInput, msg)
 }
 
+// NewFtMatchingKeyNotFound reports a MATCH() AGAINST() that no FULLTEXT index can serve.
+// Use this rather than a hand-rolled invalid-input: the restore paths identify the refusal
+// by code (see pkg/frontend/snapshot.go) and must not depend on the wording.
+// FtMatchingKeyNotFoundMsg is exported because the error code does NOT survive every
+// transport: an error raised inside a statement run through the background executor comes
+// back reconstructed, and IsMoErrCode(err, ErrFtMatchingKeyNotFound) is then false. Callers
+// on that side of the boundary (snapshot restore, PITR) must fall back to the text, exactly
+// as canSkipRestoreViewError already does for "no such table".
+const FtMatchingKeyNotFoundMsg = "Can't find FULLTEXT index matching the column list"
+
+func NewFtMatchingKeyNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrFtMatchingKeyNotFound)
+}
+
+func NewWrongArguments(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWrongArguments, function)
+}
+
+func NewWrongUsage(ctx context.Context, first, second string) *Error {
+	return newError(ctx, ErrWrongUsage, first, second)
+}
+
+func NewUpdateTableUsed(ctx context.Context, table string) *Error {
+	return newError(ctx, ErrUpdateTableUsed, table)
+}
+
+func NewWindowInvalidUse(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWindowInvalidUse, function)
+}
+
+func NewInvalidGroupFuncUse(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidGroupFuncUse)
+}
+
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
 	return newError(ctx, ErrInvalidTypeForJSON, argument, function)
+}
+
+func NewUnknownStmtHandler(ctx context.Context, name, operation string) *Error {
+	return newError(ctx, ErrUnknownStmtHandler, name, operation)
 }
 
 func NewSyntaxErrorf(ctx context.Context, format string, args ...any) *Error {
@@ -1022,6 +1136,10 @@ func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	noReportCtx := errutil.ContextWithNoReport(ctx, true)
 	return newError(noReportCtx, ErrUnsupportedDML, msg)
+}
+
+func NewMultiUpdateKeyConflict(ctx context.Context, first, second string) *Error {
+	return newError(ctx, ErrMultiUpdateKeyConflict, first, second)
 }
 
 func NewEmptyVector(ctx context.Context) *Error {
@@ -1138,6 +1256,14 @@ func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
 	noReportCtx := errutil.ContextWithNoReport(ctx, true)
 	return newError(noReportCtx, ErrNoSuchTable, db, tbl)
+}
+
+// NewNoSuchTablef preserves a caller-facing diagnostic while classifying the
+// error as ErrNoSuchTable for MySQL protocol compatibility.
+func NewNoSuchTablef(ctx context.Context, format string, args ...any) *Error {
+	err := NewNoSuchTable(ctx, "", "")
+	err.message = fmt.Sprintf(format, args...)
+	return err
 }
 
 func NewNoSuchSequence(ctx context.Context, db, tbl string) *Error {
@@ -1447,6 +1573,18 @@ func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 	return newError(ctx, ErrWrongValueCountOnRow, row)
 }
 
+func NewViewWrongList(ctx context.Context) *Error {
+	return newError(ctx, ErrViewWrongList)
+}
+
+func NewViewSelectTmpTable(ctx context.Context, table string) *Error {
+	return newError(ctx, ErrViewSelectTmpTable, table)
+}
+
+func NewCantChangeTxCharacteristics(ctx context.Context) *Error {
+	return newError(ctx, ErrCantChangeTxn)
+}
+
 func NewOperandColumns(ctx context.Context, columns int) *Error {
 	return newError(ctx, ErrOperandColumns, columns)
 }
@@ -1455,8 +1593,28 @@ func NewErrSubqueryNo1Row(ctx context.Context) *Error {
 	return newError(ctx, ErrSubqueryNo1Row)
 }
 
+func NewTooManyRows(ctx context.Context) *Error {
+	return newError(ctx, ErrTooManyRows)
+}
+
+func NewWrongNumberOfColumnsInSelect(ctx context.Context) *Error {
+	return newError(ctx, ErrWrongNumberOfColumnsInSelect)
+}
+
+func NewDerivedMustHaveAlias(ctx context.Context) *Error {
+	return newError(ctx, ErrDerivedMustHaveAlias)
+}
+
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
 	return newError(ctx, ErrBadFieldError, column, table)
+}
+
+// NewBadFieldErrorf preserves a caller-facing diagnostic while classifying the
+// error as ErrBadFieldError for MySQL protocol compatibility.
+func NewBadFieldErrorf(ctx context.Context, format string, args ...any) *Error {
+	err := NewBadFieldError(ctx, "", "")
+	err.message = fmt.Sprintf(format, args...)
+	return err
 }
 
 func NewWrongDatetimeSpec(ctx context.Context, val string) *Error {
@@ -1633,12 +1791,24 @@ func NewCheckRecursiveLevel(ctx context.Context) *Error {
 	return newError(ctx, ErrCheckRecursiveLevel)
 }
 
+func NewCteMemoryQuotaExceeded(ctx context.Context, projected, limit uint64) *Error {
+	return newError(ctx, ErrCteMemoryQuotaExceeded, projected, limit)
+}
+
 func NewErrTooManyFields(ctx context.Context) *Error {
 	return newError(ctx, ErrTooManyFields)
 }
 
 func NewErrDupFieldName(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrDupFieldName, k)
+}
+
+func NewFieldSpecifiedTwice(ctx context.Context, column string) *Error {
+	return newError(ctx, ErrFieldSpecifiedTwice, column)
+}
+
+func NewTooLongIdent(ctx context.Context, identifier string) *Error {
+	return newError(ctx, ErrTooLongIdent, identifier)
 }
 
 func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {
@@ -1793,7 +1963,7 @@ func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
 	return newError(ctx, ErrExecutorRunning, executor)
 }
 
-func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string, maxPrecision uint64) *Error {
+func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string, maxPrecision uint64) *Error {
 	return newError(ctx, ErrTooBigPrecision, precision, funcName, maxPrecision)
 }
 

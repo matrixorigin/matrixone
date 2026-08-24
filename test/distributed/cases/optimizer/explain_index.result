@@ -45,8 +45,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Index Table Scan on t1.t1i1  𝄀
-              Filter Cond: (__mo_index_idx_col < ':')  𝄀
-              Block Filter Cond: (__mo_index_idx_col < ':')
+              Filter Cond: (__mo_index_idx_col < '<opaque>')  𝄀
+              Block Filter Cond: (__mo_index_idx_col < '<opaque>')
 select count(*) from t1 where c3<30;
 ➤ count(*)[-5,64,0]  𝄀
 300
@@ -212,8 +212,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Index Table Scan on t1.t1i1  𝄀
-              Filter Cond: (__mo_index_idx_col < ':�')  𝄀
-              Block Filter Cond: (__mo_index_idx_col < ':�')
+              Filter Cond: (__mo_index_idx_col < '<opaque>')  𝄀
+              Block Filter Cond: (__mo_index_idx_col < '<opaque>')
 select count(*) from t1 where c3 <500;
 ➤ count(*)[-5,64,0]  𝄀
 5000
@@ -286,17 +286,9 @@ select * from t1 where c3 between 200 and 300 and c2 <650;
 explain select * from t1 where c3 between 100 and 500 and c2 in (271461, 271485, 271386);
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
-  ->  Join  𝄀
-        Join Type: INDEX  𝄀
-        Join Cond: (t1.__mo_cpkey_col = __mo_index_pri_col)  𝄀
-        Runtime Filter Build: #[-1,0]  𝄀
-        ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
-              Filter Cond: t1.c2 in ([271386 271461 271485]), t1.c3 BETWEEN 100 AND 500  𝄀
-              Block Filter Cond: t1.c2 in ([271386 271461 271485])  𝄀
-              Runtime Filter Probe: t1.__mo_cpkey_col  𝄀
-        ->  Index Table Scan on t1.t1i1 [ForceOneCN]  𝄀
-              Filter Cond: prefix_between(__mo_index_idx_col), serial_extract(__mo_index_pri_col, 1, INT)) in ([271386 271461 271485])  𝄀
-              Block Filter Cond: prefix_between(__mo_index_idx_col)
+  ->  Table Scan on d1.t1  𝄀
+        Filter Cond: t1.c2 in ([271386 271461 271485]), t1.c3 BETWEEN 100 AND 500  𝄀
+        Block Filter Cond: t1.c2 in ([271386 271461 271485])
 select * from t1 where c3 between 100 and 500 and c2 in (271461, 271485, 271386);
 ➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  ¦  c4[4,32,0]  ¦  c5[4,32,0]  𝄀
 90462  ¦  271386  ¦  462  ¦  3  ¦  1  𝄀

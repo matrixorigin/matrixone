@@ -60,44 +60,59 @@ func LoadPersistedColumnData(
 	cols := make([]uint16, 0, len(colIdxs))
 	typs := make([]types.Type, 0, len(colIdxs))
 	vectors := make([]containers.Vector, len(colIdxs))
-	phyAddIdx := -1
-	committsIdx := -1
-	assignedCommitts := false
+	outputPositions := make([]int, 0, len(colIdxs))
+	commitTSIdx := -1
+	abortIdx := -1
 	var deletes *nulls.Nulls
 	for i, colIdx := range colIdxs {
-		if colIdx == objectio.SEQNUM_COMMITTS {
+		switch colIdx {
+		case objectio.SEQNUM_COMMITTS:
 			cols = append(cols, objectio.SEQNUM_COMMITTS)
 			typs = append(typs, objectio.TSType)
-			committsIdx = len(cols) - 1
-			assignedCommitts = true
+			outputPositions = append(outputPositions, i)
+			commitTSIdx = len(cols) - 1
+			continue
+		case objectio.SEQNUM_ABORT:
+			cols = append(cols, objectio.SEQNUM_ABORT)
+			typs = append(typs, types.T_bool.ToType())
+			outputPositions = append(outputPositions, i)
+			abortIdx = len(cols) - 1
 			continue
 		}
 		def := schema.ColDefs[colIdx]
 		if def.IsPhyAddr() {
 			vec, err := PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 			if err != nil {
+				for _, existing := range vectors {
+					if existing != nil {
+						existing.Close()
+					}
+				}
 				return nil, deletes, nil, err
 			}
-			phyAddIdx = i
-			vectors[phyAddIdx] = vec
+			vectors[i] = vec
 			continue
 		}
 		cols = append(cols, def.SeqNum)
 		typs = append(typs, def.Type)
+		outputPositions = append(outputPositions, i)
+	}
+	if tsForAppendable != nil {
+		if commitTSIdx == -1 {
+			cols = append(cols, objectio.SEQNUM_COMMITTS)
+			typs = append(typs, types.T_TS.ToType())
+			outputPositions = append(outputPositions, -1)
+			commitTSIdx = len(cols) - 1
+		}
+		if abortIdx == -1 {
+			cols = append(cols, objectio.SEQNUM_ABORT)
+			typs = append(typs, types.T_bool.ToType())
+			outputPositions = append(outputPositions, -1)
+			abortIdx = len(cols) - 1
+		}
 	}
 	if len(cols) == 0 {
 		return vectors, deletes, nil, nil
-	}
-	if tsForAppendable != nil {
-		if committsIdx == -1 {
-			cols = append(cols, objectio.SEQNUM_COMMITTS)
-			typs = append(typs, types.T_TS.ToType())
-			committsIdx = len(cols) - 1
-			defer func() {
-				cols = cols[:len(cols)-1]
-				typs = typs[:len(typs)-1]
-			}()
-		}
 	}
 	var vecs []containers.Vector
 	var release func()
@@ -111,29 +126,36 @@ func LoadPersistedColumnData(
 		needCopy,
 		rt.VectorPool.Transient)
 	if err != nil {
+		for _, vec := range vectors {
+			if vec != nil {
+				vec.Close()
+			}
+		}
 		return nil, deletes, nil, err
 	}
 	if tsForAppendable != nil {
-		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[committsIdx].GetDownstreamVector())
+		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[commitTSIdx].GetDownstreamVector())
+		abortVec := vecs[abortIdx]
+		var aborts []bool
+		if !abortVec.IsConstNull() {
+			aborts = vector.MustFixedColNoTypeCheck[bool](abortVec.GetDownstreamVector())
+		}
 		for i := range commits {
-			if commits[i].GT(tsForAppendable) {
+			if commits[i].GT(tsForAppendable) || (aborts != nil && aborts[i]) {
 				if deletes == nil {
 					deletes = nulls.NewWithSize(int(location.Rows()))
 				}
 				deletes.Add(uint64(i))
 			}
 		}
-		if !assignedCommitts {
-			vecs[committsIdx].Close()
-			vecs = vecs[:len(vecs)-1]
-		}
 	}
 	for i, vec := range vecs {
-		idx := i
-		if idx >= phyAddIdx && phyAddIdx > -1 {
-			idx++
+		outputPos := outputPositions[i]
+		if outputPos == -1 {
+			vec.Close()
+			continue
 		}
-		vectors[idx] = vec
+		vectors[outputPos] = vec
 	}
 	return vectors, deletes, release, nil
 }

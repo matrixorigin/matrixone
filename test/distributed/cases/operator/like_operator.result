@@ -469,3 +469,60 @@ abC
 show variables where value ilike "%matrixone%" and variable_name = "version_comment";
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
 version_comment  ¦  MatrixOne
+select 'a_b' like 'a!_b' escape '!' as custom_escape;
+➤ custom_escape[-7,1,0]  𝄀
+1
+select 'a%b' not like 'a!%b' escape '!' as not_like_escape;
+➤ not_like_escape[-7,1,0]  𝄀
+0
+select 'A_B' ilike 'aX_b' escape 'X' as ilike_escape;
+➤ ilike_escape[-7,1,0]  𝄀
+1
+select 'A%B' not ilike 'aX%b' escape 'X' as not_ilike_escape;
+➤ not_ilike_escape[-7,1,0]  𝄀
+0
+select 'a_b' like 'a界_b' escape '界' as unicode_escape;
+➤ unicode_escape[-7,1,0]  𝄀
+1
+select 'axb' like 'a_b' escape '' as empty_escape;
+➤ empty_escape[-7,1,0]  𝄀
+1
+select 'axb' like 'a_b' escape null as null_escape, isnull('axb' like 'a_b' escape null) as null_escape_is_null;
+➤ null_escape[-7,1,0]  ¦  null_escape_is_null[-7,1,0]  𝄀
+1  ¦  0
+select 'a_b' like 'a!_b' escape null as null_escape_literal;
+➤ null_escape_literal[-7,1,0]  𝄀
+0
+prepare like_escape_stmt from 'select ? like ? escape ? as prepared_escape';
+set @like_value = 'a_b';
+set @like_pattern = 'a!_b';
+set @like_escape = '!';
+execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+➤ prepared_escape[-7,1,0]  𝄀
+1
+set @like_value = 'axb';
+set @like_pattern = 'a_b';
+set @like_escape = null;
+execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+➤ prepared_escape[-7,1,0]  𝄀
+1
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+➤ prepared_escape[-7,1,0]  𝄀
+1
+set @like_escape = '';
+execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
+invalid input: Incorrect arguments to ESCAPE
+set sql_mode = default;
+deallocate prepare like_escape_stmt;
+drop table if exists like_escape_test;
+create table like_escape_test (v varchar(20), esc varchar(2));
+insert into like_escape_test values ('a_b', '!'), ('axb', '!');
+select v from like_escape_test where v like 'a!_%' escape '!' order by v;
+➤ v[12,-1,0]  𝄀
+a_b
+select v from like_escape_test where v like 'a!_b' escape esc;
+invalid input: Incorrect arguments to ESCAPE
+select 'a_b' like 'a!_b' escape '!!';
+invalid input: Incorrect arguments to ESCAPE
+drop table like_escape_test;

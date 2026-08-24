@@ -1,0 +1,129 @@
+set experimental_fulltext2_index = 1;
+drop database if exists fulltext2_include;
+create database fulltext2_include;
+use fulltext2_include;
+create table g (id bigint primary key, body text not null, title varchar(100), status varchar(20), prio int, amt decimal(10,2), created date);
+create fulltext2 index gi1 on g (body) include (id);             -- pk
+invalid input: INCLUDE column 'id' must not be the primary key; predicates on the pk are pushed down automatically via the __mo_pk_host_id virtual column, so listing it here only duplicates storage
+create fulltext2 index gi2 on g (body) include (body);           -- indexed text column
+invalid input: INCLUDE column 'body' cannot be an indexed text column
+create fulltext2 index gi3 on g (body, title) include (title);   -- indexed column (multi-column index)
+invalid input: INCLUDE column 'title' cannot be an indexed text column
+create fulltext2 index gi4 on g (body) include (amt);            -- unsupported type: decimal
+not supported: INCLUDE column 'amt' has unsupported type DECIMAL64 (supported: TINYINT, SMALLINT, INT, BIGINT, TINYINT UNSIGNED, SMALLINT UNSIGNED, INT UNSIGNED, BIGINT UNSIGNED, VARCHAR, CHAR)
+create fulltext2 index gi5 on g (body) include (created);        -- unsupported type: date
+not supported: INCLUDE column 'created' has unsupported type DATE (supported: TINYINT, SMALLINT, INT, BIGINT, TINYINT UNSIGNED, SMALLINT UNSIGNED, INT UNSIGNED, BIGINT UNSIGNED, VARCHAR, CHAR)
+create fulltext2 index gi6 on g (body) include (status, status); -- duplicate
+invalid input: duplicate INCLUDE column 'status'
+drop table g;
+create table docs (
+id bigint primary key,
+body text not null,
+status varchar(20),          -- INCLUDE (varchar, nullable)
+prio int,                    -- INCLUDE (numeric, nullable)
+category varchar(20) not null -- NOT included -> residual post-filter
+);
+insert into docs values
+(1, 'machine learning basics',        'active',   10, 'tech'),
+(2, 'deep learning networks',         'active',   20, 'tech'),
+(3, 'learning to cook french food',   'archived', 30, 'food'),
+(4, 'machine learning for finance',   'active',   40, 'finance'),
+(5, 'reinforcement learning games',   null,       50, 'tech'),
+(6, 'learning sports analytics',      'active',   null, 'sports'),
+(7, 'transfer learning models',       'pending',  15, 'tech'),
+(8, 'classical cooking learning',     'archived', 25, 'food');
+create fulltext2 index ftidx on docs (body) include (status, prio);
+show create table docs;
+➤ Table[12,4,0]  ¦  Create Table[12,264,0]  𝄀
+docs  ¦  CREATE TABLE `docs` (
+  `id` bigint NOT NULL,
+  `body` text NOT NULL,
+  `status` varchar(20) DEFAULT NULL,
+  `prio` int DEFAULT NULL,
+  `category` varchar(20) NOT NULL,
+  PRIMARY KEY (`id`),
+ FULLTEXT2 `ftidx`(`body`) INCLUDE (`status`, `prio`) WITH PARSER ngram
+)
+select id, status, prio from docs where match(body) against('learning') order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
+1  ¦  active  ¦  10  𝄀
+2  ¦  active  ¦  20  𝄀
+3  ¦  archived  ¦  30  𝄀
+4  ¦  active  ¦  40  𝄀
+5  ¦  null  ¦  50  𝄀
+6  ¦  active  ¦  null  𝄀
+7  ¦  pending  ¦  15  𝄀
+8  ¦  archived  ¦  25
+select id, prio from docs where match(body) against('learning') and prio = 20 order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+2  ¦  20
+select id, prio from docs where match(body) against('learning') and prio > 25 order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+3  ¦  30  𝄀
+4  ¦  40  𝄀
+5  ¦  50
+select id, prio from docs where match(body) against('learning') and prio between 15 and 30 order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+2  ¦  20  𝄀
+3  ¦  30  𝄀
+7  ¦  15  𝄀
+8  ¦  25
+select id, prio from docs where match(body) against('learning') and prio in (10, 40) order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+1  ¦  10  𝄀
+4  ¦  40
+select id, status from docs where match(body) against('learning') and status = 'active' order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+1  ¦  active  𝄀
+2  ¦  active  𝄀
+4  ¦  active  𝄀
+6  ¦  active
+select id, status from docs where match(body) against('learning') and status like 'arch%' order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+3  ¦  archived  𝄀
+8  ¦  archived
+select id from docs where match(body) against('learning') and id in (1, 3, 5) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3  𝄀
+5
+select id from docs where match(body) against('learning') and id > 6 order by id;
+➤ id[-5,64,0]  𝄀
+7  𝄀
+8
+select id, status from docs where match(body) against('learning') and status is null order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+5  ¦  null
+select id, prio from docs where match(body) against('learning') and prio is null order by id;
+➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
+6  ¦  null
+select id, status from docs where match(body) against('learning') and status is not null order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  𝄀
+1  ¦  active  𝄀
+2  ¦  active  𝄀
+3  ¦  archived  𝄀
+4  ¦  active  𝄀
+6  ¦  active  𝄀
+7  ¦  pending  𝄀
+8  ¦  archived
+select id, category from docs where match(body) against('learning') and category = 'tech' order by id;
+➤ id[-5,64,0]  ¦  category[12,20,0]  𝄀
+1  ¦  tech  𝄀
+2  ¦  tech  𝄀
+5  ¦  tech  𝄀
+7  ¦  tech
+select id, status, prio, category from docs where match(body) against('learning') and status = 'active' and prio > 15 order by id;
+➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  ¦  category[12,20,0]  𝄀
+2  ¦  active  ¦  20  ¦  tech  𝄀
+4  ¦  active  ¦  40  ¦  finance
+select id from docs where match(body) against('learning') and status = 'active' and category = 'tech' order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+select count(*) from docs where match(body) against('learning') and status = 'active';
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*) from docs where match(body) against('learning') and prio between 15 and 30;
+➤ count(*)[-5,64,0]  𝄀
+4
+drop database fulltext2_include;

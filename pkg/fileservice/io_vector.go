@@ -16,6 +16,11 @@ package fileservice
 
 import "math"
 
+const (
+	minExpensiveRangeReadSpan        = int64(8 << 20)
+	maxMinimalRangeReadAmplification = int64(8)
+)
+
 func (i *IOVector) allDone() bool {
 	for _, entry := range i.Entries {
 		if !entry.done {
@@ -89,6 +94,40 @@ func (i *IOVector) readMinimalRange() (min *int64, max *int64) {
 		}
 	}
 	return
+}
+
+// expensiveMinimalRangeRead reports whether collapsing the unfinished entries
+// into one range would fetch substantially more data than the caller requested.
+// Unknown or invalid ranges keep the existing fallback behavior.
+func (i *IOVector) expensiveMinimalRangeRead() (logicalBytes, spanBytes int64, expensive bool) {
+	minOffset := int64(math.MaxInt64)
+	maxEnd := int64(0)
+	n := 0
+	for _, entry := range i.Entries {
+		if entry.done {
+			continue
+		}
+		if entry.Offset < 0 || entry.Size <= 0 || entry.Offset > math.MaxInt64-entry.Size {
+			return 0, 0, false
+		}
+		if logicalBytes > math.MaxInt64-entry.Size {
+			return 0, 0, false
+		}
+		n++
+		logicalBytes += entry.Size
+		minOffset = min(minOffset, entry.Offset)
+		maxEnd = max(maxEnd, entry.Offset+entry.Size)
+	}
+	if n < 2 || minOffset == math.MaxInt64 || maxEnd < minOffset {
+		return logicalBytes, 0, false
+	}
+	spanBytes = maxEnd - minOffset
+	if spanBytes <= minExpensiveRangeReadSpan ||
+		logicalBytes > math.MaxInt64/maxMinimalRangeReadAmplification {
+		return logicalBytes, spanBytes, false
+	}
+	return logicalBytes, spanBytes,
+		spanBytes > logicalBytes*maxMinimalRangeReadAmplification
 }
 
 func (i *IOVector) size() *int64 {

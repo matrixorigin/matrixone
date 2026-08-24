@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
@@ -84,30 +85,26 @@ func (m *mockCCPRTxnCacheWriterCB2) WriteObject(ctx context.Context, objectName 
 	return false, nil
 }
 
+func (m *mockCCPRTxnCacheWriterCB2) WriteNewObject(
+	ctx context.Context,
+	object ioutil.UnpublishedObject,
+	txnID []byte,
+) error {
+	isNew, err := m.WriteObject(ctx, object.File, txnID)
+	if err != nil {
+		return err
+	}
+	if !isNew {
+		return moerr.NewInternalErrorNoCtxf(
+			"attempt-unique CCPR object %s already exists", object.File)
+	}
+	return nil
+}
+
 func (m *mockCCPRTxnCacheWriterCB2) OnFileWritten(objectName string) {
 	if m.onFileWrittenFn != nil {
 		m.onFileWrittenFn(objectName)
 	}
-}
-
-// ---------------------------------------------------------------------------
-// filter_object.go — tombstoneFSinkerWithName.Close error path
-// ---------------------------------------------------------------------------
-
-func TestCoverageBoost2_TombstoneFSinkerClose_WithWriter(t *testing.T) {
-	// Close() when writer is non-nil should set it to nil and return nil
-	s := &tombstoneFSinkerWithName{}
-	// Simulate having a writer (non-nil)
-	// We can't easily create a real writer, but Close just sets it to nil
-	err := s.Close()
-	assert.NoError(t, err)
-	assert.Nil(t, s.writer)
-}
-
-func TestCoverageBoost2_TombstoneFSinkerReset_WithWriter(t *testing.T) {
-	s := &tombstoneFSinkerWithName{}
-	s.Reset()
-	assert.Nil(t, s.writer)
 }
 
 // ---------------------------------------------------------------------------
@@ -961,7 +958,7 @@ func TestCoverageBoost2_RetryPublication_ContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := retryPublication(ctx, func() error {
+	err := retryPublication(ctx, "test", func() error {
 		return moerr.NewInternalErrorNoCtx("error")
 	}, &ExecutorRetryOption{
 		RetryTimes:    100,
@@ -973,7 +970,7 @@ func TestCoverageBoost2_RetryPublication_ContextDone(t *testing.T) {
 
 func TestCoverageBoost2_RetryPublication_DurationExceeded(t *testing.T) {
 	attempts := 0
-	err := retryPublication(context.Background(), func() error {
+	err := retryPublication(context.Background(), "test", func() error {
 		attempts++
 		time.Sleep(5 * time.Millisecond)
 		return moerr.NewInternalErrorNoCtx("fail")

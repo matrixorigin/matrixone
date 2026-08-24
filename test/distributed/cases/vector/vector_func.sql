@@ -1,3 +1,4 @@
+SET sql_mode = DEFAULT;
 create table vtab32(id int primary key auto_increment,`vecf32_3` vecf32(3),`vecf32_5` vecf32(5));
 create table vtab64(id int primary key auto_increment,`vecf64_3` vecf64(3),`vecf64_5` vecf64(5));
 
@@ -37,8 +38,8 @@ select SUMMATION(vecf32_3) - SUMMATION(vecf32_5) from vtab32;
 select SUMMATION(vecf32_3) * SUMMATION(vecf32_5) from vtab32;
 select SUMMATION(vecf64_3) + SUMMATION(vecf64_5) from vtab64;
 select SUMMATION(vecf64_3) / SUMMATION(vecf64_5) from vtab64;
-select * from (select SUMMATION(vecf32_3),SUMMATION(vecf32_5) from vtab32);
-select SUMMATION(vecf64_3),SUMMATION(vecf64_5) from (select * from vtab64);
+select * from (select SUMMATION(vecf32_3),SUMMATION(vecf32_5) from vtab32) as vectors;
+select SUMMATION(vecf64_3),SUMMATION(vecf64_5) from (select * from vtab64) as vectors;
 WITH qn AS (select SUMMATION(vecf32_3),SUMMATION(vecf32_5) from vtab32) SELECT * FROM qn;
 
 
@@ -67,8 +68,8 @@ select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)), inner_produ
 select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)) * inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)) from vtab32;
 select inner_product(vecf64_3,vecf64_3) + inner_product(vecf64_5,vecf64_5) from vtab64;
 select inner_product(vecf64_3,vecf64_3) / inner_product(vecf64_5,vecf64_5) from vtab64;
-select * from (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32);
-select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from (select * from vtab64);
+select * from (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32) as vectors;
+select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from (select * from vtab64) as vectors;
 WITH qn AS (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32) SELECT * FROM qn;
 
 
@@ -95,8 +96,8 @@ select l1_norm(vecf32_3) - l1_norm(vecf32_5) from vtab32;
 select l1_norm(vecf32_3) * l1_norm(vecf32_5) from vtab32;
 select l1_norm(vecf64_3) + l1_norm(vecf64_5) from vtab64;
 select l1_norm(vecf64_3) / l1_norm(vecf64_5) from vtab64;
-select * from (select l1_norm(vecf32_3),l1_norm(vecf32_5) from vtab32);
-select l1_norm(vecf64_3),l1_norm(vecf64_5) from (select * from vtab64);
+select * from (select l1_norm(vecf32_3),l1_norm(vecf32_5) from vtab32) as vectors;
+select l1_norm(vecf64_3),l1_norm(vecf64_5) from (select * from vtab64) as vectors;
 WITH qn AS (select l1_norm(vecf32_3),l1_norm(vecf32_5) from vtab32) SELECT * FROM qn;
 
 
@@ -124,8 +125,8 @@ select l2_norm(vecf32_3) - l2_norm(vecf32_5) from vtab32;
 select l2_norm(vecf32_3) * l2_norm(vecf32_5) from vtab32;
 select l2_norm(vecf64_3) + l2_norm(vecf64_5) from vtab64;
 select l2_norm(vecf64_3) / l2_norm(vecf64_5) from vtab64;
-select * from (select l2_norm(vecf32_3),l2_norm(vecf32_5) from vtab32);
-select l2_norm(vecf64_3),l2_norm(vecf64_5) from (select * from vtab64);
+select * from (select l2_norm(vecf32_3),l2_norm(vecf32_5) from vtab32) as vectors;
+select l2_norm(vecf64_3),l2_norm(vecf64_5) from (select * from vtab64) as vectors;
 WITH qn AS (select l2_norm(vecf32_3),l2_norm(vecf32_5) from vtab32) SELECT * FROM qn;
 
 select vector_dims(vecf32_5),vector_dims(vecf32_3) from vtab32;
@@ -150,8 +151,8 @@ select vector_dims(vecf32_3) - vector_dims(vecf32_5) from vtab32;
 select vector_dims(vecf32_3) * vector_dims(vecf32_5) from vtab32;
 select vector_dims(vecf64_3) + vector_dims(vecf64_5) from vtab64;
 select vector_dims(vecf64_3) / vector_dims(vecf64_5) from vtab64;
-select * from (select vector_dims(vecf32_3),vector_dims(vecf32_5) from vtab32);
-select vector_dims(vecf64_3),vector_dims(vecf64_5) from (select * from vtab64);
+select * from (select vector_dims(vecf32_3),vector_dims(vecf32_5) from vtab32) as vectors;
+select vector_dims(vecf64_3),vector_dims(vecf64_5) from (select * from vtab64) as vectors;
 WITH qn AS (select vector_dims(vecf32_3),vector_dims(vecf32_5) from vtab32) SELECT * FROM qn;
 
 
@@ -204,8 +205,8 @@ select cosine_similarity(vecf32_3,vecf32_3_1) - cosine_similarity(vecf32_5,vecf3
 select cosine_similarity(vecf32_3,vecf32_3_1) * cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1;
 select cosine_similarity(vecf64_3,vecf64_3_1) + cosine_similarity(vecf64_5,vecf64_5_1) from vtab64_1;
 select cosine_similarity(vecf64_3,vecf64_3_1) / cosine_similarity(vecf64_5,vecf64_5_1) from vtab64_1;
-select * from (select cosine_similarity(vecf32_3,vecf32_3_1),cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1);
-select cosine_similarity(vecf64_3,vecf64_3_1), cosine_similarity(vecf64_5,vecf64_5_1) from (select * from vtab64_1);
+select * from (select cosine_similarity(vecf32_3,vecf32_3_1),cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1) as vectors;
+select cosine_similarity(vecf64_3,vecf64_3_1), cosine_similarity(vecf64_5,vecf64_5_1) from (select * from vtab64_1) as vectors;
 WITH qn AS (select cosine_similarity(vecf32_3,vecf32_3_1),cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1) SELECT * FROM qn;
 select cosine_similarity(vecf32_3,vecf32_3), cosine_similarity(vecf32_5,vecf32_5) from vtab32;
 select cosine_similarity(vecf64_3,vecf64_3), cosine_similarity(vecf64_5,vecf64_5) from vtab64;

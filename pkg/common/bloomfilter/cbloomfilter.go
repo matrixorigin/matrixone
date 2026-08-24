@@ -100,6 +100,29 @@ func ComputeMemAndHashCountC(rowCount int64, probability float64) (uint64, uint3
 	return m, k
 }
 
+// EstimateCBloomFilterMemoryBytes returns the exact C allocation made by
+// NewCBloomFilterWithProbability for the given cardinality. Callers that place
+// the filter outside MPool use this value for physical-memory admission before
+// entering C. ok=false means the size cannot be represented safely or the
+// cardinality is outside ComputeMemAndHashCountC's supported domain.
+func EstimateCBloomFilterMemoryBytes(rowCount int64, probability float64) (bytes int64, ok bool) {
+	// ComputeMemAndHashCountC currently supports cardinalities below this bound
+	// and panics above it. Admission must fail closed rather than panic.
+	if rowCount >= 1_000_000_001 {
+		return 0, false
+	}
+	if rowCount <= 0 {
+		rowCount = 2
+	}
+	nbits, _ := ComputeMemAndHashCountC(rowCount, probability)
+	bitmapBytes := (nbits + 7) / 8
+	headerBytes := uint64(C.sizeof_bloomfilter_t)
+	if bitmapBytes > math.MaxInt64-headerBytes {
+		return 0, false
+	}
+	return int64(headerBytes + bitmapBytes), true
+}
+
 // NewCBloomFilterWithProbaility creates a new CBloomFilter with optimal parameters
 // derived from the expected number of elements (rowcnt) and the desired false positive probability.
 func NewCBloomFilterWithProbability(rowcnt int64, probability float64) *CBloomFilter {
@@ -188,6 +211,17 @@ func (bf *CBloomFilter) TestAndAdd(data []byte) bool {
 
 // Marshal serializes the bloom filter into a byte slice.
 func (bf *CBloomFilter) Marshal() ([]byte, error) {
+	return bf.marshal(0, false)
+}
+
+// MarshalWithPrefix serializes directly after a one-byte caller-owned wire
+// prefix. It avoids retaining a second payload-sized Go allocation solely to
+// prepend a tag.
+func (bf *CBloomFilter) MarshalWithPrefix(prefix byte) ([]byte, error) {
+	return bf.marshal(prefix, true)
+}
+
+func (bf *CBloomFilter) marshal(prefix byte, prefixed bool) ([]byte, error) {
 	if bf == nil || bf.ptr == nil {
 		return nil, moerr.NewInternalErrorNoCtx("CBloomFilter.Marshal: CBloomFilter or C.bloomfilter_t is nil")
 	}
@@ -196,7 +230,23 @@ func (bf *CBloomFilter) Marshal() ([]byte, error) {
 	if dataPtr == nil {
 		return nil, moerr.NewInternalErrorNoCtx("failed to marhsal CBloomFilter")
 	}
-	return C.GoBytes(unsafe.Pointer(dataPtr), C.int(clen)), nil
+	if uint64(clen) >= uint64(^uint(0)>>1) {
+		return nil, moerr.NewInternalErrorNoCtx("CBloomFilter.Marshal: payload too large")
+	}
+	offset := 0
+	if prefixed {
+		offset = 1
+	}
+	data := make([]byte, int(clen)+offset)
+	C.memcpy(unsafe.Pointer(&data[offset]), unsafe.Pointer(dataPtr), clen)
+	if prefixed {
+		data[0] = prefix
+	}
+	// bloomfilter_marshal aliases the explicitly ref-counted C allocation. The
+	// synchronous copy completes before this method returns; Go reachability
+	// does not own or free that allocation, and KeepAlive would not make a
+	// concurrent Free safe.
+	return data, nil
 }
 
 // Unmarshal reconstructs the bloom filter from a byte slice.
@@ -211,6 +261,9 @@ func (bf *CBloomFilter) Unmarshal(data []byte) error {
 	// Allocate C memory and copy data to it, because bloomfilter_unmarshal
 	// just casts the pointer and we want a stable C allocation that we can free.
 	cData := C.malloc(C.size_t(len(data)))
+	if cData == nil {
+		return moerr.NewInternalErrorNoCtx("CBloomFilter:Unmarshal out of memory")
+	}
 	C.memcpy(cData, unsafe.Pointer(&data[0]), C.size_t(len(data)))
 	runtime.KeepAlive(data)
 

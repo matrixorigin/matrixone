@@ -217,31 +217,7 @@ func handleGetObject(
 	ses.ClearAllMysqlResultSet()
 	ses.ClearResultBatches()
 
-	// Create columns: data, total_size, chunk_index, total_chunks, is_complete
-	colData := new(MysqlColumn)
-	colData.SetName("data")
-	colData.SetColumnType(defines.MYSQL_TYPE_BLOB)
-	showCols = append(showCols, colData)
-
-	colTotalSize := new(MysqlColumn)
-	colTotalSize.SetName("total_size")
-	colTotalSize.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-	showCols = append(showCols, colTotalSize)
-
-	colChunkIndex := new(MysqlColumn)
-	colChunkIndex.SetName("chunk_index")
-	colChunkIndex.SetColumnType(defines.MYSQL_TYPE_LONG)
-	showCols = append(showCols, colChunkIndex)
-
-	colTotalChunks := new(MysqlColumn)
-	colTotalChunks.SetName("total_chunks")
-	colTotalChunks.SetColumnType(defines.MYSQL_TYPE_LONG)
-	showCols = append(showCols, colTotalChunks)
-
-	colIsComplete := new(MysqlColumn)
-	colIsComplete.SetName("is_complete")
-	colIsComplete.SetColumnType(defines.MYSQL_TYPE_TINY)
-	showCols = append(showCols, colIsComplete)
+	showCols = newGetObjectResultColumns()
 
 	for _, col := range showCols {
 		mrs.AddColumn(col)
@@ -332,6 +308,30 @@ func handleGetObject(
 	return trySaveQueryResult(ctx, ses, mrs)
 }
 
+func newGetObjectResultColumns() []*MysqlColumn {
+	colData := new(MysqlColumn)
+	colData.SetName("data")
+	setMysqlBinaryBlobColumnMetadata(colData, uint32(getObjectChunkSize))
+
+	colTotalSize := new(MysqlColumn)
+	colTotalSize.SetName("total_size")
+	colTotalSize.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	colChunkIndex := new(MysqlColumn)
+	colChunkIndex.SetName("chunk_index")
+	colChunkIndex.SetColumnType(defines.MYSQL_TYPE_LONG)
+
+	colTotalChunks := new(MysqlColumn)
+	colTotalChunks.SetName("total_chunks")
+	colTotalChunks.SetColumnType(defines.MYSQL_TYPE_LONG)
+
+	colIsComplete := new(MysqlColumn)
+	colIsComplete.SetName("is_complete")
+	colIsComplete.SetColumnType(defines.MYSQL_TYPE_TINY)
+
+	return []*MysqlColumn{colData, colTotalSize, colChunkIndex, colTotalChunks, colIsComplete}
+}
+
 // handleInternalGetObject handles the internal command getobject
 // It checks permission via publication and returns object data chunk
 func handleInternalGetObject(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGetObject) error {
@@ -349,31 +349,7 @@ func handleInternalGetObject(ses FeSession, execCtx *ExecCtx, ic *InternalCmdGet
 	session.ClearAllMysqlResultSet()
 	session.ClearResultBatches()
 
-	// Create columns: data, total_size, chunk_index, total_chunks, is_complete
-	colData := new(MysqlColumn)
-	colData.SetName("data")
-	colData.SetColumnType(defines.MYSQL_TYPE_BLOB)
-	showCols = append(showCols, colData)
-
-	colTotalSize := new(MysqlColumn)
-	colTotalSize.SetName("total_size")
-	colTotalSize.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-	showCols = append(showCols, colTotalSize)
-
-	colChunkIndex := new(MysqlColumn)
-	colChunkIndex.SetName("chunk_index")
-	colChunkIndex.SetColumnType(defines.MYSQL_TYPE_LONG)
-	showCols = append(showCols, colChunkIndex)
-
-	colTotalChunks := new(MysqlColumn)
-	colTotalChunks.SetName("total_chunks")
-	colTotalChunks.SetColumnType(defines.MYSQL_TYPE_LONG)
-	showCols = append(showCols, colTotalChunks)
-
-	colIsComplete := new(MysqlColumn)
-	colIsComplete.SetName("is_complete")
-	colIsComplete.SetColumnType(defines.MYSQL_TYPE_TINY)
-	showCols = append(showCols, colIsComplete)
+	showCols = newGetObjectResultColumns()
 
 	for _, col := range showCols {
 		mrs.AddColumn(col)

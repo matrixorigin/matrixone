@@ -1,0 +1,28 @@
+drop database if exists ft_ctas;
+create database ft_ctas;
+use ft_ctas;
+create table ft (id bigint primary key, body text);
+insert into ft values
+(1, '防水 材料 测试'),
+(2, '普通 塑料 制品'),
+(3, '防水 涂料 施工');
+create fulltext index ftidx on ft (body) with parser gojieba;
+create table ctas_t as
+select id, match(body) against('防水' in boolean mode) as sc
+from ft where match(body) against('防水' in boolean mode);
+select id from ctas_t order by id;
+id
+1
+3
+select count(*) as n from ctas_t;
+n
+2
+create table ctas_t2 as select id from ft where match(body) against('涂料' in boolean mode);
+select id from ctas_t2 order by id;
+id
+3
+create table ctas_t3 as select id from ft where match(body) against('材料' in boolean mode);
+select id from ctas_t3 order by id;
+id
+1
+drop database ft_ctas;

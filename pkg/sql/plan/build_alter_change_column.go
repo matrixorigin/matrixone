@@ -70,6 +70,17 @@ func ChangeColumn(
 		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
 			return false, err
 		}
+		// CHANGE COLUMN renames through the COPY path. Rewrite the CHECK
+		// definitions before ConstructCreateTableSQL builds the temporary table,
+		// otherwise its constraints still reference the removed column name.
+		if err := recoverLegacyChecks(cctx, tableDef); err != nil {
+			return false, err
+		}
+		if err := renameColumnInCheckConstraints(
+			ctx, tableDef.Checks, oldColName, newColNameOrigin,
+		); err != nil {
+			return false, err
+		}
 	}
 
 	//change the name of the column in the foreign key constraint
@@ -98,11 +109,9 @@ func ChangeColumn(
 
 	updateClusterByInTableDef(ctx, tableDef, newColName, oldColName)
 
-	delete(alterCtx.alterColMap, oldColName)
-	alterCtx.alterColMap[newColName] = selectExpr{
-		sexprType: exprColumnName,
-		sexprStr:  oldColName,
-	}
+	// CHANGE may rename the target column, but it must preserve the original
+	// copy source (or the absence of one for a column added by this ALTER).
+	alterCtx.renameColumnSource(oldColName, newColName)
 
 	if tmpCol, ok := alterCtx.changColDefMap[oCol.ColId]; ok {
 		tmpCol.Name = newColName
@@ -130,6 +139,7 @@ func buildColumnAndConstraint(
 
 	newCol := &ColDef{
 		ColId:      oldCol.ColId,
+		Seqnum:     oldCol.Seqnum,
 		Primary:    oldCol.Primary,
 		ClusterBy:  oldCol.ClusterBy,
 		Name:       newColName,
@@ -230,6 +240,8 @@ func buildColumnAndConstraint(
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCharset, *tree.AttributeCollate:
+			// Type metadata was resolved centrally before constructing the column.
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
@@ -266,10 +278,18 @@ func buildColumnAndConstraint(
 	// If the column name of the table changes, it is necessary to check if it is associated
 	// with the index key. If it is an index key column, column name replacement is required.
 	if newColName != oldCol.Name {
+		if err := requirePrefixIndexesRenameProtocol(
+			ctx, targetTableDef.Indexes, oldCol.Name, newColName,
+		); err != nil {
+			return nil, err
+		}
 		for _, indexInfo := range targetTableDef.Indexes {
 			for j, partCol := range indexInfo.Parts {
 				partCol = catalog.ResolveAlias(partCol)
 				if partCol == oldCol.Name {
+					if _, err := renameIndexPrefixLengthMetadata(indexInfo, oldCol.Name, newColName); err != nil {
+						return nil, err
+					}
 					indexInfo.Parts[j] = newColName
 				}
 			}
@@ -341,7 +361,7 @@ func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, 
 
 // Check if the column name is valid and conflicts with internal hidden columns
 func checkColumnNameValid(ctx context.Context, colName string) error {
-	if _, ok := catalog.InternalColumns[colName]; ok {
+	if _, ok := catalog.InternalColumns[colName]; ok || catalog.IsAlias(colName) {
 		return moerr.NewErrWrongColumnName(ctx, colName)
 	}
 	return nil

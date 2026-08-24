@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -35,6 +36,43 @@ import (
 
 type blockingUnlockClient struct {
 	unlockStarted chan struct{}
+}
+
+func TestIsRetryErrorTreatsLocalBackendGenerationErrorsAsAmbiguous(t *testing.T) {
+	tests := []struct {
+		name  string
+		err   error
+		retry bool
+	}{
+		{
+			name:  "exact backend create timeout",
+			err:   morpc.ErrBackendCreateTimeout,
+			retry: true,
+		},
+		{
+			name: "wrapped exact backend create timeout",
+			err: errors.Join(
+				errors.New("cleanup failed"),
+				morpc.ErrBackendCreateTimeout,
+			),
+			retry: true,
+		},
+		{
+			name:  "backend closed by concurrent reset",
+			err:   moerr.NewBackendClosedNoCtx(),
+			retry: true,
+		},
+		{
+			name:  "backend cannot connect",
+			err:   moerr.NewBackendCannotConnectNoCtx(),
+			retry: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.retry, isRetryError(test.err))
+		})
+	}
 }
 
 func (c *blockingUnlockClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
@@ -612,6 +650,7 @@ func TestLockRemoteWithContextTimeoutTracksLockForUnlock(t *testing.T) {
 			holder := txn.getHoldLocksLocked(l.bind.Group)
 			require.Contains(t, holder.tableKeys, l.bind.Table)
 			require.Contains(t, holder.tableBinds, l.bind.Table)
+			require.Contains(t, holder.uncertainLockKeys[l.bind.Table], string([]byte{1}))
 
 			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
 				return l, nil
@@ -1354,7 +1393,6 @@ func TestRemoteWithBindChanged(t *testing.T) {
 	}
 
 	c := make(chan pb.LockTable, 1)
-	defer close(c)
 	runRemoteLockTableTests(
 		t,
 		pb.LockTable{ServiceID: "s1", Table: 1, Version: 1},
@@ -1397,6 +1435,23 @@ func TestRemoteWithBindChanged(t *testing.T) {
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
+
+			// A transport error is followed by an allocator bind refresh.
+			// Register that half of the protocol as well so the test covers
+			// both a direct NewBind response and recovery after a request
+			// fails before reaching the owner.
+			s.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.GetBind.LockTable = newBind
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				},
+			)
 		},
 		func(l *remoteLockTable, s Server) {
 			txnID := []byte("txn1")
@@ -1404,25 +1459,57 @@ func TestRemoteWithBindChanged(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			txn.Lock()
+			var lockErr error
 			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
-				assert.Error(t, ErrLockTableBindChanged, err)
+				lockErr = err
 			})
-			assert.Equal(t, newBind, <-c)
+			require.ErrorIs(t, lockErr, ErrLockTableBindChanged)
+			requireRemoteBindChanged(t, ctx, c, newBind)
+
+			// Reproduce the original CI path deterministically: the first
+			// owner request fails during backend admission. The refresh must
+			// still observe the new allocator bind and notify the caller.
+			l.client = &failOnceSendClient{
+				Client: l.client,
+				method: pb.Method_Lock,
+				err:    moerr.NewBackendClosedNoCtx(),
+			}
+			lockErr = nil
+			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
+				lockErr = err
+			})
+			require.ErrorIs(t, lockErr, ErrLockTableBindChanged)
+			requireRemoteBindChanged(t, ctx, c, newBind)
 			txn.Unlock()
 
-			l.unlock(txn, nil, timestamp.Timestamp{})
-			assert.Equal(t, newBind, <-c)
+			require.NoError(t, l.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{}))
+			requireRemoteBindChanged(t, ctx, c, newBind)
 
 			require.ErrorIs(t,
-				l.getLock(context.Background(), txnID, pb.WaitTxn{TxnID: []byte{1}}, nil),
+				l.getLock(ctx, txnID, pb.WaitTxn{TxnID: []byte{1}}, nil),
 				ErrLockTableBindChanged)
-			assert.Equal(t, newBind, <-c)
+			requireRemoteBindChanged(t, ctx, c, newBind)
 			reuse.Free(txn, nil)
 		},
 		func(bind pb.LockTable) {
 			c <- bind
 		},
 	)
+}
+
+func requireRemoteBindChanged(
+	t *testing.T,
+	ctx context.Context,
+	changed <-chan pb.LockTable,
+	expected pb.LockTable,
+) {
+	t.Helper()
+	select {
+	case actual := <-changed:
+		require.Equal(t, expected, actual)
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for remote bind change: %v", context.Cause(ctx))
+	}
 }
 
 func TestRetryRemoteLockError(t *testing.T) {

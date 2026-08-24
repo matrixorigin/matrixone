@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -111,6 +112,47 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if scan := node.VectorIndexScan; scan != nil {
+		if scan.QueryVector != nil {
+			scan.QueryVector, err = rule.ApplyExpr(scan.QueryVector)
+			if err != nil {
+				return err
+			}
+		}
+		if scan.CandidateLimit != nil {
+			scan.CandidateLimit, err = rule.ApplyExpr(scan.CandidateLimit)
+			if err != nil {
+				return err
+			}
+		}
+		if scan.FirstRoundLimit != nil {
+			scan.FirstRoundLimit, err = rule.ApplyExpr(scan.FirstRoundLimit)
+			if err != nil {
+				return err
+			}
+		}
+		for i := range scan.PreFilters {
+			scan.PreFilters[i], err = rule.ApplyExpr(scan.PreFilters[i])
+			if err != nil {
+				return err
+			}
+		}
+		if scan.DistanceRange != nil {
+			if scan.DistanceRange.LowerBound != nil {
+				scan.DistanceRange.LowerBound, err = rule.ApplyExpr(scan.DistanceRange.LowerBound)
+				if err != nil {
+					return err
+				}
+			}
+			if scan.DistanceRange.UpperBound != nil {
+				scan.DistanceRange.UpperBound, err = rule.ApplyExpr(scan.DistanceRange.UpperBound)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	for i := range node.OnList {
 		node.OnList[i], err = rule.ApplyExpr(node.OnList[i])
 		if err != nil {
@@ -148,6 +190,20 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 
 	for i := range node.TimeWindowPartitionBy {
 		node.TimeWindowPartitionBy[i], err = rule.ApplyExpr(node.TimeWindowPartitionBy[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	if node.GapFillStart != nil {
+		node.GapFillStart, err = rule.ApplyExpr(node.GapFillStart)
+		if err != nil {
+			return err
+		}
+	}
+
+	if node.GapFillEnd != nil {
+		node.GapFillEnd, err = rule.ApplyExpr(node.GapFillEnd)
 		if err != nil {
 			return err
 		}
@@ -263,5 +319,66 @@ func (vq *VisitPlan) Visit(ctx context.Context) error {
 
 	}
 
+	return nil
+}
+
+// visitMissingNodeExprs applies expression rules to node fields that VisitPlan
+// does not currently cover. Keeping this pass separate makes callers safe both
+// before and after those fields are added to the generic visitor: parameter
+// collection is map-backed, and ordinal normalization tracks seen ParamRefs.
+func visitMissingNodeExprs(
+	qry *Query,
+	roots []int32,
+	rules []VisitPlanRule,
+) error {
+	visited := make(map[int32]struct{})
+	var visitNode func(int32) error
+	visitNode = func(nodeID int32) error {
+		if _, ok := visited[nodeID]; ok {
+			return nil
+		}
+		if nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+			return moerr.NewInternalErrorNoCtx("invalid query node id")
+		}
+		visited[nodeID] = struct{}{}
+		node := qry.Nodes[nodeID]
+		for _, child := range node.Children {
+			if err := visitNode(child); err != nil {
+				return err
+			}
+		}
+		for _, rule := range rules {
+			if !rule.IsApplyExpr() {
+				continue
+			}
+			for i := range node.GroupBy {
+				var err error
+				node.GroupBy[i], err = rule.ApplyExpr(node.GroupBy[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.AggList {
+				var err error
+				node.AggList[i], err = rule.ApplyExpr(node.AggList[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.WinSpecList {
+				var err error
+				node.WinSpecList[i], err = rule.ApplyExpr(node.WinSpecList[i])
+				if err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for _, root := range roots {
+		if err := visitNode(root); err != nil {
+			return err
+		}
+	}
 	return nil
 }

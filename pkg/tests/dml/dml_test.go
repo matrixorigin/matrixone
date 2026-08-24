@@ -38,7 +38,7 @@ import (
 )
 
 func TestDeleteAndSelect(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -112,8 +112,47 @@ func TestDeleteAndSelect(t *testing.T) {
 	)
 }
 
+func TestInsertIgnoreSpecialTypeOnRemoteCN(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+
+		dbName := testutils.GetDatabaseName(t)
+		execSQLDB(t, ctx, db, "create database `"+dbName+"`")
+		defer func() {
+			execSQLDB(t, ctx, db, "use mo_catalog")
+			execSQLDB(t, ctx, db, "drop database if exists `"+dbName+"`")
+		}()
+		execSQLDB(t, ctx, db, "use `"+dbName+"`")
+		execSQLDB(t, ctx, db, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+		execSQLDB(t, ctx, db, "create table src (v int)")
+		// Multiple source blocks ensure the forced AP multi-CN scan evaluates
+		// assignment casts on remote scan scopes, not only on the coordinator.
+		execSQLDB(t, ctx, db, "insert into src select 31 from generate_series(1, 24576) g")
+		execSQLDB(t, ctx, db, "create table dst (b bit(4))")
+
+		plan.SetForceScanOnMultiCN(true)
+		defer plan.SetForceScanOnMultiCN(false)
+		execSQLDB(t, ctx, db, "insert ignore into dst select v from src")
+
+		var count, min, max int
+		err = db.QueryRowContext(ctx, "select count(*), min(b + 0), max(b + 0) from dst").Scan(&count, &min, &max)
+		require.NoError(t, err)
+		require.Equal(t, 24576, count)
+		require.Equal(t, 15, min)
+		require.Equal(t, 15, max)
+	})
+}
+
 func TestDataBranchDiffAsFile(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()
@@ -191,7 +230,7 @@ func dataBranchScaleRows(full, short int) int {
 }
 
 func TestCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()
@@ -771,7 +810,21 @@ func runDiffOutputLimitLargeBase(t *testing.T, parentCtx context.Context, db *sq
 	dbName := testutils.GetDatabaseName(t)
 	base := "limit_large_t1"
 	branch := "limit_large_t2"
-	rowCount := dataBranchScaleRows(8192*100, 8192*8)
+	rowCount := dataBranchScaleRows(8192*100, int(objectio.BlockMaxRows)*3+100)
+	updateEnd := 10000
+	branchUpdateStart := 10000
+	branchUpdateEnd := 10001
+	deleteStart := 30000
+	deleteEnd := 100000
+	if testing.Short() {
+		// Keep at least three blocks and both update/delete sides of the diff;
+		// the 100-block volume is reserved for explicit non-short stress runs.
+		updateEnd = rowCount / 4
+		branchUpdateStart = updateEnd
+		branchUpdateEnd = updateEnd + 1
+		deleteStart = rowCount / 2
+		deleteEnd = rowCount * 3 / 4
+	}
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
 	defer func() {
@@ -785,14 +838,18 @@ func runDiffOutputLimitLargeBase(t *testing.T, parentCtx context.Context, db *sq
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from %s", branch, base))
 
-	execSQLDB(t, ctx, db, fmt.Sprintf("update %s set b = b + 1 where a between 1 and 10000", base))
-	execSQLDB(t, ctx, db, fmt.Sprintf("update %s set b = b + 2 where a between 10000 and 10001", branch))
-	execSQLDB(t, ctx, db, fmt.Sprintf("delete from %s where a between 30000 and 100000", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update %s set b = b + 1 where a between 1 and %d", base, updateEnd))
+	execSQLDB(t, ctx, db, fmt.Sprintf("update %s set b = b + 2 where a between %d and %d", branch, branchUpdateStart, branchUpdateEnd))
+	execSQLDB(t, ctx, db, fmt.Sprintf("delete from %s where a between %d and %d", base, deleteStart, deleteEnd))
 
 	fullStmt := fmt.Sprintf("data branch diff %s against %s", branch, base)
 	fullRows := fetchDiffRowsAsStrings(t, ctx, db, fullStmt)
 	//require.Equal(t, 30, len(fullRows), fmt.Sprintf("full diff: %v", fullRows))
-	fmt.Println("full diff:", len(fullRows))
+	t.Logf("full diff: %d", len(fullRows))
+	fullSet := make(map[string]struct{}, len(fullRows))
+	for _, row := range fullRows {
+		fullSet[strings.Join(row, "||")] = struct{}{}
+	}
 
 	limitQuery := func(cnt int) {
 		limitStmt := fmt.Sprintf("data branch diff %s against %s output limit %d", branch, base, cnt)
@@ -801,10 +858,6 @@ func runDiffOutputLimitLargeBase(t *testing.T, parentCtx context.Context, db *sq
 		require.NotEmpty(t, limitedRows, "limited diff returned no rows")
 		require.LessOrEqual(t, len(limitedRows), cnt, fmt.Sprintf("limited diff returned too many rows: %v", limitedRows))
 
-		fullSet := make(map[string]struct{}, len(fullRows))
-		for _, row := range fullRows {
-			fullSet[strings.Join(row, "||")] = struct{}{}
-		}
 		for _, row := range limitedRows {
 			_, ok := fullSet[strings.Join(row, "||")]
 			require.Truef(t, ok, "limited diff row not contained in full diff: %v", row)

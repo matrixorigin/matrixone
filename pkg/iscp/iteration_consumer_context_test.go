@@ -209,7 +209,7 @@ func TestRunInitSQLWithRuntimeSkipsFencedInitSQL(t *testing.T) {
 	require.False(t, called)
 }
 
-type initSQLTxnForTest struct {
+type iscpTxnForTest struct {
 	client.TxnOperator
 	commitErr         error
 	rollbackErr       error
@@ -220,36 +220,36 @@ type initSQLTxnForTest struct {
 	rollbackErrAtCall error
 }
 
-func (t *initSQLTxnForTest) Commit(ctx context.Context) error {
+func (t *iscpTxnForTest) Commit(ctx context.Context) error {
 	t.committed = true
 	t.commitCtx = ctx
 	return t.commitErr
 }
 
-func (t *initSQLTxnForTest) Rollback(ctx context.Context) error {
+func (t *iscpTxnForTest) Rollback(ctx context.Context) error {
 	t.rolledBack = true
 	t.rollbackCtx = ctx
 	t.rollbackErrAtCall = ctx.Err()
 	return t.rollbackErr
 }
 
-func TestFinishInitSQLTxnReturnsCommitError(t *testing.T) {
+func TestFinishISCPTransactionReturnsCommitError(t *testing.T) {
 	commitErr := errors.New("commit failed")
-	txn := &initSQLTxnForTest{commitErr: commitErr}
+	txn := &iscpTxnForTest{commitErr: commitErr}
 
-	err := finishInitSQLTxn(context.Background(), txn, nil)
+	err := finishISCPTransaction(context.Background(), txn, nil)
 
 	require.ErrorIs(t, err, commitErr)
 	require.True(t, txn.committed)
 	require.False(t, txn.rolledBack)
 }
 
-func TestFinishInitSQLTxnRollsBackWithIndependentContext(t *testing.T) {
+func TestFinishISCPTransactionRollsBackWithIndependentContext(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	cancel()
-	txn := &initSQLTxnForTest{}
+	txn := &iscpTxnForTest{}
 
-	err := finishInitSQLTxn(parent, txn, context.Canceled)
+	err := finishISCPTransaction(parent, txn, context.Canceled)
 
 	require.ErrorIs(t, err, context.Canceled)
 	require.True(t, txn.rolledBack)

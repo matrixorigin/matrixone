@@ -65,14 +65,11 @@ func init() {
 	TableStatsColDefs = make([]*plan.ColDef, len(colNames))
 	for i, name := range colNames {
 		tp := TableStatsColTypes[i]
+		planTyp := makePlan2Type(&tp)
+		planTyp.NotNullable = true
 		TableStatsColDefs[i] = &plan.ColDef{
 			Name: name,
-			Typ: plan.Type{
-				Id:          int32(tp.Oid),
-				Width:       tp.Width,
-				Scale:       tp.Scale,
-				NotNullable: true,
-			},
+			Typ:  planTyp,
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,

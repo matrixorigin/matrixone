@@ -1,0 +1,356 @@
+#!/bin/sh
+
+# Copyright 2021 - 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -eu
+
+mock_curl() {
+	if [ "${1:-}" = --disable ] && [ "${2:-}" = --help ] && [ "${3:-}" = all ]; then
+		if [ "${MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS:-1}" = 1 ]; then
+			printf '%s\n' '     --retry-all-errors'
+		else
+			printf '%s\n' '     --retry <num>'
+		fi
+		exit 0
+	fi
+
+	output=
+	retry_count=
+	retry_max_time=
+	retry_all_errors=0
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--output)
+				output=$2
+				shift 2
+				;;
+			--retry)
+				retry_count=$2
+				shift 2
+				;;
+			--retry-max-time)
+				retry_max_time=$2
+				shift 2
+				;;
+			--retry-all-errors)
+				retry_all_errors=1
+				shift
+				;;
+			--connect-timeout | --max-time | --max-filesize | --proto | --proto-redir)
+				shift 2
+				;;
+			*)
+				shift
+				;;
+		esac
+	done
+
+	[ -n "$output" ] || exit 2
+	if [ "$MO_DOWNLOAD_MOCK_MODE" = concurrent-success ]; then
+		cp "$MO_DOWNLOAD_MOCK_FIXTURE" "$output"
+		exit 0
+	fi
+	printf '%s\n' "$retry_count" > "$MO_DOWNLOAD_MOCK_STATE/retry-count"
+	printf '%s\n' "$retry_max_time" > "$MO_DOWNLOAD_MOCK_STATE/retry-max-time"
+	printf '%s\n' "$retry_all_errors" > "$MO_DOWNLOAD_MOCK_STATE/retry-all-errors"
+
+	count=0
+	if [ -f "$MO_DOWNLOAD_MOCK_STATE/count" ]; then
+		IFS= read -r count < "$MO_DOWNLOAD_MOCK_STATE/count"
+	fi
+	count=$((count + 1))
+	printf '%s\n' "$count" > "$MO_DOWNLOAD_MOCK_STATE/count"
+
+	case "$MO_DOWNLOAD_MOCK_MODE:$count" in
+		transport-once:1 | always-fail:*)
+			exit 56
+			;;
+		always-corrupt:*)
+			printf 'corrupt response\n' > "$output"
+			;;
+		oversized-stream:*)
+			if dd if=/dev/zero of="$output" bs=1024 count=1024 2>/dev/null; then
+				: > "$MO_DOWNLOAD_MOCK_STATE/stream-completed"
+				exit 0
+			else
+				exit $?
+			fi
+			;;
+		*)
+			cp "$MO_DOWNLOAD_MOCK_FIXTURE" "$output"
+			;;
+	esac
+}
+
+if [ "${MO_DOWNLOAD_MOCK_CHILD:-}" = 1 ]; then
+	mock_curl "$@"
+	exit 0
+fi
+
+script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+download_script="$script_dir/download"
+test_root=$(mktemp -d "${TMPDIR:-/tmp}/mo-download-test.XXXXXX")
+cleanup() {
+	rm -rf "$test_root"
+}
+trap cleanup 0
+trap 'exit 130' INT
+trap 'exit 129' HUP
+trap 'exit 143' TERM
+
+fixture="$test_root/fixture"
+printf 'verified dependency payload\n' > "$fixture"
+if command -v sha256sum >/dev/null 2>&1; then
+	expected_sha256=$(sha256sum "$fixture" | awk '{print $1}')
+else
+	expected_sha256=$(shasum -a 256 "$fixture" | awk '{print $1}')
+fi
+
+export MO_DOWNLOAD_ATTEMPTS=3
+export MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS=1
+export MO_DOWNLOAD_MAX_TIME_SECONDS=1
+export MO_DOWNLOAD_MAX_BYTES=1048576
+export MO_DOWNLOAD_RETRY_DELAY_SECONDS=0
+export MO_DOWNLOAD_CURL_BIN="$0"
+export MO_DOWNLOAD_MOCK_CHILD=1
+export MO_DOWNLOAD_MOCK_FIXTURE="$fixture"
+export MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS=1
+
+fail() {
+	echo "FAIL: $*" >&2
+	exit 1
+}
+
+assert_count() {
+	expected=$1
+	actual=0
+	if [ -f "$MO_DOWNLOAD_MOCK_STATE/count" ]; then
+		IFS= read -r actual < "$MO_DOWNLOAD_MOCK_STATE/count"
+	fi
+	[ "$actual" -eq "$expected" ] || fail "expected $expected curl calls, got $actual"
+}
+
+assert_retry_contract() {
+	IFS= read -r retry_count < "$MO_DOWNLOAD_MOCK_STATE/retry-count"
+	IFS= read -r retry_max_time < "$MO_DOWNLOAD_MOCK_STATE/retry-max-time"
+	IFS= read -r retry_all_errors < "$MO_DOWNLOAD_MOCK_STATE/retry-all-errors"
+	[ "$retry_count" -eq $((MO_DOWNLOAD_ATTEMPTS - 1)) ] || fail "curl retry count is $retry_count"
+	[ "$retry_max_time" -eq $((MO_DOWNLOAD_MAX_TIME_SECONDS * MO_DOWNLOAD_ATTEMPTS)) ] || fail "curl retry time is $retry_max_time"
+	[ "$retry_all_errors" -eq 1 ] || fail "curl retry-all-errors is missing"
+}
+
+assert_legacy_retry_contract() {
+	IFS= read -r retry_count < "$MO_DOWNLOAD_MOCK_STATE/retry-count"
+	IFS= read -r retry_max_time < "$MO_DOWNLOAD_MOCK_STATE/retry-max-time"
+	IFS= read -r retry_all_errors < "$MO_DOWNLOAD_MOCK_STATE/retry-all-errors"
+	[ -z "$retry_count" ] || fail "legacy curl unexpectedly received --retry $retry_count"
+	[ -z "$retry_max_time" ] || fail "legacy curl unexpectedly received --retry-max-time $retry_max_time"
+	[ "$retry_all_errors" -eq 0 ] || fail "legacy curl unexpectedly received --retry-all-errors"
+}
+
+assert_no_temp_files() {
+	case_dir=$1
+	[ -z "$(find "$case_dir" -name '*.download.*' -print -quit)" ] || fail "temporary download was not cleaned up"
+}
+
+file_mode() {
+	if stat -c '%a' "$1" >/dev/null 2>&1; then
+		stat -c '%a' "$1"
+	else
+		stat -f '%Lp' "$1"
+	fi
+}
+
+assert_publicly_readable() {
+	file=$1
+	[ "$(file_mode "$file")" = 644 ] || fail "expected mode 0644 for $file, got $(file_mode "$file")"
+}
+
+new_case() {
+	case_name=$1
+	MO_DOWNLOAD_MOCK_STATE="$test_root/$case_name"
+	mkdir -p "$MO_DOWNLOAD_MOCK_STATE"
+	export MO_DOWNLOAD_MOCK_STATE
+}
+
+new_case cache-hit
+cp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result"
+chmod 0600 "$MO_DOWNLOAD_MOCK_STATE/result"
+MO_DOWNLOAD_MOCK_MODE=always-fail
+export MO_DOWNLOAD_MOCK_MODE
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 0
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "cache hit changed destination"
+assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+
+new_case cache-hit-without-curl
+cp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result"
+MO_DOWNLOAD_CURL_BIN="$MO_DOWNLOAD_MOCK_STATE/missing-curl"
+export MO_DOWNLOAD_CURL_BIN
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 0
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "curl-free cache hit changed destination"
+assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+
+new_case cache-miss-without-curl
+MO_DOWNLOAD_CURL_BIN="$MO_DOWNLOAD_MOCK_STATE/missing-curl"
+export MO_DOWNLOAD_CURL_BIN
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "cache miss without curl unexpectedly succeeded"
+else
+	status=$?
+fi
+[ "$status" -eq 2 ] || fail "cache miss without curl returned status $status, expected 2"
+assert_count 0
+[ ! -e "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "cache miss without curl created destination"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+MO_DOWNLOAD_CURL_BIN="$0"
+export MO_DOWNLOAD_CURL_BIN
+
+new_case insecure-url
+MO_DOWNLOAD_MOCK_MODE=success
+export MO_DOWNLOAD_MOCK_MODE
+if "$download_script" http://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "insecure dependency URL unexpectedly succeeded"
+fi
+assert_count 0
+
+new_case directory-destination
+mkdir "$MO_DOWNLOAD_MOCK_STATE/result"
+MO_DOWNLOAD_MOCK_MODE=success
+export MO_DOWNLOAD_MOCK_MODE
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "directory destination unexpectedly succeeded"
+fi
+assert_count 0
+[ -d "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "directory destination was modified"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case symlink-directory-destination
+mkdir "$MO_DOWNLOAD_MOCK_STATE/real-directory"
+ln -s real-directory "$MO_DOWNLOAD_MOCK_STATE/result"
+MO_DOWNLOAD_MOCK_MODE=success
+export MO_DOWNLOAD_MOCK_MODE
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "symlink-to-directory destination unexpectedly succeeded"
+fi
+assert_count 0
+[ -L "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "directory symlink destination was modified"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case fresh-download
+MO_DOWNLOAD_MOCK_MODE=success
+export MO_DOWNLOAD_MOCK_MODE
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 1
+assert_retry_contract
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "fresh download installed wrong content"
+assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case checksum-failure
+MO_DOWNLOAD_MOCK_MODE=always-corrupt
+export MO_DOWNLOAD_MOCK_MODE
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "checksum mismatch unexpectedly succeeded"
+fi
+assert_count 1
+[ ! -e "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "checksum mismatch was installed"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case stale-cache
+printf 'old dependency version\n' > "$MO_DOWNLOAD_MOCK_STATE/result"
+MO_DOWNLOAD_MOCK_MODE=success
+export MO_DOWNLOAD_MOCK_MODE
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 1
+assert_retry_contract
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "stale cache was not replaced"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case legacy-transport-retry
+MO_DOWNLOAD_MOCK_MODE=transport-once
+MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS=0
+export MO_DOWNLOAD_MOCK_MODE MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 2
+assert_legacy_retry_contract
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "legacy curl retry installed wrong content"
+assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS=1
+export MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS
+
+new_case exhausted-transport
+printf 'previous invalid dependency\n' > "$MO_DOWNLOAD_MOCK_STATE/result"
+cp "$MO_DOWNLOAD_MOCK_STATE/result" "$MO_DOWNLOAD_MOCK_STATE/original"
+MO_DOWNLOAD_MOCK_MODE=always-fail
+export MO_DOWNLOAD_MOCK_MODE
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "persistent transport failure unexpectedly succeeded"
+fi
+assert_count 1
+assert_retry_contract
+cmp "$MO_DOWNLOAD_MOCK_STATE/original" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "failed download replaced existing destination"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case byte-limit
+MO_DOWNLOAD_MOCK_MODE=success
+MO_DOWNLOAD_ATTEMPTS=1
+MO_DOWNLOAD_MAX_BYTES=8
+export MO_DOWNLOAD_MOCK_MODE MO_DOWNLOAD_ATTEMPTS MO_DOWNLOAD_MAX_BYTES
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "oversized response unexpectedly succeeded"
+fi
+assert_count 1
+[ ! -e "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "oversized response was installed"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+MO_DOWNLOAD_ATTEMPTS=3
+MO_DOWNLOAD_MAX_BYTES=1048576
+export MO_DOWNLOAD_ATTEMPTS MO_DOWNLOAD_MAX_BYTES
+
+new_case streaming-byte-limit
+MO_DOWNLOAD_MOCK_MODE=oversized-stream
+MO_DOWNLOAD_ATTEMPTS=1
+MO_DOWNLOAD_MAX_BYTES=4096
+export MO_DOWNLOAD_MOCK_MODE MO_DOWNLOAD_ATTEMPTS MO_DOWNLOAD_MAX_BYTES
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "unbounded streaming response unexpectedly succeeded"
+fi
+assert_count 1
+[ ! -e "$MO_DOWNLOAD_MOCK_STATE/stream-completed" ] || fail "streaming transfer completed past the byte limit"
+[ ! -e "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "unbounded streaming response was installed"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+MO_DOWNLOAD_ATTEMPTS=3
+MO_DOWNLOAD_MAX_BYTES=1048576
+export MO_DOWNLOAD_ATTEMPTS MO_DOWNLOAD_MAX_BYTES
+
+new_case concurrent
+MO_DOWNLOAD_MOCK_MODE=concurrent-success
+export MO_DOWNLOAD_MOCK_MODE
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result" &
+pid1=$!
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result" &
+pid2=$!
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result" &
+pid3=$!
+wait "$pid1"
+wait "$pid2"
+wait "$pid3"
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "concurrent downloads installed wrong content"
+assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+echo "PASS: download bounds, retry, verification, permissions, cache, and failure atomicity"

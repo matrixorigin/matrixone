@@ -13,6 +13,7 @@
 # limitations under the License.
 
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+DOWNLOAD=$(PWD)/download
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
 # Extracted third-party sources live in _-prefixed directories: go/build skips
@@ -42,8 +43,56 @@ CROARING_DIR=CRoaring-4.7.0
 CROARING_TAR=$(CROARING_DIR).tar.gz
 CROARING_TMP=_croaring_build
 CROARING_CFLAGS=-O3 -fPIC -std=c11
+JEMALLOC_DIR=_jemalloc_build
+JEMALLOC_TAR=jemalloc-5.3.1.tar.bz2
+JEMALLOC_SHA256=3826bc80232f22ed5c4662f3034f799ca316e819103bdc7bb99018a421706f92
+JEMALLOC_CONFIGURE_FLAGS=--disable-shared --enable-static --enable-stats --with-jemalloc-prefix=mo_je_ --with-private-namespace=mo_je_
 
-all: init usearch xxhash croaring
+# Prebuilt onnxruntime shared library (CPU-only) from the MatrixOne thirdparty
+# mirror. GPU (linux_x64_gpu_cuda12) is intentionally not fetched here.
+# ONNX_LIB is the local filename our loader resolves; ONNX_SRC is the source path
+# in the mirror (whose real files are versioned/symlinked).
+#
+# The download is pinned to an immutable mirror commit and verified against a
+# per-platform SHA-256, so the same MatrixOne commit always produces the same
+# native library and a changed mirror artifact fails the build instead of
+# silently shipping different code.
+ONNX_VERSION=1.26.0
+ONNX_REPO_COMMIT=655365097e21c4df0f82337063f9a12b66700593
+ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
+# The MatrixOne CI builder image ships these pinned artifacts. Keep this a
+# versioned directory so a base-image update cannot accidentally satisfy a
+# different ONNX Runtime version. A local build simply falls back to DOWNLOAD.
+ONNX_PREBUILT_DIR ?= /opt/matrixone/onnxruntime/$(ONNX_VERSION)
+ONNX_SUPPORTED=
+ifeq ($(UNAME_S)_$(UNAME_M),darwin_arm64)
+  ONNX_SUPPORTED=1
+  ONNX_LIB=onnxruntime_arm64.dylib
+  ONNX_SRC=osx_arm64/lib/libonnxruntime.$(ONNX_VERSION).dylib
+  ONNX_SHA256=30afadcfc3c704f7671f8430d6252956651c1972373901d2be629da2e6a4d8ee
+else ifeq ($(UNAME_S)_$(UNAME_M),darwin_aarch64)
+  ONNX_SUPPORTED=1
+  ONNX_LIB=onnxruntime_arm64.dylib
+  ONNX_SRC=osx_arm64/lib/libonnxruntime.$(ONNX_VERSION).dylib
+  ONNX_SHA256=30afadcfc3c704f7671f8430d6252956651c1972373901d2be629da2e6a4d8ee
+else ifeq ($(UNAME_S)_$(UNAME_M),linux_x86_64)
+  ONNX_SUPPORTED=1
+  ONNX_LIB=onnxruntime.so
+  ONNX_SRC=linux_x64/lib/libonnxruntime.so.$(ONNX_VERSION)
+  ONNX_SHA256=5bd5bedf736fc501692435d0ec4f6e8b2bdf48cd30af8e6d00d61b3ddc9a7ab8
+else ifeq ($(UNAME_S)_$(UNAME_M),linux_aarch64)
+  ONNX_SUPPORTED=1
+  ONNX_LIB=onnxruntime_arm64.so
+  ONNX_SRC=linux_aarch64/lib/libonnxruntime.so.$(ONNX_VERSION)
+  ONNX_SHA256=115ecb838e703d390262b8b4d07d5248e6693c67658d4c98c48f94905ab27af4
+else ifeq ($(UNAME_S)_$(UNAME_M),linux_arm64)
+  ONNX_SUPPORTED=1
+  ONNX_LIB=onnxruntime_arm64.so
+  ONNX_SRC=linux_aarch64/lib/libonnxruntime.so.$(ONNX_VERSION)
+  ONNX_SHA256=115ecb838e703d390262b8b4d07d5248e6693c67658d4c98c48f94905ab27af4
+endif
+
+all: init usearch xxhash croaring jemalloc onnxruntime
 
 init:
 	mkdir -p install
@@ -129,6 +178,26 @@ endif
 
 croaring: install/lib/libroaring.a
 
+jemalloc: install/lib/libjemalloc.a
+
+# jemalloc is statically linked into mo-service and all public symbols are
+# prefixed with mo_je_. This keeps Memory Cache's allocator independent from
+# libc malloc and the C/C++ dependencies already linked into MatrixOne.
+install/lib/libjemalloc.a:
+	@actual="$$(shasum -a 256 $(JEMALLOC_TAR) | awk '{print $$1}')"; \
+	if [ "$$actual" != "$(JEMALLOC_SHA256)" ]; then \
+		echo "jemalloc tarball checksum mismatch: $$actual" >&2; \
+		exit 1; \
+	fi
+	rm -rf $(JEMALLOC_DIR)
+	mkdir -p $(JEMALLOC_DIR)
+	tar xjf $(JEMALLOC_TAR) -C $(JEMALLOC_DIR) --strip-components=1
+	(cd $(JEMALLOC_DIR) && CC="$(CC)" CFLAGS="$(CFLAGS) -fPIC" ./configure $(JEMALLOC_CONFIGURE_FLAGS))
+	$(MAKE) -C $(JEMALLOC_DIR) build_lib
+	cp $(JEMALLOC_DIR)/lib/libjemalloc.a install/lib/libjemalloc.a
+	cp $(JEMALLOC_DIR)/include/jemalloc/jemalloc.h install/include/jemalloc.h
+	rm -rf $(JEMALLOC_DIR)
+
 # Build CRoaring as a static lib from its single-file amalgamation, and install
 # the amalgamated header. Used by the cgo doc_id filter (roaring64 bitset).
 install/lib/libroaring.a:
@@ -141,7 +210,30 @@ install/lib/libroaring.a:
 	cp $(CROARING_TMP)/roaring.h install/include/roaring.h
 	rm -rf $(CROARING_TMP)
 
-clean:
-	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP)
+# Download the prebuilt onnxruntime $(ONNX_VERSION) shared library (CPU) for the
+# current platform, saved under the name our loader resolves:
+#   linux amd64  -> onnxruntime.so
+#   linux arm64  -> onnxruntime_arm64.so
+#   macOS arm64  -> onnxruntime_arm64.dylib
+ifeq ($(ONNX_SUPPORTED),1)
+onnxruntime: | init
+	@if test -r "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)"; then \
+		echo "using prebuilt ONNX Runtime $(ONNX_VERSION) from $(ONNX_PREBUILT_DIR)"; \
+		install -m 0644 "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)" "install/lib/$(ONNX_LIB)"; \
+		actual_sha256="$$(sha256sum "install/lib/$(ONNX_LIB)" | awk '{print $$1}')"; \
+		test "$$actual_sha256" = "$(ONNX_SHA256)" || { echo "ONNX Runtime checksum mismatch: got $$actual_sha256, expected $(ONNX_SHA256)" >&2; rm -f "install/lib/$(ONNX_LIB)"; exit 1; }; \
+	else \
+		$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "install/lib/$(ONNX_LIB)"; \
+	fi
+else
+onnxruntime:
+	$(error unsupported ONNX Runtime platform: $(UNAME_S)/$(UNAME_M))
+endif
 
-.PHONY: usearch stringzilla fp16 simsimd init croaring
+test-download:
+	$(PWD)/download_test
+
+clean:
+	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP) $(JEMALLOC_DIR)
+
+.PHONY: usearch stringzilla fp16 simsimd init croaring jemalloc onnxruntime test-download

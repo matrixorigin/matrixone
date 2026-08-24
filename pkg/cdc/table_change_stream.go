@@ -34,6 +34,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
+	"golang.org/x/sync/semaphore"
 )
 
 var _ ChangeReader = new(TableChangeStream)
@@ -79,9 +80,10 @@ type TableChangeStream struct {
 	cancelOnce       sync.Once
 
 	// Configuration
-	initSnapshotSplitTxn bool
-	startTs, endTs       types.TS
-	noFull               bool
+	initSnapshotSplitTxn   bool
+	startTs, endTs         types.TS
+	noFull                 bool
+	initialSnapshotLimiter *semaphore.Weighted
 
 	// Column indices (for AtomicBatch)
 	insTsColIdx           int
@@ -95,6 +97,7 @@ type TableChangeStream struct {
 	retryable          bool        // Protected by stateMu, updated together with lastError
 	cleanupRollbackErr error       // Set by processWithTxn defer if rollback fails (protected by stateMu)
 	hasSucceeded       atomic.Bool // Tracks if reader has successfully processed data at least once
+	initialSyncPending atomic.Bool // Limits batches until the first full-sync round completes successfully
 
 	// Retry state with exponential backoff
 	retryCount      int           // Current retry count for the same error type
@@ -123,6 +126,19 @@ type TableChangeStream struct {
 
 type TableChangeStreamOption func(*tableChangeStreamOptions)
 
+// snapshotPermit follows one initial-snapshot batch from the reader to the
+// sinker. Release is idempotent because cleanup paths can race with shutdown.
+type snapshotPermit struct {
+	once    sync.Once
+	release func()
+}
+
+func (p *snapshotPermit) Release() {
+	if p != nil {
+		p.once.Do(p.release)
+	}
+}
+
 type tableChangeStreamOptions struct {
 	watermarkStallThreshold   time.Duration
 	noProgressWarningInterval time.Duration
@@ -130,6 +146,7 @@ type tableChangeStreamOptions struct {
 	retryBackoffBase          time.Duration // Base delay for exponential backoff
 	retryBackoffMax           time.Duration // Max delay for exponential backoff
 	retryBackoffFactor        float64       // Factor for exponential backoff
+	initialSnapshotLimiter    *semaphore.Weighted
 }
 
 const (
@@ -195,6 +212,14 @@ func WithRetryBackoff(base, max time.Duration, factor float64) TableChangeStream
 		opts.retryBackoffBase = base
 		opts.retryBackoffMax = max
 		opts.retryBackoffFactor = factor
+	}
+}
+
+// WithInitialSnapshotLimiter shares a task-level in-flight batch limit across
+// table streams. It applies only to the first successful full-sync round.
+func WithInitialSnapshotLimiter(limiter *semaphore.Weighted) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.initialSnapshotLimiter = limiter
 	}
 }
 
@@ -313,6 +338,7 @@ var NewTableChangeStream = func(
 		startTs:                   startTs,
 		endTs:                     endTs,
 		noFull:                    noFull,
+		initialSnapshotLimiter:    opts.initialSnapshotLimiter,
 		insTsColIdx:               insTsColIdx,
 		insCompositedPkColIdx:     insCompositedPkColIdx,
 		delTsColIdx:               delTsColIdx,
@@ -327,7 +353,7 @@ var NewTableChangeStream = func(
 		retryBackoffMax:    opts.retryBackoffMax,
 		retryBackoffFactor: opts.retryBackoffFactor,
 	}
-
+	stream.initialSyncPending.Store(!noFull)
 	tableLabel := progressTracker.tableKey()
 	v2.CdcTableStuckGauge.WithLabelValues(tableLabel).Set(0)
 	v2.CdcTableLastActivityTimestamp.WithLabelValues(tableLabel).Set(float64(time.Now().Unix()))
@@ -803,6 +829,23 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	return err
 }
 
+func (s *TableChangeStream) acquireInitialSnapshotPermit(ctx context.Context) (*snapshotPermit, error) {
+	if !s.initialSyncPending.Load() || s.initialSnapshotLimiter == nil {
+		return nil, nil
+	}
+
+	if s.progressTracker != nil {
+		s.progressTracker.SetState("waiting_for_initial_snapshot_batch_slot")
+	}
+	if err := s.initialSnapshotLimiter.Acquire(ctx, 1); err != nil {
+		return nil, err
+	}
+
+	return &snapshotPermit{
+		release: func() { s.initialSnapshotLimiter.Release(1) },
+	}, nil
+}
+
 // updateErrorState updates lastError and retryable atomically
 // Also tracks retry count and error type for exponential backoff
 // Design: Preserves original error during retries to ensure deterministic error reporting
@@ -1160,6 +1203,7 @@ func (s *TableChangeStream) processWithTxn(
 		)
 		// Clear error on first success (lazy, eventual consistency)
 		s.clearErrorOnFirstSuccess(ctx)
+		s.initialSyncPending.Store(false)
 		s.progressTracker.EndRound(true, nil)
 		return nil // Graceful end
 	}
@@ -1304,13 +1348,28 @@ func (s *TableChangeStream) processWithTxn(
 		// Update memory pool metrics
 		v2.CdcMpoolInUseBytesGauge.Set(float64(s.mp.Stats().NumCurrBytes.Load()))
 
+		// Acquire before collector.Next so blocked table streams do not retain an
+		// unbounded number of large initial-snapshot batches. Non-snapshot results
+		// release the permit immediately below.
+		permit, acquireErr := s.acquireInitialSnapshotPermit(ctx)
+		if acquireErr != nil {
+			s.progressTracker.EndRound(false, acquireErr)
+			return acquireErr
+		}
+
 		// Get next change
 		start = time.Now()
 		changeData, err := collector.Next(ctx)
 		v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil {
+			permit.Release()
 			s.progressTracker.EndRound(false, err)
 			return err
+		}
+		if changeData.Type == ChangeTypeSnapshot && changeData.HasData() {
+			changeData.snapshotPermit = permit
+		} else {
+			permit.Release()
 		}
 
 		// FIX: Check pause before processing NoMoreData
@@ -1346,9 +1405,13 @@ func (s *TableChangeStream) processWithTxn(
 
 		// Process change
 		if err = s.dataProcessor.ProcessChange(ctx, changeData); err != nil {
+			changeData.releaseSnapshotPermit()
 			s.progressTracker.EndRound(false, err)
 			return err
 		}
+		// ProcessChange transfers snapshot permits with batch ownership. This is a
+		// no-op after a successful transfer and covers all early-return paths.
+		changeData.releaseSnapshotPermit()
 
 		// Track batch processing
 		if changeData.Type != ChangeTypeNoMoreData {
@@ -1380,7 +1443,7 @@ func (s *TableChangeStream) processWithTxn(
 		if changeData.Type == ChangeTypeNoMoreData {
 			// Clear error on first success (lazy, eventual consistency)
 			s.clearErrorOnFirstSuccess(ctx)
-
+			s.initialSyncPending.Store(false)
 			// Mark successful round completion
 			s.progressTracker.EndRound(true, nil)
 			s.progressTracker.UpdateWatermark(toTs)

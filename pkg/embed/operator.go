@@ -62,6 +62,7 @@ type operator struct {
 		gossipNode *gossip.Node
 		clock      clock.Clock
 		logger     *zap.Logger
+		fs         fileServiceCloser
 	}
 }
 
@@ -69,6 +70,17 @@ type service interface {
 	Start() error
 	Close() error
 }
+
+type fileServiceCloser interface {
+	Close(context.Context)
+}
+
+const (
+	defaultHAKeeperRunningTimeout = 2 * time.Minute
+	testingHAKeeperRunningTimeout = 5 * time.Minute
+	defaultAnyShardReadyTimeout   = 30 * time.Second
+	testingAnyShardReadyTimeout   = 5 * time.Minute
+)
 
 func newService(
 	file string,
@@ -121,17 +133,41 @@ func (op *operator) Close() error {
 	op.Lock()
 	defer op.Unlock()
 
-	if op.state == stopped {
-		return moerr.NewInvalidStateNoCtx("service already stopped")
+	if op.state == stopped &&
+		op.reset.svc == nil &&
+		op.reset.stopper == nil &&
+		op.reset.fs == nil {
+		return nil
 	}
 
-	if err := op.reset.svc.Close(); err != nil {
-		return err
+	var err error
+	if op.reset.svc != nil {
+		err = op.reset.svc.Close()
+		if err == nil {
+			op.reset.svc = nil
+		}
 	}
+	if op.reset.stopper != nil {
+		op.reset.stopper.Stop()
+		op.reset.stopper = nil
+	}
+	if op.reset.fs != nil {
+		op.reset.fs.Close(context.Background())
+		op.reset.fs = nil
+	}
+	op.reset.shutdownC = nil
+	if err == nil {
+		op.state = stopped
+	}
+	return err
+}
 
-	op.reset.stopper.Stop()
-	op.state = stopped
-	return nil
+func (op *operator) needsCleanup() bool {
+	op.RLock()
+	defer op.RUnlock()
+	return op.reset.svc != nil ||
+		op.reset.stopper != nil ||
+		op.reset.fs != nil
 }
 
 func (op *operator) Start() error {
@@ -140,6 +176,11 @@ func (op *operator) Start() error {
 
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
+	}
+	if op.serviceType == metadata.ServiceType_CN {
+		if err := op.verifySiriusBenchmarkNoGC(); err != nil {
+			return err
+		}
 	}
 
 	if err := op.init(); err != nil {
@@ -154,6 +195,7 @@ func (op *operator) Start() error {
 	if err != nil {
 		return err
 	}
+	op.reset.fs = fs
 
 	// start up system module to do some calculation.
 	system.Run(op.reset.stopper)
@@ -206,7 +248,7 @@ func (op *operator) startLogServiceLocked(
 	if err != nil {
 		return err
 	}
-	if err := s.Start(); err != nil {
+	if err := op.startConstructedServiceLocked(s); err != nil {
 		return err
 	}
 	if op.cfg.LogService.BootstrapConfig.BootstrapCluster {
@@ -215,7 +257,6 @@ func (op *operator) startLogServiceLocked(
 			return err
 		}
 	}
-	op.reset.svc = s
 	return nil
 }
 
@@ -240,21 +281,23 @@ func (op *operator) startTNServiceLocked(
 	if err != nil {
 		return err
 	}
-	if err := s.Start(); err != nil {
+	if err := op.startConstructedServiceLocked(s); err != nil {
 		return err
 	}
-	op.reset.svc = s
 	return nil
 }
 
 func (op *operator) startCNServiceLocked(
 	fs fileservice.FileService,
 ) error {
+	if err := op.verifySiriusBenchmarkNoGC(); err != nil {
+		return err
+	}
+	c := op.cfg.getCNServiceConfig()
 	if err := op.waitClusterConditionLocked(op.waitAnyShardReadyLocked); err != nil {
 		return err
 	}
 	op.cfg.initMetaCache()
-	c := op.cfg.getCNServiceConfig()
 	commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
 	s, err := cnservice.NewService(
 		&c,
@@ -269,11 +312,28 @@ func (op *operator) startCNServiceLocked(
 	if err != nil {
 		return err
 	}
-	if err := s.Start(); err != nil {
+	if err := op.startConstructedServiceLocked(s); err != nil {
 		return err
 	}
-	op.reset.svc = s
 	return nil
+}
+
+func (op *operator) verifySiriusBenchmarkNoGC() error {
+	// An individual embedded CN operator neither owns nor observes the TN that
+	// serves its snapshots. A sibling TN config is therefore not proof that GC
+	// is disabled on the actual TN, so embedded benchmark mode fails closed.
+	return cnservice.VerifySiriusBenchmarkNoGC(
+		&op.cfg.CN,
+		false,
+	)
+}
+
+func (op *operator) startConstructedServiceLocked(s service) error {
+	// Start may fail after the concrete service has opened listeners or started
+	// goroutines. Transfer ownership before calling it so rollback can always
+	// reach Close.
+	op.reset.svc = s
+	return s.Start()
 }
 
 func (op *operator) init() error {
@@ -377,25 +437,44 @@ func (op *operator) setupGossip() error {
 func (op *operator) waitClusterConditionLocked(
 	waitFunc func(logservice.CNHAKeeperClient) error,
 ) error {
-	client, err := op.waitHAKeeperReadyLocked()
+	return op.waitClusterConditionWithClientFactory(
+		op.waitHAKeeperReadyLocked,
+		waitFunc,
+	)
+}
+
+func (op *operator) waitClusterConditionWithClientFactory(
+	getClient func() (logservice.CNHAKeeperClient, error),
+	waitFunc func(logservice.CNHAKeeperClient) error,
+) error {
+	client, err := getClient()
 	if err != nil {
 		return err
 	}
-	if err := waitFunc(client); err != nil {
-		return err
-	}
-	if err := client.Close(); err != nil {
-		op.reset.logger.Error("close hakeeper client failed", zap.Error(err))
-	}
-	return nil
+	defer func() {
+		if err := client.Close(); err != nil {
+			op.reset.logger.Error("close hakeeper client failed", zap.Error(err))
+		}
+	}()
+	return waitFunc(client)
 }
 
 func (op *operator) waitHAKeeperRunningLocked(
 	client logservice.CNHAKeeperClient,
 ) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*2, moerr.CauseWaitHAKeeperRunningLocked)
+	ctx, cancel := context.WithTimeoutCause(
+		context.TODO(),
+		op.hakeeperRunningTimeout(),
+		moerr.CauseWaitHAKeeperRunningLocked,
+	)
 	defer cancel()
+	return op.waitHAKeeperRunning(ctx, client)
+}
 
+func (op *operator) waitHAKeeperRunning(
+	ctx context.Context,
+	client logservice.CNHAKeeperClient,
+) error {
 	// wait HAKeeper running
 	for {
 		state, err := client.GetClusterState(ctx)
@@ -406,17 +485,40 @@ func (op *operator) waitHAKeeperRunningLocked(
 			state.State != logpb.HAKeeperRunning {
 			// not ready
 			op.reset.logger.Info("hakeeper not ready, retry")
-			time.Sleep(time.Second)
+			if err := waitStartupRetry(ctx, op.cfg.HAKeeperRunningRetryInterval.Duration); err != nil {
+				return err
+			}
 			continue
 		}
 		return err
 	}
 }
 
-func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*30, moerr.CauseWaitAnyShardReadyLocked)
-	defer cancel()
+func (op *operator) hakeeperRunningTimeout() time.Duration {
+	if op.testing {
+		return testingHAKeeperRunningTimeout
+	}
+	return defaultHAKeeperRunningTimeout
+}
 
+func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) error {
+	ctx, cancel := context.WithTimeoutCause(
+		context.TODO(),
+		op.anyShardReadyTimeout(),
+		moerr.CauseWaitAnyShardReadyLocked,
+	)
+	defer cancel()
+	return op.waitAnyShardReady(ctx, client)
+}
+
+func (op *operator) anyShardReadyTimeout() time.Duration {
+	if op.testing {
+		return testingAnyShardReadyTimeout
+	}
+	return defaultAnyShardReadyTimeout
+}
+
+func (op *operator) waitAnyShardReady(ctx context.Context, client logservice.CNHAKeeperClient) error {
 	// wait shard ready
 	for {
 		if ok, err := func() (bool, error) {
@@ -449,7 +551,21 @@ func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) 
 			op.reset.logger.Info("shard ready")
 			return nil
 		}
-		time.Sleep(time.Second)
+		if err := waitStartupRetry(ctx, op.cfg.TNShardReadyRetryInterval.Duration); err != nil {
+			return err
+		}
+	}
+}
+
+func waitStartupRetry(ctx context.Context, interval time.Duration) error {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return moerr.AttachCause(ctx, ctx.Err())
+	case <-timer.C:
+		return nil
 	}
 }
 

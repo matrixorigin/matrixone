@@ -19,6 +19,7 @@ package nulls
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -156,7 +157,7 @@ func Add(nsp *Nulls, sels ...uint64) {
 
 func (nsp *Nulls) AddRange(start, end uint64) {
 	if nsp != nil {
-		TryExpand(nsp, int(end+1))
+		TryExpand(nsp, int(end))
 		nsp.np.AddRange(start, end)
 	}
 }
@@ -225,7 +226,7 @@ func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
 		return
 	}
 
-	b.np.InitWithSize(int64(end + 1 - bias))
+	b.np.InitWithSize(int64(end - bias))
 	for ; start < end; start++ {
 		if nsp.np.Contains(start) {
 			b.np.Add(start - bias)
@@ -280,7 +281,27 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 	}
 }
 
+// FilterInPlaceOrdered preserves Filter semantics for Vector.Shrink's ordered
+// selection contract without allocating a second row-scaled bitmap.
+func FilterInPlaceOrdered(nsp *Nulls, sels []int64, negate bool) {
+	if nsp.np.EmptyByFlag() {
+		return
+	}
+	if !nsp.np.HasExternalStorage() {
+		Filter(nsp, sels, negate)
+		return
+	}
+	nsp.np.RemapOrdered(sels, negate)
+}
+
 func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
+	FilterByMaskWithOffset(nsp, sels, negate, 0)
+}
+
+// FilterByMaskWithOffset applies sels after translating every selected row by
+// offset. The selection bitmap is relative to a window of the owning vector,
+// while the null bitmap remains in the full vector's row domain.
+func FilterByMaskWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool, offset uint64) {
 	if nsp.np.EmptyByFlag() {
 		return
 	}
@@ -290,25 +311,22 @@ func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 		oldLen := nsp.np.Len()
 		var bm bitmap.Bitmap
 		bm.InitWithSize(oldLen)
-		sel := itr.Next()
-		for oldIdx, newIdx, selIdx := int64(0), 0, 0; oldIdx < oldLen; oldIdx++ {
-			if uint64(oldIdx) != sel {
+		var sel uint64
+		hasSel := itr.HasNext()
+		if hasSel {
+			sel = itr.Next() + offset
+		}
+		for oldIdx, newIdx := int64(0), 0; oldIdx < oldLen; oldIdx++ {
+			if !hasSel || uint64(oldIdx) != sel {
 				if nsp.np.Contains(uint64(oldIdx)) {
 					bm.Add(uint64(newIdx))
 				}
 				newIdx++
 			} else {
-				selIdx++
-				if !itr.HasNext() {
-					for idx := oldIdx + 1; idx < oldLen; idx++ {
-						if nsp.np.Contains(uint64(idx)) {
-							bm.Add(uint64(newIdx))
-						}
-						newIdx++
-					}
-					break
+				hasSel = itr.HasNext()
+				if hasSel {
+					sel = itr.Next() + offset
 				}
-				sel = itr.Next()
 			}
 		}
 		nsp.np.InitWith(&bm)
@@ -318,8 +336,9 @@ func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 		upperLimit := nsp.np.Len()
 		idx := 0
 		for itr.HasNext() {
-			sel := itr.Next()
+			sel := itr.Next() + offset
 			if sel >= uint64(upperLimit) {
+				idx++
 				continue
 			}
 			if nsp.np.Contains(sel) {
@@ -329,6 +348,25 @@ func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 		}
 		nsp.np.InitWith(&bm)
 	}
+}
+
+// FilterByMaskInPlace rewrites a null bitmap using the selection bitmap's
+// naturally ordered iterator and therefore requires no row-scaled scratch.
+func FilterByMaskInPlace(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
+	FilterByMaskInPlaceWithOffset(nsp, sels, negate, 0)
+}
+
+// FilterByMaskInPlaceWithOffset is FilterByMaskInPlace for a selection whose
+// row indexes are relative to a window beginning at offset.
+func FilterByMaskInPlaceWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool, offset uint64) {
+	if nsp.np.EmptyByFlag() {
+		return
+	}
+	if !nsp.np.HasExternalStorage() {
+		FilterByMaskWithOffset(nsp, sels, negate, offset)
+		return
+	}
+	nsp.np.RemapMaskOrderedWithOffset(sels, negate, offset)
 }
 
 // XXX This emptyFlag thing is broken -- it simply cannot be used concurrently.
@@ -370,6 +408,20 @@ func (nsp *Nulls) Show() ([]byte, error) {
 		return nil, nil
 	}
 	return nsp.np.Marshal(), nil
+}
+
+func (nsp *Nulls) MarshalSize() int {
+	if nsp == nil || nsp.np.EmptyByFlag() {
+		return 0
+	}
+	return nsp.np.MarshalSize()
+}
+
+func (nsp *Nulls) MarshalTo(w io.Writer) error {
+	if nsp == nil || nsp.np.EmptyByFlag() {
+		return nil
+	}
+	return nsp.np.MarshalTo(w)
 }
 
 // ShowV1 in version 1, bitmap is v1

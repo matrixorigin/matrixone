@@ -41,6 +41,10 @@ func NewGeneratedColBinder(sysCtx context.Context, colNames []string, colTypes [
 	return b
 }
 
+func (b *GeneratedColBinder) enableCanonicalNameConstValueCast() {
+	b.allowCanonicalNameConstValueCast = true
+}
+
 func (b *GeneratedColBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
@@ -63,7 +67,7 @@ func (b *GeneratedColBinder) BindColRef(astExpr *tree.UnresolvedName, _ int32, _
 			}, nil
 		}
 	}
-	return nil, moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist or cannot be referenced by a generated column", astExpr.ColNameOrigin())
+	return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist or cannot be referenced by a generated column", astExpr.ColNameOrigin())
 }
 
 func (b *GeneratedColBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

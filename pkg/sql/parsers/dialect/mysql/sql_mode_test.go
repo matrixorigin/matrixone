@@ -62,3 +62,22 @@ func TestHasMatrixOneNativeSQLMode(t *testing.T) {
 		})
 	}
 }
+
+func TestParserSQLModeCombinations(t *testing.T) {
+	modes := ParserSQLModeCombinations()
+	if len(modes) != 16 {
+		t.Fatalf("ParserSQLModeCombinations() returned %d modes, want 16", len(modes))
+	}
+	if modes[0] != "" {
+		t.Fatalf("first parser mode = %q, want default mode", modes[0])
+	}
+
+	seen := make(map[SQLModeFlags]string, len(modes))
+	for _, mode := range modes {
+		flags := ParseSQLModeFlags(mode)
+		if previous, ok := seen[flags]; ok {
+			t.Fatalf("modes %q and %q produce duplicate flags %d", previous, mode, flags)
+		}
+		seen[flags] = mode
+	}
+}

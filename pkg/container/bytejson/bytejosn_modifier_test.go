@@ -17,6 +17,7 @@ package bytejson
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -153,6 +154,144 @@ func TestRemoveRejectsNonSimplePath(t *testing.T) {
 
 	_, err = bj.Remove([]*Path{&path})
 	require.Error(t, err)
+}
+
+func TestArrayAppend(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		paths  []string
+		values []string
+		want   string
+	}{
+		{
+			name:   "append to nested array",
+			input:  `{"arr":[1,2]}`,
+			paths:  []string{"$.arr"},
+			values: []string{"3"},
+			want:   `{"arr": [1, 2, 3]}`,
+		},
+		{
+			name:   "autowrap scalar",
+			input:  `{"value":1}`,
+			paths:  []string{"$.value"},
+			values: []string{"2"},
+			want:   `{"value": [1, 2]}`,
+		},
+		{
+			name:   "autowrap object at root",
+			input:  `{"a":1}`,
+			paths:  []string{"$"},
+			values: []string{`"z"`},
+			want:   `[{"a": 1}, "z"]`,
+		},
+		{
+			name:   "scalar index zero uses path autowrap",
+			input:  `1`,
+			paths:  []string{"$[0]"},
+			values: []string{"2"},
+			want:   `[1, 2]`,
+		},
+		{
+			name:   "json null is a scalar value",
+			input:  `null`,
+			paths:  []string{"$"},
+			values: []string{"1"},
+			want:   `[null, 1]`,
+		},
+		{
+			name:   "missing path is noop",
+			input:  `{"a":[1]}`,
+			paths:  []string{"$.missing"},
+			values: []string{"2"},
+			want:   `{"a": [1]}`,
+		},
+		{
+			name:   "paths are applied left to right",
+			input:  `{"a":[]}`,
+			paths:  []string{"$.a", "$.a"},
+			values: []string{"1", "2"},
+			want:   `{"a": [1, 2]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bj := mustParseByteJson(t, tt.input)
+			paths := make([]*Path, 0, len(tt.paths))
+			values := make([]ByteJson, 0, len(tt.values))
+			for _, pathStr := range tt.paths {
+				path, err := ParseJsonPath(pathStr)
+				require.NoError(t, err)
+				paths = append(paths, &path)
+			}
+			for _, value := range tt.values {
+				values = append(values, mustParseByteJson(t, value))
+			}
+
+			got, err := bj.Modify(paths, values, JsonModifyArrayAppend)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, mustMarshalByteJson(t, got))
+		})
+	}
+}
+
+func TestArrayAppendRejectsInvalidInputs(t *testing.T) {
+	bj := mustParseByteJson(t, `{"a":[1]}`)
+	path, err := ParseJsonPath("$.*")
+	require.NoError(t, err)
+
+	_, err = bj.Modify([]*Path{&path}, []ByteJson{mustParseByteJson(t, "2")}, JsonModifyArrayAppend)
+	require.Error(t, err)
+
+	path, err = ParseJsonPath("$.a")
+	require.NoError(t, err)
+	_, err = bj.Modify([]*Path{&path}, nil, JsonModifyArrayAppend)
+	require.Error(t, err)
+}
+
+func TestArrayAppendSizeMatchesEncoding(t *testing.T) {
+	tests := []struct {
+		input string
+		path  string
+		value string
+	}{
+		{input: `[1,2]`, path: "$", value: `3`},
+		{input: `1`, path: "$", value: `"x"`},
+		{input: `{"a":1}`, path: "$.a", value: `2`},
+		{input: `{"a":"x"}`, path: "$.a", value: `{"b":1}`},
+	}
+
+	for _, tt := range tests {
+		bj := mustParseByteJson(t, tt.input)
+		path, err := ParseJsonPath(tt.path)
+		require.NoError(t, err)
+		selected, exists := bj.querySimpleExist(&path, true)
+		require.True(t, exists)
+		value := mustParseByteJson(t, tt.value)
+		arraySize := arrayAppendSize(selected, value)
+		documentSize := arrayAppendDocumentSize(bj, selected, arraySize)
+
+		got, err := bj.Modify([]*Path{&path}, []ByteJson{value}, JsonModifyArrayAppend)
+		require.NoError(t, err)
+		require.Equal(t, arraySize, uint64(len(got.QuerySimple([]*Path{&path}).Data)))
+		require.Equal(t, documentSize, uint64(len(got.Data)))
+	}
+}
+
+func TestArrayAppendRejectsTooDeepResult(t *testing.T) {
+	input := nestedJSONArrayForLimit(JSONDocumentMaxNestingDepth, "1")
+	bj := mustParseByteJson(t, input)
+	pathString := "$" + strings.Repeat("[0]", JSONDocumentMaxNestingDepth)
+	path, err := ParseJsonPath(pathString)
+	require.NoError(t, err)
+
+	_, err = bj.Modify(
+		[]*Path{&path},
+		[]ByteJson{mustParseByteJson(t, "2")},
+		JsonModifyArrayAppend,
+	)
+	require.ErrorContains(t, err, "json document nesting depth exceeds 100")
 }
 
 func TestAppendBinaryJSON(t *testing.T) {
@@ -306,15 +445,20 @@ func TestAppendBinaryNumber(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gotType, gotBuf, err := appendBinaryNumber(nil, tt.input)
+			exportedType, exportedBuf, exportedErr := AppendBinaryNumber(nil, tt.input)
 
 			if tt.wantErr {
 				require.Error(t, err)
+				require.Error(t, exportedErr)
 				return
 			}
 
 			require.NoError(t, err)
+			require.NoError(t, exportedErr)
 			require.Equal(t, tt.wantType, gotType)
 			require.NotEmpty(t, gotBuf)
+			require.Equal(t, gotType, exportedType)
+			require.Equal(t, gotBuf, exportedBuf)
 		})
 	}
 }

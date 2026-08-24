@@ -35,6 +35,7 @@ func (s *store) registerRPCHandlers() {
 	s.server.RegisterMethodHandler(txn.TxnMethod_Read, s.handleRead)
 	s.server.RegisterMethodHandler(txn.TxnMethod_Write, s.handleWrite)
 	s.server.RegisterMethodHandler(txn.TxnMethod_Commit, s.handleCommit)
+	s.server.RegisterMethodHandler(txn.TxnMethod_CommitAutoIncrEpochFence, s.handleCommit)
 	s.server.RegisterMethodHandler(txn.TxnMethod_Rollback, s.handleRollback)
 
 	// debug request

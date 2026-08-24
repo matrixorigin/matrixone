@@ -35,8 +35,16 @@ const (
 
 type Partition struct {
 	ctr container
+	top *topNContainer
 
 	OrderBySpecs []*plan.OrderBySpec
+	Limit        *plan.Expr
+	// PartitionByCount splits OrderBySpecs into equality keys followed by
+	// per-partition ordering keys when Limit is non-nil.
+	PartitionByCount int32
+	// PreReduce is set when the consumer can recover partition boundaries from
+	// keys. It emits dense candidate batches instead of one batch per group.
+	PreReduce bool
 
 	vm.OperatorBase
 }
@@ -92,6 +100,10 @@ type container struct {
 }
 
 func (partition *Partition) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if partition.top != nil {
+		partition.top.reset(proc)
+		return
+	}
 	ctr := &partition.ctr
 
 	ctr.resetExes()
@@ -104,6 +116,11 @@ func (partition *Partition) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (partition *Partition) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if partition.top != nil {
+		partition.top.free(proc)
+		partition.top = nil
+		return
+	}
 	ctr := &partition.ctr
 	ctr.freeExes()
 	if ctr.buf != nil {

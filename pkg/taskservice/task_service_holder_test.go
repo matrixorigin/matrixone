@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -178,22 +179,271 @@ func TestRefreshTaskStorageCanRefresh(t *testing.T) {
 	}()
 
 	s.mu.RLock()
-	assert.Equal(t, stores["s1"], s.mu.store)
+	assert.Same(t, stores["s1"], s.mu.store)
 	assert.Equal(t, "s1", s.mu.lastAddress)
 	s.mu.RUnlock()
 
 	s.refresh(ctx, "s2")
 	s.mu.RLock()
-	assert.Equal(t, stores["s1"], s.mu.store)
+	assert.Same(t, stores["s1"], s.mu.store)
 	assert.Equal(t, "s1", s.mu.lastAddress)
 	s.mu.RUnlock()
 
 	address = "s2"
 	s.refresh(ctx, "s1")
 	s.mu.RLock()
-	assert.Equal(t, stores["s2"], s.mu.store)
+	assert.Same(t, stores["s2"], s.mu.store)
 	assert.Equal(t, "s2", s.mu.lastAddress)
 	s.mu.RUnlock()
+}
+
+func TestRefreshTaskStorageFailureKeepsCurrentStore(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+
+	tests := []struct {
+		name       string
+		factoryErr error
+	}{
+		{name: "create error", factoryErr: assert.AnError},
+		{name: "nil store"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			current := newTrackedTaskStorage()
+			address := "s1"
+			s := newRefreshableTaskStorage(
+				runtime.DefaultRuntime(),
+				func(context.Context, bool) (string, error) { return address, nil },
+				&testStorageFactory{
+					stores: map[string]TaskStorage{"s1": current},
+					errs:   map[string]error{"s2": test.factoryErr},
+				},
+			).(*refreshableTaskStorage)
+			t.Cleanup(func() { require.NoError(t, s.Close()) })
+
+			address = "s2"
+			s.refresh(ctx, "s1")
+
+			require.Zero(t, current.closeCount.Load())
+			s.mu.RLock()
+			require.Same(t, current, s.mu.store)
+			require.Equal(t, "s1", s.mu.lastAddress)
+			s.mu.RUnlock()
+		})
+	}
+}
+
+func TestRefreshTaskStorageOldGenerationCannotReplaceNew(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	ctx := context.Background()
+	current := newTrackedTaskStorage()
+	staleCandidate := newTrackedTaskStorage()
+	latest := newTrackedTaskStorage()
+	staleCreateStarted := make(chan struct{})
+	releaseStaleCreate := make(chan struct{})
+	var addressCalls atomic.Int64
+
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) {
+			switch addressCalls.Add(1) {
+			case 1:
+				return "s1", nil
+			case 2:
+				return "s2", nil
+			default:
+				return "s3", nil
+			}
+		},
+		taskStorageFactoryFunc(func(address string) (TaskStorage, error) {
+			switch address {
+			case "s1":
+				return current, nil
+			case "s2":
+				close(staleCreateStarted)
+				<-releaseStaleCreate
+				return staleCandidate, nil
+			case "s3":
+				return latest, nil
+			default:
+				return nil, assert.AnError
+			}
+		}),
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	staleDone := make(chan struct{})
+	go func() {
+		s.refresh(ctx, "s1")
+		close(staleDone)
+	}()
+	<-staleCreateStarted
+
+	// A later refresh wins while the older generation is still constructing.
+	s.refresh(ctx, "s1")
+	close(releaseStaleCreate)
+	<-staleDone
+
+	s.mu.RLock()
+	require.Same(t, latest, s.mu.store)
+	require.Equal(t, "s3", s.mu.lastAddress)
+	s.mu.RUnlock()
+	require.Equal(t, int64(1), current.closeCount.Load())
+	require.Equal(t, int64(1), staleCandidate.closeCount.Load())
+	require.Zero(t, latest.closeCount.Load())
+}
+
+func TestRefreshTaskStorageCloseRejectsConstructedReplacement(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	current := newTrackedTaskStorage()
+	replacement := newTrackedTaskStorage()
+	createStarted := make(chan struct{})
+	releaseCreate := make(chan struct{})
+	address := "s1"
+
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		taskStorageFactoryFunc(func(address string) (TaskStorage, error) {
+			if address == "s1" {
+				return current, nil
+			}
+			close(createStarted)
+			<-releaseCreate
+			return replacement, nil
+		}),
+	).(*refreshableTaskStorage)
+
+	address = "s2"
+	refreshDone := make(chan struct{})
+	go func() {
+		s.refresh(context.Background(), "s1")
+		close(refreshDone)
+	}()
+	<-createStarted
+
+	require.NoError(t, s.Close())
+	close(releaseCreate)
+	<-refreshDone
+
+	require.Equal(t, int64(1), current.closeCount.Load())
+	require.Equal(t, int64(1), replacement.closeCount.Load())
+	s.mu.RLock()
+	require.True(t, s.mu.closed)
+	require.Same(t, current, s.mu.store)
+	s.mu.RUnlock()
+}
+
+func TestRefreshTaskStorageCancellationRejectsConstructedReplacement(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	current := newTrackedTaskStorage()
+	replacement := newTrackedTaskStorage()
+	createStarted := make(chan struct{})
+	releaseCreate := make(chan struct{})
+	address := "s1"
+
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		taskStorageFactoryFunc(func(address string) (TaskStorage, error) {
+			if address == "s1" {
+				return current, nil
+			}
+			close(createStarted)
+			<-releaseCreate
+			return replacement, nil
+		}),
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	address = "s2"
+	ctx, cancel := context.WithCancel(context.Background())
+	refreshDone := make(chan struct{})
+	go func() {
+		s.refresh(ctx, "s1")
+		close(refreshDone)
+	}()
+	<-createStarted
+	cancel()
+	close(releaseCreate)
+	<-refreshDone
+
+	s.mu.RLock()
+	require.Same(t, current, s.mu.store)
+	require.Equal(t, "s1", s.mu.lastAddress)
+	s.mu.RUnlock()
+	require.Zero(t, current.closeCount.Load())
+	require.Equal(t, int64(1), replacement.closeCount.Load())
+}
+
+func TestRefreshTaskStorageRejectedSharedCandidateDoesNotCloseCurrent(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	current := newTrackedTaskStorage()
+	address := "s1"
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		NewFixedTaskStorageFactory(current),
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	address = "s2"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.refresh(ctx, "s1")
+
+	s.mu.RLock()
+	require.Same(t, current, s.mu.store)
+	require.Equal(t, "s1", s.mu.lastAddress)
+	s.mu.RUnlock()
+	require.Zero(t, current.closeCount.Load())
+}
+
+func TestRefreshTaskStorageClosedDoesNotConstructReplacement(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	current := newTrackedTaskStorage()
+	var createCount atomic.Int64
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "s1", nil },
+		taskStorageFactoryFunc(func(string) (TaskStorage, error) {
+			createCount.Add(1)
+			return current, nil
+		}),
+	).(*refreshableTaskStorage)
+
+	require.NoError(t, s.Close())
+	s.refresh(context.Background(), "s1")
+	require.Equal(t, int64(1), createCount.Load())
+	require.Equal(t, int64(1), current.closeCount.Load())
+}
+
+func TestRefreshTaskStoragePreviousCloseErrorDoesNotRollBackReplacement(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	current := newTrackedTaskStorage()
+	current.closeErr = assert.AnError
+	replacement := newTrackedTaskStorage()
+	address := "s1"
+	s := newRefreshableTaskStorage(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return address, nil },
+		&testStorageFactory{stores: map[string]TaskStorage{
+			"s1": current,
+			"s2": replacement,
+		}},
+	).(*refreshableTaskStorage)
+	defer func() { require.NoError(t, s.Close()) }()
+
+	address = "s2"
+	s.refresh(context.Background(), "s1")
+
+	s.mu.RLock()
+	require.Same(t, replacement, s.mu.store)
+	require.Equal(t, "s2", s.mu.lastAddress)
+	s.mu.RUnlock()
+	require.Equal(t, int64(1), current.closeCount.Load())
+	require.Zero(t, replacement.closeCount.Load())
 }
 
 func TestRefreshTaskStorageCanClose(t *testing.T) {
@@ -366,8 +616,34 @@ func TestMySQLBasedTaskStorageFactoryCreate(t *testing.T) {
 
 type testStorageFactory struct {
 	stores map[string]TaskStorage
+	errs   map[string]error
 }
 
 func (f *testStorageFactory) Create(address string) (TaskStorage, error) {
+	if err := f.errs[address]; err != nil {
+		return nil, err
+	}
 	return f.stores[address], nil
+}
+
+type taskStorageFactoryFunc func(address string) (TaskStorage, error)
+
+func (f taskStorageFactoryFunc) Create(address string) (TaskStorage, error) {
+	return f(address)
+}
+
+type trackedTaskStorage struct {
+	TaskStorage
+	closeCount atomic.Int64
+	closeErr   error
+}
+
+func newTrackedTaskStorage() *trackedTaskStorage {
+	return &trackedTaskStorage{TaskStorage: NewMemTaskStorage()}
+}
+
+func (s *trackedTaskStorage) Close() error {
+	s.closeCount.Add(1)
+	_ = s.TaskStorage.Close()
+	return s.closeErr
 }

@@ -93,6 +93,17 @@ func TestMysqlProtocolReceiveExtraInfoLogLevel(t *testing.T) {
 		entries := logs.FilterMessage("cannot get salt, maybe not use proxy").All()
 		require.Len(t, entries, 1)
 		require.Equal(t, zap.DebugLevel, entries[0].Level)
+
+		writeErr := make(chan error, 1)
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			_, err := clientConn.Write([]byte{1})
+			writeErr <- err
+		}()
+		var buf [1]byte
+		_, err := serverConn.Read(buf[:])
+		require.NoError(t, err, "ExtraInfo timeout must not leak into the MySQL handshake")
+		require.NoError(t, <-writeErr)
 	})
 
 	t.Run("malformed extra info is error", func(t *testing.T) {
@@ -2573,6 +2584,152 @@ func TestSendPrepareResponse(t *testing.T) {
 	})
 }
 
+func TestPreparedNumericFunctionBinaryProtocolMetadata(t *testing.T) {
+	ctx := context.TODO()
+	tests := []struct {
+		name           string
+		sql            string
+		resultType     defines.MysqlType
+		resultDecimals uint8
+	}{
+		{name: "sum", sql: "select sum(?) as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
+		{name: "avg", sql: "select avg(?) as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
+		{name: "window sum", sql: "select sum(?) over () as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
+		{name: "ntile", sql: "select ntile(?) over () as result", resultType: defines.MYSQL_TYPE_LONGLONG},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+			defer func() {
+				proc.SetPrepareParams(nil)
+				prepareStmt.clearBinaryParamState(proc)
+			}()
+
+			prepare := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+			require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 5)
+			require.Equal(t, uint16(1), binary.LittleEndian.Uint16(packets[0][5:]))
+			require.Equal(t, uint16(1), binary.LittleEndian.Uint16(packets[0][7:]))
+
+			parameter := parsePrepareColumnDefinition(t, packets[1])
+			require.Equal(t, "?", parameter.name)
+			require.Equal(t, defines.MYSQL_TYPE_NULL, parameter.typ)
+			require.Equal(t, byte(defines.EOFHeader), packets[2][0])
+
+			result := parsePrepareColumnDefinition(t, packets[3])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, test.resultType, result.typ)
+			require.Equal(t, test.resultDecimals, result.decimals)
+			require.Equal(t, byte(defines.EOFHeader), packets[4][0])
+		})
+	}
+}
+
+func TestPreparedFloatingPointBinaryProtocolMetadata(t *testing.T) {
+	ctx := context.TODO()
+	tests := []struct {
+		name     string
+		sql      string
+		typ      defines.MysqlType
+		decimals uint8
+	}{
+		{name: "float", sql: "select cast(12.3 as float) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: mysqlDecimalNotSpecified},
+		{name: "double", sql: "select cast(12.3 as double) as result", typ: defines.MYSQL_TYPE_DOUBLE, decimals: mysqlDecimalNotSpecified},
+		{name: "fixed float", sql: "select cast(12.3 as float(6, 2)) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: 2},
+		{name: "fixed double", sql: "select cast(12.3 as double(6, 2)) as result", typ: defines.MYSQL_TYPE_DOUBLE, decimals: 2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, _, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 3)
+			require.Equal(t, uint16(1), binary.LittleEndian.Uint16(packets[0][5:]))
+			require.Equal(t, uint16(0), binary.LittleEndian.Uint16(packets[0][7:]))
+
+			result := parsePrepareColumnDefinition(t, packets[1])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, test.typ, result.typ)
+			require.Equal(t, test.decimals, result.decimals)
+			require.Equal(t, byte(defines.EOFHeader), packets[2][0])
+		})
+	}
+}
+
+func TestPreparedSetBinaryProtocolReportsAndReplacesParameters(t *testing.T) {
+	ctx := context.TODO()
+	conn := &prepareResponseCaptureConn{}
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(
+		t, "set @first = ? + 1, @second = ?", conn)
+	proto.capability &^= CLIENT_DEPRECATE_EOF
+	defer func() {
+		proc.SetPrepareParams(nil)
+		prepareStmt.clearBinaryParamState(proc)
+	}()
+
+	prepare := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	require.Len(t, prepare.ParamTypes, 2)
+	require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+	packets := splitProtocolPackets(t, conn.writes)
+	require.Len(t, packets, 4)
+	require.Equal(t, uint16(0), binary.LittleEndian.Uint16(packets[0][5:]))
+	require.Equal(t, uint16(2), binary.LittleEndian.Uint16(packets[0][7:]))
+	for _, payload := range packets[1:3] {
+		column := parsePrepareColumnDefinition(t, payload)
+		require.Equal(t, "?", column.name)
+	}
+	require.Equal(t, byte(defines.EOFHeader), packets[3][0])
+
+	// The first execution supplies a numeric value and text value. The second
+	// supplies a different numeric value and NULL, proving that no old text
+	// parameter is appended to or reused by the prepared SET statement.
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildPreparedSetExecutePacket(proto, 0, 41, "first"), 0))
+	proc.SetPrepareParams(prepareStmt.params)
+	require.Equal(t, 2, proc.GetPrepareParams().Length())
+	require.Equal(t, "41", proc.GetPrepareParams().GetStringAt(0))
+	require.Equal(t, "first", proc.GetPrepareParams().GetStringAt(1))
+	require.False(t, proc.GetPrepareParams().GetNulls().Contains(1))
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildPreparedSetExecutePacket(proto, 1<<1, 9, ""), 0))
+	proc.SetPrepareParams(prepareStmt.params)
+	require.Equal(t, 2, proc.GetPrepareParams().Length())
+	require.Equal(t, "9", proc.GetPrepareParams().GetStringAt(0))
+	require.True(t, proc.GetPrepareParams().GetNulls().Contains(1))
+}
+
+func TestParseExecuteDataAcceptsReadOnlyCursorFlag(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	defer prepareStmt.clearBinaryParamState(proc)
+
+	data := buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, "cursor")
+	data[0] = 1 // CURSOR_TYPE_READ_ONLY
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0))
+	require.True(t, prepareStmt.cursorRequested)
+
+	prepareStmt.clearBinaryParamState(proc)
+	data[0] = 0 // CURSOR_TYPE_NO_CURSOR
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0))
+	require.False(t, prepareStmt.cursorRequested)
+
+	data[0] = 2 // CURSOR_TYPE_SCROLLABLE is not supported
+	require.Error(t, proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0))
+	require.False(t, prepareStmt.cursorRequested)
+}
+
 func FuzzParseExecuteData(f *testing.F) {
 	ctx := context.TODO()
 	proc := testutil.NewProcess(f)
@@ -2643,6 +2800,10 @@ func FuzzParseExecuteData(f *testing.F) {
 }
 
 func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
+	return newBinaryPrepareProtocolTestCaseWithConn(t, sql, &testConn{})
+}
+
+func newBinaryPrepareProtocolTestCaseWithConn(t *testing.T, sql string, conn net.Conn) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
 	t.Helper()
 	ctx := context.TODO()
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2654,10 +2815,11 @@ func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolI
 	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 
-	ioses, err := NewIOSession(&testConn{}, pu, "")
+	ioses, err := NewIOSession(conn, pu, "")
 	require.NoError(t, err)
 
 	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	proto.SetSession(&Session{feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}})
 	proc := testutil.NewProcess(t)
 
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), sql)
@@ -2794,6 +2956,18 @@ func TestParseExecuteDataPreservesExactJsonOrderingParams(t *testing.T) {
 	}
 }
 
+func TestParseExecuteDataPreservesYearWireType(t *testing.T) {
+	data := make([]byte, 11)
+	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_YEAR), 0})
+	binary.LittleEndian.PutUint16(data[9:], 2024)
+
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0))
+	require.Equal(t, "2024", prepareStmt.params.GetStringAt(0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_YEAR), 0}, prepareStmt.ParamTypes)
+}
+
 func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, payload string) []byte {
 	data := make([]byte, 8+2+9+len(payload))
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})
@@ -2813,6 +2987,25 @@ func buildLongLongExecutePacket(value uint64, unsigned bool) []byte {
 
 func buildNullExecutePacket(tp defines.MysqlType) []byte {
 	data := []byte{0, 0, 0, 0, 0, 1, 1, byte(tp), 0}
+	return data
+}
+
+func buildPreparedSetExecutePacket(proto *MysqlProtocolImpl, nullBitmap byte, first uint32, second string) []byte {
+	data := []byte{
+		0, 0, 0, 0, 0, // cursor flags and iteration count
+		nullBitmap,
+		1, // new parameters bound
+		byte(defines.MYSQL_TYPE_LONG), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+	firstValue := make([]byte, 4)
+	binary.LittleEndian.PutUint32(firstValue, first)
+	data = append(data, firstValue...)
+	if nullBitmap&(1<<1) == 0 {
+		pos := len(data)
+		data = append(data, make([]byte, len(second)+9)...)
+		data = data[:proto.writeStringLenEnc(data, pos, second)]
+	}
 	return data
 }
 
@@ -3028,6 +3221,146 @@ func Test_resultset(t *testing.T) {
 		err = proto.WriteResultSetRow(res, 0)
 		convey.So(err, convey.ShouldBeNil)
 	})
+}
+
+func TestMysqlProtocolWriteUsesLogicalBatchRowCount(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		cmd  CommandType
+	}{
+		{name: "text protocol", cmd: COM_QUERY},
+		{name: "binary protocol", cmd: COM_STMT_EXECUTE},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			require.NoError(t, err)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			pu.SV.SkipCheckUser = true
+			pu.SV.KillRountinesInterval = 0
+			setSessionAlloc("", NewLeakCheckAllocator())
+			setPu("", pu)
+
+			ioses, err := NewIOSession(&testConn{}, pu, "")
+			require.NoError(t, err)
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+			t.Cleanup(proto.Close)
+
+			ses := NewSession(context.Background(), "", proto, nil)
+			ses.SetCmd(test.cmd)
+			proto.ses = ses
+			mrs := &MysqlResultSet{}
+			for _, name := range []string{"projection_value", "total"} {
+				column := &MysqlColumn{}
+				column.SetName(name)
+				column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+				mrs.AddColumn(column)
+			}
+			ses.SetMysqlResultSet(mrs)
+
+			mp := mpool.MustNewZero()
+			constant, err := vector.NewConstFixed(
+				types.T_int64.ToType(), int64(7), 1, mp,
+			)
+			require.NoError(t, err)
+			totals := vector.NewVec(types.T_int64.ToType())
+			for _, value := range []int64{10, 20, 30} {
+				require.NoError(t, vector.AppendFixed(totals, value, false, mp))
+			}
+			bat := batch.NewWithSize(2)
+			bat.SetVector(0, constant)
+			bat.SetVector(1, totals)
+			bat.SetRowCount(3)
+			t.Cleanup(func() {
+				bat.Clean(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+
+			execCtx := &ExecCtx{
+				reqCtx: context.Background(),
+				ses:    ses,
+			}
+			err = getDataFromPipeline(ses, execCtx, bat, nil)
+			require.NoError(t, err)
+			require.Equal(t, bat.RowCount(), proto.tcpConn.packetInBuf)
+			require.Equal(t, int64(bat.RowCount()), ses.sentRows.Load())
+		})
+	}
+}
+
+func TestMysqlProtocolWriteSendsLogicalConstNullRow(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+
+	ioses, err := NewIOSession(&testConn{}, pu, "")
+	require.NoError(t, err)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	t.Cleanup(proto.Close)
+
+	ses := NewSession(context.Background(), "", proto, nil)
+	ses.SetCmd(COM_QUERY)
+	proto.ses = ses
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("null_input")
+	column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(column)
+	ses.SetMysqlResultSet(mrs)
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vector.NewConstNull(types.T_varchar.ToType(), 0, mp))
+	bat.SetRowCount(1)
+	t.Cleanup(func() {
+		bat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	execCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		ses:    ses,
+	}
+	err = getDataFromPipeline(ses, execCtx, bat, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, proto.tcpConn.packetInBuf)
+	require.Equal(t, int64(1), ses.sentRows.Load())
+}
+
+func TestSendResultSetPropagatesRowEncodingErrors(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+
+	for _, cmd := range []CommandType{COM_QUERY, COM_STMT_EXECUTE} {
+		t.Run(cmd.String(), func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			ioses, err := NewIOSession(conn, pu, "")
+			require.NoError(t, err)
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+			proto.SetSession(&Session{feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}})
+
+			mrs := &MysqlResultSet{}
+			column := new(MysqlColumn)
+			column.SetName("unsupported")
+			column.SetColumnType(defines.MYSQL_TYPE_INVALID)
+			mrs.AddColumn(column)
+			mrs.AddRow([]any{"value"})
+
+			err = proto.sendResultSet(context.Background(), mrs, int(cmd), 0, 0)
+			require.Error(t, err)
+			packets := splitProtocolPackets(t, conn.writes)
+			require.NotEmpty(t, packets)
+			require.Equal(t, byte(defines.ErrHeader), packets[len(packets)-1][0])
+		})
+	}
 }
 
 func Test_send_packet(t *testing.T) {
@@ -3435,6 +3768,7 @@ type testMysqlWriter struct {
 	ioses                 *Conn
 	mod                   int
 	makeColumnDefDataFunc func(context.Context, []*planPb.ColDef) ([][]byte, error)
+	writeEOFOrOKFunc      func(uint16, uint16) error
 }
 
 func (fp *testMysqlWriter) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
@@ -3499,6 +3833,9 @@ func (fp *testMysqlWriter) WriteEOFIFAndNoFlush(warnings uint16, status uint16) 
 }
 
 func (fp *testMysqlWriter) WriteEOFOrOK(warnings uint16, status uint16) error {
+	if fp.writeEOFOrOKFunc != nil {
+		return fp.writeEOFOrOKFunc(warnings, status)
+	}
 	//TODO implement me
 	panic("implement me")
 }
@@ -5348,6 +5685,30 @@ func Test_appendResultSetTextRow_DateTimeCoverage(t *testing.T) {
 			err := proto.appendResultSetTextRow(rs, 0)
 			convey.So(err, convey.ShouldBeNil)
 		})
+
+		// TEXT-family result metadata can use the corresponding BLOB protocol
+		// type. All of those variants carry the same length-encoded bytes.
+		for _, tc := range []struct {
+			name string
+			typ  defines.MysqlType
+		}{
+			{name: "MYSQL_TYPE_TINY_BLOB", typ: defines.MYSQL_TYPE_TINY_BLOB},
+			{name: "MYSQL_TYPE_MEDIUM_BLOB", typ: defines.MYSQL_TYPE_MEDIUM_BLOB},
+			{name: "MYSQL_TYPE_LONG_BLOB", typ: defines.MYSQL_TYPE_LONG_BLOB},
+		} {
+			convey.Convey(tc.name, func() {
+				rs := &MysqlResultSet{}
+				mysqlCol := new(MysqlColumn)
+				mysqlCol.SetName("text_col")
+				mysqlCol.SetColumnType(tc.typ)
+				rs.AddColumn(mysqlCol)
+
+				rs.AddRow([]interface{}{[]byte("text-family value")})
+
+				err := proto.appendResultSetTextRow(rs, 0)
+				convey.So(err, convey.ShouldBeNil)
+			})
+		}
 
 		// Test NULL value
 		convey.Convey("NULL value", func() {

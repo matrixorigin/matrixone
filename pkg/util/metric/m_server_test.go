@@ -38,6 +38,8 @@ func TestConnectionCounter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := ConnectionCounter(tt.args.account, 0)
+			c.Set(0)
+			t.Cleanup(func() { c.Set(0) })
 			c.Inc()
 			dtom := new(dto.Metric)
 			c.Write(dtom)

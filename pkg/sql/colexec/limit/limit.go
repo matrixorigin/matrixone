@@ -84,9 +84,19 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 	length := bat.RowCount()
 	newSeen := limit.ctr.seen + uint64(length)
 	if newSeen >= limit.ctr.limit { // limit - seen
-		// reset length is ok.
-		// we do not change the batch.Vecs & batch.Agg from pre Operator
-		batch.SetLength(bat, int(limit.ctr.limit-limit.ctr.seen))
+		if limit.ctr.buf != nil {
+			limit.ctr.buf.CleanOnlyData()
+		}
+		limit.ctr.buf, err = limit.ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		limit.ctr.buf.Attrs = append(limit.ctr.buf.Attrs[:0], bat.Attrs...)
+		limit.ctr.buf.Recursive = bat.Recursive
+		limit.ctr.buf.ShuffleIDX = bat.ShuffleIDX
+		limit.ctr.buf.SetRowCount(bat.RowCount())
+		batch.SetLength(limit.ctr.buf, int(limit.ctr.limit-limit.ctr.seen))
+		result.Batch = limit.ctr.buf
 		result.Status = vm.ExecStop
 	}
 	limit.ctr.seen = newSeen

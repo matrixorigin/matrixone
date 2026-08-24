@@ -71,12 +71,11 @@ func init() {
 		}
 
 		colname := plan.MetadataScanInfo_MetadataScanInfoType_name[i]
+		planTyp := makePlan2Type(&tp)
+		planTyp.NotNullable = true
 		coldef := &plan.ColDef{
 			Name: strings.ToLower(colname),
-			Typ: plan.Type{
-				Id:          int32(tp.Oid),
-				NotNullable: true,
-			},
+			Typ:  planTyp,
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,

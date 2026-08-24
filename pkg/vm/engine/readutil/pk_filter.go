@@ -65,8 +65,13 @@ func ConstructBlockPKFilter(
 		return objectio.BlockReadFilter{}, nil
 	}
 
-	readFilter := objectio.BlockReadFilter{
-		HasFakePK: isFakePK,
+	readFilter := objectio.BlockReadFilter{HasFakePK: isFakePK}
+	// The scoped cache search must preserve the exact routing contract of the
+	// existing callbacks. Fake PK columns are not physically sorted even when
+	// the block carries the sorted flag, and membership filters may use a
+	// second key column. Keep both cases on the legacy owned-vector path.
+	if !isFakePK && bf == nil {
+		readFilter.CachedSearch = buildCachedPKSearch(basePKFilter)
 	}
 	if basePKFilter.cleanup != nil {
 		readFilter.Cleanup = basePKFilter.cleanup.run
@@ -271,6 +276,100 @@ func ConstructBlockPKFilter(
 
 	readFilter.Valid = true
 	return readFilter, nil
+}
+
+func buildCachedPKSearch(base BasePKFilter) *objectio.ReadFilterSearch {
+	disjuncts := base.Disjuncts
+	if len(disjuncts) == 0 {
+		disjuncts = []BasePKFilter{base}
+	}
+	searches := make([]*objectio.ReadFilterSearch, 0, len(disjuncts))
+	for i := range disjuncts {
+		filter := &disjuncts[i]
+		if !validBlockPKSearchFilter(*filter) {
+			return nil
+		}
+		var search *objectio.ReadFilterSearch
+		switch filter.Op {
+		case function.EQUAL:
+			switch filter.Oid {
+			case types.T_char, types.T_varchar, types.T_binary,
+				types.T_varbinary, types.T_json:
+			default:
+				return nil
+			}
+			search = objectio.NewReadFilterSearch(filter.Oid, [][]byte{filter.LB})
+		case function.IN:
+			switch filter.Oid {
+			case types.T_char, types.T_varchar, types.T_binary,
+				types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+				types.T_array_float32, types.T_array_float64, types.T_datalink:
+			default:
+				return nil
+			}
+			search = objectio.NewReadFilterSearch(
+				filter.Oid,
+				vector.InefficientMustBytesCol(filter.Vec),
+			)
+		case function.PREFIX_EQ:
+			search = objectio.NewReadFilterPrefixSearch(
+				filter.Oid,
+				[][]byte{filter.LB},
+			)
+		case function.PREFIX_IN:
+			search = objectio.NewReadFilterPrefixSearch(
+				filter.Oid,
+				vector.InefficientMustBytesCol(filter.Vec),
+			)
+		case function.LESS_EQUAL, function.LESS_THAN:
+			search = objectio.NewReadFilterLessSearch(
+				filter.Oid,
+				filter.LB,
+				filter.Op == function.LESS_EQUAL,
+			)
+		case function.GREAT_EQUAL, function.GREAT_THAN:
+			search = objectio.NewReadFilterGreaterSearch(
+				filter.Oid,
+				filter.LB,
+				filter.Op == function.GREAT_EQUAL,
+			)
+		case function.BETWEEN, RangeLeftOpen, RangeRightOpen, RangeBothOpen:
+			search = objectio.NewReadFilterBetweenSearch(
+				filter.Oid,
+				filter.LB,
+				filter.UB,
+				blockPKRangeHint(filter.Op),
+			)
+		case function.PREFIX_BETWEEN,
+			PrefixRangeLeftOpen, PrefixRangeRightOpen, PrefixRangeBothOpen:
+			search = objectio.NewReadFilterPrefixBetweenSearch(
+				filter.Oid,
+				filter.LB,
+				filter.UB,
+				blockPKRangeHint(filter.Op),
+			)
+		default:
+			return nil
+		}
+		if search == nil {
+			return nil
+		}
+		searches = append(searches, search)
+	}
+	return objectio.CombineReadFilterSearch(searches...)
+}
+
+func blockPKRangeHint(op int) uint8 {
+	switch op {
+	case RangeLeftOpen, PrefixRangeLeftOpen:
+		return 1
+	case RangeRightOpen, PrefixRangeRightOpen:
+		return 2
+	case RangeBothOpen, PrefixRangeBothOpen:
+		return 3
+	default:
+		return 0
+	}
 }
 
 func linearBoolSearchOffsetByValFactory(values []bool) func(*vector.Vector) []int64 {

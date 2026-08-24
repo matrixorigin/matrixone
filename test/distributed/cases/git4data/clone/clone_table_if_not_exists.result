@@ -1,0 +1,214 @@
+drop database if exists clone_table_if_not_exists;
+create database clone_table_if_not_exists;
+use clone_table_if_not_exists;
+create table src_primary (id int primary key, v varchar(20));
+insert into src_primary values (1, 'src1'), (2, 'src2');
+create table dst_primary (id int primary key, v varchar(20));
+insert into dst_primary values (1, 'keep1'), (99, 'keep99');
+show create table dst_primary;
+➤ Table[12,8,0]  ¦  Create Table[12,78,0]  𝄀
+dst_primary  ¦  CREATE TABLE `dst_primary` (
+  `id` int NOT NULL,
+  `v` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+create table if not exists dst_primary clone src_primary;
+select id, v from dst_primary order by id, v;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  keep1  𝄀
+99  ¦  keep99
+select count(*) as duplicate_primary_keys
+from (
+select id
+from dst_primary
+group by id
+having count(*) > 1
+) duplicate_keys;
+➤ duplicate_primary_keys[-5,64,0]  𝄀
+0
+show create table dst_primary;
+➤ Table[12,8,0]  ¦  Create Table[12,78,0]  𝄀
+dst_primary  ¦  CREATE TABLE `dst_primary` (
+  `id` int NOT NULL,
+  `v` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+select id, v from src_primary order by id, v;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  src1  𝄀
+2  ¦  src2
+create table src_incompatible (src_id int primary key, src_payload varchar(20));
+insert into src_incompatible values (1, 'source');
+create table dst_incompatible (dst_key varchar(20) primary key, dst_count int);
+insert into dst_incompatible values ('keep', 7);
+show create table dst_incompatible;
+➤ Table[12,12,0]  ¦  Create Table[12,95,0]  𝄀
+dst_incompatible  ¦  CREATE TABLE `dst_incompatible` (
+  `dst_key` varchar(20) NOT NULL,
+  `dst_count` int DEFAULT NULL,
+  PRIMARY KEY (`dst_key`)
+)
+create table if not exists dst_incompatible clone src_incompatible;
+select dst_key, dst_count from dst_incompatible order by dst_key;
+➤ dst_key[12,15,0]  ¦  dst_count[4,32,0]  𝄀
+keep  ¦  7
+show create table dst_incompatible;
+➤ Table[12,12,0]  ¦  Create Table[12,95,0]  𝄀
+dst_incompatible  ¦  CREATE TABLE `dst_incompatible` (
+  `dst_key` varchar(20) NOT NULL,
+  `dst_count` int DEFAULT NULL,
+  PRIMARY KEY (`dst_key`)
+)
+create table src_secondary (
+id int primary key,
+source_key varchar(20),
+source_payload int,
+key src_secondary_idx (source_key)
+);
+insert into src_secondary values (1, 'source-one', 10), (2, 'source-two', 20);
+create table dst_secondary (
+id int primary key,
+destination_key varchar(20),
+destination_payload int,
+key dst_secondary_idx (destination_key)
+);
+insert into dst_secondary values (1, 'keep-secondary', 7), (99, 'keep-secondary-99', 9);
+set @dst_secondary_index_table = (
+select distinct index_table_name
+from mo_catalog.mo_indexes
+where name = 'dst_secondary_idx'
+and table_id in (
+select rel_id
+from mo_catalog.mo_tables
+where reldatabase = database()
+and relname = 'dst_secondary'
+)
+limit 1
+);
+select @dst_secondary_index_table is not null as secondary_index_table_exists;
+➤ secondary_index_table_exists[-7,1,0]  𝄀
+1
+set @dst_secondary_index_sql = concat(
+'select count(*) as physical_rows, ',
+'count(distinct __mo_index_idx_col) as distinct_keys, ',
+'count(distinct __mo_index_pri_col) as distinct_primary_keys ',
+'from `', database(), '`.`', @dst_secondary_index_table, '`'
+);
+prepare dst_secondary_index_check from @dst_secondary_index_sql;
+execute dst_secondary_index_check;
+➤ physical_rows[-5,64,0]  ¦  distinct_keys[-5,64,0]  ¦  distinct_primary_keys[-5,64,0]  𝄀
+2  ¦  2  ¦  2
+show create table dst_secondary;
+➤ Table[12,9,0]  ¦  Create Table[12,156,0]  𝄀
+dst_secondary  ¦  CREATE TABLE `dst_secondary` (
+  `id` int NOT NULL,
+  `destination_key` varchar(20) DEFAULT NULL,
+  `destination_payload` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `dst_secondary_idx` (`destination_key`)
+)
+create table if not exists dst_secondary clone src_secondary;
+select id, destination_key, destination_payload from dst_secondary order by id, destination_key;
+➤ id[4,32,0]  ¦  destination_key[12,15,0]  ¦  destination_payload[4,32,0]  𝄀
+1  ¦  keep-secondary  ¦  7  𝄀
+99  ¦  keep-secondary-99  ¦  9
+select id, destination_key, destination_payload
+from dst_secondary force index(dst_secondary_idx)
+where destination_key = 'keep-secondary';
+➤ id[4,32,0]  ¦  destination_key[12,15,0]  ¦  destination_payload[4,32,0]  𝄀
+1  ¦  keep-secondary  ¦  7
+show index from dst_secondary;
+➤ Table[12,9,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,48,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,192,0]  ¦  Collation[12,0,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,3,0]  ¦  Packed[12,3,0]  ¦  Null[12,2,0]  ¦  Index_type[12,8,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,1536,0]  ¦  Index_params[12,1536,0]  ¦  Visible[12,2,0]  ¦  Expression[12,192,0]  𝄀
+dst_secondary  ¦  1  ¦  dst_secondary_idx  ¦  1  ¦  destination_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  destination_key  𝄀
+dst_secondary  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id
+show create table dst_secondary;
+➤ Table[12,9,0]  ¦  Create Table[12,156,0]  𝄀
+dst_secondary  ¦  CREATE TABLE `dst_secondary` (
+  `id` int NOT NULL,
+  `destination_key` varchar(20) DEFAULT NULL,
+  `destination_payload` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `dst_secondary_idx` (`destination_key`)
+)
+execute dst_secondary_index_check;
+➤ physical_rows[-5,64,0]  ¦  distinct_keys[-5,64,0]  ¦  distinct_primary_keys[-5,64,0]  𝄀
+2  ¦  2  ¦  2
+deallocate prepare dst_secondary_index_check;
+select count(distinct index_table_name) as hidden_index_tables
+from mo_catalog.mo_indexes
+where name = 'dst_secondary_idx'
+and table_id in (
+select rel_id
+from mo_catalog.mo_tables
+where reldatabase = database()
+and relname = 'dst_secondary'
+);
+➤ hidden_index_tables[-5,64,0]  𝄀
+1
+create temporary table src_temporary (id int primary key, v varchar(20));
+insert into src_temporary values (1, 'temporary-source');
+create temporary table dst_temporary (id int primary key, v varchar(20));
+insert into dst_temporary values (1, 'temp-destination'), (99, 'temp-keep');
+show create table dst_temporary;
+➤ Table[12,9,0]  ¦  Create Table[12,87,0]  𝄀
+dst_temporary  ¦  CREATE TEMPORARY TABLE `dst_temporary` (
+  `id` int NOT NULL,
+  `v` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+create temporary table if not exists dst_temporary clone src_temporary;
+select id, v from dst_temporary order by id, v;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  temp-destination  𝄀
+99  ¦  temp-keep
+select count(*) as duplicate_primary_keys
+from (
+select id
+from dst_temporary
+group by id
+having count(*) > 1
+) duplicate_keys;
+➤ duplicate_primary_keys[-5,64,0]  𝄀
+0
+show create table dst_temporary;
+➤ Table[12,9,0]  ¦  Create Table[12,87,0]  𝄀
+dst_temporary  ¦  CREATE TEMPORARY TABLE `dst_temporary` (
+  `id` int NOT NULL,
+  `v` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+create table dst_primary clone src_primary;
+table dst_primary already exists
+select id, v from dst_primary order by id, v;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  keep1  𝄀
+99  ¦  keep99
+select count(*) as duplicate_primary_keys
+from (
+select id
+from dst_primary
+group by id
+having count(*) > 1
+) duplicate_keys;
+➤ duplicate_primary_keys[-5,64,0]  𝄀
+0
+show create table dst_primary;
+➤ Table[12,8,0]  ¦  Create Table[12,78,0]  𝄀
+dst_primary  ¦  CREATE TABLE `dst_primary` (
+  `id` int NOT NULL,
+  `v` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+create table if not exists dst_created clone src_primary;
+select id, v from dst_created order by id, v;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  src1  𝄀
+2  ¦  src2
+show create table dst_created;
+➤ Table[12,8,0]  ¦  Create Table[12,78,0]  𝄀
+dst_created  ¦  CREATE TABLE `dst_created` (
+  `id` int NOT NULL,
+  `v` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+drop database clone_table_if_not_exists;

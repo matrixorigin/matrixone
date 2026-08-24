@@ -14,6 +14,8 @@
 
 package frontend
 
+import "github.com/matrixorigin/matrixone/pkg/util/sysview"
+
 type Collation struct {
 	collationName string
 	charset       string
@@ -24,17 +26,24 @@ type Collation struct {
 	padAttribute  string
 }
 
-var Collations []*Collation = []*Collation{
-	{"utf8_general_ci", "utf8", 33, "", "Yes", 1, "PAD SPACE"},
-	{"binary", "binary", 63, "YES", "Yes", 1, "NO PAD"},
-	{"utf8_unicode_ci", "utf8", 192, "", "Yes", 1, "PAD SPACE"},
-	{"utf8_bin", "utf8", 83, "YES", "Yes", 1, "NO PAD"},
-	{"utf8mb4_general_ci", "utf8mb4", 45, "", "Yes", 1, "PAD SPACE"},
-	{"utf8mb4_unicode_ci", "utf8mb4", 224, "", "Yes", 1, "PAD SPACE"},
-	{"utf8mb4_bin", "utf8mb4", 46, "YES", "Yes", 1, "NO PAD"},
-	{"utf8mb4_0900_bin", "utf8mb4", 309, "", "Yes", 1, "NO PAD"},
-	{"utf8mb4_0900_ai_ci", "utf8mb4", 255, "", "Yes", 0, "NO PAD"},
-	{"utf8mb4_de_pb_0900_ai_ci", "utf8mb4", 256, "", "Yes", 0, "NO PAD"},
-	{"utf8mb4_is_0900_ai_ci", "utf8mb4", 257, "", "Yes", 0, "NO PAD"},
-	{"utf8mb4_lv_0900_ai_ci", "utf8mb4", 258, "", "Yes", 0, "NO PAD"},
-}
+// Collations is the executable capability list exposed by SHOW COLLATION.
+// It is derived from the canonical information-schema definitions so SHOW
+// COLLATION and COLLATION_CHARACTER_SET_APPLICABILITY cannot drift apart.
+var Collations = func() []*Collation {
+	collations := make([]*Collation, 0, len(sysview.SupportedCollationDefinitions))
+	for _, definition := range sysview.SupportedCollationDefinitions {
+		if !definition.Advertised {
+			continue
+		}
+		collations = append(collations, &Collation{
+			collationName: definition.Name,
+			charset:       definition.Charset,
+			id:            definition.ID,
+			isDefault:     definition.IsDefault,
+			isCompiled:    definition.IsCompiled,
+			sortLen:       definition.SortLen,
+			padAttribute:  definition.PadAttribute,
+		})
+	}
+	return collations
+}()

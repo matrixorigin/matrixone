@@ -93,7 +93,7 @@ func init() {
 // getTransferSlab returns a slab of at least size entries, with all ObjIdx
 // fields set to NoTransfer.  It pops from the appropriate tier's lock-free
 // stack, or allocates a fresh off-heap slab via mpool (C.calloc).
-func getTransferSlab(size int) []api.TransferDestPos {
+func getTransferSlab(size int) ([]api.TransferDestPos, error) {
 	tier := transferSlabTierFor(size)
 	if tier >= 0 {
 		bkt := &transferSlabBuckets[tier]
@@ -108,7 +108,7 @@ func getTransferSlab(size int) []api.TransferDestPos {
 				for i := range slab {
 					slab[i] = api.TransferDestPos{ObjIdx: api.NoTransfer}
 				}
-				return slab
+				return slab, nil
 			}
 		}
 		// stack empty – allocate at the tier's quantised size
@@ -116,12 +116,12 @@ func getTransferSlab(size int) []api.TransferDestPos {
 	}
 	slab, err := mpool.MakeSlice[api.TransferDestPos](size, transferSlabMPool, true)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	for i := range slab {
 		slab[i].ObjIdx = api.NoTransfer
 	}
-	return slab
+	return slab, nil
 }
 
 // putTransferSlab returns a slab to the appropriate tier's stack if it

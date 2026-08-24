@@ -116,6 +116,30 @@ func TestMakeEvent(t *testing.T) {
 			require.Nil(t, e)
 			require.False(t, r)
 		}
+
+		mixed := "set @seed = rand(), @@session.time_zone = @seed"
+		e, r = makeEvent(makeSimplePacket(mixed), nil)
+		require.NotNil(t, e)
+		require.False(t, r)
+		setEvent := e.(*setVarEvent)
+		require.Equal(t, mixed, setEvent.stmt)
+		require.Equal(t, "set time_zone = @seed", setEvent.systemStmt)
+
+		e, r = makeEvent(makeSimplePacket("set names 'utf8mb4' collate 'utf8mb4_bin'"), nil)
+		require.NotNil(t, e)
+		require.False(t, r)
+		require.Equal(t, "set names utf8mb4 collate utf8mb4_bin", e.(*setVarEvent).systemStmt)
+
+		e, r = makeEvent(makeSimplePacket("set @@transaction_isolation = 'READ-COMMITTED'"), nil)
+		require.NotNil(t, e)
+		require.False(t, r)
+		require.Equal(t, "set @@transaction_isolation = READ-COMMITTED", e.(*setVarEvent).systemStmt)
+
+		userOnly := "set @ts0 = (select updated_at from src limit 1)"
+		e, r = makeEvent(makeSimplePacket(userOnly), nil)
+		require.NotNil(t, e)
+		require.False(t, r)
+		require.Empty(t, e.(*setVarEvent).systemStmt)
 	})
 
 	t.Run("upgrade", func(t *testing.T) {
@@ -390,7 +414,7 @@ func TestQuitEvent(t *testing.T) {
 	sc2 := newMockServerConn(serverProxy2)
 	require.NotNil(t, sc2)
 
-	res := make(chan []byte)
+	eventHandled := make(chan error, 1)
 	st := stopper.NewStopper("test-event", stopper.WithLogger(tp.logger.RawLogger()))
 	defer st.Stop()
 	err := st.RunNamedTask("test-event-handler", func(ctx context.Context) {
@@ -400,11 +424,7 @@ func TestQuitEvent(t *testing.T) {
 				if !ok {
 					return
 				}
-				_ = cc2.HandleEvent(ctx, e, tu2.respC)
-			case r := <-tu2.respC:
-				if len(r) > 0 {
-					res <- r
-				}
+				eventHandled <- cc2.HandleEvent(ctx, e, tu2.respC)
 			case <-ctx.Done():
 				return
 			}
@@ -492,9 +512,15 @@ func TestQuitEvent(t *testing.T) {
 	barrierStart2 <- struct{}{}
 	barrierEnd2 <- struct{}{}
 
-	// wait for result
-	r := string(<-res)
-	require.Equal(t, "ok", r)
+	// A terminal QUIT can close reqC as soon as the packet is forwarded. Wait
+	// for HandleEvent itself rather than for the mock-only response to be
+	// forwarded by this loop after reqC closes.
+	select {
+	case err = <-eventHandled:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("quit event was not handled")
+	}
 
 	select {
 	case err = <-errChan:

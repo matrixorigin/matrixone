@@ -163,6 +163,7 @@ func transferToTN(qt qclient.QueryClient, version int64) (Result, error) {
 			if t.QueryAddress == "" {
 				return true
 			}
+			addr = t.QueryAddress
 			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseTransferToTN)
 			defer cancel()
 			req := qt.NewRequest(querypb.CmdMethod_SetProtocolVersion)

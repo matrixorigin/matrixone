@@ -23,3 +23,9 @@ import (
 func TestTxnStorageStart(t *testing.T) {
 	require.NoError(t, (&TestTxnStorage{}).Start())
 }
+
+func TestDefaultTNShardHasProductionIdentity(t *testing.T) {
+	shard := GetDefaultTNShard()
+	require.NotZero(t, shard.ShardID,
+		"zero is the sentinel for an unknown shard and cannot own durable cleanup")
+}

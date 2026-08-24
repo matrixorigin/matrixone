@@ -24,14 +24,17 @@ import (
 )
 
 type CachedTableMetadataLoader struct {
-	Catalog           api.CatalogClient
-	Metadata          api.MetadataFacade
-	ObjectReader      api.ObjectReader
-	Cache             *Cache
-	CredentialHash    string
-	ExternalRef       string
-	SnapshotSelector  api.SnapshotSelector
-	PlanningMaxMemory int64
+	Catalog      api.CatalogClient
+	Metadata     api.MetadataFacade
+	ObjectReader api.ObjectReader
+	Cache        *Cache
+	// RevalidateMetadataLocation conditionally checks a cached mutable table
+	// reference with the catalog before returning its metadata.
+	RevalidateMetadataLocation bool
+	CredentialHash             string
+	ExternalRef                string
+	SnapshotSelector           api.SnapshotSelector
+	PlanningMaxMemory          int64
 }
 
 type LoadedTableMetadata struct {
@@ -73,7 +76,8 @@ func (l CachedTableMetadataLoader) Load(ctx context.Context, req api.LoadTableRe
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg cached metadata loader requires metadata facade", nil)
 	}
 	locationKey := l.locationCacheKey(req)
-	if cached, ok := l.Cache.Get(locationKey); ok && cached.Metadata != nil {
+	cached, cacheHit := l.Cache.Get(locationKey)
+	if cacheHit && cached.Metadata != nil && !l.RevalidateMetadataLocation {
 		return &LoadedTableMetadata{
 			Metadata:         cached.Metadata,
 			CacheHit:         true,
@@ -83,9 +87,12 @@ func (l CachedTableMetadataLoader) Load(ctx context.Context, req api.LoadTableRe
 		}, nil
 	}
 
-	stale, hasStale := l.Cache.GetStaleForRevalidation(locationKey)
+	stale, hasStale := cached, cacheHit && cached.Metadata != nil
+	if !hasStale {
+		stale, hasStale = l.Cache.GetStaleForRevalidation(locationKey)
+	}
 	loadReq := req
-	if hasStale {
+	if hasStale && stale.ETag != "" {
 		loadReq.IfNoneMatch = stale.ETag
 	}
 	resp, err := l.Catalog.LoadTable(ctx, loadReq)

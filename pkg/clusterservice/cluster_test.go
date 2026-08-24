@@ -349,6 +349,17 @@ func (c *testHAKeeperClient) addTN(tick uint64, serviceIDs ...string) {
 	}
 }
 
+func TestNewTNServicePreservesAutoIncrEpochFenceCapability(t *testing.T) {
+	service := newTNService(logpb.TNStore{
+		UUID:                        "tn-new",
+		AutoIncrEpochFenceSupported: true,
+	})
+	require.True(t, service.AutoIncrEpochFenceSupported)
+
+	legacy := newTNService(logpb.TNStore{UUID: "tn-old"})
+	require.False(t, legacy.AutoIncrEpochFenceSupported)
+}
+
 func (c *testHAKeeperClient) Close() error                                   { return nil }
 func (c *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) { return 0, nil }
 func (c *testHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {

@@ -186,8 +186,16 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 		return nil
 	}
 	batches := mp.GetBatches()
-	//maybe optimize this in the future
+	// ProductL2 index/scratch is outside the first HashBuild accounting domain.
+	// Create an explicit unaccounted destination instead of letting a nil
+	// AppendWithCopy clone inherit the producer's allocation selection.
 	for i := range batches {
+		if ctr.bat == nil {
+			ctr.bat = batch.NewOffHeapWithSize(len(batches[i].Vecs))
+			for j, source := range batches[i].Vecs {
+				ctr.bat.Vecs[j] = vector.NewOffHeapVecWithType(*source.GetType())
+			}
+		}
 		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])
 		if err != nil {
 			return err

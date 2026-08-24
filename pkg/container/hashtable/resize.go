@@ -206,6 +206,15 @@ func checkedMultiply(a, b uint64) (uint64, bool) {
 	return a * b, true
 }
 
+func resizeNeeded(elemCnt, additional, cellCnt, cellSize uint64) bool {
+	// Published tables never exceed their load limit: every insert calls this
+	// check before mutating elemCnt, and growth publishes a target sized for the
+	// complete incoming batch. Keeping that invariant here makes the no-growth
+	// path a single remaining-capacity comparison. The growth planner still
+	// validates elemCnt+additional overflow before allocating.
+	return additional > maxElemCnt(cellCnt, cellSize)-elemCnt
+}
+
 func (p ResizePlan) matches(version, cellCnt, blockCellCnt, blockCount uint64) bool {
 	return p.TableVersion == version &&
 		p.CurrentCellCount == cellCnt &&

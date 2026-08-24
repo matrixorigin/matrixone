@@ -16,18 +16,157 @@ package compile
 
 import (
 	"context"
+	"encoding/hex"
+	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+func TestExactFloatFuzzyCheckPreservesStorageIdentity(t *testing.T) {
+	mp, err := mpool.NewMPool("test_exact_float_fuzzy_check", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	packer := types.NewPacker()
+	defer packer.Close()
+	encode := func(value float64) []byte {
+		packer.Reset()
+		packer.EncodeFloat64(value)
+		return append([]byte(nil), packer.GetBuf()...)
+	}
+
+	positiveZero := encode(0)
+	negativeZero := encode(math.Copysign(0, -1))
+	nanPayload0 := encode(math.Float64frombits(0x7ff8000000000000))
+	nanPayload1 := encode(math.Float64frombits(0x7ff8000000000001))
+
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+	for _, key := range [][]byte{positiveZero, negativeZero, nanPayload0, nanPayload1} {
+		require.NoError(t, vector.AppendBytes(vec, key, false, mp))
+	}
+
+	f := &fuzzyCheck{
+		db:            "db",
+		tbl:           "t",
+		attr:          "k",
+		exactFloatKey: true,
+		col: &plan.ColDef{
+			Name: "k",
+			Typ:  plan.Type{Id: int32(types.T_float64)},
+		},
+	}
+	require.NoError(t, f.firstlyCheck(context.Background(), vec),
+		"signed zero and distinct NaN payloads are distinct primary keys")
+
+	keys, err := f.genCollsionKeys(vec)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"unhex('" + hex.EncodeToString(positiveZero) + "')",
+		"unhex('" + hex.EncodeToString(negativeZero) + "')",
+		"unhex('" + hex.EncodeToString(nanPayload0) + "')",
+		"unhex('" + hex.EncodeToString(nanPayload1) + "')",
+	}, keys[0])
+	f.condition = strings.Join(keys[0], ", ")
+	require.Equal(t,
+		"select serial(k) from `db`.`t` where serial(k) in ("+f.condition+") group by serial(k) having count(*) > 1 limit 1;",
+		f.duplicateCheckSQL())
+
+	require.NoError(t, vector.AppendBytes(vec, negativeZero, false, mp))
+	err = f.firstlyCheck(context.Background(), vec)
+	require.ErrorContains(t, err, "Duplicate entry '-0'")
+
+	_, err = f.exactFloatKeyDisplay([]byte{0xff})
+	require.Error(t, err)
+}
+
+func TestFuzzyCheckDuplicateSQLModes(t *testing.T) {
+	compound := &fuzzyCheck{
+		db:           "db",
+		tbl:          "t",
+		condition:    "(a = 1 and b = 2)",
+		isCompound:   true,
+		compoundCols: []*plan.ColDef{{Name: "a"}, {Name: "b"}},
+	}
+	require.Equal(t,
+		"select serial(a, b) from `db`.`t` where (a = 1 and b = 2) group by serial(a, b) having count(*) > 1 limit 1;",
+		compound.duplicateCheckSQL())
+
+	hidden := &fuzzyCheck{
+		db:               "db",
+		tbl:              "hidden",
+		attr:             "k",
+		condition:        "1, 2",
+		onlyInsertHidden: true,
+	}
+	require.Equal(t,
+		"select k from `db`.`hidden` where k in (1, 2) group by k having count(*) > 1 limit 1;",
+		hidden.duplicateCheckSQL())
+}
+
+func TestExactFloatBackgroundSQLCheckFormatsDuplicateIdentity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	compile := &Compile{
+		proc: proc,
+		pn:   &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}},
+	}
+	f := &fuzzyCheck{
+		db:            "db",
+		tbl:           "t",
+		attr:          "k",
+		exactFloatKey: true,
+		col: &plan.ColDef{
+			Name: "k",
+			Typ:  plan.Type{Id: int32(types.T_float64)},
+		},
+	}
+
+	check := func(t *testing.T, key []byte) error {
+		memResult := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+		memResult.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendBytesRows(memResult, 0, [][]byte{key}))
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		oldExecutor, hadOldExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+		newExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			require.Equal(t, f.duplicateCheckSQL(), sql)
+			return memResult.GetResult(), nil
+		})
+		rt.SetGlobalVariables(moruntime.InternalSQLExecutor, newExecutor)
+		t.Cleanup(func() {
+			if hadOldExecutor {
+				rt.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+			} else {
+				rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, newExecutor)
+			}
+		})
+		return f.backgroundSQLCheck(compile)
+	}
+
+	t.Run("decoded duplicate", func(t *testing.T) {
+		packer := types.NewPacker()
+		defer packer.Close()
+		packer.EncodeFloat64(math.Copysign(0, -1))
+		err := check(t, append([]byte(nil), packer.GetBuf()...))
+		require.ErrorContains(t, err, "Duplicate entry '-0'")
+	})
+
+	t.Run("malformed identity", func(t *testing.T) {
+		require.Error(t, check(t, []byte{0xff}))
+	})
+}
 
 func TestVectorToStringNullHandling(t *testing.T) {
 	mp, err := mpool.NewMPool("test_vectorToString", 0, mpool.NoFixed)

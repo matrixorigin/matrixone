@@ -1,0 +1,9 @@
+data branch diff issue_26038_missing_a against issue_26038_missing_b
+output limit 9223372036854775807;
+SQL parser error: table "issue_26038_missing_a" does not exist
+data branch diff issue_26038_missing_a against issue_26038_missing_b
+output limit 9223372036854775808;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. OUTPUT LIMIT is out of range at line 2 column 33 near " 9223372036854775808;";
+data branch diff issue_26038_missing_a against issue_26038_missing_b
+output limit 18446744073709551615;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. OUTPUT LIMIT is out of range at line 2 column 34 near " 18446744073709551615;";

@@ -79,6 +79,12 @@ type ServiceConfig struct {
 	FileServices []fileservice.Config `toml:"fileservice"`
 	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
+	// HAKeeperRunningRetryInterval is the startup retry interval while a TN
+	// service waits for HAKeeper to enter the Running state.
+	HAKeeperRunningRetryInterval tomlutil.Duration `toml:"hakeeper-running-retry-interval"`
+	// TNShardReadyRetryInterval is the startup retry interval while a CN service
+	// waits for HAKeeper to report an available TN shard.
+	TNShardReadyRetryInterval tomlutil.Duration `toml:"tn-shard-ready-retry-interval"`
 	// TN tn service config
 	TN_please_use_getTNServiceConfig *tnservice.Config `toml:"tn"`
 	TNCompatible                     *tnservice.Config `toml:"dn"` // for old config files compatibility
@@ -135,15 +141,32 @@ func newServiceConfig() ServiceConfig {
 			AllocateIDBatch:  100,
 			EnableCompress:   false,
 		},
-		Observability: *config.NewObservabilityParameters(),
-		LogService:    logservice.DefaultConfig(),
+		HAKeeperRunningRetryInterval: tomlutil.Duration{Duration: time.Second},
+		TNShardReadyRetryInterval:    tomlutil.Duration{Duration: time.Second},
+		Observability:                *config.NewObservabilityParameters(),
+		LogService:                   logservice.DefaultConfig(),
 		CN: cnservice.Config{
 			AutomaticUpgrade: true,
 			Frontend: config.FrontendParameters{
 				KeyEncryptionKey: "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y",
+				MongoDB:          *config.NewMongoDBParameters(),
 			},
 		},
 	}
+}
+
+func (c *ServiceConfig) setStartupRetryIntervalsDefault() error {
+	if c.HAKeeperRunningRetryInterval.Duration == 0 {
+		c.HAKeeperRunningRetryInterval.Duration = time.Second
+	} else if c.HAKeeperRunningRetryInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("hakeeper-running-retry-interval must be positive")
+	}
+	if c.TNShardReadyRetryInterval.Duration == 0 {
+		c.TNShardReadyRetryInterval.Duration = time.Second
+	} else if c.TNShardReadyRetryInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("tn-shard-ready-retry-interval must be positive")
+	}
+	return nil
 }
 
 func parseConfigFromFile(
@@ -197,6 +220,9 @@ func (c *ServiceConfig) validate() error {
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
 	}
+	if err := c.setStartupRetryIntervalsDefault(); err != nil {
+		return err
+	}
 
 	// file service
 	c.setFileserviceDefaultValues()
@@ -235,6 +261,9 @@ func (c *ServiceConfig) setDefaultValue() error {
 	}
 	if !c.Clock.EnableCheckMaxClockOffset {
 		c.Clock.MaxClockOffset.Duration = 0
+	}
+	if err := c.setStartupRetryIntervalsDefault(); err != nil {
+		return err
 	}
 
 	// file service
@@ -298,7 +327,22 @@ func (c *ServiceConfig) createFileService(
 	}
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
+	counterSetNames := make([]string, 0, len(c.FileServices)*2)
+	metricScope := fileservice.ServiceMetricScope(serviceType.String(), nodeUUID)
+	created := false
+	defer func() {
+		if created {
+			return
+		}
+		for _, service := range services {
+			service.Close(ctx)
+		}
+		for _, name := range counterSetNames {
+			perfcounter.Named.Delete(name)
+		}
+	}()
 	for _, config := range c.FileServices {
+		config.Cache.MetricScope = metricScope
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
 			ctx,
@@ -319,13 +363,13 @@ func (c *ServiceConfig) createFileService(
 			service.Name(),
 		)
 		perfcounter.Named.Store(counterSetName, counterSet)
+		counterSetNames = append(counterSetNames, counterSetName)
 
 		// set shared fs perf counter as node perf counter
 		if service.Name() == defines.SharedFileServiceName {
-			perfcounter.Named.Store(
-				perfcounter.NameForNode(serviceType.String(), nodeUUID),
-				counterSet,
-			)
+			nodeCounterSetName := perfcounter.NameForNode(serviceType.String(), nodeUUID)
+			perfcounter.Named.Store(nodeCounterSetName, counterSet)
+			counterSetNames = append(counterSetNames, nodeCounterSetName)
 		}
 	}
 
@@ -364,6 +408,7 @@ func (c *ServiceConfig) createFileService(
 		return nil, err
 	}
 
+	created = true
 	return fs, nil
 }
 
@@ -599,6 +644,7 @@ func (c *ServiceConfig) setFileserviceDefaultValues() {
 		c.FileServices = append(c.FileServices, fileservice.Config{
 			Name:    defines.TmpFileServiceName,
 			Backend: "DISK-TMP",
+			DataDir: c.defaultFileServiceDataDir(defines.TmpFileServiceName),
 		})
 	}
 }

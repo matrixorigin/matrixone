@@ -243,7 +243,6 @@ select * from test_temp_db.temp_in_db;
 
 -- 测试用例 9.1: 基于临时表创建视图
 -- 预期结果: 不支持
--- @bvt:issue#23700
 drop database if exists temp_view;
 create database temp_view;
 use temp_view;
@@ -260,7 +259,7 @@ select * from temp_for_view;
 -- 清理
 drop view if exists view_on_temp;
 drop table temp_for_view;
--- @bvt:issue
+drop database temp_view;
 
 -- ============================================================================
 -- 测试分类 11: 存储过程和函数限制

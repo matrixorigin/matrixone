@@ -8,7 +8,7 @@ ENV LC_ALL="C.UTF-8"
 ENV LAUNCH="launch"
 ENV ENABLE_UT="false"
 
-RUN go env -w GOPROXY=$GOPROXY
+RUN go env -w GOPROXY="${GOPROXY}"
 
 RUN mkdir -p /matrixone-test
 

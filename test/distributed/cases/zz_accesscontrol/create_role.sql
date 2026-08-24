@@ -103,6 +103,12 @@ prepare stmt4 from 'show databases';
 execute stmt4;
 prepare stmt5 from 'select "abc"';
 execute stmt5;
+deallocate prepare stmtt;
+deallocate prepare stmt;
+deallocate prepare stmt1;
+deallocate prepare stmt2;
+deallocate prepare stmt3;
+deallocate prepare stmt5;
 -- @session
 
 drop role if exists newrole, role_1234,12role,`role@hhhh123`,`role.123`,_newrole,role222;
@@ -113,8 +119,3 @@ drop user if exists role_user,user_role;
 drop role if exists role_role1,role_role2,role_role3,role_role4,role_role5,role_role6,role_role7,role_role8,u_role;
 drop database  if exists p_db;
 set global enable_privilege_cache = on;
-deallocate prepare stmt1;
-deallocate prepare stmt2;
-deallocate prepare stmt3;
-deallocate prepare stmt4;
-deallocate prepare stmt5;

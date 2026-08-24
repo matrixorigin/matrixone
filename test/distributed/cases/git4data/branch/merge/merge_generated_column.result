@@ -1,0 +1,234 @@
+drop database if exists data_branch_generated_column;
+create database data_branch_generated_column;
+use data_branch_generated_column;
+create table stored_base (
+id int primary key,
+a int,
+b int,
+c int generated always as (a + b) stored
+);
+insert into stored_base(id, a, b) values (1, 10, 20), (2, 30, 40);
+data branch create table stored_branch from stored_base;
+update stored_branch set a = 11 where id = 1;
+insert into stored_branch(id, a, b) values (3, 50, 60);
+delete from stored_branch where id = 2;
+data branch diff stored_branch against stored_base output summary;
+➤ metric[12,0,0]  ¦  stored_branch[-5,0,0]  ¦  stored_base[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  0  𝄀
+DELETED  ¦  1  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch diff stored_branch against stored_base;
+➤ diff stored_branch against stored_base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+stored_branch  ¦  UPDATE  ¦  1  ¦  11  ¦  20  ¦  31  𝄀
+stored_branch  ¦  DELETE  ¦  2  ¦  30  ¦  40  ¦  70  𝄀
+stored_branch  ¦  INSERT  ¦  3  ¦  50  ¦  60  ¦  110
+data branch diff stored_branch against stored_base columns(c, id);
+➤ diff stored_branch against stored_base[12,0,0]  ¦  flag[12,0,0]  ¦  c[4,32,0]  ¦  id[4,32,0]  𝄀
+stored_branch  ¦  UPDATE  ¦  31  ¦  1  𝄀
+stored_branch  ¦  DELETE  ¦  70  ¦  2  𝄀
+stored_branch  ¦  INSERT  ¦  110  ¦  3
+data branch diff stored_branch against stored_base columns(c, id) output as stored_generated_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`data_branch_generated_column`.`stored_generated_diff`
+select __mo_diff_source, __mo_diff_flag, c, id from stored_generated_diff order by id, __mo_diff_source;
+➤ __mo_diff_source[12,-1,0]  ¦  __mo_diff_flag[12,-1,0]  ¦  c[4,32,0]  ¦  id[4,32,0]  𝄀
+stored_branch  ¦  UPDATE  ¦  31  ¦  1  𝄀
+stored_branch  ¦  DELETE  ¦  70  ¦  2  𝄀
+stored_branch  ¦  INSERT  ¦  110  ¦  3
+data branch merge stored_branch into stored_base when conflict accept;
+select id, a, b, c from stored_base order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  11  ¦  20  ¦  31  𝄀
+3  ¦  50  ¦  60  ¦  110
+data branch diff stored_branch against stored_base output summary;
+➤ metric[12,0,0]  ¦  stored_branch[-5,0,0]  ¦  stored_base[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+create table virtual_base (
+id int primary key,
+a int,
+b int,
+c int generated always as (a + b) virtual
+);
+insert into virtual_base(id, a, b) values (1, 10, 20), (2, 30, 40);
+data branch create table virtual_branch from virtual_base;
+update virtual_branch set a = 11 where id = 1;
+insert into virtual_branch(id, a, b) values (3, 50, 60);
+delete from virtual_branch where id = 2;
+data branch diff virtual_branch against virtual_base output summary;
+➤ metric[12,0,0]  ¦  virtual_branch[-5,0,0]  ¦  virtual_base[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  0  𝄀
+DELETED  ¦  1  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch pick virtual_branch into virtual_base keys(1, 2, 3) when conflict accept;
+select id, a, b, c from virtual_base order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  11  ¦  20  ¦  31  𝄀
+3  ¦  50  ¦  60  ¦  110
+data branch diff virtual_branch against virtual_base output summary;
+➤ metric[12,0,0]  ¦  virtual_branch[-5,0,0]  ¦  virtual_base[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+create table formula_source (
+id int primary key,
+a int,
+g int generated always as (a * 2) stored
+);
+insert into formula_source(id, a) values (1, 11);
+create table formula_destination (
+id int primary key,
+a int,
+g int generated always as (a * 3) stored
+);
+insert into formula_destination(id, a) values (1, 10);
+data branch diff formula_source against formula_destination output summary;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+internal error: schema compatibility check: column 'g' has different generated definitions
+data branch merge formula_source into formula_destination when conflict accept;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+internal error: schema compatibility check: column 'g' has different generated definitions
+select id, a, g from formula_destination order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  10  ¦  30
+create table stored_generated_pk_base (
+a int,
+b int generated always as (a * 2) stored,
+payload int,
+primary key (b)
+);
+insert into stored_generated_pk_base(a, payload) values (1, 10), (2, 20);
+data branch create table stored_generated_pk_branch from stored_generated_pk_base;
+update stored_generated_pk_branch set payload = 11 where b = 2;
+insert into stored_generated_pk_branch(a, payload) values (3, 30);
+delete from stored_generated_pk_branch where b = 4;
+data branch diff stored_generated_pk_branch against stored_generated_pk_base output summary;
+➤ metric[12,0,0]  ¦  stored_generated_pk_branch[-5,0,0]  ¦  stored_generated_pk_base[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  0  𝄀
+DELETED  ¦  1  ¦  0  𝄀
+UPDATED  ¦  1  ¦  0
+data branch merge stored_generated_pk_branch into stored_generated_pk_base when conflict accept;
+select a, b, payload from stored_generated_pk_base order by b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  2  ¦  11  𝄀
+3  ¦  6  ¦  30
+data branch diff stored_generated_pk_branch against stored_generated_pk_base output summary;
+➤ metric[12,0,0]  ¦  stored_generated_pk_branch[-5,0,0]  ¦  stored_generated_pk_base[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+create table generated_pk_source (
+a int,
+g int generated always as (a * 2) stored,
+primary key (g)
+);
+insert into generated_pk_source(a) values (1);
+create table generated_pk_destination (
+a int,
+g int generated always as (a * 3) stored,
+primary key (g)
+);
+insert into generated_pk_destination(a) values (1);
+data branch diff generated_pk_source against generated_pk_destination output summary;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+internal error: schema compatibility check: column 'g' has different generated definitions
+data branch merge generated_pk_source into generated_pk_destination when conflict accept;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+internal error: schema compatibility check: column 'g' has different generated definitions
+select a, g from generated_pk_destination order by g;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  3
+create table reordered_matching_source (
+id int primary key,
+a int,
+b int,
+g int generated always as (a * 2) stored
+);
+insert into reordered_matching_source(id, a, b) values (1, 10, 7);
+create table reordered_matching_destination (
+id int primary key,
+b int,
+a int,
+g int generated always as (a * 2) stored
+);
+insert into reordered_matching_destination(id, b, a) values (1, 7, 9);
+data branch merge reordered_matching_source into reordered_matching_destination when conflict accept;
+select id, a, b, g from reordered_matching_destination order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  10  ¦  7  ¦  20
+data branch diff reordered_matching_source against reordered_matching_destination output summary;
+➤ metric[12,0,0]  ¦  reordered_matching_source[-5,0,0]  ¦  reordered_matching_destination[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+create table reordered_mismatch_source (
+id int primary key,
+a int,
+b int,
+g int generated always as (a * 2) stored
+);
+insert into reordered_mismatch_source(id, a, b) values (1, 10, 7);
+create table reordered_mismatch_destination (
+id int primary key,
+b int,
+a int,
+g int generated always as (b * 2) stored
+);
+insert into reordered_mismatch_destination(id, b, a) values (1, 7, 9);
+data branch diff reordered_mismatch_source against reordered_mismatch_destination output summary;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+internal error: schema compatibility check: column 'g' has different generated definitions
+data branch merge reordered_mismatch_source into reordered_mismatch_destination when conflict accept;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+internal error: schema compatibility check: column 'g' has different generated definitions
+select id, a, b, g from reordered_mismatch_destination order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  9  ¦  7  ¦  14
+create table reordered_generated_pk_source (
+a int,
+b int,
+g int generated always as (a * 2) stored,
+primary key (g)
+);
+insert into reordered_generated_pk_source(a, b) values (10, 7);
+create table reordered_generated_pk_destination (
+b int,
+a int,
+g int generated always as (a * 2) stored,
+primary key (g)
+);
+insert into reordered_generated_pk_destination(b, a) values (8, 10);
+data branch merge reordered_generated_pk_source into reordered_generated_pk_destination when conflict accept;
+select a, b, g from reordered_generated_pk_destination order by g;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  g[4,32,0]  𝄀
+10  ¦  7  ¦  20
+data branch diff reordered_generated_pk_source against reordered_generated_pk_destination output summary;
+➤ metric[12,0,0]  ¦  reordered_generated_pk_source[-5,0,0]  ¦  reordered_generated_pk_destination[-5,0,0]  𝄀
+INSERTED  ¦  0  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+create table reordered_generated_pk_mismatch_source (
+a int,
+b int,
+g int generated always as (a * 2) stored,
+primary key (g)
+);
+insert into reordered_generated_pk_mismatch_source(a, b) values (10, 7);
+create table reordered_generated_pk_mismatch_destination (
+b int,
+a int,
+g int generated always as (b * 2) stored,
+primary key (g)
+);
+insert into reordered_generated_pk_mismatch_destination(b, a) values (7, 10);
+data branch diff reordered_generated_pk_mismatch_source against reordered_generated_pk_mismatch_destination output summary;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+internal error: schema compatibility check: column 'g' has different generated definitions
+data branch merge reordered_generated_pk_mismatch_source into reordered_generated_pk_mismatch_destination when conflict accept;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+internal error: schema compatibility check: column 'g' has different generated definitions
+select a, b, g from reordered_generated_pk_mismatch_destination order by g;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  g[4,32,0]  𝄀
+10  ¦  7  ¦  14
+drop database data_branch_generated_column;

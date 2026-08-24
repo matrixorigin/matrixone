@@ -1,0 +1,59 @@
+drop table if exists t_ordered_set_bvt;
+create table t_ordered_set_bvt(g int, v int, sort_key int);
+insert into t_ordered_set_bvt values
+    (1, 10, 2), (1, 20, 1), (1, 20, 5), (1, 30, 3), (1, NULL, 4),
+    (2, 4, 2), (2, 2, 1), (2, 8, 3),
+    (3, NULL, 1);
+
+select g,
+       group_concat(distinct v order by sort_key separator '|') as local_group_concat
+from t_ordered_set_bvt
+group by g order by g;
+
+select g,
+group_concat(distinct v) within group (order by sort_key desc) as within_group_concat
+from t_ordered_set_bvt
+group by g order by g;
+
+select g,
+group_concat(v) within group (order by sort_key desc) as within_group_concat_all
+from t_ordered_set_bvt
+group by g order by g;
+
+select percentile_cont(0.25) within group (order by v) as p25_cont,
+percentile_disc(0.25) within group (order by v) as p25_disc
+from t_ordered_set_bvt;
+
+select percentile_disc(0.5) within group (order by cast(v as decimal(38,0))) as p50_disc_dec38
+from t_ordered_set_bvt;
+
+select percentile_cont(0.5) within group (order by cast(v as decimal(38,0))) as p50_cont_dec38
+from t_ordered_set_bvt;
+
+select g,
+       percentile_cont(0.5) within group (order by v) as p50_cont,
+       percentile_disc(0.5) within group (order by v) as p50_disc
+from t_ordered_set_bvt
+group by g order by g;
+
+select percentile_cont(0) within group (order by v) as cont_min,
+       percentile_cont(1) within group (order by v) as cont_max,
+       percentile_disc(0) within group (order by v desc) as disc_desc_p0,
+       percentile_disc(1) within group (order by v desc) as disc_desc_p1
+from t_ordered_set_bvt;
+
+select g,
+       percentile_cont(0.5) within group (order by v) as null_cont,
+       percentile_disc(0.5) within group (order by v) as null_disc
+from t_ordered_set_bvt
+where g = 3
+group by g;
+
+drop table if exists t_within_identifier_bvt;
+create table t_within_identifier_bvt (id int, within int);
+insert into t_within_identifier_bvt values (1, 10), (2, 20);
+select within from t_within_identifier_bvt order by id;
+select word, reserved from information_schema.KEYWORDS where word = 'WITHIN';
+drop table t_within_identifier_bvt;
+
+drop table t_ordered_set_bvt;

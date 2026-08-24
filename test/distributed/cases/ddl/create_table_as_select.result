@@ -809,7 +809,7 @@ select * from time07;
 null
 drop table time07;
 drop table if exists test01;
-create table test01 as select col1 from time01 order by col1 nulls first;
+create table test01 as select col1 from time01 order by col1;
 select * from test01;
 ➤ col1[91,64,0]  𝄀
 null  𝄀
@@ -817,7 +817,7 @@ null  𝄀
 2020-10-11
 drop table test01;
 drop table if exists test02;
-create table test02 as select * from time01 order by col2 desc nulls first;
+create table test02 as select * from time01 order by col2 is not null, col2 desc;
 select * from test02;
 ➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[92,64,0]  𝄀
 null  ¦  null  ¦  null  ¦  null  𝄀
@@ -825,7 +825,7 @@ null  ¦  null  ¦  null  ¦  null  𝄀
 1919-12-01  ¦  1990-10-10 01:01:01  ¦  2001-12-12 01:01:01  ¦  10:59:59
 drop table test02;
 drop table if exists test03;
-create table test03 as select * from time01 order by col2 desc nulls last;
+create table test03 as select * from time01 order by col2 desc;
 select * from test03;
 ➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[92,64,0]  𝄀
 2020-10-11  ¦  2023-11-11 10:00:01  ¦  1997-01-13 12:12:12  ¦  12:12:12  𝄀
@@ -833,7 +833,7 @@ select * from test03;
 null  ¦  null  ¦  null  ¦  null
 drop table test03;
 drop table if exists test04;
-create table test04 as select col1 from time01 order by col1 nulls first;
+create table test04 as select col1 from time01 order by col1;
 select * from test04;
 ➤ col1[91,64,0]  𝄀
 null  𝄀
@@ -984,7 +984,7 @@ create table test.table02 as select * from table01;
 show create table table02;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 table02  ¦  CREATE TABLE `table02` (
-  `id` int NOT NULL AUTO_INCREMENT,
+  `id` int NOT NULL DEFAULT 0,
   `col1` varchar(255) NOT NULL,
   `col2` int DEFAULT NULL,
   `col3` decimal(10,2) DEFAULT NULL,
@@ -1016,7 +1016,7 @@ alter table table02 add column newcolumn int after col3, drop column col4;
 show create table table02;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 table02  ¦  CREATE TABLE `table02` (
-  `id` int NOT NULL AUTO_INCREMENT,
+  `id` int NOT NULL DEFAULT 0,
   `col1` varchar(255) NOT NULL,
   `col2` int DEFAULT NULL,
   `col3` decimal(10,2) DEFAULT NULL,
@@ -1031,7 +1031,7 @@ table02  ¦  CREATE TABLE `table02` (
 alter table table02 modify column newcolumn bigint;
 desc table02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦  auto_increment  ¦    𝄀
+id  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 col1  ¦  VARCHAR(255)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col3  ¦  DECIMAL(10,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -2058,8 +2058,8 @@ agg01  ¦  CREATE TABLE `agg01` (
   `avgcol` double DEFAULT NULL,
   `sumcol` decimal(38,0) DEFAULT NULL,
   `countcol` bigint NOT NULL,
-  `maxcol` double NOT NULL,
-  `mincol` double NOT NULL
+  `maxcol` double DEFAULT NULL,
+  `mincol` double DEFAULT NULL
 )
 select * from agg01;
 ➤ avgcol[8,54,0]  ¦  sumcol[3,38,0]  ¦  countcol[-5,64,0]  ¦  maxcol[8,54,0]  ¦  mincol[8,54,0]  𝄀
@@ -2077,7 +2077,120 @@ name VARCHAR(20) NOT NULL,
 price DECIMAL,
 PRIMARY KEY (category, id)
 );
-create dynamic table dt_test as select * from tx1;
-lack of option type
 drop table tx1;
 drop database db9;
+drop database if exists repro_ctas_datetime6;
+create database repro_ctas_datetime6;
+use repro_ctas_datetime6;
+create table t as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit;
+select dt_lit from t;
+➤ dt_lit[93,64,0]  𝄀
+2025-05-06 07:08:09.123456000
+select table_name, column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'repro_ctas_datetime6'
+order by ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+t  ¦  dt_lit  ¦  DATETIME(6)  ¦  YES
+create table t_union as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit
+union all
+select cast('2025-05-07 08:09:10.654321' as datetime(6));
+select dt_lit from t_union order by dt_lit;
+➤ dt_lit[93,64,0]  𝄀
+2025-05-06 07:08:09.123456000  𝄀
+2025-05-07 08:09:10.654321000
+drop database repro_ctas_datetime6;
+drop database if exists ctas_null_extension_26828;
+create database ctas_null_extension_26828;
+use ctas_null_extension_26828;
+create table l (id int primary key, lv int not null);
+create table r (id int primary key, rv int not null);
+insert into l values (1, 10), (2, 20);
+insert into r values (1, 100), (3, 300);
+create table direct_left as select l.id as l_id, l.lv, r.id as r_id, r.rv from l left join r on l.id = r.id;
+select * from direct_left order by l_id;
+➤ l_id[4,32,0]  ¦  lv[4,32,0]  ¦  r_id[4,32,0]  ¦  rv[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  100  𝄀
+2  ¦  20  ¦  null  ¦  null
+create table derived_right as select * from (select l.id as l_id, l.lv, r.id as r_id, r.rv from l right join r on l.id = r.id) as src;
+select * from derived_right order by r_id;
+➤ l_id[4,32,0]  ¦  lv[4,32,0]  ¦  r_id[4,32,0]  ¦  rv[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  100  𝄀
+null  ¦  null  ¦  3  ¦  300
+create view full_view as select l.id as l_id, l.lv, r.id as r_id, r.rv from l full join r on l.id = r.id;
+create table view_full as select * from full_view;
+select * from view_full order by coalesce(l_id, r_id);
+➤ l_id[4,32,0]  ¦  lv[4,32,0]  ¦  r_id[4,32,0]  ¦  rv[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  100  𝄀
+2  ¦  20  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  3  ¦  300
+create table scalar_direct as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+select * from scalar_direct order by l_id;
+➤ l_id[4,32,0]  ¦  scalar_rv[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  null
+create view scalar_view as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+create table scalar_view_ctas as select * from scalar_view;
+select * from scalar_view_ctas order by l_id;
+➤ l_id[4,32,0]  ¦  scalar_rv[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  null
+create table coalesce_left as select l.id as l_id, coalesce(r.rv, -1) as rv_or_default from l left join r on l.id = r.id;
+select * from coalesce_left order by l_id;
+➤ l_id[4,32,0]  ¦  rv_or_default[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  -1
+create table explicit_not_null_reject (r_id int not null) as select r.id from l left join r on l.id = r.id;
+constraint violation: Column 'r_id' cannot be null
+show tables like 'explicit_not_null_reject';
+➤ Tables_in_ctas_null_extension_26828[12,-1,0]
+select table_name, column_name, is_nullable from information_schema.columns where table_schema = 'ctas_null_extension_26828' and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+coalesce_left  ¦  l_id  ¦  NO  𝄀
+coalesce_left  ¦  rv_or_default  ¦  NO  𝄀
+derived_right  ¦  l_id  ¦  YES  𝄀
+derived_right  ¦  lv  ¦  YES  𝄀
+derived_right  ¦  r_id  ¦  NO  𝄀
+derived_right  ¦  rv  ¦  NO  𝄀
+direct_left  ¦  l_id  ¦  NO  𝄀
+direct_left  ¦  lv  ¦  NO  𝄀
+direct_left  ¦  r_id  ¦  YES  𝄀
+direct_left  ¦  rv  ¦  YES  𝄀
+scalar_direct  ¦  l_id  ¦  NO  𝄀
+scalar_direct  ¦  scalar_rv  ¦  YES  𝄀
+scalar_view_ctas  ¦  l_id  ¦  NO  𝄀
+scalar_view_ctas  ¦  scalar_rv  ¦  YES  𝄀
+view_full  ¦  l_id  ¦  YES  𝄀
+view_full  ¦  lv  ¦  YES  𝄀
+view_full  ¦  r_id  ¦  YES  𝄀
+view_full  ¦  rv  ¦  YES  𝄀
+drop database ctas_null_extension_26828;
+drop database if exists ctas_auto_increment_24436;
+create database ctas_auto_increment_24436;
+use ctas_auto_increment_24436;
+create table source_ai (id int primary key auto_increment, payload varchar(20));
+insert into source_ai(payload) values ('one'), ('two');
+create table target_ctas as select id, payload from source_ai;
+select count(*) from information_schema.columns
+where table_schema = database() and table_name = 'source_ai'
+and column_name = 'id' and extra = 'auto_increment';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from information_schema.columns
+where table_schema = database() and table_name = 'target_ctas'
+and column_name = 'id' and extra = 'auto_increment';
+➤ count(*)[-5,64,0]  𝄀
+0
+insert into target_ctas(payload) values ('omitted-id');
+select id, payload from target_ctas where payload = 'omitted-id';
+➤ id[4,32,0]  ¦  payload[12,20,0]  𝄀
+0  ¦  omitted-id
+create table target_explicit (id int not null default 42, payload varchar(20))
+as select id, payload from source_ai;
+insert into target_explicit(payload) values ('explicit-default');
+select id, payload from target_explicit where payload = 'explicit-default';
+➤ id[4,32,0]  ¦  payload[12,20,0]  𝄀
+42  ¦  explicit-default
+drop database ctas_auto_increment_24436;

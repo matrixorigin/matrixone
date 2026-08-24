@@ -106,6 +106,8 @@ func (CatalogHooks) SupportedVectorTypes() []types.T {
 	return []types.T{types.T_array_float32, types.T_array_float16}
 }
 
+func (CatalogHooks) IsVectorIndex() bool { return true }
+
 // SupportedPrimaryKeyTypes: requires an int64 primary key.
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return []types.T{types.T_int64} }
 
@@ -205,7 +207,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 		opType := catalog.ToLower(idx.IndexOption.AlgoParamVectorOpType)
 		if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
+			return nil, moerr.NewInvalidInputNoCtxf("invalid op_type. '%s'", opType)
 		}
 		res[catalog.IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 	} else {
@@ -229,11 +231,14 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if idx.IndexOption.Hour > 0 {
 		res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
 	}
+	if idx.IndexOption.Second > 0 {
+		res[catalog.Second] = strconv.FormatInt(idx.IndexOption.Second, 10)
+	}
 
 	if len(idx.IndexOption.Quantization) > 0 {
 		quantize := catalog.ToLower(idx.IndexOption.Quantization)
-		if !metric.ValidQuantization(quantize) {
-			return nil, moerr.NewInternalErrorNoCtx("invalid quantization. quantization is invalid. f32, f16, int8, uint8")
+		if err := (CatalogHooks{}).ValidQuantization(quantize, ""); err != nil {
+			return nil, moerr.NewNotSupportedNoCtx("invalid quantization. quantization is invalid. f32, f16, int8, uint8")
 		}
 		res[catalog.Quantization] = quantize
 	} else {
@@ -243,7 +248,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if len(idx.IndexOption.DistributionMode) > 0 {
 		mode := catalog.ToLower(idx.IndexOption.DistributionMode)
 		if !vectorindex.ValidDistributionMode(mode) {
-			return nil, moerr.NewInternalErrorNoCtx("invalid distribution_mode. distribution_mode is invalid. single, sharded, replicated")
+			return nil, moerr.NewNotSupportedNoCtx("invalid distribution_mode. distribution_mode is invalid. single, sharded, replicated")
 		}
 		res[catalog.DistributionMode] = mode
 	} else {

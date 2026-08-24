@@ -42,6 +42,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 // Helper function to create a test stream with minimal setup
@@ -201,6 +202,79 @@ func readCounterValue(t *testing.T, counter prometheus.Counter) float64 {
 	var metric dto.Metric
 	require.NoError(t, counter.Write(&metric))
 	return metric.GetCounter().GetValue()
+}
+
+func TestTableChangeStream_InitialSnapshotBatchLimiterSharedAcrossTables(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	limiter := semaphore.NewWeighted(1)
+	stream1 := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "t1"},
+		WithInitialSnapshotLimiter(limiter),
+	)
+	stream2 := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "t2"},
+		WithInitialSnapshotLimiter(limiter),
+	)
+
+	permit1, err := stream1.acquireInitialSnapshotPermit(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, permit1)
+
+	acquired := make(chan *snapshotPermit, 1)
+	errs := make(chan error, 1)
+	go func() {
+		permit, acquireErr := stream2.acquireInitialSnapshotPermit(context.Background())
+		if acquireErr != nil {
+			errs <- acquireErr
+			return
+		}
+		acquired <- permit
+	}()
+
+	select {
+	case permit := <-acquired:
+		permit.Release()
+		t.Fatal("second table acquired a batch slot before the first released it")
+	case err := <-errs:
+		require.NoError(t, err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	permit1.Release()
+	permit1.Release() // Release must be idempotent across cleanup paths.
+	select {
+	case permit := <-acquired:
+		require.NotNil(t, permit)
+		permit.Release()
+	case err := <-errs:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("second table did not acquire the released batch slot")
+	}
+}
+
+func TestTableChangeStream_InitialSnapshotBatchLimiterSkippedAfterFirstSync(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	limiter := semaphore.NewWeighted(1)
+	require.NoError(t, limiter.Acquire(context.Background(), 1))
+	defer limiter.Release(1)
+
+	stream := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "incremental"},
+		WithInitialSnapshotLimiter(limiter),
+	)
+	stream.initialSyncPending.Store(false)
+
+	permit, err := stream.acquireInitialSnapshotPermit(context.Background())
+	require.NoError(t, err)
+	require.Nil(t, permit)
 }
 
 func TestTableChangeStream_HandleSnapshotNoProgress_WarningAndReset(t *testing.T) {
@@ -977,20 +1051,20 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 	h := newTableStreamHarness(t)
 	defer h.Close()
 
-	tail := createTestBatch(t, h.MP(), types.BuildTS(10, 0), []int32{1})
-	h.SetCollectBatches([]changeBatch{
-		{insert: tail, hint: engine.ChangesHandle_Tail_done},
-		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	ready := make(chan struct{})
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		return &blockingChangesHandle{ready: ready}, nil
 	})
 
 	ar := h.NewActiveRoutine()
 	errCh, done := h.RunStreamAsync(ar)
 
-	require.Eventually(t, func() bool {
-		return len(h.CollectCallsSnapshot()) > 0
-	}, time.Second, 10*time.Millisecond, "stream should begin collecting before cancellation")
-
-	opsBefore := h.Sinker().opsSnapshot()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collector did not block before context cancellation")
+	}
+	require.Empty(t, h.Sinker().opsSnapshot(), "blocked collector should not produce sink operations")
 
 	h.Cancel()
 	done()
@@ -1007,7 +1081,7 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 	}
 
 	require.False(t, h.Stream().GetRetryable(), "cancel should not mark stream retryable")
-	require.Equal(t, opsBefore, h.Sinker().opsSnapshot(), "cancel should not produce additional sink operations")
+	require.Empty(t, h.Sinker().opsSnapshot(), "cancel should not produce sink or cleanup operations")
 }
 
 // Test ActiveRoutine Pause

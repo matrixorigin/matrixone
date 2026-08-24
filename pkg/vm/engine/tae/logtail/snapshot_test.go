@@ -15,10 +15,16 @@
 package logtail
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -73,6 +79,55 @@ func TestSnapshotInfo(t *testing.T) {
 		assert.Contains(t, allTS, ts2)
 		assert.Contains(t, allTS, ts3)
 	})
+}
+
+func TestSnapshotMetaGetSnapshotSkipsPersistedAborts(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := batch.NewWithSize(len(snapshotSchemaTypes) + 2)
+	for i, typ := range snapshotSchemaTypes {
+		input.Vecs[i] = vector.NewVec(typ)
+	}
+	input.Vecs[len(snapshotSchemaTypes)] = vector.NewVec(objectio.TSType)
+	input.Vecs[len(snapshotSchemaTypes)+1] = vector.NewVec(types.T_bool.ToType())
+	for row, ts := range []int64{100, 200} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[ColSnapshotId], uint64(row+1), false, mp))
+		require.NoError(t, vector.AppendBytes(input.Vecs[ColSName], []byte("snapshot"), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[ColTS], ts, false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[ColLevel], types.Enum(SnapshotTypeCluster), false, mp))
+		require.NoError(t, vector.AppendBytes(input.Vecs[ColAccountName], nil, false, mp))
+		require.NoError(t, vector.AppendBytes(input.Vecs[ColDatabaseName], nil, false, mp))
+		require.NoError(t, vector.AppendBytes(input.Vecs[ColTableName], nil, false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[ColObjId], uint64(0), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[len(snapshotSchemaTypes)], types.BuildTS(1, 0), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[len(snapshotSchemaTypes)+1], row == 0, false, mp))
+	}
+	input.SetRowCount(2)
+	seqnums := make([]uint16, 0, len(snapshotSchemaTypes)+2)
+	for i := range snapshotSchemaTypes {
+		seqnums = append(seqnums, uint16(i))
+	}
+	seqnums = append(seqnums, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT)
+	writer := ioutil.ConstructWriter(0, seqnums, -1, false, false, fs)
+	writer.SetAppendable()
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	input.Clean(mp)
+
+	sm := NewSnapshotMeta()
+	const tableID = uint64(1)
+	sm.objects[tableID] = map[objectio.Segmentid]*objectInfo{
+		stats.ObjectName().SegmentId(): {stats: stats},
+	}
+	snapshots, err := sm.GetSnapshot(ctx, "test", fs, mp)
+	require.NoError(t, err)
+	require.Equal(t, []types.TS{types.BuildTS(200, 0)}, snapshots.cluster)
 }
 
 // TestAccountToTableSnapshots tests the core logic of snapshot distribution

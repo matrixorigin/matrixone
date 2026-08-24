@@ -299,15 +299,15 @@ func TestPrepareIvfpqIndexContext_Success(t *testing.T) {
 func TestApplyIndicesForSortUsingIvfpq_NilGuards(t *testing.T) {
 	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 
-	got, err := b.applyIndicesForSortUsingIvfpq(7, nil, &MultiTableIndex{})
+	got, err := b.applyIndicesForSortUsingIvfpq(7, nil, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(7), got)
 
-	got, err = b.applyIndicesForSortUsingIvfpq(7, &vectorSortContext{}, &MultiTableIndex{})
+	got, err = b.applyIndicesForSortUsingIvfpq(7, &vectorSortContext{}, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(7), got)
 
-	got, err = b.applyIndicesForSortUsingIvfpq(7, &vectorSortContext{sortNode: &plan.Node{}}, &MultiTableIndex{})
+	got, err = b.applyIndicesForSortUsingIvfpq(7, &vectorSortContext{sortNode: &plan.Node{}}, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(7), got)
 }
@@ -323,7 +323,7 @@ func TestApplyIndicesForSortUsingIvfpq_PrepareReturnsNil(t *testing.T) {
 	v.sortNode = &plan.Node{}
 	v.rankOption = &plan.RankOption{Mode: "force"}
 
-	got, err := b.applyIndicesForSortUsingIvfpq(0, v, &MultiTableIndex{})
+	got, err := b.applyIndicesForSortUsingIvfpq(0, v, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(0), got)
 }
@@ -409,7 +409,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti)
+	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 
 	sortID := vecCtx.projNode.Children[0]
@@ -573,7 +573,7 @@ func TestApplyIndicesForSortUsingIvfpq_RichPushdown(t *testing.T) {
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti)
+	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 
 	sortID := vecCtx.projNode.Children[0]
@@ -669,6 +669,6 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti)
+	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 }

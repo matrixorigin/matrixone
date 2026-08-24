@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -61,6 +62,7 @@ var (
 	TableExtra               = strings.ToUpper("table-extra")
 	PrefetchOnSubscribed     = strings.ToUpper("prefetch-on-subscribed")
 	GCCatalogCacheMethod     = strings.ToUpper("GCCatalogCache")
+	RefreshViewMetadata      = strings.ToUpper("RefreshViewMetadata")
 )
 
 var (
@@ -106,6 +108,7 @@ var (
 		TableExtra:               handleTableExtra,
 		PrefetchOnSubscribed:     handlePrefetchOnSubscribed,
 		GCCatalogCacheMethod:     handleGCCatalogCache,
+		RefreshViewMetadata:      handleRefreshViewMetadata,
 	}
 )
 
@@ -120,4 +123,17 @@ type handleFunc func(proc *process.Process,
 type Result struct {
 	Method string `json:"method"`
 	Data   any    `json:"result"`
+}
+
+// GetFirstTNResponse returns the first response for callers that require a TN target.
+// Commands for which an empty target set is valid should use Result.Data directly.
+func GetFirstTNResponse(ctx context.Context, result Result) (any, error) {
+	responses, ok := result.Data.([]any)
+	if !ok {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid TN response data %T", result.Data)
+	}
+	if len(responses) == 0 {
+		return nil, moerr.NewNoAvailableBackend(ctx)
+	}
+	return responses[0], nil
 }

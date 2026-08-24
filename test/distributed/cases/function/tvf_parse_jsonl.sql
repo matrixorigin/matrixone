@@ -87,6 +87,11 @@ select * from parse_jsonl_data($$[true, 1, "2020-12-30 11:22:33"]
 $$, 'bIt'
 ) t;
 
+-- string outputs are newly authored utf8mb4_general_ci text, not legacy catalog data
+select min(col0), max(col0) from parse_jsonl_data($$["a"]
+["B"]
+$$, 's') t;
+
 select * from parse_jsonl_file('$resources/load_data/jsonline_array.jl') t;
 select * from parse_jsonl_file('$resources/load_data/jsonline_array.jl.gz') t;
 select * from parse_jsonl_file('$resources/load_data/jsonline_array.jl.bz2') t;

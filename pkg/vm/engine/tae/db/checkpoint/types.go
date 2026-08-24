@@ -29,6 +29,14 @@ var ErrCheckpointDisabled = moerr.NewInternalErrorNoCtxf("checkpoint disabled")
 var ErrExecutorRestarted = moerr.NewInternalErrorNoCtxf("executor restarted")
 var ErrExecutorClosed = moerr.NewInternalErrorNoCtxf("executor closed")
 var ErrBadIntent = moerr.NewInternalErrorNoCtxf("bad intent")
+
+// ErrGCKPNeedsFreshICKP tells the DB-level force-checkpoint coordinator to
+// advance and flush a real HLC boundary before retrying. A GCKP summarizes an
+// ICKP; using another GCKP as its predecessor would advance only the synthetic
+// checkpoint boundary, without adding the table-history data for that range.
+var ErrGCKPNeedsFreshICKP = moerr.NewInternalErrorNoCtxf(
+	"global checkpoint requires a fresh incremental checkpoint",
+)
 var ErrStopRunner = moerr.NewInternalErrorNoCtxf("runner stopped")
 
 type State int8

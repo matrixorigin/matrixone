@@ -34,6 +34,76 @@ func TestIcebergCatalogSecretRefValidation(t *testing.T) {
 	require.Contains(t, err.Error(), "secret://")
 }
 
+func TestIcebergCatalogURIValidation(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("MO_ICEBERG_ALLOW_PLAIN_HTTP", "")
+
+	require.NoError(t, validateIcebergCatalogURI(ctx, "rest", "https://catalog.example/rest"))
+	err := validateIcebergCatalogURI(ctx, "rest", "http://catalog.example/rest")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ICEBERG_CONFIG_INVALID")
+	require.Contains(t, err.Error(), "must use https unless plain HTTP is explicitly enabled")
+
+	t.Setenv("MO_ICEBERG_ALLOW_PLAIN_HTTP", "true")
+	require.NoError(t, validateIcebergCatalogURI(ctx, "rest", "http://catalog.example/rest"))
+}
+
+func TestValidateAlterIcebergCatalogURI(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("MO_ICEBERG_ALLOW_PLAIN_HTTP", "")
+
+	tests := []struct {
+		name        string
+		catalogType string
+		uri         string
+		opts        map[string]string
+		wantErr     bool
+	}{
+		{
+			name:        "REST URI change rejects plain HTTP",
+			catalogType: "rest",
+			uri:         "https://catalog.example/rest",
+			opts:        map[string]string{"uri": "http://catalog.example/rest"},
+			wantErr:     true,
+		},
+		{
+			name:        "non-REST URI change uses current type",
+			catalogType: "iceberg-go",
+			uri:         "http://catalog.example/rest",
+			opts:        map[string]string{"uri": "http://catalog2.example/rest"},
+		},
+		{
+			name:        "type-only change validates current URI",
+			catalogType: "iceberg-go",
+			uri:         "http://catalog.example/rest",
+			opts:        map[string]string{"type": "rest"},
+			wantErr:     true,
+		},
+		{
+			name:        "type and URI changes use final non-REST configuration",
+			catalogType: "rest",
+			uri:         "https://catalog.example/rest",
+			opts:        map[string]string{"type": "iceberg-go", "uri": "http://catalog.example/rest"},
+		},
+		{
+			name:        "unrelated change does not revalidate legacy URI",
+			catalogType: "rest",
+			uri:         "http://catalog.example/rest",
+			opts:        map[string]string{"warehouse": "s3://warehouse"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAlterIcebergCatalogURI(ctx, tt.catalogType, tt.uri, tt.opts)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestIcebergParameterUnitForUninitializedService(t *testing.T) {
 	require.Nil(t, icebergParameterUnitForService("iceberg-uninitialized-service"))
 }

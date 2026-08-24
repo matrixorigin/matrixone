@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -28,12 +29,23 @@ type Projection struct {
 }
 
 func (projection *Projection) PrepareProjection(proc *process.Process) (err error) {
+	return projection.PrepareProjectionWithAllocation(proc, nil)
+}
+
+// PrepareProjectionWithAllocation prepares projection-owned expression
+// storage under one immutable physical allocation selection. A nil selection
+// preserves the legacy unaccounted behavior.
+func (projection *Projection) PrepareProjectionWithAllocation(
+	proc *process.Process,
+	selection *vector.AllocationAccountSelection,
+) (err error) {
 	if len(projection.ProjectList) == 0 {
 		return
 	}
 	projection.ProjectAllocSize = 0
 	if projection.ProjectExecutors == nil {
-		projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressions(proc, projection.ProjectList)
+		projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+			proc, projection.ProjectList, selection)
 		if err != nil {
 			return
 		}
@@ -43,6 +55,13 @@ func (projection *Projection) PrepareProjection(proc *process.Process) (err erro
 	}
 
 	return
+}
+
+// HasPreparedProjection reports whether projection-owned state can still
+// retain or allocate physical storage.
+func (projection *Projection) HasPreparedProjection() bool {
+	return projection != nil &&
+		(len(projection.ProjectExecutors) != 0 || projection.projectBat != nil)
 }
 
 func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {

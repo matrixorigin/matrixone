@@ -232,7 +232,11 @@ func icebergPruneLiteralFromPlanLiteral(lit *plan.Literal) (icebergapi.PruneLite
 		}
 		return icebergapi.PruneLiteral{Kind: icebergapi.TypeLong, Int64: int64(value.U64Val)}, true
 	case *plan.Literal_Dateval:
-		return icebergapi.PruneLiteral{Kind: icebergapi.TypeDate, Int64: int64(value.Dateval)}, true
+		// MO dates use an absolute-day encoding; Iceberg dates use days from 1970-01-01.
+		return icebergapi.PruneLiteral{
+			Kind:  icebergapi.TypeDate,
+			Int64: int64(types.Date(value.Dateval).DaysSinceUnixEpoch()),
+		}, true
 	case *plan.Literal_Dval:
 		return icebergapi.PruneLiteral{Kind: icebergapi.TypeDouble, Float64: value.Dval}, true
 	case *plan.Literal_Fval:

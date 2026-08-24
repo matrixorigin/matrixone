@@ -70,21 +70,21 @@ INSERT INTO t2 (age) VALUES (25);
 select name, age from t2 order by name asc,age asc;
 SELECT min( serial(t2.name, t2.age)) from t2;
 SELECT min( serial_full(t2.name,t2.age)) from t2;
-select  serial_extract(min, 0 as varchar(255)),  serial_extract(min, 1 as int) from (SELECT min( serial_full(t2.name,t2.age)) as min from t2);
+select  serial_extract(min, 0 as varchar(255)),  serial_extract(min, 1 as int) from (SELECT min( serial_full(t2.name,t2.age)) as min from t2) as extrema;
 select age,name from t2 order by age asc,name asc;
 SELECT min( serial(t2.age,t2.name)) from t2;
 SELECT min( serial_full(t2.age,t2.name)) from t2;
-select  serial_extract(min, 0 as int),  serial_extract(min, 1 as varchar(255)) from (SELECT min( serial_full(t2.age,t2.name)) as min from t2);
+select  serial_extract(min, 0 as int),  serial_extract(min, 1 as varchar(255)) from (SELECT min( serial_full(t2.age,t2.name)) as min from t2) as extrema;
 
 -- test max
 select name, age from t2 order by name desc,age desc;
 SELECT max( serial(t2.name, t2.age)) from t2;
 SELECT max( serial_full(t2.name,t2.age)) from t2;
-select  serial_extract(max, 0 as varchar(255)),  serial_extract(max, 1 as int) from (SELECT max( serial_full(t2.name,t2.age)) as max from t2);
+select  serial_extract(max, 0 as varchar(255)),  serial_extract(max, 1 as int) from (SELECT max( serial_full(t2.name,t2.age)) as max from t2) as extrema;
 select age,name from t2 order by age desc,name desc;
 SELECT max( serial(t2.age,t2.name)) from t2;
 SELECT max( serial_full(t2.age,t2.name)) from t2;
-select  serial_extract(max, 0 as int),  serial_extract(max, 1 as varchar(255)) from (SELECT max( serial_full(t2.age,t2.name)) as max from t2);
+select  serial_extract(max, 0 as int),  serial_extract(max, 1 as varchar(255)) from (SELECT max( serial_full(t2.age,t2.name)) as max from t2) as extrema;
 
 -- test function serial()、serial_full()、max() and min()
 drop table if exists test01;

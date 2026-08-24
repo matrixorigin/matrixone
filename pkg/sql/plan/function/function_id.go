@@ -785,15 +785,63 @@ const (
 	VECF16_FROM_BASE64   = 551
 	VECINT8_FROM_BASE64  = 552
 	VECUINT8_FROM_BASE64 = 553
-
 	// function `cast_assign`
 	CAST_ASSIGN = 554
 	// function `cast_ignore`
 	CAST_IGNORE = 555
+	// function `approx_percentile`
+	APPROX_PERCENTILE = 557
+	// function `mo_is_legacy_temporary_table`
+	MO_IS_LEGACY_TEMPORARY_TABLE = 558
+
+	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
+	// (549->554->556); referenced by name only, so renumbering is safe.
+	ONNX_RUN = 556
+	// Internal CHECK constraint assertion. This is protocol-gated because older
+	// CNs do not have this function ID.
+	CHECK_CONSTRAINT_ASSERT = 561
+
+	MAX_BY          = 559
+	MAX_BY_NON_NULL = 560
+
+	// Version-specific UUID generators. Plain uuid() generates UUIDv7 and
+	// uuid_v7 is registered as an alias for it.
+	UUID_V1 = 562
+	UUID_V4 = 563
+	UUID_V6 = 564
+	// PostgreSQL-style UUID inspection functions.
+	UUID_EXTRACT_VERSION   = 565
+	UUID_EXTRACT_TIMESTAMP = 566
+
+	// SQL ordered-set aggregate functions.
+	PERCENTILE_CONT = 567
+	PERCENTILE_DISC = 568
+
+	// LOAD_TEXT reads a datalink and returns its EXTRACTED plain text (PDF/DOCX parsed
+	// via GetPlainText), unlike load_file which returns raw bytes. Renumbered as main
+	// merges claim ids (562->567->569); referenced by name only, so renumbering is safe.
+	LOAD_TEXT = 569
+
+	// Manhattan distance. Completes the op_type set an IVF-FLAT index can be built
+	// with: vector_l1_ops was already accepted at CREATE INDEX, but without this
+	// function neither the user query nor the index's own generated search SQL
+	// (MetricTypeToDistFuncName) could name the metric (#25966).
+	// Takes 570 rather than 569: LOAD_TEXT reached main first, so keeping main's
+	// numbering intact leaves the next merge clean. Ids are referenced by name.
+	L1_DISTANCE = 570
+
+	// JSON_ARRAY_APPEND appends values to arrays within a JSON document.
+	JSON_ARRAY_APPEND = 571
+
+	// Foreign-data TVF connection management (esql_tvf / sql_tvf).
+	ESQL_TVF_CONNECT    = 572
+	ESQL_TVF_DISCONNECT = 573
+	SQL_TVF_CONNECT     = 574
+	SQL_TVF_DISCONNECT  = 575
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 556
+	FUNCTION_END_NUMBER = 576
 )
 
 // functionIdRegister is what function we have registered already.
@@ -861,35 +909,41 @@ var functionIdRegister = map[string]int32{
 	"prefix_between":  PREFIX_BETWEEN,
 	"prefix_in_range": PREFIX_IN_RANGE,
 	// aggregate
-	"max":                   MAX,
-	"min":                   MIN,
-	"sum":                   SUM,
-	"group_concat":          GROUP_CONCAT,
-	"grouping":              GROUPING,
-	"avg":                   AVG,
-	"avg_tw_cache":          AVG_TW_CACHE,
-	"avg_tw_result":         AVG_TW_RESULT,
-	"count":                 COUNT,
-	"starcount":             STARCOUNT,
-	"bit_or":                BIT_OR,
-	"bit_and":               BIT_AND,
-	"bit_xor":               BIT_XOR,
-	"bit_count":             BIT_COUNT,
-	"cluster_centers":       CLUSTER_CENTERS,
-	"subvector":             SUB_VECTOR,
-	"std":                   STDDEV_POP,
-	"stddev":                STDDEV_POP,
-	"stddev_pop":            STDDEV_POP,
-	"stddev_samp":           STDDEV_SAMPLE,
-	"variance":              VAR_POP,
-	"var_pop":               VAR_POP,
-	"var_samp":              VAR_SAMPLE,
-	"approx_count":          APPROX_COUNT,
-	"approx_count_distinct": APPROX_COUNT_DISTINCT,
-	"hll_add_agg":           HLL_ADD_AGG,
-	"hll_merge_agg":         HLL_MERGE_AGG,
-	"any_value":             ANY_VALUE,
-	"median":                MEDIAN,
+	"max":                          MAX,
+	"min":                          MIN,
+	"sum":                          SUM,
+	"group_concat":                 GROUP_CONCAT,
+	"grouping":                     GROUPING,
+	"avg":                          AVG,
+	"avg_tw_cache":                 AVG_TW_CACHE,
+	"avg_tw_result":                AVG_TW_RESULT,
+	"count":                        COUNT,
+	"starcount":                    STARCOUNT,
+	"bit_or":                       BIT_OR,
+	"bit_and":                      BIT_AND,
+	"bit_xor":                      BIT_XOR,
+	"bit_count":                    BIT_COUNT,
+	"cluster_centers":              CLUSTER_CENTERS,
+	"subvector":                    SUB_VECTOR,
+	"std":                          STDDEV_POP,
+	"stddev":                       STDDEV_POP,
+	"stddev_pop":                   STDDEV_POP,
+	"stddev_samp":                  STDDEV_SAMPLE,
+	"variance":                     VAR_POP,
+	"var_pop":                      VAR_POP,
+	"var_samp":                     VAR_SAMPLE,
+	"approx_count":                 APPROX_COUNT,
+	"approx_count_distinct":        APPROX_COUNT_DISTINCT,
+	"hll_add_agg":                  HLL_ADD_AGG,
+	"hll_merge_agg":                HLL_MERGE_AGG,
+	"any_value":                    ANY_VALUE,
+	"median":                       MEDIAN,
+	"approx_percentile":            APPROX_PERCENTILE,
+	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"max_by":                       MAX_BY,
+	"max_by_non_null":              MAX_BY_NON_NULL,
+	"percentile_cont":              PERCENTILE_CONT,
+	"percentile_disc":              PERCENTILE_DISC,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,
@@ -913,6 +967,7 @@ var functionIdRegister = map[string]int32{
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,
+	"to_interval": TO_INTERVAL,
 	"str_to_date": STR_TO_DATE,
 	"ts_to_time":  TS_TO_TIME,
 	"date_format": DATE_FORMAT,
@@ -973,6 +1028,7 @@ var functionIdRegister = map[string]int32{
 	"is_ipv4_mapped":                 IS_IPV4_MAPPED,
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
+	"_check_constraint_assert":       CHECK_CONSTRAINT_ASSERT,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
@@ -998,6 +1054,7 @@ var functionIdRegister = map[string]int32{
 	"octet_length":                   LENGTH,
 	"lengthutf8":                     LENGTH_UTF8,
 	"char_length":                    LENGTH_UTF8,
+	"character_length":               LENGTH_UTF8,
 	"ln":                             LN,
 	"log":                            LOG,
 	"log2":                           LOG2,
@@ -1074,6 +1131,7 @@ var functionIdRegister = map[string]int32{
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
+	"json_array_append":              JSON_ARRAY_APPEND,
 	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,
@@ -1084,6 +1142,7 @@ var functionIdRegister = map[string]int32{
 	"json_merge_patch":               JSON_MERGE_PATCH,
 	"json_merge_preserve":            JSON_MERGE_PRESERVE,
 	"json_overlaps":                  JSON_OVERLAPS,
+	"onnx_run":                       ONNX_RUN,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
 	"json_schema_valid":              JSON_SCHEMA_VALID,
@@ -1101,10 +1160,21 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
+	"esql_tvf_connect":               ESQL_TVF_CONNECT,
+	"esql_tvf_disconnect":            ESQL_TVF_DISCONNECT,
+	"sql_tvf_connect":                SQL_TVF_CONNECT,
+	"sql_tvf_disconnect":             SQL_TVF_DISCONNECT,
+	"uuid_v7":                        UUID,
+	"uuid_v1":                        UUID_V1,
+	"uuid_v4":                        UUID_V4,
+	"uuid_v6":                        UUID_V6,
+	"uuid_extract_version":           UUID_EXTRACT_VERSION,
+	"uuid_extract_timestamp":         UUID_EXTRACT_TIMESTAMP,
 	"is_uuid":                        IS_UUID,
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,
+	"load_text":                      LOAD_TEXT,
 	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
@@ -1359,6 +1429,7 @@ var functionIdRegister = map[string]int32{
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
+	"l1_distance":       L1_DISTANCE,
 	"l2_distance":       L2_DISTANCE,
 	"l2_distance_xc":    L2_DISTANCE_XC,
 	"l2_distance_sq":    L2_DISTANCE_SQ,

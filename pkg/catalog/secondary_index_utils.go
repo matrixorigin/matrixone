@@ -29,15 +29,16 @@ import (
 
 // Index Algorithm names
 const (
-	MoIndexDefaultAlgo  = tree.INDEX_TYPE_INVALID  // used by UniqueIndex or default SecondaryIndex
-	MoIndexBTreeAlgo    = tree.INDEX_TYPE_BTREE    // used for Mocking MySQL behaviour.
-	MoIndexRTreeAlgo    = tree.INDEX_TYPE_RTREE    // used for Spatial Index on GEOMETRY columns
-	MoIndexIvfFlatAlgo  = tree.INDEX_TYPE_IVFFLAT  // used for IVF flat index on Vector/Array columns
-	MOIndexMasterAlgo   = tree.INDEX_TYPE_MASTER   // used for Master Index on VARCHAR columns
-	MOIndexFullTextAlgo = tree.INDEX_TYPE_FULLTEXT // used for Fulltext Index on VARCHAR columns
-	MoIndexHnswAlgo     = tree.INDEX_TYPE_HNSW     // used for HNSW Index on Vector/Array columns
-	MoIndexCagraAlgo    = tree.INDEX_TYPE_CAGRA    // used for CAGRA Index on Vector/Array columns
-	MoIndexIvfpqAlgo    = tree.INDEX_TYPE_IVFPQ    // used for IVFPQ Index on Vector/Array columns
+	MoIndexDefaultAlgo   = tree.INDEX_TYPE_INVALID   // used by UniqueIndex or default SecondaryIndex
+	MoIndexBTreeAlgo     = tree.INDEX_TYPE_BTREE     // used for Mocking MySQL behaviour.
+	MoIndexRTreeAlgo     = tree.INDEX_TYPE_RTREE     // used for Spatial Index on GEOMETRY columns
+	MoIndexIvfFlatAlgo   = tree.INDEX_TYPE_IVFFLAT   // used for IVF flat index on Vector/Array columns
+	MOIndexMasterAlgo    = tree.INDEX_TYPE_MASTER    // used for Master Index on VARCHAR columns
+	MOIndexFullTextAlgo  = tree.INDEX_TYPE_FULLTEXT  // used for Fulltext Index on VARCHAR columns
+	MoIndexHnswAlgo      = tree.INDEX_TYPE_HNSW      // used for HNSW Index on Vector/Array columns
+	MoIndexCagraAlgo     = tree.INDEX_TYPE_CAGRA     // used for CAGRA Index on Vector/Array columns
+	MoIndexIvfpqAlgo     = tree.INDEX_TYPE_IVFPQ     // used for IVFPQ Index on Vector/Array columns
+	MoIndexFullText2Algo = tree.INDEX_TYPE_FULLTEXT2 // CREATE FULLTEXT2 INDEX: WAND positional engine on TEXT/VARCHAR columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -81,6 +82,14 @@ func IsFullTextIndexAlgo(algo string) bool {
 	return _algo == MOIndexFullTextAlgo.ToString()
 }
 
+// IsFullText2IndexAlgo reports the distinct WAND positional fulltext engine
+// (CREATE FULLTEXT2 INDEX). It is a separate algo from classic fulltext so its
+// plugin hooks stay static; query routing / MATCH detection treat both.
+func IsFullText2IndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MoIndexFullText2Algo.ToString()
+}
+
 func IsHnswIndexAlgo(algo string) bool {
 	_algo := ToLower(algo)
 	return _algo == MoIndexHnswAlgo.ToString()
@@ -107,6 +116,7 @@ const (
 	AutoUpdate              = "auto_update"
 	Day                     = "day"
 	Hour                    = "hour"
+	Second                  = "second"
 	DistributionMode        = "distribution_mode"
 	Quantization            = "quantization"
 	BitsPerCode             = "bits_per_code"
@@ -127,7 +137,30 @@ const (
 	IndexAlgoParamMaxIndexCapacity    = "max_index_capacity"
 	IndexAlgoParamQuantizerTrainLimit = "quantizer_train_limit"
 
+	// IndexAlgoParamMaxPostingsCapacity (fulltext2): max postings (term occurrences)
+	// per built segment. Bounds per-segment build memory regardless of doc size —
+	// max_index_capacity (docs) is a poor memory proxy since a doc can hold one token
+	// or tens of thousands. A segment seals on whichever cap (docs OR postings) is hit
+	// first. Recorded only when explicitly specified; absence ⇒ DefaultPostingCapacity.
+	IndexAlgoParamMaxPostingsCapacity = "max_postings_capacity"
+
+	// IndexAlgoParamPositionFree (fulltext2): "true" ⇒ build a position-free index
+	// (bag-of-words retrieval only, ~half the footprint; the FST term dict is kept).
+	// Recorded only when POSITION_FREE=TRUE; absence ⇒ positional (phrase-capable).
+	IndexAlgoParamPositionFree = "position_free"
+
+	// IndexAlgoParamPrefixLengths is the legacy, delimiter-separated encoding.
+	// It remains readable for metadata written by older versions.
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
+	// IndexAlgoParamPrefixLengthsV2 stores a JSON object in a string value.
+	// Unlike the legacy colon/comma-separated value, it can represent every
+	// legal quoted column name without ambiguity.
+	IndexAlgoParamPrefixLengthsV2 = "prefix_lengths_v2"
+
+	// IndexAlgoParamVersion selects the index engine version. Currently fulltext
+	// only: unset/1 = classic SQL engine, 2 = WAND-based fulltext v2. The fulltext
+	// plugin routes each hook to the matching engine by this value.
+	IndexAlgoParamVersion = "version"
 )
 
 func ParseIncludeColumnsValue(raw string) ([]string, error) {
@@ -230,6 +263,13 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", Hour, val)
 	}
 
+	// SECOND is the async-index AUTO_UPDATE compaction cadence (idxcron reads it as the
+	// explicit interval). Like DAY/HOUR it must round-trip through SHOW CREATE / checkpoint
+	// restore for every async index type, else the cadence silently reverts to the default.
+	if val, ok := result[Second]; ok {
+		res += fmt.Sprintf(" %s = %s ", Second, val)
+	}
+
 	if val, ok := result[Quantization]; ok {
 		res += fmt.Sprintf(" %s '%s' ", Quantization, val)
 	}
@@ -266,9 +306,29 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
 	}
 
+	if val, ok := result[IndexAlgoParamMaxPostingsCapacity]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxPostingsCapacity, val)
+	}
+
+	// POSITION_FREE is recorded only when TRUE (absence ⇒ positional). Render it so a
+	// SHOW CREATE / checkpoint-restore DDL rebuilds a position-free fulltext2 index as
+	// position-free instead of silently reverting to the phrase-capable positional one.
+	if val, ok := result[IndexAlgoParamPositionFree]; ok && val == "true" {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamPositionFree, val)
+	}
+
 	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamQuantizerTrainLimit, val)
 	}
+
+	if val, ok := result[IndexAlgoParamVersion]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamVersion, val)
+	}
+
+	// NOTE: included_columns is intentionally NOT rendered here. INCLUDE columns are a
+	// first-class plan.IndexDef field in the merged design and are rendered by the DDL /
+	// SHOW CREATE path (see indexDefIncludedColumns); rendering them here too would
+	// double-emit them. Guarded by TestIndexParamsToStringList_DoesNotRenderIncludeColumns.
 	return res, nil
 }
 
@@ -298,8 +358,8 @@ func IndexParamsMapToJsonString(res map[string]string) (string, error) {
 }
 
 func AddIndexPrefixLengthsToParams(indexParams string, keyParts []*tree.KeyPart) (string, error) {
-	prefixLengths := IndexPrefixLengthsToString(keyParts)
-	if prefixLengths == "" {
+	prefixLengths := indexPrefixLengthsFromKeyParts(keyParts)
+	if len(prefixLengths) == 0 {
 		return indexParams, nil
 	}
 
@@ -311,15 +371,17 @@ func AddIndexPrefixLengthsToParams(indexParams string, keyParts []*tree.KeyPart)
 		}
 		params = existing
 	}
-	params[IndexAlgoParamPrefixLengths] = prefixLengths
+	if err := SetIndexPrefixLengthsInParamMap(params, prefixLengths); err != nil {
+		return "", err
+	}
 	return IndexParamsMapToJsonString(params)
 }
 
+// IndexPrefixLengthsToString returns the legacy delimiter-separated encoding.
+// New catalog metadata must be written through AddIndexPrefixLengthsToParams
+// or SetIndexPrefixLengthsInParamMap so delimiter-bearing identifiers select
+// the lossless v2 representation.
 func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
-	if len(keyParts) == 0 {
-		return ""
-	}
-
 	prefixLengths := make(map[string]int, len(keyParts))
 	for _, keyPart := range keyParts {
 		if keyPart == nil || keyPart.ColName == nil || keyPart.Length <= 0 {
@@ -327,6 +389,21 @@ func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
 		}
 		prefixLengths[keyPart.ColName.ColName()] = keyPart.Length
 	}
+	return indexPrefixLengthsMapToLegacyString(prefixLengths)
+}
+
+func indexPrefixLengthsFromKeyParts(keyParts []*tree.KeyPart) map[string]int {
+	prefixLengths := make(map[string]int, len(keyParts))
+	for _, keyPart := range keyParts {
+		if keyPart == nil || keyPart.ColName == nil || keyPart.Length <= 0 {
+			continue
+		}
+		prefixLengths[keyPart.ColName.ColName()] = keyPart.Length
+	}
+	return prefixLengths
+}
+
+func indexPrefixLengthsMapToLegacyString(prefixLengths map[string]int) string {
 	if len(prefixLengths) == 0 {
 		return ""
 	}
@@ -342,6 +419,34 @@ func IndexPrefixLengthsToString(keyParts []*tree.KeyPart) string {
 		encoded = append(encoded, fmt.Sprintf("%s:%d", part, prefixLengths[part]))
 	}
 	return strings.Join(encoded, ",")
+}
+
+// SetIndexPrefixLengthsInParamMap writes prefix-length metadata to params.
+// Ordinary names keep the legacy representation for stable catalog output;
+// names containing a legacy delimiter use the lossless v2 representation.
+func SetIndexPrefixLengthsInParamMap(params map[string]string, prefixLengths map[string]int) error {
+	if params == nil {
+		return moerr.NewInvalidInputNoCtx("nil index params map")
+	}
+	delete(params, IndexAlgoParamPrefixLengths)
+	delete(params, IndexAlgoParamPrefixLengthsV2)
+	if len(prefixLengths) == 0 {
+		return nil
+	}
+
+	for part := range prefixLengths {
+		if strings.ContainsAny(part, ":,") {
+			encoded, err := json.Marshal(prefixLengths)
+			if err != nil {
+				return err
+			}
+			params[IndexAlgoParamPrefixLengthsV2] = string(encoded)
+			return nil
+		}
+	}
+
+	params[IndexAlgoParamPrefixLengths] = indexPrefixLengthsMapToLegacyString(prefixLengths)
+	return nil
 }
 
 func IndexPrefixLengthsFromParams(indexParams string) map[string]int {
@@ -361,11 +466,26 @@ func IndexPrefixLengthsFromParamsWithError(indexParams string) (map[string]int, 
 		return nil, err
 	}
 
+	if encoded, ok := params[IndexAlgoParamPrefixLengthsV2]; ok {
+		if encoded == "" {
+			return nil, nil
+		}
+		prefixLengths := make(map[string]int)
+		if err := json.Unmarshal([]byte(encoded), &prefixLengths); err != nil {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid v2 index prefix lengths %q", encoded)
+		}
+		for part, length := range prefixLengths {
+			if part == "" || length <= 0 {
+				return nil, moerr.NewInvalidInputNoCtxf("invalid v2 index prefix length %q", encoded)
+			}
+		}
+		return prefixLengths, nil
+	}
+
 	encoded := params[IndexAlgoParamPrefixLengths]
 	if encoded == "" {
 		return nil, nil
 	}
-
 	prefixLengths := make(map[string]int)
 	for _, item := range strings.Split(encoded, ",") {
 		part, lengthText, ok := strings.Cut(item, ":")
@@ -478,7 +598,41 @@ func DefaultIvfIndexAlgoOptions() map[string]string {
 	return res
 }
 
-func IsIndexAsync(indexAlgoParams string) (bool, error) {
+// IndexAlgoParamVersionOf returns the engine version recorded in an index's
+// algo_params (currently only fulltext uses it: v2 = WAND engine). Absent or
+// unparseable ⇒ 1 (the classic engine), so pre-version indexes read as v1.
+func IndexAlgoParamVersionOf(indexAlgoParams string) int64 {
+	if len(indexAlgoParams) == 0 {
+		return 1
+	}
+	val, err := sonic.Get([]byte(indexAlgoParams), IndexAlgoParamVersion)
+	if err != nil {
+		// key not present ⇒ classic engine
+		return 1
+	}
+	s, err := val.StrictString()
+	if err != nil {
+		return 1
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 1
+	}
+	return n
+}
+
+// IndexParamAsync reports whether the user opted into async maintenance via the
+// index's `async` algo_param. (Formerly IsIndexAsync.)
+//
+// This is a pure-param PRIMITIVE — one of the two independent sources of an
+// index's async-ness (the other being the algorithm's intrinsic always-async).
+// It is NOT the full "is this index async" answer: that also depends on the
+// algorithm identity (hnsw/bm25/cagra/ivfpq are always async) and the engine
+// version (fulltext VERSION=2), neither of which is visible from catalog, which
+// sits below the plugin registry. Use indexplugin.IsAsync(algo, params) for the
+// complete resolution; reach for this primitive only when you specifically mean
+// "did the user set the async param".
+func IndexParamAsync(indexAlgoParams string) (bool, error) {
 	if len(indexAlgoParams) > 0 {
 		val, err := sonic.Get([]byte(indexAlgoParams), Async)
 		if err != nil {

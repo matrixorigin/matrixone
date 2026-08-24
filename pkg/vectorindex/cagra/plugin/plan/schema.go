@@ -135,9 +135,10 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Cagra_TblCol_Metadata_Index_Id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
+				Id:      int32(types.T_varchar),
+				Width:   128,
+				Scale:   0,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Primary: true,
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
@@ -146,8 +147,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Cagra_TblCol_Metadata_Checksum,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: types.MaxVarcharLen,
+				Id:      int32(types.T_varchar),
+				Width:   types.MaxVarcharLen,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
@@ -207,9 +209,10 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Name: catalog.Cagra_TblCol_Storage_Index_Id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 128,
-				Scale: 0,
+				Id:      int32(types.T_varchar),
+				Width:   128,
+				Scale:   0,
+				Charset: uint32(types.CharsetBinary),
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}

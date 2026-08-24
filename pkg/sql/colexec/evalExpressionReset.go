@@ -60,6 +60,10 @@ type functionInformationForEval struct {
 		selectList *function.FunctionSelectList) error
 	resetFn func() error
 	freeFn  func() error
+
+	// retainedBytesFn reports stateful function backing allocations which are
+	// not represented by the executor's owned vectors.
+	retainedBytesFn func() uint64
 }
 
 func (fI *functionInformationForEval) reset() {
@@ -80,7 +84,7 @@ func (fI *functionInformationForEval) reset() {
 	if fI.evalFn != nil {
 		// we can set the context nil here since this function will never return an error.
 		overload, _ := function.GetFunctionById(context.TODO(), fI.overloadID)
-		fI.evalFn, fI.resetFn, fI.freeFn = overload.GetExecuteMethod()
+		fI.evalFn, fI.resetFn, fI.freeFn, fI.retainedBytesFn = overload.GetExecuteMethod()
 	}
 }
 
@@ -159,6 +163,14 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 	proc *process.Process,
 	atRuntime bool,
 ) (bool, error) {
+	expr.resetFlowControlPrepareParamKind()
+	observeSelected := func(index int, folded bool, err error) (bool, error) {
+		if err == nil && folded {
+			expr.observeFlowControlPrepareParamKind(
+				expr.parameterResults[index], expr.parameterExecutor[index], []bool{true})
+		}
+		return folded, err
+	}
 	switch expr.fid {
 	case function.IFF:
 		folded, err := expr.tryFoldParameter(proc, atRuntime, 0)
@@ -174,7 +186,8 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 		if value {
 			selected = 1
 		}
-		return expr.tryFoldParameter(proc, atRuntime, selected)
+		folded, err = expr.tryFoldParameter(proc, atRuntime, selected)
+		return observeSelected(selected, folded, err)
 
 	case function.CASE:
 		parameterCount := len(expr.parameterExecutor)
@@ -186,11 +199,15 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 			condition := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[conditionIndex])
 			value, isNull := condition.GetValue(0)
 			if !isNull && value {
-				return expr.tryFoldParameter(proc, atRuntime, conditionIndex+1)
+				selected := conditionIndex + 1
+				folded, err = expr.tryFoldParameter(proc, atRuntime, selected)
+				return observeSelected(selected, folded, err)
 			}
 		}
 		if parameterCount%2 == 1 {
-			return expr.tryFoldParameter(proc, atRuntime, parameterCount-1)
+			selected := parameterCount - 1
+			folded, err := expr.tryFoldParameter(proc, atRuntime, selected)
+			return observeSelected(selected, folded, err)
 		}
 		return true, nil
 
@@ -201,6 +218,8 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 				return folded, err
 			}
 			if !expr.parameterResults[i].IsNull(0) {
+				expr.observeFlowControlPrepareParamKind(
+					expr.parameterResults[i], expr.parameterExecutor[i], []bool{true})
 				return true, nil
 			}
 		}
@@ -258,6 +277,12 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 	}
 	if err := expr.evalFn(expr.parameterResults, expr.resultVector, proc, execLen, nil); err != nil {
 		return err
+	}
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+		if err := expr.applyFlowControlPrepareParamKinds(
+			expr.resultVector.GetResultVector(), execLen, proc.Mp()); err != nil {
+			return err
+		}
 	}
 	if execLen == 1 {
 		expr.resultVector.GetResultVector().ToConst()
@@ -322,6 +347,7 @@ func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 		expr.vec.CleanOnlyData()
 	}
 	expr.folded = false
+	expr.foldedNull = false
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {

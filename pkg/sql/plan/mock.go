@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -42,18 +44,32 @@ type MockCompilerContext struct {
 	id2name         map[uint64]string
 	isDml           bool
 	mysqlCompatible bool
+	// sqlModeOverride, when non-nil, is returned for ResolveVariable("sql_mode")
+	// so tests can exercise mode-dependent paths (e.g. NO_BACKSLASH_ESCAPES).
+	sqlModeOverride *string
 
 	// ctx default: nil
 	ctx context.Context
 
 	// Add function fields for test overrides
-	GetAccountNameFunc    func() string
-	GetAccountIdFunc      func() (uint32, error)
-	DatabaseExistsFunc    func(string, *Snapshot) bool
-	GetDatabaseIdFunc     func(string, *Snapshot) (uint64, error)
-	ResolveAccountIdsFunc func([]string) ([]uint32, error)
-	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
+	GetAccountNameFunc      func() string
+	GetAccountIdFunc        func() (uint32, error)
+	DatabaseExistsFunc      func(string, *Snapshot) bool
+	GetDatabaseIdFunc       func(string, *Snapshot) (uint64, error)
+	ResolveAccountIdsFunc   func([]string) ([]uint32, error)
+	ResolveFunc             func(string, string, *Snapshot) (*ObjectRef, *TableDef)
+	ResolveVariableFunc     func(string, bool, bool) (interface{}, error)
+	ResolveVariableTypeFunc func(string, bool, bool) (Type, error)
+	GetProcessFunc          func() *process.Process
+	processHolder           *mockProcessHolder
 }
+
+type mockProcessHolder struct {
+	once sync.Once
+	proc *process.Process
+}
+
+var mockProcessHolderMu sync.RWMutex
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
 	return 1
@@ -83,7 +99,13 @@ func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pu
 }
 
 func (m *MockCompilerContext) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
-	return m.Resolve(DbNameOfObjRef(ref), tblName, snapshot)
+	objRef, tableDef, err := m.Resolve(DbNameOfObjRef(ref), tblName, snapshot)
+	if objRef != nil && ref != nil {
+		objRef.SchemaName = ref.SchemaName
+		objRef.SubscriptionName = ref.SubscriptionName
+		objRef.PubInfo = ref.PubInfo
+	}
+	return objRef, tableDef, err
 }
 
 func (m *MockCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef, error) {
@@ -102,6 +124,9 @@ func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if m.ResolveVariableFunc != nil {
+		return m.ResolveVariableFunc(varName, isSystemVar, isGlobalVar)
+	}
 	vars := make(map[string]interface{})
 	vars["str_var"] = "str"
 	vars["int_var"] = 20
@@ -112,7 +137,9 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	vars["null_var"] = nil
 	vars["delete_opt_to_truncate"] = int64(1)
 
-	if m.mysqlCompatible {
+	if m.sqlModeOverride != nil {
+		vars["sql_mode"] = *m.sqlModeOverride
+	} else if m.mysqlCompatible {
 		vars["sql_mode"] = ""
 	} else {
 		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
@@ -120,12 +147,53 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 
 	vars["foreign_key_checks"] = int64(1)
 	vars["sort_spill_mem"] = int64(0)
+	vars["lower_case_table_names"] = int64(1)
+
+	// Vector-index build/search variables (resolved by the hnsw/ivf/ivfpq/cagra
+	// plugin DDL and search paths).
+	vars["cagra_threads_build"] = int64(1)
+	vars["cagra_threads_search"] = int64(1)
+	vars["cagra_batch_window"] = int64(0)
+	vars["ivfpq_threads_build"] = int64(1)
+	vars["ivfpq_threads_search"] = int64(1)
+	vars["ivfpq_batch_window"] = int64(0)
+	vars["hnsw_threads_build"] = int64(1)
+	vars["hnsw_threads_search"] = int64(1)
+	vars["ivf_threads_build"] = int64(1)
+	vars["ivf_threads_search"] = int64(1)
+	vars["gpu_multi_simulation"] = int64(0)
+	vars["probe_limit"] = int64(20)
 
 	if result, ok := vars[varName]; ok {
 		return result, nil
 	}
 
-	return nil, moerr.NewInternalError(m.ctx, "var not found")
+	return nil, moerr.NewInternalErrorf(m.ctx, "var not found: %s", varName)
+}
+
+func (m *MockCompilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error) {
+	if m.ResolveVariableTypeFunc != nil {
+		return m.ResolveVariableTypeFunc(varName, isSystemVar, isGlobalVar)
+	}
+	if isSystemVar {
+		return Type{}, nil
+	}
+	switch varName {
+	case "int_var":
+		return makeSimplePlan2Type(types.T_int64), nil
+	case "float_var":
+		return makeSimplePlan2Type(types.T_float64), nil
+	case "decimal_var":
+		typ := types.T_decimal128.ToType()
+		typ.Width, typ.Scale = 38, 3
+		return makePlan2Type(&typ), nil
+	case "bool_var":
+		return makeSimplePlan2Type(types.T_bool), nil
+	case "null_var", "str_var":
+		return makeSimplePlan2Type(types.T_text), nil
+	default:
+		return Type{}, nil
+	}
 }
 
 type col struct {
@@ -148,22 +216,24 @@ type index struct {
 // NewEmptyCompilerContext for test create/drop statement
 func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
-		objects: make(map[string]*ObjectRef),
-		tables:  make(map[string]*TableDef),
-		ctx:     context.Background(),
+		objects:       make(map[string]*ObjectRef),
+		tables:        make(map[string]*TableDef),
+		ctx:           context.Background(),
+		processHolder: &mockProcessHolder{},
 	}
 }
 
 type Schema struct {
-	cols      []col
-	pks       []int
-	idxs      []index
-	fks       []*ForeignKeyDef
-	clusterby *ClusterByDef
-	outcnt    float64
-	tblId     int64
-	isView    bool
-	viewCfg   ViewCfg
+	cols         []col
+	pks          []int
+	idxs         []index
+	fks          []*ForeignKeyDef
+	refChildTbls []uint64
+	clusterby    *ClusterByDef
+	outcnt       float64
+	tblId        int64
+	isView       bool
+	viewCfg      ViewCfg
 	// tableType overrides TableType when non-empty; used to mock index tables
 	// carrying an algo-specific type (e.g. ivfflat "metadata").
 	tableType string
@@ -392,6 +462,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"constraint", types.T_varchar, false, 5000, 0},
 			{"rel_version", types.T_uint32, false, 32, 0},
 			{"catalog_version", types.T_uint32, false, 32, 0},
+			{"extra_info", types.T_varchar, false, 0, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0, 1},
@@ -554,7 +625,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"database_name", types.T_varchar, false, 50, 0},
 			{"table_name", types.T_varchar, false, 50, 0},
 			{"obj_id", types.T_uint64, false, 100, 0},
-			{"pitr_length", types.T_int64, false, 50, 0},
+			{"pitr_length", types.T_uint8, false, 50, 0},
 			{"pitr_unit", types.T_varchar, false, 50, 0},
 		},
 		pks: []int{0},
@@ -1037,7 +1108,247 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				OnUpdate:    plan.ForeignKeyDef_CASCADE,
 			},
 		},
-		outcnt: 10,
+		refChildTbls: []uint64{0},
+		outcnt:       10,
+	}
+
+	constraintTestSchema["self_ref_multi_cascade"] = &Schema{
+		tblId: 99997,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"parent_a", types.T_int32, true, 32, 0},
+			{"parent_b", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_self_cascade_a",
+				Cols:        []uint64{1},
+				ForeignTbl:  0,
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+			{
+				Name:        "fk_self_cascade_b",
+				Cols:        []uint64{2},
+				ForeignTbl:  0,
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+		},
+		refChildTbls: []uint64{0},
+		outcnt:       10,
+	}
+
+	/*
+		Parent-side FK action fixtures for REPLACE (issue #24951).
+
+		create table replace_fk_p(id int primary key, v varchar(20));
+		create table replace_fk_c(id int primary key, pid int,
+			foreign key(pid) references replace_fk_p(id) on delete restrict);
+
+		create table replace_fk_cp(id int primary key, v varchar(20));
+		create table replace_fk_cc(id int primary key, pid int,
+			foreign key(pid) references replace_fk_cp(id) on delete cascade);
+	*/
+	constraintTestSchema["replace_fk_p"] = &Schema{
+		tblId: 77001,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77002},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_c"] = &Schema{
+		tblId: 77002,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_c",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77001,
+				ForeignCols: []uint64{0}, // replace_fk_p.id
+				OnDelete:    plan.ForeignKeyDef_RESTRICT,
+				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+			},
+		},
+		outcnt: 4,
+	}
+	/*
+		create table insert_fk_no_key_p(id int primary key);
+		create table insert_fk_no_key_c(
+			id int,
+			pid int,
+			foreign key(pid) references insert_fk_no_key_p(id)
+		);
+		-- The child has only MatrixOne's hidden fake PK and no UNIQUE key, so
+		-- ODKU takes the documented legacy plain-INSERT fallback.
+	*/
+	constraintTestSchema["insert_fk_no_key_p"] = &Schema{
+		tblId: 77020,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77021},
+		outcnt:       4,
+	}
+	constraintTestSchema["insert_fk_no_key_c"] = &Schema{
+		tblId: 77021,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{2},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_insert_no_key_c",
+				Cols:        []uint64{1},
+				ForeignTbl:  77020,
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_RESTRICT,
+				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema["replace_fk_cp"] = &Schema{
+		tblId: 77003,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77004},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_cc"] = &Schema{
+		tblId: 77004,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_cc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77003,
+				ForeignCols: []uint64{0}, // replace_fk_cp.id
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema["replace_fk_sp"] = &Schema{
+		tblId: 77005,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77006},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_sc"] = &Schema{
+		tblId: 77006,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_sc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77005,
+				ForeignCols: []uint64{0}, // replace_fk_sp.id
+				OnDelete:    plan.ForeignKeyDef_SET_NULL,
+				OnUpdate:    plan.ForeignKeyDef_SET_NULL,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema["replace_fk_np"] = &Schema{
+		tblId: 77007,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77008},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_nc"] = &Schema{
+		tblId: 77008,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_nc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77007,
+				ForeignCols: []uint64{0}, // replace_fk_np.id
+				OnDelete:    plan.ForeignKeyDef_NO_ACTION,
+				OnUpdate:    plan.ForeignKeyDef_NO_ACTION,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema["replace_fk_dp"] = &Schema{
+		tblId: 77009,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77010},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_dc"] = &Schema{
+		tblId: 77010,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_dc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77009,
+				ForeignCols: []uint64{0}, // replace_fk_dp.id
+				OnDelete:    plan.ForeignKeyDef_SET_DEFAULT,
+				OnUpdate:    plan.ForeignKeyDef_SET_DEFAULT,
+			},
+		},
+		outcnt: 4,
 	}
 
 	/*
@@ -1188,7 +1499,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		isView: true,
 		viewCfg: ViewCfg{
-			sql: "create view v2 as\nwith \n\tv2 as (\n\t\tselect a from t1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from v2\n\t)\n",
+			sql: "create view v2 as\nwith \n\tv2 as (\n\t\tselect a from t1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from v2\n\t) as v2_sub\n",
 			db:  "cte_test",
 		},
 	}
@@ -1327,7 +1638,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		isView: true,
 		viewCfg: ViewCfg{
-			sql: "CREATE VIEW information_schema.TABLES AS SELECT 'def' AS TABLE_CATALOG,reldatabase AS TABLE_SCHEMA,relname AS TABLE_NAME,(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' when relkind = 'v'  then 'VIEW' when relkind = 'e' then 'EXTERNAL TABLE' when relkind = 'r' then 'BASE TABLE' else 'INTERNAL TABLE' end) AS TABLE_TYPE,if(relkind = 'r','Tae',NULL) AS ENGINE,if(relkind = 'v',NULL,10) AS VERSION,'Compressed' AS ROW_FORMAT,if(relkind = 'v', NULL, 0) AS TABLE_ROWS,if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH,if(relkind = 'v', NULL, 0) AS DATA_LENGTH,if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH,if(relkind = 'v', NULL, 0) AS INDEX_LENGTH,if(relkind = 'v', NULL, 0) AS DATA_FREE,if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,created_time AS CREATE_TIME,if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,if(relkind = 'v', NULL, created_time) AS CHECK_TIME,'utf8mb4_0900_ai_ci' AS TABLE_COLLATION,if(relkind = 'v', NULL, 0) AS CHECKSUM,if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,cast(rel_comment as text) AS TABLE_COMMENT FROM mo_catalog.mo_tables tbl WHERE tbl.account_id = current_account_id() and tbl.relname not like '__mo_index_%' and tbl.relkind != 'partition'",
+			sql: sysview.InformationSchemaTablesDDL,
 			db:  "information_schema",
 		},
 	}
@@ -1357,7 +1668,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		isView: true,
 		viewCfg: ViewCfg{
-			sql: "create view vv2 as\nwith \n\tvv2 as (\n\t\tselect a from vt1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from vv2\n\t)",
+			sql: "create view vv2 as\nwith \n\tvv2 as (\n\t\tselect a from vt1 \n\t)\nselect distinct \n\t* \nfrom \n\t(\n\t\tselect * from vv2\n\t) as vv2_sub",
 			db:  "cte_test2",
 		},
 	}
@@ -1513,6 +1824,10 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				tableDef.Fkeys = table.fks
 			}
 
+			if table.refChildTbls != nil {
+				tableDef.RefChildTbls = table.refChildTbls
+			}
+
 			if table.clusterby != nil {
 				tableDef.ClusterBy = &plan.ClusterByDef{
 					Name: "__mo_cbkey_003pid005pname",
@@ -1593,13 +1908,14 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	return &MockCompilerContext{
-		dbs:     dbs,
-		isDml:   isDml,
-		objects: objects,
-		tables:  tables,
-		id2name: id2name,
-		pks:     pks,
-		ctx:     context.TODO(),
+		dbs:           dbs,
+		isDml:         isDml,
+		objects:       objects,
+		tables:        tables,
+		id2name:       id2name,
+		pks:           pks,
+		ctx:           context.TODO(),
+		processHolder: &mockProcessHolder{},
 	}
 }
 
@@ -1702,14 +2018,36 @@ func (m *MockCompilerContext) SetContext(ctx context.Context) {
 }
 
 func (m *MockCompilerContext) GetProcess() *process.Process {
-	proc := testutil.NewProc(nil)
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
-		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-			return executor.Result{}, nil
-		}),
-	)
-	return proc
+	if m.GetProcessFunc != nil {
+		return m.GetProcessFunc()
+	}
+	// CompilerContext represents one session and must return the same Process
+	// throughout planning. Besides matching the production contract, this
+	// avoids rebuilding file services and runtime state at every GetProcess
+	// call. The holder is a pointer so copied mock contexts share the same
+	// Process without copying synchronization primitives.
+	mockProcessHolderMu.RLock()
+	holder := m.processHolder
+	mockProcessHolderMu.RUnlock()
+	if holder == nil {
+		mockProcessHolderMu.Lock()
+		holder = m.processHolder
+		if holder == nil {
+			holder = &mockProcessHolder{}
+			m.processHolder = holder
+		}
+		mockProcessHolderMu.Unlock()
+	}
+	holder.once.Do(func() {
+		holder.proc = testutil.NewProc(nil)
+		moruntime.ServiceRuntime(holder.proc.GetService()).SetGlobalVariables(
+			moruntime.InternalSQLExecutor,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				return executor.Result{}, nil
+			}),
+		)
+	})
+	return holder.proc
 }
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {
@@ -1775,4 +2113,10 @@ func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 
 func (moc *MockOptimizer) CurrentContext() CompilerContext {
 	return &moc.ctxt
+}
+
+// SetSqlModeOverride makes ResolveVariable("sql_mode") return the given mode,
+// letting tests exercise sql_mode-dependent build paths.
+func (m *MockCompilerContext) SetSqlModeOverride(mode string) {
+	m.sqlModeOverride = &mode
 }

@@ -77,6 +77,13 @@ func NewConsoleSinker(
 func (s *consoleSinker) Run(_ context.Context, _ *ActiveRoutine) {}
 
 func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) {
+	defer func() {
+		if data.snapshotPermit != nil {
+			data.snapshotPermit.Release()
+			data.snapshotPermit = nil
+		}
+	}()
+
 	tableName := ""
 	if s.dbTblInfo != nil {
 		tableName = s.dbTblInfo.String()

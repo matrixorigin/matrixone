@@ -85,13 +85,14 @@ select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.col
 drop table rename04;
 
 
--- error: abnormal column name
+-- unquoted unicode and digit-prefixed column names
 drop table if exists rename06;
 create table rename06(col1 int);
 insert into rename06 values(1),(2);
 alter table rename06 rename column col1 to '';
 alter table rename06 rename column col1 to ' ';
 alter table rename06 rename column col1 to 数据库系统;
+alter table rename06 rename column 数据库系统 to col1;
 alter table rename06 rename column col1 to 7327323467dhhjfkrnfe;
 alter table rename06 rename column col1 to **&&^^%%^&**;
 drop table rename06;

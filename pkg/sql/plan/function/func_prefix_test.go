@@ -158,6 +158,28 @@ func TestPrefixIn(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
 				[]bool{true, false, true}, []bool{false, false, false}),
 		},
+		{
+			info: "& test prefix_in ignores null needles",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"aa12", "bb34", "cc56"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"aa", "bb", ""}, []bool{true, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, true, false}, nil),
+		},
+		{
+			info: "& test prefix_in with only null needles",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"aa12", "bb34"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{""}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{false, false}, nil),
+		},
 	}
 
 	proc := testutil.NewProcess(t)

@@ -104,15 +104,16 @@ create table issue_23121_company(id int primary key, full_name varchar(100), pro
 create table issue_23121_company_patent(id int primary key, company_id int);
 insert into issue_23121_company values (1, 'acme shanghai', 'Shanghai'), (2, 'other', 'Beijing');
 insert into issue_23121_company_patent values (1,1),(2,1),(3,1),(4,1),(5,1),(6,1),(7,2);
-explain (analyze true, check '["Aggregate", "Group Key: c.id, c.full_name", "Join Type: LEFT", "Filter Cond"]') select c.id, c.full_name, count(cp.id) as patent_cnt from issue_23121_company c left join issue_23121_company_patent cp on c.id = cp.company_id where c.province = 'Shanghai' group by c.id, c.full_name having count(cp.id) > 5 limit 20;
+explain (analyze true, check '["Aggregate", "Group Key: c.id, c.full_name", "Hash Key: c.id", "Join Type: LEFT", "Filter Cond"]') select c.id, c.full_name, count(cp.id) as patent_cnt from issue_23121_company c left join issue_23121_company_patent cp on c.id = cp.company_id where c.province = 'Shanghai' group by c.id, c.full_name having count(cp.id) > 5 limit 20;
 -- @regex("invalid input: column 'c\\.full_name' does not exist", false)
 tp query plan  𝄀
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=36 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=36 bytes (min=0 bytes, max=36 bytes)  𝄀
   Limit: 20  𝄀
   ->  Aggregate  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=192 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=352.04 KiB (min=36 bytes, max=352.00 KiB)  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=6 outputRows=1 (min=1, max=1) InputSize=192 bytes OutputSize=36 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=320.04 KiB (min=36 bytes, max=320.00 KiB)  𝄀
         Group Key: c.id, c.full_name  𝄀
+        Hash Key: c.id  𝄀
         Aggregate Functions: count(cp.id)  𝄀
         Filter Cond: (count(cp.id) > 5)  𝄀
         ->  Join  𝄀

@@ -150,10 +150,11 @@ create external table ext_wide_jl(
 infile{'filepath'='stage://wstage/wext_widejl_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_widejl_%U.jl', 'jsondata'='object'}
 fields terminated by ',';
 insert into ext_wide_jl select c_i8, c_i64, c_u32, c_f32, c_dec, c_ch, c_vc, c_txt, c_dt, c_bool, c_json from wide_src;
--- jsonline-object reads map fields by name, so validate the full round-trip with
--- "select *" (a projected column subset hits an unrelated pre-existing limitation
--- in the jsonline-object reader).
+-- jsonline-object reads map projected fields by name while preserving each
+-- field's physical input position for the shared external-table decoder.
 select * from ext_wide_jl order by c_i64;
+select c_txt, c_dec, c_bool, c_json from ext_wide_jl order by c_i64;
+select count(*) from ext_wide_jl;
 
 -- ---------- '#'-leading values and all-empty rows round-trip ----------
 -- The CSV reader uses no comment marker by default (Comment defaults to the

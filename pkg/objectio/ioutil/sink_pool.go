@@ -68,9 +68,10 @@ type pipelineResult struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu        sync.RWMutex
-	persisted []objectio.ObjectStats
-	err       error
+	mu          sync.RWMutex
+	persisted   []objectio.ObjectStats
+	unpublished []string
+	err         error
 
 	pending sync.WaitGroup // tracks in-flight jobs for this Sinker
 
@@ -193,6 +194,13 @@ func (p *SinkPool) runSyncWorker() {
 		syncStart := time.Now()
 		stats, err := job.fSinker.Sync(r.ctx)
 		atomic.AddInt64(&r.syncNs, int64(time.Since(syncStart)))
+		if err != nil {
+			if name := activeFileSinkerObjectName(job.fSinker); name != "" {
+				r.mu.Lock()
+				r.unpublished = append(r.unpublished, name)
+				r.mu.Unlock()
+			}
+		}
 		job.fSinker.Close()
 
 		if err != nil {

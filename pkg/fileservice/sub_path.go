@@ -54,17 +54,32 @@ func (s *subPathFS) toUpstreamPath(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return s.toUpstreamParsedPath(parsed), nil
+}
+
+func (s *subPathFS) toUpstreamFilePath(p string) (string, error) {
+	parsed, err := parseFilePathAtService(p, s.name)
+	if err != nil {
+		return "", err
+	}
+	return s.toUpstreamParsedPath(parsed), nil
+}
+
+func (s *subPathFS) toUpstreamParsedPath(parsed Path) string {
 	parsed.File = path.Join(s.path, parsed.File)
 	parsed.Service = s.upstream.Name()
 	parsed.ServiceArguments = nil
-	return parsed.String(), nil
+	return parsed.String()
 }
 
 func (s *subPathFS) Close(ctx context.Context) {
 }
 
 func (s *subPathFS) Write(ctx context.Context, vector IOVector) error {
-	p, err := s.toUpstreamPath(vector.FilePath)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p, err := s.toUpstreamFilePath(vector.FilePath)
 	if err != nil {
 		return err
 	}
@@ -73,8 +88,11 @@ func (s *subPathFS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (s *subPathFS) Read(ctx context.Context, vector *IOVector) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	subVector := *vector
-	p, err := s.toUpstreamPath(subVector.FilePath)
+	p, err := s.toUpstreamFilePath(subVector.FilePath)
 	if err != nil {
 		return err
 	}
@@ -83,8 +101,11 @@ func (s *subPathFS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *subPathFS) ReadCache(ctx context.Context, vector *IOVector) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	subVector := *vector
-	p, err := s.toUpstreamPath(subVector.FilePath)
+	p, err := s.toUpstreamFilePath(subVector.FilePath)
 	if err != nil {
 		return err
 	}
@@ -94,6 +115,10 @@ func (s *subPathFS) ReadCache(ctx context.Context, vector *IOVector) error {
 
 func (s *subPathFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
 	return func(yield func(*DirEntry, error) bool) {
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
+			return
+		}
 		p, err := s.toUpstreamPath(dirPath)
 		if err != nil {
 			yield(nil, err)
@@ -104,11 +129,14 @@ func (s *subPathFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntr
 }
 
 func (s *subPathFS) Delete(ctx context.Context, filePaths ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(filePaths) == 0 {
 		return nil
 	}
 	if len(filePaths) == 1 {
-		p, err := s.toUpstreamPath(filePaths[0])
+		p, err := s.toUpstreamFilePath(filePaths[0])
 		if err != nil {
 			return err
 		}
@@ -116,7 +144,7 @@ func (s *subPathFS) Delete(ctx context.Context, filePaths ...string) error {
 	}
 	subPaths := make([]string, 0, len(filePaths))
 	for _, p := range filePaths {
-		pp, err := s.toUpstreamPath(p)
+		pp, err := s.toUpstreamFilePath(p)
 		if err != nil {
 			return err
 		}
@@ -126,7 +154,10 @@ func (s *subPathFS) Delete(ctx context.Context, filePaths ...string) error {
 }
 
 func (s *subPathFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
-	p, err := s.toUpstreamPath(filePath)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p, err := s.toUpstreamFilePath(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +165,10 @@ func (s *subPathFS) StatFile(ctx context.Context, filePath string) (*DirEntry, e
 }
 
 func (s *subPathFS) PrefetchFile(ctx context.Context, filePath string) error {
-	p, err := s.toUpstreamPath(filePath)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p, err := s.toUpstreamFilePath(filePath)
 	if err != nil {
 		return err
 	}
@@ -151,7 +185,13 @@ func (s *subPathFS) CopyObject(
 	srcPath string,
 	dstPath string,
 ) (bool, error) {
-	dst, err := s.toUpstreamPath(dstPath)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if _, err := parseFilePathAtService(srcPath, ""); err != nil {
+		return false, err
+	}
+	dst, err := s.toUpstreamFilePath(dstPath)
 	if err != nil {
 		return false, err
 	}
@@ -165,6 +205,9 @@ func (s *subPathFS) CopyObject(
 var _ MutableFileService = new(subPathFS)
 
 func (s *subPathFS) EnsureDir(ctx context.Context, filePath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	p, err := s.toUpstreamPath(filePath)
 	if err != nil {
 		return err
@@ -177,7 +220,10 @@ func (s *subPathFS) EnsureDir(ctx context.Context, filePath string) error {
 }
 
 func (s *subPathFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
-	p, err := s.toUpstreamPath(filePath)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p, err := s.toUpstreamFilePath(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +235,10 @@ func (s *subPathFS) NewMutator(ctx context.Context, filePath string) (Mutator, e
 }
 
 func (s *subPathFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
-	p, err := s.toUpstreamPath(filePath)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p, err := s.toUpstreamFilePath(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +252,10 @@ func (s *subPathFS) OpenFile(ctx context.Context, filePath string) (*os.File, er
 }
 
 func (s *subPathFS) CreateFile(ctx context.Context, filePath string) (*os.File, error) {
-	p, err := s.toUpstreamPath(filePath)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p, err := s.toUpstreamFilePath(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +269,10 @@ func (s *subPathFS) CreateFile(ctx context.Context, filePath string) (*os.File, 
 }
 
 func (s *subPathFS) RemoveFile(ctx context.Context, filePath string) error {
-	p, err := s.toUpstreamPath(filePath)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p, err := s.toUpstreamFilePath(filePath)
 	if err != nil {
 		return err
 	}
@@ -231,7 +286,10 @@ func (s *subPathFS) RemoveFile(ctx context.Context, filePath string) error {
 }
 
 func (s *subPathFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
-	p, err := s.toUpstreamPath(filePath)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p, err := s.toUpstreamFilePath(filePath)
 	if err != nil {
 		return nil, err
 	}

@@ -115,7 +115,7 @@ t1    t2
 中文123abcd    
 yef&&190     wwww 
 123    7834
-select * from (select * from text_01 where t1 like '%123%');
+select * from (select * from text_01 where t1 like '%123%') as text_sub;
 t1    t2    t3
 中文123abcd        null
 123    7834    commmmmmment

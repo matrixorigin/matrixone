@@ -502,6 +502,9 @@ func (s *triggerJobCheckpointScheduler) MaxGlobalCheckpoint() *CheckpointEntry {
 func (s *triggerJobCheckpointScheduler) MaxIncrementalCheckpoint() *CheckpointEntry {
 	return nil
 }
+func (s *triggerJobCheckpointScheduler) MaxCheckpoint() *CheckpointEntry {
+	return nil
+}
 func (s *triggerJobCheckpointScheduler) PendingIncrementalCheckpoint() *CheckpointEntry {
 	return s.pending
 }

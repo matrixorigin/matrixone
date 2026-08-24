@@ -107,6 +107,7 @@ type mockFileSinker struct {
 	sinkErr    error
 	syncErr    error
 	stats      objectio.ObjectStats
+	activeName string
 	closed     atomic.Bool
 	syncStart  chan struct{}
 	syncBlock  chan struct{}
@@ -134,6 +135,10 @@ func (m *mockFileSinker) Sync(_ context.Context) (*objectio.ObjectStats, error) 
 }
 
 func (m *mockFileSinker) Reset() {}
+
+func (m *mockFileSinker) ActiveObjectName() string {
+	return m.activeName
+}
 
 func (m *mockFileSinker) Close() error {
 	m.closed.Store(true)
@@ -251,17 +256,23 @@ func TestSinkPool_SubmitSyncError(t *testing.T) {
 	cnBat := containers.ToCNBatch(bat)
 
 	syncErr := fmt.Errorf("sync failure")
+	activeName := objectio.MockObjectName().String()
 	err = pool.Submit(&poolSinkJob{
-		data:    []*batch.Batch{cnBat},
-		factory: mockFactory(nil, syncErr),
-		mp:      mp,
-		fs:      nil,
-		result:  r,
+		data: []*batch.Batch{cnBat},
+		factory: func(*mpool.MPool, fileservice.FileService) FileSinker {
+			return &mockFileSinker{syncErr: syncErr, activeName: activeName}
+		},
+		mp:     mp,
+		fs:     nil,
+		result: r,
 	})
 	require.NoError(t, err)
 
 	r.pending.Wait()
 	require.ErrorContains(t, r.getError(), "sync failure")
+	r.mu.RLock()
+	require.Equal(t, []string{activeName}, r.unpublished)
+	r.mu.RUnlock()
 }
 
 func TestSinkPool_SubmitAfterError(t *testing.T) {

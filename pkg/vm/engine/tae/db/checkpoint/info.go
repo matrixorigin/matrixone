@@ -53,6 +53,7 @@ type RunnerReader interface {
 
 	MaxGlobalCheckpoint() *CheckpointEntry
 	MaxIncrementalCheckpoint() *CheckpointEntry
+	MaxCheckpoint() *CheckpointEntry
 	PendingIncrementalCheckpoint() *CheckpointEntry
 	MinIncrementalCheckpoint() *CheckpointEntry
 	GetDirtyCollector() logtail.Collector
@@ -117,6 +118,10 @@ func (r *runner) MaxGlobalCheckpoint() *CheckpointEntry {
 
 func (r *runner) MaxIncrementalCheckpoint() *CheckpointEntry {
 	return r.store.MaxIncrementalCheckpoint()
+}
+
+func (r *runner) MaxCheckpoint() *CheckpointEntry {
+	return r.store.MaxCheckpoint()
 }
 
 func (r *runner) PendingIncrementalCheckpoint() *CheckpointEntry {

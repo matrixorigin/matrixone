@@ -53,6 +53,6 @@ CREATE TABLE `files_related_mph` (
 `order` double DEFAULT NULL,
 PRIMARY KEY (`id`),
 KEY `files_related_mph_fk` (`file_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 alter table `files_related_mph` add index `files_related_mph_oidx`(`order`);
 drop table files_related_mph;

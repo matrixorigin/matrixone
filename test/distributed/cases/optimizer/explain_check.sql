@@ -51,6 +51,6 @@ create table issue_23121_company_patent(id int primary key, company_id int);
 insert into issue_23121_company values (1, 'acme shanghai', 'Shanghai'), (2, 'other', 'Beijing');
 insert into issue_23121_company_patent values (1,1),(2,1),(3,1),(4,1),(5,1),(6,1),(7,2);
 -- @regex("invalid input: column 'c\\.full_name' does not exist",false)
-explain (analyze true, check '["Aggregate", "Group Key: c.id, c.full_name", "Join Type: LEFT", "Filter Cond"]') select c.id, c.full_name, count(cp.id) as patent_cnt from issue_23121_company c left join issue_23121_company_patent cp on c.id = cp.company_id where c.province = 'Shanghai' group by c.id, c.full_name having count(cp.id) > 5 limit 20;
+explain (analyze true, check '["Aggregate", "Group Key: c.id, c.full_name", "Hash Key: c.id", "Join Type: LEFT", "Filter Cond"]') select c.id, c.full_name, count(cp.id) as patent_cnt from issue_23121_company c left join issue_23121_company_patent cp on c.id = cp.company_id where c.province = 'Shanghai' group by c.id, c.full_name having count(cp.id) > 5 limit 20;
 
 drop database if exists d1;

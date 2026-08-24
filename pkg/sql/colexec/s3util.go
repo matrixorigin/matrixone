@@ -147,7 +147,9 @@ func GetSequmsAttrsSortKeyIdxFromTableDef(
 			sequms = append(sequms, uint16(colDef.Seqnum))
 			attrs = append(attrs, colDef.Name)
 
-			attrTypes = append(attrTypes, types.New(types.T(colDef.Typ.Id), colDef.Typ.Width, colDef.Typ.Scale))
+			attrTypes = append(attrTypes, types.NewWithCharset(
+				types.T(colDef.Typ.Id), colDef.Typ.Width, colDef.Typ.Scale, uint8(colDef.Typ.Charset),
+			))
 		} else {
 			// check rowid as the last column
 			if i != len(tableDef.Cols)-1 {

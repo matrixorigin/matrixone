@@ -580,6 +580,28 @@ func TestMeasureWaitStopsAtBlockingBoundary(t *testing.T) {
 	assert.Zero(t, opAlyzr.opStats.ResourceQuality)
 }
 
+func TestMeasureFilesystemWaitExcludingActiveCallback(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+	opAlyzr.Start()
+
+	active := time.Hour
+	_, err := MeasureFilesystemWaitExcluding(opAlyzr, &active, func() (struct{}, error) {
+		time.Sleep(time.Millisecond)
+		start := time.Now()
+		time.Sleep(20 * time.Millisecond)
+		active += time.Since(start)
+		time.Sleep(time.Millisecond)
+		return struct{}{}, nil
+	})
+	assert.NoError(t, err)
+	wait := time.Duration(opAlyzr.opStats.ResourceWaitNS[resource.WaitFilesystem])
+	assert.Positive(t, wait)
+
+	opAlyzr.Stop()
+	assert.Positive(t, opAlyzr.opStats.TimeConsumed)
+	assert.Zero(t, opAlyzr.opStats.ResourceQuality)
+}
+
 func Test_operatorAnalyzer_AddParquetProfile(t *testing.T) {
 	opAlyzr := NewTempAnalyzer()
 	opAlyzr.AddParquetProfile(ParquetProfileStats{

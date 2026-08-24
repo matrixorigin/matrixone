@@ -12,6 +12,7 @@ package mock_task
 import (
 	context "context"
 	reflect "reflect"
+	time "time"
 
 	gomock "github.com/golang/mock/gomock"
 	logservice "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -373,6 +374,26 @@ func (mr *MockTaskServiceMockRecorder) UpdateDaemonTask(ctx, tasks any, cond ...
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]any{ctx, tasks}, cond...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDaemonTask", reflect.TypeOf((*MockTaskService)(nil).UpdateDaemonTask), varargs...)
+}
+
+// UpdateDaemonTaskStatus mocks base method.
+func (m *MockTaskService) UpdateDaemonTaskStatus(ctx context.Context, taskID uint64, status task.TaskStatus, updateAt, endAt time.Time, cond ...taskservice.Condition) (int, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, taskID, status, updateAt, endAt}
+	for _, a := range cond {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "UpdateDaemonTaskStatus", varargs...)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateDaemonTaskStatus indicates an expected call of UpdateDaemonTaskStatus.
+func (mr *MockTaskServiceMockRecorder) UpdateDaemonTaskStatus(ctx, taskID, status, updateAt, endAt any, cond ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, taskID, status, updateAt, endAt}, cond...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDaemonTaskStatus", reflect.TypeOf((*MockTaskService)(nil).UpdateDaemonTaskStatus), varargs...)
 }
 
 // MockTaskRunner is a mock of TaskRunner interface.
@@ -918,6 +939,26 @@ func (mr *MockTaskStorageMockRecorder) UpdateDaemonTask(ctx, tasks any, conds ..
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]any{ctx, tasks}, conds...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDaemonTask", reflect.TypeOf((*MockTaskStorage)(nil).UpdateDaemonTask), varargs...)
+}
+
+// UpdateDaemonTaskStatus mocks base method.
+func (m *MockTaskStorage) UpdateDaemonTaskStatus(ctx context.Context, taskID uint64, status task.TaskStatus, updateAt, endAt time.Time, conds ...taskservice.Condition) (int, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, taskID, status, updateAt, endAt}
+	for _, a := range conds {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "UpdateDaemonTaskStatus", varargs...)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateDaemonTaskStatus indicates an expected call of UpdateDaemonTaskStatus.
+func (mr *MockTaskStorageMockRecorder) UpdateDaemonTaskStatus(ctx, taskID, status, updateAt, endAt any, conds ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, taskID, status, updateAt, endAt}, conds...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDaemonTaskStatus", reflect.TypeOf((*MockTaskStorage)(nil).UpdateDaemonTaskStatus), varargs...)
 }
 
 // UpdateSQLTask mocks base method.

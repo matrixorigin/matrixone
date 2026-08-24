@@ -39,10 +39,6 @@ func newObjectStorageSemaphore(
 	}
 }
 
-func (o *objectStorageSemaphore) acquire() {
-	o.semaphore <- struct{}{}
-}
-
 func (o *objectStorageSemaphore) acquireContext(ctx context.Context) error {
 	select {
 	case o.semaphore <- struct{}{}:
@@ -86,21 +82,28 @@ func (o *objectStorageSemaphore) Delete(ctx context.Context, keys ...string) (er
 }
 
 func (o *objectStorageSemaphore) Exists(ctx context.Context, key string) (bool, error) {
-	o.acquire()
+	if err := o.acquireContext(ctx); err != nil {
+		return false, err
+	}
 	defer o.release()
 	return o.upstream.Exists(ctx, key)
 }
 
 func (o *objectStorageSemaphore) List(ctx context.Context, prefix string) iter.Seq2[*DirEntry, error] {
 	return func(yield func(*DirEntry, error) bool) {
-		o.acquire()
+		if err := o.acquireContext(ctx); err != nil {
+			yield(nil, err)
+			return
+		}
 		defer o.release()
 		o.upstream.List(ctx, prefix)(yield)
 	}
 }
 
 func (o *objectStorageSemaphore) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
-	o.acquire()
+	if err := o.acquireContext(ctx); err != nil {
+		return nil, err
+	}
 	r, err := o.upstream.Read(ctx, key, min, max)
 	if err != nil {
 		o.release()
@@ -129,13 +132,17 @@ func (o *objectStorageSemaphore) Read(ctx context.Context, key string, min *int6
 }
 
 func (o *objectStorageSemaphore) Stat(ctx context.Context, key string) (size int64, err error) {
-	o.acquire()
+	if err := o.acquireContext(ctx); err != nil {
+		return 0, err
+	}
 	defer o.release()
 	return o.upstream.Stat(ctx, key)
 }
 
 func (o *objectStorageSemaphore) Write(ctx context.Context, key string, r io.Reader, sizeHint *int64, expire *time.Time) (err error) {
-	o.acquire()
+	if err := o.acquireContext(ctx); err != nil {
+		return err
+	}
 	defer o.release()
 	return o.upstream.Write(ctx, key, r, sizeHint, expire)
 }
@@ -148,7 +155,9 @@ func (o *objectStorageSemaphore) SupportsParallelMultipart() bool {
 }
 
 func (o *objectStorageSemaphore) WriteMultipartParallel(ctx context.Context, key string, r io.Reader, sizeHint *int64, opt *ParallelMultipartOption) (err error) {
-	o.acquire()
+	if err := o.acquireContext(ctx); err != nil {
+		return err
+	}
 	defer o.release()
 	if p, ok := o.upstream.(ParallelMultipartWriter); ok {
 		return p.WriteMultipartParallel(ctx, key, r, sizeHint, opt)

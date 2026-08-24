@@ -168,6 +168,9 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 				Duration:             tt.fields.Duration,
 			}
 			if tt.args.fun != nil {
+				provider := GetTracerProvider()
+				oldSkipRunningStmt := provider.skipRunningStmt
+				t.Cleanup(func() { provider.skipRunningStmt = oldSkipRunningStmt })
 				tt.args.fun()
 			}
 			if tt.fields.doExport && !tt.fields.doReport {

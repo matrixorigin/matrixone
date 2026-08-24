@@ -3,6 +3,9 @@ select sql_sum(1, 1) as ret;
 ➤ ret[-5,64,0]  𝄀
 2
 drop function sql_sum(int, int);
+create function drop_if_exists (p_id int) returns int language sql as '$1';
+drop function if exists drop_if_exists(p_id int);
+drop function if exists drop_if_exists(p_id int);
 drop database if exists udf_db1;
 create database udf_db1;
 use udf_db1;
@@ -46,3 +49,33 @@ drop function sql_mode_pipe();
 drop function sql_mode_ansi();
 drop table udf_sql_mode_t;
 set sql_mode = default;
+drop table if exists udf_lookup_base;
+drop function if exists udf_lookup(int);
+create table udf_lookup_base (id int primary key, v int);
+insert into udf_lookup_base values (1, 5), (2, 15), (3, 25), (4, null);
+create function udf_lookup(p_id int) returns int language sql as 'select v from udf_lookup_base where id = $1';
+select udf_lookup(2) as lookup_2;
+➤ lookup_2[4,32,0]  𝄀
+15
+select id, udf_lookup(id) as lookup_v from udf_lookup_base order by id;
+➤ id[4,32,0]  ¦  lookup_v[4,32,0]  𝄀
+1  ¦  5  𝄀
+2  ¦  15  𝄀
+3  ¦  25  𝄀
+4  ¦  null
+select id from udf_lookup_base where udf_lookup(id) >= 15 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+drop function udf_lookup(int);
+drop table udf_lookup_base;
+drop table if exists udf_marker_collision_base;
+drop function if exists udf_marker_collision(int);
+create table udf_marker_collision_base (`__mo_sql_udf_1_arg_1` int);
+insert into udf_marker_collision_base values (7);
+create function udf_marker_collision(p_id int) returns int language sql as 'select __mo_sql_udf_1_arg_1 from udf_marker_collision_base where $1 = $1';
+select udf_marker_collision(cast(5 as int)) as collision_safe;
+➤ collision_safe[4,32,0]  𝄀
+7
+drop function udf_marker_collision(int);
+drop table udf_marker_collision_base;

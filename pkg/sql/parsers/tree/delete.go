@@ -14,16 +14,22 @@
 
 package tree
 
+import "strings"
+
 // Delete statement
 type Delete struct {
 	statementImpl
 	Tables         TableExprs
 	TableRefs      TableExprs
+	Priority       string
+	Quick          bool
+	Ignore         bool
 	PartitionNames IdentifierList
 	Where          *Where
 	OrderBy        OrderBy
 	Limit          *Limit
 	With           *With
+	Returning      SelectExprs
 }
 
 func (node *Delete) Format(ctx *FmtCtx) {
@@ -31,7 +37,18 @@ func (node *Delete) Format(ctx *FmtCtx) {
 		node.With.Format(ctx)
 		ctx.WriteByte(' ')
 	}
-	ctx.WriteString("delete from ")
+	ctx.WriteString("delete")
+	if node.Priority != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(strings.ToLower(node.Priority))
+	}
+	if node.Quick {
+		ctx.WriteString(" quick")
+	}
+	if node.Ignore {
+		ctx.WriteString(" ignore")
+	}
+	ctx.WriteString(" from ")
 
 	prefix := ""
 	for _, a := range node.Tables {
@@ -63,7 +80,13 @@ func (node *Delete) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Limit.Format(ctx)
 	}
+	if node.HasReturning() {
+		ctx.WriteString(" returning ")
+		node.Returning.Format(ctx)
+	}
 }
+
+func (node *Delete) HasReturning() bool { return len(node.Returning) > 0 }
 
 func (node *Delete) GetStatementType() string { return "Delete" }
 func (node *Delete) GetQueryType() string     { return QueryTypeDML }

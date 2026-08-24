@@ -236,3 +236,38 @@ func TestCumeDistCheckFn(t *testing.T) {
 		require.Equal(t, failedFunctionParametersWrong, result.status)
 	})
 }
+
+func TestNtileCheckFn(t *testing.T) {
+	var ntileFunc *FuncNew
+	for i := range supportedWindowInNewFramework {
+		if supportedWindowInNewFramework[i].functionId == NTILE {
+			ntileFunc = &supportedWindowInNewFramework[i]
+			break
+		}
+	}
+	require.NotNil(t, ntileFunc)
+
+	for _, typ := range []types.Type{
+		types.T_int8.ToType(),
+		types.T_int64.ToType(),
+		types.T_uint64.ToType(),
+	} {
+		result := ntileFunc.checkFn(ntileFunc.Overloads, []types.Type{typ})
+		require.Equal(t, succeedMatched, result.status)
+	}
+
+	for _, typ := range []types.Type{
+		types.T_float64.ToType(),
+		types.T_decimal64.ToType(),
+		types.T_varchar.ToType(),
+	} {
+		result := ntileFunc.checkFn(ntileFunc.Overloads, []types.Type{typ})
+		require.Equal(t, failedFunctionParametersWrong, result.status)
+	}
+
+	require.Equal(t, failedFunctionParametersWrong,
+		ntileFunc.checkFn(ntileFunc.Overloads, nil).status)
+	require.Equal(t, failedFunctionParametersWrong,
+		ntileFunc.checkFn(ntileFunc.Overloads,
+			[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}).status)
+}

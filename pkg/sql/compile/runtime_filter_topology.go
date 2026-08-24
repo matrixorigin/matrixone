@@ -56,7 +56,8 @@ func rightSingleLocalRuntimeFilterTags(qry *plan.Query, compiledNodeIDs []int32)
 		for _, spec := range node.RuntimeFilterBuildList {
 			// Phase-1 right-SINGLE uses exact IN.  Shuffle PASS specs have no
 			// expression and do not participate in this local delivery contract.
-			if spec != nil && spec.Tag > 0 && spec.Expr != nil {
+			if spec != nil && spec.Tag > 0 &&
+				(spec.Expr != nil || spec.BuildExpr != nil) {
 				tags = append(tags, spec.Tag)
 			}
 		}

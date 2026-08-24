@@ -45,12 +45,24 @@ func (v CatalogFactoryCommitVerifier) VerifyCommittedMaintenance(ctx context.Con
 	if err != nil {
 		return result, false, err
 	}
+	catalogReq := api.CatalogRequest{}
+	if plan != nil {
+		// The planner's request contains the catalog prefix resolved for the
+		// commit. Nessie encodes its reference and warehouse in that prefix, so
+		// dropping it here can reload a different route after a successful commit.
+		catalogReq = plan.Catalog
+	}
+	// The authorized request remains authoritative for catalog identity and
+	// principal even when transport settings come from the commit plan.
+	catalogReq.Catalog = req.Catalog
+	catalogReq.ExternalPrincipal = strings.TrimSpace(req.ExternalPrincipal)
+	catalogReq, err = resolveMaintenanceCatalogRequestPrefix(ctx, client, catalogReq)
+	if err != nil {
+		return result, false, err
+	}
 	return (CatalogCommitVerifier{
-		Client: client,
-		Catalog: api.CatalogRequest{
-			Catalog:           req.Catalog,
-			ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
-		},
+		Client:  client,
+		Catalog: catalogReq,
 	}).VerifyCommittedMaintenance(ctx, req, plan, result)
 }
 
@@ -106,6 +118,12 @@ func (v CatalogCommitVerifier) VerifyCommittedMaintenance(ctx context.Context, r
 	result.SnapshotID = expectedSnapshotID
 	result.MetadataLocation = meta.MetadataLocation
 	result.MetadataLocationHash = meta.MetadataLocationHash
+	if strings.TrimSpace(result.CommitID) == "" {
+		// CommitTableResponse standardizes the committed metadata location but
+		// not a catalog commit id. Its hash is a stable, non-sensitive identity
+		// for the verified Iceberg metadata change when no vendor header exists.
+		result.CommitID = meta.MetadataLocationHash
+	}
 	result.Unknown = false
 	result.Verified = true
 	return result, true, nil

@@ -297,6 +297,124 @@ func TestTimestampNumericCastUsesSessionTimeZone(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestTimestampToTimeCastUsesSessionTimeZone(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("+08:00", 8*60*60)
+
+	datetimeValue, err := types.ParseDatetime("2024-01-02 03:04:05.654321", 6)
+	require.NoError(t, err)
+	timestampValue := datetimeValue.ToTimestamp(time.UTC)
+	expectedTime, err := types.ParseTime("11:04:05.654321", 6)
+	require.NoError(t, err)
+
+	require.True(t, IfTypeCastSupported(types.T_timestamp, types.T_time))
+	_, err = GetFunctionByName(context.Background(), "cast", []types.Type{
+		types.T_timestamp.ToTypeWithScale(6), types.T_time.ToTypeWithScale(6),
+	})
+	require.NoError(t, err)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{timestampValue, 0}, []bool{false, true}),
+			NewFunctionTestInput(types.T_time.ToTypeWithScale(6), []types.Time{}, nil),
+		},
+		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false, []types.Time{expectedTime, 0}, []bool{false, true}),
+		NewCast,
+	)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestTimestampToTimeCastUsesTargetScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	datetimeValue, err := types.ParseDatetime("2024-01-02 03:04:05.654321", 6)
+	require.NoError(t, err)
+	timestampValue := datetimeValue.ToTimestamp(time.UTC)
+	expectedTime, err := types.ParseTime("03:04:05.654", 3)
+	require.NoError(t, err)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{timestampValue}, nil),
+			NewFunctionTestInput(types.T_time.ToTypeWithScale(3), []types.Time{}, nil),
+		},
+		NewFunctionTestResult(types.T_time.ToTypeWithScale(3), false, []types.Time{expectedTime}, nil),
+		NewCast,
+	)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestTimestampToTimeCastUsesCivilClockForTomorrow(t *testing.T) {
+	tomorrow := types.Today(time.UTC) + 1
+	year, month, day, _ := tomorrow.Calendar(true)
+	tomorrowDatetime := types.DatetimeFromClock(year, month, day, 3, 4, 5, 654321)
+	tomorrowTimestamp := tomorrowDatetime.ToTimestamp(time.UTC)
+	expectedTomorrowTime, err := types.ParseTime("03:04:05.654321", 6)
+	require.NoError(t, err)
+
+	today := types.Today(time.UTC)
+	year, month, day, _ = today.Calendar(true)
+	utcLateDatetime := types.DatetimeFromClock(year, month, day, 20, 4, 5, 654321)
+	timezoneBoundaryTimestamp := utcLateDatetime.ToTimestamp(time.UTC)
+	expectedBoundaryTime, err := types.ParseTime("04:04:05.654321", 6)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name      string
+		zone      *time.Location
+		timestamp types.Timestamp
+		want      types.Time
+	}{
+		{
+			name:      "utc tomorrow keeps clock under 24 hours",
+			zone:      time.UTC,
+			timestamp: tomorrowTimestamp,
+			want:      expectedTomorrowTime,
+		},
+		{
+			name:      "positive offset crossing date boundary keeps local clock",
+			zone:      time.FixedZone("+08:00", 8*60*60),
+			timestamp: timezoneBoundaryTimestamp,
+			want:      expectedBoundaryTime,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().TimeZone = tc.zone
+
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{tc.timestamp}, nil),
+					NewFunctionTestInput(types.T_time.ToTypeWithScale(6), []types.Time{}, nil),
+				},
+				NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false, []types.Time{tc.want}, nil),
+				NewCast,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestTimestampToTimeCastZeroTimestamp(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{types.ZeroTimestamp}, nil),
+			NewFunctionTestInput(types.T_time.ToTypeWithScale(6), []types.Time{}, nil),
+		},
+		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false, []types.Time{0}, nil),
+		NewCast,
+	)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
 func TestTemporalNumericCastRejectsPackedValueOutsideInt32(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC

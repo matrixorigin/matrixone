@@ -161,6 +161,11 @@ const (
 // exported APIs are safe for concurrent use.
 type branchHashmap struct {
 	allocator malloc.Allocator
+	// strictCapacity rejects an entry that cannot fit after spilling instead of
+	// placing that entry on the unaccounted Go heap. It is used by recovery
+	// stores whose capacity contract must fail closed.
+	strictCapacity bool
+	rawEncodedKeys bool
 
 	valueTypes []types.Type
 	keyTypes   []types.Type
@@ -188,6 +193,18 @@ type BranchHashmapOption func(*branchHashmap)
 func WithBranchHashmapAllocator(allocator malloc.Allocator) BranchHashmapOption {
 	return func(bh *branchHashmap) {
 		bh.allocator = allocator
+	}
+}
+
+func withBranchHashmapStrictCapacity() BranchHashmapOption {
+	return func(bh *branchHashmap) {
+		bh.strictCapacity = true
+	}
+}
+
+func withBranchHashmapRawEncodedKeys() BranchHashmapOption {
+	return func(bh *branchHashmap) {
+		bh.rawEncodedKeys = true
 	}
 }
 
@@ -372,6 +389,9 @@ func (bh *branchHashmap) flushPreparedEntries(shardEntries [][]int, chunk []prep
 		buf, deallocator, err = bh.allocateBuffer(uint64(totalBytes))
 		if err != nil {
 			if len(chunk) <= 1 {
+				if bh.strictCapacity {
+					return err
+				}
 				// Fallback to Go heap for single entry when allocator is exhausted.
 				buf = make([]byte, totalBytes)
 			} else {
@@ -457,7 +477,7 @@ func (bh *branchHashmap) GetByEncodedKey(encodedKey []byte) (GetResult, error) {
 		bh.metaMu.RUnlock()
 		return result, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
 	}
-	if len(bh.keyTypes) == 0 {
+	if len(bh.keyTypes) == 0 && !bh.rawEncodedKeys {
 		bh.metaMu.RUnlock()
 		return result, nil
 	}
@@ -552,34 +572,44 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 		}
 		shard.lock()
 		var removedTotal int64
+		finishShard := func() {
+			if removedTotal > 0 {
+				atomic.AddInt64(&shard.items, -removedTotal)
+				totalRemoved += removedTotal
+			}
+			shard.unlock()
+		}
 		for _, probe := range probes {
-			rows, removedBytes, removedCount := shard.mem.collect(probe.hash, probe.key, probe.plan, true, collectValues)
+			var (
+				removedBytes uint64
+				removedCount int
+				err          error
+			)
+			if collectValues {
+				removedBytes, removedCount, err = shard.mem.collectStream(probe.hash, probe.key, probe.plan, func(row []byte) error {
+					return fn(probe.idx, probe.key, row)
+				})
+			} else {
+				_, removedBytes, removedCount = shard.mem.collect(probe.hash, probe.key, probe.plan, true, false)
+			}
 			if removedBytes > 0 {
 				shard.memInUse -= removedBytes
 			}
 			if removedCount > 0 {
 				removedTotal += int64(removedCount)
 			}
-			if collectValues {
-				for _, row := range rows {
-					if err := fn(probe.idx, probe.key, row); err != nil {
-						shard.unlock()
-						return int(totalRemoved), err
-					}
-				}
+			if err != nil {
+				finishShard()
+				return int(totalRemoved), err
 			}
 		}
 		if shard.spill != nil {
 			if err := collectSpillPopStream(shard, probes, removeAll, fn, &removedTotal, collectValues); err != nil {
-				shard.unlock()
+				finishShard()
 				return int(totalRemoved), err
 			}
 		}
-		if removedTotal > 0 {
-			atomic.AddInt64(&shard.items, -removedTotal)
-			totalRemoved += removedTotal
-		}
-		shard.unlock()
+		finishShard()
 	}
 
 	return int(totalRemoved), nil
@@ -704,7 +734,7 @@ func (bh *branchHashmap) PopByEncodedKey(encodedKey []byte, removeAll bool) (Get
 		bh.metaMu.RUnlock()
 		return result, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
 	}
-	if len(bh.keyTypes) == 0 {
+	if len(bh.keyTypes) == 0 && !bh.rawEncodedKeys {
 		bh.metaMu.RUnlock()
 		return result, nil
 	}
@@ -732,7 +762,7 @@ func (bh *branchHashmap) PopByEncodedKeyValue(encodedKey []byte, encodedValue []
 		bh.metaMu.RUnlock()
 		return 0, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
 	}
-	if len(bh.keyTypes) == 0 {
+	if len(bh.keyTypes) == 0 && !bh.rawEncodedKeys {
 		bh.metaMu.RUnlock()
 		return 0, nil
 	}
@@ -1540,7 +1570,9 @@ func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator
 			return nil, nil, err
 		}
 		if buf == nil {
-			return nil, nil, moerr.NewInternalErrorNoCtx("branchHashmap failed to allocate memory after spilling")
+			return nil, nil, moerr.NewMPoolCapacityNoCtxf(
+				"branchHashmap failed to allocate %d bytes after spilling", size,
+			)
 		}
 	}
 	return buf, deallocator, nil
@@ -1576,7 +1608,9 @@ func (bh *branchHashmap) spill(required uint64) error {
 		}
 	}
 	if freed < required {
-		return moerr.NewInternalErrorNoCtx("branchHashmap cannot spill enough data to satisfy allocation request")
+		return moerr.NewMPoolCapacityNoCtxf(
+			"branchHashmap cannot spill %d bytes required for allocation", required-freed,
+		)
 	}
 	// TODO(monitoring): emit spill counters once metrics plumbing is ready.
 	return nil
@@ -1820,6 +1854,8 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 			return moerr.NewInvalidInputNoCtx("expected decimal128 value")
 		}
 		p.EncodeDecimal128(val)
+	case types.T_decimal256:
+		return encodeDecodedDecimal256(p, v)
 	case types.T_uuid:
 		val, ok := v.(types.Uuid)
 		if !ok {
@@ -1855,6 +1891,21 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 			return moerr.NewInvalidInputNoCtx("expected byte slice value")
 		}
 		p.EncodeStringType(bytesVal)
+	}
+	return nil
+}
+
+func encodeDecodedDecimal256(p *types.Packer, v any) error {
+	switch val := v.(type) {
+	case types.Decimal256:
+		p.EncodeStringType(types.EncodeDecimal256(&val))
+	case []byte:
+		if len(val) != types.Decimal256Size {
+			return moerr.NewInvalidInputNoCtxf("expected decimal256 raw bytes length %d, got %d", types.Decimal256Size, len(val))
+		}
+		p.EncodeStringType(val)
+	default:
+		return moerr.NewInvalidInputNoCtx("expected decimal256 value")
 	}
 	return nil
 }
@@ -1915,6 +1966,11 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 	case types.T_decimal128:
 		v := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, row)
 		p.EncodeDecimal128(v)
+	case types.T_decimal256:
+		raw := vec.GetRawBytesAt(row)
+		tmp := make([]byte, len(raw))
+		copy(tmp, raw)
+		p.EncodeStringType(tmp)
 	case types.T_uuid:
 		v := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, row)
 		p.EncodeUuid(v)
@@ -2255,6 +2311,40 @@ func (ms *memStore) collect(hash uint64, key []byte, plan *removalPlan, copyValu
 		slot = (slot + 1) & mask
 	}
 	return rows, removedBytes, removedCount
+}
+
+func (ms *memStore) collectStream(hash uint64, key []byte, plan *removalPlan, fn func(row []byte) error) (uint64, int, error) {
+	if len(ms.index) == 0 || ms.count == 0 {
+		return 0, 0, nil
+	}
+	var (
+		removedCount int
+		removedBytes uint64
+	)
+	mask := len(ms.index) - 1
+	slot := int(hash & uint64(mask))
+	for {
+		cur := ms.index[slot]
+		if cur == memSlotEmpty {
+			break
+		}
+		if cur >= 0 {
+			entry := &ms.entries[cur]
+			if entry.inUse && entry.hash == hash && bytes.Equal(entry.keyBytes(), key) &&
+				plan.matchesValue(entry.valueBytes()) && plan.take() {
+				value := entry.valueBytes()
+				payload := make([]byte, len(value))
+				copy(payload, value)
+				removedCount++
+				removedBytes += ms.removeEntry(cur)
+				if err := fn(payload); err != nil {
+					return removedBytes, removedCount, err
+				}
+			}
+		}
+		slot = (slot + 1) & mask
+	}
+	return removedBytes, removedCount, nil
 }
 
 func (ms *memStore) forEach(fn func(entry *memEntry) error) error {

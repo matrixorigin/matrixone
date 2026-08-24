@@ -17,7 +17,6 @@ package function
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -674,6 +673,9 @@ func jsonContainsScalar(target, candidate bytejson.ByteJson) bool {
 	if isJsonNumericType(target.Type) && isJsonNumericType(candidate.Type) {
 		return jsonContainsNumericEqual(target, candidate)
 	}
+	if cmp, ok := bytejson.CompareBinaryJSON(target, candidate); ok {
+		return cmp == 0
+	}
 	if target.Type != candidate.Type {
 		return false
 	}
@@ -964,6 +966,19 @@ func computeStringJsonReplace(json []byte, paths []*bytejson.Path, newVal []byte
 	return bj.Modify(paths, newVal, bytejson.JsonModifyReplace)
 }
 
+func computeJsonArrayAppend(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Modify(paths, newVal, bytejson.JsonModifyArrayAppend)
+}
+
+func computeStringJsonArrayAppend(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.Modify(paths, newVal, bytejson.JsonModifyArrayAppend)
+}
+
 func computeJsonRemove(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
 	bj := types.DecodeJson(json)
 	return bj.Remove(paths)
@@ -1246,7 +1261,7 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 				}
 			} else {
 				switch out.Type {
-				case bytejson.TpCodeString, bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob:
+				case bytejson.TpCodeString, bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
 					outstr, err := out.Unquote()
 					if err != nil {
 						return err
@@ -1491,6 +1506,10 @@ func (op *opBuiltInJsonSet) buildJsonInsert(parameters []*vector.Vector, result 
 
 func (op *opBuiltInJsonSet) buildJsonReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyReplace)
+}
+
+func (op *opBuiltInJsonSet) buildJsonArrayAppend(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyArrayAppend)
 }
 
 func (op *opBuiltInJsonRemove) buildJsonRemove(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1765,6 +1784,12 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 		} else {
 			fn = computeStringJsonReplace
 		}
+	case bytejson.JsonModifyArrayAppend:
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJsonArrayAppend
+		} else {
+			fn = computeStringJsonArrayAppend
+		}
 	default:
 		return moerr.NewInvalidInput(proc.Ctx, "invalid json function type")
 	}
@@ -1811,6 +1836,16 @@ rowLoop:
 		// build all values
 		valExprs := make([]bytejson.ByteJson, 0, (len(parameters)-1)/2+1)
 		for j := 2; j < len(parameters); j += 2 {
+			// Unlike JSON_SET/INSERT/REPLACE, JSON_ARRAY_APPEND returns SQL
+			// NULL when any value argument is SQL NULL.  The other JSON
+			// modification functions intentionally convert SQL NULL values to
+			// the JSON null literal, so keep this check local to ARRAY_APPEND.
+			if jsonFuncType == bytejson.JsonModifyArrayAppend && parameters[j].IsNull(i) {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue rowLoop
+			}
 			val, err := op.buildJsonModifyValue(proc, parameters[j], int(i))
 			if err != nil {
 				return err
@@ -1822,7 +1857,7 @@ rowLoop:
 		if err != nil {
 			return err
 		}
-		if out.IsNull() {
+		if out.IsNull() && jsonFuncType != bytejson.JsonModifyArrayAppend {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -1843,6 +1878,8 @@ func jsonModifyFunctionName(jsonFuncType bytejson.JsonModifyType) string {
 		return "json_insert"
 	case bytejson.JsonModifyReplace:
 		return "json_replace"
+	case bytejson.JsonModifyArrayAppend:
+		return "json_array_append"
 	default:
 		return "json_modify"
 	}
@@ -1972,7 +2009,12 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return string(v.GetBytesAt(row)), nil
+		value := string(v.GetBytesAt(row))
+		kind := v.GetPrepareParamKindAt(row)
+		if kind == vector.PrepareParamNone {
+			return value, nil
+		}
+		return preparedTextToJSONValue(ctx, value, kind)
 	case types.T_json:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -2019,10 +2061,7 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		data := v.GetBytesAt(row)
-		dst := make([]byte, base64.StdEncoding.EncodedLen(len(data)))
-		base64.StdEncoding.Encode(dst, data)
-		return newTypedByteJson(bytejson.TpCodeBlob, string(dst)), nil
+		return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
 	case types.T_decimal256:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -2039,7 +2078,11 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return newTypedByteJson(bytejson.TpCodeBlob, strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, row), 10)), nil
+		ctx := context.Background()
+		if proc != nil && proc.Ctx != nil {
+			ctx = proc.Ctx
+		}
+		return bitToJSON(vector.GetFixedAtNoTypeCheck[uint64](v, row), fromType.Width, ctx)
 	case types.T_enum:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -2125,6 +2168,43 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 	}
 }
 
+func preparedTextToJSONValue(
+	ctx context.Context,
+	value string,
+	kind vector.PrepareParamKind,
+) (any, error) {
+	switch kind {
+	case vector.PrepareParamInteger:
+		if signed, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return signed, nil
+		}
+		if unsigned, err := strconv.ParseUint(value, 10, 64); err == nil {
+			return unsigned, nil
+		}
+		return nil, moerr.NewInvalidInputf(ctx, "invalid prepared integer JSON value %q", value)
+	case vector.PrepareParamFloat:
+		floating, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared floating-point JSON value %q", value)
+		}
+		return finiteFloatToJSON(floating, ctx)
+	case vector.PrepareParamDecimal:
+		if len(value) == 0 || !json.Valid([]byte(value)) ||
+			(value[0] != '-' && (value[0] < '0' || value[0] > '9')) {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared decimal JSON value %q", value)
+		}
+		return newTypedByteJson(bytejson.TpCodeDecimal, value), nil
+	case vector.PrepareParamBoolean:
+		boolean, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared boolean JSON value %q", value)
+		}
+		return boolean, nil
+	default:
+		return nil, moerr.NewInternalErrorf(ctx, "unsupported prepared parameter kind %d", kind)
+	}
+}
+
 func jsonSessionTimeZone(proc *process.Process) *time.Location {
 	if proc == nil || proc.GetSessionInfo() == nil || proc.GetSessionInfo().TimeZone == nil {
 		return time.Local
@@ -2187,7 +2267,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 					} else {
 						key = fmt.Sprint(v)
 					}
-				case bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob:
+				case bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
 					if bj, err := v.MarshalJSON(); err == nil && len(bj) >= 2 && bj[0] == '"' {
 						key = string(bj[1 : len(bj)-1])
 					} else {
@@ -3090,9 +3170,6 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid path expression")
 		}
-		if !path.IsSimple() {
-			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid path expression")
-		}
 		// Extract value at path.
 		var bj bytejson.ByteJson
 		if isStr {
@@ -3103,7 +3180,21 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid JSON document")
 		}
-		val := bj.Query([]*bytejson.Path{&path})
+		val, exists := bj.QueryWithExists([]*bytejson.Path{&path})
+		if !exists {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		if !path.IsSimple() {
+			// QueryWithExists wraps every match of a potentially multi-valued
+			// path in an array. JSON_VALUE accepts a non-simple path only when
+			// it selects exactly one value; zero or multiple matches are NULL.
+			if val.Type != bytejson.TpCodeArray || val.GetElemCnt() != 1 {
+				rs.AppendMustNullForBytesResult()
+				continue
+			}
+			val = val.GetArrayElem(0)
+		}
 		if val.IsNull() {
 			rs.AppendMustNullForBytesResult()
 			continue

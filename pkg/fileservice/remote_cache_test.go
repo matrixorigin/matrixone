@@ -96,6 +96,9 @@ type releaseCountingCacheData struct {
 
 func (r *releaseCountingCacheData) Bytes() []byte { return r.data }
 func (r *releaseCountingCacheData) Size() int64   { return int64(len(r.data)) }
+func (r *releaseCountingCacheData) Capacity() int64 {
+	return int64(cap(r.data))
+}
 func (r *releaseCountingCacheData) Slice(length int) fscache.Data {
 	r.data = r.data[:length]
 	return r
@@ -258,6 +261,46 @@ func TestRemoteCacheReadIgnoresInvalidResponses(t *testing.T) {
 	}
 }
 
+func TestRemoteCacheReadReleasesRejectedValidatedData(t *testing.T) {
+	qt := &remoteCacheTestQueryClient{
+		responses: map[string]*query.Response{
+			"target": {
+				GetCacheDataResponse: &query.GetCacheDataResponse{
+					ResponseCacheData: []*query.ResponseCacheData{{
+						Index: 0,
+						Hit:   true,
+						Data:  []byte{1, 2},
+					}},
+				},
+			},
+		},
+	}
+	rc := NewRemoteCache(qt, func() client.KeyRouter[query.CacheKey] {
+		return remoteCacheTestRouter(func(fscache.CacheKey) string { return "target" })
+	})
+	var received fscache.Data
+	vector := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{{
+			Offset:         0,
+			Size:           1,
+			CachedDataSize: 2,
+			ValidateCacheData: func(data fscache.Data) (fscache.Data, error) {
+				received = data
+				return nil, fmt.Errorf("invalid final cache representation")
+			},
+		}},
+	}
+
+	require.NoError(t, rc.Read(context.Background(), vector))
+	require.False(t, vector.Entries[0].done)
+	require.Nil(t, vector.Entries[0].CachedData)
+	require.Nil(t, vector.Entries[0].fromCache)
+	require.NotNil(t, received)
+	require.Panics(t, func() { received.Bytes() }, "rejected owned data must be released")
+	require.Equal(t, 1, qt.releaseCount)
+}
+
 func TestRemoteCacheReadAcceptsOnlyIndicesRequestedFromTarget(t *testing.T) {
 	qt := &remoteCacheTestQueryClient{
 		responses: map[string]*query.Response{
@@ -382,9 +425,10 @@ func TestRemoteCache(t *testing.T) {
 		err = sf2.rc.Read(ctx, ioVec2)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(ioVec2.Entries))
-		assert.Equal(t, &Bytes{bytes: []byte{1, 2}}, ioVec2.Entries[0].CachedData)
+		assert.Equal(t, []byte{1, 2}, ioVec2.Entries[0].CachedData.Bytes())
 		assert.Equal(t, true, ioVec2.Entries[0].done)
 		assert.NotNil(t, ioVec2.Entries[0].fromCache)
+		ioVec2.Release()
 
 		sf1.fs.Close(ctx)
 	})

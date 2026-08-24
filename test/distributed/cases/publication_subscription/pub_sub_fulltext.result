@@ -1,0 +1,90 @@
+drop account if exists pub_ft_20210;
+drop account if exists sub_ft_20210_a;
+drop account if exists sub_ft_20210_b;
+create account pub_ft_20210 admin_name = 'admin' identified by '111';
+create account sub_ft_20210_a admin_name = 'admin' identified by '111';
+create account sub_ft_20210_b admin_name = 'admin' identified by '111';
+create database `pub-ft-db`;
+create table `pub-ft-db`.`articles-quoted` (id int primary key, body text);
+insert into `pub-ft-db`.`articles-quoted` values (1, 'hello matrixone'), (2, 'unrelated text');
+create fulltext index ft_articles on `pub-ft-db`.`articles-quoted` (body);
+create table `pub-ft-db`.secret_table (id int primary key);
+insert into `pub-ft-db`.secret_table values (99);
+create publication pub_ft_table database `pub-ft-db` table `articles-quoted` account sub_ft_20210_a, sub_ft_20210_b;
+create database pub_ft_all_db;
+create table pub_ft_all_db.all_articles (id int primary key, body text);
+insert into pub_ft_all_db.all_articles values (10, 'database publication');
+create fulltext index ft_all_articles on pub_ft_all_db.all_articles (body);
+create publication pub_ft_database database pub_ft_all_db account sub_ft_20210_a;
+create database subscriber_table_alias from pub_ft_20210 publication pub_ft_table;
+select id, body from subscriber_table_alias.`articles-quoted` order by id;
+➤ id[4,32,0]  ¦  body[12,0,0]  𝄀
+1  ¦  hello matrixone  𝄀
+2  ¦  unrelated text
+select id from subscriber_table_alias.`articles-quoted` where match(body) against('hello') order by id;
+➤ id[4,32,0]  𝄀
+1
+create database subscriber_database_alias from pub_ft_20210 publication pub_ft_database;
+select id from subscriber_database_alias.all_articles where match(body) against('publication') order by id;
+➤ id[4,32,0]  𝄀
+10
+select * from subscriber_table_alias.secret_table;
+SQL parser error: table "secret_table" does not exist
+select count(*) from mo_catalog.mo_indexes where algo = 'fulltext';
+➤ count(*)[-5,64,0]  𝄀
+0
+select * from fulltext_index_scan('{}', '`pub-ft-db`.`secret_table`', '`pub-ft-db`.`secret_table`', 'hello', 0);
+SQL parser error: No tables used
+prepare subscriber_match_stmt from 'select id from subscriber_table_alias.`articles-quoted` where match(body) against(\'hello\') order by id';
+begin;
+execute subscriber_match_stmt;
+➤ id[4,32,0]  𝄀
+1
+create database second_subscriber_alias from pub_ft_20210 publication pub_ft_table;
+select id from second_subscriber_alias.`articles-quoted` where match(body) against('hello') order by id;
+➤ id[4,32,0]  𝄀
+1
+insert into `pub-ft-db`.`articles-quoted` values (3, 'hello subscriber');
+update `pub-ft-db`.`articles-quoted` set body = 'hello updated' where id = 2;
+delete from `pub-ft-db`.`articles-quoted` where id = 1;
+execute subscriber_match_stmt;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+commit;
+select id from subscriber_table_alias.`articles-quoted` where match(body) against('hello') order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+execute subscriber_match_stmt;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+alter publication pub_ft_table account sub_ft_20210_b;
+execute subscriber_match_stmt;
+internal error: the account sub_ft_20210_a is not allowed to subscribe the publication pub_ft_table
+select id from subscriber_table_alias.`articles-quoted` where match(body) against('hello') order by id;
+internal error: the account sub_ft_20210_a is not allowed to subscribe the publication pub_ft_table
+deallocate prepare subscriber_match_stmt;
+alter publication pub_ft_table account sub_ft_20210_a, sub_ft_20210_b;
+prepare restored_subscriber_stmt from 'select id from subscriber_table_alias.`articles-quoted` where match(body) against(\'hello\') order by id';
+execute restored_subscriber_stmt;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+deallocate prepare restored_subscriber_stmt;
+prepare second_subscriber_stmt from 'select id from second_subscriber_alias.`articles-quoted` where match(body) against(\'hello\') order by id';
+execute second_subscriber_stmt;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+drop publication pub_ft_table;
+execute second_subscriber_stmt;
+internal error: there is no publication pub_ft_table
+deallocate prepare second_subscriber_stmt;
+drop database second_subscriber_alias;
+drop database subscriber_table_alias;
+drop database subscriber_database_alias;
+drop account sub_ft_20210_a;
+drop account sub_ft_20210_b;
+drop account pub_ft_20210;

@@ -126,7 +126,7 @@ COUNT(*) as total_rows,
 SUM(CASE WHEN col_nullable_with_null IS NULL THEN 1 ELSE 0 END) as null_count_col1,
 SUM(CASE WHEN col_all_null IS NULL THEN 1 ELSE 0 END) as null_count_all_null
 FROM pq_nullable_test;
-➤ total_rows[-5,64,0]  ¦  null_count_col1[-5,64,0]  ¦  null_count_all_null[-5,64,0]  𝄀
+➤ total_rows[-5,64,0]  ¦  null_count_col1[3,38,0]  ¦  null_count_all_null[3,38,0]  𝄀
 5  ¦  2  ¦  5
 SELECT COUNT(*) FROM pq_nullable_test WHERE col_not_nullable IS NULL;
 ➤ COUNT(*)[-5,64,0]  𝄀
@@ -437,12 +437,12 @@ dec_p38_s38 DECIMAL(38, 38)
 );
 load data infile {'filepath'='$resources/parquet/decimal_boundary_test.parquet', 'format'='parquet'} into table pq_decimal_boundary;
 select * from pq_decimal_boundary;
-➤ dec_p9_s2[3,9,2]  ¦  dec_p18_s9[3,18,9]  ¦  dec_p38_s0[3,39,0]  ¦  dec_p38_s38[3,38,38]  𝄀
+➤ dec_p9_s2[3,9,2]  ¦  dec_p18_s9[3,18,9]  ¦  dec_p38_s0[3,38,0]  ¦  dec_p38_s38[3,38,38]  𝄀
 9999999.99  ¦  999999999.999999999  ¦  99999999999999999999999999999999999999  ¦  1E-38  𝄀
 -9999999.99  ¦  -999999999.999999999  ¦  -99999999999999999999999999999999999999  ¦  -1E-38  𝄀
 0.00  ¦  1.234567890  ¦  0  ¦  null
 select dec_p38_s0 from pq_decimal_boundary WHERE dec_p38_s0 > 0;
-➤ dec_p38_s0[3,39,0]  𝄀
+➤ dec_p38_s0[3,38,0]  𝄀
 99999999999999999999999999999999999999
 select dec_p38_s38 from pq_decimal_boundary WHERE dec_p38_s38 > 0;
 ➤ dec_p38_s38[3,38,38]  𝄀

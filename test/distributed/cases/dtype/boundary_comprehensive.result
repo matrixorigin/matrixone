@@ -1,3 +1,4 @@
+set session sql_mode = default;
 SET time_zone = '+00:00';
 DROP TABLE IF EXISTS t_bigint;
 CREATE TABLE t_bigint (

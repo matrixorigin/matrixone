@@ -243,6 +243,12 @@ func TestHandleLocalCNRequestsWillReturnError(t *testing.T) {
 		assert.NoError(t, ts.Close(false))
 	}()
 
-	req := service.NewTestReadRequest(1, txn.TxnMeta{}, 1)
-	assert.Error(t, r.handleLocalRequest(context.Background(), &req, &txn.TxnResponse{}))
+	for _, method := range []txn.TxnMethod{
+		txn.TxnMethod_Read,
+		txn.TxnMethod_CommitAutoIncrEpochFence,
+	} {
+		req := service.NewTestReadRequest(1, txn.TxnMeta{}, 1)
+		req.Method = method
+		assert.Error(t, r.handleLocalRequest(context.Background(), &req, &txn.TxnResponse{}))
+	}
 }

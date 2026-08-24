@@ -40,6 +40,7 @@ func runFinalizeFixture(
 	buildBat, probeBat *batch.Batch,
 ) []*batch.Batch {
 	t.Helper()
+	installTestAllocation(t, dedupArg, buildArg)
 
 	buildArg.Children = nil
 	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat}))
@@ -65,6 +66,131 @@ func runFinalizeFixture(
 		}
 	}
 	return out
+}
+
+// TestDedupJoinUpdateRestoresProbeVectors exercises the real UPDATE probe
+// pipeline rather than the restoration helper in isolation.  The unique case
+// takes the compact group-to-row path; the duplicate-build cases retain
+// GroupSels and take the non-unique probe and unmatched-finalize paths.  In
+// every case the update executor temporarily replaces a join vector, the
+// emitted row observes that value, and terminal cleanup must still free each
+// owner exactly once.
+func TestDedupJoinUpdateRestoresProbeVectors(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		buildKeys      []int32
+		buildPayloads  []int32
+		probeKey       int32
+		wantHashUnique bool
+		wantProbeNull  bool
+	}{
+		{
+			name:           "compact_unique_map",
+			buildKeys:      []int32{10},
+			buildPayloads:  []int32{100},
+			probeKey:       10,
+			wantHashUnique: true,
+		},
+		{
+			name:           "duplicate_group_sels",
+			buildKeys:      []int32{10, 10},
+			buildPayloads:  []int32{100, 200},
+			probeKey:       10,
+			wantHashUnique: false,
+		},
+		{
+			name:           "duplicate_group_unmatched_finalize",
+			buildKeys:      []int32{10, 10},
+			buildPayloads:  []int32{100, 200},
+			probeKey:       99,
+			wantHashUnique: false,
+			wantProbeNull:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc, ctrl := newCaptureTestProc(t)
+			defer ctrl.Finish()
+
+			int32Typ := types.T_int32.ToType()
+			tag++
+			curTag := tag
+			buildBat := makeInt32Batch(
+				proc.Mp(),
+				[][]int32{tc.buildKeys, tc.buildPayloads},
+				nil,
+			)
+			probeBat := makeInt32Batch(
+				proc.Mp(),
+				[][]int32{{tc.probeKey}, {5}},
+				nil,
+			)
+			conditions := [][]*plan.Expr{
+				{newExpr(0, int32Typ)},
+				{newExpr(0, int32Typ)},
+			}
+			updateValue := int32(777)
+			updateExpr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int32)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+					Value: &plan.Literal_I32Val{I32Val: updateValue},
+				}},
+			}
+
+			dedupArg := &DedupJoin{
+				LeftTypes:  []types.Type{int32Typ, int32Typ},
+				RightTypes: []types.Type{int32Typ, int32Typ},
+				Conditions: conditions,
+				Result: []colexec.ResultPos{
+					colexec.NewResultPos(1, 0),
+					colexec.NewResultPos(1, 1),
+					colexec.NewResultPos(0, 0),
+				},
+				OnDuplicateAction:       plan.Node_UPDATE,
+				UpdateColIdxList:        []int32{1},
+				UpdateColExprList:       []*plan.Expr{updateExpr},
+				DelColIdx:               -1,
+				DedupDeleteMarkerColIdx: -1,
+				JoinMapTag:              curTag,
+				OperatorBase:            vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+			}
+			buildArg := &hashbuild.HashBuild{
+				NeedHashMap:      true,
+				NeedBatches:      true,
+				NeedAllocateSels: true,
+				// DedupJoin's compiler wiring leaves HashOnPK false.
+				// GroupSels.Finalize still compacts unique data, so both JoinMap
+				// representations below are reachable without a synthetic config.
+				HashOnPK:                false,
+				Conditions:              conditions[1],
+				IsDedup:                 true,
+				OnDuplicateAction:       plan.Node_UPDATE,
+				DelColIdx:               -1,
+				DedupDeleteMarkerColIdx: -1,
+				JoinMapTag:              curTag,
+				JoinMapRefCnt:           1,
+				OperatorBase:            vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+			}
+			t.Cleanup(func() {
+				dedupArg.Reset(proc, false, nil)
+				buildArg.Reset(proc, false, nil)
+				dedupArg.Free(proc, false, nil)
+				buildArg.Free(proc, false, nil)
+				proc.Free()
+				require.Equal(t, int64(0), proc.Mp().CurrNB())
+			})
+
+			out := runFinalizeFixture(t, dedupArg, buildArg, proc, buildBat, probeBat)
+			require.Equal(t, tc.wantHashUnique, dedupArg.ctr.mp.HashOnUnique())
+			require.Len(t, out, 1)
+			require.Equal(t, 1, out[0].RowCount())
+			require.Equal(t, []int32{10}, vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[0]))
+			require.Equal(t, []int32{updateValue}, vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[1]))
+			require.Equal(t, tc.wantProbeNull, out[0].Vecs[2].IsNull(0))
+			if !tc.wantProbeNull {
+				require.Equal(t, []int32{tc.probeKey}, vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[2]))
+			}
+		})
+	}
 }
 
 // TestDedupJoinFinalizeMatchedZero_NonCapture exercises the non-capture

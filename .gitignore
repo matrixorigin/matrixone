@@ -18,8 +18,15 @@
 *.py
 !pkg/iceberg/metadata/testdata/generate_golden_vectors.py
 !optools/iceberg_external_runner.py
+!suites/scenarios/14_issue_regression/issue_25599_proxy_disconnect_cancel.py
+!suites/scenarios/14_issue_regression/issue_25599_proxy_disconnect_cancel_test.py
+!optools/mongodb_changed_files.py
+!test/mongodb/compare_results.py
+!test/mongodb/test_changes.py
+!test/mongodb/test_compare_results.py
 *.sh
 !etc/launch-minio-local/tier-b/seed-nyc-tlc-iceberg.sh
+!optools/jstfu_bvt.sh
 bin/
 y.go
 *.output
@@ -45,6 +52,9 @@ vendor/
 /.proto-vendor/
 gen_config
 main
+# the bare 'main' pattern above (a built binary) also matches Maven's
+# src/main directory; re-include jstfu's source tree
+!xtool/jstfu/src/main/
 mo-tool
 /mo-server
 /mo-service
@@ -52,6 +62,7 @@ mo-tool
 cube*/
 store/
 mo-data/
+mo-data-s2h3/
 node-*-data/
 pkg/catalog/test/
 pkg/config/system_vars.go
@@ -100,3 +111,10 @@ etc/docker-multi-cn-local-disk/*.toml
 !.agents/skills/*/SKILL.md
 !.agents/skills/*/references/
 !.agents/skills/*/references/*.md
+
+# jstfu (datastream server) build output
+xtool/jstfu/target/
+
+# written by optools/run_bvt.sh when it starts the datastream server
+/jstfu.log
+test/esqltvf/reports/

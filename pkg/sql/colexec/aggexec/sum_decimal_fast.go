@@ -21,6 +21,7 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,6 +33,39 @@ import (
 type sumDecimal64FastExec struct {
 	aggExec
 	isSum bool
+}
+
+func (*sumDecimal64FastExec) sourcePreservingMerge() {}
+
+func (exec *sumDecimal64FastExec) windowSlidingSupported() bool {
+	return exec.isSum && !exec.IsDistinct()
+}
+
+func (exec *sumDecimal64FastExec) addWindowRow(row int, vectors []*vector.Vector) error {
+	return exec.Fill(0, row, vectors)
+}
+
+func (exec *sumDecimal64FastExec) removeWindowRow(row int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])
+	if cnts[0] <= 0 {
+		return moerr.NewInternalErrorNoCtx("sliding SUM state is empty")
+	}
+	raw := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
+	value := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+	sums := chunkArr[types.Decimal128](exec.state[0].vecs[0])
+	sums[0] = sums[0].Add128Unchecked(value.Minus())
+	cnts[0]--
+	if cnts[0] == 0 {
+		sums[0] = types.Decimal128{}
+	}
+	return nil
 }
 
 func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
@@ -225,7 +259,8 @@ func (exec *sumDecimal64FastExec) BatchMerge(next AggFuncExec, offset int, group
 	}
 
 	lastX1, lastX2 := -1, -1
-	var sums1, sums2 *[AggBatchSize]types.Decimal128
+	var sums1 *[AggBatchSize]types.Decimal128
+	var sums2 []types.Decimal128
 	var cnts1, cnts2 []int64
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
@@ -243,7 +278,7 @@ func (exec *sumDecimal64FastExec) BatchMerge(next AggFuncExec, offset int, group
 		}
 		if x2 != lastX2 {
 			lastX2 = x2
-			sums2 = chunkArr[types.Decimal128](other.state[x2].vecs[0])
+			sums2 = chunkRows[types.Decimal128](other.state[x2].vecs[0])
 			cnts2 = vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
 		}
 		y1 := g1 & aggBatchSizeMask
@@ -274,7 +309,11 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 
 	if exec.IsDistinct() {
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			var err error
+			vecs[i], err = exec.allocation.newVector(resultType)
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}
@@ -318,6 +357,9 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
 			cntVec := exec.state[i].vecs[1]
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+			if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+				return nil, err
+			}
 
 			if exec.isSum {
 				for j, cnt := range cnts {
@@ -357,6 +399,8 @@ type sumDecimal128FastExec struct {
 	isSum         bool
 	overflowCheck bool // true when input precision > 28 (SUM can overflow)
 }
+
+func (*sumDecimal128FastExec) sourcePreservingMerge() {}
 
 func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
 	var exec sumDecimal128FastExec
@@ -621,7 +665,11 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 
 	if exec.IsDistinct() {
 		for i := range vecs {
-			vecs[i] = vector.NewOffHeapVecWithType(resultType)
+			var err error
+			vecs[i], err = exec.allocation.newVector(resultType)
+			if err != nil {
+				return nil, err
+			}
 			if err := vecs[i].PreExtend(int(exec.state[i].length), exec.mp); err != nil {
 				return nil, err
 			}
@@ -670,6 +718,9 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
 			cntVec := exec.state[i].vecs[1]
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+			if err := preflightNullsForZeroCounts(sumVec, cnts, exec.mp); err != nil {
+				return nil, err
+			}
 
 			if exec.isSum {
 				for j, cnt := range cnts {

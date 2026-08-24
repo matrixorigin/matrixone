@@ -166,6 +166,9 @@ var (
 	CauseBuildInsertIndexMetaBatch2 = NewInternalError(context.Background(), "buildInsertIndexMetaBatch 2")
 	//pkg/sql/colexec/dispatch
 	CauseWaitRemoteRegsReady = NewInternalError(context.Background(), "waitRemoteRegsReady")
+	//pkg/sql/mongodb
+	CauseMongoDBClientCleanup    = NewInternalError(context.Background(), "mongodb client cleanup")
+	CauseMongoDBClientRetirement = NewInternalError(context.Background(), "mongodb client retirement")
 	//pkg/sql/compile
 	CauseIsAvailable              = NewInternalError(context.Background(), "isAvailable")
 	CauseNewMessageSenderOnClient = NewInternalError(context.Background(), "newMessageSenderOnClient")
@@ -187,8 +190,6 @@ var (
 	CauseTransferTaskToCN               = NewInternalError(context.Background(), "transferTaskToCN")
 	CauseTransferRequest2OtherCNs       = NewInternalError(context.Background(), "transferRequest2OtherCNs")
 	CauseDoUnsubscribeTable             = NewInternalError(context.Background(), "doUnsubscribeTable")
-	//pkg/stream/connector
-	CauseKafkaSinkConnectorExecutor = NewInternalError(context.Background(), "kafkaSinkConnectorExecutor")
 	//pkg/taskservice
 	CauseResumeTaskHandle  = NewInternalError(context.Background(), "resume task handle")
 	CauseRestartTaskHandle = NewInternalError(context.Background(), "restart task handle")

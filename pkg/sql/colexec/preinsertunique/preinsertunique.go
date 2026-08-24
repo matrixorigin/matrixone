@@ -18,6 +18,8 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -51,6 +53,30 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 		preInsertUnique.OpAnalyzer.Reset()
 	}
 
+	if !preInsertUnique.PreInsertCtx.GetInsertIgnoreMultiDedup() {
+		return nil
+	}
+	if len(preInsertUnique.PreInsertCtx.KeyColumns) == 0 ||
+		len(preInsertUnique.PreInsertCtx.KeyColumns) != len(preInsertUnique.PreInsertCtx.ConflictColumns) ||
+		preInsertUnique.PreInsertCtx.OutputColumns <= 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE multi-key dedup context")
+	}
+	if len(preInsertUnique.ctr.acceptedMaps) == 0 {
+		keyCount := len(preInsertUnique.PreInsertCtx.KeyColumns)
+		preInsertUnique.ctr.acceptedMaps = make([]*hashmap.StrHashMap, keyCount)
+		preInsertUnique.ctr.acceptedIters = make([]hashmap.Iterator, keyCount)
+		preInsertUnique.ctr.acceptedKeyVecs = make([][]*vector.Vector, keyCount)
+		for i := range keyCount {
+			accepted, err := hashmap.NewStrHashMap(false, proc.Mp())
+			if err != nil {
+				preInsertUnique.freeAcceptedMaps()
+				return err
+			}
+			preInsertUnique.ctr.acceptedMaps[i] = accepted
+			preInsertUnique.ctr.acceptedIters[i] = accepted.NewIterator()
+			preInsertUnique.ctr.acceptedKeyVecs[i] = make([]*vector.Vector, 1)
+		}
+	}
 	return nil
 }
 
@@ -92,6 +118,9 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
+	if preInsertUnique.PreInsertCtx.GetInsertIgnoreMultiDedup() {
+		return preInsertUnique.callInsertIgnoreMultiDedup(proc, result)
+	}
 	inputBat := result.Batch
 	var bitMap *nulls.Nulls
 
@@ -126,9 +155,111 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
-		if err = preInsertUnique.ctr.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp()); err != nil {
+		if bitMap.IsEmpty() {
+			err = preInsertUnique.ctr.buf.Vecs[rowIdColPos].UnionBatch(
+				inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
+		} else {
+			err = util.CompactRowIdCol(
+				inputBat.Vecs[rowIdInBat], preInsertUnique.ctr.buf.Vecs[rowIdColPos], bitMap, proc)
+		}
+		if err != nil {
 			return result, err
 		}
+	}
+	result.Batch = preInsertUnique.ctr.buf
+	return result, nil
+}
+
+func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
+	proc *process.Process,
+	result vm.CallResult,
+) (vm.CallResult, error) {
+	inputBat := result.Batch
+	keyColumns := preInsertUnique.PreInsertCtx.KeyColumns
+	conflictColumns := preInsertUnique.PreInsertCtx.ConflictColumns
+	for i := range keyColumns {
+		if keyColumns[i] < 0 || int(keyColumns[i]) >= len(inputBat.Vecs) ||
+			conflictColumns[i] < 0 || int(conflictColumns[i]) >= len(inputBat.Vecs) {
+			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE multi-key dedup column")
+		}
+		if !inputBat.Vecs[conflictColumns[i]].GetType().IsBoolean() {
+			return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "INSERT IGNORE conflict marker is not boolean")
+		}
+		preInsertUnique.ctr.acceptedKeyVecs[i][0] = inputBat.Vecs[keyColumns[i]]
+	}
+
+	sels := vector.GetSels()
+	defer vector.PutSels(sels)
+	sels = sels[:0]
+	for row := 0; row < inputBat.RowCount(); row++ {
+		accepted := true
+		for keyIdx, conflictPos := range conflictColumns {
+			conflictVec := inputBat.Vecs[conflictPos]
+			if !conflictVec.GetNulls().Contains(uint64(row)) &&
+				vector.GetFixedAtNoTypeCheck[bool](conflictVec, row) {
+				accepted = false
+				break
+			}
+			keyVec := preInsertUnique.ctr.acceptedKeyVecs[keyIdx][0]
+			if keyVec.GetNulls().Contains(uint64(row)) {
+				continue
+			}
+			vals, zvals, err := preInsertUnique.ctr.acceptedIters[keyIdx].Find(
+				row, 1, preInsertUnique.ctr.acceptedKeyVecs[keyIdx])
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			if zvals[0] != 0 && vals[0] != 0 {
+				accepted = false
+				break
+			}
+		}
+		if !accepted {
+			continue
+		}
+
+		// Commit every key only after the complete row has passed.  This is the
+		// ownership boundary that prevents a row rejected by one constraint from
+		// reserving another key for later rows.
+		for keyIdx := range keyColumns {
+			keyVec := preInsertUnique.ctr.acceptedKeyVecs[keyIdx][0]
+			if keyVec.GetNulls().Contains(uint64(row)) {
+				continue
+			}
+			isNew, err := preInsertUnique.ctr.acceptedIters[keyIdx].DetectDup(
+				preInsertUnique.ctr.acceptedKeyVecs[keyIdx], row)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			if !isNew {
+				return vm.CancelResult, moerr.NewInternalError(proc.Ctx,
+					"INSERT IGNORE multi-key dedup accepted-set changed during row commit")
+			}
+		}
+		sels = append(sels, int64(row))
+	}
+
+	if len(sels) == 0 {
+		result.Batch = batch.EmptyBatch
+		return result, nil
+	}
+	outputColumns := int(preInsertUnique.PreInsertCtx.OutputColumns)
+	if outputColumns > len(inputBat.Vecs) {
+		return vm.CancelResult, moerr.NewInvalidInput(proc.Ctx, "invalid INSERT IGNORE multi-key dedup output width")
+	}
+	if preInsertUnique.ctr.buf == nil {
+		preInsertUnique.ctr.buf = batch.NewWithSize(outputColumns)
+		if len(inputBat.Attrs) >= outputColumns {
+			preInsertUnique.ctr.buf.SetAttributes(inputBat.Attrs[:outputColumns])
+		}
+		for i, vec := range inputBat.Vecs[:outputColumns] {
+			preInsertUnique.ctr.buf.Vecs[i] = vector.NewVec(*vec.GetType())
+		}
+	} else {
+		preInsertUnique.ctr.buf.CleanOnlyData()
+	}
+	if err := preInsertUnique.ctr.buf.Union(inputBat, sels, proc.Mp()); err != nil {
+		return vm.CancelResult, err
 	}
 	result.Batch = preInsertUnique.ctr.buf
 	return result, nil

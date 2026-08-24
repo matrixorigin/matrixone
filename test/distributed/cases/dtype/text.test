@@ -219,4 +219,18 @@ FROM kb_portal_article_order a
 LEFT JOIN kb_portal_article_item i ON i.uniqueCode=a.uniqueCode
 WHERE a.spaceId=12 AND a.uniqueCode in ('U001','U002')
 GROUP BY a.spaceId;
+
+-- TINYTEXT is bounded by 255 bytes. Non-strict assignment truncates without
+-- splitting a multi-byte UTF-8 character.
+set @old_sql_mode = @@sql_mode;
+set session sql_mode = '';
+drop table if exists tinytext_limit_repro;
+create table tinytext_limit_repro (value tinytext);
+insert into tinytext_limit_repro values (repeat('A', 1000));
+insert into tinytext_limit_repro values (repeat('你', 86));
+select length(value), char_length(value)
+from tinytext_limit_repro
+order by char_length(value) desc;
+drop table tinytext_limit_repro;
+set session sql_mode = @old_sql_mode;
 drop database text_test;

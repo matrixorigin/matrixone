@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -44,6 +46,65 @@ import (
 // high bits - partition id
 var LOWER_BIT_MASK = uint64(0xffffff)
 var LOWER_BIT_SHIFT = uint64(24)
+
+// memGolang reports live Go-heap bytes (runtime Alloc); memTotal reports total node
+// memory (cgroup limit inside a container, host total on bare metal). Both indirected as
+// vars so tests can stub them. We gate growth on live HEAP vs a fraction of total, NOT on
+// instantaneous free memory (system.MemoryAvailable): that number fails open at the cgroup
+// limit (total-used underflows/hits 0) and false-aborts under reclaimable page cache, which
+// fulltext's index scans generate. Live Go heap INCLUDES the non-spillable side maps that
+// actually OOM the CN, and is immune to page-cache noise.
+var memGolang = system.MemoryGolang
+var memTotal = system.MemoryTotal
+
+// memMpool reports the CURRENT bytes held by ALL mpools process-wide
+// (mpool.GlobalStats). Partition blocks are allocated off the Go heap through the C
+// allocator (Mp().Alloc), so runtime.Alloc alone under-counts resident memory: on a CN
+// where mpools (this query's pool, other concurrent queries, caches) already hold most of
+// the cgroup, a Go-heap-only budget would fail open and the process could still be
+// OOM-killed. Adding the global mpool counter accounts for that off-heap share — across
+// concurrent queries too — while still excluding reclaimable page cache by construction
+// (mpool bytes are anonymous memory, so no page-cache false aborts). Stubable for tests.
+var memMpool = func() uint64 {
+	n := mpool.GlobalStats().NumCurrBytes.Load()
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
+}
+
+// HeapBudgetPct is the fraction (percent) of total node memory the fulltext pool is allowed
+// to project its Go heap to before it refuses to grow by another partition. Leaves headroom
+// for the rest of the CN. Tunable.
+var HeapBudgetPct uint64 = 80
+
+// MapMemPerItem is the estimated Go-heap footprint, per pooled item (= per matched
+// document), of the fulltext TVF's NON-spillable side maps (agghtab + docLenMap +
+// docIDMap). Those maps grow one entry per doc and cannot spill, so the pool factors
+// them into the per-partition memory estimate that gates growth (#25638). Doc IDs are
+// int64 (docIDMap stays empty), so this covers agghtab (~64B) + the BM25 docLen entry
+// (~55B); tunable.
+var MapMemPerItem uint64 = 128
+
+// HeapCheckInterval bounds how many items may be appended between heap-budget re-checks
+// WHILE filling a partition. The budget is otherwise only re-evaluated when a new
+// partition is allocated, but the first partition alone holds up to ~1M items and each
+// one grows the non-spillable side maps — so a query matching many docs could exhaust the
+// CN heap before the second-partition gate is reached (#25638). Re-checking every
+// HeapCheckInterval items on the fast path bounds the worst-case overshoot to
+// ~HeapCheckInterval*(dsize+MapMemPerItem) bytes while keeping the (relatively expensive)
+// runtime.ReadMemStats calls rare. Tunable.
+var HeapCheckInterval uint64 = 16384
+
+// HeapCheckBytes additionally bounds how many BYTES of variable-size side-map data
+// (charged via ChargeSideBytes) may be retained between heap-budget re-checks. The
+// item-count interval alone assumes ~MapMemPerItem bytes per doc, but fulltext preserves
+// the source primary-key type: a varchar PK can be up to 65,535 bytes and normalizeDocID
+// retains BOTH a string map key and a []byte copy per new doc — at the maximum width the
+// 16384-item interval alone would admit ~2 GiB of key bytes between checks. Charging the
+// actual retained size and re-checking once this many bytes accumulate bounds the
+// worst-case overshoot by bytes, independent of key width. Tunable.
+var HeapCheckBytes uint64 = 16 << 20
 
 // Least recently use
 type Lru struct {
@@ -78,6 +139,77 @@ type FixedBytePool struct {
 	mem_in_use    uint64       // memory in use
 	mem_limit     uint64       // memory limit to check with mem_in_use to see spill or not
 	spill_size    uint64       // total number of spilled partitions for the next round, start from 2 and double each time with max 16.
+	since_check   uint64       // items appended on the fast path since the last heap-budget check (#25638)
+	// side-map bytes charged via ChargeSideBytes since the last heap-budget check;
+	// bounds overshoot for variable-size doc IDs (varchar PKs) by bytes, not items.
+	since_check_bytes uint64
+	// number of partition unspills performed by GetItem over the pool's lifetime.
+	// Observable via Unspills() so tests can assert the top-K scoring passes touch
+	// each spilled partition a bounded number of times instead of thrashing.
+	unspills uint64
+}
+
+// ChargeSideBytes accounts n bytes of non-spillable side-map data (e.g. the retained
+// doc-ID key + copy for a varchar primary key) toward the fast-path heap-budget
+// re-check. The next NewItem re-checks the budget once HeapCheckBytes have accumulated,
+// even if fewer than HeapCheckInterval items were appended.
+func (pool *FixedBytePool) ChargeSideBytes(n uint64) {
+	pool.since_check_bytes += n
+}
+
+// Unspills reports how many times GetItem re-materialized a spilled partition.
+func (pool *FixedBytePool) Unspills() uint64 {
+	return pool.unspills
+}
+
+// NumPartitions reports the number of partitions in the pool.
+func (pool *FixedBytePool) NumPartitions() int {
+	return len(pool.partitions)
+}
+
+// heapBudget reports resident bytes (live Go heap PLUS the process-wide mpool
+// off-heap total — see memMpool) and the pool's ceiling (a fraction of total node
+// memory). ok is false when the platform can't report total memory, in which case
+// callers skip gating. dsize==0 also skips gating (nothing to size).
+func (pool *FixedBytePool) heapBudget() (used, budget uint64, ok bool) {
+	if pool.dsize == 0 {
+		return 0, 0, false
+	}
+	total := memTotal()
+	if total == 0 {
+		return 0, 0, false
+	}
+	return uint64(memGolang()) + memMpool(), total / 100 * HeapBudgetPct, true
+}
+
+// checkHeapBudget refuses to grow when the live heap (which already includes the
+// non-spillable per-doc side maps) plus est would exceed the heap budget. est is the
+// projected footprint of the next allocation (0 on the fast path / first partition, where
+// we only refuse if the CN is ALREADY over budget rather than over-reserving a worst-case
+// block for a query that may match only a handful of docs).
+func (pool *FixedBytePool) checkHeapBudget(est uint64) error {
+	used, budget, ok := pool.heapBudget()
+	if !ok {
+		return nil
+	}
+	if used+est > budget {
+		detail := ""
+		if est > 0 {
+			detail = fmt.Sprintf(" the next batch of matched documents needs ~%d bytes and", est)
+		}
+		return moerr.NewInternalError(pool.proc.Ctx,
+			fmt.Sprintf("fulltext search aborted:%s the Go heap is at %d bytes, over the %d-byte budget; the query matched too many documents, add a more selective filter or predicate", detail, used, budget))
+	}
+	return nil
+}
+
+// CheckBudget refuses with the standard over-budget error when the CN's resident
+// memory plus est would exceed the pool's heap budget. Exported for callers that
+// allocate scoring workspace OUTSIDE the pool's own accounting (e.g. the
+// partition-ordered traversal of the aggregation map) and must gate that
+// allocation on the same budget.
+func (pool *FixedBytePool) CheckBudget(est uint64) error {
+	return pool.checkHeapBudget(est)
 }
 
 // FixedBytePoolIterator to tranverse the data in the pool
@@ -184,7 +316,13 @@ func (part *Partition) GetItem(offset uint64) ([]byte, error) {
 	return util.UnsafeToBytesWithLength(&part.data[offset], int(part.dsize)), nil
 }
 
-// FreeItem simply reduce reference count by one and free the data when refcnt == 0
+// FreeItem simply reduce reference count by one and free the data when refcnt == 0.
+// The returned value is the number of RESIDENT bytes released, which the pool subtracts from
+// mem_in_use. A partition can be spilled when its last item is freed (the top-K scoring pass
+// re-spills partitions under memory pressure), in which case its resident bytes were already
+// released at Spill() and are no longer counted in mem_in_use — so we drop the on-disk copy
+// and report 0, avoiding a double subtraction (which would underflow mem_in_use) and a temp
+// file lingering until Close.
 func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 	if part.refcnt == 0 {
 		return 0, moerr.NewInternalError(part.proc.Ctx, "FreeItem: refcnt = 0, double free")
@@ -194,10 +332,17 @@ func (part *Partition) FreeItem(offfset uint64) (uint64, error) {
 	ret := uint64(0)
 	if part.refcnt == 0 {
 		// no more reference delete the data
-		ret = part.capacity
-		if part.data != nil {
-			part.proc.Mp().Free(part.data)
-			part.data = nil
+		if part.spilled {
+			// resident bytes already freed at Spill(); just remove the temp file.
+			os.Remove(part.spill_fpath)
+			part.spilled = false
+			part.spill_fpath = ""
+		} else {
+			ret = part.capacity
+			if part.data != nil {
+				part.proc.Mp().Free(part.data)
+				part.data = nil
+			}
 		}
 		part.capacity = 0
 		part.cpos = 0
@@ -282,7 +427,13 @@ func (part *Partition) LastUpdate() time.Time {
 // FixedBytePool
 func NewFixedBytePool(proc *process.Process, dsize uint64, partition_cap uint64, mem_limit uint64) *FixedBytePool {
 	if partition_cap == 0 {
-		partition_cap = LOWER_BIT_MASK
+		// Target ~1M items per partition, so the common case (fewer matched docs than that)
+		// fits in a SINGLE partition and never triggers the per-new-partition memory gate.
+		// Capped at the 24-bit partition offset limit (16MB).
+		partition_cap = (1 << 20) * dsize
+		if partition_cap == 0 || partition_cap > LOWER_BIT_MASK {
+			partition_cap = LOWER_BIT_MASK
+		}
 	}
 
 	if mem_limit == 0 {
@@ -303,6 +454,21 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 	if np > 0 {
 		p := pool.partitions[np-1]
 		if !p.full {
+			// Re-check the heap budget on a bounded interval WHILE filling the partition.
+			// Every appended item grows the non-spillable side maps, and the first partition
+			// alone holds ~1M items — so the boundary-only gate below would let the heap blow
+			// past the budget before a second partition is ever requested (#25638). The check
+			// triggers on EITHER item count or accumulated side-map bytes (ChargeSideBytes):
+			// wide varchar doc IDs retain far more than MapMemPerItem per item, so the byte
+			// threshold bounds the overshoot independent of key width.
+			pool.since_check++
+			if pool.since_check >= HeapCheckInterval || pool.since_check_bytes >= HeapCheckBytes {
+				pool.since_check = 0
+				pool.since_check_bytes = 0
+				if err := pool.checkHeapBudget(0); err != nil {
+					return 0, nil, err
+				}
+			}
 			return p.NewItem()
 		}
 	}
@@ -314,6 +480,27 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 			return 0, nil, err
 		}
 	}
+
+	// Guard the Go-heap budget before allocating a partition. checkHeapBudget compares live
+	// heap (which already includes the NON-spillable per-doc side maps agghtab/docLenMap/
+	// docIDMap) against a fraction of total node memory.
+	//   - FIRST partition: est=0, so we only refuse when the CN is ALREADY over budget (from
+	//     this or other work). We do NOT over-reserve a full worst-case block for a query that
+	//     may match only a handful of docs, which would false-fail small queries on a loaded CN.
+	//     The fast-path interval check above is what bounds this first partition's growth.
+	//   - PAST the first partition: also reserve the next partition's estimated footprint
+	//     (docvec block + its per-doc map entries). Those maps grow one entry per matched doc
+	//     and cannot spill, so a query matching far more docs than its LIMIT would otherwise
+	//     exhaust the CN heap; refuse cleanly before that happens (#25638).
+	var est uint64
+	if pool.dsize > 0 && len(pool.partitions) > 0 {
+		est = pool.partition_cap + (pool.partition_cap/pool.dsize)*MapMemPerItem
+	}
+	if err := pool.checkHeapBudget(est); err != nil {
+		return 0, nil, err
+	}
+	pool.since_check = 0
+	pool.since_check_bytes = 0
 
 	// partition not found and create new partition
 	id := uint64(len(pool.partitions))
@@ -341,11 +528,28 @@ func (pool *FixedBytePool) GetItem(addr uint64) ([]byte, error) {
 	p := pool.partitions[id]
 
 	if p.Spilled() {
+		// Bringing a spilled partition back into memory grows resident heap. The top-K
+		// scoring pass (fulltext TVF evaluate/sort_topk) GetItems every matched doc, so
+		// without a bound it would re-materialize ALL spilled partitions at once and blow
+		// past mem_limit — the same OOM this fix targets, just moved to the scoring phase
+		// (#25638). Partition data is allocated OFF the Go heap (Mp().Alloc(..., offHeap=true),
+		// C allocator), so the resident pool is bounded by mem_limit (the spill budget), NOT by
+		// the Go-heap budget — the heap budget bounds the NON-spillable side maps, which are
+		// built during NewItem (and gated there) and are never grown by GetItem. So the top-K
+		// unspill needs only a bounded resident working set: evict LRU to keep the resident pool
+		// within mem_limit, then unspill. Spill() skips already-spilled partitions (incl. the
+		// still-spilled target p) and the active append partition, so neither is evicted here.
+		if pool.mem_in_use+pool.partition_cap > pool.mem_limit {
+			if err := pool.Spill(); err != nil {
+				return nil, err
+			}
+		}
 		err := p.Unspill()
 		if err != nil {
 			return nil, err
 		}
 		pool.mem_in_use += pool.partition_cap
+		pool.unspills++
 	}
 
 	return p.GetItem(offset)
@@ -386,11 +590,18 @@ func (pool *FixedBytePool) Close() {
 // spill will find LRU partitions to spill and will double the number of partitions to spill for the next time
 func (pool *FixedBytePool) Spill() error {
 
-	// find unspilled partitions
+	// find spillable partitions. Skip:
+	//   - already-spilled partitions (nothing to do);
+	//   - the active append target (!full): the build phase's next NewItem appends to it via
+	//     the fast path, and Partition.NewItem rejects a spilled partition — spilling it here
+	//     (GetItem eviction fires during build too, to bump existing docs' word counts) would
+	//     abort the query with "NewItem: partition is spillled";
+	//   - already-freed partitions (data == nil, not spilled): they hold no resident bytes, so
+	//     counting them in nspill would under-subtract mem_in_use (underflow).
 	lru := make([]Lru, 0, len(pool.partitions))
 
 	for _, p := range pool.partitions {
-		if p.Spilled() {
+		if p.Spilled() || !p.full || p.data == nil {
 			continue
 		}
 		lru = append(lru, Lru{id: p.Id(), last_update: p.LastUpdate()})

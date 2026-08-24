@@ -271,10 +271,14 @@ func (txn *Txn) ApplyRollback() (err error) {
 	}
 	defer func() {
 		txn.LSN = txn.Store.GetLSN()
-		if err == nil {
-			err = txn.Store.Close()
-		} else {
-			txn.Store.Close()
+		closeErr := txn.Store.Close()
+		if err == nil && txn.GetError() == nil {
+			// An explicit rollback has no earlier transaction error, so its
+			// caller must observe a Close failure. During commit-abort rollback,
+			// however, the transaction already owns the primary error. Returning
+			// a cleanup failure here would make DoneApply replace that moerr and
+			// change the RPC-visible retry classification.
+			err = closeErr
 		}
 	}()
 	err = txn.Store.ApplyRollback()

@@ -316,5 +316,33 @@ SELECT IF(0, CAST('bad' AS SIGNED), 7) AS if_skip_true_branch,
        IFNULL(5, CAST('bad' AS SIGNED)) AS ifnull_skip_later;
 -- @bvt:issue
 
+-- Mixed string/DECIMAL branches must advertise enough VARCHAR bytes for a
+-- sign and decimal point. CASE keeps an identical fixed-BINARY branch type.
+SELECT IF(0, 'x', 1.23) AS if_decimal_metadata;
+SELECT CASE WHEN 0 THEN 'x' ELSE CAST(-123.45 AS DECIMAL(5, 2)) END AS case_decimal_metadata;
+SELECT COALESCE(NULL, 1.23, 'x') AS coalesce_decimal_metadata;
+CREATE TABLE if_control_flow_decimal_metadata(d DECIMAL(5, 2));
+INSERT INTO if_control_flow_decimal_metadata VALUES (-123.45);
+SELECT IF(0, 'x', d) AS if_decimal_column,
+       CASE WHEN 0 THEN 'x' ELSE d END AS case_decimal_column,
+       COALESCE(NULL, d, 'x') AS coalesce_decimal_column
+FROM if_control_flow_decimal_metadata;
+DROP TABLE if_control_flow_decimal_metadata;
+CREATE TABLE if_control_flow_binary_metadata AS
+SELECT CASE WHEN 1 THEN CAST('a' AS BINARY(4)) ELSE CAST('b' AS BINARY(4)) END AS b;
+SELECT data_type, column_type
+FROM information_schema.columns
+WHERE table_schema = DATABASE() AND table_name = 'if_control_flow_binary_metadata' AND column_name = 'b';
+SELECT HEX(b) AS case_fixed_binary_hex FROM if_control_flow_binary_metadata;
+DROP TABLE if_control_flow_binary_metadata;
+CREATE TABLE if_control_flow_binary_width_metadata AS
+SELECT IF(1, CAST('a' AS BINARY(4)), CAST('b' AS BINARY(8))) AS if_b,
+       CASE WHEN 1 THEN CAST('a' AS BINARY(4)) ELSE CAST('b' AS BINARY(8)) END AS case_b;
+SELECT column_name, data_type, column_type
+FROM information_schema.columns
+WHERE table_schema = DATABASE() AND table_name = 'if_control_flow_binary_width_metadata'
+ORDER BY ordinal_position;
+DROP TABLE if_control_flow_binary_width_metadata;
+
 # reset
 SET TIME_ZONE = "SYSTEM";

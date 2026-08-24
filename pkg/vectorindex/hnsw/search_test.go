@@ -24,6 +24,7 @@ import (
 	"time"
 
 	fallocate "github.com/detailyang/go-fallocate"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -193,13 +194,6 @@ func TestHnswSearchUnlockSynchronizesWithWaitPredicate(t *testing.T) {
 	s.Cond.L.Unlock()
 	<-done
 	require.Zero(t, s.Concurrency.Load())
-}
-
-func TestHnswSearchUpdateConfig(t *testing.T) {
-	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
-	tblcfg := vectorindex.IndexTableConfig{}
-	s := NewHnswSearch[float32](idxcfg, tblcfg)
-	require.NoError(t, s.UpdateConfig(nil))
 }
 
 func TestHnsw(t *testing.T) {
@@ -376,4 +370,163 @@ func makeIndexBatch2Files(proc *process.Process, id int) *batch.Batch {
 	vector.AppendBytes(bat.Vecs[1], dat, false, proc.Mp())
 	bat.SetRowCount(1)
 	return bat
+}
+
+// TestHnswSearchIsStaleUncheckableEvicts: the index model loaded fine but generation capture
+// failed (genValid=false — a transient error on the tiny generation SELECT after the model itself
+// loaded). IsStale must report stale, NOT a no-op: an uncheckable entry whose TTL keeps sliding
+// on every search would otherwise serve pre-CDC/rebuild data forever. Reporting stale forces a
+// bounded evict+reload that retries capture and self-heals once it succeeds.
+func TestHnswSearchIsStaleUncheckableEvicts(t *testing.T) {
+	// genValid=false: model present, generation never captured.
+	s := &HnswSearch[float32]{genValid: false, cnUUID: "some-cn"}
+	stale, err := s.IsStale()
+	require.NoError(t, err)
+	require.True(t, stale, "an entry that can't self-check freshness must be evicted, not pinned")
+
+	// no service to re-query with (cnUUID empty) is equally uncheckable → stale.
+	s2 := &HnswSearch[float32]{genValid: true, cnUUID: ""}
+	stale, err = s2.IsStale()
+	require.NoError(t, err)
+	require.True(t, stale)
+}
+
+// TestHnswSyncNextTimestampMonotonic covers the enforced-monotonic generation: even when the
+// existing max timestamp EXCEEDS the writer's wall-clock (cross-CN clock skew, or a local clock
+// stepping backward), nextTimestamp still allocates strictly above it — so MAX(metadata.timestamp)
+// always advances on a CDC save and HnswSearch.IsStale cannot miss the update.
+func TestHnswSyncNextTimestampMonotonic(t *testing.T) {
+	// existing max is 1h in the FUTURE relative to wall-clock.
+	future := time.Now().UnixMicro() + int64(time.Hour/time.Microsecond)
+	s := &HnswSync[float32]{indexes: []*HnswModel[float32]{{Timestamp: future - 1}, {Timestamp: future}}}
+	require.Equal(t, future+1, s.nextTimestamp(), "must advance past the existing max, not use wall-clock")
+
+	// no existing rows → falls back to wall-clock now (bounded).
+	empty := &HnswSync[float32]{}
+	ts := empty.nextTimestamp()
+	require.Positive(t, ts)
+	require.LessOrEqual(t, ts, time.Now().UnixMicro()+1)
+}
+
+// TestHnswSearchIsStaleQueryError covers the IsStale query path: with a captured generation but
+// an unresolvable CN service, queryHnswGeneration errors, and IsStale treats a query error as
+// stale (so a dropped/rebuilt index's dead cache entry is reclaimed) while surfacing the error.
+func TestHnswSearchIsStaleQueryError(t *testing.T) {
+	s := &HnswSearch[float32]{
+		genValid: true,
+		cnUUID:   "no-such-cn-uuid",
+		Tblcfg:   vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"},
+	}
+	stale, err := s.IsStale()
+	require.Error(t, err)
+	require.True(t, stale)
+}
+
+// TestHnswGenerationSql pins the freshness-generation query: the per-model checksum column over the
+// metadata table (the multiset of MD5 model-file checksums is the content fingerprint).
+func TestHnswGenerationSql(t *testing.T) {
+	sql := hnswGenerationSql(vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "__meta"})
+	require.Contains(t, sql, "checksum")
+	require.Contains(t, sql, "`db`.`__meta`")
+}
+
+func genChecksumResult(t *testing.T, mp *mpool.MPool, sums ...string) executor.Result {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for _, s := range sums {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(s), false, mp))
+	}
+	bat.SetRowCount(len(sums))
+	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
+}
+
+// TestGenChecksumsFingerprint pins the multiset digest: it is order-independent, sensitive to any
+// checksum change, and the empty result has a well-defined (constant) fingerprint with count 0.
+func TestGenChecksumsFingerprint(t *testing.T) {
+	mp := mpool.MustNewZero()
+	fpAB, n := genChecksums(genChecksumResult(t, mp, "A", "B"))
+	require.Equal(t, int64(2), n)
+	fpBA, _ := genChecksums(genChecksumResult(t, mp, "B", "A"))
+	require.Equal(t, fpAB, fpBA, "fingerprint is a multiset digest (order-independent)")
+	fpAC, _ := genChecksums(genChecksumResult(t, mp, "A", "C"))
+	require.NotEqual(t, fpAB, fpAC, "a changed checksum changes the fingerprint")
+
+	fpEmpty, c := genChecksums(executor.Result{})
+	require.Zero(t, c)
+	fpNil, cNil := genChecksums(executor.Result{Batches: []*batch.Batch{nil}})
+	require.Zero(t, cNil)
+	require.Equal(t, fpEmpty, fpNil) // both empty → same constant fingerprint
+	require.NotEqual(t, fpAB, fpEmpty)
+}
+
+// TestHnswSearchIsStaleContentChange is the regression for the empty-state ABA the checksum
+// generation closes: a rebuild with DIFFERENT model content but the SAME model count — which a
+// timestamp-or-count generation could re-mint after an intermediate (0,0) empty state — produces a
+// different checksum fingerprint, so IsStale still reports stale. Identical content is not stale.
+func TestHnswSearchIsStaleContentChange(t *testing.T) {
+	mp := mpool.MustNewZero()
+	old := runSqlAutoCommit
+	defer func() { runSqlAutoCommit = old }()
+	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
+
+	// current on-disk content: two models {A, C2}. The second model's content changed C1→C2.
+	runSqlAutoCommit = func(_ context.Context, _ string, _ uint32, _, _ string) (executor.Result, error) {
+		return genChecksumResult(t, mp, "A", "C2"), nil
+	}
+
+	// loaded from {A, C1}, count 2 — same count as current, different content.
+	loadedFp, loadedN := genChecksums(genChecksumResult(t, mp, "A", "C1"))
+	s := &HnswSearch[float32]{genValid: true, cnUUID: "cn", Tblcfg: cfg, loadedFp: loadedFp, loadedCount: loadedN}
+	stale, err := s.IsStale()
+	require.NoError(t, err)
+	require.True(t, stale, "different content → different checksum fingerprint, even at the same count")
+
+	// control: loaded at the current content {A, C2} → not stale (identical bytes are not stale).
+	curFp, curN := genChecksums(genChecksumResult(t, mp, "A", "C2"))
+	s2 := &HnswSearch[float32]{genValid: true, cnUUID: "cn", Tblcfg: cfg, loadedFp: curFp, loadedCount: curN}
+	stale, err = s2.IsStale()
+	require.NoError(t, err)
+	require.False(t, stale)
+}
+
+// TestLoadHnswGenerationHappy stubs the live-txn reader to cover the checksum-fingerprint load path
+// (order-independent digest + count) plus the read-error branch.
+func TestLoadHnswGenerationHappy(t *testing.T) {
+	mp := mpool.MustNewZero()
+	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
+	old := runSql
+	defer func() { runSql = old }()
+
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return genChecksumResult(t, mp, "cksA", "cksB", "cksC"), nil
+	}
+	fp, count, err := loadHnswGeneration(nil, cfg)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), count)
+	want, _ := genChecksums(genChecksumResult(t, mp, "cksC", "cksA", "cksB")) // same multiset, different order
+	require.Equal(t, want, fp)
+
+	// read error → propagated.
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("read failed")
+	}
+	_, _, err = loadHnswGeneration(nil, cfg)
+	require.Error(t, err)
+}
+
+// TestQueryHnswGenerationReadError covers the background reader's read-error branch.
+func TestQueryHnswGenerationReadError(t *testing.T) {
+	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
+	oldAuto := runSqlAutoCommit
+	defer func() { runSqlAutoCommit = oldAuto }()
+	runSqlAutoCommit = func(_ context.Context, _ string, _ uint32, _, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("read failed")
+	}
+	_, _, err := queryHnswGeneration(context.Background(), "cn", 0, cfg)
+	require.Error(t, err)
+}
+
+// TestSearchIntoUnsupported covers the SearchInto stub.
+func TestSearchIntoUnsupported(t *testing.T) {
+	require.ErrorContains(t, (&HnswSearch[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
 }

@@ -144,6 +144,52 @@ func TestMergeSortBatchesYear(t *testing.T) {
 	require.Equal(t, []int32{10, 20, 30, 40, 50}, gotPayloads)
 }
 
+func TestMergeSortBatchesBinaryTypes(t *testing.T) {
+	testCases := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "binary", typ: types.New(types.T_binary, 4, 0)},
+		{name: "varbinary", typ: types.New(types.T_varbinary, 8, 0)},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			batches := []*batch.Batch{
+				newVarlenaMergeBatch(t, mp, tc.typ,
+					[][]byte{{0x00}, {'b'}, {0xff}}, []int32{10, 30, 50}),
+				newVarlenaMergeBatch(t, mp, tc.typ,
+					[][]byte{{0x00, 0x01}, {'a'}, {'b', 0x00}}, []int32{20, 40, 60}),
+			}
+			for _, bat := range batches {
+				defer bat.Clean(mp)
+			}
+
+			newBuffer := func() *batch.Batch {
+				return batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{tc.typ, types.T_int32.ToType()})
+			}
+			buffer := newBuffer()
+
+			var gotKeys [][]byte
+			var gotPayloads []int32
+			buffer, err := MergeSortBatches(batches, 0, buffer, func(out *batch.Batch) (*batch.Batch, error) {
+				payloads := vector.MustFixedColNoTypeCheck[int32](out.Vecs[1])
+				for i := 0; i < out.RowCount(); i++ {
+					gotKeys = append(gotKeys, append([]byte(nil), out.Vecs[0].GetBytesAt(i)...))
+					gotPayloads = append(gotPayloads, payloads[i])
+				}
+				out.Clean(mp)
+				return newBuffer(), nil
+			}, mp, nil)
+			require.NoError(t, err)
+			defer buffer.Clean(mp)
+			require.Equal(t, [][]byte{{0x00}, {0x00, 0x01}, {'a'}, {'b'}, {'b', 0x00}, {0xff}}, gotKeys)
+			require.Equal(t, []int32{10, 20, 40, 30, 60, 50}, gotPayloads)
+		})
+	}
+}
+
 func newDecimal256MergeBatch(
 	t *testing.T,
 	mp *mpool.MPool,
@@ -177,6 +223,25 @@ func newYearMergeBatch(
 	bat := batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{types.T_year.ToType(), types.T_int32.ToType()})
 	for i, key := range keys {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], payloads[i], false, mp))
+	}
+	bat.SetRowCount(len(keys))
+	return bat
+}
+
+func newVarlenaMergeBatch(
+	t *testing.T,
+	mp *mpool.MPool,
+	typ types.Type,
+	keys [][]byte,
+	payloads []int32,
+) *batch.Batch {
+	t.Helper()
+	require.Len(t, payloads, len(keys))
+
+	bat := batch.NewWithSchema(false, []string{"id", "payload"}, []types.Type{typ, types.T_int32.ToType()})
+	for i, key := range keys {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], key, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], payloads[i], false, mp))
 	}
 	bat.SetRowCount(len(keys))

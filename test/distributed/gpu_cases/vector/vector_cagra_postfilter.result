@@ -28,14 +28,14 @@ insert into t values
 (20, '[20,20,20,20,20,20,20,20]', 20, 120);
 create index ix using cagra on t (v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=64 INCLUDE (c_inc);
 show create table t;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,0,0]  ¦  Create Table[12,258,0]  𝄀
 t  ¦  CREATE TABLE `t` (
   `id` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   `c_inc` int DEFAULT NULL,
   `c_noinc` int DEFAULT NULL,
   PRIMARY KEY (`id`),
-  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 64  INCLUDE (c_inc) 
+  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  intermediate_graph_degree = 16  graph_degree = 8  itopk_size = 64  INCLUDE (`c_inc`)
 )
 select id, c_noinc from t order by l2_distance(v, '[12,12,12,12,12,12,12,12]') asc limit 20;
 ➤ id[-5,64,0]  ¦  c_noinc[4,32,0]  𝄀

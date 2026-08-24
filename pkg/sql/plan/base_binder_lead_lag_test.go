@@ -191,6 +191,23 @@ func TestBindFuncExprImplByPlanExpr_LeadLagDefaultCast(t *testing.T) {
 	})
 }
 
+func TestBindFuncExprImplByPlanExpr_LagLeadOffsetParamCastError(t *testing.T) {
+	for _, name := range []string{"lag", "lead"} {
+		t.Run(name, func(t *testing.T) {
+			args := []*plan.Expr{
+				makeInt64ConstPlanExpr(1),
+				{
+					Typ:  plan.Type{Id: int32(types.T_tuple)},
+					Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+				},
+			}
+
+			_, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+			require.Error(t, err)
+		})
+	}
+}
+
 // TestBindFuncExprImplByPlanExpr_LeadLagDefaultNoCast tests that the cast is
 // NOT applied when the default value type already matches the value type.
 func TestBindFuncExprImplByPlanExpr_LeadLagDefaultNoCast(t *testing.T) {

@@ -53,7 +53,10 @@ func BuildIcebergDMLMetadataProjection(
 	})
 	out.Cols = append(out.Cols, &plan.ColDef{
 		Name: icebergapi.DMLDataFilePathColumnName,
-		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: tableDef.Name},
+		Typ: plan.Type{
+			Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: tableDef.Name,
+			Charset: uint32(types.CharsetUTF8),
+		},
 	})
 	if includePositionRows {
 		out.RowOrdinalColumnIndex = startIndex + 1

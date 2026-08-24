@@ -56,3 +56,7 @@ create table t1(a int,b json);
 insert into t1 values(1,'{"people":[{"name":"a1","address":"a2"},{"name":"b1","address":"b2"}]}');
 insert into t1 values(2,'{"people":[{"name":"c1","address":"c2"},{"name":"d1","address":"d2"}]}');
 select a,e.* from t1,unnest(t1.b,'$.people[0]') e where seq=0 and e.this=json_extract(t1.b,'$.people[0]');
+
+# Planner-generated UNNEST text uses the current utf8mb4_general_ci identity.
+select min(`key`), max(`key`), min(path), max(path)
+from unnest('{"a":1,"B":2}') u;

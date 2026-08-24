@@ -1,3 +1,4 @@
+set session sql_mode = default;
 DROP TABLE IF EXISTS dept;
 create table dept(
     deptno int unsigned auto_increment COMMENT '部门编号',
@@ -75,25 +76,23 @@ select t1.ename, t2.loc, t2.deptno as deptno from emp t1 left join dept t2 on t1
 --11. mysql：error; mo: error
 select t1.ename, t2.loc from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
 
---12. mysql: error, 别名不会参与order by表达式运算, mo: ok(bug)
+--12. mysql: error, mo: error; names inside expressions prefer source columns
 select t1.ename, t2.loc, t2.deptno as deptno from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno+33;
 
 --13.mysql：error; mo: error
 select t1.ename, t2.loc from emp t1 left join dept t2 on t1.deptno = t2.deptno order by deptno;
 
---14.mysql：ok, mo: error(bug,暂时选择报错)
--- mysql的别名是有作用域的， 通常selectList中子查询别名的优先级较高，即使主查询和子查询使用了相同的别名 ename，
--- 排序键冲突时MySQL会优先选择子查询别名，
-select ename, (select ename from emp i1 where i1.empno = emp.mgr order by 1 limit 1) as ename from emp order by ename;
+--14.mysql：ok, mo: ok; an explicit subquery-expression alias wins at the top level
+select ename, (select ename from emp i1 where i1.empno = 7369 order by 1 limit 1) as ename from emp order by ename desc, emp.empno;
 
---15.mysql：ok, mo: error(bug,暂时选择报错) (同上)
-select empno, (select ename from emp i1 where i1.empno = emp.mgr order by 1 limit 1) as ename, ename from emp order by ename;
+--15.mysql：ok, mo: ok (同上)
+select empno, (select ename from emp i1 where i1.empno = 7369 order by 1 limit 1) as ename, ename from emp order by ename, emp.empno;
 
---16.mysql: ok, mo: error(bug,暂时选择报错)
-select empno, 20 as empno from emp order by empno;
+--16.mysql: ok, mo: ok
+select empno, 20 as empno from emp order by empno desc, emp.empno;
 
---17..mysql: ok, mo: error(bug,暂时选择报错) (同上)
-select empno,  space(50) as empno from emp order by empno;
+--17.mysql: ok, mo: ok; function-expression alias follows the same rule
+select empno, length(space(50)) as empno from emp order by empno desc, emp.empno;
 
 --18.mysql:ok, mo: ok
 select empno, ename, job, mgr, hiredate, sal, empno from emp where deptno != 20 order by empno;
@@ -113,3 +112,65 @@ select t1.ename, t2.loc, t1.deptno, t2.deptno as deptno from emp t1 left join de
 
 drop table if exists dept;
 drop table if exists emp;
+
+-- ORDER BY output-name resolution: a top-level name prefers an explicit
+-- expression alias, while qualified and nested names keep source-column
+-- semantics. Duplicate direct-column aliases are ambiguous only when they
+-- denote different sources; repeated/expression aliases use the first item.
+drop table if exists order_alias_shadow;
+create table order_alias_shadow(id int primary key, k int);
+insert into order_alias_shadow values (1, 30), (2, 10), (3, 20);
+
+select id, -id as id from order_alias_shadow order by id;
+select id, k + 0 as id from order_alias_shadow order by id;
+select id, 20 as id from order_alias_shadow order by id desc, order_alias_shadow.id;
+select id, -id as neg_id from order_alias_shadow order by neg_id;
+select id, -id as id from order_alias_shadow order by order_alias_shadow.id;
+select id, -id as id from order_alias_shadow order by id + 0 desc;
+select id as x, k as x from order_alias_shadow order by x;
+select id, id as id from order_alias_shadow order by id;
+select id as x, k + 0 as x from order_alias_shadow order by x;
+select -id as x, k + 0 as x from order_alias_shadow order by x;
+select -id as x, k + 0 as x from order_alias_shadow order by x + 0;
+
+select distinct id, -id as id from order_alias_shadow order by id;
+select distinct id, 20 as id from order_alias_shadow order by id desc, order_alias_shadow.id;
+select distinct id, -id as id from order_alias_shadow order by id + 0 desc;
+
+-- ROLLUP/CUBE are rewritten as grouping-set UNIONs. Resolve nested names in
+-- each source branch before that boundary, otherwise the output alias id=k
+-- silently changes ORDER BY id+0 from the source id to k.
+select k as id, id as source_id, count(*) as row_count
+from order_alias_shadow
+group by id, k with rollup
+order by id + 0, grouping(k), source_id + 0;
+
+-- An unrelated window expression activates the ROLLUP window rewrite but must
+-- not change the source-column-first binding of the same ORDER BY expression.
+select k as id, id as source_id, count(*) as row_count,
+count(*) over () as window_rows
+from order_alias_shadow
+group by id, k with rollup
+order by id + 0, grouping(k), source_id + 0;
+
+-- Predicate-shaped ORDER BY nodes must keep the same alias fallback when the
+-- ROLLUP window rewrite is active; the rewrite cannot bind the whole predicate
+-- in the source branch because expression_alias exists only in the output.
+select -id as expression_alias, count(*) as row_count,
+count(*) over () as window_rows
+from order_alias_shadow
+group by id with rollup
+order by expression_alias is null, expression_alias;
+
+select k as id, id as source_id, k as source_k, count(*) as row_count
+from order_alias_shadow
+group by cube(id, k)
+order by id + 0, grouping(id), grouping(k), source_k + 0;
+
+select k as id, id as source_id, k as source_k, count(*) as row_count,
+count(*) over () as window_rows
+from order_alias_shadow
+group by cube(id, k)
+order by id + 0, grouping(id), grouping(k), source_k + 0;
+
+drop table order_alias_shadow;

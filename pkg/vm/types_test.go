@@ -153,10 +153,11 @@ func TestOperatorTypeAndBaseAccessors(t *testing.T) {
 }
 
 func TestOperatorToStrMapCompleteness(t *testing.T) {
+	const reservedSource = External + 1
 	const reservedShuffleV2 = Shuffle + 1
 
 	for op := Top; op < OpTypeEnd; op++ {
-		if op == reservedShuffleV2 {
+		if op == reservedSource || op == reservedShuffleV2 {
 			continue
 		}
 		if op.String() == "Unknown" {

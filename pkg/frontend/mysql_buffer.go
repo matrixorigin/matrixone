@@ -398,7 +398,7 @@ func (c *Conn) Close() error {
 
 		err = c.closeConn()
 		if err != nil {
-			logutil.LogConnectionCloseError("close conn error", err)
+			logutil.LogConnectionCloseEvent(frontendConnectionCloseEvents, err)
 		}
 		c.ses.Store(&holder[*Session]{})
 		rm := getRtMgr(c.service)

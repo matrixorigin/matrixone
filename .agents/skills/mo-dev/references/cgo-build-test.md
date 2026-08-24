@@ -13,19 +13,16 @@
 
 ```bash
 # Compile check
-go build ./pkg/target/...
+GOWORK=off go build -mod=readonly ./pkg/target/...
 
 # Static analysis
-go vet ./pkg/target/...
+GOWORK=off go vet -mod=readonly ./pkg/target/...
 
 # Run tests (-count=1 disables cache)
-go test -v -count=1 ./pkg/target/...
+GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s ./pkg/target/...
 
 # Single test
-go test -v -count=1 -run TestXxx ./pkg/target/...
-
-# Timeout control (integration tests can be slow)
-go test -v -count=1 -timeout 120s ./pkg/target/...
+GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s -run '^TestXxx$' ./pkg/target/...
 ```
 
 ## 2. CGo Environment (Four-Layer Model)
@@ -76,7 +73,7 @@ Note: Makefile does **not** set `CGO_LDFLAGS`; `libmo` link flags all go through
 | C header flags | `CGO_CFLAGS="-I{root}/cgo -I{root}/thirdparties/install/include"` | Same |
 | usearch search flags | `CGO_LDFLAGS="-L{root}/thirdparties/install/lib"` | Same |
 
-### Deterministic test command
+### Controlled local CPU test command
 
 Prefer the repository wrapper for arbitrary packages and test flags:
 
@@ -90,6 +87,9 @@ It verifies host/target and CGo prerequisites, enforces the repository's
 chooses the supported OS library/loader form, and gives temporary test
 executables absolute rpaths. It is a local CPU-test entry point; GPU and static
 cross-builds have different toolchain contracts and remain explicit workflows.
+`GOFLAGS`, `GOEXPERIMENT`, `CC`, and `CXX` remain caller-owned inputs; record
+them when attribution or reproducibility depends on them, and ensure native
+artifacts were built from the same source generation.
 
 ### Why test rpaths differ from packaged binaries
 
@@ -164,7 +164,7 @@ GOWORK=off go list -mod=readonly \
 Layer 1, pure Go:
 
 ```bash
-go test -v -count=1 -timeout 120s ./pkg/common/moerr/... ./pkg/pb/timestamp/...
+GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s ./pkg/common/moerr/... ./pkg/pb/timestamp/...
 ```
 
 Layer 2, CGo-transitive:
@@ -219,19 +219,69 @@ time, so inspect the whole graph after the first missing library.
 
 ## 5. Attribution And Clean-Tree Reproduction
 
-Never claim a test failure is pre-existing without proof.
+Never claim a test failure is pre-existing without proof at the correct clean
+baseline. Do not use `git stash`: it omits untracked files by default, does not
+remove committed PR changes, and can disturb the user's index or conflict on
+restore.
+
+First run the exact candidate command and record its exit status plus a stable
+failure signature (failing test/package and causal error, not timestamps or temp
+paths). Then run the same command at the baseline below:
 
 ```bash
-# 1. Stash current changes
-git stash
+# Choose HEAD for an uncommitted-only change, or the verified PR base/merge-base
+# when the candidate includes commits. Record the resolved object ID.
+baseline_ref=HEAD
+baseline_parent=$(mktemp -d "${TMPDIR:-/tmp}/mo-baseline.XXXXXX")
+baseline_dir="$baseline_parent/tree"
+git worktree add --detach "$baseline_dir" "$baseline_ref"
+baseline_log="$baseline_parent/baseline.log"
+cleanup_baseline() {
+  git worktree remove --force "$baseline_dir" 2>/dev/null || true
+}
+trap cleanup_baseline EXIT
+trap 'exit 130' INT
+trap 'exit 129' HUP
+trap 'exit 143' TERM
 
-# 2. Run the same test from clean state
-go test -v -count=1 -timeout 120s ./pkg/target/...
-
-# 3. If it fails: genuinely pre-existing -- document it
-# 4. If it passes: YOUR code caused it -- investigate
-git stash pop
+# In the isolated worktree, recreate matching native artifacts and run the
+# exact candidate command with the same Go/toolchain/module inputs.
+baseline_status=0
+(cd "$baseline_dir" && GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s ./pkg/target/...) \
+  >"$baseline_log" 2>&1 || baseline_status=$?
+printf 'baseline exit status: %s\n' "$baseline_status"
+printf 'baseline log retained for signature comparison: %s\n' "$baseline_log"
+cleanup_baseline
+trap - EXIT INT HUP TERM
 ```
+
+Keep cleanup and signal termination as separate responsibilities. The `EXIT`
+trap owns worktree cleanup; each signal trap must terminate with its conventional
+`128 + signal` status so a cancelled command cannot continue into baseline
+attribution. This minimal oracle must report status 130, record exactly one
+`cleanup` line, and never record `continued`:
+
+```bash
+signal_log=$(mktemp)
+signal_status=0
+sh -c '
+  trap '\''printf "cleanup\\n" >> "$1"'\'' EXIT
+  trap '\''exit 130'\'' INT
+  kill -INT $$
+  printf "continued\\n" >> "$1"
+' sh "$signal_log" || signal_status=$?
+test "$signal_status" -eq 130
+test "$(cat "$signal_log")" = cleanup
+rm -f "$signal_log"
+```
+
+A candidate failure is pre-existing evidence only when the baseline also fails
+with the equivalent causal signature and the command, environment, platform,
+and native dependency provenance match. Baseline success points to the
+candidate; a different failure is inconclusive. Extract and record the causal
+signature from the retained log before deleting the exact `baseline_parent`;
+the cleanup above removes only the disposable worktree, so a tool invocation
+cannot erase the evidence before comparison.
 
 ## 6. GPU Build (`MO_CL_CUDA=1`) -- cuVS / CUDA
 
@@ -239,11 +289,18 @@ GPU support compiles the CUDA-backed vector index algorithms (**CAGRA**, **IVF-P
 
 Prerequisites:
 
-1. CUDA toolkit 12.0 / 13.0+ installed under `/usr/local/cuda`.
-2. cuVS Go bindings installed via conda and the env activated so `CONDA_PREFIX` is exported:
+1. CUDA toolkit matching the versions pinned by
+   `optools/images/gpu/Dockerfile` and
+   `optools/images/gpu/go_cuda-130_arch-x86_64.yaml`, installed under the path
+   expected by those files. Do not infer an unsupported version range.
+2. cuVS Go bindings installed from the repository's Linux x86_64 environment
+   file and the environment activated so `CONDA_PREFIX` is exported. Prefer the
+   builder stage in `optools/images/gpu/Dockerfile` when a container runtime is
+   available. Building does not require a GPU device; executing GPU workloads
+   requires a compatible NVIDIA host/runtime.
 
 ```bash
-conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
+conda env create --name go -f optools/images/gpu/go_cuda-130_arch-x86_64.yaml
 conda activate go
 ```
 
@@ -267,6 +324,7 @@ Guardrails:
 
 - `CONDA_PREFIX env variable not found`: conda env not activated. Run `conda activate <env>` first. This is not a code bug.
 - `libmo` is re-linked on every GPU build deliberately because `mo-service` loads `libmo.so` dynamically. A stale `.so` silently runs old C++.
+- Always pass `-j8`. The cuVS/CUDA objects dominate a GPU build and a single-threaded `make` stalls the edit-build-test loop for minutes at a time.
 
 The `gpu` tag gates index-plugin registration. CAGRA and IVF-PQ register only under `//go:build gpu` (`pkg/indexplugin/all/all_gpu.go`). On a CPU binary their plugins are absent from the registry, so `CREATE INDEX ... USING ivfpq|cagra` fails cleanly at plan-build with `unsupported index type: <algo>` before hidden table creation. Do not move those imports into `all.go`.
 
@@ -279,14 +337,77 @@ MO_CL_CUDA=1 make -j8 cgo
 GPU tests need `-tags gpu` plus CUDA search paths. Linux only:
 
 ```bash
+gpu_package=./pkg/vectorindex/ivfpq/... # set to the affected GPU algorithm package
 CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include -I$CONDA_PREFIX/include -I/usr/local/cuda/include" \
 CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c -L$CONDA_PREFIX/lib -lcuvs -lcuvs_c" \
 LD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib:$CONDA_PREFIX/lib:/usr/local/cuda/lib64" \
-go test -tags gpu \
-  -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/lib -Wl,-rpath,\$ORIGIN/lib -fopenmp'" \
-  -v -count=1 -timeout 300s ./pkg/vectorindex/ivfpq/...
+GOWORK=off go test -mod=readonly -tags gpu \
+  -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/lib -Wl,-rpath,$(pwd)/cgo -Wl,-rpath,$(pwd)/thirdparties/install/lib -Wl,-rpath,$CONDA_PREFIX/lib -Wl,-rpath,/usr/local/cuda/lib64 -fopenmp'" \
+  -v -count=1 -timeout 300s "$gpu_package"
 ```
 
 The authoritative flag source is the Makefile (`CUDA_CFLAGS` / `CUDA_LDFLAGS`), not this snippet. If a GPU link error appears, diff your flags against those lines.
 
 Tag-split test files are a trap: `*_gpu.go` / `//go:build gpu` tests compile only under `-tags gpu`. A plain `go test ./pkg/vectorindex/ivfpq/...` runs `//go:build !gpu` / `*_cpu.go` stubs instead. CPU tests passing does not test the GPU path.
+
+### The GPU suite is not green just because CI is
+
+CI does not compile `//go:build gpu` files at all, so GPU-tagged tests are unmaintained by
+default: nothing tells an author when one rots. A single local sweep in August 2026 found
+**four** failing on `main`, each broken by an unrelated change months earlier —
+
+| Test | Broken by |
+|---|---|
+| `TestIvfpqSearch` | the quantization base-type guard (#25095); its `IndexTableConfig` omits `parttype`, so `KeyPartType` defaulted to 0 and every `vecf32` query was rejected |
+| `TestBuildCagraSecondaryIndexDef_OK`, `TestBuildIvfpqSecondaryIndexDef_OK` | mock catalog drift |
+| `TestBatchArrayDistanceSync_GPU_InnerProduct` | an inner-product double negation |
+
+Two consequences for anyone running GPU tests:
+
+1. **A GPU failure is not automatically yours.** Prove ownership at the clean baseline
+   using the isolated worktree in section 5 — do NOT revert in place. `git stash` is
+   forbidden there for reasons that apply verbatim here, and `git checkout HEAD~1 -- <paths>`
+   is worse: it rewrites the index AND the working tree, so an interrupted or mistyped
+   invocation silently discards uncommitted work. A GPU build in the worktree needs its own
+   `MO_CL_CUDA=1 make -j8 cgo`, since `cgo/libmo.so` is a build artifact and is not checked
+   out with it.
+
+   Once the failure is shown to predate your change, find out who owns it before touching it:
+   `git log -S '<symbol>' --all --oneline` and `git branch --contains <commit>`. Three of the
+   four above were already fixed on other in-flight branches; duplicating those fixes would
+   have produced merge conflicts for no gain.
+2. **Run the whole GPU set, not just your package**, when touching shared vector code:
+
+```bash
+grep -rl '^//go:build gpu' --include='*_test.go' pkg/ | xargs -n1 dirname | sort -u
+```
+
+### mo-cgo-test merges the gpu tag into yours
+
+`MO_CL_CUDA=1` makes the wrapper add `-tags gpu`. When the caller passes their own `-tags`,
+it is **merged** (`-tags typecheck` becomes `-tags typecheck,gpu`, in whichever spelling was
+used) rather than replaced or skipped.
+
+It skipped it until August 2026, on the reasoning that `go test` keeps only the last `-tags`
+and appending would discard the caller's. The effect was a false green:
+`MO_CL_CUDA=1 mo-cgo-test -tags typecheck ./pkg/vectorindex/metric/` compiled **0** of that
+package's 2 GPU test files while reporting a pass. `mo-cgo-test-tags-test` pins every form
+and needs no GPU, CUDA toolkit or built libmo.
+
+Stubbing `go` is not enough to earn that, and the first version of the test wrongly
+claimed it: the wrapper resolves its repository from its own location and rejects the run
+unless `cgo/libmo.so` and `thirdparties/install/include` exist there, before it would ever
+reach the stub. Pointed at the real checkout the test passed only where libmo happened to
+be built, and in a clean worktree reported all seven cases as `<no -tags at all>` -- a
+wrapper that never ran, misread as a wrapper that dropped the tag. It now copies the real
+wrapper into a throwaway git repo with empty stand-ins for both prerequisites, and checks
+each invocation exited zero before parsing its stdout, so a setup fault reports as
+`harness broken` instead of as seven tag failures.
+
+The wrapper's CUDA support is itself branch-dependent: a checkout whose `mo-cgo-test`
+predates it ignores `MO_CL_CUDA` entirely and fails to link a GPU-built `libmo` with
+`undefined reference to cuMemcpyHtoD_v2` and `libcuda.so.1 not found`. Check with
+`grep -c MO_CL_CUDA .agents/skills/mo-dev/scripts/mo-cgo-test` before concluding the tree is
+broken; borrow a newer copy into the repo root if needed (it derives the repo from its own
+location, so it must sit inside the worktree).
+

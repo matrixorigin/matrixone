@@ -1012,6 +1012,26 @@ func compactPrimaryCol(
 	return err
 }
 
+// CompactRowIdCol copies the Rowids whose input positions are not present in
+// bitMap. Callers keep the empty-bitmap path on UnionBatch so the common case
+// remains a bulk copy.
+func CompactRowIdCol(
+	v *vector.Vector,
+	vec *vector.Vector,
+	bitMap *nulls.Nulls,
+	proc *process.Process,
+) error {
+	sels := vector.GetSels()
+	for i := 0; i < v.Length(); i++ {
+		if !nulls.Contains(bitMap, uint64(i)) {
+			sels = append(sels, int64(i))
+		}
+	}
+	err := vec.Union(v, sels, proc.Mp())
+	vector.PutSels(sels)
+	return err
+}
+
 func XXHashVectors(vs []*vector.Vector,
 	proc *process.Process,
 	packers *PackerList,

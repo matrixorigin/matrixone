@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,96 @@ func TestObjectStorageSemaphoreDeleteObservesContextWhileWaiting(t *testing.T) {
 	err := wrapped.Delete(ctx, "object")
 	require.ErrorIs(t, err, context.Canceled)
 	<-wrapped.semaphore
+}
+
+func TestObjectStorageSemaphoreOperationsObserveContextWhileWaiting(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*objectStorageSemaphore, context.Context) error
+	}{
+		{
+			name: "exists",
+			call: func(storage *objectStorageSemaphore, ctx context.Context) error {
+				_, err := storage.Exists(ctx, "object")
+				return err
+			},
+		},
+		{
+			name: "list",
+			call: func(storage *objectStorageSemaphore, ctx context.Context) error {
+				for _, err := range storage.List(ctx, "prefix") {
+					return err
+				}
+				return nil
+			},
+		},
+		{
+			name: "read",
+			call: func(storage *objectStorageSemaphore, ctx context.Context) error {
+				reader, err := storage.Read(ctx, "object", nil, nil)
+				if err != nil {
+					return err
+				}
+				return reader.Close()
+			},
+		},
+		{
+			name: "stat",
+			call: func(storage *objectStorageSemaphore, ctx context.Context) error {
+				_, err := storage.Stat(ctx, "object")
+				return err
+			},
+		},
+		{
+			name: "write",
+			call: func(storage *objectStorageSemaphore, ctx context.Context) error {
+				return storage.Write(ctx, "object", strings.NewReader(""), nil, nil)
+			},
+		},
+		{
+			name: "write multipart parallel",
+			call: func(storage *objectStorageSemaphore, ctx context.Context) error {
+				return storage.WriteMultipartParallel(ctx, "object", nil, nil, nil)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			upstream := &mockParallelObjectStorage{supports: true}
+			storage := newObjectStorageSemaphore(upstream, 1)
+			storage.semaphore <- struct{}{}
+			t.Cleanup(func() {
+				select {
+				case <-storage.semaphore:
+				default:
+				}
+			})
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			result := make(chan error, 1)
+			go func() {
+				result <- test.call(storage, ctx)
+			}()
+
+			select {
+			case err := <-result:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				<-storage.semaphore
+				<-result
+				t.Fatal("operation did not observe context cancellation while waiting")
+			}
+
+			select {
+			case <-storage.semaphore:
+			default:
+				t.Fatal("canceled operation acquired the semaphore")
+			}
+		})
+	}
 }
 
 func TestObjectStorageSemaphoreSerializes(t *testing.T) {

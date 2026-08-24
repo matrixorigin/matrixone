@@ -60,6 +60,169 @@ func TestCloseLocalLockTable(t *testing.T) {
 	)
 }
 
+func TestCloseLocalLockTableNotifiesOutsideTableMutex(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				logger := getLogger("")
+				events := newWaiterEvents(1, nil, nil, time.Hour, nil, logger)
+				// A one-element queue makes the old close -> eventC -> worker ->
+				// table mutex cycle deterministic with only three waiters.
+				events.eventC = make(chan *lockContext, 1)
+				events.start()
+
+				lt := newLocalLockTable(
+					pb.LockTable{Table: 1, ServiceID: "test"},
+					nil,
+					events,
+					rt.Clock(),
+					nil,
+					logger,
+				).(*localLockTable)
+
+				lock := newRowLock(logger, &lockContext{
+					waitTxn: pb.WaitTxn{TxnID: []byte("holder")},
+					opts: LockOptions{LockOptions: pb.LockOptions{
+						Mode: pb.LockMode_Exclusive,
+					}},
+				})
+				handled := make(chan struct{}, 3)
+				waiters := make([]*waiter, 0, 3)
+				for i := 0; i < 3; i++ {
+					w := acquireWaiter(
+						pb.WaitTxn{TxnID: []byte(fmt.Sprintf("waiter-%d", i))},
+						"test",
+						logger,
+					)
+					w.setStatus(blocking)
+					w.event = event{
+						c: &lockContext{
+							txn: &activeTxn{RWMutex: &sync.RWMutex{}},
+							lockFunc: func(_ *lockContext, _ bool) {
+								// The real terminal async path re-enters l.mu while
+								// removing the notified waiter.
+								lt.mu.Lock()
+								lt.mu.Unlock()
+								handled <- struct{}{}
+							},
+						},
+						eventC: events.eventC,
+					}
+					lock.addWaiter(logger, w)
+					waiters = append(waiters, w)
+				}
+				lt.mu.store.Add([]byte{1}, lock)
+
+				closed := make(chan struct{})
+				go func() {
+					lt.close(closeReasonServiceClose)
+					close(closed)
+				}()
+				select {
+				case <-closed:
+				case <-time.After(5 * time.Second):
+					t.Fatal("local lock table close deadlocked with a full waiter event queue")
+				}
+				for _, w := range waiters {
+					require.ErrorIs(t, w.mustRecvNotification(logger).err, ErrLockTableNotFound)
+					w.close("test", logger)
+				}
+
+				events.close()
+				require.Len(t, handled, 3)
+				lt.mu.RLock()
+				require.True(t, lt.mu.closed)
+				require.Zero(t, lt.mu.store.Len())
+				lt.mu.RUnlock()
+			})
+		},
+	)
+}
+
+func TestRemoveLocalLockTableClosesOutsideHolderMutex(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				logger := getLogger("")
+				events := newWaiterEvents(1, nil, nil, time.Hour, nil, logger)
+				events.eventC = make(chan *lockContext, 1)
+				events.start()
+
+				lt := newLocalLockTable(
+					pb.LockTable{Table: 1, ServiceID: "test"},
+					nil,
+					events,
+					rt.Clock(),
+					nil,
+					logger,
+				).(*localLockTable)
+				holder := &lockTableHolder{
+					tables: map[uint64]lockTable{1: lt},
+				}
+				holders := &lockTableHolders{
+					holders: map[uint32]*lockTableHolder{0: holder},
+				}
+
+				lock := newRowLock(logger, &lockContext{
+					waitTxn: pb.WaitTxn{TxnID: []byte("holder")},
+					opts: LockOptions{LockOptions: pb.LockOptions{
+						Mode: pb.LockMode_Exclusive,
+					}},
+				})
+				handled := make(chan struct{}, 3)
+				waiters := make([]*waiter, 0, 3)
+				for i := 0; i < 3; i++ {
+					w := acquireWaiter(
+						pb.WaitTxn{TxnID: []byte(fmt.Sprintf("waiter-%d", i))},
+						"test",
+						logger,
+					)
+					w.setStatus(blocking)
+					w.event = event{
+						c: &lockContext{
+							txn: &activeTxn{RWMutex: &sync.RWMutex{}},
+							lockFunc: func(_ *lockContext, _ bool) {
+								// A real completion callback validates that its
+								// table is still current through this holder.
+								_ = holder.get(1)
+								handled <- struct{}{}
+							},
+						},
+						eventC: events.eventC,
+					}
+					lock.addWaiter(logger, w)
+					waiters = append(waiters, w)
+				}
+				lt.mu.store.Add([]byte{1}, lock)
+
+				removed := make(chan int, 1)
+				go func() {
+					removed <- holders.removeWithFilter(
+						func(_ uint64, _ lockTable) bool { return true },
+						closeReasonServiceClose,
+					)
+				}()
+				select {
+				case count := <-removed:
+					require.Equal(t, 1, count)
+				case <-time.After(5 * time.Second):
+					t.Fatal("table close retained the holder mutex while the waiter queue was full")
+				}
+				for _, w := range waiters {
+					require.ErrorIs(t, w.mustRecvNotification(logger).err, ErrLockTableNotFound)
+					w.close("test", logger)
+				}
+
+				events.close()
+				require.Len(t, handled, 3)
+				require.Nil(t, holder.get(1))
+			})
+		},
+	)
+}
+
 func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -174,13 +337,287 @@ func TestSynchronousWaiterRemovedFromEventsBeforeAfterWait(t *testing.T) {
 
 			select {
 			case <-waiting:
-			case <-time.After(time.Second):
+			case <-time.After(5 * time.Second):
 				t.Fatal("txn2 did not begin waiting for the range lock")
 			}
 
 			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			require.True(t, <-removed)
 			require.NoError(t, <-done)
+			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestEmptyRangeEndpointIsRemovedBeforeNewRangeLock(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			// Simulate the state left by a failed range waiter cleanup: the two
+			// endpoints are both empty, but no longer share their backing state.
+			start := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			end := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{1}, start)
+			lt.mu.store.Add([]byte{5}, end)
+			lt.mu.Unlock()
+
+			txnID := newTestTxnID(2)
+			require.NotPanics(t, func() {
+				_, err := s.Lock(ctx, table, [][]byte{{0}, {10}}, txnID, newTestRangeExclusiveOptions())
+				require.NoError(t, err)
+			})
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+
+			lt.mu.RLock()
+			require.Zero(t, lt.mu.store.Len())
+			lt.mu.RUnlock()
+		},
+	)
+}
+
+func TestEmptyRangeEndpointDoesNotSpliceAdjacentLiveRange(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(_ context.Context, _ *service, lt *localLockTable) {
+			// The empty start at 1 is an orphan. The live range [3, 5] is
+			// adjacent in the ordered store, but its end at 5 is not the
+			// orphan's counterpart.
+			sharedHolders := newHolders()
+			sharedHolders.add(pb.WaitTxn{TxnID: []byte("holder")})
+			sharedWaiters := newWaiterQueue()
+			sharedWaiters.init(lt.logger)
+
+			stale := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			liveStart := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: sharedHolders,
+				waiters: sharedWaiters,
+			}
+			liveEnd := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: sharedHolders,
+				waiters: sharedWaiters,
+			}
+
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{1}, stale)
+			lt.mu.store.Add([]byte{3}, liveStart)
+			lt.mu.store.Add([]byte{5}, liveEnd)
+			lt.deleteEmptyLockLocked([]byte{1}, stale)
+			_, startOK := lt.mu.store.Get([]byte{1})
+			liveStart, liveStartOK := lt.mu.store.Get([]byte{3})
+			liveEnd, liveEndOK := lt.mu.store.Get([]byte{5})
+			lt.mu.Unlock()
+
+			require.False(t, startOK, "orphan endpoint should be removed")
+			require.True(t, liveStartOK)
+			require.True(t, liveEndOK)
+			require.Same(t, sharedHolders, liveStart.holders)
+			require.Same(t, sharedWaiters, liveStart.waiters)
+			require.True(t, liveStart.isLockRangeStart())
+			require.Same(t, sharedHolders, liveEnd.holders)
+			require.Same(t, sharedWaiters, liveEnd.waiters)
+			require.True(t, liveEnd.isLockRangeEnd())
+		},
+	)
+}
+
+func TestMismatchedRangeEndpointRepairsLiveCounterpart(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			txnID := newTestTxnID(1)
+			_, err := s.Lock(ctx, table, newTestRows(1, 5), txnID, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			// Keep the live range-end, but replace only the start's backing state
+			// with an empty state. This is the half-live shape left by a failed
+			// waiter cleanup and must be repaired before the next merge scan.
+			lt.mu.Lock()
+			staleStart, ok := lt.mu.store.Get([]byte{1})
+			require.True(t, ok)
+			staleStart.holders = newHolders()
+			staleStart.waiters = newWaiterQueue()
+			lt.mu.store.Add([]byte{1}, staleStart)
+			lt.mu.Unlock()
+
+			require.NotPanics(t, func() {
+				_, err = s.Lock(ctx, table, newTestRows(0, 10), txnID, newTestRangeExclusiveOptions())
+			})
+			require.NoError(t, err)
+
+			lt.mu.RLock()
+			startLock, startOK := lt.mu.store.Get([]byte{0})
+			endLock, endOK := lt.mu.store.Get([]byte{10})
+			_, oldStartOK := lt.mu.store.Get([]byte{1})
+			_, oldEndOK := lt.mu.store.Get([]byte{5})
+			lt.mu.RUnlock()
+			require.True(t, startOK)
+			require.True(t, endOK)
+			require.False(t, oldStartOK)
+			require.False(t, oldEndOK)
+			require.True(t, startLock.isLockRangeStart())
+			require.True(t, endLock.isLockRangeEnd())
+			require.Same(t, startLock.holders, endLock.holders)
+			require.Same(t, startLock.waiters, endLock.waiters)
+
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			lt.mu.RLock()
+			require.Zero(t, lt.mu.store.Len())
+			lt.mu.RUnlock()
+		},
+	)
+}
+
+func TestMismatchedRangeEndRepairsLiveCounterpart(t *testing.T) {
+	table := uint64(11)
+	getRunner(false)(
+		t,
+		table,
+		func(_ context.Context, _ *service, lt *localLockTable) {
+			sharedHolders := newHolders()
+			sharedHolders.add(pb.WaitTxn{TxnID: []byte("holder")})
+			sharedWaiters := newWaiterQueue()
+			sharedWaiters.init(lt.logger)
+			staleEnd := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			liveStart := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: sharedHolders,
+				waiters: sharedWaiters,
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{1}, liveStart)
+			lt.mu.store.Add([]byte{5}, staleEnd)
+			lt.deleteEmptyLockLocked([]byte{5}, staleEnd)
+			startLock, startOK := lt.mu.store.Get([]byte{1})
+			endLock, endOK := lt.mu.store.Get([]byte{5})
+			lt.mu.Unlock()
+
+			require.True(t, startOK)
+			require.True(t, endOK)
+			require.Same(t, sharedHolders, startLock.holders)
+			require.Same(t, sharedWaiters, startLock.waiters)
+			require.Same(t, sharedHolders, endLock.holders)
+			require.Same(t, sharedWaiters, endLock.waiters)
+			require.True(t, endLock.isLockRangeEnd())
+		},
+	)
+}
+
+func TestEmptyRowLockIsRemovedBeforeNewRowLock(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			stale := Lock{
+				value:   flagLockRow | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{3}, stale)
+			lt.mu.Unlock()
+
+			txnID := newTestTxnID(2)
+			require.NotPanics(t, func() {
+				_, err := s.Lock(ctx, table, [][]byte{{3}}, txnID, newTestRowExclusiveOptions())
+				require.NoError(t, err)
+			})
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+
+			lt.mu.RLock()
+			require.Zero(t, lt.mu.store.Len())
+			lt.mu.RUnlock()
+		},
+	)
+}
+
+func TestMergeRangeRestartsAfterEmptyConflict(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			rangeRows := newTestRows(1, 2)
+			txn1 := newTestTxnID(1)
+			txn2 := newTestTxnID(2)
+			_, err := s.Lock(ctx, table, rangeRows, txn1, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			waiting := make(chan struct{})
+			var waitingOnce sync.Once
+			lt.options.beforeWait = func(c *lockContext) func() {
+				if !bytes.Equal(c.txn.txnID, txn2) {
+					return func() {}
+				}
+				return func() { waitingOnce.Do(func() { close(waiting) }) }
+			}
+
+			txn2Done := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, rangeRows, txn2, newTestRangeExclusiveOptions())
+				txn2Done <- err
+			}()
+			select {
+			case <-waiting:
+			case <-time.After(5 * time.Second):
+				t.Fatal("txn2 did not begin waiting for the range lock")
+			}
+
+			// Make the first range scan encounter an empty row only after it has
+			// already merged txn1's [1, 2] lock and txn2's waiter.
+			stale := Lock{
+				value:   flagLockRow | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{5}, stale)
+			lt.mu.Unlock()
+
+			_, err = s.Lock(ctx, table, newTestRows(1, 10), txn1, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			lt.mu.RLock()
+			startLock, startOK := lt.mu.store.Get([]byte{1})
+			endLock, endOK := lt.mu.store.Get([]byte{10})
+			lt.mu.RUnlock()
+			require.True(t, startOK)
+			require.True(t, endOK)
+			require.Equal(t, 1, startLock.waiters.size(), "retry must not duplicate the waiter")
+			require.Equal(t, 1, endLock.waiters.size(), "retry must not duplicate the waiter")
+
+			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			select {
+			case err := <-txn2Done:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("txn2 did not acquire the range lock after txn1 released it")
+			}
 			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 		},
 	)
@@ -912,6 +1349,268 @@ func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, timestamp.Timestamp{PhysicalTime: 2}, res.Timestamp)
 		})
+}
+
+func TestTableDefChangedAtRetainedAfterUnlock(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		granularity pb.Granularity
+		rows        [][]byte
+	}{
+		{name: "row", granularity: pb.Granularity_Row, rows: [][]byte{{1}}},
+		{name: "range", granularity: pb.Granularity_Range, rows: [][]byte{{1}, {2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockServiceTests(
+				t,
+				[]string{"s1"},
+				func(_ *lockTableAllocator, services []*service) {
+					service := services[0]
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+
+					const tableID = uint64(10)
+					options := pb.LockOptions{
+						Granularity: tc.granularity,
+						Mode:        pb.LockMode_Exclusive,
+						Policy:      pb.WaitPolicy_Wait,
+					}
+
+					// Ordinary DML commits advance the table commit timestamp but must not
+					// manufacture a schema-generation change.
+					_, err := service.Lock(ctx, tableID, tc.rows, []byte{1}, options)
+					require.NoError(t, err)
+					require.NoError(t, service.Unlock(ctx, []byte{1}, timestamp.Timestamp{PhysicalTime: 2}))
+					result, err := service.Lock(ctx, tableID, tc.rows, []byte{2}, options)
+					require.NoError(t, err)
+					require.Nil(t, result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte{2}, timestamp.Timestamp{}))
+
+					definitionOptions := options
+					definitionOptions.TableDefChanged = true
+					// An aborted definition lock must not establish a fence.
+					_, err = service.Lock(ctx, tableID, tc.rows, []byte("aborted-ddl"), definitionOptions)
+					require.NoError(t, err)
+					require.NoError(t, service.Unlock(ctx, []byte("aborted-ddl"), timestamp.Timestamp{}))
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte("after-abort"), options)
+					require.NoError(t, err)
+					require.Nil(t, result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte("after-abort"), timestamp.Timestamp{}))
+
+					// A committed definition lock establishes the generation fence.
+					_, err = service.Lock(ctx, tableID, tc.rows, []byte{3}, definitionOptions)
+					require.NoError(t, err)
+					changedAt := timestamp.Timestamp{PhysicalTime: 3}
+					require.NoError(t, service.Unlock(ctx, []byte{3}, changedAt))
+
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte{4}, options)
+					require.NoError(t, err)
+					require.Equal(t, changedAt, *result.TableDefChangedAt)
+					retainedMarker := result.TableDefChangedAt
+					encoded, err := result.Marshal()
+					require.NoError(t, err)
+					var decoded pb.Result
+					require.NoError(t, decoded.Unmarshal(encoded))
+					require.Equal(t, changedAt, *decoded.TableDefChangedAt)
+					// A later ordinary commit cannot erase the DDL fence.
+					require.NoError(t, service.Unlock(ctx, []byte{4}, timestamp.Timestamp{PhysicalTime: 4}))
+
+					// A transaction created at or after the DDL cannot have resolved a
+					// pre-DDL plan. Omit the marker so its remote response stays free of
+					// the optional timestamp and the corresponding decode allocation.
+					freshOptions := options
+					freshOptions.SnapShotTs = changedAt
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte("fresh"), freshOptions)
+					require.NoError(t, err)
+					require.Nil(t, result.TableDefChangedAt)
+					freshEncoded, err := result.Marshal()
+					require.NoError(t, err)
+					decoded = pb.Result{}
+					require.NoError(t, decoded.Unmarshal(freshEncoded))
+					require.Nil(t, decoded.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte("fresh"), timestamp.Timestamp{}))
+
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte{5}, options)
+					require.NoError(t, err)
+					require.Equal(t, changedAt, *result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte{5}, timestamp.Timestamp{}))
+
+					// An aborted DDL never became visible and must not move the fence.
+					_, err = service.Lock(ctx, tableID, tc.rows, []byte{6}, definitionOptions)
+					require.NoError(t, err)
+					require.NoError(t, service.Unlock(ctx, []byte{6}, timestamp.Timestamp{}))
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte{7}, options)
+					require.NoError(t, err)
+					require.Equal(t, changedAt, *result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte{7}, timestamp.Timestamp{}))
+
+					// A later DDL replaces the immutable marker. Results already handed
+					// to callers keep the timestamp they observed without a data race.
+					_, err = service.Lock(ctx, tableID, tc.rows, []byte{8}, definitionOptions)
+					require.NoError(t, err)
+					secondChangedAt := timestamp.Timestamp{PhysicalTime: 5}
+					require.NoError(t, service.Unlock(ctx, []byte{8}, secondChangedAt))
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte{9}, options)
+					require.NoError(t, err)
+					require.Equal(t, secondChangedAt, *result.TableDefChangedAt)
+					require.Equal(t, changedAt, *retainedMarker)
+					require.NotSame(t, retainedMarker, result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte{9}, timestamp.Timestamp{}))
+				},
+			)
+		})
+	}
+}
+
+func TestTableDefChangedIntentSurvivesLockWait(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		granularity pb.Granularity
+		rows        [][]byte
+	}{
+		{name: "row", granularity: pb.Granularity_Row, rows: [][]byte{{1}}},
+		{name: "range", granularity: pb.Granularity_Range, rows: [][]byte{{1}, {2}}},
+	} {
+		for _, commitDDL := range []bool{false, true} {
+			outcome := "abort"
+			if commitDDL {
+				outcome = "commit"
+			}
+			t.Run(tc.name+"/"+outcome, func(t *testing.T) {
+				runLockServiceTests(
+					t,
+					[]string{"s1"},
+					func(_ *lockTableAllocator, services []*service) {
+						service := services[0]
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+
+						const tableID = uint64(10)
+						ordinaryOptions := pb.LockOptions{
+							Granularity: tc.granularity,
+							Mode:        pb.LockMode_Exclusive,
+							Policy:      pb.WaitPolicy_Wait,
+							SnapShotTs:  timestamp.Timestamp{PhysicalTime: 1},
+						}
+						definitionOptions := ordinaryOptions
+						definitionOptions.TableDefChanged = true
+
+						holderTxn := []byte("ordinary-holder")
+						_, err := service.Lock(ctx, tableID, tc.rows, holderTxn, ordinaryOptions)
+						require.NoError(t, err)
+
+						ddlTxn := []byte("definition-waiter")
+						ddlResultC := make(chan pb.Result, 1)
+						ddlErrC := make(chan error, 1)
+						go func() {
+							result, lockErr := service.Lock(ctx, tableID, tc.rows, ddlTxn, definitionOptions)
+							ddlResultC <- result
+							ddlErrC <- lockErr
+						}()
+						waitWaiters(t, service, tableID, tc.rows[0], 1)
+
+						// The predecessor is ordinary DML, so its notification reports no
+						// definition change. That fact must not clear the waiter's own DDL intent.
+						require.NoError(t, service.Unlock(ctx, holderTxn,
+							timestamp.Timestamp{PhysicalTime: 2}))
+						require.NoError(t, <-ddlErrC)
+						ddlResult := <-ddlResultC
+						require.False(t, ddlResult.TableDefChanged)
+
+						// Queue an ordinary successor while DDL owns the same lock. On
+						// promotion it observes the predecessor notification, but the stored
+						// lock must start a new holder generation with ordinary intent.
+						successorTxn := []byte("ordinary-successor")
+						type lockResult struct {
+							result pb.Result
+							err    error
+						}
+						successorC := make(chan lockResult, 1)
+						go func() {
+							result, lockErr := service.Lock(ctx, tableID, tc.rows, successorTxn, ordinaryOptions)
+							successorC <- lockResult{result: result, err: lockErr}
+						}()
+						waitWaiters(t, service, tableID, tc.rows[0], 1)
+
+						ddlCommitTS := timestamp.Timestamp{}
+						if commitDDL {
+							ddlCommitTS = timestamp.Timestamp{PhysicalTime: 3}
+						}
+						require.NoError(t, service.Unlock(ctx, ddlTxn, ddlCommitTS))
+						successor := <-successorC
+						require.NoError(t, successor.err)
+						require.Equal(t, commitDDL, successor.result.TableDefChanged)
+						if commitDDL {
+							// A real CN retries this transaction after a committed DDL.
+							require.NoError(t, service.Unlock(ctx, successorTxn, timestamp.Timestamp{}))
+						} else {
+							// An aborted DDL is not visible, so the successor can commit. Its
+							// ordinary commit must not manufacture a definition fence.
+							require.NoError(t, service.Unlock(ctx, successorTxn,
+								timestamp.Timestamp{PhysicalTime: 4}))
+						}
+
+						result, err := service.Lock(ctx, tableID, tc.rows, []byte("late-dml"), ordinaryOptions)
+						require.NoError(t, err)
+						if commitDDL {
+							require.NotNil(t, result.TableDefChangedAt)
+							require.Equal(t, ddlCommitTS, *result.TableDefChangedAt)
+						} else {
+							require.Nil(t, result.TableDefChangedAt)
+						}
+						require.NoError(t, service.Unlock(ctx, []byte("late-dml"), timestamp.Timestamp{}))
+					},
+				)
+			})
+		}
+	}
+}
+
+func TestTableDefChangedIntentAppliedOnReentrantLock(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		granularity pb.Granularity
+		rows        [][]byte
+	}{
+		{name: "row", granularity: pb.Granularity_Row, rows: [][]byte{{1}}},
+		{name: "range", granularity: pb.Granularity_Range, rows: [][]byte{{1}, {2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockServiceTests(
+				t,
+				[]string{"s1"},
+				func(_ *lockTableAllocator, services []*service) {
+					service := services[0]
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+
+					const tableID = uint64(10)
+					options := pb.LockOptions{
+						Granularity: tc.granularity,
+						Mode:        pb.LockMode_Exclusive,
+						Policy:      pb.WaitPolicy_Wait,
+						SnapShotTs:  timestamp.Timestamp{PhysicalTime: 1},
+					}
+					txnID := []byte("same-txn")
+					_, err := service.Lock(ctx, tableID, tc.rows, txnID, options)
+					require.NoError(t, err)
+
+					definitionOptions := options
+					definitionOptions.TableDefChanged = true
+					_, err = service.Lock(ctx, tableID, tc.rows, txnID, definitionOptions)
+					require.NoError(t, err)
+					changedAt := timestamp.Timestamp{PhysicalTime: 2}
+					require.NoError(t, service.Unlock(ctx, txnID, changedAt))
+
+					result, err := service.Lock(ctx, tableID, tc.rows, []byte("late-dml"), options)
+					require.NoError(t, err)
+					require.NotNil(t, result.TableDefChangedAt)
+					require.Equal(t, changedAt, *result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte("late-dml"), timestamp.Timestamp{}))
+				},
+			)
+		})
+	}
 }
 
 func Test15608(t *testing.T) {

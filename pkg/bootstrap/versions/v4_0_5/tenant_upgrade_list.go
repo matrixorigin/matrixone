@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
@@ -28,6 +29,49 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addOrphanFileColumn("namespace", "varchar(2048) not null default ''", "catalog_id"),
 	addOrphanFileColumn("table_name", "varchar(1024) not null default ''", "namespace"),
 	addOrphanFileColumn("file_path", "varchar(4096) not null default ''", "table_location_hash"),
+	upgradeInformationSchemaView("TABLES", sysview.InformationSchemaTablesDDL),
+	upgradeInformationSchemaView("COLUMNS", sysview.InformationSchemaColumnsDDL),
+	upgradeInformationSchemaView("STATISTICS", sysview.InformationSchemaStatisticsDDL),
+	upgradeInformationSchemaViewFromLegacyTable("TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL),
+}
+
+func upgradeInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: viewName,
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    viewDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, viewName)
+			if err != nil {
+				return false, err
+			}
+			return exists && viewDef == viewDDL, nil
+		},
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+	}
+}
+
+// upgradeInformationSchemaViewFromLegacyTable converges an information_schema
+// object that historical tenant upgrades may have left as a base table. Keep
+// all SQL fully qualified because tenant upgrade transactions use mo_catalog as
+// their default database.
+func upgradeInformationSchemaViewFromLegacyTable(viewName, viewDDL string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: viewName,
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, viewName)
+			if err != nil {
+				return false, err
+			}
+			return exists && viewDef == viewDDL, nil
+		},
+		PreSql:  fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
+		PostSql: viewDDL,
+	}
 }
 
 func upgradeIcebergCatalogIDAllocator() versions.UpgradeEntry {

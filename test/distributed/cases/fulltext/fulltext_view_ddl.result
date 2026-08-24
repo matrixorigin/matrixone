@@ -1,0 +1,136 @@
+set ft_relevancy_algorithm="TF-IDF";
+set experimental_fulltext_index = 1;
+drop database if exists ft_view_ddl;
+create database ft_view_ddl;
+use ft_view_ddl;
+create table docs (id int primary key, body text, title text);
+insert into docs values
+(1, 'hello matrixone', 'alpha'),
+(2, 'other text', 'hello title'),
+(3, 'hello hello database', 'gamma');
+create view v_create_bad as
+select id, match(body) against('hello') as score from docs where match(body) against('hello');
+Can't find FULLTEXT index matching the column list
+select count(*) as leftover from information_schema.views
+where table_schema = 'ft_view_ddl' and table_name = 'v_create_bad';
+➤ leftover[-5,64,0]  𝄀
+0
+create view v_alter as select id, body from docs;
+select count(*) as before_alter from v_alter;
+➤ before_alter[-5,64,0]  𝄀
+3
+alter view v_alter as
+select id, match(body) against('hello') as score from docs where match(body) against('hello');
+Can't find FULLTEXT index matching the column list
+select count(*) as after_alter from v_alter;
+➤ after_alter[-5,64,0]  𝄀
+3
+create view v_replace as select id, body from docs;
+select count(*) as before_replace from v_replace;
+➤ before_replace[-5,64,0]  𝄀
+3
+create or replace view v_replace as
+select id, match(body) against('hello') as score from docs where match(body) against('hello');
+Can't find FULLTEXT index matching the column list
+select count(*) as after_replace from v_replace;
+➤ after_replace[-5,64,0]  𝄀
+3
+create view v_filter_only as select id from docs where match(body) against('hello');
+Can't find FULLTEXT index matching the column list
+create view v_project_only as select id, match(body) against('hello') as score from docs;
+Can't find FULLTEXT index matching the column list
+create view v_window as
+select id, row_number() over (order by match(body) against('hello')) as rn from docs;
+Can't find FULLTEXT index matching the column list
+create view v_window_ok as select id, row_number() over (order by id) as rn from docs;
+select id, rn from v_window_ok order by id;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+create fulltext index ft_title on docs(title);
+create view v_wrong_col as select id from docs where match(body) against('hello');
+Can't find FULLTEXT index matching the column list
+create fulltext index ft_body on docs(body);
+create view v_good_filter as select id from docs where match(body) against('hello');
+select id from v_good_filter order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+create view v_good_score as
+select id, match(body) against('hello') as score from docs where match(body) against('hello');
+select id from v_good_score order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+alter view v_good_score as
+select id, match(body) against('hello') as score from docs where match(body) against('hello');
+select id from v_good_score order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+create or replace view v_good_score as
+select id, match(body) against('hello') as score from docs where match(body) against('hello');
+select id from v_good_score order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+create view v_window_idx as
+select id, row_number() over (order by match(body) against('hello')) as rn from docs;
+Can't find FULLTEXT index matching the column list
+create view v_window_where as
+select id, row_number() over (order by id) as rn from docs where match(body) against('hello');
+Can't find FULLTEXT index matching the column list
+create view v_window_plain as select id, row_number() over (order by id) as rn from docs;
+select id, rn from v_window_plain order by id;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+explain select id from v_good_filter;
+-- @regex("Table Function on fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft_view_ddl.docs  𝄀
+                    Runtime Filter Probe: docs.id  𝄀
+              ->  Table Function on fulltext_index_scan
+explain select id from v_good_score where score > 0;
+-- @regex("Table Function on fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (mo_fulltext_alias_0.score > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft_view_ddl.docs  𝄀
+                          Runtime Filter Probe: docs.id  𝄀
+                    ->  Table Function on fulltext_index_scan
+select id from v_good_score where score > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from v_good_score where score > 0.05 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from (
+select id, match(body) against('hello') as sc from docs where match(body) against('hello')
+) x where sc > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+create view v_plain as select id, body from docs where id > 1;
+select count(*) as plain_rows from v_plain;
+➤ plain_rows[-5,64,0]  𝄀
+2
+drop database ft_view_ddl;
+set ft_relevancy_algorithm="TF-IDF";

@@ -67,8 +67,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		}
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
-	case plan.Node_SOURCE_SCAN:
-		pname = "Source Scan"
 	case plan.Node_MATERIAL_SCAN:
 		pname = "Material Scan"
 	case plan.Node_PROJECT:
@@ -99,6 +97,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Sort"
 	case plan.Node_PARTITION:
 		pname = "Partition"
+		if ndesc.Node.Limit != nil && ndesc.Node.PartitionByCount > 0 {
+			pname = "Partition Top N"
+		}
 	case plan.Node_UNION:
 		pname = "Union"
 	case plan.Node_UNION_ALL:
@@ -133,6 +134,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Minus All"
 	case plan.Node_FUNCTION_SCAN:
 		pname = "Table Function"
+	case plan.Node_VECTOR_INDEX_SCAN:
+		pname = "Vector Index Scan"
 	case plan.Node_PRE_INSERT:
 		pname = "PreInsert"
 	case plan.Node_PRE_INSERT_UK:
@@ -144,7 +147,11 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 	case plan.Node_LOCK_OP:
 		pname = "Lock"
 	case plan.Node_APPLY:
-		pname = "CROSS APPLY"
+		if ndesc.Node.ApplyType == plan.Node_OUTERAPPLY {
+			pname = "OUTER APPLY"
+		} else {
+			pname = "CROSS APPLY"
+		}
 	case plan.Node_MULTI_UPDATE:
 		pname = "Multi Update"
 	case plan.Node_POSTDML:
@@ -164,7 +171,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_SOURCE_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				if ndesc.Node.IndexScanInfo.IsIndexScan {
@@ -182,6 +189,14 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			buf.WriteString(" on ")
 			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
 				buf.WriteString(ndesc.Node.TableDef.TblFunc.Name)
+			}
+		case plan.Node_VECTOR_INDEX_SCAN:
+			buf.WriteString(" on ")
+			if spec := ndesc.Node.VectorIndexScan; spec != nil && spec.Index != nil {
+				buf.WriteString(spec.Index.IndexName)
+				buf.WriteString(" [")
+				buf.WriteString(spec.DistanceFunction)
+				buf.WriteString("]")
 			}
 		case plan.Node_DELETE:
 			buf.WriteString(" on ")
@@ -303,14 +318,52 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		}
 		lines = append(lines, icebergInfo)
 	}
+	if ndesc.Node.NodeType == plan.Node_EXTERNAL_SCAN &&
+		ndesc.Node.GetExternScan() != nil && ndesc.Node.GetExternScan().GetMongodbScan() != nil {
+		scan := ndesc.Node.GetExternScan().GetMongodbScan()
+		pushed := 0
+		var countPredicate func(*plan.MongoPredicate)
+		countPredicate = func(predicate *plan.MongoPredicate) {
+			if predicate == nil {
+				return
+			}
+			if predicate.Op != plan.MongoPredicateOp_MONGO_PREDICATE_AND {
+				pushed++
+			}
+			for _, child := range predicate.Children {
+				countPredicate(child)
+			}
+		}
+		countPredicate(scan.PushedPredicate)
+		lines = append(lines, fmt.Sprintf("MongoDB Scan: table=%d columns=%d pushed=%d residual=%s",
+			scan.TableId, len(scan.Columns), pushed, scan.ResidualFilterDigest))
+	}
 
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
-		orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
-		if err != nil {
-			return nil, err
+		if ndesc.Node.NodeType == plan.Node_PARTITION && ndesc.Node.Limit != nil &&
+			ndesc.Node.PartitionByCount > 0 && int(ndesc.Node.PartitionByCount) < len(ndesc.Node.OrderBy) {
+			for _, item := range []struct {
+				label string
+				specs []*plan.OrderBySpec
+			}{
+				{label: "Partition Key: ", specs: ndesc.Node.OrderBy[:ndesc.Node.PartitionByCount]},
+				{label: "Sort Key: ", specs: ndesc.Node.OrderBy[ndesc.Node.PartitionByCount:]},
+			} {
+				buf := bytes.NewBuffer(make([]byte, 0, 300))
+				buf.WriteString(item.label)
+				if err := NewOrderByDescribeImpl(item.specs).GetDescription(ctx, options, buf); err != nil {
+					return nil, err
+				}
+				lines = append(lines, buf.String())
+			}
+		} else {
+			orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, orderByInfo)
 		}
-		lines = append(lines, orderByInfo)
 	}
 
 	// Get Sort list info
@@ -347,6 +400,16 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			return nil, err
 		}
 		lines = append(lines, groupByInfo)
+		if len(ndesc.Node.GroupByHashKey) > 0 {
+			hashKeyInfo, err := ndesc.getGroupByHashKeyInfo(ctx, options)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, hashKeyInfo)
+		}
+	}
+	if ndesc.Node.NodeType == plan.Node_TIME_WINDOW && ndesc.Node.GapFillMode == plan.Node_GAP_FILL_PARTITION {
+		lines = append(lines, "Gap Fill: Partition")
 	}
 
 	if ndesc.Node.NodeType == plan.Node_FILL {
@@ -481,15 +544,43 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		if len(msg) > 0 {
 			lines = append(lines, msg)
 		}
-		msg, err = ndesc.GetIvfSearchInfo(ctx, options)
+	}
+	if ndesc.Node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		msg, err := ndesc.GetVectorIndexScanInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
-		if len(msg) > 0 {
+		if msg != "" {
 			lines = append(lines, msg)
 		}
 	}
 	return lines, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetVectorIndexScanInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	spec := ndesc.Node.GetVectorIndexScan()
+	if spec == nil || spec.GetIndex() == nil {
+		return "", nil
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, 192))
+	buf.WriteString("Vector Index: ")
+	buf.WriteString(spec.GetIndex().GetIndexName())
+	buf.WriteString(", Metric: ")
+	buf.WriteString(spec.GetDistanceFunction())
+	buf.WriteString(", Candidate Limit: ")
+	if err := describeExpr(ctx, spec.GetCandidateLimit(), options, buf); err != nil {
+		return "", err
+	}
+	buf.WriteString(", NProbe: ")
+	buf.WriteString(strconv.FormatUint(uint64(spec.GetInitialProbeCount()), 10))
+	if len(spec.GetPreFilters()) > 0 {
+		buf.WriteString(", Index Filter: ")
+		filters := NewExprListDescribeImpl(spec.GetPreFilters())
+		if err := filters.GetDescription(ctx, options, buf); err != nil {
+			return "", err
+		}
+	}
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetIcebergScanInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -539,27 +630,6 @@ func (ndesc *NodeDescribeImpl) GetFullTextSql(ctx context.Context, options *Expl
 		return result, nil
 	}
 	return "", nil
-}
-
-func (ndesc *NodeDescribeImpl) GetIvfSearchInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType != plan.Node_FUNCTION_SCAN ||
-		ndesc.Node.TableDef == nil ||
-		ndesc.Node.TableDef.TblFunc == nil ||
-		ndesc.Node.TableDef.TblFunc.Name != "ivf_search" ||
-		len(ndesc.Node.TblFuncExprList) < 3 {
-		return "", nil
-	}
-
-	filterExpr := ndesc.Node.TblFuncExprList[2]
-	litExpr, ok := filterExpr.Expr.(*plan.Expr_Lit)
-	if !ok || litExpr.Lit == nil {
-		return "", nil
-	}
-	rawFilter := litExpr.Lit.GetSval()
-	if strings.TrimSpace(rawFilter) == "" {
-		return "", nil
-	}
-	return "Filter Cond: " + rawFilter, nil
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -736,7 +806,11 @@ func (ndesc *NodeDescribeImpl) GetDedupJoinCtxInfo(ctx context.Context, options 
 }
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 512))
-	buf.WriteString("Filter Cond: ")
+	if ndesc.Node.NodeType == plan.Node_ASSERT {
+		buf.WriteString("Assert Cond: ")
+	} else {
+		buf.WriteString("Filter Cond: ")
+	}
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.FilterList {
@@ -788,7 +862,7 @@ func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, 
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
+	if !hasRuntimeFilterProbeExpr(ndesc.Node.RuntimeFilterProbeList) {
 		return "", nil
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
@@ -796,6 +870,11 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RuntimeFilterProbeList {
+			if v == nil || v.Expr == nil {
+				// Expression-less specs are control or transport markers, not
+				// predicates that EXPLAIN can render.
+				continue
+			}
 			if !first {
 				buf.WriteString(", ")
 			}
@@ -817,7 +896,7 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
+	if !hasRuntimeFilterBuildExpr(ndesc.Node.RuntimeFilterBuildList) {
 		return "", nil
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
@@ -825,11 +904,15 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RuntimeFilterBuildList {
+			expr := runtimeFilterBuildExpr(v)
+			if expr == nil {
+				continue
+			}
 			if !first {
 				buf.WriteString(", ")
 			}
 			first = false
-			err := describeExpr(ctx, v.Expr, options, buf)
+			err := describeExpr(ctx, expr, options, buf)
 			if err != nil {
 				return "", err
 			}
@@ -840,6 +923,34 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 	return buf.String(), nil
+}
+
+func hasRuntimeFilterProbeExpr(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if spec != nil && spec.Expr != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRuntimeFilterBuildExpr(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if runtimeFilterBuildExpr(spec) != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeFilterBuildExpr(spec *plan.RuntimeFilterSpec) *plan.Expr {
+	if spec == nil {
+		return nil
+	}
+	if spec.BuildExpr != nil {
+		return spec.BuildExpr
+	}
+	return spec.Expr
 }
 
 func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -934,6 +1045,23 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 
 		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 			buf.WriteString(" shuffle: REUSE")
+		}
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) getGroupByHashKeyInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 100))
+	buf.WriteString("Hash Key: ")
+	for i, idx := range ndesc.Node.GroupByHashKey {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		if idx < 0 || int(idx) >= len(ndesc.Node.GroupBy) {
+			return "", moerr.NewInternalErrorf(ctx, "invalid group-by hash key index %d", idx)
+		}
+		if err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf); err != nil {
+			return "", err
 		}
 	}
 	return buf.String(), nil
@@ -1115,6 +1243,15 @@ func (ndesc *NodeDescribeImpl) GetIndexReaderParamInfo(ctx context.Context, opti
 			}
 		}
 
+		// OverFetchLimit is the plan-time over-fetched candidate budget for a
+		// literal LIMIT (the TVF fetches this many so k rows survive the
+		// post-filter). It is 0 for a prepared LIMIT ? (over-fetch computed at
+		// EXECUTE); shown only when known so EXPLAIN reflects the real budget
+		// rather than the raw k on Limit.
+		if param.OverFetchLimit != 0 {
+			fmt.Fprintf(buf, "  OverFetchLimit: %d", param.OverFetchLimit)
+		}
+
 		if param.DistRange != nil {
 			if param.DistRange.LowerBoundType != plan.BoundType_UNBOUNDED || param.DistRange.UpperBoundType != plan.BoundType_UNBOUNDED {
 				buf.WriteString("  DistRange: ")
@@ -1193,7 +1330,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	case plan.Node_SORT:
 		majorStr = "sort"
 		minorStr = "mergesort"
-	case plan.Node_FILTER:
+	case plan.Node_FILTER, plan.Node_ASSERT:
 		majorStr = ""
 		minorStr = "filter"
 	}

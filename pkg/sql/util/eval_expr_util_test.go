@@ -16,15 +16,204 @@ package util
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGenVectorByVarValueTypedJSONAndUUID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	jsonVec, err := GenVectorByVarValue(proc, types.T_json.ToType(), `{"a":1,"b":2}`)
+	require.NoError(t, err)
+	t.Cleanup(func() { jsonVec.Free(proc.Mp()) })
+	require.Equal(t, `{"a": 1, "b": 2}`, types.DecodeJson(jsonVec.GetBytesAt(0)).String())
+
+	wantUUID, err := types.ParseUuid("00000000-0000-0000-0000-000000000001")
+	require.NoError(t, err)
+	uuidVec, err := GenVectorByVarValue(proc, types.T_uuid.ToType(), wantUUID.String())
+	require.NoError(t, err)
+	t.Cleanup(func() { uuidVec.Free(proc.Mp()) })
+	require.Equal(t, wantUUID, vector.MustFixedColNoTypeCheck[types.Uuid](uuidVec)[0])
+}
+
+func TestGenVectorByVarValueTypedArrays(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCases := []struct {
+		name          string
+		typ           types.Type
+		value         any
+		wantRowString string
+		check         func(t *testing.T, vec *vector.Vector)
+	}{
+		{
+			name:          "vecf32",
+			typ:           types.New(types.T_array_float32, 3, 0),
+			value:         []float32{1, 2, 3},
+			wantRowString: "[1, 2, 3]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []float32{1, 2, 3}, vector.GetArrayAt[float32](vec, 0))
+			},
+		},
+		{
+			name:          "vecf64",
+			typ:           types.New(types.T_array_float64, 3, 0),
+			value:         []float64{1, 2, 3},
+			wantRowString: "[1, 2, 3]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []float64{1, 2, 3}, vector.GetArrayAt[float64](vec, 0))
+			},
+		},
+		{
+			name:          "vecbf16",
+			typ:           types.New(types.T_array_bf16, 3, 0),
+			value:         types.Float32ToBF16Slice([]float32{1, 2, 3}),
+			wantRowString: "[1, 2, 3]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []float32{1, 2, 3}, types.BF16ToFloat32Slice(vector.GetArrayAt[types.BF16](vec, 0)))
+			},
+		},
+		{
+			name:          "vecf16",
+			typ:           types.New(types.T_array_float16, 3, 0),
+			value:         types.Float32ToFloat16Slice([]float32{1, 2, 3}),
+			wantRowString: "[1, 2, 3]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []float32{1, 2, 3}, types.Float16ToFloat32Slice(vector.GetArrayAt[types.Float16](vec, 0)))
+			},
+		},
+		{
+			name:          "vecint8",
+			typ:           types.New(types.T_array_int8, 3, 0),
+			value:         []int8{1, 2, 3},
+			wantRowString: "[1, 2, 3]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []int8{1, 2, 3}, vector.GetArrayAt[int8](vec, 0))
+			},
+		},
+		{
+			name:          "vecuint8",
+			typ:           types.New(types.T_array_uint8, 3, 0),
+			value:         []uint8{1, 128, 255},
+			wantRowString: "[1, 128, 255]",
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, []uint8{1, 128, 255}, vector.GetArrayAt[uint8](vec, 0))
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			vec, err := GenVectorByVarValue(proc, testCase.typ, testCase.value)
+			require.NoError(t, err)
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			testCase.check(t, vec)
+			require.Equal(t, testCase.wantRowString, vec.RowToString(0))
+		})
+	}
+}
+
+func TestGenVectorByVarValueTimestampUsesSessionTimeZone(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sessionTZ := time.FixedZone("UTC+8", 8*60*60)
+	proc.Base.SessionInfo.TimeZone = sessionTZ
+
+	typ := types.T_timestamp.ToType()
+	vec, err := GenVectorByVarValue(proc, typ, "2026-01-01 00:00:00")
+	require.NoError(t, err)
+	t.Cleanup(func() { vec.Free(proc.Mp()) })
+
+	got := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
+	require.Equal(t, "2026-01-01 00:00:00", got.String2(sessionTZ, typ.Scale))
+	require.Equal(t, "2025-12-31 16:00:00", got.String2(time.UTC, typ.Scale))
+
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	utcVec, err := GenVectorByVarValue(proc, typ, "2026-01-01 00:00:00")
+	require.NoError(t, err)
+	t.Cleanup(func() { utcVec.Free(proc.Mp()) })
+	utcGot := vector.MustFixedColNoTypeCheck[types.Timestamp](utcVec)[0]
+	require.Equal(t, "2026-01-01 00:00:00", utcGot.String2(time.UTC, typ.Scale))
+}
+
+func TestGenVectorByVarValueInternalFixedTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	blockid := types.BuildTestBlockid(11, 22)
+	rowid := types.NewRowid(&blockid, 7)
+	ts := types.BuildTS(123456789, 42)
+
+	testCases := []struct {
+		name  string
+		typ   types.Type
+		value any
+		check func(t *testing.T, vec *vector.Vector)
+	}{
+		{
+			name:  "rowid typed value",
+			typ:   types.T_Rowid.ToType(),
+			value: rowid,
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, rowid, vector.MustFixedColNoTypeCheck[types.Rowid](vec)[0])
+			},
+		},
+		{
+			name:  "rowid encoded bytes",
+			typ:   types.T_Rowid.ToType(),
+			value: types.EncodeFixed(rowid),
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, rowid, vector.MustFixedColNoTypeCheck[types.Rowid](vec)[0])
+			},
+		},
+		{
+			name:  "blockid typed value",
+			typ:   types.T_Blockid.ToType(),
+			value: blockid,
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, blockid, vector.MustFixedColNoTypeCheck[types.Blockid](vec)[0])
+			},
+		},
+		{
+			name:  "blockid encoded bytes",
+			typ:   types.T_Blockid.ToType(),
+			value: types.EncodeFixed(blockid),
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, blockid, vector.MustFixedColNoTypeCheck[types.Blockid](vec)[0])
+			},
+		},
+		{
+			name:  "ts typed value",
+			typ:   types.T_TS.ToType(),
+			value: ts,
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, ts, vector.MustFixedColNoTypeCheck[types.TS](vec)[0])
+			},
+		},
+		{
+			name:  "ts encoded bytes",
+			typ:   types.T_TS.ToType(),
+			value: types.EncodeFixed(ts),
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, ts, vector.MustFixedColNoTypeCheck[types.TS](vec)[0])
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			vec, err := GenVectorByVarValue(proc, testCase.typ, testCase.value)
+			require.NoError(t, err)
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			require.Equal(t, testCase.typ.Oid, vec.GetType().Oid)
+			testCase.check(t, vec)
+		})
+	}
+}
 
 func TestHexToInt(t *testing.T) {
 	var val uint64
@@ -137,6 +326,164 @@ func TestBinaryToInt(t *testing.T) {
 
 	_, err = BinaryToInt("0x2")
 	require.Error(t, err)
+}
+
+func TestSetInsertValueBitIgnoreAdjustment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit4 := types.New(types.T_bit, 4, 0)
+	bit64 := types.New(types.T_bit, 64, 0)
+
+	tests := []struct {
+		name    string
+		value   *tree.NumVal
+		typ     *types.Type
+		ignore  bool
+		want    uint64
+		wantErr bool
+	}{
+		{
+			name:  "boolean converts to one",
+			value: tree.NewNumVal(true, "true", false, tree.P_bool),
+			typ:   &bit4,
+			want:  1,
+		},
+		{
+			name:   "character bytes convert within width",
+			value:  tree.NewNumVal("A", "A", false, tree.P_char),
+			typ:    &bit4,
+			want:   15,
+			ignore: true,
+		},
+		{
+			name:  "positive integer converts within width",
+			value: tree.NewNumVal(int64(7), "7", false, tree.P_int64),
+			typ:   &bit4,
+			want:  7,
+		},
+		{
+			name:  "unsigned integer converts within width",
+			value: tree.NewNumVal(uint64(8), "8", false, tree.P_uint64),
+			typ:   &bit4,
+			want:  8,
+		},
+		{
+			name:  "hexadecimal literal converts",
+			value: tree.NewNumVal("0x0f", "0x0f", false, tree.P_hexnum),
+			typ:   &bit4,
+			want:  15,
+		},
+		{
+			name:  "score binary converts",
+			value: tree.NewNumVal("1", "1", false, tree.P_ScoreBinary),
+			typ:   &bit64,
+			want:  49,
+		},
+		{
+			name:  "floating value rounds within width",
+			value: tree.NewNumVal(7.6, "7.6", false, tree.P_float64),
+			typ:   &bit4,
+			want:  8,
+		},
+		{
+			name:    "strict bit literal overflow fails",
+			value:   tree.NewNumVal("0b11111", "0b11111", false, tree.P_bit),
+			typ:     &bit4,
+			wantErr: true,
+		},
+		{
+			name:   "ignore bit literal overflow saturates",
+			value:  tree.NewNumVal("0b11111", "0b11111", false, tree.P_bit),
+			typ:    &bit4,
+			ignore: true,
+			want:   15,
+		},
+		{
+			name:   "ignore negative integer becomes zero",
+			value:  tree.NewNumVal(int64(-1), "-1", false, tree.P_int64),
+			typ:    &bit4,
+			ignore: true,
+			want:   0,
+		},
+		{
+			name:   "ignore bit64 floating upper boundary saturates",
+			value:  tree.NewNumVal(math.Exp2(64), "18446744073709551616", false, tree.P_float64),
+			typ:    &bit64,
+			ignore: true,
+			want:   math.MaxUint64,
+		},
+		{
+			name:   "ignore negative floating value becomes zero",
+			value:  tree.NewNumVal(-1.5, "-1.5", false, tree.P_float64),
+			typ:    &bit4,
+			ignore: true,
+			want:   0,
+		},
+		{
+			name:  "false boolean converts to zero",
+			value: tree.NewNumVal(false, "false", false, tree.P_bool),
+			typ:   &bit4,
+			want:  0,
+		},
+		{
+			name:  "character bytes convert without adjustment",
+			value: tree.NewNumVal("A", "A", false, tree.P_char),
+			typ: func() *types.Type {
+				typ := types.New(types.T_bit, 8, 0)
+				return &typ
+			}(),
+			want: 65,
+		},
+		{
+			name:    "long character literal fails",
+			value:   tree.NewNumVal("123456789", "123456789", false, tree.P_char),
+			typ:     &bit64,
+			wantErr: true,
+		},
+		{
+			name:    "strict integer overflow fails",
+			value:   tree.NewNumVal(int64(16), "16", false, tree.P_int64),
+			typ:     &bit4,
+			wantErr: true,
+		},
+		{
+			name:    "strict unsigned overflow fails",
+			value:   tree.NewNumVal(uint64(16), "16", false, tree.P_uint64),
+			typ:     &bit4,
+			wantErr: true,
+		},
+		{
+			name:    "strict hexadecimal overflow fails",
+			value:   tree.NewNumVal("0x10", "0x10", false, tree.P_hexnum),
+			typ:     &bit4,
+			wantErr: true,
+		},
+		{
+			name:    "strict score binary overflow fails",
+			value:   tree.NewNumVal("1", "1", false, tree.P_ScoreBinary),
+			typ:     &bit4,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			canInsert, got, err := SetInsertValueBit(proc, tc.value, tc.typ, tc.ignore)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, canInsert)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	require.Equal(t, uint64(0), bitMaxValue(0))
+	require.Equal(t, uint64(15), bitMaxValue(4))
+	require.Equal(t, uint64(math.MaxUint64), bitMaxValue(64))
+	require.True(t, bitFloatOutOfRange(math.Inf(1), 4))
+	require.True(t, bitFloatOutOfRange(math.Exp2(64), 64))
+	require.False(t, bitFloatOutOfRange(15, 4))
 }
 
 func TestScoreBinaryToInt(t *testing.T) {

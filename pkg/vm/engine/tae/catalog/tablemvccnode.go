@@ -41,6 +41,16 @@ func (e *TableMVCCNode) CloneAll() *TableMVCCNode {
 func (e *TableMVCCNode) CloneData() *TableMVCCNode {
 	return e.CloneAll()
 }
+
+// CloneForDelete creates a distinct MVCC payload while sharing the immutable
+// schemas. A delete only changes EntryMVCCNode; it never mutates schema data.
+func (e *TableMVCCNode) CloneForDelete() *TableMVCCNode {
+	return &TableMVCCNode{
+		Schema:          e.Schema,
+		TombstoneSchema: e.TombstoneSchema,
+	}
+}
+
 func (e *TableMVCCNode) GetTombstoneSchema() *Schema {
 	if e.TombstoneSchema == nil {
 		panic(fmt.Sprintf("logic error, table %v, has pk %v", e.Schema.Name, e.Schema.HasPKOrFakePK()))

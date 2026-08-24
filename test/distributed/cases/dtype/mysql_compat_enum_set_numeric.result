@@ -1,0 +1,45 @@
+drop table if exists mysql_compat_enum_set_numeric;
+create table mysql_compat_enum_set_numeric (
+e enum('a', 'b', ''),
+s set('x', 'y', 'z'),
+i int
+);
+insert into mysql_compat_enum_set_numeric values ('a', 'x', 1), ('b', 'x,y', 2);
+select cast(e as signed), abs(e), e = i, e between 1 and 2, e in (i), e = +1,
+length(e), e = 'a'
+from mysql_compat_enum_set_numeric order by i;
+cast(e as signed)    abs(e)    e = i    e between 1 and 2    e in (i)    e = +1    length(e)    e = a
+1    1    1    1    1    1    1    1
+2    2    1    1    1    0    1    0
+select cast(s as signed), abs(s), s = i, s between 1 and 2, s in (i), s = +1,
+length(s), s = 'x'
+from mysql_compat_enum_set_numeric order by i;
+cast(s as signed)    abs(s)    s = i    s between 1 and 2    s in (i)    s = +1    length(s)    s = x
+1    1    1    1    1    1    1    1
+3    3    0    0    0    0    3    0
+select e in (select i from mysql_compat_enum_set_numeric),
+e not in (select i from mysql_compat_enum_set_numeric),
+e = any (select i from mysql_compat_enum_set_numeric),
+s in (select i from mysql_compat_enum_set_numeric),
+s not in (select i from mysql_compat_enum_set_numeric)
+from mysql_compat_enum_set_numeric order by i;
+e in (select i from mysql_compat_enum_set_numeric)    e not in (select i from mysql_compat_enum_set_numeric)    e = any (select i from mysql_compat_enum_set_numeric)    s in (select i from mysql_compat_enum_set_numeric)    s not in (select i from mysql_compat_enum_set_numeric)
+1    0    1    1    0
+1    0    1    0    1
+select i in (select e from mysql_compat_enum_set_numeric),
+i = any (select e from mysql_compat_enum_set_numeric),
+i in (select s from mysql_compat_enum_set_numeric),
+(e, i) in (select i, i from mysql_compat_enum_set_numeric),
+(e, i) not in (select i, i from mysql_compat_enum_set_numeric),
+(e, i) = any (select i, i from mysql_compat_enum_set_numeric)
+from mysql_compat_enum_set_numeric order by i;
+i in (select e from mysql_compat_enum_set_numeric)    i = any (select e from mysql_compat_enum_set_numeric)    i in (select s from mysql_compat_enum_set_numeric)    (e, i) in (select i, i from mysql_compat_enum_set_numeric)    (e, i) not in (select i, i from mysql_compat_enum_set_numeric)    (e, i) = any (select i, i from mysql_compat_enum_set_numeric)
+1    1    1    1    0    1
+1    1    0    1    0    1
+select e in (select cast(i as char) from mysql_compat_enum_set_numeric),
+s in (select cast(i as char) from mysql_compat_enum_set_numeric)
+from mysql_compat_enum_set_numeric order by i;
+e in (select cast(i as char) from mysql_compat_enum_set_numeric)    s in (select cast(i as char) from mysql_compat_enum_set_numeric)
+0    0
+0    0
+drop table mysql_compat_enum_set_numeric;

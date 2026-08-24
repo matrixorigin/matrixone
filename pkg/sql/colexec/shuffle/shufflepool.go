@@ -618,7 +618,7 @@ func (sp *ShufflePool) tryWrite(
 				sp.batchLocks[bucket].Unlock()
 				break
 			}
-			readyDelta := sp.batchSets[bucket].ReadyDelta(len(chunk))
+			readyDelta := sp.batchSets[bucket].ReadyDeltaFor(srcBatch, len(chunk))
 			wait, ok := sp.reserveReady(int32(bucket), readyDelta)
 			if !ok {
 				sp.batchLocks[bucket].Unlock()

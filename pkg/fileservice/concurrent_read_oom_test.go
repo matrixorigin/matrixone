@@ -27,96 +27,59 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/stretchr/testify/require"
 )
 
-// TestConcurrentIOAllocatorPressure tests the ioAllocator under concurrent pressure.
-// Models the TPCC OOM scenario (issue #24348):
-// 1000 terminals × FOR UPDATE → TableScan → DiskCache.Read → prepareData → ioAllocator().Allocate
+// TestConcurrentIOAllocatorPressure verifies that concurrent ioAllocator users
+// can hold and release their allocations together. The larger TPCC OOM
+// reproductions below remain opt-in because their wall-clock load is diagnostic,
+// not a unit-test oracle.
 func TestConcurrentIOAllocatorPressure(t *testing.T) {
 	const (
-		numGoroutines = 1000
-		blockSize     = 65536                 // 64KB per block
-		holdDuration  = 50 * time.Millisecond // time data is held during scan
-		testDuration  = 5 * time.Second
+		numWorkers = 128
+		blockSize  = 64 << 10
 	)
 
 	alloc := ioAllocator()
+	start := make(chan struct{})
+	allocated := make(chan error, numWorkers)
+	release := make(chan struct{})
+	var inFlight atomic.Int64
+	var wg sync.WaitGroup
 
-	var (
-		totalAllocs  atomic.Int64
-		peakInFlight atomic.Int64
-		curInFlight  atomic.Int64
-		stopCh       = make(chan struct{})
-		wg           sync.WaitGroup
-	)
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-stopCh:
-				return
-			case <-time.After(10 * time.Millisecond):
-				cur := curInFlight.Load()
-				for {
-					old := peakInFlight.Load()
-					if cur <= old {
-						break
-					}
-					if peakInFlight.CompareAndSwap(old, cur) {
-						break
-					}
-				}
-			}
-		}
-	}()
-
-	for i := 0; i < numGoroutines; i++ {
+	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for {
-				select {
-				case <-stopCh:
-					return
-				default:
-				}
-
-				slice, dec, err := alloc.Allocate(uint64(blockSize), malloc.NoHints)
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				_ = slice
-				curInFlight.Add(1)
-				totalAllocs.Add(1)
-
-				time.Sleep(holdDuration)
-
-				dec.Deallocate()
-				curInFlight.Add(-1)
+			<-start
+			slice, dec, err := alloc.Allocate(blockSize, malloc.NoHints)
+			if err != nil {
+				allocated <- err
+				return
 			}
+			// Touch both ends so the test also validates the returned extent.
+			slice[0], slice[len(slice)-1] = 1, 1
+			inFlight.Add(1)
+			allocated <- nil
+			<-release
+			dec.Deallocate()
+			inFlight.Add(-1)
 		}()
 	}
 
-	time.Sleep(testDuration)
-	close(stopCh)
+	close(start)
+	var allocationErrors []error
+	for i := 0; i < numWorkers; i++ {
+		if err := <-allocated; err != nil {
+			allocationErrors = append(allocationErrors, err)
+		}
+	}
+	heldTogether := inFlight.Load()
+	close(release)
 	wg.Wait()
-
-	peakMB := float64(peakInFlight.Load()) * float64(blockSize) / 1024 / 1024
-
-	t.Logf("Results (hold=%v):", holdDuration)
-	t.Logf("  Goroutines: %d, Block size: %d KB", numGoroutines, blockSize/1024)
-	t.Logf("  Total allocs: %d", totalAllocs.Load())
-	t.Logf("  Peak in-flight: %d (= %.1f MB)", peakInFlight.Load(), peakMB)
-
-	s3Latency := 200 * time.Millisecond
-	scaleFactor := float64(s3Latency) / float64(holdDuration)
-	t.Logf("\n  === Projected OOM Model (S3 latency=%v) ===", s3Latency)
-	t.Logf("  Scale factor: %.1fx", scaleFactor)
-	t.Logf("  Projected peak (single block): %.0f MB", peakMB*scaleFactor)
-	t.Logf("  Projected peak (10 blocks/scan): %.0f MB", peakMB*scaleFactor*10)
+	require.Empty(t, allocationErrors)
+	require.Equal(t, int64(numWorkers), heldTogether)
+	require.Zero(t, inFlight.Load())
 }
 
 // TestLockOpHoldingCacheDataOOM reproduces the exact OOM mechanism from issue #24348:

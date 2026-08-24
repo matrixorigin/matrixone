@@ -1,0 +1,30 @@
+drop database if exists temp_shadow_truncate;
+create database temp_shadow_truncate;
+use temp_shadow_truncate;
+create table shadow(id int primary key, k int, index idx_k(k));
+insert into shadow values (100, 7), (101, 8);
+prepare truncate_shadow_before_temp from 'truncate table shadow';
+create temporary table shadow(id int primary key, k int, index idx_k(k));
+insert into shadow values (1, 7), (2, 8);
+truncate table shadow;
+no such table temp_shadow_truncate.shadow
+select count(*) as temp_rows_after_direct from shadow;
+➤ temp_rows_after_direct[-5,64,0]  𝄀
+2
+prepare truncate_shadow_after_temp from 'truncate table shadow';
+no such table temp_shadow_truncate.shadow
+select count(*) as temp_rows_after_prepare from shadow;
+➤ temp_rows_after_prepare[-5,64,0]  𝄀
+2
+execute truncate_shadow_before_temp;
+no such table temp_shadow_truncate.shadow
+select count(*) as temp_rows_after_execute from shadow;
+➤ temp_rows_after_execute[-5,64,0]  𝄀
+2
+use temp_shadow_truncate;
+select count(*) as permanent_rows from shadow;
+➤ permanent_rows[-5,64,0]  𝄀
+2
+deallocate prepare truncate_shadow_before_temp;
+drop table shadow;
+drop database temp_shadow_truncate;

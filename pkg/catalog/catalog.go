@@ -121,10 +121,13 @@ func NewDefines() *Defines {
 				&engine.IndexDef{
 					Indexes: []*plan.IndexDef{
 						{
-							IndexName:      "idx_rel_logical_id",
-							Parts:          []string{SystemRelAttr_LogicalID},
-							Unique:         true,
-							Visible:        true,
+							IndexName: "idx_rel_logical_id",
+							Parts:     []string{SystemRelAttr_LogicalID},
+							Unique:    true,
+							Visible:   true,
+							Option: &plan.IndexOption{
+								Visibility: plan.IndexOption_VISIBILITY_VISIBLE,
+							},
 							IndexTableName: MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME,
 							TableExist:     true, // Index table will be created during system startup
 						},

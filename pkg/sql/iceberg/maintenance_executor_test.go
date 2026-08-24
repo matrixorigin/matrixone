@@ -17,6 +17,8 @@ package iceberg
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -485,8 +487,18 @@ func TestMaintenanceProcedureExecutorRunsNativeRewriteDataFilesWithDefaultCompac
 		},
 	}
 	var commitReq api.CommitRequest
+	const committedMetadataLocation = "s3://warehouse/orders/metadata/v5.json"
+	var committedMetadataJSON []byte
 	client := &icebergcatalog.MockClient{
 		LoadTableFunc: func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+			if len(committedMetadataJSON) > 0 {
+				return &api.LoadTableResponse{
+					Namespace:        req.Namespace,
+					TableName:        req.Table,
+					MetadataLocation: committedMetadataLocation,
+					MetadataJSON:     committedMetadataJSON,
+				}, nil
+			}
 			return &api.LoadTableResponse{
 				Namespace:        req.Namespace,
 				TableName:        req.Table,
@@ -496,9 +508,26 @@ func TestMaintenanceProcedureExecutorRunsNativeRewriteDataFilesWithDefaultCompac
 		},
 		CommitTableFunc: func(ctx context.Context, req api.CommitRequest) (*api.CommitResult, error) {
 			commitReq = req
-			return &api.CommitResult{SnapshotID: 8, CommitID: "commit-native-rewrite-data", Verified: true}, nil
+			committed, err := metadata.ParseTableMetadata(maintenanceExpireMetadataJSON(), "s3://warehouse/orders/metadata/v4.json")
+			requireNoErr(t, err)
+			if len(req.Updates) != 2 || req.Updates[0].Snapshot == nil {
+				t.Fatalf("unexpected native rewrite data files updates: %+v", req.Updates)
+			}
+			newSnapshot := *req.Updates[0].Snapshot
+			committed.Snapshots = append(committed.Snapshots, newSnapshot)
+			committed.CurrentSnapshotID = &newSnapshot.SnapshotID
+			committed.Refs["main"] = api.SnapshotRef{Name: "main", Type: "branch", SnapshotID: newSnapshot.SnapshotID}
+			committedMetadataJSON, err = json.Marshal(committed)
+			requireNoErr(t, err)
+			// Nessie follows the standard CommitTableResponse shape: the metadata
+			// location is present, while snapshot and vendor commit IDs are absent.
+			return &api.CommitResult{
+				MetadataLocation:     committedMetadataLocation,
+				MetadataLocationHash: api.PathHash(committedMetadataLocation),
+			}, nil
 		},
 	}
+	catalogFactory := &fakeMaintenanceCatalogFactory{client: client}
 	cfg := api.DefaultConfig()
 	cfg.Enable = true
 	cfg.Write.EnableWrite = true
@@ -506,7 +535,8 @@ func TestMaintenanceProcedureExecutorRunsNativeRewriteDataFilesWithDefaultCompac
 	executor := NewMaintenanceProcedureExecutor(store, MaintenanceProcedureExecutorOptions{
 		Config:         cfg,
 		Account:        api.AccountConfig{AccountID: 7, Enable: true},
-		CatalogFactory: &fakeMaintenanceCatalogFactory{client: client},
+		CatalogFactory: catalogFactory,
+		CommitVerifier: maintenance.CatalogFactoryCommitVerifier{CatalogFactory: catalogFactory},
 		ObjectIOProvider: icebergio.ScopedProvider{
 			FileService: fs,
 		},
@@ -531,7 +561,8 @@ func TestMaintenanceProcedureExecutorRunsNativeRewriteDataFilesWithDefaultCompac
 		Parsed:      parsed,
 	})
 	requireNoErr(t, err)
-	if result.SnapshotAfter != "8" || result.CommitID != "commit-native-rewrite-data" || !result.Verified || result.RewrittenFileCount != 2 {
+	expectedSnapshotAfter := strconv.FormatInt(commitReq.Updates[0].Snapshot.SnapshotID, 10)
+	if result.SnapshotAfter != expectedSnapshotAfter || result.CommitID != api.PathHash(committedMetadataLocation) || !result.Verified || result.RewrittenFileCount != 2 || result.RemovedFileCount != 2 {
 		t.Fatalf("unexpected native rewrite data files result: %+v", result)
 	}
 	if commitReq.TargetRef != "main" || commitReq.IdempotencyKey != "stmt-1" || len(commitReq.Updates) != 2 || commitReq.Updates[0].Type != "add-snapshot" || commitReq.Updates[1].Type != "set-snapshot-ref" {

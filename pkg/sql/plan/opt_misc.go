@@ -53,6 +53,10 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 		increaseRefCntForColRefList(updateCtx.InsertCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.DeleteCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.PartitionCols, 2, colRefCnt)
+		if updateCtx.ChangedRowsCol != nil {
+			colRefCnt[[2]int32{updateCtx.ChangedRowsCol.RelPos, updateCtx.ChangedRowsCol.ColPos}] += 2
+		}
+		increaseRefCntForColRefList(updateCtx.AffectedRowsCols, 2, colRefCnt)
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
@@ -114,6 +118,23 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	case plan.Node_MULTI_UPDATE:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
+		}
+
+	case plan.Node_LOCK_OP:
+		childParentType := node.NodeType
+		if _, preserve := builder.preserveLockProjection[nodeID]; preserve {
+			// A preserved pass-through lock can feed positional consumers such as a
+			// shared SINK. Keep its immediate PROJECT as the stable row-image
+			// boundary; inlining that PROJECT changes the binding tag and can make
+			// every downstream sink column resolve to input column zero.
+			childParentType = plan.Node_UNKNOWN
+		}
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, true, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -207,6 +228,12 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	}
 
 	childType := builder.qry.Nodes[node.Children[0]].NodeType
+	// A PROJECT is also the rewrite boundary for a fulltext-filtered scan.
+	// Removing it can expose the scan directly under a WINDOW or an outer JOIN,
+	// neither of which can safely perform the scan-local fulltext rewrite.
+	if childType == plan.Node_TABLE_SCAN && builder.scanHasMatchedFullTextFilter(builder.qry.Nodes[node.Children[0]]) {
+		return false
+	}
 	if childType == plan.Node_VALUE_SCAN || childType == plan.Node_EXTERNAL_SCAN {
 		return parentType == plan.Node_PROJECT
 	}
@@ -231,6 +258,16 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
+		// fulltext_match is a planner placeholder: applyIndices replaces it
+		// with the score column produced by fulltext_index_scan.  Inlining a
+		// projection that contains it can move the placeholder into a WINDOW
+		// (for example through a multi-CTE query) where the fulltext rewrite
+		// cannot associate it with the source scan anymore.  Keep that PROJECT
+		// until applyIndices has performed the replacement; the second
+		// removeSimpleProjections pass can remove it afterwards.
+		if ne.F.Func.ObjName == "fulltext_match" {
+			return false
+		}
 		overload, exists := function.GetFunctionByIdWithoutError(ne.F.Func.Obj)
 		if !exists || overload.CannotFold() || overload.IsRealTimeRelated() {
 			return false
@@ -305,6 +342,12 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 		replaceColumnsForColRefList(updateCtx.InsertCols, projMap)
 		replaceColumnsForColRefList(updateCtx.DeleteCols, projMap)
 		replaceColumnsForColRefList(updateCtx.PartitionCols, projMap)
+		if updateCtx.ChangedRowsCol != nil {
+			cols := []plan.ColRef{*updateCtx.ChangedRowsCol}
+			replaceColumnsForColRefList(cols, projMap)
+			*updateCtx.ChangedRowsCol = cols[0]
+		}
+		replaceColumnsForColRefList(updateCtx.AffectedRowsCols, projMap)
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
@@ -333,9 +376,18 @@ func replaceColumnsForColRefList(cols []plan.ColRef, projMap map[[2]int32]*plan.
 	for i := range cols {
 		mapID := [2]int32{cols[i].RelPos, cols[i].ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
-			newCol := projExpr.Expr.(*plan.Expr_Col).Col
-			cols[i].RelPos = newCol.RelPos
-			cols[i].ColPos = newCol.ColPos
+			// A []plan.ColRef can only hold a column, so a mapping to any other
+			// expression form (a CTE projecting `id+1`, a cast) has nowhere to go here.
+			// Assert-and-panic would take down the CN; leaving the ref alone keeps the
+			// list valid. Vector rewrites publish such maps into idxColMap, which
+			// applyIndices then applies to every ancestor including nodes carrying
+			// UpdateCtxList / DedupJoinCtx.OldColList.
+			colExpr, isCol := projExpr.Expr.(*plan.Expr_Col)
+			if !isCol || colExpr.Col == nil {
+				continue
+			}
+			cols[i].RelPos = colExpr.Col.RelPos
+			cols[i].ColPos = colExpr.Col.ColPos
 		}
 	}
 }
@@ -578,6 +630,10 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 		increaseTagCntForColRefList(updateCtx.InsertCols, 2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.DeleteCols, 2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.PartitionCols, 2, tagCnt)
+		if updateCtx.ChangedRowsCol != nil {
+			tagCnt[updateCtx.ChangedRowsCol.RelPos] += 2
+		}
+		increaseTagCntForColRefList(updateCtx.AffectedRowsCols, 2, tagCnt)
 	}
 
 	for i, childID := range node.Children {
@@ -623,6 +679,10 @@ END:
 		increaseTagCntForColRefList(updateCtx.InsertCols, -2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.DeleteCols, -2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.PartitionCols, -2, tagCnt)
+		if updateCtx.ChangedRowsCol != nil {
+			tagCnt[updateCtx.ChangedRowsCol.RelPos] -= 2
+		}
+		increaseTagCntForColRefList(updateCtx.AffectedRowsCols, -2, tagCnt)
 	}
 
 	return nodeID
@@ -666,7 +726,7 @@ func increaseTagCnt(expr *plan.Expr, inc int, tagCnt map[int32]int) {
 func findHashOnPKTable(nodeID, tag int32, builder *QueryBuilder) *plan.TableDef {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		if node.BindingTags[0] == tag {
+		if len(node.BindingTags) > 0 && node.BindingTags[0] == tag {
 			return node.TableDef
 		}
 	} else if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER {
@@ -684,7 +744,7 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	node := builder.qry.Nodes[nodeID]
 
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		if node.TableDef.Pkey == nil {
+		if node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
 			return nil
 		}
 		tag := uint64(node.BindingTags[0]) << 32
@@ -1045,6 +1105,12 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 		expr := node.FilterList[i]
 		fun := expr.GetF()
 		if fun != nil && fun.Func.ObjName == "like" {
+			// Explicit ESCAPE changes how wildcard bytes are interpreted. Keep
+			// the original predicate intact instead of applying the two-argument
+			// prefix rewrite with its hard-coded default escape semantics.
+			if len(fun.Args) != 2 {
+				continue
+			}
 			col := fun.Args[0].GetCol()
 			if col == nil {
 				continue
@@ -1131,14 +1197,28 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 	}
 }
 
-func handleOptimizerHints(str string, builder *QueryBuilder) {
+// splitOptimizerHint parses one comma-separated `key=value` entry of the optimizer_hints
+// variable. Nothing is trimmed, so in `a=1, applyIndices=1` the second entry has the key
+// " applyIndices" and matches no hint -- that hint is simply not applied.
+//
+// Anything else deciding whether a hint is in effect must call THIS, not re-split the string:
+// a copy that trims believes a hint is on while the optimizer ignores it, and the two then
+// disagree about what the plan actually did.
+func splitOptimizerHint(str string) (key string, value int, ok bool) {
 	strs := strings.Split(str, "=")
 	if len(strs) != 2 {
-		return
+		return "", 0, false
 	}
-	key := strs[0]
-	value, err := strconv.Atoi(strs[1])
+	v, err := strconv.Atoi(strs[1])
 	if err != nil {
+		return "", 0, false
+	}
+	return strs[0], v, true
+}
+
+func handleOptimizerHints(str string, builder *QueryBuilder) {
+	key, value, ok := splitOptimizerHint(str)
+	if !ok {
 		return
 	}
 	if builder.optimizerHints == nil {
@@ -1249,6 +1329,11 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 	}
 	tableDef := baseNode.TableDef
 	objRef := baseNode.ObjRef
+	if builder.isForUpdate && query.StmtType == plan.Query_SELECT {
+		if err = validateTableIndexDefinitions(tableDef); err != nil {
+			return
+		}
+	}
 	tableIDs := make(map[uint64]bool)
 	tableIDs[tableDef.TblId] = true
 	for _, idx := range tableDef.Indexes {

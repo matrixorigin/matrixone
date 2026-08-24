@@ -51,7 +51,13 @@ func (f *FileServices) CopyObject(
 	srcPath string,
 	dstPath string,
 ) (bool, error) {
-	p, err := ParsePathAtService(dstPath, "")
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if _, err := parseFilePathAtService(srcPath, ""); err != nil {
+		return false, err
+	}
+	p, err := parseFilePathAtService(dstPath, "")
 	if err != nil {
 		return false, err
 	}
@@ -71,6 +77,9 @@ func (f *FileServices) CopyObject(
 }
 
 func (f *FileServices) Delete(ctx context.Context, filePaths ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for _, filePath := range filePaths {
 		if err := f.deleteSingle(ctx, filePath); err != nil {
 			return err
@@ -86,7 +95,7 @@ func (f *FileServices) Close(ctx context.Context) {
 }
 
 func (f *FileServices) deleteSingle(ctx context.Context, filePath string) error {
-	path, err := ParsePathAtService(filePath, "")
+	path, err := parseFilePathAtService(filePath, "")
 	if err != nil {
 		return err
 	}
@@ -102,6 +111,10 @@ func (f *FileServices) deleteSingle(ctx context.Context, filePath string) error 
 
 func (f *FileServices) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
 	return func(yield func(*DirEntry, error) bool) {
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
+			return
+		}
 		path, err := ParsePathAtService(dirPath, "")
 		if err != nil {
 			yield(nil, err)
@@ -124,7 +137,10 @@ func (f *FileServices) Name() string {
 }
 
 func (f *FileServices) Read(ctx context.Context, vector *IOVector) error {
-	path, err := ParsePathAtService(vector.FilePath, "")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := parseFilePathAtService(vector.FilePath, "")
 	if err != nil {
 		return err
 	}
@@ -139,7 +155,10 @@ func (f *FileServices) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (f *FileServices) ReadCache(ctx context.Context, vector *IOVector) error {
-	path, err := ParsePathAtService(vector.FilePath, "")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := parseFilePathAtService(vector.FilePath, "")
 	if err != nil {
 		return err
 	}
@@ -154,7 +173,10 @@ func (f *FileServices) ReadCache(ctx context.Context, vector *IOVector) error {
 }
 
 func (f *FileServices) Write(ctx context.Context, vector IOVector) error {
-	path, err := ParsePathAtService(vector.FilePath, "")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := parseFilePathAtService(vector.FilePath, "")
 	if err != nil {
 		return err
 	}
@@ -169,7 +191,10 @@ func (f *FileServices) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (f *FileServices) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
-	path, err := ParsePathAtService(filePath, "")
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	path, err := parseFilePathAtService(filePath, "")
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +209,10 @@ func (f *FileServices) StatFile(ctx context.Context, filePath string) (*DirEntry
 }
 
 func (f *FileServices) PrefetchFile(ctx context.Context, filePath string) error {
-	path, err := ParsePathAtService(filePath, "")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := parseFilePathAtService(filePath, "")
 	if err != nil {
 		return err
 	}

@@ -344,9 +344,13 @@ func TestCommand_Close(t *testing.T) {
 	})
 
 	t.Run("Idempotent", func(t *testing.T) {
+		releases := 0
 		cmd := NewInsertDeleteBatchCommand(NewAtomicBatch(nil), nil, types.BuildTS(1, 0), types.BuildTS(2, 0))
+		cmd.snapshotPermit = &snapshotPermit{release: func() { releases++ }}
 		cmd.Close()
 		assert.NotPanics(t, func() { cmd.Close() })
+		assert.Equal(t, 1, releases)
+		assert.Nil(t, cmd.snapshotPermit)
 	})
 
 	t.Run("EmptyCommand", func(t *testing.T) {

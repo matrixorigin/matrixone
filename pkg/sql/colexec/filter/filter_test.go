@@ -16,6 +16,7 @@ package filter
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -38,7 +39,7 @@ type filterTestCase struct {
 	getRowCount int
 }
 
-func makeTestCases(t *testing.T) []filterTestCase {
+func makeTestCases(t testing.TB) []filterTestCase {
 	boolType := types.T_bool.ToType()
 	int32Type := types.T_int32.ToType()
 
@@ -159,6 +160,72 @@ func makeTestCases(t *testing.T) []filterTestCase {
 	}
 }
 
+func BenchmarkCheckConstraintFilter(b *testing.B) {
+	for conditionCount := 1; conditionCount <= 2; conditionCount++ {
+		for _, assertFastPath := range []bool{false, true} {
+			mode := "filter_lowering"
+			if assertFastPath {
+				mode = "assert_fast_path"
+			}
+			b.Run(fmt.Sprintf("conditions_%d/%s", conditionCount, mode), func(b *testing.B) {
+				tcs := makeTestCases(b)
+				tc := tcs[conditionCount-1]
+				for idx := range tcs {
+					if idx != conditionCount-1 {
+						tcs[idx].proc.Free()
+					}
+				}
+				// Keep every row valid so the benchmark measures the successful
+				// assertion path rather than fail-fast error construction.
+				for idx, condition := range tc.arg.FilterExprs {
+					threshold := int32(0)
+					if idx == 1 {
+						threshold = 100
+					}
+					condition.GetF().Args[1].GetLit().Value = &plan.Literal_I32Val{I32Val: threshold}
+				}
+				tc.arg.FilterExprs = makeCheckConstraintAssertExprs(b, tc.arg.FilterExprs)
+				tc.arg.IsAssert = assertFastPath
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					resetChildren(tc.arg, tc.proc)
+					require.NoError(b, tc.arg.Prepare(tc.proc))
+					result, err := vm.Exec(tc.arg, tc.proc)
+					require.NoError(b, err)
+					require.NotNil(b, result.Batch)
+					tc.arg.Reset(tc.proc, false, nil)
+				}
+				b.StopTimer()
+				for _, child := range tc.arg.Children {
+					child.Free(tc.proc, false, nil)
+				}
+				tc.arg.Free(tc.proc, false, nil)
+				tc.proc.Free()
+				require.Zero(b, tc.proc.Mp().CurrNB())
+			})
+		}
+	}
+}
+
+func makeCheckConstraintAssertExprs(t testing.TB, conditions []*plan.Expr) []*plan.Expr {
+	t.Helper()
+	assertions := make([]*plan.Expr, len(conditions))
+	for i, condition := range conditions {
+		message := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: "check failed"},
+			}},
+		}
+		var err error
+		assertions[i], err = plan2.BindFuncExprImplByPlanExpr(
+			context.Background(), "_check_constraint_assert", []*plan.Expr{condition, message})
+		require.NoError(t, err)
+	}
+	return assertions
+}
+
 func TestFilter(t *testing.T) {
 	tcs := makeTestCases(t)
 	for _, tc := range tcs {
@@ -208,6 +275,96 @@ func TestFilter(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestAssertFilterFastPath(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	message := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: "check failed"},
+		}},
+	}
+	assertExpr, err := plan2.BindFuncExprImplByPlanExpr(
+		t.Context(),
+		"_check_constraint_assert",
+		[]*plan.Expr{plan2.MakePlan2BoolConstExprWithType(false), message},
+	)
+	require.NoError(t, err)
+
+	arg := &Filter{FilterExprs: []*plan.Expr{assertExpr}, IsAssert: true}
+	resetChildren(arg, proc)
+	require.NoError(t, arg.Prepare(proc))
+	_, err = vm.Exec(arg, proc)
+	require.ErrorContains(t, err, "check failed")
+
+	for _, child := range arg.Children {
+		child.Free(proc, true, err)
+	}
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestFilterReturnsSelectionOnLaterExecutorError(t *testing.T) {
+	tcs := makeTestCases(t)
+	tc := tcs[0]
+	tcs[1].proc.Free()
+	message := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: "later check failed"},
+		}},
+	}
+	assertExpr, err := plan2.BindFuncExprImplByPlanExpr(
+		t.Context(),
+		"_check_constraint_assert",
+		[]*plan.Expr{plan2.MakePlan2BoolConstExprWithType(false), message},
+	)
+	require.NoError(t, err)
+	tc.arg.FilterExprs = append(tc.arg.FilterExprs, assertExpr)
+
+	for i := 0; i < 100; i++ {
+		resetChildren(tc.arg, tc.proc)
+		require.NoError(t, tc.arg.Prepare(tc.proc))
+		_, err = vm.Exec(tc.arg, tc.proc)
+		require.ErrorContains(t, err, "later check failed")
+		tc.arg.Reset(tc.proc, true, err)
+	}
+
+	for _, child := range tc.arg.Children {
+		child.Free(tc.proc, true, err)
+	}
+	tc.arg.Free(tc.proc, true, err)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestAssertFilterStillAppliesRuntimeFilter(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	assertions := makeCheckConstraintAssertExprs(
+		t,
+		[]*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)},
+	)
+	arg := &Filter{
+		FilterExprs:        assertions,
+		RuntimeFilterExprs: []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(false)},
+		IsAssert:           true,
+	}
+	resetChildren(arg, proc)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Zero(t, result.Batch.RowCount(),
+		"runtime filters remain cardinality-changing on ASSERT operators")
+
+	for _, child := range arg.Children {
+		child.Free(proc, false, nil)
+	}
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func resetChildren(arg *Filter, proc *process.Process) {

@@ -27,7 +27,7 @@ func (n *Bitmap) cPtr() *C.uint64_t {
 	return (*C.uint64_t)(unsafe.Pointer(&n.data[0]))
 }
 func (n *Bitmap) cLen() C.uint64_t {
-	return C.uint64_t(n.len)
+	return C.uint64_t(n.logicalLen())
 }
 
 func (n *Bitmap) C_IsEmpty() bool {
@@ -53,5 +53,5 @@ func (n *Bitmap) RawPtrLen() (uintptr, uintptr) {
 	if n == nil || len(n.data) == 0 {
 		return 0, 0
 	}
-	return uintptr(unsafe.Pointer(&n.data[0])), uintptr(n.len)
+	return uintptr(unsafe.Pointer(&n.data[0])), uintptr(n.logicalLen())
 }

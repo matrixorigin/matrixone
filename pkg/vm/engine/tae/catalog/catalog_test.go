@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -199,6 +200,65 @@ func TestTableEntry1(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = db.GetRelationByName(schema.Name)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+}
+
+func TestDropTableSharesSchemaAndAlterKeepsCopyOnWrite(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	catalog := MockCatalog(nil)
+	defer catalog.Close()
+
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
+	txnMgr.Start(context.Background())
+	defer txnMgr.Stop()
+
+	createTxn, _ := txnMgr.StartTxn(nil)
+	db, err := createTxn.CreateDatabase("db1", "", "")
+	require.NoError(t, err)
+	schema := MockSchema(4, 0)
+	schema.Name = "tb1"
+	schema.Extra.Checks = []*planpb.CheckDef{{
+		Name:      "positive_col_0",
+		OriginSql: "`col_0` > 0",
+	}}
+	rel, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	require.NoError(t, createTxn.Commit(context.Background()))
+
+	table := rel.(*mockTableHandle).entry
+	table.RLock()
+	createdNode := table.GetLatestNodeLocked()
+	table.RUnlock()
+
+	dropTxn, _ := txnMgr.StartTxn(nil)
+	db, err = dropTxn.GetDatabase("db1")
+	require.NoError(t, err)
+	_, err = db.DropRelationByName(schema.Name)
+	require.NoError(t, err)
+
+	table.RLock()
+	dropNode := table.GetLatestNodeLocked()
+	table.RUnlock()
+	require.NotSame(t, createdNode, dropNode)
+	require.NotSame(t, createdNode.BaseNode, dropNode.BaseNode)
+	require.Same(t, createdNode.BaseNode.Schema, dropNode.BaseNode.Schema)
+	require.Same(t, createdNode.BaseNode.TombstoneSchema, dropNode.BaseNode.TombstoneSchema)
+	require.True(t, dropNode.HasDropIntent())
+
+	sharedBaseNode := dropNode.BaseNode
+	originalComment := createdNode.BaseNode.Schema.Comment
+	_, alteredSchema, err := table.AlterTable(
+		context.Background(),
+		dropTxn,
+		api.NewUpdateCommentReq(table.GetDB().GetID(), table.GetID(), "new comment"),
+	)
+	require.NoError(t, err)
+	require.NotSame(t, sharedBaseNode, dropNode.BaseNode)
+	require.NotSame(t, createdNode.BaseNode.Schema, alteredSchema)
+	require.Equal(t, originalComment, createdNode.BaseNode.Schema.Comment)
+	require.Equal(t, "new comment", alteredSchema.Comment)
+	require.Equal(t, schema.Extra.Checks, alteredSchema.Extra.Checks)
+	require.NotSame(t, schema.Extra.Checks[0], alteredSchema.Extra.Checks[0])
+	require.NoError(t, dropTxn.Commit(context.Background()))
 }
 
 func TestTableEntry2(t *testing.T) {
@@ -418,6 +478,18 @@ func TestAlterSchema(t *testing.T) {
 	require.Equal(t, uint16(5), schema.GetSingleSortKey().SeqNum)
 	require.Equal(t, 5, schema.GetSingleSortKeyIdx())
 
+	schema.Extra.Checks = []*planpb.CheckDef{{OriginSql: "CHECK (`mock_0` > 0)"}}
+	req = api.NewRenameColumnReqWithChecks(
+		0,
+		0,
+		"mock_0",
+		"renamed_0",
+		uint32(schema.GetSeqnum("mock_0")),
+		[]*planpb.CheckDef{{OriginSql: "CHECK (`renamed_0` > 0)"}},
+	)
+	require.NoError(t, schema.ApplyAlterTable(req))
+	require.Equal(t, "renamed_0", schema.ColDefs[schema.GetColIdx("renamed_0")].Name)
+	require.Equal(t, "CHECK (`renamed_0` > 0)", schema.Extra.Checks[0].OriginSql)
 }
 
 func randomTxnID(t *testing.T) []byte {

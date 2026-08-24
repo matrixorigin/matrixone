@@ -486,22 +486,22 @@ select * from time07;
 drop table time07;
 
 drop table if exists test01;
-create table test01 as select col1 from time01 order by col1 nulls first;
+create table test01 as select col1 from time01 order by col1;
 select * from test01;
 drop table test01;
 
 drop table if exists test02;
-create table test02 as select * from time01 order by col2 desc nulls first;
+create table test02 as select * from time01 order by col2 is not null, col2 desc;
 select * from test02;
 drop table test02;
 
 drop table if exists test03;
-create table test03 as select * from time01 order by col2 desc nulls last;
+create table test03 as select * from time01 order by col2 desc;
 select * from test03;
 drop table test03;
 
 drop table if exists test04;
-create table test04 as select col1 from time01 order by col1 nulls first;
+create table test04 as select col1 from time01 order by col1;
 select * from test04;
 drop table test04;
 
@@ -1433,6 +1433,80 @@ CREATE TABLE tx1 (
 );
 
 -- error test
-create dynamic table dt_test as select * from tx1;
 drop table tx1;
 drop database db9;
+
+-- CTAS must preserve DATETIME(fsp) casts when it serializes the SELECT for the insert plan.
+drop database if exists repro_ctas_datetime6;
+create database repro_ctas_datetime6;
+use repro_ctas_datetime6;
+create table t as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit;
+select dt_lit from t;
+select table_name, column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'repro_ctas_datetime6'
+order by ordinal_position;
+create table t_union as
+select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit
+union all
+select cast('2025-05-07 08:09:10.654321' as datetime(6));
+select dt_lit from t_union order by dt_lit;
+drop database repro_ctas_datetime6;
+
+-- @bvt:issue#26828
+-- CTAS metadata must include NULLs synthesized by joins and scalar subqueries.
+drop database if exists ctas_null_extension_26828;
+create database ctas_null_extension_26828;
+use ctas_null_extension_26828;
+create table l (id int primary key, lv int not null);
+create table r (id int primary key, rv int not null);
+insert into l values (1, 10), (2, 20);
+insert into r values (1, 100), (3, 300);
+
+create table direct_left as select l.id as l_id, l.lv, r.id as r_id, r.rv from l left join r on l.id = r.id;
+select * from direct_left order by l_id;
+
+create table derived_right as select * from (select l.id as l_id, l.lv, r.id as r_id, r.rv from l right join r on l.id = r.id) as src;
+select * from derived_right order by r_id;
+
+create view full_view as select l.id as l_id, l.lv, r.id as r_id, r.rv from l full join r on l.id = r.id;
+create table view_full as select * from full_view;
+select * from view_full order by coalesce(l_id, r_id);
+
+create table scalar_direct as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+select * from scalar_direct order by l_id;
+
+create view scalar_view as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+create table scalar_view_ctas as select * from scalar_view;
+select * from scalar_view_ctas order by l_id;
+
+create table coalesce_left as select l.id as l_id, coalesce(r.rv, -1) as rv_or_default from l left join r on l.id = r.id;
+select * from coalesce_left order by l_id;
+
+create table explicit_not_null_reject (r_id int not null) as select r.id from l left join r on l.id = r.id;
+show tables like 'explicit_not_null_reject';
+
+select table_name, column_name, is_nullable from information_schema.columns where table_schema = 'ctas_null_extension_26828' and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
+drop database ctas_null_extension_26828;
+
+-- CTAS must not copy AUTO_INCREMENT from a source column.
+drop database if exists ctas_auto_increment_24436;
+create database ctas_auto_increment_24436;
+use ctas_auto_increment_24436;
+create table source_ai (id int primary key auto_increment, payload varchar(20));
+insert into source_ai(payload) values ('one'), ('two');
+create table target_ctas as select id, payload from source_ai;
+select count(*) from information_schema.columns
+where table_schema = database() and table_name = 'source_ai'
+  and column_name = 'id' and extra = 'auto_increment';
+select count(*) from information_schema.columns
+where table_schema = database() and table_name = 'target_ctas'
+  and column_name = 'id' and extra = 'auto_increment';
+insert into target_ctas(payload) values ('omitted-id');
+select id, payload from target_ctas where payload = 'omitted-id';
+create table target_explicit (id int not null default 42, payload varchar(20))
+as select id, payload from source_ai;
+insert into target_explicit(payload) values ('explicit-default');
+select id, payload from target_explicit where payload = 'explicit-default';
+drop database ctas_auto_increment_24436;

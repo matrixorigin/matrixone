@@ -1,0 +1,267 @@
+set ft2_relevancy_algorithm="BM25";
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_wrapped;
+create database ft2_wrapped;
+use ft2_wrapped;
+create table docs(id int primary key, body text);
+insert into docs values (1,'hello a'),(2,'other text'),(3,'hello hello b');
+create fulltext2 index ft on docs(body);
+select id, match(body) against('hello') as sc from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  𝄀
+1  ¦  0.03313846  𝄀
+3  ¦  0.040571388
+select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.033  𝄀
+3  ¦  0.041
+select id, cast(match(body) against('hello') as decimal(10,3)) as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[3,10,3]  𝄀
+1  ¦  0.033  𝄀
+3  ¦  0.041
+select id, match(body) against('hello') * 100 as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  3.31384614109993  𝄀
+3  ¦  4.0571387857198715
+select id, round(match(body) against('hello') + 1, 3) as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  1.033  𝄀
+3  ¦  1.041
+select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello') order by r desc;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+3  ¦  0.041  𝄀
+1  ¦  0.033
+explain select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello');
+-- @regex("Table Function on fulltext2_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft2_wrapped.docs  𝄀
+                    Runtime Filter Probe: docs.id  𝄀
+              ->  Table Function on fulltext2_search
+create view v as select id, match(body) against('hello') as sc from docs where match(body) against('hello');
+select id from v where sc > 0 order by id;              -- baseline: every match
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from v where sc > 0.037 order by id;          -- only the higher scorer
+➤ id[4,32,0]  𝄀
+3
+select id from v where round(sc, 4) > 0.037 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where cast(sc as double) > 0.037 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where sc * 2 > 0.074 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where sc > 0.037 and id > 1 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where round(cast(sc as double) * 2, 3) > 0.074 order by id;
+➤ id[4,32,0]  𝄀
+3
+explain select id from v where round(sc, 4) > 0;
+-- @regex("Table Function on fulltext2_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (round(cast(mo_fulltext_alias_0.__mo_ft_score AS DOUBLE), 4) > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft2_wrapped.docs  𝄀
+                          Runtime Filter Probe: docs.id  𝄀
+                    ->  Table Function on fulltext2_search
+select id from v where sc > 0.037 order by id;      -- only the higher-scoring row
+➤ id[4,32,0]  𝄀
+3
+select id from v where sc > 0.5 order by id;     -- none
+➤ id[4,32,0]
+select id from v where round(sc, 4) > 0.037 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where cast(sc as double) > 0.5 order by id;
+➤ id[4,32,0]
+select id from (
+select id, match(body) against('hello') as sc from docs where match(body) against('hello')
+) x where sc > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+create table two(id int primary key, body text);
+insert into two values (1,'hello'),(2,'hello hello'),(3,'hello hello hello'),(4,'world'),(5,'hello hello world');
+create fulltext2 index ft_two on two(body);
+select id, match(body) against('hello') as h from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  h[7,5,0]  𝄀
+1  ¦  0.01211813  𝄀
+2  ¦  0.013416502  𝄀
+3  ¦  0.013913408  𝄀
+5  ¦  0.011558833
+select id, match(body) against('world') as w from two where match(body) against('world') order by id;
+➤ id[4,32,0]  ¦  w[7,5,0]  𝄀
+4  ¦  0.20433064  𝄀
+5  ¦  0.12927042
+select id, round(match(body) against('hello'),3) as h, round(match(body) against('world'),3) as w
+from two where match(body) against('hello') and match(body) against('world') order by id;
+➤ id[4,32,0]  ¦  h[8,53,31]  ¦  w[8,53,31]  𝄀
+5  ¦  0.012  ¦  0.129
+select id, match(body) against('hello') as sc, round(match(body) against('hello'),3) as r
+from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.01211813  ¦  0.012  𝄀
+2  ¦  0.013416502  ¦  0.013  𝄀
+3  ¦  0.013913408  ¦  0.014  𝄀
+5  ¦  0.011558833  ¦  0.012
+select id, round(match(body) against('world'),3) as r from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+5  ¦  0.129
+select id from two where match(body) against('hello') and match(body) against('world') > 0.1 order by id;
+➤ id[4,32,0]  𝄀
+5
+select id from two where match(body) against('hello') and match(body) against('world') > 0.9 order by id;
+➤ id[4,32,0]
+select id, round(match(body) against('world'),3) as w from two
+where match(body) against('hello') and match(body) against('world')
+and match(body) against('world') > 0.1 order by id;
+➤ id[4,32,0]  ¦  w[8,53,31]  𝄀
+5  ¦  0.129
+select id from two
+where match(body) against('hello') and match(body) against('world')
+and match(body) against('world') > 0.9 order by id;
+➤ id[4,32,0]
+select id from two where match(body) against('hello') order by round(match(body) against('hello'),3) desc, id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+2  𝄀
+1  𝄀
+5
+select id from two where match(body) against('hello') > 0.0132 order by id;  -- drops the lower scorers
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from two where match(body) against('hello') > 0.9 order by id;     -- none
+➤ id[4,32,0]
+select id, round(match(body) against('hello'),3) as r from two order by id;  -- projection, no WHERE MATCH
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.012  𝄀
+2  ¦  0.013  𝄀
+3  ¦  0.014  𝄀
+5  ¦  0.012
+select count(*) as n from two where match(body) against('hello') > 0.0132;   -- and through an aggregate
+➤ n[-5,64,0]  𝄀
+2
+select count(*) as n from two where match(body) against('hello') > 0.9;
+➤ n[-5,64,0]  𝄀
+0
+explain select id from two where match(body) against('hello') > 0.0132;
+-- @regex("Table Function on fulltext2_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (cast(mo_fulltext_alias_0.__mo_ft_score AS DOUBLE) > 0.0132)
+              -- HINT: Cast expression may prevent index usage  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (two.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft2_wrapped.two  𝄀
+                          Runtime Filter Probe: two.id  𝄀
+                    ->  Table Function on fulltext2_search
+create table nodx(id int primary key, txt text);
+insert into nodx values (1,'hello');
+select id from nodx where match(txt) against('hello') > 0.1;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id, match(body) against('hello') as sc from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  𝄀
+1  ¦  0.01211813  𝄀
+2  ¦  0.013416502  𝄀
+3  ¦  0.013913408  𝄀
+5  ¦  0.011558833
+select id from two where match(body) against('hello') and match(body) against('hello') > 0.0125 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.0125 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+5
+select id from two where match(body) against('hello')
+and match(body) against('hello') > 0.0118 and match(body) against('hello') < 0.0138 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from two where match(body) against('hello') and match(body) against('hello') >= 0.013416502 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from two where match(body) against('hello') and match(body) against('hello') <= 0.013416502 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+5
+select id from two where match(body) against('hello') and (match(body) against('hello') > 0.0138 or id = 1) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+explain select id from two where match(body) against('hello') and match(body) against('hello') > 0.0125;
+-- @regex("Table Function on fulltext2_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (cast(mo_fulltext_alias_0.__mo_ft_score AS DOUBLE) > 0.0125)
+              -- HINT: Cast expression may prevent index usage  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (two.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft2_wrapped.two  𝄀
+                          Runtime Filter Probe: two.id  𝄀
+                    ->  Table Function on fulltext2_search
+create table covpk(body varchar(100) primary key, tag int);
+insert into covpk values ('hello',1),('hello hello',2),('hello hello hello',3),('world',4);
+create fulltext2 index ci_covpk on covpk(body) include(tag);
+select body, tag, match(body) against('hello') as sc from covpk where match(body) against('hello') order by body;
+➤ body[12,75,0]  ¦  tag[4,32,0]  ¦  sc[7,5,0]  𝄀
+hello  ¦  1  ¦  0.019339437  𝄀
+hello hello  ¦  2  ¦  0.02132055  𝄀
+hello hello hello  ¦  3  ¦  0.022074306
+select body, tag, round(match(body) against('hello'),3) as r from covpk where match(body) against('hello') order by body;
+➤ body[12,75,0]  ¦  tag[4,32,0]  ¦  r[8,53,31]  𝄀
+hello  ¦  1  ¦  0.019  𝄀
+hello hello  ¦  2  ¦  0.021  𝄀
+hello hello hello  ¦  3  ¦  0.022
+explain select body, tag, round(match(body) against('hello'),3) as r from covpk where match(body) against('hello');
+-- @regex("Table Function on fulltext2_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Table Function on fulltext2_search
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.0118 limit 1;
+➤ id[4,32,0]  𝄀
+5
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.0118;
+➤ id[4,32,0]  𝄀
+5
+select count(*) as n from (
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.0132 limit 1
+) q;
+➤ n[-5,64,0]  𝄀
+1
+select id from two where match(body) against('hello') and match(body) against('hello') > 0.0132 limit 1;
+➤ id[4,32,0]  𝄀
+3
+drop database ft2_wrapped;
+set ft2_relevancy_algorithm="BM25";

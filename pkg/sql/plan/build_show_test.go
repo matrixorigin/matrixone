@@ -151,8 +151,35 @@ func TestCoverage_buildShowIndex(t *testing.T) {
 
 	sqls := []string{
 		"show index from tpch.nation",
+		"show keys from tpch.nation",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestShowKeysUsesMySQLIndexOrder(t *testing.T) {
+	testCases := []string{
+		"show keys from tpch.nation",
+		"show keys from tpch.nation where Key_name = 'PRIMARY'",
+	}
+
+	for _, sql := range testCases {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+
+			var sortNodes []*plan.Node
+			for _, node := range logicPlan.GetQuery().GetNodes() {
+				if node.GetNodeType() == plan.Node_SORT {
+					sortNodes = append(sortNodes, node)
+				}
+			}
+			require.Len(t, sortNodes, 1)
+			require.Len(t, sortNodes[0].GetOrderBy(), 3)
+			require.Equal(t, "case", sortNodes[0].GetOrderBy()[0].GetExpr().GetF().GetFunc().GetObjName())
+			require.Equal(t, "MIN(idx.id)", sortNodes[0].GetOrderBy()[1].GetExpr().GetCol().GetName())
+			require.Equal(t, "idx.ordinal_position", sortNodes[0].GetOrderBy()[2].GetExpr().GetCol().GetName())
+		})
+	}
 }
 
 func TestCoverage_buildShowFunctionStatus(t *testing.T) {
@@ -264,6 +291,23 @@ func TestCoverage_buildShowColumns(t *testing.T) {
 		"show columns from nation from tpch",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestShowColumnsSkipsNilIndexMetadata(t *testing.T) {
+	control, err := runOneStmt(NewMockOptimizer(false), t, "show columns from single_idx_t")
+	require.NoError(t, err)
+
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tables["single_idx_t"]
+	require.NotNil(t, tableDef)
+	require.NotEmpty(t, tableDef.Indexes)
+	tableDef.Indexes = append([]*plan.IndexDef{nil}, tableDef.Indexes...)
+
+	got, err := runOneStmt(mock, t, "show columns from single_idx_t")
+	require.NoError(t, err)
+	require.Equal(t, control.GetQuery().GetHeadings(), got.GetQuery().GetHeadings())
+	require.True(t, queryContainsStringLiteral(control.GetQuery(), "MUL"))
+	require.True(t, queryContainsStringLiteral(got.GetQuery(), "MUL"))
 }
 
 func TestCoverage_buildShowTableStatus(t *testing.T) {

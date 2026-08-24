@@ -198,12 +198,14 @@ func (dp *DataProcessor) processSnapshot(ctx context.Context, data *ChangeData) 
 
 	// Send snapshot data to sinker
 	dp.sinker.Sink(ctx, &DecoderOutput{
-		outputTyp:     OutputTypeSnapshot,
-		checkpointBat: data.InsertBatch,
-		fromTs:        dp.fromTs,
-		toTs:          dp.toTs,
-		mp:            dp.mp,
+		outputTyp:      OutputTypeSnapshot,
+		checkpointBat:  data.InsertBatch,
+		fromTs:         dp.fromTs,
+		toTs:           dp.toTs,
+		mp:             dp.mp,
+		snapshotPermit: data.snapshotPermit,
 	})
+	data.snapshotPermit = nil
 
 	// Note: We don't clean data.InsertBatch here because Sink() takes ownership
 

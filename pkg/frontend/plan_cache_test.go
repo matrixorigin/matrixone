@@ -211,6 +211,37 @@ func TestSessionReleasePlanCache(t *testing.T) {
 	require.Equal(t, 1, second.freed)
 }
 
+func TestSessionUserVariableAssignmentClearsPlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	stmt := &trackedStatement{}
+	pc.cache("select @v + 0", []tree.Statement{stmt}, []*plan.Plan{{}})
+
+	ses := &Session{
+		planCache:       pc,
+		userDefinedVars: make(map[string]*UserDefinedVar),
+	}
+	require.True(t, ses.isCached("select @v + 0"))
+	require.NoError(t, ses.SetUserDefinedVar("v", int64(1), "set @v = 1"))
+	require.False(t, ses.isCached("select @v + 0"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSelectIntoPlanIsNeverReusedFromPlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "v"}}}
+	pc.cache("select 1 into @v", []tree.Statement{stmt}, []*plan.Plan{{}})
+
+	ses := &Session{planCache: pc}
+	input := &UserInput{sql: "select 1 into @v"}
+	input.genHash()
+
+	// A cached SELECT-INTO plan is stale by definition: its user-variable
+	// references were bound before the assignment executed.  The lookup must
+	// discard it so the next execution is rebound against the new type.
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+}
+
 func TestFreeStmtsSkipsNil(t *testing.T) {
 	good := &trackedStatement{}
 	stmts := []tree.Statement{nil, good, nil}
@@ -247,19 +278,42 @@ func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
 	require.NotPanics(t, func() { ses.releasePlanCache() })
 }
 
+func TestSessionRemoveCachedPlanOnlyEvictsTarget(t *testing.T) {
+	ses := &Session{planCache: newPlanCache(2)}
+	first := &trackedStatement{}
+	second := &trackedStatement{}
+	ses.cachePlan("first", []tree.Statement{first}, []*plan.Plan{{}})
+	ses.cachePlan("second", []tree.Statement{second}, []*plan.Plan{{}})
+
+	ses.removeCachedPlan("first")
+	require.False(t, ses.isCached("first"))
+	require.True(t, ses.isCached("second"))
+	require.Equal(t, 1, first.freed)
+	require.Zero(t, second.freed)
+
+	require.NotPanics(t, func() { ses.removeCachedPlan("first") })
+	require.NotPanics(t, func() { ses.removeCachedPlan("") })
+}
+
 func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
 	stmt := &trackedStatement{}
 	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
 	require.True(t, ses.isCached("cached-sql"))
-
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
 	require.True(t, ses.isCached("cached-sql"))
 	require.Zero(t, stmt.freed)
 
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,ONLY_FULL_GROUP_BY"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
 	require.NoError(t, ses.SetSessionSysVar(ctx, "SQL_MODE", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
@@ -276,8 +330,10 @@ func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
 		from int64
 		to   int64
 	}{
-		{name: "upgrade", from: defines.MORPCVersion4, to: defines.MORPCVersion5},
-		{name: "rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
+		{name: "existing upgrade", from: defines.MORPCVersion4, to: defines.MORPCVersion5},
+		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
+		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
+		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
@@ -300,6 +356,14 @@ func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
 	require.True(t, has)
 
 	has, ok = sqlModeHasMatrixOneNativeValue("STRICT_TRANS_TABLES, MATRIXONE_NATIVE_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
+
+	has, ok = sqlModeHasOnlyFullGroupByValue("STRICT_TRANS_TABLES, ONLY_FULL_GROUP_BY")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasOnlyFullGroupByValue("STRICT_TRANS_TABLES, ONLY_FULL_GROUP_BY_EXTRA")
 	require.True(t, ok)
 	require.False(t, has)
 }

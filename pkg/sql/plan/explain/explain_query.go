@@ -37,6 +37,7 @@ const (
 	Label_Scan_Columns              = "Scan columns"
 	Label_List_Expression           = "List of expressions"
 	Label_Grouping_Keys             = "Grouping keys"
+	Label_Grouping_Hash_Keys        = "Grouping hash keys"
 	Label_Agg_Functions             = "Aggregate functions"
 	Label_Filter_Conditions         = "Filter conditions"
 	Label_Block_Filter_Conditions   = "Block Filter conditions"
@@ -236,9 +237,6 @@ func summarizeBackgroundQueries(qry *plan.Query) string {
 		parts = append(parts, "round_limits="+truncateSummaryList(roundLimits, 4))
 	}
 	parts = append(parts, fmt.Sprintf("empty_rounds=%d", emptyRounds))
-	if dedupOutputRows, ok := findIvfSearchOutputRows(qry); ok {
-		parts = append(parts, fmt.Sprintf("dedup_output_rows=%d", dedupOutputRows))
-	}
 	parts = append(parts, "use EXPLAIN VERBOSE ANALYZE to expand")
 	return strings.Join(parts, " ")
 }
@@ -316,22 +314,6 @@ func queryOutputRows(qry *plan.Query) int64 {
 		}
 	}
 	return 0
-}
-
-func findIvfSearchOutputRows(qry *plan.Query) (int64, bool) {
-	if qry == nil {
-		return 0, false
-	}
-	for _, node := range qry.Nodes {
-		if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN || node.TableDef == nil || node.TableDef.TblFunc == nil {
-			continue
-		}
-		if node.TableDef.TblFunc.Name != "ivf_search" || node.AnalyzeInfo == nil {
-			continue
-		}
-		return node.AnalyzeInfo.OutputRows, true
-	}
-	return 0, false
 }
 
 func truncateSummaryList(items []string, maxItems int) string {
@@ -560,7 +542,12 @@ func explainStep(ctx context.Context, step *plan.Node, nodes []*plan.Node, setti
 						sinkScan = childNode
 					}
 				}
-				if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.5 {
+				buildOnTable := step.FuzzyBuildSide ==
+					plan.Node_FUZZY_BUILD_SIDE_TABLE ||
+					(step.FuzzyBuildSide ==
+						plan.Node_FUZZY_BUILD_SIDE_UNSPECIFIED &&
+						(tableScan.Stats.Cost/sinkScan.Stats.Cost) < 0.3)
+				if buildOnTable {
 					buf.WriteString("TableScan")
 					if step.IfInsertFromUnique {
 						buf.WriteString(" (InsertFromUnique)")

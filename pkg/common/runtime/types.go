@@ -110,6 +110,9 @@ type Runtime interface {
 	SetGlobalVariables(name string, value any)
 	// GetGlobalVariables get global variables, return false if variables not found.
 	GetGlobalVariables(name string) (any, bool)
+	// CompareAndDeleteGlobalVariables removes a variable only when its current
+	// value is the expected service generation.
+	CompareAndDeleteGlobalVariables(name string, old any) bool
 }
 
 // Option used to setup runtime

@@ -1219,6 +1219,11 @@ func TestSubscriptionWaitsForOrderedBootstrapEvent(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("subscription response was not written after the bootstrap event")
 	}
+	// The sender can write the queued response before CompleteSubscription has
+	// committed its producer-side state. Tables takes the same state lock, so
+	// this assertion is also the deterministic completion barrier for Active.
+	id := MarshalTableID(&table)
+	require.Equal(t, TableSubscribed, sessions[0].Tables()[id])
 	require.Equal(t, 1, sessions[0].Active())
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 10}, server.waterline.Waterline())
 }

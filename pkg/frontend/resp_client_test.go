@@ -49,6 +49,43 @@ func TestSessionLastAffectedRows(t *testing.T) {
 	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
 }
 
+func TestRespStatusInsertUsesStatementGeneratedKey(t *testing.T) {
+	ses := &Session{
+		seqLastValue:  new(string),
+		feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}},
+	}
+	ses.SetLastInsertID(7)
+	proc := &process.Process{Base: &process.BaseProcess{
+		LastInsertID:          new(uint64),
+		StatementLastInsertID: new(uint64),
+	}}
+	proc.SetLastInsertID(7)
+	proc.SetStatementLastInsertID(0)
+	proc.InitSeq()
+	writer := &countingMysqlWriter{
+		testMysqlWriter: &testMysqlWriter{},
+		responses:       make([]*Response, 0, 1),
+	}
+	resper := NewMysqlResp(writer)
+	execCtx := &ExecCtx{
+		reqCtx:    context.Background(),
+		stmt:      &tree.Insert{},
+		proc:      proc,
+		runResult: &util.RunResult{AffectRows: 1},
+	}
+
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Zero(t, writer.responses[0].lastInsertId)
+	require.Equal(t, uint64(7), ses.GetLastInsertID())
+
+	proc.SetStatementLastInsertID(11)
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 2)
+	require.Equal(t, uint64(11), writer.responses[1].lastInsertId)
+	require.Equal(t, uint64(11), ses.GetLastInsertID())
+}
+
 func TestMarkRowCountFailed(t *testing.T) {
 	// session + proc both reset to -1
 	ses := &Session{}

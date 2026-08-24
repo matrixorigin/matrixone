@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"github.com/hayageek/threadsafe"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -42,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -123,25 +123,36 @@ type SessionInfo struct {
 	LockWaitTimeout     int64
 	LockWaitTimeoutSet  bool // distinguishes an explicit zero from an unset value
 	MatrixOneNativeMode bool
+	// IsRestore identifies catalog DDL executed by snapshot/PITR restore. Such
+	// DDL rebuilds persisted View metadata through legacy discovery after the
+	// restore transaction, rather than running dependency hooks while catalog
+	// identities are being replaced.
+	IsRestore bool
 	// ExplicitZeroTemporalCastReturnsNull is resolved on the initiating CN and
 	// carried in the remote process snapshot because remote CNs have no session
 	// variable resolver.
 	ExplicitZeroTemporalCastReturnsNull bool
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
-	SqlMode              string
-	StorageEngine        engine.Engine
-	QueryId              []string
-	ResultColTypes       []types.Type
-	SeqCurValues         map[uint64]string
-	SeqDeleteKeys        []uint64
-	SeqAddValues         map[uint64]string
-	SeqLastValue         []string
-	SqlHelper            sqlHelper
-	Buf                  *buffer.Buffer
-	SourceInMemScanBatch []*kafka.Message
-	LogLevel             zapcore.Level
-	SessionId            uuid.UUID
+	SqlMode string
+	// ApplySQLSelectLimit distinguishes client statements from frontend
+	// background SQL, which may inherit a session-variable resolver but must not
+	// be affected by a client's row cap.
+	ApplySQLSelectLimit bool
+	// CountUpdateChangedRows requests MySQL changed-row semantics for UPDATE.
+	// Frontend sessions set it when CLIENT_FOUND_ROWS was not negotiated.
+	CountUpdateChangedRows bool
+	StorageEngine          engine.Engine
+	QueryId                []string
+	ResultColTypes         []types.Type
+	SeqCurValues           map[uint64]string
+	SeqDeleteKeys          []uint64
+	SeqAddValues           map[uint64]string
+	SeqLastValue           []string
+	SqlHelper              sqlHelper
+	Buf                    *buffer.Buffer
+	LogLevel               zapcore.Level
+	SessionId              uuid.UUID
 }
 
 type Session interface {
@@ -152,6 +163,35 @@ type Session interface {
 	// GetSqlModeNoAutoValueOnZero reports whether sql_mode contains NO_AUTO_VALUE_ON_ZERO.
 	// ok=false means the session doesn't support the cache.
 	GetSqlModeNoAutoValueOnZero() (bool, bool)
+}
+
+// ForeignConn is a connection to a foreign data source (Elasticsearch, an
+// external SQL database, ...) cached on an interactive session for esql_tvf /
+// sql_tvf. The session owns its lifetime and closes it when the session ends.
+// Close must be safe to call more than once.
+type ForeignConn interface {
+	Close() error
+}
+
+// ForeignConnCache is an OPTIONAL capability implemented only by the interactive
+// frontend session. esql_tvf / sql_tvf and their connect/disconnect builtins
+// reach it via proc.GetSession().(ForeignConnCache); a session that does not
+// implement it (internal executor, background session) cannot use those TVFs.
+// A handle is derived from the connection config, so reconnecting with the same
+// config yields the same handle and reuses the cached connection.
+type ForeignConnCache interface {
+	// PutForeignConn stores conn under handle unless an entry already exists,
+	// and returns the entry that is cached after the call (first-wins). Two
+	// scans sharing one config can race to connect; the loser must close its
+	// own conn and use the returned winner — the cache never closes a
+	// connection another operator may already be using. Admission is bounded:
+	// when the cache is full a non-nil error is returned and nothing is
+	// stored; the caller owns (and must close) the rejected conn.
+	PutForeignConn(ctx context.Context, handle string, conn ForeignConn) (ForeignConn, error)
+	GetForeignConn(handle string) (ForeignConn, bool)
+	// RemoveForeignConn detaches and returns the connection for handle so the
+	// caller can close it; ok=false if no such handle.
+	RemoveForeignConn(handle string) (ForeignConn, bool)
 }
 
 type ExecStatus int
@@ -360,28 +400,39 @@ type BaseProcess struct {
 	IncrService      incrservice.AutoIncrementService
 
 	LastInsertID *uint64
+	// StatementLastInsertID is the generated-key value reported by the
+	// current statement's OK packet.  LastInsertID intentionally keeps the
+	// session value so LAST_INSERT_ID() continues to observe the previous
+	// value when an INSERT supplies all auto-increment values explicitly.
+	StatementLastInsertID *uint64
+	statementInsertIDMu   sync.Mutex
 	// AffectedRows carries the number of rows affected by the previous
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
 	// 0 after DDL, and the affected row count after DML.
-	AffectedRows             *int64
-	LoadLocalReader          *io.PipeReader
-	Aicm                     *defines.AutoIncrCacheManager
-	resolveVariableFunc      func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
-	prepareParams            *vector.Vector
-	prepareParamsIsBin       []bool
-	prepareParamsOwned       bool
-	QueryClient              qclient.QueryClient
-	Hakeeper                 logservice.CNHAKeeperClient
-	UdfService               udf.Service
-	WaitPolicy               lock.WaitPolicy
-	messageBoard             *message.MessageBoard
-	hashBuildBudgetMu        sync.Mutex
-	hashBuildBudget          *HashBuildBudgetGeneration
-	logger                   *log.MOLogger
-	TxnOperator              client.TxnOperator
-	CloneTxnOperator         client.TxnOperator
+	AffectedRows                        *int64
+	LoadLocalReader                     *io.PipeReader
+	Aicm                                *defines.AutoIncrCacheManager
+	resolveVariableFunc                 func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableIsBinFunc            func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariableBinaryStringFunc     func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
+	prepareParams                       *vector.Vector
+	prepareParamsIsBin                  []bool
+	prepareParamsBinaryString           []bool
+	prepareParamsOwned                  bool
+	QueryClient                         qclient.QueryClient
+	Hakeeper                            logservice.CNHAKeeperClient
+	UdfService                          udf.Service
+	WaitPolicy                          lock.WaitPolicy
+	messageBoard                        *message.MessageBoard
+	executionResourceBudgetMu           sync.Mutex
+	executionResourceBudget             *ExecutionResourceGeneration
+	cteMemoryBudgetMu                   sync.Mutex
+	cteMemoryBudget                     *CTEMemoryBudget
+	logger                              *log.MOLogger
+	TxnOperator                         client.TxnOperator
+	CloneTxnOperator                    client.TxnOperator
 	// userLevelLockIdentity is session-scoped rather than statement-scoped.
 	// SessionInfo is rebuilt before every statement, so keeping this identity
 	// there would lose the synthetic transaction owner while locks are held.
@@ -431,6 +482,15 @@ type Process struct {
 	Base *BaseProcess
 	Reg  Register
 
+	// planSnapshotTS is the snapshot against which this execution generation's
+	// plan was bound. Unlike the transaction snapshot, it must not advance while
+	// RC lock handling refreshes visibility. It belongs to Process rather than
+	// shared BaseProcess so nested or overlapping pipeline generations cannot
+	// overwrite each other's definition-fence reference point. Child processes
+	// share this immutable object, keeping the per-pipeline footprint to one
+	// pointer rather than one protobuf timestamp.
+	planSnapshotTS *timestamp.Timestamp
+
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
 	Ctx     context.Context
@@ -448,11 +508,15 @@ type sqlHelper interface {
 // WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
-	ReceiverDone bool
-	MsgId        uint64
-	Uid          uuid.UUID
-	Cs           morpc.ClientSession
-	Err          chan error
+	ReceiverDone  bool
+	MsgId         uint64
+	Uid           uuid.UUID
+	Cs            morpc.ClientSession
+	Err           chan error
+	ReserveBatch  func(context.Context, uint64) (uint64, error)
+	RollbackBatch func(uint64)
+	BatchCredits  uint32
+	ByteCredits   uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
@@ -473,12 +537,18 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
-	proc.Base.hashBuildBudgetMu.Lock()
-	if proc.Base.hashBuildBudget != nil {
-		proc.Base.hashBuildBudget.Close()
-		proc.Base.hashBuildBudget = nil
+	proc.Base.executionResourceBudgetMu.Lock()
+	if proc.Base.executionResourceBudget != nil {
+		proc.Base.executionResourceBudget.Close()
+		proc.Base.executionResourceBudget = nil
 	}
-	proc.Base.hashBuildBudgetMu.Unlock()
+	proc.Base.executionResourceBudgetMu.Unlock()
+	proc.Base.cteMemoryBudgetMu.Lock()
+	if proc.Base.cteMemoryBudget != nil {
+		proc.Base.cteMemoryBudget.Close()
+		proc.Base.cteMemoryBudget = nil
+	}
+	proc.Base.cteMemoryBudgetMu.Unlock()
 	proc.Base.StmtProfile = sp
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode
@@ -512,7 +582,7 @@ func (proc *Process) SetFileService(fs fileservice.FileService) {
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
-	if i < 0 || i >= proc.Base.prepareParams.Length() {
+	if proc.Base.prepareParams == nil || i < 0 || i >= proc.Base.prepareParams.Length() {
 		return nil, moerr.NewInternalErrorf(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
 	if proc.Base.prepareParams.IsNull(uint64(i)) {
@@ -524,7 +594,35 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 }
 
 func (proc *Process) GetPrepareParamIsBin(i int) bool {
-	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
+	return proc.getPrepareParamMeta(i, 0)
+}
+
+func (proc *Process) GetPrepareParamKind(i int) vector.PrepareParamKind {
+	var kind vector.PrepareParamKind
+	if proc.getPrepareParamMeta(i, 1) {
+		kind |= 1
+	}
+	if proc.getPrepareParamMeta(i, 2) {
+		kind |= 2
+	}
+	if proc.getPrepareParamMeta(i, 3) {
+		kind |= 4
+	}
+	return kind
+}
+
+func (proc *Process) getPrepareParamMeta(i, section int) bool {
+	paramCount := 0
+	if proc.Base.prepareParams != nil {
+		paramCount = proc.Base.prepareParams.Length()
+	}
+	offset := section*paramCount + i
+	return section >= 0 && i >= 0 && i < paramCount && offset < len(proc.Base.prepareParamsIsBin) &&
+		proc.Base.prepareParamsIsBin[offset]
+}
+
+func (proc *Process) GetPrepareParamIsBinaryString(i int) bool {
+	return i >= 0 && i < len(proc.Base.prepareParamsBinaryString) && proc.Base.prepareParamsBinaryString[i]
 }
 
 // SetIncrStatementDisabled marks this process (and every child process
@@ -556,10 +654,86 @@ func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystem
 	return proc.Base.resolveVariableIsBinFunc
 }
 
+func (proc *Process) SetResolveVariableBinaryStringFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
+	proc.Base.resolveVariableBinaryStringFunc = f
+}
+
+func (proc *Process) GetResolveVariableBinaryStringFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return proc.Base.resolveVariableBinaryStringFunc
+}
+
+func (proc *Process) SetResolveVariablePrepareParamKindFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error),
+) {
+	proc.Base.resolveVariablePrepareParamKindFunc = f
+}
+
+func (proc *Process) GetResolveVariablePrepareParamKindFunc() func(
+	varName string,
+	isSystemVar, isGlobalVar bool,
+) (vector.PrepareParamKind, error) {
+	return proc.Base.resolveVariablePrepareParamKindFunc
+}
+
 func (proc *Process) SetLastInsertID(num uint64) {
+	if proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
 	if proc.Base.LastInsertID != nil {
 		atomic.StoreUint64(proc.Base.LastInsertID, num)
 	}
+}
+
+func (proc *Process) SetStatementLastInsertID(num uint64) {
+	if proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	if proc.Base.StatementLastInsertID != nil {
+		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+	}
+}
+
+// SetStatementLastInsertIDIfEarlier publishes the smallest non-zero generated
+// value seen by any parallel scope of the current statement.  Statement
+// LAST_INSERT_ID is reset before execution starts, so the shared coordinator
+// makes the first generated value deterministic while keeping the session and
+// statement values synchronized.
+func (proc *Process) SetStatementLastInsertIDIfEarlier(num uint64) uint64 {
+	if num == 0 {
+		if proc.Base == nil {
+			return 0
+		}
+		return proc.GetStatementLastInsertID()
+	}
+	if proc.Base == nil {
+		return num
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	if proc.Base.StatementLastInsertID == nil {
+		if proc.Base.LastInsertID != nil {
+			atomic.StoreUint64(proc.Base.LastInsertID, num)
+		}
+		return num
+	}
+	current := atomic.LoadUint64(proc.Base.StatementLastInsertID)
+	if current == 0 || num < current {
+		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+		if proc.Base.LastInsertID != nil {
+			atomic.StoreUint64(proc.Base.LastInsertID, num)
+		}
+		return num
+	}
+	if proc.Base.LastInsertID != nil {
+		// Keep the session-visible value synchronized if another scope won
+		// while this scope was still materializing its batch.
+		atomic.StoreUint64(proc.Base.LastInsertID, current)
+	}
+	return current
 }
 
 func (proc *Process) GetSessionInfo() *SessionInfo {
@@ -570,6 +744,13 @@ func (proc *Process) GetLastInsertID() uint64 {
 	if proc.Base.LastInsertID != nil {
 		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
+	}
+	return 0
+}
+
+func (proc *Process) GetStatementLastInsertID() uint64 {
+	if proc.Base.StatementLastInsertID != nil {
+		return atomic.LoadUint64(proc.Base.StatementLastInsertID)
 	}
 	return 0
 }
@@ -604,6 +785,37 @@ func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
 
 func (proc *Process) GetTxnOperator() client.TxnOperator {
 	return proc.Base.TxnOperator
+}
+
+// SetPlanSnapshotTS binds this process to the snapshot used to build its plan.
+// Child pipeline processes inherit the immutable binding pointer.
+func (proc *Process) SetPlanSnapshotTS(ts timestamp.Timestamp) {
+	proc.planSnapshotTS = &ts
+}
+
+// ClearPlanSnapshotTS removes the plan binding. Lock callers without a plan
+// then retain the legacy transaction-snapshot behavior.
+func (proc *Process) ClearPlanSnapshotTS() {
+	proc.planSnapshotTS = nil
+}
+
+// GetPlanSnapshotTS returns the immutable plan snapshot for this execution
+// generation and whether one was bound.
+func (proc *Process) GetPlanSnapshotTS() (timestamp.Timestamp, bool) {
+	if proc.planSnapshotTS == nil {
+		return timestamp.Timestamp{}, false
+	}
+	return *proc.planSnapshotTS, true
+}
+
+// CopyPlanSnapshotFrom propagates one execution generation's binding to a
+// child or reused pipeline process without exposing the presence bit.
+func (proc *Process) CopyPlanSnapshotFrom(parent *Process) {
+	if parent == nil {
+		proc.ClearPlanSnapshotTS()
+		return
+	}
+	proc.planSnapshotTS = parent.planSnapshotTS
 }
 
 func (proc *Process) GetBaseProcessRunningStatus() bool {

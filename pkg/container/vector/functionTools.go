@@ -571,9 +571,10 @@ func OptGetBytesParamFromWrapper(wrapper FunctionResultWrapper, idx int, src *Ve
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
 
 type FunctionResult[T types.FixedSizeT] struct {
-	typ types.Type
-	vec *Vector
-	mp  *mpool.MPool
+	typ        types.Type
+	vec        *Vector
+	mp         *mpool.MPool
+	allocation *AllocationAccountSelection
 
 	isVarlena bool
 	cols      []T
@@ -621,22 +622,41 @@ func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if fr.vec == nil {
-		fr.vec = NewOffHeapVecWithType(fr.typ)
+		var err error
+		fr.vec, err = NewOffHeapVecWithTypeAndAllocation(fr.typ, fr.allocation)
+		if err != nil {
+			return err
+		}
 	}
 
 	oldLength := fr.vec.Length()
-
-	if more := targetSize - oldLength; more > 0 {
+	wasConst := fr.vec.IsConst()
+	if wasConst {
+		// PreExtend is intentionally a no-op for CONSTANT vectors. Reset the
+		// class first so a later non-folded evaluation can materialize every
+		// requested row instead of retaining one broadcast physical value.
+		fr.vec.ResetWithSameType()
+		if targetSize > 0 {
+			if err := fr.vec.PreExtend(targetSize, fr.mp); err != nil {
+				return err
+			}
+		}
+	} else if more := targetSize - oldLength; more > 0 {
 		if err := fr.vec.PreExtend(more, fr.mp); err != nil {
 			return err
 		}
 	}
-	fr.vec.ResetWithSameType()
+	if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
+		return err
+	}
+	if !wasConst {
+		fr.vec.ResetWithSameType()
+	}
 
 	if !fr.isVarlena {
 		fr.length = 0
 		fr.vec.length = targetSize
-		if targetSize > oldLength {
+		if wasConst || targetSize > oldLength {
 			fr.cols = MustFixedColWithTypeCheck[T](fr.vec)
 		}
 	}
@@ -669,6 +689,18 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 		return SetConstBytes(fr.vec, val, fr.vec.Length(), fr.mp)
 	}
 	return nil
+}
+
+// AppendMultiBytes appends cnt logical rows backed by one materialized varlena
+// payload. Non-inline descriptors intentionally share the same area range.
+func (fr *FunctionResult[T]) AppendMultiBytes(val []byte, isnull bool, cnt int) error {
+	if !fr.vec.IsConst() {
+		return AppendMultiBytes(fr.vec, val, isnull, cnt, fr.mp)
+	}
+	if isnull {
+		return SetConstNull(fr.vec, cnt, fr.mp)
+	}
+	return SetConstBytes(fr.vec, val, cnt, fr.mp)
 }
 
 func (fr *FunctionResult[T]) AppendByteJson(bj bytejson.ByteJson, isnull bool) error {
@@ -760,6 +792,14 @@ func (fr *FunctionResult[T]) Free() {
 	fr.convenientParam = nil
 }
 
+func (fr *FunctionResult[T]) setAllocation(selection *AllocationAccountSelection) {
+	fr.allocation = selection
+}
+
+type functionResultAllocationSetter interface {
+	setAllocation(*AllocationAccountSelection)
+}
+
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
 	if typ.IsVarlen() {
 		return newResultFunc[types.Varlena](typ, mp)
@@ -818,4 +858,26 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWra
 		return newResultFunc[types.Enum](typ, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
+}
+
+// NewFunctionResultWrapperWithAllocation constructs a reusable result whose
+// current and future vectors allocate through selection. The selection stays
+// with the wrapper when EvalWithoutResultReusing transfers its current vector.
+func NewFunctionResultWrapperWithAllocation(
+	typ types.Type,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (FunctionResultWrapper, error) {
+	if selection != nil {
+		if err := selection.validate(); err != nil {
+			return nil, err
+		}
+	}
+	result := NewFunctionResultWrapper(typ, mp)
+	setter, ok := result.(functionResultAllocationSetter)
+	if !ok {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	setter.setAllocation(selection)
+	return result, nil
 }

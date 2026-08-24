@@ -215,4 +215,136 @@ drop snapshot sp2;
 drop table t1;
 drop table t2;
 
+-- ----------------------------------------------------------------
+-- case g: BETWEEN upper bound after ALTER uses the bounded row image
+-- ----------------------------------------------------------------
+-- The same PK changes in the old physical generation and again after
+-- ALTER.  PICK must hydrate the old change at sp_schema_to, not from the
+-- current source row written after that snapshot.
+
+drop snapshot if exists sp_schema_from;
+drop snapshot if exists sp_schema_to;
+
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1);
+
+data branch create table t1 from t0;
+
+create snapshot sp_schema_from for account sys;
+update t1 set b=10 where a=1;
+alter table t1 add column c int default 7;
+create snapshot sp_schema_to for account sys;
+update t1 set b=20 where a=1;
+
+data branch pick t1 into t0 between snapshot sp_schema_from and sp_schema_to;
+select * from t0 order by a asc;
+-- expect destination b=10 at the upper bound; current source b=20 is later
+select * from t1 order by a asc;
+
+drop snapshot sp_schema_from;
+drop snapshot sp_schema_to;
+drop table t0;
+drop table t1;
+
+-- ----------------------------------------------------------------
+-- case h: BETWEEN upper bound before ALTER scans only the old generation
+-- ----------------------------------------------------------------
+-- The current physical table does not exist at sp_schema_to.  PICK must
+-- resolve the old physical generation and apply its b=15 row image.
+
+drop snapshot if exists sp_schema_from;
+drop snapshot if exists sp_schema_to;
+
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1);
+
+data branch create table t1 from t0;
+
+create snapshot sp_schema_from for account sys;
+update t1 set b=15 where a=1;
+create snapshot sp_schema_to for account sys;
+alter table t1 add column c int default 7;
+update t1 set b=25 where a=1;
+
+data branch pick t1 into t0 between snapshot sp_schema_from and sp_schema_to;
+select * from t0 order by a asc;
+-- expect destination b=15; ALTER and b=25 are outside the range
+select * from t1 order by a asc;
+
+drop snapshot sp_schema_from;
+drop snapshot sp_schema_to;
+drop table t0;
+drop table t1;
+
+-- ----------------------------------------------------------------
+-- case i: no-LCA BETWEEN across ALTER excludes materialization
+-- ----------------------------------------------------------------
+-- t2 is schema-compatible with current t1 but independent of its DAG.
+-- Only a=1 changes inside the bounded old-generation window; a=2 must
+-- keep its independent destination value even though ALTER copies it.
+
+drop snapshot if exists sp_nolca_from;
+drop snapshot if exists sp_nolca_to;
+
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1),(2,2);
+data branch create table t1 from t0;
+
+create table t2 (a int, b int, c int default 7, primary key(a));
+insert into t2 values (1,1,7),(2,200,7);
+
+create snapshot sp_nolca_from for account sys;
+update t1 set b=15 where a=1;
+create snapshot sp_nolca_to for account sys;
+alter table t1 add column c int default 7;
+update t1 set b=25 where a=1;
+
+data branch pick t1 into t2 between snapshot sp_nolca_from and sp_nolca_to when conflict accept;
+select * from t2 order by a asc;
+-- expect a=1 at bounded value 15 with c=NULL (column not yet present);
+-- a=2 remains independent value 200
+select * from t1 order by a asc;
+
+drop snapshot sp_nolca_from;
+drop snapshot sp_nolca_to;
+drop table t2;
+drop table t1;
+drop table t0;
+
+-- ----------------------------------------------------------------
+-- case j: no-LCA BETWEEN hydrates through a dropped middle generation
+-- ----------------------------------------------------------------
+-- The upper-bound generation is itself replaced by a later ALTER. Rows from
+-- the first generation still need its endpoint image, so the reader fallback
+-- must use the relation opened at sp_double_to rather than current catalog.
+
+drop snapshot if exists sp_double_from;
+drop snapshot if exists sp_double_to;
+
+create table t0 (a int, b int, primary key(a));
+insert into t0 values (1,1),(2,2);
+data branch create table t1 from t0;
+
+create table t2 (a int, b int, c int default 7, d int default 9, primary key(a));
+insert into t2 values (1,100,70,90),(2,200,71,91);
+
+create snapshot sp_double_from for account sys;
+update t1 set b=10 where a=1;
+alter table t1 add column c int default 7;
+update t1 set b=15,c=8 where a=1;
+create snapshot sp_double_to for account sys;
+alter table t1 add column d int default 9;
+update t1 set b=25,c=18,d=19 where a=1;
+
+data branch pick t1 into t2 between snapshot sp_double_from and sp_double_to when conflict accept;
+select * from t2 order by a asc;
+-- expect bounded middle-generation row; d did not exist at the upper bound
+select * from t1 order by a asc;
+
+drop snapshot sp_double_from;
+drop snapshot sp_double_to;
+drop table t2;
+drop table t1;
+drop table t0;
+
 drop database test;
