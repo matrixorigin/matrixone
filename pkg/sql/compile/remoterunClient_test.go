@@ -130,6 +130,40 @@ func TestNewMessageSenderOnClientSetsDeadlineBeforeNewStream(t *testing.T) {
 	client.close()
 }
 
+// TestNewMessageSenderOnClientPropagatesBackendCreateTimeout verifies the
+// statement boundary used by RemoteRun. A stale fixed endpoint must surface
+// the typed MORPC terminal error without canceling the caller's longer query
+// context or constructing a sender that would require stream cleanup.
+func TestNewMessageSenderOnClientPropagatesBackendCreateTimeout(t *testing.T) {
+	sid := t.Name()
+	runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+
+	var calls atomic.Int32
+	tPCli := &testPipelineClient{
+		genStream: func(ctx context.Context, backend string) (morpc.Stream, error) {
+			calls.Add(1)
+			require.Equal(t, "stale-cn:6002", backend)
+			return nil, morpc.ErrBackendCreateTimeout
+		},
+	}
+	runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.PipelineClient, tPCli)
+
+	queryCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sender, err := newMessageSenderOnClient(
+		queryCtx,
+		sid,
+		"stale-cn:6002",
+		mpool.MustNewZero(),
+		nil,
+	)
+	require.Nil(t, sender)
+	require.ErrorIs(t, err, morpc.ErrBackendCreateTimeout)
+	require.EqualValues(t, 1, calls.Load())
+	require.NoError(t, context.Cause(queryCtx),
+		"RemoteRun stream creation canceled the owning statement context")
+}
+
 func TestNewMessageSenderOnClientReturnsErrorWithoutPipelineClient(t *testing.T) {
 	sid := t.Name()
 	runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
