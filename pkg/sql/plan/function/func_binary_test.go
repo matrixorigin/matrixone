@@ -1948,6 +1948,7 @@ func TestTimestampAddRetType(t *testing.T) {
 		// Call retType function
 		retType := matchedOverload.retType(parameters)
 		require.Equal(t, types.T_datetime, retType.Oid, "retType returns DATETIME type (to match MySQL behavior)")
+		require.Equal(t, int32(6), retType.Scale, "retType must expose MICROSECOND precision")
 
 		// Document the behavior: retType returns DATETIME, which ensures MySQL column metadata is MYSQL_TYPE_DATETIME
 		// This prevents "Invalid length (19) for type DATE" errors when actual vector type is DATETIME
@@ -1989,6 +1990,31 @@ func TestTimestampAddRetType(t *testing.T) {
 		// Call retType function
 		retType := matchedOverload2.retType(parameters)
 		require.Equal(t, types.T_datetime, retType.Oid, "retType returns DATETIME type for DATETIME input")
+		require.Equal(t, int32(6), retType.Scale, "retType must preserve MICROSECOND precision")
+	})
+
+	t.Run("TIMESTAMP input - retType preserves MICROSECOND precision", func(t *testing.T) {
+		parameters := []types.Type{
+			types.T_varchar.ToType(),
+			types.T_int64.ToType(),
+			types.T_timestamp.ToType(),
+		}
+
+		fn := allSupportedFunctions[fnId]
+		var matchedOverload *overload
+		for i := range fn.Overloads {
+			ov := &fn.Overloads[i]
+			if len(ov.args) == len(parameters) && ov.args[0] == parameters[0].Oid &&
+				ov.args[1] == parameters[1].Oid && ov.args[2] == parameters[2].Oid {
+				matchedOverload = ov
+				break
+			}
+		}
+		require.NotNil(t, matchedOverload, "Should find matching overload for TIMESTAMP input")
+
+		retType := matchedOverload.retType(parameters)
+		require.Equal(t, types.T_timestamp, retType.Oid)
+		require.Equal(t, int32(6), retType.Scale, "retType must expose MICROSECOND precision")
 	})
 }
 
