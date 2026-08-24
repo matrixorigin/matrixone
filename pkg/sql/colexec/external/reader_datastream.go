@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	datastream "github.com/matrixorigin/matrixone/pkg/datastream/v1"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -72,6 +73,12 @@ func (r *DataStreamReader) Open(param *ExternalParam, proc *process.Process) (fi
 	}
 	// JoinHostPort (not "server:port") so an IPv6 literal like ::1 becomes
 	// [::1]:4444 rather than the ambiguous ::1:4444
+	// Fail closed on the retired "env:NAME" apikey syntax in a pre-existing
+	// table definition instead of silently sending the literal string as the
+	// credential.
+	if err := sqldatastream.RejectEnvAPIKeyRef(proc.Ctx, ds.ApiKey); err != nil {
+		return false, err
+	}
 	target := net.JoinHostPort(ds.Server, strconv.Itoa(int(ds.Port)))
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),

@@ -52,6 +52,14 @@ func TestParseTableOptions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "s3cr3t", cfg.APIKey)
 
+	// the retired env:NAME apikey syntax is rejected fail-closed, never
+	// silently sent as a literal credential
+	_, err = ParseTableOptions(ctx, options("server", "h", "port", "1", "table", "t", "apikey", "env:DS_KEY"))
+	require.ErrorContains(t, err, "no longer supported")
+	require.NoError(t, RejectEnvAPIKeyRef(ctx, ""))
+	require.NoError(t, RejectEnvAPIKeyRef(ctx, "s3cr3t"))
+	require.ErrorContains(t, RejectEnvAPIKeyRef(ctx, "env:X"), "no longer supported")
+
 	for _, bad := range []*tree.DataStreamTableParam{
 		options("port", "4444", "table", "t"),                                 // missing server
 		options("server", "h", "table", "t"),                                  // missing port

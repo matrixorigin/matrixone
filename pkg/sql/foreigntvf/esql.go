@@ -83,6 +83,18 @@ func connectESQL(ctx context.Context, configJSON string) (Conn, error) {
 		ExpectContinueTimeout: time.Second,
 	}
 	cfg.Transport = transport
+	// Until ownership transfers to the returned EsqlConn, every failure path
+	// must close the private transport's keep-alive sockets itself — a failed
+	// connect is never admitted to the session cache, so nothing else would
+	// ever release them. Registered before the body-close defer so (LIFO) the
+	// response body is closed first, returning its socket to the idle pool
+	// this then drains.
+	owned := false
+	defer func() {
+		if !owned {
+			transport.CloseIdleConnections()
+		}
+	}()
 	es, err := elasticsearch.NewClient(cfg)
 	if err != nil {
 		return nil, moerr.NewInvalidInputf(ctx, "esql_tvf: cannot create elasticsearch client: %v", err)
@@ -95,6 +107,7 @@ func connectESQL(ctx context.Context, configJSON string) (Conn, error) {
 	if res.IsError() {
 		return nil, moerr.NewInternalErrorf(ctx, "esql_tvf: elasticsearch returned %s", res.Status())
 	}
+	owned = true
 	return &EsqlConn{es: es, transport: transport}, nil
 }
 

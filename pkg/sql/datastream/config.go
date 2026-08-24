@@ -62,6 +62,20 @@ func (c Config) Address() string {
 	return net.JoinHostPort(c.Server, strconv.Itoa(int(c.Port)))
 }
 
+// RejectEnvAPIKeyRef fails closed on the retired "env:NAME" apikey syntax.
+// Query processing no longer reads the CN process environment, so an env:
+// reference cannot be resolved; erroring beats silently sending the literal
+// "env:NAME" string as the credential (a pre-existing table created with the
+// old syntax must be recreated with the apikey value itself — SHOW CREATE
+// never emits the apikey, so nothing else needs migrating).
+func RejectEnvAPIKeyRef(ctx context.Context, raw string) error {
+	if strings.HasPrefix(raw, "env:") {
+		return moerr.NewInvalidInput(ctx,
+			"datastream: 'env:NAME' apikey references are no longer supported (query processing does not read the CN process environment); recreate the table with the apikey value itself")
+	}
+	return nil
+}
+
 // ParseTableOptions validates the WITH (...) list of ENGINE = DATASTREAM.
 func ParseTableOptions(ctx context.Context, param *tree.DataStreamTableParam) (Config, error) {
 	cfg := Config{Recheck: true}
@@ -94,6 +108,9 @@ func ParseTableOptions(ctx context.Context, param *tree.DataStreamTableParam) (C
 			}
 			cfg.Recheck = recheck
 		case optionAPIKey:
+			if err := RejectEnvAPIKeyRef(ctx, value); err != nil {
+				return Config{}, err
+			}
 			cfg.APIKey = value
 		default:
 			return Config{}, moerr.NewInvalidInputf(ctx, "unknown datastream option '%s' (supported: server, port, table, recheck, apikey)", key)

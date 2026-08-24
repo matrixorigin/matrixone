@@ -19,10 +19,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -148,4 +151,37 @@ func TestConnectESQLRejectsEmptyConfig(t *testing.T) {
 	cache := newFakeConnCache()
 	_, _, err := ResolveOrConnect(ctx, cache, KindESQL, `{}`)
 	require.ErrorContains(t, err, "needs addresses or a cloudid")
+}
+
+// TestConnectESQLFailedHandshakeClosesTransport proves a failed connect leaves
+// no unowned keep-alive socket: the private transport is drained on every
+// failure path. A failed connect is never admitted to the session cache, so
+// nothing else could ever release those sockets (regression: 8 failed
+// connects against a 401 endpoint left 8 server connections in StateIdle for
+// IdleConnTimeout).
+func TestConnectESQLFailedHandshakeClosesTransport(t *testing.T) {
+	ctx := context.Background()
+	var open atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Elastic-Product", "Elasticsearch")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	srv.Config.ConnState = func(c net.Conn, s http.ConnState) {
+		switch s {
+		case http.StateNew:
+			open.Add(1)
+		case http.StateClosed, http.StateHijacked:
+			open.Add(-1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	for i := 0; i < 8; i++ {
+		_, err := connectESQL(ctx, esConfigJSON(srv.URL))
+		require.ErrorContains(t, err, "elasticsearch returned")
+	}
+	require.Eventually(t, func() bool { return open.Load() == 0 },
+		5*time.Second, 20*time.Millisecond,
+		"failed connects must not leave open keep-alive connections")
 }
