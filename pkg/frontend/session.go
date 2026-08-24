@@ -182,6 +182,12 @@ type Session struct {
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
 
+	// preparedCursorBytes accounts for rows retained by all active server-side
+	// cursors in this session. Cursor results live on the prepared statement,
+	// so a session-level budget is required in addition to a per-cursor bound.
+	preparedCursorBytes atomic.Uint64
+	preparedCursorLimit atomic.Uint64
+
 	priv *privilege
 
 	ddlOwnerRoleID uint32
@@ -191,6 +197,19 @@ type Session struct {
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
 	ruleCacheMu sync.RWMutex      // protects ruleCache
+
+	// foreignConns caches connections to foreign data sources (Elasticsearch,
+	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and
+	// consumed by esql_tvf / sql_tvf. It is session-scoped: every connection is
+	// closed when the session ends (see closeForeignConns in Close). See
+	// session_foreignconn.go for the process.ForeignConnCache implementation.
+	foreignConnMu sync.Mutex
+	foreignConns  map[string]process.ForeignConn // handle -> connection
+	// foreignConnsClosed is the terminal tombstone set by closeForeignConns:
+	// a connector racing with session close (KILL CONNECTION during a slow
+	// connect handshake) must have its late connection rejected and closed,
+	// not silently re-admitted into a cache nobody will ever clean up again.
+	foreignConnsClosed bool
 
 	// rewriteEnabled caches the enable_remap_hint system variable state
 	// to avoid expensive GetSessionSysVar calls on every SQL query
@@ -1302,6 +1321,10 @@ func (ses *Session) Close() {
 		}
 	}
 
+	// Close any esql_tvf / sql_tvf foreign-data connections opened by this
+	// session so their sockets and driver pools do not outlive it.
+	ses.closeForeignConns()
+
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
@@ -1324,6 +1347,8 @@ func (ses *Session) Close() {
 		stmt.Close()
 	}
 	ses.prepareStmts = nil
+	ses.preparedCursorBytes.Store(0)
+	ses.preparedCursorLimit.Store(0)
 	ses.allResultSet = nil
 	ses.tenant = nil
 	ses.priv = nil
@@ -1621,6 +1646,12 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute {
+			if err := capturePreparedCursorBatch(ses, execCtx, bat); err != nil {
+				return err
+			}
+			return stagePreparedCursorQueryResult(execCtx, crs, bat)
+		}
 		return ses.outputCallback(ses, execCtx, bat, crs)
 	}
 }

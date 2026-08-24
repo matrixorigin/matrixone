@@ -699,6 +699,7 @@ message UpdateCtx {
   bool dedup_by_target_row_id = 14;
   int32 target_update_ctx_idx = 15;
   repeated ColRef affected_rows_cols = 16 [(gogoproto.nullable) = false];
+  ColRef changed_rows_col = 17;
 }
 
 message InsertCtx {
@@ -1169,6 +1170,7 @@ enum ExternType {
   ICEBERG_TB = 3;
   MONGODB_TB = 4;
   DATASTREAM_TB = 5;
+  FOREIGN_TB = 6;
 }
 
 message ExternScan {
@@ -1185,6 +1187,7 @@ message ExternScan {
   IcebergScan iceberg_scan = 11;
   MongoScan mongodb_scan = 12;
   DataStreamScan datastream_scan = 13;
+  ForeignScan foreign_scan = 14;
 }
 
 // DataStreamScan describes a scan of a datastream external table: a
@@ -1201,6 +1204,20 @@ message DataStreamScan {
   // api_key is the shared secret presented to the server ("" when the table
   // configured none).
   string api_key = 6;
+}
+
+// ForeignScan describes a scan of an ESQL/SQL foreign external table
+// (CREATE EXTERNAL TABLE ... ENGINE = ESQL|SQL): the query texts to run come
+// from __mo_query predicates (the scan's FileList), the connection from
+// config (inline JSON, or "" meaning the session's @esql_tvf_config /
+// @sql_tvf_config). See docs/cn/esql_sql_exttab.md.
+message ForeignScan {
+  // kind is "esql" or "sql".
+  string kind = 1;
+  // config is the connection config option, verbatim ("" means session var).
+  string config = 2;
+  // default_query is the 'query' table option ("" when not set).
+  string default_query = 3;
 }
 
 message IcebergScan {

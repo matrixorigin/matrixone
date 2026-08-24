@@ -93,11 +93,15 @@ func commonConditionalStringType(result types.Type, source []types.Type) types.T
 			}
 		case types.T_text:
 			hasText = true
-			// T_text/Width=0 is unbounded TEXT, while Width=255 is the
-			// persisted TINYTEXT subtype marker. Numeric max-width merging
-			// must not turn TEXT + VARCHAR(255) into TINYTEXT and truncate
-			// the TEXT branch before CASE/IF/COALESCE selects it.
-			if typ.Width != types.MaxTinyTextLen {
+			// Width zero is ordinary unbounded TEXT. The non-zero values are
+			// persisted TINYTEXT/MEDIUMTEXT/LONGTEXT markers and must remain
+			// bounded when all conditional branches carry the same family.
+			switch typ.Width {
+			case types.MaxTinyTextLen, types.MaxMediumTextLen, types.MaxLongTextLen:
+				// A persisted TEXT-family subtype marker is a proven bound.
+			default:
+				// Width zero is plain TEXT; any other value is an unknown legacy
+				// representation. Both must fail closed to unbounded TEXT.
 				hasUnboundedText = true
 			}
 			if typ.Width > maxWidth {
@@ -108,10 +112,9 @@ func commonConditionalStringType(result types.Type, source []types.Type) types.T
 		}
 	}
 	if hasText && allText {
-		if result.Oid == types.T_text &&
-			(hasUnboundedText || maxWidth > types.MaxTinyTextLen) {
+		if result.Oid == types.T_text && hasUnboundedText {
 			result.Width = 0
-		} else {
+		} else if maxWidth >= 0 {
 			result.Width = maxWidth
 		}
 	}
@@ -2247,6 +2250,26 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInJsonSet().buildJsonReplace
+				},
+			},
+		},
+	},
+
+	// function `json_array_append`
+	{
+		functionId: JSON_ARRAY_APPEND,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSetCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonSet().buildJsonArrayAppend
 				},
 			},
 		},
@@ -8966,7 +8989,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					typ := types.T_timestamp.ToType()
-					typ.Scale = 6
+					typ.Scale = 0
 					return typ
 				},
 				newOp: func() executeLogicOfOverload {
@@ -8997,7 +9020,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					typ := types.T_timestamp.ToType()
-					typ.Scale = 6
+					typ.Scale = 0
 					return typ
 				},
 				newOp: func() executeLogicOfOverload {
@@ -9029,7 +9052,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				volatile:        true,
 				retType: func(parameters []types.Type) types.Type {
 					typ := types.T_timestamp.ToType()
-					typ.Scale = 6
+					typ.Scale = 0
 					return typ
 				},
 				newOp: func() executeLogicOfOverload {
@@ -12485,6 +12508,28 @@ var supportedControlBuiltIns = []FuncNew{
 }
 
 var supportedOthersBuiltIns = []FuncNew{
+	// Internal helper used by the interval binder for dynamic string values.
+	{
+		functionId: TO_INTERVAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
+				newOp:      func() executeLogicOfOverload { return ToInterval },
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_int64.ToType() },
+				newOp:      func() executeLogicOfOverload { return ToInterval },
+			},
+		},
+	},
+
 	// function `build_version`
 	{
 		functionId: BUILD_VERSION,
@@ -14349,6 +14394,84 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// esql_tvf / sql_tvf connection management. Volatile so the connect side
+	// effect runs and is never constant-folded.
+	{
+		functionId: ESQL_TVF_CONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInEsqlTvfConnect
+				},
+			},
+		},
+	},
+	{
+		functionId: SQL_TVF_CONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqlTvfConnect
+				},
+			},
+		},
+	},
+	{
+		functionId: ESQL_TVF_DISCONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInEsqlTvfDisconnect
+				},
+			},
+		},
+	},
+	{
+		functionId: SQL_TVF_DISCONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqlTvfDisconnect
+				},
+			},
+		},
+	},
 	// function `uuid`
 	{
 		functionId: UUID,

@@ -64,6 +64,15 @@ func countStarAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
 }
 
+func countDistinctAgg(pos int32) aggexec.AggFuncExecExpression {
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfCountColumn,
+		true,
+		[]*plan.Expr{colExpr(pos, types.T_int32)},
+		nil,
+	)
+}
+
 func countStarLiteralAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfCountStar,
@@ -1647,6 +1656,50 @@ func TestMergeGroupUsesReducedHashKey(t *testing.T) {
 	for _, partial := range partials {
 		partial.Clean(proc.Mp())
 	}
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeGroupDeduplicatesCountDistinctAcrossPartialGroups(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	buildPartial := func(groups, values []int32, nulls []uint64) *batch.Batch {
+		input := batch.NewWithSize(2)
+		input.Vecs[0] = testutil.MakeInt32Vector(groups, nil, proc.Mp())
+		input.Vecs[1] = testutil.MakeInt32Vector(values, nulls, proc.Mp())
+		input.SetRowCount(len(groups))
+		child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+		partial := newGroupOp(
+			proc,
+			[]*plan.Expr{colExpr(0, types.T_int32)},
+			[]aggexec.AggFuncExecExpression{countDistinctAgg(1)},
+		)
+		partial.NeedEval = false
+		partial.AppendChild(child)
+		require.NoError(t, partial.Prepare(proc))
+		outputs := collectBatches(t, partial, proc)
+		require.Len(t, outputs, 1)
+		result := cloneBatch(t, proc, outputs[0])
+		partial.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		return result
+	}
+
+	partials := []*batch.Batch{
+		buildPartial([]int32{1, 1, 2, 3}, []int32{1, 2, 7, 0}, []uint64{3}),
+		buildPartial([]int32{1, 1, 2, 2, 3}, []int32{2, 3, 7, 8, 0}, []uint64{4}),
+	}
+	child := colexec.NewMockOperator().WithBatchs(partials)
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countDistinctAgg(1)})
+	merge.AppendChild(child)
+	require.NoError(t, merge.Prepare(proc))
+	finals := collectBatches(t, merge, proc)
+	require.Len(t, finals, 1)
+	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColNoTypeCheck[int32](finals[0].Vecs[0]))
+	require.Equal(t, []int64{3, 2, 0}, vector.MustFixedColNoTypeCheck[int64](finals[0].Vecs[1]))
+
+	merge.Free(proc, false, nil)
+	child.Free(proc, false, nil)
 	require.Zero(t, proc.Mp().CurrNB())
 }
 

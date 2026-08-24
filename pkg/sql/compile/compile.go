@@ -1369,7 +1369,15 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	default:
 		var rs *Scope
 		if c.IsSingleScope(ss) {
-			rs = ss[0]
+			// Output owns a callback created by this Compile and cannot be
+			// serialized for execution on another CN. Keep the result sink on
+			// its owner and return the remote child through the existing
+			// connector/merge path.
+			if ss[0].Magic == Remote && !ss[0].ipAddrMatch(c.addr) {
+				rs = c.newMergeScope(ss)
+			} else {
+				rs = ss[0]
+			}
 		} else {
 			ss = c.mergeShuffleScopesIfNeeded(ss, false)
 			rs = c.newMergeScope(ss)
@@ -1682,7 +1690,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
 		defer groupInfo.Release()
-		anyDistinctAgg := groupInfo.AnyDistinctAgg()
+		distinctRequiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
@@ -1701,7 +1709,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
 			return ss, nil
 		} else {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileMergeGroup(node, ss, nodes, anyDistinctAgg))))
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node,
+				c.compileMergeGroup(node, ss, nodes, distinctRequiresSingleStage))))
 			return ss, nil
 		}
 	case plan.Node_SAMPLE:
@@ -2453,6 +2462,10 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		return c.compileDatastreamScan(node, strictSqlMode)
 	}
 
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_FOREIGN_TB) {
+		return c.compileForeignScan(node, strictSqlMode)
+	}
+
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_ICEBERG_TB) {
 		access, err := c.checkIcebergScanAccess(node)
 		if err != nil {
@@ -2574,6 +2587,55 @@ func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]
 	scope := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
+}
+
+// compileForeignScan compiles a scan of an ESQL/SQL foreign external table.
+// The query texts to run are derived from __mo_query predicates (falling back
+// to the table's 'query' option) and become the scan's FileList: one query is
+// one virtual file. The scope is pinned to the session's CN with Mcpu=1 --
+// the session-local connection cache must be reachable, and foreign queries
+// within one scan run sequentially. Separate scans in one MO query are
+// separate scopes and run concurrently.
+func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	fs := node.ExternScan.GetForeignScan()
+	if fs == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "foreign external table is missing scan metadata")
+	}
+
+	queryList, err := external.DeriveForeignQueryList(c.proc.Ctx, node, c.proc)
+	if err != nil {
+		return nil, err
+	}
+	if len(queryList) == 0 {
+		if fs.DefaultQuery == "" {
+			return nil, moerr.NewInvalidInputf(c.proc.Ctx,
+				"%s external table requires a __mo_query = '<text>' predicate or a 'query' table option", fs.Kind)
+		}
+		queryList = []string{fs.DefaultQuery}
+	}
+	// Apply ALL query-level conjuncts to the candidate list (the generating
+	// =/IN ones trivially pass; non-generating ones like LIKE may prune) and
+	// keep only row-level conjuncts in the compile-owned node's FilterList.
+	fileSize := make([]int64, len(queryList))
+	for i := range fileSize {
+		fileSize[i] = -1
+	}
+	queryList, fileSize, residual, err := external.FilterFileList(c.proc.Ctx, node, c.proc, queryList, fileSize)
+	if err != nil {
+		return nil, err
+	}
+	node.FilterList = residual
+
+	param := external.ForeignExternParam(fs.Kind)
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, queryList, fileSize, nil, strictSqlMode)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
@@ -4171,8 +4233,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
-	if len(node.FilterList) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(node.FilterList)
+	storageFilters := filterScanStorageExprs(node.FilterList)
+	if len(storageFilters) != len(s.DataSource.FilterList) {
+		s.DataSource.FilterList = plan2.DeepCopyExprList(storageFilters)
 		for _, e := range s.DataSource.FilterList {
 			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
 			if err != nil {
@@ -4210,6 +4273,25 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.RecvMsgList = node.RecvMsgList
 
 	return nil
+}
+
+// filterScanStorageExprs excludes row-dependent predicates from the engine
+// reader. The complete node.FilterList remains owned by TableScan or Restrict,
+// so these predicates are still evaluated once at the row-level boundary.
+func filterScanStorageExprs(exprs []*plan.Expr) []*plan.Expr {
+	for i, expr := range exprs {
+		if plan2.ContainsVolatileFunction(expr) {
+			filtered := make([]*plan.Expr, 0, len(exprs)-1)
+			filtered = append(filtered, exprs[:i]...)
+			for _, remaining := range exprs[i+1:] {
+				if !plan2.ContainsVolatileFunction(remaining) {
+					filtered = append(filtered, remaining)
+				}
+			}
+			return filtered
+		}
+	}
+	return exprs
 }
 
 func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
@@ -5657,16 +5739,16 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return ss
 }
 
-func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Node, hasDistinct bool) []*Scope {
-	// for less memory usage while merge group,
-	// we do not run the group-operator in parallel once this has a distinct aggregation.
-	// because the parallel need to store all the source data in the memory for merging.
-	// we construct a pipeline like the following description for this case:
-	//
-	// all the operators from ss[0] to ss[last] send the data to only one group-operator.
-	// this group-operator sends its result to the merge-group-operator.
-	// todo: I cannot remove the merge-group action directly, because the merge-group action is used to fill the partial result.
-	if hasDistinct {
+func (c *Compile) compileMergeGroup(
+	node *plan.Node,
+	ss []*Scope,
+	ns []*plan.Node,
+	distinctRequiresSingleStage bool,
+) []*Scope {
+	// DISTINCT aggregates without an exact state-merge contract run one Group
+	// operator before MergeGroup. Parallel-mergeable DISTINCT aggregates use the
+	// ordinary local Group + MergeGroup pipeline below.
+	if distinctRequiresSingleStage {
 		ss = c.mergeShuffleScopesIfNeeded(ss, false)
 		mergeToGroup := c.newMergeScope(ss)
 
@@ -5852,6 +5934,32 @@ func supportsRemoteCrossDomainStringLiterals(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion23
+}
+
+func supportsRemoteStatementLastInsertID(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion26
+}
+
+func supportsRemoteUpdateChangedRows(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion25
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
@@ -6677,12 +6785,21 @@ func scopeTreeSinkScanNode(s *Scope, visitedScopes map[*Scope]bool, visitedOps m
 	return engine.Node{}, false
 }
 
+// operatorTreeContainsSinkScan reports whether the operator tree contains a
+// CN-pinned local source: a SINK_SCAN merge (consumes an in-process
+// PipelineEdge) or an ESQL/SQL foreign external scan (its connection cache
+// lives only on the interactive session's CN). Either one must keep its
+// owning CN inside the shuffle receiver stage set, or no receiver tree would
+// ever start the scope and every shuffle receiver would wait forever.
 func operatorTreeContainsSinkScan(op vm.Operator, visited map[vm.Operator]bool) bool {
 	if op == nil || visited[op] {
 		return false
 	}
 	visited[op] = true
 	if mergeOp, ok := op.(*merge.Merge); ok && mergeOp.SinkScan {
+		return true
+	}
+	if ext, ok := op.(*external.External); ok && ext.Es != nil && ext.Es.ForeignScan != nil {
 		return true
 	}
 	base := op.GetOperatorBase()
