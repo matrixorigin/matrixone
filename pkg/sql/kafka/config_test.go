@@ -47,6 +47,12 @@ func TestParseTableOptions(t *testing.T) {
 	require.Equal(t, "g1", cfg.Group)
 	require.Equal(t, FormatJSONL, cfg.Format)
 
+	// a comma-space broker list is canonicalized: the stored value feeds the
+	// Kafka client directly, and an untrimmed seed would lose failover
+	cfg, err = ParseTableOptions(ctx, options("brokers", " h1:9092 , h2:9092 ", "topic", "t"))
+	require.NoError(t, err)
+	require.Equal(t, "h1:9092,h2:9092", cfg.Brokers)
+
 	// csv separator: verbatim single rune, including whitespace and multibyte
 	for _, sep := range []string{"|", "\t", " ", "§"} {
 		cfg, err = ParseTableOptions(ctx, options("brokers", "h:1", "topic", "t", "separator", sep))

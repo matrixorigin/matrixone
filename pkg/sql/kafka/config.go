@@ -124,11 +124,20 @@ func ParseTableOptions(ctx context.Context, param *tree.KafkaTableParam) (Config
 	if cfg.Brokers == "" {
 		return Config{}, moerr.NewInvalidInput(ctx, "kafka external table requires the 'brokers' option")
 	}
-	for _, b := range strings.Split(cfg.Brokers, ",") {
-		if _, _, err := net.SplitHostPort(strings.TrimSpace(b)); err != nil {
-			return Config{}, moerr.NewInvalidInputf(ctx, "kafka option 'brokers' entry '%s' is not host:port", strings.TrimSpace(b))
+	// Validate AND canonicalize: the stored list is exactly what the scan
+	// hands to the Kafka client, so a conventional "host1:9092, host2:9092"
+	// comma-space list must not keep whitespace that breaks the second
+	// seed's DNS lookup — losing failover precisely when the first broker
+	// is down.
+	entries := strings.Split(cfg.Brokers, ",")
+	for i, b := range entries {
+		b = strings.TrimSpace(b)
+		if _, _, err := net.SplitHostPort(b); err != nil {
+			return Config{}, moerr.NewInvalidInputf(ctx, "kafka option 'brokers' entry '%s' is not host:port", b)
 		}
+		entries[i] = b
 	}
+	cfg.Brokers = strings.Join(entries, ",")
 	if cfg.Topic == "" {
 		return Config{}, moerr.NewInvalidInput(ctx, "kafka external table requires the 'topic' option")
 	}

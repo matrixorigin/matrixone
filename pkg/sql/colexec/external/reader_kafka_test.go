@@ -878,3 +878,15 @@ func BenchmarkKafkaParseOneMessage(b *testing.B) {
 		}
 	}
 }
+
+// TestKafkaReaderBrokerFailover: a conventional comma-space broker list with
+// a DEAD first seed must still reach the healthy second seed — an untrimmed
+// " host:port" entry fails DNS and loses failover exactly when it matters.
+func TestKafkaReaderBrokerFailover(t *testing.T) {
+	addr := startKafka(t, "t_failover", [][2]string{{"", "1,a"}, {"", "2,b"}})
+	ks := kafkaScan("127.0.0.1:1, "+addr, "t_failover", sqlkafka.FormatCSV)
+	param, proc, bat := newKafkaTestParam(t, ks)
+	readAllKafka(t, param, proc, bat)
+	require.Equal(t, 2, bat.RowCount())
+	require.Equal(t, int64(1), proc.GetSession().(*fakeKafkaSession).lastID)
+}

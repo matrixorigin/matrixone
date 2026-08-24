@@ -277,7 +277,7 @@ func (r *KafkaReader) Open(param *ExternalParam, proc *process.Process) (fileEmp
 	// validate an explicit start id (below the log start or beyond the end
 	// is an error, never a silent reset) and resolve the -1/earliest
 	// boundary without a second admin round-trip.
-	seedCl, err := kgo.NewClient(kgo.SeedBrokers(strings.Split(ks.Brokers, ",")...))
+	seedCl, err := kgo.NewClient(kgo.SeedBrokers(kafkaSeeds(ks.Brokers)...))
 	if err != nil {
 		return false, moerr.NewInternalErrorf(proc.Ctx, "kafka: cannot create client for %s: %v", ks.Brokers, err)
 	}
@@ -318,7 +318,7 @@ func (r *KafkaReader) Open(param *ExternalParam, proc *process.Process) (fileEmp
 	}
 
 	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(strings.Split(ks.Brokers, ",")...),
+		kgo.SeedBrokers(kafkaSeeds(ks.Brokers)...),
 		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
 			ks.Topic: {ks.Partition: kgo.NewOffset().At(readFrom)},
 		}),
@@ -536,6 +536,21 @@ func (p *KafkaPendingProgress) Finalize(proc *process.Process, success bool) {
 	}
 	p.cl.Close()
 	p.cl = nil
+}
+
+// kafkaSeeds splits a broker list, trimming every entry: new tables store a
+// canonical list, but a pre-existing envelope may still carry
+// "host1:9092, host2:9092", and an untrimmed second seed loses failover
+// exactly when the first broker is down.
+func kafkaSeeds(brokers string) []string {
+	parts := strings.Split(brokers, ",")
+	seeds := parts[:0]
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			seeds = append(seeds, p)
+		}
+	}
+	return seeds
 }
 
 // kafkaPartitionBounds returns the partition's [logStart, logEnd) offsets.
