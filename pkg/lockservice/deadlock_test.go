@@ -57,20 +57,20 @@ func TestCheckWithDeadlock(t *testing.T) {
 			})
 		defer d.close()
 
-		// txn1 - txn2 - txn3 - txn1
+		// Every traversal of the same cycle must select the same victim.
 		assert.NoError(t, d.check(txn4, pb.WaitTxn{TxnID: txn1}))
-		assert.Equal(t, txn1, <-abortC)
-		d.txnClosed(txn1)
+		victim := <-abortC
+		d.txnClosed(victim)
 
 		// txn2 - txn3 - txn1 - txn2
 		assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn2}))
-		assert.Equal(t, txn2, <-abortC)
-		d.txnClosed(txn2)
+		assert.Equal(t, victim, <-abortC)
+		d.txnClosed(victim)
 
 		// txn3 - txn1 - txn2 - txn3
 		assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn3}))
-		assert.Equal(t, txn3, <-abortC)
-		d.txnClosed(txn3)
+		assert.Equal(t, victim, <-abortC)
+		d.txnClosed(victim)
 
 		assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn4}))
 		select {
@@ -235,14 +235,14 @@ func TestCheckWithDeadlockWith2Txn(t *testing.T) {
 			})
 		defer d.close()
 
-		// txn2 - txn1 - txn2
+		// Both traversals of the cycle must select the same victim.
 		assert.NoError(t, d.check(txn2, pb.WaitTxn{TxnID: txn1}))
-		assert.Equal(t, txn2, <-abortC)
-		d.txnClosed(txn2)
+		victim := <-abortC
+		d.txnClosed(victim)
 
 		assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn2}))
-		assert.Equal(t, txn2, <-abortC)
-		d.txnClosed(txn2)
+		assert.Equal(t, victim, <-abortC)
+		d.txnClosed(victim)
 
 		assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn3}))
 		select {
@@ -250,6 +250,70 @@ func TestCheckWithDeadlockWith2Txn(t *testing.T) {
 			assert.Fail(t, "can not found dead lock")
 		case <-time.After(time.Millisecond * 100):
 		}
+	})
+}
+
+func TestConcurrentChecksSelectOneVictimPerCycle(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		txn1 := []byte("t1")
+		txn2 := []byte("t2")
+		depends := map[string][]pb.WaitTxn{
+			string(txn1): {{TxnID: txn2}},
+			string(txn2): {{TxnID: txn1}},
+		}
+
+		cycleFound := make(chan struct{}, 2)
+		release := make(chan struct{})
+		released := false
+		defer func() {
+			if !released {
+				close(release)
+			}
+		}()
+		abortC := make(chan pb.WaitTxn, 2)
+
+		d := newDeadlockDetector(
+			runtime.DefaultRuntime().Logger(),
+			func(_ context.Context, txn pb.WaitTxn, w *waiters) (bool, error) {
+				for _, waiter := range depends[string(txn.TxnID)] {
+					if !w.add(waiter, "") {
+						// Hold both detector workers after they have independently
+						// found the same cycle, but before either can abort a txn.
+						cycleFound <- struct{}{}
+						<-release
+						return false, nil
+					}
+				}
+				return true, nil
+			},
+			func(txn pb.WaitTxn, _ error) {
+				abortC <- txn
+			},
+		)
+		defer d.close()
+
+		require.NoError(t, d.check(txn2, pb.WaitTxn{TxnID: txn1}))
+		require.NoError(t, d.check(txn1, pb.WaitTxn{TxnID: txn2}))
+		for range 2 {
+			select {
+			case <-cycleFound:
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "detector workers did not both find the cycle")
+			}
+		}
+		close(release)
+		released = true
+
+		require.Eventually(t, func() bool {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			return len(d.mu.activeCheckTxn) == 0
+		}, 5*time.Second, 10*time.Millisecond)
+		require.Len(t, abortC, 2)
+		victim1 := <-abortC
+		victim2 := <-abortC
+		require.Equal(t, victim1.TxnID, victim2.TxnID)
+		require.Contains(t, []string{string(txn1), string(txn2)}, string(victim1.TxnID))
 	})
 }
 
@@ -422,25 +486,23 @@ func TestCheckWithComplexDeadlock(t *testing.T) {
 			})
 		defer d.close()
 
-		// Test case 1: Start with txn1, should detect deadlock and abort txn1
+		// Every entry point into the cycle must select the same victim.
 		assert.NoError(t, d.check([]byte("txn0"), pb.WaitTxn{TxnID: txn1}))
-		assert.Equal(t, txn1, <-abortC)
-		d.txnClosed(txn1)
+		victim := <-abortC
+		d.txnClosed(victim)
 
-		// Test case 2: Start with txn5, should detect deadlock and abort txn5
 		assert.NoError(t, d.check([]byte("txn0"), pb.WaitTxn{TxnID: txn5}))
-		assert.Equal(t, txn5, <-abortC)
-		d.txnClosed(txn5)
+		assert.Equal(t, victim, <-abortC)
+		d.txnClosed(victim)
 
-		// Test case 3: Start with txn10, should detect deadlock and abort txn10
 		assert.NoError(t, d.check([]byte("txn0"), pb.WaitTxn{TxnID: txn10}))
-		assert.Equal(t, txn10, <-abortC)
-		d.txnClosed(txn10)
+		assert.Equal(t, victim, <-abortC)
+		d.txnClosed(victim)
 
-		// Test case 3: Start with txn11, should detect deadlock and abort txn11
+		// txn11 is only an entry path and must not affect victim selection.
 		assert.NoError(t, d.check([]byte("txn0"), pb.WaitTxn{TxnID: txn11}))
-		assert.Equal(t, txn1, <-abortC)
-		d.txnClosed(txn1)
+		assert.Equal(t, victim, <-abortC)
+		d.txnClosed(victim)
 
 		// Test case 5: Break the cycle by removing txn10's dependency on txn1
 		depends[string(txn10)] = []pb.WaitTxn{} // Remove the dependency that creates the cycle
@@ -503,9 +565,13 @@ func TestCheckDeadlock(t *testing.T) {
 			})
 		defer d.close()
 
-		// Test case 1: Start with txn1, should detect deadlock and abort txn1
+		// txn1 leads into, but is not part of, the txn2..txn10 cycle.
 		assert.NoError(t, d.check([]byte("txn0"), pb.WaitTxn{TxnID: txn1}))
-		assert.Equal(t, txn2, <-abortC)
-		d.txnClosed(txn2)
+		victim := <-abortC
+		assert.Contains(t, []string{
+			string(txn2), string(txn3), string(txn4), string(txn5), string(txn6),
+			string(txn7), string(txn8), string(txn9), string(txn10),
+		}, string(victim))
+		d.txnClosed(victim)
 	})
 }

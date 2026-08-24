@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -200,8 +201,42 @@ func (d *detector) checkDeadlock(ctx context.Context, w *waiters) (bool, pb.Wait
 
 func (d *detector) deadlockFound(w *waiters) (bool, pb.WaitTxn, error) {
 	node := w.deadlockNode()
-	logDeadLockFound(d.logger, node.txn, printPathFromRoot(node))
-	return true, node.txn, nil
+	victim := canonicalDeadlockVictim(node)
+	logDeadLockFound(d.logger, victim, printPathFromRoot(node))
+	return true, victim, nil
+}
+
+// canonicalDeadlockVictim selects the same victim for every traversal of a
+// cycle. Ranking a txn's full ID avoids always favoring one CN's ID prefix; the
+// byte comparison makes the result deterministic even if two hashes collide.
+func canonicalDeadlockVictim(node *lockNode) pb.WaitTxn {
+	if node == nil {
+		return pb.WaitTxn{}
+	}
+
+	victim := node.txn
+	victimRank := deadlockVictimRank(victim.TxnID)
+	for current := node.parent; current != nil; current = current.parent {
+		// The closing node has the waiter address needed to route a remote
+		// abort. Keep it when the duplicated txn ID closes the cycle.
+		if bytes.Equal(current.txn.TxnID, victim.TxnID) {
+			continue
+		}
+
+		rank := deadlockVictimRank(current.txn.TxnID)
+		if rank > victimRank ||
+			(rank == victimRank && bytes.Compare(current.txn.TxnID, victim.TxnID) > 0) {
+			victim = current.txn
+			victimRank = rank
+		}
+	}
+	return victim
+}
+
+func deadlockVictimRank(txnID []byte) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write(txnID)
+	return h.Sum64()
 }
 
 type txnVisitState uint8
