@@ -813,10 +813,11 @@ type service struct {
 
 	task struct {
 		sync.RWMutex
-		holder         taskservice.TaskServiceHolder
-		runner         taskservice.TaskRunner
-		runnerReady    atomic.Bool
-		storageFactory taskservice.TaskStorageFactory
+		holder            taskservice.TaskServiceHolder
+		runner            taskservice.TaskRunner
+		runnerReady       atomic.Bool
+		generationRevoked bool
+		storageFactory    taskservice.TaskStorageFactory
 	}
 
 	addressMgr address.AddressManager

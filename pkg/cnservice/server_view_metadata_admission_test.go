@@ -173,6 +173,7 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 		},
 	}
 	s.viewMetadataIngressReady.Store(true)
+	s.task.runnerReady.Store(true)
 	pipelineCtx, releasePipeline, admitted := s.admitPipelineHandler(context.Background())
 	require.True(t, admitted)
 	releaseQuery, admitted := s.queryWork.admit()
@@ -186,6 +187,8 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 		}))
 	require.Equal(t, uint64(9), s.viewMetadataAdmission.Load().Generation)
 	require.False(t, s.viewMetadataIngressReady.Load())
+	require.False(t, s.task.runnerReady.Load(),
+		"generation revocation must synchronously withdraw task-runner eligibility")
 	select {
 	case <-pipelineCtx.Done():
 	default:
@@ -246,6 +249,10 @@ func TestCNGenerationRevocationCancelsIngressStart(t *testing.T) {
 	<-revokeDone
 	require.Equal(t, int32(1), mo.startCount.Load(), "revocation must not restart frontend")
 	require.False(t, s.viewMetadataIngressReady.Load())
+	require.False(t, s.task.runnerReady.Load())
+	err = s.publishTaskRunner()
+	require.Error(t, err, "a revoke between startup precheck and task publication must win")
+	require.False(t, s.task.runnerReady.Load())
 	select {
 	case <-mo.stopped:
 	default:

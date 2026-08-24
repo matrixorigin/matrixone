@@ -486,11 +486,9 @@ func (s *service) Start() (err error) {
 	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
-	s.task.runnerReady.Store(true)
-	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
+	if err = s.publishTaskRunner(); err != nil {
 		return err
 	}
-	s.startTaskRunner()
 	return s.checkViewMetadataGenerationRevoked()
 }
 
