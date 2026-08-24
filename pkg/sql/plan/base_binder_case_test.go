@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,6 +25,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedScalarNumericOverloadsUseDoubleDomain(t *testing.T) {
+	for _, name := range []string{"abs", "sleep"} {
+		t.Run(name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false), t,
+				fmt.Sprintf("prepare stmt_%s from 'select %s(?)'", name, name))
+			require.NoError(t, err)
+
+			fn := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, name)
+			require.NotNil(t, fn)
+			require.Len(t, fn.GetF().Args, 1)
+			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+			cast := fn.GetF().Args[0].GetF()
+			require.NotNil(t, cast)
+			require.Equal(t, "cast", cast.Func.GetObjName())
+			require.NotNil(t, cast.Args[0].GetP())
+			require.Equal(t, int32(types.T_float64), cast.Args[1].Typ.Id)
+		})
+	}
+
+	t.Run("ordinary column keeps native overload", func(t *testing.T) {
+		p, err := runOneStmt(NewMockOptimizer(false), t,
+			"prepare stmt_abs_column from 'select abs(n_regionkey) from nation'")
+		require.NoError(t, err)
+
+		fn := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, "abs")
+		require.NotNil(t, fn)
+		require.NotEqual(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+	})
+
+	t.Run("parameter nested in arithmetic", func(t *testing.T) {
+		p, err := runOneStmt(NewMockOptimizer(false), t,
+			"prepare stmt_abs_expr from 'select abs(? + 0)'")
+		require.NoError(t, err)
+
+		fn := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, "abs")
+		require.NotNil(t, fn)
+		require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+	})
+}
 
 func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {
 	ctx := context.Background()

@@ -2776,6 +2776,17 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNotSupported(b.GetContext(),
 			"ordered-set percentile window functions")
 	}
+	// Resolve ambiguous scalar numeric overloads while the statement is being
+	// prepared. The parameter itself remains a ParamRef under the DOUBLE cast;
+	// execution only supplies the value vector and can therefore reuse the
+	// cached compile without rebuilding the plan for each parameter type.
+	if b.builder != nil && b.builder.isPrepareStatement {
+		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
+			containsPreparedParamExprs(astExpr.Exprs) &&
+			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sleep")) {
+			return b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
+		}
+	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 
@@ -2824,11 +2835,72 @@ func (b *baseBinder) bindGroupingFuncExpr(astExpr *tree.FuncExpr) (*plan.Expr, e
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "grouping", args)
 }
 
+// containsPreparedParamExprs limits the deferred overload path to expressions
+// whose value is supplied by the prepared statement.  In particular, a
+// prepared query may also contain ordinary calls such as abs(integer_column);
+// those calls must retain their column's native integer/unsigned result type.
+// Keep the walk local to the expression forms that can occur as scalar
+// function arguments; unsupported forms conservatively return false and stay
+// on the regular binder path.
+func containsPreparedParamExprs(exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if containsPreparedParamExpr(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPreparedParamExpr(expr tree.Expr) bool {
+	switch e := expr.(type) {
+	case *tree.ParamExpr:
+		return true
+	case *tree.BinaryExpr:
+		return containsPreparedParamExpr(e.Left) || containsPreparedParamExpr(e.Right)
+	case *tree.UnaryExpr:
+		return containsPreparedParamExpr(e.Expr)
+	case *tree.ParenExpr:
+		return containsPreparedParamExpr(e.Expr)
+	case *tree.FuncExpr:
+		return containsPreparedParamExprs(e.Exprs)
+	case *tree.CastExpr:
+		return containsPreparedParamExpr(e.Expr)
+	case *tree.BitCastExpr:
+		return containsPreparedParamExpr(e.Expr)
+	case *tree.CaseExpr:
+		if e.Expr != nil && containsPreparedParamExpr(e.Expr) {
+			return true
+		}
+		for _, when := range e.Whens {
+			if when != nil && (containsPreparedParamExpr(when.Cond) || containsPreparedParamExpr(when.Val)) {
+				return true
+			}
+		}
+		return e.Else != nil && containsPreparedParamExpr(e.Else)
+	case *tree.Tuple:
+		return containsPreparedParamExprs(e.Exprs)
+	default:
+		return false
+	}
+}
+
 func isPreparedNumericAggregate(name string, argCount int) bool {
 	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
 }
 
 func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
+	// ABS and SLEEP both have integer and floating-point overloads. A bare
+	// prepared parameter has TEXT transport type at PREPARE time, so letting
+	// the generic overload resolver choose an integer cast makes valid binary
+	// executions such as ABS(-1.5) and SLEEP(0.01) fail before the function can
+	// see the value. Use DOUBLE as the stable deferred domain; integer values
+	// are losslessly accepted by this domain and no execute-time plan rebuild is
+	// required.
+	if argCount == 1 && (strings.EqualFold(name, "abs") || strings.EqualFold(name, "sleep")) {
+		typ := types.T_float64.ToType()
+		target := makePlan2Type(&typ)
+		return &target, true
+	}
 	if isPreparedNumericAggregate(name, argCount) {
 		return nil, true
 	}
