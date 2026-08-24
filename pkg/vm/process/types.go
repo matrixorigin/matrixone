@@ -150,17 +150,17 @@ type SessionInfo struct {
 	// overwritten by the limited output count.
 	FoundRowsRecorded bool
 	SqlCalcFoundRows  bool
-	StorageEngine          engine.Engine
-	QueryId                []string
-	ResultColTypes         []types.Type
-	SeqCurValues           map[uint64]string
-	SeqDeleteKeys          []uint64
-	SeqAddValues           map[uint64]string
-	SeqLastValue           []string
-	SqlHelper              sqlHelper
-	Buf                    *buffer.Buffer
-	LogLevel               zapcore.Level
-	SessionId              uuid.UUID
+	StorageEngine     engine.Engine
+	QueryId           []string
+	ResultColTypes    []types.Type
+	SeqCurValues      map[uint64]string
+	SeqDeleteKeys     []uint64
+	SeqAddValues      map[uint64]string
+	SeqLastValue      []string
+	SqlHelper         sqlHelper
+	Buf               *buffer.Buffer
+	LogLevel          zapcore.Level
+	SessionId         uuid.UUID
 }
 
 type Session interface {

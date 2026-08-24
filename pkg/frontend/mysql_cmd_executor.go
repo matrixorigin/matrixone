@@ -5358,7 +5358,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		SessionId:              ses.GetSessId(),
 		ApplySQLSelectLimit:    !ses.GetIsInternal() && !ses.IsBackgroundSession() && !ses.IsDerivedStmt(),
 		CountUpdateChangedRows: countUpdateChangedRows(ses),
-		FoundRows:           ses.GetLastFoundRows(),
+		FoundRows:              ses.GetLastFoundRows(),
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	// Carry the previous statement's affected rows into this proc so the
