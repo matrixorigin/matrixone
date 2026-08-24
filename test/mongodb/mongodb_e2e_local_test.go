@@ -133,6 +133,14 @@ func TestMongoDBLocalE2EPortPlanValidatesOverrides(t *testing.T) {
 			},
 			want: "frontend overlaps status",
 		},
+		{
+			name: "frontend outside reserved block",
+			overrides: map[string]string{
+				"MO_MONGODB_LOG_PORT_BASE": "40000",
+				"MO_MONGODB_FRONTEND_PORT": "50000",
+			},
+			want: "MO_MONGODB_FRONTEND_PORT must be inside the reserved 80-port block",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, output, err := runMongoDBPortPlan(t, test.overrides)
@@ -140,6 +148,54 @@ func TestMongoDBLocalE2EPortPlanValidatesOverrides(t *testing.T) {
 			require.Contains(t, output, test.want)
 		})
 	}
+}
+
+func TestMongoDBLocalE2EPortPlanLeasesPortBlockAcrossProcesses(t *testing.T) {
+	ports, output, err := runMongoDBPortPlan(t, nil)
+	require.NoError(t, err, output)
+	base := strconv.Itoa(ports["LOG_PORT_BASE"])
+	readyFile := filepath.Join(t.TempDir(), "port-plan-ready")
+
+	repoRoot := mongoDBTestRepoRoot(t)
+	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
+	command.Dir = repoRoot
+	command.Env = mongoDBPortPlanEnv(map[string]string{
+		"MO_MONGODB_LOG_PORT_BASE":          base,
+		"MO_MONGODB_PORT_PLAN_HOLD_SECONDS": "2",
+		"MO_MONGODB_PORT_PLAN_READY_FILE":   readyFile,
+	})
+	var commandOutput strings.Builder
+	command.Stdout = &commandOutput
+	command.Stderr = &commandOutput
+	require.NoError(t, command.Start())
+	finished := false
+	t.Cleanup(func() {
+		if !finished && command.Process != nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		contents, readErr := os.ReadFile(readyFile)
+		if readErr == nil && string(contents) == "ready\n" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	contents, readErr := os.ReadFile(readyFile)
+	require.NoErrorf(t, readErr, "first port-plan did not become ready: %s", commandOutput.String())
+	require.Equal(t, "ready\n", string(contents), commandOutput.String())
+
+	_, output, err = runMongoDBPortPlan(t, map[string]string{
+		"MO_MONGODB_LOG_PORT_BASE": base,
+	})
+	require.Error(t, err)
+	require.Contains(t, output, "MO_MONGODB_LOG_PORT_BASE is already leased")
+
+	require.NoError(t, command.Wait(), commandOutput.String())
+	finished = true
 }
 
 func runMongoDBPortPlan(t *testing.T, overrides map[string]string) (map[string]int, string, error) {

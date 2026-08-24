@@ -9,6 +9,7 @@ PROFILE="${1:-e2e-local}"
 REPORT_DIR="${MO_MONGODB_REPORT_DIR:-${ROOT_DIR}/test/mongodb/reports/ci_$(date -u +%Y%m%dT%H%M%SZ)}"
 TMP_DIR=""
 MO_PID=""
+PORT_LEASE_PID=""
 
 readonly PORT_BLOCK_WIDTH=80
 # AddressManager permits its base port plus 20 fallback slots when an address
@@ -77,6 +78,7 @@ cleanup() {
       log "refusing to remove unexpected temporary path: $TMP_DIR"
     fi
   fi
+  release_port_block_lease
   return "$status"
 }
 
@@ -116,34 +118,103 @@ wait_primary() {
   done
 }
 
-find_free_port_block() {
+port_block_candidates() {
   python3 - <<'PY'
 import random
-import socket
 
-# A CN/TN address manager can claim its base port plus 20 fallback ports. Keep every
-# MatrixOne listener in one verified block so this disposable E2E deployment
-# cannot collide with itself or a local developer cluster.
+# Keep every MatrixOne listener in one 80-port block. Availability is checked
+# after a host-wide lease has been acquired for each candidate.
 width = 80
 candidates = list(range(36000, 57000 - width, width))
 random.shuffle(candidates)
 for base in candidates:
-    sockets = []
-    try:
-        for port in range(base, base + width):
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.bind(("127.0.0.1", port))
-            sockets.append(sock)
-    except OSError:
-        pass
-    else:
-        print(base)
-        raise SystemExit(0)
-    finally:
-        for sock in sockets:
-            sock.close()
-raise SystemExit("could not find a free 80-port range for the MongoDB E2E cluster")
+    print(base)
 PY
+}
+
+port_block_is_available() {
+  local base="$1"
+  python3 - "$base" "$PORT_BLOCK_WIDTH" <<'PY'
+import socket
+import sys
+
+base = int(sys.argv[1])
+width = int(sys.argv[2])
+sockets = []
+try:
+    for port in range(base, base + width):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", port))
+        sockets.append(sock)
+except OSError:
+    raise SystemExit(1)
+finally:
+    for sock in sockets:
+        sock.close()
+PY
+}
+
+acquire_port_block_lease() {
+  local base="$1" lease_dir status_file status=""
+  lease_dir="${MO_MONGODB_PORT_LEASE_DIR:-${TMPDIR:-/tmp}/mo-mongodb-port-leases-$(id -u)}"
+  mkdir -p "$lease_dir" || die "could not create MongoDB E2E port lease directory"
+  chmod 700 "$lease_dir" || die "could not secure MongoDB E2E port lease directory"
+  local lease_file="$lease_dir/$base.lock"
+  status_file="$(mktemp "${TMPDIR:-/tmp}/mo-mongodb-port-lease.XXXXXX")" || \
+    die "could not create MongoDB E2E port lease status file"
+
+  python3 - "$lease_file" "$status_file" <<'PY' &
+import fcntl
+import signal
+import sys
+
+lease_file, status_file = sys.argv[1:]
+with open(lease_file, "a+") as lease:
+    try:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        with open(status_file, "w") as status:
+            status.write("busy\n")
+        raise SystemExit(1)
+    with open(status_file, "w") as status:
+        status.write("locked\n")
+
+    def release(_signal, _frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, release)
+    signal.signal(signal.SIGINT, release)
+    while True:
+        signal.pause()
+PY
+  PORT_LEASE_PID=$!
+
+  for _ in {1..100}; do
+    if [[ -s "$status_file" ]]; then
+      status="$(cat "$status_file")"
+      break
+    fi
+    if ! kill -0 "$PORT_LEASE_PID" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.05
+  done
+  rm -f -- "$status_file"
+
+  if [[ "$status" == "locked" ]]; then
+    return
+  fi
+  wait "$PORT_LEASE_PID" >/dev/null 2>&1 || true
+  PORT_LEASE_PID=""
+  return 1
+}
+
+release_port_block_lease() {
+  if [[ -n "$PORT_LEASE_PID" ]]; then
+    kill "$PORT_LEASE_PID" >/dev/null 2>&1 || true
+    wait "$PORT_LEASE_PID" >/dev/null 2>&1 || true
+  fi
+  PORT_LEASE_PID=""
 }
 
 is_tcp_port() {
@@ -175,6 +246,10 @@ validate_port_allocation() {
   validate_tcp_port "MO_MONGODB_FRONTEND_PORT" "$MO_PORT"
   validate_tcp_port "MO_MONGODB_STATUS_PORT" "$STATUS_PORT"
   validate_port_block_base "MO_MONGODB_LOG_PORT_BASE" "$LOG_PORT_BASE"
+  (( MO_PORT >= LOG_PORT_BASE && MO_PORT < LOG_PORT_BASE + PORT_BLOCK_WIDTH )) || \
+    die "MO_MONGODB_FRONTEND_PORT must be inside the reserved ${PORT_BLOCK_WIDTH}-port block"
+  (( STATUS_PORT >= LOG_PORT_BASE && STATUS_PORT < LOG_PORT_BASE + PORT_BLOCK_WIDTH )) || \
+    die "MO_MONGODB_STATUS_PORT must be inside the reserved ${PORT_BLOCK_WIDTH}-port block"
 
   assert_disjoint_port_ranges "LogService" "$LOG_RAFT_PORT" "$LOG_GOSSIP_PORT" \
     "TN" "$TN_PORT_BASE" "$((TN_PORT_BASE + ADDRESS_MANAGER_PORT_COUNT - 1))"
@@ -198,10 +273,7 @@ validate_port_allocation() {
     "status" "$STATUS_PORT" "$STATUS_PORT"
 }
 
-allocate_mo_ports() {
-  LOG_PORT_BASE="${MO_MONGODB_LOG_PORT_BASE:-$(find_free_port_block)}"
-  validate_port_block_base "MO_MONGODB_LOG_PORT_BASE" "$LOG_PORT_BASE"
-
+derive_mo_ports() {
   LOG_RAFT_PORT="$LOG_PORT_BASE"
   LOG_SERVICE_PORT="$((LOG_PORT_BASE + 1))"
   LOG_GOSSIP_PORT="$((LOG_PORT_BASE + 2))"
@@ -209,8 +281,49 @@ allocate_mo_ports() {
   CN_PORT_BASE="$((LOG_PORT_BASE + CN_PORT_OFFSET))"
   MO_PORT="${MO_MONGODB_FRONTEND_PORT:-$((LOG_PORT_BASE + FRONTEND_PORT_OFFSET))}"
   STATUS_PORT="${MO_MONGODB_STATUS_PORT:-$((LOG_PORT_BASE + STATUS_PORT_OFFSET))}"
+}
 
-  validate_port_allocation
+allocate_mo_ports() {
+  local requested_base="${MO_MONGODB_LOG_PORT_BASE:-}" candidate
+  if [[ -n "$requested_base" ]]; then
+    LOG_PORT_BASE="$requested_base"
+    derive_mo_ports
+    validate_port_allocation
+    acquire_port_block_lease "$LOG_PORT_BASE" || \
+      die "MO_MONGODB_LOG_PORT_BASE is already leased by another MongoDB E2E run"
+    if ! port_block_is_available "$LOG_PORT_BASE"; then
+      release_port_block_lease
+      die "MO_MONGODB_LOG_PORT_BASE is not available on this host"
+    fi
+    return
+  fi
+
+  while IFS= read -r candidate; do
+    LOG_PORT_BASE="$candidate"
+    derive_mo_ports
+    validate_port_allocation
+    acquire_port_block_lease "$LOG_PORT_BASE" || continue
+    if port_block_is_available "$LOG_PORT_BASE"; then
+      return
+    fi
+    release_port_block_lease
+  done < <(port_block_candidates)
+  die "could not find an available 80-port range for the MongoDB E2E cluster"
+}
+
+run_port_plan() {
+  require python3
+  trap release_port_block_lease EXIT
+  allocate_mo_ports
+  print_port_plan
+  if [[ -n "${MO_MONGODB_PORT_PLAN_READY_FILE:-}" ]]; then
+    printf 'ready\n' >"$MO_MONGODB_PORT_PLAN_READY_FILE"
+  fi
+  if [[ -n "${MO_MONGODB_PORT_PLAN_HOLD_SECONDS:-}" ]]; then
+    [[ "$MO_MONGODB_PORT_PLAN_HOLD_SECONDS" =~ ^[0-9]+$ ]] || \
+      die "MO_MONGODB_PORT_PLAN_HOLD_SECONDS must be a non-negative integer"
+    (( 10#$MO_MONGODB_PORT_PLAN_HOLD_SECONDS == 0 )) || sleep "$MO_MONGODB_PORT_PLAN_HOLD_SECONDS"
+  fi
 }
 
 print_port_plan() {
@@ -341,11 +454,7 @@ run_unit() {
 case "$PROFILE" in
   unit) run_unit ;;
   e2e-local) run_e2e ;;
-  port-plan)
-    require python3
-    allocate_mo_ports
-    print_port_plan
-    ;;
+  port-plan) run_port_plan ;;
   nightly)
 	run_unit
 	run_e2e
