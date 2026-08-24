@@ -350,6 +350,40 @@ resolves tables by bare name, so names must be unique across mock schemas.
 Five files, 415 statements, with checked-in expected results (generated with
 mo-tester `-m genrs`, then verified in compare mode `-n -g`).
 
+Coverage at a glance (P = parser unit test, L = planner unit test, and the
+BVT file(s); "manual" = verified by hand only, see below):
+
+| Behaviour | Where |
+|---|---|
+| Grammar forms, round trip, syntax errors | P |
+| Unconditional `INSERT ALL`, positional and explicit column lists | L, `multi_insert`, `_schema`, `_big` |
+| `INSERT ALL` with overlapping WHENs (row to every match) | L, `multi_insert`, `_conditional`, `_big`, `_skew` |
+| `INSERT FIRST` (row to first match only) | L, `multi_insert`, `_conditional`, `_big`, `_skew` |
+| ELSE: receives non-matching rows / never fires / receives everything | `_conditional`, `_skew` |
+| NULL conditions never match (routed to ELSE or dropped) | `multi_insert`, `_conditional` |
+| Nothing matches, no ELSE; empty source | `_conditional`, `_skew` |
+| Condition shapes: subquery, LIKE/BETWEEN/IN/IS NULL, computed aliases, CASE in VALUES | `_conditional` |
+| Several INTOs per WHEN; same table under several WHENs | `multi_insert`, `_conditional`, `_skew` |
+| Source shapes: WITH, aggregate, join, UNION ALL, ORDER BY/LIMIT, DISTINCT | L (WITH), `multi_insert`, `_conditional` |
+| WHEN/VALUES bind to source *output* columns, not table aliases | `_conditional` (negative case) |
+| Same table in several clauses → one pipeline; cross-clause duplicates rejected | L, `multi_insert`, `_big`, `_skew` |
+| Widening different column lists (defaults, auto-increment NULL → generated) | L, `multi_insert`, `_schema` |
+| Different target schemas: narrower/wider/re-ordered/re-typed, conversions (json, enum, binary, date/time) | `_schema` |
+| Constraints per target: pk, unique, composite pk, fake pk, NOT NULL, CHECK, generated, CLUSTER BY, auto-increment | L (pk/unique), `multi_insert`, `_schema` |
+| Regular index tables maintained by the target's MULTI_UPDATE | L, `multi_insert`, `_big`, `_skew` |
+| Fulltext / ivfflat maintenance (single and merged clauses) | L, `multi_insert` |
+| Atomicity: one failing target rolls back all; late failure after S3 flush | `multi_insert`, `_conditional`, `_big`, `_skew` |
+| Explicit transactions (ROLLBACK / COMMIT) | `multi_insert`, `_conditional`, `_big` |
+| S3-object write path, object presence per target, durability after flush | `_big`, `_skew` |
+| Extreme imbalance between targets, empty targets | `_skew` |
+| Targets in another database, temporary target, target = source | `_schema` |
+| Case-insensitive / qualified target column lists | `_schema` |
+| Rejections: FK target, external table, view, unknown columns, count mismatch, generated column as target | L, `multi_insert`, `_schema` |
+| EXPLAIN shape (Sink + per-target Sink Scan) | `multi_insert` |
+| Affected rows = sum over targets; `LAST_INSERT_ID()` | manual |
+| PREPARE / EXECUTE with parameters | manual |
+| INSERT privilege required on every target | manual |
+
 **`multi_insert.sql` (79) — smoke coverage of every feature.**
 
 | Group | Cases |
@@ -446,6 +480,35 @@ Run it with:
    -s ../matrixone/test/distributed/resources/ -n -g)      # whole directory, or one multi_insert*.sql
 ```
 
+### Adding or regenerating BVT cases
+
+- Generate expected results against a server that runs the feature build
+  (the persistent docker cluster may not), e.g. the isolated single-node
+  instance on port 6101: point `~/m/mo-tester/mo.yml` `addr:` at it, run
+  `./run.sh -p <file> -s ../matrixone/test/distributed/resources/ -m genrs`,
+  then run the same file with `-n -g` to confirm the recorded result is
+  reproducible, and restore `mo.yml`.
+- `genrs` records error messages as expected output. Read the generated
+  `.result` and make sure every recorded error is an intended one.
+- Keep results deterministic:
+  - never `EXPLAIN` a target with a unique index — its index table name
+    embeds a UUID;
+  - assert `metadata_scan` object presence only on targets the planner will
+    estimate as dominant (`has_objects = 1`, `sum(rows_cnt)` = the count) or
+    on empty targets (`0`); a target of a handful of rows may be planned on
+    either path;
+  - prefer self-checking assertions (`(select count(*) from t) = (select
+    count(*) from src where ...)`, joins between targets) over literal
+    numbers where the number is not obviously derivable;
+  - build big sources with `generate_series(1, N)` + `repeat('p', 500)`, and
+    make the source itself large enough to be object-backed so its
+    statistics — and therefore each target's write-mode decision — are
+    stable.
+- MatrixOne specifics that bit while writing these files: `sum(bool)` is
+  not supported (use `sum(case when ... then 1 else 0 end)`), and `WHEN` /
+  `VALUES` cannot use the source query's table aliases (`v.id`), only its
+  output column names — alias the column in the SELECT list.
+
 ### Regression protection for the shared insert path
 
 - `go test ./pkg/sql/plan/` — full package (the only failure is the
@@ -453,9 +516,10 @@ Run it with:
   `TestBuildCreateOrReplaceViewRejectsRecursiveDefinition/future_AS_OF_timestamp`,
   which fails identically on `main`).
 - The whole `test/distributed/cases/dml/insert` directory in compare mode
-  (2000/2000 on the feature build) — covers `INSERT`, `INSERT IGNORE`,
-  ON DUPLICATE KEY, auto-pk, defaults, CHECK constraints, which all flow
-  through the refactored cast tail.
+  (2000/2000 pre-existing statements on the feature build, plus the 415 new
+  ones) — covers `INSERT`, `INSERT IGNORE`, ON DUPLICATE KEY, auto-pk,
+  defaults, CHECK constraints, which all flow through the refactored cast
+  tail.
 - `go test ./pkg/frontend/` subset around the touched switch sites
   (`Remap|Privilege|StmtKind|...`), `go vet` and `golangci-lint` on
   `parsers/tree`, `plan`, `frontend`.
@@ -482,6 +546,8 @@ On the isolated single-node server:
 | `SINK_SCAN` binding not visible to unqualified names → "column X does not exist". | every VALUES/WHEN case in all three layers. |
 | Missing `StmtKind()` on the new AST node → nil-pointer panic in `executeStmt`. | any BVT statement (the whole file would panic). |
 | UUID index-table names in EXPLAIN output. | EXPLAIN case restricted to non-unique targets; result compared in mo-tester `-n -g` mode. |
+| Test comments assumed the 64 MB byte threshold decides the S3 path; the mode is actually chosen per target from the planner's row estimate, so small branches may land on either path. | `has_objects` assertions limited to dominant and empty targets (`_big`, `_skew`); rule documented above. |
+| A "late failure" case whose arithmetic never produced the conflict (id 999 had `cat = 4`). | Case rewritten around id 996 and its expected `Duplicate entry` is recorded in `_conditional.result`. |
 
 ### Known gaps / suggested additions before merge
 
