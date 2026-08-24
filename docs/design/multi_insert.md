@@ -347,7 +347,7 @@ resolves tables by bare name, so names must be unique across mock schemas.
 
 ### Layer 3 — BVT: `test/distributed/cases/dml/insert/multi_insert*.sql`
 
-Four files, 333 statements, with checked-in expected results (generated with
+Five files, 415 statements, with checked-in expected results (generated with
 mo-tester `-m genrs`, then verified in compare mode `-n -g`).
 
 **`multi_insert.sql` (79) — smoke coverage of every feature.**
@@ -396,19 +396,48 @@ schemas** from one 6-column source (`int`, `varchar`, `decimal`, `datetime`,
 | Errors | value count mismatch, unknown column, missing table, view target. |
 
 **`multi_insert_big.sql` (73) — a source big enough to make every target
-flush S3 objects.** 300k rows × ~520 bytes ≈ 150 MB per target, well above
-`InsertWriteS3Threshold` (64 MB); runs in ~8 s.
+write S3 objects.** 300k rows × ~520 bytes ≈ 150 MB per wide target; runs in
+~8 s.
+
+How a target ends up on the S3 path: `compileMultiUpdate` picks the write
+mode per `MULTI_UPDATE` node at compile time from the planner's estimate —
+`Stats.Outcnt × SingleLineSizeEstimate (300 B) > DistributedThreshold (10 MB)`,
+i.e. roughly 35k estimated rows — and an S3-mode writer then flushes every
+`InsertWriteS3Threshold` (64 MB) of buffered rows and the tail at the end. So
+the decision follows the *estimated* row count of each target's branch, not
+the byte volume; a narrow 300k-row target is on the S3 path too, while a
+branch the planner estimates at a few rows stays in memory. Object presence
+is observed with `metadata_scan('db.t', 'id')` (committed objects only:
+0 for a small insert, 0 after a rollback).
 
 | Group | Cases |
 |---|---|
 | Unconditional, 4 targets | pk-only, pk + unique + secondary index, composite pk, and a narrow (id, cat) table that stays far below the threshold. Counts, sums, min/max and `sum(length(pad))` per target. |
-| S3 objects really written | `metadata_scan('db.t', 'id')` reports committed objects: `count(*) > 0` and `sum(rows_cnt) = 300000` for the three big targets, `0` objects for the narrow one (its rows stay in the in-memory/TN path). |
+| S3 objects really written | `metadata_scan('db.t', 'id')` reports committed objects with `count(*) > 0` and `sum(rows_cnt) = 300000` for all four targets, the narrow one included. |
 | Indexes at scale | point lookup through the unique key, counts through the secondary key and the composite pk. |
 | FIRST vs ALL at scale | `cat = 0` / `cat < 3` / ELSE over 300k rows: FIRST partitions the source (42857 / 85715 / 171428, checked against filtered SELECTs), ALL overlaps (the `cat = 0` rows appear in two targets). |
 | Same big table, two clauses | 600k rows through one merged pipeline, objects present; a duplicate-key variant is rejected and adds nothing. |
 | Late failure rolls back written objects | a duplicate at id 299999 fails the statement after the other target has already flushed; that target ends with 0 rows and 0 objects. |
 | Durability | `mo_ctl('dn','flush', ...)` on the targets, then counts/sums/lookups re-read. |
 | Transaction | a big multi-insert inside `BEGIN ... ROLLBACK` leaves the targets unchanged. |
+
+**`multi_insert_skew.sql` (82) — extreme imbalance between targets** on the same
+300k-row source, plus small-scale replicas of every shape. Object checks are
+made only on the two deterministic kinds of target — a dominant one the
+planner estimates at (almost) all rows (`has_objects = 1`,
+`sum(rows_cnt)` = its count) and an empty one (0 objects in either mode) —
+never on a 1- or 3-row target, whose mode depends on selectivity estimates.
+
+| Group | Cases |
+|---|---|
+| FIRST, one dominant WHEN | `id in (1,2,3)` → 3 rows, `id = 300000` → 1 row, `id > 0` → the other 299,996, a never-true WHEN (`id < 0`) → 0 rows, ELSE → 0 rows; the union covers the source once; the dominant target has objects for every row, the never-hit and ELSE targets have none; indexes of the dominant target answer lookups, those of the empty target answer nothing. |
+| ALL, only the dominant WHEN matches | `cat >= 0` (all rows) + two impossible WHENs (`cat > 100`, `pad is null`), no ELSE. |
+| ELSE takes everything | no WHEN ever matches; ELSE holds all 300k rows with objects. |
+| Nothing matches, no ELSE | `INSERT ALL` and `INSERT FIRST` succeed and write nothing; unconditional `INSERT ALL` over an empty source leaves every target empty. |
+| Skew the other way | one row to the wide table, 299,999 to a narrow `(id, cat)` table (which is on the S3 path by estimate). |
+| Same table, dominant + empty clause | `cat >= 0` and `cat < 0` into the same table: one merged pipeline, 300k rows, objects present. |
+| Empty targets still constrained | a target that received nothing in earlier statements rejects a duplicate when it finally gets a row, rolling back the sibling branch. |
+| Small scale | 5-row source: FIRST with an unused ELSE, ALL where only ELSE fires, FIRST with no ELSE and one branch. |
 
 Run it with:
 
@@ -459,11 +488,13 @@ On the isolated single-node server:
 - A BVT privilege case (needs an account/role fixture like
   `test/distributed/cases/prepare/prepare.test`) and a BVT `PREPARE`/`EXECUTE`
   case, to turn the manual checks into checked-in ones.
-- The S3-object assertions in `multi_insert_big.sql` rely on the write
-  pipelines running on one CN (the sink dispatch is local), so each target
-  sees the full 150 MB; if a future change splits a target's writes across
-  CNs the per-CN volume could fall under the 64 MB threshold and the
-  `has_objects` checks would need a larger source.
+- The S3-object assertions in `multi_insert_big.sql` / `multi_insert_skew.sql`
+  depend on the planner estimating each dominant branch at more than ~35k
+  rows (the `DistributedThreshold` rule above). The source table is itself
+  written as S3 objects, so its statistics are derived from object metadata
+  and the estimate is stable; if the source were small enough to stay in
+  memory, or the thresholds changed, the `has_objects` expectations would
+  need revisiting.
 - A run on the multi-CN docker cluster (`make dev-up`): all server-side
   testing was on the single-node instance. The design is per-CN pipelines
   fed by local channels, the same mechanism the IVF/fulltext maintenance

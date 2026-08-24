@@ -37,9 +37,9 @@ select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_i
 select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_cpk', 'id') g;
 ➤ has_objects[-7,1,0]  ¦  sum(rows_cnt)[3,38,0]  𝄀
 1  ¦  300000
-select count(*) > 0 as has_objects from metadata_scan('mi_big.t_narrow', 'id') g;
-➤ has_objects[-7,1,0]  𝄀
-1
+select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_narrow', 'id') g;
+➤ has_objects[-7,1,0]  ¦  sum(rows_cnt)[3,38,0]  𝄀
+1  ¦  300000
 select id, cat from t_idx where val = 11 * 123456;
 ➤ id[4,32,0]  ¦  cat[4,32,0]  𝄀
 123456  ¦  4

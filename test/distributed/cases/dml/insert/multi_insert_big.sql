@@ -1,5 +1,7 @@
--- Multi-table INSERT: a source large enough that every target's write pipeline flushes S3 objects
--- (the Multi Update writer flushes once a table's buffered batches exceed 64MB; 300k rows x ~520 bytes ~ 150MB per target)
+-- Multi-table INSERT: a source large enough that every target's write pipeline writes S3 objects.
+-- The write mode is chosen per target at compile time from the planner's row estimate
+-- (Outcnt x SingleLineSizeEstimate > DistributedThreshold => write S3 objects directly, flushing every
+-- 64MB of buffered rows); 300k rows x ~520 bytes ~ 150MB per wide target.
 drop database if exists mi_big;
 create database mi_big;
 use mi_big;
@@ -13,7 +15,7 @@ create table t_idx (id int primary key, cat int, val bigint, pad varchar(600), u
 create table t_cpk (cat int, id int, val bigint, pad varchar(600), primary key (cat, id));
 create table t_narrow (id int primary key, cat int);
 
--- ================= unconditional: 4 targets, 3 of them above the S3 flush threshold, 1 far below
+-- ================= unconditional: 4 targets, three wide ones (~150MB each) and one narrow (id, cat)
 insert all
   into t_plain
   into t_idx (id, cat, val, pad) values (id, cat, val, pad)
@@ -24,11 +26,11 @@ select count(*), sum(val), min(id), max(id), sum(length(pad)) from t_plain;
 select count(*), sum(val), min(id), max(id), sum(length(pad)) from t_idx;
 select count(*), sum(val), min(id), max(id), sum(length(pad)) from t_cpk;
 select count(*), sum(cat) from t_narrow;
--- the big targets were written as S3 objects by the insert itself; the narrow one stayed in memory
+-- every target was written as S3 objects by the insert itself (300k estimated rows each), holding all of its rows
 select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_plain', 'id') g;
 select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_idx', 'id') g;
 select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_cpk', 'id') g;
-select count(*) > 0 as has_objects from metadata_scan('mi_big.t_narrow', 'id') g;
+select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_narrow', 'id') g;
 -- indexes built by the same statement answer point and range lookups
 select id, cat from t_idx where val = 11 * 123456;
 select count(*) from t_idx where cat = 3;
