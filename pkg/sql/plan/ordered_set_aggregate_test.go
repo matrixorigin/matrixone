@@ -101,11 +101,20 @@ func TestBuildMedianWithinGroupRejectsDifferentOrderExpression(t *testing.T) {
 	require.ErrorContains(t, err, "median requires the WITHIN GROUP ORDER BY expression to match")
 }
 
-func TestBuildMedianWithinGroupAcceptsIdenticalScalarSubquery(t *testing.T) {
+func TestBuildMedianWithinGroupAcceptsEquivalentScalarSubquery(t *testing.T) {
 	for _, sql := range []string{
 		"select median((select 1)) within group (order by (select 1)) from select_test.bind_select",
 		`select median((select a from select_test.bind_select y limit 1))
+  within group (order by (select A from select_test.bind_select y limit 1))
+  from select_test.bind_select x`,
+		`select median((select a from select_test.bind_select y limit 1))
   within group (order by (select y.a from select_test.bind_select y limit 1))
+  from select_test.bind_select x`,
+		`select median((select a from select_test.bind_select limit 1))
+  within group (order by (select select_test.bind_select.a from select_test.bind_select limit 1))
+  from select_test.bind_select x`,
+		`select median((select bind_select.a from select_test.bind_select limit 1))
+  within group (order by (select select_test.bind_select.a from select_test.bind_select limit 1))
   from select_test.bind_select x`,
 		`select median((select abs(y.a) from select_test.bind_select y limit 1))
   within group (order by (select ABS(y.A) from select_test.bind_select y limit 1))
