@@ -673,6 +673,47 @@ On the isolated single-node server:
   correctness at 300k rows (memory stays at one batch per consumer edge by
   construction — see "Runtime"), but no throughput benchmark was run.
 
+## Self-review decision log
+
+Recorded from the pre-merge self-review of PR #27560 (multi-angle sweep and
+functional closure parser → planner → compile → frontend → tests), so later
+review rounds do not re-litigate them.
+
+Fixed during the review:
+
+- `remap_db.go` remapped a target's schema twice (table expr remap plus
+  `remapInsertTarget` on the same field); now only the qualified column names
+  go through `remapInsertTarget`. Unit test added.
+- `compile2.go`'s vector-search auto-mode rewrites (`rewriteAutoModeToPre`,
+  `forceModePre`) did not reach a `MultiInsert`'s source query. Added, with
+  a unit test.
+
+Accepted as designed (with the reason):
+
+- `INSERT FIRST` evaluates earlier conditions again as `IS NOT TRUE` filters
+  (O(rows × branches)); keeps routing in plan structure with no operator
+  change. The selector-column alternative above removes it if it ever
+  matters.
+- The statement-level `WITH` is moved onto the source `SELECT` by mutating
+  the AST, as `bindInsert` does; idempotent, so PREPARE/EXECUTE re-binding
+  is safe.
+- Clauses are grouped by the resolved, lower-cased `schema.table`, so `t`,
+  `db.t` and `DB.T` share one pipeline (verified: overlapping keys raise
+  `Duplicate entry`).
+- Parenthesized source directly after a bare `INTO t` is a syntax error
+  (`%prec LOWER_THAN_LPAREN`); tables named `first`/`all` keep working with
+  plain `INSERT`.
+- S3-object assertions in the BVT are limited to dominant and empty
+  targets because the write mode is an estimate-based compile-time decision.
+
+Verified without change: runtime errors in the source, in one branch's
+`VALUES`, or in a `WHEN` fail the statement promptly with nothing written and
+no hang (sink consumers terminate with the failing scope); partitioned
+targets, expression defaults and `EXPLAIN ANALYZE` work; privilege entries
+are per-table plan tips, so `writeDatabaseAndTableDirectly` only gates the
+light-privilege path exactly as for `Insert`; the mock table ids added for
+`docs_ft` do not collide.
+
 ## Possible follow-ups
 
 - The chained, selector-based single-pipeline design described above, as a
