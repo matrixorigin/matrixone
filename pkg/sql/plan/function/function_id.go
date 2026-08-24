@@ -833,9 +833,15 @@ const (
 	// JSON_ARRAY_APPEND appends values to arrays within a JSON document.
 	JSON_ARRAY_APPEND = 571
 
+	// Foreign-data TVF connection management (esql_tvf / sql_tvf).
+	ESQL_TVF_CONNECT    = 572
+	ESQL_TVF_DISCONNECT = 573
+	SQL_TVF_CONNECT     = 574
+	SQL_TVF_DISCONNECT  = 575
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 572
+	FUNCTION_END_NUMBER = 576
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1154,6 +1160,10 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
+	"esql_tvf_connect":               ESQL_TVF_CONNECT,
+	"esql_tvf_disconnect":            ESQL_TVF_DISCONNECT,
+	"sql_tvf_connect":                SQL_TVF_CONNECT,
+	"sql_tvf_disconnect":             SQL_TVF_DISCONNECT,
 	"uuid_v7":                        UUID,
 	"uuid_v1":                        UUID_V1,
 	"uuid_v4":                        UUID_V4,

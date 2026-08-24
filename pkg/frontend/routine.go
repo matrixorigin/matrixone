@@ -594,6 +594,14 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {
 		return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
 	}
+	// Foreign connections (esql_tvf/sql_tvf and ENGINE=ESQL|SQL scans) are
+	// session-CN-local: neither the pools/transports nor the handle->conn map
+	// migrate, so a transferred client would keep handle strings that resolve
+	// to nothing on the target. Fail closed like pending long-data below;
+	// the client can disconnect its handles and retry.
+	if ses.hasForeignConns() {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
