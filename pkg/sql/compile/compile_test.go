@@ -380,6 +380,79 @@ func TestSQLSelectLimitResolverFailureReleasesCompileStepsTree(t *testing.T) {
 	}
 }
 
+func TestCompileStepsKeepsOutputOnCurrentCNForSingleRemoteScope(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local-cn:6001"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+
+	remote := newScope(Remote)
+	remote.NodeInfo = engine.Node{Addr: "remote-cn:6001", Mcpu: 1}
+	remote.Proc = c.proc.NewNoContextChildProc(0)
+	remote.setRootOperator(projection.NewArgument())
+
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_PROJECT,
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{remote}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	t.Cleanup(func() { ReleaseScopes(compiled) })
+
+	resultScope := compiled[0]
+	require.Equal(t, Merge, resultScope.Magic)
+	require.Equal(t, c.addr, resultScope.NodeInfo.Addr)
+	require.Equal(t, vm.Output, resultScope.RootOp.OpType())
+	require.Equal(t, vm.Merge, resultScope.RootOp.GetOperatorBase().GetChildren(0).OpType())
+	require.Len(t, resultScope.PreScopes, 1)
+
+	remote = resultScope.PreScopes[0]
+	require.Equal(t, Remote, remote.Magic)
+	require.Equal(t, vm.Connector, remote.RootOp.OpType())
+	require.Equal(t, vm.Projection, remote.RootOp.GetOperatorBase().GetChildren(0).OpType())
+
+	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(remote)
+	require.False(t, withoutOutput)
+	require.Equal(t, vm.Projection, encodedScope.RootOp.OpType())
+	_, err = encodeScope(encodedScope)
+	require.NoError(t, err)
+}
+
+func TestCompileStepsReusesSingleScopeExecutingOnCurrentCNForOutput(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local-cn:6001"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+
+	local := newScope(Remote)
+	local.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	local.Proc = c.proc.NewNoContextChildProc(0)
+	local.setRootOperator(projection.NewArgument())
+
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_PROJECT,
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{local}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	t.Cleanup(func() { ReleaseScopes(compiled) })
+
+	require.Same(t, local, compiled[0])
+	require.Empty(t, compiled[0].PreScopes)
+	require.Equal(t, vm.Output, compiled[0].RootOp.OpType())
+	require.Equal(t, vm.Projection, compiled[0].RootOp.GetOperatorBase().GetChildren(0).OpType())
+}
+
 func compiledScopesContainOperator(scopes []*Scope, opType vm.OpType) bool {
 	for _, scope := range scopes {
 		found := false
@@ -1778,6 +1851,81 @@ func TestCompileJoinGroupsExternalSinkScanOwner(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompileMergeGroupDistinctTopology(t *testing.T) {
+	var containsGroup func(vm.Operator) bool
+	containsGroup = func(op vm.Operator) bool {
+		if _, ok := op.(*group.Group); ok {
+			return true
+		}
+		for _, child := range op.GetOperatorBase().Children {
+			if containsGroup(child) {
+				return true
+			}
+		}
+		return false
+	}
+	makeAgg := func(name string, id int32, distinct bool, arg *plan.Expr) *plan.Expr {
+		encoded := function.EncodeOverloadID(id, 0)
+		if distinct {
+			encoded = int64(uint64(encoded) | uint64(function.Distinct))
+		}
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: encoded, ObjName: name},
+				Args: []*plan.Expr{arg},
+			}},
+		}
+	}
+
+	t.Run("mixed count distinct uses local parallel groups", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		node, nodes := newShuffleGroupTestNodes(2)
+		arg := nodes[0].ProjectList[0]
+		node.AggList = []*plan.Expr{
+			makeAgg("count", function.COUNT, false, arg),
+			makeAgg("count", function.COUNT, true, arg),
+		}
+		scopes := []*Scope{
+			newShuffleGroupInputScope(t, 1),
+			newShuffleGroupInputScope(t, 1),
+		}
+
+		requiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
+		require.False(t, requiresSingleStage)
+		result := c.compileMergeGroup(node, scopes, nodes, requiresSingleStage)
+
+		require.Len(t, result, 1)
+		for _, scope := range scopes {
+			require.True(t, containsGroup(scope.RootOp),
+				"each input worker should aggregate before MergeGroup")
+		}
+	})
+
+	t.Run("unsupported distinct keeps one group", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		node, nodes := newShuffleGroupTestNodes(2)
+		arg := nodes[0].ProjectList[0]
+		node.AggList = []*plan.Expr{makeAgg("avg", function.AVG, true, arg)}
+		scopes := []*Scope{
+			newShuffleGroupInputScope(t, 1),
+			newShuffleGroupInputScope(t, 1),
+		}
+
+		requiresSingleStage := plan2.RequiresSingleStageDistinctAgg(node)
+		require.True(t, requiresSingleStage)
+		result := c.compileMergeGroup(node, scopes, nodes, requiresSingleStage)
+
+		require.Len(t, result, 1)
+		for _, scope := range scopes {
+			require.False(t, containsGroup(scope.RootOp))
+		}
+		require.Len(t, result[0].PreScopes, 1)
+		require.True(t, containsGroup(result[0].PreScopes[0].RootOp),
+			"non-mergeable DISTINCT states must share one Group operator")
+	})
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {

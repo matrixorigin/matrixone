@@ -73,6 +73,12 @@ func (r *DataStreamReader) Open(param *ExternalParam, proc *process.Process) (fi
 	}
 	// JoinHostPort (not "server:port") so an IPv6 literal like ::1 becomes
 	// [::1]:4444 rather than the ambiguous ::1:4444
+	// Fail closed on the retired "env:NAME" apikey syntax in a pre-existing
+	// table definition instead of silently sending the literal string as the
+	// credential.
+	if err := sqldatastream.RejectEnvAPIKeyRef(proc.Ctx, ds.ApiKey); err != nil {
+		return false, err
+	}
 	target := net.JoinHostPort(ds.Server, strconv.Itoa(int(ds.Port)))
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -81,18 +87,11 @@ func (r *DataStreamReader) Open(param *ExternalParam, proc *process.Process) (fi
 	if err != nil {
 		return false, moerr.NewInternalErrorf(proc.Ctx, "datastream: cannot create client for %s: %v", target, err)
 	}
-	// Resolve an "env:NAME" apikey reference from the CN environment here, at
-	// scan time, so the secret was never stored in the catalog/plan/logs.
-	apiKey, err := sqldatastream.ResolveAPIKey(proc.Ctx, ds.ApiKey)
-	if err != nil {
-		conn.Close()
-		return false, err
-	}
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	stream, err := datastream.NewDataStreamClient(conn).Read(ctx, &datastream.ReadRequest{
 		Table:  ds.Table,
 		Filter: ds.PushedFilter,
-		ApiKey: apiKey,
+		ApiKey: ds.ApiKey,
 	})
 	if err != nil {
 		cancel()

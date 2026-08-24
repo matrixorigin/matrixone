@@ -1,0 +1,125 @@
+drop database if exists conn_limit;
+create database conn_limit;
+use conn_limit;
+set @h1 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=1s"}');
+select @h1 is not null;
+➤ @h1 is not null[-7,1,0]  𝄀
+1
+set @h2 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=2s"}');
+select @h2 is not null;
+➤ @h2 is not null[-7,1,0]  𝄀
+1
+set @h3 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=3s"}');
+select @h3 is not null;
+➤ @h3 is not null[-7,1,0]  𝄀
+1
+set @h4 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=4s"}');
+select @h4 is not null;
+➤ @h4 is not null[-7,1,0]  𝄀
+1
+set @h5 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=5s"}');
+select @h5 is not null;
+➤ @h5 is not null[-7,1,0]  𝄀
+1
+set @h6 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=6s"}');
+select @h6 is not null;
+➤ @h6 is not null[-7,1,0]  𝄀
+1
+set @h7 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=7s"}');
+select @h7 is not null;
+➤ @h7 is not null[-7,1,0]  𝄀
+1
+set @h8 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=8s"}');
+select @h8 is not null;
+➤ @h8 is not null[-7,1,0]  𝄀
+1
+set @h9 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=9s"}');
+select @h9 is not null;
+➤ @h9 is not null[-7,1,0]  𝄀
+1
+set @h10 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=10s"}');
+select @h10 is not null;
+➤ @h10 is not null[-7,1,0]  𝄀
+1
+set @h11 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=11s"}');
+select @h11 is not null;
+➤ @h11 is not null[-7,1,0]  𝄀
+1
+set @h12 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=12s"}');
+select @h12 is not null;
+➤ @h12 is not null[-7,1,0]  𝄀
+1
+set @h13 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=13s"}');
+select @h13 is not null;
+➤ @h13 is not null[-7,1,0]  𝄀
+1
+set @h14 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=14s"}');
+select @h14 is not null;
+➤ @h14 is not null[-7,1,0]  𝄀
+1
+set @h15 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=15s"}');
+select @h15 is not null;
+➤ @h15 is not null[-7,1,0]  𝄀
+1
+select sql_tvf_connect('{ "driver": "mysql",  "dsn": "dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=15s" }') = @h15;
+➤ sql_tvf_connect({ "driver": "mysql",  "dsn": "dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=15s" }) = @h15[-7,1,0]  𝄀
+1
+set @h16 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=16s"}');
+select sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=17s"}');
+invalid input: this session already caches 16 foreign connections; disconnect unused handles with esql_tvf_disconnect/sql_tvf_disconnect or reuse an existing config
+select sql_tvf_disconnect(@h16);
+➤ sql_tvf_disconnect(@h16)[-7,1,0]  𝄀
+1
+set @h17 = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/conn_limit?timeout=17s"}');
+select @h17 is not null;
+➤ @h17 is not null[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h1);
+➤ sql_tvf_disconnect(@h1)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h2);
+➤ sql_tvf_disconnect(@h2)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h3);
+➤ sql_tvf_disconnect(@h3)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h4);
+➤ sql_tvf_disconnect(@h4)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h5);
+➤ sql_tvf_disconnect(@h5)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h6);
+➤ sql_tvf_disconnect(@h6)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h7);
+➤ sql_tvf_disconnect(@h7)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h8);
+➤ sql_tvf_disconnect(@h8)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h9);
+➤ sql_tvf_disconnect(@h9)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h10);
+➤ sql_tvf_disconnect(@h10)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h11);
+➤ sql_tvf_disconnect(@h11)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h12);
+➤ sql_tvf_disconnect(@h12)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h13);
+➤ sql_tvf_disconnect(@h13)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h14);
+➤ sql_tvf_disconnect(@h14)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h15);
+➤ sql_tvf_disconnect(@h15)[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h17);
+➤ sql_tvf_disconnect(@h17)[-7,1,0]  𝄀
+1
+drop database conn_limit;
