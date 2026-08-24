@@ -154,7 +154,12 @@ func TestMongoDBLocalE2EPortPlanLeasesPortBlockAcrossProcesses(t *testing.T) {
 	ports, output, err := runMongoDBPortPlan(t, nil)
 	require.NoError(t, err, output)
 	base := strconv.Itoa(ports["LOG_PORT_BASE"])
-	readyFile := filepath.Join(t.TempDir(), "port-plan-ready")
+	temporaryDirectory := t.TempDir()
+	firstTempDirectory := filepath.Join(temporaryDirectory, "first-tmp")
+	secondTempDirectory := filepath.Join(temporaryDirectory, "second-tmp")
+	require.NoError(t, os.MkdirAll(firstTempDirectory, 0o700))
+	require.NoError(t, os.MkdirAll(secondTempDirectory, 0o700))
+	readyFile := filepath.Join(firstTempDirectory, "port-plan-ready")
 
 	repoRoot := mongoDBTestRepoRoot(t)
 	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
@@ -163,6 +168,7 @@ func TestMongoDBLocalE2EPortPlanLeasesPortBlockAcrossProcesses(t *testing.T) {
 		"MO_MONGODB_LOG_PORT_BASE":          base,
 		"MO_MONGODB_PORT_PLAN_HOLD_SECONDS": "2",
 		"MO_MONGODB_PORT_PLAN_READY_FILE":   readyFile,
+		"TMPDIR":                            firstTempDirectory,
 	})
 	outputFile, err := os.CreateTemp(t.TempDir(), "port-plan-output")
 	require.NoError(t, err)
@@ -182,6 +188,7 @@ func TestMongoDBLocalE2EPortPlanLeasesPortBlockAcrossProcesses(t *testing.T) {
 
 	_, output, err = runMongoDBPortPlan(t, map[string]string{
 		"MO_MONGODB_LOG_PORT_BASE": base,
+		"TMPDIR":                   secondTempDirectory,
 	})
 	require.Error(t, err)
 	require.Contains(t, output, "MO_MONGODB_LOG_PORT_BASE is already leased")

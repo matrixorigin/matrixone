@@ -156,7 +156,9 @@ PY
 
 acquire_port_block_lease() {
   local base="$1" lease_dir status_file status=""
-  lease_dir="${MO_MONGODB_PORT_LEASE_DIR:-${TMPDIR:-/tmp}/mo-mongodb-port-leases-$(id -u)}"
+  # TMPDIR may be scoped to an individual CI job. The default lock directory
+  # must instead be stable for every process running under this host user.
+  lease_dir="${MO_MONGODB_PORT_LEASE_DIR:-/tmp/mo-mongodb-port-leases-$(id -u)}"
   mkdir -p "$lease_dir" || die "could not create MongoDB E2E port lease directory"
   chmod 700 "$lease_dir" || die "could not secure MongoDB E2E port lease directory"
   local lease_file="$lease_dir/$base.lock"
