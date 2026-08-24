@@ -480,14 +480,15 @@ func (s *service) Lock(
 	if lockWaitDeadlineExpired(options, time.Now()) {
 		return pb.Result{}, ErrLockTimeout
 	}
-	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
+	txn, txnGeneration := s.activeTxnHolder.getActiveTxnWithGeneration(
+		txnID, true, "")
 
 	s.bindChangeMu.RLock()
 	// All txn lock op must be serial. And avoid dead lock between doAcquireLock
 	// and getLock. The doAcquireLock and getLock operations of the same transaction
 	// will be concurrent (deadlock detection), which may lead to a deadlock in mutex.
 	txn.Lock()
-	if !bytes.Equal(txn.txnID, txnID) {
+	if txn.generation != txnGeneration || !bytes.Equal(txn.txnID, txnID) {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrTxnNotFound
@@ -705,27 +706,28 @@ func (s *service) Unlock(
 	// this closes the ordinary Unlock generation gap: a concurrent/delayed Lock
 	// with the same transaction ID observes closing instead of creating a second
 	// activeTxn whose holders an old cleanup could remove.
-	txn, synchronousClosure := s.lockSynchronousTxnClosure(txnID, mutations)
-	if !synchronousClosure {
+	txn, txnGeneration, closureState := s.lockSynchronousTxnClosure(
+		txnID, mutations)
+	if closureState == synchronousTxnClosureStale {
+		return nil
+	}
+	synchronousClosure := closureState == synchronousTxnClosureLocked
+	if closureState == synchronousTxnClosureFallback {
 		releaseClosure, err := s.acquireTxnClosureAdmission(unlockCtx, txnID, mutations)
 		if err != nil {
 			return err
 		}
 		defer releaseClosure.release()
 
-		txn = s.activeTxnHolder.getActiveTxn(txnID, false, "")
+		txn, txnGeneration, _ = s.lockActiveTxnGeneration(txnID)
 		if txn == nil {
 			return nil
 		}
-		txn.Lock()
 	}
 
 	defer txn.Unlock()
-	if !bytes.Equal(txn.txnID, txnID) {
-		return nil
-	}
 	txn.beginClosingLocked(s.logger)
-	if !txn.waitAsyncLockOpsLocked(txnID) {
+	if !txn.waitAsyncLockOpsLocked(txnID, txnGeneration) {
 		return nil
 	}
 
@@ -757,7 +759,7 @@ func (s *service) Unlock(
 	// activeTxn pooling uses the still-held transaction mutex as its generation
 	// barrier. Old pointers and a new allocation must observe the reset identity
 	// only after this caller's deferred Unlock.
-	reuse.Free(txn, nil)
+	s.activeTxnHolder.freeActiveTxn(txn)
 	return nil
 }
 
@@ -803,15 +805,11 @@ func (s *service) unlockRemoteLockTable(
 	}
 	defer releaseClosure.release()
 
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+	txn, txnGeneration, _ := s.lockActiveTxnGeneration(txnID)
 	if txn == nil {
 		return nil
 	}
-	txn.Lock()
 	defer txn.Unlock()
-	if !bytes.Equal(txn.txnID, txnID) {
-		return nil
-	}
 
 	holder := txn.lockHolders[bind.Group]
 	if holder == nil {
@@ -830,7 +828,7 @@ func (s *service) unlockRemoteLockTable(
 	}
 
 	txn.beginClosingLocked(s.logger)
-	if !txn.waitAsyncLockOpsLocked(txnID) {
+	if !txn.waitAsyncLockOpsLocked(txnID, txnGeneration) {
 		return nil
 	}
 	holder = txn.lockHolders[bind.Group]
@@ -881,7 +879,7 @@ func (s *service) unlockRemoteLockTable(
 	s.reduceCanMoveGroupTables(binds)
 	s.tryCompleteDrain()
 	s.deadlockDetector.txnClosed(txnID)
-	reuse.Free(txn, nil)
+	s.activeTxnHolder.freeActiveTxn(txn)
 	return nil
 }
 
@@ -926,7 +924,7 @@ func (s *service) adoptRemoteHandoffLockTableRefs(
 			seen[replacementKey] = struct{}{}
 		}
 
-		replacement := s.activeTxnHolder.getActiveTxn(
+		replacement, replacementGeneration := s.activeTxnHolder.getActiveTxnWithGeneration(
 			replacementID,
 			false,
 			"",
@@ -937,6 +935,11 @@ func (s *service) adoptRemoteHandoffLockTableRefs(
 
 		adopted := false
 		replacement.Lock()
+		if replacement.generation != replacementGeneration ||
+			!bytes.Equal(replacement.txnID, replacementID) {
+			replacement.Unlock()
+			continue
+		}
 		holder := replacement.lockHolders[bind.Group]
 		if holder != nil {
 			recordedBind, holdsTable := holder.tableBinds[bind.Table]
@@ -995,17 +998,13 @@ func (s *service) unlockUnknownCommit(
 	// holder before its ReplaceTo mutation reaches the remote owner. Retaining
 	// the active transaction on a bounded-attempt failure makes orphan cleanup
 	// fail closed; the resolver retries it later.
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+	txn, txnGeneration, _ := s.lockActiveTxnGeneration(txnID)
 	if txn == nil {
 		return nil
 	}
-	txn.Lock()
 	defer txn.Unlock()
-	if !bytes.Equal(txn.txnID, txnID) {
-		return nil
-	}
 	txn.beginClosingLocked(s.logger)
-	if !txn.waitAsyncLockOpsLocked(txnID) {
+	if !txn.waitAsyncLockOpsLocked(txnID, txnGeneration) {
 		return nil
 	}
 
@@ -1031,7 +1030,7 @@ func (s *service) unlockUnknownCommit(
 	s.reduceCanMoveGroupTables(binds)
 	s.tryCompleteDrain()
 	s.deadlockDetector.txnClosed(txnID)
-	reuse.Free(txn, nil)
+	s.activeTxnHolder.freeActiveTxn(txn)
 	return nil
 }
 
@@ -1065,26 +1064,26 @@ func (s *service) unlockWithContext(
 	// This cleanup is cancellation-aware and therefore retryable. Keep the
 	// transaction registered until every table acknowledges release, and fence
 	// late Lock calls with closing instead of opening a same-ID generation gap.
-	txn, synchronousClosure := s.lockSynchronousTxnClosure(txnID, mutations)
-	if !synchronousClosure {
+	txn, txnGeneration, closureState := s.lockSynchronousTxnClosure(
+		txnID, mutations)
+	if closureState == synchronousTxnClosureStale {
+		return nil
+	}
+	if closureState == synchronousTxnClosureFallback {
 		releaseClosure, err := s.acquireTxnClosureAdmission(ctx, txnID, mutations)
 		if err != nil {
 			return err
 		}
 		defer releaseClosure.release()
 
-		txn = s.activeTxnHolder.getActiveTxn(txnID, false, "")
+		txn, txnGeneration, _ = s.lockActiveTxnGeneration(txnID)
 		if txn == nil {
 			return nil
 		}
-		txn.Lock()
 	}
 	defer txn.Unlock()
-	if !bytes.Equal(txn.txnID, txnID) {
-		return nil
-	}
 	txn.beginClosingLocked(s.logger)
-	if !txn.waitAsyncLockOpsLocked(txnID) {
+	if !txn.waitAsyncLockOpsLocked(txnID, txnGeneration) {
 		return nil
 	}
 
@@ -1106,7 +1105,7 @@ func (s *service) unlockWithContext(
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
-	reuse.Free(txn, nil)
+	s.activeTxnHolder.freeActiveTxn(txn)
 	return nil
 }
 
@@ -2244,20 +2243,50 @@ func (s *service) wait(ctx context.Context) error {
 func (s *service) lockSynchronousTxnClosure(
 	txnID []byte,
 	mutations []pb.ExtraMutation,
-) (*activeTxn, bool) {
+) (*activeTxn, uint64, synchronousTxnClosureState) {
 	if len(mutations) != 0 {
-		return nil, false
+		return nil, 0, synchronousTxnClosureFallback
 	}
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+	txn, generation, stale := s.lockActiveTxnGeneration(txnID)
 	if txn == nil {
-		return nil, false
+		if stale {
+			return nil, 0, synchronousTxnClosureStale
+		}
+		return nil, 0, synchronousTxnClosureFallback
 	}
-	txn.Lock()
-	if bytes.Equal(txn.txnID, txnID) && txn.lockOpsCtx == nil {
-		return txn, true
+	if txn.lockOpsCtx == nil {
+		return txn, generation, synchronousTxnClosureLocked
 	}
 	txn.Unlock()
-	return nil, false
+	return nil, 0, synchronousTxnClosureFallback
+}
+
+type synchronousTxnClosureState uint8
+
+const (
+	synchronousTxnClosureFallback synchronousTxnClosureState = iota
+	synchronousTxnClosureStale
+	synchronousTxnClosureLocked
+)
+
+// lockActiveTxnGeneration pins the holder-published generation before waiting
+// for the transaction mutex. The shard snapshot is the publication barrier:
+// pooling can reuse the same pointer and txn ID only after that map entry is
+// deleted, and newActiveTxn increments generation before republishing it.
+func (s *service) lockActiveTxnGeneration(
+	txnID []byte,
+) (*activeTxn, uint64, bool) {
+	txn, generation := s.activeTxnHolder.getActiveTxnWithGeneration(
+		txnID, false, "")
+	if txn == nil {
+		return nil, 0, false
+	}
+	txn.Lock()
+	if txn.generation != generation || !bytes.Equal(txn.txnID, txnID) {
+		txn.Unlock()
+		return nil, 0, true
+	}
+	return txn, generation, false
 }
 
 type activeTxnHolder interface {
@@ -2266,6 +2295,8 @@ type activeTxnHolder interface {
 	getAllTxnID() [][]byte
 	incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string)
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
+	getActiveTxnWithGeneration(
+		txnID []byte, create bool, remoteService string) (*activeTxn, uint64)
 	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
 	restoreActiveTxn(txn *activeTxn) bool
@@ -2273,7 +2304,9 @@ type activeTxnHolder interface {
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
 	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
-	getActiveTxnWithCreated(txnID []byte, create bool, remoteService string) (*activeTxn, bool)
+	getActiveTxnWithCreated(
+		txnID []byte, create bool, remoteService string) (*activeTxn, bool, uint64)
+	freeActiveTxn(txn *activeTxn)
 	deleteActiveTxnIf(txnID []byte, expected *activeTxn) bool
 	canUnlockRemoteTxn(pb.WaitTxn) (bool, timestamp.Timestamp)
 	getTimeoutRemoveTxn(
@@ -2360,8 +2393,18 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 	create bool,
 	remoteService string,
 ) *activeTxn {
-	txn, _ := h.getActiveTxnInternal(txnID, create, remoteService, false)
+	txn, _, _ := h.getActiveTxnInternal(txnID, create, remoteService, false)
 	return txn
+}
+
+func (h *mapBasedTxnHolder) getActiveTxnWithGeneration(
+	txnID []byte,
+	create bool,
+	remoteService string,
+) (*activeTxn, uint64) {
+	txn, _, generation := h.getActiveTxnInternal(
+		txnID, create, remoteService, false)
+	return txn, generation
 }
 
 // getActiveTxnWithCreated returns a newly published transaction with its mutex
@@ -2372,8 +2415,12 @@ func (h *mapBasedTxnHolder) getActiveTxnWithCreated(
 	txnID []byte,
 	create bool,
 	remoteService string,
-) (*activeTxn, bool) {
+) (*activeTxn, bool, uint64) {
 	return h.getActiveTxnInternal(txnID, create, remoteService, true)
+}
+
+func (h *mapBasedTxnHolder) freeActiveTxn(txn *activeTxn) {
+	reuse.Free(txn, nil)
 }
 
 func (h *mapBasedTxnHolder) getActiveTxnInternal(
@@ -2381,23 +2428,29 @@ func (h *mapBasedTxnHolder) getActiveTxnInternal(
 	create bool,
 	remoteService string,
 	lockCreated bool,
-) (*activeTxn, bool) {
+) (*activeTxn, bool, uint64) {
 	txnKey := util.UnsafeBytesToString(txnID)
 	shard := h.getActiveTxnShard(txnKey)
 	shard.RLock()
 	entry, ok := shard.txns[txnKey]
+	var generation uint64
+	if ok {
+		// generation changes only before publication. Holding the shard read
+		// lock prevents deletion, reset and reuse until this snapshot is taken.
+		generation = entry.txn.generation
+	}
 	shard.RUnlock()
 	if ok {
-		return entry.txn, false
+		return entry.txn, false, generation
 	}
 	if !create {
-		return nil, false
+		return nil, false, 0
 	}
 
 	shard.Lock()
 	defer shard.Unlock()
 	if entry, ok := shard.txns[txnKey]; ok {
-		return entry.txn, false
+		return entry.txn, false, entry.txn.generation
 	}
 
 	txn := newActiveTxn(txnID, txnKey, h.fsp, remoteService)
@@ -2421,7 +2474,7 @@ func (h *mapBasedTxnHolder) getActiveTxnInternal(
 		h.mu.Unlock()
 	}
 	logTxnCreated(h.logger, txn)
-	return txn, true
+	return txn, true, txn.generation
 }
 
 func (h *mapBasedTxnHolder) hasActiveTxn(txnID []byte) bool {
@@ -2747,7 +2800,7 @@ func (h *mapBasedTxnHolder) close() {
 	}
 	for i := range h.activeTxns {
 		for txnKey, entry := range h.activeTxns[i].txns {
-			reuse.Free(entry.txn, nil)
+			h.freeActiveTxn(entry.txn)
 			delete(h.activeTxns[i].txns, txnKey)
 		}
 	}

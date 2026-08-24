@@ -167,17 +167,20 @@ func (txn *activeTxn) beginClosingLocked(logger *log.MOLogger) {
 // waitAsyncLockOpsLocked waits for callbacks that may still dereference txn.
 // The caller holds txn's mutex before and after this method. closing must be
 // set before calling it so no later handler can add another operation.
-func (txn *activeTxn) waitAsyncLockOpsLocked(txnID []byte) bool {
+func (txn *activeTxn) waitAsyncLockOpsLocked(
+	txnID []byte,
+	generation uint64,
+) bool {
 	if txn.lockOpsCtx == nil {
 		// A synchronous generation never admits work into asyncLockOps. Once
 		// closing is set under the transaction mutex, a nil generation context
 		// proves the WaitGroup is empty and avoids an unnecessary unlock/relock.
-		return bytes.Equal(txn.txnID, txnID)
+		return txn.generation == generation && bytes.Equal(txn.txnID, txnID)
 	}
 	txn.Unlock()
 	txn.asyncLockOps.Wait()
 	txn.Lock()
-	return bytes.Equal(txn.txnID, txnID)
+	return txn.generation == generation && bytes.Equal(txn.txnID, txnID)
 }
 
 // terminalLockErrorLocked normalizes every terminal transaction-generation
@@ -286,6 +289,17 @@ func newActiveTxn(
 	fsp *fixedSlicePool,
 	remoteService string) *activeTxn {
 	txn := reuse.Alloc[activeTxn](nil)
+	initActiveTxn(txn, txnID, txnKey, fsp, remoteService)
+	return txn
+}
+
+func initActiveTxn(
+	txn *activeTxn,
+	txnID []byte,
+	txnKey string,
+	fsp *fixedSlicePool,
+	remoteService string,
+) {
 	txn.Lock()
 	defer txn.Unlock()
 	txn.txnID = txnID
@@ -293,7 +307,6 @@ func newActiveTxn(
 	txn.generation++
 	txn.fsp = fsp
 	txn.remoteService = remoteService
-	return txn
 }
 
 func (txn *activeTxn) TypeName() string {

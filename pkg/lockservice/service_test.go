@@ -6583,6 +6583,68 @@ type blockingUnlockTestTable struct {
 	release chan struct{}
 }
 
+type generationSnapshotHookTxnHolder struct {
+	activeTxnHolder
+	calls         atomic.Int32
+	firstCaptured chan struct{}
+	releaseFirst  chan struct{}
+	mu            sync.Mutex
+	captureFree   bool
+	recycled      *activeTxn
+}
+
+func (h *generationSnapshotHookTxnHolder) getActiveTxnWithGeneration(
+	txnID []byte,
+	create bool,
+	remoteService string,
+) (*activeTxn, uint64) {
+	txn, generation := h.activeTxnHolder.getActiveTxnWithGeneration(
+		txnID, create, remoteService)
+	if txn != nil && h.calls.Add(1) == 1 {
+		close(h.firstCaptured)
+		<-h.releaseFirst
+	}
+	return txn, generation
+}
+
+func (h *generationSnapshotHookTxnHolder) freeActiveTxn(txn *activeTxn) {
+	h.mu.Lock()
+	if h.captureFree {
+		h.captureFree = false
+		txn.reset()
+		h.recycled = txn
+		h.mu.Unlock()
+		return
+	}
+	h.mu.Unlock()
+	h.activeTxnHolder.freeActiveTxn(txn)
+}
+
+func (h *generationSnapshotHookTxnHolder) reuseCapturedTxn(
+	txnID []byte,
+	fsp *fixedSlicePool,
+) *activeTxn {
+	h.mu.Lock()
+	txn := h.recycled
+	h.recycled = nil
+	h.mu.Unlock()
+	if txn == nil {
+		return nil
+	}
+	initActiveTxn(txn, txnID, string(txnID), fsp, "")
+	return txn
+}
+
+func (h *generationSnapshotHookTxnHolder) releaseCapturedTxn() {
+	h.mu.Lock()
+	txn := h.recycled
+	h.recycled = nil
+	h.mu.Unlock()
+	if txn != nil {
+		h.activeTxnHolder.freeActiveTxn(txn)
+	}
+}
+
 func (l *blockingUnlockTestTable) unlockWithContext(
 	context.Context,
 	*activeTxn,
@@ -7686,17 +7748,19 @@ func TestLockSynchronousTxnClosureRejectsPublishedOrMutatingGeneration(t *testin
 
 	synchronousID := []byte("synchronous-close")
 	synchronousTxn := holder.getActiveTxn(synchronousID, true, "")
-	locked, ok := s.lockSynchronousTxnClosure(synchronousID, nil)
-	require.True(t, ok)
+	locked, generation, state := s.lockSynchronousTxnClosure(synchronousID, nil)
+	require.Equal(t, synchronousTxnClosureLocked, state)
 	require.Same(t, synchronousTxn, locked)
+	require.Equal(t, synchronousTxn.generation, generation)
 	locked.Unlock()
 
-	locked, ok = s.lockSynchronousTxnClosure(
+	locked, generation, state = s.lockSynchronousTxnClosure(
 		synchronousID,
 		[]pb.ExtraMutation{{Key: []byte("row")}},
 	)
-	require.False(t, ok)
+	require.Equal(t, synchronousTxnClosureFallback, state)
 	require.Nil(t, locked)
+	require.Zero(t, generation)
 
 	publishedID := []byte("published-close")
 	publishedTxn := holder.getActiveTxn(publishedID, true, "")
@@ -7705,13 +7769,100 @@ func TestLockSynchronousTxnClosureRejectsPublishedOrMutatingGeneration(t *testin
 	publishedTxn.Unlock()
 	defer finishLockOp()
 
-	locked, ok = s.lockSynchronousTxnClosure(publishedID, nil)
-	require.False(t, ok)
+	locked, generation, state = s.lockSynchronousTxnClosure(publishedID, nil)
+	require.Equal(t, synchronousTxnClosureFallback, state)
 	require.Nil(t, locked)
+	require.Zero(t, generation)
 
-	locked, ok = s.lockSynchronousTxnClosure([]byte("absent-close"), nil)
-	require.False(t, ok)
+	locked, generation, state = s.lockSynchronousTxnClosure([]byte("absent-close"), nil)
+	require.Equal(t, synchronousTxnClosureFallback, state)
 	require.Nil(t, locked)
+	require.Zero(t, generation)
+}
+
+func TestDelayedOrdinaryUnlockDoesNotCloseReusedSameIDGeneration(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		logger := getLogger("")
+		fsp := newFixedSlicePool(32)
+		baseHolder := newMapBasedTxnHandler(
+			"same-id-unlock-generation",
+			logger,
+			fsp,
+			func(string) (bool, error) { return true, nil },
+			func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+				return pb.CannotCommitResponse{}, nil
+			},
+			func(pb.WaitTxn) (bool, error) { return true, nil },
+		)
+		defer baseHolder.close()
+		s := &service{
+			activeTxnHolder:  baseHolder,
+			fsp:              fsp,
+			deadlockDetector: &detector{},
+			logger:           logger,
+		}
+
+		func() {
+			txnID := []byte("same-id-reused-txn")
+			oldTxn := baseHolder.getActiveTxn(txnID, true, "")
+			oldGeneration := oldTxn.generation
+
+			hooked := &generationSnapshotHookTxnHolder{
+				activeTxnHolder: baseHolder,
+				firstCaptured:   make(chan struct{}),
+				releaseFirst:    make(chan struct{}),
+				captureFree:     true,
+			}
+			s.activeTxnHolder = hooked
+			var releaseOnce sync.Once
+			defer hooked.releaseCapturedTxn()
+
+			delayed := make(chan error, 1)
+			go func() {
+				delayed <- s.Unlock(
+					context.Background(), txnID, timestamp.Timestamp{})
+			}()
+			delayedJoined := false
+			defer func() {
+				releaseOnce.Do(func() { close(hooked.releaseFirst) })
+				if !delayedJoined {
+					<-delayed
+				}
+			}()
+			<-hooked.firstCaptured
+
+			// A second ordinary close wins the old generation while the delayed
+			// close retains its pointer plus generation snapshot.
+			require.NoError(t, s.Unlock(
+				context.Background(), txnID, timestamp.Timestamp{}))
+			require.Nil(t, baseHolder.getActiveTxn(txnID, false, ""))
+
+			// Force the holder's pool boundary to reset and reinitialize the exact
+			// object retained by the delayed close, then publish the new same-ID
+			// generation. This remains deterministic under the race detector.
+			reused := hooked.reuseCapturedTxn(txnID, s.fsp)
+			require.Same(t, oldTxn, reused)
+			require.Greater(t, reused.generation, oldGeneration)
+			require.True(t, baseHolder.restoreActiveTxn(reused))
+
+			releaseOnce.Do(func() { close(hooked.releaseFirst) })
+			delayedErr := <-delayed
+			delayedJoined = true
+			require.NoError(t, delayedErr)
+
+			current, generation := baseHolder.getActiveTxnWithGeneration(
+				txnID, false, "")
+			require.Same(t, reused, current)
+			require.Equal(t, reused.generation, generation)
+			reused.Lock()
+			require.False(t, reused.closing.Load(),
+				"the delayed old close must not fence the new generation")
+			reused.Unlock()
+			require.NoError(t, s.Unlock(
+				context.Background(), txnID, timestamp.Timestamp{}))
+			require.Nil(t, baseHolder.getActiveTxn(txnID, false, ""))
+		}()
+	})
 }
 
 func BenchmarkTxnClosureAdmissionSingleSource(b *testing.B) {

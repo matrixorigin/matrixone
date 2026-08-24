@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -457,6 +456,7 @@ func (l *localLockTable) unlockWithContext(
 
 	type replacementUpdate struct {
 		txn          *activeTxn
+		generation   uint64
 		keys         [][]byte
 		existingKeys [][]byte
 		prepared     *preparedTxnLocks
@@ -504,7 +504,7 @@ func (l *localLockTable) unlockWithContext(
 					// Keep the pooled generation behind its still-held mutex. Any
 					// Lock handler that fetched this pointer before deletion must
 					// observe the reset identity after the deferred Unlock below.
-					reuse.Free(update.txn, nil)
+					l.txnHolder.freeActiveTxn(update.txn)
 				}
 			}
 		}
@@ -514,11 +514,12 @@ func (l *localLockTable) unlockWithContext(
 	}()
 	for _, txnID := range replacementIDs {
 		update := replacementsByID[txnID]
-		update.txn, update.created = l.txnHolder.getActiveTxnWithCreated(
-			[]byte(txnID),
-			len(update.keys) > 0,
-			txn.remoteService,
-		)
+		update.txn, update.created, update.generation =
+			l.txnHolder.getActiveTxnWithCreated(
+				[]byte(txnID),
+				len(update.keys) > 0,
+				txn.remoteService,
+			)
 		if update.txn == nil {
 			return ErrTxnNotFound
 		}
@@ -526,10 +527,13 @@ func (l *localLockTable) unlockWithContext(
 			update.txn.Lock()
 		}
 		lockedReplacements = append(lockedReplacements, update.txn)
-		if !bytes.Equal(update.txn.txnID, []byte(txnID)) {
+		if update.txn.generation != update.generation ||
+			!bytes.Equal(update.txn.txnID, []byte(txnID)) {
 			return ErrTxnNotFound
 		}
-		if l.txnHolder.getActiveTxn([]byte(txnID), false, "") != update.txn ||
+		current, currentGeneration := l.txnHolder.getActiveTxnWithGeneration(
+			[]byte(txnID), false, "")
+		if current != update.txn || currentGeneration != update.generation ||
 			update.txn.deadlockFound {
 			return ErrTxnNotFound
 		}

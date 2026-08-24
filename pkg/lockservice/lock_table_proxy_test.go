@@ -452,7 +452,8 @@ func TestProxyFollowerClosureCancelsBeforeOwnerCompletion(t *testing.T) {
 		go func() {
 			followerTxn.Lock()
 			followerTxn.beginClosingLocked(getLogger(""))
-			closedGeneration := followerTxn.waitAsyncLockOpsLocked(followerTxn.txnID)
+			closedGeneration := followerTxn.waitAsyncLockOpsLocked(
+				followerTxn.txnID, followerTxn.generation)
 			followerTxn.Unlock()
 			closureDone <- closedGeneration
 		}()
