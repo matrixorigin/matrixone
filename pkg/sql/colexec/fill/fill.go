@@ -770,6 +770,13 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 	}
 	if preVec.GetType().Oid == types.T_decimal256 && curVec.GetType().Oid == types.T_decimal256 {
 		result := vector.NewVec(*preVec.GetType())
+		if ctr.expressionAllocation != nil {
+			result = vector.NewOffHeapVecWithType(*preVec.GetType())
+			if err := result.SetAllocationAccount(ctr.expressionAllocation); err != nil {
+				result.Free(proc.Mp())
+				return nil, false, err
+			}
+		}
 		left := vector.GetFixedAtNoTypeCheck[types.Decimal256](preVec, preRow)
 		right := vector.GetFixedAtNoTypeCheck[types.Decimal256](curVec, curRow)
 		value, err := linearExactValue256(left, right, 1, 2)
