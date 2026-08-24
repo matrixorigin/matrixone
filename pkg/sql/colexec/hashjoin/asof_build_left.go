@@ -592,7 +592,7 @@ func (ctr *container) markAsofBuildLeftPayload(payloadSlot, rightRow int) error 
 }
 
 func (ctr *container) allocateAsofBuildLeftPayload(rightRow int) (int, error) {
-	payloadSlot := -1
+	var payloadSlot int
 	if ctr.asofBuildLeftFreePayloadCount > 0 {
 		ctr.asofBuildLeftFreePayloadCount--
 		payloadSlot = int(ctr.asofBuildLeftFreePayloadSlots[ctr.asofBuildLeftFreePayloadCount])
