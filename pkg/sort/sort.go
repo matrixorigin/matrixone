@@ -94,6 +94,17 @@ func RowidLess(a, b types.Rowid) bool     { return a.LT(&b) }
 func BlockidLess(a, b types.Blockid) bool { return a.LT(&b) }
 
 func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
+	sortByVector(desc, nullsLast, hasNull, os, vec, false)
+}
+
+// SortForSQLOrder sorts selectors with the SQL ORDER BY relation. Keep Sort's
+// legacy floating-point behavior for physical/storage callers whose ordering
+// is part of an existing persisted-data contract.
+func SortForSQLOrder(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
+	sortByVector(desc, nullsLast, hasNull, os, vec, true)
+}
+
+func sortByVector(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, sqlOrder bool) {
 	if hasNull {
 		sz := len(os)
 		if nullsLast { // move null rows to the tail
@@ -202,14 +213,22 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
-		if !desc {
+		if sqlOrder && !desc {
+			genericSort(col, os, float32OrderAscLess)
+		} else if sqlOrder {
+			genericSort(col, os, float32OrderDescLess)
+		} else if !desc {
 			genericSort(col, os, genericLess[float32])
 		} else {
 			genericSort(col, os, genericGreater[float32])
 		}
 	case types.T_float64:
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
-		if !desc {
+		if sqlOrder && !desc {
+			genericSort(col, os, float64OrderAscLess)
+		} else if sqlOrder {
+			genericSort(col, os, float64OrderDescLess)
+		} else if !desc {
 			genericSort(col, os, genericLess[float64])
 		} else {
 			genericSort(col, os, genericGreater[float64])
@@ -396,7 +415,7 @@ func SortByVectors(
 	diffs := make([]bool, len(os))
 	previous := vectors[0]
 	for i := 1; i < len(vectors); i++ {
-		partitions = mopartition.Partition(os, diffs, partitions, previous)
+		partitions = mopartition.PartitionForOrder(os, diffs, partitions, previous)
 		vec := vectors[i]
 		if !vec.IsConst() {
 			for j := range partitions {
@@ -418,8 +437,24 @@ func sortSelectorsByVector(os []int64, vec *vector.Vector, desc, nullsLast bool)
 	}
 	nullCount := vec.GetNulls().Count()
 	if nullCount < vec.Length() {
-		Sort(desc, nullsLast, nullCount > 0, os, vec)
+		SortForSQLOrder(desc, nullsLast, nullCount > 0, os, vec)
 	}
+}
+
+func float32OrderAscLess(data []float32, i, j int64) bool {
+	return types.Float32OrderAscCompare(data[i], data[j]) < 0
+}
+
+func float32OrderDescLess(data []float32, i, j int64) bool {
+	return types.Float32OrderDescCompare(data[i], data[j]) < 0
+}
+
+func float64OrderAscLess(data []float64, i, j int64) bool {
+	return types.Float64OrderAscCompare(data[i], data[j]) < 0
+}
+
+func float64OrderDescLess(data []float64, i, j int64) bool {
+	return types.Float64OrderDescCompare(data[i], data[j]) < 0
 }
 
 func boolLess[T bool](data []T, i, j int64) bool {
