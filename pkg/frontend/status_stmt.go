@@ -348,7 +348,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		isIssue3482 := false
 		localFileName := ""
 		switch st := execCtx.stmt.(type) {
-		case *tree.Insert:
+		case *tree.Insert, *tree.MultiInsert:
 			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
 			if res.lastInsertId != 0 {
 				ses.SetLastInsertID(res.lastInsertId)

@@ -618,6 +618,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildExplainPhyPlan(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:
 		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
+	case *tree.MultiInsert:
+		return bindAndOptimizeMultiInsertQuery(ctx, stmt, isPrepareStmt)
 	case *tree.Replace:
 		if stmt.HasReturning() {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support REPLACE")
