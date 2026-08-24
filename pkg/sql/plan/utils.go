@@ -3291,46 +3291,42 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 		}
 	}
 
-	// ProjectList is used for every relational projection, including the
-	// private projects that implement derived tables and scalar subqueries.
-	// Only projections directly feeding a DML writer carry the positional
-	// assignment contract that must be preserved.  Walking every reachable
-	// project incorrectly treats a nested `select ? = ?` as a write root and
-	// prevents its comparison from being rebound at execute time.
-	isWriteParent := func(nodeType plan.Node_NodeType) bool {
-		switch nodeType {
-		case plan.Node_INSERT, plan.Node_MULTI_UPDATE,
-			plan.Node_PRE_INSERT, plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK,
-			plan.Node_LOCK_OP:
-			return true
-		default:
-			return false
+	// Follow only the writer's primary input path. ProjectList is used for
+	// every relational projection, including private projects that implement
+	// derived tables and scalar subqueries. Those secondary branches must stay
+	// outside the preservation set so their marker comparisons can be rebound.
+	// The final row-image projection and any unary projections below it are the
+	// positional roots consumed by the writer.
+	visited := make(map[int32]struct{})
+	var visitWritePath func(int32)
+	visitWritePath = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+			return
+		}
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		if node.NodeType == plan.Node_PROJECT {
+			for _, expr := range node.ProjectList {
+				add(expr)
+			}
+		}
+		if len(node.Children) > 0 {
+			// A DML input can fan out through joins/applies. The final
+			// positional projection is above that fan-out; once below it,
+			// follow only the primary (left) path and leave secondary
+			// subquery/derived-table projections to normal specialization.
+			visitWritePath(node.Children[0])
 		}
 	}
-	parents := make(map[int32][]plan.Node_NodeType)
 	for _, node := range query.Nodes {
 		if node == nil {
 			continue
-		}
-		for _, childID := range node.Children {
-			if childID >= 0 && int(childID) < len(query.Nodes) {
-				parents[childID] = append(parents[childID], node.NodeType)
-			}
-		}
-	}
-	for nodeID, node := range query.Nodes {
-		if node == nil {
-			continue
-		}
-		if node.NodeType == plan.Node_PROJECT {
-			for _, parentType := range parents[int32(nodeID)] {
-				if isWriteParent(parentType) {
-					for _, expr := range node.ProjectList {
-						add(expr)
-					}
-					break
-				}
-			}
 		}
 		// INSERT/MULTI_UPDATE may carry a writer projection directly on the
 		// sink node.  DELETE has no value projection; its parameters belong to
@@ -3338,6 +3334,9 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 		if node.NodeType == plan.Node_INSERT || node.NodeType == plan.Node_MULTI_UPDATE {
 			for _, expr := range node.ProjectList {
 				add(expr)
+			}
+			for _, childID := range node.Children {
+				visitWritePath(childID)
 			}
 		}
 		for _, expr := range node.OnUpdateExprs {
