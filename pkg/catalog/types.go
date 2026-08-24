@@ -47,6 +47,14 @@ const (
 	// remapping, unlike TbColToDataCol's original file-field indexes.
 	ExternalFilePathColId = ^uint64(0)
 
+	// ExternalQuery is the hidden column of ESQL/SQL foreign external tables
+	// (ENGINE = ESQL|SQL). The query text plays the role the file name plays
+	// for __mo_filepath: `__mo_query = '<text>'` predicates select what is sent
+	// to the foreign source, and every returned row carries the text of the
+	// query that produced it. See docs/cn/esql_sql_exttab.md.
+	ExternalQuery      = "__mo_query"
+	ExternalQueryColId = ^uint64(0) - 1
+
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 	// TableTailAttr are attrs in table tail
@@ -112,7 +120,24 @@ var InternalTableNames = map[string]int8{
 }
 
 func ContainExternalHidenCol(col string) bool {
+	// Only __mo_filepath is hidden globally BY NAME (pre-existing behavior).
+	// __mo_query is scoped: use IsForeignQueryCol (name + reserved ColId) so a
+	// real __mo_query column in a pre-existing schema keeps working.
 	return col == ExternalFilePath
+}
+
+// IsForeignQueryCol reports whether (name, colId) is the SYNTHETIC __mo_query
+// column of an ESQL/SQL foreign external scan, as opposed to a real user
+// column of the same name in a pre-existing schema (new schemas cannot create
+// one: see IsReservedExternalColName).
+func IsForeignQueryCol(name string, colId uint64) bool {
+	return name == ExternalQuery && colId == ExternalQueryColId
+}
+
+// IsReservedExternalColName reports whether a column name is reserved for the
+// synthetic external-scan columns and must be rejected at CREATE/ALTER.
+func IsReservedExternalColName(name string) bool {
+	return name == ExternalFilePath || name == ExternalQuery
 }
 
 func IsHiddenTable(name string) bool {

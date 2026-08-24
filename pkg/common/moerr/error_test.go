@@ -278,6 +278,14 @@ func TestErrWrongNumberOfColumnsInSelectContract(t *testing.T) {
 	require.Equal(t, err, decoded)
 }
 
+func TestTooLongIdentMySQLError(t *testing.T) {
+	err := NewTooLongIdent(context.Background(), "identifier")
+	require.Equal(t, ErrTooLongIdent, err.ErrorCode())
+	require.Equal(t, ER_TOO_LONG_IDENT, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Identifier name 'identifier' is too long", err.Error())
+}
+
 type fakeErr struct {
 }
 
