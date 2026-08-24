@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,7 +56,9 @@ func TestPipelineClient_NewStreamAllowsLocalBackend(t *testing.T) {
 }
 
 func TestNewPipelineClientCreatesIndependentControlClient(t *testing.T) {
-	client, err := NewPipelineClient(t.Name(), "127.0.0.1:6001", &PipelineConfig{})
+	sid := t.Name()
+	moruntime.SetupServiceBasedRuntime(sid, moruntime.DefaultRuntime())
+	client, err := NewPipelineClient(sid, "127.0.0.1:6001", &PipelineConfig{})
 	require.NoError(t, err)
 	pc := client.(*pipelineClient)
 	require.NotNil(t, pc.client)
