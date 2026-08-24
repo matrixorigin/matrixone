@@ -85,7 +85,7 @@ volatile (like `uuid`) to prevent constant-folding / multiple evaluation.
 New leaf package `pkg/sql/foreigntvf/` (imported by both `function` and `table_function`;
 imports only `process` + DB/ES clients — no cycle):
   - `conn.go`     — `EsqlConn`/`SqlConn` implementing `process.ForeignConn`; config hashing.
-  - `esql.go`     — parse `elasticsearch.Config` JSON; connect; run ES|QL → `io.ReadCloser` (CSV).
+  - `esql.go`     — strictly parse a whitelisted es config JSON (endpoint/credential fields only; unknown fields rejected); connect; run ES|QL → `io.ReadCloser` (CSV).
   - `sql.go`      — parse `{driver,dsn}`; `sql.Open`; run query; `*sql.Rows` → CSV `io.Reader`.
   - `config.go`   — resolve config (arg vs `@..._config` session var); connect-or-reuse.
 

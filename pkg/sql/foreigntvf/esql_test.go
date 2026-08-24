@@ -17,6 +17,7 @@ package foreigntvf
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -135,6 +136,95 @@ func TestValidateESQLConfig(t *testing.T) {
 	require.NoError(t, validateESQLConfig(ctx, `{"cloudid":"x:y"}`))
 	require.Error(t, validateESQLConfig(ctx, `nope`))
 	require.Error(t, validateESQLConfig(ctx, `{}`)) // neither addresses nor cloudid
+	// field names stay case-insensitive, as with the previous decoder
+	require.NoError(t, validateESQLConfig(ctx, `{"Addresses":["http://h:9200"],"Username":"u"}`))
+	// trailing garbage after the object is rejected
+	require.Error(t, validateESQLConfig(ctx, `{"addresses":["http://h"]}{}`))
+}
+
+// TestESQLConfigRejectsLifecycleKnobs proves the session JSON can only set
+// the whitelisted endpoint/credential fields. The library's
+// elasticsearch.Config also carries lifecycle and process-global knobs a SQL
+// session must not reach: CACert (library-side handling clones the transport
+// and panics on a nil TLSClientConfig), DiscoverNodesInterval (installs a
+// self-rescheduling timer nothing can stop), EnableDebugLogger (writes an
+// unsynchronized package-global). All unknown fields fail closed on both the
+// validate and connect paths.
+func TestESQLConfigRejectsLifecycleKnobs(t *testing.T) {
+	ctx := context.Background()
+	for _, cfg := range []string{
+		`{"addresses":["http://h:9200"],"EnableDebugLogger":true}`,
+		`{"addresses":["http://h:9200"],"DiscoverNodesInterval":20000000}`,
+		`{"addresses":["http://h:9200"],"DiscoverNodesOnStart":true}`,
+		`{"addresses":["http://h:9200"],"RetryOnStatus":[502]}`,
+		`{"addresses":["http://h:9200"],"EnableMetrics":true}`,
+		`{"addresses":["http://h:9200"],"bogus":1}`,
+	} {
+		require.ErrorContains(t, validateESQLConfig(ctx, cfg), "invalid elasticsearch config", cfg)
+		_, err := connectESQL(ctx, cfg)
+		require.ErrorContains(t, err, "invalid elasticsearch config", cfg)
+	}
+}
+
+// TestConnectESQLCACert covers the MO-owned private-CA path: the PEM applies
+// to MO's own transport (never the library's CACert field, whose clone would
+// break Close ownership — and panic). Success and handshake-failure paths
+// both leave zero open server connections after Close/failure.
+func TestConnectESQLCACert(t *testing.T) {
+	ctx := context.Background()
+
+	newTLS := func(status int) (*httptest.Server, *atomic.Int64, string) {
+		var open atomic.Int64
+		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Elastic-Product", "Elasticsearch")
+			if status != http.StatusOK {
+				w.WriteHeader(status)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintln(w, `{"name":"fake","version":{"number":"8.15.0","build_flavor":"default"},"tagline":"You Know, for Search"}`)
+		}))
+		srv.Config.ConnState = func(c net.Conn, s http.ConnState) {
+			switch s {
+			case http.StateNew:
+				open.Add(1)
+			case http.StateClosed, http.StateHijacked:
+				open.Add(-1)
+			}
+		}
+		srv.StartTLS()
+		t.Cleanup(srv.Close)
+		caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
+		return srv, &open, caPEM
+	}
+	cfgWithCA := func(url, caPEM string) string {
+		b, _ := json.Marshal(map[string]any{"addresses": []string{url}, "cacert": caPEM})
+		return string(b)
+	}
+
+	// a valid private CA connects (no panic, no library clone), and Close
+	// drains the actual socket-owning transport
+	srv, open, caPEM := newTLS(http.StatusOK)
+	conn, err := connectESQL(ctx, cfgWithCA(srv.URL, caPEM))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	require.Eventually(t, func() bool { return open.Load() == 0 },
+		5*time.Second, 20*time.Millisecond, "Close must drain the transport the client actually uses")
+
+	// without the CA the handshake is rejected (proves verification is on)
+	_, err = connectESQL(ctx, esConfigJSON(srv.URL))
+	require.ErrorContains(t, err, "cannot reach elasticsearch")
+
+	// a 401 behind the private CA takes the failure defer: no socket leaks
+	srv401, open401, caPEM401 := newTLS(http.StatusUnauthorized)
+	_, err = connectESQL(ctx, cfgWithCA(srv401.URL, caPEM401))
+	require.ErrorContains(t, err, "elasticsearch returned")
+	require.Eventually(t, func() bool { return open401.Load() == 0 },
+		5*time.Second, 20*time.Millisecond, "failed CA connects must not leave open connections")
+
+	// non-PEM cacert content is a clean error
+	_, err = connectESQL(ctx, cfgWithCA("https://h:9200", "not pem"))
+	require.ErrorContains(t, err, "no valid PEM certificate")
 }
 
 // TestConnectESQLRejectsEmptyConfig proves an empty/endpoint-less config
