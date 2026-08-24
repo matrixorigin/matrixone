@@ -3601,6 +3601,181 @@ func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
 	result.Free(mp)
 }
 
+func TestWindowTimestampRangeFoldAggregateMembershipHandlesConstOrderVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-11-03 05:30:00.000000", 6)
+	require.NoError(t, err)
+	orderVec, err := vector.NewConstFixed(types.T_timestamp.ToType(), timestamp, 4, mp)
+	require.NoError(t, err)
+	defer orderVec.Free(mp)
+
+	values := testutil.MakeInt32Vector([]int32{1, 2, 4, 8}, nil, mp)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = values
+	bat.SetRowCount(values.Length())
+	defer bat.Clean(mp)
+
+	spec := makeWindowSpec()
+	spec.GetW().Frame = &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:       bat,
+		aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{values}}},
+		orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+	}
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{15, 15, 15, 15}, vector.MustFixedColWithTypeCheck[int64](result))
+	result.Free(mp)
+
+	// Const storage must still obey finite RANGE bounds instead of treating
+	// every frame as its peer group.
+	futureFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(1, types.Minute),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(2, types.Minute),
+		},
+	}
+	left, right, buildErr := ctr.buildInterval(proc, 0, 0, bat.RowCount(), futureFrame)
+	require.NoError(t, buildErr)
+	require.Equal(t, [2]int{bat.RowCount(), bat.RowCount()}, [2]int{left, right})
+}
+
+func TestWindowTimestampRangeFoldAggregateMembershipPreservesUnboundedNullPeers(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	unboundedPreceding := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	unboundedFollowing := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true},
+	}
+
+	for _, test := range []struct {
+		name      string
+		desc      bool
+		nullsLast bool
+		utc       []string
+		nulls     []bool
+		values    []int32
+		frame     *plan.FrameClause
+		want      []int64
+	}{
+		{
+			name:      "asc nulls first unbounded preceding",
+			nullsLast: false,
+			utc: []string{
+				"2024-11-03 00:00:00.000000", // NULL
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+				"2024-11-03 05:30:00.000000", // 01:30 EDT
+				"2024-11-03 06:00:00.000000", // 01:00 EST
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+			},
+			nulls:  []bool{true, false, false, false, false},
+			values: []int32{100, 1, 2, 4, 8},
+			frame:  unboundedPreceding,
+			want:   []int64{100, 105, 115, 105, 115},
+		},
+		{
+			name:      "asc nulls last unbounded following",
+			nullsLast: true,
+			utc: []string{
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+				"2024-11-03 05:30:00.000000", // 01:30 EDT
+				"2024-11-03 06:00:00.000000", // 01:00 EST
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+				"2024-11-03 00:00:00.000000", // NULL
+			},
+			nulls:  []bool{false, false, false, false, true},
+			values: []int32{1, 2, 4, 8, 100},
+			frame:  unboundedFollowing,
+			want:   []int64{115, 110, 115, 110, 100},
+		},
+		{
+			name:      "desc nulls first unbounded preceding",
+			desc:      true,
+			nullsLast: false,
+			utc: []string{
+				"2024-11-03 00:00:00.000000", // NULL
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+				"2024-11-03 06:00:00.000000", // 01:00 EST
+				"2024-11-03 05:30:00.000000", // 01:30 EDT
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+			},
+			nulls:  []bool{true, false, false, false, false},
+			values: []int32{100, 8, 4, 2, 1},
+			frame:  unboundedPreceding,
+			want:   []int64{100, 110, 115, 110, 115},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			timestamps := make([]types.Timestamp, len(test.utc))
+			for i, value := range test.utc {
+				timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(orderVec, timestamps, test.nulls, mp))
+			defer orderVec.Free(mp)
+
+			values := testutil.MakeInt32Vector(test.values, nil, mp)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = values
+			bat.SetRowCount(values.Length())
+			defer bat.Clean(mp)
+
+			spec := makeWindowSpec()
+			spec.GetW().Frame = test.frame
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+			}
+			ctr := &container{
+				desc:      []bool{test.desc},
+				nullsLast: []bool{test.nullsLast},
+				bat:       bat,
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{values}}},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+			}
+			result, runErr := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, runErr)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result))
+			result.Free(mp)
+		})
+	}
+}
+
 func TestWindowTimestampRangeFoldAggregateMembershipSmallPartitions(t *testing.T) {
 	newYork, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)

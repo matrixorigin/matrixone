@@ -1319,7 +1319,11 @@ func (ctr *container) timestampRangeSelection(
 	vec *vector.Vector,
 	frame *plan.FrameClause,
 ) (*timestampRangeSelection, error) {
-	if vec.GetType().Oid != types.T_timestamp || vec.GetNulls().Contains(uint64(rowIdx)) {
+	// A const vector stores one physical value for all logical rows. It cannot
+	// cross a timezone transition, so the ordinary RANGE path already has the
+	// complete peer interval and fold indexing must not address it by logical
+	// row position.
+	if vec.GetType().Oid != types.T_timestamp || vec.IsConst() || vec.GetNulls().Contains(uint64(rowIdx)) {
 		return nil, nil
 	}
 	index, err := ctr.timestampCivilOrderIndex(proc, loc, start, end, vec, ctr.rangeDescending())
@@ -1368,17 +1372,31 @@ func (ctr *container) timestampRangeSelection(
 	}
 
 	selection := &timestampRangeSelection{}
+	// The civil spans deliberately omit NULL order keys. A NULL peer can still
+	// belong to a frame with an unbounded side: it is included only when that
+	// side reaches the NULL end of the already sorted window order.
+	nullsLast := ctr.rangeNullsLast()
+	if frame.Start.UnBounded && !nullsLast && index.nullPrefixEnd > start {
+		selection.spans = append(selection.spans, timestampCivilOrderSpan{start: start, end: index.nullPrefixEnd})
+	}
 	for _, span := range index.spans {
 		left, right := timestampCivilSpanBounds(vec, loc, span, desc, low, hasLow, high, hasHigh)
 		if left < right {
 			selection.spans = append(selection.spans, timestampCivilOrderSpan{start: left, end: right})
 		}
 	}
+	if frame.End.UnBounded && nullsLast && index.nullSuffixStart < end {
+		selection.spans = append(selection.spans, timestampCivilOrderSpan{start: index.nullSuffixStart, end: end})
+	}
 	return selection, nil
 }
 
 func (ctr *container) rangeDescending() bool {
 	return len(ctr.desc) > 0 && ctr.desc[len(ctr.desc)-1]
+}
+
+func (ctr *container) rangeNullsLast() bool {
+	return len(ctr.nullsLast) > 0 && ctr.nullsLast[len(ctr.nullsLast)-1]
 }
 
 func (ctr *container) timestampCivilOrderIndex(
@@ -1396,7 +1414,7 @@ func (ctr *container) timestampCivilOrderIndex(
 		ctr.timestampCivilOrder = make(map[timestampCivilOrderKey]*timestampCivilOrderIndex)
 	}
 
-	index := &timestampCivilOrderIndex{}
+	index := &timestampCivilOrderIndex{nullPrefixEnd: start, nullSuffixStart: end}
 	col := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 	// A sparse vector can cross a fall-back transition without its sampled
 	// civil values reversing (01:00 EDT followed by 01:30 EST, for example).
@@ -1408,7 +1426,11 @@ func (ctr *container) timestampCivilOrderIndex(
 		if err := checkCanceled(proc, i-start); err != nil {
 			return nil, err
 		}
-		if vec.GetNulls().Contains(uint64(i)) || col[i] == types.ZeroTimestamp {
+		if vec.GetNulls().Contains(uint64(i)) {
+			continue
+		}
+		index.nullPrefixEnd = i
+		if col[i] == types.ZeroTimestamp {
 			continue
 		}
 		firstTimestamp, haveFirst = col[i], true
@@ -1418,7 +1440,11 @@ func (ctr *container) timestampCivilOrderIndex(
 		if err := checkCanceled(proc, end-1-i); err != nil {
 			return nil, err
 		}
-		if vec.GetNulls().Contains(uint64(i)) || col[i] == types.ZeroTimestamp {
+		if vec.GetNulls().Contains(uint64(i)) {
+			continue
+		}
+		index.nullSuffixStart = i + 1
+		if col[i] == types.ZeroTimestamp {
 			continue
 		}
 		lastTimestamp, haveLast = col[i], true
@@ -2059,6 +2085,16 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
 		end--
 	}
+	// A const vector stores one physical value, while the search bounds are
+	// logical rows. Evaluate the one physical row and project its boundary back
+	// to this logical interval instead of indexing the scalar column by mid.
+	if vec.IsConst() && end-start > 1 {
+		boundary, err := searchLeftWithLocation(loc, 0, 1, 0, vec, expr, plus, desc)
+		if err != nil || boundary == 0 {
+			return start, err
+		}
+		return end, nil
+	}
 
 	// For DESC, swap the arithmetic direction.
 	if desc {
@@ -2509,6 +2545,15 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 	}
 	for end > start && vec.GetNulls().Contains(uint64(end-1)) {
 		end--
+	}
+	// See searchLeftWithLocation: resolve scalar storage against one physical
+	// row, then preserve the result's logical interval boundary.
+	if vec.IsConst() && end-start > 1 {
+		boundary, err := searchRightWithLocation(loc, 0, 1, 0, vec, expr, sub, desc)
+		if err != nil || boundary == 0 {
+			return start, err
+		}
+		return end, nil
 	}
 
 	// For DESC, swap the arithmetic direction.

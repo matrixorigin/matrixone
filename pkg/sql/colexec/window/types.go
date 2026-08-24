@@ -86,8 +86,10 @@ type timestampCivilOrderKey struct {
 }
 
 type timestampCivilOrderIndex struct {
-	hasFold bool
-	spans   []timestampCivilOrderSpan
+	hasFold         bool
+	nullPrefixEnd   int
+	nullSuffixStart int
+	spans           []timestampCivilOrderSpan
 }
 
 type timestampCivilOrderSpan struct {
