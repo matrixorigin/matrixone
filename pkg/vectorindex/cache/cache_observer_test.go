@@ -17,16 +17,20 @@ package cache
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 type observerMock struct {
 	MockSearch
-	waiters          int64
-	finished         bool
-	invalidated      string
-	invalidatedCalls int
+	waiters           int64
+	finished          bool
+	invalidated       string
+	invalidatedCalls  int
+	invalidatedReady  chan struct{}
+	allowInvalidation chan struct{}
+	destroyStarted    chan struct{}
 }
 
 func (m *observerMock) SetLoadWaiters(n int64) { m.waiters = n }
@@ -34,6 +38,15 @@ func (m *observerMock) FinishLoadObservation() { m.finished = true }
 func (m *observerMock) OnCacheInvalidated(reason string) {
 	m.invalidated = reason
 	m.invalidatedCalls++
+	if m.invalidatedReady != nil {
+		close(m.invalidatedReady)
+		<-m.allowInvalidation
+	}
+}
+func (m *observerMock) Destroy() {
+	if m.destroyStarted != nil {
+		close(m.destroyStarted)
+	}
 }
 
 func TestVectorIndexSearchCompletesLoadObserverAfterWaiterSample(t *testing.T) {
@@ -84,4 +97,75 @@ func TestVectorIndexCacheExplicitInvalidationThenRemoveNotifiesOnce(t *testing.T
 
 	require.Equal(t, 1, mock.invalidatedCalls)
 	require.Equal(t, "merge", mock.invalidated)
+}
+
+func TestVectorIndexCacheHouseKeepingPublishesReasonBeforeRemovingEntry(t *testing.T) {
+	mock := &observerMock{
+		invalidatedReady:  make(chan struct{}),
+		allowInvalidation: make(chan struct{}),
+		destroyStarted:    make(chan struct{}),
+	}
+	s := &VectorIndexSearch{Algo: mock}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	c := NewVectorIndexCache()
+	c.IndexMap.Store("key", s)
+
+	// Model an active reader holding the entry lock while housekeeping evicts it.
+	s.Mutex.Lock()
+	mutexHeld := true
+	releasedInvalidation := false
+	done := make(chan struct{})
+	defer func() {
+		if !releasedInvalidation {
+			close(mock.allowInvalidation)
+		}
+		if mutexHeld {
+			s.Mutex.Unlock()
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+	}()
+	go func() {
+		c.HouseKeeping()
+		close(done)
+	}()
+
+	select {
+	case <-mock.invalidatedReady:
+	case <-time.After(time.Second):
+		t.Fatal("housekeeping did not publish the invalidation before waiting on the old entry")
+	}
+	value, loaded := c.IndexMap.Load("key")
+	require.True(t, loaded, "the old entry must still occupy the key while its reason is published")
+	require.Same(t, s, value)
+	replacement := &VectorIndexSearch{Algo: &observerMock{}}
+	replacement.Cond = sync.NewCond(replacement.Mutex.RLocker())
+	actual, loaded := c.IndexMap.LoadOrStore("key", replacement)
+	require.True(t, loaded, "a replacement must not start before the old entry is removed")
+	require.Same(t, s, actual)
+
+	close(mock.allowInvalidation)
+	releasedInvalidation = true
+	require.Eventually(t, func() bool {
+		_, ok := c.IndexMap.Load("key")
+		return !ok
+	}, time.Second, time.Millisecond)
+	select {
+	case <-mock.destroyStarted:
+		t.Fatal("destruction must remain behind the active reader lock")
+	default:
+	}
+	s.Mutex.Unlock()
+	mutexHeld = false
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("housekeeping did not finish after the active reader released")
+	}
+	require.Equal(t, 1, mock.invalidatedCalls)
+	require.Equal(t, "ttl_expired", mock.invalidated)
 }

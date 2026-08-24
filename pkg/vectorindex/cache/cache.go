@@ -133,24 +133,45 @@ type VectorIndexSearch struct {
 	loadWaiters atomic.Int64
 	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
+	destroying atomic.Bool // exactly-once eviction claim; also blocks new searches before removal
 }
 
 func (s *VectorIndexSearch) Destroy() {
 	s.DestroyWithReason("")
 }
 
-func (s *VectorIndexSearch) DestroyWithReason(reason string) {
+// claimDestroy claims this entry before it is removed from IndexMap. The
+// invalidation reason must be published while the old value still occupies its
+// key, otherwise a replacement load can start before the reason is visible.
+func (s *VectorIndexSearch) claimDestroy(reason string) bool {
+	if !s.destroying.CompareAndSwap(false, true) {
+		return false
+	}
+	// Make a concurrent Search observe the terminal state even during the short
+	// interval between the reason publication and the atomic map removal.
+	s.Status.Store(STATUS_DESTROYED)
+	if aware, ok := s.Algo.(cacheInvalidationAware); ok && reason != "" {
+		aware.OnCacheInvalidated(reason)
+	}
+	return true
+}
+
+func (s *VectorIndexSearch) destroyClaimed() {
 	s.Mutex.Lock()
 	defer func() {
 		s.Mutex.Unlock()
 		s.Cond.Broadcast()
 	}()
-	if aware, ok := s.Algo.(cacheInvalidationAware); ok && reason != "" {
-		aware.OnCacheInvalidated(reason)
-	}
 	s.Algo.Destroy()
 	// destroyed
 	s.Status.Store(STATUS_DESTROYED)
+}
+
+func (s *VectorIndexSearch) DestroyWithReason(reason string) {
+	if !s.claimDestroy(reason) {
+		return
+	}
+	s.destroyClaimed()
 }
 
 func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
@@ -349,14 +370,17 @@ func (c *VectorIndexCache) HouseKeeping() {
 	})
 
 	for _, k := range expiredkeys {
-		value, loaded := c.IndexMap.LoadAndDelete(k)
+		value, loaded := c.IndexMap.Load(k)
 		if loaded {
 			algo := value.(*VectorIndexSearch)
 			reason := "ttl_expired"
 			if algo.stale.Load() {
 				reason = "generation_changed"
 			}
-			algo.DestroyWithReason(reason)
+			if algo.claimDestroy(reason) {
+				c.IndexMap.CompareAndDelete(k, value)
+				algo.destroyClaimed()
+			}
 			algo = nil
 			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", k)
 		}
@@ -493,10 +517,13 @@ func (c *VectorIndexCache) Remove(key string) {
 // RemoveWithReason is the internal reason-aware variant. The empty reason
 // preserves the historical behavior for all algorithms.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
-	value, loaded := c.IndexMap.LoadAndDelete(key)
+	value, loaded := c.IndexMap.Load(key)
 	if loaded {
 		algo := value.(*VectorIndexSearch)
-		algo.DestroyWithReason(reason)
+		if algo.claimDestroy(reason) {
+			c.IndexMap.CompareAndDelete(key, value)
+			algo.destroyClaimed()
+		}
 		algo = nil
 	}
 }

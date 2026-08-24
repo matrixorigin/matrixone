@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -202,6 +203,95 @@ func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
 	require.Empty(t, reason)
 	require.True(t, observedAt.IsZero())
 	veccache.Cache.Remove(cfg.IndexTable)
+}
+
+func TestFulltext2HouseKeepingPublishesTTLReasonBeforeReplacementLoad(t *testing.T) {
+	cleanupObserver := setLoadObserver(func(LoadEvent) {})
+	defer cleanupObserver()
+
+	pendingLoadReasons.Lock()
+	previousReasons := pendingLoadReasons.m
+	pendingLoadReasons.m = make(map[string]pendingLoadReason)
+	pendingLoadReasons.Unlock()
+	t.Cleanup(func() {
+		pendingLoadReasons.Lock()
+		pendingLoadReasons.m = previousReasons
+		pendingLoadReasons.Unlock()
+	})
+
+	cfg := testStorageCfg()
+	cache := veccache.NewVectorIndexCache()
+	old := NewFulltext2Search(cfg)
+	old.idx = NewIndex(nil, nil)
+	old.loaded = true
+	oldEntry := &veccache.VectorIndexSearch{Algo: old}
+	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
+	oldEntry.Status.Store(veccache.STATUS_LOADED)
+	oldEntry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	cache.IndexMap.Store(cfg.IndexTable, oldEntry)
+
+	// Keep destruction behind the old reader lock. The reason must still be
+	// visible before the replacement can claim the cache key.
+	oldEntry.Mutex.Lock()
+	mutexHeld := true
+	done := make(chan struct{})
+	defer func() {
+		if mutexHeld {
+			oldEntry.Mutex.Unlock()
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+	}()
+	go func() {
+		cache.HouseKeeping()
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		_, ok := cache.IndexMap.Load(cfg.IndexTable)
+		return !ok
+	}, time.Second, time.Millisecond)
+	reason, observedAt := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Equal(t, LoadMissTTLExpired, reason)
+	require.NotZero(t, observedAt)
+
+	replacement := NewFulltext2Search(cfg)
+	replacement.idx = NewIndex(nil, nil)
+	replacement.loaded = true
+	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
+	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
+	cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
+
+	mp := mpool.MustNewZero()
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "CAST(COALESCE"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+		case strings.Contains(sql, "MAX(timestamp)"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
+		case strings.Contains(sql, "MAX(chunk_id)"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
+		case strings.Contains(sql, "LENGTH("):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+		default:
+			return executor.Result{Mp: mp}, nil
+		}
+	})
+	require.NoError(t, replacementEntry.Load(newSearchProc(t)))
+	reason, observedAt = peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Empty(t, reason)
+	require.True(t, observedAt.IsZero())
+
+	oldEntry.Mutex.Unlock()
+	mutexHeld = false
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("housekeeping did not finish after the old reader released")
+	}
+	cache.Remove(cfg.IndexTable)
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the
