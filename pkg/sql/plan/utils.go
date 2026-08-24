@@ -3304,6 +3304,52 @@ func ValidatePreparedLagLeadParams(ctx context.Context, preparePlan *Plan, param
 	return nil
 }
 
+// PreparedLagLeadParamPositions returns the zero-based parameter positions
+// used as prepared LAG/LEAD offsets.
+func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
+	positions := make(map[int32]struct{})
+	if preparePlan == nil {
+		return nil
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.GetWinSpecList() {
+			window := expr.GetW()
+			if window == nil {
+				continue
+			}
+			function := window.GetWindowFunc().GetF()
+			if function == nil || len(function.Args) < 2 {
+				continue
+			}
+			name := function.GetFunc().GetObjName()
+			if name != "lag" && name != "lead" {
+				continue
+			}
+			if position, ok := preparedWindowArgumentParamPosition(function.Args[1]); ok {
+				positions[position] = struct{}{}
+			}
+		}
+	}
+
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
 // ValidatePreparedPaginationParams validates parameter markers used by LIMIT
 // and OFFSET before the values are converted through the generic expression
 // cast path. MySQL accepts NULL and Boolean user variables here, but rejects
@@ -3507,12 +3553,21 @@ func isNonNegativePreparedInteger(value any) bool {
 		value = paramValue.Value
 		kind = paramValue.PrepareParamKind
 	}
-	if value == nil || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal ||
-		kind == vector.PrepareParamBoolean {
+	if value == nil || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal {
 		return false
 	}
+	if kind == vector.PrepareParamBoolean {
+		switch value := value.(type) {
+		case bool:
+			return true
+		case string:
+			return value == "0" || value == "1"
+		default:
+			return false
+		}
+	}
 	if _, ok := value.(bool); ok {
-		return false
+		return true
 	}
 	valid, negative := validatePreparedPaginationValue(ParamValue{
 		Value:            value,

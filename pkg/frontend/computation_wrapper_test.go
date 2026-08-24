@@ -299,9 +299,32 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 }
 
 func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
+	binaryParam := func(value string, mysqlType defines.MysqlType) func(
+		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
+	) *plan.Execute {
+		return func(t *testing.T, _ *Session, prepareStmt *PrepareStmt, cw *TxnComputationWrapper) *plan.Execute {
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+			prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+			return nil
+		}
+	}
+	textBooleanParam := func(value bool) func(
+		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
+	) *plan.Execute {
+		return func(t *testing.T, ses *Session, prepareStmt *PrepareStmt, _ *TxnComputationWrapper) *plan.Execute {
+			require.NoError(t, ses.SetUserDefinedVar("offset_value", value, ""))
+			return &plan.Execute{
+				Name: prepareStmt.Name,
+				Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "offset_value"}}}},
+			}
+		}
+	}
+
 	tests := []struct {
 		name      string
 		sql       string
+		wantParam string
 		wantError bool
 		configure func(*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper) *plan.Execute
 	}{
@@ -309,34 +332,61 @@ func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
 			name:      "binary float",
 			sql:       "select lag(1, ?) over ()",
 			wantError: true,
-			configure: func(t *testing.T, _ *Session, prepareStmt *PrepareStmt, cw *TxnComputationWrapper) *plan.Execute {
-				prepareStmt.params = vector.NewVec(types.T_text.ToType())
-				require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
-				prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
-				return nil
-			},
+			configure: binaryParam("1", defines.MYSQL_TYPE_DOUBLE),
 		},
 		{
-			name:      "text boolean",
+			name:      "binary signed tiny zero lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "0",
+			configure: binaryParam("0", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "binary signed tiny one lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "1",
+			configure: binaryParam("1", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "binary signed tiny zero lead",
 			sql:       "select lead(1, ?) over ()",
-			wantError: true,
-			configure: func(t *testing.T, ses *Session, prepareStmt *PrepareStmt, _ *TxnComputationWrapper) *plan.Execute {
-				require.NoError(t, ses.SetUserDefinedVar("offset_value", true, ""))
-				return &plan.Execute{
-					Name: prepareStmt.Name,
-					Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "offset_value"}}}},
-				}
-			},
+			wantParam: "0",
+			configure: binaryParam("0", defines.MYSQL_TYPE_TINY),
 		},
 		{
-			name: "binary integer control",
-			sql:  "select lag(1, ?) over ()",
-			configure: func(t *testing.T, _ *Session, prepareStmt *PrepareStmt, cw *TxnComputationWrapper) *plan.Execute {
-				prepareStmt.params = vector.NewVec(types.T_text.ToType())
-				require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
-				prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
-				return nil
-			},
+			name:      "binary signed tiny one lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "1",
+			configure: binaryParam("1", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "text boolean false lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "0",
+			configure: textBooleanParam(false),
+		},
+		{
+			name:      "text boolean true lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "1",
+			configure: textBooleanParam(true),
+		},
+		{
+			name:      "text boolean false lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "0",
+			configure: textBooleanParam(false),
+		},
+		{
+			name:      "text boolean true lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "1",
+			configure: textBooleanParam(true),
+		},
+		{
+			name:      "binary integer control",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "1",
+			configure: binaryParam("1", defines.MYSQL_TYPE_LONGLONG),
 		},
 	}
 
@@ -367,6 +417,7 @@ func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
 
 			require.NoError(t, err)
 			require.Same(t, sentinel, retComp)
+			require.Equal(t, test.wantParam, cw.proc.GetPrepareParams().GetStringAt(0))
 			if owned {
 				executionStmt.Free()
 			}
