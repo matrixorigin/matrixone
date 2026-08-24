@@ -1973,8 +1973,8 @@ func NewWindowNoInheritFrame(ctx context.Context, name string) *Error {
 	return newError(ctx, ErrWindowNoInheritFrame, name)
 }
 
-func NewWindowNoRedefineOrderBy(ctx context.Context, name, orderBy string) *Error {
-	return newError(ctx, ErrWindowNoRedefineOrderBy, name, orderBy)
+func NewWindowNoRedefineOrderBy(ctx context.Context, childName, baseName string) *Error {
+	return newError(ctx, ErrWindowNoRedefineOrderBy, childName, baseName)
 }
 
 func NewWindowDuplicateName(ctx context.Context, name string) *Error {

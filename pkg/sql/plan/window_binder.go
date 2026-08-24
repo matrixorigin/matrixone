@@ -319,7 +319,11 @@ func cloneWindowSpec(spec *tree.WindowSpec) *tree.WindowSpec {
 	return &cloned
 }
 
-func inheritWindowSpec(ctx context.Context, base, local *tree.WindowSpec, baseName string) (*tree.WindowSpec, error) {
+func inheritWindowSpec(
+	ctx context.Context,
+	base, local *tree.WindowSpec,
+	childName, baseName string,
+) (*tree.WindowSpec, error) {
 	if len(local.PartitionBy) > 0 {
 		return nil, moerr.NewWindowNoChildPartitioning(ctx)
 	}
@@ -327,7 +331,7 @@ func inheritWindowSpec(ctx context.Context, base, local *tree.WindowSpec, baseNa
 		return nil, moerr.NewWindowNoInheritFrame(ctx, baseName)
 	}
 	if len(base.OrderBy) > 0 && len(local.OrderBy) > 0 {
-		return nil, moerr.NewWindowNoRedefineOrderBy(ctx, baseName, "ORDER BY")
+		return nil, moerr.NewWindowNoRedefineOrderBy(ctx, childName, baseName)
 	}
 
 	merged := cloneWindowSpec(base)
@@ -389,7 +393,9 @@ func resolveNamedWindowDefinitions(ctx context.Context, definitions tree.WindowD
 			if err != nil {
 				return nil, err
 			}
-			spec, err = inheritWindowSpec(ctx, base, local, local.RefName.Origin())
+			spec, err = inheritWindowSpec(
+				ctx, base, local, definition.Name.Origin(), local.RefName.Origin(),
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -427,7 +433,7 @@ func resolveWindowSpecReference(
 		resolved.ReferencedOnly = false
 		return resolved, nil
 	}
-	return inheritWindowSpec(ctx, base, local, local.RefName.Origin())
+	return inheritWindowSpec(ctx, base, local, "<unnamed window>", local.RefName.Origin())
 }
 
 func ensureDefaultWindowFrame(spec *tree.WindowSpec) {

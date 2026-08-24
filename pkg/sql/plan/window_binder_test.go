@@ -523,7 +523,7 @@ func TestNamedWindowSpecHelpers(t *testing.T) {
 		Frame:       existingFrame,
 	}
 	local := &tree.WindowSpec{RefName: tree.NewCStr("base", 1)}
-	inherited, err := inheritWindowSpec(ctx, base, local, "base")
+	inherited, err := inheritWindowSpec(ctx, base, local, "derived", "base")
 	require.NoError(t, err)
 	require.Len(t, inherited.PartitionBy, 1)
 	require.False(t, inherited.HasFrame)
@@ -848,7 +848,13 @@ func TestBuildPlanRejectsInvalidNamedWindows(t *testing.T) {
 		{
 			name:      "inherited order",
 			sql:       "select 1 from nation window w1 as (order by n_regionkey), w2 as (w1 order by n_nationkey)",
-			wantErr:   "cannot inherit",
+			wantErr:   "Window 'w2' cannot inherit 'w1' since both contain an ORDER BY clause.",
+			mysqlCode: moerr.ER_WINDOW_NO_REDEFINE_ORDER_BY,
+		},
+		{
+			name:      "inline inherited order",
+			sql:       "select sum(n_nationkey) over (w1 order by n_regionkey) from nation window w1 as (order by n_name)",
+			wantErr:   "Window '<unnamed window>' cannot inherit 'w1' since both contain an ORDER BY clause.",
 			mysqlCode: moerr.ER_WINDOW_NO_REDEFINE_ORDER_BY,
 		},
 		{

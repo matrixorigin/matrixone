@@ -276,7 +276,7 @@ func TestNamedWindowErrorContracts(t *testing.T) {
 		{"circularity", NewWindowCircularityInWindowGraph(ctx), ER_WINDOW_CIRCULARITY_IN_WINDOW_GRAPH},
 		{"child partitioning", NewWindowNoChildPartitioning(ctx), ER_WINDOW_NO_CHILD_PARTITIONING},
 		{"inherit frame", NewWindowNoInheritFrame(ctx, "base"), ER_WINDOW_NO_INHERIT_FRAME},
-		{"redefine order by", NewWindowNoRedefineOrderBy(ctx, "base", "ORDER BY"), ER_WINDOW_NO_REDEFINE_ORDER_BY},
+		{"redefine order by", NewWindowNoRedefineOrderBy(ctx, "child", "base"), ER_WINDOW_NO_REDEFINE_ORDER_BY},
 		{"duplicate name", NewWindowDuplicateName(ctx, "w"), ER_WINDOW_DUPLICATE_NAME},
 	}
 
