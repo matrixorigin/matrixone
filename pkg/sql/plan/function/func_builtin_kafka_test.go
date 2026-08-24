@@ -38,6 +38,11 @@ func (s *kafkaStateSession) RemoveTempTableByRealName(realName string)        {}
 func (s *kafkaStateSession) GetSqlModeNoAutoValueOnZero() (bool, bool)        { return false, false }
 func (s *kafkaStateSession) SetLastKafkaMessageID(id int64)                   { s.id, s.set = id, true }
 func (s *kafkaStateSession) LastKafkaMessageID() (int64, bool)                { return s.id, s.set }
+func (s *kafkaStateSession) EnqueueKafkaProgress(finalize func(publish bool)) { finalize(true) }
+
+// the builtin resolves the session through the FULL interface: a compile-time
+// assertion so a future interface change fails here, not as a silent NULL
+var _ process.KafkaSessionState = (*kafkaStateSession)(nil)
 
 // TestLastKafkaMessageID drives the builtin through the registered overload:
 // NULL before any scan (or without kafka session state), the recorded id

@@ -51,6 +51,8 @@ func (s *fakeKafkaSession) LastKafkaMessageID() (int64, bool) {
 }
 func (s *fakeKafkaSession) EnqueueKafkaProgress(f func(publish bool)) { s.queue = append(s.queue, f) }
 
+var _ process.KafkaSessionState = (*fakeKafkaSession)(nil)
+
 // finalizeAll is what the frontend statement terminal does.
 func (s *fakeKafkaSession) finalizeAll(publish bool) {
 	q := s.queue
