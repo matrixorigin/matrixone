@@ -1338,10 +1338,10 @@ func (s *fillSpill) finishLinearBatch(ctr *container, ap *Fill, proc *process.Pr
 			s.linearLeftSteps[col]++
 			total := s.linearLeftSteps[col] + rightSteps
 			if total == 2 {
-				leftBatch := batch.NewWithSize(col + 1)
+				leftBatch := batch.NewOffHeapWithSize(col + 1)
 				leftBatch.SetVector(int32(col), s.linearLeft[col])
 				leftBatch.SetRowCount(1)
-				rightBatch := batch.NewWithSize(col + 1)
+				rightBatch := batch.NewOffHeapWithSize(col + 1)
 				rightBatch.SetVector(int32(col), bat.Vecs[col])
 				rightBatch.SetRowCount(bat.RowCount())
 				value, owned, err := linearFillValue(ctr, proc, col, leftBatch, 0, rightBatch, row)
