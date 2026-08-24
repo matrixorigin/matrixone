@@ -2817,20 +2817,24 @@ func updatePersistedTombstoneBatch(
 	if rowIDVec.GetType().Oid != types.T_Rowid || commitTSVec.IsConstNull() {
 		return moerr.NewInternalErrorNoCtx("invalid persisted tombstone special columns")
 	}
-	commits := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
+	logicalRows := pkVec.Length()
+	if rowIDVec.Length() != logicalRows {
+		return moerr.NewInternalErrorNoCtx("persisted tombstone object has inconsistent row counts")
+	}
+	commits, err := ioutil.ValidateTombstoneCommitTSColumn(logicalRows, commitTSVec)
+	if err != nil {
+		return err
+	}
 	var aborts ioutil.TombstoneAbortColumn
 	if hasAbort {
-		var err error
-		aborts, err = ioutil.ValidateTombstoneAbortColumn(len(commits), bat.Vecs[abortPos])
+		aborts, err = ioutil.ValidateTombstoneAbortColumn(logicalRows, bat.Vecs[abortPos])
 		if err != nil {
 			return err
 		}
 	}
 	deletes := make([]int64, 0)
-	for i, ts := range commits {
-		if commitTSVec.IsNull(uint64(i)) {
-			return moerr.NewInternalErrorNoCtx("persisted tombstone special column contains null")
-		}
+	for i := 0; i < logicalRows; i++ {
+		ts := commits.At(i)
 		_, skip := skipTS[ts]
 		if (aborts.IsPresent() && aborts.At(i)) || ts.LT(&start) || ts.GT(&end) || skip {
 			deletes = append(deletes, int64(i))
@@ -2963,20 +2967,21 @@ func updatePersistedDataBatch(
 			return moerr.NewInternalErrorNoCtx("persisted appendable object abort column is null")
 		}
 	}
-	commits := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
+	logicalRows := bat.RowCount()
+	commits, err := ioutil.ValidateTombstoneCommitTSColumn(logicalRows, commitTSVec)
+	if err != nil {
+		return err
+	}
 	var aborts ioutil.TombstoneAbortColumn
 	if abortVec != nil {
-		var err error
-		aborts, err = ioutil.ValidateTombstoneAbortColumn(len(commits), abortVec)
+		aborts, err = ioutil.ValidateTombstoneAbortColumn(logicalRows, abortVec)
 		if err != nil {
 			return err
 		}
 	}
 	deletes := make([]int64, 0)
-	for i, ts := range commits {
-		if commitTSVec.IsNull(uint64(i)) {
-			return moerr.NewInternalErrorNoCtx("persisted appendable object special column contains null")
-		}
+	for i := 0; i < logicalRows; i++ {
+		ts := commits.At(i)
 		if (aborts.IsPresent() && aborts.At(i)) || ts.LT(&start) || ts.GT(&end) {
 			deletes = append(deletes, int64(i))
 		}
@@ -2993,7 +2998,7 @@ func updatePersistedDataBatch(
 			return moerr.NewInternalErrorNoCtx("persisted appendable object cannot synthesize rowid without block id")
 		}
 		rowIDVec = vector.NewVec(types.T_Rowid.ToType())
-		for i := range commits {
+		for i := 0; i < logicalRows; i++ {
 			if err := vector.AppendFixed(rowIDVec, types.NewRowid(blk, uint32(i)), false, mp); err != nil {
 				rowIDVec.Free(mp)
 				return err

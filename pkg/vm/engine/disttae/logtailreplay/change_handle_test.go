@@ -398,6 +398,126 @@ func TestUpdatePersistedDataBatch_RetainsLeadingRowID(t *testing.T) {
 	bat.Clean(mp)
 }
 
+func TestUpdatePersistedTombstoneBatch_ConstMVCCColumns(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		commitTS     types.TS
+		withAbort    bool
+		expectedRows int
+	}{
+		{name: "constant false abort keeps every row", commitTS: types.BuildTS(100, 0), withAbort: true, expectedRows: 2},
+		{name: "missing abort still filters every row", commitTS: types.BuildTS(200, 0), expectedRows: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+
+			vectorCount := 3
+			if test.withAbort {
+				vectorCount++
+			}
+			bat := batch.NewWithSize(vectorCount)
+			defer bat.Clean(mp)
+			bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			blk := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+			for row := range 2 {
+				require.NoError(t, vector.AppendFixed(
+					bat.Vecs[0], types.NewRowid(blk, uint32(row)), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(row+1), false, mp))
+			}
+			var err error
+			bat.Vecs[2], err = vector.NewConstFixed(types.T_TS.ToType(), test.commitTS, 2, mp)
+			require.NoError(t, err)
+
+			layout := objectio.SpecialColumnLayout{
+				PhysicalAddr: objectio.InvalidSpecialColumnPosition,
+				CommitTS:     2,
+				Abort:        objectio.InvalidSpecialColumnPosition,
+			}
+			if test.withAbort {
+				bat.Vecs[3], err = vector.NewConstFixed(types.T_bool.ToType(), false, 2, mp)
+				require.NoError(t, err)
+				layout.Abort = 3
+			}
+			bat.SetRowCount(2)
+
+			require.NoError(t, updatePersistedTombstoneBatch(
+				bat,
+				types.BuildTS(50, 0),
+				types.BuildTS(150, 0),
+				nil,
+				false,
+				layout,
+				true,
+				mp,
+			))
+			require.Equal(t, test.expectedRows, bat.RowCount())
+			require.Equal(t, test.expectedRows, bat.Vecs[0].Length())
+			require.Equal(t, test.expectedRows, bat.Vecs[1].Length())
+			require.Equal(t, test.expectedRows, bat.Vecs[2].Length())
+		})
+	}
+}
+
+func TestUpdatePersistedDataBatch_ConstMVCCColumns(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		commitTS     types.TS
+		withAbort    bool
+		expectedRows int
+	}{
+		{name: "constant false abort keeps every row", commitTS: types.BuildTS(100, 0), withAbort: true, expectedRows: 2},
+		{name: "missing abort still filters every row", commitTS: types.BuildTS(200, 0), expectedRows: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+
+			vectorCount := 2
+			if test.withAbort {
+				vectorCount++
+			}
+			bat := batch.NewWithSize(vectorCount)
+			defer bat.Clean(mp)
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			for row := range 2 {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(row+1), false, mp))
+			}
+			var err error
+			bat.Vecs[1], err = vector.NewConstFixed(types.T_TS.ToType(), test.commitTS, 2, mp)
+			require.NoError(t, err)
+
+			layout := objectio.SpecialColumnLayout{
+				PhysicalAddr: objectio.InvalidSpecialColumnPosition,
+				CommitTS:     1,
+				Abort:        objectio.InvalidSpecialColumnPosition,
+			}
+			if test.withAbort {
+				bat.Vecs[2], err = vector.NewConstFixed(types.T_bool.ToType(), false, 2, mp)
+				require.NoError(t, err)
+				layout.Abort = 2
+			}
+			bat.SetAttributes(make([]string, vectorCount))
+			bat.SetRowCount(2)
+
+			require.NoError(t, updatePersistedDataBatch(
+				bat,
+				types.BuildTS(50, 0),
+				types.BuildTS(150, 0),
+				nil,
+				layout,
+				false,
+				mp,
+			))
+			require.Equal(t, test.expectedRows, bat.RowCount())
+			require.Len(t, bat.Vecs, 2)
+			require.Equal(t, test.expectedRows, bat.Vecs[0].Length())
+			require.Equal(t, test.expectedRows, bat.Vecs[1].Length())
+		})
+	}
+}
+
 func TestAObjectHandleShouldReadBlock_UsesCachedPlan(t *testing.T) {
 	obj := makeTestObjectEntry(t, 2, false, false, types.BuildTS(10, 0))
 	handle := &AObjectHandle{
