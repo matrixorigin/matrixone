@@ -416,9 +416,10 @@ func (s *service) handleRemoteLock(
 	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
 	s.activeTxnHolder.keepRemoteLockBindActive(req.Lock.ServiceID, req.LockTable)
 
-	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
+	txn, txnGeneration := s.activeTxnHolder.getActiveTxnWithGeneration(
+		req.Lock.TxnID, true, req.Lock.ServiceID)
 	txn.Lock()
-	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
+	if txn.generation != txnGeneration || !bytes.Equal(txn.txnID, req.Lock.TxnID) {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrTxnNotFound, cs, defaultRPCWriteTimeout, logFields)
@@ -566,9 +567,10 @@ func (s *service) handleForwardLock(
 	}
 	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
 	s.activeTxnHolder.keepRemoteLockBindActive(req.Lock.ServiceID, req.LockTable)
-	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
+	txn, txnGeneration := s.activeTxnHolder.getActiveTxnWithGeneration(
+		req.Lock.TxnID, true, req.Lock.ServiceID)
 	txn.Lock()
-	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
+	if txn.generation != txnGeneration || !bytes.Equal(txn.txnID, req.Lock.TxnID) {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrTxnNotFound, cs, defaultRPCWriteTimeout, logFields)

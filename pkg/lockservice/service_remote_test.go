@@ -920,6 +920,125 @@ func TestHandleForwardLockCloseWaitsForAsyncCallback(t *testing.T) {
 	)
 }
 
+func TestRemoteLockHandlersRejectReusedSameIDGeneration(t *testing.T) {
+	tests := []struct {
+		name   string
+		method pb.Method
+		handle func(*service, context.Context, *pb.Request, *pb.Response, morpc.ClientSession)
+	}{
+		{
+			name:   "remote lock",
+			method: pb.Method_Lock,
+			handle: func(s *service, ctx context.Context, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				s.handleRemoteLock(ctx, nil, req, resp, cs)
+			},
+		},
+		{
+			name:   "forward lock",
+			method: pb.Method_ForwardLock,
+			handle: func(s *service, ctx context.Context, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				s.handleForwardLock(ctx, nil, req, resp, cs)
+			},
+		},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockServiceTests(
+				t,
+				[]string{"s1"},
+				func(_ *lockTableAllocator, services []*service) {
+					s := services[0]
+					tableID := uint64(2670600 + i)
+					seedTxn := []byte(fmt.Sprintf("generation-seed-%d", i))
+					mustAddTestLock(t, context.Background(), s, tableID, seedTxn,
+						[][]byte{{1}}, pb.Granularity_Row)
+					require.NoError(t, s.Unlock(
+						context.Background(), seedTxn, timestamp.Timestamp{}))
+
+					l := s.tableGroups.get(0, tableID)
+					require.NotNil(t, l)
+					bind := l.getBind()
+					txnID := []byte(fmt.Sprintf("reused-remote-generation-%d", i))
+					baseHolder := s.activeTxnHolder
+					oldTxn := baseHolder.getActiveTxn(txnID, true, "remote-origin")
+					oldGeneration := oldTxn.generation
+					hooked := &generationSnapshotHookTxnHolder{
+						activeTxnHolder: baseHolder,
+						firstCaptured:   make(chan struct{}),
+						releaseFirst:    make(chan struct{}),
+						captureFree:     true,
+					}
+					s.activeTxnHolder = hooked
+					var releaseOnce sync.Once
+					defer func() {
+						releaseOnce.Do(func() { close(hooked.releaseFirst) })
+						hooked.releaseCapturedTxn()
+					}()
+
+					req := &pb.Request{
+						RequestID: 1,
+						Method:    tc.method,
+						LockTable: bind,
+						Lock: pb.LockRequest{
+							TxnID:     txnID,
+							ServiceID: "remote-origin",
+							Rows:      [][]byte{{2}},
+							Options:   newTestRowExclusiveOptions(),
+						},
+					}
+					resp := acquireResponse()
+					defer releaseResponse(resp)
+					cs := &testClientSession{ctx: context.Background()}
+					done := make(chan struct{})
+					go func() {
+						defer close(done)
+						tc.handle(s, context.Background(), req, resp, cs)
+					}()
+
+					select {
+					case <-hooked.firstCaptured:
+					case <-time.After(5 * time.Second):
+						require.FailNow(t, "remote handler did not capture transaction generation")
+					}
+
+					removed := baseHolder.deleteActiveTxn(txnID)
+					require.Same(t, oldTxn, removed)
+					hooked.freeActiveTxn(removed)
+					reused := hooked.reuseCapturedTxn(txnID, s.fsp)
+					require.Same(t, oldTxn, reused)
+					require.Greater(t, reused.generation, oldGeneration)
+					require.True(t, baseHolder.restoreActiveTxn(reused))
+
+					releaseOnce.Do(func() { close(hooked.releaseFirst) })
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						require.FailNow(t, "remote handler did not reject stale generation")
+					}
+					require.True(t, cs.writeCalled)
+					responseErr := resp.UnwrapError()
+					require.True(t, moerr.IsMoErrCode(responseErr, moerr.ErrInvalidState))
+					require.ErrorContains(t, responseErr, "txn not found")
+
+					current, generation := baseHolder.getActiveTxnWithGeneration(
+						txnID, false, "")
+					require.Same(t, reused, current)
+					require.Equal(t, reused.generation, generation)
+					reused.Lock()
+					require.Empty(t, reused.lockHolders,
+						"stale remote work must not publish locks into the replacement generation")
+					require.False(t, reused.closing.Load())
+					reused.Unlock()
+
+					require.Same(t, reused, baseHolder.deleteActiveTxn(txnID))
+					baseHolder.freeActiveTxn(reused)
+				},
+			)
+		})
+	}
+}
+
 func TestRemoteLockHandlersDeadlineCancelsLockTableAllocationWait(t *testing.T) {
 	tests := []struct {
 		name   string
