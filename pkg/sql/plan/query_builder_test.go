@@ -4919,6 +4919,45 @@ func TestAggregateValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
 	}
 }
 
+func TestLeastGreatestPreservePromotedCharPadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name    string
+		expr    string
+		wantKey bool
+	}{
+		{name: "least first value argument", expr: "least(" + value + ", cast(n_comment as varchar(8)))", wantKey: true},
+		{name: "least second value argument", expr: "least(cast(n_comment as varchar(8)), " + value + ")", wantKey: true},
+		{name: "greatest first value argument", expr: "greatest(" + value + ", cast(n_comment as varchar(8)))", wantKey: true},
+		{name: "greatest second value argument", expr: "greatest(cast(n_comment as varchar(8)), " + value + ")", wantKey: true},
+		{name: "varchar control", expr: "least(cast(n_comment as varchar(8)), cast(n_comment as varchar(8)))"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(
+				NewMockOptimizer(true),
+				t,
+				"select distinct x from (select "+tc.expr+" as x from nation) d",
+			)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			if !tc.wantKey {
+				require.Empty(t, distinctAgg.GroupByHashKey)
+				return
+			}
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
 func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -6408,8 +6408,14 @@ func hasPadSpaceStringProvenance(expr *Expr) bool {
 	if fn.Func.ObjName == "cast" && len(fn.Args) > 0 {
 		fromType := makeTypeByPlan2Expr(fn.Args[0])
 		toType := makeTypeByPlan2Expr(expr)
-		return fromType.Oid == types.T_char &&
-			(toType.Oid == types.T_varchar || toType.Oid == types.T_text)
+		if fromType.Oid == types.T_char &&
+			(toType.Oid == types.T_varchar || toType.Oid == types.T_text) {
+			return true
+		}
+		// LEAST/GREATEST compare through overload 2 before returning one of the
+		// values. Follow that comparison-only wrapper so a value-selecting
+		// parent can retain the source value's PAD SPACE provenance.
+		return isCastOverload(expr, 2) && hasPadSpaceStringProvenance(fn.Args[0])
 	}
 	for _, idx := range padSpaceValueArgumentIndexes(fn.Func.ObjName, len(fn.Args)) {
 		if hasPadSpaceStringProvenance(fn.Args[idx]) {
@@ -6442,6 +6448,12 @@ func padSpaceValueArgumentIndexes(name string, argsLength int) []int {
 		if argsLength > 0 {
 			return []int{0}
 		}
+	case "least", "greatest":
+		indexes := make([]int, argsLength)
+		for i := range indexes {
+			indexes[i] = i
+		}
+		return indexes
 	}
 	return nil
 }
