@@ -54,7 +54,7 @@ func TestReserveHostMemory_BudgetIs75Percent(t *testing.T) {
 	r, err := ReserveHostMemory(budget, "fits")
 	require.NoError(t, err)
 	require.Equal(t, budget, HostReservedBytes())
-	r.Release()
+	r.Settle()
 	require.Zero(t, HostReservedBytes())
 
 	// One byte over is refused, and refusal must not leave anything on the ledger.
@@ -73,27 +73,27 @@ func TestReserveHostMemory_SecondClaimSeesTheFirst(t *testing.T) {
 	_, err = ReserveHostMemory(500, "second")
 	require.Error(t, err, "second claim must see the first one's 500 bytes")
 
-	// It fits again once the first releases.
-	first.Release()
+	// It fits again once the first settles.
+	first.Settle()
 	second, err := ReserveHostMemory(500, "second")
 	require.NoError(t, err)
-	second.Release()
+	second.Settle()
 	require.Zero(t, HostReservedBytes())
 }
 
-func TestHostReservation_ReleaseIsIdempotent(t *testing.T) {
+func TestHostReservation_SettleIsIdempotent(t *testing.T) {
 	withHostAvail(t, 1000, true)
 	r, err := ReserveHostMemory(300, "once")
 	require.NoError(t, err)
-	r.Release()
-	r.Release()
-	r.Release()
-	// A double release would underflow the unsigned ledger to a huge value and
+	r.Settle()
+	r.Settle()
+	r.Settle()
+	// A double settle would underflow the unsigned ledger to a huge value and
 	// permanently refuse every later claim.
 	require.Zero(t, HostReservedBytes())
 
 	var nilRes *HostReservation
-	require.NotPanics(t, func() { nilRes.Release() })
+	require.NotPanics(t, func() { nilRes.Settle() })
 	require.Zero(t, nilRes.Bytes())
 }
 
@@ -105,7 +105,7 @@ func TestReserveHostMemory_UnmeasuredIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, r.Bytes())
 	require.Zero(t, HostReservedBytes())
-	r.Release()
+	r.Settle()
 	require.Zero(t, HostReservedBytes())
 }
 
@@ -146,14 +146,14 @@ func TestReserveHostMemory_ConcurrentAdmissionIsExclusive(t *testing.T) {
 	require.Equal(t, 1, refusals)
 	require.Equal(t, uint64(each), HostReservedBytes())
 	for _, r := range granted {
-		r.Release()
+		r.Settle()
 	}
 	require.Zero(t, HostReservedBytes())
 }
 
 // TestReserveHostMemory_LedgerExactUnderChurn runs many concurrent
-// claim/release cycles; the ledger must return to exactly zero. An off-by-one
-// in the CAS loop or a non-idempotent release shows up here as a nonzero total.
+// claim/settle cycles; the ledger must return to exactly zero. An off-by-one
+// in the CAS loop or a non-idempotent settle shows up here as a nonzero total.
 func TestReserveHostMemory_LedgerExactUnderChurn(t *testing.T) {
 	withHostAvail(t, 1<<40, true)
 	var wg sync.WaitGroup
@@ -166,7 +166,7 @@ func TestReserveHostMemory_LedgerExactUnderChurn(t *testing.T) {
 				if err != nil {
 					continue
 				}
-				r.Release()
+				r.Settle()
 			}
 		}(i)
 	}
@@ -179,7 +179,7 @@ func TestReserveHostMemory_LedgerExactUnderChurn(t *testing.T) {
 // allocated is counted twice -- once in the ledger, once in the availability it
 // already lowered -- and the headroom lost is the whole claim.
 //
-// This is why the builders release as soon as InitEmpty returns instead of at
+// This is why the builders settle as soon as InitEmpty returns instead of at
 // the end of the build. If someone lengthens that lifetime again, this test
 // documents the bill.
 func TestReserveHostMemory_HoldingPastAllocationDoubleCounts(t *testing.T) {
@@ -202,40 +202,41 @@ func TestReserveHostMemory_HoldingPastAllocationDoubleCounts(t *testing.T) {
 
 	// Committing at the allocation -- what the builders now do -- makes the same
 	// request fit, because availability alone already accounts for the 100.
-	held.Release()
+	held.Settle()
 	second, err := ReserveHostMemory(budget, "build2")
-	require.NoError(t, err, "after release the second build sees the true budget")
-	second.Release()
+	require.NoError(t, err, "after settling the second build sees the true budget")
+	second.Settle()
 	require.Zero(t, HostReservedBytes())
 }
 
-// TestHostReservation_DeferredAndExplicitReleasePair checks the shape every call
-// site uses: a deferred Release covering the paths that never allocate, plus an
+// TestHostReservation_DeferredAndExplicitSettlePair checks the shape every call
+// site uses: a deferred Settle covering the paths that never allocate, plus an
 // explicit one right after the allocation. Whichever runs first wins and the
 // other is a no-op, so no flag is needed to tell success from error.
-func TestHostReservation_DeferredAndExplicitReleasePair(t *testing.T) {
+func TestHostReservation_DeferredAndExplicitSettlePair(t *testing.T) {
 	withHostAvail(t, 1000, true)
 
-	// Success path: Commit, then the deferred Release must not double-subtract.
+	// Success path: settle explicitly, then the deferred Settle must not double-subtract.
 	r, err := ReserveHostMemory(300, "ok")
 	require.NoError(t, err)
-	r.Release() // explicit, right after the "allocation"
+	r.Settle() // explicit, right after the "allocation"
 	require.Zero(t, HostReservedBytes())
-	r.Release() // the deferred one
-	require.Zero(t, HostReservedBytes(), "the second Release must be a no-op")
+	r.Settle() // the deferred one
+	require.Zero(t, HostReservedBytes(), "the second Settle must be a no-op")
 
-	// Error path: only the deferred Release runs, and a later Commit is inert.
+	// Error path: only the deferred Settle runs, and a later explicit one is inert.
 	r2, err := ReserveHostMemory(300, "failed")
 	require.NoError(t, err)
-	r2.Release() // only the deferred one runs
+	r2.Settle() // only the deferred one runs
 	require.Zero(t, HostReservedBytes())
-	r2.Release()
+	r2.Settle()
 	require.Zero(t, HostReservedBytes())
 
 	// Both orders leave the ledger exactly empty, so the next build sees the
 	// full budget rather than a stranded claim.
 	full, err := ReserveHostMemory(750, "next")
 	require.NoError(t, err)
-	full.Release()
+	full.Settle()
 	require.Zero(t, HostReservedBytes())
 }
+

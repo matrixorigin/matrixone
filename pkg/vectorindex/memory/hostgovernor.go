@@ -36,7 +36,7 @@ import (
 //
 // This ledger closes that window the same way device_memory_governor closes it
 // for VRAM: a claim is taken BEFORE the allocation and held until the memory is
-// actually released, and admission is check-and-claim under a single CAS so two
+// the allocator has taken it, and admission is check-and-claim under a single CAS so two
 // callers cannot both pass against the same ledger value.
 //
 // Deliberate differences from the device side:
@@ -44,30 +44,46 @@ import (
 //   - The ledger lives in Go, not C++. The device governor had to be native
 //     because loads allocate deep inside cuVS deserialize, where Go cannot wrap
 //     the allocation. The host allocation is triggered BY Go (InitEmpty), so a
-//     Go claim can span snapshot -> allocation -> release exactly, and stays
+//     Go claim can span snapshot -> allocation exactly, and stays
 //     reachable from ordinary non-gpu-tagged CI like the rest of this package.
 //   - Budget is 75% (hostBudgetNumerator/Denominator), matching HostRowsFitting
 //     so the admission and the capacity model cannot disagree.
 //
-// LIFETIME CONTRACT -- hold a claim across the ALLOCATION, not for the lifetime
-// of the memory. Once the bytes are actually allocated, the live availability
-// figure has already dropped by that amount, so a claim still on the ledger is
-// counted TWICE: once in `inflight`, once in the lowered `avail`. The cost is
-// not a rounding error, it is the full size of the claim, for as long as it is
-// held:
+// LIFETIME CONTRACT -- hold a claim until the allocator has actually TAKEN the
+// bytes, then settle it; do not hold it for the lifetime of the memory. Once the
+// bytes are allocated the live availability figure has already dropped by that
+// amount, so a claim still on the ledger is counted TWICE: once in `inflight`,
+// once in the lowered `avail`. The cost is not a rounding error, it is the full
+// size of the claim, for as long as it is held:
 //
 //	total 512G, a build claims 100G and allocates it
 //	  avail  -> 412G, budget -> 309G, inflight -> 100G
 //	  a second build can now get 209G, when 309G is genuinely free
 //
 // For a build that runs for tens of minutes that is tens of minutes of a
-// concurrent build being refused memory that exists. So callers release as soon
+// concurrent build being refused memory that exists. So callers settle as soon
 // as the allocation returns; the window the ledger has to cover is only the one
 // where a decision has been made and the memory not yet taken, which is exactly
 // the window the live figure cannot see.
+//
+// "TAKEN" MEANS MALLOC'ED, and a caller may need more than one claim to say so.
+// The test is whether the allocator has been asked for the bytes, not whether the
+// pages have been faulted in: availability comes from cgroup usage, which charges
+// on fault, but a malloc'ed region will be faulted by the same caller that
+// malloc'ed it, so treating malloc as the settling point is both simpler and
+// sound. What is NOT sound is settling a claim covering bytes nobody has asked
+// for yet.
+//
+// A build's whole host cost is malloc'ed by the time its constructor returns --
+// the capacity-sized resizes plus host_ids.reserve -- so one claim with one
+// lifetime covers it. That is a property of the native code, not a given: it holds
+// because id_to_index_ is no longer populated during ingest (index_base.hpp,
+// ensure_id_index). If a capacity-sized structure is ever allocated lazily again,
+// a single claim settled at the constructor stops being correct -- those bytes
+// would be counted nowhere, and the next build would be admitted against them.
 // ---------------------------------------------------------------------------
 
-// hostReserved is the per-CN ledger of host bytes claimed but not yet released.
+// hostReserved is the per-CN ledger of host bytes claimed but not yet settled.
 var hostReserved atomic.Uint64
 
 // hostAvailFn is the availability source, indirected so the budgeting rules are
@@ -75,9 +91,9 @@ var hostReserved atomic.Uint64
 // side taking a free-bytes callback rather than calling CUDA itself.
 var hostAvailFn = system.MemoryAvailableIncludingCache
 
-// HostReservation is a claim on host memory. Release is idempotent and safe from
+// HostReservation is a claim on host memory. Settle is idempotent and safe from
 // any goroutine; a zero-byte reservation (returned when availability cannot be
-// measured) releases to nothing.
+// measured) settles to nothing.
 type HostReservation struct {
 	bytes uint64
 	once  sync.Once
@@ -92,21 +108,29 @@ func (r *HostReservation) Bytes() uint64 {
 	return r.bytes
 }
 
-// Release drops the claim from the ledger. WHERE it is called is the whole
-// contract: immediately after the allocation returns, not when the memory is
-// finally freed. See the lifetime note above -- a claim held past the allocation
-// is counted twice, and the headroom lost is its full size.
+// Settle drops the claim from the ledger, declaring that the bytes it stood for
+// have now been malloc'ed (or that nothing will allocate them after all, on a
+// rollback path). It does NOT free anything -- the name is about the ledger, not
+// the memory, and the memory it covered typically outlives this call by the whole
+// build.
+//
+// WHERE it is called is the whole contract: as soon as the allocator has taken
+// the bytes, not when they are finally freed. See the lifetime note above -- a
+// claim held past the allocation is counted twice, and the headroom lost is its
+// full size. Equally, a claim settled BEFORE the allocation is counted zero
+// times, and the next admission is measured against headroom that is already
+// spoken for.
 //
 // Idempotent, so the canonical shape needs no flag to tell the paths apart:
 //
 //	claim, err := ReserveHostMemory(n, "who")
 //	if err != nil { return err }
-//	defer claim.Release()   // covers an early return or a panic
+//	defer claim.Settle()   // covers an early return or a panic
 //	... allocate ...
-//	claim.Release()         // allocated: stop counting it now
+//	claim.Settle()         // malloc'ed: stop counting it now
 //
 // whichever runs first wins and the other is a no-op.
-func (r *HostReservation) Release() {
+func (r *HostReservation) Settle() {
 	if r == nil {
 		return
 	}
@@ -126,7 +150,7 @@ func (r *HostReservation) Release() {
 //
 // A refusal is an ordinary, expected outcome -- it means another build already
 // holds the headroom -- so it returns an error rather than blocking. Callers
-// must release the claim once the memory is genuinely freed, on EVERY path
+// must settle the claim once the allocator has taken the bytes, on EVERY path
 // (success, error, and panic).
 //
 // When availability cannot be measured, this returns a zero-byte reservation

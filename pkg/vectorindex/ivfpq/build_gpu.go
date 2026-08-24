@@ -152,17 +152,18 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 	}
 
 	if b.current == nil {
-		// Claim the host memory BEFORE anything allocates it. InitEmpty's native
-		// constructor resizes host_ids to capacity, and SetFilterColumns resizes
-		// every INCLUDE column to capacity * elem_size, so by the time either
-		// returns the memory is already spent.
+		// Claim the host memory BEFORE anything allocates it. The native
+		// constructor resizes flattened_host_dataset to capacity*dim and RESERVES
+		// host_ids to capacity, and SetFilterColumns resizes every INCLUDE column to
+		// capacity * elem_size -- reserve mallocs the whole span, so by the time
+		// either returns every byte of the claim has been taken.
 		hostClaim, herr := b.reserveBuildHost(capacity)
 		if herr != nil {
 			return nil, herr
 		}
 		// Roll back if we never reach the allocation -- error return or a panic
-		// out of the C++ constructor. The explicit Release below makes this a no-op.
-		defer hostClaim.Release()
+		// out of the C++ constructor. The explicit Settle below makes this a no-op.
+		defer hostClaim.Settle()
 
 		key := b.createKey(len(b.indexes))
 		m, err := NewIvfpqModelForBuild[B, Q](key, b.idxcfg, b.nthread, b.devices)
@@ -179,12 +180,12 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 				return nil, err
 			}
 		}
-		// The buffers are allocated now, so the ledger must stop counting them:
+		// The buffers are malloc'ed now, so the ledger must stop counting them:
 		// they are already visible in MemoryAvailableIncludingCache, and holding
 		// the claim for the rest of the build would charge a concurrent build this
 		// claim's worth of headroom for as long as the build runs -- tens of
-		// minutes for a large index. The deferred Release above then does nothing.
-		hostClaim.Release()
+		// minutes for a large index. The deferred Settle above then does nothing.
+		hostClaim.Settle()
 
 		m.TmpDir = b.tmpDir
 		b.current = m
@@ -306,13 +307,24 @@ func (b *IvfpqBuild[B, Q]) SetHostBytesPerRow(perRow uint64) {
 	b.hostBytesPerRow = perRow
 }
 
-// reserveBuildHost claims the host memory this sub-index is about to allocate
-// eagerly. HostRowsFitting only answers "does it fit" from a snapshot, which two
-// concurrent CREATE INDEX statements both pass before either allocates; the
-// claim is what makes that decision exclusive. It is taken BEFORE InitEmpty,
-// whose native constructor performs the capacity-sized resize, and dropped as
-// soon as that resize returns -- see the call site for why holding it longer
-// double-counts.
+// reserveBuildHost claims the host memory this sub-index is about to allocate.
+// HostRowsFitting only answers "does it fit" from a snapshot, which two concurrent
+// CREATE INDEX statements both pass before either allocates; the claim is what
+// makes that decision exclusive.
+//
+// ONE claim with ONE lifetime, because every byte it covers is malloc'ed by the
+// time InitEmpty and SetFilterColumns return: the capacity-sized
+// flattened_host_dataset.resize and host_ids.reserve in the chunked constructor
+// (ivf_pq.hpp:265-266), plus FilterStore's per-INCLUDE resize. It is taken before
+// them and settled as soon as they return -- see the call site for why holding it
+// longer double-counts.
+//
+// This is only true because id_to_index_ is no longer populated during a build
+// (index_base.hpp, ensure_id_index). When it was, ~40 bytes/row of the claim stood
+// for memory the allocator had not been asked for yet, and settling here left those
+// bytes counted nowhere -- not in the ledger, not yet in availability -- so a
+// concurrent build could be admitted against them. That is fixed by not allocating
+// the map, not by tracking it: see HostIDBytesPerRow.
 //
 // Returns a no-op when the per-row cost was never supplied or the capacity is
 // zero: ReserveHostMemory refuses a zero claim by design and there is nothing

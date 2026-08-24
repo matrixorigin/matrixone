@@ -51,10 +51,15 @@ func TestHostRowsFitting(t *testing.T) {
 }
 
 // TestHostIDBytesPerRowIsCharged proves the ID bookkeeping actually MOVES the
-// capacity, not merely that a constant exists. host_ids plus the id_to_index_
-// entry are compulsory capacity-sized native allocations, so for a narrow vector
-// they dominate the row and a model that omits them overstates how many rows the
-// host can hold.
+// capacity, not merely that a constant exists. host_ids is a compulsory
+// capacity-sized native allocation (host_ids.reserve in both chunked constructors),
+// so for a narrow vector it is a real fraction of the row and a model that omits it
+// overstates how many rows the host can hold.
+//
+// It is deliberately host_ids ALONE: id_to_index_ is built on demand and is never
+// allocated during a build, so charging it would reserve memory against a structure
+// that does not exist yet. See the constant's doc for what must change together if
+// that ever stops being true.
 func TestHostIDBytesPerRowIsCharged(t *testing.T) {
 	require.Positive(t, HostIDBytesPerRow)
 
@@ -68,8 +73,9 @@ func TestHostIDBytesPerRowIsCharged(t *testing.T) {
 
 	require.Less(t, withIDs, vectorOnly,
 		"charging IDs must reduce the admitted row count")
-	// 8 B of vector vs 8+48 B charged: the honest capacity is ~7x smaller, so
-	// omitting IDs is an overstatement of the budget, not a rounding error.
-	require.LessOrEqual(t, withIDs*6, vectorOnly,
-		"for a narrow row the ID term dominates; omitting it overstates capacity several-fold")
+	// 8 B of vector vs 8+8 B charged: the honest capacity is half, so omitting the
+	// ID term is an overstatement of the budget, not a rounding error.
+	require.LessOrEqual(t, withIDs*2, vectorOnly,
+		"for a narrow row the ID term is a full share; omitting it overstates capacity")
 }
+

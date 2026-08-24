@@ -542,6 +542,24 @@ public:
     // Used only when host_ids is non-empty.
     std::unordered_map<IdT, uint64_t> id_to_index_;
 
+    // id_to_index_ is DERIVED state, built on demand rather than during ingest.
+    //
+    // delete_id() is its only reader, and the lifecycle above forbids delete_id()
+    // before build(), so nothing can read it while a build is running. It is not
+    // serialized either -- save_ids() writes host_ids alone, and load_ids() rebuilds
+    // from that. Populating it per row during a build therefore cost one malloc per
+    // row, plus rehash spikes, for a structure Pack() throws away: ~40 bytes/row of
+    // host memory that no reader ever saw. On a narrow int8 vector that was more
+    // than a fifth of the whole per-row host cost, which is capacity taken from the
+    // index for nothing.
+    //
+    // INVARIANT: the map is either EMPTY (not built yet) or COMPLETE for host_ids.
+    // id_index_built_ separates "empty because unbuilt" from "empty because there
+    // are no ids", so an id-less index does not rebuild on every delete. Writers
+    // extend the map only once it is built; ensure_id_index() materialises it the
+    // first time a reader needs it.
+    bool id_index_built_ = false;
+
     // ---- Host-resident filter columns for pre-filtered search (protected by mutex_) ----
     // Populated before build() via set_filter_columns() + add_filter_chunk().
     // Retained for the lifetime of the index — search-time predicate eval reads
@@ -981,6 +999,21 @@ public:
         set_ids_internal(ids, count_vectors, offset);
     }
 
+    // Materialise id_to_index_ from host_ids. CALLER MUST HOLD mutex_ (unique_lock):
+    // this takes no lock of its own, because its only caller already holds one and
+    // re-locking a shared_mutex here would deadlock.
+    //
+    // Sized up front, so the build the reader pays for is one allocation and n
+    // inserts rather than the doubling rehash sequence the per-row path incurred.
+    void ensure_id_index() {
+        if (this->id_index_built_) return;
+        this->id_to_index_.reserve(this->host_ids.size());
+        for (uint64_t i = 0; i < this->host_ids.size(); ++i) {
+            this->id_to_index_[this->host_ids[i]] = i;
+        }
+        this->id_index_built_ = true;
+    }
+
     void set_ids_internal(const IdT* ids, uint64_t count_vectors, uint64_t offset = 0) {
         if (!ids) return;
         // std::cout << "[DEBUG] set_ids: count=" << count_vectors << " offset=" << offset 
@@ -990,8 +1023,12 @@ public:
             this->host_ids.resize(offset + count_vectors);
         }
         std::copy(ids, ids + count_vectors, this->host_ids.begin() + offset);
-        for (uint64_t i = 0; i < count_vectors; ++i) {
-            this->id_to_index_[ids[i]] = offset + i;
+        // Extend the map only if a reader already forced it into existence; otherwise
+        // leave it empty and let ensure_id_index() build it complete on demand.
+        if (this->id_index_built_) {
+            for (uint64_t i = 0; i < count_vectors; ++i) {
+                this->id_to_index_[ids[i]] = offset + i;
+            }
         }
     }
 
@@ -1095,8 +1132,13 @@ public:
                 host_ids.resize(current_offset_);
             }
             std::copy(ids, ids + chunk_count, host_ids.begin() + target_offset);
-            for (uint64_t i = 0; i < chunk_count; ++i) {
-                id_to_index_[ids[i]] = target_offset + i;
+            // Build-time path: the map is unbuilt here by construction (delete_id
+            // cannot run before build()), so this loop is skipped and the per-row
+            // malloc never happens.
+            if (id_index_built_) {
+                for (uint64_t i = 0; i < chunk_count; ++i) {
+                    id_to_index_[ids[i]] = target_offset + i;
+                }
             }
         }
     }
@@ -1160,6 +1202,9 @@ public:
         std::unique_lock<std::shared_mutex> lock(mutex_);
         uint64_t pos;
         if (!host_ids.empty()) {
+            // The only reader, and the only place the map is ever built. Under the
+            // unique_lock taken above, so ensure_id_index() must not take its own.
+            ensure_id_index();
             auto it = id_to_index_.find(id);
             if (it == id_to_index_.end()) return; // not found
             pos = it->second;
@@ -1423,8 +1468,10 @@ public:
                 }
                 const IdT* span_ids = sids.data() + sp.ids_start;
                 std::copy(span_ids, span_ids + sp.count, host_ids.begin() + target_offset);
-                for (uint64_t i = 0; i < sp.count; ++i) {
-                    id_to_index_[span_ids[i]] = target_offset + i;
+                if (id_index_built_) {
+                    for (uint64_t i = 0; i < sp.count; ++i) {
+                        id_to_index_[span_ids[i]] = target_offset + i;
+                    }
                 }
             }
         }
@@ -1850,6 +1897,9 @@ public:
             std::unique_lock<std::shared_mutex> lock(mutex_);
             this->host_ids.clear();
             this->id_to_index_.clear();
+            // Back to "unbuilt", not "complete and empty": set_ids below repopulates
+            // host_ids, and the map must be rebuilt from it on the next delete.
+            this->id_index_built_ = false;
         }
         if (size > 0) {
             std::vector<IdT> temp_ids(size);

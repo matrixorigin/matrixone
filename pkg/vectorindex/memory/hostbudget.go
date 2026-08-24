@@ -36,29 +36,38 @@ import (
 )
 
 // HostIDBytesPerRow is the HOST cost of the per-row identity bookkeeping every GPU
-// index keeps, which the vector+INCLUDE cost model omitted entirely.
+// index keeps, charged by the capacity model on top of vector + INCLUDE bytes.
 //
-// Both chunked constructors reserve host_ids to capacity up front
-// (cgo/cuvs/index_base.hpp:484, std::vector<int64_t>), and AddRow additionally
-// inserts into id_to_index_ (:539, std::unordered_map<int64_t,uint64_t>):
+//	host_ids   8   one int64 per row, from host_ids.reserve(capacity) in both
+//	               chunked constructors (ivf_pq.hpp:266, cagra.hpp:318). reserve()
+//	               mallocs the whole span, so this is taken by the time InitEmpty
+//	               returns -- which is what lets the build hold ONE claim with one
+//	               lifetime (see reserveBuildHost).
 //
-//	host_ids             8   one int64 per row
-//	map node            24   next pointer + pair<const int64_t,uint64_t>
-//	allocator header     8   glibc malloc bookkeeping, per node
-//	bucket slot          8   one pointer per element at load factor 1.0
-//	                    --
-//	                    48
+// id_to_index_ is deliberately NOT charged. It used to be, at ~40 bytes/row (24
+// map node + 8 allocator header + 8 bucket slot), and that was honest at the time:
+// add_chunk inserted one node per row across the whole ingest. It is not allocated
+// during a build any more -- index_base.hpp builds the map on demand in
+// ensure_id_index(), because delete_id() is its only reader, the lifecycle forbids
+// delete_id() before build(), and save_ids() never serializes it. Charging for it
+// would now reserve host memory against a structure the build never allocates, and
+// take that capacity away from the index for nothing.
 //
-// This is not a rounding error: with a narrow int8 vector the IDs cost several
-// times the vector itself, so a capacity sized on vector+INCLUDE alone can spend
-// the entire advertised host budget on ID storage and still be declared to fit.
-const HostIDBytesPerRow = 48
+// Keep this constant and that laziness together: if the map is ever populated
+// during ingest again, this must go back to 48 AND the build must hold the map's
+// share on its own lifetime, because those bytes would once more be claimed before
+// the allocator had been asked for them.
+//
+// The 8 that remains is not a rounding error either. With a narrow int8 vector the
+// ID storage is a real fraction of the row, so a capacity sized on vector+INCLUDE
+// alone overcommits the host budget.
+const HostIDBytesPerRow = 8
 
 // hostBudgetNumerator/Denominator take 75% of what is actually available. The
 // budget is now derived from an accurate baseline — cgroup limit (regardless of
 // PID) or MemAvailable (cache-aware) — and the per-row cost model includes every
-// eager capacity-sized allocation (vector staging + INCLUDE columns), so the
-// safety margin does not also need to absorb measurement error. 25% still leaves
+// eager capacity-sized allocation (vector staging + INCLUDE columns + host_ids), so
+// the safety margin does not also need to absorb measurement error. 25% still leaves
 // headroom for concurrent queries, allocator slack, and the mpool. This is a
 // deliberate divergence from the device-side 60%: VRAM is contested by the RMM
 // pool + graph build workspace + kernel scratch, which host memory is not.
