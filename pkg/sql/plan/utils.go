@@ -3260,20 +3260,13 @@ func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
 
 	rule := &preparedRuntimeSpecializationScanRule{
 		directResult: query.StmtType == plan.Query_SELECT,
+		skipExprs:    preparedDMLWriteExpressions(query),
 		seen:         make(map[*plan.Expr]struct{}),
 	}
 	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
 		// The scan is an optimization only. Preserve correctness if a newly
 		// added plan field cannot be visited here.
 		return true
-	}
-	// A mutation plan with parameterized write expressions must keep its
-	// prepare-time positional write projection and assignment casts intact.
-	// Rebinding the complete plan would make a fresh DML compile consume a
-	// different write layout. Predicate-only DML has no such write parameters,
-	// so it remains eligible for execute-time predicate specialization.
-	if isPreparedDMLStmt(query.StmtType) && preparedDMLWriteHasParams(query) {
-		return false
 	}
 	return rule.needs
 }
@@ -3287,68 +3280,65 @@ func isPreparedDMLStmt(stmtType plan.Query_StatementType) bool {
 	}
 }
 
-func preparedDMLWriteHasParams(query *plan.Query) bool {
+func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
+	writeExprs := make(map[*plan.Expr]struct{})
 	if query == nil || !isPreparedDMLStmt(query.StmtType) {
-		return false
+		return writeExprs
 	}
 	visited := make(map[int32]struct{})
-	var visit func(int32) bool
-	visit = func(nodeID int32) bool {
+	var visit func(int32)
+	visit = func(nodeID int32) {
 		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
-			return false
+			return
 		}
 		if _, ok := visited[nodeID]; ok {
-			return false
+			return
 		}
 		visited[nodeID] = struct{}{}
 		node := query.Nodes[nodeID]
 		if node == nil {
-			return false
+			return
 		}
 		for _, expr := range node.ProjectList {
 			if preparedExprContainsParam(expr) {
-				return true
+				writeExprs[expr] = struct{}{}
 			}
 		}
 		for _, expr := range node.OnUpdateExprs {
 			if preparedExprContainsParam(expr) {
-				return true
+				writeExprs[expr] = struct{}{}
 			}
 		}
 		if node.DedupJoinCtx != nil {
 			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
 				if preparedExprContainsParam(expr) {
-					return true
+					writeExprs[expr] = struct{}{}
 				}
 			}
 		}
 		if node.RowsetData != nil {
 			for _, col := range node.RowsetData.Cols {
 				for _, row := range col.Data {
-					if preparedExprContainsParam(row.Expr) {
-						return true
+					if row != nil && preparedExprContainsParam(row.Expr) {
+						writeExprs[row.Expr] = struct{}{}
 					}
 				}
 			}
 		}
 		for _, childID := range node.Children {
-			if visit(childID) {
-				return true
-			}
+			visit(childID)
 		}
-		return false
 	}
 	for _, step := range query.Steps {
-		if visit(step) {
-			return true
-		}
+		visit(step)
 	}
-	return false
+	return writeExprs
 }
 
 type preparedRuntimeSpecializationScanRule struct {
 	directResult bool
 	needs        bool
+	skipExprs    map[*plan.Expr]struct{}
 	seen         map[*plan.Expr]struct{}
 }
 
@@ -3365,6 +3355,9 @@ func (rule *preparedRuntimeSpecializationScanRule) ApplyNode(_ *Node) error {
 }
 
 func (rule *preparedRuntimeSpecializationScanRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
+	if _, ok := rule.skipExprs[expr]; ok {
+		return expr, nil
+	}
 	rule.scanExpr(expr, true)
 	return expr, nil
 }
@@ -3390,7 +3383,7 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
 		if preparedRuntimeSpecializationFunction(name) {
 			for _, arg := range exprImpl.F.Args {
-				if preparedExprContainsParam(arg) {
+				if preparedExprRequiresRuntimeSpecialization(name, arg) {
 					rule.needs = true
 					return
 				}
@@ -3427,6 +3420,53 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			}
 		}
 	}
+}
+
+func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.Expr) bool {
+	if !preparedExprContainsParam(expr) {
+		return false
+	}
+	// A comparison against a table column already has a prepare-time cast to
+	// the column's domain. Rebinding that cast on every execute is unnecessary
+	// and would force otherwise cacheable DML writes down the fresh-compile
+	// path. Marker-to-marker comparisons have no such domain owner and must
+	// still be specialized.
+	if isPreparedNumericComparison(functionName) {
+		return preparedExprHasUnboundParam(expr)
+	}
+	return true
+}
+
+// preparedExprHasUnboundParam distinguishes a marker whose domain is still
+// owned by the comparison from one already constrained by a prepare-time
+// cast. Composite-key predicates may wrap several such casts in a serial()
+// helper, so inspect the complete expression rather than only its root.
+func preparedExprHasUnboundParam(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil || expr.GetV() != nil {
+		return true
+	}
+	if isImplicitPreparedParamCast(expr) {
+		return false
+	}
+	if function := expr.GetF(); function != nil {
+		for _, arg := range function.Args {
+			if preparedExprHasUnboundParam(arg) {
+				return true
+			}
+		}
+		return false
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if preparedExprHasUnboundParam(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func preparedExprContainsParam(expr *plan.Expr) bool {
@@ -3480,7 +3520,7 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 		return true
 	}
 	switch name {
-	case "case", "greatest", "least", "sum", "avg", "min", "max", "any_value",
+	case "case", "greatest", "least", "sum", "avg", "min", "max", "any_value", "max_by", "max_by_non_null",
 		"first_value", "last_value", "lag", "lead", "ntile", "nth_value", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",

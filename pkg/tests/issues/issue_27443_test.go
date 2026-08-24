@@ -118,6 +118,20 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
 		require.Equal(t, int64(1), status)
 
+		// A write parameter and a numeric predicate can share the same DML
+		// plan. Runtime specialization must rebind the predicate while retaining
+		// the target assignment cast for the positional write expression.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		mixedPredicateStmt, err := db.PrepareContext(ctx, "update `"+dbName+"`.predicate_dst set status = ? where ? = ?")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, mixedPredicateStmt.Close())
+		}()
+		_, err = mixedPredicateStmt.ExecContext(ctx, int64(2), int64(1), "1.00")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(2), status)
+
 		sumStmt, err := db.PrepareContext(ctx, "select sum(?)")
 		require.NoError(t, err)
 		defer func() {
@@ -134,5 +148,14 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		}()
 		require.NoError(t, windowStmt.QueryRowContext(ctx, int64(7)).Scan(&sum))
 		require.Equal(t, int64(14), sum)
+
+		for _, name := range []string{"max_by", "max_by_non_null"} {
+			stmt, err := db.PrepareContext(ctx, "select "+name+"(?, 1, 1)")
+			require.NoError(t, err)
+			var value int64
+			require.NoError(t, stmt.QueryRowContext(ctx, int64(7)).Scan(&value))
+			require.Equal(t, int64(7), value)
+			require.NoError(t, stmt.Close())
+		}
 	})
 }

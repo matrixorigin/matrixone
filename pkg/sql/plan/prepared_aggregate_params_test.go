@@ -373,17 +373,84 @@ func TestPreparedWindowAggregateRuntimeTypeReachesResultProjection(t *testing.T)
 	require.True(t, windowSeen)
 }
 
-func TestPreparedDMLRuntimeSpecializationKeepsWriteParametersCached(t *testing.T) {
+func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
+	for _, name := range []string{"max_by", "max_by_non_null"} {
+		t.Run(name, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, fmt.Sprintf("select %s(?, 1, 1) from nation", name))
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(),
+				prepare.Plan,
+				[]any{ParamValue{
+					Value:            "7",
+					RuntimeType:      types.T_int64.ToType(),
+					HasRuntimeType:   true,
+					IsBinaryProtocol: true,
+				}},
+			)
+			require.NoError(t, err)
+			require.True(t, specialized)
+
+			columns := GetResultColumnsFromPlan(filled)
+			require.Len(t, columns, 1)
+			require.Equal(t, int32(types.T_int64), columns[0].Typ.Id)
+		})
+	}
+}
+
+func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) {
 	predicateOnly := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ''x'' where ? = ?")
 	require.True(t, PreparedPlanNeedsRuntimeSpecialization(predicateOnly.Plan))
 
 	withWriteParameter := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ? where ? = ?")
-	// A fresh DML compile cannot safely replace a positional write parameter.
-	// Keep that statement on its cached write path; predicate-only DML above
-	// still gets execute-time comparison specialization.
-	require.False(t, PreparedPlanNeedsRuntimeSpecialization(withWriteParameter.Plan))
+	// The predicate still needs execute-time comparison specialization. The
+	// write projection is materialized with its original assignment cast so a
+	// fresh DML compile cannot change the positional write layout.
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(withWriteParameter.Plan))
+
+	columnBoundPredicate := buildPreparedAggregatePlan(t,
+		"update nation set n_comment = ? where n_nationkey = ? and n_regionkey = ?")
+	// Column-owned casts keep ordinary parameterized DML on its cached path.
+	require.False(t, PreparedPlanNeedsRuntimeSpecialization(columnBoundPredicate.Plan))
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(),
+		withWriteParameter.Plan,
+		[]any{
+			ParamValue{Value: "updated", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+			ParamValue{Value: "1", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+			ParamValue{Value: "1.00", RuntimeType: types.T_text.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	writeCastSeen := false
+	predicateParamSeen := false
+	for _, node := range filled.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			function := expr.GetF()
+			if function == nil || function.Func == nil || function.Func.GetObjName() != "cast_assign" || len(function.Args) == 0 {
+				continue
+			}
+			if literal := function.Args[0].GetLit(); literal != nil && literal.GetSval() == "updated" {
+				writeCastSeen = true
+			}
+		}
+		for _, expr := range node.FilterList {
+			if expr.GetF() == nil || expr.GetF().Func == nil || expr.GetF().Func.GetObjName() != "=" {
+				continue
+			}
+			for _, arg := range expr.GetF().Args {
+				if arg.GetP() != nil {
+					predicateParamSeen = true
+				}
+			}
+		}
+	}
+	require.True(t, writeCastSeen)
+	require.False(t, predicateParamSeen)
 }
 
 func TestPreparedNtileParameter(t *testing.T) {
