@@ -298,9 +298,14 @@ func clearLoadGenerationRegistry() {
 
 func clearReusableLoadGeneration(cfg TableConfig) {
 	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	clearReusableLoadPools(cfg)
+	clearLoadGeneration(index)
+}
+
+func clearReusableLoadPools(cfg TableConfig) {
+	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
 	loadedBasePool.clearIndex(index)
 	loadedTailPool.clear(index)
-	clearLoadGeneration(index)
 }
 
 // invalidateLoadGeneration records why the next load will miss and clears
@@ -316,7 +321,7 @@ func invalidateLoadGeneration(cfg TableConfig, reason LoadMissReason) {
 			loadedBasePool.clearAll()
 			loadedTailPool.clearAll()
 		} else {
-			clearReusableLoadGeneration(cfg)
+			clearReusableLoadPools(cfg)
 		}
 	case LoadMissTTLExpired, LoadMissGenerationChange:
 		// Keep the current index's immutable base/tail reusable across CDC and

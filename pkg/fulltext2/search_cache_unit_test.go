@@ -103,38 +103,60 @@ func TestFulltext2SearchLoadFailurePreservesOtherGeneration(t *testing.T) {
 }
 
 func TestFulltext2SearchLoadConsumesInvalidationReasonAfterSuccess(t *testing.T) {
-	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
-	mp := mpool.MustNewZero()
-	cfg := testStorageCfg()
-	var events []LoadEvent
-	restore := setLoadObserver(func(event LoadEvent) { events = append(events, event) })
-	defer restore()
-	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		switch {
-		case strings.Contains(sql, "CAST(COALESCE"):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
-		case strings.Contains(sql, "MAX(timestamp)"):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
-		case strings.Contains(sql, "MAX(chunk_id)"):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
-		case strings.Contains(sql, "LENGTH("):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
-		default:
-			return executor.Result{Mp: mp}, nil
-		}
-	})
+	for _, reason := range []LoadMissReason{LoadMissCDCFlush, LoadMissMerge, LoadMissRebuild} {
+		t.Run(string(reason), func(t *testing.T) {
+			sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
+			mp := mpool.MustNewZero()
+			cfg := testStorageCfg()
+			var events []LoadEvent
+			restore := setLoadObserver(func(event LoadEvent) { events = append(events, event) })
+			defer restore()
 
-	s := NewFulltext2Search(cfg)
-	require.NoError(t, s.Load(sp))
-	s.FinishLoadObservation()
-	require.Len(t, events, 1)
-	require.Equal(t, LoadMissCDCFlush, events[0].MissReason)
-	require.True(t, events[0].LoadSuccess)
-	reason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
-	require.Empty(t, reason)
-	require.Zero(t, generation)
-	s.Destroy()
+			pendingLoadReasons.Lock()
+			oldReasons := pendingLoadReasons.m
+			pendingLoadReasons.m = make(map[string]pendingLoadReason)
+			pendingLoadReasons.Unlock()
+			loadGenerations.Lock()
+			oldGenerations := loadGenerations.m
+			loadGenerations.m = make(map[string]loadGenerationState)
+			loadGenerations.Unlock()
+			t.Cleanup(func() {
+				pendingLoadReasons.Lock()
+				pendingLoadReasons.m = oldReasons
+				pendingLoadReasons.Unlock()
+				loadGenerations.Lock()
+				loadGenerations.m = oldGenerations
+				loadGenerations.Unlock()
+			})
+
+			swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				switch {
+				case strings.Contains(sql, "CAST(COALESCE"):
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+				case strings.Contains(sql, "MAX(timestamp)"):
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
+				case strings.Contains(sql, "MAX(chunk_id)"):
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
+				case strings.Contains(sql, "LENGTH("):
+					return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+				default:
+					return executor.Result{Mp: mp}, nil
+				}
+			})
+			invalidateLoadGeneration(cfg, reason)
+
+			s := NewFulltext2Search(cfg)
+			require.NoError(t, s.Load(sp))
+			s.FinishLoadObservation()
+			require.Len(t, events, 1)
+			require.Equal(t, reason, events[0].MissReason)
+			require.True(t, events[0].LoadSuccess)
+			gotReason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+			require.Empty(t, gotReason)
+			require.Zero(t, generation)
+			s.Destroy()
+		})
+	}
 }
 
 func TestFulltext2SearchLoadClassifiesQueryInterruptionAsCancel(t *testing.T) {
@@ -155,38 +177,50 @@ func TestFulltext2SearchLoadClassifiesQueryInterruptionAsCancel(t *testing.T) {
 }
 
 func TestFulltext2SearchLoadRetainsInvalidationReasonAfterFailure(t *testing.T) {
-	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
-	cfg := testStorageCfg()
-	var events []LoadEvent
-	restore := setLoadObserver(func(got LoadEvent) { events = append(events, got) })
-	defer restore()
+	for _, reason := range []LoadMissReason{LoadMissCDCFlush, LoadMissMerge, LoadMissRebuild} {
+		t.Run(string(reason), func(t *testing.T) {
+			sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
+			cfg := testStorageCfg()
+			var events []LoadEvent
+			restore := setLoadObserver(func(got LoadEvent) { events = append(events, got) })
+			defer restore()
 
-	pendingLoadReasons.Lock()
-	old := pendingLoadReasons.m
-	pendingLoadReasons.m = make(map[string]pendingLoadReason)
-	pendingLoadReasons.Unlock()
-	t.Cleanup(func() {
-		pendingLoadReasons.Lock()
-		pendingLoadReasons.m = old
-		pendingLoadReasons.Unlock()
-	})
+			pendingLoadReasons.Lock()
+			oldReasons := pendingLoadReasons.m
+			pendingLoadReasons.m = make(map[string]pendingLoadReason)
+			pendingLoadReasons.Unlock()
+			loadGenerations.Lock()
+			oldGenerations := loadGenerations.m
+			loadGenerations.m = make(map[string]loadGenerationState)
+			loadGenerations.Unlock()
+			t.Cleanup(func() {
+				pendingLoadReasons.Lock()
+				pendingLoadReasons.m = oldReasons
+				pendingLoadReasons.Unlock()
+				loadGenerations.Lock()
+				loadGenerations.m = oldGenerations
+				loadGenerations.Unlock()
+			})
 
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		return executor.Result{}, moerr.NewQueryInterrupted(context.Background())
-	})
-	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
+			swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+				return executor.Result{}, moerr.NewQueryInterrupted(context.Background())
+			})
+			invalidateLoadGeneration(cfg, reason)
 
-	s := NewFulltext2Search(cfg)
-	require.Error(t, s.Load(sp))
-	s.FinishLoadObservation()
-	require.Error(t, s.Load(sp))
-	s.FinishLoadObservation()
+			s := NewFulltext2Search(cfg)
+			require.Error(t, s.Load(sp))
+			s.FinishLoadObservation()
+			require.Error(t, s.Load(sp))
+			s.FinishLoadObservation()
 
-	require.Len(t, events, 2)
-	require.Equal(t, LoadMissCDCFlush, events[0].MissReason)
-	require.Equal(t, LoadMissCDCFlush, events[1].MissReason)
-	require.True(t, events[0].LoadCancel)
-	require.True(t, events[1].LoadCancel)
+			require.Len(t, events, 2)
+			require.Equal(t, reason, events[0].MissReason)
+			require.Equal(t, reason, events[1].MissReason)
+			require.True(t, events[0].LoadCancel)
+			require.True(t, events[1].LoadCancel)
+			s.Destroy()
+		})
+	}
 }
 
 func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {

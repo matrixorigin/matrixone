@@ -148,6 +148,41 @@ func TestLoadReasonRegistryBoundariesAndInvalidation(t *testing.T) {
 	invalidateLoadGeneration(cfg, LoadMissReason("process_shutdown"))
 }
 
+func TestInvalidateLoadGenerationPreservesReplacementReasonAndGeneration(t *testing.T) {
+	restore := setLoadObserver(func(LoadEvent) {})
+	defer restore()
+
+	pendingLoadReasons.Lock()
+	oldReasons := pendingLoadReasons.m
+	pendingLoadReasons.m = make(map[string]pendingLoadReason)
+	pendingLoadReasons.Unlock()
+	loadGenerations.Lock()
+	oldGenerations := loadGenerations.m
+	loadGenerations.m = make(map[string]loadGenerationState)
+	loadGenerations.Unlock()
+	t.Cleanup(func() {
+		pendingLoadReasons.Lock()
+		pendingLoadReasons.m = oldReasons
+		pendingLoadReasons.Unlock()
+		loadGenerations.Lock()
+		loadGenerations.m = oldGenerations
+		loadGenerations.Unlock()
+	})
+
+	cfg := TableConfig{DbName: "db", IndexTable: "store"}
+	for generation, reason := range []LoadMissReason{LoadMissMerge, LoadMissRebuild} {
+		invalidateLoadGeneration(cfg, reason)
+		gotReason, gotGeneration := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+		require.Equal(t, reason, gotReason)
+		require.Equal(t, uint64(generation+1), gotGeneration)
+		consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), gotGeneration)
+	}
+	NewFulltext2Search(cfg).OnCacheInvalidated("")
+	gotReason, gotGeneration := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Empty(t, gotReason)
+	require.Zero(t, gotGeneration)
+}
+
 func TestLoadReasonRegistryDoesNotConsumeNewerInvalidation(t *testing.T) {
 	restore := setLoadObserver(func(LoadEvent) {})
 	defer restore()
