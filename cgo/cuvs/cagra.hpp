@@ -609,6 +609,28 @@ public:
         return static_cast<size_t>(rows) * static_cast<size_t>(dim) * sizeof(T);
     }
 
+    // Bytes cuvs::cagra::build is about to take for the intermediate kNN graph,
+    // ON TOP OF the dataset already uploaded -- NN-Descent holds a neighbour id
+    // and a distance per edge. This is the same igd*8 term cagra_cost charges
+    // when capacity is planned (index_cost.hpp), including its treatment of 0 as
+    // the cuVS default, so admission and planning cannot disagree about what a
+    // CAGRA build costs.
+    //
+    // It needs its own claim precisely BECAUSE it is transient: optimize()
+    // reduces the intermediate graph to graph_degree and frees it before build()
+    // returns. A peak that comes and goes inside one call is never visible to a
+    // later cudaMemGetInfo at the moment admission needs to see it, so leaving it
+    // unclaimed means a concurrent load can be admitted against memory this build
+    // is about to take -- and the build OOMs instead of being refused.
+    //
+    // Sized from the same view as the upload, so it is per-shard correct.
+    size_t graph_peak_bytes(int64_t rows) const {
+        const size_t igd = this->build_params.intermediate_graph_degree == 0
+                               ? 128
+                               : static_cast<size_t>(this->build_params.intermediate_graph_degree);
+        return static_cast<size_t>(rows) * igd * 8;
+    }
+
     void build_internal(raft_handle_wrapper_t& handle) {
         cuvs::neighbors::cagra::index_params index_params;
         index_params.metric = static_cast<cuvs::distance::DistanceType>(this->metric);
@@ -655,19 +677,36 @@ public:
                     // figure that already dropped -- and every concurrent load is
                     // refused over memory that is only spoken for once.
                     //
-                    // In particular this does NOT wrap cuvs::cagra::build below. That
-                    // call allocates its graph and workspace promptly and visibly, then
-                    // COMPUTES for minutes; a claim spanning it would hold the whole
-                    // build's worth of budget for the whole build, which is what the Go
-                    // side used to do.
+                    // This claim covers the DATASET only. cuvs::cagra::build below
+                    // takes the intermediate graph on top of it, and that has its own
+                    // claim with its own lifetime -- see graph_peak_bytes. Charging
+                    // both here would hold the dataset's bytes for the whole build
+                    // after they had already become visible, which is what the Go side
+                    // used to do.
                     auto upload_claim = matrixone::device_memory_governor::reserve(
                         upload_bytes(dataset_host.extent(0), dataset_host.extent(1)),
                         "cagra::build upload");
                     local_padded = std::shared_ptr<padded_dataset_t>(
                         cuvs::neighbors::make_device_padded_dataset(*res, dataset_host).release());
                 }
-                local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                    *res, index_params, local_padded->as_dataset_view()));
+                {
+                    // The intermediate kNN graph is the larger half of a CAGRA build
+                    // at low dimension -- igd*8 is 1024 B/row at the default degree,
+                    // against dim*sizeof(T) for the dataset -- and capacity was
+                    // planned against the sum. Without this claim that half is
+                    // admitted nowhere: the upload fits, build() then allocates the
+                    // graph, and a plan that was valid when it was made OOMs because
+                    // something else took the memory in between.
+                    //
+                    // Held for the whole call, which is what the transient nature of
+                    // the graph requires: there is no hook that says "the graph has
+                    // landed", and it is freed again before build() returns, so the
+                    // bytes really are spoken for from here to there.
+                    auto graph_claim = matrixone::device_memory_governor::reserve(
+                        graph_peak_bytes(dataset_host.extent(0)), "cagra::build graph");
+                    local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
+                        *res, index_params, local_padded->as_dataset_view()));
+                }
             }
             require_dataset_attached(*local_idx, this->count, "REPLICATED");
 
@@ -726,19 +765,36 @@ public:
                     // figure that already dropped -- and every concurrent load is
                     // refused over memory that is only spoken for once.
                     //
-                    // In particular this does NOT wrap cuvs::cagra::build below. That
-                    // call allocates its graph and workspace promptly and visibly, then
-                    // COMPUTES for minutes; a claim spanning it would hold the whole
-                    // build's worth of budget for the whole build, which is what the Go
-                    // side used to do.
+                    // This claim covers the DATASET only. cuvs::cagra::build below
+                    // takes the intermediate graph on top of it, and that has its own
+                    // claim with its own lifetime -- see graph_peak_bytes. Charging
+                    // both here would hold the dataset's bytes for the whole build
+                    // after they had already become visible, which is what the Go side
+                    // used to do.
                     auto upload_claim = matrixone::device_memory_governor::reserve(
                         upload_bytes(dataset_host.extent(0), dataset_host.extent(1)),
                         "cagra::build upload");
                     local_padded = std::shared_ptr<padded_dataset_t>(
                         cuvs::neighbors::make_device_padded_dataset(*res, dataset_host).release());
                 }
-                local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                    *res, index_params, local_padded->as_dataset_view()));
+                {
+                    // The intermediate kNN graph is the larger half of a CAGRA build
+                    // at low dimension -- igd*8 is 1024 B/row at the default degree,
+                    // against dim*sizeof(T) for the dataset -- and capacity was
+                    // planned against the sum. Without this claim that half is
+                    // admitted nowhere: the upload fits, build() then allocates the
+                    // graph, and a plan that was valid when it was made OOMs because
+                    // something else took the memory in between.
+                    //
+                    // Held for the whole call, which is what the transient nature of
+                    // the graph requires: there is no hook that says "the graph has
+                    // landed", and it is freed again before build() returns, so the
+                    // bytes really are spoken for from here to there.
+                    auto graph_claim = matrixone::device_memory_governor::reserve(
+                        graph_peak_bytes(dataset_host.extent(0)), "cagra::build graph");
+                    local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
+                        *res, index_params, local_padded->as_dataset_view()));
+                }
             }
             require_dataset_attached(*local_idx, num_rows, "SHARDED");
 
@@ -775,19 +831,36 @@ public:
                     // figure that already dropped -- and every concurrent load is
                     // refused over memory that is only spoken for once.
                     //
-                    // In particular this does NOT wrap cuvs::cagra::build below. That
-                    // call allocates its graph and workspace promptly and visibly, then
-                    // COMPUTES for minutes; a claim spanning it would hold the whole
-                    // build's worth of budget for the whole build, which is what the Go
-                    // side used to do.
+                    // This claim covers the DATASET only. cuvs::cagra::build below
+                    // takes the intermediate graph on top of it, and that has its own
+                    // claim with its own lifetime -- see graph_peak_bytes. Charging
+                    // both here would hold the dataset's bytes for the whole build
+                    // after they had already become visible, which is what the Go side
+                    // used to do.
                     auto upload_claim = matrixone::device_memory_governor::reserve(
                         upload_bytes(dataset_host.extent(0), dataset_host.extent(1)),
                         "cagra::build upload");
                     new_padded = std::shared_ptr<padded_dataset_t>(
                         cuvs::neighbors::make_device_padded_dataset(*res, dataset_host).release());
                 }
-                new_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                    *res, index_params, new_padded->as_dataset_view()));
+                {
+                    // The intermediate kNN graph is the larger half of a CAGRA build
+                    // at low dimension -- igd*8 is 1024 B/row at the default degree,
+                    // against dim*sizeof(T) for the dataset -- and capacity was
+                    // planned against the sum. Without this claim that half is
+                    // admitted nowhere: the upload fits, build() then allocates the
+                    // graph, and a plan that was valid when it was made OOMs because
+                    // something else took the memory in between.
+                    //
+                    // Held for the whole call, which is what the transient nature of
+                    // the graph requires: there is no hook that says "the graph has
+                    // landed", and it is freed again before build() returns, so the
+                    // bytes really are spoken for from here to there.
+                    auto graph_claim = matrixone::device_memory_governor::reserve(
+                        graph_peak_bytes(dataset_host.extent(0)), "cagra::build graph");
+                    new_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
+                        *res, index_params, new_padded->as_dataset_view()));
+                }
             }
             require_dataset_attached(*new_idx, this->count, "SINGLE_GPU");
             handle.sync();
