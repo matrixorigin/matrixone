@@ -320,7 +320,14 @@ set @ddl_first_after = (select watermark from change_watermark() w);
 insert into ddl_order_first values (7, 1, 99);
 select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_first');
 ➤ mo_ctl(dn, flush, table_changes_db.ddl_order_first)[12,65535,0]  𝄀
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
 set @ddl_first_until = (select watermark from change_watermark() w);
 select change_type, added, id, payload
 from table_changes('table_changes_db', 'ddl_order_first', @ddl_first_after, @ddl_first_until) c;
@@ -332,7 +339,14 @@ set @ddl_after_after = (select watermark from change_watermark() w);
 insert into ddl_order_after values (1, 7, 99, 100);
 select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_after');
 ➤ mo_ctl(dn, flush, table_changes_db.ddl_order_after)[12,65535,0]  𝄀
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
 set @ddl_after_until = (select watermark from change_watermark() w);
 select change_type, id, added, payload, tail
 from table_changes('table_changes_db', 'ddl_order_after', @ddl_after_after, @ddl_after_until) c;
@@ -344,7 +358,14 @@ set @ddl_drop_after = (select watermark from change_watermark() w);
 insert into ddl_order_drop values (2, 100);
 select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_drop');
 ➤ mo_ctl(dn, flush, table_changes_db.ddl_order_drop)[12,65535,0]  𝄀
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
 set @ddl_drop_until = (select watermark from change_watermark() w);
 select change_type, id, tail
 from table_changes('table_changes_db', 'ddl_order_drop', @ddl_drop_after, @ddl_drop_until) c;
