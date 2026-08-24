@@ -37,51 +37,100 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 12)
-	require.Len(t, clusterUpgEntries, 1)
+	require.Len(t, tenantUpgEntries, 17)
+	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
+	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
+	require.Equal(t, catalog.MO_VIEW_REFRESH, clusterUpgEntries[2].TableName)
+	for _, entry := range clusterUpgEntries[1:] {
+		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
+		require.Contains(t, strings.ToLower(entry.UpgSql), "create cluster table mo_catalog.mo_view_")
+	}
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
 	require.Equal(t, mongodb.TableMappings, tenantUpgEntries[1].TableName)
 	for _, entry := range tenantUpgEntries[:2] {
 		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
 		require.Contains(t, strings.ToLower(entry.UpgSql), "create table mo_catalog.")
 	}
-	characterSets := tenantUpgEntries[7]
+	characterSetsTable := tenantUpgEntries[7]
+	require.Equal(t, sysview.InformationDBConst, characterSetsTable.Schema)
+	require.Equal(t, "CHARACTER_SETS", characterSetsTable.TableName)
+	require.Equal(t, versions.CREATE_NEW_TABLE, characterSetsTable.UpgType)
+	require.Equal(t, sysview.InformationSchemaCharacterSetsDDL, characterSetsTable.UpgSql)
+	characterSets := tenantUpgEntries[8]
 	require.Equal(t, sysview.InformationDBConst, characterSets.Schema)
 	require.Equal(t, "CHARACTER_SETS", characterSets.TableName)
 	require.Equal(t, versions.MODIFY_METADATA, characterSets.UpgType)
 	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSets.UpgSql)
 	require.Contains(t, strings.ToLower(characterSets.PreSql), "delete from information_schema.character_sets")
-	columns := tenantUpgEntries[8]
+	columns := tenantUpgEntries[9]
 	require.Equal(t, sysview.InformationDBConst, columns.Schema)
 	require.Equal(t, "COLUMNS", columns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, columns.UpgSql)
 	require.Contains(t, strings.ToLower(columns.PreSql), "drop view if exists information_schema.columns")
-	checkConstraints := tenantUpgEntries[9]
+	checkConstraints := tenantUpgEntries[10]
 	require.Equal(t, sysview.InformationDBConst, checkConstraints.Schema)
 	require.Equal(t, "CHECK_CONSTRAINTS", checkConstraints.TableName)
 	require.Equal(t, versions.CREATE_VIEW, checkConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaCheckConstraintsDDL, checkConstraints.UpgSql)
 	require.Equal(t, int64(defines.MORPCVersion16), checkConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(checkConstraints.PreSql), "drop view if exists information_schema.check_constraints")
-	tableConstraints := tenantUpgEntries[10]
+	tableConstraints := tenantUpgEntries[11]
 	require.Equal(t, sysview.InformationDBConst, tableConstraints.Schema)
 	require.Equal(t, "TABLE_CONSTRAINTS", tableConstraints.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, tableConstraints.UpgType)
 	require.Equal(t, sysview.InformationSchemaTableConstraintsDDL, tableConstraints.UpgSql)
 	require.Equal(t, int64(defines.MORPCVersion16), tableConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(tableConstraints.PreSql), "drop view if exists information_schema.table_constraints")
-	hideInternalColumns := tenantUpgEntries[11]
+	hideInternalColumns := tenantUpgEntries[12]
 	require.Equal(t, sysview.InformationDBConst, hideInternalColumns.Schema)
 	require.Equal(t, "COLUMNS", hideInternalColumns.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, hideInternalColumns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, hideInternalColumns.UpgSql)
 	require.Contains(t, strings.ToLower(hideInternalColumns.PreSql), "drop view if exists information_schema.columns")
+	userDefinedFunctions := tenantUpgEntries[13]
+	require.Equal(t, versions.DROP_INDEX, userDefinedFunctions.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctions.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctions.TableName)
+	require.Contains(t, strings.ToLower(userDefinedFunctions.UpgSql), "drop index name")
+	userDefinedFunctionArgumentTypes := tenantUpgEntries[14]
+	require.Equal(t, versions.ADD_COLUMN, userDefinedFunctionArgumentTypes.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionArgumentTypes.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctionArgumentTypes.TableName)
+	require.Contains(t, strings.ToLower(userDefinedFunctionArgumentTypes.UpgSql), "arg_types")
+	require.Contains(t, userDefinedFunctionArgumentTypes.UpgSql, "varchar(65535)")
+	userDefinedFunctionBackfill := tenantUpgEntries[15]
+	require.Equal(t, versions.MODIFY_METADATA, userDefinedFunctionBackfill.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionBackfill.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctionBackfill.TableName)
+	require.Equal(t,
+		"update mo_catalog.mo_user_defined_function set arg_types = "+catalog.UserDefinedFunctionArgumentTypesSQL,
+		userDefinedFunctionBackfill.UpgSql,
+	)
+	userDefinedFunctionSignatureIndex := tenantUpgEntries[16]
+	require.Equal(t, versions.ADD_INDEX, userDefinedFunctionSignatureIndex.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionSignatureIndex.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctionSignatureIndex.TableName)
+	require.Contains(t, strings.ToLower(userDefinedFunctionSignatureIndex.UpgSql), "unique index name_db_arg_types")
+}
+
+func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *testing.T) {
+	entry := backfillUserDefinedFunctionArgumentTypes()
+	txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		require.Contains(t, sql, "length(")
+		require.Contains(t, sql, "> 65535")
+		return newShowCreateTableResult(t, "function", "create table function (id int)"), nil
+	})
+
+	finished, err := entry.CheckFunc(txn, 1)
+	require.False(t, finished)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "catalog limit")
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 12)
+	require.Len(t, tenantUpgEntries, 17)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -93,8 +142,9 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 	keyColumnUsage := tenantUpgEntries[5]
 	require.Equal(t, versions.CREATE_VIEW, keyColumnUsage.UpgType)
 	require.Equal(t, "KEY_COLUMN_USAGE", keyColumnUsage.TableName)
-	require.Equal(t, sysview.InformationSchemaKeyColumnUsageDDL, keyColumnUsage.UpgSql)
+	require.Contains(t, strings.ToLower(keyColumnUsage.UpgSql), "drop view if exists information_schema.key_column_usage")
 	require.Contains(t, strings.ToLower(keyColumnUsage.PreSql), "drop table if exists information_schema.key_column_usage")
+	require.Equal(t, sysview.InformationSchemaKeyColumnUsageDDL, keyColumnUsage.PostSql)
 
 	referentialConstraints := tenantUpgEntries[6]
 	require.Equal(t, versions.MODIFY_VIEW, referentialConstraints.UpgType)
@@ -320,11 +370,15 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 
 	for _, entry := range entries {
 		t.Run(entry.TableName+"/match", func(t *testing.T) {
+			targetDefinition := entry.UpgSql
+			if entry.PostSql != "" {
+				targetDefinition = entry.PostSql
+			}
 			stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
 				if accountID != 42 || schema != sysview.InformationDBConst || viewName != entry.TableName {
 					t.Fatalf("unexpected view check arguments: account=%d schema=%s view=%s", accountID, schema, viewName)
 				}
-				return true, entry.UpgSql, nil
+				return true, targetDefinition, nil
 			})
 			defer stub.Reset()
 
@@ -395,6 +449,37 @@ func TestCheckConstraintViewsUpgradeMixedProtocolInitializedTenant(t *testing.T)
 			require.False(t, matched)
 		})
 	}
+}
+
+func TestKeyColumnUsageViewUpgradeIsOrderedAndIdempotent(t *testing.T) {
+	entry := upgradeInformationSchemaKeyColumnUsage()
+	upgraded := false
+	stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+		require.Equal(t, uint32(42), accountID)
+		require.Equal(t, sysview.InformationDBConst, schema)
+		require.Equal(t, "KEY_COLUMN_USAGE", viewName)
+		if upgraded {
+			return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
+		}
+		return false, "", nil
+	})
+	defer stub.Reset()
+
+	var executed []string
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		if sql == entry.PostSql {
+			upgraded = true
+		}
+		return executor.Result{}, nil
+	})
+
+	require.NoError(t, entry.Upgrade(txnExecutor, 42))
+	require.Equal(t, []string{entry.PreSql, entry.UpgSql, entry.PostSql}, executed)
+
+	executed = nil
+	require.NoError(t, entry.Upgrade(txnExecutor, 42))
+	require.Empty(t, executed)
 }
 
 func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
@@ -952,6 +1037,34 @@ func legacyForeignKeyMigrationUpdatesForAssertion(updates []string) []string {
 		ret = append(ret, update)
 	}
 	return ret
+}
+
+func TestEnsureInformationSchemaCharacterSetsTableIsIdempotent(t *testing.T) {
+	entry := ensureInformationSchemaCharacterSetsTable()
+	exists := false
+	stub := gostub.Stub(&versions.CheckTableDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, table string) (bool, error) {
+		require.Equal(t, uint32(42), accountID)
+		require.Equal(t, sysview.InformationDBConst, schema)
+		require.Equal(t, "character_sets", table)
+		return exists, nil
+	})
+	defer stub.Reset()
+
+	var executed []string
+	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		if sql == entry.UpgSql {
+			exists = true
+		}
+		return executor.Result{}, nil
+	}, nil)
+
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Equal(t, []string{sysview.InformationSchemaCharacterSetsDDL}, executed)
+
+	executed = nil
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Empty(t, executed)
 }
 
 func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {

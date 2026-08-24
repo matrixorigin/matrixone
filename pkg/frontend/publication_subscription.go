@@ -34,8 +34,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/publication"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // sanitizeSQLInput escapes a string for safe SQL interpolation WITHOUT wrapping in quotes.
@@ -478,6 +480,11 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		err = moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", pubName)
 		return
 	}
+	if ap.AccountsSet != nil || ap.DbName != "" || len(ap.Table) > 0 {
+		if err = invalidatePublicationViewMetadata(ctx, bh, ses.GetService(), pub); err != nil {
+			return err
+		}
+	}
 
 	// alter account
 	var oldSubAccounts, newSubAccounts map[int32]*pubsub.AccountInfo
@@ -662,7 +669,34 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 		err = finishTxn(ctx, bh, err)
 	}()
 
+	pub, err := getPubInfo(ctx, bh, string(dp.Name))
+	if err != nil {
+		return err
+	}
+	if pub != nil {
+		if err = invalidatePublicationViewMetadata(ctx, bh, ses.GetService(), pub); err != nil {
+			return err
+		}
+	}
 	return dropPublication(ctx, bh, dp.IfExists, tenantInfo.Tenant, string(dp.Name))
+}
+
+func invalidatePublicationViewMetadata(
+	ctx context.Context,
+	bh BackgroundExec,
+	service string,
+	pub *pubsub.PubInfo,
+) error {
+	enabled, err := prepareViewMetadataMutation(ctx, bh, service)
+	if err != nil || !enabled {
+		return err
+	}
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return err
+	}
+	return bh.Exec(process.WithSystemCTELimits(systemCtx), compile.PublicationViewMetadataInvalidationSQL(
+		pub.PubAccountId, pub.DbId, uint64(time.Now().UnixNano())))
 }
 
 func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcprSubscription) (err error) {
@@ -2369,7 +2403,6 @@ func batchDeleteMoSubs(
 func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn TxnOperator, bh BackgroundExec) (*plan.SubscriptionMeta, error) {
 	dbMeta, err := getPu(ses.GetService()).StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
-		ses.Errorf(ctx, "Get Subscription database %s meta error: %s", dbName, err.Error())
 		// ExpectedEOB means the database is not visible at the current snapshot
 		// (e.g., cross-CN visibility race). A non-visible database cannot be a
 		// subscription — return (nil, nil) so callers proceed normally and the
@@ -2377,6 +2410,7 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn 
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			return nil, nil
 		}
+		ses.Errorf(ctx, "Get Subscription database %s meta error: %s", dbName, err.Error())
 		return nil, moerr.NewNoDB(ctx)
 	}
 

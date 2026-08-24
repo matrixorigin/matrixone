@@ -16,27 +16,590 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
-	source := cloneDatabaseSource{
-		srcTblInfos: []*tableInfo{
-			{tblName: "regular"},
-			{tblName: "foreign_key"},
-			{tblName: "view", typ: view},
+type accountRecordingBackgroundExec struct {
+	*backgroundExecTest
+	accountID uint32
+}
+
+func (bt *accountRecordingBackgroundExec) Exec(ctx context.Context, sql string) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err == nil {
+		bt.accountID = accountID
+	}
+	return bt.backgroundExecTest.Exec(ctx, sql)
+}
+
+type erroringBackgroundExec struct {
+	*backgroundExecTest
+	err error
+}
+
+func (bt *erroringBackgroundExec) Exec(ctx context.Context, sql string) error {
+	if err := bt.backgroundExecTest.Exec(ctx, sql); err != nil {
+		return err
+	}
+	return bt.err
+}
+
+func newStoredProcedureMetadataResultSet(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"name", "args", "lang", "body", "sql_mode"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(column)
+	}
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+	return mrs
+}
+
+func newUserDefinedFunctionMetadataResultSet(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"name", "args", "retType", "body", "language", "sql_mode"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(column)
+	}
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+	return mrs
+}
+
+func TestGetStoredProcedureInfosUsesSnapshotAndTenant(t *testing.T) {
+	const dbName = "source_db"
+	snapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 42},
+		Tenant: &plan.SnapshotTenant{TenantID: 7},
+	}
+	querySQL := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure {MO_TS = 42} where db = 'source_db' order by name"
+	base := &backgroundExecTest{}
+	base.init()
+	base.sql2result[querySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
+		{"p_answer", "[]", "sql", "begin select 42; end", "PIPES_AS_CONCAT"},
+	})
+	bh := &accountRecordingBackgroundExec{backgroundExecTest: base}
+
+	procedures, err := getStoredProcedureInfos(context.Background(), bh, snapshot, dbName)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), bh.accountID)
+	require.Equal(t, []storedProcedureDefinition{{
+		name:    "p_answer",
+		args:    "[]",
+		lang:    "sql",
+		body:    "begin select 42; end",
+		sqlMode: "PIPES_AS_CONCAT",
+		dbName:  dbName,
+	}}, procedures)
+
+	t.Run("catalog query failure is propagated", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("stored procedure query failed")
+		bh.sql2err[querySQL] = wantErr
+
+		procedures, err := getStoredProcedureInfos(context.Background(), bh, snapshot, dbName)
+		require.ErrorIs(t, err, wantErr)
+		require.Nil(t, procedures)
+	})
+}
+
+func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
+	const dbName = "source_db"
+	snapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 42},
+		Tenant: &plan.SnapshotTenant{TenantID: 7},
+	}
+	querySQL := "select name, args, retType, body, language, sql_mode from mo_catalog.mo_user_defined_function {MO_TS = 42} where db = 'source_db' order by name"
+	base := &backgroundExecTest{}
+	base.init()
+	base.sql2result[querySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
+		{"f_answer", `[{"name":"arg","type":"int"}]`, "int", "select 42", "sql", "PIPES_AS_CONCAT"},
+	})
+	bh := &accountRecordingBackgroundExec{backgroundExecTest: base}
+
+	functions, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), bh.accountID)
+	require.Equal(t, []userDefinedFunctionDefinition{{
+		name:     "f_answer",
+		args:     `[{"name":"arg","type":"int"}]`,
+		argTypes: `["int"]`,
+		retType:  "int",
+		body:     "select 42",
+		lang:     "sql",
+		sqlMode:  "PIPES_AS_CONCAT",
+		dbName:   dbName,
+	}}, functions)
+
+	t.Run("catalog query failure is propagated", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("user defined function query failed")
+		bh.sql2err[querySQL] = wantErr
+
+		functions, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
+		require.ErrorIs(t, err, wantErr)
+		require.Nil(t, functions)
+	})
+}
+
+func TestUdfCatalogLookupUsesSnapshot(t *testing.T) {
+	snapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 42},
+		Tenant: &plan.SnapshotTenant{TenantID: 7},
+	}
+
+	queryCtx, sql := udfCatalogLookup(context.Background(), snapshot, "f_snapshot", "source_db")
+	accountID, err := defines.GetAccountId(queryCtx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), accountID)
+	require.Equal(t,
+		`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function {MO_TS = 42} where name = "f_snapshot" and db = "source_db";`,
+		sql,
+	)
+
+	queryCtx, sql = udfCatalogLookup(context.Background(), nil, "f_live", "live_db")
+	_, err = defines.GetAccountId(queryCtx)
+	require.Error(t, err)
+	require.Equal(t,
+		`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function where name = "f_live" and db = "live_db";`,
+		sql,
+	)
+}
+
+func TestGetCloneDatabaseRoutineInfosRespectsSubscriptionBoundary(t *testing.T) {
+	t.Run("database source collects functions and procedures", func(t *testing.T) {
+		const dbName = "source_db"
+		functionQuerySQL := "select name, args, retType, body, language, sql_mode from mo_catalog.mo_user_defined_function where db = 'source_db' order by name"
+		procedureQuerySQL := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure where db = 'source_db' order by name"
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[functionQuerySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
+			{"f_answer", "{}", "int", "select 42", "sql", "PIPES_AS_CONCAT"},
+		})
+		bh.sql2result[procedureQuerySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
+			{"p_answer", "[]", "sql", "begin select 42; end", ""},
+		})
+
+		functions, procedures, err := getCloneDatabaseRoutineInfos(context.Background(), bh, nil, dbName, nil)
+		require.NoError(t, err)
+		require.Equal(t, []userDefinedFunctionDefinition{{
+			name:    "f_answer",
+			args:    "{}",
+			retType: "int",
+			body:    "select 42",
+			lang:    "sql",
+			sqlMode: "PIPES_AS_CONCAT",
+			dbName:  dbName,
+		}}, functions)
+		require.Equal(t, []storedProcedureDefinition{{
+			name:   "p_answer",
+			args:   "[]",
+			lang:   "sql",
+			body:   "begin select 42; end",
+			dbName: dbName,
+		}}, procedures)
+		require.Equal(t, []string{functionQuerySQL, procedureQuerySQL}, bh.executedSQLs)
+	})
+
+	t.Run("subscription source skips publisher routine catalogs", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		functions, procedures, err := getCloneDatabaseRoutineInfos(
+			context.Background(),
+			bh,
+			nil,
+			"publisher_db",
+			&plan.SubscriptionMeta{DbName: "publisher_db", Tables: "t1"},
+		)
+		require.NoError(t, err)
+		require.Empty(t, functions)
+		require.Empty(t, procedures)
+		require.Empty(t, bh.executedSQLs)
+	})
+
+	t.Run("imported package functions are rejected before target creation", func(t *testing.T) {
+		const dbName = "source_db"
+		functionQuerySQL := "select name, args, retType, body, language, sql_mode from mo_catalog.mo_user_defined_function where db = 'source_db' order by name"
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[functionQuerySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{{
+			"f_imported", "{}", "int", `{"handler":"f_imported","import":true,"body":"shared:udf/f_imported.py"}`, "python", "",
+		}})
+
+		functions, procedures, err := getCloneDatabaseRoutineInfos(context.Background(), bh, nil, dbName, nil)
+		require.ErrorContains(t, err, "imported python function f_imported is not supported")
+		require.Nil(t, functions)
+		require.Nil(t, procedures)
+		require.Equal(t, []string{functionQuerySQL}, bh.executedSQLs)
+	})
+}
+
+func TestResolveCloneDatabaseRoutineTenantUsesTargetAdministrator(t *testing.T) {
+	const targetAccountID = uint32(7)
+	query := "select account_name, admin_name from mo_catalog.mo_account where account_id = 7"
+	base := &backgroundExecTest{}
+	base.init()
+	base.sql2result[query] = newMrsForRestoreStringRows(
+		[]string{"account_name", "admin_name"}, [][]interface{}{{"acc1", "root1"}},
+	)
+	bh := &accountRecordingBackgroundExec{backgroundExecTest: base}
+
+	tenant, err := resolveCloneDatabaseRoutineTenant(
+		context.Background(), bh, getDefaultAccount(), targetAccountID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, targetAccountID, tenant.GetTenantID())
+	require.Equal(t, "acc1", tenant.GetTenant())
+	require.Equal(t, "root1", tenant.GetUser())
+	require.Equal(t, uint32(accountAdminRoleID), tenant.GetDefaultRoleID())
+	require.Equal(t, uint32(sysAccountID), bh.accountID)
+
+	sameAccount := &TenantInfo{Tenant: "acc1", User: "owner", TenantID: targetAccountID}
+	got, err := resolveCloneDatabaseRoutineTenant(context.Background(), bh, sameAccount, targetAccountID)
+	require.NoError(t, err)
+	require.Same(t, sameAccount, got)
+	require.Equal(t, []string{query}, bh.executedSQLs)
+}
+
+func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
+	ctx := context.Background()
+	tenant := &TenantInfo{User: "root1", DefaultRoleID: accountAdminRoleID}
+	function := userDefinedFunctionDefinition{
+		name:    "f_answer",
+		args:    "{}",
+		retType: "int",
+		body:    "select 42",
+		lang:    "sql",
+		sqlMode: "PIPES_AS_CONCAT",
+	}
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	require.NoError(t, restoreCloneDatabaseUserDefinedFunctions(ctx, bh, tenant, []userDefinedFunctionDefinition{function}, "target_db"))
+	require.Len(t, bh.executedSQLs, 1)
+	require.Contains(t, bh.executedSQLs[0], "insert into mo_catalog.mo_user_defined_function")
+	require.Contains(t, bh.executedSQLs[0], "\"f_answer\",2")
+	require.Contains(t, bh.executedSQLs[0], "\"target_db\"")
+	require.Contains(t, bh.executedSQLs[0], "\"root1\"")
+	// SQL literal quoting is an implementation detail of EscapeFormat; preserve
+	// the behavior under test rather than coupling this regression to its style.
+	require.Contains(t, bh.executedSQLs[0], "PIPES_AS_CONCAT")
+	require.NotContains(t, bh.executedSQLs, "begin;")
+
+	failingBase := &backgroundExecTest{}
+	failingBase.init()
+	wantErr := errors.New("function persistence failed")
+	failing := &erroringBackgroundExec{backgroundExecTest: failingBase, err: wantErr}
+	require.ErrorIs(t, restoreCloneDatabaseUserDefinedFunctions(ctx, failing, tenant, []userDefinedFunctionDefinition{function}, "target_db"), wantErr)
+	require.Len(t, failing.executedSQLs, 1)
+}
+
+func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
+	ctx := context.Background()
+	tenant := &TenantInfo{User: "root1", DefaultRoleID: accountAdminRoleID}
+	procedure := storedProcedureDefinition{
+		name:    "p_double",
+		args:    `[{"ArgName":"input_value","InOutType":0},{"ArgName":"output_value","InOutType":1}]`,
+		lang:    "sql",
+		body:    "begin set output_value = input_value * 2; end",
+		sqlMode: "PIPES_AS_CONCAT",
+	}
+	checkSQL := getSqlForCheckProcedureExistence(procedure.name, "target_db")
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[checkSQL] = newMrsForPasswordOfUser(nil)
+	require.NoError(t, restoreCloneDatabaseStoredProcedures(ctx, bh, tenant, []storedProcedureDefinition{procedure}, "target_db"))
+	require.Len(t, bh.executedSQLs, 2)
+	require.Equal(t, checkSQL, bh.executedSQLs[0])
+	require.Contains(t, bh.executedSQLs[1], procedure.args)
+	require.Contains(t, bh.executedSQLs[1], "'PIPES_AS_CONCAT'")
+	require.Contains(t, bh.executedSQLs[1], "'target_db'")
+	require.Contains(t, bh.executedSQLs[1], "'root1'")
+	require.NotContains(t, bh.executedSQLs[1], "create procedure")
+	require.NotContains(t, bh.executedSQLs, "begin;")
+
+	bh = &backgroundExecTest{}
+	bh.init()
+	wantErr := errors.New("lookup failed")
+	bh.sql2err[checkSQL] = wantErr
+	require.ErrorIs(t, restoreCloneDatabaseStoredProcedures(ctx, bh, tenant, []storedProcedureDefinition{procedure}, "target_db"), wantErr)
+	require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+}
+
+func TestRewriteCloneStoredProcedureBodies(t *testing.T) {
+	procedures := []storedProcedureDefinition{{
+		name: "p_source_reference",
+		lang: "sql",
+		body: "begin if exists (select 1 from source_db.control_t) then select id from source_db.control_t; else select 'source_db' as marker from other_db.control_t; end if; call SOURCE_DB.p_inner(); end",
+	}}
+
+	rewritten, err := rewriteCloneStoredProcedureBodies(
+		context.Background(), procedures, "source_db", "target_db", 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	require.Contains(t, rewritten[0].body, "from `target_db`.`control_t`")
+	require.Contains(t, rewritten[0].body, "call target_db.p_inner()")
+	require.Contains(t, rewritten[0].body, "from `other_db`.`control_t`")
+	require.Contains(t, rewritten[0].body, "'source_db'")
+	require.NotContains(t, rewritten[0].body, "source_db.control_t")
+	require.Equal(t, procedures[0].body, "begin if exists (select 1 from source_db.control_t) then select id from source_db.control_t; else select 'source_db' as marker from other_db.control_t; end if; call SOURCE_DB.p_inner(); end")
+}
+
+func TestRewriteCloneStoredProcedureBodiesRewritesNestedControlFlow(t *testing.T) {
+	procedures := []storedProcedureDefinition{{
+		name: "p_nested_source_references",
+		lang: "sql",
+		body: `begin
+			if exists (select 1 from source_db.if_table) then
+				select id from source_db.then_table;
+			elseif exists (select 1 from source_db.elif_table) then
+				call source_db.p_inner();
+			else
+				select id from source_db.else_table;
+			end if;
+			case 1
+				when 1 then select id from source_db.case_table;
+				else select id from source_db.case_else_table;
+			end case;
+		end`,
+	}}
+
+	rewritten, err := rewriteCloneStoredProcedureBodies(
+		context.Background(), procedures, "source_db", "target_db", 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	for _, table := range []string{
+		"if_table", "then_table", "elif_table", "else_table", "case_table", "case_else_table",
+	} {
+		require.Contains(t, rewritten[0].body, "`target_db`.`"+table+"`")
+		require.NotContains(t, rewritten[0].body, "source_db."+table)
+	}
+	require.Contains(t, rewritten[0].body, "call target_db.p_inner()")
+	require.Equal(t, procedures[0].body, `begin
+			if exists (select 1 from source_db.if_table) then
+				select id from source_db.then_table;
+			elseif exists (select 1 from source_db.elif_table) then
+				call source_db.p_inner();
+			else
+				select id from source_db.else_table;
+			end if;
+			case 1
+				when 1 then select id from source_db.case_table;
+				else select id from source_db.case_else_table;
+			end case;
+		end`)
+}
+
+func TestRewriteCloneStoredProcedureBodiesRewritesExecutableWrappers(t *testing.T) {
+	procedures := []storedProcedureDefinition{{
+		name: "p_wrapped_source_references",
+		lang: "sql",
+		body: `begin
+			explain select * from source_db.explain_table;
+			explain analyze select * from source_db.analyze_table;
+			lock tables source_db.lock_table read;
+			check table source_db.check_table;
+			show table status from source_db;
+			show sequences from source_db;
+			show tables from source_db;
+			show triggers from source_db;
+			show create database source_db;
+			show table_number from source_db;
+			show databases;
+			show variables;
+			show status;
+			use source_db;
+		end`,
+	}}
+
+	rewritten, err := rewriteCloneStoredProcedureBodies(
+		context.Background(), procedures, "source_db", "target_db", 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	for _, table := range []string{"explain_table", "analyze_table", "lock_table", "check_table"} {
+		require.Contains(t, rewritten[0].body, "`target_db`.`"+table+"`")
+	}
+	for _, show := range []string{
+		"show table status from target_db",
+		"show sequences from target_db",
+		"show tables from target_db",
+		"show triggers from target_db",
+		"show create database target_db",
+		"show table_number from target_db",
+		"show databases",
+		"show variables",
+		"show status",
+		"use target_db",
+	} {
+		require.Contains(t, rewritten[0].body, show)
+	}
+	require.NotContains(t, rewritten[0].body, "source_db.")
+	require.NotContains(t, rewritten[0].body, "from source_db")
+	require.NotContains(t, rewritten[0].body, "use source_db")
+}
+
+func TestRewriteCloneRoutineBodiesPreserveOpaqueLanguagesAndRejectInvalidSQL(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("opaque routine languages are not parsed or rewritten", func(t *testing.T) {
+		procedures := []storedProcedureDefinition{{
+			name: "p_external", lang: "javascript", body: "source_db.table",
+		}}
+		functions := []userDefinedFunctionDefinition{{
+			name: "f_external", lang: "javascript", body: "select source_db.table",
+		}}
+
+		rewrittenProcedures, err := rewriteCloneStoredProcedureBodies(ctx, procedures, "source_db", "target_db", 1)
+		require.NoError(t, err)
+		require.Equal(t, procedures, rewrittenProcedures)
+
+		rewrittenFunctions, err := rewriteCloneUserDefinedFunctionBodies(ctx, functions, "source_db", "target_db", 1)
+		require.NoError(t, err)
+		require.Equal(t, functions, rewrittenFunctions)
+	})
+
+	t.Run("invalid SQL aborts the clone", func(t *testing.T) {
+		_, err := rewriteCloneStoredProcedureBodies(ctx, []storedProcedureDefinition{{
+			name: "p_invalid", lang: "sql", body: "select from",
+		}}, "source_db", "target_db", 1)
+		require.Error(t, err)
+
+		_, err = rewriteCloneUserDefinedFunctionBodies(ctx, []userDefinedFunctionDefinition{{
+			name: "f_invalid", lang: "sql", body: "select from",
+		}}, "source_db", "target_db", 1)
+		require.Error(t, err)
+	})
+
+	t.Run("unhandled executable statement aborts the clone", func(t *testing.T) {
+		_, err := rewriteCloneStoredProcedureBodies(ctx, []storedProcedureDefinition{{
+			name: "p_unhandled", lang: "sql", body: "begin create database source_db; end",
+		}}, "source_db", "target_db", 1)
+		require.ErrorContains(t, err, "cannot be safely remapped")
+	})
+
+	t.Run("identity mapping does not parse the body", func(t *testing.T) {
+		body, err := rewriteCloneSQLRoutineBody(ctx, "not valid SQL", "", "source_db", "source_db", 1)
+		require.NoError(t, err)
+		require.Equal(t, "not valid SQL", body)
+	})
+}
+
+func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
+	functions := []userDefinedFunctionDefinition{
+		{
+			name: "f_source_table",
+			lang: "sql",
+			body: "select count(*) from SOURCE_DB.control_t where id = $1",
+		},
+		{
+			name: "f_expression",
+			lang: "sql",
+			body: "$1 + 1",
+		},
+		{
+			name: "f_uppercase_select_literal",
+			lang: "sql",
+			body: "concat('SELECT', $1)",
+		},
+		{
+			name: "f_uppercase_select_comment",
+			lang: "sql",
+			body: "/* SELECT */ $1 + 1",
+		},
+		{
+			name: "f_uppercase_select_identifier",
+			lang: "sql",
+			body: "SELECT_value + $1",
 		},
 	}
 
-	require.Equal(t, int64(2), source.branchTableCount())
+	rewritten, err := rewriteCloneUserDefinedFunctionBodies(
+		context.Background(), functions, "source_db", "target_db", 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 5)
+	require.Contains(t, rewritten[0].body, "from `target_db`.`control_t`")
+	require.Contains(t, rewritten[0].body, "$1")
+	require.Equal(t, "$1 + 1", rewritten[1].body)
+	require.Equal(t, functions[2].body, rewritten[2].body)
+	require.Equal(t, functions[3].body, rewritten[3].body)
+	require.Equal(t, functions[4].body, rewritten[4].body)
+	require.Equal(t, "select count(*) from SOURCE_DB.control_t where id = $1", functions[0].body)
+}
+
+func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
+	tests := []struct {
+		name   string
+		tables []*tableInfo
+		want   int64
+	}{
+		{
+			name: "empty database consumes no branch table quota",
+			want: 0,
+		},
+		{
+			name: "mixed objects count only receipt-backed tables",
+			tables: []*tableInfo{
+				{tblName: "regular"},
+				{tblName: "sequence", relKind: catalog.SystemSequenceRel},
+				{tblName: "view", typ: view},
+			},
+			want: 1,
+		},
+		{
+			name: "sequence-only database consumes no branch table quota",
+			tables: []*tableInfo{
+				{tblName: "sequence", relKind: catalog.SystemSequenceRel},
+			},
+			want: 0,
+		},
+		{
+			name: "view-only database consumes no branch table quota",
+			tables: []*tableInfo{
+				{tblName: "view", typ: view},
+			},
+			want: 0,
+		},
+		{
+			name: "ordinary tables each consume branch table quota",
+			tables: []*tableInfo{
+				{tblName: "regular"},
+				{tblName: "foreign_key"},
+			},
+			want: 2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := cloneDatabaseSource{srcTblInfos: test.tables}
+			require.Equal(t, test.want, source.branchTableCount())
+		})
+	}
 }
 
 func TestValidateCloneDatabaseAccounts(t *testing.T) {

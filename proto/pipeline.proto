@@ -286,6 +286,7 @@ message HashJoin {
   repeated plan.Type right_types = 13 [(gogoproto.nullable) = false];
   int32 join_map_tag = 14;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 15;
+  bool emit_compressed_row_count = 16;
 }
 
 message LoopJoin {
@@ -489,6 +490,8 @@ message ExternalScan {
   IcebergPlanningStats iceberg_planning_stats = 21;
   int64 iceberg_delete_max_memory_bytes = 22;
   bool iceberg_delete_spill_enabled = 23;
+  plan.DataStreamScan datastream_scan = 24;
+  plan.ForeignScan foreign_scan = 25;
 }
 
 message TableScan {
@@ -762,4 +765,7 @@ message Apply {
   repeated int32 rel_list = 2;
   repeated int32 col_list = 3;
   repeated plan.Type types = 4 [(gogoproto.nullable) = false];
+  plan.VectorIndexScan vector_index_scan = 5;
+  repeated string vector_attrs = 6;
+  int64 txn_offset = 7;
 }

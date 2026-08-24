@@ -48,8 +48,13 @@ func (bj ByteJson) Unquote() (string, error) {
 	if bj.Type == TpCodeOpaque || bj.Type == TpCodeBit {
 		return base64.StdEncoding.EncodeToString(bj.GetString()), nil
 	}
-	if bj.Type != TpCodeString &&
-		bj.Type != TpCodeDate &&
+	// Binary JSON stores string payload bytes without JSON representation
+	// delimiters or escapes. Do not infer delimiters from the payload itself:
+	// a valid string value may begin and end with a double quote.
+	if bj.Type == TpCodeString {
+		return string(bj.GetString()), nil
+	}
+	if bj.Type != TpCodeDate &&
 		bj.Type != TpCodeTime &&
 		bj.Type != TpCodeDatetime {
 		return bj.String(), nil
@@ -1144,6 +1149,8 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 			bj, err = modifier.insert(path, val)
 		case JsonModifyReplace:
 			bj, err = modifier.replace(path, val)
+		case JsonModifyArrayAppend:
+			bj, err = modifier.arrayAppend(path, val)
 		default:
 			return Null, moerr.NewInvalidInputNoCtx("invalid modify type")
 		}

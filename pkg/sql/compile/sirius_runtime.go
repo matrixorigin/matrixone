@@ -50,9 +50,11 @@ func siriusStatementEligible(stmt tree.Statement) bool {
 	return ok && !selectStmt.IsPerform && selectStmt.Ep == nil
 }
 
-// SiriusRuntime is initialized and closed by one CN service. The lease
-// manager is supplied by the storage/GC integration because constructing an
-// unprotected CN-local substitute would violate snapshot safety.
+// SiriusRuntime is initialized and closed by one CN service. Production lease
+// managers are supplied by the storage/GC integration because constructing an
+// unprotected CN-local substitute would violate snapshot safety. The only
+// exception is the explicit local-CN benchmark mode, where TN GC is disabled,
+// and each CN owns one process-local manager and one sidecar pairing.
 type SiriusRuntime struct {
 	Flight                   *sidecarflight.Runtime
 	Leases                   *substrait.LeaseManager
@@ -61,12 +63,23 @@ type SiriusRuntime struct {
 	DataDir                  string
 	LeaseTTL                 time.Duration
 	CleanupTimeout           time.Duration
+	// BenchmarkNoGC is set only by the CN launcher after it verifies that the
+	// paired TN has disabled GC. It permits the explicitly non-durable,
+	// process-local lease manager used by the local-CN benchmark profile.
+	BenchmarkNoGC bool
 }
 
 func (r *SiriusRuntime) Validate() error {
-	if r == nil || r.Flight == nil || r.Leases == nil || !r.Leases.DurableReady() ||
+	if r == nil || r.Flight == nil || r.Leases == nil ||
 		r.Resolver == nil || len(r.AuthorizedClientSPKIHash) != 32 || r.DataDir == "" ||
 		r.LeaseTTL <= 0 || r.LeaseTTL > substrait.MaxLeaseTTL || r.CleanupTimeout <= 0 {
+		return moerr.NewInternalErrorNoCtx("substrait: incomplete CN Sirius runtime")
+	}
+	if r.BenchmarkNoGC {
+		if !r.Leases.BenchmarkReady() {
+			return moerr.NewInternalErrorNoCtx("substrait: incomplete benchmark CN Sirius runtime")
+		}
+	} else if !r.Leases.DurableReady() {
 		return moerr.NewInternalErrorNoCtx("substrait: incomplete CN Sirius runtime")
 	}
 	return nil
@@ -149,7 +162,7 @@ func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Pl
 		return false, nil
 	}
 	accountID, err := defines.GetAccountId(ctx)
-	if err != nil || accountID == 0 {
+	if err != nil {
 		return false, nil
 	}
 	statementID := c.proc.GetStmtProfile().GetStmtId()

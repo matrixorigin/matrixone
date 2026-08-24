@@ -123,6 +123,11 @@ type SessionInfo struct {
 	LockWaitTimeout     int64
 	LockWaitTimeoutSet  bool // distinguishes an explicit zero from an unset value
 	MatrixOneNativeMode bool
+	// IsRestore identifies catalog DDL executed by snapshot/PITR restore. Such
+	// DDL rebuilds persisted View metadata through legacy discovery after the
+	// restore transaction, rather than running dependency hooks while catalog
+	// identities are being replaced.
+	IsRestore bool
 	// ExplicitZeroTemporalCastReturnsNull is resolved on the initiating CN and
 	// carried in the remote process snapshot because remote CNs have no session
 	// variable resolver.
@@ -134,17 +139,20 @@ type SessionInfo struct {
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
 	ApplySQLSelectLimit bool
-	StorageEngine       engine.Engine
-	QueryId             []string
-	ResultColTypes      []types.Type
-	SeqCurValues        map[uint64]string
-	SeqDeleteKeys       []uint64
-	SeqAddValues        map[uint64]string
-	SeqLastValue        []string
-	SqlHelper           sqlHelper
-	Buf                 *buffer.Buffer
-	LogLevel            zapcore.Level
-	SessionId           uuid.UUID
+	// CountUpdateChangedRows requests MySQL changed-row semantics for UPDATE.
+	// Frontend sessions set it when CLIENT_FOUND_ROWS was not negotiated.
+	CountUpdateChangedRows bool
+	StorageEngine          engine.Engine
+	QueryId                []string
+	ResultColTypes         []types.Type
+	SeqCurValues           map[uint64]string
+	SeqDeleteKeys          []uint64
+	SeqAddValues           map[uint64]string
+	SeqLastValue           []string
+	SqlHelper              sqlHelper
+	Buf                    *buffer.Buffer
+	LogLevel               zapcore.Level
+	SessionId              uuid.UUID
 }
 
 type Session interface {
@@ -155,6 +163,35 @@ type Session interface {
 	// GetSqlModeNoAutoValueOnZero reports whether sql_mode contains NO_AUTO_VALUE_ON_ZERO.
 	// ok=false means the session doesn't support the cache.
 	GetSqlModeNoAutoValueOnZero() (bool, bool)
+}
+
+// ForeignConn is a connection to a foreign data source (Elasticsearch, an
+// external SQL database, ...) cached on an interactive session for esql_tvf /
+// sql_tvf. The session owns its lifetime and closes it when the session ends.
+// Close must be safe to call more than once.
+type ForeignConn interface {
+	Close() error
+}
+
+// ForeignConnCache is an OPTIONAL capability implemented only by the interactive
+// frontend session. esql_tvf / sql_tvf and their connect/disconnect builtins
+// reach it via proc.GetSession().(ForeignConnCache); a session that does not
+// implement it (internal executor, background session) cannot use those TVFs.
+// A handle is derived from the connection config, so reconnecting with the same
+// config yields the same handle and reuses the cached connection.
+type ForeignConnCache interface {
+	// PutForeignConn stores conn under handle unless an entry already exists,
+	// and returns the entry that is cached after the call (first-wins). Two
+	// scans sharing one config can race to connect; the loser must close its
+	// own conn and use the returned winner — the cache never closes a
+	// connection another operator may already be using. Admission is bounded:
+	// when the cache is full a non-nil error is returned and nothing is
+	// stored; the caller owns (and must close) the rejected conn.
+	PutForeignConn(ctx context.Context, handle string, conn ForeignConn) (ForeignConn, error)
+	GetForeignConn(handle string) (ForeignConn, bool)
+	// RemoveForeignConn detaches and returns the connection for handle so the
+	// caller can close it; ok=false if no such handle.
+	RemoveForeignConn(handle string) (ForeignConn, bool)
 }
 
 type ExecStatus int
@@ -363,6 +400,12 @@ type BaseProcess struct {
 	IncrService      incrservice.AutoIncrementService
 
 	LastInsertID *uint64
+	// StatementLastInsertID is the generated-key value reported by the
+	// current statement's OK packet.  LastInsertID intentionally keeps the
+	// session value so LAST_INSERT_ID() continues to observe the previous
+	// value when an INSERT supplies all auto-increment values explicitly.
+	StatementLastInsertID *uint64
+	statementInsertIDMu   sync.Mutex
 	// AffectedRows carries the number of rows affected by the previous
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
@@ -633,9 +676,64 @@ func (proc *Process) GetResolveVariablePrepareParamKindFunc() func(
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
+	if proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
 	if proc.Base.LastInsertID != nil {
 		atomic.StoreUint64(proc.Base.LastInsertID, num)
 	}
+}
+
+func (proc *Process) SetStatementLastInsertID(num uint64) {
+	if proc.Base == nil {
+		return
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	if proc.Base.StatementLastInsertID != nil {
+		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+	}
+}
+
+// SetStatementLastInsertIDIfEarlier publishes the smallest non-zero generated
+// value seen by any parallel scope of the current statement.  Statement
+// LAST_INSERT_ID is reset before execution starts, so the shared coordinator
+// makes the first generated value deterministic while keeping the session and
+// statement values synchronized.
+func (proc *Process) SetStatementLastInsertIDIfEarlier(num uint64) uint64 {
+	if num == 0 {
+		if proc.Base == nil {
+			return 0
+		}
+		return proc.GetStatementLastInsertID()
+	}
+	if proc.Base == nil {
+		return num
+	}
+	proc.Base.statementInsertIDMu.Lock()
+	defer proc.Base.statementInsertIDMu.Unlock()
+	if proc.Base.StatementLastInsertID == nil {
+		if proc.Base.LastInsertID != nil {
+			atomic.StoreUint64(proc.Base.LastInsertID, num)
+		}
+		return num
+	}
+	current := atomic.LoadUint64(proc.Base.StatementLastInsertID)
+	if current == 0 || num < current {
+		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+		if proc.Base.LastInsertID != nil {
+			atomic.StoreUint64(proc.Base.LastInsertID, num)
+		}
+		return num
+	}
+	if proc.Base.LastInsertID != nil {
+		// Keep the session-visible value synchronized if another scope won
+		// while this scope was still materializing its batch.
+		atomic.StoreUint64(proc.Base.LastInsertID, current)
+	}
+	return current
 }
 
 func (proc *Process) GetSessionInfo() *SessionInfo {
@@ -646,6 +744,13 @@ func (proc *Process) GetLastInsertID() uint64 {
 	if proc.Base.LastInsertID != nil {
 		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
+	}
+	return 0
+}
+
+func (proc *Process) GetStatementLastInsertID() uint64 {
+	if proc.Base.StatementLastInsertID != nil {
+		return atomic.LoadUint64(proc.Base.StatementLastInsertID)
 	}
 	return 0
 }

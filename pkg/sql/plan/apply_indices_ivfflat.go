@@ -15,25 +15,17 @@
 package plan
 
 import (
-	"encoding/json"
-	"fmt"
 	"math"
-	"strings"
-	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 )
 
 type ivfIndexContext struct {
@@ -50,6 +42,7 @@ type ivfIndexContext struct {
 	params          string
 	nThread         int64
 	nProbe          int64
+	totalLists      int64
 	pushdownEnabled bool
 
 	// Auto mode support.
@@ -194,10 +187,8 @@ func (builder *QueryBuilder) calculateAdaptiveNprobe(baseNprobe int64, stats *pl
 	return adaptiveNprobe
 }
 
-var ivfTreeEmptyLocale = ""
-
 func buildIvfSearchColDefs(includeColumns []string, originalTableDef *plan.TableDef) []*plan.ColDef {
-	colDefs := DeepCopyColDefList(ivfflatplan.IVFFLATSearchColDefs)
+	colDefs := DeepCopyColDefList(ivfflatplan.IVFFLATScanColDefs)
 	if len(includeColumns) == 0 || originalTableDef == nil {
 		return colDefs
 	}
@@ -215,24 +206,6 @@ func buildIvfSearchColDefs(includeColumns []string, originalTableDef *plan.Table
 	}
 
 	return colDefs
-}
-
-func buildIvfTableFuncArgs(tblCfgStr string, vecLitArg *plan.Expr, pushdownFilterSQL string, searchRoundLimit uint64, bucketExpandStep uint64) []*plan.Expr {
-	args := []*plan.Expr{
-		makePlan2StringConstExprWithType(tblCfgStr),
-		DeepCopyExpr(vecLitArg),
-	}
-
-	if pushdownFilterSQL == "" && searchRoundLimit == 0 && bucketExpandStep == 0 {
-		return args
-	}
-
-	args = append(args,
-		makePlan2StringConstExprWithType(pushdownFilterSQL),
-		makePlan2Uint64ConstExprWithType(searchRoundLimit),
-		makePlan2Uint64ConstExprWithType(bucketExpandStep),
-	)
-	return args
 }
 
 func buildIvfChildProjectionMap(childNode *plan.Node) map[[2]int32]*plan.Expr {
@@ -369,680 +342,6 @@ func canDoIndexOnlyScan(requiredCols map[string]struct{}, tableDef *plan.TableDe
 	return true
 }
 
-func serializeFiltersToSQL(filters []*plan.Expr, scanNode *plan.Node, includeColumns []string, partPos int32, timeZone *time.Location) (string, []*plan.Expr, []*plan.Expr, error) {
-	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
-		return "", nil, filters, nil
-	}
-
-	covered := buildVectorIndexCoveredColumns(scanNode.TableDef, includeColumns)
-	scanTag := scanNode.BindingTags[0]
-	sqlParts := make([]string, 0, len(filters))
-	pushdownFilters := make([]*plan.Expr, 0, len(filters))
-	remainingFilters := make([]*plan.Expr, 0, len(filters))
-	for _, expr := range filters {
-		astExpr, ok, err := serializeFilterExprToAST(expr, scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		if !ok {
-			remainingFilters = append(remainingFilters, expr)
-			continue
-		}
-		sql := tree.StringWithOpts(astExpr, dialect.MYSQL, tree.WithQuoteString(true))
-		sqlParts = append(sqlParts, "("+sql+")")
-		pushdownFilters = append(pushdownFilters, expr)
-	}
-
-	return strings.Join(sqlParts, " AND "), pushdownFilters, remainingFilters, nil
-}
-
-func serializeFilterExprToAST(expr *plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location) (tree.Expr, bool, error) {
-	if !vectorIndexExprRefsOnlyCoveredColumns(expr, scanTag, partPos, scanNode.TableDef, covered) {
-		return nil, false, nil
-	}
-
-	switch impl := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		colExpr, err := ivfFilterColumnToAST(impl.Col, scanNode)
-		if err != nil {
-			return nil, false, err
-		}
-		return colExpr, true, nil
-	case *plan.Expr_Lit:
-		litExpr, err := ivfLiteralToAST(impl.Lit, expr.Typ, timeZone)
-		if err != nil {
-			return nil, false, err
-		}
-		return litExpr, true, nil
-	case *plan.Expr_List:
-		items, ok, err := serializeFilterExprListToAST(impl.List.List, scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil {
-			return nil, false, err
-		}
-		if !ok {
-			return nil, false, nil
-		}
-		return tree.NewTuple(items), true, nil
-	case *plan.Expr_F:
-		return serializeFilterFuncToAST(expr, impl.F, scanNode, scanTag, partPos, covered, timeZone)
-	default:
-		return nil, false, nil
-	}
-}
-
-func serializeFilterExprListToAST(exprs []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location) (tree.Exprs, bool, error) {
-	items := make(tree.Exprs, 0, len(exprs))
-	for _, expr := range exprs {
-		item, ok, err := serializeFilterExprToAST(expr, scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil {
-			return nil, false, err
-		}
-		if !ok {
-			return nil, false, nil
-		}
-		items = append(items, item)
-	}
-	return items, true, nil
-}
-
-func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location) (tree.Expr, bool, error) {
-	if fn == nil || fn.Func == nil || fn.Func.ObjName == "" {
-		return nil, false, nil
-	}
-
-	fnName := strings.ToLower(fn.Func.ObjName)
-	args := fn.Args
-
-	switch fnName {
-	case "and", "or", "xor":
-		if len(args) != 2 {
-			return nil, false, nil
-		}
-		left, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		right, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		switch fnName {
-		case "and":
-			return tree.NewAndExpr(left, right), true, nil
-		case "or":
-			return tree.NewOrExpr(left, right), true, nil
-		default:
-			return tree.NewXorExpr(left, right), true, nil
-		}
-	case "not":
-		if len(args) != 1 {
-			return nil, false, nil
-		}
-		subExpr, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		return tree.NewNotExpr(subExpr), true, nil
-	case "=", "!=", "<>", "<", "<=", ">", ">=", "like", "not_like", "ilike", "not_ilike", "reg_match", "not_reg_match", "<=>":
-		if len(args) != 2 {
-			return nil, false, nil
-		}
-		left, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		right, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		op, ok := ivfComparisonOpForFunc(fnName)
-		if !ok {
-			return nil, false, nil
-		}
-		return tree.NewComparisonExpr(op, left, right), true, nil
-	case "between":
-		if len(args) != 3 {
-			return nil, false, nil
-		}
-		target, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		fromExpr, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		toExpr, ok, err := serializeFilterExprToAST(args[2], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		return tree.NewRangeCond(false, target, fromExpr, toExpr), true, nil
-	case "in", "not_in", "partition_in":
-		if len(args) < 2 {
-			return nil, false, nil
-		}
-		target, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		listExpr, ok, err := serializeInListToAST(args[1:], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		op := tree.IN
-		if fnName == "not_in" {
-			op = tree.NOT_IN
-		}
-		return tree.NewComparisonExpr(op, target, listExpr), true, nil
-	case "isnull", "is_null":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
-			return tree.NewIsNullExpr(expr)
-		})
-	case "isnotnull", "is_not_null":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
-			return tree.NewIsNotNullExpr(expr)
-		})
-	case "isunknown", "is_unknown":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
-			return tree.NewIsUnknownExpr(expr)
-		})
-	case "isnotunknown", "is_not_unknown":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
-			return tree.NewIsNotUnknownExpr(expr)
-		})
-	case "istrue", "is_true":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
-			return tree.NewIsTrueExpr(expr)
-		})
-	case "isnottrue", "is_not_true":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
-			return tree.NewIsNotTrueExpr(expr)
-		})
-	case "isfalse", "is_false":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
-			return tree.NewIsFalseExpr(expr)
-		})
-	case "isnotfalse", "is_not_false":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
-			return tree.NewIsNotFalseExpr(expr)
-		})
-	case "+", "-", "*", "/", "div", "%", "&", "|", "^", "<<", ">>":
-		if len(args) != 2 {
-			return nil, false, nil
-		}
-		left, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		right, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		op, ok := ivfBinaryOpForFunc(fnName)
-		if !ok {
-			return nil, false, nil
-		}
-		return tree.NewBinaryExpr(op, left, right), true, nil
-	case "unary_minus", "unary_plus", "unary_tilde", "unary_mark":
-		if len(args) != 1 {
-			return nil, false, nil
-		}
-		child, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		op, ok := ivfUnaryOpForFunc(fnName)
-		if !ok {
-			return nil, false, nil
-		}
-		return tree.NewUnaryExpr(op, child), true, nil
-	case "cast":
-		if len(args) < 1 {
-			return nil, false, nil
-		}
-		child, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		targetType := parentExpr.Typ
-		if len(args) > 1 && !args[1].Typ.IsEmpty() {
-			targetType = args[1].Typ
-		}
-		treeType, err := ivfPlanTypeToTreeType(targetType)
-		if err != nil {
-			return nil, false, nil
-		}
-		return tree.NewCastExpr(child, treeType), true, nil
-	case "case":
-		return serializeFilterCaseExprToAST(args, scanNode, scanTag, partPos, covered, timeZone)
-	default:
-		if !ivfCanFormatAsFunctionName(fn.Func.ObjName) {
-			return nil, false, nil
-		}
-		astArgs, ok, err := serializeFilterExprListToAST(args, scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		return &tree.FuncExpr{
-			Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(fn.Func.ObjName)),
-			Type:  tree.FUNC_TYPE_DEFAULT,
-			Exprs: astArgs,
-		}, true, nil
-	}
-}
-
-func serializeFilterIsExprToAST(args []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location, build func(tree.Expr) tree.Expr) (tree.Expr, bool, error) {
-	if len(args) != 1 {
-		return nil, false, nil
-	}
-	target, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
-	if err != nil || !ok {
-		return nil, ok, err
-	}
-	return build(target), true, nil
-}
-
-func serializeInListToAST(args []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location) (tree.Expr, bool, error) {
-	if len(args) == 1 {
-		listExpr, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		if _, ok := listExpr.(*tree.Tuple); !ok {
-			return nil, false, nil
-		}
-		return listExpr, true, nil
-	}
-
-	items, ok, err := serializeFilterExprListToAST(args, scanNode, scanTag, partPos, covered, timeZone)
-	if err != nil || !ok {
-		return nil, ok, err
-	}
-	return tree.NewTuple(items), true, nil
-}
-
-func serializeFilterCaseExprToAST(args []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location) (tree.Expr, bool, error) {
-	if len(args) == 0 || len(args)%2 == 0 {
-		return nil, false, nil
-	}
-
-	whens := make([]*tree.When, 0, len(args)/2)
-	for i := 0; i < len(args)-1; i += 2 {
-		cond, ok, err := serializeFilterExprToAST(args[i], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		val, ok, err := serializeFilterExprToAST(args[i+1], scanNode, scanTag, partPos, covered, timeZone)
-		if err != nil || !ok {
-			return nil, ok, err
-		}
-		whens = append(whens, tree.NewWhen(cond, val))
-	}
-
-	elseExpr, ok, err := serializeFilterExprToAST(args[len(args)-1], scanNode, scanTag, partPos, covered, timeZone)
-	if err != nil || !ok {
-		return nil, ok, err
-	}
-	return tree.NewCaseExpr(nil, whens, elseExpr), true, nil
-}
-
-func ivfComparisonOpForFunc(fnName string) (tree.ComparisonOp, bool) {
-	switch fnName {
-	case "=":
-		return tree.EQUAL, true
-	case "!=", "<>":
-		return tree.NOT_EQUAL, true
-	case "<":
-		return tree.LESS_THAN, true
-	case "<=":
-		return tree.LESS_THAN_EQUAL, true
-	case ">":
-		return tree.GREAT_THAN, true
-	case ">=":
-		return tree.GREAT_THAN_EQUAL, true
-	case "like":
-		return tree.LIKE, true
-	case "not_like":
-		return tree.NOT_LIKE, true
-	case "ilike":
-		return tree.ILIKE, true
-	case "not_ilike":
-		return tree.NOT_ILIKE, true
-	case "reg_match":
-		return tree.REG_MATCH, true
-	case "not_reg_match":
-		return tree.NOT_REG_MATCH, true
-	case "<=>":
-		return tree.NULL_SAFE_EQUAL, true
-	default:
-		return tree.ComparisonOp(0), false
-	}
-}
-
-func ivfBinaryOpForFunc(fnName string) (tree.BinaryOp, bool) {
-	switch fnName {
-	case "+":
-		return tree.PLUS, true
-	case "-":
-		return tree.MINUS, true
-	case "*":
-		return tree.MULTI, true
-	case "/":
-		return tree.DIV, true
-	case "div":
-		return tree.INTEGER_DIV, true
-	case "%":
-		return tree.MOD, true
-	case "&":
-		return tree.BIT_AND, true
-	case "|":
-		return tree.BIT_OR, true
-	case "^":
-		return tree.BIT_XOR, true
-	case "<<":
-		return tree.LEFT_SHIFT, true
-	case ">>":
-		return tree.RIGHT_SHIFT, true
-	default:
-		return tree.BinaryOp(0), false
-	}
-}
-
-func ivfUnaryOpForFunc(fnName string) (tree.UnaryOp, bool) {
-	switch fnName {
-	case "unary_minus":
-		return tree.UNARY_MINUS, true
-	case "unary_plus":
-		return tree.UNARY_PLUS, true
-	case "unary_tilde":
-		return tree.UNARY_TILDE, true
-	case "unary_mark":
-		return tree.UNARY_MARK, true
-	default:
-		return tree.UnaryOp(0), false
-	}
-}
-
-func ivfCanFormatAsFunctionName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for i, r := range name {
-		if r == '_' || (r >= '0' && r <= '9' && i > 0) || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-// ivfFilterColumnToAST is the IVF lowering boundary. It converts the planner's
-// bound ColRef coordinates to a logical column name before building the SQL
-// string payload, so the payload never depends on outer scan binding positions.
-func ivfFilterColumnToAST(col *plan.ColRef, scanNode *plan.Node) (tree.Expr, error) {
-	if scanNode == nil || scanNode.TableDef == nil || scanNode.TableDef.Pkey == nil || len(scanNode.BindingTags) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("invalid ivf filter scan node")
-	}
-	colName, ok := vectorIndexColumnNameFromColRef(col, scanNode, scanNode.BindingTags[0])
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("invalid ivf filter column position")
-	}
-
-	mappedName := catalog.SystemSI_IVFFLAT_IncludeColPrefix + colName
-	if len(scanNode.TableDef.Pkey.Names) == 1 && colName == scanNode.TableDef.Pkey.PkeyColName {
-		mappedName = catalog.SystemSI_IVFFLAT_TblCol_Entries_pk
-	}
-
-	colExpr := tree.NewUnresolvedColName(mappedName)
-	colExpr.CStrParts[0] = tree.NewCStr(ivfQuotedIdentifierOrigin(mappedName), 0)
-	return colExpr, nil
-}
-
-func ivfQuotedIdentifierOrigin(name string) string {
-	// The IVF filter payload deparses with quoteString, not quoteIdentifier,
-	// so the CStr origin must already be a complete, escaped identifier.
-	return sqlquote.Ident(name)
-}
-
-func ivfLiteralToAST(lit *plan.Literal, typ plan.Type, timeZone *time.Location) (tree.Expr, error) {
-	if lit == nil || lit.Isnull {
-		return tree.NewNumVal("", "", false, tree.P_null), nil
-	}
-	if timeZone == nil {
-		timeZone = time.UTC
-	}
-
-	switch v := lit.Value.(type) {
-	case *plan.Literal_I8Val:
-		val := int64(int8(v.I8Val))
-		return tree.NewNumVal(val, fmt.Sprintf("%d", val), false, tree.P_int64), nil
-	case *plan.Literal_I16Val:
-		val := int64(int16(v.I16Val))
-		return tree.NewNumVal(val, fmt.Sprintf("%d", val), false, tree.P_int64), nil
-	case *plan.Literal_I32Val:
-		val := int64(v.I32Val)
-		return tree.NewNumVal(val, fmt.Sprintf("%d", val), false, tree.P_int64), nil
-	case *plan.Literal_I64Val:
-		return tree.NewNumVal(v.I64Val, fmt.Sprintf("%d", v.I64Val), false, tree.P_int64), nil
-	case *plan.Literal_U8Val:
-		val := uint64(uint8(v.U8Val))
-		return tree.NewNumVal(val, fmt.Sprintf("%d", val), false, tree.P_uint64), nil
-	case *plan.Literal_U16Val:
-		val := uint64(uint16(v.U16Val))
-		return tree.NewNumVal(val, fmt.Sprintf("%d", val), false, tree.P_uint64), nil
-	case *plan.Literal_U32Val:
-		val := uint64(v.U32Val)
-		return tree.NewNumVal(val, fmt.Sprintf("%d", val), false, tree.P_uint64), nil
-	case *plan.Literal_U64Val:
-		return tree.NewNumVal(v.U64Val, fmt.Sprintf("%d", v.U64Val), false, tree.P_uint64), nil
-	case *plan.Literal_Fval:
-		val := float64(v.Fval)
-		return tree.NewNumVal(val, fmt.Sprintf("%g", val), false, tree.P_float64), nil
-	case *plan.Literal_Dval:
-		return tree.NewNumVal(v.Dval, fmt.Sprintf("%g", v.Dval), false, tree.P_float64), nil
-	case *plan.Literal_Sval:
-		return tree.NewNumVal(v.Sval, v.Sval, false, tree.P_char), nil
-	case *plan.Literal_Bval:
-		return tree.NewNumVal(v.Bval, "", false, tree.P_bool), nil
-	case *plan.Literal_Dateval:
-		str := types.Date(v.Dateval).String()
-		return tree.NewNumVal(str, str, false, tree.P_char), nil
-	case *plan.Literal_Timeval:
-		str := types.Time(v.Timeval).String2(typ.Scale)
-		return tree.NewNumVal(str, str, false, tree.P_char), nil
-	case *plan.Literal_Datetimeval:
-		str := types.Datetime(v.Datetimeval).String2(typ.Scale)
-		return tree.NewNumVal(str, str, false, tree.P_char), nil
-	case *plan.Literal_Timestampval:
-		str := types.Timestamp(v.Timestampval).String2(timeZone, typ.Scale)
-		return tree.NewNumVal(str, str, false, tree.P_char), nil
-	case *plan.Literal_Decimal64Val:
-		str := types.Decimal64(v.Decimal64Val.A).Format(typ.Scale)
-		return tree.NewNumVal(str, str, false, tree.P_decimal), nil
-	case *plan.Literal_Decimal128Val:
-		str := types.Decimal128{
-			B0_63:   uint64(v.Decimal128Val.A),
-			B64_127: uint64(v.Decimal128Val.B),
-		}.Format(typ.Scale)
-		return tree.NewNumVal(str, str, false, tree.P_decimal), nil
-	case *plan.Literal_Jsonval:
-		str := string(v.Jsonval)
-		return tree.NewNumVal(str, str, false, tree.P_char), nil
-	case *plan.Literal_EnumVal:
-		val := uint64(v.EnumVal)
-		return tree.NewNumVal(val, fmt.Sprintf("%d", val), false, tree.P_uint64), nil
-	case *plan.Literal_VecVal:
-		return tree.NewNumVal(v.VecVal, v.VecVal, false, tree.P_char), nil
-	default:
-		return nil, moerr.NewNotSupportedNoCtx("unsupported ivf filter literal")
-	}
-}
-
-func ivfPlanTypeToTreeType(typ plan.Type) (*tree.T, error) {
-	treeType := &tree.T{
-		InternalType: tree.InternalType{
-			Locale: &ivfTreeEmptyLocale,
-		},
-	}
-
-	switch types.T(typ.Id) {
-	case types.T_bool:
-		treeType.InternalType.Family = tree.BoolFamily
-		treeType.InternalType.FamilyString = "bool"
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_BOOL)
-	case types.T_bit:
-		treeType.InternalType.Family = tree.BitFamily
-		treeType.InternalType.FamilyString = "bit"
-		treeType.InternalType.DisplayWith = max(typ.Width, int32(1))
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_BIT)
-	case types.T_int8:
-		treeType.InternalType.Family = tree.IntFamily
-		treeType.InternalType.FamilyString = "tinyint"
-		treeType.InternalType.Width = 8
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_TINY)
-	case types.T_uint8:
-		treeType.InternalType.Family = tree.IntFamily
-		treeType.InternalType.FamilyString = "tinyint"
-		treeType.InternalType.Width = 8
-		treeType.InternalType.Unsigned = true
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_TINY)
-	case types.T_int16:
-		treeType.InternalType.Family = tree.IntFamily
-		treeType.InternalType.FamilyString = "smallint"
-		treeType.InternalType.Width = 16
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_SHORT)
-	case types.T_uint16:
-		treeType.InternalType.Family = tree.IntFamily
-		treeType.InternalType.FamilyString = "smallint"
-		treeType.InternalType.Width = 16
-		treeType.InternalType.Unsigned = true
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_SHORT)
-	case types.T_int32:
-		treeType.InternalType.Family = tree.IntFamily
-		treeType.InternalType.FamilyString = "int"
-		treeType.InternalType.Width = 32
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_LONG)
-	case types.T_uint32:
-		treeType.InternalType.Family = tree.IntFamily
-		treeType.InternalType.FamilyString = "int"
-		treeType.InternalType.Width = 32
-		treeType.InternalType.Unsigned = true
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_LONG)
-	case types.T_int64:
-		treeType.InternalType.Family = tree.IntFamily
-		treeType.InternalType.FamilyString = "bigint"
-		treeType.InternalType.Width = 64
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_LONGLONG)
-	case types.T_uint64:
-		treeType.InternalType.Family = tree.IntFamily
-		treeType.InternalType.FamilyString = "bigint"
-		treeType.InternalType.Width = 64
-		treeType.InternalType.Unsigned = true
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_LONGLONG)
-	case types.T_float32:
-		treeType.InternalType.Family = tree.FloatFamily
-		treeType.InternalType.FamilyString = "float"
-		treeType.InternalType.Width = 32
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_FLOAT)
-	case types.T_float64:
-		treeType.InternalType.Family = tree.FloatFamily
-		treeType.InternalType.FamilyString = "double"
-		treeType.InternalType.Width = 64
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_DOUBLE)
-	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
-		treeType.InternalType.Family = tree.FloatFamily
-		treeType.InternalType.FamilyString = "decimal"
-		treeType.InternalType.DisplayWith = max(typ.Width, int32(0))
-		treeType.InternalType.Scale = max(typ.Scale, int32(0))
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_NEWDECIMAL)
-	case types.T_date:
-		treeType.InternalType.Family = tree.DateFamily
-		treeType.InternalType.FamilyString = "date"
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_DATE)
-	case types.T_time:
-		treeType.InternalType.Family = tree.TimeFamily
-		treeType.InternalType.FamilyString = "time"
-		treeType.InternalType.DisplayWith = max(typ.Scale, int32(0))
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_TIME)
-	case types.T_datetime:
-		treeType.InternalType.Family = tree.TimestampFamily
-		treeType.InternalType.FamilyString = "datetime"
-		treeType.InternalType.DisplayWith = max(typ.Scale, int32(0))
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_DATETIME)
-	case types.T_timestamp:
-		treeType.InternalType.Family = tree.TimestampFamily
-		treeType.InternalType.FamilyString = "timestamp"
-		treeType.InternalType.DisplayWith = max(typ.Scale, int32(0))
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_TIMESTAMP)
-	case types.T_char:
-		treeType.InternalType.Family = tree.StringFamily
-		treeType.InternalType.FamilyString = "char"
-		treeType.InternalType.DisplayWith = ivfStringTypeDisplayWidth(typ.Width)
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_STRING)
-	case types.T_varchar:
-		treeType.InternalType.Family = tree.StringFamily
-		treeType.InternalType.FamilyString = "varchar"
-		treeType.InternalType.DisplayWith = ivfStringTypeDisplayWidth(typ.Width)
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_VARCHAR)
-	case types.T_binary:
-		treeType.InternalType.Family = tree.StringFamily
-		treeType.InternalType.FamilyString = "binary"
-		treeType.InternalType.Binary = true
-		treeType.InternalType.DisplayWith = ivfStringTypeDisplayWidth(typ.Width)
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_VARCHAR)
-	case types.T_varbinary:
-		treeType.InternalType.Family = tree.StringFamily
-		treeType.InternalType.FamilyString = "varbinary"
-		treeType.InternalType.Binary = true
-		treeType.InternalType.DisplayWith = ivfStringTypeDisplayWidth(typ.Width)
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_VARCHAR)
-	case types.T_text:
-		treeType.InternalType.Family = tree.BlobFamily
-		treeType.InternalType.FamilyString = "text"
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_TEXT)
-	case types.T_blob:
-		treeType.InternalType.Family = tree.BlobFamily
-		treeType.InternalType.FamilyString = "blob"
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_BLOB)
-	case types.T_json:
-		treeType.InternalType.Family = tree.JsonFamily
-		treeType.InternalType.FamilyString = "json"
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_JSON)
-	case types.T_uuid:
-		treeType.InternalType.Family = tree.UuidFamily
-		treeType.InternalType.FamilyString = "uuid"
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_UUID)
-	case types.T_enum:
-		treeType.InternalType.Family = tree.EnumFamily
-		treeType.InternalType.FamilyString = "enum"
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_ENUM)
-		if typ.Enumvalues != "" {
-			treeType.InternalType.EnumValues = strings.Split(typ.Enumvalues, ",")
-		}
-	case types.T_array_float32:
-		treeType.InternalType.Family = tree.ArrayFamily
-		treeType.InternalType.FamilyString = "vecf32"
-		treeType.InternalType.DisplayWith = ivfStringTypeDisplayWidth(typ.Width)
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_VARCHAR)
-	case types.T_array_float64:
-		treeType.InternalType.Family = tree.ArrayFamily
-		treeType.InternalType.FamilyString = "vecf64"
-		treeType.InternalType.DisplayWith = ivfStringTypeDisplayWidth(typ.Width)
-		treeType.InternalType.Oid = uint32(defines.MYSQL_TYPE_VARCHAR)
-	default:
-		return nil, moerr.NewNotSupportedNoCtxf("unsupported ivf filter cast target type %s", types.T(typ.Id).String())
-	}
-
-	return treeType, nil
-}
-
-func ivfStringTypeDisplayWidth(width int32) int32 {
-	if width > 0 {
-		return width
-	}
-	return -1
-}
-
 func buildIvfScanToTableFuncMap(tableFuncTag int32, tableFuncIncludeColumns []string, scanNode *plan.Node) map[[2]int32]*plan.Expr {
 	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
 		return nil
@@ -1093,8 +392,8 @@ func firstIvfSearchRoundLimit(limit *plan.Expr, hasFilterPressure bool) uint64 {
 		return originalLimit
 	}
 
-	overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
-	return max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+	overFetchFactor := overfetch.FilteredPostModeFactor(originalLimit)
+	return overfetch.Limit(originalLimit, overFetchFactor)
 }
 
 func ensureIvfIncludeSearchRoundLimitAtLeastK(searchRoundLimit uint64, outerResultNeed *plan.Expr) uint64 {
@@ -1182,7 +481,10 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 	}
 
 	origFuncName := vecCtx.distFnExpr.Func.ObjName
-	if opType != metric.DistFuncOpTypes[origFuncName] {
+	// An index serves this distance function when its op_type is metric-equivalent to the
+	// query's, not only when it is the canonical one — vector_l2_ops and vector_l2sq_ops
+	// build the same index and both answer l2_distance / l2_distance_sq (#25966).
+	if !metric.OpTypeServesDistFunc(opType, origFuncName) {
 		return nil, nil
 	}
 
@@ -1255,6 +557,7 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		params:          idxDef.IndexAlgoParams,
 		nThread:         nThread.(int64),
 		nProbe:          nProbe,
+		totalLists:      totalLists,
 		pushdownEnabled: (mode == "pre"),
 
 		// Auto mode fields.
@@ -1325,39 +628,23 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		projectedCols = collectProjectedColumns(boundaryProj, boundaryChild, scanNode, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
 	}
 	coveragePushdown, _ := splitFiltersByVectorIndexCoverage(newFilterList, scanNode, includeAwareColumns, ivfCtx.partPos)
-	timeZone := time.UTC
-	if proc := builder.compCtx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
-		timeZone = proc.GetSessionInfo().TimeZone
-	}
-	pushdownFilterSQL, serializedPushdownFilters, _, err := serializeFiltersToSQL(coveragePushdown, scanNode, includeAwareColumns, ivfCtx.partPos, timeZone)
-	if err != nil {
-		return nodeID, err
-	}
-	remainingFilters := make([]*plan.Expr, 0, len(newFilterList)-len(serializedPushdownFilters))
-	serializedSet := make(map[*plan.Expr]struct{}, len(serializedPushdownFilters))
-	for _, expr := range serializedPushdownFilters {
-		serializedSet[expr] = struct{}{}
+	typedPushdownFilters := coveragePushdown
+	remainingFilters := make([]*plan.Expr, 0, len(newFilterList)-len(typedPushdownFilters))
+	pushdownSet := make(map[*plan.Expr]struct{}, len(typedPushdownFilters))
+	for _, expr := range typedPushdownFilters {
+		pushdownSet[expr] = struct{}{}
 	}
 	for _, expr := range newFilterList {
-		if _, ok := serializedSet[expr]; ok {
+		if _, ok := pushdownSet[expr]; ok {
 			continue
 		}
 		remainingFilters = append(remainingFilters, expr)
 	}
-	// Multi-round search may stop on a candidate count only when ivf_search has
+	// Multi-round search may stop on a candidate count only when the index scan has
 	// observed every filter. Keep residual predicates on the exact membership
 	// pre-filter path and use the legacy single-round IVF search.
 	includeModeFallbackToPre := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
 	usePreFilter := ivfCtx.pushdownEnabled || includeModeFallbackToPre
-	if usePreFilter && len(remainingFilters) > 0 &&
-		types.T(ivfCtx.pkType.Id).IsInteger() &&
-		!localProtocolEnablesSortedMembershipFilter(
-			builder.compCtx.GetProcess().GetService()) {
-		// The exact pre-filter payload can use TagSorted64. During a rolling
-		// upgrade an older remote reader cannot decode that tag, so retain the
-		// original relational plan until the deployment-wide protocol gate rises.
-		return nodeID, nil
-	}
 	canIndexOnly := boundaryProj != nil &&
 		canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
 	tableFuncIncludeColumns := make([]string, 0, len(includeAwareColumns))
@@ -1369,48 +656,25 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 	}
 
-	includeColumnTypes := make([]int32, 0, len(includeColumns))
-	for _, colName := range includeColumns {
-		colIdx, ok := scanNode.TableDef.Name2ColIndex[colName]
-		if !ok {
-			continue
-		}
-		includeColumnTypes = append(includeColumnTypes, scanNode.TableDef.Cols[colIdx].Typ.Id)
-	}
-
-	tblCfg := vectorindex.IndexTableConfig{
-		DbName:             scanNode.ObjRef.SchemaName,
-		SrcTable:           scanNode.TableDef.Name,
-		MetadataTable:      ivfCtx.metaDef.IndexTableName,
-		IndexTable:         ivfCtx.idxDef.IndexTableName,
-		ThreadsSearch:      ivfCtx.nThread,
-		EntriesTable:       ivfCtx.entriesDef.IndexTableName,
-		Nprobe:             uint(ivfCtx.nProbe),
-		PKeyType:           ivfCtx.pkType.Id,
-		PKey:               scanNode.TableDef.Pkey.PkeyColName,
-		KeyPart:            ivfCtx.idxDef.Parts[0],
-		KeyPartType:        ivfCtx.partType.Id,
-		OrigFuncName:       ivfCtx.origFuncName,
-		IncludeColumns:     includeColumns,
-		IncludeColumnTypes: includeColumnTypes,
-	}
-	tblCfgBytes, err := json.Marshal(tblCfg)
-	if err != nil {
-		return nodeID, err
-	}
-	tblCfgStr := string(tblCfgBytes)
-
-	// vectorSortContext.limit already contains the outer LIMIT+OFFSET window.
-	// Filter pressure adds over-fetch on top of that candidate budget below.
+	// vectorSortContext.limit is the semantic outer LIMIT+OFFSET window. Keep it
+	// unchanged in the reusable plan; execution binding derives any candidate
+	// over-fetch budget after prepared parameters are available.
 	outerResultNeedExpr := DeepCopyExpr(limit)
+	postFilterOverFetch := len(remainingFilters) > 0 && !usePreFilter
 
 	firstRoundLimit := uint64(0)
+	var firstRoundLimitExpr *plan.Expr
 	bucketExpandStep := uint64(0)
 	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && !includeModeFallbackToPre {
-		firstRoundLimit = firstIvfSearchRoundLimit(outerResultNeedExpr, len(serializedPushdownFilters) > 0)
+		firstRoundLimit = firstIvfSearchRoundLimit(outerResultNeedExpr, len(typedPushdownFilters) > 0)
 		firstRoundLimit = ensureIvfIncludeSearchRoundLimitAtLeastK(firstRoundLimit, outerResultNeedExpr)
-		if firstRoundLimit == 0 && outerResultNeedExpr != nil {
-			firstRoundLimit = 1
+		if firstRoundLimit > 0 {
+			firstRoundLimitExpr = makePlan2Uint64ConstExprWithType(firstRoundLimit)
+		} else if outerResultNeedExpr != nil {
+			// A prepared LIMIT must remain an execution-time expression. Using a
+			// plan-time fallback of one truncates the only populated centroid and
+			// cannot be repaired by expanding into unrelated centroid buckets.
+			firstRoundLimitExpr = DeepCopyExpr(outerResultNeedExpr)
 		}
 		bucketExpandStep = uint64(ivfCtx.nProbe)
 		if bucketExpandStep == 0 {
@@ -1421,27 +685,52 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	if err != nil {
 		return nodeID, err
 	}
+	typedPreFilters := rebindIvfPreFilters(typedPushdownFilters, scanNode, includeColumns)
 
-	// build ivf_search table function node
+	// Build an optimizer-visible vector-index access path.  The hidden table
+	// references are resolved by name on the execution CN in the same txn; no
+	// generated SQL or nested plan is needed.
 	tableFuncTag := builder.genNewBindTag()
 	tableFuncNode := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
+		NodeType: plan.Node_VECTOR_INDEX_SCAN,
 		// Async index payload may be committed locally before every CN has
 		// replayed the corresponding object metadata. Keep search on one CN
 		// until the async path provides a global visibility watermark.
-		Stats: &plan.Stats{ForceOneCN: asyncIndex},
+		Stats:  &plan.Stats{ForceOneCN: asyncIndex},
+		ObjRef: DeepCopyObjectRef(scanNode.ObjRef),
+		// Keep the generic node snapshot in sync with the vector-specific
+		// specification.  The compiler uses the node-level field to choose the
+		// transaction and context for every scan datasource.
+		ScanSnapshot: DeepCopySnapshot(scanNode.ScanSnapshot),
 		TableDef: &plan.TableDef{
-			TableType: "func_table", //test if ok
-			//Name:               tbl.String(),
-			TblFunc: &plan.TableFunction{
-				Name:  ivfflatplan.IVFFLATSearchFuncName,
-				Param: []byte(ivfCtx.params),
-			},
-			Cols: buildIvfSearchColDefs(tableFuncIncludeColumns, scanNode.TableDef),
+			Name:      scanNode.TableDef.Name,
+			TableType: "vector_index_scan",
+			Cols:      buildIvfSearchColDefs(tableFuncIncludeColumns, scanNode.TableDef),
 		},
-		BindingTags:     []int32{tableFuncTag},
-		Children:        vectorSearchProviderChildren(vecCtx),
-		TblFuncExprList: buildIvfTableFuncArgs(tblCfgStr, ivfCtx.vecLitArg, pushdownFilterSQL, firstRoundLimit, bucketExpandStep),
+		BindingTags: []int32{tableFuncTag},
+		Children:    vectorSearchProviderChildren(vecCtx),
+		VectorIndexScan: &plan.VectorIndexScan{
+			SourceTable:         DeepCopyObjectRef(scanNode.ObjRef),
+			SourceTableDef:      DeepCopyTableDef(scanNode.TableDef, true),
+			ScanSnapshot:        DeepCopySnapshot(scanNode.ScanSnapshot),
+			Index:               DeepCopyIndexDef(ivfCtx.metaDef),
+			QueryVector:         DeepCopyExpr(ivfCtx.vecLitArg),
+			DistanceFunction:    ivfCtx.origFuncName,
+			Direction:           vecCtx.sortDirection,
+			DistanceRange:       DeepCopyDistRange(distRange),
+			PreFilters:          typedPreFilters,
+			IncludedColumns:     append([]string(nil), tableFuncIncludeColumns...),
+			InitialProbeCount:   uint32(ivfCtx.nProbe),
+			FirstRoundLimit:     firstRoundLimitExpr,
+			BucketExpandStep:    uint32(bucketExpandStep),
+			ThreadsSearch:       ivfCtx.nThread,
+			PostFilterOverFetch: postFilterOverFetch,
+			HiddenTables: []*plan.VectorIndexTableRef{
+				{Role: catalog.SystemSI_IVFFLAT_TblType_Metadata, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: ivfCtx.metaDef.IndexTableName}},
+				{Role: catalog.SystemSI_IVFFLAT_TblType_Centroids, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: ivfCtx.idxDef.IndexTableName}},
+				{Role: catalog.SystemSI_IVFFLAT_TblType_Entries, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: ivfCtx.entriesDef.IndexTableName}},
+			},
+		},
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
@@ -1449,74 +738,61 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	if err != nil {
 		return 0, err
 	}
+	candidateNodeID := tableFuncNodeID
+	if len(tableFuncNode.Children) == 1 {
+		providerNodeID := tableFuncNode.Children[0]
+		tableFuncNode.Children = nil
+		candidateNodeID = builder.appendNode(&plan.Node{
+			NodeType:  plan.Node_APPLY,
+			Children:  []int32{providerNodeID, tableFuncNodeID},
+			ApplyType: plan.Node_CROSSAPPLY,
+			Stats:     DeepCopyStats(tableFuncNode.Stats),
+		}, ctx)
+	}
 
 	// change doc_id type to the primary type here
 	tableFuncNode.TableDef.Cols[0].Typ = ivfCtx.pkType
 
-	// push down the candidate limit to the table function.
+	// Preserve semantic k in the plan for both literal and prepared executions.
 	limitExpr := DeepCopyExpr(outerResultNeedExpr)
 
-	if len(remainingFilters) > 0 && !usePreFilter {
-		// When there are filters, over-fetch to get more candidates.
-		// This ensures we have enough candidates after filtering.
-		// Over-fetch strategy: dynamically adjust factor based on limit size
-		// Smaller limits need more over-fetching due to higher variance
-		if limitConst := limitExpr.GetLit(); limitConst != nil {
-			originalLimit := limitConst.GetU64Val()
-
-			// Filtered post mode needs a larger candidate budget than the historical
-			// default, but we keep it as fixed buckets so the plan is predictable.
-			overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
-
-			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
-
-			if ivfCtx.isAutoMode {
-				logutil.Debugf(
-					"Auto mode over-fetch: original_limit=%d, factor=%.2f, filter_count=%d",
-					originalLimit, overFetchFactor, len(remainingFilters),
-				)
-				logutil.Debugf(
-					"Auto mode over-fetch result: original_limit=%d, new_limit=%d",
-					originalLimit, newLimit,
-				)
-			} else {
-				logutil.Debugf(
-					"Vector mode over-fetch: mode=post, original_limit=%d, factor=%.2f, filter_count=%d, new_limit=%d",
-					originalLimit, overFetchFactor, len(remainingFilters), newLimit,
-				)
+	tableFuncNode.VectorIndexScan.CandidateLimit = DeepCopyExpr(limitExpr)
+	if tableFuncNode.Stats == nil {
+		tableFuncNode.Stats = DefaultStats()
+	}
+	if scanNode.Stats != nil && scanNode.Stats.TableCnt > 0 {
+		fraction := 1.0
+		if ivfCtx.totalLists > 0 {
+			fraction = math.Min(1, float64(max(int64(1), ivfCtx.nProbe))/float64(ivfCtx.totalLists))
+		}
+		tableFuncNode.Stats.TableCnt = scanNode.Stats.TableCnt
+		tableFuncNode.Stats.Cost = math.Max(1, scanNode.Stats.TableCnt*fraction)
+		tableFuncNode.Stats.BlockNum = max(int32(1), int32(math.Ceil(float64(scanNode.Stats.BlockNum)*fraction)))
+		tableFuncNode.Stats.Rowsize = GetRowSizeFromTableDef(tableFuncNode.TableDef, true)
+	}
+	if lit := limitExpr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.Value.(*plan.Literal_U64Val); ok {
+			candidateBudget := value.U64Val
+			if postFilterOverFetch {
+				candidateBudget = overfetch.FilteredPostModeLimit(value.U64Val)
 			}
-
-			limitExpr = &Expr{
-				Typ: limit.Typ,
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_U64Val{
-							U64Val: newLimit,
-						},
-					},
-				},
-			}
+			outcnt := float64(candidateBudget)
+			tableFuncNode.Stats.Outcnt = outcnt
+			tableFuncNode.Stats.Selectivity = safeSelectivityRatio(outcnt, tableFuncNode.Stats.TableCnt)
 		}
 	}
-
-	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        limitExpr,
-		OrigFuncName: ivfCtx.origFuncName,
-		DistRange:    distRange,
-	}
-	tableFuncNode.Limit = DeepCopyExpr(limitExpr)
+	tableFuncNode.Stats.ForceOneCN = asyncIndex
 
 	// Determine join structure based on the effective filtering strategy:
-	//   no pre-filter: JOIN(scanNode, ivf_search)
-	//   pre-filter:    JOIN(scanNode, JOIN(ivf_search, secondScan))
+	//   no pre-filter: JOIN(scanNode, vectorScan)
+	//   pre-filter:    JOIN(scanNode, SEMI(vectorScan, secondScan))
 	var joinRootID int32
 
 	pushdownEnabled := usePreFilter && len(remainingFilters) > 0
 	scanNode.FilterList = remainingFilters
 
 	if canIndexOnly {
-		joinRootID = tableFuncNodeID
+		joinRootID = candidateNodeID
 	} else if pushdownEnabled {
 		// secondScanNode: copy original scanNode for JOIN(ivf, table)
 		secondScanNodeID := builder.copyNode(ctx, scanNode.NodeId)
@@ -1583,7 +859,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			BindingTags: []int32{secondProjectTag},
 		}, ctx)
 
-		// inner join: (ivf_search table function JOIN second table project)
+		// membership SEMI join: (vector scan SEMI JOIN second table project)
 		innerJoinOn, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 			{
 				Typ: ivfCtx.pkType,
@@ -1607,8 +883,12 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 
 		innerJoinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{tableFuncNodeID, secondProjectNodeID},
-			JoinType: plan.Node_INNER,
+			Children: []int32{candidateNodeID, secondProjectNodeID},
+			// The filtered relation is only a membership producer; none of its
+			// columns escape this node. SEMI is both the exact relational shape
+			// and an optimizer barrier that prevents the runtime-filter producer
+			// from being flattened into a three-way INNER join with its consumer.
+			JoinType: plan.Node_SEMI,
 			OnList:   []*Expr{innerJoinOn},
 			// Don't set Limit/Offset on JOIN - they should be applied after SORT
 		}, ctx)
@@ -1694,49 +974,6 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			// Don't set Limit/Offset on JOIN - they should be applied after SORT
 		}, ctx)
 
-		// Manually construct a runtime filter for outer join:
-		//   - build side: right child inner join (smaller set, contains actual pkid)
-		//   - probe side: left child table scan (original table), performs block/row pruning at scan stage.
-		// Note:
-		//   1) We don't use BloomFilter here, but use the existing IN-list runtime filter pipeline;
-		//   2) UpperLimit is set to avoid all filters being degraded to PASS due to 0.
-		rfTag2 := builder.genNewMsgTag()
-
-		outerProbeNodeID := builder.findScanNodeByTag(outerScanNodeID, outerPkExpr.GetCol().RelPos)
-
-		// build: placeholder column, HashBuild will generate IN-list based on build side join key's UniqueJoinKeys[0]
-		buildExpr2 := &plan.Expr{
-			Typ: ivfCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: -1,
-					ColPos: 0,
-				},
-			},
-		}
-
-		// Set inLimit to "unlimited" to ensure this runtime filter won't be disabled due to upper limit.
-		// Use int32 max value directly here.
-		const unlimitedInFilterCard = int32(1<<31 - 1)
-		if outerProbeNodeID >= 0 {
-			probeSpec2, buildSpec2, hasRuntimeFilter := builder.makeExactRuntimeFilterPair(
-				rfTag2,
-				false,
-				unlimitedInFilterCard,
-				outerPkExpr,
-				buildExpr2,
-				false,
-			)
-			if hasRuntimeFilter {
-				probeNode := builder.qry.Nodes[outerProbeNodeID]
-				probeNode.RuntimeFilterProbeList = append(
-					probeNode.RuntimeFilterProbeList, probeSpec2)
-				outerJoinNode := builder.qry.Nodes[outerJoinNodeID]
-				outerJoinNode.RuntimeFilterBuildList = append(
-					outerJoinNode.RuntimeFilterBuildList, buildSpec2)
-			}
-		}
-
 		// Outer join doesn't add extra project, let global column pruning optimizer handle it
 		joinRootID = outerJoinNodeID
 	} else {
@@ -1764,7 +1001,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 
 		joinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{scanNode.NodeId, tableFuncNodeID},
+			Children: []int32{scanNode.NodeId, candidateNodeID},
 			JoinType: plan.Node_INNER,
 			OnList:   []*Expr{wherePkEqPk},
 			// Don't set Limit/Offset on JOIN - they should be applied after SORT
@@ -1836,6 +1073,52 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 	remap := vectorRemapForChildProject(childNode, orderExpr, orderByScore[0].Expr, scanRemap)
 	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
+}
+
+func rebindIvfPreFilters(filters []*plan.Expr, scanNode *plan.Node, includeColumns []string) []*plan.Expr {
+	out := DeepCopyExprList(filters)
+	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
+		return out
+	}
+	includePos := make(map[string]int32, len(includeColumns))
+	for i, name := range includeColumns {
+		includePos[name] = int32(4 + i)
+	}
+	pkName := ""
+	if scanNode.TableDef.Pkey != nil {
+		pkName = scanNode.TableDef.Pkey.PkeyColName
+	}
+	var rebind func(*plan.Expr)
+	rebind = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		if col := expr.GetCol(); col != nil && col.RelPos == scanNode.BindingTags[0] && col.ColPos >= 0 && int(col.ColPos) < len(scanNode.TableDef.Cols) {
+			name := scanNode.TableDef.Cols[col.ColPos].Name
+			switch {
+			case name == pkName:
+				col.RelPos, col.ColPos = 0, 2
+				col.Name = catalog.SystemSI_IVFFLAT_TblCol_Entries_pk
+			case includePos[name] != 0:
+				col.RelPos, col.ColPos = 0, includePos[name]
+				col.Name = catalog.SystemSI_IVFFLAT_IncludeColPrefix + name
+			}
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				rebind(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				rebind(item)
+			}
+		}
+	}
+	for _, filter := range out {
+		rebind(filter)
+	}
+	return out
 }
 
 func (builder *QueryBuilder) buildPkExprFromNode(nodeID int32, pkType plan.Type, pkName string) *plan.Expr {

@@ -199,7 +199,8 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, error) {
-	return getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
+	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
+	return value, err
 }
 
 func getExprValueWithPrepareMeta(
@@ -209,7 +210,7 @@ func getExprValueWithPrepareMeta(
 	preparedExpression bool,
 	prepareParamKind *vector.PrepareParamKind,
 	isBin ...*bool,
-) (interface{}, error) {
+) (interface{}, plan.Type, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -225,7 +226,7 @@ func getExprValueWithPrepareMeta(
 		if prepareParamKind != nil {
 			*prepareParamKind = vector.PrepareParamNone
 		}
-		return v.ColName(), nil
+		return v.ColName(), plan.Type{Id: int32(types.T_text)}, nil
 	}
 
 	var err error
@@ -263,20 +264,30 @@ func getExprValueWithPrepareMeta(
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
 	}
-	defer tempExecCtx.Close()
+	defer func() {
+		// The synthetic SELECT is executed through doComQuery, which points the
+		// session compiler context at tempExecCtx.  Restore the caller's context
+		// before the next statement in a multi-statement packet is planned;
+		// tempExecCtx.Close clears its request context and would otherwise leave
+		// a nil context/process behind.
+		tempExecCtx.Close()
+		if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+			tcc.SetExecCtx(execCtx)
+		}
+	}()
 	err = executeStmtInSameSession(
 		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {
-		return nil, err
+		return nil, plan.Type{}, err
 	}
 
 	batches := ses.GetResultBatches()
 	if len(batches) == 0 {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	if batches[0].VectorCount() > 1 {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
 	}
 
 	//evaluate the count of rows, the count of columns
@@ -288,7 +299,7 @@ func getExprValueWithPrepareMeta(
 		}
 		count += b.RowCount()
 		if count > 1 {
-			return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
+			return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
 		}
 		if resultVec == nil && b.GetVector(0).Length() != 0 {
 			resultVec = b.GetVector(0)
@@ -296,7 +307,7 @@ func getExprValueWithPrepareMeta(
 	}
 
 	if resultVec == nil {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	// for the decimal type, we need the type of expr
@@ -307,7 +318,7 @@ func getExprValueWithPrepareMeta(
 		planExpr, err = bindSetVariableResultExpr(
 			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
-			return nil, err
+			return nil, plan.Type{}, err
 		}
 	}
 
@@ -319,14 +330,15 @@ func getExprValueWithPrepareMeta(
 		if *prepareParamKind == vector.PrepareParamNone {
 			*prepareParamKind, err = transparentPrepareParamKind(e, ses)
 			if err != nil {
-				return nil, err
+				return nil, plan.Type{}, err
 			}
 		}
 		if *prepareParamKind == vector.PrepareParamNone {
 			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
 		}
 	}
-	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+	return value, plan2.MakePlan2Type(resultVec.GetType()), err
 }
 
 // transparentPrepareParamKind closes the metadata boundary introduced by SET's
@@ -1743,7 +1755,21 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 		col.SetLength(mysqlDecimalDisplayLength(typ.Width, typ.Scale, col.IsSigned()))
 	} else if typ.Oid == types.T_year {
 		// Keep YEAR metadata consistent with regular query result columns.
-		col.SetLength(uint32(types.MaxVarcharLen))
+		col.SetLength(4)
+	} else if typ.Oid == types.T_date {
+		col.SetLength(10)
+	} else if typ.Oid == types.T_time {
+		col.SetLength(mysqlTemporalDisplayLength(10, typ.Scale))
+	} else if typ.Oid == types.T_datetime || typ.Oid == types.T_timestamp {
+		col.SetLength(mysqlTemporalDisplayLength(19, typ.Scale))
+	} else if typ.Oid == types.T_text {
+		// TEXT-family widths are already declared in bytes. A width of zero is
+		// the ordinary TEXT declaration (65535 bytes), not an empty result.
+		length := uint32(types.MaxStringSize)
+		if typ.Width > 0 {
+			length = uint32(typ.Width)
+		}
+		col.SetLength(length)
 	} else if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
 		// Protocol::ColumnDefinition41 expresses column_length in bytes. Character
 		// string widths are declared in characters, so the byte multiplier must
@@ -1770,6 +1796,13 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 		return
 	}
 	col.SetDecimal(typ.Scale)
+}
+
+func mysqlTemporalDisplayLength(base int, scale int32) uint32 {
+	if scale > 0 {
+		return uint32(base + 1 + int(scale))
+	}
+	return uint32(base)
 }
 
 func mysqlTextMaxBytesPerCharacter(charset uint8) uint32 {
@@ -1894,6 +1927,9 @@ type UserInput struct {
 	sqlSourceType             []string
 	isRestore                 bool
 	isBinaryProtExecute       bool
+	// isCursorExecute marks a COM_STMT_EXECUTE using MySQL's
+	// CURSOR_TYPE_READ_ONLY flag. Its rows are retained for COM_STMT_FETCH.
+	isCursorExecute bool
 	// isSetExpression marks an AST-only SELECT synthesized to evaluate a SET
 	// assignment. Such statements have no stable SQL cache key.
 	isSetExpression bool

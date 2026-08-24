@@ -188,14 +188,16 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = hnswSearchPrepare(proc, tblArg)
 	case "ivf_create":
 		tblArg.ctr.state, err = ivfCreatePrepare(proc, tblArg)
-	case "ivf_search":
-		tblArg.ctr.state, err = ivfSearchPrepare(proc, tblArg)
 	case "fulltext2_search":
 		tblArg.ctr.state, err = fulltext2SearchPrepare(proc, tblArg)
 	case "parse_jsonl_data":
 		tblArg.ctr.state, err = parseJsonlDataPrepare(proc, tblArg)
 	case "parse_jsonl_file":
 		tblArg.ctr.state, err = parseJsonlFilePrepare(proc, tblArg)
+	case "esql_tvf":
+		tblArg.ctr.state, err = esqlTvfPrepare(proc, tblArg)
+	case "sql_tvf":
+		tblArg.ctr.state, err = sqlTvfPrepare(proc, tblArg)
 	case "table_stats":
 		tblArg.ctr.state, err = tableStatsPrepare(proc, tblArg)
 	case "load_file_chunks":

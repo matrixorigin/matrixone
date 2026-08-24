@@ -255,6 +255,8 @@ func init() {
 		"identified":                 IDENTIFIED,
 		"iceberg":                    ICEBERG,
 		"mongodb":                    MONGODB,
+		"datastream":                 DATASTREAM,
+		"esql":                       ESQL,
 		"mongodb_convert":            MONGODB_CONVERT,
 		"mongodb_path":               MONGODB_PATH,
 		"if":                         IF,

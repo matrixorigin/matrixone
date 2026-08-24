@@ -1041,6 +1041,24 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = writer.WriteEnd(ctx)
 	assert.NoError(t, err)
+	// This test targets stale checkpoint coverage after the partition file is
+	// gone, not temporary TN checkpoint lag. A successful empty response keeps
+	// that contract isolated and avoids entering the shared bounded retry path.
+	ssStub := gostub.Stub(
+		&disttae.RequestSnapshotRead,
+		disttae.GetSnapshotReadFnWithHandler(
+			func(
+				_ context.Context,
+				_ pbtxn.TxnMeta,
+				_ *cmd_util.SnapshotReadReq,
+				resp *cmd_util.SnapshotReadResp,
+			) (func(), error) {
+				resp.Succeed = true
+				return nil, nil
+			},
+		),
+	)
+	defer ssStub.Reset()
 
 	{
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
@@ -4111,13 +4129,18 @@ func TestDropJobsByDBName(t *testing.T) {
 
 	target1 := registerFn("src_table", "job1")
 	target2 := registerFn("src_table2", "job2")
+	// Shared CI runners can pause the embedded TN/logtail path for longer than
+	// the normal ten-second propagation window (a recent run spent about ten
+	// seconds in one commit). Keep the assertion bounded, but leave enough
+	// budget for the watermark to catch up under scheduler pressure.
+	const watermarkWait = 30 * time.Second
 	waitForISCPWatermark(
 		t,
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "job1")
 		},
 		target1,
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4129,7 +4152,7 @@ func TestDropJobsByDBName(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID2, "job2")
 		},
 		target2,
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID2,
@@ -4148,7 +4171,7 @@ func TestDropJobsByDBName(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "job1")
 		},
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4159,7 +4182,7 @@ func TestDropJobsByDBName(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID2, "job2")
 		},
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID2,
@@ -5692,7 +5715,7 @@ func TestPartitionChangesHandleStaleRead(t *testing.T) {
 						End:       &t3Timestamp,
 						Location1: []byte("fake_location1"),
 						Location2: []byte("fake_location2"),
-						EntryType: 0,
+						EntryType: int32(checkpoint.ET_Incremental),
 						Version:   1,
 					},
 				}
@@ -6261,7 +6284,7 @@ func TestRealStaleReadStillReturnsError(t *testing.T) {
 						End:       &t2NextTs,
 						Location1: []byte("fake"),
 						Location2: []byte("fake"),
-						EntryType: 0,
+						EntryType: int32(checkpoint.ET_Incremental),
 						Version:   1,
 					},
 				}

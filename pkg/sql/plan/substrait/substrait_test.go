@@ -433,7 +433,7 @@ func TestBoundInt64SumIsAdvertisedWithDecimalResult(t *testing.T) {
 }
 
 func TestCapabilityHashMatchesSidecarContract(t *testing.T) {
-	require.Equal(t, "600b2a4b0c57e37a2b1aac8e99e9d2b064d5e3d9c652419470009080946fb568", hex.EncodeToString(CapabilityHash[:]))
+	require.Equal(t, "6f788b3d6665ecdd1ac734043fb757968893f14fd7d197fabcfa287764ee6bad", hex.EncodeToString(CapabilityHash[:]))
 }
 
 func TestBoundDecimalUnaryMinusLowersToSubtractFromTypedZero(t *testing.T) {
@@ -562,6 +562,34 @@ func TestSemanticRegistryRejectsForgedNullability(t *testing.T) {
 	require.True(t, supported)
 }
 
+func TestSemanticNullabilityUsesConcreteNonNullLiteralFact(t *testing.T) {
+	resolved, err := function.GetFunctionByName(
+		context.Background(),
+		"=",
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+
+	notNullColumn := col(0)
+	notNullColumn.Typ.NotNullable = true
+	nonNullLiteral := i64(1)
+	require.False(t, nonNullLiteral.Typ.NotNullable, "the planner literal annotation is deliberately conservative")
+	require.True(t, semanticNotNullable(
+		resolved.GetEncodedOverloadID(), []*planpb.Expr{notNullColumn, nonNullLiteral}))
+
+	nullLiteral := i64(1)
+	nullLiteral.GetLit().Isnull = true
+	require.False(t, semanticNotNullable(
+		resolved.GetEncodedOverloadID(), []*planpb.Expr{notNullColumn, nullLiteral}))
+	nullableColumn := col(0)
+	require.False(t, semanticNotNullable(
+		resolved.GetEncodedOverloadID(), []*planpb.Expr{nullableColumn, nonNullLiteral}))
+
+	query := boundSQLQuery(t, "select a = 1, case when a > 0 then a else 0 end from select_test.bind_select")
+	_, err = Export(query)
+	require.NoError(t, err)
+}
+
 func TestExportRequiresCompleteBoundOutputHeadings(t *testing.T) {
 	q := scanQuery()
 	q.Headings = nil
@@ -593,12 +621,19 @@ func TestStarCountAggregateLowering(t *testing.T) {
 func TestTaeReadStrictWire(t *testing.T) {
 	now := uint64(time.Now().UnixMilli())
 	h := sha256.Sum256([]byte("x"))
-	r := &TaeRead{ProtocolVersion: 1, ReadRef: bytes.Repeat([]byte{1}, 32), QueryID: []byte("q"), AccountID: 1, DatabaseID: 3, TableID: 2, SnapshotTS: make([]byte, 12), SchemaDigest: h[:], ManifestSHA256: h[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: now + 1000}
+	r := &TaeRead{ProtocolVersion: TaeReadProtocolVersion, ReadRef: bytes.Repeat([]byte{1}, 32), QueryID: []byte("q"), AccountID: 0, DatabaseID: 3, TableID: 2, SnapshotTS: make([]byte, 12), SchemaDigest: h[:], ManifestSHA256: h[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: now + 1000}
 	b, err := MarshalTaeRead(r)
 	require.NoError(t, err)
 	got, err := UnmarshalTaeRead(b, now)
 	require.NoError(t, err)
 	require.Equal(t, r.TableID, got.TableID)
+	require.Equal(t, uint64(0), got.AccountID)
+	accountField := append(protowire.AppendTag(nil, 5, protowire.VarintType), 0)
+	accountOffset := bytes.Index(b, accountField)
+	require.NotEqual(t, -1, accountOffset)
+	withoutAccount := append(append([]byte(nil), b[:accountOffset]...), b[accountOffset+len(accountField):]...)
+	_, err = UnmarshalTaeRead(withoutAccount, now)
+	require.ErrorContains(t, err, "missing TaeRead field")
 	_, err = UnmarshalTaeRead(append(b, b[:2]...), now)
 	require.Error(t, err)
 }
@@ -1164,7 +1199,7 @@ func TestAdmissionPublishesOnlyProtectedSnapshot(t *testing.T) {
 	provider.onPrepare = func() { require.True(t, protector.active) }
 	leases := NewLeaseManager(1, protector)
 	now := time.Now()
-	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{9}, 32)), Now: now})
+	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 0, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{9}, 32)), Now: now})
 	require.NoError(t, err)
 	require.Equal(t, 1, protector.begun)
 	require.Equal(t, 1, protector.closed)
@@ -1172,8 +1207,23 @@ func TestAdmissionPublishesOnlyProtectedSnapshot(t *testing.T) {
 	require.Equal(t, 1, protector.registered)
 	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
 	require.NoError(t, err)
+	require.Equal(t, uint64(0), tr.AccountID)
 	_, ok := resolveLease(leases, tr.ReadRef)
 	require.True(t, ok)
+}
+
+func TestBenchmarkLeaseManagerReadinessIsExplicit(t *testing.T) {
+	normal := NewLeaseManager(1, new(fakeProtector))
+	require.True(t, normal.Ready())
+	require.True(t, normal.Protected())
+	require.False(t, normal.BenchmarkReady())
+	require.False(t, normal.DurableReady())
+
+	benchmark := NewBenchmarkLeaseManager(1, new(fakeProtector))
+	require.True(t, benchmark.Ready())
+	require.True(t, benchmark.Protected())
+	require.True(t, benchmark.BenchmarkReady())
+	require.False(t, benchmark.DurableReady())
 }
 
 func TestAdmissionStartsTTLAfterSnapshotPreparation(t *testing.T) {
@@ -1748,7 +1798,6 @@ func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
 		{name: "missing leases", mutate: func(r *AdmissionRequest) { r.Leases = nil }, want: "incomplete admission"},
 		{name: "not read only", mutate: func(r *AdmissionRequest) { r.ReadOnly = false }, want: "read-only snapshot"},
 		{name: "prior writes", mutate: func(r *AdmissionRequest) { r.PriorWrites = true }, want: "read-only snapshot"},
-		{name: "missing account", mutate: func(r *AdmissionRequest) { r.AccountID = 0 }, want: "identity"},
 		{name: "missing query", mutate: func(r *AdmissionRequest) { r.QueryID = nil }, want: "identity"},
 		{name: "bad timestamp", mutate: func(r *AdmissionRequest) { r.SnapshotTS = []byte{1} }, want: "identity"},
 		{name: "missing authorized client", mutate: func(r *AdmissionRequest) { r.AuthorizedClientSPKIHash = nil }, want: "identity"},
@@ -1842,6 +1891,8 @@ func TestResolveHandlerRejectsInvalidRequests(t *testing.T) {
 	validBody := appendBytes(nil, 1, wires[0])
 	validBody = appendBytes(validBody, 2, read.Schema)
 	verifiedTLS := testVerifiedTLS(testClientSPKI)
+	otherPairTLS := testVerifiedTLS([]byte("other-sidecar-subject-public-key-info"))
+	otherPairLeases := NewLeaseManager(1, new(fakeProtector))
 
 	tests := []struct {
 		name        string
@@ -1860,6 +1911,8 @@ func TestResolveHandlerRejectsInvalidRequests(t *testing.T) {
 		{name: "empty verified chain", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{}}}, manager: leases, want: http.StatusUnauthorized},
 		{name: "malformed request", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: []byte{0xff}, tls: verifiedTLS, manager: leases, want: http.StatusBadRequest},
 		{name: "resolver unavailable", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: verifiedTLS, want: http.StatusServiceUnavailable},
+		{name: "different sidecar identity", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: otherPairTLS, manager: leases, want: http.StatusNotFound},
+		{name: "different CN authority", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: verifiedTLS, manager: otherPairLeases, want: http.StatusNotFound},
 		{name: "schema mismatch", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: appendBytes(appendBytes(nil, 1, wires[0]), 2, []byte("wrong")), tls: verifiedTLS, manager: leases, want: http.StatusNotFound},
 	}
 	for _, tc := range tests {
@@ -1878,7 +1931,7 @@ func TestResolverServerLifecycle(t *testing.T) {
 	nondurable := NewLeaseManager(1, new(fakeProtector))
 	require.False(t, nondurable.DurableReady())
 	_, err := NewResolverServer("127.0.0.1:0", &tls.Config{}, nondurable, acceptResolveAudit())
-	require.ErrorContains(t, err, "replayed lease manager")
+	require.ErrorContains(t, err, "approved lease manager")
 	leases := NewPersistentLeaseManager(1, new(fakeProtector), new(fakeLeaseJournal))
 	require.NoError(t, leases.Replay(context.Background()))
 	require.True(t, leases.DurableReady())
@@ -1889,6 +1942,10 @@ func TestResolverServerLifecycle(t *testing.T) {
 		Certificates: []tls.Certificate{{Certificate: [][]byte{{1}}}},
 	}
 	auditor := acceptResolveAudit()
+	benchmark := NewBenchmarkLeaseManager(1, new(fakeProtector))
+	benchmarkServer, err := NewResolverServer("127.0.0.1:0", validTLS, benchmark, auditor)
+	require.NoError(t, err)
+	require.NoError(t, benchmarkServer.Close(context.Background()))
 	_, err = NewResolverServer("", validTLS, leases, auditor)
 	require.Error(t, err)
 	_, err = NewResolverServer("127.0.0.1:0", nil, leases, auditor)
@@ -2257,10 +2314,79 @@ func TestSubstraitTypeAndLiteralMappings(t *testing.T) {
 	require.ErrorContains(t, err, "outside the supported bound")
 
 	charType := planpb.Type{Id: int32(types.T_char), Width: 5}
-	_, err = substraitType(&charType)
-	require.True(t, IsNotEligible(err))
-	_, err = literal(&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "fixed"}}, &charType)
-	require.True(t, IsNotEligible(err))
+	mappedChar, err := substraitType(&charType)
+	require.NoError(t, err)
+	require.Equal(t, int32(5), mappedChar.GetVarchar().GetLength())
+	charLiteral, err := literal(
+		&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "x  "}}, &charType)
+	require.NoError(t, err)
+	require.Equal(t, "x  ", charLiteral.GetLiteral().GetVarChar().GetValue(), "wire canonicalization must not trim or pad CHAR bytes")
+	require.Equal(t, uint32(5), charLiteral.GetLiteral().GetVarChar().GetLength())
+	_, err = substraitType(&planpb.Type{Id: int32(types.T_char), Width: -1})
+	require.ErrorContains(t, err, "negative char width")
+}
+
+func TestCharUsesTheVarcharSemanticFamily(t *testing.T) {
+	charType := planpb.Type{Id: int32(types.T_char), Width: 10, NotNullable: true}
+	varcharType := planpb.Type{Id: int32(types.T_varchar), Width: 10, NotNullable: true}
+	charExpr := &planpb.Expr{Typ: charType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	varcharExpr := &planpb.Expr{Typ: varcharType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+		Value: &planpb.Literal_Sval{Sval: "AIR "},
+	}}}
+	out := boolType()
+	out.NotNullable = true
+	require.NoError(t, validateScalarSignature("equal", &out, []*planpb.Expr{charExpr, varcharExpr}))
+	require.NoError(t, validateScalarSignature("like", &out, []*planpb.Expr{charExpr, varcharExpr}))
+
+	resolved, err := function.GetFunctionByName(
+		context.Background(), "=", []types.Type{types.New(types.T_char, 10, 0), types.New(types.T_char, 10, 0)})
+	require.NoError(t, err)
+	charLiteral := *varcharExpr
+	charLiteral.Typ = charType
+	supported, err := hasSemanticCapability(
+		semanticScalar,
+		"equal",
+		&planpb.ObjectRef{Obj: resolved.GetEncodedOverloadID(), ObjName: "="},
+		[]*planpb.Expr{charExpr, &charLiteral},
+		&out,
+	)
+	require.NoError(t, err)
+	require.True(t, supported)
+}
+
+func TestExportRejectsWidthSensitiveStringCasts(t *testing.T) {
+	for _, target := range []string{"char(3)", "varchar(3)"} {
+		t.Run(target, func(t *testing.T) {
+			// MatrixOne truncates this public SQL cast to three runes. Sirius
+			// executes its Substrait VARCHAR target without enforcing the bound,
+			// so Export must decline rather than expose divergent result bytes.
+			query := boundSQLQuery(t, "select cast('abcd' as "+target+") from tpch.nation")
+			_, err := Export(query)
+			require.True(t, IsNotEligible(err))
+			require.ErrorContains(t, err, "cast overload")
+		})
+	}
+}
+
+func TestTPCHCastStringWidthAdmission(t *testing.T) {
+	varchar6 := &planpb.Type{Id: int32(types.T_varchar), Width: 6}
+	char6 := &planpb.Type{Id: int32(types.T_char), Width: 6}
+	for _, tc := range []struct {
+		name   string
+		input  *planpb.Type
+		output *planpb.Type
+		want   bool
+	}{
+		{name: "varchar widening", input: varchar6, output: &planpb.Type{Id: int32(types.T_varchar), Width: 25}, want: true},
+		{name: "varchar unbounded", input: varchar6, output: &planpb.Type{Id: int32(types.T_varchar)}, want: true},
+		{name: "varchar narrowing", input: varchar6, output: &planpb.Type{Id: int32(types.T_varchar), Width: 3}, want: false},
+		{name: "char target", input: varchar6, output: &planpb.Type{Id: int32(types.T_char), Width: 25}, want: false},
+		{name: "char source", input: char6, output: &planpb.Type{Id: int32(types.T_varchar), Width: 25}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tpchCastTypes(tc.input, tc.output))
+		})
+	}
 }
 
 func TestExportAcceptsDateAndRejectsTimestamp(t *testing.T) {
@@ -2307,6 +2433,13 @@ func TestEligibilityDeclinesAreDistinctFromMalformedAndOperationalErrors(t *test
 	malformed.Nodes[0].ObjRef = nil
 	_, err = Export(malformed)
 	require.Error(t, err)
+	require.False(t, IsNotEligible(err))
+
+	missingDatabaseID := scanQuery()
+	missingDatabaseID.Nodes[0].ObjRef.Db = 7
+	missingDatabaseID.Nodes[0].TableDef.DbId = 0
+	_, err = Export(missingDatabaseID)
+	require.ErrorContains(t, err, "malformed table identity")
 	require.False(t, IsNotEligible(err))
 
 	candidate, err := Export(scanQuery())
@@ -2462,7 +2595,7 @@ func boundSQLQuery(t *testing.T, sql string) *planpb.Query {
 		require.NotNil(t, node.TableDef)
 		// The mock compiler intentionally leaves catalog IDs unset. Supply only
 		// those physical identities so Export sees an otherwise real bound plan.
-		node.ObjRef.Db = 7
+		node.TableDef.DbId = 7
 		if node.TableDef.TblId == 0 {
 			node.TableDef.TblId = uint64(node.NodeId) + 42
 		}
@@ -2552,7 +2685,7 @@ func scalarFunctionName(plan *spb.Plan, anchor uint32) string {
 }
 
 func scanQuery() *planpb.Query {
-	return &planpb.Query{StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"}, Nodes: []*planpb.Node{{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Db: 7, Obj: 42, ObjName: "t"}, TableDef: &planpb.TableDef{TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", ColId: 11, Seqnum: 5, Typ: i64Type()}}}}}}
+	return &planpb.Query{StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"}, Nodes: []*planpb.Node{{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Obj: 42, ObjName: "t"}, TableDef: &planpb.TableDef{DbId: 7, TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", ColId: 11, Seqnum: 5, Typ: i64Type()}}}}}}
 }
 func i64Type() planpb.Type  { return planpb.Type{Id: int32(types.T_int64)} }
 func boolType() planpb.Type { return planpb.Type{Id: int32(types.T_bool)} }

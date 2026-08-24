@@ -345,7 +345,13 @@ func TestOnlyOneEligibleExecutionOwnsStatementAttempts(t *testing.T) {
 
 func TestRemoteTerminalEnvelope(t *testing.T) {
 	anal := &AnalyzeModule{}
-	sender := &messageSenderOnClient{anal: anal}
+	lastInsertID := uint64(0)
+	statementLastInsertID := uint64(0)
+	senderProc := &process.Process{Base: &process.BaseProcess{
+		LastInsertID:          &lastInsertID,
+		StatementLastInsertID: &statementLastInsertID,
+	}}
+	sender := &messageSenderOnClient{anal: anal, proc: senderProc}
 	var allocation resource.AllocationAccountTotals
 	require.Zero(t, allocation.AddGeneration(17, 0, true))
 	require.Zero(t, allocation.AddOwnerGeneration(63, 17, 0))
@@ -355,6 +361,7 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 			LocalScope: []models.PhyScope{{Magic: "Merge"}},
 		},
 		TerminalResourceVersion: remoteTerminalResourceVersion,
+		StatementLastInsertID:   17,
 		Delta: resource.Delta{
 			Usage:   resource.Usage{ExclusiveActiveNS: 11, S3ReadBytes: 12},
 			Quality: resource.QualityPartial,
@@ -386,6 +393,8 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 	}}, summary.PendingAllocationGroups)
 	require.Equal(t, []string{"completed@cn"}, summary.CompletedAllocationGroups)
 	require.Equal(t, uint64(12), summary.Usage.S3ReadBytes)
+	require.Equal(t, uint64(17), senderProc.GetStatementLastInsertID())
+	require.Equal(t, uint64(17), senderProc.GetLastInsertID())
 	require.Equal(t, uint64(15), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Equal(t, uint64(1), summary.Allocation.GenerationCount)
 	require.Equal(t, uint64(17), summary.Allocation.MaxGenerationPeak)

@@ -976,6 +976,16 @@ func TestByteJson_Unquote(t *testing.T) {
 			valid:   true,
 		},
 		{
+			jsonStr: `"\"x\""`,
+			outStr:  `"x"`,
+			valid:   true,
+		},
+		{
+			jsonStr: `"\"\""`,
+			outStr:  `""`,
+			valid:   true,
+		},
+		{
 			jsonStr: `"a\b"`,
 			outStr:  "a\b",
 			valid:   true,
@@ -1026,6 +1036,28 @@ func TestByteJson_Unquote(t *testing.T) {
 		out, err := bj.Unquote()
 		require.Nil(t, err)
 		require.Equal(t, kase.outStr, out)
+	}
+}
+
+func TestByteJson_UnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
+	values := []string{
+		"plain",
+		"a\"b",
+		"\"leading",
+		"trailing\"",
+		"\"both\"",
+		"\"",
+		"\"\"",
+		"\"你好\"",
+	}
+	for _, want := range values {
+		encoded, err := json.Marshal(want)
+		require.NoError(t, err)
+		bj, err := ParseFromString(string(encoded))
+		require.NoError(t, err)
+		got, err := bj.Unquote()
+		require.NoError(t, err)
+		require.Equal(t, want, got)
 	}
 }
 

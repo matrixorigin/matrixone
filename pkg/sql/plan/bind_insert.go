@@ -53,6 +53,23 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
+	targetDB := string(stmt.TargetDatabaseName)
+	targetTable := string(stmt.TargetTableName)
+	if targetTable == "" {
+		target := stmt.Table.(*tree.TableName)
+		targetDB = string(target.SchemaName)
+		targetTable = string(target.ObjectName)
+	}
+	if targetDB == "" {
+		targetDB = builder.compCtx.DefaultDatabase()
+	}
+	dmlCtx.targetDBName = targetDB
+	dmlCtx.targetTableName = targetTable
+	if err = validateInsertColumnQualifiers(
+		builder.GetContext(), stmt.ColumnNames, targetDB, targetTable, builder.compCtx.GetLowerCaseTableNames(),
+	); err != nil {
+		return 0, err
+	}
 
 	if stmt.IsRestore {
 		builder.isRestore = true
@@ -1803,7 +1820,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	} else {
 		onDupAction = plan.Node_UPDATE
 
-		binder := NewOndupUpdateBinder(builder.GetContext(), builder, bindCtx, scanTag, selectTag, tableDef)
+		binder := NewOndupUpdateBinder(
+			builder.GetContext(), builder, bindCtx, scanTag, selectTag, tableDef,
+			dmlCtx.targetDBName, dmlCtx.targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+		)
 		var updateExpr *plan.Expr
 		for _, astUpdateExpr := range astUpdateExprs {
 			colName := astUpdateExpr.Names[0].ColName()
@@ -3322,7 +3342,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 			return 0, nil, nil, err
 		}
 
-	case *tree.SelectClause:
+	case *tree.SelectClause, *tree.UnionClause:
 		astSelect = astRows
 
 		subCtx := NewBindContext(builder, bindCtx)

@@ -217,7 +217,7 @@ func AppendVectorSQLLiteral(ctx context.Context, vec *vector.Vector, row int, bu
 		buf = append(buf, value...)
 		buf = append(buf, '\'')
 	default:
-		return nil, moerr.NewInternalErrorf(ctx, "ivf_search: unsupported pk type %d", typ.Oid)
+		return nil, moerr.NewInternalErrorf(ctx, "IVF membership filter: unsupported pk type %d", typ.Oid)
 	}
 
 	return buf, nil

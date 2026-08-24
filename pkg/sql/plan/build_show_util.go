@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -44,10 +46,17 @@ func ConstructCreateTableSQL(
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
 	// This formatter is also used by context-free consumers that do not own a
-	// source catalog snapshot (CDC, publication, and dump).  Keep it limited to
-	// rendering the supplied definition; planner entry points that resolve a
-	// local source table reconcile its visibility before calling here.
-	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+	// source catalog snapshot (CDC, publication, and dump). Planner entry points
+	// reconcile index visibility before calling here. Subscription-aware clone
+	// planning additionally passes its scoped publisher identity explicitly.
+	var sourceSubscription *SubscriptionMeta
+	if ctx != nil {
+		sourceSubscription = ctx.GetQueryingSubscription()
+	}
+	return constructCreateTableSQL(
+		ctx, tableDef, snapshot, useDbName, cloneStmt, true,
+		sourceSubscription,
+	)
 }
 
 func createTableIndexVisible(indexDef *plan.IndexDef) bool {
@@ -66,6 +75,7 @@ func constructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
+	sourceSubscription *SubscriptionMeta,
 ) (string, tree.Statement, error) {
 	var err error
 	var createStr string
@@ -449,6 +459,14 @@ func constructCreateTableSQL(
 		}
 	}
 
+	sourceDatabaseName := ""
+	if cloneStmt != nil {
+		sourceDatabaseName = cloneStmt.SrcTable.SchemaName.String()
+		if sourceSubscription != nil {
+			sourceDatabaseName = sourceSubscription.DbName
+		}
+	}
+
 	updateFKTableDef := func(fkDef *TableDef) (*TableDef, error) {
 		if cloneStmt == nil || cloneStmt.StmtType == tree.NoClone {
 			return fkDef, nil
@@ -481,7 +499,7 @@ func constructCreateTableSQL(
 			return err
 		}
 
-		if cloneStmt.SrcTable.SchemaName.String() == fkDef.DbName {
+		if sourceDatabaseName == fkDef.DbName {
 			// within db refer
 			referType = 1
 		} else {
@@ -534,8 +552,8 @@ func constructCreateTableSQL(
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
 		} else {
-			if ctx.GetQueryingSubscription() != nil {
-				if _, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription()); err != nil {
+			if sourceSubscription != nil {
+				if _, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, sourceSubscription); err != nil {
 					return "", nil, err
 				}
 				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
@@ -575,8 +593,11 @@ func constructCreateTableSQL(
 		}
 
 		fkRefDbName := fkTableDef.DbName
+		if cloneStmt == nil && sourceSubscription != nil && fkRefDbName == sourceSubscription.DbName {
+			fkRefDbName = sourceSubscription.SubName
+		}
 		if cloneStmt != nil && (cloneStmt.StmtType == tree.WithinAccCloneDB || cloneStmt.StmtType == tree.BetweenAccCloneDB) &&
-			cloneStmt.SrcTable.SchemaName.String() == fkTableDef.DbName {
+			sourceDatabaseName == fkTableDef.DbName {
 			fkRefDbName = schemaName
 		}
 		fkRefDbTblName := sqlquote.Ident(fkTableDef.Name)
@@ -716,6 +737,26 @@ func constructCreateTableSQL(
 		}
 		if len(mongoColumns) > 0 {
 			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
+		if dsCfg, found, parseErr := IsDataStreamTableDef(ctx.GetContext(), tableDef); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatDataStreamTableOptionsForShowCreate(dsCfg, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
+		if fCfg, found, parseErr := IsForeignTableDef(ctx.GetContext(), tableDef); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatForeignTableOptionsForShowCreate(fCfg, sqlMode)
 			var stmt tree.Statement
 			if ctx != nil {
 				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
@@ -1156,8 +1197,15 @@ func FormatColType(colType plan.Type) string {
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
-	if typ.Oid == types.T_text && colType.Width == types.MaxTinyTextLen {
-		ts = "TINYTEXT"
+	if typ.Oid == types.T_text {
+		switch colType.Width {
+		case types.MaxTinyTextLen:
+			ts = "TINYTEXT"
+		case types.MaxMediumTextLen:
+			ts = "MEDIUMTEXT"
+		case types.MaxLongTextLen:
+			ts = "LONGTEXT"
+		}
 	}
 	// after decimal fix, remove this
 	if typ.Oid.IsDecimal() {
@@ -1307,6 +1355,69 @@ func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope, sq
 		builder.WriteString("'")
 	}
 	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config, sqlMode string) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "server", value: cfg.Server},
+		{key: "port", value: fmt.Sprintf("%d", cfg.Port)},
+		{key: "table", value: cfg.Table},
+		{key: "recheck", value: fmt.Sprintf("%t", cfg.Recheck)},
+		// cfg.APIKey is intentionally NOT emitted: SHOW CREATE output is
+		// widely visible and would leak the shared secret. A datastream table
+		// restored from SHOW CREATE (snapshot/PITR replay) must have its
+		// 'apikey' re-supplied if the server requires one.
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = DATASTREAM WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, sqlMode string) string {
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = ")
+	builder.WriteString(strings.ToUpper(cfg.Kind))
+	options := make([]struct{ key, value string }, 0, 2)
+	if cfg.ConfigJSON != "" {
+		// A config carries credentials (ES password, DSN password): SHOW
+		// CREATE output is widely visible, so it is always redacted. A table
+		// restored from SHOW CREATE (snapshot/PITR replay) must have its
+		// 'config' re-supplied, or be created without one and use the
+		// @esql_tvf_config / @sql_tvf_config session variable.
+		options = append(options, struct{ key, value string }{"config", "<redacted>"})
+	}
+	if cfg.DefaultQuery != "" {
+		options = append(options, struct{ key, value string }{"query", cfg.DefaultQuery})
+	}
+	if len(options) > 0 {
+		builder.WriteString(" WITH (")
+		for i, option := range options {
+			if i > 0 {
+				builder.WriteString(", ")
+			}
+			builder.WriteString("\"")
+			builder.WriteString(option.key)
+			builder.WriteString("\" = '")
+			builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+			builder.WriteString("'")
+		}
+		builder.WriteString(")")
+	}
 	return builder.String()
 }
 

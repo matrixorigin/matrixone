@@ -312,6 +312,11 @@ type PrepareStmt struct {
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
+	// cursorRequested is set by the current COM_STMT_EXECUTE packet. The
+	// materialized cursor is kept on the prepared statement because a later
+	// COM_STMT_FETCH only carries the statement id.
+	cursorRequested bool
+	cursor          *preparedStmtCursor
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
@@ -334,6 +339,44 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+}
+
+// preparedStmtCursor is the server-side result retained between
+// COM_STMT_EXECUTE and COM_STMT_FETCH. MySQL sessions serialize commands, so
+// the cursor does not need an additional lock.
+type preparedStmtCursor struct {
+	result   *MysqlResultSet
+	offset   uint64
+	bytes    uint64
+	maxBytes uint64
+	// maxBytesSet distinguishes an explicit zero query_result_maxsize from
+	// an in-memory test/legacy cursor that has not been initialized yet.
+	maxBytesSet bool
+	maxRows     uint64
+	owner       *Session
+}
+
+func (cursor *preparedStmtCursor) close() {
+	if cursor == nil {
+		return
+	}
+	if cursor.owner != nil && cursor.bytes > 0 {
+		cursor.owner.releasePreparedCursorBytes(cursor.bytes)
+	}
+	cursor.result = nil
+	cursor.offset = 0
+	cursor.bytes = 0
+	cursor.owner = nil
+}
+
+func (prepareStmt *PrepareStmt) closeCursor() {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.cursor != nil {
+		prepareStmt.cursor.close()
+		prepareStmt.cursor = nil
+	}
 }
 
 /*
@@ -675,6 +718,7 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //}
 
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.closeCursor()
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
@@ -709,6 +753,10 @@ func (prepareStmt *PrepareStmt) resetBinaryParamState() {
 	}
 }
 
+func (prepareStmt *PrepareStmt) hasPendingLongData() bool {
+	return prepareStmt != nil && len(prepareStmt.getFromSendLongData) > 0
+}
+
 func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	if prepareStmt == nil {
 		return
@@ -720,6 +768,7 @@ func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	for k := range prepareStmt.getFromSendLongData {
 		delete(prepareStmt.getFromSendLongData, k)
 	}
+	prepareStmt.cursorRequested = false
 }
 
 type Allocator interface {
@@ -913,6 +962,9 @@ type ExecCtx struct {
 	persistentDropTableTargets tree.TableNames
 	//isLastStmt : true denotes the last statement in the query
 	isLastStmt bool
+	// singleStatementQuery is true only for a raw COM_QUERY containing one
+	// statement, which is the only input the proxy records for raw replay.
+	singleStatementQuery bool
 	// tenant name
 	tenant          string
 	userName        string
@@ -933,7 +985,9 @@ type ExecCtx struct {
 	resper            Responser
 	results           []ExecResult
 	prepareColDef     [][]byte
+	cursorResultSaver StagedBinaryWriter
 	returning         *returningState
+	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
@@ -958,6 +1012,10 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
+	if execCtx.cursorResultSaver != nil && execCtx.reqCtx != nil && execCtx.ses != nil {
+		_ = execCtx.cursorResultSaver.Abort(execCtx)
+	}
+	execCtx.cursorResultSaver = nil
 	if execCtx.returning != nil {
 		_ = execCtx.returning.Close(execCtx)
 		execCtx.returning = nil
@@ -968,6 +1026,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.persistentDropTableTargets = nil
+	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -982,6 +1041,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.selectInto = nil
 	execCtx.rewriteEnabled = false
 }
 
@@ -1575,7 +1635,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// later in rewriteSQL, which runs on every statement and would make the
 	// session unable to even clear the bad value.
 	if name == "remap_rewrites" {
-		if err = validateRemapRewrites(ctx, val); err != nil {
+		if err = validateRemapRewrites(ctx, val, parserLowerCaseTableNames(ses)); err != nil {
 			return err
 		}
 	}
@@ -1601,6 +1661,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
 			txnHandler.setSessionTxnIsolation(txnIsolation)
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
 		}
 	}
 
@@ -1617,6 +1678,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
 	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
 		ses.RemoveAllPrepareStmts()
+	}
+	if err == nil {
+		ses.markMigrationSystemVarReplayable(canonicalName, false)
 	}
 	return
 }

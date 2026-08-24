@@ -70,6 +70,14 @@ func TestSiriusRuntimeValidationAndLookup(t *testing.T) {
 		AuthorizedClientSPKIHash: make([]byte, 32), DataDir: t.TempDir(), LeaseTTL: time.Minute, CleanupTimeout: time.Second,
 	}
 	require.Error(t, invalid.Validate())
+	benchmark := *invalid
+	benchmark.BenchmarkNoGC = true
+	benchmark.Leases = substrait.NewBenchmarkLeaseManager(1, &siriusRuntimeTestProtector{})
+	require.NoError(t, benchmark.Validate())
+	require.False(t, nondurable.BenchmarkReady())
+	wrongNormalMode := benchmark
+	wrongNormalMode.BenchmarkNoGC = false
+	require.ErrorContains(t, wrongNormalMode.Validate(), "incomplete CN Sirius runtime")
 	leases := substrait.NewPersistentLeaseManager(1, &siriusRuntimeTestProtector{}, siriusJournalStub{})
 	require.NoError(t, leases.Replay(context.Background()))
 	valid := &SiriusRuntime{
@@ -79,6 +87,9 @@ func TestSiriusRuntimeValidationAndLookup(t *testing.T) {
 		DataDir: t.TempDir(), LeaseTTL: time.Minute, CleanupTimeout: time.Second,
 	}
 	require.NoError(t, valid.Validate())
+	wrongBenchmarkMode := *valid
+	wrongBenchmarkMode.BenchmarkNoGC = true
+	require.ErrorContains(t, wrongBenchmarkMode.Validate(), "incomplete benchmark CN Sirius runtime")
 
 	service := "sirius-runtime-lookup-test"
 	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
@@ -104,8 +115,8 @@ func TestRecoverAdmittedReadReleasesOrRetainsRetryableOwner(t *testing.T) {
 		StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"},
 		Nodes: []*planpb.Node{{
 			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
-			ObjRef: &planpb.ObjectRef{Db: 7, Obj: 42, ObjName: "t"},
-			TableDef: &planpb.TableDef{TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{
+			ObjRef: &planpb.ObjectRef{Obj: 42, ObjName: "t"},
+			TableDef: &planpb.TableDef{DbId: 7, TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{
 				Name: "a", ColId: 11, Seqnum: 5, Typ: planpb.Type{Id: int32(types.T_int64)},
 			}}},
 		}},
@@ -184,9 +195,9 @@ func TestSQLSelectLimitIsMaterializedBeforeSiriusExport(t *testing.T) {
 		ApplySqlSelectLimit: true,
 		Nodes: []*planpb.Node{{
 			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
-			ObjRef: &planpb.ObjectRef{Db: 7, Obj: 42, ObjName: "t"},
+			ObjRef: &planpb.ObjectRef{Obj: 42, ObjName: "t"},
 			TableDef: &planpb.TableDef{
-				TblId: 42, Version: 3, Name: "t", TableType: "r",
+				DbId: 7, TblId: 42, Version: 3, Name: "t", TableType: "r",
 				Cols: []*planpb.ColDef{{
 					Name: "a", ColId: 11, Seqnum: 5,
 					Typ: planpb.Type{Id: int32(types.T_int64)},
