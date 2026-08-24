@@ -758,14 +758,14 @@ func TestNamedWindowLimitPerQueryBlock(t *testing.T) {
 
 	t.Run("named plus implicit", func(t *testing.T) {
 		_, err := buildNamedWindowPlan(t,
-			"select row_number() over () from nation window "+namedWindowsSQL("w", 126))
+			"select row_number() over (), rank() over () from nation window "+namedWindowsSQL("w", 125))
 		require.NoError(t, err)
 		_, err = buildNamedWindowPlan(t,
-			"select row_number() over (), rank() over () from nation window "+namedWindowsSQL("w", 126))
+			"select row_number() over () from nation window "+namedWindowsSQL("w", 126))
 		require.NoError(t, err)
 
 		_, err = buildNamedWindowPlan(t,
-			"select row_number() over (), rank() over () from nation window "+namedWindowsSQL("w", 127))
+			"select row_number() over (), rank() over () from nation window "+namedWindowsSQL("w", 126))
 		require.ErrorContains(t, err, "Too many windows in SELECT: 128. Maximum allowed is 127")
 	})
 

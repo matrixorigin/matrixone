@@ -45,7 +45,6 @@ const maxWindowsPerQueryBlock = 127
 
 func validateQueryBlockWindowCount(ctx context.Context, clause *tree.SelectClause, orderBy tree.OrderBy) error {
 	count := len(clause.Windows)
-	implicitWindows := make(map[string]struct{})
 	countExpr := func(expr tree.Expr) {
 		if expr == nil || count > maxWindowsPerQueryBlock {
 			return
@@ -58,11 +57,7 @@ func validateQueryBlockWindowCount(ctx context.Context, clause *tree.SelectClaus
 				// OVER name reuses a named window. OVER (...) defines an
 				// additional implicit window, including OVER (name ...).
 				if function.WindowSpec.RefName == nil || !function.WindowSpec.ReferencedOnly {
-					key := semanticNodeKey(function.WindowSpec)
-					if _, exists := implicitWindows[key]; !exists {
-						implicitWindows[key] = struct{}{}
-						count++
-					}
+					count++
 				}
 			}
 			return count <= maxWindowsPerQueryBlock
