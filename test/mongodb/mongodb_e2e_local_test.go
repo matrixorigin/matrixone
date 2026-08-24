@@ -164,9 +164,11 @@ func TestMongoDBLocalE2EPortPlanLeasesPortBlockAcrossProcesses(t *testing.T) {
 		"MO_MONGODB_PORT_PLAN_HOLD_SECONDS": "2",
 		"MO_MONGODB_PORT_PLAN_READY_FILE":   readyFile,
 	})
-	var commandOutput strings.Builder
-	command.Stdout = &commandOutput
-	command.Stderr = &commandOutput
+	outputFile, err := os.CreateTemp(t.TempDir(), "port-plan-output")
+	require.NoError(t, err)
+	command.Stdout = outputFile
+	command.Stderr = outputFile
+	t.Cleanup(func() { _ = outputFile.Close() })
 	require.NoError(t, command.Start())
 	finished := false
 	t.Cleanup(func() {
@@ -176,17 +178,7 @@ func TestMongoDBLocalE2EPortPlanLeasesPortBlockAcrossProcesses(t *testing.T) {
 		}
 	})
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		contents, readErr := os.ReadFile(readyFile)
-		if readErr == nil && string(contents) == "ready\n" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	contents, readErr := os.ReadFile(readyFile)
-	require.NoErrorf(t, readErr, "first port-plan did not become ready: %s", commandOutput.String())
-	require.Equal(t, "ready\n", string(contents), commandOutput.String())
+	waitForMongoDBPortPlanReady(t, readyFile)
 
 	_, output, err = runMongoDBPortPlan(t, map[string]string{
 		"MO_MONGODB_LOG_PORT_BASE": base,
@@ -194,8 +186,99 @@ func TestMongoDBLocalE2EPortPlanLeasesPortBlockAcrossProcesses(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, output, "MO_MONGODB_LOG_PORT_BASE is already leased")
 
-	require.NoError(t, command.Wait(), commandOutput.String())
+	waitErr := command.Wait()
 	finished = true
+	require.NoError(t, outputFile.Close())
+	commandOutput, err := os.ReadFile(outputFile.Name())
+	require.NoError(t, err)
+	require.NoError(t, waitErr, string(commandOutput))
+}
+
+func TestMongoDBLocalE2EPortPlanReleasesLeaseAfterParentDeath(t *testing.T) {
+	ports, output, err := runMongoDBPortPlan(t, nil)
+	require.NoError(t, err, output)
+	base := strconv.Itoa(ports["LOG_PORT_BASE"])
+	temporaryDirectory := t.TempDir()
+	readyFile := filepath.Join(temporaryDirectory, "port-plan-ready")
+	leaseDirectory := filepath.Join(temporaryDirectory, "leases")
+	outputFile := filepath.Join(temporaryDirectory, "port-plan-output")
+
+	repoRoot := mongoDBTestRepoRoot(t)
+	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
+	command.Dir = repoRoot
+	command.Env = mongoDBPortPlanEnv(map[string]string{
+		"MO_MONGODB_LOG_PORT_BASE":          base,
+		"MO_MONGODB_PORT_LEASE_DIR":         leaseDirectory,
+		"MO_MONGODB_PORT_PLAN_HOLD_SECONDS": "60",
+		"MO_MONGODB_PORT_PLAN_READY_FILE":   readyFile,
+	})
+	commandOutput, err := os.Create(outputFile)
+	require.NoError(t, err)
+	command.Stdout = commandOutput
+	command.Stderr = commandOutput
+	finished := false
+	t.Cleanup(func() {
+		if !finished && command.Process != nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+		_ = commandOutput.Close()
+		killMongoDBLeaseHolders(t, filepath.Join(leaseDirectory, base+".lock"))
+	})
+	require.NoError(t, command.Start())
+
+	waitForMongoDBPortPlanReady(t, readyFile)
+	require.NoError(t, command.Process.Kill())
+	require.Error(t, command.Wait())
+	finished = true
+
+	deadline := time.Now().Add(3 * time.Second)
+	lastOutput := ""
+	for time.Now().Before(deadline) {
+		_, output, err = runMongoDBPortPlan(t, map[string]string{
+			"MO_MONGODB_LOG_PORT_BASE":  base,
+			"MO_MONGODB_PORT_LEASE_DIR": leaseDirectory,
+		})
+		if err == nil {
+			return
+		}
+		lastOutput = output
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("port lease remained after parent death: %s", lastOutput)
+}
+
+func waitForMongoDBPortPlanReady(t *testing.T, readyFile string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		contents, err := os.ReadFile(readyFile)
+		if err == nil && string(contents) == "ready\n" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	contents, err := os.ReadFile(readyFile)
+	require.NoError(t, err, "port-plan did not become ready")
+	require.Equal(t, "ready\n", string(contents))
+}
+
+func killMongoDBLeaseHolders(t *testing.T, leaseFile string) {
+	t.Helper()
+	output, err := exec.Command("pgrep", "-f", leaseFile).Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Fields(string(output)) {
+		pid, err := strconv.Atoi(line)
+		if err != nil {
+			continue
+		}
+		process, err := os.FindProcess(pid)
+		if err == nil {
+			_ = process.Kill()
+		}
+	}
 }
 
 func runMongoDBPortPlan(t *testing.T, overrides map[string]string) (map[string]int, string, error) {

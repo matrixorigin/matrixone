@@ -163,12 +163,15 @@ acquire_port_block_lease() {
   status_file="$(mktemp "${TMPDIR:-/tmp}/mo-mongodb-port-lease.XXXXXX")" || \
     die "could not create MongoDB E2E port lease status file"
 
-  python3 - "$lease_file" "$status_file" <<'PY' &
+  python3 - "$lease_file" "$status_file" "$$" <<'PY' &
 import fcntl
+import os
 import signal
 import sys
+import time
 
-lease_file, status_file = sys.argv[1:]
+lease_file, status_file, parent_pid = sys.argv[1:]
+parent_pid = int(parent_pid)
 with open(lease_file, "a+") as lease:
     try:
         fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -184,8 +187,10 @@ with open(lease_file, "a+") as lease:
 
     signal.signal(signal.SIGTERM, release)
     signal.signal(signal.SIGINT, release)
-    while True:
-        signal.pause()
+    # The shell trap handles ordinary cleanup. If the shell is killed, the
+    # child is reparented and must close its flock without waiting for a signal.
+    while os.getppid() == parent_pid:
+        time.sleep(0.05)
 PY
   PORT_LEASE_PID=$!
 
