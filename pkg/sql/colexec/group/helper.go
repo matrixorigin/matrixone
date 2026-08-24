@@ -186,6 +186,18 @@ func (publication *groupKeySourcePublication) finalize() {
 	}
 }
 
+type groupPrePublicationError struct {
+	cause error
+}
+
+func (err *groupPrePublicationError) Error() string { return err.cause.Error() }
+func (err *groupPrePublicationError) Unwrap() error { return err.cause }
+
+func isGroupPrePublicationError(err error) bool {
+	_, ok := err.(*groupPrePublicationError)
+	return ok
+}
+
 func (ctr *container) commitGroupByChunk(
 	vectors []*vector.Vector,
 	offset, rows int,
@@ -206,12 +218,12 @@ func (ctr *container) commitGroupByChunk(
 		if err := ctr.preflightPreviewGroupKeyStringSources(
 			vectors, offset, preview.values, preview.inserted,
 			&sourcePublication); err != nil {
-			return nil, 0, err
+			return nil, 0, &groupPrePublicationError{cause: err}
 		}
 	}
 	values, _, err := ctr.hr.TxnItr.CommitPreview(&ctr.hr.insertPlan)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, &groupPrePublicationError{cause: err}
 	}
 
 	more, err := ctr.appendGroupByBatchWithStringSources(
@@ -1450,7 +1462,16 @@ reloadLoop:
 		vals, more, err := ctr.commitGroupByChunk(
 			gbBatch.Vecs, 0, rowCount, preview)
 		if err != nil {
-			return false, err
+			if !isGroupPrePublicationError(err) {
+				return false, err
+			}
+			ctr.cancelGroupByPreflights()
+			retried, retryErr := ctr.retrySpillReloadRecord(
+				proc, opAnalyzer, opStats, bkt, bufferedFile, recordStart, err)
+			if !retried {
+				return false, retryErr
+			}
+			continue reloadLoop
 		}
 
 		if len(ctr.aggList) > 0 {

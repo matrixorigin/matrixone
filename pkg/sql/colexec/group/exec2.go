@@ -513,22 +513,27 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 					vals, more, insertErr := group.ctr.commitGroupByChunk(
 						group.ctr.groupByEvaluate.Vec, i, n, preview)
 					if insertErr != nil {
-						return false, insertErr
-					}
-					if more > 0 {
-						for _, agg := range group.ctr.aggList {
-							if growErr := agg.GroupGrow(more); growErr != nil {
-								return false, growErr
+						if !isGroupPrePublicationError(insertErr) {
+							return false, insertErr
+						}
+						group.ctr.cancelGroupByPreflights()
+						err = insertErr
+					} else {
+						if more > 0 {
+							for _, agg := range group.ctr.aggList {
+								if growErr := agg.GroupGrow(more); growErr != nil {
+									return false, growErr
+								}
 							}
 						}
-					}
-					for j, agg := range group.ctr.aggList {
-						if err = agg.BatchFill(
-							i, vals[:n], group.ctr.aggArgEvaluate[j].Vec); err != nil {
-							return false, err
+						for j, agg := range group.ctr.aggList {
+							if err = agg.BatchFill(
+								i, vals[:n], group.ctr.aggArgEvaluate[j].Vec); err != nil {
+								return false, err
+							}
 						}
+						break
 					}
-					break
 				}
 				if retried, retryErr := group.retryBuildBatchAfterCapacity(proc, err); retried {
 					evaluated = false
