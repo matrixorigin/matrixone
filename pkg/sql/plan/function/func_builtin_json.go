@@ -33,7 +33,56 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 )
 
-const JsonOrderingParamFunctionName = "__mo_json_ordering_param"
+const (
+	JsonOrderingParamFunctionName   = "__mo_json_ordering_param"
+	JsonComparisonParamFunctionName = "__mo_json_comparison_param"
+)
+
+// normalizeJsonComparisonParam preserves the runtime scalar category of a
+// prepared parameter before a JSON equality comparison. Prepared parameters
+// use TEXT as their transport type; treating that transport type as the SQL
+// type would unquote both JSON strings and JSON booleans to the same text.
+func normalizeJsonComparisonParam(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	_ *FunctionSelectList,
+) error {
+	from := vector.GenerateFunctionStrParameter(parameters[0])
+	to := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := from.GetStrValue(i)
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var scalar any = string(value)
+		kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+		if kind != vector.PrepareParamNone {
+			var err error
+			scalar, err = preparedTextToJSONValue(proc.Ctx, string(value), kind)
+			if err != nil {
+				return err
+			}
+		}
+		jsonValue, err := bytejson.CreateByteJSON(scalar)
+		if err != nil {
+			return err
+		}
+		encoded, err := types.EncodeJson(jsonValue)
+		if err != nil {
+			return err
+		}
+		if err := to.AppendBytes(encoded, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func normalizeJsonOrderingParam(
 	parameters []*vector.Vector,

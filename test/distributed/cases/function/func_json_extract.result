@@ -696,13 +696,25 @@ insert into json_bool_compare_test values
 (1, '{"enabled":true}'),
 (2, '{"enabled":false}'),
 (3, '{}'),
-(4, '{"enabled":null}');
+(4, '{"enabled":null}'),
+(5, '{"enabled":"true"}'),
+(6, '{"enabled":"false"}');
 select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = true;
 count(*)
 1
 select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = false;
 count(*)
 1
+prepare json_bool_compare_stmt from 'select id from json_bool_compare_test where json_extract(doc, ''$.enabled'') = ? order by id';
+set @json_bool_compare_param = true;
+execute json_bool_compare_stmt using @json_bool_compare_param;
+id
+1
+set @json_bool_compare_param = false;
+execute json_bool_compare_stmt using @json_bool_compare_param;
+id
+2
+deallocate prepare json_bool_compare_stmt;
 select json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true, json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true;
 json_extract(json_array(cast(0.00 as decimal(10, 2))), $[0]) = true    json_extract(json_array(cast(1.20 as decimal(10, 2))), $[0]) = true
 0    1

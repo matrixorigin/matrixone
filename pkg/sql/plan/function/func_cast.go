@@ -2910,8 +2910,9 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 	return nil
 }
 
-// jsonToBool implements JSON -> BOOL using the same scalar rules as the
-// existing numeric/string-to-bool casts.
+// jsonToBool implements JSON -> BOOL while preserving the JSON scalar type.
+// JSON strings are not boolean values, so coercive boolean comparisons must
+// see them as SQL NULL instead of parsing their contents as booleans.
 func jsonToBool(ctx context.Context, source vector.FunctionParameterWrapper[types.Varlena],
 	result vector.FunctionResultWrapper, length int) error {
 	to := vector.MustFunctionResult[bool](result)
@@ -2957,11 +2958,10 @@ func jsonToBool(ctx context.Context, source vector.FunctionParameterWrapper[type
 				return jsonCastErr(ctx, types.T_bool)
 			}
 		case bytejson.TpCodeString:
-			parsed, err := types.ParseBool(string(bj.GetString()))
-			if err != nil {
-				return jsonCastErr(ctx, types.T_bool)
+			if err := to.Append(false, true); err != nil {
+				return err
 			}
-			value = parsed
+			continue
 		default:
 			return jsonCastErr(ctx, types.T_bool)
 		}

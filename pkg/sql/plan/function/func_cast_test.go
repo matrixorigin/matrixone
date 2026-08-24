@@ -3863,14 +3863,16 @@ func TestCastJsonToBool(t *testing.T) {
 
 	run(t, "literal_and_numeric", []string{"true", "false", "0", "2", "-1"}, nil,
 		[]bool{true, false, false, true, true}, []bool{false, false, false, false, false}, false)
-	run(t, "string_values", []string{`"true"`, `"false"`, `"0"`, `"2"`}, nil,
-		[]bool{true, false, false, true}, []bool{false, false, false, false}, false)
-	run(t, "quoted_string_error", []string{`"\"true\""`}, nil, nil, nil, true)
+	run(t, "string_values_are_null", []string{`"true"`, `"false"`, `"0"`, `"2"`}, nil,
+		[]bool{false, false, false, false}, []bool{true, true, true, true}, false)
+	run(t, "quoted_string_is_null", []string{`"\"true\""`}, nil,
+		[]bool{false}, []bool{true}, false)
 	run(t, "json_null", []string{"null", "true"}, []bool{false, true},
 		[]bool{false, false}, []bool{true, true}, false)
 	run(t, "object_error", []string{"{}"}, nil, nil, nil, true)
 	run(t, "array_error", []string{"[true]"}, nil, nil, nil, true)
-	run(t, "string_error", []string{`"not-a-bool"`}, nil, nil, nil, true)
+	run(t, "other_string_is_null", []string{`"not-a-bool"`}, nil,
+		[]bool{false}, []bool{true}, false)
 
 	decimalEncoded := []string{
 		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0.00")),

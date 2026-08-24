@@ -21,9 +21,39 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJsonComparisonParamPreservesPreparedScalarType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	encode := func(value any) string {
+		bj, err := bytejson.CreateByteJSON(value)
+		require.NoError(t, err)
+		encoded, err := types.EncodeJson(bj)
+		require.NoError(t, err)
+		return string(encoded)
+	}
+
+	inputs := []FunctionTestInput{NewFunctionTestInput(
+		types.T_text.ToType(),
+		[]string{"true", "false", "7", "true"},
+		nil,
+	)}
+	expect := NewFunctionTestResult(types.T_json.ToType(), false,
+		[]string{encode(true), encode(false), encode(int64(7)), encode("true")}, nil)
+	testCase := NewFunctionTestCase(proc, inputs, expect, normalizeJsonComparisonParam)
+	testCase.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamBoolean,
+		vector.PrepareParamBoolean,
+		vector.PrepareParamInteger,
+		vector.PrepareParamNone,
+	})
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
 
 func TestDatetimeTimestampComparisonPreservesInstantSemantics(t *testing.T) {
 	proc := testutil.NewProcess(t)
