@@ -63,3 +63,38 @@ func TestV9RollbackSentinelDoesNotReachTombstoneLogtail(t *testing.T) {
 	require.Equal(t, 1, output.Length())
 	require.Equal(t, int64(7), output.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Get(0))
 }
+
+func TestV9ConstantRollbackSentinelFiltersEveryLogicalRow(t *testing.T) {
+	const rowCount = 2
+	src := &containers.BatchWithVersion{
+		Batch: containers.NewBatchWithCapacity(4),
+		Seqnums: []uint16{
+			objectio.TombstoneAttr_Rowid_SeqNum,
+			objectio.TombstoneAttr_PK_SeqNum,
+			objectio.SEQNUM_ROWID,
+			objectio.SEQNUM_COMMITTS,
+		},
+		NextSeqnum: 2,
+	}
+	defer src.Close()
+
+	deletedRowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	primaryKeys := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	physicalRowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	commitTSs := containers.NewConstFixed(
+		types.T_TS.ToType(), txnif.UncommitTS, rowCount,
+	)
+	var blockID types.Blockid
+	for row, key := range []int64{42, 7} {
+		deletedRowIDs.Append(types.NewRowid(&blockID, uint32(row+10)), false)
+		primaryKeys.Append(key, false)
+		physicalRowIDs.Append(types.NewRowid(&blockID, uint32(row)), false)
+	}
+	src.AddVector(objectio.TombstoneAttr_Rowid_Attr, deletedRowIDs)
+	src.AddVector(objectio.TombstoneAttr_PK_Attr, primaryKeys)
+	src.AddVector(catalog.PhyAddrColumnName, physicalRowIDs)
+	src.AddVector(objectio.TombstoneAttr_CommitTs_Attr, commitTSs)
+
+	output := TombstoneChangeToLogtailBatch(src)
+	require.Zero(t, output.Length())
+}

@@ -569,13 +569,23 @@ func (obj *baseObject) FillBlockTombstones(
 	blkID *objectio.Blockid,
 	deletes **nulls.Nulls,
 	deleteStartOffset uint64,
+	deleteEndOffset uint64,
 	mp *mpool.MPool) error {
-	node := obj.PinNode()
-	defer node.Unref()
-	if !obj.meta.Load().IsTombstone {
-		panic("logic err")
+	if obj == nil {
+		return moerr.NewInternalErrorNoCtx("tombstone fill has no object")
 	}
-	return node.FillBlockTombstones(ctx, txn, blkID, deletes, deleteStartOffset, mp)
+	meta := obj.meta.Load()
+	if meta == nil || !meta.IsTombstone {
+		return moerr.NewInternalErrorNoCtx("cannot fill tombstones from a data object")
+	}
+	node := obj.PinNode()
+	if node == nil {
+		return moerr.NewInternalErrorNoCtx("tombstone fill could not pin object data")
+	}
+	defer node.Unref()
+	return node.FillBlockTombstones(
+		ctx, txn, blkID, deletes, deleteStartOffset, deleteEndOffset, mp,
+	)
 }
 
 func (obj *baseObject) ScanInMemory(

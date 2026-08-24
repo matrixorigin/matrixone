@@ -201,6 +201,90 @@ func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
 	})
 }
 
+func TestApplyAppendLockedRejectsMalformedBatchBeforeMutation(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	schema := catalog.MockSchema(2, 0)
+	node := &memoryNode{object: &baseObject{}, writeSchema: schema}
+	malformedFirst := containers.BuildBatch(
+		schema.AllNames(), schema.AllTypes(),
+		containers.Options{Allocator: common.DefaultAllocator},
+	)
+	for _, vec := range malformedFirst.Vecs {
+		vec.Append(nil, true)
+	}
+	malformedFirst.Attrs[0] = "missing_column"
+	_, err := node.ApplyAppendLocked(malformedFirst)
+	malformedFirst.Close()
+	require.ErrorContains(t, err, "missing or malformed")
+	require.Nil(t, node.data, "failed first append must not allocate object state")
+
+	valid := containers.BuildBatch(
+		schema.AllNames(), schema.AllTypes(),
+		containers.Options{Allocator: common.DefaultAllocator},
+	)
+	defer valid.Close()
+	for _, vec := range valid.Vecs {
+		vec.Append(nil, true)
+	}
+	_, err = node.ApplyAppendLocked(valid)
+	require.NoError(t, err)
+	defer node.data.Close()
+
+	assertUnchanged := func(t *testing.T) {
+		t.Helper()
+		for _, vec := range node.data.Vecs {
+			require.Equal(t, 1, vec.Length())
+		}
+	}
+
+	t.Run("unknown attribute", func(t *testing.T) {
+		input := containers.BuildBatch(
+			schema.AllNames(), schema.AllTypes(),
+			containers.Options{Allocator: common.DefaultAllocator},
+		)
+		defer input.Close()
+		for _, vec := range input.Vecs {
+			vec.Append(nil, true)
+		}
+		input.Attrs[0] = "missing_column"
+		_, err := node.ApplyAppendLocked(input)
+		require.ErrorContains(t, err, "missing or malformed")
+		assertUnchanged(t)
+	})
+
+	t.Run("ragged source", func(t *testing.T) {
+		input := containers.BuildBatch(
+			schema.AllNames(), schema.AllTypes(),
+			containers.Options{Allocator: common.DefaultAllocator},
+		)
+		defer input.Close()
+		input.Vecs[0].Append(nil, true)
+		_, err := node.ApplyAppendLocked(input)
+		require.ErrorContains(t, err, "missing or malformed")
+		assertUnchanged(t)
+	})
+
+	t.Run("incompatible source", func(t *testing.T) {
+		input := containers.BuildBatch(
+			schema.AllNames(), schema.AllTypes(),
+			containers.Options{Allocator: common.DefaultAllocator},
+		)
+		defer input.Close()
+		input.Vecs[0].Close()
+		badType := types.T_bool.ToType()
+		if schema.ColDefs[0].Type == badType {
+			badType = types.T_int64.ToType()
+		}
+		input.Vecs[0] = containers.MakeVector(badType, common.DefaultAllocator)
+		for _, vec := range input.Vecs {
+			vec.Append(nil, true)
+		}
+		_, err := node.ApplyAppendLocked(input)
+		require.ErrorContains(t, err, "incompatible")
+		assertUnchanged(t)
+	})
+}
+
 func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	rt := moruntime.ServiceRuntime("")
@@ -297,11 +381,30 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	require.Equal(t, txnif.UncommitTS, legacyCommitTS[1])
 	require.Equal(t, types.BuildTS(3, 0), legacyCommitTS[2])
 
+	// Keep one physical row newer than the reader snapshot. Appending into an
+	// existing result must use the visible window, not the whole memory batch.
+	futureInput := containers.BuildBatch(
+		schema.AllNames(),
+		schema.AllTypes(),
+		containers.Options{Allocator: common.DefaultAllocator},
+	)
+	defer futureInput.Close()
+	for _, vec := range futureInput.Vecs {
+		vec.Append(nil, true)
+	}
+	from, err := mnode.ApplyAppendLocked(futureInput)
+	require.NoError(t, err)
+	require.Equal(t, 3, from)
+	futureNode, _ := mvcc.AddAppendNodeLocked(nil, 3, 4)
+	futureTS := types.BuildTS(10, 0)
+	futureNode.Start, futureNode.Prepare, futureNode.End = futureTS, futureTS, futureTS
+
 	var output *containers.Batch
+	reader := updates.MockTxnWithStartTS(types.BuildTS(3, 0))
 	err = mnode.Scan(
 		context.Background(),
 		&output,
-		updates.MockTxnWithStartTS(types.BuildTS(3, 0)),
+		reader,
 		schema,
 		0,
 		[]int{0},
@@ -314,4 +417,43 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	require.True(t, output.IsDeleted(1))
 	require.False(t, output.IsDeleted(0))
 	require.False(t, output.IsDeleted(2))
+
+	err = mnode.Scan(
+		context.Background(), &output, reader, schema, 0, []int{0}, common.DefaultAllocator,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 6, output.Length())
+	require.True(t, output.IsDeleted(4))
+
+	err = mnode.Scan(
+		context.Background(), &output, reader, schema, 1, []int{0}, common.DefaultAllocator,
+	)
+	require.ErrorContains(t, err, "only block 0")
+	err = mnode.Scan(
+		context.Background(), &output, reader, schema, 0,
+		[]int{objectio.SEQNUM_ABORT}, common.DefaultAllocator,
+	)
+	require.ErrorContains(t, err, "does not expose the abort column")
+
+	malformedOutput := containers.NewBatch()
+	malformedOutput.AddVector(
+		"wrong_name", containers.MakeVector(schema.ColDefs[0].Type, common.DefaultAllocator),
+	)
+	defer malformedOutput.Close()
+	err = mnode.Scan(
+		context.Background(), &malformedOutput, reader, schema, 0,
+		[]int{0}, common.DefaultAllocator,
+	)
+	require.ErrorContains(t, err, "missing or incompatible")
+	require.Zero(t, malformedOutput.Length())
+
+	// A stale Nameidx entry must not redirect a requested attribute to a
+	// different, type-compatible vector.
+	malformedOutput.Nameidx[schema.ColDefs[0].Name] = 0
+	err = mnode.Scan(
+		context.Background(), &malformedOutput, reader, schema, 0,
+		[]int{0}, common.DefaultAllocator,
+	)
+	require.ErrorContains(t, err, "missing or incompatible")
+	require.Zero(t, malformedOutput.Length())
 }

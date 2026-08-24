@@ -12385,6 +12385,7 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 		&nbid,
 		&deletes,
 		0,
+		1,
 		common.DebugAllocator)
 	assert.NoError(t, txn.Commit(ctx))
 	assert.Equal(t, 1, deletes.Count())

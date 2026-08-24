@@ -1179,35 +1179,29 @@ func (e *Engine) BuildBlockReaders(
 	}
 
 	shards := relData.Split(newNum)
-	for i := 0; i < newNum; i++ {
-		readerHint := hint
-		var readerFilter docfilter.MembershipFilter
-		if mainFilter != nil {
-			readerFilter = mainFilter.Share()
-			readerHint.BF = readerFilter
-		}
-		ds := readutil.NewRemoteDataSource(ctx, fs, ts, shards[i])
-		rd, err := readutil.NewReader(
-			ctx,
-			proc.Mp(),
-			e.packerPool,
-			e.fs,
-			def,
-			ts,
-			expr,
-			ds,
-			readutil.GetThresholdForReader(newNum),
-			readerHint,
-		)
-		if err != nil {
-			// NewReader owns the current source and filter share even when its
-			// construction fails.
-			closeReaders(rds)
-			return nil, err
-		}
-		rds = append(rds, rd)
-	}
-	return rds, nil
+	return buildReadersWithMembershipFilter(
+		rds,
+		newNum,
+		hint,
+		mainFilter,
+		func(i int) (engine.DataSource, error) {
+			return readutil.NewRemoteDataSource(ctx, fs, ts, shards[i]), nil
+		},
+		func(ds engine.DataSource, readerHint engine.FilterHint) (engine.Reader, error) {
+			return readutil.NewReader(
+				ctx,
+				proc.Mp(),
+				e.packerPool,
+				e.fs,
+				def,
+				ts,
+				expr,
+				ds,
+				readutil.GetThresholdForReader(newNum),
+				readerHint,
+			)
+		},
+	)
 }
 
 func (e *Engine) GetTNServices() []DNStore {

@@ -24,6 +24,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type unshareableMembershipFilter struct{}
+
+func (*unshareableMembershipFilter) Test([]byte) bool { return true }
+func (*unshareableMembershipFilter) TestVector(
+	*vector.Vector, func(bool, bool, int),
+) []uint8 {
+	return nil
+}
+func (*unshareableMembershipFilter) Valid() bool { return true }
+func (*unshareableMembershipFilter) Exact() bool { return true }
+func (*unshareableMembershipFilter) Free()       {}
+
+type nilSharingMembershipFilter struct {
+	unshareableMembershipFilter
+}
+
+func (*nilSharingMembershipFilter) Share() docfilter.MembershipFilter { return nil }
+
+type invalidSharingMembershipFilter struct {
+	unshareableMembershipFilter
+	share *trackingMembershipFilter
+}
+
+func (f *invalidSharingMembershipFilter) Share() docfilter.MembershipFilter {
+	f.share = newTrackingMembershipFilter()
+	f.share.Free()
+	return f.share
+}
+
 type recordingFilterAdmission struct {
 	acquireCalls int
 	releaseCalls int
@@ -165,4 +194,88 @@ func TestBuildReadersWithMembershipFilterClosesPartialConstruction(t *testing.T)
 			}
 		})
 	}
+}
+
+func TestPrepareMembershipFilterRejectsUnshareableFilter(t *testing.T) {
+	_, _, _, err := prepareMembershipFilter(
+		engine.FilterHint{BF: new(unshareableMembershipFilter)}, nil,
+	)
+	require.ErrorContains(t, err, "cannot be shared")
+}
+
+func TestPrepareMembershipFilterRejectsTypedNilAndInvalidFilters(t *testing.T) {
+	var typedNil *nilSharingMembershipFilter
+	_, _, _, err := prepareMembershipFilter(engine.FilterHint{BF: typedNil}, nil)
+	require.ErrorContains(t, err, "nil or invalid")
+
+	invalid := newTrackingMembershipFilter()
+	invalid.Free()
+	_, _, _, err = prepareMembershipFilter(engine.FilterHint{BF: invalid}, nil)
+	require.ErrorContains(t, err, "nil or invalid")
+}
+
+func TestBuildReadersWithMembershipFilterRejectsNilShare(t *testing.T) {
+	filter := new(nilSharingMembershipFilter)
+	sourceCalled := false
+	readers, err := buildReadersWithMembershipFilter(
+		nil,
+		1,
+		engine.FilterHint{BF: filter},
+		filter,
+		func(int) (engine.DataSource, error) {
+			sourceCalled = true
+			return nil, nil
+		},
+		func(engine.DataSource, engine.FilterHint) (engine.Reader, error) {
+			t.Fatal("reader construction must not run after an invalid share")
+			return nil, nil
+		},
+	)
+	require.ErrorContains(t, err, "nil or invalid reader share")
+	require.Nil(t, readers)
+	require.False(t, sourceCalled)
+}
+
+func TestBuildReadersWithMembershipFilterFreesInvalidShare(t *testing.T) {
+	filter := new(invalidSharingMembershipFilter)
+	readers, err := buildReadersWithMembershipFilter(
+		nil,
+		1,
+		engine.FilterHint{BF: filter},
+		filter,
+		func(int) (engine.DataSource, error) {
+			t.Fatal("source construction must not run after an invalid share")
+			return nil, nil
+		},
+		func(engine.DataSource, engine.FilterHint) (engine.Reader, error) {
+			t.Fatal("reader construction must not run after an invalid share")
+			return nil, nil
+		},
+	)
+	require.ErrorContains(t, err, "nil or invalid reader share")
+	require.Nil(t, readers)
+	require.NotNil(t, filter.share)
+	require.Equal(t, 2, filter.share.freeCalls)
+}
+
+func TestBuildReadersWithMembershipFilterRejectsTypedNilMainFilter(t *testing.T) {
+	var filter *nilSharingMembershipFilter
+	sourceCalled := false
+	readers, err := buildReadersWithMembershipFilter(
+		nil,
+		1,
+		engine.FilterHint{BF: filter},
+		filter,
+		func(int) (engine.DataSource, error) {
+			sourceCalled = true
+			return nil, nil
+		},
+		func(engine.DataSource, engine.FilterHint) (engine.Reader, error) {
+			t.Fatal("reader construction must not receive a typed-nil filter")
+			return nil, nil
+		},
+	)
+	require.ErrorContains(t, err, "nil or invalid membership filter")
+	require.Nil(t, readers)
+	require.False(t, sourceCalled)
 }

@@ -270,6 +270,28 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 	))
 	require.Zero(t, rowidOnly.Vecs[0].Length())
 	rowidOnly.Clean(queryMP)
+
+	// The no-copy release combines the fileservice pin with the synthesized
+	// rowid allocation. Calling it must release each owner exactly once; the old
+	// self-capturing closure recursed instead of invoking the original pin
+	// release.
+	noCopy, deleteMask, release, err := BlockDataReadNoCopy(
+		ctx,
+		&info,
+		&blockReadTestDataSource{},
+		columns,
+		colTypes,
+		types.TS{},
+		fileservice.Policy(0),
+		queryMP,
+		fs,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, noCopy)
+	require.Nil(t, deleteMask)
+	require.NotNil(t, release)
+	require.Equal(t, 16, noCopy.RowCount())
+	release()
 	require.Zero(t, queryMP.CurrNB())
 }
 
@@ -917,6 +939,125 @@ func TestBlockDataReadBackupCombinesAbortAndTombstoneMasks(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBlockDataReadBackupBroadcastsConstantCommitTS(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	const rowCount = 4
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	var err error
+	input.Vecs[1], err = vector.NewConstFixed(
+		objectio.TSType, types.BuildTS(1, 0), rowCount, mp,
+	)
+	require.NoError(t, err)
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	for row, aborted := range []bool{false, true, false, false} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(row), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], aborted, false, mp))
+	}
+	input.SetRowCount(rowCount)
+	defer input.Clean(mp)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := objectio.NewObjectWriter(
+		name,
+		fs,
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		nil,
+	)
+	require.NoError(t, err)
+	writer.SetAppendable()
+	_, err = writer.Write(input)
+	require.NoError(t, err)
+	_, err = writer.WriteEnd(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	require.NoError(t, objectio.SetObjectStatsRowCnt(&stats, rowCount))
+	info := stats.ConstructBlockInfo(0)
+
+	loaded, _, err := BlockDataReadBackup(
+		ctx,
+		&info,
+		&blockReadTestDataSource{deleted: []uint64{2}},
+		nil,
+		types.BuildTS(2, 0),
+		fs,
+	)
+	require.NoError(t, err)
+	defer loaded.Clean(common.DebugAllocator)
+	require.Equal(t, []int32{0, 3}, vector.MustFixedColWithTypeCheck[int32](loaded.Vecs[0]))
+}
+
+func TestBlockDataReadBackupUsesDecodedRowsForShortIntermediateBlock(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1,
+		false,
+		false,
+		fs,
+	)
+	writer.SetAppendable()
+	writeBlock := func(values []int32) {
+		t.Helper()
+		input := batch.NewWithSize(3)
+		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		var err error
+		input.Vecs[1], err = vector.NewConstFixed(
+			objectio.TSType, types.BuildTS(1, 0), len(values), mp,
+		)
+		require.NoError(t, err)
+		input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+		for _, value := range values {
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, mp))
+			require.NoError(t, vector.AppendFixed(input.Vecs[2], false, false, mp))
+		}
+		input.SetRowCount(len(values))
+		_, err = writer.WriteBatch(input)
+		require.NoError(t, err)
+		input.Clean(mp)
+	}
+	writeBlock([]int32{1, 2})
+	writeBlock([]int32{3, 4, 5})
+	_, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	require.Equal(t, uint32(2), stats.BlkCnt())
+
+	info := stats.ConstructBlockInfo(0)
+	loaded, _, err := BlockDataReadBackup(
+		ctx,
+		&info,
+		&blockReadTestDataSource{},
+		nil,
+		types.BuildTS(2, 0),
+		fs,
+	)
+	require.NoError(t, err)
+	defer loaded.Clean(common.DebugAllocator)
+	require.Equal(t, []int32{1, 2}, vector.MustFixedColWithTypeCheck[int32](loaded.Vecs[0]))
+
+	invalid, _, err := BlockDataReadBackup(
+		ctx,
+		&info,
+		&blockReadTestDataSource{deleted: []uint64{2}},
+		nil,
+		types.BuildTS(2, 0),
+		fs,
+	)
+	require.Nil(t, invalid)
+	require.ErrorContains(t, err, "outside block row count 2")
 }
 
 func TestFillOutputBatchBySelectedRows(t *testing.T) {

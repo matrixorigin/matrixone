@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -50,6 +52,140 @@ import (
 const (
 	JTCDCLoad tasks.JobType = 300 + iota
 )
+
+const maxChangeObjectBlockCount uint32 = 1 << 16
+
+func validateChangeCollectionInputs(
+	ctx context.Context,
+	start, end types.TS,
+	maxRow uint32,
+	primarySeqnum int,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) error {
+	if ctx == nil || mp == nil || fs == nil {
+		return moerr.NewInvalidInputNoCtx(
+			"change collection requires context, mpool, and file service",
+		)
+	}
+	if end.IsEmpty() || start.GT(&end) {
+		return moerr.NewInvalidInputNoCtx("change collection has invalid timestamp range")
+	}
+	if maxRow == 0 {
+		return moerr.NewInvalidInputNoCtx("change collection maximum row count is zero")
+	}
+	if primarySeqnum < -1 || primarySeqnum >= int(objectio.SEQNUM_UPPER) {
+		return moerr.NewInvalidInputNoCtxf(
+			"change collection has invalid primary sequence %d", primarySeqnum,
+		)
+	}
+	return nil
+}
+
+func validateChangeObjectBlockCount(stats *objectio.ObjectStats) (int, error) {
+	if stats == nil {
+		return 0, moerr.NewInternalErrorNoCtx("change object has no statistics")
+	}
+	count := stats.BlkCnt()
+	if count == 0 || count > maxChangeObjectBlockCount {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"invalid change object block count %d; expected 1..%d",
+			count, maxChangeObjectBlockCount,
+		)
+	}
+	return int(count), nil
+}
+
+// changeObjectIdentity returns the complete binary object identity. ShortString
+// is deliberately only a logging abbreviation (the final 48 UUID bits plus
+// object number) and must never be used as a map key for correctness state.
+func changeObjectIdentity(obj *objectio.ObjectEntry) string {
+	if obj == nil {
+		return ""
+	}
+	return string(obj.ObjectShortName()[:])
+}
+
+func changePKFilterSegmentsValid(segments [][]byte) (valid bool) {
+	if len(segments) == 0 {
+		return true
+	}
+	defer func() {
+		if recover() != nil {
+			valid = false
+		}
+	}()
+	var previous index.ZM
+	for i, encoded := range segments {
+		if len(encoded) != index.ZMSize {
+			return false
+		}
+		segment := index.ZM(encoded)
+		if !segment.IsInited() {
+			return false
+		}
+		if intersects, ok := segment.Intersect(segment); !ok || !intersects {
+			return false
+		}
+		if i > 0 {
+			if segment.GetType() != previous.GetType() ||
+				segment.GetScale() != previous.GetScale() {
+				return false
+			}
+			// The binary overlap search requires strictly separated segments:
+			// previous.max < segment.min.
+			if overlaps, ok := previous.AnyGE(segment); !ok || overlaps {
+				return false
+			}
+		}
+		previous = segment
+	}
+	return true
+}
+
+// changeZoneMapDisjoint is a fail-open wrapper around PK pruning. Zone maps
+// and filter segments are optimization metadata; malformed bytes must never
+// suppress a real row or crash change collection.
+func changeZoneMapDisjoint(zm objectio.ZoneMap, segments [][]byte) (disjoint bool) {
+	if !zm.IsInited() || len(segments) == 0 {
+		return false
+	}
+	defer func() {
+		if recover() != nil {
+			disjoint = false
+		}
+	}()
+	return !index.AnySegmentOverlaps(zm, segments)
+}
+
+func changeBlockPKDisjoint(
+	blk objectio.BlockObject,
+	seqnum uint16,
+	segments [][]byte,
+) (disjoint bool) {
+	defer func() {
+		if recover() != nil {
+			disjoint = false
+		}
+	}()
+	if seqnum >= blk.GetMetaColumnCount() {
+		return false
+	}
+	column := blk.ColumnMeta(seqnum)
+	if column.DataType() == uint8(types.T_any) {
+		return false
+	}
+	return changeZoneMapDisjoint(column.ZoneMap(), segments)
+}
+
+func changeObjectCreatedBy(snapshot, createTS types.TS) bool {
+	return !createTS.Equal(&txnif.UncommitTS) && !createTS.GT(&snapshot)
+}
+
+func changeObjectDeletedBy(snapshot, deleteTS types.TS) bool {
+	return !deleteTS.IsEmpty() && !deleteTS.Equal(&txnif.UncommitTS) &&
+		deleteTS.LE(&snapshot)
+}
 
 var (
 	_jobPool = sync.Pool{
@@ -108,8 +244,13 @@ func batchesShareAppendSchema(dst, src *batch.Batch) bool {
 	if dst == nil || src == nil {
 		return true
 	}
-	if len(dst.Vecs) != len(src.Vecs) {
+	if len(dst.Vecs) != len(src.Vecs) || len(dst.Attrs) != len(src.Attrs) {
 		return false
+	}
+	for i := range dst.Attrs {
+		if dst.Attrs[i] != src.Attrs[i] {
+			return false
+		}
 	}
 	for i := range dst.Vecs {
 		if dst.Vecs[i] == nil || src.Vecs[i] == nil {
@@ -123,6 +264,126 @@ func batchesShareAppendSchema(dst, src *batch.Batch) bool {
 		}
 	}
 	return true
+}
+
+type changeAppendState struct {
+	vec         *vector.Vector
+	checkpoint  vector.AppendCheckpoint
+	replacement bool
+}
+
+func cleanChangeAppendReplacements(states []changeAppendState, mp *mpool.MPool) {
+	for i := range states {
+		if states[i].replacement && states[i].vec != nil {
+			states[i].vec.Free(mp)
+			states[i].vec = nil
+		}
+	}
+}
+
+// appendChangeBatchWindow appends one contiguous source window atomically.
+// A previous source can leave a const destination (notably commitTS); writing
+// directly to it either panics or preserves only its original broadcast value.
+// Materialize const destinations off to the side, then publish replacements
+// only after every column append succeeds. Non-const destinations use vector
+// append checkpoints so an allocation failure cannot leave columns misaligned.
+func appendChangeBatchWindow(
+	dst, src *batch.Batch,
+	start, end int,
+	mp *mpool.MPool,
+) error {
+	if dst == nil || src == nil || dst == src || len(dst.Vecs) == 0 ||
+		!batchesShareAppendSchema(dst, src) {
+		return moerr.NewInternalErrorNoCtx("cannot append incompatible change batches")
+	}
+	if dst.Vecs[0] == nil || src.Vecs[0] == nil {
+		return moerr.NewInternalErrorNoCtx("change batch has a nil leading column")
+	}
+	if start < 0 || end < start {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid change batch window [%d,%d)", start, end,
+		)
+	}
+	dstRows := dst.Vecs[0].Length()
+	srcRows := src.Vecs[0].Length()
+	if dst.RowCount() != dstRows || src.RowCount() != srcRows || end > srcRows {
+		return moerr.NewInternalErrorNoCtx("change batch row count is inconsistent")
+	}
+	rows := end - start
+
+	const inlineColumns = 16
+	var inline [inlineColumns]changeAppendState
+	states := inline[:]
+	if len(dst.Vecs) <= inlineColumns {
+		states = states[:len(dst.Vecs)]
+	} else {
+		states = make([]changeAppendState, len(dst.Vecs))
+	}
+	for i := range dst.Vecs {
+		dstVec, srcVec := dst.Vecs[i], src.Vecs[i]
+		if dstVec == nil || srcVec == nil || dstVec == srcVec ||
+			*dstVec.GetType() != *srcVec.GetType() {
+			cleanChangeAppendReplacements(states, mp)
+			return moerr.NewInternalErrorNoCtxf(
+				"incompatible change batch column %d", i,
+			)
+		}
+		if dstVec.Length() != dstRows || srcVec.Length() != srcRows || end > srcVec.Length() {
+			cleanChangeAppendReplacements(states, mp)
+			return moerr.NewInternalErrorNoCtxf(
+				"change batch column %d has %d rows, cannot append [%d,%d)",
+				i, srcVec.Length(), start, end,
+			)
+		}
+		states[i].vec = dstVec
+		if !dstVec.IsConst() && !dstVec.NeedDup() {
+			continue
+		}
+		materialized := vector.NewOffHeapVecWithType(*dstVec.GetType())
+		if selection := dstVec.AllocationAccountSelection(); selection != nil {
+			if err := materialized.SetAllocationAccount(selection); err != nil {
+				materialized.Free(mp)
+				cleanChangeAppendReplacements(states, mp)
+				return err
+			}
+		}
+		if err := materialized.UnionBatch(
+			dstVec, 0, dstVec.Length(), nil, mp,
+		); err != nil {
+			materialized.Free(mp)
+			cleanChangeAppendReplacements(states, mp)
+			return err
+		}
+		states[i].vec = materialized
+		states[i].replacement = true
+	}
+	if rows == 0 {
+		cleanChangeAppendReplacements(states, mp)
+		return nil
+	}
+
+	for i := range states {
+		states[i].checkpoint = states[i].vec.MakeAppendCheckpoint()
+	}
+	for i := range states {
+		if err := states[i].vec.UnionBatch(src.Vecs[i], int64(start), rows, nil, mp); err != nil {
+			for pos := range states {
+				states[pos].vec.RollbackAppend(states[pos].checkpoint, rows)
+			}
+			cleanChangeAppendReplacements(states, mp)
+			return err
+		}
+	}
+
+	for i := range states {
+		if !states[i].replacement {
+			continue
+		}
+		dst.Vecs[i].Free(mp)
+		dst.Vecs[i] = states[i].vec
+	}
+	dst.SetRowCount(dst.Vecs[0].Length())
+	return nil
 }
 
 func NewRowHandle(data *batch.Batch, mp *mpool.MPool, baseHandle *baseHandle, ctx context.Context, tombstone bool) (handle *BatchHandle) {
@@ -169,7 +430,12 @@ func (r *BatchHandle) NextTS() types.TS {
 	return vector.GetFixedAtNoTypeCheck[types.TS](commitTSVec, r.rowOffsetCursor)
 }
 func (r *BatchHandle) Close() {
+	if r == nil || r.batches == nil {
+		return
+	}
 	r.batches.Clean(r.mp)
+	r.batches = nil
+	r.batchLength = 0
 }
 func (r *BatchHandle) Next(data **batch.Batch, mp *mpool.MPool) (err error) {
 	if r.isEnd() {
@@ -198,26 +464,26 @@ func (r *BatchHandle) QuickNext(data **batch.Batch, mp *mpool.MPool) (err error)
 func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (err error) {
 	t0 := time.Now()
 	if *bat == nil {
-		*bat = batch.NewWithSize(0)
-		(*bat).Attrs = append((*bat).Attrs, r.batches.Attrs...)
+		result := batch.NewWithSize(0)
+		result.Attrs = append(result.Attrs, r.batches.Attrs...)
 		for _, vec := range r.batches.Vecs {
 			newVec, err := vec.CloneWindow(start, end, mp)
 			if err != nil {
+				result.Clean(mp)
 				return err
 			}
-			(*bat).Vecs = append((*bat).Vecs, newVec)
+			result.Vecs = append(result.Vecs, newVec)
 		}
+		result.SetRowCount(result.Vecs[0].Length())
+		*bat = result
 	} else {
 		if !batchesShareAppendSchema(*bat, r.batches) {
 			return moerr.GetOkExpectedEOB()
 		}
-		for offset := start; offset < end; offset++ {
-			for i, vec := range (*bat).Vecs {
-				appendFromEntry(r.batches.Vecs[i], vec, offset, mp)
-			}
+		if err = appendChangeBatchWindow(*bat, r.batches, start, end, mp); err != nil {
+			return err
 		}
 	}
-	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	r.baseHandle.changesHandle.copyDuration += time.Since(t0)
 	return
 }
@@ -231,9 +497,14 @@ type CNObjectHandle struct {
 	mp                 *mpool.MPool
 	base               *baseHandle
 
-	cache []*batch.Batch
-	blks  []types.Blockid
-	TSs   []types.TS
+	cache    []*batch.Batch
+	blks     []types.Blockid
+	TSs      []types.TS
+	layouts  []objectio.SpecialColumnLayout
+	seqnums  [][]uint16
+	prepared []bool
+
+	terminalErr error
 }
 
 func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fileservice.FileService, baseHandle *baseHandle, mp *mpool.MPool) *CNObjectHandle {
@@ -247,42 +518,120 @@ func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fil
 		blks:        make([]types.Blockid, 0),
 	}
 }
+
+func (h *CNObjectHandle) terminalError() error {
+	if h == nil {
+		return nil
+	}
+	return h.terminalErr
+}
+
+// fail records structural failures that make the remaining cache unsafe to
+// consume. Prefetch and allocation errors remain retryable because their
+// cursors and source batches have not advanced.
+func (h *CNObjectHandle) fail(err error) error {
+	if err == nil {
+		return nil
+	}
+	if h.terminalErr == nil {
+		h.terminalErr = err
+		h.Close()
+	}
+	return h.terminalErr
+}
+
 func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
+	initialObjectOffset, initialBlockOffset := h.objectOffsetCursor, h.blkOffsetCursor
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
+	commitTSs := make([]types.TS, 0)
 	for i := 0; i < LoadParallism; i++ {
 		if h.objectOffsetCursor >= len(h.objects) {
 			break
 		}
 		entry := h.objects[h.objectOffsetCursor]
+		if entry == nil {
+			err = moerr.NewInternalErrorNoCtx("CN change object entry is nil")
+			break
+		}
 		stats := entry.ObjectStats
+		blockCount, validateErr := validateChangeObjectBlockCount(&stats)
+		if validateErr != nil {
+			err = validateErr
+			break
+		}
+		if h.blkOffsetCursor < 0 || h.blkOffsetCursor >= blockCount {
+			err = moerr.NewInternalErrorNoCtxf(
+				"CN change object block cursor %d is outside [0,%d)",
+				h.blkOffsetCursor, blockCount,
+			)
+			break
+		}
 		blk := uint16(h.blkOffsetCursor)
-		h.TSs = append(h.TSs, entry.CreateTime)
-		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
-		job := prefetchObjects(ctx, uint32(h.blkOffsetCursor), h.fs, &stats, h.base.changesHandle.scheduler)
+		job, scheduleErr := prefetchObjects(
+			ctx, uint32(h.blkOffsetCursor), h.fs, &stats, h.base.changesHandle.scheduler,
+		)
+		if scheduleErr != nil {
+			err = scheduleErr
+			break
+		}
 		jobs = append(jobs, job)
+		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
+		commitTSs = append(commitTSs, entry.CreateTime)
 		h.blkOffsetCursor++
-		if h.blkOffsetCursor >= int(stats.BlkCnt()) {
+		if h.blkOffsetCursor >= blockCount {
 			h.blkOffsetCursor = 0
 			h.objectOffsetCursor++
 		}
 	}
+	loadedBlocks := make([]*loadedAObjectBlock, len(jobs))
 	for i, job := range jobs {
 		res := job.GetResult()
-		if res.Err != nil {
-			err = res.Err
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				logutil.Info("ChangesHandle-FileNotFound",
-					zap.String("err", err.Error()))
-			}
-			h.base.changesHandle.readDuration += time.Since(t0)
-			return
-		}
 		putJob(job)
-		loaded := res.Res.(*loadedAObjectBlock)
+		if res == nil {
+			if err == nil {
+				err = moerr.NewInternalErrorNoCtx("CN object prefetch job returned no result")
+			}
+			continue
+		}
+		if res.Err != nil {
+			if err == nil {
+				err = res.Err
+			}
+			if moerr.IsMoErrCode(res.Err, moerr.ErrFileNotFound) {
+				logutil.Info("ChangesHandle-FileNotFound",
+					zap.String("err", res.Err.Error()))
+			}
+			continue
+		}
+		loaded, ok := res.Res.(*loadedAObjectBlock)
+		if !ok || loaded == nil || loaded.batch == nil {
+			if err == nil {
+				err = moerr.NewInternalErrorNoCtx("CN object prefetch job returned invalid data")
+			}
+			continue
+		}
+		loadedBlocks[i] = loaded
+	}
+	if err != nil {
+		for _, loaded := range loadedBlocks {
+			if loaded != nil && loaded.batch != nil {
+				loaded.batch.Clean(h.mp)
+			}
+		}
+		h.objectOffsetCursor = initialObjectOffset
+		h.blkOffsetCursor = initialBlockOffset
+		h.base.changesHandle.readDuration += time.Since(t0)
+		return
+	}
+	for i, loaded := range loadedBlocks {
 		h.cache = append(h.cache, loaded.batch)
 		h.blks = append(h.blks, blks[i])
+		h.TSs = append(h.TSs, commitTSs[i])
+		h.layouts = append(h.layouts, loaded.specialLayout)
+		h.seqnums = append(h.seqnums, loaded.columnSeqnums)
+		h.prepared = append(h.prepared, false)
 	}
 	h.base.changesHandle.readDuration += time.Since(t0)
 	return
@@ -291,9 +640,12 @@ func (h *CNObjectHandle) isEnd() bool {
 	return h.objectOffsetCursor >= len(h.objects) && len(h.cache) == 0
 }
 func (h *CNObjectHandle) IsEmpty() bool {
-	return len(h.objects) == 0
+	return h == nil || len(h.objects) == 0
 }
 func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
+	if terminalErr := h.terminalError(); terminalErr != nil {
+		return terminalErr
+	}
 	if h.isEnd() {
 		return moerr.GetOkExpectedEOF()
 	}
@@ -303,64 +655,95 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 			return
 		}
 	}
+	if len(h.cache) != len(h.prepared) || len(h.cache) != len(h.TSs) ||
+		len(h.cache) != len(h.layouts) ||
+		(len(h.seqnums) != 0 && len(h.cache) != len(h.seqnums)) ||
+		(len(h.blks) != 0 && len(h.cache) != len(h.blks)) {
+		return h.fail(moerr.NewInternalErrorNoCtx(
+			"CN object block cache metadata is inconsistent",
+		))
+	}
 	data := h.cache[0]
+	discardSource := func() {
+		h.cache = h.cache[1:]
+		h.prepared = h.prepared[1:]
+		if len(h.blks) > 0 {
+			h.blks = h.blks[1:]
+		}
+		h.TSs = h.TSs[1:]
+		h.layouts = h.layouts[1:]
+		if len(h.seqnums) > 0 {
+			h.seqnums = h.seqnums[1:]
+		}
+		data.Clean(h.mp)
+	}
 	var blk *types.Blockid
 	if len(h.blks) > 0 {
 		blk = &h.blks[0]
 	}
 	ts := h.TSs[0]
-	t0 := time.Now()
-	if h.isTombstone {
-		if err = updateCNTombstoneBatch(
-			data,
-			ts,
-			blk,
-			h.base.changesHandle.retainRowID,
-			h.mp,
-		); err != nil {
-			return err
-		}
-	} else {
-		if err = updateCNDataBatch(
-			data,
-			ts,
-			blk,
-			h.base.changesHandle.retainRowID,
-			h.mp,
-		); err != nil {
-			return err
-		}
+	layout := h.layouts[0]
+	var seqnums []uint16
+	if len(h.seqnums) > 0 {
+		seqnums = h.seqnums[0]
 	}
-	h.base.changesHandle.updateDuration += time.Since(t0)
-	t0 = time.Now()
+	if !h.prepared[0] {
+		t0 := time.Now()
+		if h.isTombstone {
+			err = updateCNTombstoneBatch(
+				data,
+				ts,
+				blk,
+				layout,
+				h.base.changesHandle.retainRowID,
+				h.mp,
+			)
+		} else {
+			err = updateCNDataBatchWithSchema(
+				data,
+				ts,
+				blk,
+				layout,
+				seqnums,
+				h.base.changesHandle.dataSchema,
+				h.base.changesHandle.retainRowID,
+				h.mp,
+			)
+		}
+		if err != nil {
+			// Preparation is atomic: keep the source at the current cursor so a
+			// transient allocation failure can be retried, and a malformed block
+			// cannot be silently skipped by a caller that invokes Next again.
+			return err
+		}
+		h.prepared[0] = true
+		h.base.changesHandle.updateDuration += time.Since(t0)
+	}
+	t0 := time.Now()
+	createdOutput := false
 	if *bat == nil {
-		*bat = batch.NewWithSize(0)
-		(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
+		result := batch.NewWithSize(0)
+		result.Attrs = append(result.Attrs, data.Attrs...)
 		for _, vec := range data.Vecs {
 			newVec := vector.NewVec(*vec.GetType())
-			if err != nil {
-				return err
-			}
-			(*bat).Vecs = append((*bat).Vecs, newVec)
+			result.Vecs = append(result.Vecs, newVec)
 		}
+		*bat = result
+		createdOutput = true
 	} else if !batchesShareAppendSchema(*bat, data) {
 		return moerr.GetOkExpectedEOB()
 	}
-	h.cache = h.cache[1:]
-	if len(h.blks) > 0 {
-		h.blks = h.blks[1:]
-	}
-	h.TSs = h.TSs[1:]
 	srcLen := data.Vecs[0].Length()
-	sels := make([]int64, srcLen)
-	for j := 0; j < srcLen; j++ {
-		sels[j] = int64(j)
+	if err = appendChangeBatchWindow(*bat, data, 0, srcLen, mp); err != nil {
+		if createdOutput {
+			(*bat).Clean(mp)
+			*bat = nil
+		}
+		// Keep the prepared source in place: after transient allocation
+		// pressure clears, a retry can copy the same block without losing rows.
+		return err
 	}
-	for i, vec := range (*bat).Vecs {
-		src := data.Vecs[i]
-		vec.Union(src, sels, mp)
-	}
-	(*bat).SetRowCount((*bat).Vecs[0].Length())
+	discardSource()
 	h.base.changesHandle.copyDuration += time.Since(t0)
 	return
 }
@@ -369,14 +752,41 @@ func (h *CNObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *
 	return h.Next(ctx, data, mp)
 }
 
+func (h *CNObjectHandle) Close() {
+	if h == nil {
+		return
+	}
+	for _, bat := range h.cache {
+		if bat != nil {
+			bat.Clean(h.mp)
+		}
+	}
+	h.cache = nil
+	h.blks = nil
+	h.TSs = nil
+	h.layouts = nil
+	h.seqnums = nil
+	h.prepared = nil
+	h.objectOffsetCursor = len(h.objects)
+	h.objects = nil
+	h.blkOffsetCursor = 0
+}
+
 func (h *CNObjectHandle) NextTS() types.TS {
-	if h.isEnd() {
+	if h == nil || h.terminalErr != nil || h.isEnd() {
 		return types.TS{}
 	}
-	if len(h.cache) == 0 {
-		return h.objects[h.objectOffsetCursor].CreateTime
+	if len(h.cache) > 0 {
+		if len(h.TSs) == 0 {
+			return types.TS{}
+		}
+		return h.TSs[0]
 	}
-	return h.TSs[0]
+	if h.objectOffsetCursor < 0 || h.objectOffsetCursor >= len(h.objects) ||
+		h.objects[h.objectOffsetCursor] == nil {
+		return types.TS{}
+	}
+	return h.objects[h.objectOffsetCursor].CreateTime
 }
 
 type AObjectHandle struct {
@@ -393,12 +803,36 @@ type AObjectHandle struct {
 	mp                 *mpool.MPool
 	cache              []*batch.Batch
 	specialLayouts     []objectio.SpecialColumnLayout
+	columnSeqnums      [][]uint16
 	blks               []types.Blockid
 	p                  *baseHandle
+	terminalErr        error
 
 	// blockPlans caches block-level commit-ts overlap decisions for objects.
 	// It is only populated when checkpoint-range mode enables block pruning.
 	blockPlans map[string]*aobjBlockPlan
+}
+
+func (h *AObjectHandle) terminalError() error {
+	if h == nil {
+		return nil
+	}
+	return h.terminalErr
+}
+
+// fail records an error after a prefetched block has been detached from the
+// retryable prefetch cursor. At that point conversion may already have mutated
+// the block and later blocks are cached. Keep the first error sticky and
+// release owned batches so a retry cannot silently skip the bad block.
+func (h *AObjectHandle) fail(err error) error {
+	if err == nil {
+		return nil
+	}
+	if h.terminalErr == nil {
+		h.terminalErr = err
+		h.Close()
+	}
+	return h.terminalErr
 }
 
 type aobjBlockPlan struct {
@@ -441,13 +875,33 @@ func (h *AObjectHandle) nextPrefetchTarget(
 	ctx context.Context,
 ) (obj *objectio.ObjectEntry, blk uint16, ok bool, err error) {
 	for {
+		if ctx != nil {
+			select {
+			case <-ctx.Done():
+				return nil, 0, false, context.Cause(ctx)
+			default:
+			}
+		}
 		if h.objectOffsetCursor >= len(h.objects) {
 			return nil, 0, false, nil
 		}
 		obj = h.objects[h.objectOffsetCursor]
+		if obj == nil {
+			return nil, 0, false, moerr.NewInternalErrorNoCtx("appendable change object entry is nil")
+		}
+		blockCount, validateErr := validateChangeObjectBlockCount(&obj.ObjectStats)
+		if validateErr != nil {
+			return nil, 0, false, validateErr
+		}
+		if h.blkOffsetCursor < 0 || h.blkOffsetCursor >= blockCount {
+			return nil, 0, false, moerr.NewInternalErrorNoCtxf(
+				"appendable change object block cursor %d is outside [0,%d)",
+				h.blkOffsetCursor, blockCount,
+			)
+		}
 		blk = uint16(h.blkOffsetCursor)
 		h.blkOffsetCursor++
-		if h.blkOffsetCursor >= int(obj.BlkCnt()) {
+		if h.blkOffsetCursor >= blockCount {
 			h.blkOffsetCursor = 0
 			h.objectOffsetCursor++
 		}
@@ -475,6 +929,9 @@ func (h *AObjectHandle) shouldReadBlock(
 	if obj == nil {
 		return false, nil
 	}
+	if h == nil || h.p == nil || h.p.changesHandle == nil {
+		return false, moerr.NewInternalErrorNoCtx("appendable change handle is not initialized")
+	}
 	changes := h.p.changesHandle
 	if !changes.enableCommitTSBlockPrune {
 		return true, nil
@@ -484,7 +941,7 @@ func (h *AObjectHandle) shouldReadBlock(
 	if obj.GetAppendable() || obj.GetCNCreated() {
 		return true, nil
 	}
-	key := obj.ObjectShortName().ShortString()
+	key := changeObjectIdentity(obj)
 	plan, ok := h.blockPlans[key]
 	if !ok {
 		plan = &aobjBlockPlan{}
@@ -517,7 +974,10 @@ func (h *AObjectHandle) shouldReadBlock(
 		return true, nil
 	}
 	if int(blk) >= len(plan.shouldReadByBlks) {
-		return false, nil
+		return false, moerr.NewInternalErrorNoCtxf(
+			"change block %d is outside planned block range [0,%d)",
+			blk, len(plan.shouldReadByBlks),
+		)
 	}
 	return plan.shouldReadByBlks[blk], nil
 }
@@ -526,17 +986,43 @@ func (h *AObjectHandle) buildBlockPlan(
 	ctx context.Context,
 	obj *objectio.ObjectEntry,
 	plan *aobjBlockPlan,
-) error {
-	plan.initialized = true
+) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if plan != nil {
+				plan.initialized = false
+			}
+			err = moerr.NewInternalErrorNoCtxf(
+				"cannot decode change object block metadata: %v", recovered,
+			)
+		}
+	}()
+	if ctx == nil || h == nil || h.p == nil || h.p.changesHandle == nil ||
+		obj == nil || plan == nil || h.fs == nil {
+		return moerr.NewInternalErrorNoCtx("cannot build a change block plan without object and destination")
+	}
+	blockCount, err := validateChangeObjectBlockCount(&obj.ObjectStats)
+	if err != nil {
+		return err
+	}
+	plan.initialized = false
 	plan.evaluable = false
-	plan.shouldReadByBlks = make([]bool, int(obj.BlkCnt()))
-	plan.totalBlocks = int(obj.BlkCnt())
+	plan.shouldReadByBlks = make([]bool, blockCount)
+	plan.totalBlocks = blockCount
 	plan.evaluableBlocks = 0
 	plan.overlapBlocks = 0
 	plan.prunedBlocks = 0
-	plan.nonEvaluableReasons = make(map[string]int, 4)
-	plan.nonEvaluableSamples = make([]string, 0, 5)
-	plan.evaluableSamples = make([]string, 0, 5)
+	collectDiagnostics := h.p.changesHandle.strictCommitTSBlockPrune ||
+		h.p.changesHandle.debugLabel != ""
+	if collectDiagnostics {
+		plan.nonEvaluableReasons = make(map[string]int, 4)
+		plan.nonEvaluableSamples = make([]string, 0, 5)
+		plan.evaluableSamples = make([]string, 0, 5)
+	} else {
+		plan.nonEvaluableReasons = nil
+		plan.nonEvaluableSamples = nil
+		plan.evaluableSamples = nil
+	}
 	for i := range plan.shouldReadByBlks {
 		plan.shouldReadByBlks[i] = true
 	}
@@ -552,48 +1038,87 @@ func (h *AObjectHandle) buildBlockPlan(
 		)
 		return err
 	}
-	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	dataMeta, err := ioutil.GetDataMetaForLocation(meta, metaLoc)
+	if err != nil {
+		return err
+	}
+	if uint32(blockCount) != dataMeta.BlockCount() {
+		return moerr.NewInternalErrorNoCtxf(
+			"object %s reports %d blocks but metadata contains %d",
+			obj.ObjectShortName().ShortString(), obj.BlkCnt(), dataMeta.BlockCount(),
+		)
+	}
 	evaluableBlockCnt := 0
 	overlapBlockCnt := 0
 	pkf := h.p.changesHandle.pkFilter
-	pkSeqnum := uint16(h.p.changesHandle.primarySeqnum)
-	for i := uint16(0); i < uint16(obj.BlkCnt()); i++ {
+	pkSeqnum, canPruneByPK := uint16(0), false
+	if pkf != nil && len(pkf.Segments) > 0 {
+		if h.isTombstone {
+			// A tombstone object's sort key is the target physical rowid at
+			// sequence zero.  PKFilter segments, however, encode the table's user
+			// primary key, which tombstones persist at sequence one.  Comparing the
+			// two is especially dangerous when the user PK itself has ROWID type:
+			// the types match, so the zonemap helper cannot conservatively detect
+			// the semantic mismatch and may prune real deletes.
+			pkSeqnum = objectio.TombstoneAttr_PK_SeqNum
+			canPruneByPK = true
+		} else if pkf.PrimarySeqnum >= 0 && pkf.PrimarySeqnum < int(objectio.SEQNUM_UPPER) {
+			// primarySeqnum on ChangeHandler is also used as a positional index
+			// while reconciling logical output batches.  PKFilter.PrimarySeqnum is
+			// the explicit physical sequence number and is therefore the only safe
+			// source for object metadata lookup when schemas contain sequence gaps.
+			pkSeqnum = uint16(pkf.PrimarySeqnum)
+			canPruneByPK = true
+		}
+	}
+	for i := 0; i < blockCount; i++ {
+		if i&255 == 0 {
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
+			}
+		}
 		blk := dataMeta.GetBlockMeta(uint32(i))
-		overlap, evaluable, reason, detail := blockCommitTSOverlapsRange(blk, h.start, h.end)
+		overlap, evaluable, reason, _ := blockCommitTSOverlapsRangeDetailed(
+			blk, h.start, h.end, false,
+		)
 		if !evaluable {
-			plan.nonEvaluableReasons[reason]++
-			if len(plan.nonEvaluableSamples) < 5 {
+			if collectDiagnostics {
+				plan.nonEvaluableReasons[reason]++
+			}
+			if collectDiagnostics && len(plan.nonEvaluableSamples) < 5 {
+				_, _, _, detail := blockCommitTSOverlapsRangeDetailed(
+					blk, h.start, h.end, true,
+				)
 				plan.nonEvaluableSamples = append(
 					plan.nonEvaluableSamples,
 					fmt.Sprintf("blk=%d reason=%s %s", i, reason, detail),
 				)
 			}
 			// Even for non-evaluable blocks, PK pruning can still skip them.
-			if pkf != nil && len(pkf.Segments) > 0 {
-				pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
-				if pkZM.IsInited() && !index.AnySegmentOverlaps(pkZM, pkf.Segments) {
-					plan.shouldReadByBlks[i] = false
-					plan.prunedBlocks++
-				}
+			if canPruneByPK && changeBlockPKDisjoint(blk, pkSeqnum, pkf.Segments) {
+				plan.shouldReadByBlks[i] = false
+				plan.prunedBlocks++
 			}
 			continue
 		}
 		evaluableBlockCnt++
 		plan.shouldReadByBlks[i] = overlap
 		// Apply PK pruning as a secondary filter on blocks that survived commit-TS check.
-		if overlap && pkf != nil && len(pkf.Segments) > 0 {
-			pkZM := blk.MustGetColumn(pkSeqnum).ZoneMap()
-			if pkZM.IsInited() && !index.AnySegmentOverlaps(pkZM, pkf.Segments) {
-				plan.shouldReadByBlks[i] = false
-				overlap = false
-			}
+		if overlap && canPruneByPK && changeBlockPKDisjoint(blk, pkSeqnum, pkf.Segments) {
+			plan.shouldReadByBlks[i] = false
+			overlap = false
 		}
 		if overlap {
 			overlapBlockCnt++
 		} else {
 			plan.prunedBlocks++
 		}
-		if len(plan.evaluableSamples) < 5 {
+		if collectDiagnostics && len(plan.evaluableSamples) < 5 {
+			_, _, _, detail := blockCommitTSOverlapsRangeDetailed(
+				blk, h.start, h.end, true,
+			)
 			plan.evaluableSamples = append(
 				plan.evaluableSamples,
 				fmt.Sprintf("blk=%d overlap=%t %s", i, overlap, detail),
@@ -605,21 +1130,7 @@ func (h *AObjectHandle) buildBlockPlan(
 	plan.evaluable = evaluableBlockCnt > 0
 	plan.evaluableBlocks = evaluableBlockCnt
 	plan.overlapBlocks = overlapBlockCnt
-	if evaluableBlockCnt == 0 {
-		fields := []zap.Field{
-			zap.String("object", obj.ObjectShortName().ShortString()),
-			zap.Bool("tombstone", h.isTombstone),
-			zap.String("start", h.start.ToString()),
-			zap.String("end", h.end.ToString()),
-			zap.Int("total-blocks", plan.totalBlocks),
-			zap.Any("non-evaluable-reasons", plan.nonEvaluableReasons),
-			zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
-		}
-		if h.p.changesHandle.debugLabel != "" {
-			fields = append(fields, zap.String("debug-label", h.p.changesHandle.debugLabel))
-		}
-		logutil.Warn("ChangesHandle-CommitTSBlockPlan no evaluable blocks", fields...)
-	} else {
+	if h.p.changesHandle.debugLabel != "" {
 		fields := []zap.Field{
 			zap.String("object", obj.ObjectShortName().ShortString()),
 			zap.Bool("tombstone", h.isTombstone),
@@ -632,11 +1143,10 @@ func (h *AObjectHandle) buildBlockPlan(
 			zap.Strings("non-evaluable-samples", plan.nonEvaluableSamples),
 			zap.Strings("evaluable-samples", plan.evaluableSamples),
 		}
-		if h.p.changesHandle.debugLabel != "" {
-			fields = append(fields, zap.String("debug-label", h.p.changesHandle.debugLabel))
-		}
+		fields = append(fields, zap.String("debug-label", h.p.changesHandle.debugLabel))
 		logutil.Info("ChangesHandle-CommitTSBlockPlan summary", fields...)
 	}
+	plan.initialized = true
 	return nil
 }
 
@@ -647,9 +1157,35 @@ func blockCommitTSOverlapsRange(
 	blk objectio.BlockObject,
 	start, end types.TS,
 ) (bool, bool, string, string) {
+	return blockCommitTSOverlapsRangeDetailed(blk, start, end, true)
+}
+
+func blockCommitTSOverlapsRangeDetailed(
+	blk objectio.BlockObject,
+	start, end types.TS,
+	withDetail bool,
+) (overlap, evaluable bool, reason, detail string) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			overlap = false
+			evaluable = false
+			reason = "malformed_metadata"
+			if withDetail {
+				detail = fmt.Sprintf("metadata_panic=%v", recovered)
+			} else {
+				detail = ""
+			}
+		}
+	}()
+	if start.GT(&end) {
+		return false, false, "invalid_range", ""
+	}
 	metaColCnt := blk.GetMetaColumnCount()
 	maxSeqnum := blk.GetMaxSeqnum()
-	base := fmt.Sprintf("meta_col_cnt=%d max_seqnum=%d", metaColCnt, maxSeqnum)
+	base := ""
+	if withDetail {
+		base = fmt.Sprintf("meta_col_cnt=%d max_seqnum=%d", metaColCnt, maxSeqnum)
+	}
 	if metaColCnt == 0 {
 		return false, false, "no_meta_columns", base
 	}
@@ -658,25 +1194,40 @@ func blockCommitTSOverlapsRange(
 		return false, false, "tail_column_not_ts", base
 	}
 	commitCol := blk.ColumnMeta(commitPos)
-	base = fmt.Sprintf("%s commit_pos=%d", base, commitPos)
+	if withDetail {
+		base = fmt.Sprintf("%s commit_pos=%d", base, commitPos)
+	}
 	zm := commitCol.ZoneMap()
 	if !zm.IsInited() {
 		return false, false, "zonemap_not_inited", base
 	}
 	if zm.GetType() != types.T_TS {
-		return false, false, "zonemap_type_not_ts", fmt.Sprintf("%s zm_type=%s", base, zm.GetType().String())
+		if withDetail {
+			base = fmt.Sprintf("%s zm_type=%s", base, zm.GetType().String())
+		}
+		return false, false, "zonemap_type_not_ts", base
 	}
-	minTS := types.DecodeFixed[types.TS](zm.GetMinBuf())
-	maxTS := types.DecodeFixed[types.TS](zm.GetMaxBuf())
-	detail := fmt.Sprintf(
-		"%s zm_type=%s zm_min=%s zm_max=%s range=[%s,%s]",
-		base,
-		zm.GetType().String(),
-		minTS.ToString(),
-		maxTS.ToString(),
-		start.ToString(),
-		end.ToString(),
-	)
+	minBuf, maxBuf := zm.GetMinBuf(), zm.GetMaxBuf()
+	if len(minBuf) != types.TxnTsSize || len(maxBuf) != types.TxnTsSize {
+		return false, false, "zonemap_invalid_bounds", base
+	}
+	minTS := types.DecodeFixed[types.TS](minBuf)
+	maxTS := types.DecodeFixed[types.TS](maxBuf)
+	if minTS.GT(&maxTS) {
+		return false, false, "zonemap_reversed_bounds", base
+	}
+	detail = ""
+	if withDetail {
+		detail = fmt.Sprintf(
+			"%s zm_type=%s zm_min=%s zm_max=%s range=[%s,%s]",
+			base,
+			zm.GetType().String(),
+			minTS.ToString(),
+			maxTS.ToString(),
+			start.ToString(),
+			end.ToString(),
+		)
+	}
 	if maxTS.LT(&start) || minTS.GT(&end) {
 		return false, true, "", detail
 	}
@@ -692,38 +1243,73 @@ func calcPruneRate(pruned, total int) float64 {
 
 func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
+	initialObjectOffset, initialBlockOffset := h.objectOffsetCursor, h.blkOffsetCursor
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
 	for i := 0; i < LoadParallism; i++ {
 		obj, blk, ok, targetErr := h.nextPrefetchTarget(ctx)
 		if targetErr != nil {
 			err = targetErr
-			h.p.changesHandle.readDuration += time.Since(t0)
-			return
+			break
 		}
 		if !ok {
 			break
 		}
 		stats := obj.ObjectStats
-		job := prefetchObjects(ctx, uint32(blk), h.fs, &stats, h.p.changesHandle.scheduler)
+		job, scheduleErr := prefetchObjects(
+			ctx, uint32(blk), h.fs, &stats, h.p.changesHandle.scheduler,
+		)
+		if scheduleErr != nil {
+			err = scheduleErr
+			break
+		}
 		jobs = append(jobs, job)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 	}
+	loadedBlocks := make([]*loadedAObjectBlock, len(jobs))
 	for i, job := range jobs {
 		res := job.GetResult()
-		if res.Err != nil {
-			err = res.Err
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				logutil.Info("ChangesHandle-FileNotFound",
-					zap.String("err", err.Error()))
-			}
-			h.p.changesHandle.readDuration += time.Since(t0)
-			return
-		}
 		putJob(job)
-		loaded := res.Res.(*loadedAObjectBlock)
+		if res == nil {
+			if err == nil {
+				err = moerr.NewInternalErrorNoCtx("appendable object prefetch job returned no result")
+			}
+			continue
+		}
+		if res.Err != nil {
+			if err == nil {
+				err = res.Err
+			}
+			if moerr.IsMoErrCode(res.Err, moerr.ErrFileNotFound) {
+				logutil.Info("ChangesHandle-FileNotFound",
+					zap.String("err", res.Err.Error()))
+			}
+			continue
+		}
+		loaded, ok := res.Res.(*loadedAObjectBlock)
+		if !ok || loaded == nil || loaded.batch == nil {
+			if err == nil {
+				err = moerr.NewInternalErrorNoCtx("appendable object prefetch job returned invalid data")
+			}
+			continue
+		}
+		loadedBlocks[i] = loaded
+	}
+	if err != nil {
+		for _, loaded := range loadedBlocks {
+			if loaded != nil && loaded.batch != nil {
+				loaded.batch.Clean(h.mp)
+			}
+		}
+		h.objectOffsetCursor = initialObjectOffset
+		h.blkOffsetCursor = initialBlockOffset
+		h.p.changesHandle.readDuration += time.Since(t0)
+		return
+	}
+	for i, loaded := range loadedBlocks {
 		h.cache = append(h.cache, loaded.batch)
 		h.specialLayouts = append(h.specialLayouts, loaded.specialLayout)
+		h.columnSeqnums = append(h.columnSeqnums, loaded.columnSeqnums)
 		h.blks = append(h.blks, blks[i])
 	}
 	h.p.changesHandle.readDuration += time.Since(t0)
@@ -735,16 +1321,24 @@ func (h *AObjectHandle) init(ctx context.Context, quick bool) (err error) {
 	return
 }
 func (h *AObjectHandle) IsEmpty() bool {
-	return len(h.objects) == 0
+	return h == nil || len(h.objects) == 0
 }
 func (h *AObjectHandle) RowCount() int {
+	if h == nil {
+		return 0
+	}
 	cnt := 0
 	for _, obj := range h.objects {
-		cnt += int(obj.ObjectStats.Rows())
+		if obj != nil {
+			cnt += int(obj.ObjectStats.Rows())
+		}
 	}
 	return cnt
 }
 func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
+	if terminalErr := h.terminalError(); terminalErr != nil {
+		return terminalErr
+	}
 	for {
 		if h.isEnd() {
 			return
@@ -763,10 +1357,22 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 		}
 		h.currentBatch = h.cache[0]
 		h.cache = h.cache[1:]
+		if (len(h.specialLayouts) != 0 && len(h.specialLayouts) != len(h.cache)+1) ||
+			(len(h.columnSeqnums) != 0 && len(h.columnSeqnums) != len(h.cache)+1) ||
+			(len(h.blks) != 0 && len(h.blks) != len(h.cache)+1) {
+			return h.fail(moerr.NewInternalErrorNoCtx(
+				"appendable object block cache metadata is inconsistent",
+			))
+		}
 		var specialLayout *objectio.SpecialColumnLayout
 		if len(h.specialLayouts) > 0 {
 			specialLayout = &h.specialLayouts[0]
 			h.specialLayouts = h.specialLayouts[1:]
+		}
+		var columnSeqnums []uint16
+		if len(h.columnSeqnums) > 0 {
+			columnSeqnums = h.columnSeqnums[0]
+			h.columnSeqnums = h.columnSeqnums[1:]
 		}
 		var blk *types.Blockid
 		if len(h.blks) > 0 {
@@ -776,11 +1382,14 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 		t0 := time.Now()
 		if h.isTombstone {
 			if err = updateTombstoneBatch(h.currentBatch, h.start, h.end, h.p.skipTS, !h.quick, blk, specialLayout, h.p.changesHandle.retainRowID, h.mp); err != nil {
-				return err
+				return h.fail(err)
 			}
 		} else {
-			if err = updateDataBatch(h.currentBatch, h.start, h.end, blk, specialLayout, h.p.changesHandle.retainRowID, h.mp); err != nil {
-				return err
+			if err = updateDataBatchWithSchema(
+				h.currentBatch, h.start, h.end, blk, specialLayout, columnSeqnums,
+				h.p.changesHandle.dataSchema, h.p.changesHandle.retainRowID, h.mp,
+			); err != nil {
+				return h.fail(err)
 			}
 		}
 		h.p.changesHandle.updateDuration += time.Since(t0)
@@ -788,6 +1397,8 @@ func (h *AObjectHandle) getNextAObject(ctx context.Context) (err error) {
 		if h.batchLength > 0 {
 			return
 		}
+		h.currentBatch.Clean(h.mp)
+		h.currentBatch = nil
 	}
 }
 func (h *AObjectHandle) isEnd() bool {
@@ -795,7 +1406,15 @@ func (h *AObjectHandle) isEnd() bool {
 }
 
 func (h *AObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *mpool.MPool) (err error) {
-	if h.isEnd() && h.rowOffsetCursor >= h.batchLength {
+	if terminalErr := h.terminalError(); terminalErr != nil {
+		return terminalErr
+	}
+	if h.currentBatch == nil && h.rowOffsetCursor >= h.batchLength {
+		if err = h.getNextAObject(ctx); err != nil {
+			return err
+		}
+	}
+	if h.currentBatch == nil && h.isEnd() {
 		return moerr.GetOkExpectedEOF()
 	}
 	err = h.next(ctx, data, mp, h.rowOffsetCursor, h.batchLength)
@@ -806,38 +1425,50 @@ func (h *AObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *m
 }
 
 func (h *AObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
-	if h.isEnd() && h.rowOffsetCursor >= h.batchLength {
+	if terminalErr := h.terminalError(); terminalErr != nil {
+		return terminalErr
+	}
+	if h.currentBatch == nil && h.rowOffsetCursor >= h.batchLength {
+		if err = h.getNextAObject(ctx); err != nil {
+			return err
+		}
+	}
+	if h.currentBatch == nil && h.isEnd() {
 		return moerr.GetOkExpectedEOF()
 	}
 	return h.next(ctx, bat, mp, h.rowOffsetCursor, h.rowOffsetCursor+1)
 }
 func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool, start, end int) (err error) {
+	if terminalErr := h.terminalError(); terminalErr != nil {
+		return terminalErr
+	}
 	if h.isEnd() && h.rowOffsetCursor >= h.batchLength {
 		return moerr.GetOkExpectedEOF()
 	}
 	t0 := time.Now()
 	if *bat == nil {
-		*bat = batch.NewWithSize(len(h.currentBatch.Vecs))
-		(*bat).Attrs = append((*bat).Attrs, h.currentBatch.Attrs...)
+		result := batch.NewWithSize(len(h.currentBatch.Vecs))
+		result.Attrs = append(result.Attrs, h.currentBatch.Attrs...)
 		for i, vec := range h.currentBatch.Vecs {
 			newVec, err := vec.CloneWindow(start, end, mp)
 			if err != nil {
+				result.Clean(mp)
 				h.p.changesHandle.copyDuration += time.Since(t0)
 				return err
 			}
-			(*bat).Vecs[i] = newVec
+			result.Vecs[i] = newVec
 		}
+		result.SetRowCount(result.Vecs[0].Length())
+		*bat = result
 	} else {
 		if !batchesShareAppendSchema(*bat, h.currentBatch) {
 			return moerr.GetOkExpectedEOB()
 		}
-		for i, vec := range (*bat).Vecs {
-			for rowOffset := start; rowOffset < end; rowOffset++ {
-				appendFromEntry(h.currentBatch.Vecs[i], vec, rowOffset, mp)
-			}
+		if err = appendChangeBatchWindow(*bat, h.currentBatch, start, end, mp); err != nil {
+			h.p.changesHandle.copyDuration += time.Since(t0)
+			return err
 		}
 	}
-	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	h.p.changesHandle.copyDuration += time.Since(t0)
 	h.rowOffsetCursor = end
 	if h.rowOffsetCursor >= h.batchLength {
@@ -845,7 +1476,11 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 		h.currentBatch = nil
 		h.batchLength = 0
 		h.rowOffsetCursor = 0
-		if !h.isEnd() {
+		// Ordered mode needs the next row's commit timestamp immediately for
+		// cross-source merge ordering. Quick mode drains sources sequentially;
+		// defer the next block's conversion until the next call so a future I/O
+		// error cannot turn an already-copied output block into an error result.
+		if !h.quick && !h.isEnd() {
 			err = h.getNextAObject(ctx)
 			if err != nil {
 				return
@@ -855,11 +1490,52 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 	return
 }
 func (h *AObjectHandle) NextTS() types.TS {
-	if h.isEnd() && h.rowOffsetCursor >= h.batchLength {
+	if h == nil || h.terminalErr != nil ||
+		(h.isEnd() && h.rowOffsetCursor >= h.batchLength) {
+		return types.TS{}
+	}
+	if h.currentBatch == nil || h.batchLength <= 0 ||
+		h.rowOffsetCursor < 0 || h.rowOffsetCursor >= h.batchLength ||
+		h.currentBatch.RowCount() != h.batchLength || len(h.currentBatch.Vecs) == 0 {
+		h.fail(moerr.NewInternalErrorNoCtx(
+			"appendable change handle has an invalid current batch",
+		))
 		return types.TS{}
 	}
 	commitTSVec := h.currentBatch.Vecs[len(h.currentBatch.Vecs)-1]
+	if commitTSVec == nil || commitTSVec.GetType().Oid != types.T_TS ||
+		commitTSVec.Length() != h.batchLength {
+		h.fail(moerr.NewInternalErrorNoCtx(
+			"appendable change handle has an invalid commit-ts column",
+		))
+		return types.TS{}
+	}
 	return vector.GetFixedAtNoTypeCheck[types.TS](commitTSVec, h.rowOffsetCursor)
+}
+
+func (h *AObjectHandle) Close() {
+	if h == nil {
+		return
+	}
+	if h.currentBatch != nil {
+		h.currentBatch.Clean(h.mp)
+		h.currentBatch = nil
+	}
+	for _, bat := range h.cache {
+		if bat != nil {
+			bat.Clean(h.mp)
+		}
+	}
+	h.cache = nil
+	h.specialLayouts = nil
+	h.columnSeqnums = nil
+	h.blks = nil
+	h.blockPlans = nil
+	h.batchLength = 0
+	h.rowOffsetCursor = 0
+	h.objectOffsetCursor = len(h.objects)
+	h.objects = nil
+	h.blkOffsetCursor = 0
 }
 
 type baseHandle struct {
@@ -868,8 +1544,19 @@ type baseHandle struct {
 	inMemoryHandle *BatchHandle
 
 	changesHandle *ChangeHandler
+	isTombstone   bool
 
 	skipTS map[types.TS]struct{}
+}
+
+func (p *baseHandle) terminalError() error {
+	if p == nil {
+		return nil
+	}
+	if err := p.aobjHandle.terminalError(); err != nil {
+		return err
+	}
+	return p.cnObjectHandle.terminalError()
 }
 
 const (
@@ -882,10 +1569,22 @@ const (
 )
 
 func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, end types.TS, mp *mpool.MPool, tombstone bool, fs fileservice.FileService, ctx context.Context) (p *baseHandle, err error) {
+	if state == nil || changesHandle == nil || ctx == nil || mp == nil || fs == nil {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"base change handler requires state, parent, context, mpool, and file service",
+		)
+	}
 	p = &baseHandle{
 		skipTS:        make(map[types.TS]struct{}),
 		changesHandle: changesHandle,
+		isTombstone:   tombstone,
 	}
+	defer func() {
+		if err != nil {
+			p.Close()
+			p = nil
+		}
+	}()
 	var iter btree.IterG[objectio.ObjectEntry]
 	if tombstone {
 		iter = state.tombstoneObjectsNameIndex.Iter()
@@ -895,24 +1594,35 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 	defer iter.Release()
 	if tombstone {
 		dataIter := state.dataObjectsNameIndex.Iter()
-		p.fillInSkipTS(dataIter, start, end)
+		fillErr := p.fillInSkipTSWithContext(ctx, dataIter, start, end)
 		dataIter.Release()
+		if fillErr != nil {
+			return nil, fillErr
+		}
 	}
 	rowIter, rowIterKind, pkFilterApplied := p.newReplayRowsIter(state, start, end, tombstone)
 	defer rowIter.Close()
-	p.inMemoryHandle = p.newBatchHandleWithRowIterator(
+	p.inMemoryHandle, err = p.newBatchHandleWithRowIterator(
 		ctx, rowIter, rowIterKind, pkFilterApplied, start, end, tombstone, mp,
 	)
-	aobj, cnObj, tnByCreateTS, tnCreateTSKeys := p.getObjectEntries(iter, start, end)
+	if err != nil {
+		return nil, err
+	}
+	aobj, cnObj, tnByCreateTS, collectErr := p.getObjectEntriesWithContext(
+		ctx, iter, start, end,
+	)
+	if collectErr != nil {
+		return nil, collectErr
+	}
 	if p.changesHandle.enableDeleteChainResolve {
 		resolvedAObj, resolveErr := p.resolveVisibleObjectsByDeleteChain(
-			ctx, start, end, aobj, tnByCreateTS, tnCreateTSKeys, tombstone, "appendable",
+			ctx, start, end, aobj, tnByCreateTS, tombstone, "appendable",
 		)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
 		resolvedCNObj, resolveErr := p.resolveVisibleObjectsByDeleteChain(
-			ctx, start, end, cnObj, tnByCreateTS, tnCreateTSKeys, tombstone, "constant-commit-ts",
+			ctx, start, end, cnObj, tnByCreateTS, tombstone, "constant-commit-ts",
 		)
 		if resolveErr != nil {
 			return nil, resolveErr
@@ -950,9 +1660,15 @@ func NewBaseHandlerWithObjEntries(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (p *baseHandle, err error) {
+	if changesHandle == nil || ctx == nil || mp == nil || fs == nil {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"object change handler requires parent, context, mpool, and file service",
+		)
+	}
 	p = &baseHandle{
 		skipTS:        make(map[types.TS]struct{}),
 		changesHandle: changesHandle,
+		isTombstone:   tombstone,
 	}
 	p.aobjHandle = NewAObjectHandle(ctx, p, tombstone, start, end, aobj, fs, mp)
 	p.cnObjectHandle = NewCNObjectHandle(tombstone, cnObj, fs, p, mp)
@@ -967,21 +1683,40 @@ func (p *baseHandle) init(ctx context.Context, quick bool, mp *mpool.MPool) (err
 	return
 }
 func (p *baseHandle) fillInSkipTS(iter btree.IterG[objectio.ObjectEntry], start, end types.TS) {
+	_ = p.fillInSkipTSWithContext(context.Background(), iter, start, end)
+}
+
+func (p *baseHandle) fillInSkipTSWithContext(
+	ctx context.Context,
+	iter btree.IterG[objectio.ObjectEntry],
+	start, end types.TS,
+) error {
+	index := 0
 	for iter.Next() {
+		if index&1023 == 0 {
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
+			}
+		}
+		index++
 		obj := iter.Item()
-		if !obj.DeleteTime.IsEmpty() {
+		if !obj.DeleteTime.IsEmpty() && !obj.DeleteTime.Equal(&txnif.UncommitTS) {
 			ts := obj.DeleteTime
 			if ts.GE(&start) && ts.LE(&end) {
 				p.skipTS[obj.DeleteTime] = struct{}{}
 			}
 		}
 	}
+	return nil
 }
 
 func (p *baseHandle) fillInSkipTSFromObjects(start, end types.TS, groups ...[]*objectio.ObjectEntry) {
 	for _, group := range groups {
 		for _, obj := range group {
-			if obj == nil || obj.DeleteTime.IsEmpty() {
+			if obj == nil || obj.DeleteTime.IsEmpty() ||
+				obj.DeleteTime.Equal(&txnif.UncommitTS) {
 				continue
 			}
 			ts := obj.DeleteTime
@@ -1008,6 +1743,12 @@ func (p *baseHandle) Close() {
 	}
 	if p.inMemoryHandle != nil {
 		p.inMemoryHandle.Close()
+	}
+	if p.aobjHandle != nil {
+		p.aobjHandle.Close()
+	}
+	if p.cnObjectHandle != nil {
+		p.cnObjectHandle.Close()
 	}
 }
 func (p *baseHandle) less(a, b types.TS) bool {
@@ -1036,7 +1777,13 @@ func (p *baseHandle) NextTS() types.TS {
 	return ts
 }
 func (p *baseHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
+	if err = p.terminalError(); err != nil {
+		return err
+	}
 	_, typ := p.nextTS()
+	if err = p.terminalError(); err != nil {
+		return err
+	}
 	switch typ {
 	case NextChangeHandle_AObj:
 		err = p.aobjHandle.Next(ctx, bat, mp)
@@ -1048,9 +1795,16 @@ func (p *baseHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPoo
 	return
 }
 func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
+	if err = p.terminalError(); err != nil {
+		return err
+	}
 	if p.aobjHandle != nil {
 		err = p.aobjHandle.QuickNext(ctx, bat, mp)
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			if terminalErr := p.aobjHandle.terminalError(); terminalErr != nil {
+				return terminalErr
+			}
+			p.aobjHandle.Close()
 			p.aobjHandle = nil
 			err = nil
 		}
@@ -1086,30 +1840,57 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 	start, end types.TS,
 	tombstone bool,
 	mp *mpool.MPool,
-) (h *BatchHandle) {
-	bat := p.getBatchesFromRowIterator(iter, iterKind, pkFilterApplied, start, end, tombstone, mp)
+) (h *BatchHandle, err error) {
+	bat, err := p.getBatchesFromRowIterator(
+		ctx, iter, iterKind, pkFilterApplied, start, end, tombstone, mp,
+	)
+	if err != nil {
+		return nil, err
+	}
 	if bat == nil {
-		return nil
+		return nil, nil
 	}
 	h = NewRowHandle(bat, mp, p, ctx, tombstone)
-	return
+	return h, nil
 }
 func (p *baseHandle) getBatchesFromRowIterator(
+	ctx context.Context,
 	iter RowsIter,
 	iterKind string,
 	pkFilterApplied bool,
 	start, end types.TS,
 	tombstone bool,
 	mp *mpool.MPool,
-) (bat *batch.Batch) {
+) (bat *batch.Batch, err error) {
+	defer func() {
+		if err != nil && bat != nil {
+			bat.Clean(mp)
+			bat = nil
+		}
+	}()
 	var scanned, tsMatched, emitted int
 	for iter.Next() {
+		if scanned&1023 == 0 && ctx != nil {
+			select {
+			case <-ctx.Done():
+				return nil, context.Cause(ctx)
+			default:
+			}
+		}
 		scanned++
 		entry := iter.Entry()
+		if entry == nil {
+			return nil, moerr.NewInternalErrorNoCtx("change row iterator returned a nil entry")
+		}
 		if checkTS(start, end, entry.Time) {
 			tsMatched++
 			if !entry.Deleted && !tombstone {
-				fillInInsertBatch(&bat, entry, p.changesHandle.retainRowID, mp)
+				if err = fillInInsertBatchWithSchema(
+					&bat, entry, p.changesHandle.dataSchema,
+					p.changesHandle.retainRowID, mp,
+				); err != nil {
+					return nil, err
+				}
 				emitted++
 			}
 			if entry.Deleted && tombstone {
@@ -1119,7 +1900,9 @@ func (p *baseHandle) getBatchesFromRowIterator(
 						continue
 					}
 				}
-				fillInDeleteBatch(&bat, entry, p.changesHandle.retainRowID, mp)
+				if err = fillInDeleteBatch(&bat, entry, p.changesHandle.retainRowID, mp); err != nil {
+					return nil, err
+				}
 				emitted++
 			}
 		}
@@ -1137,7 +1920,7 @@ func (p *baseHandle) getBatchesFromRowIterator(
 			zap.Int("emitted", emitted),
 		)
 	}
-	return
+	return bat, nil
 }
 func (p *baseHandle) getObjectEntries(
 	objIter btree.IterG[objectio.ObjectEntry],
@@ -1145,12 +1928,30 @@ func (p *baseHandle) getObjectEntries(
 ) (
 	aobj, cnObj []*objectio.ObjectEntry,
 	tnByCreateTS map[types.TS][]*objectio.ObjectEntry,
-	tnCreateTSKeys []types.TS,
 ) {
+	aobj, cnObj, tnByCreateTS, _ = p.getObjectEntriesWithContext(
+		context.Background(), objIter, start, end,
+	)
+	return
+}
+
+func (p *baseHandle) getObjectEntriesWithContext(
+	ctx context.Context,
+	objIter btree.IterG[objectio.ObjectEntry],
+	start, end types.TS,
+) (
+	aobj, cnObj []*objectio.ObjectEntry,
+	tnByCreateTS map[types.TS][]*objectio.ObjectEntry,
+	err error,
+) {
+	if ctx == nil {
+		return nil, nil, nil, moerr.NewInvalidInputNoCtx(
+			"change object collection requires context",
+		)
+	}
 	aobj = make([]*objectio.ObjectEntry, 0)
 	cnObj = make([]*objectio.ObjectEntry, 0)
 	tnByCreateTS = make(map[types.TS][]*objectio.ObjectEntry)
-	tnKeySet := make(map[types.TS]struct{})
 	var pkf *engine.PKFilter
 	debugLabel := ""
 	if p.changesHandle != nil {
@@ -1160,24 +1961,38 @@ func (p *baseHandle) getObjectEntries(
 	var (
 		totalAppendable, prunedAppendable int
 		totalCNCreated, prunedCNCreated   int
-		totalTNStatic, prunedTNStatic     int
+		totalTNStatic                     int
 	)
+	objectIndex := 0
 	for objIter.Next() {
+		if objectIndex&1023 == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, nil, nil, context.Cause(ctx)
+			default:
+			}
+		}
+		objectIndex++
 		entry := objIter.Item()
 		entryCopy := entry
+		if entry.CreateTime.Equal(&txnif.UncommitTS) {
+			continue
+		}
 		if entry.GetAppendable() {
 			totalAppendable++
 			if entry.CreateTime.GT(&end) {
 				continue
 			}
-			if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
+			if !entry.DeleteTime.IsEmpty() &&
+				!entry.DeleteTime.Equal(&txnif.UncommitTS) &&
+				entry.DeleteTime.LT(&start) {
 				continue
 			}
 			// PK zonemap pruning: skip appendable objects whose sort-key range
 			// does not overlap with the requested PK values.
-			if pkf != nil && len(pkf.Segments) > 0 {
+			if !p.isTombstone && pkf != nil && pkf.ObjectZMIsPK && len(pkf.Segments) > 0 {
 				zm := entry.SortKeyZoneMap()
-				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+				if changeZoneMapDisjoint(zm, pkf.Segments) {
 					prunedAppendable++
 					continue
 				}
@@ -1189,9 +2004,9 @@ func (p *baseHandle) getObjectEntries(
 				if entry.CreateTime.LT(&start) || entry.CreateTime.GT(&end) {
 					continue
 				}
-				if pkf != nil && len(pkf.Segments) > 0 {
+				if !p.isTombstone && pkf != nil && pkf.ObjectZMIsPK && len(pkf.Segments) > 0 {
 					zm := entry.SortKeyZoneMap()
-					if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
+					if changeZoneMapDisjoint(zm, pkf.Segments) {
 						prunedCNCreated++
 						continue
 					}
@@ -1203,35 +2018,27 @@ func (p *baseHandle) getObjectEntries(
 			if entry.CreateTime.GT(&end) {
 				continue
 			}
-			// PK zonemap pruning for TN non-appendable objects.
-			if pkf != nil && len(pkf.Segments) > 0 {
-				zm := entry.SortKeyZoneMap()
-				if zm.IsInited() && !index.AnySegmentOverlaps(zm, pkf.Segments) {
-					prunedTNStatic++
-					continue
-				}
-			}
-			// Keep every TN-produced non-appendable object in the create-time index so
+			// Keep every TN-produced non-appendable object in the create-time index,
+			// even when its object-level PK zonemap does not match. A deleted object
+			// may have been rewritten into this object by compaction while the queried
+			// PK itself was deleted. Pruning the successor before delete-chain
+			// resolution would then turn a valid empty result into ErrFileNotFound.
+			// Block-level PK pruning still avoids reading unrelated data blocks after
+			// the chain has been resolved.
+			//
+			// Keeping all successors is also required so
 			// delete-chain resolution can rewrite a deleted/missing predecessor to the
 			// replacement object created at the predecessor's delete timestamp.
 			tnByCreateTS[entry.CreateTime] = append(tnByCreateTS[entry.CreateTime], &entryCopy)
-			tnKeySet[entry.CreateTime] = struct{}{}
 			// After checkpoint + GC + restart, older appendable predecessors may be gone;
 			// resolveVisibleObjectsByDeleteChain sweeps for orphaned live TN objects.
 		}
-	}
-	tnCreateTSKeys = make([]types.TS, 0, len(tnKeySet))
-	for ts := range tnKeySet {
-		tnCreateTSKeys = append(tnCreateTSKeys, ts)
 	}
 	goSort.Slice(aobj, func(i, j int) bool {
 		return aobj[i].CreateTime.LT(&aobj[j].CreateTime)
 	})
 	goSort.Slice(cnObj, func(i, j int) bool {
 		return cnObj[i].CreateTime.LT(&cnObj[j].CreateTime)
-	})
-	goSort.Slice(tnCreateTSKeys, func(i, j int) bool {
-		return tnCreateTSKeys[i].LT(&tnCreateTSKeys[j])
 	})
 	if debugLabel != "" {
 		logutil.Info(
@@ -1243,7 +2050,7 @@ func (p *baseHandle) getObjectEntries(
 			zap.Int("cn-created-total", totalCNCreated),
 			zap.Int("cn-created-pruned", prunedCNCreated),
 			zap.Int("tn-static-total", totalTNStatic),
-			zap.Int("tn-static-pruned", prunedTNStatic),
+			zap.Int("tn-static-pruned", 0),
 			zap.String("start", start.ToString()),
 			zap.String("end", end.ToString()),
 		)
@@ -1256,12 +2063,21 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 	start, end types.TS,
 	visible []*objectio.ObjectEntry,
 	tnByCreateTS map[types.TS][]*objectio.ObjectEntry,
-	tnCreateTSKeys []types.TS,
 	isTombstone bool,
 	kind string,
 ) ([]*objectio.ObjectEntry, error) {
+	if ctx == nil || p == nil || p.changesHandle == nil {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"delete-chain resolution requires handle and context",
+		)
+	}
 	if len(visible) == 0 && len(tnByCreateTS) == 0 {
 		return visible, nil
+	}
+	if p.changesHandle.fs == nil {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"delete-chain resolution requires file service for non-empty inputs",
+		)
 	}
 	resolved := make([]*objectio.ObjectEntry, 0, len(visible))
 	queue := make([]*objectio.ObjectEntry, 0, len(visible))
@@ -1269,24 +2085,33 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 	visited := make(map[string]struct{}, len(visible))
 	missingCnt := 0
 	rewriteHopCnt := 0
-	fuzzyHopCnt := 0
+	processed := 0
 	for len(queue) > 0 {
+		if processed&255 == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, context.Cause(ctx)
+			default:
+			}
+		}
+		processed++
 		current := queue[0]
 		queue = queue[1:]
 		if current == nil {
 			continue
 		}
+		identity := changeObjectIdentity(current)
 		name := current.ObjectShortName().ShortString()
-		if _, ok := visited[name]; ok {
+		if _, ok := visited[identity]; ok {
 			continue
 		}
-		visited[name] = struct{}{}
+		visited[identity] = struct{}{}
 		// For snapshot-state range replay, we only need terminal objects that are
 		// still visible at range end. If an object has already been deleted at or
 		// before end, keep following its delete-time chain instead of reading this
 		// transient intermediate object.
-		if !current.DeleteTime.IsEmpty() && current.DeleteTime.LE(&end) {
-			next, successorTS, exact := lookupDeleteChainSuccessor(current.DeleteTime, tnByCreateTS, tnCreateTSKeys)
+		if changeObjectDeletedBy(end, current.DeleteTime) {
+			next := lookupDeleteChainSuccessor(current.DeleteTime, tnByCreateTS)
 			if len(next) == 0 {
 				logutil.Warn(
 					"ChangesHandle-DeleteChain no successor for non-visible object at end",
@@ -1300,17 +2125,6 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 				return nil, moerr.NewFileNotFoundNoCtx(current.ObjectName().String())
 			}
 			rewriteHopCnt++
-			if !exact {
-				fuzzyHopCnt++
-				logutil.Info(
-					"ChangesHandle-DeleteChain matched successor create-time",
-					zap.String("kind", kind),
-					zap.Bool("tombstone", isTombstone),
-					zap.String("current", name),
-					zap.String("delete-time", current.DeleteTime.ToString()),
-					zap.String("successor-create-time", successorTS.ToString()),
-				)
-			}
 			queue = append(queue, next...)
 			continue
 		}
@@ -1323,7 +2137,7 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 			continue
 		}
 		missingCnt++
-		if current.DeleteTime.IsEmpty() {
+		if current.DeleteTime.IsEmpty() || current.DeleteTime.Equal(&txnif.UncommitTS) {
 			logutil.Warn(
 				"ChangesHandle-DeleteChain unresolved object without delete-time",
 				zap.String("kind", kind),
@@ -1334,7 +2148,7 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 			)
 			return nil, moerr.NewFileNotFoundNoCtx(current.ObjectName().String())
 		}
-		next, successorTS, exact := lookupDeleteChainSuccessor(current.DeleteTime, tnByCreateTS, tnCreateTSKeys)
+		next := lookupDeleteChainSuccessor(current.DeleteTime, tnByCreateTS)
 		if len(next) == 0 {
 			logutil.Warn(
 				"ChangesHandle-DeleteChain no replacement at delete-time",
@@ -1348,31 +2162,32 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 			return nil, moerr.NewFileNotFoundNoCtx(current.ObjectName().String())
 		}
 		rewriteHopCnt++
-		if !exact {
-			fuzzyHopCnt++
-			logutil.Info(
-				"ChangesHandle-DeleteChain matched successor create-time",
-				zap.String("kind", kind),
-				zap.Bool("tombstone", isTombstone),
-				zap.String("missing", name),
-				zap.String("delete-time", current.DeleteTime.ToString()),
-				zap.String("successor-create-time", successorTS.ToString()),
-			)
-		}
 		queue = append(queue, next...)
 	}
 	// Sweep for orphaned TN objects whose appendable predecessors were GC'd.
 	// After checkpoint + GC + restart, no appendable seed remains in the visible
 	// set, so these live TN objects are never reached by chain walking above.
 	orphanCnt := 0
+	orphanIndex := 0
 	for _, objs := range tnByCreateTS {
 		for _, obj := range objs {
-			name := obj.ObjectShortName().ShortString()
-			if _, ok := visited[name]; ok {
+			if orphanIndex&255 == 0 {
+				select {
+				case <-ctx.Done():
+					return nil, context.Cause(ctx)
+				default:
+				}
+			}
+			orphanIndex++
+			if obj == nil {
 				continue
 			}
-			visited[name] = struct{}{}
-			if !obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&end) {
+			identity := changeObjectIdentity(obj)
+			if _, ok := visited[identity]; ok {
+				continue
+			}
+			visited[identity] = struct{}{}
+			if changeObjectDeletedBy(end, obj.DeleteTime) {
 				continue
 			}
 			exists, err := p.objectFileExists(ctx, obj)
@@ -1400,34 +2215,22 @@ func (p *baseHandle) resolveVisibleObjectsByDeleteChain(
 			zap.Int("missing", missingCnt),
 			zap.Int("orphan-tn", orphanCnt),
 			zap.Int("rewrite-hops", rewriteHopCnt),
-			zap.Int("fuzzy-hops", fuzzyHopCnt),
 		)
 	}
 	return resolved, nil
 }
 
-// lookupDeleteChainSuccessor returns replacement TN non-appendable objects for
-// a missing visible object. It first tries exact delete-time -> create-time
-// matching, and then falls back to the earliest TN create-time >= delete-time.
+// lookupDeleteChainSuccessor returns replacement TN non-appendable objects
+// created by the same transaction that deleted the predecessor. A later
+// create-time alone is not a lineage signal: accepting it can attach an
+// unrelated compaction's objects and return rows that never belonged to the
+// predecessor. Terminal TN objects whose predecessors were GC'd are recovered
+// independently by the orphan sweep above.
 func lookupDeleteChainSuccessor(
 	deleteTS types.TS,
 	tnByCreateTS map[types.TS][]*objectio.ObjectEntry,
-	tnCreateTSKeys []types.TS,
-) (next []*objectio.ObjectEntry, successorTS types.TS, exact bool) {
-	if objs := tnByCreateTS[deleteTS]; len(objs) > 0 {
-		return objs, deleteTS, true
-	}
-	if len(tnCreateTSKeys) == 0 {
-		return nil, types.TS{}, false
-	}
-	idx := goSort.Search(len(tnCreateTSKeys), func(i int) bool {
-		return !tnCreateTSKeys[i].LT(&deleteTS)
-	})
-	if idx >= len(tnCreateTSKeys) {
-		return nil, types.TS{}, false
-	}
-	successorTS = tnCreateTSKeys[idx]
-	return tnByCreateTS[successorTS], successorTS, false
+) []*objectio.ObjectEntry {
+	return tnByCreateTS[deleteTS]
 }
 
 // classifyResolvedObjects routes resolved objects into:
@@ -1446,7 +2249,7 @@ func classifyResolvedObjects(groups ...[]*objectio.ObjectEntry) (aobjs, cnObjs [
 			if obj == nil {
 				continue
 			}
-			name := obj.ObjectShortName().ShortString()
+			name := changeObjectIdentity(obj)
 			if obj.ObjectStats.GetCNCreated() {
 				if _, ok := seenCN[name]; ok {
 					continue
@@ -1475,6 +2278,11 @@ func (p *baseHandle) objectFileExists(ctx context.Context, obj *objectio.ObjectE
 	if obj == nil {
 		return false, nil
 	}
+	if ctx == nil || p == nil || p.changesHandle == nil || p.changesHandle.fs == nil {
+		return false, moerr.NewInvalidInputNoCtx(
+			"object existence check requires handle, context, and file service",
+		)
+	}
 	// FastLoadObjectMeta may be satisfied by object-meta cache even after file
 	// GC. Use StatFile to validate physical existence before replay.
 	_, err := p.changesHandle.fs.StatFile(ctx, obj.ObjectName().String())
@@ -1493,9 +2301,12 @@ type ChangeHandler struct {
 	dataHandle      *baseHandle
 	coarseMaxRow    int
 	quick           bool
-	primarySeqnum   int
+	primarySeqnum   int // stable physical sequence number
+	primaryPosition int // logical position in dataSchema/output batches
+	dataSchema      *engine.CollectChangesSchema
 	scheduler       tasks.JobScheduler
 	mp              *mpool.MPool
+	outputMP        *mpool.MPool
 
 	readDuration, copyDuration    time.Duration
 	updateDuration, totalDuration time.Duration
@@ -1523,8 +2334,107 @@ type ChangeHandler struct {
 	debugLabel string
 
 	retainRowID bool
+	terminalErr error
 
 	LogThreshold time.Duration
+}
+
+func (p *ChangeHandler) terminalError() error {
+	if p == nil {
+		return nil
+	}
+	if p.terminalErr != nil {
+		return p.terminalErr
+	}
+	if err := p.dataHandle.terminalError(); err != nil {
+		return err
+	}
+	return p.tombstoneHandle.terminalError()
+}
+
+// fail makes post-consumption failures sticky. Once either input cursor has
+// advanced, accepting another Next call would omit the consumed rows. Closing
+// both streams also bounds retained cache memory while callers hold the failed
+// handle.
+func (p *ChangeHandler) fail(err error) error {
+	if err == nil {
+		return nil
+	}
+	if p.terminalErr == nil {
+		p.terminalErr = err
+		_ = p.Close()
+	}
+	return p.terminalErr
+}
+
+func (p *ChangeHandler) applyRequestSchema(ctx context.Context) error {
+	p.primaryPosition = p.primarySeqnum
+	p.dataSchema = engine.CollectChangesSchemaFromContext(ctx)
+	if p.pkFilter != nil {
+		segmentsValid := changePKFilterSegmentsValid(p.pkFilter.Segments)
+		replayValid := p.pkFilter.ReplaySpec == nil ||
+			p.pkFilter.ReplaySpec.Op != function.EQUAL ||
+			len(p.pkFilter.ReplaySpec.Keys) != 1 ||
+			len(p.pkFilter.ReplaySpec.Keys[0]) > 0
+		if !segmentsValid || !replayValid {
+			// PKFilter is an optional optimization hint. Preserve any valid half
+			// and fail open on malformed metadata instead of rejecting a query or
+			// allowing binary-search assumptions to create false negatives.
+			filterCopy := *p.pkFilter
+			if !segmentsValid {
+				filterCopy.Segments = nil
+				filterCopy.ObjectZMIsPK = false
+			}
+			if !replayValid {
+				filterCopy.ReplaySpec = nil
+			}
+			if len(filterCopy.Segments) == 0 && filterCopy.ReplaySpec == nil {
+				p.pkFilter = nil
+			} else {
+				p.pkFilter = &filterCopy
+			}
+			logutil.Warn(
+				"ChangesHandle disabled malformed PK filter optimization",
+				zap.Bool("segments-valid", segmentsValid),
+				zap.Bool("replay-valid", replayValid),
+			)
+		}
+	}
+	if p.dataSchema == nil {
+		return nil
+	}
+	if !p.dataSchema.Valid() {
+		return moerr.NewInternalErrorNoCtx("collect changes request has an invalid data schema")
+	}
+	seenSeqnums := make(map[uint16]struct{}, len(p.dataSchema.Seqnums))
+	for position, seqnum := range p.dataSchema.Seqnums {
+		if p.dataSchema.Attrs[position] == "" || seqnum >= objectio.SEQNUM_UPPER ||
+			p.dataSchema.Types[position].Oid == types.T_any {
+			return moerr.NewInternalErrorNoCtxf(
+				"collect changes request column %d is invalid", position,
+			)
+		}
+		if _, duplicate := seenSeqnums[seqnum]; duplicate {
+			return moerr.NewInternalErrorNoCtxf(
+				"collect changes request has duplicate sequence %d", seqnum,
+			)
+		}
+		seenSeqnums[seqnum] = struct{}{}
+	}
+	if p.primarySeqnum < 0 {
+		p.primaryPosition = -1
+		return nil
+	}
+	for position, seqnum := range p.dataSchema.Seqnums {
+		if int(seqnum) == p.primarySeqnum {
+			p.primaryPosition = position
+			return nil
+		}
+	}
+	return moerr.NewInternalErrorNoCtxf(
+		"collect changes primary sequence %d is absent from the logical schema",
+		p.primarySeqnum,
+	)
 }
 
 type checkpointObjectSelection uint8
@@ -1661,6 +2571,14 @@ func NewChangesHandlerWithPartitionStateRange(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
+	if state == nil {
+		return nil, moerr.NewInvalidInputNoCtx("partition-state range change collection requires state")
+	}
+	if err = validateChangeCollectionInputs(
+		ctx, start, end, maxRow, primarySeqnum, mp, fs,
+	); err != nil {
+		return nil, err
+	}
 	stateStart := state.GetStart()
 	if stateStart.GT(&start) {
 		logutil.Info("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
@@ -1683,6 +2601,7 @@ func NewChangesHandlerWithPartitionStateRange(
 		enableCommitTSBlockPrune: true,
 		strictCommitTSBlockPrune: true,
 		enableDeleteChainResolve: true,
+		pkFilter:                 engine.PKFilterFromContext(ctx),
 		debugLabel:               engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:              engine.RetainRowIDFromContext(ctx),
 	}
@@ -1694,6 +2613,9 @@ func NewChangesHandlerWithPartitionStateRange(
 			}
 		}
 	}()
+	if err = changeHandle.applyRequestSchema(ctx); err != nil {
+		return nil, err
+	}
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
 	if err != nil {
 		return nil, err
@@ -1740,6 +2662,11 @@ func newChangesHandlerWithCheckpointEntries(
 	selection checkpointObjectSelection,
 	isRecoveryMode bool,
 ) (changeHandle *ChangeHandler, err error) {
+	if err = validateChangeCollectionInputs(
+		ctx, start, end, maxRow, primarySeqnum, mp, fs,
+	); err != nil {
+		return nil, err
+	}
 	changeHandle = &ChangeHandler{
 		coarseMaxRow:   int(maxRow),
 		start:          start,
@@ -1752,6 +2679,7 @@ func newChangesHandlerWithCheckpointEntries(
 		mp:             mp,
 		scheduler:      tasks.NewParallelJobScheduler(LoadParallism),
 		isRecoveryMode: isRecoveryMode,
+		pkFilter:       engine.PKFilterFromContext(ctx),
 		debugLabel:     engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:    engine.RetainRowIDFromContext(ctx),
 	}
@@ -1764,6 +2692,9 @@ func newChangesHandlerWithCheckpointEntries(
 			changeHandle = nil
 		}
 	}()
+	if err = changeHandle.applyRequestSchema(ctx); err != nil {
+		return nil, err
+	}
 	if selection == checkpointObjectSelectionRange {
 		changeHandle.enableCommitTSBlockPrune = true
 		changeHandle.strictCommitTSBlockPrune = true
@@ -1786,11 +2717,12 @@ func newChangesHandlerWithCheckpointEntries(
 	if err != nil {
 		return
 	}
-	if err = changeHandle.dataHandle.init(ctx, changeHandle.quick, mp); err != nil {
-		return
-	}
 	changeHandle.tombstoneHandle, err = NewBaseHandlerWithObjEntries(ctx, changeHandle, start, end, tombstoneAobj, tombstoneCNObj, true, mp, fs)
 	if err != nil {
+		return
+	}
+	changeHandle.decideMode()
+	if err = changeHandle.dataHandle.init(ctx, changeHandle.quick, mp); err != nil {
 		return
 	}
 	if err = changeHandle.tombstoneHandle.init(ctx, changeHandle.quick, mp); err != nil {
@@ -1807,13 +2739,13 @@ func logRangeReplaySelection(
 	start, end types.TS,
 	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
 ) {
-	sumRows := func(entries []*objectio.ObjectEntry) int {
-		total := 0
+	sumRows := func(entries []*objectio.ObjectEntry) uint64 {
+		var total uint64
 		for _, entry := range entries {
 			if entry == nil {
 				continue
 			}
-			total += int(entry.Rows())
+			total += uint64(entry.Rows())
 		}
 		return total
 	}
@@ -1822,13 +2754,13 @@ func logRangeReplaySelection(
 		zap.String("start", start.ToString()),
 		zap.String("end", end.ToString()),
 		zap.Int("data-aobj-count", len(dataAobj)),
-		zap.Int("data-aobj-rows", sumRows(dataAobj)),
+		zap.Uint64("data-aobj-rows", sumRows(dataAobj)),
 		zap.Int("data-cnobj-count", len(dataCNObj)),
-		zap.Int("data-cnobj-rows", sumRows(dataCNObj)),
+		zap.Uint64("data-cnobj-rows", sumRows(dataCNObj)),
 		zap.Int("tombstone-aobj-count", len(tombstoneAobj)),
-		zap.Int("tombstone-aobj-rows", sumRows(tombstoneAobj)),
+		zap.Uint64("tombstone-aobj-rows", sumRows(tombstoneAobj)),
 		zap.Int("tombstone-cnobj-count", len(tombstoneCNObj)),
-		zap.Int("tombstone-cnobj-rows", sumRows(tombstoneCNObj)),
+		zap.Uint64("tombstone-cnobj-rows", sumRows(tombstoneCNObj)),
 	)
 }
 
@@ -1845,13 +2777,42 @@ func getObjectsFromCheckpointEntries(
 	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
 	err error,
 ) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj = nil, nil, nil, nil
+			err = moerr.NewInternalErrorNoCtxf(
+				"cannot decode checkpoint object entries: %v", recovered,
+			)
+		}
+	}()
+	if ctx == nil || mp == nil || fs == nil || start.GT(&end) {
+		return nil, nil, nil, nil, moerr.NewInvalidInputNoCtx(
+			"checkpoint change collection requires context, ordered timestamps, mpool, and file service",
+		)
+	}
+	if selection != checkpointObjectSelectionRecovery &&
+		selection != checkpointObjectSelectionRange {
+		return nil, nil, nil, nil, moerr.NewInvalidInputNoCtx(
+			"checkpoint change collection has invalid selection mode",
+		)
+	}
 	dataAobjMap := make(map[string]*objectio.ObjectEntry)
 	dataCNObjMap := make(map[string]*objectio.ObjectEntry)
 	tombstoneAobjMap := make(map[string]*objectio.ObjectEntry)
 	tombstoneCNObjMap := make(map[string]*objectio.ObjectEntry)
 	readers := make([]checkpointEntryReader, 0)
 	for _, entry := range checkpoint {
+		if entry == nil {
+			return nil, nil, nil, nil, moerr.NewInternalErrorNoCtx(
+				"checkpoint change collection received a nil entry",
+			)
+		}
 		reader := newCKPReaderWithTableID(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
+		if checkpointEntryReaderIsNil(reader) {
+			return nil, nil, nil, nil, moerr.NewInternalErrorNoCtx(
+				"checkpoint reader factory returned nil",
+			)
+		}
 		readers = append(readers, reader)
 		if loc := entry.GetLocation(); !loc.IsEmpty() {
 			ioutil.Prefetch(sid, fs, loc)
@@ -1868,18 +2829,33 @@ func getObjectsFromCheckpointEntries(
 		if err = reader.ConsumeCheckpointWithTableID(
 			ctx,
 			func(ctx context.Context, fs fileservice.FileService, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+				if obj.ObjectStats.IsZero() {
+					return moerr.NewInternalErrorNoCtx(
+						"checkpoint change collection received empty object statistics",
+					)
+				}
+				if _, validateErr := validateChangeObjectBlockCount(&obj.ObjectStats); validateErr != nil {
+					return validateErr
+				}
+				if obj.CreateTime.Equal(&txnif.UncommitTS) ||
+					obj.DeleteTime.Equal(&txnif.UncommitTS) ||
+					(!obj.DeleteTime.IsEmpty() && obj.DeleteTime.LT(&obj.CreateTime)) {
+					return moerr.NewInternalErrorNoCtx(
+						"checkpoint change collection received an invalid object lifetime",
+					)
+				}
 				switch classifyCheckpointObject(obj, isTombstone, start, end, selection) {
 				case checkpointObjectKindRowCommitTS:
 					if isTombstone {
-						tombstoneAobjMap[obj.ObjectShortName().ShortString()] = &obj
+						tombstoneAobjMap[changeObjectIdentity(&obj)] = &obj
 					} else {
-						dataAobjMap[obj.ObjectShortName().ShortString()] = &obj
+						dataAobjMap[changeObjectIdentity(&obj)] = &obj
 					}
 				case checkpointObjectKindConstantCommitTS:
 					if isTombstone {
-						tombstoneCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+						tombstoneCNObjMap[changeObjectIdentity(&obj)] = &obj
 					} else {
-						dataCNObjMap[obj.ObjectShortName().ShortString()] = &obj
+						dataCNObjMap[changeObjectIdentity(&obj)] = &obj
 					}
 				}
 				return
@@ -1919,14 +2895,15 @@ func classifyCheckpointObject(
 			}
 			return checkpointObjectKindConstantCommitTS
 		}
-		if obj.CreateTime.LT(&start) || obj.CreateTime.GT(&end) {
+		// A TN-created non-appendable object can preserve row-level commit
+		// timestamps from an older appendable/backup object.  Its object create
+		// time is therefore only a lifetime bound, not the commit time of every
+		// row.  Keep any object whose lifetime overlaps the requested range and
+		// let updateDataBatch/updateTombstoneBatch apply the exact row filter.
+		if obj.CreateTime.GT(&end) ||
+			(!obj.DeleteTime.IsEmpty() && obj.DeleteTime.LT(&start)) {
 			return checkpointObjectKindIgnore
 		}
-		// DN-created non-appendable objects may be rewritten by flush/merge, so
-		// object create time alone does not describe which rows belong to
-		// CollectChanges(start, end). Keep them on the row-commit-ts path and let
-		// the batch-level TS filter recover only the rows whose commit TS falls in
-		// the requested interval.
 		return checkpointObjectKindRowCommitTS
 	default:
 		if obj.GetAppendable() && obj.CreateTime.GE(&start) {
@@ -1969,6 +2946,14 @@ func NewChangesHandler(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
+	if state == nil {
+		return nil, moerr.NewInvalidInputNoCtx("partition change collection requires state")
+	}
+	if err = validateChangeCollectionInputs(
+		ctx, start, end, maxRow, primarySeqnum, mp, fs,
+	); err != nil {
+		return nil, err
+	}
 	if state.start.GT(&start) {
 		return nil, moerr.NewErrStaleReadNoCtx(state.start.ToString(), start.ToString())
 	}
@@ -1986,6 +2971,12 @@ func NewChangesHandler(
 		pkFilter:      engine.PKFilterFromContext(ctx),
 		debugLabel:    engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:   engine.RetainRowIDFromContext(ctx),
+	}
+	if err = changeHandle.applyRequestSchema(ctx); err != nil {
+		if changeHandle.scheduler != nil {
+			changeHandle.scheduler.Stop()
+		}
+		return nil, err
 	}
 	defer func() {
 		if err != nil {
@@ -2029,6 +3020,7 @@ func (p *ChangeHandler) Close() error {
 	}
 	if p.scheduler != nil {
 		p.scheduler.Stop()
+		p.scheduler = nil
 	}
 	return nil
 }
@@ -2058,6 +3050,9 @@ func (p *ChangeHandler) decideNextHandle() int {
 	return NextChangeHandle_Data
 }
 func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, err error) {
+	if terminalErr := p.terminalError(); terminalErr != nil {
+		return nil, nil, terminalErr
+	}
 	for {
 		dataEnd := false
 		tombstoneEnd := false
@@ -2066,7 +3061,8 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 			dataEnd = true
 			err = nil
 		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+			if err = filterBatchWithContext(ctx, data, tombstone, p.primaryPosition, p.skipDeletes, p.isRecoveryMode); err != nil {
+				err = p.fail(err)
 				return
 			}
 			return
@@ -2079,7 +3075,8 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 			tombstoneEnd = true
 			err = nil
 		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+			if err = filterBatchWithContext(ctx, data, tombstone, p.primaryPosition, p.skipDeletes, p.isRecoveryMode); err != nil {
+				err = p.fail(err)
 				return
 			}
 			return
@@ -2087,20 +3084,34 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if err != nil {
 			return
 		}
-		if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+		if err = filterBatchWithContext(ctx, data, tombstone, p.primaryPosition, p.skipDeletes, p.isRecoveryMode); err != nil {
+			err = p.fail(err)
 			return
 		}
 		if tombstoneEnd && dataEnd {
 			break
 		}
-		if dataEnd && tombstone.RowCount() > p.coarseMaxRow {
+		if dataEnd && tombstone != nil && tombstone.RowCount() > p.coarseMaxRow {
 			break
 		}
-		if tombstoneEnd && data.RowCount() > p.coarseMaxRow {
+		if tombstoneEnd && data != nil && data.RowCount() > p.coarseMaxRow {
 			break
 		}
 	}
 	return
+}
+
+func changeBatchHasLeadingRowID(bat *batch.Batch) bool {
+	if bat == nil || len(bat.Vecs) == 0 || bat.Vecs[0] == nil {
+		return false
+	}
+	if len(bat.Attrs) == len(bat.Vecs) {
+		return bat.Attrs[0] == catalog.Row_ID
+	}
+	// Attribute-less legacy output used the leading ROWID type as the protocol
+	// marker. Complete schemas must use the semantic attribute instead, because
+	// a user column can itself have type ROWID.
+	return bat.Vecs[0].GetType().Oid == types.T_Rowid
 }
 
 // filterBatch merges operations on the same primary key (pk) from data and tombstone batches.
@@ -2123,9 +3134,27 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 // isRecoveryMode: When true (e.g., CDC restart from checkpoint), Case 2.2 (first insert, last delete)
 // will keep the delete to ensure downstream consistency. When false (normal operation),
 // Case 2.2 deletes all rows since the net effect is "no change".
-func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bool, isRecoveryMode bool) (err error) {
+func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bool, isRecoveryMode bool) error {
+	return filterBatchWithContext(
+		context.Background(), data, tombstone, primarySeqnum, skipDeletes, isRecoveryMode,
+	)
+}
+
+func filterBatchWithContext(
+	ctx context.Context,
+	data, tombstone *batch.Batch,
+	primarySeqnum int,
+	skipDeletes bool,
+	isRecoveryMode bool,
+) (err error) {
 	if data == nil || tombstone == nil {
 		return
+	}
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("change reconciliation requires context")
+	}
+	if len(data.Vecs) == 0 || len(tombstone.Vecs) == 0 {
+		return moerr.NewInternalErrorNoCtx("cannot reconcile empty change batch schema")
 	}
 
 	type rowInfo struct {
@@ -2136,23 +3165,68 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 
 	// Build maps for data and tombstone batches
 	rowInfoMap := make(map[any][]rowInfo)
+	pkKeyTypeChecked := false
+	normalizePKKey := func(value any) (any, error) {
+		if bytes, ok := value.([]byte); ok {
+			value = string(bytes)
+		}
+		if !pkKeyTypeChecked {
+			keyType := reflect.TypeOf(value)
+			if keyType == nil || !keyType.Comparable() {
+				return nil, moerr.NewInternalErrorNoCtxf(
+					"change batch primary-key value of type %T is not comparable", value,
+				)
+			}
+			pkKeyTypeChecked = true
+		}
+		return value, nil
+	}
 
 	// Process data batch
 	dataPKIdx := primarySeqnum
-	if len(data.Vecs) > 0 && data.Vecs[0] != nil && data.Vecs[0].GetType().Oid == types.T_Rowid {
+	if changeBatchHasLeadingRowID(data) {
 		dataPKIdx++
 	}
+	if dataPKIdx < 0 || dataPKIdx >= len(data.Vecs) || data.Vecs[dataPKIdx] == nil ||
+		data.Vecs[len(data.Vecs)-1] == nil {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid data change batch primary-key position %d", dataPKIdx,
+		)
+	}
 	pkVec := data.Vecs[dataPKIdx]
+	dataPKType := *pkVec.GetType()
 	tsVec := data.Vecs[len(data.Vecs)-1]
-	timestamps := vector.MustFixedColWithTypeCheck[types.TS](tsVec)
+	if err = validateChangeBatchShape(data, pkVec.Length(), "data change batch"); err != nil {
+		return err
+	}
+	timestamps, err := ioutil.ValidateTombstoneCommitTSColumn(pkVec.Length(), tsVec)
+	if err != nil {
+		return err
+	}
 	for i := 0; i < pkVec.Length(); i++ {
+		if i&1023 == 0 {
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
+			}
+		}
+		if pkVec.IsNull(uint64(i)) {
+			return moerr.NewInternalErrorNoCtx("data change batch contains a null primary key")
+		}
 		pkVal := vector.GetAny(pkVec, i, false)
-		if _, ok := pkVal.([]byte); ok {
-			pkVal = string(pkVal.([]byte))
+		if pkVal == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"data change batch has unsupported primary-key type %s", dataPKType.String(),
+			)
+		}
+		pkVal, err = normalizePKKey(pkVal)
+		if err != nil {
+			return err
 		}
 		rowInfoMap[pkVal] = append(rowInfoMap[pkVal], rowInfo{
 			row:      i,
-			ts:       timestamps[i],
+			ts:       timestamps.At(i),
 			isDelete: false,
 		})
 	}
@@ -2160,21 +3234,53 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 	// Process tombstone batch
 	tombstonePKIdx := 0
 	tombstoneTSIdx := 1
-	if len(tombstone.Vecs) > 0 && tombstone.Vecs[0] != nil && tombstone.Vecs[0].GetType().Oid == types.T_Rowid {
+	if changeBatchHasLeadingRowID(tombstone) {
 		tombstonePKIdx = 1
 		tombstoneTSIdx = 2
 	}
+	if tombstonePKIdx >= len(tombstone.Vecs) || tombstoneTSIdx >= len(tombstone.Vecs) ||
+		tombstone.Vecs[tombstonePKIdx] == nil || tombstone.Vecs[tombstoneTSIdx] == nil {
+		return moerr.NewInternalErrorNoCtx("invalid tombstone change batch schema")
+	}
 	pkVec = tombstone.Vecs[tombstonePKIdx]
+	if *pkVec.GetType() != dataPKType {
+		return moerr.NewInternalErrorNoCtxf(
+			"change batch primary-key types differ: data %s, tombstone %s",
+			dataPKType.String(), pkVec.GetType().String(),
+		)
+	}
 	tsVec = tombstone.Vecs[tombstoneTSIdx]
-	timestamps = vector.MustFixedColWithTypeCheck[types.TS](tsVec)
+	if err = validateChangeBatchShape(tombstone, pkVec.Length(), "tombstone change batch"); err != nil {
+		return err
+	}
+	timestamps, err = ioutil.ValidateTombstoneCommitTSColumn(pkVec.Length(), tsVec)
+	if err != nil {
+		return err
+	}
 	for i := 0; i < pkVec.Length(); i++ {
+		if i&1023 == 0 {
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
+			}
+		}
+		if pkVec.IsNull(uint64(i)) {
+			return moerr.NewInternalErrorNoCtx("tombstone change batch contains a null primary key")
+		}
 		pkVal := vector.GetAny(pkVec, i, false)
-		if _, ok := pkVal.([]byte); ok {
-			pkVal = string(pkVal.([]byte))
+		if pkVal == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"tombstone change batch has unsupported primary-key type %s", dataPKType.String(),
+			)
+		}
+		pkVal, err = normalizePKKey(pkVal)
+		if err != nil {
+			return err
 		}
 		rowInfoMap[pkVal] = append(rowInfoMap[pkVal], rowInfo{
 			row:      i,
-			ts:       timestamps[i],
+			ts:       timestamps.At(i),
 			isDelete: true,
 		})
 	}
@@ -2182,7 +3288,16 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 	dataRowsToDelete := make([]int64, 0)
 	tombstoneRowsToDelete := make([]int64, 0)
 
+	processedKeys := 0
 	for _, rowInfos := range rowInfoMap {
+		if processedKeys&1023 == 0 {
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			default:
+			}
+		}
+		processedKeys++
 		// Sort by timestamp
 		goSort.Slice(rowInfos, func(i, j int) bool {
 			if rowInfos[i].ts.EQ(&rowInfos[j].ts) {
@@ -2272,6 +3387,11 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 		}
 	}
 
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	default:
+	}
 	goSort.Slice(tombstoneRowsToDelete, func(i, j int) bool {
 		return tombstoneRowsToDelete[i] < tombstoneRowsToDelete[j]
 	})
@@ -2283,6 +3403,21 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 	return
 }
 func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	if p == nil || ctx == nil || mp == nil {
+		return nil, nil, engine.ChangesHandle_Tail_done, moerr.NewInvalidInputNoCtx(
+			"change collection requires handle, context, and mpool",
+		)
+	}
+	if terminalErr := p.terminalError(); terminalErr != nil {
+		return nil, nil, engine.ChangesHandle_Tail_done, terminalErr
+	}
+	if p.outputMP == nil {
+		p.outputMP = mp
+	} else if p.outputMP != mp {
+		return nil, nil, engine.ChangesHandle_Tail_done, moerr.NewInvalidInputNoCtx(
+			"change collection cannot switch output mpool",
+		)
+	}
 	if time.Since(p.lastPrint) > p.LogThreshold {
 		p.lastPrint = time.Now()
 		if p.dataLength != 0 || p.tombstoneLength != 0 {
@@ -2306,12 +3441,23 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		}
 	}
 	defer func() {
+		if err != nil {
+			if data != nil {
+				data.Clean(mp)
+				data = nil
+			}
+			if tombstone != nil {
+				tombstone.Clean(mp)
+				tombstone = nil
+			}
+			return
+		}
 		if data != nil && data.RowCount() == 0 {
-			data.Clean(p.mp)
+			data.Clean(mp)
 			data = nil
 		}
 		if tombstone != nil && tombstone.RowCount() == 0 {
-			tombstone.Clean(p.mp)
+			tombstone.Clean(mp)
 			tombstone = nil
 		}
 	}()
@@ -2319,51 +3465,60 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	t0 := time.Now()
 	if p.quick {
 		if data, tombstone, err = p.quickNext(ctx, mp); err != nil {
+			if terminalErr := p.terminalError(); terminalErr != nil {
+				err = terminalErr
+			} else if data != nil || tombstone != nil {
+				err = p.fail(err)
+			}
 			return
 		}
 		p.totalDuration += time.Since(t0)
-		if data != nil {
-			p.dataLength += data.Vecs[0].Length()
-		}
-		if tombstone != nil {
-			p.tombstoneLength += tombstone.Vecs[0].Length()
-		}
+		p.dataLength += changeBatchMetricRows(data)
+		p.tombstoneLength += changeBatchMetricRows(tombstone)
 		return
 	}
 	for {
 		typ := p.decideNextHandle()
+		if terminalErr := p.terminalError(); terminalErr != nil {
+			err = terminalErr
+			return
+		}
 		switch typ {
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
+			if err == nil && (data == nil || len(data.Vecs) == 0 || data.Vecs[0] == nil) {
+				err = p.fail(moerr.NewInternalErrorNoCtx(
+					"data change handle returned no batch",
+				))
+			}
 			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+				if err = filterBatchWithContext(ctx, data, tombstone, p.primaryPosition, p.skipDeletes, p.isRecoveryMode); err != nil {
+					err = p.fail(err)
 					return
 				}
 				if data.Vecs[0].Length() > p.coarseMaxRow {
 					p.totalDuration += time.Since(t0)
-					if data != nil {
-						p.dataLength += data.Vecs[0].Length()
-					}
-					if tombstone != nil {
-						p.tombstoneLength += tombstone.Vecs[0].Length()
-					}
+					p.dataLength += changeBatchMetricRows(data)
+					p.tombstoneLength += changeBatchMetricRows(tombstone)
 					return
 				}
 			}
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
+			if err == nil && (tombstone == nil || len(tombstone.Vecs) == 0 || tombstone.Vecs[0] == nil) {
+				err = p.fail(moerr.NewInternalErrorNoCtx(
+					"tombstone change handle returned no batch",
+				))
+			}
 			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+				if err = filterBatchWithContext(ctx, data, tombstone, p.primaryPosition, p.skipDeletes, p.isRecoveryMode); err != nil {
+					err = p.fail(err)
 					return
 				}
 				if tombstone.Vecs[0].Length() > p.coarseMaxRow {
 					p.totalDuration += time.Since(t0)
-					if data != nil {
-						p.dataLength += data.Vecs[0].Length()
-					}
-					if tombstone != nil {
-						p.tombstoneLength += tombstone.Vecs[0].Length()
-					}
+					p.dataLength += changeBatchMetricRows(data)
+					p.tombstoneLength += changeBatchMetricRows(tombstone)
 					return
 				}
 			}
@@ -2371,58 +3526,103 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			err = nil
 			if data != nil || tombstone != nil {
-				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+				if err = filterBatchWithContext(ctx, data, tombstone, p.primaryPosition, p.skipDeletes, p.isRecoveryMode); err != nil {
+					err = p.fail(err)
 					return
 				}
 				p.totalDuration += time.Since(t0)
-				if data != nil {
-					p.dataLength += data.Vecs[0].Length()
-				}
-				if tombstone != nil {
-					p.tombstoneLength += tombstone.Vecs[0].Length()
-				}
+				p.dataLength += changeBatchMetricRows(data)
+				p.tombstoneLength += changeBatchMetricRows(tombstone)
 				return
 			}
 			continue
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
-			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+			if err = filterBatchWithContext(ctx, data, tombstone, p.primaryPosition, p.skipDeletes, p.isRecoveryMode); err != nil {
+				err = p.fail(err)
 				return
 			}
 			p.totalDuration += time.Since(t0)
-			if data != nil {
-				p.dataLength += data.Vecs[0].Length()
-			}
-			if tombstone != nil {
-				p.tombstoneLength += tombstone.Vecs[0].Length()
-			}
+			p.dataLength += changeBatchMetricRows(data)
+			p.tombstoneLength += changeBatchMetricRows(tombstone)
 			return
 		}
 		if err != nil {
+			if terminalErr := p.terminalError(); terminalErr != nil {
+				err = terminalErr
+			} else if data != nil || tombstone != nil {
+				err = p.fail(err)
+			}
 			p.totalDuration += time.Since(t0)
-			if data != nil {
-				p.dataLength += data.Vecs[0].Length()
-			}
-			if tombstone != nil {
-				p.tombstoneLength += tombstone.Vecs[0].Length()
-			}
+			p.dataLength += changeBatchMetricRows(data)
+			p.tombstoneLength += changeBatchMetricRows(tombstone)
 			return
 		}
 	}
+}
+
+func changeBatchMetricRows(bat *batch.Batch) int {
+	if bat == nil || len(bat.Vecs) == 0 || bat.Vecs[0] == nil {
+		return 0
+	}
+	return bat.Vecs[0].Length()
+}
+
+func validateChangeBatchShape(bat *batch.Batch, rowCount int, kind string) error {
+	if bat == nil {
+		return moerr.NewInternalErrorNoCtxf("%s is nil", kind)
+	}
+	if rowCount < 0 || bat.RowCount() != rowCount {
+		return moerr.NewInternalErrorNoCtxf(
+			"%s reports %d rows, expected %d", kind, bat.RowCount(), rowCount,
+		)
+	}
+	for pos, vec := range bat.Vecs {
+		if vec == nil {
+			return moerr.NewInternalErrorNoCtxf("%s column %d is nil", kind, pos)
+		}
+		if vec.Length() != rowCount {
+			return moerr.NewInternalErrorNoCtxf(
+				"%s column %d has %d rows, expected %d",
+				kind, pos, vec.Length(), rowCount,
+			)
+		}
+	}
+	return nil
 }
 
 func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, skipTS map[types.TS]struct{}, start, end types.TS) error {
 	if bat == nil {
 		return nil
 	}
-	if bat.Vecs[sortIdx].GetType().Oid != types.T_TS {
-		panic(fmt.Sprintf("logic error, batch attrs %v, sort idx %d", bat.Attrs, sortIdx))
+	if len(bat.Vecs) == 0 || sortIdx < 0 || sortIdx >= len(bat.Vecs) {
+		return moerr.NewInternalErrorNoCtx("invalid commit-ts position in change batch")
 	}
-	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[sortIdx])
+	if bat.Vecs[sortIdx] == nil {
+		return moerr.NewInternalErrorNoCtx("nil commit-ts column in change batch")
+	}
+	if bat.Vecs[sortIdx].GetType().Oid != types.T_TS {
+		return moerr.NewInternalErrorNoCtxf(
+			"change batch commit column %d has type %s, expected TS",
+			sortIdx, bat.Vecs[sortIdx].GetType().String(),
+		)
+	}
+	if bat.Vecs[0] == nil {
+		return moerr.NewInternalErrorNoCtx("nil leading column in change batch")
+	}
+	rowCount := bat.Vecs[0].Length()
+	if err := validateChangeBatchShape(bat, rowCount, "change batch"); err != nil {
+		return err
+	}
+	commitTSs, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, bat.Vecs[sortIdx])
+	if err != nil {
+		return err
+	}
 	deletes := make([]int64, 0)
-	for i, ts := range commitTSs {
-		if ts.LT(&start) || ts.GT(&end) {
+	for i := 0; i < rowCount; i++ {
+		ts := commitTSs.At(i)
+		if ts.Equal(&txnif.UncommitTS) || ts.LT(&start) || ts.GT(&end) {
 			deletes = append(deletes, int64(i))
 		} else {
 			if skipTS != nil {
@@ -2433,19 +3633,33 @@ func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, skipTS map[types.TS]st
 			}
 		}
 	}
-	for _, vec := range bat.Vecs {
-		vec.Shrink(deletes, true)
-	}
+	bat.Shrink(deletes, true)
 	return nil
 }
 func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 	if bat == nil {
 		return nil
 	}
-	if bat.Vecs[sortIdx].GetType().Oid != types.T_TS {
-		panic(fmt.Sprintf("logic error, batch attrs %v, sort idx %d", bat.Attrs, sortIdx))
+	if len(bat.Vecs) == 0 || sortIdx < 0 || sortIdx >= len(bat.Vecs) || bat.Vecs[sortIdx] == nil {
+		return moerr.NewInternalErrorNoCtx("invalid commit-ts position in change batch sort")
 	}
-	sortedIdx := make([]int64, bat.Vecs[0].Length())
+	if bat.Vecs[sortIdx].GetType().Oid != types.T_TS {
+		return moerr.NewInternalErrorNoCtxf(
+			"change batch sort column %d has type %s, expected TS",
+			sortIdx, bat.Vecs[sortIdx].GetType().String(),
+		)
+	}
+	if bat.Vecs[0] == nil {
+		return moerr.NewInternalErrorNoCtx("nil leading column in change batch sort")
+	}
+	rowCount := bat.Vecs[0].Length()
+	if err := validateChangeBatchShape(bat, rowCount, "change batch sort"); err != nil {
+		return err
+	}
+	if _, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, bat.Vecs[sortIdx]); err != nil {
+		return err
+	}
+	sortedIdx := make([]int64, rowCount)
 	for i := 0; i < len(sortedIdx); i++ {
 		sortedIdx[i] = int64(i)
 	}
@@ -2478,114 +3692,388 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 
 func newDataBatchWithBatch(src *batch.Batch, retainRowID bool) (data *batch.Batch) {
 	data = batch.NewWithSize(0)
+	hasCompleteAttrs := len(src.Attrs) == len(src.Vecs)
 	if retainRowID {
-		data.Attrs = append(data.Attrs, catalog.Row_ID)
 		data.Vecs = append(data.Vecs, vector.NewVec(types.T_Rowid.ToType()))
-	}
-	data.Attrs = append(data.Attrs, src.Attrs[2:]...)
-	for _, vec := range src.Vecs {
-		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
-			continue
+		if hasCompleteAttrs {
+			data.Attrs = append(data.Attrs, catalog.Row_ID)
 		}
+	}
+	if hasCompleteAttrs {
+		data.Attrs = append(data.Attrs, src.Attrs[2:]...)
+	}
+	// RowEntry batches have a positional protocol: [rowid, commitTS, users...].
+	// User columns may themselves be T_TS or T_Rowid, so type-based stripping
+	// corrupts the output schema.
+	for _, vec := range src.Vecs[2:] {
 		newVec := vector.NewVec(*vec.GetType())
 		data.Vecs = append(data.Vecs, newVec)
 	}
-	data.Attrs = append(data.Attrs, objectio.DefaultCommitTS_Attr)
+	if hasCompleteAttrs {
+		data.Attrs = append(data.Attrs, objectio.DefaultCommitTS_Attr)
+	}
 	newVec := vector.NewVec(types.T_TS.ToType())
 	data.Vecs = append(data.Vecs, newVec)
 	return
 }
 
-func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
-	if src.IsNull(uint64(offset)) {
-		vector.AppendAny(vec, nil, true, mp)
-	} else {
-		var val any
-		switch vec.GetType().Oid {
-		case types.T_bool:
-			val = vector.GetFixedAtNoTypeCheck[bool](src, offset)
-		case types.T_bit:
-			val = vector.GetFixedAtNoTypeCheck[uint64](src, offset)
-		case types.T_int8:
-			val = vector.GetFixedAtNoTypeCheck[int8](src, offset)
-		case types.T_int16:
-			val = vector.GetFixedAtNoTypeCheck[int16](src, offset)
-		case types.T_int32:
-			val = vector.GetFixedAtNoTypeCheck[int32](src, offset)
-		case types.T_int64:
-			val = vector.GetFixedAtNoTypeCheck[int64](src, offset)
-		case types.T_uint8:
-			val = vector.GetFixedAtNoTypeCheck[uint8](src, offset)
-		case types.T_uint16:
-			val = vector.GetFixedAtNoTypeCheck[uint16](src, offset)
-		case types.T_uint32:
-			val = vector.GetFixedAtNoTypeCheck[uint32](src, offset)
-		case types.T_uint64:
-			val = vector.GetFixedAtNoTypeCheck[uint64](src, offset)
-		case types.T_decimal64:
-			val = vector.GetFixedAtNoTypeCheck[types.Decimal64](src, offset)
-		case types.T_decimal128:
-			val = vector.GetFixedAtNoTypeCheck[types.Decimal128](src, offset)
-		case types.T_decimal256:
-			val = vector.GetFixedAtNoTypeCheck[types.Decimal256](src, offset)
-		case types.T_uuid:
-			val = vector.GetFixedAtNoTypeCheck[types.Uuid](src, offset)
-		case types.T_float32:
-			val = vector.GetFixedAtNoTypeCheck[float32](src, offset)
-		case types.T_float64:
-			val = vector.GetFixedAtNoTypeCheck[float64](src, offset)
-		case types.T_date:
-			val = vector.GetFixedAtNoTypeCheck[types.Date](src, offset)
-		case types.T_year:
-			val = vector.GetFixedAtNoTypeCheck[types.MoYear](src, offset)
-		case types.T_time:
-			val = vector.GetFixedAtNoTypeCheck[types.Time](src, offset)
-		case types.T_datetime:
-			val = vector.GetFixedAtNoTypeCheck[types.Datetime](src, offset)
-		case types.T_timestamp:
-			val = vector.GetFixedAtNoTypeCheck[types.Timestamp](src, offset)
-		case types.T_enum:
-			val = vector.GetFixedAtNoTypeCheck[types.Enum](src, offset)
-		case types.T_TS:
-			val = vector.GetFixedAtNoTypeCheck[types.TS](src, offset)
-		case types.T_Rowid:
-			val = vector.GetFixedAtNoTypeCheck[types.Rowid](src, offset)
-		case types.T_Blockid:
-			val = vector.GetFixedAtNoTypeCheck[types.Blockid](src, offset)
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-			types.T_array_float32, types.T_array_float64,
-			types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
-			types.T_datalink, types.T_geometry, types.T_geometry32:
-			val = src.GetBytesAt(offset)
-		default:
-			//return vector.ErrVecTypeNotSupport
-			panic(any("No Support"))
-		}
-		vector.AppendAny(vec, val, false, mp)
+func appendFromEntry(src, dst *vector.Vector, offset int, mp *mpool.MPool) error {
+	if src == nil || dst == nil || offset < 0 || offset >= src.Length() ||
+		*src.GetType() != *dst.GetType() {
+		return moerr.NewInternalErrorNoCtx("invalid change-row append source")
 	}
-
+	return dst.UnionOne(src, int64(offset), mp)
 }
 
-func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp *mpool.MPool) {
+func validateReplayRowSource(entry *RowEntry, sourceRows, sourceRow int) error {
+	rowIDs, err := ioutil.ValidateTombstoneRowIDColumn(
+		sourceRows, entry.Batch.Vecs[0],
+	)
+	if err != nil {
+		return err
+	}
+	commits, err := ioutil.ValidateTombstoneCommitTSColumn(
+		sourceRows, entry.Batch.Vecs[1],
+	)
+	if err != nil {
+		return err
+	}
+	commitTS := commits.At(sourceRow)
+	if commitTS.Equal(&txnif.UncommitTS) {
+		return moerr.NewInternalErrorNoCtx("change source row is uncommitted")
+	}
+	if !entry.Time.IsEmpty() && !commitTS.Equal(&entry.Time) {
+		return moerr.NewInternalErrorNoCtxf(
+			"change source commit timestamp %s does not match row entry %s",
+			commitTS.ToString(), entry.Time.ToString(),
+		)
+	}
+	var zeroRowID types.Rowid
+	if entry.RowID != zeroRowID && !rowIDs[sourceRow].EQ(&entry.RowID) {
+		return moerr.NewInternalErrorNoCtx("change source rowid does not match row entry")
+	}
+	return nil
+}
+
+func fillInInsertBatch(
+	bat **batch.Batch,
+	entry *RowEntry,
+	retainRowID bool,
+	mp *mpool.MPool,
+) error {
+	return fillInInsertBatchWithSchema(bat, entry, nil, retainRowID, mp)
+}
+
+func fillInInsertBatchWithSchema(
+	bat **batch.Batch,
+	entry *RowEntry,
+	schema *engine.CollectChangesSchema,
+	retainRowID bool,
+	mp *mpool.MPool,
+) error {
+	if schema != nil {
+		return fillInInsertBatchUsingSchema(bat, entry, schema, retainRowID, mp)
+	}
+	if bat == nil || entry == nil || entry.Batch == nil || len(entry.Batch.Vecs) < 3 || mp == nil {
+		return moerr.NewInvalidInputNoCtx("insert change row requires output, source batch, and mpool")
+	}
+	sourceRow := int(entry.Offset)
+	sourceRows := entry.Batch.RowCount()
+	if sourceRow < 0 || sourceRow >= sourceRows {
+		return moerr.NewInternalErrorNoCtxf("insert change source has no row %d", sourceRow)
+	}
+	if err := validateChangeBatchShape(entry.Batch, sourceRows, "insert change source"); err != nil {
+		return err
+	}
+	if err := validateReplayRowSource(entry, sourceRows, sourceRow); err != nil {
+		return err
+	}
 	if *bat == nil {
-		(*bat) = newDataBatchWithBatch(entry.Batch, retainRowID)
+		*bat = newDataBatchWithBatch(entry.Batch, retainRowID)
 	}
-	dstOffset := 0
+	dst := *bat
+	expectedColumns := len(entry.Batch.Vecs) - 1
 	if retainRowID {
-		appendFromEntry(entry.Batch.Vecs[0], (*bat).Vecs[0], int(entry.Offset), mp)
-		dstOffset = 1
+		expectedColumns++
 	}
-	for i, vec := range entry.Batch.Vecs {
-		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
-			continue
+	if len(dst.Vecs) != expectedColumns || len(dst.Vecs) == 0 {
+		return moerr.NewInternalErrorNoCtx("insert change destination schema is inconsistent")
+	}
+	if len(entry.Batch.Attrs) == len(entry.Batch.Vecs) {
+		if len(dst.Attrs) != expectedColumns {
+			return moerr.NewInternalErrorNoCtx("insert change destination attributes are inconsistent")
 		}
-		appendFromEntry(vec, (*bat).Vecs[i-2+dstOffset], int(entry.Offset), mp)
+		destPos := 0
+		if retainRowID {
+			if dst.Attrs[0] != catalog.Row_ID {
+				return moerr.NewInternalErrorNoCtx("insert change destination rowid attribute is inconsistent")
+			}
+			destPos++
+		}
+		for sourcePos := 2; sourcePos < len(entry.Batch.Attrs); sourcePos++ {
+			if dst.Attrs[destPos] != entry.Batch.Attrs[sourcePos] {
+				return moerr.NewInternalErrorNoCtxf(
+					"insert change destination attribute %d is %q, expected %q",
+					destPos, dst.Attrs[destPos], entry.Batch.Attrs[sourcePos],
+				)
+			}
+			destPos++
+		}
+		if dst.Attrs[destPos] != objectio.DefaultCommitTS_Attr {
+			return moerr.NewInternalErrorNoCtxf(
+				"insert change destination attribute %d is %q, expected %q",
+				destPos, dst.Attrs[destPos], objectio.DefaultCommitTS_Attr,
+			)
+		}
+	} else if len(dst.Attrs) != 0 {
+		return moerr.NewInternalErrorNoCtx("insert change destination attributes are inconsistent")
 	}
-	appendFromEntry(entry.Batch.Vecs[1], (*bat).Vecs[len((*bat).Vecs)-1], int(entry.Offset), mp)
-
+	oldRows := dst.Vecs[0].Length()
+	if dst.RowCount() != oldRows {
+		return moerr.NewInternalErrorNoCtx("insert change destination row count is inconsistent")
+	}
+	const inlineColumns = 16
+	var inline [inlineColumns]vector.AppendCheckpoint
+	checkpoints := inline[:]
+	if len(dst.Vecs) <= inlineColumns {
+		checkpoints = checkpoints[:len(dst.Vecs)]
+	} else {
+		checkpoints = make([]vector.AppendCheckpoint, len(dst.Vecs))
+	}
+	for destPos, dest := range dst.Vecs {
+		sourcePos := destPos + 2
+		if retainRowID {
+			if destPos == 0 {
+				sourcePos = 0
+			} else {
+				sourcePos = destPos + 1
+			}
+		}
+		if destPos == len(dst.Vecs)-1 {
+			sourcePos = 1
+		}
+		source := entry.Batch.Vecs[sourcePos]
+		if dest == nil || dest.IsConst() || dest.NeedDup() || dest.Length() != oldRows ||
+			*dest.GetType() != *source.GetType() || dest == source {
+			return moerr.NewInternalErrorNoCtxf("insert change destination column %d is not appendable", destPos)
+		}
+		checkpoints[destPos] = dest.MakeAppendCheckpoint()
+	}
+	for destPos, dest := range dst.Vecs {
+		sourcePos := destPos + 2
+		if retainRowID {
+			if destPos == 0 {
+				sourcePos = 0
+			} else {
+				sourcePos = destPos + 1
+			}
+		}
+		if destPos == len(dst.Vecs)-1 {
+			sourcePos = 1
+		}
+		if err := appendFromEntry(entry.Batch.Vecs[sourcePos], dest, sourceRow, mp); err != nil {
+			for pos, rollbackVec := range dst.Vecs {
+				rollbackVec.RollbackAppend(checkpoints[pos], 1)
+			}
+			return err
+		}
+	}
+	dst.SetRowCount(oldRows + 1)
+	return nil
 }
-func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp *mpool.MPool) {
-	pkVec := entry.Batch.Vecs[2]
+
+func fillInInsertBatchUsingSchema(
+	bat **batch.Batch,
+	entry *RowEntry,
+	schema *engine.CollectChangesSchema,
+	retainRowID bool,
+	mp *mpool.MPool,
+) error {
+	if bat == nil || entry == nil || entry.Batch == nil || schema == nil || !schema.Valid() || mp == nil ||
+		len(entry.Batch.Vecs) < 2 {
+		return moerr.NewInvalidInputNoCtx(
+			"insert change row requires output, source batch, schema, and mpool",
+		)
+	}
+	sourceRow := int(entry.Offset)
+	sourceRows := entry.Batch.RowCount()
+	if sourceRow < 0 || sourceRow >= sourceRows {
+		return moerr.NewInternalErrorNoCtxf("insert change source has no row %d", sourceRow)
+	}
+	hasCompleteAttrs := len(entry.Batch.Attrs) == len(entry.Batch.Vecs)
+	if len(entry.Batch.Attrs) != 0 && !hasCompleteAttrs {
+		return moerr.NewInternalErrorNoCtx("insert change source has partial attributes")
+	}
+	for position, source := range entry.Batch.Vecs {
+		if source == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"insert change source column %d is nil", position,
+			)
+		}
+		placeholder := position >= 2 && hasCompleteAttrs && entry.Batch.Attrs[position] == ""
+		if placeholder {
+			if source.Length() == 0 {
+				continue
+			}
+			return moerr.NewInternalErrorNoCtxf(
+				"insert change source placeholder column %d contains %d rows",
+				position, source.Length(),
+			)
+		}
+		if source.Length() != sourceRows {
+			return moerr.NewInternalErrorNoCtxf(
+				"insert change source column %d has %d rows, expected %d",
+				position, source.Length(), sourceRows,
+			)
+		}
+	}
+	if err := validateReplayRowSource(entry, sourceRows, sourceRow); err != nil {
+		return err
+	}
+
+	expectedColumns := len(schema.Seqnums) + 1
+	if retainRowID {
+		expectedColumns++
+	}
+	if *bat == nil {
+		result := batch.NewWithSize(expectedColumns)
+		position := 0
+		if retainRowID {
+			result.Attrs = append(result.Attrs, catalog.Row_ID)
+			result.Vecs[position] = vector.NewVec(types.T_Rowid.ToType())
+			position++
+		}
+		for logicalPosition := range schema.Seqnums {
+			result.Attrs = append(result.Attrs, schema.Attrs[logicalPosition])
+			result.Vecs[position] = vector.NewVec(schema.Types[logicalPosition])
+			position++
+		}
+		result.Attrs = append(result.Attrs, objectio.DefaultCommitTS_Attr)
+		result.Vecs[position] = vector.NewVec(types.T_TS.ToType())
+		*bat = result
+	}
+	dst := *bat
+	if len(dst.Vecs) != expectedColumns || len(dst.Attrs) != expectedColumns {
+		return moerr.NewInternalErrorNoCtx("insert change destination schema is inconsistent")
+	}
+	oldRows := dst.RowCount()
+	for position, dstVec := range dst.Vecs {
+		if dstVec == nil || dstVec.IsConst() || dstVec.NeedDup() || dstVec.Length() != oldRows {
+			return moerr.NewInternalErrorNoCtxf(
+				"insert change destination column %d is not appendable", position,
+			)
+		}
+	}
+	destinationPosition := 0
+	if retainRowID {
+		if dst.Attrs[0] != catalog.Row_ID || dst.Vecs[0].GetType().Oid != types.T_Rowid {
+			return moerr.NewInternalErrorNoCtx("insert change destination rowid is incompatible")
+		}
+		destinationPosition++
+	}
+	for logicalPosition := range schema.Seqnums {
+		if dst.Attrs[destinationPosition] != schema.Attrs[logicalPosition] ||
+			*dst.Vecs[destinationPosition].GetType() != schema.Types[logicalPosition] {
+			return moerr.NewInternalErrorNoCtxf(
+				"insert change destination column %d is incompatible", destinationPosition,
+			)
+		}
+		destinationPosition++
+	}
+	if dst.Attrs[destinationPosition] != objectio.DefaultCommitTS_Attr ||
+		dst.Vecs[destinationPosition].GetType().Oid != types.T_TS {
+		return moerr.NewInternalErrorNoCtx("insert change destination commit-ts is incompatible")
+	}
+
+	const inlineColumns = 16
+	var inline [inlineColumns]vector.AppendCheckpoint
+	checkpoints := inline[:]
+	if len(dst.Vecs) <= inlineColumns {
+		checkpoints = checkpoints[:len(dst.Vecs)]
+	} else {
+		checkpoints = make([]vector.AppendCheckpoint, len(dst.Vecs))
+	}
+	for position, dstVec := range dst.Vecs {
+		checkpoints[position] = dstVec.MakeAppendCheckpoint()
+	}
+	rollback := func() {
+		for position, dstVec := range dst.Vecs {
+			dstVec.RollbackAppend(checkpoints[position], 1)
+		}
+	}
+	appendSource := func(destination int, source *vector.Vector) error {
+		if err := appendFromEntry(source, dst.Vecs[destination], sourceRow, mp); err != nil {
+			rollback()
+			return err
+		}
+		return nil
+	}
+	destinationPosition = 0
+	if retainRowID {
+		if err := appendSource(destinationPosition, entry.Batch.Vecs[0]); err != nil {
+			return err
+		}
+		destinationPosition++
+	}
+	for logicalPosition, seqnum := range schema.Seqnums {
+		sourcePosition := 2 + int(seqnum)
+		sourcePresent := sourcePosition < len(entry.Batch.Vecs)
+		if sourcePresent && hasCompleteAttrs && entry.Batch.Attrs[sourcePosition] == "" &&
+			entry.Batch.Vecs[sourcePosition].Length() == 0 {
+			sourcePresent = false
+		}
+		if sourcePresent && entry.Batch.Vecs[sourcePosition].Length() == 0 {
+			sourcePresent = false
+		}
+		if sourcePresent {
+			source := entry.Batch.Vecs[sourcePosition]
+			if source.Length() != sourceRows || *source.GetType() != schema.Types[logicalPosition] {
+				rollback()
+				return moerr.NewInternalErrorNoCtxf(
+					"insert change source column %q at sequence %d is incompatible",
+					schema.Attrs[logicalPosition], seqnum,
+				)
+			}
+			if err := appendSource(destinationPosition, source); err != nil {
+				return err
+			}
+		} else if err := vector.AppendNull(dst.Vecs[destinationPosition], mp); err != nil {
+			rollback()
+			return err
+		}
+		destinationPosition++
+	}
+	if err := appendSource(destinationPosition, entry.Batch.Vecs[1]); err != nil {
+		return err
+	}
+	dst.SetRowCount(oldRows + 1)
+	return nil
+}
+
+func fillInDeleteBatch(
+	bat **batch.Batch,
+	entry *RowEntry,
+	retainRowID bool,
+	mp *mpool.MPool,
+) error {
+	if bat == nil || entry == nil || entry.Batch == nil || len(entry.Batch.Vecs) < 3 || mp == nil {
+		return moerr.NewInvalidInputNoCtx("delete change row requires output, source batch, and mpool")
+	}
+	sourceRow := int(entry.Offset)
+	sourceRows := entry.Batch.RowCount()
+	if sourceRow < 0 || sourceRow >= sourceRows {
+		return moerr.NewInternalErrorNoCtx("delete change source row is unavailable")
+	}
+	if err := validateChangeBatchShape(entry.Batch, sourceRows, "delete change source"); err != nil {
+		return err
+	}
+	rowIDSource, pkVec := entry.Batch.Vecs[0], entry.Batch.Vecs[2]
+	if err := validateReplayRowSource(entry, sourceRows, sourceRow); err != nil {
+		return err
+	}
+	if pkVec == nil {
+		return moerr.NewInternalErrorNoCtx("delete change source row is unavailable")
+	}
 	if *bat == nil {
 		vecCnt := 2
 		attrs := []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
@@ -2604,20 +4092,82 @@ func fillInDeleteBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp 
 			(*bat).Vecs[1] = vector.NewVec(types.T_TS.ToType())
 		}
 	}
+	dst := *bat
 	pkIdx := 0
 	tsIdx := 1
 	if retainRowID {
-		appendFromEntry(entry.Batch.Vecs[0], (*bat).Vecs[0], int(entry.Offset), mp)
 		pkIdx = 1
 		tsIdx = 2
 	}
-	appendFromEntry(pkVec, (*bat).Vecs[pkIdx], int(entry.Offset), mp)
-	vector.AppendFixed((*bat).Vecs[tsIdx], entry.Time, false, mp)
+	if len(dst.Vecs) != tsIdx+1 || len(dst.Vecs) == 0 {
+		return moerr.NewInternalErrorNoCtx("delete change destination schema is inconsistent")
+	}
+	expectedAttrs := []string{
+		objectio.TombstoneAttr_PK_Attr,
+		objectio.DefaultCommitTS_Attr,
+	}
+	if retainRowID {
+		expectedAttrs = []string{
+			catalog.Row_ID,
+			objectio.TombstoneAttr_PK_Attr,
+			objectio.DefaultCommitTS_Attr,
+		}
+	}
+	if len(dst.Attrs) != len(expectedAttrs) {
+		return moerr.NewInternalErrorNoCtx("delete change destination attributes are inconsistent")
+	}
+	for pos := range expectedAttrs {
+		if dst.Attrs[pos] != expectedAttrs[pos] {
+			return moerr.NewInternalErrorNoCtxf(
+				"delete change destination attribute %d is %q, expected %q",
+				pos, dst.Attrs[pos], expectedAttrs[pos],
+			)
+		}
+	}
+	oldRows := dst.Vecs[0].Length()
+	for pos, vec := range dst.Vecs {
+		if vec == nil || vec.IsConst() || vec.NeedDup() || vec.Length() != oldRows {
+			return moerr.NewInternalErrorNoCtxf("delete change destination column %d is not appendable", pos)
+		}
+	}
+	if dst.RowCount() != oldRows || *dst.Vecs[pkIdx].GetType() != *pkVec.GetType() ||
+		dst.Vecs[tsIdx].GetType().Oid != types.T_TS ||
+		(retainRowID && dst.Vecs[0].GetType().Oid != types.T_Rowid) {
+		return moerr.NewInternalErrorNoCtx("delete change destination schema is incompatible")
+	}
+	var checkpoints [3]vector.AppendCheckpoint
+	for pos, vec := range dst.Vecs {
+		checkpoints[pos] = vec.MakeAppendCheckpoint()
+	}
+	rollback := func() {
+		for pos, vec := range dst.Vecs {
+			vec.RollbackAppend(checkpoints[pos], 1)
+		}
+	}
+	if retainRowID {
+		if err := appendFromEntry(rowIDSource, dst.Vecs[0], sourceRow, mp); err != nil {
+			rollback()
+			return err
+		}
+	}
+	if err := appendFromEntry(pkVec, dst.Vecs[pkIdx], sourceRow, mp); err != nil {
+		rollback()
+		return err
+	}
+	// The source commit-ts column is the canonical replay value. RowEntry.Time is
+	// an index key and may be empty in synthetic/recovered entries; when present,
+	// validateReplayRowSource already checked that the two values agree.
+	if err := appendFromEntry(entry.Batch.Vecs[1], dst.Vecs[tsIdx], sourceRow, mp); err != nil {
+		rollback()
+		return err
+	}
+	dst.SetRowCount(oldRows + 1)
+	return nil
 }
 
 // PXU TODO
 func checkTS(start, end types.TS, ts types.TS) bool {
-	return ts.LE(&end) && ts.GE(&start)
+	return !ts.Equal(&txnif.UncommitTS) && ts.LE(&end) && ts.GE(&start)
 }
 
 func prefetchObjects(
@@ -2625,14 +4175,30 @@ func prefetchObjects(
 	blockID uint32,
 	fs fileservice.FileService,
 	stats *objectio.ObjectStats,
-	scheduler tasks.JobScheduler) (job *tasks.Job) {
+	scheduler tasks.JobScheduler,
+) (job *tasks.Job, err error) {
+	if fs == nil {
+		return nil, moerr.NewInternalErrorNoCtx("object prefetch file service is nil")
+	}
+	blockCount, err := validateChangeObjectBlockCount(stats)
+	if err != nil {
+		return nil, err
+	}
+	if blockID >= uint32(blockCount) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"object prefetch block %d is outside [0,%d)", blockID, blockCount,
+		)
+	}
+	if scheduler == nil {
+		return nil, moerr.NewInternalErrorNoCtx("object prefetch scheduler is nil")
+	}
 	job = getJob(
 		ctx,
 		stats.ObjectName().String(),
 		JTCDCLoad,
 		func(ctx context.Context) (res *tasks.JobResult) {
 			loc := stats.BlockLocation(uint16(blockID), 8192)
-			bat, _, specialLayout, err := ioutil.LoadOneBlockWithSpecialLayout(
+			bat, _, specialLayout, columnSeqnums, err := ioutil.LoadOneBlockWithColumnLayout(
 				ctx,
 				fs,
 				loc,
@@ -2642,60 +4208,82 @@ func prefetchObjects(
 			if err != nil {
 				res.Err = err
 			} else {
-				res.Res = &loadedAObjectBlock{batch: bat, specialLayout: specialLayout}
+				res.Res = &loadedAObjectBlock{
+					batch: bat, specialLayout: specialLayout, columnSeqnums: columnSeqnums,
+				}
 			}
 			return
 		},
 	)
-	scheduler.Schedule(job)
-	return
+	if err = scheduler.Schedule(job); err != nil {
+		putJob(job)
+		return nil, err
+	}
+	return job, nil
 }
 
 type loadedAObjectBlock struct {
 	batch         *batch.Batch
 	specialLayout objectio.SpecialColumnLayout
+	columnSeqnums []uint16
 }
 
 func prependRowIDVectorIfNeeded(bat *batch.Batch, blk *types.Blockid, mp *mpool.MPool) error {
-	if bat == nil || blk == nil || bat.RowCount() == 0 {
-		return nil
+	if bat == nil || len(bat.Vecs) == 0 {
+		return moerr.NewInternalErrorNoCtx("cannot add rowid to an empty change batch")
+	}
+	rowCount := bat.RowCount()
+	if err := validateChangeBatchShape(bat, rowCount, "change batch before rowid insertion"); err != nil {
+		return err
 	}
 	firstRowIDIdx := -1
 	rowIDCnt := 0
-	for i, vec := range bat.Vecs {
-		if vec != nil && vec.GetType().Oid == types.T_Rowid {
-			rowIDCnt++
-			if firstRowIDIdx == -1 {
-				firstRowIDIdx = i
+	hasCompleteAttrs := len(bat.Attrs) == len(bat.Vecs)
+	if hasCompleteAttrs {
+		for i, attr := range bat.Attrs {
+			if attr == catalog.Row_ID || attr == objectio.PhysicalAddr_Attr ||
+				attr == objectio.TombstoneAttr_Rowid_Attr {
+				rowIDCnt++
+				if firstRowIDIdx == -1 {
+					firstRowIDIdx = i
+				}
 			}
+		}
+	} else {
+		// The legacy positional protocol marks only a leading ROWID as the
+		// hidden physical address. A later ROWID can be a perfectly valid user
+		// column (including the primary key) and must be preserved.
+		if bat.Vecs[0] != nil && bat.Vecs[0].GetType().Oid == types.T_Rowid {
+			rowIDCnt = 1
+			firstRowIDIdx = 0
 		}
 	}
 	if firstRowIDIdx >= 0 {
-		if rowIDCnt == 1 && firstRowIDIdx == 0 {
-			return nil
+		if rowIDCnt != 1 {
+			return moerr.NewInternalErrorNoCtxf(
+				"change batch has %d rowid columns without layout metadata", rowIDCnt,
+			)
+		}
+		if _, err := ioutil.ValidateTombstoneRowIDColumn(
+			rowCount, bat.Vecs[firstRowIDIdx],
+		); err != nil {
+			return moerr.NewInternalErrorNoCtxf("change batch has invalid rowid column: %v", err)
 		}
 		origVecs := bat.Vecs
-		rebuiltVecs := make([]*vector.Vector, 0, len(origVecs)-rowIDCnt+1)
+		rebuiltVecs := make([]*vector.Vector, 0, len(origVecs))
 		rebuiltVecs = append(rebuiltVecs, origVecs[firstRowIDIdx])
 		for i, vec := range origVecs {
 			if i == firstRowIDIdx {
 				continue
 			}
-			if vec != nil && vec.GetType().Oid == types.T_Rowid {
-				vec.Free(mp)
-				continue
-			}
 			rebuiltVecs = append(rebuiltVecs, vec)
 		}
 		bat.Vecs = rebuiltVecs
-		if len(bat.Attrs) == len(origVecs) {
+		if hasCompleteAttrs {
 			rebuiltAttrs := make([]string, 0, len(rebuiltVecs))
 			rebuiltAttrs = append(rebuiltAttrs, catalog.Row_ID)
 			for i, attr := range bat.Attrs {
 				if i == firstRowIDIdx {
-					continue
-				}
-				if origVecs[i] != nil && origVecs[i].GetType().Oid == types.T_Rowid {
 					continue
 				}
 				rebuiltAttrs = append(rebuiltAttrs, attr)
@@ -2704,18 +4292,69 @@ func prependRowIDVectorIfNeeded(bat *batch.Batch, blk *types.Blockid, mp *mpool.
 		}
 		return nil
 	}
+	if rowCount > 0 && blk == nil {
+		return moerr.NewInternalErrorNoCtx("cannot synthesize rowid without block id")
+	}
+	if err := validateSyntheticRowIDCount(rowCount); err != nil {
+		return err
+	}
 	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	for i := 0; i < bat.RowCount(); i++ {
+	for i := 0; i < rowCount; i++ {
 		if err := vector.AppendFixed(rowIDVec, types.NewRowid(blk, uint32(i)), false, mp); err != nil {
 			rowIDVec.Free(mp)
 			return err
 		}
 	}
 	bat.Vecs = append([]*vector.Vector{rowIDVec}, bat.Vecs...)
-	if len(bat.Attrs) == len(bat.Vecs)-1 {
+	if hasCompleteAttrs {
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	}
 	return nil
+}
+
+func validateSyntheticRowIDCount(rowCount int) error {
+	if rowCount < 0 || uint64(rowCount) > uint64(^uint32(0)) {
+		return moerr.NewInternalErrorNoCtxf(
+			"cannot synthesize rowids for invalid block row count %d", rowCount,
+		)
+	}
+	return nil
+}
+
+func changeCommitTSPosition(bat *batch.Batch) (int, error) {
+	if bat == nil || len(bat.Vecs) == 0 {
+		return -1, moerr.NewInternalErrorNoCtx("change batch has no commit-ts column")
+	}
+	commitPos := -1
+	hasCompleteAttrs := len(bat.Attrs) == len(bat.Vecs)
+	if hasCompleteAttrs {
+		for pos, attr := range bat.Attrs {
+			if attr != objectio.DefaultCommitTS_Attr {
+				continue
+			}
+			if commitPos >= 0 {
+				return -1, moerr.NewInternalErrorNoCtx("change batch has duplicate commit-ts attributes")
+			}
+			commitPos = pos
+		}
+	}
+	if commitPos < 0 {
+		if hasCompleteAttrs {
+			return -1, moerr.NewInternalErrorNoCtx(
+				"change batch attributes do not identify the commit-ts column",
+			)
+		}
+		// Legacy collect-change batches have no complete attributes, but their
+		// protocol still defines commitTS as the trailing column. Type alone is
+		// ambiguous because a user primary key or data column may also be T_TS.
+		commitPos = len(bat.Vecs) - 1
+	}
+	if bat.Vecs[commitPos] == nil || bat.Vecs[commitPos].GetType().Oid != types.T_TS {
+		return -1, moerr.NewInternalErrorNoCtxf(
+			"change batch trailing commit column %d is not TS", commitPos,
+		)
+	}
+	return commitPos, nil
 }
 
 func updateTombstoneBatch(
@@ -2733,39 +4372,87 @@ func updateTombstoneBatch(
 			bat, start, end, skipTS, sort, *specialLayout, retainRowID, mp,
 		)
 	}
+	if bat == nil || len(bat.Vecs) < 2 {
+		return moerr.NewInternalErrorNoCtx("invalid tombstone batch layout for collect changes")
+	}
 	if retainRowID {
 		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
 			return err
 		}
 	}
-	var rowIDVec *vector.Vector
-	var pkVec *vector.Vector
-	var commitTSVec *vector.Vector
-	for _, vec := range bat.Vecs {
-		switch vec.GetType().Oid {
-		case types.T_Rowid:
-			if rowIDVec == nil {
-				rowIDVec = vec
-			} else {
-				vec.Free(mp)
-			}
-		case types.T_TS:
-			if commitTSVec == nil {
-				commitTSVec = vec
-			} else {
-				vec.Free(mp)
-			}
-		default:
-			if pkVec == nil {
-				pkVec = vec
-			} else {
-				vec.Free(mp)
+	rowCount := bat.RowCount()
+	if err := validateChangeBatchShape(bat, rowCount, "tombstone change batch"); err != nil {
+		return err
+	}
+	commitPos, err := changeCommitTSPosition(bat)
+	if err != nil {
+		return err
+	}
+	rowIDPos, pkPos := -1, -1
+	if len(bat.Attrs) == len(bat.Vecs) {
+		for pos, attr := range bat.Attrs {
+			switch attr {
+			case catalog.Row_ID, objectio.TombstoneAttr_Rowid_Attr:
+				if rowIDPos >= 0 && rowIDPos != pos {
+					return moerr.NewInternalErrorNoCtx("tombstone change batch has duplicate rowid attributes")
+				}
+				rowIDPos = pos
+			case objectio.TombstoneAttr_PK_Attr:
+				if pkPos >= 0 {
+					return moerr.NewInternalErrorNoCtx("tombstone change batch has duplicate primary-key attributes")
+				}
+				pkPos = pos
 			}
 		}
 	}
-	if pkVec == nil || commitTSVec == nil || (retainRowID && rowIDVec == nil) {
+	if len(bat.Attrs) != len(bat.Vecs) {
+		if bat.Vecs[0] != nil && bat.Vecs[0].GetType().Oid == types.T_Rowid {
+			rowIDPos = 0
+		}
+	}
+	if rowIDPos >= 0 {
+		if _, err = ioutil.ValidateTombstoneRowIDColumn(rowCount, bat.Vecs[rowIDPos]); err != nil {
+			return err
+		}
+	}
+	if pkPos < 0 {
+		if len(bat.Attrs) == len(bat.Vecs) {
+			return moerr.NewInternalErrorNoCtx(
+				"tombstone change batch attributes do not identify the primary-key column",
+			)
+		}
+		for pos := range bat.Vecs {
+			if pos == rowIDPos || pos == commitPos {
+				continue
+			}
+			if pkPos >= 0 {
+				return moerr.NewInternalErrorNoCtx(
+					"tombstone batch layout is ambiguous without special-column metadata",
+				)
+			}
+			pkPos = pos
+		}
+	}
+	if pkPos < 0 || pkPos == rowIDPos || pkPos == commitPos ||
+		(retainRowID && rowIDPos < 0) {
 		return moerr.NewInternalErrorNoCtx("invalid tombstone batch layout for collect changes")
 	}
+	for pos := range bat.Vecs {
+		if pos != rowIDPos && pos != pkPos && pos != commitPos {
+			return moerr.NewInternalErrorNoCtx(
+				"tombstone batch has unsupported columns without special-column metadata",
+			)
+		}
+	}
+	if err = applyTSFilterForBatch(bat, commitPos, skipTS, start, end); err != nil {
+		return err
+	}
+	rowIDVec := (*vector.Vector)(nil)
+	if rowIDPos >= 0 {
+		rowIDVec = bat.Vecs[rowIDPos]
+	}
+	pkVec := bat.Vecs[pkPos]
+	commitTSVec := bat.Vecs[commitPos]
 	if retainRowID {
 		bat.Vecs = []*vector.Vector{rowIDVec, pkVec, commitTSVec}
 		bat.Attrs = []string{
@@ -2773,7 +4460,6 @@ func updateTombstoneBatch(
 			objectio.TombstoneAttr_PK_Attr,
 			objectio.DefaultCommitTS_Attr,
 		}
-		applyTSFilterForBatch(bat, 2, skipTS, start, end)
 	} else {
 		if rowIDVec != nil {
 			rowIDVec.Free(mp)
@@ -2782,8 +4468,8 @@ func updateTombstoneBatch(
 		bat.Attrs = []string{
 			objectio.TombstoneAttr_PK_Attr,
 			objectio.DefaultCommitTS_Attr}
-		applyTSFilterForBatch(bat, 1, skipTS, start, end)
 	}
+	bat.SetRowCount(pkVec.Length())
 	if sort {
 		sortIdx := len(bat.Vecs) - 1
 		return sortBatch(bat, sortIdx, mp)
@@ -2804,39 +4490,80 @@ func updatePersistedTombstoneBatch(
 		return moerr.NewInternalErrorNoCtx("invalid persisted tombstone batch layout for collect changes")
 	}
 	commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
-	if !ok || int(commitPos) >= len(bat.Vecs) || bat.Vecs[commitPos].GetType().Oid != types.T_TS {
+	if !ok || int(commitPos) >= len(bat.Vecs) ||
+		int(commitPos) <= int(objectio.TombstoneAttr_PK_SeqNum) ||
+		bat.Vecs[commitPos] == nil || bat.Vecs[commitPos].GetType().Oid != types.T_TS {
 		return moerr.NewInternalErrorNoCtx("persisted tombstone object has no valid commit-ts column")
 	}
 	abortPos, hasAbort := layout.Resolve(objectio.SEQNUM_ABORT)
-	if hasAbort && (int(abortPos) >= len(bat.Vecs) || bat.Vecs[abortPos].GetType().Oid != types.T_bool) {
+	if hasAbort && (int(abortPos) >= len(bat.Vecs) || bat.Vecs[abortPos] == nil ||
+		bat.Vecs[abortPos].GetType().Oid != types.T_bool) {
 		return moerr.NewInternalErrorNoCtx("persisted tombstone object has an invalid abort column")
+	}
+	if hasAbort && (abortPos == commitPos ||
+		int(abortPos) <= int(objectio.TombstoneAttr_PK_SeqNum)) {
+		return moerr.NewInternalErrorNoCtx("persisted tombstone object has overlapping special columns")
 	}
 	rowIDVec := bat.Vecs[objectio.TombstoneAttr_Rowid_SeqNum]
 	pkVec := bat.Vecs[objectio.TombstoneAttr_PK_SeqNum]
 	commitTSVec := bat.Vecs[commitPos]
-	if rowIDVec.GetType().Oid != types.T_Rowid || commitTSVec.IsConstNull() {
+	if rowIDVec == nil || pkVec == nil || commitTSVec.IsConstNull() {
 		return moerr.NewInternalErrorNoCtx("invalid persisted tombstone special columns")
 	}
-	logicalRows := pkVec.Length()
-	if rowIDVec.Length() != logicalRows {
-		return moerr.NewInternalErrorNoCtx("persisted tombstone object has inconsistent row counts")
+	rowCount := bat.RowCount()
+	if err := validateChangeBatchShape(bat, rowCount, "persisted tombstone batch"); err != nil {
+		return err
 	}
-	commits, err := ioutil.ValidateTombstoneCommitTSColumn(logicalRows, commitTSVec)
+	if _, err := ioutil.ValidateTombstoneRowIDColumn(rowCount, rowIDVec); err != nil {
+		return err
+	}
+	physicalPos := uint16(objectio.InvalidSpecialColumnPosition)
+	if declaredPhysicalPos := layout.PhysicalAddr; declaredPhysicalPos != objectio.InvalidSpecialColumnPosition &&
+		declaredPhysicalPos != objectio.TombstoneAttr_Rowid_SeqNum {
+		// Position zero is the mandatory semantic tombstone rowid.  Treat it
+		// as an unspecified physical address for compatibility with legacy
+		// callers that construct SpecialColumnLayout values without setting
+		// PhysicalAddr (whose Go zero value is also zero).
+		if int(declaredPhysicalPos) <= int(objectio.TombstoneAttr_PK_SeqNum) ||
+			declaredPhysicalPos == commitPos || (hasAbort && declaredPhysicalPos == abortPos) ||
+			int(declaredPhysicalPos) >= len(bat.Vecs) {
+			return moerr.NewInternalErrorNoCtx("persisted tombstone object has an invalid physical rowid position")
+		}
+		if _, err := ioutil.ValidateTombstoneRowIDColumn(
+			rowCount, bat.Vecs[declaredPhysicalPos],
+		); err != nil {
+			return err
+		}
+		physicalPos = declaredPhysicalPos
+	}
+	for pos := range bat.Vecs {
+		seqnum := uint16(pos)
+		if seqnum == objectio.TombstoneAttr_Rowid_SeqNum ||
+			seqnum == objectio.TombstoneAttr_PK_SeqNum || seqnum == commitPos ||
+			(hasAbort && seqnum == abortPos) || seqnum == physicalPos {
+			continue
+		}
+		return moerr.NewInternalErrorNoCtxf(
+			"persisted tombstone object has undeclared column %d", pos,
+		)
+	}
+	commits, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, commitTSVec)
 	if err != nil {
 		return err
 	}
 	var aborts ioutil.TombstoneAbortColumn
 	if hasAbort {
-		aborts, err = ioutil.ValidateTombstoneAbortColumn(logicalRows, bat.Vecs[abortPos])
+		aborts, err = ioutil.ValidateTombstoneAbortColumn(rowCount, bat.Vecs[abortPos])
 		if err != nil {
 			return err
 		}
 	}
 	deletes := make([]int64, 0)
-	for i := 0; i < logicalRows; i++ {
+	for i := 0; i < rowCount; i++ {
 		ts := commits.At(i)
 		_, skip := skipTS[ts]
-		if (aborts.IsPresent() && aborts.At(i)) || ts.LT(&start) || ts.GT(&end) || skip {
+		if (aborts.IsPresent() && aborts.At(i)) || ts.Equal(&txnif.UncommitTS) ||
+			ts.LT(&start) || ts.GT(&end) || skip {
 			deletes = append(deletes, int64(i))
 		}
 	}
@@ -2874,57 +4601,204 @@ func updateDataBatch(
 	retainRowID bool,
 	mp *mpool.MPool,
 ) error {
+	return updateDataBatchWithSchema(
+		bat, start, end, blk, specialLayout, nil, nil, retainRowID, mp,
+	)
+}
+
+func updateDataBatchWithSchema(
+	bat *batch.Batch,
+	start, end types.TS,
+	blk *types.Blockid,
+	specialLayout *objectio.SpecialColumnLayout,
+	columnSeqnums []uint16,
+	schema *engine.CollectChangesSchema,
+	retainRowID bool,
+	mp *mpool.MPool,
+) error {
 	if specialLayout != nil {
-		return updatePersistedDataBatch(bat, start, end, blk, *specialLayout, retainRowID, mp)
+		return updatePersistedDataBatchWithSchema(
+			bat, start, end, blk, *specialLayout, columnSeqnums, schema, retainRowID, mp,
+		)
+	}
+	if bat == nil || len(bat.Vecs) == 0 {
+		return moerr.NewInternalErrorNoCtx("invalid data batch layout for collect changes")
 	}
 	if retainRowID {
 		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
 			return err
 		}
 	}
-	filteredVecs := make([]*vector.Vector, 0, len(bat.Vecs))
-	var commitTSVec *vector.Vector
-	rebuildAttrs := len(bat.Attrs) == len(bat.Vecs)
-	filteredAttrs := make([]string, 0, len(bat.Attrs))
-	var commitTSAttr string
-
-	for i, vec := range bat.Vecs {
-		switch vec.GetType().Oid {
-		case types.T_Rowid:
-			if retainRowID {
-				filteredVecs = append(filteredVecs, vec)
-				if rebuildAttrs {
-					filteredAttrs = append(filteredAttrs, bat.Attrs[i])
-				}
-			} else {
-				vec.Free(mp)
+	rowCount := bat.RowCount()
+	if err := validateChangeBatchShape(bat, rowCount, "data change batch"); err != nil {
+		return err
+	}
+	commitPos, err := changeCommitTSPosition(bat)
+	if err != nil {
+		return err
+	}
+	rowIDPos := -1
+	if len(bat.Attrs) == len(bat.Vecs) {
+		for pos, attr := range bat.Attrs {
+			if attr != catalog.Row_ID && attr != objectio.PhysicalAddr_Attr {
+				continue
 			}
-		case types.T_TS:
-			commitTSVec = vec
-			if rebuildAttrs {
-				commitTSAttr = bat.Attrs[i]
+			if rowIDPos >= 0 && rowIDPos != pos {
+				return moerr.NewInternalErrorNoCtx("data change batch has duplicate rowid attributes")
 			}
-		default:
-			filteredVecs = append(filteredVecs, vec)
-			if rebuildAttrs {
-				filteredAttrs = append(filteredAttrs, bat.Attrs[i])
-			}
+			rowIDPos = pos
 		}
 	}
-	if commitTSVec != nil {
-		filteredVecs = append(filteredVecs, commitTSVec)
-		if rebuildAttrs {
-			if commitTSAttr == "" {
-				commitTSAttr = objectio.DefaultCommitTS_Attr
-			}
-			filteredAttrs = append(filteredAttrs, commitTSAttr)
+	if len(bat.Attrs) != len(bat.Vecs) {
+		if bat.Vecs[0] != nil && bat.Vecs[0].GetType().Oid == types.T_Rowid {
+			rowIDPos = 0
 		}
+	}
+	if rowIDPos >= 0 {
+		if _, err = ioutil.ValidateTombstoneRowIDColumn(rowCount, bat.Vecs[rowIDPos]); err != nil {
+			return err
+		}
+	}
+	if retainRowID && rowIDPos < 0 {
+		return moerr.NewInternalErrorNoCtx("data change batch is missing retained rowid column")
+	}
+	userColumnCount := len(bat.Vecs) - 1
+	if rowIDPos >= 0 {
+		userColumnCount--
+	}
+	if userColumnCount <= 0 {
+		return moerr.NewInternalErrorNoCtx("data change batch has no user columns")
+	}
+	if err = applyTSFilterForBatch(bat, commitPos, nil, start, end); err != nil {
+		return err
+	}
+
+	filteredVecs := make([]*vector.Vector, 0, len(bat.Vecs))
+	rebuildAttrs := len(bat.Attrs) == len(bat.Vecs)
+	filteredAttrs := make([]string, 0, len(bat.Attrs))
+	if retainRowID {
+		filteredVecs = append(filteredVecs, bat.Vecs[rowIDPos])
+		if rebuildAttrs {
+			filteredAttrs = append(filteredAttrs, catalog.Row_ID)
+		}
+	}
+	for i, vec := range bat.Vecs {
+		if i == rowIDPos || i == commitPos {
+			continue
+		}
+		filteredVecs = append(filteredVecs, vec)
+		if rebuildAttrs {
+			filteredAttrs = append(filteredAttrs, bat.Attrs[i])
+		}
+	}
+	filteredVecs = append(filteredVecs, bat.Vecs[commitPos])
+	if rebuildAttrs {
+		filteredAttrs = append(filteredAttrs, objectio.DefaultCommitTS_Attr)
+	}
+	if !retainRowID && rowIDPos >= 0 {
+		bat.Vecs[rowIDPos].Free(mp)
 	}
 	bat.Vecs = filteredVecs
 	if rebuildAttrs {
 		bat.Attrs = filteredAttrs
+	} else {
+		bat.Attrs = nil
 	}
-	applyTSFilterForBatch(bat, len(bat.Vecs)-1, nil, start, end)
+	bat.SetRowCount(bat.Vecs[0].Length())
+	return nil
+}
+
+// projectLoadedDataBatch converts one compact storage batch to the logical
+// CollectChanges schema. columnSeqnums maps compact source positions back to
+// stable physical column identities. Positions occupied by storage-only
+// columns must be excluded because their object-local metadata numbers can
+// collide with user sequence numbers added in a later schema version.
+//
+// The function validates the complete projection before publishing it. On
+// error, ownership of every input vector remains with bat and ownership of
+// synthesized rowID/commitTS vectors remains with the caller.
+func projectLoadedDataBatch(
+	bat *batch.Batch,
+	columnSeqnums []uint16,
+	schema *engine.CollectChangesSchema,
+	excludedPositions map[int]struct{},
+	rowIDVec, commitTSVec *vector.Vector,
+	retainRowID bool,
+	mp *mpool.MPool,
+) error {
+	if bat == nil || schema == nil || !schema.Valid() || len(columnSeqnums) != len(bat.Vecs) {
+		return moerr.NewInternalErrorNoCtx("loaded change batch has invalid column mapping")
+	}
+	rowCount := bat.RowCount()
+	if commitTSVec == nil || commitTSVec.Length() != rowCount ||
+		(retainRowID && (rowIDVec == nil || rowIDVec.Length() != rowCount)) {
+		return moerr.NewInternalErrorNoCtx("loaded change batch has invalid derived columns")
+	}
+	positionBySeqnum := make(map[uint16]int, len(columnSeqnums))
+	for position, seqnum := range columnSeqnums {
+		if _, excluded := excludedPositions[position]; excluded {
+			continue
+		}
+		if _, duplicate := positionBySeqnum[seqnum]; duplicate {
+			return moerr.NewInternalErrorNoCtxf(
+				"loaded change batch has duplicate user sequence %d", seqnum,
+			)
+		}
+		positionBySeqnum[seqnum] = position
+	}
+	for logicalPosition, seqnum := range schema.Seqnums {
+		if sourcePosition, ok := positionBySeqnum[seqnum]; ok {
+			source := bat.Vecs[sourcePosition]
+			if source == nil || source.Length() != rowCount ||
+				*source.GetType() != schema.Types[logicalPosition] {
+				return moerr.NewInternalErrorNoCtxf(
+					"loaded change column %q at sequence %d is incompatible",
+					schema.Attrs[logicalPosition], seqnum,
+				)
+			}
+		}
+	}
+
+	resultVecs := make([]*vector.Vector, 0, len(schema.Seqnums)+2)
+	resultAttrs := make([]string, 0, len(schema.Seqnums)+2)
+	keepSource := make([]bool, len(bat.Vecs))
+	markExisting := func(target *vector.Vector) {
+		for position, source := range bat.Vecs {
+			if source == target {
+				keepSource[position] = true
+				return
+			}
+		}
+	}
+	if retainRowID {
+		resultVecs = append(resultVecs, rowIDVec)
+		resultAttrs = append(resultAttrs, catalog.Row_ID)
+		markExisting(rowIDVec)
+	}
+	for logicalPosition, seqnum := range schema.Seqnums {
+		if sourcePosition, ok := positionBySeqnum[seqnum]; ok {
+			resultVecs = append(resultVecs, bat.Vecs[sourcePosition])
+			keepSource[sourcePosition] = true
+		} else {
+			resultVecs = append(
+				resultVecs,
+				vector.NewConstNull(schema.Types[logicalPosition], rowCount, mp),
+			)
+		}
+		resultAttrs = append(resultAttrs, schema.Attrs[logicalPosition])
+	}
+	resultVecs = append(resultVecs, commitTSVec)
+	resultAttrs = append(resultAttrs, objectio.DefaultCommitTS_Attr)
+	markExisting(commitTSVec)
+
+	for position, vec := range bat.Vecs {
+		if !keepSource[position] {
+			vec.Free(mp)
+		}
+	}
+	bat.Vecs = resultVecs
+	bat.Attrs = resultAttrs
+	bat.SetRowCount(rowCount)
 	return nil
 }
 
@@ -2936,15 +4810,32 @@ func updatePersistedDataBatch(
 	retainRowID bool,
 	mp *mpool.MPool,
 ) error {
+	return updatePersistedDataBatchWithSchema(
+		bat, start, end, blk, layout, nil, nil, retainRowID, mp,
+	)
+}
+
+func updatePersistedDataBatchWithSchema(
+	bat *batch.Batch,
+	start, end types.TS,
+	blk *types.Blockid,
+	layout objectio.SpecialColumnLayout,
+	columnSeqnums []uint16,
+	schema *engine.CollectChangesSchema,
+	retainRowID bool,
+	mp *mpool.MPool,
+) error {
 	if bat == nil {
 		return moerr.NewInternalErrorNoCtx("updatePersistedDataBatch: nil batch")
 	}
 	commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
-	if !ok || int(commitPos) >= len(bat.Vecs) || bat.Vecs[commitPos].GetType().Oid != types.T_TS {
+	if !ok || int(commitPos) >= len(bat.Vecs) || bat.Vecs[commitPos] == nil ||
+		bat.Vecs[commitPos].GetType().Oid != types.T_TS {
 		return moerr.NewInternalErrorNoCtx("persisted appendable object has no valid commit-ts column")
 	}
 	abortPos, hasAbort := layout.Resolve(objectio.SEQNUM_ABORT)
-	if hasAbort && (int(abortPos) >= len(bat.Vecs) || bat.Vecs[abortPos].GetType().Oid != types.T_bool) {
+	if hasAbort && (int(abortPos) >= len(bat.Vecs) || bat.Vecs[abortPos] == nil ||
+		bat.Vecs[abortPos].GetType().Oid != types.T_bool) {
 		return moerr.NewInternalErrorNoCtx("persisted appendable object has an invalid abort column")
 	}
 	rowIDPos := uint16(objectio.InvalidSpecialColumnPosition)
@@ -2954,6 +4845,13 @@ func updatePersistedDataBatch(
 			bat.Vecs[rowIDPos].GetType().Oid != types.T_Rowid {
 			return moerr.NewInternalErrorNoCtx("persisted appendable object has an invalid rowid column")
 		}
+	}
+	if hasAbort && abortPos == commitPos {
+		return moerr.NewInternalErrorNoCtx("persisted appendable object has overlapping special columns")
+	}
+	if rowIDPos != objectio.InvalidSpecialColumnPosition &&
+		(rowIDPos == commitPos || (hasAbort && rowIDPos == abortPos)) {
+		return moerr.NewInternalErrorNoCtx("persisted appendable object has overlapping special columns")
 	}
 
 	commitTSVec := bat.Vecs[commitPos]
@@ -2967,38 +4865,110 @@ func updatePersistedDataBatch(
 			return moerr.NewInternalErrorNoCtx("persisted appendable object abort column is null")
 		}
 	}
-	logicalRows := bat.RowCount()
-	commits, err := ioutil.ValidateTombstoneCommitTSColumn(logicalRows, commitTSVec)
+	rowCount := bat.RowCount()
+	if err := validateChangeBatchShape(bat, rowCount, "persisted data batch"); err != nil {
+		return err
+	}
+	if rowIDPos != objectio.InvalidSpecialColumnPosition {
+		if _, err := ioutil.ValidateTombstoneRowIDColumn(
+			rowCount, bat.Vecs[rowIDPos],
+		); err != nil {
+			return err
+		}
+	}
+	userColumnCount := len(bat.Vecs) - 1
+	if hasAbort {
+		userColumnCount--
+	}
+	if rowIDPos != objectio.InvalidSpecialColumnPosition {
+		userColumnCount--
+	}
+	if userColumnCount <= 0 {
+		return moerr.NewInternalErrorNoCtx("persisted appendable object has no user columns")
+	}
+	commits, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, commitTSVec)
 	if err != nil {
 		return err
 	}
 	var aborts ioutil.TombstoneAbortColumn
 	if abortVec != nil {
-		aborts, err = ioutil.ValidateTombstoneAbortColumn(logicalRows, abortVec)
+		aborts, err = ioutil.ValidateTombstoneAbortColumn(rowCount, abortVec)
 		if err != nil {
 			return err
 		}
 	}
 	deletes := make([]int64, 0)
-	for i := 0; i < logicalRows; i++ {
+	for i := 0; i < rowCount; i++ {
 		ts := commits.At(i)
-		if (aborts.IsPresent() && aborts.At(i)) || ts.LT(&start) || ts.GT(&end) {
+		if (aborts.IsPresent() && aborts.At(i)) || ts.Equal(&txnif.UncommitTS) ||
+			ts.LT(&start) || ts.GT(&end) {
 			deletes = append(deletes, int64(i))
 		}
+	}
+	if schema != nil {
+		var projectedRowID *vector.Vector
+		rowIDSynthesized := false
+		if retainRowID {
+			if rowIDPos != objectio.InvalidSpecialColumnPosition {
+				projectedRowID = bat.Vecs[rowIDPos]
+			} else {
+				if blk == nil && rowCount > 0 {
+					return moerr.NewInternalErrorNoCtx(
+						"persisted appendable object cannot synthesize rowid without block id",
+					)
+				}
+				if err = validateSyntheticRowIDCount(rowCount); err != nil {
+					return err
+				}
+				projectedRowID = vector.NewVec(types.T_Rowid.ToType())
+				for row := 0; row < rowCount; row++ {
+					if err = vector.AppendFixed(
+						projectedRowID, types.NewRowid(blk, uint32(row)), false, mp,
+					); err != nil {
+						projectedRowID.Free(mp)
+						return err
+					}
+				}
+				rowIDSynthesized = true
+			}
+		}
+		excluded := map[int]struct{}{int(commitPos): {}}
+		if hasAbort {
+			excluded[int(abortPos)] = struct{}{}
+		}
+		if rowIDPos != objectio.InvalidSpecialColumnPosition {
+			excluded[int(rowIDPos)] = struct{}{}
+		}
+		if err = projectLoadedDataBatch(
+			bat, columnSeqnums, schema, excluded, projectedRowID, commitTSVec,
+			retainRowID, mp,
+		); err != nil {
+			if rowIDSynthesized {
+				projectedRowID.Free(mp)
+			}
+			return err
+		}
+		for _, vec := range bat.Vecs {
+			vec.Shrink(deletes, true)
+		}
+		bat.SetRowCount(bat.Vecs[0].Length())
+		return nil
 	}
 
 	rebuildAttrs := len(bat.Attrs) == len(bat.Vecs)
 	filteredVecs := make([]*vector.Vector, 0, len(bat.Vecs)-1)
 	filteredAttrs := make([]string, 0, len(bat.Attrs))
-	commitTSAttr := objectio.DefaultCommitTS_Attr
 	var rowIDVec *vector.Vector
 	rowIDKept := false
 	if retainRowID && rowIDPos == objectio.InvalidSpecialColumnPosition {
 		if blk == nil {
 			return moerr.NewInternalErrorNoCtx("persisted appendable object cannot synthesize rowid without block id")
 		}
+		if err := validateSyntheticRowIDCount(rowCount); err != nil {
+			return err
+		}
 		rowIDVec = vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < logicalRows; i++ {
+		for i := 0; i < rowCount; i++ {
 			if err := vector.AppendFixed(rowIDVec, types.NewRowid(blk, uint32(i)), false, mp); err != nil {
 				rowIDVec.Free(mp)
 				return err
@@ -3010,9 +4980,6 @@ func updatePersistedDataBatch(
 		pos := uint16(i)
 		switch {
 		case pos == commitPos:
-			if rebuildAttrs && bat.Attrs[i] != "" {
-				commitTSAttr = bat.Attrs[i]
-			}
 		case hasAbort && pos == abortPos:
 			vec.Free(mp)
 		case pos == rowIDPos:
@@ -3037,11 +5004,16 @@ func updatePersistedDataBatch(
 	}
 	filteredVecs = append(filteredVecs, commitTSVec)
 	if rebuildAttrs {
-		filteredAttrs = append(filteredAttrs, commitTSAttr)
+		filteredAttrs = append(filteredAttrs, objectio.DefaultCommitTS_Attr)
 	}
 	bat.Vecs = filteredVecs
 	if rebuildAttrs {
 		bat.Attrs = filteredAttrs
+	} else {
+		// Partial attributes are not positional metadata. Dropping storage-only
+		// columns can otherwise make their length accidentally match the rebuilt
+		// vector list and turn stale names into an apparently complete schema.
+		bat.Attrs = nil
 	}
 	for _, vec := range bat.Vecs {
 		vec.Shrink(deletes, true)
@@ -3051,80 +5023,337 @@ func updatePersistedDataBatch(
 	}
 	return nil
 }
-func updateCNTombstoneBatch(bat *batch.Batch, committs types.TS, blk *types.Blockid, retainRowID bool, mp *mpool.MPool) error {
+func updateCNTombstoneBatch(
+	bat *batch.Batch,
+	commitTS types.TS,
+	_ *types.Blockid,
+	layout objectio.SpecialColumnLayout,
+	retainRowID bool,
+	mp *mpool.MPool,
+) error {
 	if bat == nil {
 		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: nil batch")
 	}
-	if retainRowID {
-		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
+	rowIDPos, pkPos, derivedCommitPos := -1, -1, -1
+	hasCompleteAttrs := len(bat.Attrs) == len(bat.Vecs)
+	if hasCompleteAttrs {
+		for pos, attr := range bat.Attrs {
+			switch attr {
+			case catalog.Row_ID, objectio.TombstoneAttr_Rowid_Attr:
+				if rowIDPos >= 0 {
+					return moerr.NewInternalErrorNoCtx(
+						"updateCNTombstoneBatch: duplicate semantic rowid columns",
+					)
+				}
+				rowIDPos = pos
+			case objectio.TombstoneAttr_PK_Attr:
+				if pkPos >= 0 {
+					return moerr.NewInternalErrorNoCtx(
+						"updateCNTombstoneBatch: duplicate pk columns",
+					)
+				}
+				pkPos = pos
+			case objectio.DefaultCommitTS_Attr:
+				if derivedCommitPos >= 0 {
+					return moerr.NewInternalErrorNoCtx(
+						"updateCNTombstoneBatch: duplicate derived commit-ts columns",
+					)
+				}
+				derivedCommitPos = pos
+			}
+		}
+		canonical := (!retainRowID && len(bat.Vecs) == 2 && pkPos == 0 && derivedCommitPos == 1) ||
+			(retainRowID && len(bat.Vecs) == 3 && rowIDPos == 0 && pkPos == 1 && derivedCommitPos == 2)
+		if canonical {
+			rowCount := bat.Vecs[pkPos].Length()
+			if err := validateChangeBatchShape(bat, rowCount, "canonical CN tombstone batch"); err != nil {
+				return err
+			}
+			if retainRowID {
+				if _, err := ioutil.ValidateTombstoneRowIDColumn(rowCount, bat.Vecs[rowIDPos]); err != nil {
+					return err
+				}
+			}
+			if _, err := ioutil.ValidateTombstoneCommitTSColumn(
+				rowCount, bat.Vecs[derivedCommitPos],
+			); err != nil {
+				return err
+			}
+			replacement, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, rowCount, mp)
+			if err != nil {
+				return err
+			}
+			bat.Vecs[derivedCommitPos].Free(mp)
+			bat.Vecs[derivedCommitPos] = replacement
+			return nil
+		}
+	}
+	if pkPos == -1 {
+		if hasCompleteAttrs {
+			return moerr.NewInternalErrorNoCtx(
+				"updateCNTombstoneBatch: attributes do not identify the tombstone pk",
+			)
+		}
+		if len(bat.Vecs) < len(objectio.TombstoneSeqnums_CN_Created) ||
+			bat.Vecs[objectio.TombstoneAttr_Rowid_Idx] == nil ||
+			bat.Vecs[objectio.TombstoneAttr_Rowid_Idx].GetType().Oid != types.T_Rowid {
+			return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: tombstone batch missing pk vector")
+		}
+		rowIDPos = objectio.TombstoneAttr_Rowid_Idx
+		pkPos = objectio.TombstoneAttr_PK_Idx
+		if len(bat.Vecs) == len(objectio.TombstoneSeqnums_CN_Created)+1 &&
+			bat.Vecs[len(bat.Vecs)-1] != nil &&
+			bat.Vecs[len(bat.Vecs)-1].GetType().Oid == types.T_TS {
+			derivedCommitPos = len(bat.Vecs) - 1
+		}
+	}
+	if pkPos >= len(bat.Vecs) || bat.Vecs[pkPos] == nil {
+		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: tombstone batch missing pk vector")
+	}
+	if rowIDPos >= 0 && (rowIDPos >= len(bat.Vecs) || bat.Vecs[rowIDPos] == nil ||
+		bat.Vecs[rowIDPos].GetType().Oid != types.T_Rowid) {
+		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: invalid semantic rowid column")
+	}
+	if rowIDPos < 0 {
+		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: semantic rowid vector is missing")
+	}
+
+	pk := bat.Vecs[pkPos]
+	rowCount := pk.Length()
+	if err := validateChangeBatchShape(bat, rowCount, "CN-created tombstone batch"); err != nil {
+		return err
+	}
+	if rowIDPos >= 0 {
+		if _, err := ioutil.ValidateTombstoneRowIDColumn(
+			rowCount, bat.Vecs[rowIDPos],
+		); err != nil {
 			return err
 		}
 	}
-	var rowid *vector.Vector
-	var pk *vector.Vector
-	for _, vec := range bat.Vecs {
-		switch vec.GetType().Oid {
-		case types.T_Rowid:
-			if retainRowID {
-				rowid = vec
-			} else {
-				vec.Free(mp)
-			}
-		case types.T_TS:
-			vec.Free(mp)
-		default:
-			pk = vec
+	physicalPos := -1
+	if layout.PhysicalAddr != objectio.InvalidSpecialColumnPosition {
+		physicalPos = int(layout.PhysicalAddr)
+		if physicalPos < 0 || physicalPos >= len(bat.Vecs) ||
+			physicalPos == rowIDPos || physicalPos == pkPos || bat.Vecs[physicalPos] == nil {
+			return moerr.NewInternalErrorNoCtx(
+				"updateCNTombstoneBatch: invalid physical rowid position",
+			)
+		}
+		if _, err := ioutil.ValidateTombstoneRowIDColumn(
+			rowCount, bat.Vecs[physicalPos],
+		); err != nil {
+			return err
 		}
 	}
-	if pk == nil {
-		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: tombstone batch missing pk vector")
+	if _, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
+		return moerr.NewInternalErrorNoCtx(
+			"updateCNTombstoneBatch: CN-created tombstone unexpectedly has commit-ts metadata",
+		)
 	}
-	if retainRowID && rowid == nil {
-		return moerr.NewInternalErrorNoCtx("updateCNTombstoneBatch: retainRowID set but rowid vector missing")
+	if _, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+		return moerr.NewInternalErrorNoCtx(
+			"updateCNTombstoneBatch: CN-created tombstone unexpectedly has abort metadata",
+		)
 	}
-	commitTS, err := vector.NewConstFixed(types.T_TS.ToType(), committs, pk.Length(), mp)
+	for pos := range bat.Vecs {
+		if pos != rowIDPos && pos != pkPos && pos != physicalPos && pos != derivedCommitPos {
+			return moerr.NewInternalErrorNoCtxf(
+				"updateCNTombstoneBatch: unexpected column %d outside the declared layout", pos,
+			)
+		}
+	}
+	commitTSVec, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, rowCount, mp)
 	if err != nil {
 		return err
 	}
+	var rowID *vector.Vector
 	if retainRowID {
-		bat.Vecs = []*vector.Vector{rowid, pk, commitTS}
+		rowID = bat.Vecs[rowIDPos]
+	}
+	for pos, vec := range bat.Vecs {
+		if pos == pkPos || (retainRowID && pos == rowIDPos) {
+			continue
+		}
+		vec.Free(mp)
+	}
+	if retainRowID {
+		bat.Vecs = []*vector.Vector{rowID, pk, commitTSVec}
 		bat.Attrs = []string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 	} else {
-		bat.Vecs = []*vector.Vector{pk, commitTS}
+		bat.Vecs = []*vector.Vector{pk, commitTSVec}
 		bat.Attrs = []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 	}
+	bat.SetRowCount(rowCount)
 	return nil
 }
-func updateCNDataBatch(bat *batch.Batch, commitTS types.TS, blk *types.Blockid, retainRowID bool, mp *mpool.MPool) error {
+
+func updateCNDataBatch(
+	bat *batch.Batch,
+	commitTS types.TS,
+	blk *types.Blockid,
+	layout objectio.SpecialColumnLayout,
+	retainRowID bool,
+	mp *mpool.MPool,
+) error {
+	return updateCNDataBatchWithSchema(
+		bat, commitTS, blk, layout, nil, nil, retainRowID, mp,
+	)
+}
+
+func updateCNDataBatchWithSchema(
+	bat *batch.Batch,
+	commitTS types.TS,
+	blk *types.Blockid,
+	layout objectio.SpecialColumnLayout,
+	columnSeqnums []uint16,
+	schema *engine.CollectChangesSchema,
+	retainRowID bool,
+	mp *mpool.MPool,
+) error {
 	if bat == nil {
 		return moerr.NewInternalErrorNoCtx("updateCNDataBatch: nil batch")
 	}
-	for i, vec := range bat.Vecs {
-		if vec.GetType().Oid == types.T_TS {
-			vec.Free(mp)
-			bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
-			if len(bat.Attrs) == len(bat.Vecs)+1 {
-				bat.Attrs = append(bat.Attrs[:i], bat.Attrs[i+1:]...)
-			}
-			break
-		}
+	if len(bat.Vecs) == 0 {
+		return moerr.NewInternalErrorNoCtx("updateCNDataBatch: data batch has no user vectors")
 	}
-	if retainRowID {
-		if err := prependRowIDVectorIfNeeded(bat, blk, mp); err != nil {
+
+	specialPositions := make(map[int]struct{}, 3)
+	physicalPos := -1
+	if layout.PhysicalAddr != objectio.InvalidSpecialColumnPosition {
+		physicalPos = int(layout.PhysicalAddr)
+		if physicalPos >= len(bat.Vecs) || bat.Vecs[physicalPos] == nil ||
+			bat.Vecs[physicalPos].GetType().Oid != types.T_Rowid {
+			return moerr.NewInternalErrorNoCtx("updateCNDataBatch: invalid physical rowid column")
+		}
+		specialPositions[physicalPos] = struct{}{}
+	}
+	if commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
+		pos := int(commitPos)
+		if pos >= len(bat.Vecs) || bat.Vecs[pos] == nil {
+			return moerr.NewInternalErrorNoCtx("updateCNDataBatch: invalid persisted commit-ts column")
+		}
+		specialPositions[pos] = struct{}{}
+	}
+	if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+		pos := int(abortPos)
+		if pos >= len(bat.Vecs) || bat.Vecs[pos] == nil {
+			return moerr.NewInternalErrorNoCtx("updateCNDataBatch: invalid persisted abort column")
+		}
+		specialPositions[pos] = struct{}{}
+	}
+
+	rowCount, hasUserColumn := bat.RowCount(), false
+	for pos, vec := range bat.Vecs {
+		if _, special := specialPositions[pos]; special {
+			continue
+		}
+		if vec == nil {
+			return moerr.NewInternalErrorNoCtxf("updateCNDataBatch: data column %d is nil", pos)
+		}
+		hasUserColumn = true
+		break
+	}
+	if !hasUserColumn {
+		return moerr.NewInternalErrorNoCtx("updateCNDataBatch: data batch has no user vectors")
+	}
+	if err := validateChangeBatchShape(bat, rowCount, "CN-created data batch"); err != nil {
+		return err
+	}
+	if physicalPos >= 0 {
+		if _, err := ioutil.ValidateTombstoneRowIDColumn(
+			rowCount, bat.Vecs[physicalPos],
+		); err != nil {
 			return err
 		}
 	}
-	if len(bat.Vecs) == 0 {
-		return moerr.NewInternalErrorNoCtx("updateCNDataBatch: data batch has no vectors after stripping commit-ts")
+	if commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
+		if _, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, bat.Vecs[commitPos]); err != nil {
+			return err
+		}
 	}
-	commitTSVec, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, bat.Vecs[0].Length(), mp)
+	if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+		if _, err := ioutil.ValidateTombstoneAbortColumn(rowCount, bat.Vecs[abortPos]); err != nil {
+			return err
+		}
+	}
+
+	var rowIDVec *vector.Vector
+	rowIDSynthesized := false
+	if retainRowID {
+		if physicalPos >= 0 {
+			rowIDVec = bat.Vecs[physicalPos]
+		} else {
+			if blk == nil && rowCount > 0 {
+				return moerr.NewInternalErrorNoCtx("updateCNDataBatch: cannot synthesize rowid without block id")
+			}
+			if err := validateSyntheticRowIDCount(rowCount); err != nil {
+				return err
+			}
+			rowIDVec = vector.NewVec(types.T_Rowid.ToType())
+			for row := 0; row < rowCount; row++ {
+				if err := vector.AppendFixed(
+					rowIDVec, types.NewRowid(blk, uint32(row)), false, mp,
+				); err != nil {
+					rowIDVec.Free(mp)
+					return err
+				}
+			}
+			rowIDSynthesized = true
+		}
+	}
+	commitTSVec, err := vector.NewConstFixed(types.T_TS.ToType(), commitTS, rowCount, mp)
 	if err != nil {
+		if rowIDSynthesized {
+			rowIDVec.Free(mp)
+		}
 		return err
 	}
-	bat.Vecs = append(bat.Vecs, commitTSVec)
-	if len(bat.Attrs) == len(bat.Vecs)-1 {
-		bat.Attrs = append(bat.Attrs, objectio.DefaultCommitTS_Attr)
+	if schema != nil {
+		if err = projectLoadedDataBatch(
+			bat, columnSeqnums, schema, specialPositions, rowIDVec, commitTSVec,
+			retainRowID, mp,
+		); err != nil {
+			commitTSVec.Free(mp)
+			if rowIDSynthesized {
+				rowIDVec.Free(mp)
+			}
+			return err
+		}
+		return nil
 	}
+
+	rebuildAttrs := len(bat.Attrs) == len(bat.Vecs)
+	resultVecs := make([]*vector.Vector, 0, len(bat.Vecs)-len(specialPositions)+2)
+	resultAttrs := make([]string, 0, cap(resultVecs))
+	if retainRowID {
+		resultVecs = append(resultVecs, rowIDVec)
+		if rebuildAttrs {
+			resultAttrs = append(resultAttrs, catalog.Row_ID)
+		}
+	}
+	for pos, vec := range bat.Vecs {
+		if _, special := specialPositions[pos]; special {
+			if !(retainRowID && pos == physicalPos) {
+				vec.Free(mp)
+			}
+			continue
+		}
+		resultVecs = append(resultVecs, vec)
+		if rebuildAttrs {
+			resultAttrs = append(resultAttrs, bat.Attrs[pos])
+		}
+	}
+	resultVecs = append(resultVecs, commitTSVec)
+	if rebuildAttrs {
+		resultAttrs = append(resultAttrs, objectio.DefaultCommitTS_Attr)
+	}
+	bat.Vecs = resultVecs
+	if rebuildAttrs {
+		bat.Attrs = resultAttrs
+	} else {
+		bat.Attrs = nil
+	}
+	bat.SetRowCount(rowCount)
 	return nil
 }
 
@@ -3177,6 +5406,20 @@ type checkpointEntryReader interface {
 	ReadMeta(context.Context) error
 	PrefetchData(string)
 	ConsumeCheckpointWithTableID(context.Context, func(context.Context, fileservice.FileService, objectio.ObjectEntry, bool) error) error
+}
+
+func checkpointEntryReaderIsNil(reader checkpointEntryReader) bool {
+	if reader == nil {
+		return true
+	}
+	value := reflect.ValueOf(reader)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 var newCKPReaderWithTableID = func(version uint32, location objectio.Location, tableID uint64, mp *mpool.MPool, fs fileservice.FileService) checkpointEntryReader {

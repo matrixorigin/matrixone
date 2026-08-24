@@ -15,6 +15,7 @@
 package ioutil
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -95,6 +96,30 @@ func TestEvalDeleteMaskFromDNCreatedTombstonesAbortColumnCompatibility(t *testin
 		require.ErrorContains(t, err, "commit-ts column is unavailable")
 		require.False(t, rows.IsValid())
 	})
+
+	t.Run("uncommitted sentinel stays invisible at max snapshot", func(t *testing.T) {
+		uncommittedRows := vector.NewVec(objectio.RowidType)
+		require.NoError(t, vector.AppendFixed(
+			uncommittedRows, types.NewRowid(&blockID, 4), false, mp,
+		))
+		defer uncommittedRows.Free(mp)
+		uncommittedTS, err := vector.NewConstFixed(
+			types.T_TS.ToType(), types.MaxTs(), 1, mp,
+		)
+		require.NoError(t, err)
+		defer uncommittedTS.Free(mp)
+		abortColumn := vector.NewConstNull(types.T_bool.ToType(), 1, mp)
+		defer abortColumn.Free(mp)
+		maxSnapshot := types.MaxTs()
+
+		rows, err := EvalDeleteMaskFromDNCreatedTombstones(
+			uncommittedRows, uncommittedTS, abortColumn,
+			objectio.BlockObject{}, &maxSnapshot, &blockID,
+		)
+		require.NoError(t, err)
+		defer rows.Release()
+		require.False(t, rows.Contains(4))
+	})
 }
 
 func TestTombstoneCommitTSColumnAtDoesNotAllocate(t *testing.T) {
@@ -117,4 +142,89 @@ func TestTombstoneCommitTSColumnAtDoesNotAllocate(t *testing.T) {
 	})
 	require.Equal(t, commitTS, got)
 	require.Zero(t, allocs)
+}
+
+func TestValidateTombstoneAbortColumnAcceptsEmptyBatch(t *testing.T) {
+	vec := vector.NewVec(types.T_bool.ToType())
+	defer vec.Free(nil)
+
+	column, err := ValidateTombstoneAbortColumn(0, vec)
+	require.NoError(t, err)
+	require.True(t, column.IsPresent())
+}
+
+func TestValidateTombstoneRowIDColumnRejectsBroadcastAndMalformedData(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	blockID := types.Blockid{}
+	rowID := types.NewRowid(&blockID, 1)
+	constRowIDs, err := vector.NewConstFixed(objectio.RowidType, rowID, 3, mp)
+	require.NoError(t, err)
+	defer constRowIDs.Free(mp)
+	_, err = ValidateTombstoneRowIDColumn(3, constRowIDs)
+	require.ErrorContains(t, err, "rowid column is unavailable")
+
+	dense := vector.NewVec(objectio.RowidType)
+	defer dense.Free(mp)
+	require.NoError(t, vector.AppendFixed(dense, rowID, false, mp))
+	_, err = ValidateTombstoneRowIDColumn(2, dense)
+	require.ErrorContains(t, err, "rowid column is unavailable")
+}
+
+func TestCheckTombstoneFileRejectsMalformedInputsWithoutCallbacks(t *testing.T) {
+	getCalled := false
+	_, _, _, err := CheckTombstoneFile(
+		context.Background(),
+		[]byte{1},
+		func() (*objectio.ObjectStats, error) {
+			getCalled = true
+			return nil, nil
+		},
+		func(*objectio.ObjectStats, int) (bool, error) {
+			t.Fatal("block callback must not run")
+			return false, nil
+		},
+		nil,
+	)
+	require.ErrorContains(t, err, "invalid tombstone rowid prefix length")
+	require.False(t, getCalled)
+
+	stats := new(objectio.ObjectStats)
+	returned := false
+	_, _, _, err = CheckTombstoneFile(
+		context.Background(),
+		make([]byte, types.BlockidSize),
+		func() (*objectio.ObjectStats, error) {
+			if returned {
+				return nil, nil
+			}
+			returned = true
+			return stats, nil
+		},
+		func(*objectio.ObjectStats, int) (bool, error) {
+			t.Fatal("block callback must not run")
+			return false, nil
+		},
+		nil,
+	)
+	require.ErrorContains(t, err, "invalid rowid zone map")
+}
+
+func TestCheckTombstoneFileChecksCancellationBeforeIterator(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	getCalled := false
+	_, _, _, err := CheckTombstoneFile(
+		ctx,
+		make([]byte, types.BlockidSize),
+		func() (*objectio.ObjectStats, error) {
+			getCalled = true
+			return nil, nil
+		},
+		func(*objectio.ObjectStats, int) (bool, error) { return false, nil },
+		nil,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, getCalled)
 }

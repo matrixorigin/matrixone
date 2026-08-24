@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -34,6 +35,119 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 )
+
+func TestObjectLifetimeOverlapsRange(t *testing.T) {
+	start := types.BuildTS(20, 0)
+	end := types.BuildTS(30, 0)
+
+	for _, test := range []struct {
+		name     string
+		createAt types.TS
+		deleteAt types.TS
+		overlaps bool
+	}{
+		{
+			name:     "live object",
+			createAt: types.BuildTS(10, 0),
+			overlaps: true,
+		},
+		{
+			name:     "deleted before range",
+			createAt: types.BuildTS(10, 0),
+			deleteAt: types.BuildTS(19, 0),
+			overlaps: false,
+		},
+		{
+			name:     "deleted at range start",
+			createAt: types.BuildTS(10, 0),
+			deleteAt: start,
+			overlaps: true,
+		},
+		{
+			name:     "created after range",
+			createAt: types.BuildTS(31, 0),
+			overlaps: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.overlaps, objectLifetimeOverlapsRange(
+				test.createAt, test.deleteAt, start, end,
+			))
+		})
+	}
+}
+
+func TestValidatePersistedObjectBlockCount(t *testing.T) {
+	require.Error(t, validatePersistedObjectBlockCount(0))
+	require.NoError(t, validatePersistedObjectBlockCount(1))
+	require.NoError(t, validatePersistedObjectBlockCount(maxPersistedObjectBlockCount))
+	require.Error(t, validatePersistedObjectBlockCount(maxPersistedObjectBlockCount+1))
+}
+
+func TestCheckedDeleteOffsetRejectsOverflow(t *testing.T) {
+	offset, err := checkedDeleteOffset(7, 100, 108)
+	require.NoError(t, err)
+	require.Equal(t, uint64(107), offset)
+
+	_, err = checkedDeleteOffset(1, math.MaxUint64, math.MaxUint64)
+	require.ErrorContains(t, err, "overflows")
+	_, err = checkedDeleteOffset(7, 100, 107)
+	require.ErrorContains(t, err, "outside output row range")
+}
+
+func TestGetPersistedBlockBloomFilterRejectsMalformedMetadata(t *testing.T) {
+	require.NotPanics(t, func() {
+		_, err := getPersistedBlockBloomFilter(objectio.BloomFilter{1}, 1, 0)
+		require.ErrorContains(t, err, "malformed")
+	})
+}
+
+func TestPersistedTombstoneFillRejectsCanceledContextBeforeIO(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	node := &persistedNode{object: &baseObject{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+	deletes := &nulls.Nulls{}
+	deletes.Add(7)
+
+	err := node.FillBlockTombstones(
+		ctx,
+		txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0)),
+		blockID,
+		&deletes,
+		0,
+		1,
+		mp,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, deletes.Count())
+	require.True(t, deletes.Contains(7))
+}
+
+func TestPersistedScanRejectsMalformedProjectionBeforeIO(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	node := &persistedNode{object: &baseObject{}}
+	schema := catalog.MockSchema(1, 0)
+	var output *containers.Batch
+
+	err := node.Scan(
+		context.Background(), &output, nil, schema, 0,
+		[]int{len(schema.ColDefs)}, mp,
+	)
+	require.ErrorContains(t, err, "outside the read schema")
+	require.Nil(t, output)
+
+	err = node.Scan(
+		context.Background(), &output, nil, schema, 0,
+		[]int{objectio.SEQNUM_COMMITTS, objectio.SEQNUM_COMMITTS}, mp,
+	)
+	require.ErrorContains(t, err, "duplicate column")
+	require.Nil(t, output)
+}
 
 func TestPersistedNodeReadsLegacyBackupTombstone(t *testing.T) {
 	ctx := context.Background()
@@ -101,7 +215,10 @@ func TestPersistedNodeReadsLegacyBackupTombstone(t *testing.T) {
 	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
 	require.NoError(t, err)
 	entry, err := table.CreateCommittedObject(
-		types.BuildTS(10, 0),
+		// A rewritten/backup tombstone object can be created long after the
+		// per-row deletes it carries. FillBlockTombstones must use those row
+		// timestamps instead of pruning by this object timestamp.
+		types.BuildTS(100, 0),
 		&objectio.CreateObjOpt{Stats: stats, IsTombstone: true},
 		NewDataFactory(rt, "").MakeObjectFactory(),
 	)
@@ -169,6 +286,27 @@ func TestPersistedNodeReadsLegacyBackupTombstone(t *testing.T) {
 		require.Equal(t, types.BuildTS(10, 0), result.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(0))
 	})
 
+	t.Run("range collection does not prune by TN object creation", func(t *testing.T) {
+		var result *containers.Batch
+		err := entry.GetObjectData().CollectObjectTombstoneInRange(
+			ctx,
+			types.BuildTS(15, 0),
+			types.BuildTS(25, 0),
+			&targetObject,
+			&result,
+			mp,
+			transientPool,
+		)
+		require.NoError(t, err)
+		if result != nil {
+			defer result.Close()
+		}
+		require.NotNil(t, result)
+		require.Equal(t, 1, result.Length())
+		require.Equal(t, int32(2), result.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Get(0))
+		require.Equal(t, types.BuildTS(20, 0), result.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(0))
+	})
+
 	t.Run("block filtering uses per-row commit timestamp", func(t *testing.T) {
 		blockID := types.NewBlockidWithObjectID(&targetObject, 0)
 		for _, test := range []struct {
@@ -188,6 +326,7 @@ func TestPersistedNodeReadsLegacyBackupTombstone(t *testing.T) {
 					&blockID,
 					&deletes,
 					100,
+					103,
 					mp,
 				)
 				require.NoError(t, err)
@@ -197,6 +336,24 @@ func TestPersistedNodeReadsLegacyBackupTombstone(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	t.Run("block filtering rejects out-of-range rowid atomically", func(t *testing.T) {
+		blockID := types.NewBlockidWithObjectID(&targetObject, 0)
+		deletes := &nulls.Nulls{}
+		deletes.Add(7)
+		err := entry.GetObjectData().FillBlockTombstones(
+			ctx,
+			txnbase.MockTxnReaderWithStartTS(types.BuildTS(25, 0)),
+			&blockID,
+			&deletes,
+			100,
+			102,
+			mp,
+		)
+		require.ErrorContains(t, err, "outside output row range")
+		require.Equal(t, 1, deletes.Count())
+		require.True(t, deletes.Contains(7))
 	})
 }
 
@@ -322,6 +479,7 @@ func TestPersistedNodeFiltersCanonicalTombstoneByCommitTS(t *testing.T) {
 				&blockID,
 				&deletes,
 				100,
+				103,
 				mp,
 			)
 			require.NoError(t, fillErr)
@@ -364,6 +522,7 @@ func TestLoadPersistedColumnDataClosesPhysicalAddressOnMetadataError(t *testing.
 		mp,
 		nil,
 		true,
+		false,
 	)
 	require.Error(t, err)
 	usedAfter, _ := transientPool.Used(false)
@@ -503,6 +662,7 @@ func TestPersistedNodeReadsCNCreatedTombstone(t *testing.T) {
 					&blockID,
 					&deletes,
 					100,
+					103,
 					mp,
 				)
 				require.NoError(t, err)
@@ -513,4 +673,121 @@ func TestPersistedNodeReadsCNCreatedTombstone(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestAppendPersistedScanVectorsMaterializesConstAndBorrowedDestinations(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	dst := containers.NewBatch()
+	constIDs, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 2, mp)
+	require.NoError(t, err)
+	dst.AddVector("id", containers.ToTNVector(constIDs, mp))
+
+	borrowedOwner := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(borrowedOwner, []byte("a"), false, mp))
+	require.NoError(t, vector.AppendBytes(borrowedOwner, []byte("b"), false, mp))
+	borrowed, err := borrowedOwner.Window(0, 2)
+	require.NoError(t, err)
+	require.True(t, borrowed.NeedDup())
+	dst.AddVector("value", containers.ToTNVector(borrowed, mp))
+
+	src := containers.NewBatch()
+	srcID := containers.MakeVector(types.T_int64.ToType(), mp)
+	require.NoError(t, vector.AppendFixed(srcID.GetDownstreamVector(), int64(8), false, mp))
+	src.AddVector("id", srcID)
+	srcValue := containers.MakeVector(types.T_varchar.ToType(), mp)
+	require.NoError(t, vector.AppendBytes(srcValue.GetDownstreamVector(), []byte("c"), false, mp))
+	src.AddVector("value", srcValue)
+
+	offset, err := appendTNBatchVectorsAtomic(dst, src.Attrs, src.Vecs, mp)
+	require.NoError(t, err)
+	require.Equal(t, 2, offset)
+	require.Equal(t, 3, dst.Length())
+	require.False(t, dst.GetVectorByName("id").IsConst())
+	require.False(t, dst.GetVectorByName("value").GetDownstreamVector().NeedDup())
+	require.Equal(t, int64(7), dst.GetVectorByName("id").Get(0))
+	require.Equal(t, int64(7), dst.GetVectorByName("id").Get(1))
+	require.Equal(t, int64(8), dst.GetVectorByName("id").Get(2))
+	require.Equal(t, []byte("c"), dst.GetVectorByName("value").Get(2))
+
+	dst.Close()
+	src.Close()
+	borrowedOwner.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAppendPersistedScanVectorsRollsBackAllocationFailure(t *testing.T) {
+	dstMP, err := mpool.NewMPool("persisted-scan-rollback", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	srcMP := mpool.MustNewZero()
+
+	dst := containers.NewBatch()
+	dstID := containers.MakeVector(types.T_int64.ToType(), dstMP)
+	require.NoError(t, vector.AppendFixed(dstID.GetDownstreamVector(), int64(1), false, dstMP))
+	dst.AddVector("id", dstID)
+	dstValue := containers.MakeVector(types.T_varchar.ToType(), dstMP)
+	require.NoError(t, vector.AppendBytes(dstValue.GetDownstreamVector(), []byte("kept"), false, dstMP))
+	dst.AddVector("value", dstValue)
+
+	src := containers.NewBatch()
+	srcID := containers.MakeVector(types.T_int64.ToType(), srcMP)
+	require.NoError(t, vector.AppendFixed(srcID.GetDownstreamVector(), int64(2), false, srcMP))
+	src.AddVector("id", srcID)
+	srcValue := containers.MakeVector(types.T_varchar.ToType(), srcMP)
+	require.NoError(t, vector.AppendBytes(srcValue.GetDownstreamVector(), make([]byte, 2<<20), false, srcMP))
+	src.AddVector("value", srcValue)
+
+	_, err = appendTNBatchVectorsAtomic(dst, src.Attrs, src.Vecs, dstMP)
+	require.Error(t, err)
+	require.Equal(t, 1, dst.Length())
+	require.Equal(t, int64(1), dst.GetVectorByName("id").Get(0))
+	require.Equal(t, []byte("kept"), dst.GetVectorByName("value").Get(0))
+
+	dst.Close()
+	src.Close()
+	require.Zero(t, dstMP.CurrNB())
+	require.Zero(t, srcMP.CurrNB())
+	mpool.DeleteMPool(dstMP)
+	mpool.DeleteMPool(srcMP)
+}
+
+func TestTombstoneResultAppenderRollsBackAllocationFailure(t *testing.T) {
+	dstMP, err := mpool.NewMPool("tombstone-row-rollback", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	srcMP := mpool.MustNewZero()
+
+	dst := catalog.NewTombstoneBatchByPKType(types.T_varchar.ToType(), dstMP)
+	var blockID types.Blockid
+	require.NoError(t, vector.AppendFixed(
+		dst.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+		types.NewRowid(&blockID, 0), false, dstMP,
+	))
+	require.NoError(t, vector.AppendBytes(
+		dst.GetVectorByName(objectio.TombstoneAttr_PK_Attr).GetDownstreamVector(),
+		[]byte("kept"), false, dstMP,
+	))
+	require.NoError(t, vector.AppendFixed(
+		dst.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).GetDownstreamVector(),
+		types.BuildTS(1, 0), false, dstMP,
+	))
+
+	sourcePK := containers.MakeVector(types.T_varchar.ToType(), srcMP)
+	require.NoError(t, vector.AppendBytes(
+		sourcePK.GetDownstreamVector(), make([]byte, 2<<20), false, srcMP,
+	))
+	appender, err := newTombstoneResultAppender(dst, sourcePK.GetType(), dstMP)
+	require.NoError(t, err)
+	err = appender.Append(types.NewRowid(&blockID, 1), sourcePK, 0, types.BuildTS(2, 0))
+	require.Error(t, err)
+	require.Equal(t, 1, dst.Length())
+	require.Equal(t, []byte("kept"), dst.GetVectorByName(objectio.TombstoneAttr_PK_Attr).Get(0))
+	require.Equal(t, types.BuildTS(1, 0), dst.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Get(0))
+
+	dst.Close()
+	sourcePK.Close()
+	require.Zero(t, dstMP.CurrNB())
+	require.Zero(t, srcMP.CurrNB())
+	mpool.DeleteMPool(dstMP)
+	mpool.DeleteMPool(srcMP)
 }

@@ -1639,6 +1639,12 @@ func TestGetObjectsFromCheckpointEntriesDedup(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
 			catalog.SetupDefines("")
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			fs, err := fileservice.NewMemoryFS(
+				"checkpoint-entry-dedup", fileservice.DisabledCacheConfig, nil,
+			)
+			require.NoError(t, err)
 
 			ctx := context.Background()
 			start := types.BuildTS(1, 0)
@@ -1677,7 +1683,7 @@ func TestGetObjectsFromCheckpointEntriesDedup(t *testing.T) {
 			entry1 := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
 			entry2 := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
 
-			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointEntries(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry1, entry2}, nil, nil)
+			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointEntries(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry1, entry2}, mp, fs)
 			require.NoError(t, err)
 
 			require.Len(t, dataAobjs, 1)
@@ -1699,6 +1705,12 @@ func TestGetObjectsFromCheckpointRange(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
 			catalog.SetupDefines("")
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			fs, err := fileservice.NewMemoryFS(
+				"checkpoint-range", fileservice.DisabledCacheConfig, nil,
+			)
+			require.NoError(t, err)
 
 			ctx := context.Background()
 			start := types.BuildTS(10, 0)
@@ -1740,7 +1752,7 @@ func TestGetObjectsFromCheckpointRange(t *testing.T) {
 
 			entry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.ET_Global)
 
-			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointRange(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry}, nil, nil)
+			dataAobjs, dataCNObjs, tombstoneAobjs, tombstoneCNObjs, err := logtailreplay.TestGetObjectsFromCheckpointRange(ctx, 1, "", start, end, []*checkpoint.CheckpointEntry{entry}, mp, fs)
 			require.NoError(t, err)
 
 			require.Len(t, dataCNObjs, 1)
@@ -1795,6 +1807,7 @@ func newObjectEntryForCheckpointTest(t *testing.T, id byte, appendable bool, cnC
 
 	stats := objectio.NewObjectStats()
 	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
 	if appendable {
 		objectio.WithAppendable()(stats)
 	}

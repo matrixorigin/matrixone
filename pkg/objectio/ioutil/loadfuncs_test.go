@@ -41,6 +41,15 @@ type releaseTrackingFS struct {
 	outstanding atomic.Int32
 }
 
+func TestGetDataMetaForLocationRejectsMalformedMetadataWithoutPanic(t *testing.T) {
+	location := objectio.NewRandomLocation(0, 1)
+	var err error
+	require.NotPanics(t, func() {
+		_, err = GetDataMetaForLocation(objectio.ObjectMeta{1}, location)
+	})
+	require.ErrorContains(t, err, "malformed")
+}
+
 func (f *releaseTrackingFS) Read(
 	ctx context.Context,
 	ioVector *fileservice.IOVector,
@@ -66,6 +75,61 @@ func (f *releaseTrackingFS) Read(
 type releaseTrackingData struct {
 	fscache.Data
 	outstanding *atomic.Int32
+}
+
+func TestLoadOneBlockWithColumnLayoutSupportsSparseSeqnums(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := batch.NewWithSize(5)
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	defer input.Clean(mp)
+	blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, mp))
+	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("pk"), false, mp))
+	require.NoError(t, vector.AppendFixed(input.Vecs[2], types.NewRowid(blockID, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(input.Vecs[3], types.BuildTS(9, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(input.Vecs[4], false, false, mp))
+	input.SetRowCount(1)
+
+	writer := ConstructWriter(
+		0,
+		[]uint16{0, 5, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		1,
+		false,
+		false,
+		fs,
+	)
+	writer.SetAppendable()
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	location := stats.ObjectLocation()
+	loaded, sortKey, layout, seqnums, err := LoadOneBlockWithColumnLayout(
+		ctx, fs, location, objectio.SchemaData,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	defer loaded.Clean(mp)
+	require.Equal(t, []uint16{0, 5, 6, 7, 8}, seqnums)
+	require.Equal(t, uint16(1), sortKey)
+	require.Equal(t, uint16(2), layout.PhysicalAddr)
+	require.Equal(t, uint16(3), layout.CommitTS)
+	require.Equal(t, uint16(4), layout.Abort)
+	require.Len(t, loaded.Vecs, 5)
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](loaded.Vecs[0], 0))
+	require.Equal(t, "pk", loaded.Vecs[1].GetStringAt(0))
+	require.Equal(t, types.T_Rowid, loaded.Vecs[2].GetType().Oid)
+	require.Equal(t, types.BuildTS(9, 0), vector.GetFixedAtNoTypeCheck[types.TS](loaded.Vecs[3], 0))
 }
 
 func TestAppendableVisibilityFiltersAbortFromMaterializeAndSearch(t *testing.T) {
@@ -167,7 +231,11 @@ func TestReadDeletesBroadcastsConstantAbort(t *testing.T) {
 		require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(5, 0), false, mp))
 	}
 	input.SetRowCount(3)
-	writer := ConstructWriter(0, []uint16{objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}, -1, false, false, fs)
+	writer := ConstructWriter(0, []uint16{
+		objectio.TombstoneAttr_Rowid_SeqNum,
+		objectio.SEQNUM_COMMITTS,
+		objectio.SEQNUM_ABORT,
+	}, -1, false, false, fs)
 	writer.SetAppendable()
 	require.NoError(t, func() error { _, err := writer.WriteBatch(input); return err }())
 	_, _, err := writer.Sync(ctx)
@@ -567,4 +635,39 @@ func TestLoadColumns2NeedCopyReleasesSourceCachedData(t *testing.T) {
 	require.Len(t, vectors, 1)
 	require.Equal(t, types.BuildTS(42, 0), vectors[0].Get(0))
 	vectors[0].Close()
+
+	// nil types are the supported fast path when the object has no schema
+	// changes. The returned zero-copy vector keeps the cache lease until release.
+	zeroCopy, zeroCopyRelease, err := LoadColumns2(
+		ctx,
+		[]uint16{0},
+		nil,
+		trackingFS,
+		stats.ObjectLocation(),
+		fileservice.Policy(0),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, zeroCopyRelease)
+	require.Len(t, zeroCopy, 1)
+	require.Equal(t, types.T_TS, zeroCopy[0].GetType().Oid)
+	require.Positive(t, trackingFS.outstanding.Load())
+	zeroCopyRelease()
+	require.Zero(t, trackingFS.outstanding.Load())
+
+	badVectors, badRelease, err := LoadColumns2(
+		ctx,
+		[]uint16{0},
+		[]types.Type{types.T_int64.ToType()},
+		trackingFS,
+		stats.ObjectLocation(),
+		fileservice.Policy(0),
+		true,
+		pool,
+	)
+	require.ErrorContains(t, err, "has type TRANSACTION TIMESTAMP, expected BIGINT")
+	require.Nil(t, badVectors)
+	require.Nil(t, badRelease)
+	require.Zero(t, trackingFS.outstanding.Load())
 }

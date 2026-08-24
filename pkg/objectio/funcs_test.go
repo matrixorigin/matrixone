@@ -17,7 +17,9 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"sync/atomic"
 	"testing"
 
@@ -185,6 +187,50 @@ func TestReadOneBlockWithMetaReleasesPartialReadOnError(t *testing.T) {
 	require.Empty(t, ioVec.Entries)
 }
 
+func TestReadOneBlockWithMetaRejectsMissingFallbackTypes(t *testing.T) {
+	meta := BuildMetaData(1, 1)
+	block := meta.GetBlockMeta(0)
+	block.BlockHeader().SetRows(1)
+	block.BlockHeader().SetMaxSeqnum(0)
+	block.BlockHeader().SetMetaColumnCount(1)
+	// DataType zero marks a column that was not present in this object.
+	block.ColumnMeta(0).setDataType(0)
+
+	var err error
+	require.NotPanics(t, func() {
+		_, err = ReadOneBlockWithMeta(
+			context.Background(),
+			&meta,
+			"missing-column",
+			0,
+			[]uint16{0},
+			nil,
+			mpool.MustNewZero(),
+			&partialReadErrorFS{err: errors.New("storage read must not run")},
+			constructorFactory,
+			fileservice.Policy(0),
+		)
+	})
+	require.ErrorContains(t, err, "requires fallback types")
+}
+
+func TestReadOneBlockWithMetaRejectsFallbackTypeCountMismatch(t *testing.T) {
+	meta := BuildMetaData(1, 1)
+	_, err := ReadOneBlockWithMeta(
+		context.Background(),
+		&meta,
+		"type-count-mismatch",
+		0,
+		[]uint16{0},
+		[]types.Type{types.T_int8.ToType(), types.T_int16.ToType()},
+		mpool.MustNewZero(),
+		&partialReadErrorFS{err: errors.New("storage read must not run")},
+		constructorFactory,
+		fileservice.Policy(0),
+	)
+	require.ErrorContains(t, err, "1 columns but 2 fallback types")
+}
+
 func TestReadOneBlockDoesNotConfuseUserTSWithCommitTS(t *testing.T) {
 	readErr := moerr.NewInternalErrorNoCtx("must not read the user timestamp")
 	fs := &partialReadErrorFS{err: readErr}
@@ -306,6 +352,18 @@ func TestResolveSpecialColumnLayoutCompatibility(t *testing.T) {
 		block.ColumnMeta(1).setDataType(uint8(types.T_bool))
 
 		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.CommitTS)
+		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.Abort)
+	})
+
+	t.Run("reserved-or-corrupt-max-seqnum-does-not-wrap", func(t *testing.T) {
+		block := BuildBlockMeta(1)
+		block.BlockHeader().SetMetaColumnCount(1)
+		block.BlockHeader().SetMaxSeqnum(math.MaxUint16)
+		block.ColumnMeta(0).setDataType(uint8(types.T_TS))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.PhysicalAddr)
 		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.CommitTS)
 		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.Abort)
 	})

@@ -117,7 +117,11 @@ func ResolveSpecialColumnLayout(block BlockObject) SpecialColumnLayout {
 		return layout
 	}
 
-	pos := block.GetMaxSeqnum() + 1
+	maxSeqnum := block.GetMaxSeqnum()
+	if maxSeqnum >= SEQNUM_UPPER {
+		return layout
+	}
+	pos := maxSeqnum + 1
 	if pos < metaColumnCount &&
 		block.ColumnMeta(pos).DataType() == uint8(types.T_Rowid) {
 		layout.PhysicalAddr = pos

@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1015,6 +1016,64 @@ func TestCountTombstoneRowsWithDuplicates(t *testing.T) {
 	require.NoError(t, err)
 	// This tells us how many rows are actually in the file
 	t.Logf("Rows in tombstone file: %d", countNoCheck)
+}
+
+func TestCollectTombstoneStatsRejectsMalformedBlockCount(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	objectID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objectID, false, true, false)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(
+		stats, maxChangeObjectBlockCount+1,
+	))
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  types.BuildTS(1, 0),
+	})
+
+	_, err := state.CollectTombstoneStats(
+		context.Background(), types.BuildTS(10, 0), testutil.NewSharedFS(),
+	)
+	require.ErrorContains(t, err, "invalid change object block count")
+}
+
+func TestObjectStatsVisibilityExcludesUncommittedCreateAndKeepsUncommittedDelete(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	newStats := func(rows uint32) objectio.ObjectStats {
+		objectID := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&objectID, false, true, false)
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, rows))
+		return *stats
+	}
+
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: newStats(7),
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.MaxTs(),
+	})
+	state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: newStats(11),
+		CreateTime:  types.MaxTs(),
+	})
+	dataStats, err := state.CollectDataStats(
+		context.Background(), types.MaxTs(), nil, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), dataStats.Rows)
+	require.Equal(t, 1, dataStats.ObjectCnt)
+
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: newStats(5),
+		CreateTime:  types.BuildTS(1, 0),
+		DeleteTime:  types.MaxTs(),
+	})
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{
+		ObjectStats: newStats(13),
+		CreateTime:  types.MaxTs(),
+	})
+	estimated, objects := state.estimateTombstoneRowsOnly(types.MaxTs())
+	require.Equal(t, 5, estimated)
+	require.Equal(t, 1, objects)
 }
 
 func TestCountTombstoneRowsObjectVisibility(t *testing.T) {
@@ -2885,6 +2944,24 @@ func TestTombstoneStatsBroadcastConstantCommitTS(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, stats.Rows)
 	})
+
+	t.Run("uncommitted sentinel is invisible at max snapshot", func(t *testing.T) {
+		maxSnapshot := types.MaxTs()
+		for _, objectCount := range []int{1, 2, 4} {
+			state, objects := newState(t, objectCount, txnif.UncommitTS)
+			var stats TombstoneStats
+			var err error
+			if objectCount == 4 {
+				stats, err = state.countTombstoneStatsWithMerge(
+					ctx, maxSnapshot, fs, objects, TombstoneStats{},
+				)
+			} else {
+				stats, err = state.CollectTombstoneStats(ctx, maxSnapshot, fs)
+			}
+			require.NoError(t, err)
+			require.Zero(t, stats.Rows)
+		}
+	})
 }
 
 // TestCollectTombstoneStats_DNCreatedWithCommitTs tests DN created tombstone with CommitTs check
@@ -3256,6 +3333,108 @@ func TestCountRows_VisibleAppendableDataObjects(t *testing.T) {
 		dataStats2, err := state.CollectDataStats(ctx, types.BuildTS(7, 0), fs, mp)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(3), dataStats2.Rows, "only 3 rows have commit_ts <= 7")
+	})
+
+	t.Run("persisted_appendable_broadcasts_constant_commit_ts", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+
+		const rowCount = 3
+		writer := ioutil.ConstructWriter(
+			0,
+			[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+			-1,
+			false,
+			false,
+			fs,
+		)
+		writer.SetAppendable()
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		var err error
+		bat.Vecs[1], err = vector.NewConstFixed(
+			types.T_TS.ToType(), types.BuildTS(5, 0), rowCount, mp,
+		)
+		require.NoError(t, err)
+		bat.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+		for row, aborted := range []bool{false, true, false} {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(row), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[2], aborted, false, mp))
+		}
+		bat.SetRowCount(rowCount)
+		defer bat.Clean(mp)
+
+		_, err = writer.WriteBatch(bat)
+		require.NoError(t, err)
+		_, _, err = writer.Sync(ctx)
+		require.NoError(t, err)
+		stats := writer.GetObjectStats(objectio.WithAppendable())
+
+		state := NewPartitionState("", false, 42, false)
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+		})
+
+		visible, err := state.CollectDataStats(ctx, types.BuildTS(10, 0), fs, mp)
+		require.NoError(t, err)
+		require.Equal(t, uint64(2), visible.Rows)
+
+		future, err := state.CollectDataStats(ctx, types.BuildTS(4, 0), fs, mp)
+		require.NoError(t, err)
+		require.Zero(t, future.Rows)
+	})
+
+	t.Run("persisted_appendable_multiple_short_blocks", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+
+		writer := ioutil.ConstructWriter(
+			0,
+			[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+			-1,
+			false,
+			false,
+			fs,
+		)
+		writer.SetAppendable()
+		writeBlock := func(values []int32, commitTS types.TS, aborts []bool) {
+			t.Helper()
+			require.Len(t, aborts, len(values))
+			bat := batch.NewWithSize(3)
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			var err error
+			bat.Vecs[1], err = vector.NewConstFixed(
+				types.T_TS.ToType(), commitTS, len(values), mp,
+			)
+			require.NoError(t, err)
+			bat.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+			for row, value := range values {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[2], aborts[row], false, mp))
+			}
+			bat.SetRowCount(len(values))
+			require.NoError(t, func() error {
+				defer bat.Clean(mp)
+				_, writeErr := writer.WriteBatch(bat)
+				return writeErr
+			}())
+		}
+		writeBlock([]int32{1, 2}, types.BuildTS(5, 0), []bool{false, true})
+		writeBlock([]int32{3, 4, 5}, types.BuildTS(8, 0), []bool{false, false, false})
+		_, _, err := writer.Sync(ctx)
+		require.NoError(t, err)
+		stats := writer.GetObjectStats(objectio.WithAppendable())
+		require.Equal(t, uint32(2), stats.BlkCnt())
+
+		state := NewPartitionState("", false, 42, false)
+		state.dataObjectsNameIndex.Set(objectio.ObjectEntry{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+		})
+		visible, err := state.CollectDataStats(ctx, types.BuildTS(10, 0), fs, mp)
+		require.NoError(t, err)
+		require.Equal(t, uint64(4), visible.Rows)
 	})
 
 	// Cover error path: appendable object has blocks in stats but we read from a different fs

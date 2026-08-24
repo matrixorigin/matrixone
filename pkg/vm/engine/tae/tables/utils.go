@@ -17,6 +17,7 @@ package tables
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 )
 
@@ -45,6 +47,14 @@ func PreparePhyAddrData(
 	return
 }
 
+func closePersistedVectors(vectors []containers.Vector) {
+	for _, vec := range vectors {
+		if vec != nil {
+			vec.Close()
+		}
+	}
+}
+
 func LoadPersistedColumnData(
 	ctx context.Context,
 	schema *catalog.Schema,
@@ -55,13 +65,22 @@ func LoadPersistedColumnData(
 	mp *mpool.MPool,
 	tsForAppendable *types.TS,
 	needCopy bool,
+	isTombstone bool,
 ) ([]containers.Vector, *nulls.Nulls, func(), error) {
+	if ctx == nil || schema == nil || rt == nil || id == nil || mp == nil || rt.Fs == nil ||
+		rt.VectorPool.Transient == nil {
+		return nil, nil, nil, moerr.NewInvalidInputNoCtx(
+			"persisted column load requires context, schema, runtime, id, file service, vector pool, and mpool",
+		)
+	}
 	cols := make([]uint16, 0, len(colIdxs))
 	typs := make([]types.Type, 0, len(colIdxs))
 	vectors := make([]containers.Vector, len(colIdxs))
 	outputPositions := make([]int, 0, len(colIdxs))
+	physicalAddrPositions := make([]int, 0, 1)
 	commitTSIdx := -1
 	abortIdx := -1
+	tombstoneRowIDIdx := -1
 	var deletes *nulls.Nulls
 	for i, colIdx := range colIdxs {
 		switch colIdx {
@@ -78,23 +97,33 @@ func LoadPersistedColumnData(
 			abortIdx = len(cols) - 1
 			continue
 		}
+		if colIdx < 0 || colIdx >= len(schema.ColDefs) {
+			closePersistedVectors(vectors)
+			return nil, deletes, nil, moerr.NewInvalidInputNoCtxf(
+				"persisted column index %d is outside schema with %d columns",
+				colIdx, len(schema.ColDefs),
+			)
+		}
 		def := schema.ColDefs[colIdx]
+		if def == nil {
+			closePersistedVectors(vectors)
+			return nil, deletes, nil, moerr.NewInternalErrorNoCtxf(
+				"persisted schema column %d is nil", colIdx,
+			)
+		}
 		if def.IsPhyAddr() {
-			vec, err := PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
-			if err != nil {
-				for _, existing := range vectors {
-					if existing != nil {
-						existing.Close()
-					}
-				}
-				return nil, deletes, nil, err
-			}
-			vectors[i] = vec
+			// Synthesize the physical address only after the actual block row
+			// count is known. Location.Rows can be an ObjectStats-derived
+			// estimate for intermediate short blocks.
+			physicalAddrPositions = append(physicalAddrPositions, i)
 			continue
 		}
 		cols = append(cols, def.SeqNum)
 		typs = append(typs, def.Type)
 		outputPositions = append(outputPositions, i)
+		if isTombstone && def.SeqNum == objectio.TombstoneAttr_Rowid_SeqNum {
+			tombstoneRowIDIdx = len(cols) - 1
+		}
 	}
 	if tsForAppendable != nil {
 		if commitTSIdx == -1 {
@@ -111,30 +140,25 @@ func LoadPersistedColumnData(
 		}
 	}
 	if len(cols) == 0 {
-		return vectors, deletes, nil, nil
-	}
-	if commitTSIdx >= 0 {
-		meta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, rt.Fs)
+		objectMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, rt.Fs)
+		if err != nil {
+			return nil, deletes, nil, err
+		}
+		dataMeta, metaErr := ioutil.GetDataMetaForLocation(objectMeta, location)
 		if metaErr != nil {
-			for _, vec := range vectors {
-				if vec != nil {
-					vec.Close()
-				}
-			}
 			return nil, deletes, nil, metaErr
 		}
-		block := meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(uint32(location.ID()))
-		layout := objectio.ResolveSpecialColumnLayout(block)
-		if _, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); !ok &&
-			!block.BlockHeader().Appendable() &&
-			block.GetColumnCount() == 3 &&
-			block.GetMaxSeqnum() == 2 &&
-			block.ColumnMeta(0).DataType() == uint8(types.T_Rowid) &&
-			block.ColumnMeta(2).DataType() == uint8(types.T_TS) {
-			// Backup rewrites from older releases stored commitTS as the
-			// trailing ordinary column instead of declaring it special.
-			cols[commitTSIdx] = 2
+		rowCount := dataMeta.GetBlockMeta(uint32(location.ID())).GetRows()
+		for _, outputPos := range physicalAddrPositions {
+			vectors[outputPos], err = PreparePhyAddrData(
+				&id.BlockID, 0, rowCount, rt.VectorPool.Transient,
+			)
+			if err != nil {
+				closePersistedVectors(vectors)
+				return nil, deletes, nil, err
+			}
 		}
+		return vectors, deletes, nil, nil
 	}
 	var vecs []containers.Vector
 	var release func()
@@ -148,53 +172,156 @@ func LoadPersistedColumnData(
 		needCopy,
 		rt.VectorPool.Transient)
 	if err != nil {
-		for _, vec := range vectors {
-			if vec != nil {
-				vec.Close()
-			}
-		}
+		closePersistedVectors(vectors)
 		return nil, deletes, nil, err
 	}
+	cleanupLoaded := func(closeOutputs bool) {
+		closePersistedVectors(vecs)
+		vecs = nil
+		if release != nil {
+			release()
+			release = nil
+		}
+		if closeOutputs {
+			closePersistedVectors(vectors)
+			for i := range vectors {
+				vectors[i] = nil
+			}
+		}
+	}
+
+	rowCount := 0
+	if len(vecs) > 0 && vecs[0] != nil {
+		rowCount = vecs[0].Length()
+	}
+	validateLoaded := func() error {
+		if len(vecs) != len(cols) {
+			return moerr.NewInternalErrorNoCtxf(
+				"persisted block returned %d columns, expected %d", len(vecs), len(cols),
+			)
+		}
+		for pos, vec := range vecs {
+			if vec == nil || vec.Length() != rowCount {
+				return moerr.NewInternalErrorNoCtxf(
+					"persisted block column %d has invalid logical row count", pos,
+				)
+			}
+		}
+		if tombstoneRowIDIdx >= 0 {
+			if _, validateErr := ioutil.ValidateTombstoneRowIDColumn(
+				rowCount, vecs[tombstoneRowIDIdx].GetDownstreamVector(),
+			); validateErr != nil {
+				return moerr.NewInternalErrorNoCtxf(
+					"persisted tombstone has invalid rowid column: %v", validateErr,
+				)
+			}
+		}
+		return nil
+	}
+	if err = validateLoaded(); err != nil {
+		cleanupLoaded(true)
+		return nil, deletes, nil, err
+	}
+	for _, outputPos := range physicalAddrPositions {
+		vectors[outputPos], err = PreparePhyAddrData(
+			&id.BlockID, 0, uint32(rowCount), rt.VectorPool.Transient,
+		)
+		if err != nil {
+			cleanupLoaded(true)
+			return nil, deletes, nil, err
+		}
+	}
+	var commitTSs ioutil.TombstoneCommitTSColumn
+	if commitTSIdx >= 0 && (isTombstone || tsForAppendable != nil) {
+		commitTSs, err = ioutil.ValidateTombstoneCommitTSColumn(
+			rowCount,
+			vecs[commitTSIdx].GetDownstreamVector(),
+		)
+		if err != nil && isTombstone && vecs[commitTSIdx].IsConstNull() {
+			objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, rt.Fs)
+			if metaErr != nil {
+				cleanupLoaded(true)
+				return nil, deletes, nil, metaErr
+			}
+			dataMeta, dataMetaErr := ioutil.GetDataMetaForLocation(objectMeta, location)
+			if dataMetaErr != nil {
+				cleanupLoaded(true)
+				return nil, deletes, nil, dataMetaErr
+			}
+			blockMeta := dataMeta.GetBlockMeta(uint32(location.ID()))
+			if legacyCommitTS, ok := ioutil.ResolveLegacyBackupTombstoneCommitTS(blockMeta); ok {
+				cleanupLoaded(false)
+				cols[commitTSIdx] = legacyCommitTS
+				vecs, release, err = ioutil.LoadColumns2(
+					ctx,
+					cols,
+					typs,
+					rt.Fs,
+					location,
+					fileservice.GetFileServicePolicy(ctx),
+					needCopy,
+					rt.VectorPool.Transient,
+				)
+				if err != nil {
+					closePersistedVectors(vectors)
+					return nil, deletes, nil, err
+				}
+				if err = validateLoaded(); err != nil {
+					cleanupLoaded(true)
+					return nil, deletes, nil, err
+				}
+				commitTSs, err = ioutil.ValidateTombstoneCommitTSColumn(
+					rowCount,
+					vecs[commitTSIdx].GetDownstreamVector(),
+				)
+			} else if isCNCreatedTombstoneBlock(blockMeta) {
+				// CN-created tombstones persist only rowid and primary key. Their
+				// containing object's CreatedAt is the logical commit timestamp.
+				commitTSs = ioutil.TombstoneCommitTSColumn{}
+				err = nil
+			}
+		}
+		if err != nil {
+			cleanupLoaded(true)
+			return nil, deletes, nil, err
+		}
+	}
+
+	var aborts ioutil.TombstoneAbortColumn
+	if abortIdx >= 0 {
+		aborts, err = ioutil.ValidateTombstoneAbortColumn(
+			rowCount,
+			vecs[abortIdx].GetDownstreamVector(),
+		)
+		if err != nil {
+			cleanupLoaded(true)
+			return nil, deletes, nil, err
+		}
+	}
 	if tsForAppendable != nil {
-		cleanup := func() {
-			for _, vec := range vecs {
-				if vec != nil {
-					vec.Close()
-				}
-			}
-			for _, vec := range vectors {
-				if vec != nil {
-					vec.Close()
-				}
-			}
-			if release != nil {
-				release()
-				release = nil
-			}
-		}
-		rowCount := int(location.Rows())
-		commits, commitErr := ioutil.ValidateTombstoneCommitTSColumn(
-			rowCount, vecs[commitTSIdx].GetDownstreamVector(),
-		)
-		if commitErr != nil {
-			cleanup()
-			return nil, deletes, nil, commitErr
-		}
-		aborts, abortErr := ioutil.ValidateTombstoneAbortColumn(
-			rowCount, vecs[abortIdx].GetDownstreamVector(),
-		)
-		if abortErr != nil {
-			cleanup()
-			return nil, deletes, nil, abortErr
+		if !commitTSs.IsPresent() {
+			cleanupLoaded(true)
+			return nil, deletes, nil, moerr.NewInvalidInputNoCtx(
+				"appendable object commit-ts column is unavailable",
+			)
 		}
 		for i := 0; i < rowCount; i++ {
-			commitTS := commits.At(i)
-			if commitTS.GT(tsForAppendable) || (aborts.IsPresent() && aborts.At(i)) {
+			commitTS := commitTSs.At(i)
+			if commitTS.Equal(&txnif.UncommitTS) || commitTS.GT(tsForAppendable) ||
+				(aborts.IsPresent() && aborts.At(i)) {
 				if deletes == nil {
-					deletes = nulls.NewWithSize(int(location.Rows()))
+					deletes = nulls.NewWithSize(rowCount)
 				}
 				deletes.Add(uint64(i))
 			}
+		}
+	}
+	for pos, vec := range vectors {
+		if vec != nil && vec.Length() != rowCount {
+			cleanupLoaded(true)
+			return nil, deletes, nil, moerr.NewInternalErrorNoCtxf(
+				"persisted synthesized column %d has invalid logical row count", pos,
+			)
 		}
 	}
 	for i, vec := range vecs {
@@ -206,6 +333,34 @@ func LoadPersistedColumnData(
 		vectors[outputPos] = vec
 	}
 	return vectors, deletes, release, nil
+}
+
+func isCNCreatedTombstoneBlock(block objectio.BlockObject) bool {
+	baseColumns := uint16(len(objectio.TombstoneSeqnums_CN_Created))
+	if block.GetColumnCount() < baseColumns || block.GetMetaColumnCount() < baseColumns ||
+		block.BlockHeader().Appendable() ||
+		block.GetMaxSeqnum() != objectio.TombstoneAttr_PK_SeqNum ||
+		block.ColumnMeta(objectio.TombstoneAttr_Rowid_SeqNum).DataType() != uint8(types.T_Rowid) ||
+		block.ColumnMeta(objectio.TombstoneAttr_PK_SeqNum).DataType() == uint8(types.T_any) {
+		return false
+	}
+	layout := objectio.ResolveSpecialColumnLayout(block)
+	if _, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
+		return false
+	}
+	if _, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+		return false
+	}
+	expectedColumns := baseColumns
+	if layout.PhysicalAddr != objectio.InvalidSpecialColumnPosition {
+		if layout.PhysicalAddr != expectedColumns ||
+			block.ColumnMeta(layout.PhysicalAddr).DataType() != uint8(types.T_Rowid) {
+			return false
+		}
+		expectedColumns++
+	}
+	return block.GetColumnCount() == expectedColumns &&
+		block.GetMetaColumnCount() == expectedColumns
 }
 
 func MakeImmuIndex(

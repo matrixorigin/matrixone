@@ -116,6 +116,256 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 	}
 }
 
+func TestBackupSpecialColumnLayoutUsesCompactWriterPositions(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	input := batch.NewWithSize(5)
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	defer input.Clean(common.DebugAllocator)
+
+	blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, common.DebugAllocator))
+	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("pk"), false, common.DebugAllocator))
+	require.NoError(t, vector.AppendFixed(
+		input.Vecs[2], types.NewRowid(blockID, 0), false, common.DebugAllocator,
+	))
+	require.NoError(t, vector.AppendFixed(
+		input.Vecs[3], types.BuildTS(9, 0), false, common.DebugAllocator,
+	))
+	require.NoError(t, vector.AppendFixed(input.Vecs[4], false, false, common.DebugAllocator))
+	input.SetRowCount(1)
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, 5, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		1,
+		false,
+		false,
+		fs,
+	)
+	writer.SetAppendable()
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	location := stats.ObjectLocation()
+	layout, err := loadSpecialColumnLayout(ctx, fs, location, true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(2), layout.PhysicalAddr)
+	require.Equal(t, uint16(3), layout.CommitTS)
+	require.Equal(t, uint16(4), layout.Abort)
+
+	loaded, sortKey, loadedLayout, err := loadOneBlockWithBackupLayout(ctx, fs, location)
+	require.NoError(t, err)
+	defer loaded.Clean(common.DebugAllocator)
+	require.Equal(t, uint16(1), sortKey)
+	require.Equal(t, layout, loadedLayout)
+	require.Len(t, loaded.Vecs, 5)
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](loaded.Vecs[0], 0))
+	require.Equal(t, "pk", loaded.Vecs[1].GetStringAt(0))
+}
+
+func TestProjectBackupSortKeyAfterRemovingHiddenColumns(t *testing.T) {
+	projected, err := projectBackupSortKey(
+		4,
+		map[uint16]struct{}{0: {}, 2: {}},
+		5,
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint16(2), projected)
+
+	projected, err = projectBackupSortKey(
+		uint16(invalidBackupSpecialColumnPosition),
+		map[uint16]struct{}{0: {}},
+		2,
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint16(invalidBackupSpecialColumnPosition), projected)
+
+	_, err = projectBackupSortKey(2, map[uint16]struct{}{2: {}}, 3)
+	require.ErrorContains(t, err, "hidden column")
+	_, err = projectBackupSortKey(3, nil, 3)
+	require.ErrorContains(t, err, "exceeds")
+}
+
+func TestBackupReplacementSortedFlagMatchesPhysicalOrdering(t *testing.T) {
+	require.True(t, backupReplacementIsSorted(&objData{
+		dataType: objectio.SchemaTombstone,
+		sortKey:  invalidBackupSpecialColumnPosition,
+	}))
+	require.True(t, backupReplacementIsSorted(&objData{
+		dataType: objectio.SchemaData,
+		sortKey:  0,
+	}))
+	require.False(t, backupReplacementIsSorted(&objData{
+		dataType: objectio.SchemaData,
+		sortKey:  invalidBackupSpecialColumnPosition,
+	}))
+}
+
+func TestTrimTombstoneDataReadsEveryBlock(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	first := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
+	defer first.Clean(common.DebugAllocator)
+	second := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
+	defer second.Clean(common.DebugAllocator)
+
+	objectID := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&objectID)
+	writer, err := ioutil.NewBlockWriterNew(
+		fs,
+		name,
+		0,
+		objectio.TombstoneSeqnums_DN_Created,
+		true,
+	)
+	require.NoError(t, err)
+	writer.SetAppendable()
+	_, err = writer.WriteBatch(first)
+	require.NoError(t, err)
+	_, err = writer.WriteBatch(second)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 2)
+
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	objectData := &objData{
+		stats:      &stats,
+		appendable: true,
+		dataType:   objectio.SchemaTombstone,
+	}
+	objectsData := map[string]*objData{name.String(): objectData}
+	require.NoError(t, trimTombstoneData(
+		ctx,
+		fs,
+		types.BuildTS(15, 0),
+		&objectsData,
+	))
+	t.Cleanup(func() {
+		for _, bat := range objectData.data {
+			bat.Clean(common.DebugAllocator)
+		}
+	})
+
+	require.Len(t, objectData.data, 2)
+	for _, bat := range objectData.data {
+		require.Equal(t, 2, bat.RowCount())
+		require.Len(t, bat.Vecs, len(objectio.TombstoneSeqnums_DN_Created))
+	}
+}
+
+func TestTrimTombstoneDataPreservesEmptyBlockOrdinals(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	first := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
+	defer first.Clean(common.DebugAllocator)
+	second := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
+	defer second.Clean(common.DebugAllocator)
+	for row := 0; row < first.RowCount(); row++ {
+		require.NoError(t, vector.SetFixedAtWithTypeCheck(
+			first.Vecs[2], row, types.BuildTS(30, 0),
+		))
+	}
+
+	objectID := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&objectID)
+	writer, err := ioutil.NewBlockWriterNew(
+		fs, name, 0, objectio.TombstoneSeqnums_DN_Created, true,
+	)
+	require.NoError(t, err)
+	writer.SetAppendable()
+	_, err = writer.WriteBatch(first)
+	require.NoError(t, err)
+	_, err = writer.WriteBatch(second)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	objectData := &objData{
+		stats: &stats, appendable: true, dataType: objectio.SchemaTombstone,
+	}
+	objectsData := map[string]*objData{name.String(): objectData}
+	require.NoError(t, trimTombstoneData(
+		ctx, fs, types.BuildTS(15, 0), &objectsData,
+	))
+	t.Cleanup(func() {
+		for _, bat := range objectData.data {
+			bat.Clean(common.DebugAllocator)
+		}
+	})
+
+	require.Len(t, objectData.data, 2)
+	require.Zero(t, objectData.data[0].RowCount())
+	require.Equal(t, 2, objectData.data[1].RowCount())
+
+	mask := objectio.GetNoReuseBitmap()
+	defer mask.Release()
+	var target types.Blockid
+	require.NoError(t, GetTombstonesByBlockId(
+		ctx,
+		&target,
+		&mask,
+		func(onTombstone func(*objData) (bool, error)) error {
+			_, callbackErr := onTombstone(objectData)
+			return callbackErr
+		},
+		false,
+		3,
+	))
+	require.Equal(t, 2, mask.Count())
+	require.True(t, mask.Contains(0))
+	require.True(t, mask.Contains(1))
+}
+
+func TestBackupDataLayoutDoesNotTreatUserTSAsLegacyTombstoneCommit(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	defer input.Clean(common.DebugAllocator)
+
+	blockID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+	require.NoError(t, vector.AppendFixed(
+		input.Vecs[0], types.NewRowid(blockID, 0), false, common.DebugAllocator,
+	))
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(7), false, common.DebugAllocator))
+	require.NoError(t, vector.AppendFixed(
+		input.Vecs[2], types.BuildTS(9, 0), false, common.DebugAllocator,
+	))
+	input.SetRowCount(1)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := ioutil.NewBlockWriter(fs, name.String())
+	require.NoError(t, err)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, extent, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	location := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
+
+	dataLayout, err := loadSpecialColumnLayout(ctx, fs, location, false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(invalidBackupSpecialColumnPosition), dataLayout.PhysicalAddr)
+	require.Equal(t, uint16(invalidBackupSpecialColumnPosition), dataLayout.CommitTS)
+	require.Equal(t, uint16(invalidBackupSpecialColumnPosition), dataLayout.Abort)
+
+	legacyTombstoneLayout, err := loadSpecialColumnLayout(ctx, fs, location, true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(2), legacyTombstoneLayout.CommitTS)
+}
+
 func TestBackupTombstoneWriterBroadcastsConstantCommitTS(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
@@ -224,6 +474,37 @@ func TestBackupTombstoneValidationRejectsMalformedColumns(t *testing.T) {
 			},
 		},
 		{
+			name:   "stale batch row count",
+			layout: newBackupTombstoneLayout(2, invalidBackupSpecialColumnPosition, 3),
+			mutate: func(bat *batch.Batch) {
+				bat.SetRowCount(2)
+			},
+		},
+		{
+			name:   "constant logical rowid",
+			layout: newBackupTombstoneLayout(2, invalidBackupSpecialColumnPosition, 3),
+			mutate: func(bat *batch.Batch) {
+				bat.Vecs[0].Free(common.DebugAllocator)
+				var err error
+				bat.Vecs[0], err = vector.NewConstFixed(
+					types.T_Rowid.ToType(), types.Rowid{}, bat.RowCount(), common.DebugAllocator,
+				)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name:   "constant physical rowid",
+			layout: newBackupTombstoneLayout(2, 3, invalidBackupSpecialColumnPosition),
+			mutate: func(bat *batch.Batch) {
+				bat.Vecs[3].Free(common.DebugAllocator)
+				var err error
+				bat.Vecs[3], err = vector.NewConstFixed(
+					types.T_Rowid.ToType(), types.Rowid{}, bat.RowCount(), common.DebugAllocator,
+				)
+				require.NoError(t, err)
+			},
+		},
+		{
 			name:   "wrong commit timestamp type",
 			layout: newBackupTombstoneLayout(3, invalidBackupSpecialColumnPosition, 2),
 		},
@@ -262,6 +543,159 @@ func TestBackupTombstoneValidationRejectsMalformedColumns(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestGetTombstonesByBlockIDDoesNotPublishPartialFailure(t *testing.T) {
+	validBatch := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
+	defer validBatch.Clean(common.DebugAllocator)
+	invalidBatch := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
+	defer invalidBatch.Clean(common.DebugAllocator)
+	invalidBatch.Vecs[0].Free(common.DebugAllocator)
+	var err error
+	invalidBatch.Vecs[0], err = vector.NewConstFixed(
+		types.T_Rowid.ToType(), types.Rowid{}, invalidBatch.RowCount(), common.DebugAllocator,
+	)
+	require.NoError(t, err)
+
+	newObjectData := func(bat *batch.Batch) *objData {
+		stats := objectio.NewObjectStats()
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+		return &objData{
+			stats:      stats,
+			data:       []*batch.Batch{bat},
+			appendable: true,
+			dataType:   objectio.SchemaTombstone,
+		}
+	}
+	valid := newObjectData(validBatch)
+	invalid := newObjectData(invalidBatch)
+	mask := objectio.GetNoReuseBitmap()
+	defer mask.Release()
+	mask.Add(99)
+	var blockID types.Blockid
+
+	err = GetTombstonesByBlockId(
+		context.Background(),
+		&blockID,
+		&mask,
+		func(onTombstone func(*objData) (bool, error)) error {
+			if _, callbackErr := onTombstone(valid); callbackErr != nil {
+				return callbackErr
+			}
+			_, callbackErr := onTombstone(invalid)
+			return callbackErr
+		},
+		true,
+		objectio.BlockMaxRows,
+	)
+	require.Error(t, err)
+	require.Equal(t, 3, validBatch.RowCount(), "failed scan must not consume validated prefixes")
+	require.Equal(t, 1, mask.Count(), "failed scan must not publish partial delete offsets")
+	require.True(t, mask.Contains(99))
+}
+
+func TestGetTombstonesByBlockIDDeduplicatesAliasedBatch(t *testing.T) {
+	input := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
+	defer input.Clean(common.DebugAllocator)
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	objectData := &objData{
+		stats:      stats,
+		data:       []*batch.Batch{input},
+		appendable: true,
+		dataType:   objectio.SchemaTombstone,
+	}
+	mask := objectio.GetNoReuseBitmap()
+	defer mask.Release()
+	var blockID types.Blockid
+
+	err := GetTombstonesByBlockId(
+		context.Background(),
+		&blockID,
+		&mask,
+		func(onTombstone func(*objData) (bool, error)) error {
+			if _, callbackErr := onTombstone(objectData); callbackErr != nil {
+				return callbackErr
+			}
+			_, callbackErr := onTombstone(objectData)
+			return callbackErr
+		},
+		true,
+		objectio.BlockMaxRows,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 3, mask.Count())
+	require.Zero(t, input.RowCount())
+}
+
+func TestGetTombstonesByBlockIDRejectsOutOfRangeOffsetAtomically(t *testing.T) {
+	input := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
+	defer input.Clean(common.DebugAllocator)
+	var blockID types.Blockid
+	require.NoError(t, vector.SetFixedAtWithTypeCheck(
+		input.Vecs[0], 0, types.NewRowid(&blockID, ^uint32(0)),
+	))
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	objectData := &objData{
+		stats: stats, data: []*batch.Batch{input}, appendable: true,
+		dataType: objectio.SchemaTombstone,
+	}
+	mask := objectio.GetNoReuseBitmap()
+	defer mask.Release()
+
+	err := GetTombstonesByBlockId(
+		context.Background(),
+		&blockID,
+		&mask,
+		func(onTombstone func(*objData) (bool, error)) error {
+			_, callbackErr := onTombstone(objectData)
+			return callbackErr
+		},
+		true,
+		input.RowCount(),
+	)
+	require.Error(t, err)
+	require.Zero(t, mask.Count())
+	require.Equal(t, 3, input.RowCount(), "failed validation must not consume rows")
+}
+
+func TestGetTombstonesByBlockIDRejectsUnsortedRowIDsAtomically(t *testing.T) {
+	input := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
+	defer input.Clean(common.DebugAllocator)
+	first := vector.GetFixedAtWithTypeCheck[types.Rowid](input.Vecs[0], 0)
+	second := vector.GetFixedAtWithTypeCheck[types.Rowid](input.Vecs[0], 1)
+	require.NoError(t, vector.SetFixedAtWithTypeCheck(input.Vecs[0], 0, second))
+	require.NoError(t, vector.SetFixedAtWithTypeCheck(input.Vecs[0], 1, first))
+
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	objectData := &objData{
+		stats:      stats,
+		data:       []*batch.Batch{input},
+		appendable: true,
+		dataType:   objectio.SchemaTombstone,
+	}
+	mask := objectio.GetNoReuseBitmap()
+	defer mask.Release()
+	mask.Add(99)
+	var blockID types.Blockid
+
+	err := GetTombstonesByBlockId(
+		context.Background(),
+		&blockID,
+		&mask,
+		func(onTombstone func(*objData) (bool, error)) error {
+			_, callbackErr := onTombstone(objectData)
+			return callbackErr
+		},
+		true,
+		objectio.BlockMaxRows,
+	)
+	require.ErrorContains(t, err, "rowids are not sorted")
+	require.Equal(t, 1, mask.Count())
+	require.True(t, mask.Contains(99))
+	require.Equal(t, 3, input.RowCount(), "failed validation must not consume rows")
 }
 
 func TestBackupTombstoneWriterPreservesHiddenCommitTS(t *testing.T) {
@@ -375,19 +809,38 @@ func TestBackupDeltaLocDataSourceReadsLegacyGenericWriterTombstone(t *testing.T)
 	require.NoError(t, objectio.SetObjectStatsBlkCnt(legacyStats, uint32(len(blocks))))
 	require.NoError(t, objectio.SetObjectStatsSize(legacyStats, extent.End()))
 	dataSource.tombstones = []objectio.ObjectStats{*legacyStats}
-	t.Cleanup(func() {
-		for _, data := range dataSource.ds {
-			for _, bat := range data.data {
-				bat.Clean(common.DebugAllocator)
-			}
-		}
-	})
+	t.Cleanup(dataSource.Close)
 
 	deletedRows, err := dataSource.GetTombstones(ctx, &deletedBlock)
 	require.NoError(t, err)
 	defer deletedRows.Release()
 	require.True(t, deletedRows.Contains(1))
 	require.False(t, deletedRows.Contains(2))
+
+	loadedBatch := dataSource.ds[name.String()].data[0]
+	require.Equal(t, objectio.SchemaTombstone, dataSource.ds[name.String()].dataType)
+	cachedRows, err := dataSource.GetTombstones(ctx, &deletedBlock)
+	require.NoError(t, err)
+	// Backup readers consume matching rows as they walk blocks. A second read
+	// must reuse, rather than reload, the already-consumed cached batch.
+	require.False(t, cachedRows.Contains(1))
+	cachedRows.Release()
+	require.Same(t, loadedBatch, dataSource.ds[name.String()].data[0])
+
+	dataSource.SetTS(types.BuildTS(25, 0))
+	allRows, err := dataSource.GetTombstones(ctx, &deletedBlock)
+	require.NoError(t, err)
+	defer allRows.Release()
+	require.True(t, allRows.Contains(1))
+	require.True(t, allRows.Contains(2))
+	require.NotSame(t, loadedBatch, dataSource.ds[name.String()].data[0])
+
+	// The map belongs to the caller. Closing the datasource must not remove a
+	// same-name entry that replaced the object installed by the lazy loader.
+	replacement := &objData{appendable: true, dataType: objectio.SchemaTombstone}
+	dataSource.ds[name.String()] = replacement
+	dataSource.Close()
+	require.Same(t, replacement, dataSource.ds[name.String()])
 }
 
 func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {

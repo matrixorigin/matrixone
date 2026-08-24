@@ -16,7 +16,9 @@ package logtail
 
 import (
 	"context"
+	"math"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,6 +41,15 @@ func TestSnapshotInfo(t *testing.T) {
 		assert.NotNil(t, info.account)
 		assert.NotNil(t, info.database)
 		assert.NotNil(t, info.tables)
+	})
+
+	t.Run("EmptyPITRPlaceholder", func(t *testing.T) {
+		pitr := NewPitrInfo()
+		assert.True(t, pitr.IsEmpty())
+		pitr.account[1] = []types.TS{{}}
+		assert.True(t, pitr.IsEmpty())
+		pitr.account[1] = []types.TS{types.BuildTS(1, 0)}
+		assert.False(t, pitr.IsEmpty())
 	})
 
 	t.Run("AddSnapshots", func(t *testing.T) {
@@ -81,6 +92,198 @@ func TestSnapshotInfo(t *testing.T) {
 	})
 }
 
+func TestCopyObjectsLockedDeepCopiesEntries(t *testing.T) {
+	segmentID := *objectio.NewSegmentid()
+	originalDeleteAt := types.BuildTS(10, 1)
+	objects := map[uint64]map[objectio.Segmentid]*objectInfo{
+		42: {
+			segmentID: {deleteAt: originalDeleteAt},
+		},
+	}
+
+	copied := copyObjectsLocked(objects)
+	require.NotSame(t, objects[42][segmentID], copied[42][segmentID])
+	objects[42][segmentID].deleteAt = types.BuildTS(20, 2)
+	require.Equal(t, originalDeleteAt, copied[42][segmentID].deleteAt)
+}
+
+func TestParseSnapshotTS(t *testing.T) {
+	ts, err := parseSnapshotTS("10-2")
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(10, 2), ts)
+
+	for _, value := range []string{"", "x-1", "1-x", "1-2-3", "-1-0"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := parseSnapshotTS(value)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestRetainMinimumISCPWatermarkKeepsEmptyLowerBound(t *testing.T) {
+	tables := make(map[uint64]types.TS)
+	retainMinimumISCPWatermark(tables, 42, types.TS{})
+	retainMinimumISCPWatermark(tables, 42, types.BuildTS(20, 0))
+	require.Equal(t, types.TS{}, tables[42])
+
+	retainMinimumISCPWatermark(tables, 7, types.BuildTS(20, 0))
+	retainMinimumISCPWatermark(tables, 7, types.BuildTS(10, 0))
+	retainMinimumISCPWatermark(tables, 7, types.BuildTS(30, 0))
+	require.Equal(t, types.BuildTS(10, 0), tables[7])
+}
+
+func TestCheckedSnapshotAccountIDRejectsTruncation(t *testing.T) {
+	id, err := checkedSnapshotAccountID(context.Background(), "snapshot", math.MaxUint32)
+	require.NoError(t, err)
+	require.Equal(t, uint32(math.MaxUint32), id)
+
+	_, err = checkedSnapshotAccountID(
+		context.Background(), "snapshot", uint64(math.MaxUint32)+1,
+	)
+	require.ErrorContains(t, err, "exceeds uint32")
+}
+
+func TestGetSnapshotsByLevelRejectsAccountIDTruncation(t *testing.T) {
+	info := NewSnapshotInfo()
+	info.account[0] = []types.TS{types.BuildTS(1, 0)}
+	require.Nil(t, info.GetSnapshotsByLevel(
+		PitrLevelAccount, uint64(math.MaxUint32)+1,
+	))
+}
+
+func TestCollectCheckpointObjectMutationsConvertsReaderPanicToError(t *testing.T) {
+	data, tombstones, err := collectCheckpointObjectMutations(
+		context.Background(), &CKPReader{withTableID: true},
+	)
+	require.ErrorContains(t, err, "checkpoint iteration failed")
+	require.Nil(t, data)
+	require.Nil(t, tombstones)
+}
+
+func TestCollectTableInfoUpdatePlanRejectsReversedRange(t *testing.T) {
+	plan, err := collectTableInfoUpdatePlan(
+		context.Background(),
+		testutil.NewSharedFS(),
+		nil,
+		nil,
+		types.BuildTS(2, 0),
+		types.BuildTS(1, 0),
+	)
+	require.Nil(t, plan)
+	require.ErrorContains(t, err, "is reversed")
+}
+
+func TestApplyTableInfoUpdatePlanRejectsInvalidStateAtomically(t *testing.T) {
+	sm := NewSnapshotMeta()
+	sm.tables[7] = map[uint64]*tableInfo{8: nil}
+	pending := types.BuildTS(9, 0)
+	err := sm.applyTableInfoUpdatePlan(&tableInfoUpdatePlan{
+		pendingAObjectDeletes: map[types.TS]struct{}{pending: {}},
+	})
+	require.ErrorContains(t, err, "has nil metadata")
+	require.NotContains(t, sm.aobjDelTsMap, pending)
+}
+
+func TestForEachObjectBlockLocation(t *testing.T) {
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 3))
+
+	var blockIDs []uint16
+	require.NoError(t, forEachObjectBlockLocation(
+		context.Background(), *stats, func(location objectio.Location) error {
+			blockIDs = append(blockIDs, location.ID())
+			return nil
+		},
+	))
+	require.Equal(t, []uint16{0, 1, 2}, blockIDs)
+
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 0))
+	err := forEachObjectBlockLocation(
+		context.Background(), *stats, func(objectio.Location) error { return nil },
+	)
+	require.ErrorContains(t, err, "has no blocks")
+
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1<<16+1))
+	err = forEachObjectBlockLocation(
+		context.Background(), *stats, func(objectio.Location) error { return nil },
+	)
+	require.ErrorContains(t, err, "unsupported block count")
+}
+
+func TestSnapshotMetaRoundTripKeepsSpecialTombstonesSeparate(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	source := NewSnapshotMeta()
+	source.pitr.tid = 101
+	source.iscp.tid = 202
+
+	pitrStats := objectio.NewObjectStats()
+	pitrName := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	require.NoError(t, objectio.SetObjectStatsObjectName(pitrStats, pitrName))
+	iscpStats := objectio.NewObjectStats()
+	iscpName := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	require.NoError(t, objectio.SetObjectStatsObjectName(iscpStats, iscpName))
+	pitrDeleteAt := types.BuildTS(20, 1)
+	iscpDeleteAt := types.BuildTS(30, 2)
+	source.pitr.tombstones[pitrName.SegmentId()] = &objectInfo{
+		stats: *pitrStats, createAt: types.BuildTS(10, 1), deleteAt: pitrDeleteAt,
+	}
+	source.iscp.tombstones[iscpName.SegmentId()] = &objectInfo{
+		stats: *iscpStats, createAt: types.BuildTS(11, 2), deleteAt: iscpDeleteAt,
+	}
+
+	const fileName = "snapshot-meta-special-tombstones"
+	size, err := source.SaveMeta(fileName, fs)
+	require.NoError(t, err)
+	require.NotZero(t, size, "tombstone-only metadata must not be skipped")
+
+	restored := NewSnapshotMeta()
+	restored.pitr.tid = source.pitr.tid
+	restored.iscp.tid = source.iscp.tid
+	staleName := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	restored.objects[999] = map[objectio.Segmentid]*objectInfo{
+		staleName.SegmentId(): {stats: *pitrStats},
+	}
+	restored.pitr.tombstones[staleName.SegmentId()] = &objectInfo{stats: *pitrStats}
+	require.NoError(t, restored.ReadMeta(ctx, fileName, fs))
+	require.Len(t, restored.pitr.tombstones, 1)
+	require.Len(t, restored.iscp.tombstones, 1)
+	require.Equal(t, pitrDeleteAt, restored.pitr.tombstones[pitrName.SegmentId()].deleteAt)
+	require.Equal(t, iscpDeleteAt, restored.iscp.tombstones[iscpName.SegmentId()].deleteAt)
+	require.NotContains(t, restored.pitr.tombstones, iscpName.SegmentId())
+	require.NotContains(t, restored.iscp.tombstones, pitrName.SegmentId())
+	require.NotContains(t, restored.objects, uint64(999))
+	require.NotContains(t, restored.pitr.tombstones, staleName.SegmentId())
+}
+
+func TestSnapshotTableInfoRoundTripKeepsDeleteTimestampsWithoutTables(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	source := NewSnapshotMeta()
+	deleteAt := types.BuildTS(42, 7)
+	source.aobjDelTsMap[deleteAt] = struct{}{}
+
+	const fileName = "snapshot-table-info-delete-timestamps"
+	size, err := source.SaveTableInfo(fileName, fs)
+	require.NoError(t, err)
+	require.NotZero(t, size, "delete-timestamp-only metadata must not be skipped")
+
+	restored := NewSnapshotMeta()
+	staleDeleteAt := types.BuildTS(99, 0)
+	restored.aobjDelTsMap[staleDeleteAt] = struct{}{}
+	restored.tables[7] = map[uint64]*tableInfo{8: {tid: 8, accountID: 7}}
+	restored.tableIDIndex[8] = restored.tables[7][8]
+	restored.pitr.tid = 1001
+	restored.iscp.tid = 1002
+	require.NoError(t, restored.ReadTableInfo(ctx, fileName, fs))
+	require.Contains(t, restored.aobjDelTsMap, deleteAt)
+	require.NotContains(t, restored.aobjDelTsMap, staleDeleteAt)
+	require.Empty(t, restored.tables)
+	require.Empty(t, restored.tableIDIndex)
+	require.Zero(t, restored.pitr.tid)
+	require.Zero(t, restored.iscp.tid)
+}
+
 func TestSnapshotMetaGetSnapshotSkipsPersistedAborts(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
@@ -93,7 +296,7 @@ func TestSnapshotMetaGetSnapshotSkipsPersistedAborts(t *testing.T) {
 	}
 	input.Vecs[len(snapshotSchemaTypes)] = vector.NewVec(objectio.TSType)
 	input.Vecs[len(snapshotSchemaTypes)+1] = vector.NewVec(types.T_bool.ToType())
-	for row, ts := range []int64{100, 200} {
+	for row, ts := range []int64{100, 200, 300} {
 		require.NoError(t, vector.AppendFixed(input.Vecs[ColSnapshotId], uint64(row+1), false, mp))
 		require.NoError(t, vector.AppendBytes(input.Vecs[ColSName], []byte("snapshot"), false, mp))
 		require.NoError(t, vector.AppendFixed(input.Vecs[ColTS], ts, false, mp))
@@ -105,7 +308,7 @@ func TestSnapshotMetaGetSnapshotSkipsPersistedAborts(t *testing.T) {
 		require.NoError(t, vector.AppendFixed(input.Vecs[len(snapshotSchemaTypes)], types.BuildTS(1, 0), false, mp))
 		require.NoError(t, vector.AppendFixed(input.Vecs[len(snapshotSchemaTypes)+1], row == 0, false, mp))
 	}
-	input.SetRowCount(2)
+	input.SetRowCount(3)
 	seqnums := make([]uint16, 0, len(snapshotSchemaTypes)+2)
 	for i := range snapshotSchemaTypes {
 		seqnums = append(seqnums, uint16(i))
@@ -120,14 +323,53 @@ func TestSnapshotMetaGetSnapshotSkipsPersistedAborts(t *testing.T) {
 	stats := writer.GetObjectStats(objectio.WithAppendable())
 	input.Clean(mp)
 
+	// A committed tombstone can legitimately carry an HLC timestamp ahead of
+	// the local wall clock. Snapshot reads must still apply it; only the exact
+	// UncommitTS sentinel is excluded.
+	tombstoneInput := batch.NewWithSize(len(objectio.TombstoneSeqnums_DN_Created))
+	tombstoneInput.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tombstoneInput.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+	tombstoneInput.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	targetBlock := stats.ConstructBlockInfo(0).BlockID
+	require.NoError(t, vector.AppendFixed(
+		tombstoneInput.Vecs[0], types.NewRowid(&targetBlock, 1), false, mp,
+	))
+	require.NoError(t, vector.AppendFixed(tombstoneInput.Vecs[1], uint64(2), false, mp))
+	require.NoError(t, vector.AppendFixed(
+		tombstoneInput.Vecs[2],
+		types.BuildTS(time.Now().Add(time.Hour).UnixNano(), 0),
+		false,
+		mp,
+	))
+	tombstoneInput.SetRowCount(1)
+	tombstoneName := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	tombstoneWriter, err := ioutil.NewBlockWriterNew(
+		fs,
+		tombstoneName,
+		0,
+		objectio.TombstoneSeqnums_DN_Created,
+		true,
+	)
+	require.NoError(t, err)
+	tombstoneWriter.SetAppendable()
+	_, err = tombstoneWriter.WriteBatch(tombstoneInput)
+	require.NoError(t, err)
+	_, _, err = tombstoneWriter.Sync(ctx)
+	require.NoError(t, err)
+	tombstoneStats := tombstoneWriter.GetObjectStats(objectio.WithAppendable())
+	tombstoneInput.Clean(mp)
+
 	sm := NewSnapshotMeta()
 	const tableID = uint64(1)
 	sm.objects[tableID] = map[objectio.Segmentid]*objectInfo{
 		stats.ObjectName().SegmentId(): {stats: stats},
 	}
+	sm.tombstones[tableID] = map[objectio.Segmentid]*objectInfo{
+		tombstoneStats.ObjectName().SegmentId(): {stats: tombstoneStats},
+	}
 	snapshots, err := sm.GetSnapshot(ctx, "test", fs, mp)
 	require.NoError(t, err)
-	require.Equal(t, []types.TS{types.BuildTS(200, 0)}, snapshots.cluster)
+	require.Equal(t, []types.TS{types.BuildTS(300, 0)}, snapshots.cluster)
 }
 
 // TestAccountToTableSnapshots tests the core logic of snapshot distribution

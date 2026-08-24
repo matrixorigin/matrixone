@@ -59,7 +59,15 @@ func HybridScanByBlock(
 	defer it.Release()
 	for it.Next() {
 		tombstone := it.Item()
-		err := tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, uint64(deleteStartOffset), mp)
+		err := tombstone.GetObjectData().FillBlockTombstones(
+			ctx,
+			txn,
+			blkID,
+			&(*bat).Deletes,
+			uint64(deleteStartOffset),
+			uint64((*bat).Length()),
+			mp,
+		)
 		if err != nil {
 			(*bat).Close()
 			return err
@@ -93,6 +101,12 @@ func TombstoneRangeScanByObject(
 	mp *mpool.MPool,
 	vpool *containers.VectorPool,
 ) (bat *containers.Batch, err error) {
+	defer func() {
+		if err != nil && bat != nil {
+			bat.Close()
+			bat = nil
+		}
+	}()
 	tableEntry.WaitTombstoneObjectCommitted(end)
 	it := tableEntry.MakeTombstoneObjectIt()
 	defer it.Release()

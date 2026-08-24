@@ -59,6 +59,32 @@ func (c TombstoneAbortColumn) At(row int) bool {
 	return vector.GetFixedAtNoTypeCheck[bool](c.vec, row)
 }
 
+// ValidateTombstoneRowIDColumn validates the dense rowid column that defines
+// the logical cardinality of a tombstone batch. Unlike commitTS and abort,
+// rowids cannot be broadcast: every logical tombstone row must own a distinct
+// physical rowid value.
+func ValidateTombstoneRowIDColumn(expectedRows int, rowIDVec *vector.Vector) ([]types.Rowid, error) {
+	if expectedRows < 0 {
+		return nil, moerr.NewInvalidInputNoCtxf("negative tombstone row count %d", expectedRows)
+	}
+	if rowIDVec == nil {
+		return nil, moerr.NewInvalidInputNoCtx("tombstone rowid column is missing")
+	}
+	if rowIDVec.GetType().Oid != types.T_Rowid {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"tombstone rowid column has type %s, expected ROWID", rowIDVec.GetType().String())
+	}
+	if rowIDVec.IsConst() || rowIDVec.Length() != expectedRows || rowIDVec.GetNulls().Any() {
+		return nil, moerr.NewInvalidInputNoCtx("tombstone rowid column is unavailable")
+	}
+	typeSize := int(rowIDVec.GetType().TypeSize())
+	if typeSize <= 0 || expectedRows > math.MaxInt/typeSize ||
+		len(rowIDVec.GetData()) < expectedRows*typeSize {
+		return nil, moerr.NewInvalidInputNoCtx("tombstone rowid backing data is invalid")
+	}
+	return vector.MustFixedColWithTypeCheck[types.Rowid](rowIDVec), nil
+}
+
 func ValidateTombstoneAbortColumn(expectedRows int, abortVec *vector.Vector) (TombstoneAbortColumn, error) {
 	if expectedRows < 0 {
 		return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtxf("negative tombstone row count %d", expectedRows)
@@ -79,7 +105,7 @@ func ValidateTombstoneAbortColumn(expectedRows int, abortVec *vector.Vector) (To
 			abortVec.Length(), expectedRows,
 		)
 	}
-	if abortVec.Length() == 0 {
+	if abortVec.Length() == 0 && expectedRows != 0 {
 		return TombstoneAbortColumn{}, moerr.NewInvalidInputNoCtx("tombstone abort column is empty")
 	}
 	if abortVec.Length() != expectedRows {
@@ -357,37 +383,138 @@ func CheckTombstoneFile(
 	totalBlkCnt int,
 	err error,
 ) {
-	if getTombstoneFileFn == nil {
+	if ctx == nil || getTombstoneFileFn == nil || onBlockSelectedFn == nil {
+		err = moerr.NewInvalidInputNoCtx(
+			"tombstone file check requires context and callbacks",
+		)
 		return
 	}
-	var tombstoneObject *objectio.ObjectStats
-	for tombstoneObject, err = getTombstoneFileFn(); err == nil && tombstoneObject != nil; tombstoneObject, err = getTombstoneFileFn() {
+	switch len(prefixPattern) {
+	case types.SegmentidSize, types.ObjectidSize, types.BlockidSize, types.RowidSize:
+	default:
+		err = moerr.NewInvalidInputNoCtxf(
+			"invalid tombstone rowid prefix length %d", len(prefixPattern),
+		)
+		return
+	}
+	validateRowIDZoneMap := func(zm objectio.ZoneMap, scope string) error {
+		if !zm.IsInited() || zm.GetType() != types.T_Rowid ||
+			len(zm.GetMinBuf()) != types.RowidSize ||
+			len(zm.GetMaxBuf()) != types.RowidSize {
+			return moerr.NewInvalidInputNoCtxf(
+				"%s has an invalid rowid zone map", scope,
+			)
+		}
+		return nil
+	}
+	getBlockZoneMap := func(
+		dataMeta objectio.ObjectDataMeta,
+		blockID uint32,
+	) (zm objectio.ZoneMap, blockErr error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				zm = nil
+				blockErr = moerr.NewInvalidInputNoCtxf(
+					"tombstone block %d metadata is malformed: %v", blockID, recovered,
+				)
+			}
+		}()
+		zm = dataMeta.GetBlockMeta(blockID).MustGetColumn(0).ZoneMap()
+		blockErr = validateRowIDZoneMap(zm, "tombstone block")
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			err = context.Cause(ctx)
+			return
+		default:
+		}
+		var tombstoneObject *objectio.ObjectStats
+		tombstoneObject, err = getTombstoneFileFn()
+		if err != nil || tombstoneObject == nil {
+			return
+		}
 		tombstoneObjectCnt++
 		tombstoneZM := tombstoneObject.SortKeyZoneMap()
+		if err = validateRowIDZoneMap(tombstoneZM, "tombstone object"); err != nil {
+			return
+		}
 		if !tombstoneZM.RowidPrefixEq(prefixPattern) {
 			skipObjectCnt++
 			continue
 		}
 		var objMeta objectio.ObjectMeta
 		location := tombstoneObject.ObjectLocation()
+		if fs == nil {
+			err = moerr.NewInvalidInputNoCtx(
+				"tombstone file check requires file service for a matching object",
+			)
+			return
+		}
 
 		if objMeta, err = objectio.FastLoadObjectMeta(
 			ctx, &location, false, fs,
 		); err != nil {
 			return
 		}
-		dataMeta := objMeta.MustDataMeta()
+		dataMeta, metaErr := GetDataMetaForLocation(objMeta, location)
+		if metaErr != nil {
+			err = metaErr
+			return
+		}
 
-		blkCnt := int(dataMeta.BlockCount())
+		blockCount := dataMeta.BlockCount()
+		startID := uint32(dataMeta.BlockHeader().StartID())
+		if blockCount > 0 && uint64(startID)+uint64(blockCount)-1 > math.MaxUint32 {
+			err = moerr.NewInvalidInputNoCtx("tombstone metadata block range overflows")
+			return
+		}
+		blkCnt := int(blockCount)
+		if blkCnt > math.MaxInt-totalBlkCnt {
+			err = moerr.NewInvalidInputNoCtx("tombstone block count overflows")
+			return
+		}
 		totalBlkCnt += blkCnt
 
-		startIdx := sort.Search(blkCnt, func(i int) bool {
-			return dataMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap().AnyGEByValue(prefixPattern)
-		})
+		// Use an explicit lower-bound search so malformed metadata and
+		// cancellation can be returned instead of panicking inside sort.Search.
+		low, high := 0, blkCnt
+		for low < high {
+			select {
+			case <-ctx.Done():
+				err = context.Cause(ctx)
+				return
+			default:
+			}
+			middle := int(uint(low+high) >> 1)
+			var columnZoneMap objectio.ZoneMap
+			columnZoneMap, err = getBlockZoneMap(dataMeta, startID+uint32(middle))
+			if err != nil {
+				return
+			}
+			if columnZoneMap.AnyGEByValue(prefixPattern) {
+				high = middle
+			} else {
+				low = middle + 1
+			}
+		}
+		startIdx := low
 
 		for pos := startIdx; pos < blkCnt; pos++ {
-			blkMeta := dataMeta.GetBlockMeta(uint32(pos))
-			columnZoneMap := blkMeta.MustGetColumn(0).ZoneMap()
+			select {
+			case <-ctx.Done():
+				err = context.Cause(ctx)
+				return
+			default:
+			}
+			columnZoneMap, zoneMapErr := getBlockZoneMap(
+				dataMeta, startID+uint32(pos),
+			)
+			if zoneMapErr != nil {
+				err = zoneMapErr
+				return
+			}
 			// block id is the prefixPattern of the rowid and zonemap is min-max of rowid
 			// !PrefixEq means there is no rowid of this block in this zonemap, so skip
 			if columnZoneMap.RowidPrefixEq(prefixPattern) {
@@ -406,7 +533,6 @@ func CheckTombstoneFile(
 			}
 		}
 	}
-	return
 }
 
 // CoarseFilterTombstoneObject It is used to filter out tombstone objects that do not contain any deleted data objects.
@@ -444,6 +570,11 @@ func IsRowDeletedByLocation(
 	fs fileservice.FileService,
 	createdByCN bool,
 ) (deleted bool, err error) {
+	if ctx == nil || row == nil || fs == nil || (!createdByCN && snapshotTS == nil) {
+		return false, moerr.NewInvalidInputNoCtx(
+			"tombstone row lookup requires context, row, file service, and snapshot timestamp",
+		)
+	}
 	var hidden objectio.HiddenColumnSelection
 	if !createdByCN {
 		hidden = hidden | objectio.HiddenColumnSelection_CommitTS | objectio.HiddenColumnSelection_Abort
@@ -460,7 +591,9 @@ func IsRowDeletedByLocation(
 	if err != nil {
 		return
 	}
-	defer release()
+	if release != nil {
+		defer release()
+	}
 	if data.Rows() == 0 {
 		return
 	}
@@ -484,7 +617,8 @@ func IsRowDeletedByLocation(
 				break
 			}
 			commitTS := commitTSs.At(i)
-			if (!aborts.IsPresent() || !aborts.At(i)) && commitTS.LE(snapshotTS) {
+			if (!aborts.IsPresent() || !aborts.At(i)) &&
+				commitTS != types.MaxTs() && commitTS.LE(snapshotTS) {
 				deleted = true
 				break
 			}
@@ -503,6 +637,12 @@ func FillBlockDeleteMask(
 ) (deleteMask objectio.Bitmap, err error) {
 	if location.IsEmpty() {
 		return
+	}
+	if ctx == nil || blockId == nil || fs == nil ||
+		(!createdByCN && snapshotTS == nil) {
+		return objectio.NullBitmap, moerr.NewInvalidInputNoCtx(
+			"tombstone mask read requires context, block id, file service, and a snapshot for TN tombstones",
+		)
 	}
 
 	var (
@@ -523,10 +663,12 @@ func FillBlockDeleteMask(
 	); err != nil {
 		return
 	}
-	defer release()
+	if release != nil {
+		defer release()
+	}
 
 	if createdByCN {
-		deleteMask = EvalDeleteMaskFromCNCreatedTombstones(blockId, &persistedDeletes[0])
+		deleteMask, err = EvalDeleteMaskFromCNCreatedTombstones(blockId, &persistedDeletes[0])
 	} else {
 		deleteMask, err = EvalDeleteMaskFromDNCreatedTombstones(
 			&persistedDeletes[0],
@@ -590,13 +732,45 @@ func ReadDeletes(
 		cleanup()
 		return
 	}
+	// The location row count is only a block-size estimate when the caller
+	// constructs locations from ObjectStats without loading block metadata.
+	// Tombstone objects may contain multiple short blocks, so use the loaded
+	// dense rowid column as the block's logical cardinality instead.
+	rowCount := cacheVectors[0].Length()
+	if _, err = ValidateTombstoneRowIDColumn(rowCount, &cacheVectors[0]); err != nil {
+		cleanup()
+		return
+	}
+	commitIdx, abortIdx := -1, -1
+	if !isPersistedByCN {
+		commitIdx = len(cols) - 2
+		abortIdx = len(cols) - 1
+	}
+	validateLoadedRows := func() error {
+		for pos := range cols {
+			// Keep the dedicated validators authoritative for the two DN-only
+			// columns.  Besides checking cardinality, they validate the const
+			// encoding and preserve the precise diagnostics callers rely on.
+			if pos == commitIdx || pos == abortIdx {
+				continue
+			}
+			if cacheVectors[pos].Length() != rowCount {
+				return moerr.NewInvalidInputNoCtxf(
+					"tombstone column %d has %d rows, expected %d",
+					pos, cacheVectors[pos].Length(), rowCount,
+				)
+			}
+		}
+		return nil
+	}
+	if err = validateLoadedRows(); err != nil {
+		cleanup()
+		return
+	}
 	if isPersistedByCN {
 		return
 	}
 
-	rowCount := cacheVectors[0].Length()
-	commitIdx := len(cols) - 2
-	abortIdx := len(cols) - 1
 	if _, err = ValidateTombstoneCommitTSColumn(
 		rowCount, &cacheVectors[commitIdx],
 	); err != nil {
@@ -614,6 +788,16 @@ func ReadDeletes(
 					return
 				}
 				rowCount = cacheVectors[0].Length()
+				if _, err = ValidateTombstoneRowIDColumn(
+					rowCount, &cacheVectors[0],
+				); err != nil {
+					cleanup()
+					return
+				}
+				if err = validateLoadedRows(); err != nil {
+					cleanup()
+					return
+				}
 				_, err = ValidateTombstoneCommitTSColumn(
 					rowCount, &cacheVectors[commitIdx],
 				)
@@ -641,7 +825,15 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	if deletedRows == nil {
 		return
 	}
-	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletedRows)
+	if ts == nil || blockid == nil {
+		return objectio.NullBitmap, moerr.NewInvalidInputNoCtx(
+			"DN tombstone evaluation requires snapshot timestamp and block id",
+		)
+	}
+	rowids, err := ValidateTombstoneRowIDColumn(deletedRows.Length(), deletedRows)
+	if err != nil {
+		return objectio.NullBitmap, err
+	}
 	commitTSs, err := ValidateTombstoneCommitTSColumn(len(rowids), commitTSVec)
 	if err != nil {
 		return objectio.NullBitmap, err
@@ -656,12 +848,28 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	}
 
 	noTSCheck := false
-	if end-start > 10 && !aborts.IsPresent() {
+	if end-start > 10 && !aborts.IsPresent() && *ts != types.MaxTs() {
 		// fast path is true if the maxTS is less than the snapshotTS
 		// this means that all the rows between start and end are visible
 		layout := objectio.ResolveSpecialColumnLayout(meta)
 		if idx, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
-			noTSCheck = meta.MustGetColumn(idx).ZoneMap().FastLEValue(ts[:], 0)
+			// A zonemap is only an optimization. Malformed metadata must fall
+			// back to the validated per-row timestamps, never panic or make a
+			// false-positive visibility decision.
+			func() {
+				defer func() {
+					if recover() != nil {
+						noTSCheck = false
+					}
+				}()
+				zm := meta.MustGetColumn(idx).ZoneMap()
+				if !zm.IsInited() || zm.GetType() != types.T_TS ||
+					len(zm.GetMinBuf()) != types.TxnTsSize ||
+					len(zm.GetMaxBuf()) != types.TxnTsSize {
+					return
+				}
+				noTSCheck = zm.FastLEValue(ts[:], 0)
+			}()
 		}
 	}
 	rows = objectio.GetReusableBitmap()
@@ -673,7 +881,8 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 	} else {
 		for i := end - 1; i >= start; i-- {
 			commitTS := commitTSs.At(i)
-			if (aborts.IsPresent() && aborts.At(i)) || commitTS.GT(ts) {
+			if (aborts.IsPresent() && aborts.At(i)) ||
+				commitTS == types.MaxTs() || commitTS.GT(ts) {
 				continue
 			}
 			row := rowids[i].GetRowOffset()
@@ -687,11 +896,19 @@ func EvalDeleteMaskFromDNCreatedTombstones(
 func EvalDeleteMaskFromCNCreatedTombstones(
 	bid *types.Blockid,
 	deletedRows *vector.Vector,
-) (rows objectio.Bitmap) {
+) (rows objectio.Bitmap, err error) {
 	if deletedRows == nil {
 		return
 	}
-	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](deletedRows)
+	if bid == nil {
+		return objectio.NullBitmap, moerr.NewInvalidInputNoCtx(
+			"CN tombstone evaluation requires a block id",
+		)
+	}
+	rowids, err := ValidateTombstoneRowIDColumn(deletedRows.Length(), deletedRows)
+	if err != nil {
+		return objectio.NullBitmap, err
+	}
 
 	start, end := FindStartEndOfBlockFromSortedRowids(rowids, bid)
 	if start < end {
