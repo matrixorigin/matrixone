@@ -255,24 +255,140 @@ list; `remap_db.go`; `build.go` dispatch.
 
 ---
 
-## Verification
+## Test plan and strategy
 
-- Parser: `pkg/sql/parsers/dialect/mysql/multi_insert_test.go` — round trips,
-  AST shape, syntax errors.
-- Planner: `pkg/sql/plan/bind_multi_insert_test.go` — step/node shape for
-  unconditional and conditional forms, FIRST/ELSE filter composition, ALL not
-  negating earlier branches, same-table merge into one MULTI_UPDATE with
-  UNION ALL, widening errors, fulltext maintenance retained, rejected targets.
-- BVT: `test/distributed/cases/dml/insert/multi_insert.sql` — routing,
-  same-table clauses (defaults, duplicate rejection, FIRST, auto-increment),
-  fulltext + ivfflat targets, constraint errors and statement atomicity,
-  explicit transactions, error messages, EXPLAIN. The EXPLAIN case uses
-  targets without unique indexes on purpose: unique-index table names contain
-  a UUID and would make the expected output non-deterministic.
-- Also checked by hand on a single-node server: affected-row counts,
-  `LAST_INSERT_ID()`, prepared statements with parameters, privilege denial
-  when one target lacks INSERT, the whole `dml/insert` BVT directory
-  (no regression from the shared-tail refactor).
+### Strategy
+
+The feature is a new front end (grammar + AST) over an unchanged write path.
+The risk therefore sits in three places, and the tests are layered to match:
+
+1. **Syntax and AST** — the grammar must accept every documented form, reject
+   the malformed ones, and `Format` must round-trip (statement text is logged,
+   restored and re-parsed by the frontend). Parser unit tests, no server.
+2. **Plan shape** — the planner must produce *exactly* the fan-out described
+   above: one SINK, one write step per target table, the right FILTER
+   conjuncts for ALL/FIRST/ELSE, same-table clauses merged through UNION ALL,
+   and the irregular-index maintenance steps present. These are structural
+   properties that end-to-end results cannot distinguish from luck (e.g. a
+   missing fulltext step just leaves the index empty; a missing merge only
+   shows up with overlapping keys), so they are asserted directly on the plan
+   with the mock catalog. Planner unit tests, no server.
+3. **Behaviour** — constraints, indexes, atomicity, transactions, privileges
+   and error messages must match a single INSERT. These are exercised
+   against a real server with BVT cases whose expected results are checked
+   in, plus a regression run of the existing insert cases to prove the
+   shared insert tail (`appendInsertReplaceSourceCasts` /
+   `castInsertSourceColumn`, refactored out of `initInsertReplaceStmt`) did
+   not change single-table behaviour.
+
+Every bug found during development got a test at the layer that would have
+caught it earliest (see "Regression guards" below).
+
+### Layer 1 — parser: `pkg/sql/parsers/dialect/mysql/multi_insert_test.go`
+
+| Test | Covers |
+|---|---|
+| `TestMultiInsertSyntaxRoundTrip` | parse → `Format` → re-parse → identical text for: unconditional `INSERT ALL`; explicit column lists and VALUES expressions with a db-qualified target; conditional ALL with ELSE (the issue's example); FIRST with several INTOs under one WHEN; `WITH` prefix; parenthesized source after a column list; `UNION ALL` source. |
+| `TestMultiInsertSyntaxShape` | AST structure: `First` flag, `Targets` vs `Whens`/`Else`, per-target `Columns`/`Values` (nil when omitted), `AllTargets()` order. |
+| `TestMultiInsertSyntaxErrors` | rejected: `INSERT FIRST` without WHEN, missing source, ELSE without WHEN, WHEN without THEN, plain `INSERT` with two INTOs, the documented `into t (select ...)` ambiguity. |
+
+The grammar build itself is a test: `make mysql_sql.go` fails on any new
+shift/reduce conflict.
+
+### Layer 2 — planner: `pkg/sql/plan/bind_multi_insert_test.go`
+
+Mock catalog tables used: `dept` (pk + unique + secondary index, nullable
+columns), `t2` (pk, NOT NULL `b`), `t3` (pk only), `emp` (has a foreign key),
+`docs_ft` (fulltext index; added to `mock.go` for this feature). Note the mock
+resolves tables by bare name, so names must be unique across mock schemas.
+
+| Test | Asserts |
+|---|---|
+| `TestMultiInsertUnconditionalFansOutOverOneSink` | steps `[SINK, MULTI_UPDATE, MULTI_UPDATE]`; 1 SINK, 2 SINK_SCAN, 2 MULTI_UPDATE, 0 FILTER; `dept`'s MULTI_UPDATE has 3 update contexts (base + 2 index tables), `t2`'s has 1; `StmtType == INSERT`; plan deep-copies. |
+| `TestMultiInsertFirstAndElseRouting` | 3 targets → 4 steps; each target step has exactly one FILTER with `[1, 2, 2]` conjuncts; ELSE conjuncts are all `isnottrue`; the second WHEN carries its own `<` plus one `isnottrue`. |
+| `TestMultiInsertAllConditionalDoesNotExcludeEarlierBranches` | with `INSERT ALL`, every branch keeps exactly one conjunct (no negation of earlier WHENs). |
+| `TestMultiInsertPositionalTargetUsesEverySourceColumn` | `INTO t` without VALUES over a source with matching width plans. |
+| `TestMultiInsertWithClauseFeedsSource` | `WITH ... INSERT ALL ... SELECT * FROM cte` plans with 2 steps. |
+| `TestMultiInsertSameTableMergesIntoOneWritePipeline` | two clauses on `dept` → steps `[SINK, MULTI_UPDATE]`; 2 SINK_SCAN, 2 FILTER, exactly 1 UNION_ALL and 1 MULTI_UPDATE; union width = union of the clauses' column lists; the merged pipeline still writes the 3 index/base tables. |
+| `TestMultiInsertSameTableMixedColumnListsRejectsMissingNotNull` | widening a clause that omits a NOT NULL column without default fails with the single-insert error text. |
+| `TestMultiInsertKeepsIrregularIndexMaintenance` | for a fulltext target, single-clause and merged two-clause forms both produce exactly one `fulltext_index_tokenize` FUNCTION_SCAN and more than 2 steps. |
+| `TestMultiInsertRejectsUnsupportedTargets` | FK target ("foreign key"), VALUES/column count mismatch, positional width mismatch, unknown source column in VALUES and in WHEN, unknown target column. |
+
+### Layer 3 — BVT: `test/distributed/cases/dml/insert/multi_insert.sql`
+
+79 statements with checked-in expected results (`multi_insert.result`,
+generated with mo-tester `-m genrs`, then verified in compare mode).
+
+| Group | Cases |
+|---|---|
+| Unconditional | positional INTO plus INTO with column list + VALUES expressions; target with auto-increment pk and a DEFAULT column. |
+| Conditional ALL + ELSE | the issue's region example; NULL region goes to ELSE. |
+| ALL vs FIRST | overlapping WHENs: ALL writes the row to both targets, FIRST to the first only; ELSE receives the rest. |
+| Composition | several INTOs under one WHEN, `upper()`/`lower()`/arithmetic in VALUES, `WITH` source with `ORDER BY ... LIMIT`. |
+| Constraints | duplicate primary key; duplicate unique key; a failing second target rolls the first target back (`count(*) = 0`). |
+| Same table, several clauses | different column lists (defaults filled); overlapping keys across clauses → `Duplicate entry`; FIRST with the same table in both branches routes each row once; one clause sets the auto-increment key, the other lets the engine generate it. |
+| Irregular indexes | fulltext target written by two merged clauses, ivfflat target; verified by `MATCH ... AGAINST` and a vector read afterwards. |
+| Transactions | `BEGIN` / multi-insert / `ROLLBACK` leaves nothing. |
+| Errors | value-count mismatch (explicit and positional), unknown source column in VALUES / WHEN, unknown target column, missing table, `INSERT FIRST` without WHEN, foreign-key target, external-table target. |
+| EXPLAIN | one `Sink`, one `Sink Scan → Filter → Lock → DEDUP → Multi Update` per target. Targets without unique indexes are used on purpose: unique-index table names embed a UUID and would make the expected output non-deterministic. |
+
+Run it with:
+
+```
+(cd $HOME/m/mo-tester; ./run.sh -p ../matrixone/test/distributed/cases/dml/insert/multi_insert.sql \
+   -s ../matrixone/test/distributed/resources/ -n -g)
+```
+
+### Regression protection for the shared insert path
+
+- `go test ./pkg/sql/plan/` — full package (the only failure is the
+  pre-existing, timezone-dependent
+  `TestBuildCreateOrReplaceViewRejectsRecursiveDefinition/future_AS_OF_timestamp`,
+  which fails identically on `main`).
+- The whole `test/distributed/cases/dml/insert` directory in compare mode
+  (2000/2000 on the feature build) — covers `INSERT`, `INSERT IGNORE`,
+  ON DUPLICATE KEY, auto-pk, defaults, CHECK constraints, which all flow
+  through the refactored cast tail.
+- `go test ./pkg/frontend/` subset around the touched switch sites
+  (`Remap|Privilege|StmtKind|...`), `go vet` and `golangci-lint` on
+  `parsers/tree`, `plan`, `frontend`.
+
+### Verified manually (not encoded in a test file)
+
+On the isolated single-node server:
+
+- affected rows = sum over targets (`9 rows affected` for 3 rows × 3 targets);
+  `LAST_INSERT_ID()` after a multi-insert into an auto-increment target;
+- `PREPARE ... FROM 'insert all ... values (concat(v, ?)) ... where id = ?'`
+  / `EXECUTE ... USING` with parameters in both VALUES and the source;
+- privilege: a role with INSERT on only one of two targets can run a
+  multi-insert into the permitted table, and is denied — with nothing written
+  to either table — when the statement also names the other;
+- ambiguous source headings (`select id, id`) are rejected as ambiguous.
+
+### Regression guards — why specific tests exist
+
+| Bug found during development | Guard |
+|---|---|
+| Same table in two clauses silently inserted duplicate primary keys (each pipeline dedups against the statement snapshot only). | `TestMultiInsertSameTableMergesIntoOneWritePipeline` (structure) + BVT "overlapping keys across clauses → Duplicate entry" (behaviour). |
+| `getIrregularIndexes` called after `appendNodesForInsertStmt` (which strips them) → fulltext/IVF maintenance steps vanished with no error. | `TestMultiInsertKeepsIrregularIndexMaintenance` + BVT fulltext/ivfflat group. |
+| `SINK_SCAN` binding not visible to unqualified names → "column X does not exist". | every VALUES/WHEN case in all three layers. |
+| Missing `StmtKind()` on the new AST node → nil-pointer panic in `executeStmt`. | any BVT statement (the whole file would panic). |
+| UUID index-table names in EXPLAIN output. | EXPLAIN case restricted to non-unique targets; result compared in mo-tester `-n -g` mode. |
+
+### Known gaps / suggested additions before merge
+
+- A BVT privilege case (needs an account/role fixture like
+  `test/distributed/cases/prepare/prepare.test`) and a BVT `PREPARE`/`EXECUTE`
+  case, to turn the manual checks into checked-in ones.
+- A run on the multi-CN docker cluster (`make dev-up`): all server-side
+  testing was on the single-node instance. The design is per-CN pipelines
+  fed by local channels, the same mechanism the IVF/fulltext maintenance
+  already relies on, but the remote-scope path
+  (`Remote` scopes with a `Multi Update` root, `addAllAffectedRows`) has not
+  been exercised by this feature's tests.
+- Large-source behaviour (memory stays at one batch per consumer edge by
+  construction — see "Runtime" — but no benchmark was run).
 
 ## Possible follow-ups
 
