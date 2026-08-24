@@ -375,7 +375,9 @@ func (b *HavingBinder) bindMedianWithinGroupAgg(
 			return nil, err
 		}
 	}
-	if canonicalGroupByAstKey(b.ctx, valueAst) != canonicalGroupByAstKey(b.ctx, orderAst) {
+	valueKey, valueValid := canonicalMedianWithinGroupAstKey(b.ctx, valueAst)
+	orderKey, orderValid := canonicalMedianWithinGroupAstKey(b.ctx, orderAst)
+	if !valueValid || !orderValid || valueKey != orderKey {
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
 			"%s requires the WITHIN GROUP ORDER BY expression to match its value expression", funcName)
 	}

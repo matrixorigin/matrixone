@@ -64,6 +64,24 @@ func resolveGroupByColumnIdentity(ctx *BindContext, name *tree.UnresolvedName) (
 	return binding, colPos, true
 }
 
+// groupByNameHasMismatchedDatabase reports an explicit database qualifier that
+// names a table visible in the current query block but does not match that
+// table's resolved database. Keep this check separate from
+// resolveGroupByColumnIdentity: an unresolved name is allowed to fall back to
+// the normal binder error, while a mismatched qualifier must never be folded
+// into the visible column's identity by the MEDIAN equality check.
+func groupByNameHasMismatchedDatabase(ctx *BindContext, name *tree.UnresolvedName) bool {
+	if ctx == nil || name == nil || name.DbName() == "" || name.TblName() == "" {
+		return false
+	}
+
+	binding := ctx.bindingByTable[name.TblName()]
+	if binding == nil {
+		binding = ctx.bindingByTable[name.DbName()+"."+name.TblName()]
+	}
+	return binding != nil && !strings.EqualFold(name.DbName(), binding.db)
+}
+
 // canonicalGroupByAstKey folds identifiers and function names through their
 // comparison form. Resolved columns are represented by relation tag and column
 // position, so col, tbl.col, and db.tbl.col match only when they resolve to the
@@ -107,6 +125,36 @@ func canonicalGroupByAstKey(ctx *BindContext, astExpr tree.Expr) string {
 		return true
 	})
 	return semanticAstKey(normalized) + "\x00resolved-columns" + resolvedColumns.String()
+}
+
+// canonicalMedianWithinGroupAstKey is deliberately query-block scoped. The
+// generic canonicalizer resolves visible columns by using ctx, but a scalar
+// subquery has its own bindings and may also contain correlated outer refs.
+// Do not descend into subqueries while validating explicit database
+// qualifiers; otherwise an inner column can be mistaken for an outer one.
+func canonicalMedianWithinGroupAstKey(ctx *BindContext, astExpr tree.Expr) (string, bool) {
+	valid := true
+	functionNames := make(map[*tree.UnresolvedName]struct{})
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		switch node := expr.(type) {
+		case *tree.FuncExpr:
+			if name, ok := node.Func.FunctionReference.(*tree.UnresolvedName); ok {
+				functionNames[name] = struct{}{}
+			}
+		case *tree.UnresolvedName:
+			if _, isFunctionName := functionNames[node]; isFunctionName {
+				return true
+			}
+			if groupByNameHasMismatchedDatabase(ctx, node) {
+				valid = false
+				return false
+			}
+		case *tree.Subquery:
+			return false
+		}
+		return true
+	})
+	return canonicalGroupByAstKey(ctx, astExpr), valid
 }
 
 func lookupGroupByAst(ctx *BindContext, astExpr tree.Expr, astKey string) (int32, bool) {

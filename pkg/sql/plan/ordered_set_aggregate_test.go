@@ -171,6 +171,10 @@ func TestBuildMedianWithinGroupRejectsScopedOrMismatchedQualifications(t *testin
 			name: "wrong database qualifier",
 			sql:  "select median(a) within group (order by wrong_database.bind_select.a) from select_test.bind_select",
 		},
+		{
+			name: "both expressions use wrong database qualifier",
+			sql:  "select median(wrong_database.bind_select.a) within group (order by wrong_database.bind_select.a) from select_test.bind_select",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
