@@ -53,7 +53,19 @@ type pipelineClient struct {
 	localServiceAddress string
 	config              *PipelineConfig
 	client              morpc.RPCClient
-	controlClient       morpc.ControlClient
+}
+
+func pipelineBackendCreateOptions(cfg *PipelineConfig) []morpc.ClientOption {
+	// A scheduled Pipeline scope is pinned to one remote CN. Bound both global
+	// factory admission and all connect/retry attempts for that fixed address so
+	// a stale cluster-service route fails the statement instead of inheriting a
+	// potentially day-long SQL context. The existing per-connect timeout bounds
+	// each of the two wait phases, so the total wait is finite and at most twice
+	// that value. It is always positive after cfg.fill().
+	return []morpc.ClientOption{
+		morpc.WithClientAutoCreateQueueWaitTimeout(cfg.TimeOutForEachConnect),
+		morpc.WithClientAutoCreateWaitTimeout(cfg.TimeOutForEachConnect),
+	}
 }
 
 func NewPipelineClient(
@@ -69,21 +81,6 @@ func NewPipelineClient(
 		localServiceAddress: localServiceAddress,
 		config:              cfg,
 	}
-
-	// Keep liveness probes on a physically independent connection. A pipeline
-	// data connection can be stuck dialing a CN that was removed while the
-	// replacement is becoming ready; probing through that same backend would
-	// not make progress. Pipeline endpoint liveness is authoritative, so a
-	// failed probe retires the current data backend generation.
-	controlConfig := cfg.RPC
-	controlClient, err := controlConfig.NewControlClient(
-		sid,
-		"pipeline-control-client",
-		func() morpc.Message { return AcquireMessage() })
-	if err != nil {
-		return nil, err
-	}
-	c.controlClient = controlClient
 
 	codec := morpc.NewMessageCodec(
 		sid,
@@ -109,20 +106,19 @@ func NewPipelineClient(
 		morpc.WithBackendReadTimeout(defaultRPCTimeout),
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
 		morpc.WithBackendLogger(logger),
-		morpc.WithBackendLivenessProbe(func(ctx context.Context, remote string) error {
-			return controlClient.Ping(ctx, remote)
-		}),
-		morpc.WithBackendLivenessProbeFailureIsTerminal(),
 	)
 
+	clientOptions := []morpc.ClientOption{
+		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
+		morpc.WithClientLogger(logger),
+	}
+	clientOptions = append(clientOptions, pipelineBackendCreateOptions(cfg)...)
 	cli, err := morpc.NewClient(
 		"pipeline-client",
 		factory,
-		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
-		morpc.WithClientLogger(logger),
+		clientOptions...,
 	)
 	if err != nil {
-		_ = controlClient.Close()
 		return nil, err
 	}
 
@@ -139,9 +135,5 @@ func (c *pipelineClient) Raw() morpc.RPCClient {
 }
 
 func (c *pipelineClient) Close() error {
-	if err := c.client.Close(); err != nil {
-		_ = c.controlClient.Close()
-		return err
-	}
-	return c.controlClient.Close()
+	return c.client.Close()
 }

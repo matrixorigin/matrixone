@@ -138,17 +138,6 @@ func WithBackendLivenessProbe(value func(context.Context, string) error) Backend
 	}
 }
 
-// WithBackendLivenessProbeFailureIsTerminal makes a failed liveness probe
-// terminate the current data connection generation. Use this when the probe
-// is authoritative for the peer endpoint; callers that may observe a
-// temporarily unavailable control transport should leave it disabled so a
-// valid slow data response can still complete.
-func WithBackendLivenessProbeFailureIsTerminal() BackendOption {
-	return func(rb *remoteBackend) {
-		rb.options.livenessProbeFailureIsTerminal = true
-	}
-}
-
 // WithBackendMetrics setup backend metrics
 func WithBackendMetrics(metrics *metrics) BackendOption {
 	return func(rb *remoteBackend) {
@@ -206,20 +195,19 @@ type remoteBackend struct {
 	livenessEpoch   time.Time
 
 	options struct {
-		hasPayloadResponse             bool
-		goettyOptions                  []goetty.Option
-		connectTimeout                 time.Duration
-		bufferSize                     int
-		busySize                       int
-		batchSendSize                  int
-		streamBufferSize               int
-		disconnectAfterRead            int
-		filter                         func(msg Message, backendAddr string) bool
-		readTimeout                    time.Duration
-		livenessProbe                  func(context.Context, string) error
-		livenessProbeFailureIsTerminal bool
-		freeResponse                   func(Message)
-		releaseRequest                 func(Message)
+		hasPayloadResponse  bool
+		goettyOptions       []goetty.Option
+		connectTimeout      time.Duration
+		bufferSize          int
+		busySize            int
+		batchSendSize       int
+		streamBufferSize    int
+		disconnectAfterRead int
+		filter              func(msg Message, backendAddr string) bool
+		readTimeout         time.Duration
+		livenessProbe       func(context.Context, string) error
+		freeResponse        func(Message)
+		releaseRequest      func(Message)
 	}
 
 	stateMu struct {
@@ -256,10 +244,6 @@ type remoteBackend struct {
 		pending      map[uint64]struct{}
 		pendingSince int64
 		overflow     bool
-		// activeStreamSince marks the oldest currently-owned pipeline stream.
-		// A stream is data-plane state even though stream messages do not have
-		// unary request/response liveness tracking.
-		activeStreamSince int64
 	}
 
 	atomic struct {
@@ -437,7 +421,6 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	st := rb.acquireStream()
 	st.init(rb.nextID(), unlockAfterClose)
 	rb.mu.activeStreams[st.ID()] = st
-	rb.recordActiveStream(rb.livenessTick())
 	// stateMu is already read-locked here. Keep the activity update in the
 	// same state snapshot so Close cannot publish stateStopped between the
 	// state check and the timestamp write.
@@ -976,7 +959,6 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 	delete(rb.mu.activeStreams, s.id)
 	rb.deleteFutureLocked(s.id)
 	channelNotEmpty := len(s.c) > 0
-	rb.removeActiveStreamLiveness()
 	rb.finishDrainingLocked()
 	rb.mu.Unlock()
 	if channelNotEmpty {
@@ -1368,12 +1350,8 @@ func (rb *remoteBackend) keepDataConnectionAfterProbe(
 	// control transport that may be temporarily unavailable when there is no
 	// outstanding or unacknowledged user traffic to diagnose.
 	oldestWritten := rb.dataPendingSince()
-	oldestStream := rb.activeStreamSince()
-	if oldestWritten == 0 && oldestStream == 0 {
+	if oldestWritten == 0 {
 		return true
-	}
-	if oldestWritten == 0 || (oldestStream != 0 && oldestStream < oldestWritten) {
-		oldestWritten = oldestStream
 	}
 	if elapsed := rb.livenessTick() - oldestWritten; elapsed >= 0 &&
 		elapsed < rb.options.readTimeout.Nanoseconds() {
@@ -1409,9 +1387,6 @@ func (rb *remoteBackend) keepDataConnectionAfterProbe(
 	defer cancel()
 	if err := rb.options.livenessProbe(probeCtx, rb.remote); err != nil {
 		rb.metrics.observeBackendError(rb.remote, "liveness-probe", err)
-		if rb.options.livenessProbeFailureIsTerminal {
-			return false
-		}
 		// The control transport is independent from this data connection. Its
 		// failure is therefore inconclusive: the peer may still return a valid
 		// slow response on the data connection. Leave reset and Future failure to
@@ -1486,29 +1461,6 @@ func (rb *remoteBackend) dataPendingSince() int64 {
 	rb.livenessMu.Lock()
 	defer rb.livenessMu.Unlock()
 	return rb.livenessMu.pendingSince
-}
-
-func (rb *remoteBackend) recordActiveStream(at int64) {
-	rb.livenessMu.Lock()
-	if rb.livenessMu.activeStreamSince == 0 {
-		rb.livenessMu.activeStreamSince = at
-	}
-	rb.livenessMu.Unlock()
-}
-
-func (rb *remoteBackend) removeActiveStreamLiveness() {
-	if len(rb.mu.activeStreams) != 0 {
-		return
-	}
-	rb.livenessMu.Lock()
-	rb.livenessMu.activeStreamSince = 0
-	rb.livenessMu.Unlock()
-}
-
-func (rb *remoteBackend) activeStreamSince() int64 {
-	rb.livenessMu.Lock()
-	defer rb.livenessMu.Unlock()
-	return rb.livenessMu.activeStreamSince
 }
 
 func (rb *remoteBackend) resetDataProgress() {

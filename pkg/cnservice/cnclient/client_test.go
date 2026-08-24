@@ -16,11 +16,15 @@ package cnclient
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type testRPCClient struct {
@@ -55,13 +59,50 @@ func TestPipelineClient_NewStreamAllowsLocalBackend(t *testing.T) {
 	require.True(t, rpcClient.lock)
 }
 
-func TestNewPipelineClientCreatesIndependentControlClient(t *testing.T) {
+func TestNewPipelineClient(t *testing.T) {
 	sid := t.Name()
 	moruntime.SetupServiceBasedRuntime(sid, moruntime.DefaultRuntime())
 	client, err := NewPipelineClient(sid, "127.0.0.1:6001", &PipelineConfig{})
 	require.NoError(t, err)
-	pc := client.(*pipelineClient)
-	require.NotNil(t, pc.client)
-	require.NotNil(t, pc.controlClient)
-	require.NoError(t, pc.Close())
+	require.NotNil(t, client.(*pipelineClient).client)
+	require.NoError(t, client.Close())
+}
+
+type retryablePipelineBackendFactory struct {
+	calls atomic.Int32
+}
+
+func (f *retryablePipelineBackendFactory) Create(
+	string,
+	...morpc.BackendOption,
+) (morpc.Backend, error) {
+	f.calls.Add(1)
+	// resetConn reports this after its connect retry window expires. MORPC
+	// deliberately treats it as retryable, so the client-level recovery budget
+	// must terminate the retry loop.
+	return nil, moerr.NewRPCTimeoutNoCtx()
+}
+
+func TestPipelineBackendCreateOptionsBoundRetry(t *testing.T) {
+	cfg := &PipelineConfig{TimeOutForEachConnect: 37 * time.Millisecond}
+	cfg.fill()
+	factory := &retryablePipelineBackendFactory{}
+	options := pipelineBackendCreateOptions(cfg)
+	options = append(options,
+		morpc.WithClientDisableCircuitBreaker(),
+		morpc.WithClientLogger(zap.NewNop()),
+	)
+	client, err := morpc.NewClient(t.Name(), factory, options...)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, client.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	started := time.Now()
+	stream, err := client.NewStream(ctx, "dead-pipeline-endpoint", false)
+	require.Nil(t, stream)
+	require.ErrorIs(t, err, morpc.ErrBackendCreateTimeout)
+	require.Less(t, time.Since(started), 500*time.Millisecond,
+		"pipeline recovery budget must expire before the query context")
+	require.Positive(t, factory.calls.Load())
 }
