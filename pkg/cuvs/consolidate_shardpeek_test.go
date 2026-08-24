@@ -173,8 +173,8 @@ func TestResolveDevicesForTarLoad(t *testing.T) {
 		devices    []int
 		shardCount int
 		wantErr    string
-		wantResult []int  // devices returned on success (nil = same slice header, len check only when wantLen set)
-		wantLen    int    // if wantResult is nil, verify len(result) == wantLen
+		wantResult []int // devices returned on success (nil = same slice header, len check only when wantLen set)
+		wantLen    int   // if wantResult is nil, verify len(result) == wantLen
 	}{
 		{
 			name:       "SINGLE/REPLICATED tar returns devices unchanged",
