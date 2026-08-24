@@ -462,9 +462,10 @@ func (s *service) handleSyncCommit(
 	// Invalidate the publication right of catalog refreshes that started before
 	// this fence. The epoch must advance before ACK so a new session cannot be
 	// raced back to an older shared snapshot after SET GLOBAL reports success.
-	advanceGlobalSysVarsPublicationEpochFn()
+	appliedCommitTS := s._txnClient.GetLatestCommitTS()
+	advanceGlobalSysVarsPublicationEpochFn(appliedCommitTS)
 	resp.SyncCommit = &query.SyncCommitResponse{
-		CurrentCommitTS: s._txnClient.GetLatestCommitTS(),
+		CurrentCommitTS: appliedCommitTS,
 	}
 	return nil
 }

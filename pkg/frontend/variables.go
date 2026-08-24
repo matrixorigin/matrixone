@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
@@ -971,7 +972,8 @@ type GlobalSysVarsMgr struct {
 	accountsGlobalSysVarsMap map[uint32]*SystemVariables
 	// publicationEpoch invalidates catalog reads that started before a remote
 	// SyncCommit fence. It is independent from per-account local mutations.
-	publicationEpoch uint64
+	publicationEpoch   uint64
+	publicationFenceTS timestamp.Timestamp
 }
 
 func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, sysVarsMp map[string]interface{}) {
@@ -1000,6 +1002,7 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 		m.Lock()
 		sysVars, ok := m.accountsGlobalSysVarsMap[accountId]
 		refreshEpoch := m.publicationEpoch
+		refreshFenceTS := m.publicationFenceTS
 		var mutationGeneration uint64
 		if ok {
 			mutationGeneration = sysVars.getMutationGeneration()
@@ -1028,6 +1031,7 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 		}
 		if !exists {
 			current = &SystemVariables{mp: sysVarsMp}
+			current.advancePublicationFloor(refreshFenceTS)
 			m.accountsGlobalSysVarsMap[accountId] = current
 			m.Unlock()
 			return current, nil
@@ -1039,7 +1043,7 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 			m.Unlock()
 			return current, nil
 		}
-		current.replaceIfMutationGeneration(mutationGeneration, sysVarsMp)
+		current.replaceIfMutationGeneration(mutationGeneration, sysVarsMp, refreshFenceTS)
 		m.Unlock()
 		return current, nil
 	}
@@ -1053,10 +1057,13 @@ func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {
 
 // AdvancePublicationEpoch prevents every catalog refresh that started before
 // this call from publishing into the shared account cache.
-func (m *GlobalSysVarsMgr) AdvancePublicationEpoch() {
+func (m *GlobalSysVarsMgr) AdvancePublicationEpoch(fenceTS timestamp.Timestamp) {
 	m.Lock()
 	defer m.Unlock()
 	m.publicationEpoch++
+	if fenceTS.Greater(m.publicationFenceTS) {
+		m.publicationFenceTS = fenceTS
+	}
 }
 
 var GSysVarsMgr = &GlobalSysVarsMgr{
@@ -1072,6 +1079,9 @@ type SystemVariables struct {
 	// refresh is derived from the catalog and must not invalidate another
 	// refresh that observed the same local generation.
 	mutationGeneration uint64
+	// publicationFloorTS orders SET GLOBAL publications per canonical variable.
+	// Catalog refreshes raise the floor to their stable SyncCommit fence.
+	publicationFloorTS map[string]timestamp.Timestamp
 }
 
 const (
@@ -1099,13 +1109,39 @@ func (sv *SystemVariables) getMutationGeneration() uint64 {
 
 // replaceIfMutationGeneration publishes a refreshed snapshot only when no
 // local mutation has been applied since the refresh started.
-func (sv *SystemVariables) replaceIfMutationGeneration(generation uint64, mp map[string]interface{}) {
+func (sv *SystemVariables) replaceIfMutationGeneration(
+	generation uint64,
+	mp map[string]interface{},
+	fenceTS timestamp.Timestamp,
+) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
 	if sv.mutationGeneration != generation {
 		return
 	}
 	sv.mp = mp
+	sv.advancePublicationFloorLocked(fenceTS)
+}
+
+func (sv *SystemVariables) advancePublicationFloor(fenceTS timestamp.Timestamp) {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	sv.advancePublicationFloorLocked(fenceTS)
+}
+
+func (sv *SystemVariables) advancePublicationFloorLocked(fenceTS timestamp.Timestamp) {
+	if fenceTS.IsEmpty() {
+		return
+	}
+	if sv.publicationFloorTS == nil {
+		sv.publicationFloorTS = make(map[string]timestamp.Timestamp)
+	}
+	for name := range sv.mp {
+		name = canonicalSystemVariableName(name)
+		if fenceTS.Greater(sv.publicationFloorTS[name]) {
+			sv.publicationFloorTS[name] = fenceTS
+		}
+	}
 }
 
 // Clone returns a copy of sv
@@ -1136,6 +1172,33 @@ func (sv *SystemVariables) Get(name string) interface{} {
 func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
+	sv.setLocked(name, value)
+}
+
+// SetIfNewerCommitTS publishes a SET GLOBAL value unless a later commit for
+// the same canonical variable has already been published.
+func (sv *SystemVariables) SetIfNewerCommitTS(
+	name string,
+	value interface{},
+	commitTS timestamp.Timestamp,
+) bool {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	name = canonicalSystemVariableName(name)
+	if !commitTS.IsEmpty() {
+		if publishedTS, ok := sv.publicationFloorTS[name]; ok && commitTS.Less(publishedTS) {
+			return false
+		}
+		if sv.publicationFloorTS == nil {
+			sv.publicationFloorTS = make(map[string]timestamp.Timestamp)
+		}
+		sv.publicationFloorTS[name] = commitTS
+	}
+	sv.setLocked(name, value)
+	return true
+}
+
+func (sv *SystemVariables) setLocked(name string, value interface{}) {
 	name = canonicalSystemVariableName(name)
 	sv.mp[name] = value
 	if name == transactionIsolationSystemVariable {

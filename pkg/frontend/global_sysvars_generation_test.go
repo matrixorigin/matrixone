@@ -24,6 +24,8 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 func TestGlobalSysVarsRefreshDoesNotOverwriteConcurrentSet(t *testing.T) {
@@ -163,7 +165,7 @@ func TestGlobalSysVarsFencePreventsOldRefreshFromOverwritingNewPublication(t *te
 
 	// Linearize the remote SyncCommit ACK, then let a post-fence refresh publish
 	// the new catalog value but pause conceptually before its caller clones it.
-	mgr.AdvancePublicationEpoch()
+	mgr.AdvancePublicationEpoch(timestamp.Timestamp{PhysicalTime: 100})
 	postFenceVars, err := mgr.Get(accountID, ses, context.Background(), nil)
 	require.NoError(t, err)
 	require.Same(t, globalVars, postFenceVars)
@@ -228,7 +230,7 @@ func TestGlobalSysVarsFenceRetriesOldRefreshBeforeCreatingSharedEntry(t *testing
 	case <-time.After(5 * time.Second):
 		t.Fatal("old refresh did not capture its catalog snapshot")
 	}
-	mgr.AdvancePublicationEpoch()
+	mgr.AdvancePublicationEpoch(timestamp.Timestamp{PhysicalTime: 100})
 	releaseOnce.Do(func() { close(releaseOldRead) })
 
 	select {
@@ -258,7 +260,7 @@ func TestGlobalSysVarsLaterFenceCannotReturnOlderSharedCache(t *testing.T) {
 	}
 
 	// E1 represents the completed SET GLOBAL whose value the new session must see.
-	mgr.AdvancePublicationEpoch()
+	mgr.AdvancePublicationEpoch(timestamp.Timestamp{PhysicalTime: 100})
 	firstReadCaptured := make(chan struct{})
 	releaseFirstRead := make(chan struct{})
 	var releaseOnce sync.Once
@@ -299,7 +301,7 @@ func TestGlobalSysVarsLaterFenceCannotReturnOlderSharedCache(t *testing.T) {
 
 	// An unrelated SyncCommit advances the CN-wide epoch to E2 while the E1
 	// refresh is waiting to publish. The old shared cache still contains 5.
-	mgr.AdvancePublicationEpoch()
+	mgr.AdvancePublicationEpoch(timestamp.Timestamp{PhysicalTime: 200})
 	releaseOnce.Do(func() { close(releaseFirstRead) })
 
 	select {
@@ -311,6 +313,52 @@ func TestGlobalSysVarsLaterFenceCannotReturnOlderSharedCache(t *testing.T) {
 	}
 	require.Equal(t, int64(0), globalVars.Get(PasswordHistory))
 	require.Equal(t, int32(2), reads.Load())
+	require.False(t, globalVars.SetIfNewerCommitTS(
+		PasswordHistory, int64(5), timestamp.Timestamp{PhysicalTime: 150}),
+		"a delayed local publication must not overwrite a catalog snapshot fenced at E2")
+	require.Equal(t, int64(0), globalVars.Get(PasswordHistory))
+}
+
+func TestGlobalSysVarsConcurrentSetPublishesInCommitOrder(t *testing.T) {
+	globalVars := &SystemVariables{mp: map[string]interface{}{
+		PasswordHistory: int64(5),
+	}}
+	commitTS1 := timestamp.Timestamp{PhysicalTime: 100}
+	commitTS2 := timestamp.Timestamp{PhysicalTime: 200}
+	releaseTS1Fence := make(chan struct{})
+	ts1Done := make(chan bool, 1)
+
+	// SET A has already committed value 0 at TS1, but its fence returns later.
+	go func() {
+		<-releaseTS1Fence
+		ts1Done <- globalVars.SetIfNewerCommitTS(PasswordHistory, int64(0), commitTS1)
+	}()
+
+	// SET B commits later at TS2 and completes its fence first.
+	require.True(t, globalVars.SetIfNewerCommitTS(PasswordHistory, int64(1), commitTS2))
+	close(releaseTS1Fence)
+	select {
+	case published := <-ts1Done:
+		require.False(t, published, "TS1 must not overwrite the publication from TS2")
+	case <-time.After(5 * time.Second):
+		t.Fatal("TS1 setter did not complete")
+	}
+	require.Equal(t, int64(1), globalVars.Get(PasswordHistory))
+}
+
+func TestGlobalSysVarsCommitOrderIsTrackedPerVariable(t *testing.T) {
+	globalVars := &SystemVariables{mp: map[string]interface{}{
+		PasswordHistory:       int64(0),
+		PasswordReuseInterval: int64(0),
+	}}
+	laterTS := timestamp.Timestamp{PhysicalTime: 200}
+	earlierTS := timestamp.Timestamp{PhysicalTime: 100}
+
+	require.True(t, globalVars.SetIfNewerCommitTS(PasswordHistory, int64(1), laterTS))
+	require.True(t, globalVars.SetIfNewerCommitTS(PasswordReuseInterval, int64(2), earlierTS),
+		"a later publication for another variable must not reject this commit")
+	require.Equal(t, int64(1), globalVars.Get(PasswordHistory))
+	require.Equal(t, int64(2), globalVars.Get(PasswordReuseInterval))
 }
 
 func TestGlobalSysVarsRefreshDoesNotAdvanceMutationGeneration(t *testing.T) {
@@ -323,12 +371,12 @@ func TestGlobalSysVarsRefreshDoesNotAdvanceMutationGeneration(t *testing.T) {
 
 	globalVars.replaceIfMutationGeneration(generation, map[string]interface{}{
 		PasswordHistory: int64(5),
-	})
+	}, timestamp.Timestamp{})
 	require.Equal(t, generation, globalVars.getMutationGeneration())
 
 	globalVars.replaceIfMutationGeneration(generation, map[string]interface{}{
 		PasswordHistory: int64(0),
-	})
+	}, timestamp.Timestamp{})
 	value := globalVars.Get(PasswordHistory)
 	require.Equal(t, int64(0), value)
 }

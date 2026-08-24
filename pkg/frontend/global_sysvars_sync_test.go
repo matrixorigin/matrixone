@@ -333,6 +333,11 @@ func TestSetGlobalSysVarPublishesCacheOnlyAfterCommitSync(t *testing.T) {
 	require.NoError(t, ses.SetGlobalSysVar(
 		context.Background(), PasswordHistory, int64(5)))
 	require.Equal(t, int64(5), globalVars.Get(PasswordHistory))
+	globalVars.mu.Lock()
+	publishedTS := globalVars.publicationFloorTS[PasswordHistory]
+	globalVars.mu.Unlock()
+	require.Equal(t, commitTS, publishedTS,
+		"cache publication must carry the same commit timestamp used by the fence")
 }
 
 func TestSyncGlobalSysVarCommitUsesSessionCommitTimestamp(t *testing.T) {
@@ -354,7 +359,7 @@ func TestSyncGlobalSysVarCommitUsesSessionCommitTimestamp(t *testing.T) {
 		lastCommitTS: commitTS,
 	}}
 
-	require.NoError(t, syncGlobalSysVarCommit(context.Background(), ses))
+	require.NoError(t, syncGlobalSysVarCommit(context.Background(), ses, commitTS))
 	requests, releaseCount := qc.snapshot()
 	require.Equal(t, []globalSysVarSyncRequest{
 		{address: "cn-1", method: querypb.CmdMethod_GetProtocolVersion},
@@ -379,7 +384,7 @@ func TestSyncGlobalSysVarCommitPropagatesInventoryFailure(t *testing.T) {
 		lastCommitTS: timestamp.Timestamp{PhysicalTime: 100},
 	}}
 
-	err := syncGlobalSysVarCommit(context.Background(), ses)
+	err := syncGlobalSysVarCommit(context.Background(), ses, ses.getLastCommitTS())
 	require.ErrorContains(t, err, "inventory failed")
 	requests, _ := qc.snapshot()
 	require.Empty(t, requests)

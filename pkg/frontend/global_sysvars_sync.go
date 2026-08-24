@@ -33,7 +33,11 @@ const globalSysVarCommitSyncTimeout = 10 * time.Second
 
 // syncGlobalSysVarCommit makes a committed SET GLOBAL visible to transactions
 // created on every currently routable CN before the statement reports success.
-func syncGlobalSysVarCommit(ctx context.Context, ses *Session) error {
+func syncGlobalSysVarCommit(
+	ctx context.Context,
+	ses *Session,
+	commitTS timestamp.Timestamp,
+) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -50,7 +54,6 @@ func syncGlobalSysVarCommit(ctx context.Context, ses *Session) error {
 		return moerr.NewInternalError(ctx, "HAKeeper client is not initialized")
 	}
 
-	commitTS := ses.getLastCommitTS()
 	if commitTS.IsEmpty() {
 		return moerr.NewInternalError(ctx, "global system variable commit timestamp is empty")
 	}

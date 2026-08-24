@@ -75,7 +75,8 @@ func TestHandleSyncCommit(t *testing.T) {
 	applied := requested.Next()
 	epochAdvanced := false
 	previousAdvance := advanceGlobalSysVarsPublicationEpochFn
-	advanceGlobalSysVarsPublicationEpochFn = func() {
+	advanceGlobalSysVarsPublicationEpochFn = func(fenceTS timestamp.Timestamp) {
+		require.Equal(t, applied, fenceTS)
 		require.False(t, epochAdvanced)
 		epochAdvanced = true
 	}
@@ -87,7 +88,7 @@ func TestHandleSyncCommit(t *testing.T) {
 				return nil
 			}),
 		txnClient.EXPECT().GetLatestCommitTS().DoAndReturn(func() timestamp.Timestamp {
-			require.True(t, epochAdvanced, "publication epoch must advance before ACK is constructed")
+			require.False(t, epochAdvanced)
 			return applied
 		}),
 	)
@@ -123,7 +124,7 @@ func TestHandleSyncCommitPropagatesCancellation(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	advanced := false
 	previousAdvance := advanceGlobalSysVarsPublicationEpochFn
-	advanceGlobalSysVarsPublicationEpochFn = func() { advanced = true }
+	advanceGlobalSysVarsPublicationEpochFn = func(timestamp.Timestamp) { advanced = true }
 	t.Cleanup(func() { advanceGlobalSysVarsPublicationEpochFn = previousAdvance })
 	ts := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
 	entered := make(chan struct{})

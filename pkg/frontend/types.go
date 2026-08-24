@@ -1540,10 +1540,11 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if err = doSetGlobalSystemVariables(ctx, ses, persistNames, val); err != nil {
 		return
 	}
-	if err = syncGlobalSysVarCommit(ctx, ses); err != nil {
+	commitTS := ses.getLastCommitTS()
+	if err = syncGlobalSysVarCommit(ctx, ses, commitTS); err != nil {
 		return
 	}
-	ses.gSysVars.Set(canonicalName, val)
+	ses.gSysVars.SetIfNewerCommitTS(canonicalName, val, commitTS)
 	return
 }
 
