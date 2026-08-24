@@ -463,6 +463,9 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			logutil.Infof("CAGRA create: capacity=%d (requested=%d, vram_bound=%v) -> %d sub-index(es) for %d rows; cdc_cutoff=%d",
 				plan.Capacity, requestedCapacity, plan.VRAMBound, plan.NumSubIdx, srcRowCount, plan.CdcCutoff)
 		}
+		// Rotation just bounded each build; say now if their SUM cannot be searched
+		// here, rather than leaving it for memory.DeviceLoadFits at the first query.
+		warnAggregateNotResident("CAGRA", plan, rowsFit, perRow)
 
 		nthread := uint32(vectorindex.GetConcurrency(u.tblcfg.ThreadsBuild))
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)

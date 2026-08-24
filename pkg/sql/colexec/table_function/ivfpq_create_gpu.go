@@ -503,6 +503,9 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			logutil.Infof("IVFPQ create: capacity=%d (requested=%d, vram_bound=%v, host_bound=%v) -> %d sub-index(es) for %d rows; cdc_cutoff=%d",
 				plan.Capacity, requestedCapacity, plan.VRAMBound, plan.HostBound, plan.NumSubIdx, srcRowCount, plan.CdcCutoff)
 		}
+		// Rotation just bounded each build; say now if their SUM cannot be searched
+		// here, rather than leaving it for memory.DeviceLoadFits at the first query.
+		warnAggregateNotResident("IVFPQ", plan, rowsFit, perRow)
 
 		// Resolve the training sample against the capacity just chosen, and record the
 		// EFFECTIVE fraction rather than the requested one. Without this the clamp is

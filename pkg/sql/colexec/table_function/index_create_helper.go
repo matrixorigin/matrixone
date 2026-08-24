@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -176,17 +175,19 @@ func planCapacity(
 	return plan, nil
 }
 
-// quantizationBytes is the on-device element size of one vector component for a storage
-// quantization. It sizes the per-row cost used to bound a build against VRAM.
-func quantizationBytes(qt metric.QuantizationType) uint64 {
-	switch qt {
-	case metric.Quantization_F16:
-		return 2
-	case metric.Quantization_INT8, metric.Quantization_UINT8:
-		return 1
-	default: // Quantization_F32
-		return 4
-	}
+// aggregateNotResident reports whether the sub-indexes this plan will produce cannot
+// all be resident at once on the devices that measured rowsFit -- i.e. whether
+// memory.DeviceLoadFits will refuse this index at its first query.
+//
+// plan.CdcCutoff, not srcRowCount, is the indexed row count: rows past the cutoff go to
+// the brute-force CDC tail and are never resident as sub-index data.
+//
+// rowsFit is already the AGGREGATE the participating devices admit (rows_fitting() in
+// C++ scales it by distribution mode), so this is a total-vs-total comparison. rowsFit
+// <= 0 means the device could not be measured; planCapacity has already decided what to
+// do about that, and there is nothing honest to compare here.
+func aggregateNotResident(plan capacityPlan, rowsFit int64) bool {
+	return rowsFit > 0 && plan.CdcCutoff > rowsFit
 }
 
 // kmeansPointsPerCentroid is the conventional floor for k-means to have enough

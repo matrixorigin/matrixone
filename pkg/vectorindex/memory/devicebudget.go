@@ -99,6 +99,23 @@ func DeviceBuildBytes(mode vectorindex.DistributionMode, devices []int, totalByt
 // This is a pre-flight check, so a peer that allocates between the check and the
 // loads is still caught -- by those per-load claims, one layer down.
 //
+// DESIGN DECISION -- this refusal is deferred to load on purpose.
+//
+// The reviewed alternative was to reject (or roll back) CREATE when the aggregate
+// exceeds what the building host can hold, or to add bounded load/search/evict so an
+// oversized index stays searchable on one device. Neither is done:
+//
+//   - An index is a persisted artifact and the build-time device set is not the
+//     search-time device set. Sub-indexes that overflow one card are fully searchable
+//     on two, or on the sharded multi-server layout rotation exists to feed; rejecting
+//     CREATE would bake the building host's topology into the artifact.
+//   - Bounded load/evict is single-node machinery that sharded search supersedes.
+//
+// So the contract is: the build succeeds, table_function.warnAggregateNotResident warns
+// at CREATE time while the operator is watching, and a query fails HERE -- deterministically,
+// before any allocation, naming the total and the levers. Revisit when search can span
+// devices/servers: this gate then sums against the larger budget and stops refusing.
+//
 // totalBytes is the aggregate on-disk size of every sub-index to be loaded; the
 // packed tar is a good proxy for the resident footprint because it holds exactly
 // what gets materialised (PQ codes / dataset, graph, ids, bitset, filter blobs).

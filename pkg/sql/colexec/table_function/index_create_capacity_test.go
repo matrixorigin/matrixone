@@ -206,3 +206,78 @@ func TestPlanCapacityHostBound(t *testing.T) {
 		require.False(t, p.HostBound)
 	})
 }
+
+// TestAggregateNotResident pins the CREATE-time warning predicate. It is the build-side
+// mirror of memory.DeviceLoadFits: whenever this returns true, that gate refuses the
+// index at its first query. Rotation is ALLOWED to outgrow one device (the design
+// decision recorded on warnAggregateNotResident), so this must warn and never gate the
+// build — these cases fix which side of that line each situation falls on.
+func TestAggregateNotResident(t *testing.T) {
+	cases := []struct {
+		name    string
+		plan    capacityPlan
+		rowsFit int64
+		want    bool
+	}{
+		{
+			// The reviewed trigger: two sub-indexes that each build fine, whose sum
+			// no single device can hold.
+			name:    "rotated sum exceeds the budget",
+			plan:    capacityPlan{Capacity: 500, NumSubIdx: 2, CdcCutoff: 1000},
+			rowsFit: 600,
+			want:    true,
+		},
+		{
+			name:    "rotated sum within the budget",
+			plan:    capacityPlan{Capacity: 500, NumSubIdx: 2, CdcCutoff: 1000},
+			rowsFit: 1000,
+			want:    false,
+		},
+		{
+			// Exactly at the budget is admitted by DeviceLoadFits, so warning here
+			// would contradict it.
+			name:    "at the budget is not a warning",
+			plan:    capacityPlan{Capacity: 500, NumSubIdx: 2, CdcCutoff: 600},
+			rowsFit: 600,
+			want:    false,
+		},
+		{
+			name:    "one row over the budget warns",
+			plan:    capacityPlan{Capacity: 500, NumSubIdx: 2, CdcCutoff: 601},
+			rowsFit: 600,
+			want:    true,
+		},
+		{
+			// Rows past the cutoff are brute-force CDC tail, never resident as
+			// sub-index data — charging them would warn on indexes that load fine.
+			name:    "cdc tail rows are not charged",
+			plan:    capacityPlan{Capacity: 500, NumSubIdx: 1, CdcCutoff: 500},
+			rowsFit: 600,
+			want:    false,
+		},
+		{
+			// An unmeasurable device must not produce a guess in either direction.
+			name:    "unmeasured device stays silent",
+			plan:    capacityPlan{Capacity: 500, NumSubIdx: 2, CdcCutoff: 1000},
+			rowsFit: 0,
+			want:    false,
+		},
+		{
+			name:    "negative rowsFit stays silent",
+			plan:    capacityPlan{Capacity: 500, NumSubIdx: 2, CdcCutoff: 1000},
+			rowsFit: -1,
+			want:    false,
+		},
+		{
+			name:    "single sub-index never warns",
+			plan:    capacityPlan{Capacity: 1000, NumSubIdx: 1, CdcCutoff: 900},
+			rowsFit: 1000,
+			want:    false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, aggregateNotResident(tc.plan, tc.rowsFit))
+		})
+	}
+}

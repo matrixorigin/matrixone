@@ -15,7 +15,6 @@
 package memory
 
 import (
-	"errors"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"testing"
 
@@ -23,23 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
-
-// rowsFittingFrom builds a DeviceRowsFittingFunc over a per-device free-bytes
-// map. This is the seam that lets the sizing POLICY be tested without a GPU:
-// production passes cuvs.RowsFittingFreeMem, which is the only part that needs
-// real hardware.
-func rowsFittingFrom(free map[int]uint64) DeviceRowsFittingFunc {
-	return func(dev int, perRowBytes uint64) (int64, uint64, error) {
-		f, ok := free[dev]
-		if !ok {
-			return 0, 0, errors.New("no such device")
-		}
-		if perRowBytes == 0 {
-			return 0, f, errors.New("per-row size is 0")
-		}
-		return int64(f / perRowBytes), f, nil
-	}
-}
 
 func TestDeviceDistinct(t *testing.T) {
 	cases := []struct {
