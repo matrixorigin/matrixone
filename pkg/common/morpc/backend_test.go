@@ -1151,13 +1151,6 @@ func TestActiveStreamLivenessProbeClosesDataGeneration(t *testing.T) {
 			return nil
 		},
 		func(rb *remoteBackend) {
-			rb.options.readTimeout = time.Second
-			rb.options.livenessProbe = func(context.Context, string) error {
-				probes.Add(1)
-				return errors.New("peer endpoint is gone")
-			}
-			WithBackendLivenessProbeFailureIsTerminal()(rb)
-
 			st, err := rb.NewStream(false)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, st.Close(false)) }()
@@ -1170,6 +1163,12 @@ func TestActiveStreamLivenessProbeClosesDataGeneration(t *testing.T) {
 			require.False(t, rb.keepDataConnectionAfterProbe(ctx, context.DeadlineExceeded))
 			require.Equal(t, int32(1), probes.Load())
 		},
+		WithBackendReadTimeout(time.Second),
+		WithBackendLivenessProbe(func(context.Context, string) error {
+			probes.Add(1)
+			return errors.New("peer endpoint is gone")
+		}),
+		WithBackendLivenessProbeFailureIsTerminal(),
 	)
 }
 
