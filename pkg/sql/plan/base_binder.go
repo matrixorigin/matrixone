@@ -5053,10 +5053,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// return new expr
 	Typ := makePlan2Type(&returnType)
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
-	if (returnType.Oid == types.T_varchar || returnType.Oid == types.T_text) &&
-		isPadSpaceValueSelectingFunction(name) {
-		for _, arg := range args {
-			if hasPadSpaceStringProvenance(arg) {
+	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
+		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {
+			if hasPadSpaceStringProvenance(args[idx]) {
 				Typ.PadSpace = true
 				break
 			}
@@ -6412,25 +6411,39 @@ func hasPadSpaceStringProvenance(expr *Expr) bool {
 		return fromType.Oid == types.T_char &&
 			(toType.Oid == types.T_varchar || toType.Oid == types.T_text)
 	}
-	if isPadSpaceValueSelectingFunction(fn.Func.ObjName) {
-		for _, arg := range fn.Args {
-			if hasPadSpaceStringProvenance(arg) {
-				return true
-			}
+	for _, idx := range padSpaceValueArgumentIndexes(fn.Func.ObjName, len(fn.Args)) {
+		if hasPadSpaceStringProvenance(fn.Args[idx]) {
+			return true
 		}
 	}
 	return false
 }
 
-func isPadSpaceValueSelectingFunction(name string) bool {
+// padSpaceValueArgumentIndexes returns only arguments whose bytes can become
+// the function result. In particular, max_by's order and tie arguments must
+// not taint the first-argument value returned by the aggregate.
+func padSpaceValueArgumentIndexes(name string, argsLength int) []int {
 	switch name {
-	case "case", "coalesce", "if", "ifnull",
-		"lag", "lead", "first_value", "last_value", "nth_value",
+	case "case", "coalesce", "if", "iff":
+		return controlFlowValueIndexes(name, argsLength)
+	case "ifnull":
+		if argsLength == 2 {
+			return []int{0, 1}
+		}
+	case "lag", "lead":
+		if argsLength >= 3 {
+			return []int{0, 2}
+		}
+		if argsLength > 0 {
+			return []int{0}
+		}
+	case "first_value", "last_value", "nth_value",
 		"any_value", "min", "max", "max_by", "max_by_non_null":
-		return true
-	default:
-		return false
+		if argsLength > 0 {
+			return []int{0}
+		}
 	}
+	return nil
 }
 
 func appendPadSpaceComparisonCastIfNeeded(ctx context.Context, expr *Expr) (*Expr, error) {

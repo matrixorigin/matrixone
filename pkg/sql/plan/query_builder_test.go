@@ -4874,14 +4874,23 @@ func TestWindowValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
 func TestAggregateValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
 	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
 	for _, tc := range []struct {
-		name string
-		expr string
+		name    string
+		expr    string
+		wantKey bool
 	}{
-		{name: "any value", expr: "any_value(" + value + ")"},
-		{name: "min", expr: "min(" + value + ")"},
-		{name: "max", expr: "max(" + value + ")"},
-		{name: "max by", expr: "max_by(" + value + ", n_nationkey, n_nationkey)"},
-		{name: "max by non null", expr: "max_by_non_null(" + value + ", n_nationkey, n_nationkey)"},
+		{name: "any value", expr: "any_value(" + value + ")", wantKey: true},
+		{name: "min", expr: "min(" + value + ")", wantKey: true},
+		{name: "max", expr: "max(" + value + ")", wantKey: true},
+		{name: "max by", expr: "max_by(" + value + ", n_nationkey, n_nationkey)", wantKey: true},
+		{name: "max by non null", expr: "max_by_non_null(" + value + ", n_nationkey, n_nationkey)", wantKey: true},
+		{
+			name: "max by order provenance does not taint value",
+			expr: "max_by(cast(n_name as varchar(8)), " + value + ", n_nationkey)",
+		},
+		{
+			name: "max by tie provenance does not taint value",
+			expr: "max_by(cast(n_name as varchar(8)), n_nationkey, " + value + ")",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logicPlan, err := runOneStmt(
@@ -4900,6 +4909,10 @@ func TestAggregateValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
 				}
 			}
 			require.NotNil(t, distinctAgg)
+			if !tc.wantKey {
+				require.Empty(t, distinctAgg.GroupByHashKey)
+				return
+			}
 			require.Len(t, distinctAgg.GroupBy, 2)
 			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
 		})
