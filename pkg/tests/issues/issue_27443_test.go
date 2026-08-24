@@ -152,10 +152,12 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		for _, name := range []string{"max_by", "max_by_non_null"} {
 			stmt, err := db.PrepareContext(ctx, "select "+name+"(?, 1, 1)")
 			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, stmt.Close())
+			}()
 			var value int64
 			require.NoError(t, stmt.QueryRowContext(ctx, int64(7)).Scan(&value))
 			require.Equal(t, int64(7), value)
-			require.NoError(t, stmt.Close())
 		}
 	})
 }

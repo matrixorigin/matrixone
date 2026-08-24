@@ -26,7 +26,7 @@ desc orders;
 id  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 amount  ¦  DECIMAL(12,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-created  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+created  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select id, name from orders
 where __mo_query = 'select id, name, amount, created from src'
 and amount > 80 order by id;
