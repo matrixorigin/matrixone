@@ -40,6 +40,25 @@ from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(linear)
 order by pump, _wstart;
 
+create table linear_varchar(series_id int, ts datetime, value varchar(16));
+insert into linear_varchar values
+    (1, '2026-03-03 00:00:00', 'alpha'),
+    (1, '2026-03-03 00:02:00', 'omega'),
+    (2, '2026-03-03 00:00:00', '10'),
+    (2, '2026-03-03 00:02:00', '30');
+
+select series_id, _wstart, max(value) as value_max
+from linear_varchar
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart;
+
+select series_id, _wstart, max(value) as value_max
+from linear_varchar
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(prev)
+order by series_id, _wstart;
+
+drop table linear_varchar;
+
 # A maximal run of k missing buckets is divided into k+1 equal steps. All rows
 # use one logical series key; no table-partition capability is involved.
 create table linear_readings(series_id int, ts datetime, value int);

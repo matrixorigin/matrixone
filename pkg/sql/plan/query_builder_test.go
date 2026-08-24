@@ -3552,6 +3552,169 @@ func TestQueryBuilder_bindTimeWindow_WithFill(t *testing.T) {
 	}
 }
 
+func TestQueryBuilder_bindTimeWindowLinearFillTypeValidation(t *testing.T) {
+	tests := []struct {
+		name         string
+		fillMode     tree.FillMode
+		fillTypes    []types.Type
+		fillNames    []string
+		wantErr      bool
+		errorType    string
+		wantFillType plan.Node_FillType
+	}{
+		{
+			name:         "int64",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_int64.ToType()},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "float64",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_float64.ToType()},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "decimal256",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.New(types.T_decimal256, 65, 0)},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:      "varchar",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_varchar.ToType()},
+			wantErr:   true,
+			errorType: "VARCHAR",
+		},
+		{
+			name:      "bool",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_bool.ToType()},
+			wantErr:   true,
+			errorType: "BOOL",
+		},
+		{
+			name:      "datetime",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_datetime.ToType()},
+			wantErr:   true,
+			errorType: "DATETIME",
+		},
+		{
+			name:      "json",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_json.ToType()},
+			wantErr:   true,
+			errorType: "JSON",
+		},
+		{
+			name:      "any",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_any.ToType()},
+			wantErr:   true,
+			errorType: "ANY",
+		},
+		{
+			name:      "mixed numeric and varchar",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+			wantErr:   true,
+			errorType: "VARCHAR",
+		},
+		{
+			name:         "boundary carriers are excluded",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_datetime.ToType(), types.T_datetime.ToType(), types.T_int64.ToType()},
+			fillNames:    []string{TimeWindowStart, TimeWindowEnd, "value"},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "varchar prev remains supported",
+			fillMode:     tree.FillPrev,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_PREV,
+		},
+		{
+			name:         "varchar next remains supported",
+			fillMode:     tree.FillNext,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_NEXT,
+		},
+		{
+			name:         "varchar value remains supported",
+			fillMode:     tree.FillValue,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_VALUE,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_datetime, "ts")
+			bindCtx.times = make([]*plan.Expr, len(tt.fillTypes))
+			for i, fillType := range tt.fillTypes {
+				name := "value"
+				if i < len(tt.fillNames) {
+					name = tt.fillNames[i]
+				}
+				bindCtx.times[i] = &plan.Expr{
+					Typ: makePlan2Type(&fillType),
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: int32(i),
+						Name:   name,
+					}},
+				}
+			}
+
+			fillVal := tree.Expr(nil)
+			if tt.fillMode == tree.FillValue {
+				fillVal = tree.NewNumVal(int64(0), "0", false, tree.P_int64)
+			}
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+					Unit: "second",
+				},
+				Fill: &tree.Fill{Mode: tt.fillMode, Val: fillVal},
+			}
+
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_datetime)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+				}},
+			}
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			fillType, _, _, _, _, _, _, _, _, _, err := builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+				require.Contains(t, err.Error(), "FILL(LINEAR) does not support aggregate result type")
+				require.Contains(t, err.Error(), tt.errorType)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantFillType, fillType)
+		})
+	}
+}
+
 func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 

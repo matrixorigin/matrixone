@@ -8330,6 +8330,18 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 
 		if astTimeWindow.Fill.Mode == tree.FillLinear {
+			for _, fillCol := range fillCols {
+				fillColType := makeTypeByPlan2Type(fillCol.Typ)
+				if !fillColType.IsNumeric() {
+					err = moerr.NewNotSupportedf(
+						builder.GetContext(),
+						"FILL(LINEAR) does not support aggregate result type %s",
+						fillColType.String(),
+					)
+					return
+				}
+			}
+
 			for i, timeAst := range ctx.timeAsts {
 				b := &tree.BinaryExpr{
 					Op: tree.DIV,
