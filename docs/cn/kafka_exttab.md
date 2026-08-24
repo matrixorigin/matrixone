@@ -106,9 +106,14 @@ select last_kafka_message_id();      -- e.g. 4711
 select * from kt where __mo_read_start_id = 4711 and ...;  -- continues after
 ```
 
-An aborted scan (error/cancel) updates neither the session id nor (with
-`autocommit=true`) the committed offset. With `autocommit=true` a completed
-scan commits `last+1` (Kafka next-to-read convention).
+Progress side effects publish only when the WHOLE statement succeeds, not
+when the source merely reaches end-of-stream: a drained scan hands its
+pending progress (committed-offset advance and session last id) to the
+statement terminal, which publishes on success and discards on any failure
+or cancellation — including a downstream operator error after the source
+finished. An aborted statement therefore never advances the exactly-once
+chain (retry replays, never skips). With `autocommit=true` a successful
+statement commits `last+1` (Kafka next-to-read convention).
 
 ## 6. Execution
 

@@ -112,7 +112,12 @@ type ExParam struct {
 	Fileparam *ExFileparam
 	// KafkaMeta carries the per-message metadata FIFO of a running Kafka
 	// scan (set by KafkaReader.Open, consumed row-by-row in makeBatchRows).
-	KafkaMeta                   *KafkaMetaState
+	KafkaMeta *KafkaMetaState
+	// KafkaPending is the deferred progress of a DRAINED Kafka scan: the
+	// reader hands it off at source EOF, and External.Reset publishes it
+	// only when the whole statement succeeded (discarding it on failure or
+	// cancel), so an aborted statement never advances the exactly-once chain.
+	KafkaPending                *KafkaPendingProgress
 	Filter                      *FilterParam
 	currentPartValues           map[string]string
 	parquetProfile              process.ParquetProfileStats
@@ -276,6 +281,12 @@ func (external *External) Release() {
 }
 
 func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if external.Es != nil && external.Es.KafkaPending != nil {
+		// publish the drained Kafka scan's progress only when the WHOLE
+		// statement succeeded; a failed/cancelled statement discards it
+		external.Es.KafkaPending.Finalize(proc, !pipelineFailed && err == nil)
+		external.Es.KafkaPending = nil
+	}
 	if external.reader != nil {
 		if closeErr := external.reader.Close(); closeErr != nil {
 			logutil.Debugf("external reader close on reset: %v", closeErr)
@@ -311,6 +322,12 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if external.Es != nil && external.Es.KafkaPending != nil {
+		// Free without a prior Reset means the statement did not complete
+		// normally: discard, never publish (replay is safe, skipping is not)
+		external.Es.KafkaPending.Finalize(proc, false)
+		external.Es.KafkaPending = nil
+	}
 	if external.reader != nil {
 		external.reader.Close()
 		external.reader = nil

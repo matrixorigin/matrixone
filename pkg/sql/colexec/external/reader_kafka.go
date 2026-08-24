@@ -430,31 +430,25 @@ func (r *KafkaReader) Close() error {
 	if r.cl == nil {
 		return nil
 	}
-	// A clean, complete read commits progress (autocommit=true) and records
-	// the last message id for LAST_KAFKA_MESSAGE_ID(). An aborted read (error
-	// or cancel) commits nothing and leaves the session id untouched.
-	if r.completed && r.stream != nil && r.stream.anyRead {
-		if r.ks.Autocommit {
-			// committed offset is the NEXT offset to read (Kafka convention).
-			// Bounded: Close runs synchronously in the query teardown and
-			// must not stall behind kgo's retry budget on a dead broker; a
-			// failed progress commit is logged (the read itself succeeded,
-			// and ON-mode reads never depend on committed progress).
-			cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			if err := kafkaCommit(cctx, r.cl, r.ks, r.stream.last+1); err != nil {
-				logutil.Warnf("kafka: autocommit of offset %d for group %s failed: %v",
-					r.stream.last+1, r.ks.Group, err)
-			}
-			cancel()
+	// A clean, complete read HANDS OFF its progress side effects (autocommit
+	// offset + LAST_KAFKA_MESSAGE_ID) as pending state: Close runs when the
+	// SOURCE drains, but the final batch has not yet survived downstream
+	// operators or delivery. External.Reset publishes the pending progress
+	// only when the whole statement succeeded and discards it otherwise —
+	// an aborted statement must change nothing, no matter where it aborts.
+	// An aborted read (error/cancel before EOF) just closes the transport.
+	if r.completed && r.stream != nil && r.stream.anyRead && r.csv.param != nil {
+		r.csv.param.KafkaPending = &KafkaPendingProgress{
+			cl:     r.cl,
+			ks:     r.ks,
+			lastID: r.stream.last,
 		}
-		if r.proc != nil {
-			if ses, ok := r.proc.GetSession().(process.KafkaSessionState); ok {
-				ses.SetLastKafkaMessageID(r.stream.last)
-			}
-		}
+		r.cl = nil // ownership moved to the pending progress
 	}
-	r.cl.Close()
-	r.cl = nil
+	if r.cl != nil {
+		r.cl.Close()
+		r.cl = nil
+	}
 	r.stream = nil
 	if r.csv.param != nil {
 		r.csv.param.KafkaMeta = nil
@@ -462,6 +456,47 @@ func (r *KafkaReader) Close() error {
 	r.csv.plh = nil
 	r.csv.reader = nil
 	return nil
+}
+
+// KafkaPendingProgress is the deferred side-effect state of a drained Kafka
+// scan: the committed-offset advance and the session's last message id. It
+// owns the client until Finalize.
+type KafkaPendingProgress struct {
+	cl     *kgo.Client
+	ks     *plan.KafkaScan
+	lastID int64
+}
+
+// Finalize publishes the progress when the statement SUCCEEDED (commit
+// last+1 for autocommit=true, record the last id for
+// LAST_KAFKA_MESSAGE_ID()) and discards it otherwise, then releases the
+// client. Idempotent via the caller nil-ing the pending pointer.
+func (p *KafkaPendingProgress) Finalize(proc *process.Process, success bool) {
+	if p == nil || p.cl == nil {
+		return
+	}
+	if success {
+		if p.ks.Autocommit {
+			// committed offset is the NEXT offset to read (Kafka convention).
+			// Bounded: this runs synchronously in statement teardown and must
+			// not stall behind kgo's retry budget on a dead broker; a failed
+			// progress commit is logged (the read itself succeeded, and
+			// ON-mode reads never depend on committed progress).
+			cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if err := kafkaCommit(cctx, p.cl, p.ks, p.lastID+1); err != nil {
+				logutil.Warnf("kafka: autocommit of offset %d for group %s failed: %v",
+					p.lastID+1, p.ks.Group, err)
+			}
+			cancel()
+		}
+		if proc != nil {
+			if ses, ok := proc.GetSession().(process.KafkaSessionState); ok {
+				ses.SetLastKafkaMessageID(p.lastID)
+			}
+		}
+	}
+	p.cl.Close()
+	p.cl = nil
 }
 
 // kafkaPartitionBounds returns the partition's [logStart, logEnd) offsets.

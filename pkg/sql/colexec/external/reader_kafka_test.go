@@ -26,6 +26,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -146,6 +147,10 @@ func readAllKafka(t *testing.T, param *ExternalParam, proc *process.Process, bat
 		}
 	}
 	require.NoError(t, r.Close())
+	// what External.Reset does on statement success: publish the pending
+	// progress (commit + session last id)
+	param.KafkaPending.Finalize(proc, true)
+	param.KafkaPending = nil
 	return r
 }
 
@@ -286,6 +291,7 @@ func TestKafkaReaderErrors(t *testing.T) {
 	}
 	require.ErrorContains(t, readErr(), "not equal to input columns")
 	require.NoError(t, r.Close())
+	require.Nil(t, param.KafkaPending, "aborted scan must not hand off progress")
 	require.False(t, proc.GetSession().(*fakeKafkaSession).lastSet,
 		"aborted scan must not update the session last id")
 	_, ok := fetchCommitted(t, addr, "g_test", "t_bad")
@@ -563,4 +569,54 @@ func TestKafkaReaderTimestampInstant(t *testing.T) {
 	cstTS := readTS("t_ts_cst", produce("t_ts_cst"), time.FixedZone("+08:00", 8*3600))
 	require.Equal(t, utcTS, cstTS, "the message instant must not shift with the session zone")
 	require.NotZero(t, utcTS)
+}
+
+// TestKafkaScanStatementBoundary is the pipeline-boundary regression: the
+// SOURCE drains (EOF reached, batch produced) but the STATEMENT then fails —
+// a downstream operator error or a cancel after the source call returned.
+// The drained scan's progress must publish only from the success terminal
+// path (External.Reset with pipelineFailed=false): a failed statement leaves
+// the committed offset and the session last id untouched, so retry/chaining
+// replays instead of skipping. Reader-only tests cannot cover this boundary;
+// this drives the full External operator.
+func TestKafkaScanStatementBoundary(t *testing.T) {
+	run := func(topic string, pipelineFailed bool, failErr error) (*process.Process, string) {
+		addr := startKafka(t, topic, [][2]string{{"", "1,a"}, {"", "2,b"}})
+		ks := kafkaScan(addr, topic, sqlkafka.FormatCSV)
+		param, proc, _ := newKafkaTestParam(t, ks)
+		op := NewArgument().WithEs(param)
+		require.NoError(t, op.Prepare(proc))
+
+		// drive Call until the source drains; batches are produced but (in
+		// the failure scenario) never survive downstream
+		for {
+			result, err := op.Call(proc)
+			require.NoError(t, err)
+			if result.Batch == nil {
+				break
+			}
+		}
+		require.NotNil(t, param.KafkaPending, "a drained scan hands off pending progress")
+
+		// the statement terminal: pipeline Reset with the outcome
+		op.Reset(proc, pipelineFailed, failErr)
+		require.Nil(t, param.KafkaPending, "Reset consumes the pending progress")
+		op.Free(proc, pipelineFailed, failErr)
+		return proc, addr
+	}
+
+	// downstream failure: nothing is published
+	proc, addr := run("t_stmt_fail", true, moerr.NewInternalErrorNoCtx("downstream operator failed"))
+	require.False(t, proc.GetSession().(*fakeKafkaSession).lastSet,
+		"failed statement must not record a last id")
+	_, ok := fetchCommitted(t, addr, "g_test", "t_stmt_fail")
+	require.False(t, ok, "failed statement must not commit")
+
+	// statement success: both side effects publish
+	proc2, addr2 := run("t_stmt_ok", false, nil)
+	require.True(t, proc2.GetSession().(*fakeKafkaSession).lastSet)
+	require.Equal(t, int64(1), proc2.GetSession().(*fakeKafkaSession).lastID)
+	at, ok := fetchCommitted(t, addr2, "g_test", "t_stmt_ok")
+	require.True(t, ok)
+	require.Equal(t, int64(2), at, "success commits last+1")
 }
