@@ -16,6 +16,8 @@ package hashjoin
 
 import (
 	"bytes"
+	"math/bits"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -35,7 +37,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const opName = "hash_join"
+const (
+	opName                       = "hash_join"
+	asofLinearOnlyGroupSizeLimit = 4
+)
 
 func (hashJoin *HashJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -955,34 +960,52 @@ func (ctr *container) findAsofPredecessor(
 		return -1, false, nil
 	}
 
-	// Singleton groups do not benefit from retained metadata.
-	if len(candidates) == 1 {
-		candidate := candidates[0]
-		rightValue, rightValid := ctr.asofRightTemporalValue(hashJoin, candidate)
-		if !rightValid || !asofPredecessorEligible(rightValue, leftValue, ctr.asofStrict) {
+	// A bounded scan is cheaper than retaining per-group metadata for tiny
+	// equality groups, even when they are reused. This is the literal
+	// one-best-row path: no index table and no per-row search state.
+	if len(candidates) <= asofLinearOnlyGroupSizeLimit {
+		best = ctr.scanAsofBest(hashJoin, candidates, leftValue, ctr.asofStrict)
+		if best < 0 {
 			return -1, false, nil
 		}
-		batchIdx := int64(candidate / colexec.DefaultBatchSize)
-		rowIdx := int64(candidate % colexec.DefaultBatchSize)
+		batchIdx := int64(best / colexec.DefaultBatchSize)
+		rowIdx := int64(best % colexec.DefaultBatchSize)
 		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
-		return candidate, qualified, evalErr
+		return best, qualified, evalErr
 	}
 
-	index, indexErr := ctr.getOrBuildAsofIndex(hashJoin, proc, groupKey, candidates)
+	index, firstProbe, indexErr := ctr.getOrCreateAsofIndex(hashJoin, proc, groupKey, candidates)
 	if indexErr != nil {
 		return -1, false, indexErr
 	}
-	switch index.order {
-	case asofIndexEmpty:
-		return -1, false, nil
-	case asofIndexAscending:
-		best = ctr.searchAscendingAsof(hashJoin, candidates, leftValue, ctr.asofStrict)
-	case asofIndexDescending:
-		best = ctr.searchDescendingAsof(hashJoin, candidates, leftValue, ctr.asofStrict)
-	case asofIndexTree:
-		best = ctr.searchAsofTree(hashJoin, index, leftValue, ctr.asofStrict)
-	default:
-		return -1, false, moerr.NewInternalErrorNoCtx("invalid ASOF predecessor index")
+	if firstProbe {
+		// The first probe follows the one-best-row algorithm directly: scan the
+		// group once, keep only the closest candidate, and classify the immutable
+		// selection for possible reuse. No per-row search index is built here.
+		best = ctr.classifyAndScanAsofGroup(hashJoin, index, candidates, leftValue, ctr.asofStrict)
+	} else {
+		switch index.order {
+		case asofIndexEmpty:
+			return -1, false, nil
+		case asofIndexAscending:
+			best = ctr.searchAscendingAsof(hashJoin, candidates, leftValue, ctr.asofStrict)
+		case asofIndexDescending:
+			best = ctr.searchDescendingAsof(hashJoin, candidates, leftValue, ctr.asofStrict)
+		case asofIndexLinear:
+			if index.linearProbes >= asofIndexPromotionScans(index.candidateCount, index.validCount) {
+				if buildErr := ctr.buildSortedAsofIndex(hashJoin, proc, index, candidates); buildErr != nil {
+					return -1, false, buildErr
+				}
+				best = searchSortedAsof(index, leftValue, ctr.asofStrict)
+			} else {
+				best = ctr.scanAsofBest(hashJoin, candidates, leftValue, ctr.asofStrict)
+				index.linearProbes++
+			}
+		case asofIndexSorted:
+			best = searchSortedAsof(index, leftValue, ctr.asofStrict)
+		default:
+			return -1, false, moerr.NewInternalErrorNoCtx("invalid ASOF predecessor index")
+		}
 	}
 	if best < 0 {
 		return -1, false, nil
@@ -1035,19 +1058,19 @@ func asofPredecessorEligible(right, left int64, strict bool) bool {
 	return right <= left
 }
 
-func (ctr *container) getOrBuildAsofIndex(
+func (ctr *container) getOrCreateAsofIndex(
 	hashJoin *HashJoin,
 	proc *process.Process,
 	groupKey uint64,
 	candidates []int32,
-) (*asofIndex, error) {
+) (*asofIndex, bool, error) {
 	if err := ctr.ensureAsofIndexTable(hashJoin, proc); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	indexPos := ctr.findAsofIndexSlot(groupKey)
 	if ctr.asofIndexes[indexPos].occupied &&
 		int(ctr.asofIndexes[indexPos].candidateCount) == len(candidates) {
-		return &ctr.asofIndexes[indexPos], nil
+		return &ctr.asofIndexes[indexPos], false, nil
 	}
 	if ctr.asofIndexes[indexPos].occupied {
 		// Production JoinMaps are immutable, so a changed group length denotes a
@@ -1055,21 +1078,22 @@ func (ctr *container) getOrBuildAsofIndex(
 		// collision chain; invalidate the complete generation instead.
 		ctr.cleanAsofIndexes(proc)
 		if err := ctr.ensureAsofIndexTable(hashJoin, proc); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		indexPos = ctr.findAsofIndexSlot(groupKey)
 	}
 
-	index, buildErr := ctr.buildAsofIndex(hashJoin, proc, groupKey, candidates)
-	if buildErr != nil {
-		return nil, buildErr
+	index := asofIndex{
+		key:            groupKey,
+		candidateCount: int32(len(candidates)),
+		order:          asofIndexLinear,
+		occupied:       true,
 	}
 	if ctr.asofIndexCount+1 > len(ctr.asofIndexes)*3/4 {
 		capacity := len(ctr.asofIndexes) * 2
 		newIndexes, allocErr := mpool.MakeSliceAccounted[asofIndex](capacity, proc.Mp(), hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex)
 		if allocErr != nil {
-			mpool.FreeSlice(proc.Mp(), index.nodes)
-			return nil, allocErr
+			return nil, false, allocErr
 		}
 		for _, old := range ctr.asofIndexes {
 			if !old.occupied {
@@ -1087,7 +1111,7 @@ func (ctr *container) getOrBuildAsofIndex(
 	}
 	ctr.asofIndexes[indexPos] = index
 	ctr.asofIndexCount++
-	return &ctr.asofIndexes[indexPos], nil
+	return &ctr.asofIndexes[indexPos], true, nil
 }
 
 func (ctr *container) ensureAsofIndexTable(hashJoin *HashJoin, proc *process.Process) error {
@@ -1105,27 +1129,24 @@ func (ctr *container) ensureAsofIndexTable(hashJoin *HashJoin, proc *process.Pro
 	return nil
 }
 
-func (ctr *container) buildAsofIndex(
+func (ctr *container) classifyAndScanAsofGroup(
 	hashJoin *HashJoin,
-	proc *process.Process,
-	groupKey uint64,
+	index *asofIndex,
 	candidates []int32,
-) (asofIndex, error) {
-	index := asofIndex{
-		key:            groupKey,
-		root:           -1,
-		candidateCount: int32(len(candidates)),
-		occupied:       true,
-	}
+	leftValue int64,
+	strict bool,
+) int32 {
+	best := int32(-1)
+	var bestValue int64
 	ascending, descending := true, true
 	nonNullCount := 0
 	hasPrevious := false
+	hasNull := false
 	var previous int64
 	for _, candidate := range candidates {
 		value, valid := ctr.asofRightTemporalValue(hashJoin, candidate)
 		if !valid {
-			ascending = false
-			descending = false
+			hasNull = true
 			continue
 		}
 		nonNullCount++
@@ -1139,40 +1160,132 @@ func (ctr *container) buildAsofIndex(
 		}
 		previous = value
 		hasPrevious = true
+		if asofPredecessorEligible(value, leftValue, strict) &&
+			(best < 0 || value > bestValue) {
+			best = candidate
+			bestValue = value
+		}
 	}
+	index.validCount = int32(nonNullCount)
+	index.linearProbes = 1
 	if nonNullCount == 0 {
 		index.order = asofIndexEmpty
-		return index, nil
+		return -1
 	}
-	if ascending {
+	// Binary search over the JoinMap selection is valid only when every
+	// candidate has a temporal value. A NULL hole would break its ordering.
+	if !hasNull && ascending {
 		index.order = asofIndexAscending
-		return index, nil
+		return best
 	}
-	if descending {
+	if !hasNull && descending {
 		index.order = asofIndexDescending
-		return index, nil
+		return best
 	}
+	index.order = asofIndexLinear
+	return best
+}
 
-	nodes, allocErr := mpool.MakeSliceAccounted[asofTreeNode](
-		nonNullCount, proc.Mp(), hashJoin.allocationAccount,
+func (ctr *container) scanAsofBest(
+	hashJoin *HashJoin,
+	candidates []int32,
+	leftValue int64,
+	strict bool,
+) int32 {
+	best := int32(-1)
+	var bestValue int64
+	for _, candidate := range candidates {
+		value, valid := ctr.asofRightTemporalValue(hashJoin, candidate)
+		if !valid || !asofPredecessorEligible(value, leftValue, strict) {
+			continue
+		}
+		if best < 0 || value > bestValue {
+			best = candidate
+			bestValue = value
+		}
+	}
+	return best
+}
+
+// asofIndexPromotionScans is an online rent-or-buy boundary. One linear probe
+// costs candidateCount visits. Building the compact index costs one fill scan
+// plus approximately validCount*ceil(log2(validCount)) sort comparisons.
+// The comparison estimate is bounded by the accompanying focused benchmark:
+// sorting copied integers is much cheaper than revisiting vector-backed rows.
+// A group used once or a few times therefore avoids eager sort/allocation.
+func asofIndexPromotionScans(candidateCount, validCount int32) uint32 {
+	if candidateCount <= 0 || validCount <= 0 {
+		return ^uint32(0)
+	}
+	levels := bits.Len32(uint32(validCount - 1))
+	if levels == 0 {
+		levels = 1
+	}
+	buildWork := int64(candidateCount) + int64(validCount)*int64(levels)
+	scans := (buildWork + int64(candidateCount) - 1) / int64(candidateCount)
+	if scans < 2 {
+		scans = 2
+	}
+	// The accompanying benchmark covers 16..4095 unordered rows. Sorting the
+	// copied integer entries costs no more than four vector-backed scans there;
+	// cap the comparison-count estimate so it does not overprice cache-local
+	// sorting and leave a repeatedly probed group on the linear path too long.
+	if scans > 4 {
+		scans = 4
+	}
+	return uint32(scans)
+}
+
+func (ctr *container) buildSortedAsofIndex(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	index *asofIndex,
+	candidates []int32,
+) error {
+	entries, allocErr := mpool.MakeSliceAccounted[asofIndexEntry](
+		int(index.validCount), proc.Mp(), hashJoin.allocationAccount,
 		mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex,
 	)
 	if allocErr != nil {
-		return asofIndex{}, allocErr
+		return allocErr
 	}
-	index.order = asofIndexTree
-	index.nodes = nodes
-	next := int32(0)
-	for _, candidate := range candidates {
+	next := 0
+	for ordinal, candidate := range candidates {
 		value, valid := ctr.asofRightTemporalValue(hashJoin, candidate)
 		if !valid {
 			continue
 		}
-		nodes[next] = asofTreeNode{row: candidate, left: -1, right: -1, height: 1}
-		index.root = ctr.insertAsofTreeNode(hashJoin, nodes, index.root, next, value)
+		if next >= len(entries) {
+			mpool.FreeSlice(proc.Mp(), entries)
+			return moerr.NewInternalErrorNoCtx("ASOF group changed while building predecessor index")
+		}
+		entries[next] = asofIndexEntry{value: value, row: candidate, ordinal: int32(ordinal)}
 		next++
 	}
-	return index, nil
+	if next != len(entries) {
+		mpool.FreeSlice(proc.Mp(), entries)
+		return moerr.NewInternalErrorNoCtx("ASOF group changed while building predecessor index")
+	}
+	slices.SortFunc(entries, func(left, right asofIndexEntry) int {
+		if left.value < right.value {
+			return -1
+		}
+		if left.value > right.value {
+			return 1
+		}
+		// Reverse ordinal order makes the final entry for an equal timestamp
+		// the first row in the materialized JoinMap selection.
+		if left.ordinal > right.ordinal {
+			return -1
+		}
+		if left.ordinal < right.ordinal {
+			return 1
+		}
+		return 0
+	})
+	index.entries = entries
+	index.order = asofIndexSorted
+	return nil
 }
 
 func (ctr *container) searchAscendingAsof(
@@ -1232,112 +1345,20 @@ func (ctr *container) searchDescendingAsof(
 	return candidates[lo]
 }
 
-func (ctr *container) searchAsofTree(
-	hashJoin *HashJoin,
-	index *asofIndex,
-	leftValue int64,
-	strict bool,
-) int32 {
-	best := int32(-1)
-	for node := index.root; node >= 0; {
-		value, _ := ctr.asofRightTemporalValue(hashJoin, index.nodes[node].row)
-		if asofPredecessorEligible(value, leftValue, strict) {
-			best = index.nodes[node].row
-			node = index.nodes[node].right
+func searchSortedAsof(index *asofIndex, leftValue int64, strict bool) int32 {
+	lo, hi := 0, len(index.entries)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if asofPredecessorEligible(index.entries[mid].value, leftValue, strict) {
+			lo = mid + 1
 		} else {
-			node = index.nodes[node].left
+			hi = mid
 		}
 	}
-	return best
-}
-
-func (ctr *container) insertAsofTreeNode(
-	hashJoin *HashJoin,
-	nodes []asofTreeNode,
-	root int32,
-	newNode int32,
-	newValue int64,
-) int32 {
-	if root < 0 {
-		return newNode
-	}
-	rootValue, _ := ctr.asofRightTemporalValue(hashJoin, nodes[root].row)
-	if compareAsofTreeKey(newValue, nodes[newNode].row, rootValue, nodes[root].row) < 0 {
-		nodes[root].left = ctr.insertAsofTreeNode(hashJoin, nodes, nodes[root].left, newNode, newValue)
-	} else {
-		nodes[root].right = ctr.insertAsofTreeNode(hashJoin, nodes, nodes[root].right, newNode, newValue)
-	}
-	updateAsofTreeHeight(nodes, root)
-	balance := asofTreeHeight(nodes, nodes[root].left) - asofTreeHeight(nodes, nodes[root].right)
-	if balance > 1 {
-		if asofTreeBalance(nodes, nodes[root].left) < 0 {
-			nodes[root].left = rotateAsofTreeLeft(nodes, nodes[root].left)
-		}
-		return rotateAsofTreeRight(nodes, root)
-	}
-	if balance < -1 {
-		if asofTreeBalance(nodes, nodes[root].right) > 0 {
-			nodes[root].right = rotateAsofTreeRight(nodes, nodes[root].right)
-		}
-		return rotateAsofTreeLeft(nodes, root)
-	}
-	return root
-}
-
-func compareAsofTreeKey(leftValue int64, leftRow int32, rightValue int64, rightRow int32) int {
-	if leftValue < rightValue {
+	if lo == 0 {
 		return -1
 	}
-	if leftValue > rightValue {
-		return 1
-	}
-	// Reverse the ordinal only inside an equal timestamp. The predecessor's
-	// greatest tree key is then the first row materialized for that timestamp.
-	if leftRow > rightRow {
-		return -1
-	}
-	if leftRow < rightRow {
-		return 1
-	}
-	return 0
-}
-
-func asofTreeHeight(nodes []asofTreeNode, node int32) int32 {
-	if node < 0 {
-		return 0
-	}
-	return nodes[node].height
-}
-
-func asofTreeBalance(nodes []asofTreeNode, node int32) int32 {
-	if node < 0 {
-		return 0
-	}
-	return asofTreeHeight(nodes, nodes[node].left) - asofTreeHeight(nodes, nodes[node].right)
-}
-
-func updateAsofTreeHeight(nodes []asofTreeNode, node int32) {
-	nodes[node].height = max(asofTreeHeight(nodes, nodes[node].left), asofTreeHeight(nodes, nodes[node].right)) + 1
-}
-
-func rotateAsofTreeLeft(nodes []asofTreeNode, root int32) int32 {
-	newRoot := nodes[root].right
-	middle := nodes[newRoot].left
-	nodes[newRoot].left = root
-	nodes[root].right = middle
-	updateAsofTreeHeight(nodes, root)
-	updateAsofTreeHeight(nodes, newRoot)
-	return newRoot
-}
-
-func rotateAsofTreeRight(nodes []asofTreeNode, root int32) int32 {
-	newRoot := nodes[root].left
-	middle := nodes[newRoot].right
-	nodes[newRoot].right = root
-	nodes[root].left = middle
-	updateAsofTreeHeight(nodes, root)
-	updateAsofTreeHeight(nodes, newRoot)
-	return newRoot
+	return index.entries[lo-1].row
 }
 
 func hashAsofIndex(key uint64, size int) int {

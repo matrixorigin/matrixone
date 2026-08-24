@@ -129,26 +129,31 @@ const (
 	asofIndexEmpty asofIndexOrder = iota
 	asofIndexAscending
 	asofIndexDescending
-	asofIndexTree
+	asofIndexLinear
+	asofIndexSorted
 )
 
-// asofTreeNode is an array-backed AVL node. Child links are indexes into the
-// same mpool-accounted slice, so no node or pointer escapes to the Go heap.
-type asofTreeNode struct {
-	row    int32
-	left   int32
-	right  int32
-	height int32
+// asofIndexEntry is the cache-friendly representation used only after an
+// unordered equality group proves hot enough to amortize sorting. Ordinal is
+// the position in the immutable JoinMap selection; reverse ordinal order for
+// equal timestamps preserves the first materialized row during predecessor
+// search.
+type asofIndexEntry struct {
+	value   int64
+	row     int32
+	ordinal int32
 }
 
 // asofIndex keeps all equality-group metadata in an accounted open-addressed
-// table. Time-ordered groups search the immutable JoinMap selection directly;
-// only an unordered group owns an accounted AVL node slice.
+// table. Time-ordered groups search the immutable JoinMap selection directly.
+// An unordered group starts with one-best-row linear scans and owns a sorted
+// entry slice only after repeated probes amortize its construction cost.
 type asofIndex struct {
 	key            uint64
-	nodes          []asofTreeNode
-	root           int32
+	entries        []asofIndexEntry
 	candidateCount int32
+	validCount     int32
+	linearProbes   uint32
 	order          asofIndexOrder
 	occupied       bool
 }
@@ -346,7 +351,7 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 func (ctr *container) cleanAsofIndexes(proc *process.Process) {
 	if proc != nil {
 		for _, index := range ctr.asofIndexes {
-			mpool.FreeSlice(proc.Mp(), index.nodes)
+			mpool.FreeSlice(proc.Mp(), index.entries)
 		}
 		mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
 	}

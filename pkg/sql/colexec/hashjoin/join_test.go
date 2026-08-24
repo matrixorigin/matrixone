@@ -1327,36 +1327,44 @@ func TestFindAsofPredecessor(t *testing.T) {
 		[]string{"2026-01-01 10:00:00"})
 	left.SetRowCount(1)
 	right := batch.NewWithSize(2)
-	right.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
-	right.Vecs[1] = testutil.NewTimestampVector(3, timeType, proc.Mp(), false, nil,
-		[]string{"2026-01-01 11:00:00", "2026-01-01 07:00:00", "2026-01-01 09:00:00"})
-	right.SetRowCount(3)
+	right.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1, 1}, nil, proc.Mp())
+	right.Vecs[1] = testutil.NewTimestampVector(5, timeType, proc.Mp(), false, nil,
+		[]string{
+			"2026-01-01 11:00:00", "2026-01-01 07:00:00", "2026-01-01 09:00:00",
+			"2026-01-01 05:00:00", "2026-01-01 08:00:00",
+		})
+	right.SetRowCount(5)
 
 	arg.ctr.leftBat = left
 	arg.ctr.rightBats = []*batch.Batch{right}
 	arg.ctr.joinBats[0], arg.ctr.cfs1 = colexec.NewJoinBatch(left, proc.Mp())
 	arg.ctr.joinBats[1], arg.ctr.cfs2 = colexec.NewJoinBatch(right, proc.Mp())
-	best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 0, []int32{0, 1, 2})
+	candidates := []int32{0, 1, 2, 3, 4}
+	best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 0, candidates)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, int32(2), best)
-	_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 1, []int32{0, 1, 2})
+	_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 1, candidates)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, 2, arg.ctr.asofIndexCount)
 
 	// Equal-timestamp ties follow the materialized build order for this map.
 	right.Vecs[1].CleanOnlyData()
-	require.NoError(t, vector.AppendFixedList(right.Vecs[1], []types.Timestamp{9, 9}, nil, proc.Mp()))
-	right.SetRowCount(2)
-	best, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 0, []int32{0, 1})
+	require.NoError(t, vector.AppendFixedList(
+		right.Vecs[1], []types.Timestamp{9, 9, 9, 9, 9, 9}, nil, proc.Mp(),
+	))
+	require.NoError(t, vector.AppendFixed(right.Vecs[0], int32(1), false, proc.Mp()))
+	right.SetRowCount(6)
+	changedCandidates := []int32{0, 1, 2, 3, 4, 5}
+	best, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 0, changedCandidates)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, int32(0), best)
 	// A changed group belongs to a new immutable-map generation. Rebuilding it
 	// drops every old open-addressed entry rather than breaking a collision chain.
 	require.Equal(t, 1, arg.ctr.asofIndexCount)
-	_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 0, []int32{0, 1})
+	_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 0, changedCandidates)
 	require.NoError(t, err)
 	require.True(t, found)
 
@@ -1369,7 +1377,7 @@ func TestFindAsofPredecessor(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-func TestAsofIndexChoosesOrderedSearchOrAccountedTree(t *testing.T) {
+func TestAsofIndexChoosesOrderedOrAdaptiveSearch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
@@ -1391,16 +1399,16 @@ func TestAsofIndexChoosesOrderedSearchOrAccountedTree(t *testing.T) {
 	left.SetRowCount(1)
 
 	// Four equality groups: ascending, descending, unordered, and unordered
-	// with a NULL temporal value. Ordered groups reuse JoinMap selections and
-	// allocate no per-row index; only unordered non-NULL rows become AVL nodes.
+	// with a NULL temporal value. Ordered groups reuse JoinMap selections. An
+	// unordered group starts with a one-best-row scan and no per-row index.
 	rightTimes := []types.Timestamp{
-		7, 9, 11,
-		11, 9, 7,
-		9, 7, 9,
-		0, 9, 8,
+		5, 7, 9, 11, 13,
+		13, 11, 9, 7, 5,
+		9, 7, 9, 5, 11,
+		0, 9, 8, 6, 12,
 	}
 	nulls := make([]bool, len(rightTimes))
-	nulls[9] = true
+	nulls[15] = true
 	right := batch.NewWithSize(2)
 	right.Vecs[0] = testutil.MakeInt32Vector(make([]int32, len(rightTimes)), nil, proc.Mp())
 	right.Vecs[1] = vector.NewVec(timeType)
@@ -1411,18 +1419,28 @@ func TestAsofIndexChoosesOrderedSearchOrAccountedTree(t *testing.T) {
 	arg.ctr.rightBats = []*batch.Batch{right}
 	arg.ctr.joinBats[0], arg.ctr.cfs1 = colexec.NewJoinBatch(left, proc.Mp())
 	arg.ctr.joinBats[1], arg.ctr.cfs2 = colexec.NewJoinBatch(right, proc.Mp())
+	// Tiny groups always use the literal one-best-row scan, even under reuse:
+	// no per-group metadata and no per-row index are retained.
+	for range 8 {
+		best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 99, []int32{10, 11, 12})
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, int32(10), best)
+	}
+	require.Empty(t, arg.ctr.asofIndexes)
+	require.Zero(t, arg.ctr.asofIndexCount)
 
 	tests := []struct {
 		key        uint64
 		candidates []int32
 		want       int32
 		order      asofIndexOrder
-		nodes      int
+		entries    int
 	}{
-		{key: 1, candidates: []int32{0, 1, 2}, want: 1, order: asofIndexAscending},
-		{key: 2, candidates: []int32{3, 4, 5}, want: 4, order: asofIndexDescending},
-		{key: 3, candidates: []int32{6, 7, 8}, want: 6, order: asofIndexTree, nodes: 3},
-		{key: 4, candidates: []int32{9, 10, 11}, want: 10, order: asofIndexTree, nodes: 2},
+		{key: 1, candidates: []int32{0, 1, 2, 3, 4}, want: 2, order: asofIndexAscending},
+		{key: 2, candidates: []int32{5, 6, 7, 8, 9}, want: 7, order: asofIndexDescending},
+		{key: 3, candidates: []int32{10, 11, 12, 13, 14}, want: 10, order: asofIndexLinear},
+		{key: 4, candidates: []int32{15, 16, 17, 18, 19}, want: 16, order: asofIndexLinear},
 	}
 	for _, test := range tests {
 		best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, test.key, test.candidates)
@@ -1431,8 +1449,28 @@ func TestAsofIndexChoosesOrderedSearchOrAccountedTree(t *testing.T) {
 		require.Equal(t, test.want, best)
 		index := arg.ctr.asofIndexes[arg.ctr.findAsofIndexSlot(test.key)]
 		require.Equal(t, test.order, index.order)
-		require.Len(t, index.nodes, test.nodes)
+		require.Len(t, index.entries, test.entries)
 	}
+
+	// The unordered group is promoted only after its prior scans have paid the
+	// estimated fill+sort cost. Equal timestamps still select the first row in
+	// the materialized JoinMap selection after promotion.
+	unordered := []int32{10, 11, 12, 13, 14}
+	index := &arg.ctr.asofIndexes[arg.ctr.findAsofIndexSlot(3)]
+	for index.linearProbes < asofIndexPromotionScans(index.candidateCount, index.validCount) {
+		best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 3, unordered)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, int32(10), best)
+	}
+	best, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, 3, unordered)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, int32(10), best)
+	require.Equal(t, asofIndexSorted, index.order)
+	require.Len(t, index.entries, 5)
+	require.Equal(t, int32(10), searchSortedAsof(index, 9, false))
+	require.Equal(t, int32(11), searchSortedAsof(index, 9, true))
 
 	arg.ctr.leftBat = nil
 	arg.ctr.rightBats = nil
@@ -1443,7 +1481,7 @@ func TestAsofIndexChoosesOrderedSearchOrAccountedTree(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-func TestAsofUnorderedIndexHasLogarithmicHeightAndReusesAllocation(t *testing.T) {
+func TestAsofUnorderedIndexPromotesAfterAmortizationAndReusesAllocation(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
@@ -1459,11 +1497,22 @@ func TestAsofUnorderedIndexHasLogarithmicHeightAndReusesAllocation(t *testing.T)
 	require.NoError(t, arg.Prepare(proc))
 
 	const rowCount = 4095
+	const repeatedProbes = 1024
+	const probeRows = repeatedProbes + 16 // promotion uses at most eight prior scans
+	leftTimestamps := make([]types.Timestamp, probeRows)
+	leftKeys := make([]int32, probeRows)
+	for i := range probeRows {
+		leftKeys[i] = 1
+		// Exercise forward and backward probe-time movement across both the
+		// linear and sorted states. The build side contains every value.
+		leftTimestamps[i] = types.Timestamp((i*997 + 17) % rowCount)
+	}
+	leftTimestamps[0] = rowCount - 1
 	left := batch.NewWithSize(2)
-	left.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	left.Vecs[0] = testutil.MakeInt32Vector(leftKeys, nil, proc.Mp())
 	left.Vecs[1] = vector.NewVec(timeType)
-	require.NoError(t, vector.AppendFixedList(left.Vecs[1], []types.Timestamp{rowCount - 1}, nil, proc.Mp()))
-	left.SetRowCount(1)
+	require.NoError(t, vector.AppendFixedList(left.Vecs[1], leftTimestamps, nil, proc.Mp()))
+	left.SetRowCount(probeRows)
 
 	candidates := make([]int32, rowCount)
 	timestamps := make([]types.Timestamp, rowCount)
@@ -1492,18 +1541,45 @@ func TestAsofUnorderedIndexHasLogarithmicHeightAndReusesAllocation(t *testing.T)
 	require.True(t, valid)
 	require.Equal(t, int64(rowCount-1), bestValue)
 	index := &arg.ctr.asofIndexes[arg.ctr.findAsofIndexSlot(1)]
-	require.Equal(t, asofIndexTree, index.order)
-	require.Len(t, index.nodes, rowCount)
-	require.LessOrEqual(t, index.nodes[index.root].height, int32(16))
-
-	// Repeated probes reuse the immutable index and add no retained memory.
-	_, _, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 1, candidates)
-	require.NoError(t, err)
-	retained := proc.Mp().CurrNB()
-	for range 1024 {
-		_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 1, candidates)
+	require.Equal(t, asofIndexLinear, index.order)
+	require.Empty(t, index.entries)
+	promotionScans := asofIndexPromotionScans(index.candidateCount, index.validCount)
+	require.Greater(t, promotionScans, uint32(1))
+	probeRow := int64(1)
+	for index.linearProbes < promotionScans {
+		best, found, err = arg.ctr.findAsofPredecessor(arg, proc, probeRow, 1, candidates)
 		require.NoError(t, err)
 		require.True(t, found)
+		bestValue, valid = arg.ctr.asofRightTemporalValue(arg, best)
+		require.True(t, valid)
+		require.Equal(t, int64(leftTimestamps[probeRow]), bestValue)
+		require.Equal(t, asofIndexLinear, index.order)
+		require.Empty(t, index.entries)
+		probeRow++
+	}
+
+	// The next probe buys the compact sorted representation. No AVL/tree nodes
+	// or retained per-probe candidates are involved.
+	best, found, err = arg.ctr.findAsofPredecessor(arg, proc, probeRow, 1, candidates)
+	require.NoError(t, err)
+	require.True(t, found)
+	bestValue, valid = arg.ctr.asofRightTemporalValue(arg, best)
+	require.True(t, valid)
+	require.Equal(t, int64(leftTimestamps[probeRow]), bestValue)
+	probeRow++
+	require.Equal(t, asofIndexSorted, index.order)
+	require.Len(t, index.entries, rowCount)
+
+	// Repeated probes reuse the immutable index and add no retained memory.
+	retained := proc.Mp().CurrNB()
+	for range repeatedProbes {
+		best, found, err = arg.ctr.findAsofPredecessor(arg, proc, probeRow, 1, candidates)
+		require.NoError(t, err)
+		require.True(t, found)
+		bestValue, valid = arg.ctr.asofRightTemporalValue(arg, best)
+		require.True(t, valid)
+		require.Equal(t, int64(leftTimestamps[probeRow]), bestValue)
+		probeRow++
 	}
 	require.Equal(t, retained, proc.Mp().CurrNB())
 
@@ -1514,6 +1590,137 @@ func TestAsofUnorderedIndexHasLogarithmicHeightAndReusesAllocation(t *testing.T)
 	right.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestAsofIndexPromotionScansBalancesReuseAndBuildCost(t *testing.T) {
+	tests := []struct {
+		name       string
+		candidates int32
+		valid      int32
+		want       uint32
+	}{
+		{name: "empty", candidates: 0, valid: 0, want: ^uint32(0)},
+		{name: "smallest adaptive group", candidates: 5, valid: 5, want: 4},
+		{name: "ordinary unordered", candidates: 16, valid: 16, want: 4},
+		{name: "large unordered", candidates: 4095, valid: 4095, want: 4},
+		{name: "mostly null", candidates: 4095, valid: 1, want: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, asofIndexPromotionScans(test.candidates, test.valid))
+		})
+	}
+}
+
+func TestAsofSortedIndexAllocationFailureKeepsLinearState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	arg := &HashJoin{AsofRightCol: 0}
+	require.NoError(t, arg.SetAllocationAccount(account))
+
+	right := batch.NewWithSize(1)
+	right.Vecs[0] = vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		right.Vecs[0], []types.Timestamp{3, 1, 2}, nil, proc.Mp(),
+	))
+	right.SetRowCount(3)
+	arg.ctr.rightBats = []*batch.Batch{right}
+	index := &asofIndex{
+		validCount:   3,
+		linearProbes: 8,
+		order:        asofIndexLinear,
+	}
+
+	err = arg.ctr.buildSortedAsofIndex(arg, proc, index, []int32{0, 1, 2})
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Equal(t, asofIndexLinear, index.order)
+	require.Empty(t, index.entries)
+	require.Zero(t, account.Snapshot().Used)
+
+	arg.ctr.rightBats = nil
+	right.Clean(proc.Mp())
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+var benchmarkAsofBest int32
+
+func BenchmarkAsofUnorderedGroupLookup(b *testing.B) {
+	for _, test := range []struct {
+		name     string
+		rowCount int
+		stride   int
+	}{
+		{name: "rows-3", rowCount: 3, stride: 2},
+		{name: "rows-16", rowCount: 16, stride: 5},
+		{name: "rows-256", rowCount: 256, stride: 37},
+		{name: "rows-4095", rowCount: 4095, stride: 37},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			benchmarkAsofUnorderedGroupLookup(b, test.rowCount, test.stride)
+		})
+	}
+}
+
+func benchmarkAsofUnorderedGroupLookup(b *testing.B, rowCount, stride int) {
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	arg := &HashJoin{AsofRightCol: 1}
+	installTestAllocation(b, arg)
+
+	candidates := make([]int32, rowCount)
+	timestamps := make([]types.Timestamp, rowCount)
+	for i := range rowCount {
+		candidates[i] = int32(i)
+		timestamps[i] = types.Timestamp((i * stride) % rowCount)
+	}
+	right := batch.NewWithSize(2)
+	right.Vecs[1] = vector.NewVec(types.T_timestamp.ToType())
+	if err := vector.AppendFixedList(right.Vecs[1], timestamps, nil, proc.Mp()); err != nil {
+		b.Fatal(err)
+	}
+	right.SetRowCount(rowCount)
+	arg.ctr.rightBats = []*batch.Batch{right}
+
+	index := &asofIndex{validCount: int32(rowCount)}
+	if err := arg.ctr.buildSortedAsofIndex(arg, proc, index, candidates); err != nil {
+		b.Fatal(err)
+	}
+	defer func() {
+		mpool.FreeSlice(proc.Mp(), index.entries)
+		arg.ctr.rightBats = nil
+		right.Clean(proc.Mp())
+		proc.Free()
+	}()
+
+	b.Run("linear", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			benchmarkAsofBest = arg.ctr.scanAsofBest(arg, candidates, int64(rowCount-1), false)
+		}
+	})
+	b.Run("build-sorted", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			candidateIndex := &asofIndex{validCount: int32(rowCount)}
+			if err := arg.ctr.buildSortedAsofIndex(arg, proc, candidateIndex, candidates); err != nil {
+				b.Fatal(err)
+			}
+			mpool.FreeSlice(proc.Mp(), candidateIndex.entries)
+		}
+	})
+	b.Run("sorted", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			benchmarkAsofBest = searchSortedAsof(index, int64(rowCount-1), false)
+		}
+	})
 }
 
 func TestAsofIndexMetadataGrowsAmortizedAndCleans(t *testing.T) {
@@ -1535,9 +1742,13 @@ func TestAsofIndexMetadataGrowsAmortizedAndCleans(t *testing.T) {
 	left.Vecs[1] = testutil.NewTimestampVector(1, timeType, proc.Mp(), false, nil, []string{"2026-01-01 10:00:00"})
 	left.SetRowCount(1)
 	right := batch.NewWithSize(2)
-	right.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
-	right.Vecs[1] = testutil.NewTimestampVector(2, timeType, proc.Mp(), false, nil, []string{"2026-01-01 09:00:00", "2026-01-01 08:00:00"})
-	right.SetRowCount(2)
+	right.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1, 1}, nil, proc.Mp())
+	right.Vecs[1] = testutil.NewTimestampVector(5, timeType, proc.Mp(), false, nil,
+		[]string{
+			"2026-01-01 09:00:00", "2026-01-01 08:00:00", "2026-01-01 07:00:00",
+			"2026-01-01 06:00:00", "2026-01-01 05:00:00",
+		})
+	right.SetRowCount(5)
 	arg.ctr.leftBat = left
 	arg.ctr.rightBats = []*batch.Batch{right}
 	arg.ctr.joinBats[0], arg.ctr.cfs1 = colexec.NewJoinBatch(left, proc.Mp())
@@ -1546,7 +1757,9 @@ func TestAsofIndexMetadataGrowsAmortizedAndCleans(t *testing.T) {
 	// The index must use bounded-amortized placement rather than shifting all
 	// previously seen groups for each first touch.
 	for group := uint64(64); group > 0; group-- {
-		_, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, group, []int32{0, 1})
+		_, found, err := arg.ctr.findAsofPredecessor(
+			arg, proc, 0, group, []int32{0, 1, 2, 3, 4},
+		)
 		require.NoError(t, err)
 		require.True(t, found)
 	}
