@@ -87,7 +87,11 @@ func (external *External) Prepare(proc *process.Process) error {
 	param.maxBatchSize = uint64(float64(param.maxBatchSize) * 0.6)
 
 	if param.Extern == nil {
-		if param.DatastreamScan != nil {
+		if param.ForeignScan != nil {
+			// Same rationale as datastream below: no file-backed ExternParam,
+			// CreateSql is the foreign envelope, not JSON.
+			param.Extern = ForeignExternParam(param.ForeignScan.Kind)
+		} else if param.DatastreamScan != nil {
 			// A datastream scan has no file-backed ExternParam; its CreateSql is
 			// the datastream envelope, not JSON.  Rebuild the synthetic param
 			// (remote-run decode arrives here with Extern == nil).
@@ -102,6 +106,9 @@ func (external *External) Prepare(proc *process.Process) error {
 			}
 			param.Extern.FileService = proc.Base.FileService
 		}
+	}
+	if param.ForeignScan != nil && param.ForeignScan.Kind == foreignScanKindESQL {
+		param.ESQLTemporalUTC = true
 	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
@@ -154,6 +161,8 @@ func (external *External) Prepare(proc *process.Process) error {
 
 	// Create reader (single dispatch point)
 	switch {
+	case param.ForeignScan != nil:
+		external.reader = NewForeignScanReader(param)
 	case param.DatastreamScan != nil:
 		external.reader = NewDataStreamReader(param)
 	case param.Extern.ExternType == int32(plan.ExternType_RESULT_SCAN):
@@ -327,10 +336,17 @@ func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
 	if colPos < 0 || colPos >= len(node.TableDef.Cols) || colPos != len(node.TableDef.Cols)-1 {
 		return false
 	}
-	if node.TableDef.Cols[colPos].Name != catalog.ExternalFilePath {
-		return false
+	// Two hidden trailing columns exist: __mo_filepath on ordinary external
+	// tables and __mo_query on ESQL/SQL foreign tables. Either one is the
+	// "file-level" column of its scan (the query text plays the file-name
+	// role for foreign tables).
+	switch node.TableDef.Cols[colPos].Name {
+	case catalog.ExternalFilePath:
+		return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
+	case catalog.ExternalQuery:
+		return node.TableDef.Cols[colPos].ColId == catalog.ExternalQueryColId
 	}
-	return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
+	return false
 }
 
 func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
@@ -436,7 +452,8 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name
-		if i == num-1 && bat.Attrs[i] == catalog.ExternalFilePath {
+		if i == num-1 && (catalog.ContainExternalHidenCol(bat.Attrs[i]) ||
+			catalog.IsForeignQueryCol(bat.Attrs[i], node.TableDef.Cols[i].ColId)) {
 			typ := types.T_varchar.ToType()
 			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)
 			if err != nil {
@@ -1175,7 +1192,11 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 }
 
 func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam, fieldIdx int32) csvparser.Field {
-	if catalog.ContainExternalHidenCol(colName) {
+	// __mo_filepath is synthesized by name (pre-existing behavior); __mo_query
+	// only on foreign scans, so a real __mo_query data column in a
+	// pre-existing generic external table still reads source data.
+	if catalog.ContainExternalHidenCol(colName) ||
+		(param.ForeignScan != nil && colName == catalog.ExternalQuery) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
 	return line[fieldIdx]
@@ -1237,6 +1258,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		id != types.T_bit {
 		field.Val = strings.TrimSpace(field.Val)
 		trimSpace = true
+	}
+	// ES|QL CSV renders dates as ISO 8601 UTC ("2026-01-15T10:20:30.123Z");
+	// MO's temporal parsers reject the trailing 'Z' and interpret zone-less
+	// text in the session time zone, so both ESQL paths (foreign table and
+	// schema-mode esql_tvf) rewrite the value as session-zone wall clock,
+	// preserving the UTC instant.
+	if param.ESQLTemporalUTC &&
+		(id == types.T_timestamp || id == types.T_datetime || id == types.T_date) {
+		field.Val = normalizeISO8601Zulu(field.Val, proc.GetSessionInfo().TimeZone)
 	}
 	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
 	isNullOrEmpty := field.IsNull || mappedNull

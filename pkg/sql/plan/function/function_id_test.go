@@ -731,9 +731,13 @@ var predefinedFunids = map[int]int{
 	MAX_BY_NON_NULL:               560,
 	CHECK_CONSTRAINT_ASSERT:       561,
 	LOAD_TEXT:                     562,
+	ESQL_TVF_CONNECT:              563,
+	ESQL_TVF_DISCONNECT:           564,
+	SQL_TVF_CONNECT:               565,
+	SQL_TVF_DISCONNECT:            566,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 563,
+	FUNCTION_END_NUMBER: 567,
 }
 
 func Test_funids(t *testing.T) {
