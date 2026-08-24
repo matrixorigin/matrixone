@@ -145,6 +145,7 @@ func TestRemoteWaitingListRequiresConfirmedHolder(t *testing.T) {
 				remoteTable.getBind().Group,
 				remoteTable.getBind(),
 				[][]byte{row},
+				newTestRowExclusiveOptions(),
 				source.logger,
 			)
 			waiterTxn.Unlock()
