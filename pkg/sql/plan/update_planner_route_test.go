@@ -1855,6 +1855,13 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		selfRef := mock.ctxt.tables["self_ref"]
 		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
 		emp := mock.ctxt.tables["emp"]
+		// Mock tables without an explicit ID are assigned from map iteration and
+		// can receive 0, which foreign-key metadata reserves for self references.
+		// Keep this non-self child deterministic so the recursive RESTRICT edge is
+		// always resolved as emp.
+		const empTableID = uint64(88895)
+		emp.TblId = empTableID
+		mock.ctxt.objects["emp"].Obj = int64(empTableID)
 		empDeptno := emp.Fkeys[0].Cols[0]
 		selfParentID := selfRef.Fkeys[0].Cols[0]
 		emp.Fkeys = append(emp.Fkeys, &planpb.ForeignKeyDef{
@@ -1865,7 +1872,7 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 			OnUpdate:    planpb.ForeignKeyDef_RESTRICT,
 		})
 		selfRef.RefChildTbls = append(selfRef.RefChildTbls, emp.TblId)
-		mock.ctxt.id2name[emp.TblId] = "emp"
+		mock.ctxt.id2name[empTableID] = "emp"
 
 		logicPlan, err := runOneStmt(mock, t, "UPDATE self_ref SET id = id + 10")
 		require.NoError(t, err)
