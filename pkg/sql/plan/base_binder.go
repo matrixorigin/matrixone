@@ -21,6 +21,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -4760,6 +4761,8 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 	switch {
 	case returnType.Oid == types.T_varchar:
 		changed = adjustControlFlowVarcharMetadata(args, argTypes, valueIndexes, returnType)
+	case returnType.Oid == types.T_varbinary:
+		changed = adjustControlFlowBinaryMetadata(args, argTypes, valueIndexes, returnType)
 	case returnType.Oid.IsDecimal():
 		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
 	}
@@ -4776,6 +4779,12 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 	if returnType.Oid == types.T_varchar {
 		for _, idx := range valueIndexes {
 			argsCastType[idx] = conservativeReturnType
+		}
+		return
+	}
+	if returnType.Oid == types.T_varbinary {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = *returnType
 		}
 		return
 	}
@@ -4874,6 +4883,87 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 		return changed
 	}
 	return false
+}
+
+// adjustControlFlowBinaryMetadata narrows a binary/character conditional
+// result only when every character branch is a known literal. The result is
+// VARBINARY, so a character branch's declared width must first be converted
+// from characters to bytes using its effective charset. MatrixOne currently
+// exposes UTF-8 text as utf8mb4 on the wire and in persisted view metadata;
+// CharsetLegacy is only the zero-value marker on pre-collation plans, not a
+// promise that the client session uses utf8mb3. Keep the advertised utf8mb4
+// bound for that legacy identity as well. New text expressions carry
+// CharsetUTF8/CharsetUTF8MB4Bin and use the same utf8mb4 bound.
+func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	hasBinary := false
+	hasCharacter := false
+	width := int32(0)
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) || controlFlowNullExpr(args[idx]) {
+			continue
+		}
+		typ := argTypes[idx]
+		switch typ.Oid {
+		case types.T_binary, types.T_varbinary:
+			hasBinary = true
+			if typ.Width > width {
+				width = typ.Width
+			}
+		case types.T_char, types.T_varchar:
+			hasCharacter = true
+			lit := args[idx].GetLit()
+			if lit == nil || lit.Isnull {
+				return false
+			}
+			value, ok := lit.Value.(*plan.Literal_Sval)
+			if !ok {
+				return false
+			}
+			candidate := int32(0)
+			maxBytesPerCharacter := controlFlowMaxBytesPerCharacter(typ.Charset)
+			if typ.Width > 0 && typ.Width <= types.MaxVarBinaryLen/maxBytesPerCharacter {
+				candidate = typ.Width * maxBytesPerCharacter
+			} else if typ.Width > 0 {
+				candidate = types.MaxVarBinaryLen
+			}
+			if byteWidth := int32(len(value.Sval)); byteWidth > candidate {
+				candidate = byteWidth
+			}
+			if candidate > width {
+				width = candidate
+			}
+		default:
+			return false
+		}
+	}
+	if !hasBinary || !hasCharacter || width <= 0 || width >= returnType.Width {
+		return false
+	}
+	returnType.Width = width
+	return true
+}
+
+func controlFlowMaxBytesPerCharacter(charset uint8) int32 {
+	switch charset {
+	case types.CharsetBinary:
+		return 1
+	case types.CharsetLegacy:
+		// CharsetLegacy is the zero value in plans written before collation
+		// metadata became meaningful. MatrixOne's effective/public text charset
+		// is utf8mb4, so use its four-byte bound instead of treating this
+		// historical marker as an explicit utf8mb3 setting.
+		return int32(utf8.UTFMax)
+	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
+		// Both explicit text identities are utf8mb4 in MatrixOne. This is the
+		// effective charset of newly bound literals and view expressions, so a
+		// two-character literal has an eight-byte VARBINARY capacity.
+		return int32(utf8.UTFMax)
+	default:
+		// Unknown identities can come from a plan produced by a newer node. Keep
+		// the public utf8mb4 capacity until that identity is understood rather
+		// than understate a value that may contain four-byte UTF-8 code points.
+		return int32(utf8.UTFMax)
+	}
 }
 
 func controlFlowNullExpr(expr *Expr) bool {

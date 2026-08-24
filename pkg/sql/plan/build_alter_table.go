@@ -639,6 +639,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
+	if err := validateAlterTableIdentifierDestinations(ctx.GetContext(), stmt.Options); err != nil {
+		return nil, err
+	}
 	for _, option := range stmt.Options {
 		if rename, ok := option.(*tree.AlterOptionTableName); ok {
 			if err := rejectCrossDatabaseTableRename(ctx.GetContext(), schemaName, rename); err != nil {
@@ -653,6 +656,22 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if isMongoDB {
 		return nil, moerr.NewNotSupported(ctx.GetContext(),
 			"ALTER TABLE on a MongoDB external table; drop and recreate the external table to change its schema")
+	}
+	// The copy-based ALTER path cannot work for envelope-backed external
+	// tables: it recreates the table from SHOW CREATE output (whose inline
+	// config/secret is redacted) and would run the foreign/default query for
+	// the data-copy step. Same rationale as the MongoDB guard above.
+	if _, isForeign, err := IsForeignTableDef(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	} else if isForeign {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on an ESQL/SQL external table; drop and recreate the external table to change its schema")
+	}
+	if _, isDataStream, err := IsDataStreamTableDef(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	} else if isDataStream {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a datastream external table; drop and recreate the external table to change its schema")
 	}
 
 	if tableDef.IsTemporary {
@@ -699,6 +718,44 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
+}
+
+func validateAlterTableIdentifierDestinations(ctx context.Context, options []tree.AlterTableOption) error {
+	for _, option := range options {
+		switch option := option.(type) {
+		case *tree.AlterOptionTableName:
+			if err := validateIdentifier(ctx, string(option.Name.ToTableName().ObjectName)); err != nil {
+				return err
+			}
+		case *tree.AlterOptionAdd:
+			if err := validateTableDefinitionIdentifier(ctx, option.Def); err != nil {
+				return err
+			}
+		case *tree.AlterAddCol:
+			if err := validateTableDefinitionIdentifier(ctx, option.Column); err != nil {
+				return err
+			}
+		case *tree.AlterTableAddColumnClause:
+			for _, column := range option.NewColumns {
+				if err := validateTableDefinitionIdentifier(ctx, column); err != nil {
+					return err
+				}
+			}
+		case *tree.AlterTableModifyColumnClause:
+			if err := validateTableDefinitionIdentifier(ctx, option.NewColumn); err != nil {
+				return err
+			}
+		case *tree.AlterTableChangeColumnClause:
+			if err := validateTableDefinitionIdentifier(ctx, option.NewColumn); err != nil {
+				return err
+			}
+		case *tree.AlterTableRenameColumnClause:
+			if err := validateIdentifier(ctx, option.NewColumnName.ColNameOrigin()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // allowTempTableAlterForIndex returns true if the alter table statement

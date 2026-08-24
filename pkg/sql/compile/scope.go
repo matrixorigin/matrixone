@@ -1269,18 +1269,11 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		originalErr := err
-		normalizedErr, _ := normalizeScopeRunError(
+		err, _ = normalizeScopeRunError(
 			err,
 			s.Proc.Ctx,
 			scopeRunQueryContext(s.Proc),
 		)
-		// QueryInterrupted is normal pipeline fallout and may be suppressed.
-		// Preserve a raw context cancellation when it has no stronger cause so
-		// registration-retry cancellation retains its historical classification.
-		if normalizedErr != nil || moerr.IsMoErrCode(originalErr, moerr.ErrQueryInterrupted) {
-			err = normalizedErr
-		}
 		s.cancelMergeSiblingsOnError(err)
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
