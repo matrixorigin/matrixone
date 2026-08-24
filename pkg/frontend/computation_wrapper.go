@@ -1009,7 +1009,7 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeSpecialized := false
 	if needsRuntimeSpecialization && execCtx.input != nil && execCtx.input.isBinaryProtExecute && len(cwft.paramVals) > 0 && executionPlan != nil &&
 		(executionPlan.GetQuery() != nil || executionPlan.GetDdl() != nil) {
-		runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
+		runtimePlan, specialized, err := plan2.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
 			reqCtx, executionPlan, cwft.paramVals)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err

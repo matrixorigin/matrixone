@@ -247,10 +247,24 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	}
 
 	applyAndResetType := func(e *Expr) (*Expr, error) {
+		preserveAssignmentCast := false
+		if preserver, ok := rule.(interface {
+			PreserveAssignmentCast(*Expr) bool
+		}); ok {
+			preserveAssignmentCast = preserver.PreserveAssignmentCast(e)
+		}
 		oldType := e.Typ
 		e, err = rule.ApplyExpr(e)
 		if err != nil {
 			return nil, err
+		}
+		// Some prepared DML expressions are the positional values consumed by
+		// the write operator.  A runtime specialization may replace nested
+		// parameters in those expressions, but it must not rebuild the outer
+		// assignment cast: that cast carries the target-column layout and SQL
+		// mode semantics for the write path.
+		if preserveAssignmentCast {
+			return e, nil
 		}
 		if (oldType.Id == int32(types.T_float32) || oldType.Id == int32(types.T_float64)) && (e.Typ.Id == int32(types.T_decimal64) || e.Typ.Id == int32(types.T_decimal128)) {
 			e, err = forceCastExpr2(ctx, e, typ, targetTyp)

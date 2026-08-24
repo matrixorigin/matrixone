@@ -377,6 +377,7 @@ func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
 	for _, name := range []string{"max_by", "max_by_non_null"} {
 		t.Run(name, func(t *testing.T) {
 			prepare := buildPreparedAggregatePlan(t, fmt.Sprintf("select %s(?, 1, 1) from nation", name))
+			require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
 			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(),
 				prepare.Plan,
@@ -424,7 +425,7 @@ func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) 
 	// Column-owned casts keep ordinary parameterized DML on its cached path.
 	require.False(t, PreparedPlanNeedsRuntimeSpecialization(columnBoundPredicate.Plan))
 
-	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
 		context.Background(),
 		withWriteParameter.Plan,
 		[]any{

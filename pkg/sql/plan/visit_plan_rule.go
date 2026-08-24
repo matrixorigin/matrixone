@@ -394,9 +394,15 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 // ---------------------------
 
 type ResetParamRefRule struct {
-	ctx                  context.Context
-	params               []*Expr
-	exprMemo             map[*plan.Expr]*plan.Expr
+	ctx      context.Context
+	params   []*Expr
+	exprMemo map[*plan.Expr]*plan.Expr
+	// preserveRoots contains DML write expressions whose outer shape must
+	// remain stable while nested parameters are rebound.  The write operator
+	// consumes these expressions positionally; rebuilding the outer function
+	// can change its assignment-cast contract even when the predicate needs a
+	// different execute-time overload.
+	preserveRoots        map[*plan.Expr]struct{}
 	validateFunctionArgs func(string, []*Expr) error
 	// specialized is set only when execute-time rebinding changes a function
 	// overload/result type. Literal replacement alone is not enough to require
@@ -439,7 +445,13 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	if rewritten, ok := rule.exprMemo[e]; ok {
 		return rewritten, nil
 	}
-	rewritten, err := rule.applyExpr(e)
+	var rewritten *plan.Expr
+	var err error
+	if _, preserve := rule.preserveRoots[e]; preserve {
+		rewritten, err = rule.applyExprPreservingRoot(e)
+	} else {
+		rewritten, err = rule.applyExpr(e)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -448,6 +460,62 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 	rule.exprMemo[e] = rewritten
 	return rewritten, nil
+}
+
+// PreserveAssignmentCast reports whether VisitPlan must leave the assignment
+// cast around this expression untouched.  It is intentionally a small,
+// optional rule hook so ordinary expression visitors retain their existing
+// behavior.
+func (rule *ResetParamRefRule) PreserveAssignmentCast(e *plan.Expr) bool {
+	_, ok := rule.preserveRoots[e]
+	return ok
+}
+
+// applyExprPreservingRoot replaces parameters below a DML write expression,
+// but keeps the root function (and its result type) intact.  A bare parameter
+// root is left parameterized so the normal ParamExpressionExecutor supplies
+// the value using the prepare-time assignment domain.
+func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr, error) {
+	if e == nil {
+		return nil, nil
+	}
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_P:
+		return e, nil
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return e, nil
+		}
+		if rule.validateFunctionArgs != nil {
+			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
+				return nil, err
+			}
+		}
+		for i, arg := range exprImpl.F.Args {
+			rewritten, err := rule.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+			exprImpl.F.Args[i] = rewritten
+		}
+		return e, nil
+	case *plan.Expr_W:
+		return applyWindowExpr(e, rule.ApplyExpr)
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return e, nil
+		}
+		for i, arg := range exprImpl.List.List {
+			rewritten, err := rule.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+			exprImpl.List.List[i] = rewritten
+		}
+		return e, nil
+	default:
+		return e, nil
+	}
 }
 
 func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {

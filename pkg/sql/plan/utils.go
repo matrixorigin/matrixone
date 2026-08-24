@@ -3381,7 +3381,7 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
-		if preparedRuntimeSpecializationFunction(name) {
+		if preparedRuntimeSpecializationFunction(name) || preparedFunctionResultDependsOnRuntimeParam(expr) {
 			for _, arg := range exprImpl.F.Args {
 				if preparedExprRequiresRuntimeSpecialization(name, arg) {
 					rule.needs = true
@@ -3536,6 +3536,68 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	}
 }
 
+// preparedFunctionResultDependsOnRuntimeParam uses the function registry as a
+// forward-compatible fallback for polymorphic functions.  The explicit list
+// above covers functions whose executor semantics are known to depend on the
+// parameter domain even when their return type is fixed.  For other functions,
+// compare the selected overload and return type against the legal binary
+// protocol parameter domains.  This keeps new first-argument-returning
+// aggregates (for example max_by variants) from silently inheriting the
+// prepare-time TEXT overload.
+func preparedFunctionResultDependsOnRuntimeParam(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+		return false
+	}
+	paramArgs := make([]int, 0, len(fn.Args))
+	argTypes := make([]types.Type, len(fn.Args))
+	for i, arg := range fn.Args {
+		if arg == nil {
+			return false
+		}
+		argTypes[i] = makeTypeByPlan2Expr(arg)
+		if preparedExprContainsParam(arg) {
+			paramArgs = append(paramArgs, i)
+		}
+	}
+	if len(paramArgs) == 0 {
+		return false
+	}
+
+	for _, paramArg := range paramArgs {
+		for _, candidate := range preparedRuntimeParamTypeCandidates() {
+			candidateArgs := append([]types.Type(nil), argTypes...)
+			candidateArgs[paramArg] = candidate
+			resolved, err := function.GetFunctionByName(context.Background(), fn.Func.GetObjName(), candidateArgs)
+			if err != nil {
+				continue
+			}
+			if resolved.GetEncodedOverloadID() != fn.Func.GetObj() || !resolved.GetReturnType().Eq(makeTypeByPlan2Expr(expr)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var preparedRuntimeParamTypes = []types.Type{
+	types.T_bool.ToType(),
+	types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType(),
+	types.T_uint8.ToType(), types.T_uint16.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType(),
+	types.T_float32.ToType(), types.T_float64.ToType(),
+	types.New(types.T_decimal64, 18, 2), types.New(types.T_decimal128, 38, 18),
+	types.New(types.T_varchar, 64, 0), types.T_text.ToType(),
+	types.T_date.ToType(), types.T_datetime.ToType(), types.T_timestamp.ToType(), types.T_time.ToType(),
+	types.New(types.T_varbinary, 64, 0), types.T_json.ToType(), types.T_uuid.ToType(),
+}
+
+func preparedRuntimeParamTypeCandidates() []types.Type {
+	return preparedRuntimeParamTypes
+}
+
 // FillValuesOfParamsInPlanWithSpecialization replaces parameters in an
 // isolated plan copy and reports whether the replacement changed an overload
 // or a result-column domain. Callers that already have a cached compile must
@@ -3546,6 +3608,29 @@ func FillValuesOfParamsInPlanWithSpecialization(
 	ctx context.Context,
 	preparePlan *Plan,
 	paramVals []any,
+) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, false)
+}
+
+// FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites performs the
+// same execute-time overload/result-type specialization as
+// FillValuesOfParamsInPlanWithSpecialization, while preserving the outer
+// expressions consumed positionally by INSERT/UPDATE/DELETE/MERGE writers.
+// Parameters in predicates and other non-write expressions are still
+// replaced and rebound normally.
+func FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+) (*Plan, bool, error) {
+	return fillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, paramVals, true)
+}
+
+func fillValuesOfParamsInPlanWithSpecialization(
+	ctx context.Context,
+	preparePlan *Plan,
+	paramVals []any,
+	preserveDMLWrites bool,
 ) (*Plan, bool, error) {
 	switch preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
@@ -3559,14 +3644,14 @@ func FillValuesOfParamsInPlanWithSpecialization(
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
-			_, err := replaceParamVals(ctx, copied, paramVals)
+			_, err := replaceParamVals(ctx, copied, paramVals, false)
 			if err != nil {
 				return nil, false, err
 			}
 		}
 
 	case *plan.Plan_Query:
-		specialized, err := replaceParamVals(ctx, copied, paramVals)
+		specialized, err := replaceParamVals(ctx, copied, paramVals, preserveDMLWrites)
 		if err != nil {
 			return nil, false, err
 		}
@@ -4081,7 +4166,7 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 	}
 }
 
-func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, error) {
+func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any, preserveDMLWrites bool) (bool, error) {
 	params := make([]*Expr, len(paramVals))
 	var err error
 	for i, val := range paramVals {
@@ -4128,6 +4213,9 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	if preserveDMLWrites {
+		paramRule.preserveRoots = preparedDMLWriteExpressions(plan0.GetQuery())
+	}
 	paramRule.inferTextParamPositions = make(map[int]bool)
 	for i, val := range paramVals {
 		if param, ok := val.(ParamValue); ok {
