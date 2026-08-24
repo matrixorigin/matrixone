@@ -249,6 +249,11 @@ type KafkaReader struct {
 	cl     *kgo.Client
 	ks     *plan.KafkaScan
 	proc   *process.Process
+	// msgParser and msgReader are allocated ONCE per scan and Reset per
+	// message: the parser's block buffer is ~320 KiB, far too heavy to
+	// rebuild per row on an Mcpu=1 scan.
+	msgParser *csvparser.CSVParser
+	msgReader *strings.Reader
 	// completed is set only when ReadBatch drained the source without error;
 	// the pending-progress handoff in Close depends on it (an aborted read
 	// must change nothing).
@@ -368,6 +373,15 @@ func (r *KafkaReader) Open(param *ExternalParam, proc *process.Process) (fileEmp
 	r.ks = ks
 	r.proc = proc
 	r.csv.param = param
+	if param.Extern.Format != tree.JSONLINE {
+		r.msgReader = strings.NewReader("")
+		parser, perr := newCSVParserFromReader(param.Extern, r.msgReader)
+		if perr != nil {
+			cl.Close()
+			return false, perr
+		}
+		r.msgParser = parser
+	}
 	return false, nil
 }
 
@@ -391,11 +405,13 @@ func (r *KafkaReader) parseOneMessage(ctx context.Context, param *ExternalParam,
 		}
 		return fields, nil
 	}
-	parser, err := newCSVParserFromReader(param.Extern, strings.NewReader(value+"\n"))
-	if err != nil {
-		return nil, err
-	}
-	row, err := parser.Read(nil)
+	// reuse the scan's single parser: Reset clears every byte of buffered
+	// stream state, so message boundaries stay exact with zero per-message
+	// parser construction
+	r.msgReader.Reset(value)
+	r.msgParser.Reset(r.msgReader)
+	row, err := r.msgParser.Read(r.msgParser.LastRow)
+	r.msgParser.LastRow = row
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, moerr.NewInvalidInputf(ctx,
@@ -403,7 +419,7 @@ func (r *KafkaReader) parseOneMessage(ctx context.Context, param *ExternalParam,
 		}
 		return nil, err
 	}
-	if _, err := parser.Read(nil); !errors.Is(err, io.EOF) {
+	if _, err := r.msgParser.Read(nil); !errors.Is(err, io.EOF) {
 		return nil, moerr.NewInvalidInputf(ctx,
 			"kafka message at offset %d did not parse to exactly one record", msg.Offset)
 	}
@@ -471,6 +487,8 @@ func (r *KafkaReader) Close() error {
 		r.cl = nil
 	}
 	r.source = nil
+	r.msgParser = nil
+	r.msgReader = nil
 	if r.csv.param != nil {
 		r.csv.param.KafkaMeta = nil
 	}

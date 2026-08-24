@@ -829,3 +829,50 @@ func TestKafkaCommitPartitionError(t *testing.T) {
 	require.ErrorContains(t, err, "commit offset")
 	require.ErrorContains(t, err, "failed")
 }
+
+// newBenchKafkaReader builds a reader with just enough state to drive
+// parseOneMessage (no broker).
+func newBenchKafkaReader(t testing.TB, format string) (*KafkaReader, *ExternalParam) {
+	ks := &plan.KafkaScan{Format: format, Separator: ","}
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Attrs: []plan.ExternAttr{
+				{ColName: "a", ColIndex: 0, ColFieldIndex: 0},
+				{ColName: "s", ColIndex: 1, ColFieldIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+				{Name: "s", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
+			},
+			Extern:    KafkaExternParam(ks),
+			KafkaScan: ks,
+		},
+		ExParam: ExParam{Fileparam: new(ExFileparam)},
+	}
+	r := NewKafkaReader(param)
+	r.csv.param = param
+	r.msgReader = strings.NewReader("")
+	parser, err := newCSVParserFromReader(param.Extern, r.msgReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.msgParser = parser
+	return r, param
+}
+
+// BenchmarkKafkaParseOneMessage tracks the per-message parse cost: the
+// scan's parser (and its ~320 KiB block buffer) is built once and Reset per
+// message, so a small record must cost bytes proportional to the record, not
+// to the parser.
+func BenchmarkKafkaParseOneMessage(b *testing.B) {
+	r, _ := newBenchKafkaReader(b, sqlkafka.FormatCSV)
+	msg := KafkaMsgMeta{Offset: 1, Value: "1,a"}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := r.parseOneMessage(ctx, r.csv.param, &msg); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

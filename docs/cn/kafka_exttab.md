@@ -125,10 +125,15 @@ statement commits `last+1` (Kafka next-to-read convention).
 pipeline: `compileKafkaScan` pins the scope to the session CN with Mcpu=1
 (session state + ordered partition read) and participates in the shuffle
 receiver graph like foreign scans. `KafkaReader`
-(`pkg/sql/colexec/external/reader_kafka.go`, franz-go client) streams message
-values as lines into the shared CSV/jsonline machinery; a per-message metadata
-FIFO pairs each converted record with its message (order-based, re-checked at
-EOF), and `getFieldFromLine` synthesizes the metadata columns.
+(`pkg/sql/colexec/external/reader_kafka.go`, franz-go client at
+`read_committed` isolation) parses EVERY message independently — one Reset of
+the scan's single reusable CSV parser per message (~16 B and 2 allocs per
+small record, gated by an allocation-budget test), exactly-one-record
+enforced on each message's own boundary, jsonl via one object parse per
+value — so record↔message pairing is exact by construction;
+`getFieldFromLine` synthesizes the metadata columns. A drained scan hands
+its progress to the session, and the statement terminal publishes it only
+when the whole statement succeeds.
 
 v1 limits: one partition per table (create several tables for several
 partitions), plaintext brokers (no SASL/TLS yet), no discovery of committed
