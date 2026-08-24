@@ -44,7 +44,6 @@ var dnsResolver = dns.NewCachingResolver(
 )
 
 func init() {
-	net.DefaultResolver = dnsResolver
 	http.DefaultTransport = httpRoundTripper
 }
 

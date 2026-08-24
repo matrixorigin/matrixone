@@ -22,6 +22,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"testing"
 
@@ -59,4 +60,9 @@ func TestNewHTTPClient(t *testing.T) {
 		},
 	})
 	_ = client
+}
+
+func TestDNSResolverScope(t *testing.T) {
+	assert.NotSame(t, dnsResolver, net.DefaultResolver)
+	assert.Same(t, dnsResolver, httpDialer.Resolver)
 }
