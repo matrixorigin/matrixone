@@ -8373,7 +8373,39 @@ func (builder *QueryBuilder) bindTimeWindowFill(
 			return
 		}
 
-		for i, timeAst := range ctx.timeAsts {
+		// ProjectionBinder records every AST occurrence in timeAsts, while
+		// timeByAst/times keep one entry per unique time-window aggregate. ORDER BY
+		// may mention an aggregate already selected, so align the linear expression
+		// inputs by the unique time column position rather than by occurrence count.
+		astsByTimeCol := make(map[int32]tree.Expr, len(ctx.timeAsts))
+		for _, timeAst := range ctx.timeAsts {
+			colPos, ok := ctx.timeByAst[windowExprAstKey(timeAst)]
+			if ok {
+				if _, exists := astsByTimeCol[colPos]; !exists {
+					astsByTimeCol[colPos] = timeAst
+				}
+			}
+		}
+		linearTimeAsts := make([]tree.Expr, 0, len(fillCols))
+		if len(astsByTimeCol) == 0 {
+			// Keep the direct bindTimeWindow unit-test context, which supplies
+			// fill columns without the projection metadata used by full queries.
+			linearTimeAsts = append(linearTimeAsts, ctx.timeAsts...)
+		} else {
+			for colPos, time := range ctx.times {
+				if isTimeWindowFillBoundary(time) {
+					continue
+				}
+				timeAst, ok := astsByTimeCol[int32(colPos)]
+				if !ok {
+					err = moerr.NewInternalErrorf(builder.GetContext(), "linear fill AST missing for time column %d", colPos)
+					return
+				}
+				linearTimeAsts = append(linearTimeAsts, timeAst)
+			}
+		}
+
+		for i, timeAst := range linearTimeAsts {
 			b := &tree.BinaryExpr{
 				Op: tree.DIV,
 				Left: &tree.ParenExpr{

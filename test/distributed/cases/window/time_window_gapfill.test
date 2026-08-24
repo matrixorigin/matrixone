@@ -74,6 +74,11 @@ from linear_order_numeric
 group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
 order by max(sort_key), series_id, _wstart;
 
+select series_id, _wstart, max(shown) as shown_fill
+from linear_order_numeric
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(shown), max(sort_key), series_id, _wstart;
+
 drop table linear_order_numeric;
 
 # A maximal run of k missing buckets is divided into k+1 equal steps. All rows
