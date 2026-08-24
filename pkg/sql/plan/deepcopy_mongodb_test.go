@@ -89,11 +89,11 @@ func TestMongoScanDeepCopyAndCredentialFreeProto(t *testing.T) {
 		MongodbScan: &pb.MongoScan{
 			TableId: 99, MappingId: 1, MappingVersion: 4, ConnectionId: 2, ConnectionVersion: 3,
 			Database: "telemetry", Collection: "events", ProjectedPaths: []string{"meta.device_id"},
-			Columns:         []*pb.MongoColumnMapping{{Name: "device_id", Path: "meta.device_id"}},
-			PushedPredicate: &pb.MongoPredicate{Op: pb.MongoPredicateOp_MONGO_PREDICATE_EQUAL, Path: "meta.device_id", ValueBson: []byte{1, 2, 3}},
-			UserQueryKind:       1,
-			UserFilterBson:      []byte{4, 5, 6},
-			UserQueryDigest:     strings.Repeat("a", 64),
+			Columns:            []*pb.MongoColumnMapping{{Name: "device_id", Path: "meta.device_id"}},
+			PushedPredicate:    &pb.MongoPredicate{Op: pb.MongoPredicateOp_MONGO_PREDICATE_EQUAL, Path: "meta.device_id", ValueBson: []byte{1, 2, 3}},
+			UserQueryKind:      1,
+			UserFilterBson:     []byte{4, 5, 6},
+			UserQueryDigest:    strings.Repeat("a", 64),
 			IncludeQueryColumn: true,
 		},
 	}}
