@@ -295,28 +295,43 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		if err != nil {
 			return err
 		}
-		vecs, _, _, err := LoadPersistedColumnData(
+		vecs, _, release, err := LoadPersistedColumnData(
 			ctx, readSchema, node.object.rt, id, colIdxes, location, mp, nil,
 			true,
 		)
 		if err != nil {
 			return err
 		}
-		var commitTSs []types.TS
+		cleanup := func() {
+			for i := range vecs {
+				vecs[i].Close()
+			}
+			if release != nil {
+				release()
+				release = nil
+			}
+		}
+		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 		if !persistedByCN {
-			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2].GetDownstreamVector())
+			commitTSs, commitErr := ioutil.ValidateTombstoneCommitTSColumn(
+				len(rowIDs), vecs[2].GetDownstreamVector(),
+			)
+			if commitErr != nil {
+				cleanup()
+				return commitErr
+			}
 			aborts, abortErr := ioutil.ValidateTombstoneAbortColumn(
-				len(commitTSs), vecs[3].GetDownstreamVector(),
+				len(rowIDs), vecs[3].GetDownstreamVector(),
 			)
 			if abortErr != nil {
+				cleanup()
 				return abortErr
 			}
-			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
-			for i := 0; i < len(commitTSs); i++ {
+			for i := 0; i < len(rowIDs); i++ {
 				if aborts.IsPresent() && aborts.At(i) {
 					continue
 				}
-				commitTS := commitTSs[i]
+				commitTS := commitTSs.At(i)
 				if commitTS.GE(&start) && commitTS.LE(&end) &&
 					types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
@@ -330,7 +345,6 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 				}
 			}
 		} else {
-			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
 			for i := 0; i < len(rowIDs); i++ {
 				if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
@@ -344,9 +358,7 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 				}
 			}
 		}
-		for i := range vecs {
-			vecs[i].Close()
-		}
+		cleanup()
 	}
 	return
 }

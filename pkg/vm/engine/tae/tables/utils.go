@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -152,20 +151,40 @@ func LoadPersistedColumnData(
 		return nil, deletes, nil, err
 	}
 	if tsForAppendable != nil {
-		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[commitTSIdx].GetDownstreamVector())
-		aborts, abortErr := ioutil.ValidateTombstoneAbortColumn(
-			len(commits), vecs[abortIdx].GetDownstreamVector(),
-		)
-		if abortErr != nil {
+		cleanup := func() {
 			for _, vec := range vecs {
 				if vec != nil {
 					vec.Close()
 				}
 			}
+			for _, vec := range vectors {
+				if vec != nil {
+					vec.Close()
+				}
+			}
+			if release != nil {
+				release()
+				release = nil
+			}
+		}
+		rowCount := int(location.Rows())
+		commits, commitErr := ioutil.ValidateTombstoneCommitTSColumn(
+			rowCount, vecs[commitTSIdx].GetDownstreamVector(),
+		)
+		if commitErr != nil {
+			cleanup()
+			return nil, deletes, nil, commitErr
+		}
+		aborts, abortErr := ioutil.ValidateTombstoneAbortColumn(
+			rowCount, vecs[abortIdx].GetDownstreamVector(),
+		)
+		if abortErr != nil {
+			cleanup()
 			return nil, deletes, nil, abortErr
 		}
-		for i := range commits {
-			if commits[i].GT(tsForAppendable) || (aborts.IsPresent() && aborts.At(i)) {
+		for i := 0; i < rowCount; i++ {
+			commitTS := commits.At(i)
+			if commitTS.GT(tsForAppendable) || (aborts.IsPresent() && aborts.At(i)) {
 				if deletes == nil {
 					deletes = nulls.NewWithSize(int(location.Rows()))
 				}
