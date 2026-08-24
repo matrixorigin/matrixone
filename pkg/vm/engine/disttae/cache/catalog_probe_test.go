@@ -168,6 +168,133 @@ func TestHasNewerVersionMatchesLegacyExactOracle(t *testing.T) {
 	}
 }
 
+func TestHasNewerVersionMatchesLegacyAfterMutationReplayAndGC(t *testing.T) {
+	cc := NewCatalog()
+	query := &TableChangeQuery{
+		AccountId:  1,
+		DatabaseId: 10,
+		Name:       "t",
+		TableId:    100,
+		Version:    1,
+	}
+
+	check := func(step string) {
+		t.Helper()
+		want := legacyHasNewerVersionForTest(cc, query)
+		require.Equal(t, want, cc.HasNewerVersion(query), step)
+	}
+
+	// These mutations model the replay order for create, alter, truncate,
+	// drop/recreate, and the later GC pass. Every step uses the same exact
+	// oracle as the pre-pool implementation.
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 10, Name: "t", Id: 100, Version: 1,
+		Ts: timestamp.Timestamp{PhysicalTime: 10},
+	}, true)
+	check("create")
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 10, Name: "t", Id: 100, Version: 2,
+		Ts: timestamp.Timestamp{PhysicalTime: 20},
+	}, true)
+	check("alter")
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 10, Name: "t", Id: 100, Version: 3,
+		Ts: timestamp.Timestamp{PhysicalTime: 25},
+	}, true)
+	check("truncate")
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 10, Name: "t", Id: 100, Version: 3,
+		deleted: true,
+		Ts:      timestamp.Timestamp{PhysicalTime: 30},
+	}, false)
+	check("drop")
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 10, Name: "t", Id: 101, Version: 1,
+		Ts: timestamp.Timestamp{PhysicalTime: 40},
+	}, true)
+	check("recreate")
+	cc.GC(timestamp.Timestamp{PhysicalTime: 25})
+	check("gc")
+}
+
+func TestHasNewerVersionTableHasNoSteadyStateAllocations(t *testing.T) {
+	negativeCatalog, negativeQuery := newProbeBenchmarkCatalog(16, false, false)
+	positiveCatalog, positiveQuery := newProbeBenchmarkCatalog(16, false, true)
+
+	negativeCatalog.HasNewerVersion(negativeQuery)
+	positiveCatalog.HasNewerVersion(positiveQuery)
+
+	var got bool
+	negativeAllocs := testing.AllocsPerRun(100, func() {
+		got = negativeCatalog.HasNewerVersion(negativeQuery)
+	})
+	require.False(t, got)
+	require.Zero(t, negativeAllocs)
+
+	positiveAllocs := testing.AllocsPerRun(100, func() {
+		got = positiveCatalog.HasNewerVersion(positiveQuery)
+	})
+	require.True(t, got)
+	require.Zero(t, positiveAllocs)
+
+	coldCatalog, coldQuery := newProbeBenchmarkCatalog(16, false, false)
+	coldAllocs := testing.AllocsPerRun(1, func() {
+		got = coldCatalog.HasNewerVersion(coldQuery)
+	})
+	runtime.GC()
+	postGCAllocs := testing.AllocsPerRun(1, func() {
+		got = coldCatalog.HasNewerVersion(coldQuery)
+	})
+	t.Logf("table cold allocs=%v post-GC allocs=%v", coldAllocs, postGCAllocs)
+}
+
+func TestHasNewerVersionDatabaseHasNoSteadyStateAllocations(t *testing.T) {
+	negativeCatalog, negativeQuery := newProbeBenchmarkCatalog(16, true, false)
+	positiveCatalog, positiveQuery := newProbeBenchmarkCatalog(16, true, true)
+
+	negativeCatalog.HasNewerVersion(negativeQuery)
+	positiveCatalog.HasNewerVersion(positiveQuery)
+
+	var got bool
+	negativeAllocs := testing.AllocsPerRun(100, func() {
+		got = negativeCatalog.HasNewerVersion(negativeQuery)
+	})
+	require.False(t, got)
+	require.Zero(t, negativeAllocs)
+
+	positiveAllocs := testing.AllocsPerRun(100, func() {
+		got = positiveCatalog.HasNewerVersion(positiveQuery)
+	})
+	require.True(t, got)
+	require.Zero(t, positiveAllocs)
+
+	coldCatalog, coldQuery := newProbeBenchmarkCatalog(16, true, false)
+	coldAllocs := testing.AllocsPerRun(1, func() {
+		got = coldCatalog.HasNewerVersion(coldQuery)
+	})
+	runtime.GC()
+	postGCAllocs := testing.AllocsPerRun(1, func() {
+		got = coldCatalog.HasNewerVersion(coldQuery)
+	})
+	t.Logf("database cold allocs=%v post-GC allocs=%v", coldAllocs, postGCAllocs)
+}
+
+func TestHasNewerVersionProbeReleaseClearsExactObject(t *testing.T) {
+	cc := NewCatalog()
+	tableProbe := &TableItem{
+		AccountId: 1, DatabaseId: 2, Name: "long-table-name",
+		DatabaseName: "db", CPKey: []byte("retained-key"),
+	}
+	releaseTableQueryProbe(&cc.tableQueryProbePool, tableProbe)
+	require.Equal(t, TableItem{}, *tableProbe)
+
+	databaseProbe := &DatabaseItem{
+		AccountId: 1, Name: "long-database-name", CPKey: []byte("retained-key"),
+	}
+	releaseDatabaseQueryProbe(&cc.databaseQueryProbePool, databaseProbe)
+	require.Equal(t, DatabaseItem{}, *databaseProbe)
+}
+
 func TestHasNewerVersionProbeReuseAcrossGC(t *testing.T) {
 	cc := newProbeOracleCatalog()
 	queries := []*TableChangeQuery{

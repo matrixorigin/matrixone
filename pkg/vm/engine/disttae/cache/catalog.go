@@ -64,6 +64,16 @@ func NewCatalog() *CatalogCache {
 	return cc
 }
 
+func releaseTableQueryProbe(pool *sync.Pool, probe *TableItem) {
+	*probe = TableItem{}
+	pool.Put(probe)
+}
+
+func releaseDatabaseQueryProbe(pool *sync.Pool, probe *DatabaseItem) {
+	*probe = DatabaseItem{}
+	pool.Put(probe)
+}
+
 func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
@@ -430,8 +440,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 			}
 			return false
 		})
-		*key = DatabaseItem{}
-		cc.databaseQueryProbePool.Put(key)
+		releaseDatabaseQueryProbe(&cc.databaseQueryProbePool, key)
 		if find {
 			return true
 		}
@@ -468,8 +477,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		}
 		return false
 	})
-	*key = TableItem{}
-	cc.tableQueryProbePool.Put(key)
+	releaseTableQueryProbe(&cc.tableQueryProbePool, key)
 	return find
 }
 
