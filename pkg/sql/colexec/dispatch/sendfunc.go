@@ -53,16 +53,31 @@ var (
 )
 
 func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion12
+}
+
+func binaryStringRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion18
+}
+
+func explicitTextRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion23
+}
+
+func remoteBatchWireVersion(proc *process.Process) int64 {
 	if proc == nil {
-		return false
+		return 0
 	}
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	if rt == nil {
-		return false
+		return 0
 	}
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion12
+	if !ok {
+		return 0
+	}
+	return version
 }
 
 // marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
@@ -74,6 +89,14 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
 	}
 	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
+	if bat.HasBinaryStringMetadata() && !binaryStringRemoteWireEnabled(proc) {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"binary-string provenance requires MORPCVersion18 for remote dispatch")
+	}
+	if bat.HasExplicitTextStringMetadata() && !explicitTextRemoteWireEnabled(proc) {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"explicit-text provenance requires MORPCVersion23 for remote dispatch")
+	}
 	if bat.HasPrepareParamKindMetadata() && !wireEnabled {
 		return nil, moerr.NewInvalidStateNoCtx(
 			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")

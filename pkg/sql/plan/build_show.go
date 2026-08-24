@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -49,17 +48,21 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
-
-		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
-			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
-		} else {
-			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
-		}
+		snapshotSpec = showSnapshotSpec(stmt.AtTsExpr, snapshot)
 	}
 
 	name, err := databaseIsValid(getSuitableDBName("", stmt.Name), ctx, snapshot)
 	if err != nil {
 		return nil, err
+	}
+	if snapshot != nil && snapshot.ExtraInfo != nil {
+		databaseID, err := ctx.GetDatabaseId(name, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if err = ValidateSnapshotDatabaseScope(snapshot, name, databaseID); err != nil {
+			return nil, err
+		}
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(name, snapshot); err != nil {
@@ -100,9 +103,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 
 	// check if the database is a subscription
-	if sub, err := ctx.GetSubscriptionMeta(dbName, snapshot); err != nil {
+	sub, err := ctx.GetSubscriptionMeta(dbName, snapshot)
+	if err != nil {
 		return nil, err
-	} else if sub != nil {
+	}
+	if sub != nil {
 		if !pubsub.InSubMetaTables(sub, tblName) {
 			return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tblName, sub.Name)
 		}
@@ -119,6 +124,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
+		return nil, err
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		var newStmt *tree.ShowCreateView
@@ -141,24 +149,23 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		newTableDef.Name = tblName
 		tableDef = &newTableDef
 	}
+	if sub == nil && tableDef.TblId != 0 {
+		// SHOW CREATE owns the local source table, its snapshot, and the compiler
+		// catalog context. Normalize legacy visibility before formatting while
+		// leaving subscription definitions to their publisher-provided metadata.
+		tableDef = DeepCopyTableDef(tableDef, true)
+		if err = reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+			return nil, err
+		}
+	}
 
 	ddlStr, _, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var buf bytes.Buffer
-	for i, ch := range ddlStr {
-		// escape double quote, for the sql pattern below
-		if ch == '"' {
-			if i == 0 || ddlStr[i-1] != '\\' {
-				buf.WriteRune('"')
-			}
-		}
-		buf.WriteRune(ch)
-	}
-	sql := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, buf.String())
+	sql := "SELECT %s AS `Table`, %s AS `Create Table`"
+	sql = fmt.Sprintf(sql, formatStrLit(tblName), formatStrLit(ddlStr))
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
@@ -187,6 +194,9 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	}
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
 		return nil, moerr.NewInvalidInputf(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
+	}
+	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
+		return nil, err
 	}
 	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`"
 	var viewStr string
@@ -228,19 +238,28 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
-
 		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 			accountId = snapshot.Tenant.TenantID
-			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
-		} else {
-			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+		snapshotSpec = showSnapshotSpec(stmt.AtTsExpr, snapshot)
+		if snapshot.ExtraInfo != nil {
+			switch snapshot.ExtraInfo.Level {
+			case tree.SNAPSHOTLEVELDATABASE.String():
+				snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
+			case tree.SNAPSHOTLEVELTABLE.String():
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "table-level snapshot(%s) cannot list databases", snapshot.ExtraInfo.Name)
+			}
 		}
 
 	}
 
 	// Any account should show database MO_CATALOG_DB_NAME
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s WHERE (%s) ORDER BY %s", MO_CATALOG_DB_NAME, snapshotSpec, accountClause, catalog.SystemDBAttr_Name)
+	sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database %s WHERE (%s)", MO_CATALOG_DB_NAME, snapshotSpec, accountClause)
+	if snapshot != nil && snapshot.ExtraInfo != nil && snapshot.ExtraInfo.Level == tree.SNAPSHOTLEVELDATABASE.String() {
+		sql += fmt.Sprintf(" and dat_id = %d", snapshot.ExtraInfo.ObjId)
+	}
+	sql += fmt.Sprintf(" ORDER BY %s", catalog.SystemDBAttr_Name)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -295,19 +314,25 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		if snapshot, err = getTimeStampByTsHint(ctx, stmt.AtTsExpr); err != nil {
 			return nil, err
 		}
-
 		if stmt.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 			accountId = snapshot.Tenant.TenantID
-			snapshotSpec = fmt.Sprintf("{snapshot = '%s'}", stmt.AtTsExpr.SnapshotName)
-		} else {
-			snapshotSpec = fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
 		}
+		snapshotSpec = showSnapshotSpec(stmt.AtTsExpr, snapshot)
 
 	}
 
 	dbName, err := databaseIsValid(stmt.DBName, ctx, snapshot)
 	if err != nil {
 		return nil, err
+	}
+	if snapshot != nil && snapshot.ExtraInfo != nil {
+		databaseID, err := ctx.GetDatabaseId(dbName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if err = ValidateSnapshotDatabaseScope(snapshot, dbName, databaseID); err != nil {
+			return nil, err
+		}
 	}
 
 	var tableType string
@@ -589,6 +614,9 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		}
 		if tableDef.Indexes != nil {
 			for _, indexDef := range tableDef.Indexes {
+				if indexDef == nil {
+					continue
+				}
 				name := colNameToOriginName[indexDef.Parts[0]]
 				if indexDef.Unique {
 					if isPrimaryKey(tableDef, indexDef.Parts) {
@@ -906,7 +934,11 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
 		"GROUP BY `tcl`.`att_relname`, `idx`.`type`, `idx`.`name`, `idx`.`ordinal_position`, " +
 		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
-		"`idx`.`algo_params`, `idx`.`is_visible`"
+		"`idx`.`algo_params`, `idx`.`is_visible` " +
+		// Match MySQL's index classes, then preserve catalog creation order within each class.
+		// MIN(id) supplies one stable key without defeating the GROUP BY deduplication above.
+		"ORDER BY CASE `idx`.`type` WHEN 'PRIMARY' THEN 0 WHEN 'UNIQUE' THEN 1 ELSE 2 END, " +
+		"MIN(`idx`.`id`), `idx`.`ordinal_position`"
 
 	displayTblName := tblName
 	if tableDef.IsTemporary {
@@ -1121,6 +1153,14 @@ func returnByRewriteSQL(ctx CompilerContext, sql string,
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 
+func showSnapshotSpec(atTsExpr *tree.AtTimeStamp, snapshot *Snapshot) string {
+	if atTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT &&
+		(snapshot.ExtraInfo == nil || snapshot.ExtraInfo.Level != tree.SNAPSHOTLEVELDATABASE.String()) {
+		return fmt.Sprintf("{snapshot = '%s'}", atTsExpr.SnapshotName)
+	}
+	return fmt.Sprintf("{MO_TS = %d}", snapshot.TS.PhysicalTime)
+}
+
 func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 	where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
@@ -1165,7 +1205,11 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 }
 
 func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) {
-	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 0)
+	return getRewriteSQLStmtWithSQLMode(ctx, sql, "")
+}
+
+func getRewriteSQLStmtWithSQLMode(ctx CompilerContext, sql, sqlMode string) (tree.Statement, error) {
+	newStmts, err := parsers.ParseWithSQLMode(ctx.GetContext(), dialect.MYSQL, sql, 0, sqlMode)
 	if err != nil {
 		return nil, err
 	}

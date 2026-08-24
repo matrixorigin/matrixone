@@ -11,14 +11,15 @@
 -- CDC consumer could never apply the delta.
 --
 -- Each index is built and maintained entirely by the CDC consumer (first iteration runs
--- the InitSQL build, later inserts/updates ride the delta path). Shared sleep(30) windows
--- let the 10s-tick consumer settle for all four indexes at once.
+-- the InitSQL build, later inserts/updates ride the delta path). Each index is waited
+-- independently through its first deterministic search in every phase; readiness of one
+-- index says nothing about the other three consumers.
 --
 -- Two well-separated clusters [1..5]/[50..54] and cluster-center query points keep every
 -- top-k distance distinct (no ties) so the result is deterministic for every narrow type;
 -- integer values 1..55 are exact in bf16/f16 and in int8/uint8 range, so the narrow base
 -- stores them without ambiguity. Queries are `ORDER BY l2_distance LIMIT k` with no
--- secondary sort key so the ivfflat index pushdown (ivf_search) actually fires.
+-- secondary sort key so the ivfflat index pushdown (VECTOR_INDEX_SCAN) actually fires.
 SET probe_limit=10;
 
 create table nbf(a int primary key, v vecbf16(4));
@@ -37,8 +38,31 @@ create table nu8(a int primary key, v vecuint8(4));
 insert into nu8 values (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
 create index xu8 using ivfflat on nu8(v) lists=2 op_type 'vector_l2_ops' ASYNC;
 
+-- Resolve each index's active-version payload tables once. A nearest-neighbor
+-- query can look correct while only one centroid list has landed, so build and
+-- insert readiness must require the complete expected row count for every index.
+set @nbf_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xbf' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'nbf') limit 1);
+set @nbf_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xbf' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'nbf') limit 1);
+set @nhf_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xhf' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'nhf') limit 1);
+set @nhf_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xhf' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'nhf') limit 1);
+set @ni8_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xi8' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ni8') limit 1);
+set @ni8_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xi8' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'ni8') limit 1);
+set @nu8_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xu8' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'nu8') limit 1);
+set @nu8_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xu8' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'nu8') limit 1);
+set @wait_narrow_entries_sql = concat(
+    'select ',
+    '(select count(*) from `', database(), '`.`', @nbf_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @nbf_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as nbf_ready, ',
+    '(select count(*) from `', database(), '`.`', @nhf_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @nhf_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as nhf_ready, ',
+    '(select count(*) from `', database(), '`.`', @ni8_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @ni8_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as ni8_ready, ',
+    '(select count(*) from `', database(), '`.`', @nu8_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @nu8_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as nu8_ready'
+);
+prepare wait_narrow_entries from @wait_narrow_entries_sql;
+
 -- 1) initial async build (CDC reindex InitSQL). Low cluster -> 1,2,3 ; high -> 6,5,4.
-select sleep(30);
+set @expected_ivf_entries = 6;
+-- @metacmp(false)
+-- @wait_expect(2, 30)
+execute wait_narrow_entries;
 select a from nbf order by l2_distance(v,'[1,1,1,1]') limit 3;
 select a from nbf order by l2_distance(v,'[54,54,54,54]') limit 3;
 select a from nhf order by l2_distance(v,'[1,1,1,1]') limit 3;
@@ -55,7 +79,10 @@ insert into nbf values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
 insert into nhf values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
 insert into ni8 values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
 insert into nu8 values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
-select sleep(30);
+set @expected_ivf_entries = 8;
+-- @metacmp(false)
+-- @wait_expect(2, 30)
+execute wait_narrow_entries;
 select a from nbf order by l2_distance(v,'[1,1,1,1]') limit 3;
 select a from nbf order by l2_distance(v,'[54,54,54,54]') limit 3;
 select a from nhf order by l2_distance(v,'[1,1,1,1]') limit 3;
@@ -73,12 +100,16 @@ update nbf set v = '[55,55,55,55]' where a = 1;
 update nhf set v = '[55,55,55,55]' where a = 1;
 update ni8 set v = '[55,55,55,55]' where a = 1;
 update nu8 set v = '[55,55,55,55]' where a = 1;
-select sleep(30);
+-- @wait_expect(2, 30)
 select a from nbf order by l2_distance(v,'[1,1,1,1]') limit 3;
+-- @wait_expect(2, 30)
 select a from nhf order by l2_distance(v,'[1,1,1,1]') limit 3;
+-- @wait_expect(2, 30)
 select a from ni8 order by l2_distance(v,'[1,1,1,1]') limit 3;
+-- @wait_expect(2, 30)
 select a from nu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 
+deallocate prepare wait_narrow_entries;
 drop table nbf;
 drop table nhf;
 drop table ni8;

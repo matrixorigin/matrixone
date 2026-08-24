@@ -23,18 +23,41 @@ import (
 )
 
 type DMLContext struct {
-	objRefs        []*plan.ObjectRef
-	tableDefs      []*plan.TableDef
-	aliases        []string
-	isClusterTable []bool
+	objRefs         []*plan.ObjectRef
+	tableDefs       []*plan.TableDef
+	aliases         []string
+	isClusterTable  []bool
+	targetDBName    string
+	targetTableName string
+	// hasReadOnlySource records UPDATE table-list entries which participate in
+	// the source SELECT but cannot be writable DML targets, such as derived
+	// tables and CTEs.
+	hasReadOnlySource bool
 
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
-	updatePartCol  []bool                 //If update cols contains col that Partition expr used
+	// updateTargetOrder records writable targets in the table-list binding order.
+	// MySQL evaluates repeated physical targets in this order, independently of
+	// the order in which their assignments appear in the SET list.
+	updateTargetOrder []int
+	// updateColOrder preserves the source order of distinct target columns for
+	// callers that operate on the final row image.
+	updateColOrder [][]string
+	// updateAssignments preserves every source SET assignment, including
+	// repeated targets. MySQL evaluates single-table UPDATE assignments from
+	// left to right, so UPDATE t SET a = a + 1, a = a + 1 must apply both
+	// occurrences instead of retaining only the final RHS in updateCol2Expr.
+	updateAssignments [][]UpdateAssignment
+	updatePartCol     []bool //If update cols contains col that Partition expr used
 	//oldColPosMap   []map[string]int       // origin table values to their position in derived table
 	//newColPosMap   []map[string]int       // insert/update values to their position in derived table
 	//nameToIdx      map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
 	//idToName       map[uint64]string      // Mapping of tableId to full path name of table
 	aliasMap map[string]int // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
+}
+
+type UpdateAssignment struct {
+	Column string
+	Expr   tree.Expr
 }
 
 func NewDMLContext() *DMLContext {
@@ -46,13 +69,17 @@ func NewDMLContext() *DMLContext {
 }
 
 func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Update) error {
-	err := dmlCtx.resolveTables(ctx, stmt.Tables, stmt.With, nil, foreignKeyResolveDeferred)
+	dmlCtx.updateTargetOrder = nil
+	dmlCtx.hasReadOnlySource = false
+	err := dmlCtx.resolveTables(ctx, stmt.Tables, stmt.With, nil, foreignKeyResolveDeferred, true)
 	if err != nil {
 		return classifyUpdateTableResolutionError(ctx, stmt, err)
 	}
 
 	// check update field and set updateKeys
 	usedTbl := make(map[string]map[string]tree.Expr)
+	updateColOrder := make(map[string][]string)
+	updateAssignments := make(map[string][]UpdateAssignment)
 	allColumns := make(map[string]map[string]bool)
 	for alias, idx := range dmlCtx.aliasMap {
 		allColumns[alias] = make(map[string]bool)
@@ -65,7 +92,11 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		if _, exists := usedTbl[table]; !exists {
 			usedTbl[table] = make(map[string]tree.Expr)
 		}
+		if _, exists := usedTbl[table][column]; !exists {
+			updateColOrder[table] = append(updateColOrder[table], column)
+		}
 		usedTbl[table][column] = expr
+		updateAssignments[table] = append(updateAssignments[table], UpdateAssignment{Column: column, Expr: expr})
 	}
 
 	for _, updateExpr := range stmt.Exprs {
@@ -82,7 +113,7 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 				if allColumns[tblName][colName] {
 					appendToTbl(tblName, colName, expr)
 				} else {
-					return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
+					return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
 				}
 			} else {
 				return moerr.NewNoSuchTable(ctx.GetContext(), "", parts.TblNameOrigin())
@@ -107,29 +138,71 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 					}
 					str += string(c.Name.Alias)
 				}
-				return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
+				return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
 			} else if !found {
-				return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table", parts.ColNameOrigin())
+				return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table", parts.ColNameOrigin())
 			}
 		}
 	}
 
-	if len(usedTbl) > 1 {
-		return newLegacyUpdatePlannerRouteError(
-			updateRouteReasonMultiTarget,
-			moerr.NewUnsupportedDML(ctx.GetContext(), "multi-table update"),
-		)
-	}
-
 	dmlCtx.updateCol2Expr = make([]map[string]tree.Expr, len(dmlCtx.tableDefs))
+	dmlCtx.updateColOrder = make([][]string, len(dmlCtx.tableDefs))
+	dmlCtx.updateAssignments = make([][]UpdateAssignment, len(dmlCtx.tableDefs))
 	for alias, columnMap := range usedTbl {
 		idx := dmlCtx.aliasMap[alias]
 		dmlCtx.updateCol2Expr[idx] = columnMap
+		dmlCtx.updateColOrder[idx] = updateColOrder[alias]
+		dmlCtx.updateAssignments[idx] = updateAssignments[alias]
 	}
+	dmlCtx.collectUpdateTargetOrder(stmt.Tables)
 
 	dmlCtx.updatePartCol = make([]bool, len(dmlCtx.tableDefs))
 
 	return nil
+}
+
+func (dmlCtx *DMLContext) collectUpdateTargetOrder(tableExprs tree.TableExprs) {
+	var collect func(tree.TableExpr)
+	collect = func(tableExpr tree.TableExpr) {
+		for {
+			switch tbl := tableExpr.(type) {
+			case *tree.ParenTableExpr:
+				tableExpr = tbl.Expr
+				continue
+			case *tree.AliasedTableExpr:
+				if alias := string(tbl.As.Alias); alias != "" {
+					if idx, ok := dmlCtx.aliasMap[alias]; ok && len(dmlCtx.updateCol2Expr[idx]) > 0 {
+						dmlCtx.updateTargetOrder = append(dmlCtx.updateTargetOrder, idx)
+					}
+					return
+				}
+				tableExpr = tbl.Expr
+				continue
+			case *tree.JoinTableExpr:
+				if tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
+					collect(tbl.Right)
+					collect(tbl.Left)
+				} else {
+					collect(tbl.Left)
+					if tbl.Right != nil {
+						collect(tbl.Right)
+					}
+				}
+				return
+			case *tree.TableName:
+				alias := string(tbl.ObjectName)
+				if idx, ok := dmlCtx.aliasMap[alias]; ok && len(dmlCtx.updateCol2Expr[idx]) > 0 {
+					dmlCtx.updateTargetOrder = append(dmlCtx.updateTargetOrder, idx)
+				}
+				return
+			default:
+				return
+			}
+		}
+	}
+	for _, tableExpr := range tableExprs {
+		collect(tableExpr)
+	}
 }
 
 type foreignKeyResolvePolicy uint8
@@ -159,10 +232,10 @@ func classifyUpdateTableResolutionError(ctx CompilerContext, stmt *tree.Update, 
 			moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table"),
 		)
 	case foreignKeyUnsupportedDMLMsg:
-		return newLegacyUpdatePlannerRouteError(updateRouteReasonForeignKey, err)
+		return newRejectedUpdatePlannerRouteError(updateRouteReasonForeignKey, err)
 	case unsupportedTableTypeDMLMsg:
 		if updateHasMultiTableTargetShape(stmt) {
-			return newLegacyUpdatePlannerRouteError(updateRouteReasonMultiTarget, err)
+			return newRejectedUpdatePlannerRouteError(updateRouteReasonMultiTarget, err)
 		}
 		return newUpdatePlannerRouteError(
 			updatePlannerRejected,
@@ -231,7 +304,7 @@ func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.Tab
 	if respectFKCheck {
 		policy = foreignKeyResolveRespectSession
 	}
-	return dmlCtx.resolveTables(ctx, tableExprs, with, aliasMap, policy)
+	return dmlCtx.resolveTables(ctx, tableExprs, with, aliasMap, policy, false)
 }
 
 func (dmlCtx *DMLContext) resolveTables(
@@ -240,6 +313,7 @@ func (dmlCtx *DMLContext) resolveTables(
 	with *tree.With,
 	aliasMap map[string][2]string,
 	foreignKeyPolicy foreignKeyResolvePolicy,
+	allowReadOnlySources bool,
 ) error {
 	cteMap := make(map[string]bool)
 	if with != nil {
@@ -249,7 +323,7 @@ func (dmlCtx *DMLContext) resolveTables(
 	}
 
 	for _, tbl := range tableExprs {
-		err := dmlCtx.resolveSingleTable(ctx, tbl, aliasMap, cteMap, foreignKeyPolicy)
+		err := dmlCtx.resolveSingleTable(ctx, tbl, aliasMap, cteMap, foreignKeyPolicy, allowReadOnlySources)
 		if err != nil {
 			return err
 		}
@@ -263,7 +337,7 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 	if respectFKCheck {
 		policy = foreignKeyResolveRespectSession
 	}
-	return dmlCtx.resolveSingleTable(ctx, tbl, aliasMap, withMap, policy)
+	return dmlCtx.resolveSingleTable(ctx, tbl, aliasMap, withMap, policy, false)
 }
 
 func (dmlCtx *DMLContext) resolveSingleTable(
@@ -272,6 +346,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	aliasMap map[string][2]string,
 	withMap map[string]bool,
 	foreignKeyPolicy foreignKeyResolvePolicy,
+	allowReadOnlySources bool,
 ) error {
 	var tblName, dbName, alias string
 
@@ -288,26 +363,45 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 		}
 	}
 
-	//if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
-	//	dmlCtx.needAggFilter = true
-	//	err := setTableExprToDmlTableInfo(ctx, joinTbl.Left, dmlCtx, aliasMap, withMap)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	if joinTbl.Right != nil {
-	//		return setTableExprToDmlTableInfo(ctx, joinTbl.Right, dmlCtx, aliasMap, withMap)
-	//	}
-	//	return nil
-	//}
+	if joinTbl, ok := tbl.(*tree.JoinTableExpr); ok {
+		if err := dmlCtx.resolveSingleTable(
+			ctx,
+			joinTbl.Left,
+			aliasMap,
+			withMap,
+			foreignKeyPolicy,
+			allowReadOnlySources,
+		); err != nil {
+			return err
+		}
+		if joinTbl.Right != nil {
+			return dmlCtx.resolveSingleTable(
+				ctx,
+				joinTbl.Right,
+				aliasMap,
+				withMap,
+				foreignKeyPolicy,
+				allowReadOnlySources,
+			)
+		}
+		return nil
+	}
 
 	if baseTbl, ok := tbl.(*tree.TableName); ok {
 		dbName = string(baseTbl.SchemaName)
 		tblName = string(baseTbl.ObjectName)
 	} else {
+		if allowReadOnlySources {
+			dmlCtx.hasReadOnlySource = true
+			return nil
+		}
 		return moerr.NewUnsupportedDML(ctx.GetContext(), "unsupported table type")
 	}
 
 	if withMap[tblName] {
+		if allowReadOnlySources {
+			dmlCtx.hasReadOnlySource = true
+		}
 		return nil
 	}
 
@@ -332,12 +426,15 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return err
+	}
 
 	// External tables are not handled by the modern DML binder. Writable ones
-	// (WRITE_FILE_PATTERN) defer to the legacy planner, whose buildInsert /
-	// buildLoad implement INSERT/LOAD into them; read-only ones reject all DML
-	// directly with the user-facing error, so statement kinds without a legacy
-	// fallback (REPLACE) don't leak the internal fallback sentinel.
+	// (WRITE_FILE_PATTERN) emit a classified sentinel: INSERT/LOAD can select
+	// their dedicated compatibility path, while UPDATE and REPLACE reject it.
+	// Read-only external tables reject every DML statement directly with the
+	// user-facing error.
 	if tableDef.TableType == catalog.SystemExternalRel {
 		isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
 		if err != nil {

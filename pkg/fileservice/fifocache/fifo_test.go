@@ -140,6 +140,88 @@ func TestDoubleFree(t *testing.T) {
 	assert.Equal(t, 1, evicts[1])
 }
 
+func TestPrepareEvictLifecycle(t *testing.T) {
+	var events []string
+	cache := NewWithPrepareEvict[int, int](
+		fscache.ConstCapacity(1),
+		ShardInt[int],
+		nil,
+		nil,
+		func(int, int, int64, uint64) func() {
+			events = append(events, "prepare")
+			return func() { events = append(events, "finish") }
+		},
+		func(context.Context, int, int, int64, uint64) {
+			events = append(events, "post")
+		},
+	)
+	cache.Set(t.Context(), 1, 1, 1)
+	cache.Delete(t.Context(), 1)
+	assert.Equal(t, []string{"prepare", "post", "finish"}, events)
+
+	events = events[:0]
+	cache.Set(t.Context(), 2, 2, 1)
+	cache.Set(t.Context(), 3, 3, 1)
+	assert.Equal(t, []string{"prepare", "post", "finish"}, events)
+
+	events = events[:0]
+	assert.True(t, cache.Replace(t.Context(), 3, 30, 1))
+	assert.Equal(t, []string{"post"}, events)
+}
+
+func TestPrepareEvictFinishRunsAfterPostEvictPanic(t *testing.T) {
+	var finished atomic.Bool
+	cache := NewWithPrepareEvict[int, int](
+		fscache.ConstCapacity(1),
+		ShardInt[int],
+		nil,
+		nil,
+		func(int, int, int64, uint64) func() {
+			return func() { finished.Store(true) }
+		},
+		func(context.Context, int, int, int64, uint64) {
+			panic("post-evict failure")
+		},
+	)
+	cache.Set(t.Context(), 1, 1, 1)
+	func() {
+		defer func() {
+			assert.Equal(t, "post-evict failure", recover())
+		}()
+		cache.Delete(t.Context(), 1)
+	}()
+	assert.True(t, finished.Load())
+}
+
+func TestPrepareEvictFinishesBatchAfterPostEvictPanic(t *testing.T) {
+	var finished atomic.Int64
+	var postCalls atomic.Int64
+	cache := NewWithPrepareEvict[int, int](
+		fscache.ConstCapacity(3),
+		ShardInt[int],
+		nil,
+		nil,
+		func(int, int, int64, uint64) func() {
+			return func() { finished.Add(1) }
+		},
+		func(context.Context, int, int, int64, uint64) {
+			postCalls.Add(1)
+			panic("post-evict failure")
+		},
+	)
+	cache.Set(t.Context(), 1, 1, 1)
+	cache.Set(t.Context(), 2, 2, 1)
+	cache.Set(t.Context(), 3, 3, 1)
+	func() {
+		defer func() {
+			assert.Equal(t, "post-evict failure", recover())
+		}()
+		cache.ForceEvictWithWait(t.Context(), cache.Used())
+	}()
+	assert.Equal(t, int64(1), postCalls.Load())
+	assert.Equal(t, int64(3), finished.Load())
+}
+
 func TestGhostQueue(t *testing.T) {
 	numSet := make(map[int]int)
 	numEvict := make(map[int]int)
@@ -295,6 +377,37 @@ func TestReplaceAccountsPendingEnqueueJob(t *testing.T) {
 
 	assert.True(t, cache.Replace(ctx, 1, 10, 8))
 	assert.Equal(t, int64(8), cache.used())
+}
+
+func TestPendingEnqueueCountsTowardsUsed(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(20),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	ctx := t.Context()
+
+	cache.queueLock.Lock()
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 1, 1, 4)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending enqueue job")
+	}
+	cache.queueLock.Unlock()
+
+	// Set has accepted the item, so its already-allocated backing must be
+	// visible to capacity users before another goroutine can reserve space.
+	assert.Equal(t, int64(4), cache.used())
+	assert.Equal(t, int64(4), cache.pendingBytes.Load())
+
+	cache.Evict(ctx, nil, 0)
+	assert.Equal(t, int64(4), cache.used())
+	assert.Zero(t, cache.pendingBytes.Load())
 }
 
 func TestEvictAccountsPendingEnqueueJob(t *testing.T) {

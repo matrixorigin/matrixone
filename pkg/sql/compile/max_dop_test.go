@@ -16,45 +16,43 @@ package compile
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestForceSingleScanDistinctAgg(t *testing.T) {
-	node := &plan.Node{
-		AggList: []*plan.Expr{
-			{
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{
-							ObjName: "sum",
+	newNode := func(name string, id int32) *plan.Node {
+		node := &plan.Node{
+			AggList: []*plan.Expr{{
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: name},
+					Args: []*plan.Expr{{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}},
 						},
-						Args: []*plan.Expr{
-							{
-								Expr: &plan.Expr_Lit{
-									Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+					}},
+				}},
+			}},
+		}
+		encoded := function.EncodeOverloadID(id, 0)
+		node.AggList[0].GetF().Func.Obj = int64(uint64(encoded) | uint64(function.Distinct))
+		return node
 	}
-	node.AggList[0].Expr.(*plan.Expr_F).F.Func.Obj = -9223372036854775808
 
-	require.True(t, forceSingleScan(node))
+	require.False(t, forceSingleScan(newNode("count", function.COUNT)))
+	require.True(t, forceSingleScan(newNode("sum", function.SUM)))
+	require.True(t, forceSingleScan(newNode("avg", function.AVG)))
 }
 
 func TestToScheduledQueryWorkersKeepsLocalIdentityWithoutRoute(t *testing.T) {
@@ -233,6 +231,83 @@ func TestConstructScopeForExternalNodeKeepsWorkerIdentity(t *testing.T) {
 	require.Equal(t, "remote", scope.NodeInfo.Id)
 	require.Equal(t, "remote:6001", scope.NodeInfo.Addr)
 	require.Equal(t, 1, scope.NodeInfo.Mcpu)
+}
+
+func TestConstructMongoScanScopeUsesScheduledQueryWorker(t *testing.T) {
+	tests := []struct {
+		name      string
+		workers   engine.Nodes
+		wantID    string
+		wantAddr  string
+		wantMagic magicType
+	}{
+		{
+			name: "current CN remains local when scheduled",
+			workers: engine.Nodes{
+				{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+				{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 8},
+			},
+			wantID: "cn-local", wantAddr: "cn-local:6001", wantMagic: Merge,
+		},
+		{
+			name: "remote query worker owns source when coordinator is not scheduled",
+			workers: engine.Nodes{
+				{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+			},
+			wantID: "cn-remote", wantAddr: "cn-remote:6001", wantMagic: Remote,
+		},
+		{
+			name:     "current CN is fallback without query workers",
+			wantAddr: "cn-local:6001", wantMagic: Merge,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr = "cn-local:6001"
+			c.cnList = test.workers
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+			scope := c.constructMongoScanScope()
+
+			require.Equal(t, test.wantID, scope.NodeInfo.Id)
+			require.Equal(t, test.wantAddr, scope.NodeInfo.Addr)
+			require.Equal(t, 1, scope.NodeInfo.Mcpu)
+			require.Equal(t, test.wantMagic, scope.Magic)
+		})
+	}
+}
+
+func TestMongoScanScopeIsStartedByDistributedDedupShuffle(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-coordinator:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-a", Addr: "cn-a:6001", Mcpu: 1},
+		{Id: "cn-b", Addr: "cn-b:6001", Mcpu: 1},
+	}
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	mongoScope := c.constructMongoScanScope()
+	mongoScope.setRootOperator(colexec.NewMockOperator())
+	buildScope := newShuffleJoinTestScope(t, c.cnList[1], 1)
+	joinNode := newShuffleJoinTestNode(1)
+	joinNode.JoinType = plan.Node_DEDUP
+	stageNodes := c.queryWorkerStageNodes()
+
+	receivers := c.newShuffleJoinScopeListAt(
+		[]*Scope{mongoScope}, []*Scope{buildScope}, joinNode, stageNodes, false)
+
+	var sourceAttached bool
+	for _, receiver := range receivers {
+		if sameExecutionNode(receiver.NodeInfo, mongoScope.NodeInfo) {
+			sourceAttached = slices.Contains(receiver.PreScopes, mongoScope)
+			break
+		}
+	}
+	require.True(t, sourceAttached,
+		"the DEDUP shuffle receiver on the MongoDB worker must own the source scope")
 }
 
 func TestSameExecutionNodeUsesIdentityAndDoesNotMatchEmptyAddressToRemote(t *testing.T) {
@@ -433,338 +508,6 @@ func TestGenerateNodesCapsByCNMcpuWhenDOPIsLarger(t *testing.T) {
 	require.Equal(t, 4, nodes[1].Mcpu)
 }
 
-func TestGenerateNodesUsesMultiCNForSmallIvfEntriesInternalScan(t *testing.T) {
-	c := NewMockCompile(t)
-	c.addr = "cn-local:6001"
-	c.e = newStubEngineForGenerateNodes("testdb", "idx_entries")
-	c.cnList = engine.Nodes{
-		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
-		{Id: "cn2", Addr: "cn-local:6001", Mcpu: 4},
-	}
-
-	node := &plan.Node{
-		NodeType: plan.Node_TABLE_SCAN,
-		ObjRef: &plan.ObjectRef{
-			SchemaName: "testdb",
-			ObjName:    "idx_entries",
-		},
-		TableDef: &plan.TableDef{
-			Name:      "idx_entries",
-			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-		},
-		Stats: &plan.Stats{
-			BlockNum: 1,
-			Dop:      1,
-		},
-		IndexReaderParam: &plan.IndexReaderParam{
-			OrderBy:      []*plan.OrderBySpec{{Expr: &plan.Expr{}}},
-			OrigFuncName: "l2_distance",
-			Limit: &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
-				},
-			},
-		},
-	}
-
-	nodes, err := c.generateNodes(node)
-	require.NoError(t, err)
-	require.Len(t, nodes, 2)
-	require.Equal(t, int32(2), nodes[0].CNCNT)
-	require.Equal(t, int32(0), nodes[0].CNIDX)
-	require.Equal(t, int32(2), nodes[1].CNCNT)
-	require.Equal(t, int32(1), nodes[1].CNIDX)
-}
-
-func TestGenerateNodesUsesMultiCNForSmallIvfSearchFunctionScan(t *testing.T) {
-	c := NewMockCompile(t)
-	c.addr = "cn-local:6001"
-	c.e = newStubEngineForGenerateNodes("testdb", "idx_entries")
-	c.cnList = engine.Nodes{
-		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
-		{Id: "cn2", Addr: "cn-local:6001", Mcpu: 4},
-	}
-
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		ObjRef: &plan.ObjectRef{
-			SchemaName: "testdb",
-			ObjName:    "idx_entries",
-		},
-		TableDef: &plan.TableDef{
-			Name:      "idx_entries",
-			TableType: "func_table",
-			TblFunc:   &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
-		},
-		Stats: &plan.Stats{
-			BlockNum: 1,
-			Dop:      1,
-		},
-		IndexReaderParam: &plan.IndexReaderParam{
-			OrigFuncName: "l2_distance",
-			Limit: &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
-				},
-			},
-		},
-	}
-
-	nodes, err := c.generateNodes(node)
-	require.NoError(t, err)
-	require.Len(t, nodes, 2)
-	require.Equal(t, int32(2), nodes[0].CNCNT)
-	require.Equal(t, int32(0), nodes[0].CNIDX)
-	require.Equal(t, int32(2), nodes[1].CNCNT)
-	require.Equal(t, int32(1), nodes[1].CNIDX)
-}
-
-func TestGenerateNodesPreservesPartitionedIvfEntriesPhysicalOwnership(t *testing.T) {
-	c := NewMockCompile(t)
-	c.addr = "cn-local:6001"
-	c.e = newStubEngineForGenerateNodes("testdb", "idx_entries")
-	c.cnList = engine.Nodes{
-		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
-		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 4},
-	}
-
-	node := &plan.Node{
-		NodeType: plan.Node_TABLE_SCAN,
-		ObjRef: &plan.ObjectRef{
-			SchemaName: "testdb",
-			ObjName:    "idx_entries",
-		},
-		TableDef: &plan.TableDef{
-			Name:      "idx_entries",
-			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-		},
-		Stats: &plan.Stats{
-			BlockNum: 1,
-			Dop:      1,
-		},
-		IndexReaderParam: &plan.IndexReaderParam{
-			Limit: &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
-				},
-			},
-			OrigFuncName:   "l2_distance",
-			PartitionCnCnt: 2,
-			PartitionCnIdx: 1,
-		},
-	}
-
-	nodes, err := c.generateNodes(node)
-	require.NoError(t, err)
-	require.Len(t, nodes, 1)
-	require.Equal(t, "cn-local:6001", nodes[0].Addr)
-	require.Equal(t, int32(2), nodes[0].CNCNT)
-	require.Equal(t, int32(1), nodes[0].CNIDX)
-}
-
-func TestCompileTableFunctionDispatchesIvfSearchToAllCNs(t *testing.T) {
-	c := NewMockCompile(t)
-	c.addr = "cn-local:6001"
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.anal = &AnalyzeModule{isFirst: true}
-	c.pn = &plan.Plan{
-		Plan: &plan.Plan_Query{
-			Query: &plan.Query{},
-		},
-	}
-	c.cnList = engine.Nodes{
-		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4, CNCNT: 2, CNIDX: 0},
-		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 4, CNCNT: 2, CNIDX: 1},
-	}
-
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		TableDef: &plan.TableDef{
-			Name:      "idx_entries",
-			TableType: "func_table",
-			Cols: []*plan.ColDef{
-				{Name: "pkid", Typ: plan.Type{Id: int32(types.T_int64)}},
-				{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
-			},
-			TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
-		},
-		Stats: &plan.Stats{BlockNum: 1, Dop: 1},
-		IndexReaderParam: &plan.IndexReaderParam{
-			OrigFuncName: "l2_distance",
-			Limit: &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
-				},
-			},
-		},
-	}
-
-	scopes, err := c.compileTableFunction(node, nil)
-	require.NoError(t, err)
-	require.Len(t, scopes, 2)
-	require.Equal(t, Remote, scopes[0].Magic)
-	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
-	require.Equal(t, 1, scopes[0].NodeInfo.Mcpu)
-	require.Equal(t, int32(2), scopes[0].NodeInfo.CNCNT)
-	require.Equal(t, int32(0), scopes[0].NodeInfo.CNIDX)
-	require.Equal(t, Remote, scopes[1].Magic)
-	require.Equal(t, "cn-remote:6001", scopes[1].NodeInfo.Addr)
-	require.Equal(t, 1, scopes[1].NodeInfo.Mcpu)
-	require.Equal(t, int32(2), scopes[1].NodeInfo.CNCNT)
-	require.Equal(t, int32(1), scopes[1].NodeInfo.CNIDX)
-
-	op0, ok := scopes[0].RootOp.(*table_function.TableFunction)
-	require.True(t, ok)
-	require.Equal(t, int32(2), op0.IndexReaderParam.GetPartitionCnCnt())
-	require.Equal(t, int32(0), op0.IndexReaderParam.GetPartitionCnIdx())
-	op1, ok := scopes[1].RootOp.(*table_function.TableFunction)
-	require.True(t, ok)
-	require.Equal(t, int32(2), op1.IndexReaderParam.GetPartitionCnCnt())
-	require.Equal(t, int32(1), op1.IndexReaderParam.GetPartitionCnIdx())
-}
-
-type readonlyWorkspaceForIvfTest struct{ *Ws }
-
-func (*readonlyWorkspaceForIvfTest) Readonly() bool { return true }
-
-func TestShouldDispatchIvfSearchMultiCNRejectsWritableWorkspace(t *testing.T) {
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		TableDef: &plan.TableDef{
-			TableType: "func_table",
-			TblFunc:   &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
-		},
-		IndexReaderParam: &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
-	}
-	cnList := engine.Nodes{{Addr: "cn1:6001"}, {Addr: "cn2:6001"}}
-
-	var writable client.Workspace = &Ws{}
-	require.False(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, writable))
-	require.True(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, &readonlyWorkspaceForIvfTest{Ws: &Ws{}}))
-	require.True(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, nil))
-
-	node.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{{Tag: 1, UseMembershipFilter: true}}
-	require.False(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, nil))
-}
-
-func TestCompileTableFunctionKeepsRuntimeFilteredIvfSearchOnCurrentCN(t *testing.T) {
-	c := NewMockCompile(t)
-	c.addr = "cn-local:6001"
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.anal = &AnalyzeModule{isFirst: true}
-	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
-	c.cnList = engine.Nodes{
-		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4, CNCNT: 2, CNIDX: 0},
-		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 4, CNCNT: 2, CNIDX: 1},
-	}
-
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		TableDef: &plan.TableDef{
-			Name:      "idx_entries",
-			TableType: "func_table",
-			Cols:      ivfSearchTestColDefs(),
-			TblFunc:   &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
-		},
-		Stats:                  &plan.Stats{BlockNum: 1, Dop: 1},
-		IndexReaderParam:       &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
-		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{Tag: 1, UseMembershipFilter: true}},
-	}
-
-	scopes, err := c.compileTableFunction(node, nil)
-	require.NoError(t, err)
-	require.Len(t, scopes, 1)
-	require.Equal(t, Merge, scopes[0].Magic)
-	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
-
-	op, ok := scopes[0].RootOp.(*table_function.TableFunction)
-	require.True(t, ok)
-	require.Len(t, op.RuntimeFilterSpecs, 1)
-	require.Equal(t, int32(0), op.IndexReaderParam.GetPartitionCnCnt())
-	require.Equal(t, int32(0), op.IndexReaderParam.GetPartitionCnIdx())
-}
-
-func TestCompileTableFunctionUsesSingleCNWithOneEligibleWorker(t *testing.T) {
-	c := NewMockCompile(t)
-	c.addr = "current-pipeline"
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.anal = &AnalyzeModule{isFirst: true}
-	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
-	// Engine.Nodes has already excluded CNs whose CommitID differs from this binary.
-	c.cnList = engine.Nodes{{Id: "current-cn", Addr: "current-pipeline", Mcpu: 4}}
-
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		TableDef: &plan.TableDef{
-			Name:      "idx_entries",
-			TableType: "func_table",
-			Cols:      ivfSearchTestColDefs(),
-			TblFunc:   &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
-		},
-		Stats: &plan.Stats{BlockNum: 1, Dop: 1},
-		IndexReaderParam: &plan.IndexReaderParam{
-			Limit: plan2.MakePlan2Int64ConstExprWithType(10),
-		},
-	}
-
-	scopes, err := c.compileTableFunction(node, nil)
-	require.NoError(t, err)
-	require.Len(t, scopes, 1)
-	require.Equal(t, Merge, scopes[0].Magic)
-	require.Equal(t, "current-pipeline", scopes[0].NodeInfo.Addr)
-	op, ok := scopes[0].RootOp.(*table_function.TableFunction)
-	require.True(t, ok)
-	require.Equal(t, int32(0), op.IndexReaderParam.GetPartitionCnCnt())
-	require.Equal(t, int32(0), op.IndexReaderParam.GetPartitionCnIdx())
-}
-
-func ivfSearchTestColDefs() []*plan.ColDef {
-	return []*plan.ColDef{
-		{Name: "pkid", Typ: plan.Type{Id: int32(types.T_int64)}},
-		{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
-	}
-}
-
-func TestGenerateNodesKeepsForceOneCNIvfEntriesInternalScanOnCurrentCN(t *testing.T) {
-	c := NewMockCompile(t)
-	c.addr = "cn-local:6001"
-	c.e = newStubEngineForGenerateNodes("testdb", "idx_entries")
-	c.cnList = engine.Nodes{
-		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
-		{Id: "cn2", Addr: "cn-local:6001", Mcpu: 4},
-	}
-
-	node := &plan.Node{
-		NodeType: plan.Node_TABLE_SCAN,
-		ObjRef: &plan.ObjectRef{
-			SchemaName: "testdb",
-			ObjName:    "idx_entries",
-		},
-		TableDef: &plan.TableDef{
-			Name:      "idx_entries",
-			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-		},
-		Stats: &plan.Stats{
-			BlockNum:   1,
-			Dop:        1,
-			ForceOneCN: true,
-		},
-		IndexReaderParam: &plan.IndexReaderParam{
-			OrderBy: []*plan.OrderBySpec{{Expr: &plan.Expr{}}},
-			Limit: &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}},
-				},
-			},
-		},
-	}
-
-	nodes, err := c.generateNodes(node)
-	require.NoError(t, err)
-	require.Len(t, nodes, 1)
-	require.Equal(t, int32(1), nodes[0].CNCNT)
-}
-
 func TestGenerateNodesKeepsSmallNonIvfScanOnCurrentCN(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
@@ -797,6 +540,101 @@ func TestGenerateNodesKeepsSmallNonIvfScanOnCurrentCN(t *testing.T) {
 		Mcpu:  4,
 		CNCNT: 1,
 	}}, nodes)
+}
+
+func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{isFirst: true}
+	c.cnList = engine.Nodes{
+		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
+		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_VECTOR_INDEX_SCAN,
+		ObjRef:   &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+		TableDef: &plan.TableDef{
+			Name: "t",
+			Cols: []*plan.ColDef{
+				{Name: "pkid", Typ: plan.Type{Id: 23}},
+				{Name: "score", Typ: plan.Type{Id: 31}},
+			},
+		},
+		Stats: &plan.Stats{Outcnt: 10},
+		ScanSnapshot: &plan.Snapshot{
+			TS:     &timestamp.Timestamp{PhysicalTime: 123},
+			Tenant: &plan.SnapshotTenant{TenantID: 7},
+		},
+		VectorIndexScan: &plan.VectorIndexScan{
+			ScanSnapshot: &plan.Snapshot{
+				TS:     &timestamp.Timestamp{PhysicalTime: 123},
+				Tenant: &plan.SnapshotTenant{TenantID: 7},
+			},
+		},
+	}
+
+	scopes, err := c.compileVectorIndexScan(node)
+	require.NoError(t, err)
+	require.Len(t, scopes, 2)
+	for i, scope := range scopes {
+		require.Equal(t, int32(2), scope.NodeInfo.CNCNT)
+		require.Equal(t, int32(i), scope.NodeInfo.CNIDX)
+		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		require.Equal(t, node.ScanSnapshot, scope.DataSource.node.ScanSnapshot)
+		require.Equal(t, node.VectorIndexScan.ScanSnapshot, scope.DataSource.node.VectorIndexScan.ScanSnapshot)
+		require.NotSame(t, node.ScanSnapshot, scope.DataSource.node.ScanSnapshot)
+	}
+
+	node.Stats.ForceOneCN = true
+	scopes, err = c.compileVectorIndexScan(node)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
+	require.Equal(t, int32(1), scopes[0].NodeInfo.CNCNT)
+}
+
+func TestNormalizeVectorIndexScanSnapshot(t *testing.T) {
+	nestedSnapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 10},
+		Tenant: &plan.SnapshotTenant{TenantID: 11},
+	}
+	node := &plan.Node{
+		VectorIndexScan: &plan.VectorIndexScan{ScanSnapshot: nestedSnapshot},
+	}
+
+	normalizeVectorIndexScanSnapshot(node)
+	require.Equal(t, nestedSnapshot, node.ScanSnapshot)
+	require.Equal(t, nestedSnapshot, node.VectorIndexScan.ScanSnapshot)
+	require.NotSame(t, nestedSnapshot, node.ScanSnapshot)
+	require.NotSame(t, nestedSnapshot, node.VectorIndexScan.ScanSnapshot)
+
+	topLevelSnapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 20},
+		Tenant: &plan.SnapshotTenant{TenantID: 22},
+	}
+	node.ScanSnapshot = topLevelSnapshot
+	normalizeVectorIndexScanSnapshot(node)
+	require.Equal(t, topLevelSnapshot, node.ScanSnapshot)
+	require.Equal(t, topLevelSnapshot, node.VectorIndexScan.ScanSnapshot)
+	require.NotSame(t, topLevelSnapshot, node.ScanSnapshot)
+	require.NotSame(t, topLevelSnapshot, node.VectorIndexScan.ScanSnapshot)
+}
+
+func TestUpdateScopeTxnOffsetRefreshesApplyOperators(t *testing.T) {
+	rootApply := &apply.Apply{TxnOffset: 3}
+	preScopeApply := &apply.Apply{TxnOffset: 3}
+	scope := &Scope{
+		TxnOffset: 3,
+		RootOp:    rootApply,
+		PreScopes: []*Scope{{TxnOffset: 3, RootOp: preScopeApply}},
+	}
+
+	UpdateScopeTxnOffset(scope, 9)
+	require.Equal(t, 9, scope.TxnOffset)
+	require.Equal(t, 9, rootApply.TxnOffset)
+	require.Equal(t, 9, scope.PreScopes[0].TxnOffset)
+	require.Equal(t, 9, preScopeApply.TxnOffset)
 }
 
 func TestGenerateNodesKeepsLargeScanOnCurrentCNWhenNoWorkers(t *testing.T) {

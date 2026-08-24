@@ -387,7 +387,7 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.False(t, expr.Typ.NotNullable)
 	})
 
-	t.Run("case binary character keeps binary metadata", func(t *testing.T) {
+	t.Run("case binary character uses literal byte metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "case", []*planpb.Expr{
 			makePlan2BoolConstExprWithType(true),
 			makePlan2VarBinaryConstExprWithType("a"),
@@ -399,7 +399,7 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.True(t, expr.Typ.NotNullable)
 	})
 
-	t.Run("if binary character keeps binary metadata", func(t *testing.T) {
+	t.Run("if binary character uses literal byte metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
 			makePlan2BoolConstExprWithType(true),
 			makePlan2VarBinaryConstExprWithType("a"),
@@ -410,6 +410,44 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.Equal(t, int32(8), expr.Typ.Width)
 		require.True(t, expr.Typ.NotNullable)
 	})
+
+	t.Run("binary character column keeps conservative capacity", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+			makePlan2BoolConstExprWithType(true),
+			makePlan2VarBinaryConstExprWithType("a"),
+			{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 2}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
+		require.Equal(t, int32(8), expr.Typ.Width)
+	})
+}
+
+func TestBindControlFlowBinaryCharacterCharsetWidth(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		charset uint8
+		width   int32
+	}{
+		{name: "legacy text follows advertised utf8mb4 policy", charset: types.CharsetLegacy, width: 8},
+		{name: "utf8mb4 general text", charset: types.CharsetUTF8, width: 8},
+		{name: "utf8mb4 binary collation", charset: types.CharsetUTF8MB4Bin, width: 8},
+		{name: "binary payload", charset: types.CharsetBinary, width: 2},
+		{name: "unknown text identity uses utf8mb4 bound", charset: 255, width: 8},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			character := makePlan2StringConstExprWithType("bc")
+			character.Typ.Charset = uint32(test.charset)
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), "if", []*planpb.Expr{
+				makePlan2BoolConstExprWithType(true),
+				makePlan2VarBinaryConstExprWithType("a"),
+				character,
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
+			require.Equal(t, test.width, expr.Typ.Width)
+		})
+	}
 }
 
 func TestBuildCaseSignedUnsignedMetadataWithNull(t *testing.T) {
@@ -475,6 +513,31 @@ func TestBuildControlFlowUTF8MB4BinaryWidth(t *testing.T) {
 			require.Len(t, projectList, 1)
 			require.Equal(t, int32(types.T_varbinary), projectList[0].Typ.Id)
 			require.Equal(t, int32(4), projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestBuildControlFlowBinaryCharacterLiteralWidth(t *testing.T) {
+	for _, test := range []struct {
+		sql   string
+		width int32
+	}{
+		{sql: `select case when 1 then _binary 'a' else 'bc' end as c`, width: 8},
+		{sql: `select if(1, _binary 'a', 'bc') as c`, width: 8},
+		{sql: `select case when 1 then _binary 'a' else '中文' end as c`, width: 8},
+		{sql: `select case when 1 then _binary 'a' else '😀' end as c`, width: 4},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_varbinary), projectList[0].Typ.Id)
+			require.Equal(t, test.width, projectList[0].Typ.Width)
 		})
 	}
 }
@@ -619,6 +682,46 @@ func TestBuildControlFlowTypedNullVarcharMetadata(t *testing.T) {
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 			require.Len(t, projectList, 1)
 			require.Equal(t, int32(types.T_varchar), projectList[0].Typ.Id)
+			require.Equal(t, test.width, projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestBuildControlFlowTextFamilyMetadataFromColumns(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["text_family"] = &planpb.TableDef{
+		TblId:     1001,
+		Name:      "text_family",
+		DbName:    "tpch",
+		TableType: "ORDINARY",
+		Cols: []*planpb.ColDef{
+			{Name: "tiny_col", OriginName: "tiny_col", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}},
+			{Name: "medium_col", OriginName: "medium_col", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}},
+			{Name: "long_col", OriginName: "long_col", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxLongTextLen}},
+		},
+	}
+	ctx.objects["text_family"] = &ObjectRef{ObjName: "text_family", SchemaName: "tpch"}
+
+	for _, test := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{name: "case medium", sql: "select case when true then medium_col else medium_col end from text_family", width: types.MaxMediumTextLen},
+		{name: "if long", sql: "select if(true, long_col, long_col) from text_family", width: types.MaxLongTextLen},
+		{name: "coalesce tiny", sql: "select coalesce(tiny_col, tiny_col) from text_family", width: types.MaxTinyTextLen},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			pl, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_text), projectList[0].Typ.Id)
 			require.Equal(t, test.width, projectList[0].Typ.Width)
 		})
 	}

@@ -23,6 +23,7 @@ import (
 	"math"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -353,6 +354,36 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 	return expr
 }
 
+func replaceColRefsIntroducesVolatile(expr *plan.Expr, tag int32, projects []*plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if replaceColRefsIntroducesVolatile(arg, tag, projects) {
+				return true
+			}
+		}
+	case *plan.Expr_Col:
+		colRef := exprImpl.Col
+		return colRef.RelPos == tag && ContainsVolatileFunction(projects[colRef.ColPos])
+	case *plan.Expr_W:
+		if replaceColRefsIntroducesVolatile(exprImpl.W.WindowFunc, tag, projects) {
+			return true
+		}
+		for _, arg := range exprImpl.W.PartitionBy {
+			if replaceColRefsIntroducesVolatile(arg, tag, projects) {
+				return true
+			}
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if replaceColRefsIntroducesVolatile(order.Expr, tag, projects) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -383,6 +414,9 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		needCast := true
 		fn := expr.GetF()
 		if fn != nil {
+			// fulltext_match / bm25_match are rewritten to an index-scan join by the
+			// optimizer; leave them un-cast so the rewrite can find them by name in the
+			// filter list (a wrapping cast(... AS BOOL) would hide the function).
 			needCast = fn.Func.ObjName != "fulltext_match"
 		}
 		// expr must be bool type, if not, try to do type convert
@@ -877,7 +911,7 @@ func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	var exprs []*plan.Expr
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if exprImpl.F.Func.ObjName == "and" {
+		if exprImpl.F.Func.ObjName == "and" && !conjunctionSharesMemoAcrossBranches(exprImpl.F.Args) {
 			exprs = append(exprs, splitPlanConjunction(exprImpl.F.Args[0])...)
 			exprs = append(exprs, splitPlanConjunction(exprImpl.F.Args[1])...)
 		} else {
@@ -889,6 +923,54 @@ func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
 	}
 
 	return exprs
+}
+
+// conjunctionSharesMemoAcrossBranches reports whether splitting an AND would
+// separate occurrences that must share one volatile-expression memo cache.
+func conjunctionSharesMemoAcrossBranches(args []*plan.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	left := make(map[int32]struct{})
+	collectNegativeAuxIDs(args[0], left)
+	if len(left) == 0 {
+		return false
+	}
+	right := make(map[int32]struct{})
+	collectNegativeAuxIDs(args[1], right)
+	for id := range left {
+		if _, ok := right[id]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func collectNegativeAuxIDs(expr *plan.Expr, ids map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	if expr.AuxId < 0 {
+		ids[expr.AuxId] = struct{}{}
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F != nil {
+			for _, arg := range e.F.Args {
+				collectNegativeAuxIDs(arg, ids)
+			}
+		}
+	case *plan.Expr_List:
+		if e.List != nil {
+			for _, item := range e.List.List {
+				collectNegativeAuxIDs(item, ids)
+			}
+		}
+	case *plan.Expr_Lit:
+		if e.Lit != nil {
+			collectNegativeAuxIDs(e.Lit.Src, ids)
+		}
+	}
 }
 
 func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan.Expr, err error) {
@@ -1183,6 +1265,16 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
+	// Column-free is not the same as scan-invariant. A volatile function can
+	// produce a new value for every row and must not be evaluated once more by
+	// block pruning before the row-level filter runs.
+	if containsVolatileFunction(expr) {
+		return false
+	}
+	return exprIsZonemappable(ctx, expr)
+}
+
+func exprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		isConst := true
@@ -1192,7 +1284,7 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 			} else {
 				isConst = false
 			}
-			isZonemappable := ExprIsZonemappable(ctx, arg)
+			isZonemappable := exprIsZonemappable(ctx, arg)
 			if !isZonemappable {
 				return false
 			}
@@ -1459,6 +1551,16 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		if cannotFold || !foldInExpr {
 			return expr, nil
 		}
+		requiresStringProvenance, err := plan.RequiresMORPCVersion23StringProvenance(exprList)
+		if err != nil {
+			return nil, err
+		}
+		if requiresStringProvenance {
+			// LiteralVec uses the stable Vector wire format, which cannot carry
+			// per-item runtime string domains. Keep the literal list executable
+			// and visible to the remote protocol capability analysis.
+			return expr, nil
+		}
 		isSerialized := rule.ContainsSerializedLiteral(exprList)
 
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -1557,6 +1659,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if c == nil {
 		return expr, nil
 	}
+	rule.PreserveFoldedLiteralStringDomain(expr, c)
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
@@ -1617,7 +1720,8 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 	var lit *plan.Literal
 	if constExpr.GetLit() != nil {
 		lit = constExpr.GetLit()
-	} else if funcExpr := constExpr.GetF(); funcExpr != nil {
+	} else if funcExpr := constExpr.GetF(); funcExpr != nil &&
+		funcExpr.Func != nil && funcExpr.Func.GetObjName() == "cast" {
 		// Check if it's a cast function with a literal argument
 		if len(funcExpr.Args) > 0 {
 			if innerLit := funcExpr.Args[0].GetLit(); innerLit != nil {
@@ -3128,7 +3232,9 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
 	}
-
+	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
+		return nil, err
+	}
 	copied := DeepCopyPlan(preparePlan)
 	switch pp := copied.Plan.(type) {
 
@@ -3149,9 +3255,201 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return copied, nil
 }
 
+// ValidatePreparedPaginationParams validates parameter markers used by LIMIT
+// and OFFSET before the values are converted through the generic expression
+// cast path. MySQL accepts NULL and Boolean user variables here, but rejects
+// string, floating-point, and decimal sources even when their text is an
+// integer. Negative signed values use the unsigned-range error required by
+// EXECUTE.
+func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
+	for _, pos := range PreparedPaginationParamPositions(preparePlan) {
+		if pos < 0 || int(pos) >= len(paramVals) {
+			continue
+		}
+		valid, negative := validatePreparedPaginationValue(paramVals[pos])
+		if negative {
+			return moerr.NewPreparedParamOutOfRange(ctx, "unsigned integer", "EXECUTE")
+		}
+		if !valid {
+			return moerr.NewWrongArguments(ctx, "EXECUTE")
+		}
+	}
+	return nil
+}
+
+// PreparedPlanHasPaginationParams reports whether a prepared plan must bind
+// LIMIT/OFFSET values for each execution instead of reusing a value-filled
+// compile from an earlier execution.
+func PreparedPlanHasPaginationParams(preparePlan *Plan) bool {
+	return len(preparedPaginationParamPositions(preparePlan)) > 0
+}
+
+// PreparedPaginationParamPositions returns the zero-based parameter positions
+// used by LIMIT/OFFSET in a prepared plan.
+func PreparedPaginationParamPositions(preparePlan *Plan) []int32 {
+	positions := preparedPaginationParamPositions(preparePlan)
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func preparedPaginationParamPositions(preparePlan *Plan) map[int32]struct{} {
+	positions := make(map[int32]struct{})
+	if preparePlan == nil {
+		return positions
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return positions
+	}
+
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		collectPreparedParamPositions(node.GetLimit(), positions)
+		collectPreparedParamPositions(node.GetOffset(), positions)
+	}
+	return positions
+}
+
+func collectPreparedParamPositions(expr *Expr, positions map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		positions[exprImpl.P.Pos] = struct{}{}
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			collectPreparedParamPositions(arg, positions)
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			collectPreparedParamPositions(item, positions)
+		}
+	}
+}
+
+func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
+	kind := vector.PrepareParamNone
+	if param, ok := value.(ParamValue); ok {
+		value = param.Value
+		kind = param.PrepareParamKind
+	}
+	if value == nil {
+		return true, false
+	}
+	if kind != vector.PrepareParamNone && kind != vector.PrepareParamInteger && kind != vector.PrepareParamBoolean {
+		return false, false
+	}
+
+	switch value := value.(type) {
+	case int:
+		return true, value < 0
+	case int8:
+		return true, value < 0
+	case int16:
+		return true, value < 0
+	case int32:
+		return true, value < 0
+	case int64:
+		return true, value < 0
+	case uint, uint8, uint16, uint32, uint64, types.MoYear, bool:
+		return true, false
+	case string:
+		if kind == vector.PrepareParamBoolean {
+			return value == "0" || value == "1", false
+		}
+		if kind != vector.PrepareParamInteger {
+			return false, false
+		}
+		if strings.HasPrefix(value, "-") {
+			digits := strings.TrimPrefix(value, "-")
+			if digits == "" {
+				return false, false
+			}
+			if _, err := strconv.ParseUint(digits, 10, 64); err != nil {
+				return false, false
+			}
+			return true, strings.TrimLeft(digits, "0") != ""
+		}
+		_, err := strconv.ParseUint(value, 10, 64)
+		return err == nil, false
+	default:
+		return false, false
+	}
+}
+
 type ParamValue struct {
-	Value any
-	IsBin bool
+	Value            any
+	IsBin            bool
+	PrepareParamKind vector.PrepareParamKind
+}
+
+func preparedNthValueParamPosition(expr *Expr) (int32, bool) {
+	if param := expr.GetP(); param != nil {
+		return param.Pos, true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.GetFunc().GetObjName() != "cast" || len(fn.Args) == 0 {
+		return 0, false
+	}
+	param := fn.Args[0].GetP()
+	if param == nil {
+		return 0, false
+	}
+	return param.Pos, true
+}
+
+func isPositivePreparedInteger(value any) bool {
+	kind := vector.PrepareParamNone
+	if paramValue, ok := value.(ParamValue); ok {
+		value = paramValue.Value
+		kind = paramValue.PrepareParamKind
+	}
+	if value == nil || kind != vector.PrepareParamNone && kind != vector.PrepareParamInteger {
+		return false
+	}
+
+	switch value := value.(type) {
+	case int:
+		return value > 0
+	case int8:
+		return value > 0
+	case int16:
+		return value > 0
+	case int32:
+		return value > 0
+	case int64:
+		return value > 0
+	case uint:
+		return value > 0 && uint64(value) <= uint64(math.MaxInt64)
+	case uint8:
+		return value > 0
+	case uint16:
+		return value > 0
+	case uint32:
+		return value > 0
+	case uint64:
+		return value > 0 && value <= uint64(math.MaxInt64)
+	case types.MoYear:
+		return value > 0
+	case string:
+		if kind != vector.PrepareParamInteger {
+			return false
+		}
+		parsed, err := strconv.ParseUint(value, 10, 63)
+		return err == nil && parsed > 0
+	default:
+		return false
+	}
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
@@ -3183,6 +3481,22 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
+		if name != "nth_value" || len(args) != 2 {
+			return nil
+		}
+		pos, ok := preparedNthValueParamPosition(args[1])
+		if !ok {
+			return nil
+		}
+		if pos < 0 || int(pos) >= len(paramVals) {
+			return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
+		}
+		if !isPositivePreparedInteger(paramVals[pos]) {
+			return moerr.NewWrongArguments(ctx, "nth_value")
+		}
+		return nil
+	}
 	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
 	err := VisitQuery.Visit(ctx)
 	if err != nil {
@@ -3199,23 +3513,30 @@ func (builder *QueryBuilder) addNameByColRef(tag int32, tableDef *plan.TableDef)
 }
 
 func GetRowSizeFromTableDef(tableDef *TableDef, ignoreHiddenKey bool) float64 {
-	size := int32(0)
+	// Column widths are protocol capacities and may use MaxLongTextLen
+	// (math.MaxInt32). Accumulate in float64 and cap the planner estimate so
+	// adding an ordinary column cannot wrap the old int32 accumulator negative.
+	const maxPlanningRowSize = float64(math.MaxInt32)
+	size := float64(0)
 	for _, col := range tableDef.Cols {
 		if col.Hidden && ignoreHiddenKey {
 			continue
 		}
 		if col.Typ.Width > 0 {
-			size += col.Typ.Width
-			continue
-		}
-		typ := types.T(col.Typ.Id).ToType()
-		if typ.Width > 0 {
-			size += typ.Width
+			size += float64(col.Typ.Width)
 		} else {
-			size += typ.Size
+			typ := types.T(col.Typ.Id).ToType()
+			if typ.Width > 0 {
+				size += float64(typ.Width)
+			} else {
+				size += float64(typ.Size)
+			}
+		}
+		if size >= maxPlanningRowSize {
+			return maxPlanningRowSize
 		}
 	}
-	return float64(size)
+	return size
 }
 
 type UnorderedSet[T ~string | ~int] map[T]int

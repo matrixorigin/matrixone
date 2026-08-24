@@ -21,16 +21,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	prom "github.com/prometheus/client_golang/prometheus"
+	promtest "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMPoolRelatedMetricsIncludesOnHeapOwnership(t *testing.T) {
+	mp := mpool.MustNew("mometric-onheap-ownership")
+	defer mpool.DeleteMPool(mp)
+	buf, err := mp.Alloc(96, false)
+	require.NoError(t, err)
+
+	mpoolRelatedMetrics()
+	require.Equal(t,
+		float64(mpool.GlobalOnHeapStats().NumCurrBytes.Load()),
+		promtest.ToFloat64(v2.MemMPoolOnHeapOutstandingBytesGauge))
+	require.Equal(t, float64(mpool.GlobalOnHeapStats().NumCurrObjects.Load()),
+		promtest.ToFloat64(v2.MemMPoolOnHeapOutstandingObjectsGauge))
+
+	mp.Free(buf)
+	mpoolRelatedMetrics()
+	require.Equal(t, float64(mpool.GlobalOnHeapStats().NumCurrBytes.Load()),
+		promtest.ToFloat64(v2.MemMPoolOnHeapOutstandingBytesGauge))
+}
 
 func TestMetric(t *testing.T) {
 	sqlch := make(chan string, 100)

@@ -419,6 +419,39 @@ func TestBuildTable_AlterView(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestBuildTableRejectsOutOfScopeSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := NewMockCompilerContext2(ctrl)
+	snapshot := &Snapshot{ExtraInfo: &plan.SnapshotExtraInfo{
+		Name: "snapshot", Level: tree.SNAPSHOTLEVELTABLE.String(), ObjId: 1,
+	}}
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1))
+	ctx.EXPECT().GetSnapshot().Return(nil)
+	ctx.EXPECT().ResolveSnapshotWithSnapshotName("snapshot").Return(snapshot, nil)
+	ctx.EXPECT().DatabaseExists("db", snapshot).Return(true)
+	ctx.EXPECT().GetSubscriptionMeta("db", snapshot).Return(nil, nil)
+	ctx.EXPECT().Resolve("db", "other_table", snapshot).Return(
+		&plan.ObjectRef{SchemaName: "db", ObjName: "other_table"},
+		&plan.TableDef{DbId: 1, TblId: 2},
+		nil,
+	)
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.snapshot = snapshot
+	table := &tree.TableName{}
+	table.SchemaName = "db"
+	table.ObjectName = "other_table"
+	table.AtTsExpr = &tree.AtTimeStamp{
+		Type: tree.ATTIMESTAMPSNAPSHOT,
+		Expr: tree.NewNumVal("snapshot", "snapshot", false, tree.P_char),
+	}
+	_, err := builder.buildTable(table, bindCtx, nil)
+	require.EqualError(t, err, "internal error: table-level snapshot(snapshot) does not belong to the table(db-other_table)")
+}
+
 func TestBindViewUsesStoredSQLModeForPipesAsConcat(t *testing.T) {
 	sqlMode := "PIPES_AS_CONCAT"
 	builder, nodeID := buildViewForSQLModeTest(t, "v_pipe", ViewData{
@@ -457,6 +490,114 @@ func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
 	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
 	require.True(t, exprContainsFunc(projectExpr, "concat"))
 	require.False(t, exprContainsFunc(projectExpr, "or"))
+}
+
+func TestBindViewUsesStoredLowerCaseTableNames(t *testing.T) {
+	storedCaseSensitive := int64(0)
+	for _, test := range []struct {
+		name   string
+		target string
+		views  map[string]ViewData
+	}{
+		{
+			name:   "direct view",
+			target: "v_direct",
+			views: map[string]ViewData{
+				"v_direct": {
+					Stmt:                "create view v_direct as select Nation.n_name from Nation",
+					DefaultDatabase:     "db",
+					LowerCaseTableNames: &storedCaseSensitive,
+				},
+			},
+		},
+		{
+			name:   "nested view",
+			target: "v_outer",
+			views: map[string]ViewData{
+				"v_inner": {
+					Stmt:                "create view v_inner as select Nation.n_name from Nation",
+					DefaultDatabase:     "db",
+					LowerCaseTableNames: &storedCaseSensitive,
+				},
+				"v_outer": {
+					Stmt:            "create view v_outer as select v_inner.n_name from v_inner",
+					DefaultDatabase: "db",
+				},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, nodeID := buildViewsForLowerCaseTest(t, test.target, test.views)
+			require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[nodeID].NodeType)
+			require.Len(t, builder.qry.Nodes[nodeID].ProjectList, 1)
+		})
+	}
+}
+
+func buildViewsForLowerCaseTest(
+	t *testing.T,
+	target string,
+	views map[string]ViewData,
+) (*QueryBuilder, int32) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	type relation struct {
+		obj   *ObjectRef
+		table *TableDef
+	}
+	store := map[string]relation{
+		"db.Nation": {
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: "Nation"},
+			table: &plan.TableDef{
+				DbName: "db", Name: "Nation", TableType: catalog.SystemOrdinaryRel,
+				Cols: []*ColDef{{Name: "n_name", Typ: plan.Type{Id: int32(types.T_varchar), Width: 60, Table: "Nation"}}},
+			},
+		},
+	}
+	for name, data := range views {
+		viewJSON, err := json.Marshal(data)
+		require.NoError(t, err)
+		store["db."+name] = relation{
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: name},
+			table: &plan.TableDef{
+				DbName: "db", Name: name, TableType: catalog.SystemViewRel,
+				Cols:    []*ColDef{{Name: "n_name", Typ: plan.Type{Id: int32(types.T_varchar), Width: 60, Table: name}}},
+				ViewSql: &plan.ViewDef{View: string(viewJSON)},
+			},
+		}
+	}
+
+	ctx := NewMockCompilerContext2(ctrl)
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+			if schemaName == "" {
+				schemaName = "db"
+			}
+			relation := store[schemaName+"."+tableName]
+			return relation.obj, relation.table, nil
+		}).AnyTimes()
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
+	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(uint32(0), nil).AnyTimes()
+	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	tableName := &tree.TableName{}
+	tableName.SchemaName = "db"
+	tableName.ObjectName = tree.Identifier(target)
+	nodeID, err := builder.buildTable(tableName, bindCtx, nil)
+	require.NoError(t, err)
+	return builder, nodeID
 }
 
 func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (*QueryBuilder, int32) {
@@ -779,7 +920,7 @@ func TestQueryBuilder_bindWhere(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from select_test.bind_select where a > 0 and b < 0 or c = 0", 1)
 	clause := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Where
 
-	newNodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, clause, 0)
+	newNodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, clause, 0, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), newNodeID)
 	require.Equal(t, 1, len(boundFilterList))
@@ -973,6 +1114,61 @@ func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
 	require.NoError(t, err)
 	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
 	require.Error(t, err, "string literal case must remain significant in grouping-expression matching")
+}
+
+func TestQueryBuilderRejectsGroupingOutsideGroupingExtensions(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "plain select",
+			sql:  `select grouping(a) from select_test.bind_select order by a, b`,
+		},
+		{
+			name: "ordinary group by",
+			sql:  `select a, grouping(a), count(*) from select_test.bind_select group by a order by a`,
+		},
+		{
+			name: "having",
+			sql:  `select a, count(*) from select_test.bind_select group by a having grouping(a) = 0 order by a`,
+		},
+		{
+			name: "order by",
+			sql:  `select a from select_test.bind_select order by grouping(a), a`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidGroupFuncUse), err)
+
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, uint16(moerr.ER_INVALID_GROUP_FUNC_USE), moErr.MySQLCode())
+			require.Equal(t, "HY000", moErr.SqlState())
+			require.Equal(t, "Invalid use of group function", moErr.Error())
+		})
+	}
+}
+
+func TestQueryBuilderAllowsGroupingWithSingleGroupingSet(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select a, grouping(a), count(*)
+		from select_test.bind_select
+		group by grouping sets ((a))`, 1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+	require.NotNil(t, queryPlan.GetQuery())
 }
 
 func TestQueryBuilderBuildRollupRejectsNonGroupByGroupingArguments(t *testing.T) {
@@ -2436,10 +2632,14 @@ func TestQueryBuilder_bindProjection(t *testing.T) {
 
 // genBuilderAndCtxWithColumnType creates a builder and context with a column of specified type
 func genBuilderAndCtxWithColumnType(typ types.T, colName string) (*QueryBuilder, *BindContext) {
+	typesType := typ.ToType()
+	return genBuilderAndCtxWithColumnTypesType(typesType, colName)
+}
+
+func genBuilderAndCtxWithColumnTypesType(typesType types.Type, colName string) (*QueryBuilder, *BindContext) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
-	typesType := typ.ToType()
 	plan2Type := makePlan2Type(&typesType)
 	bind := &Binding{
 		tag:            1,
@@ -2462,6 +2662,557 @@ func genBuilderAndCtxWithColumnType(typ types.T, colName string) (*QueryBuilder,
 	return builder, bindCtx
 }
 
+func TestQueryBuilder_bindTimeWindowTruncatePreservesFractionalScale(t *testing.T) {
+	tests := []struct {
+		name      string
+		inputType types.Type
+		wantScale int32
+		wantCast  bool
+	}{
+		{
+			name:      "timestamp6",
+			inputType: types.T_timestamp.ToTypeWithScale(6),
+			wantScale: 6,
+			wantCast:  false,
+		},
+		{
+			name:      "datetime6",
+			inputType: types.T_datetime.ToTypeWithScale(6),
+			wantScale: 6,
+			wantCast:  true,
+		},
+		{
+			name:      "varchar",
+			inputType: types.T_varchar.ToType(),
+			wantScale: 6,
+			wantCast:  true,
+		},
+		{
+			name:      "datetime0",
+			inputType: types.T_datetime.ToType(),
+			wantScale: 0,
+			wantCast:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnTypesType(tt.inputType, "ts")
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+					Unit: "second",
+				},
+			}
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+
+			truncateExpr, err := projectionBinder.BindExpr(helpFunc.truncate, 0, true)
+			require.NoError(t, err)
+
+			truncateFunc := truncateExpr.GetF()
+			require.NotNil(t, truncateFunc)
+			require.Equal(t, "mo_win_truncate", truncateFunc.GetFunc().GetObjName())
+			require.Len(t, truncateFunc.Args, 3)
+			wantRetType := int32(types.T_datetime)
+			if !tt.wantCast {
+				wantRetType = int32(types.T_timestamp)
+			}
+			require.Equal(t, wantRetType, truncateExpr.Typ.Id)
+			require.Equal(t, tt.wantScale, truncateExpr.Typ.Scale)
+
+			castExpr := truncateFunc.Args[0]
+			if !tt.wantCast {
+				require.Nil(t, castExpr.GetF())
+				require.Equal(t, int32(types.T_timestamp), castExpr.Typ.Id)
+				require.Equal(t, tt.wantScale, castExpr.Typ.Scale)
+				return
+			}
+
+			castFunc := castExpr.GetF()
+			require.NotNil(t, castFunc)
+			require.Equal(t, "cast", castFunc.GetFunc().GetObjName())
+			require.Len(t, castFunc.Args, 2)
+			require.Equal(t, int32(types.T_datetime), castExpr.Typ.Id)
+			require.Equal(t, tt.wantScale, castExpr.Typ.Scale)
+			require.Equal(t, int32(types.T_datetime), castFunc.Args[1].Typ.Id)
+			require.Equal(t, tt.wantScale, castFunc.Args[1].Typ.Scale)
+		})
+	}
+}
+
+func TestQueryBuilder_bindTimeWindowRejectsUnsupportedUnitsBeforeCompile(t *testing.T) {
+	tests := []struct {
+		name         string
+		intervalUnit string
+		slidingUnit  string
+	}{
+		{
+			name:         "interval month",
+			intervalUnit: "month",
+		},
+		{
+			name:         "interval week",
+			intervalUnit: "week",
+		},
+		{
+			name:         "interval year",
+			intervalUnit: "year",
+		},
+		{
+			name:         "interval quarter",
+			intervalUnit: "quarter",
+		},
+		{
+			name:         "sliding month",
+			intervalUnit: "second",
+			slidingUnit:  "month",
+		},
+		{
+			name:         "sliding week",
+			intervalUnit: "day",
+			slidingUnit:  "week",
+		},
+		{
+			name:         "sliding year",
+			intervalUnit: "hour",
+			slidingUnit:  "year",
+		},
+		{
+			name:         "sliding quarter",
+			intervalUnit: "minute",
+			slidingUnit:  "quarter",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_timestamp, "ts")
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+					Unit: tt.intervalUnit,
+				},
+			}
+			if tt.slidingUnit != "" {
+				astTimeWindow.Sliding = &tree.Sliding{
+					Val:  tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+					Unit: tt.slidingUnit,
+				}
+			}
+
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_datetime)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+				},
+			}
+
+			_, _, _, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+			require.ErrorContains(t, err, unsupportedTimeWindowIntervalUnit)
+		})
+	}
+}
+
+func TestQueryBuilder_bindTimeWindowRejectsNonPositiveValuesBeforeCompile(t *testing.T) {
+	tests := []struct {
+		name          string
+		intervalValue int64
+		slidingValue  *int64
+		errorContains string
+	}{
+		{
+			name:          "zero interval",
+			intervalValue: 0,
+			errorContains: timeWindowIntervalMustBePositive,
+		},
+		{
+			name:          "negative interval",
+			intervalValue: -1,
+			errorContains: timeWindowIntervalMustBePositive,
+		},
+		{
+			name:          "zero sliding",
+			intervalValue: 5,
+			slidingValue:  ptrTo[int64](0),
+			errorContains: timeWindowSlidingMustBePositive,
+		},
+		{
+			name:          "negative sliding",
+			intervalValue: 5,
+			slidingValue:  ptrTo[int64](-1),
+			errorContains: timeWindowSlidingMustBePositive,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_timestamp, "ts")
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(tt.intervalValue, fmt.Sprintf("%d", tt.intervalValue), false, tree.P_int64),
+					Unit: "minute",
+				},
+			}
+			if tt.slidingValue != nil {
+				astTimeWindow.Sliding = &tree.Sliding{
+					Val:  tree.NewNumVal(*tt.slidingValue, fmt.Sprintf("%d", *tt.slidingValue), false, tree.P_int64),
+					Unit: "minute",
+				}
+			}
+
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_datetime)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+				},
+			}
+
+			_, _, _, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+			require.ErrorContains(t, err, tt.errorContains)
+		})
+	}
+}
+
+func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "datetime scale 0", typ: types.T_datetime.ToTypeWithScale(0)},
+		{name: "datetime scale 3", typ: types.T_datetime.ToTypeWithScale(3)},
+		{name: "datetime scale 6", typ: types.T_datetime.ToTypeWithScale(6)},
+		{name: "timestamp scale 0", typ: types.T_timestamp.ToTypeWithScale(0)},
+		{name: "timestamp scale 3", typ: types.T_timestamp.ToTypeWithScale(3)},
+		{name: "timestamp scale 6", typ: types.T_timestamp.ToTypeWithScale(6)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mockTimeWindowScaleTable(t, mock, tt.typ)
+
+			logicPlan, err := runOneStmt(mock, t,
+				"select _wstart, _wend, count(*) from tw_scale interval(ts, 1, microsecond)")
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotEmpty(t, query.Steps)
+			root := query.Nodes[query.Steps[0]]
+			require.Equal(t, plan.Node_PROJECT, root.NodeType)
+			require.GreaterOrEqual(t, len(root.ProjectList), 2)
+
+			require.Equal(t, int32(tt.typ.Oid), root.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(6), root.ProjectList[0].Typ.Scale)
+			require.Equal(t, int32(6), root.ProjectList[0].Typ.Width)
+			require.Equal(t, int32(tt.typ.Oid), root.ProjectList[1].Typ.Id)
+			require.Equal(t, int32(6), root.ProjectList[1].Typ.Scale)
+			require.Equal(t, int32(6), root.ProjectList[1].Typ.Width)
+
+			var timeWindowNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_TIME_WINDOW {
+					timeWindowNode = node
+					break
+				}
+			}
+			require.NotNil(t, timeWindowNode)
+			require.Equal(t, int32(tt.typ.Oid), timeWindowNode.Timestamp.Typ.Id)
+			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Scale)
+			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Width)
+			require.Len(t, timeWindowNode.GroupBy, 1)
+			require.Equal(t, int32(tt.typ.Oid), timeWindowNode.GroupBy[0].Typ.Id)
+			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Scale)
+			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Width)
+		})
+	}
+}
+
+func TestInferGapFillBoundsNormalizesTemporalTypesToDatetime(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		oid   types.T
+		scale int32
+		make  func(int64) *plan.Expr
+	}{
+		{
+			name:  "time",
+			oid:   types.T_time,
+			scale: 6,
+			make: func(value int64) *plan.Expr {
+				return MakePlan2TimeConstExprWithType(value)
+			},
+		},
+		{
+			name:  "year",
+			oid:   types.T_year,
+			scale: 0,
+			make: func(value int64) *plan.Expr {
+				expr := makePlan2Int16ConstExprWithType(int16(value))
+				expr.Typ = plan.Type{Id: int32(types.T_year)}
+				return expr
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			timestamp := &plan.Expr{
+				Typ: plan.Type{Id: int32(tc.oid), Scale: tc.scale},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+				}},
+			}
+			boundFilter := func(op string, bound *plan.Expr) *plan.Expr {
+				return &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_bool)},
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: op},
+						Args: []*plan.Expr{DeepCopyExpr(timestamp), bound},
+					}},
+				}
+			}
+
+			start, finish, err := inferGapFillBounds(
+				context.Background(),
+				[]*plan.Expr{
+					boundFilter(">=", tc.make(1)),
+					boundFilter("<", tc.make(2)),
+				},
+				timestamp,
+			)
+			require.NoError(t, err)
+			for _, bound := range []*plan.Expr{start, finish} {
+				require.Equal(t, int32(types.T_datetime), bound.Typ.Id)
+				require.Equal(t, timestamp.Typ.Scale, bound.Typ.Scale)
+				require.Equal(t, "cast", bound.GetF().Func.ObjName)
+				require.Equal(t, int32(tc.oid), bound.GetF().Args[0].Typ.Id)
+			}
+		})
+	}
+}
+
+func TestInferGapFillBoundsPreservesTimestampInstantBounds(t *testing.T) {
+	timestamp := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 1,
+			ColPos: 0,
+		}},
+	}
+	boundFilter := func(op string, value int64) *plan.Expr {
+		bound := makePlan2TimestampConstExprWithType(value)
+		bound.Typ.Scale = timestamp.Typ.Scale
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: op},
+				Args: []*plan.Expr{DeepCopyExpr(timestamp), bound},
+			}},
+		}
+	}
+
+	start, finish, err := inferGapFillBounds(t.Context(), []*plan.Expr{
+		boundFilter(">=", 1),
+		boundFilter("<", 2),
+	}, timestamp)
+
+	require.NoError(t, err)
+	for _, bound := range []*plan.Expr{start, finish} {
+		require.Equal(t, int32(types.T_timestamp), bound.Typ.Id)
+		require.Equal(t, int32(types.T_timestamp), bound.GetF().Args[0].Typ.Id)
+	}
+}
+
+func TestQueryBuilderTimeWindowLinearFillKeepsTimestampBoundaryTypes(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mockTimeWindowScaleTable(t, mock, types.T_timestamp.ToTypeWithScale(3))
+
+	logicPlan, err := runOneStmt(mock, t,
+		"select _wstart, _wend, max(v), _wstart from tw_scale interval(ts, 10, minute) sliding(5, minute) fill(linear)")
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotEmpty(t, query.Steps)
+	root := query.Nodes[query.Steps[0]]
+	require.Equal(t, plan.Node_PROJECT, root.NodeType)
+	require.GreaterOrEqual(t, len(root.ProjectList), 4)
+	for _, idx := range []int{0, 1, 3} {
+		require.Equalf(t, int32(types.T_timestamp), root.ProjectList[idx].Typ.Id,
+			"root project %d should expose timestamp boundary", idx)
+		require.GreaterOrEqualf(t, root.ProjectList[idx].Typ.Scale, int32(3),
+			"root project %d should not reduce source timestamp scale", idx)
+	}
+
+	var fillNode *plan.Node
+	var timeWindowNode *plan.Node
+	for _, node := range query.Nodes {
+		switch node.NodeType {
+		case plan.Node_FILL:
+			fillNode = node
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		}
+	}
+	require.NotNil(t, fillNode)
+	require.NotNil(t, timeWindowNode)
+
+	assertBoundaryProjects := func(node *plan.Node) {
+		seen := map[string]bool{}
+		for idx, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col == nil || (col.Name != TimeWindowStart && col.Name != TimeWindowEnd) {
+				continue
+			}
+			seen[col.Name] = true
+			require.Equalf(t, int32(types.T_timestamp), expr.Typ.Id,
+				"%s project %d %s should expose timestamp boundary", node.NodeType.String(), idx, col.Name)
+			require.GreaterOrEqualf(t, expr.Typ.Scale, int32(3),
+				"%s project %d %s should not reduce source timestamp scale", node.NodeType.String(), idx, col.Name)
+		}
+		require.Truef(t, seen[TimeWindowStart], "%s should project %s", node.NodeType.String(), TimeWindowStart)
+		require.Truef(t, seen[TimeWindowEnd], "%s should project %s", node.NodeType.String(), TimeWindowEnd)
+	}
+	assertBoundaryProjects(fillNode)
+	assertBoundaryProjects(timeWindowNode)
+}
+
+func TestQueryBuilderTimeWindowOuterFilterKeepsBoundaryCarrier(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mockTimeWindowScaleTable(t, mock, types.T_timestamp.ToTypeWithScale(6))
+
+	logicPlan, err := runOneStmt(mock, t,
+		"select count(*) from ("+
+			"select _wstart, _wend, count(*) as n from tw_scale "+
+			"interval(ts, 1, hour) sliding(1, hour)"+
+			") q where _wend is null")
+	require.NoError(t, err)
+
+	var timeWindowNode *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_TIME_WINDOW {
+			timeWindowNode = node
+			break
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.NotEqual(t, TimeWindowSlotNone, layout.WEndSlot)
+	for _, expr := range timeWindowNode.ProjectList {
+		col := expr.GetCol()
+		require.NotNil(t, col)
+		require.Less(t, col.ColPos, layout.ColCnt)
+	}
+	require.NotEmpty(t, timeWindowNode.FilterList)
+	wendFilterCol := timeWindowNode.FilterList[0].GetF().Args[0].GetCol()
+	require.NotNil(t, wendFilterCol)
+	require.Equal(t, layout.WEndSlot, wendFilterCol.ColPos)
+}
+
+func mockTimeWindowScaleTable(t *testing.T, mock *MockOptimizer, typ types.Type) {
+	t.Helper()
+	tableName := "tw_scale"
+	mock.ctxt.objects[tableName] = &plan.ObjectRef{DbName: "test", ObjName: tableName, Obj: 42}
+	mock.ctxt.tables[tableName] = &plan.TableDef{
+		Name: tableName,
+		Cols: []*plan.ColDef{
+			{Name: "ts", Typ: makePlan2Type(&typ)},
+			{Name: "v", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+	}
+}
+
+func TestGapFillBoundContainsColumnTraversesExpressionTrees(t *testing.T) {
+	timestamp := &plan.ColRef{RelPos: 1, ColPos: 2}
+	timestampExpr := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: timestamp.RelPos, ColPos: timestamp.ColPos}},
+	}
+	otherColumn := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 3, ColPos: 4}},
+	}
+
+	require.False(t, gapFillBoundContainsColumn(nil, timestamp))
+	require.True(t, gapFillBoundContainsColumn(timestampExpr, timestamp))
+	require.True(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{otherColumn, timestampExpr}}},
+	}, timestamp))
+	require.True(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{otherColumn, timestampExpr}}},
+	}, timestamp))
+	require.False(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{otherColumn}}},
+	}, timestamp))
+}
+
+func TestInferGapFillBoundsAcceptsReversedHalfOpenEdges(t *testing.T) {
+	timestamp := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}},
+	}
+	bound := func(value int64) *plan.Expr {
+		expr := makePlan2Int64ConstExprWithType(value)
+		expr.Typ = timestamp.Typ
+		return expr
+	}
+	filter := func(name string, left, right *plan.Expr) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: name},
+				Args: []*plan.Expr{left, right},
+			}},
+		}
+	}
+
+	start, finish, err := inferGapFillBounds(t.Context(), []*plan.Expr{
+		filter("<=", bound(1), DeepCopyExpr(timestamp)),
+		filter(">", bound(2), DeepCopyExpr(timestamp)),
+	}, timestamp)
+
+	require.NoError(t, err)
+	require.NotNil(t, start)
+	require.NotNil(t, finish)
+	require.Equal(t, int32(types.T_datetime), start.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), finish.Typ.Id)
+}
+
+func TestValidateTimeWindowIntervalUnitRejectsInvalidUnit(t *testing.T) {
+	err := validateTimeWindowIntervalUnit(context.Background(), "century")
+	require.ErrorContains(t, err, "invalid interval type 'century'")
+}
+
+func ptrTo[T any](v T) *T {
+	return &v
+}
+
 func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -2469,6 +3220,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 		colName       string
 		expectError   bool
 		expectCast    bool
+		expectWEnd    types.T
 		errorContains string
 	}{
 		// Temporal types - should work without casting
@@ -2478,6 +3230,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "DATE type should work",
@@ -2485,6 +3238,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "TIMESTAMP type should work",
@@ -2492,6 +3246,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_timestamp,
 		},
 		{
 			name:        "TIME type should work",
@@ -2499,6 +3254,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_time,
 		},
 		// String types - should be automatically cast to DATETIME
 		{
@@ -2507,6 +3263,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  true,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "CHAR type should be cast to DATETIME",
@@ -2514,6 +3271,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  true,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "TEXT type should be cast to DATETIME",
@@ -2521,6 +3279,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  true,
+			expectWEnd:  types.T_datetime,
 		},
 		// Non-temporal types - should return error
 		{
@@ -2586,7 +3345,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
 			// Call bindTimeWindow
-			fillType, fillVals, fillCols, interval, sliding, ts, wEnd, boundTimeWindowOrderBy, err := builder.bindTimeWindow(
+			fillType, fillVals, fillCols, interval, sliding, ts, wEnd, _, _, boundTimeWindowOrderBy, err := builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -2618,7 +3377,11 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 					require.Equal(t, "cast", castExpr.F.Func.ObjName)
 				} else {
 					// For temporal types, should keep original type
-					require.Equal(t, int32(tt.colType), ts.Typ.Id)
+					if tt.colType == types.T_date {
+						require.Equal(t, int32(types.T_datetime), ts.Typ.Id)
+					} else {
+						require.Equal(t, int32(tt.colType), ts.Typ.Id)
+					}
 				}
 
 				// Verify boundTimeWindowOrderBy
@@ -2628,7 +3391,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 				// Verify wEnd is set when sliding is nil
 				if astTimeWindow.Sliding == nil {
 					require.NotNil(t, wEnd)
-					require.Equal(t, ts.Typ.Id, wEnd.Typ.Id)
+					require.Equal(t, int32(tt.expectWEnd), wEnd.Typ.Id)
 				} else {
 					require.NotNil(t, sliding)
 				}
@@ -2673,7 +3436,7 @@ func TestQueryBuilder_bindTimeWindow_WithSliding(t *testing.T) {
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
-	_, _, _, _, sliding, ts, wEnd, _, err := builder.bindTimeWindow(
+	_, _, _, _, sliding, ts, wEnd, _, _, _, err := builder.bindTimeWindow(
 		bindCtx,
 		projectionBinder,
 		astTimeWindow,
@@ -2767,7 +3530,7 @@ func TestQueryBuilder_bindTimeWindow_WithFill(t *testing.T) {
 			havingBinder := NewHavingBinder(builder, bindCtx)
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
-			fillType, fillVals, fillCols, _, _, _, _, _, err := builder.bindTimeWindow(
+			fillType, fillVals, fillCols, _, _, _, _, _, _, _, err := builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -4122,7 +4885,7 @@ func TestQueryBuilder_appendWhereNode(t *testing.T) {
 	require.Equal(t, int32(0), nodeID)
 
 	bindCtx.binder = NewWhereBinder(builder, bindCtx)
-	nodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, selectClause.Where, nodeID)
+	nodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, selectClause.Where, nodeID, false)
 	require.NoError(t, err)
 
 	nodeID = builder.appendWhereNode(bindCtx, nodeID, boundFilterList, notCacheable)
@@ -4192,7 +4955,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(boundHavingList))
 	require.Len(t, bindCtx.windows, 1)
@@ -4245,7 +5008,7 @@ func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
 	require.NoError(t, err)
 
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	require.NoError(t, err)
 	require.Len(t, boundHavingList, 1)
 	require.IsType(t, &plan.Expr_Sub{}, boundHavingList[0].Expr)
@@ -4263,7 +5026,7 @@ func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -4330,7 +5093,7 @@ func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
 	orderList := stmts[0].(*tree.Select).OrderBy
 
 	// bind select clause
-	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	// bind projection
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 	resultLen, notCacheable, _ := builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)

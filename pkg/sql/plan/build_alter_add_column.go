@@ -50,6 +50,12 @@ func AddColumn(
 	if col := FindColumn(tableDef.Cols, newColName); col != nil {
 		return false, moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
 	}
+	// same reservation as CREATE TABLE: these names are hidden by name in
+	// external-scan star expansion and readers.
+	if catalog.IsReservedExternalColName(newColName) {
+		return false, moerr.NewInvalidInputf(ctx.GetContext(),
+			"column name %s is reserved for external table scans", newColName)
+	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
 	if err != nil {
@@ -328,11 +334,11 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 		TableExist:     true,
 		Comment:        "",
 	}
+	setIndexDefVisibility(indexDef, uniKey.IndexOption)
 
 	if uniKey.IndexOption != nil {
 		indexDef.Comment = uniKey.IndexOption.Comment
 	}
-	setIndexDefVisibility(indexDef, uniKey.IndexOption)
 	return indexDef, nil
 }
 
@@ -445,6 +451,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			// handle unique index
 			if len(indexInfo.Parts) == 0 {
 				tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+				i--
 			}
 		} else if !indexInfo.Unique {
 			// handle secondary index
@@ -461,13 +468,16 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					//NOTE: if the last SK column is an __mo_alias or __mo_fake or __mo_cp, then the index will be deleted.
 					// There is no way that user can add __mo_alias or __mo_fake or __mo_cp as the SK column.
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				} else if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				}
 			case catalog.MOIndexMasterAlgo.ToString():
 				if len(indexInfo.Parts) == 0 {
 					// TODO: verify this
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				}
 			default:
 				// Plugin-registered indexes may span multiple hidden IndexDefs;

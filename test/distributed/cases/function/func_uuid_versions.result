@@ -22,8 +22,8 @@ select is_uuid(uuid_v7('2026-01-01 00:00:00')), substring(cast(uuid_v7('2026-01-
 select substring(cast(uuid_v7('2026-01-01 00:00:00') as varchar), 20, 17);
 ➤ substring(cast(uuid_v7(2026-01-01 00:00:00) as varchar), 20, 17)[12,65535,0]  𝄀
 8000-000000000000
-select uuid_v7(now()) <= uuid_v7();
-➤ uuid_v7(now()) <= uuid_v7()[-7,1,0]  𝄀
+select uuid_v7(now(6)) <= uuid_v7();
+➤ uuid_v7(now(6)) <= uuid_v7()[-7,1,0]  𝄀
 1
 select uuid_v7('9999-01-01') > uuid_v7();
 ➤ uuid_v7(9999-01-01) > uuid_v7()[-7,1,0]  𝄀

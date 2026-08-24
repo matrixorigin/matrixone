@@ -33,12 +33,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// ExpandSubStage resolves a stage:// URL down to its concrete backing URL, following each
+// stage-to-stage reference in turn.
+//
+// A cyclic definition (a -> a, or a -> b -> a) has no concrete URL to reach, so the walk is
+// terminated by the visited set below and reported as a bounded error. Nothing rejects such a
+// definition at CREATE/ALTER STAGE time, and the cycle can be closed by altering any node in the
+// chain, so resolution is where it must be caught: without the check the walk never ends, and
+// because StageLoadCatalog serves repeat lookups from proc's stage cache it spins with no SQL and
+// no I/O — the CN request hangs rather than failing (#26890).
 func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, error) {
-	if s.Url.Scheme == stage.STAGE_PROTOCOL {
+	// Stage names already expanded on this chain, in order, for both the cycle test and the error
+	// message. The walk is bounded by the number of distinct stages: every hop consumes one name.
+	visited := make(map[string]struct{})
+	var chain []string
+
+	for s.Url.Scheme == stage.STAGE_PROTOCOL {
 		stagename, prefix, query, err := stage.ParseStageUrl(s.Url)
 		if err != nil {
 			return stage.StageDef{}, err
 		}
+
+		if _, seen := visited[stagename]; seen {
+			return stage.StageDef{}, moerr.NewBadConfigf(context.TODO(),
+				"cyclic stage reference: %s -> %s", strings.Join(chain, " -> "), stagename)
+		}
+		visited[stagename] = struct{}{}
+		chain = append(chain, stagename)
 
 		res, err := StageLoadCatalog(proc, stagename)
 		if err != nil {
@@ -47,7 +68,7 @@ func ExpandSubStage(s stage.StageDef, proc *process.Process) (stage.StageDef, er
 
 		res.Url = res.Url.JoinPath(prefix)
 		res.Url.RawQuery = query
-		return ExpandSubStage(res, proc)
+		s = res
 	}
 
 	return s, nil

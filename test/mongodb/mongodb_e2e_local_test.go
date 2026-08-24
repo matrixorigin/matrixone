@@ -60,11 +60,22 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	require.NoError(t, err)
 	db, mock := newMongoDBE2ESQLMock(t)
 
-	for range 6 {
+	for range 8 {
 		mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
+	mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
+		"name", "discovery_mode", "auth_mechanism", "tls_mode",
+		"read_preference", "read_concern", "version", "disabled",
+	}).
+		AddRow("existing", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 1, 0).
+		AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 	mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 		"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+	expectMongoDBE2EScalar(mock, `"text"`)
+	expectMongoDBE2EScalar(mock, "2")
+	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "4")
+	expectMongoDBE2EScalar(mock, "0")
 	expectMongoDBE2EScalar(mock, "5")
 	fixtureRows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
 	for _, row := range manifest.Rows {
@@ -74,6 +85,9 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows)
 	expectMongoDBE2EScalar(mock, "3")
 	expectMongoDBE2EScalar(mock, "3")
+	mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, "1")
 	mock.ExpectQuery("select payload_1").WillReturnError(errors.New("MongoDB decoded batch byte limit exceeded"))
 	// A pre-canceled context is rejected by database/sql before it reaches the
@@ -112,8 +126,12 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	require.NoError(t, run(t.Context(), db, "127.0.0.1:27017", &result))
 	require.Equal(t, []string{
 		"secret-backed-ddl",
+		"show-connections-admin-metadata-redaction",
 		"show-create-redaction-roundtrip",
+		"json-relaxed-extended-conversion",
+		"fixed-binary-padding",
 		"scan-projection-pushdown-null-conversion",
+		"insert-select-primary-key-target",
 		"low-precision-temporal-residual",
 		"decoded-vector-budget-enforced",
 		"multi-batch-cancel-recovery",
@@ -125,6 +143,103 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"connection-disable-enable",
 	}, result.Cases)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		failedQuery string
+	}{
+		{name: "payload", failedQuery: "json_unquote"},
+		{name: "array", failedQuery: "json_contains"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repoRoot := mongoDBTestRepoRoot(t)
+			previous, err := os.Getwd()
+			require.NoError(t, err)
+			require.NoError(t, os.Chdir(repoRoot))
+			t.Cleanup(func() { require.NoError(t, os.Chdir(previous)) })
+
+			db, mock := newMongoDBE2ESQLMock(t)
+			for range 8 {
+				mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
+				"name", "discovery_mode", "auth_mechanism", "tls_mode",
+				"read_preference", "read_concern", "version", "disabled",
+			}).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
+			mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
+				"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+			expectMongoDBE2EScalar(mock, `"text"`)
+			if tc.failedQuery == "json_contains" {
+				expectMongoDBE2EScalar(mock, "2")
+			}
+			mock.ExpectQuery(tc.failedQuery).WillReturnError(errors.New("relaxed JSON query failed"))
+
+			err = run(t.Context(), db, "127.0.0.1:27017", &report{})
+			require.ErrorContains(t, err, "relaxed JSON query failed")
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestMongoDBPrimaryKeyInsertSelect(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(sqlmock.Sqlmock)
+		wantErr string
+	}{
+		{
+			name: "create target fails",
+			prepare: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("create table mongodb_ci.events_insert_target").
+					WillReturnError(errors.New("catalog unavailable"))
+			},
+			wantErr: "create primary-key insert target: catalog unavailable",
+		},
+		{
+			name: "insert select fails",
+			prepare: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("insert into mongodb_ci.events_insert_target").
+					WillReturnError(errors.New("source scan failed"))
+			},
+			wantErr: "insert-select into primary-key target: source scan failed",
+		},
+		{
+			name: "inserted row count is validated",
+			prepare: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("select count\\(\\*\\) from mongodb_ci.events_insert_target").
+					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow("0"))
+			},
+			wantErr: "expected \"1\"",
+		},
+		{
+			name: "single source row is inserted",
+			prepare: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("select count\\(\\*\\) from mongodb_ci.events_insert_target").
+					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow("1"))
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock := newMongoDBE2ESQLMock(t)
+			test.prepare(mock)
+			err := verifyPrimaryKeyInsertSelect(t.Context(), db)
+			if test.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, test.wantErr)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestMongoDBLocalE2EHelpers(t *testing.T) {
@@ -202,6 +317,39 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("show connections validation", func(t *testing.T) {
+		columns := []string{
+			"name", "discovery_mode", "auth_mechanism", "tls_mode",
+			"read_preference", "read_concern", "version", "disabled",
+		}
+		tests := []struct {
+			name string
+			rows *sqlmock.Rows
+			err  error
+			want string
+		}{
+			{name: "query error", err: errors.New("catalog offline"), want: "catalog offline"},
+			{name: "unexpected columns", rows: sqlmock.NewRows([]string{"name"}).AddRow("mongodb_ci"), want: "unexpected columns"},
+			{name: "metadata mismatch", rows: sqlmock.NewRows(columns).AddRow("mongodb_ci", "srv", "SCRAM-SHA-256", "disabled", "primary", "majority", 1, 0), want: "metadata mismatch"},
+			{name: "invalid version", rows: sqlmock.NewRows(columns).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 0, 0), want: "invalid version"},
+			{name: "row error", rows: sqlmock.NewRows(columns).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 1, 0).RowError(0, errors.New("getMore failed")), want: "getMore failed"},
+			{name: "connection omitted", rows: sqlmock.NewRows(columns).AddRow("existing", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 1, 0), want: "omitted mongodb_ci"},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				db, mock := newMongoDBE2ESQLMock(t)
+				expectation := mock.ExpectQuery("show mongodb connections")
+				if tc.err != nil {
+					expectation.WillReturnError(tc.err)
+				} else {
+					expectation.WillReturnRows(tc.rows)
+				}
+				require.ErrorContains(t, verifyShowMongoDBConnections(t.Context(), db), tc.want)
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	})
+
 	t.Run("scalar and expected failure", func(t *testing.T) {
 		db, mock := newMongoDBE2ESQLMock(t)
 		mock.ExpectQuery("scalar-error").WillReturnError(errors.New("query failed"))
@@ -214,6 +362,14 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.ErrorContains(t, expectQueryFailure(t.Context(), db, "wrong-error", "disabled"), "without")
 		mock.ExpectQuery("expected-error").WillReturnError(errors.New("connection disabled"))
 		require.NoError(t, expectQueryFailure(t.Context(), db, "expected-error", "DISABLED"))
+		mock.ExpectQuery("unexpected-statement-success").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("1"))
+		require.ErrorContains(t, expectStatementRejected(t.Context(), db, "unexpected-statement-success", "privilege"), "unexpectedly succeeded")
+		mock.ExpectQuery("statement-row-error").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("1").RowError(0, errors.New("read failed")))
+		require.ErrorContains(t, expectStatementRejected(t.Context(), db, "statement-row-error", "privilege"), "failed while reading rows")
+		mock.ExpectQuery("wrong-statement-error").WillReturnError(errors.New("network offline"))
+		require.ErrorContains(t, expectStatementRejected(t.Context(), db, "wrong-statement-error", "privilege"), "without")
+		mock.ExpectQuery("denied-statement").WillReturnError(errors.New("do not have privilege to execute the statement"))
+		require.NoError(t, expectStatementRejected(t.Context(), db, "denied-statement", "PRIVILEGE"))
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 

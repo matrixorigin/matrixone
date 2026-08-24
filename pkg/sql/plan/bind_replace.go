@@ -39,6 +39,21 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 	if err != nil {
 		return 0, err
 	}
+	targetDB := string(stmt.TargetDatabaseName)
+	targetTable := string(stmt.TargetTableName)
+	if targetTable == "" {
+		target := stmt.Table.(*tree.TableName)
+		targetDB = string(target.SchemaName)
+		targetTable = string(target.ObjectName)
+	}
+	if targetDB == "" {
+		targetDB = builder.compCtx.DefaultDatabase()
+	}
+	if err = validateInsertColumnQualifiers(
+		builder.GetContext(), stmt.ColumnNames, targetDB, targetTable, builder.compCtx.GetLowerCaseTableNames(),
+	); err != nil {
+		return 0, err
+	}
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForReplaceStmt
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan; REPLACE maintains them with
@@ -247,7 +262,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		oldScanNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     tableDef,
+			TableDef:     CloneTableDefForPlan(tableDef, true),
 			ObjRef:       objRef,
 			BindingTags:  []int32{oldScanTag},
 			ScanSnapshot: bindCtx.snapshot,
@@ -1089,9 +1104,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// and let the main plan, the insert maintenance (new entries) and the delete
 	// maintenance (drop the old entries, keyed by the old PK) all read it.
 	if len(irregularIndexes) > 0 && replaceOldPkPos >= 0 {
-		lastNodeID = builder.appendOnDupIrregularMaintSource(
+		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos, replaceOldPkTyp,
+			-1, -1,
 			irregularIndexes, tableDef, objRef)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	if len(lockTargets) > 0 && !buildParentFKActions {

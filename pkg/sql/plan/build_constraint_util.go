@@ -127,6 +127,28 @@ func appendCheckConstraintPlanWithColLookup(
 	lookupColPos func(string) (int32, bool),
 	ignoreMode bool,
 ) (int32, error) {
+	return appendCheckConstraintPlanWithColLookupAndEligibility(
+		builder,
+		bindCtx,
+		tableDef,
+		lastNodeID,
+		inputTag,
+		lookupColPos,
+		ignoreMode,
+		nil,
+	)
+}
+
+func appendCheckConstraintPlanWithColLookupAndEligibility(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	inputTag int32,
+	lookupColPos func(string) (int32, bool),
+	ignoreMode bool,
+	targetEligible *plan.Expr,
+) (int32, error) {
 	if len(tableDef.Checks) == 0 {
 		return lastNodeID, nil
 	}
@@ -170,6 +192,24 @@ func appendCheckConstraintPlanWithColLookup(
 		)
 		if err != nil {
 			return 0, err
+		}
+		if targetEligible != nil {
+			notEligible, err := BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"not",
+				[]*plan.Expr{DeepCopyExpr(targetEligible)},
+			)
+			if err != nil {
+				return 0, err
+			}
+			passExpr, err = BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"or",
+				[]*plan.Expr{notEligible, passExpr},
+			)
+			if err != nil {
+				return 0, err
+			}
 		}
 		if ignoreMode {
 			filterList = append(filterList, passExpr)
@@ -410,8 +450,8 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	}
 	// Preserve the original target-table order from tblInfo. Iterating
 	// usedTbl directly would randomize order across runs (Go map
-	// iteration), which makes the fallback UPDATE planner emit the
-	// per-target column blocks in a non-deterministic layout.
+	// iteration), which makes downstream UPDATE consumers observe
+	// non-deterministic per-target column blocks.
 	aliasByIdx := make([]string, len(tblInfo.tableDefs))
 	for alias, idx := range tblInfo.alias {
 		aliasByIdx[idx] = alias
@@ -532,6 +572,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return err
 	}
 
 	if err := checkTableType(ctx.GetContext(), tableDef, tblInfo.typ); err != nil {
@@ -709,7 +752,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			return false, nil, nil, err
 		}
 
-	case *tree.SelectClause:
+	case *tree.SelectClause, *tree.UnionClause:
 		astSlt = stmt.Rows
 
 		subCtx := NewBindContext(builder, bindCtx)

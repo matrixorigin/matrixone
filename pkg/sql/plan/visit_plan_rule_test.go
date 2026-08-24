@@ -79,6 +79,29 @@ func TestPrepareRulesTraverseEveryWindowSpecParameter(t *testing.T) {
 	})
 }
 
+func TestPrepareRulesTraverseVectorIndexScanExpressions(t *testing.T) {
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeId:   0,
+			NodeType: planpb.Node_VECTOR_INDEX_SCAN,
+			VectorIndexScan: &planpb.VectorIndexScan{
+				QueryVector:     param(4),
+				CandidateLimit:  param(3),
+				FirstRoundLimit: param(0),
+				PreFilters:      []*planpb.Expr{param(2)},
+				DistanceRange:   &planpb.DistRange{LowerBound: param(1)},
+			},
+		}},
+	}}}
+	rule := NewGetParamRule()
+	require.NoError(t, NewVisitPlan(queryPlan, []VisitPlanRule{rule}).Visit(context.Background()))
+	require.Equal(t, map[int]int{0: 0, 1: 0, 2: 0, 3: 0, 4: 0}, rule.params)
+}
+
 func TestApplyRuleToWindowSpecPropagatesFieldErrors(t *testing.T) {
 	newWindow := func() *planpb.WindowSpec {
 		param := func() *planpb.Expr {
@@ -643,12 +666,25 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 	}
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), true, false)
 	bindCtx := NewBindContext(builder, nil)
+	viewRef := &ObjectRef{
+		SchemaName: "db",
+		ObjName:    "v",
+		Obj:        20,
+	}
+	viewDef := &TableDef{
+		DbName:  "db",
+		Name:    "v",
+		DbId:    10,
+		TblId:   20,
+		Version: 30,
+		ViewSql: &planpb.ViewDef{View: string(viewJSON)},
+	}
 
 	_, err = builder.bindView(
 		bindCtx,
-		&TableDef{ViewSql: &planpb.ViewDef{View: string(viewJSON)}},
+		viewDef,
 		snapshot,
-		&ObjectRef{},
+		viewRef,
 		"db",
 		"v",
 	)
@@ -661,6 +697,15 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 	require.Equal(t, "v", viewName)
 	require.Equal(t, snapshot.TS, recorded.TS)
 	require.Equal(t, snapshot.Tenant, recorded.Tenant)
+	require.Len(t, builder.qry.GetCatalogDependencies(), 1)
+	dependency := builder.qry.GetCatalogDependencies()[0]
+	require.Equal(t, "db", dependency.GetSchemaName())
+	require.Equal(t, "v", dependency.GetObjName())
+	require.Equal(t, int64(10), dependency.GetDb())
+	require.Equal(t, int64(20), dependency.GetObj())
+	require.Equal(t, int64(30), dependency.GetServer())
+	require.Equal(t, snapshot, dependency.GetSnapshot())
+	require.NotSame(t, snapshot, dependency.GetSnapshot())
 
 	nodeID, err := builder.bindView(
 		NewBindContext(builder, nil),
@@ -830,7 +875,7 @@ func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
 					DbId:    1,
 					TblId:   2,
 					Version: 3,
-					Indexes: []*planpb.IndexDef{{
+					Indexes: []*planpb.IndexDef{nil, {
 						IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
 						IndexTableName: hiddenTable,
 					}},
@@ -874,7 +919,7 @@ func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
 		},
 		TableDef: &planpb.TableDef{
 			Name: "src", DbId: 1, TblId: 2, Version: 3,
-			Indexes: []*planpb.IndexDef{{
+			Indexes: []*planpb.IndexDef{nil, {
 				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
 				IndexTableName: hiddenTable,
 			}},
@@ -927,6 +972,30 @@ func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
 	cloned := DeepCopyQuery(builder.qry)
 	require.Equal(t, builder.qry.CatalogDependencies, cloned.CatalogDependencies)
 	require.NotSame(t, builder.qry.CatalogDependencies[0], cloned.CatalogDependencies[0])
+}
+
+func TestPrepareSkipsNilIndexMetadata(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["single_idx_t"]
+	require.NotNil(t, tableDef)
+	require.NotEmpty(t, tableDef.Indexes)
+	tableDef.Indexes = append([]*planpb.IndexDef{nil}, tableDef.Indexes...)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"prepare sparse_index_stmt from 'select val from single_idx_t where val = ?'")
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 1)
+	require.NotEmpty(t, prepare.Schemas)
+	foundBaseSchema := false
+	for _, schema := range prepare.Schemas {
+		if schema.GetObjName() == "single_idx_t" {
+			foundBaseSchema = true
+			break
+		}
+	}
+	require.True(t, foundBaseSchema)
 }
 
 func TestResetPreparedSetMergesTransientCatalogDependencies(t *testing.T) {

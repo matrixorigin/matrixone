@@ -48,6 +48,32 @@ type emptyDispatchChild struct {
 	called chan struct{}
 }
 
+func TestMarshalRemoteBatchExplicitTextProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	vec := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("text"), false, proc.Mp()))
+	require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, proc.Mp()))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		}
+	})
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	_, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
+	require.ErrorContains(t, err, "MORPCVersion23")
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	_, err = marshalRemoteBatch(proc, bat, &bytes.Buffer{})
+	require.NoError(t, err)
+}
+
 func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
 	close(child.called)
 	return vm.NewCallResult(), nil
@@ -106,6 +132,78 @@ func TestMarshalRemoteBatchPrepareParamProtocolGate(t *testing.T) {
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
 	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+}
+
+func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	newBatch := func(typ types.Type) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(typ)
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, proc.Mp()))
+		bat.SetRowCount(2)
+		return bat
+	}
+
+	dynamic := newBatch(types.T_text.ToType())
+	require.NoError(t, dynamic.Vecs[0].SetIsBinaryStringAt(0, true))
+	defer dynamic.Clean(proc.Mp())
+	for _, version := range []int64{
+		defines.MORPCVersion12,
+		defines.MORPCVersion13,
+		defines.MORPCVersion14,
+		defines.MORPCVersion15,
+		defines.MORPCVersion16,
+		defines.MORPCVersion17,
+	} {
+		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		buf := bytes.NewBufferString("sentinel")
+		_, err := marshalRemoteBatch(proc, dynamic, buf)
+		require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion18")
+		require.Equal(t, "sentinel", buf.String())
+	}
+
+	staticSource := newBatch(types.T_varbinary.ToType())
+	defer staticSource.Clean(proc.Mp())
+	staticRows := batch.NewWithSize(1)
+	staticRows.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, staticRows.Vecs[0].UnionBatch(
+		staticSource.Vecs[0], 0, staticSource.RowCount(), nil, proc.Mp()))
+	staticRows.SetRowCount(staticSource.RowCount())
+	require.False(t, staticRows.HasBinaryStringMetadata())
+	require.NoError(t, staticRows.Vecs[0].SetPrepareParamKindsWithMP(
+		[]vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamNone}, proc.Mp()))
+	defer staticRows.Clean(proc.Mp())
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion12)
+	buf := bytes.NewBufferString("sentinel")
+	staticEncoded, err := marshalRemoteBatch(proc, staticRows, buf)
+	require.NoError(t, err)
+	staticDecoded := batch.NewOffHeapEmpty()
+	defer staticDecoded.Clean(proc.Mp())
+	require.NoError(t, staticDecoded.UnmarshalBinaryWithPrepareParamKinds(staticEncoded, proc.Mp()))
+	require.Equal(t, vector.PrepareParamInteger, staticDecoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone, staticDecoded.Vecs[0].GetPrepareParamKindAt(1))
+
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion18)
+	buf.Reset()
+	encoded, err := marshalRemoteBatch(proc, dynamic, buf)
+	require.NoError(t, err)
+	decoded := batch.NewOffHeapEmpty()
+	defer decoded.Clean(proc.Mp())
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, proc.Mp()))
+	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
 }
 
 func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
@@ -797,7 +895,7 @@ func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
 	}
 }
 
-func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.T) {
+func TestDispatchResetRecordsEndForFullAndAvailableChannels(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 10 * time.Millisecond
 	t.Cleanup(func() {
@@ -841,39 +939,42 @@ func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("Dispatch.Reset blocked after normal End delivery failed")
+		t.Fatal("Dispatch.Reset blocked while recording normal End")
 	}
 	require.Nil(t, d.ctr)
-	require.Nil(t, d.cleanupSpool)
-	require.Equal(t, int64(0), mp.CurrNB())
+	require.Same(t, sp, d.cleanupSpool)
+	require.Greater(t, mp.CurrNB(), int64(0))
 
 	select {
 	case <-fullReg.Done():
 	default:
-		t.Fatal("fallback abort did not close Done for full receiver")
+		t.Fatal("durable End did not close Done for full receiver")
 	}
-	require.ErrorIs(t, fullReg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+	require.NoError(t, fullReg.Err())
 	select {
 	case <-healthyReg.Done():
 	default:
 		t.Fatal("End did not close Done for healthy receiver")
 	}
+	require.NoError(t, healthyReg.Err())
 
-	staleSignal := <-fullReg.Ch2
-	got, info := staleSignal.Action()
-	require.Nil(t, got)
-	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
+	for _, reg := range []*process.WaitRegister{fullReg, healthyReg} {
+		receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+		got, info := receiver.GetNextBatch(nil)
+		require.NoError(t, info)
+		require.NotNil(t, got)
+		require.Equal(t, 1024, got.RowCount())
+		got, info = receiver.GetNextBatch(nil)
+		require.Nil(t, got)
+		require.NoError(t, info)
+	}
 
-	staleSignal = <-healthyReg.Ch2
-	got, info = staleSignal.Action()
-	require.Nil(t, got)
-	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
-
-	terminalSignal := <-healthyReg.Ch2
-	require.Equal(t, process.EventEnd, terminalSignal.EventType)
+	d.CleanupDeferredSpool()
+	require.Nil(t, d.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestDispatchResetUsesSharedTerminalSendBudget(t *testing.T) {
+func TestDispatchResetEndDoesNotWaitForChannelCapacity(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 200 * time.Millisecond
 	t.Cleanup(func() {
@@ -896,9 +997,9 @@ func TestDispatchResetUsesSharedTerminalSendBudget(t *testing.T) {
 		select {
 		case <-reg.Done():
 		default:
-			t.Fatal("fallback abort should mark every failed receiver edge terminal")
+			t.Fatal("durable End should mark every receiver edge terminal")
 		}
-		require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+		require.NoError(t, reg.Err())
 	}
 }
 

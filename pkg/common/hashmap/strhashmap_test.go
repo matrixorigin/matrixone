@@ -15,6 +15,7 @@
 package hashmap
 
 import (
+	"fmt"
 	"io"
 	"math"
 	"math/rand"
@@ -50,6 +51,129 @@ func mustEncodeHashMapJSON(t *testing.T, text string) []byte {
 	encoded, err := types.EncodeJson(value)
 	require.NoError(t, err)
 	return encoded
+}
+
+func TestStrHashMapPreviewInsertMatchesPublication(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	defer func() {
+		hashMap.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	existing := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer existing.Free(mp)
+	defer input.Free(mp)
+	require.NoError(t, vector.AppendBytes(existing, []byte("seven"), false, mp))
+	for _, value := range []string{"seven", "eight", "eight", "nine"} {
+		require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
+	}
+
+	iterator := hashMap.NewTransactionalIterator()
+	_, _, err = iterator.Insert(0, 1, []*vector.Vector{existing})
+	require.NoError(t, err)
+	var plan InsertPlan
+	err = iterator.PreviewInsert(
+		0, input.Length(), []*vector.Vector{input},
+		hashMap.GroupCount(), &plan)
+	require.NoError(t, err)
+	previewValues := append([]uint64(nil), plan.Values()...)
+	require.Equal(t, []uint64{1, 2, 2, 3}, previewValues)
+	require.Equal(t, []uint8{0, 1, 0, 1}, plan.Inserted())
+	require.Equal(t, uint64(2), plan.NewGroups())
+	require.Equal(t, uint64(1), hashMap.GroupCount())
+
+	values, _, err := iterator.CommitPreview(&plan)
+	require.NoError(t, err)
+	require.Equal(t, previewValues, values)
+	require.Equal(t, uint64(3), hashMap.GroupCount())
+
+	err = iterator.PreviewInsert(
+		0, input.Length(), []*vector.Vector{input},
+		hashMap.GroupCount(), &plan)
+	require.NoError(t, err)
+	require.Zero(t, plan.NewGroups())
+	plan.complete = false
+	_, _, err = iterator.CommitPreview(&plan)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+
+	err = iterator.PreviewInsert(
+		0, input.Length(), []*vector.Vector{input},
+		hashMap.GroupCount(), &plan)
+	require.NoError(t, err)
+	values, _, err = iterator.CommitPreview(&plan)
+	require.NoError(t, err)
+	require.Equal(t, previewValues, values)
+	require.Equal(t, uint64(3), hashMap.GroupCount())
+}
+
+func TestStrHashMapPreviewInsertGrowsBeforePublication(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	defer func() {
+		hashMap.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(mp)
+	for i := 0; i < UnitLimit; i++ {
+		require.NoError(t, vector.AppendBytes(
+			input, []byte(fmt.Sprintf("preview-key-%03d", i)), false, mp))
+	}
+	iterator := hashMap.NewTransactionalIterator()
+	var plan InsertPlan
+	err = iterator.PreviewInsert(
+		0, input.Length(), []*vector.Vector{input}, 0, &plan)
+	require.NoError(t, err)
+	preview := append([]uint64(nil), plan.Values()...)
+	require.Equal(t, uint64(input.Length()), plan.NewGroups())
+	expected := make([]uint64, input.Length())
+	for i := range expected {
+		expected[i] = uint64(i + 1)
+	}
+	require.Equal(t, expected, append([]uint64(nil), preview...))
+	require.Zero(t, hashMap.GroupCount())
+	published, _, err := iterator.CommitPreview(&plan)
+	require.NoError(t, err)
+	require.Equal(t, preview, published)
+	require.Equal(t, uint64(input.Length()), hashMap.GroupCount())
+}
+
+func TestStrHashMapPreviewInsertNullableGrouping(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewStrHashMap(true, mp)
+	require.NoError(t, err)
+	require.NoError(t, hashMap.SetGroupingAware())
+	defer func() {
+		hashMap.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(mp)
+	require.NoError(t, vector.AppendBytes(input, []byte("x"), false, mp))
+	require.NoError(t, vector.AppendBytes(input, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(input, []byte("x"), false, mp))
+	require.NoError(t, vector.AppendBytes(input, nil, true, mp))
+	input.GetGrouping().Add(2)
+
+	iterator := hashMap.NewTransactionalIterator()
+	var plan InsertPlan
+	err = iterator.PreviewInsert(
+		0, input.Length(), []*vector.Vector{input}, 0, &plan)
+	require.NoError(t, err)
+	preview := append([]uint64(nil), plan.Values()...)
+	require.Equal(t, []uint64{1, 2, 3, 2}, append([]uint64(nil), preview...))
+	require.Equal(t, []uint8{1, 1, 1, 0}, plan.Inserted())
+	require.Equal(t, uint64(3), plan.NewGroups())
+	published, _, err := iterator.CommitPreview(&plan)
+	require.NoError(t, err)
+	require.Equal(t, preview, published)
+	require.Equal(t, uint64(3), hashMap.GroupCount())
 }
 
 func TestStrHashMapRejectsCompositeJoinNaN(t *testing.T) {
@@ -626,6 +750,8 @@ func TestStringHashIteratorAccountedGrowthCapacityBoundary(t *testing.T) {
 				mpool.AllocationSiteMin,
 			)
 			require.NoError(t, err)
+			iterator.keyBufferMP = mp
+			iterator.keyBufferAllocation = allocation
 			iterator.keyBuffer = iterator.keyBuffer[:0]
 			vec := vector.NewVec(types.T_varchar.ToType())
 			require.NoError(t, vector.AppendBytes(
@@ -1497,6 +1623,9 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 
 		data, err := mp.MarshalBinary()
 		require.NoError(t, err)
+		size, err := mp.MarshalBinarySize()
+		require.NoError(t, err)
+		require.Equal(t, int64(len(data)), size)
 
 		unmarshaledMp := &StrHashMap{}
 		err = unmarshaledMp.UnmarshalBinary(data, m)
@@ -1530,6 +1659,9 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 
 		data, err := mp.MarshalBinary()
 		require.NoError(t, err)
+		size, err := mp.MarshalBinarySize()
+		require.NoError(t, err)
+		require.Equal(t, int64(len(data)), size)
 
 		unmarshaledMp := &StrHashMap{}
 		err = unmarshaledMp.UnmarshalBinary(data, m)
@@ -1542,6 +1674,25 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 		foundVs, _, err := unmarshaledMp.NewIterator().Find(0, rowCount, vecs)
 		require.NoError(t, err)
 		require.Equal(t, expectedMappedValue, foundVs)
+	})
+
+	t.Run("Reject Mismatched Row Count", func(t *testing.T) {
+		original, err := NewStrHashMap(false, m)
+		require.NoError(t, err)
+		defer original.Free()
+		vec := newVector(1, types.T_varchar.ToType(), m, false, []string{"hello"})
+		defer vec.Free(m)
+		_, _, err = original.NewIterator().Insert(0, 1, []*vector.Vector{vec})
+		require.NoError(t, err)
+
+		data, err := original.MarshalBinary()
+		require.NoError(t, err)
+		invalidRows := uint64(2)
+		copy(data[1:9], types.EncodeUint64(&invalidRows))
+		restored := &StrHashMap{}
+		err = restored.UnmarshalBinary(data, m)
+		require.ErrorContains(t, err, "does not match cardinality")
+		restored.Free()
 	})
 
 	t.Run("Multiple Elements (With Resize, With Nulls, Mixed Types)", func(t *testing.T) {
@@ -1568,6 +1719,9 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 
 		data, err := mp.MarshalBinary()
 		require.NoError(t, err)
+		size, err := mp.MarshalBinarySize()
+		require.NoError(t, err)
+		require.Equal(t, int64(len(data)), size)
 
 		unmarshaledMp := &StrHashMap{}
 		err = unmarshaledMp.UnmarshalBinary(data, m)

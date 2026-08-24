@@ -105,6 +105,9 @@ func (m MarshalNodeImpl) GetStats() models.Stats {
 
 func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 	// Get the Node Name
+	if m.node.NodeType == plan.Node_PARTITION && m.node.Limit != nil && m.node.PartitionByCount > 0 {
+		return "Partition Top N", nil
+	}
 	if value, ok := nodeTypeToNameMap[m.node.NodeType]; ok {
 		return value, nil
 	} else {
@@ -203,6 +206,23 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	case plan.Node_FILL:
 		return "fill", nil
 	case plan.Node_PARTITION:
+		if m.node.Limit != nil && m.node.PartitionByCount > 0 && int(m.node.PartitionByCount) < len(m.node.OrderBy) {
+			buf.WriteString("Partition Keys: ")
+			partitionKeys := NewOrderByDescribeImpl(m.node.OrderBy[:m.node.PartitionByCount])
+			if err = partitionKeys.GetDescription(ctx, options, buf); err != nil {
+				return "", err
+			}
+			buf.WriteString("; Sort Keys: ")
+			orderKeys := NewOrderByDescribeImpl(m.node.OrderBy[m.node.PartitionByCount:])
+			if err = orderKeys.GetDescription(ctx, options, buf); err != nil {
+				return "", err
+			}
+			buf.WriteString("; N: ")
+			if err = describeExpr(ctx, m.node.Limit, options, buf); err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(buf.String()), nil
+		}
 		return "partition", nil
 	case plan.Node_FUNCTION_SCAN:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
@@ -211,6 +231,11 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		} else {
 			return "", moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
+	case plan.Node_VECTOR_INDEX_SCAN:
+		if m.node.VectorIndexScan == nil || m.node.VectorIndexScan.Index == nil {
+			return "", moerr.NewInvalidInput(ctx, "Vector index scan metadata not found")
+		}
+		fmt.Fprintf(buf, "Vector Index Scan[%s]", m.node.VectorIndexScan.Index.IndexName)
 	case plan.Node_FUZZY_FILTER:
 		return "fuzzy_filter", nil
 	case plan.Node_SAMPLE:
@@ -335,6 +360,22 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 				Value: value,
 			})
 		}
+	case plan.Node_VECTOR_INDEX_SCAN:
+		if m.node.VectorIndexScan == nil || m.node.VectorIndexScan.Index == nil || m.node.TableDef == nil {
+			return nil, moerr.NewInternalError(ctx, "Vector index scan definition not found when plan is serialized to json")
+		}
+		labels = append(labels, models.Label{
+			Name:  Label_Table_Name,
+			Value: m.node.VectorIndexScan.Index.IndexName,
+		})
+		labels = append(labels, models.Label{
+			Name:  Label_Table_Columns,
+			Value: GetTableColsLableValue(ctx, m.node.TableDef.Cols, options),
+		})
+		labels = append(labels, models.Label{
+			Name:  Label_Scan_Columns,
+			Value: len(m.node.TableDef.Cols),
+		})
 	case plan.Node_INSERT:
 		objRef := m.node.InsertCtx.Ref
 		fullTableName := ""

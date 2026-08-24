@@ -2865,12 +2865,12 @@ id    sum(id) over (partition by sex order by id rows between 2 preceding and 1 
 4    9    f
 1    6    m
 5    6    m
-create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following), sex from row_number01;
+create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as window_sum, sex from row_number01;
 show create view v;
 View    Create View    character_set_client    collation_connection
-v    create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following), sex from row_number01;    utf8mb4    utf8mb4_general_ci
+v    create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following) as window_sum, sex from row_number01;    utf8mb4    utf8mb4_general_ci
 select * from v;
-id    sum(id) over (partition by sex order by id rows between 2 preceding and 1 following)    sex
+id    window_sum    sex
 2    5    f
 3    9    f
 4    9    f
@@ -4832,6 +4832,49 @@ id    k_label    v    cnt_rng
 4    1    11    4
 5    NULL    20    6
 6    NULL    30    6
+create table t_window_23107(id int);
+insert into t_window_23107 values (1), (2), (3), (4), (5), (6),
+(7), (8), (9), (10), (11), (12);
+select id,
+sum(id) over (order by id rows between 2147483647 preceding and current row) as running_sum
+from t_window_23107 limit 10;
+id    running_sum
+1    1
+2    3
+3    6
+4    10
+5    15
+6    21
+7    28
+8    36
+9    45
+10    55
+drop table t_window_23107;
+create table t_window_27352(id int primary key, v int);
+insert into t_window_27352 values (1, 10), (2, null), (3, 30), (4, 40), (5, null);
+prepare window_27352 from 'select id,
+sum(coalesce(v, 0)) over (
+order by id rows between ? preceding and current row
+) as sliding_sum
+from t_window_27352 order by id';
+set @window_bound = 2;
+execute window_27352 using @window_bound;
+id    sliding_sum
+1    10
+2    10
+3    40
+4    70
+5    70
+set @window_bound = 1;
+execute window_27352 using @window_bound;
+id    sliding_sum
+1    10
+2    10
+3    30
+4    70
+5    40
+deallocate prepare window_27352;
+drop table t_window_27352;
 drop table t_desc;
 drop database test_range_desc;
 drop database test;

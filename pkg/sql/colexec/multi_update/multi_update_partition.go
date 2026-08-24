@@ -29,29 +29,33 @@ import (
 type PartitionMultiUpdate struct {
 	vm.OperatorBase
 
-	raw              *MultiUpdate
-	affectedRows     uint64
+	raw          *MultiUpdate
+	rawContexts  []*MultiUpdateCtx
+	targets      []*partitionUpdateTarget
+	affectedRows uint64
+	writers      map[uint64]*s3WriterDelegate
+	freeWriters  []*s3WriterDelegate
+	nextWriterID uint64
+}
+
+type partitionUpdateTarget struct {
+	contexts         []*MultiUpdateCtx
 	tableID          uint64
 	meta             partition.PartitionMetadata
 	mainIndexes      []uint64
 	partitionIndexes map[uint64][]engine.Relation
-	rawTableIDs      []uint64
-	rawTableFlags    []uint64
-	writers          map[uint64]*s3WriterDelegate
-	freeWriters      []*s3WriterDelegate
+	writerIDs        map[uint64]uint64
 }
 
 func NewPartitionMultiUpdate(
 	raw *MultiUpdate,
-	tableID uint64,
 ) vm.Operator {
 	if raw.Action == UpdateFlushS3Info {
 		return raw
 	}
 
 	return &PartitionMultiUpdate{
-		raw:     raw,
-		tableID: tableID,
+		raw: raw,
 	}
 }
 
@@ -65,7 +69,7 @@ func NewPartitionMultiUpdateFrom(
 	op.CountDeleteAffectRows = from.raw.CountDeleteAffectRows
 	op.RejectZeroTemporal = from.raw.RejectZeroTemporal
 	op.Engine = from.raw.Engine
-	return NewPartitionMultiUpdate(op, from.tableID)
+	return NewPartitionMultiUpdate(op)
 }
 
 func (op *PartitionMultiUpdate) String(buf *bytes.Buffer) {
@@ -86,46 +90,80 @@ func (op *PartitionMultiUpdate) Prepare(
 		op.OpAnalyzer.Reset()
 	}
 
-	var err error
-	op.meta, _, err = proc.GetPartitionService().GetStorage().GetMetadata(
-		proc.Ctx,
-		op.tableID,
-		proc.GetTxnOperator(),
-	)
-	if err != nil {
+	op.raw.OperatorBase = op.OperatorBase
+	if err := op.raw.Prepare(proc); err != nil {
 		return err
-	}
-	_, _, r, err := op.raw.Engine.GetRelationById(
-		proc.Ctx,
-		proc.GetTxnOperator(),
-		op.tableID,
-	)
-	if err != nil {
-		return err
-	}
-	if len(r.GetExtraInfo().IndexTables) > 0 {
-		op.mainIndexes = r.GetExtraInfo().IndexTables
-		op.partitionIndexes = make(map[uint64][]engine.Relation, len(op.meta.Partitions))
 	}
 
-	op.raw.OperatorBase = op.OperatorBase
-	if err = op.raw.Prepare(proc); err != nil {
-		return err
+	op.rawContexts = op.raw.MultiUpdateCtx
+	op.targets = buildPartitionUpdateTargets(op.rawContexts)
+	for _, target := range op.targets {
+		if !features.IsPartitioned(target.contexts[0].TableDef.FeatureFlag) {
+			continue
+		}
+
+		var err error
+		target.meta, _, err = proc.GetPartitionService().GetStorage().GetMetadata(
+			proc.Ctx,
+			target.tableID,
+			proc.GetTxnOperator(),
+		)
+		if err != nil {
+			return err
+		}
+		_, _, r, err := op.raw.Engine.GetRelationById(
+			proc.Ctx,
+			proc.GetTxnOperator(),
+			target.tableID,
+		)
+		if err != nil {
+			return err
+		}
+		if len(r.GetExtraInfo().IndexTables) > 0 {
+			target.mainIndexes = r.GetExtraInfo().IndexTables
+			target.partitionIndexes = make(map[uint64][]engine.Relation, len(target.meta.Partitions))
+		}
 	}
 
 	op.affectedRows = 0
 	op.raw.getS3WriterFunc = op.getS3Writer
 	op.raw.getFlushableS3WriterFunc = op.getFlushableS3Writer
 	op.raw.addAffectedRowsFunc = op.doAddAffectedRows
-	op.writers = make(map[uint64]*s3WriterDelegate, len(op.meta.Partitions))
-
-	op.rawTableIDs = make([]uint64, 0, len(op.raw.MultiUpdateCtx))
-	op.rawTableFlags = make([]uint64, 0, len(op.raw.MultiUpdateCtx))
-	for _, c := range op.raw.MultiUpdateCtx {
-		op.rawTableIDs = append(op.rawTableIDs, c.TableDef.TblId)
-		op.rawTableFlags = append(op.rawTableFlags, c.TableDef.FeatureFlag)
-	}
+	op.writers = make(map[uint64]*s3WriterDelegate)
+	op.nextWriterID = 0
 	return nil
+}
+
+func buildPartitionUpdateTargets(contexts []*MultiUpdateCtx) []*partitionUpdateTarget {
+	targetsByMain := make(map[int]*partitionUpdateTarget)
+	targets := make([]*partitionUpdateTarget, 0, len(contexts))
+	for i, ctx := range contexts {
+		if features.IsIndexTable(ctx.TableDef.FeatureFlag) {
+			continue
+		}
+		target := &partitionUpdateTarget{
+			contexts:  []*MultiUpdateCtx{cloneTargetContext(ctx)},
+			tableID:   ctx.TableDef.TblId,
+			writerIDs: make(map[uint64]uint64),
+		}
+		targetsByMain[i] = target
+		targets = append(targets, target)
+	}
+	for _, ctx := range contexts {
+		if !features.IsIndexTable(ctx.TableDef.FeatureFlag) {
+			continue
+		}
+		if target := targetsByMain[ctx.TargetUpdateCtxIdx]; target != nil {
+			target.contexts = append(target.contexts, cloneTargetContext(ctx))
+		}
+	}
+	return targets
+}
+
+func cloneTargetContext(ctx *MultiUpdateCtx) *MultiUpdateCtx {
+	cloned := ctx.clone()
+	cloned.TargetUpdateCtxIdx = 0
+	return cloned
 }
 
 func (op *PartitionMultiUpdate) Call(
@@ -155,70 +193,10 @@ func (op *PartitionMultiUpdate) writeTable(
 	op.raw.delegated = true
 	op.raw.input = input
 
-	pos := int32(-1)
-	if len(op.raw.MultiUpdateCtx[0].PartitionCols) > 0 {
-		pos = int32(op.raw.MultiUpdateCtx[0].PartitionCols[0])
-	}
-
-	res, err := partitionprune.Prune(proc, input.Batch, op.meta, pos)
-	if err != nil {
-		return vm.CallResult{}, err
-	}
-	defer res.Close()
-	if res.Empty() {
-		panic("Prune result is empty")
-	}
-
-	var rel engine.Relation
-	res.Iter(
-		func(
-			partition partition.Partition,
-			bat *batch.Batch,
-		) bool {
-			_, _, rel, err = op.raw.Engine.GetRelationById(
-				proc.Ctx,
-				proc.GetTxnOperator(),
-				partition.PartitionID,
-			)
-			if err != nil {
-				return false
-			}
-
-			// mapping all main table and index table to partition's.
-			// Clone each context to avoid mutating shared plan objects
-			// that may be read concurrently by other operators.
-			cloned := make([]*MultiUpdateCtx, len(op.raw.MultiUpdateCtx))
-			for i, c := range op.raw.MultiUpdateCtx {
-				r := rel
-				if features.IsIndexTable(op.rawTableFlags[i]) {
-					r, err = op.getPartitionIndex(
-						proc,
-						op.rawTableIDs[i],
-						partition.PartitionID,
-						rel,
-					)
-					if err != nil {
-						return false
-					}
-				}
-
-				cloned[i] = c.clone()
-				cloned[i].ObjRef.ObjName = r.GetTableName()
-				cloned[i].TableDef = r.GetTableDef(proc.Ctx)
-			}
-			op.raw.MultiUpdateCtx = cloned
-			op.raw.resetMultiUpdateCtxs()
-			if err = op.raw.resetMultiSources(proc); err != nil {
-				return false
-			}
-			op.raw.input = vm.CallResult{Batch: bat}
-
-			_, err = op.raw.Call(proc)
-			return err == nil
-		},
-	)
-	if err != nil {
-		return vm.CallResult{}, err
+	for _, target := range op.targets {
+		if err := op.writeTarget(proc, target, input.Batch); err != nil {
+			return vm.CallResult{}, err
+		}
 	}
 	return input, nil
 }
@@ -250,74 +228,258 @@ func (op *PartitionMultiUpdate) writeS3(
 			continue
 		}
 
-		pos := int32(-1)
-		if len(op.raw.MultiUpdateCtx[0].PartitionCols) > 0 {
-			pos = int32(op.raw.MultiUpdateCtx[0].PartitionCols[0])
-		}
-		res, err := partitionprune.Prune(proc, input.Batch, op.meta, pos)
-		if err != nil {
-			return vm.CallResult{}, err
-		}
-		if res.Empty() {
-			panic("Prune result is empty")
-		}
-
-		var rel engine.Relation
-		res.Iter(
-			func(
-				partition partition.Partition,
-				bat *batch.Batch,
-			) bool {
-				_, _, rel, err = op.raw.Engine.GetRelationById(
-					proc.Ctx,
-					proc.GetTxnOperator(),
-					partition.PartitionID,
-				)
-				if err != nil {
-					return false
-				}
-
-				old := op.raw.MultiUpdateCtx
-				new := make([]*MultiUpdateCtx, 0, len(old))
-
-				// mapping all main table and index table to partition's.
-				for i, c := range op.raw.MultiUpdateCtx {
-					r := rel
-					if features.IsIndexTable(op.rawTableFlags[i]) {
-						r, err = op.getPartitionIndex(
-							proc,
-							op.rawTableIDs[i],
-							partition.PartitionID,
-							rel,
-						)
-						if err != nil {
-							return false
-						}
-					}
-
-					newC := c.clone()
-					newC.ObjRef.ObjName = r.GetTableName()
-					newC.TableDef = r.GetTableDef(proc.Ctx)
-					new = append(new, newC)
-				}
-				op.raw.MultiUpdateCtx = new
-
-				op.raw.resetMultiUpdateCtxs()
-				if err = op.raw.resetMultiSources(proc); err != nil {
-					return false
-				}
-				op.raw.mainTable = partition.PartitionID
-				op.raw.input = vm.CallResult{Batch: bat}
-
-				_, err = op.raw.Call(proc)
-				return err == nil
-			},
-		)
-		res.Close()
-		if err != nil {
-			return vm.CallResult{}, err
+		for _, target := range op.targets {
+			if err := op.writeTarget(proc, target, input.Batch); err != nil {
+				return vm.CallResult{}, err
+			}
 		}
 	}
+}
+
+func (op *PartitionMultiUpdate) writeTarget(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	input *batch.Batch,
+) error {
+	if !features.IsPartitioned(target.contexts[0].TableDef.FeatureFlag) {
+		return op.callRawTarget(proc, target, target.contexts, target.tableID, input)
+	}
+	filtered, owned, err := op.selectPartitionTargetRows(proc, target, input)
+	if err != nil {
+		return err
+	}
+	if owned {
+		defer filtered.Clean(proc.Mp())
+	}
+	if filtered.RowCount() == 0 {
+		return nil
+	}
+	if len(target.contexts[0].PartitionCols) > 1 {
+		return op.writePartitionKeyUpdate(proc, target, filtered)
+	}
+
+	contexts := clonePartitionTargetContexts(target.contexts)
+	pos := int32(-1)
+	if len(contexts[0].PartitionCols) > 0 {
+		pos = int32(contexts[0].PartitionCols[0])
+	}
+	res, err := partitionprune.Prune(proc, filtered, target.meta, pos)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	if res.Empty() {
+		panic("Prune result is empty")
+	}
+
+	res.Iter(func(p partition.Partition, bat *batch.Batch) bool {
+		partitionContexts, resolveErr := op.resolvePartitionContexts(proc, target, contexts, p)
+		if resolveErr != nil {
+			err = resolveErr
+			return false
+		}
+		err = op.callRawTarget(proc, target, partitionContexts, p.PartitionID, bat)
+		return err == nil
+	})
+	return err
+}
+
+func (op *PartitionMultiUpdate) selectPartitionTargetRows(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	input *batch.Batch,
+) (*batch.Batch, bool, error) {
+	var seenSizeBefore int64
+	if op.raw.Action == UpdateWriteS3 {
+		seenSizeBefore = op.raw.seenTargetRowsSize()
+	}
+	filtered, owned, duplicateRows, err := filterTargetRows(
+		proc,
+		target.contexts[0],
+		input,
+		op.raw.ctr.seenTargetRows[target.tableID],
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	if op.raw.Action == UpdateWriteS3 {
+		seenIncrement := op.raw.seenTargetRowsSize() - seenSizeBefore
+		if err = op.raw.admitSeenTargetRowsGrowth(seenIncrement); err != nil {
+			if owned {
+				filtered.Clean(proc.Mp())
+			}
+			return nil, false, err
+		}
+	}
+	op.raw.addAffectedRowsFunc(duplicateRows)
+	return filtered, owned, nil
+}
+
+func (op *PartitionMultiUpdate) resolvePartitionContexts(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	contexts []*MultiUpdateCtx,
+	p partition.Partition,
+) ([]*MultiUpdateCtx, error) {
+	_, _, rel, err := op.raw.Engine.GetRelationById(
+		proc.Ctx,
+		proc.GetTxnOperator(),
+		p.PartitionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	resolved := make([]*MultiUpdateCtx, len(contexts))
+	for i, ctx := range contexts {
+		r := rel
+		if features.IsIndexTable(ctx.TableDef.FeatureFlag) {
+			r, err = op.getPartitionIndex(
+				proc,
+				target,
+				ctx.TableDef.TblId,
+				p.PartitionID,
+				rel,
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+		resolved[i] = ctx.clone()
+		resolved[i].ObjRef.ObjName = r.GetTableName()
+		resolved[i].TableDef = r.GetTableDef(proc.Ctx)
+	}
+	return resolved, nil
+}
+
+func (op *PartitionMultiUpdate) writePartitionKeyUpdate(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	input *batch.Batch,
+) error {
+	mainCtx := target.contexts[0]
+	deleteContexts := clonePartitionPhaseContexts(target.contexts, true)
+	if err := op.writePartitionPhase(
+		proc, target, deleteContexts, mainCtx.PartitionCols[0], input,
+	); err != nil {
+		return err
+	}
+	insertContexts := clonePartitionPhaseContexts(target.contexts, false)
+	return op.writePartitionPhase(
+		proc, target, insertContexts, mainCtx.PartitionCols[1], input,
+	)
+}
+
+func clonePartitionTargetContexts(contexts []*MultiUpdateCtx) []*MultiUpdateCtx {
+	cloned := make([]*MultiUpdateCtx, len(contexts))
+	for i, ctx := range contexts {
+		cloned[i] = ctx.clone()
+		// selectPartitionTargetRows already accounted for selector semantics.
+		// Partition-local writers must not count physical inserts again when
+		// semantic selectors were present; ordinary single-target updates still
+		// derive affected rows from their physical inserts.
+		cloned[i].DedupByTargetRowID = false
+		cloned[i].SuppressPhysicalAffectedRows = len(cloned[i].AffectedRowsCols) > 0
+		cloned[i].AffectedRowsCols = nil
+	}
+	return cloned
+}
+
+func clonePartitionPhaseContexts(
+	contexts []*MultiUpdateCtx,
+	deletePhase bool,
+) []*MultiUpdateCtx {
+	cloned := make([]*MultiUpdateCtx, len(contexts))
+	for i, ctx := range contexts {
+		cloned[i] = ctx.clone()
+		// Partition-key moves share the selection result across delete and
+		// insert phases, so neither phase may count semantic selectors again.
+		cloned[i].DedupByTargetRowID = false
+		cloned[i].SuppressPhysicalAffectedRows = len(cloned[i].AffectedRowsCols) > 0
+		cloned[i].AffectedRowsCols = nil
+		if deletePhase {
+			cloned[i].InsertCols = nil
+		} else {
+			cloned[i].DeleteCols = nil
+		}
+	}
+	return cloned
+}
+
+func (op *PartitionMultiUpdate) writePartitionPhase(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	contexts []*MultiUpdateCtx,
+	partitionCol int,
+	input *batch.Batch,
+) error {
+	res, err := partitionprune.Prune(proc, input, target.meta, int32(partitionCol))
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	if res.Empty() {
+		return nil
+	}
+
+	res.Iter(func(p partition.Partition, bat *batch.Batch) bool {
+		partitionContexts, resolveErr := op.resolvePartitionContexts(proc, target, contexts, p)
+		if resolveErr != nil {
+			err = resolveErr
+			return false
+		}
+		err = op.callRawTarget(proc, target, partitionContexts, p.PartitionID, bat)
+		return err == nil
+	})
+	return err
+}
+
+func (op *PartitionMultiUpdate) callRawTarget(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	contexts []*MultiUpdateCtx,
+	mainTable uint64,
+	input *batch.Batch,
+) error {
+	op.raw.MultiUpdateCtx = contexts
+	if op.raw.Action == UpdateWriteTable {
+		op.raw.cleanTargetBuffers(proc)
+	}
+	op.raw.resetMultiUpdateCtxs()
+	if err := op.raw.resetMultiSources(proc); err != nil {
+		return err
+	}
+	op.raw.mainTable = mainTable
+	if op.raw.Action == UpdateWriteS3 {
+		op.raw.mainTable = op.writerID(target, mainTable)
+	}
+	op.raw.input = vm.CallResult{Batch: input}
+	_, err := op.raw.Call(proc)
+	return err
+}
+
+func (update *MultiUpdate) cleanTargetBuffers(proc *process.Process) {
+	for _, buf := range update.ctr.insertBuf {
+		if buf != nil {
+			buf.Clean(proc.Mp())
+		}
+	}
+	update.ctr.insertBuf = make([]*batch.Batch, len(update.MultiUpdateCtx))
+	for _, buf := range update.ctr.deleteBuf {
+		if buf != nil {
+			buf.Clean(proc.Mp())
+		}
+	}
+	update.ctr.deleteBuf = make([]*batch.Batch, len(update.MultiUpdateCtx))
+}
+
+func (op *PartitionMultiUpdate) writerID(target *partitionUpdateTarget, physicalTableID uint64) uint64 {
+	if id, ok := target.writerIDs[physicalTableID]; ok {
+		return id
+	}
+	op.nextWriterID++
+	target.writerIDs[physicalTableID] = op.nextWriterID
+	return op.nextWriterID
 }
 
 func (op *PartitionMultiUpdate) ExecProjection(
@@ -333,10 +495,7 @@ func (op *PartitionMultiUpdate) Free(
 	err error,
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
-
-	for _, w := range op.freeWriters {
-		w.free(proc)
-	}
+	op.freePartitionWriters(proc)
 }
 
 func (op *PartitionMultiUpdate) Release() {
@@ -348,7 +507,25 @@ func (op *PartitionMultiUpdate) Reset(
 	pipelineFailed bool,
 	err error,
 ) {
+	op.raw.MultiUpdateCtx = op.rawContexts
 	op.raw.Reset(proc, pipelineFailed, err)
+	op.raw.resetMultiUpdateCtxs()
+	op.freePartitionWriters(proc)
+	for _, target := range op.targets {
+		clear(target.writerIDs)
+	}
+	op.nextWriterID = 0
+}
+
+func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process) {
+	for id, writer := range op.writers {
+		_ = writer.free(proc)
+		delete(op.writers, id)
+	}
+	for _, writer := range op.freeWriters {
+		_ = writer.free(proc)
+	}
+	op.freeWriters = nil
 }
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {
@@ -367,18 +544,19 @@ func (op *PartitionMultiUpdate) SetRejectZeroTemporal(reject bool) {
 
 func (op *PartitionMultiUpdate) getPartitionIndex(
 	proc *process.Process,
+	target *partitionUpdateTarget,
 	tableID uint64,
 	partitionID uint64,
 	partitionRel engine.Relation,
 ) (engine.Relation, error) {
-	for i, id := range op.mainIndexes {
+	for i, id := range target.mainIndexes {
 		if id == tableID {
-			indexes, ok := op.partitionIndexes[partitionID]
+			indexes, ok := target.partitionIndexes[partitionID]
 			if ok {
 				return indexes[i], nil
 			}
 
-			relations := make([]engine.Relation, 0, len(op.meta.Partitions))
+			relations := make([]engine.Relation, 0, len(target.meta.Partitions))
 			for _, index := range partitionRel.GetExtraInfo().IndexTables {
 				_, _, rel, err := op.raw.Engine.GetRelationById(
 					proc.Ctx,
@@ -390,7 +568,7 @@ func (op *PartitionMultiUpdate) getPartitionIndex(
 				}
 				relations = append(relations, rel)
 			}
-			op.partitionIndexes[partitionID] = relations
+			target.partitionIndexes[partitionID] = relations
 
 			return relations[i], nil
 		}
@@ -438,12 +616,18 @@ func (op *PartitionMultiUpdate) SetAffectedRows(affectedRows uint64) {
 
 func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 	v := &MultiUpdateCtx{
-		InsertCols:         ctx.InsertCols,
-		DeleteCols:         ctx.DeleteCols,
-		PartitionCols:      ctx.PartitionCols,
-		SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
-		InsertPkColIdx:     ctx.InsertPkColIdx,
-		IgnoreAffectedRows: ctx.IgnoreAffectedRows,
+		InsertCols:                   ctx.InsertCols,
+		DeleteCols:                   ctx.DeleteCols,
+		PartitionCols:                ctx.PartitionCols,
+		SkipInsertOnNullPk:           ctx.SkipInsertOnNullPk,
+		InsertPkColIdx:               ctx.InsertPkColIdx,
+		IgnoreAffectedRows:           ctx.IgnoreAffectedRows,
+		DedupByTargetRowID:           ctx.DedupByTargetRowID,
+		TargetUpdateCtxIdx:           ctx.TargetUpdateCtxIdx,
+		ChangedRowsCol:               ctx.ChangedRowsCol,
+		AffectedRowsCols:             append([]int(nil), ctx.AffectedRowsCols...),
+		SuppressPhysicalAffectedRows: ctx.SuppressPhysicalAffectedRows,
+		TargetTableID:                ctx.TargetTableID,
 	}
 	objRef := *ctx.ObjRef
 	def := *ctx.TableDef

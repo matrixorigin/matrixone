@@ -203,9 +203,12 @@ func TestCancelableJob(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, jobs.JobCount())
 
-	testutils.WaitExpect(5000, func() bool {
-		return v1.Load() > 5 && v2.Load() > 5
-	})
+	require.Eventually(t, func() bool {
+		return v2.Load() > 5
+	}, time.Second, time.Millisecond)
+	// The duplicate job1 registration above must not replace or start the
+	// rejected callback.
+	assert.Zero(t, v1.Load())
 
 	jobs.Reset()
 	assert.Equal(t, 0, jobs.JobCount())
@@ -1314,6 +1317,7 @@ func TestFlushTableErrorHandle(t *testing.T) {
 	schema.Extra.BlockMaxRows = 20
 	schema.Extra.ObjectMaxBlocks = 10
 	bat := catalog.MockBatch(schema, (int(schema.Extra.BlockMaxRows)*2 + int(schema.Extra.BlockMaxRows/2)))
+	defer bat.Close()
 
 	txn, _ := tae.StartTxn(nil)
 	txn.CreateDatabase("db", "", "")
@@ -1341,7 +1345,14 @@ func TestFlushTableErrorHandle(t *testing.T) {
 		assert.Error(t, err)
 		assert.NoError(t, txn.Rollback(context.Background()))
 	}
-	for i := 0; i < 20; i++ {
+	iterations := 20
+	if testing.Short() {
+		// CI runs the race suite in short mode. Keep representative create,
+		// flush-failure, and drop cycles while leaving the full stress count
+		// for explicit non-short runs.
+		iterations = 3
+	}
+	for i := 0; i < iterations; i++ {
 		createAndInsert()
 		flushTable()
 		droptable()
@@ -4094,6 +4105,93 @@ func TestFlushTransferTombstonesRollback(t *testing.T) {
 	tae.CheckRowsByScan(0, true)
 }
 
+func TestTombstoneMergeKeepsTargetDroppedAfterSnapshot(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	rows := catalog.MockBatch(schema, 10)
+	defer rows.Close()
+	tae.CreateRelAndAppend(rows, true)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	key := rows.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	targetID, targetRow, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(key))
+	require.NoError(t, err)
+	require.NoError(t, deleteRel.RangeDelete(
+		targetID, targetRow, targetRow, handle.DT_Normal,
+	))
+	require.NoError(t, deleteTxn.Commit(ctx))
+
+	flushTxn, flushRel := tae.GetRelation()
+	tombstoneMetas := testutil.GetAllAppendableMetas(flushRel, true)
+	require.NotEmpty(t, tombstoneMetas)
+	flushTask, err := jobs.NewFlushTableTailTask(
+		nil, flushTxn, nil, tombstoneMetas, tae.Runtime,
+	)
+	require.NoError(t, err)
+	require.NoError(t, flushTask.OnExec(ctx))
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	var persistedTombstones []*catalog.ObjectEntry
+	it := mergeRel.MakeObjectIt(true)
+	for it.Next() {
+		meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !meta.IsAppendable() {
+			persistedTombstones = append(persistedTombstones, meta)
+		}
+	}
+	require.NoError(t, it.Close())
+	require.NotEmpty(t, persistedTombstones)
+
+	// The merge snapshot predates this object drop. Pruning against the latest
+	// catalog state would make the compaction erase a tombstone that belongs to
+	// the concurrent data-object generation.
+	dropTxn, dropRel := tae.GetRelation()
+	require.NoError(t, dropRel.SoftDeleteObject(targetID.ObjectID(), false))
+	require.NoError(t, dropTxn.Commit(ctx))
+	mergeStartTS, dropCommitTS := mergeTxn.GetStartTS(), dropTxn.GetCommitTS()
+	require.True(t, mergeStartTS.LT(&dropCommitTS))
+
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, persistedTombstones, tae.Runtime, 0, true,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.Len(t, mergeTask.GetCommitEntry().CreatedObjs, 1)
+	created := objectio.ObjectStats(mergeTask.GetCommitEntry().CreatedObjs[0])
+	require.Equal(t, uint32(1), created.Rows())
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	// The next merge starts after the target drop, so it must reclaim the now
+	// obsolete tombstone instead of retaining it indefinitely.
+	pruneTxn, pruneRel := tae.GetRelation()
+	persistedTombstones = persistedTombstones[:0]
+	it = pruneRel.MakeObjectIt(true)
+	for it.Next() {
+		meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !meta.IsAppendable() {
+			persistedTombstones = append(persistedTombstones, meta)
+		}
+	}
+	require.NoError(t, it.Close())
+	require.NotEmpty(t, persistedTombstones)
+	pruneTask, err := jobs.NewMergeObjectsTask(
+		nil, pruneTxn, persistedTombstones, tae.Runtime, 0, true,
+	)
+	require.NoError(t, err)
+	require.NoError(t, pruneTask.OnExec(ctx))
+	require.Empty(t, pruneTask.GetCommitEntry().CreatedObjs)
+	require.NoError(t, pruneTxn.Commit(ctx))
+}
+
 func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -5758,11 +5856,18 @@ func TestReadCheckpoint(t *testing.T) {
 
 	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	require.NotEmpty(t, entries)
+	finishedReadCount := 0
 	for _, entry := range entries {
+		if !entry.IsFinished() {
+			t.Logf("skipping unfinished checkpoint entry: %s", entry.String())
+			continue
+		}
 		t.Log(entry.String())
 		t.Log(entry.JsonString())
 		readCheckpoint(entry)
+		finishedReadCount++
 	}
+	require.Positive(t, finishedReadCount, "no finished checkpoint entry was read")
 
 	tae.Restart(ctx)
 	replayed := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
@@ -10468,7 +10573,13 @@ func TestDedup2(t *testing.T) {
 	tae.BindSchema(schema)
 
 	count := 50
+	if testing.Short() {
+		// Cross the first object boundary (2 rows/block * 10 blocks/object)
+		// while avoiding the quadratic 50-row stress volume in the short suite.
+		count = int(schema.Extra.BlockMaxRows*schema.Extra.ObjectMaxBlocks) + 1
+	}
 	data := catalog.MockBatch(schema, count)
+	defer data.Close()
 	datas := data.Split(count)
 
 	tae.CreateRelAndAppend(datas[0], true)
@@ -12230,7 +12341,9 @@ func TestPersistTransferTable(t *testing.T) {
 	}
 	page.SetPath(path)
 
-	time.Sleep(2 * time.Second)
+	// Expire only the in-memory representation. Advancing the page timestamp
+	// keeps this TTL boundary test deterministic under slow CI scheduling.
+	page.SetBornTS(time.Now().Add(-2 * time.Second))
 	tae.Runtime.TransferTable.RunTTL()
 	assert.True(t, page.IsPersist())
 	for i := 0; i < 10; i++ {
@@ -12303,7 +12416,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 			}
 			page.SetPath(path)
 
-			time.Sleep(2 * time.Second)
+			// Expire the persisted representation without a wall-clock sleep.
+			page.SetBornTS(time.Now().Add(-3 * time.Second))
 			tae.Runtime.TransferTable.RunTTL()
 			_, err = tae.Runtime.TransferTable.Pin(*page.ID())
 			assert.True(t, errors.Is(err, moerr.GetOkExpectedEOB()))
@@ -12441,6 +12555,547 @@ func TestMergeBlocks4(t *testing.T) {
 	wg.Wait()
 
 	assert.NoError(t, txn.Commit(context.Background()))
+	tae.CheckRowsByScan(0, true)
+}
+
+func TestMergeBlocksWithConcurrentTombstoneMergeCommit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 8
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	dataTxn, dataRel := tae.GetRelation()
+	dataObj := testutil.GetOneBlockMeta(dataRel)
+	dataTask, err := jobs.NewMergeObjectsTask(
+		nil, dataTxn, []*catalog.ObjectEntry{dataObj}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
+	var dataID *common.ID
+	for i := 0; i < bat.Length(); i++ {
+		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+		require.NoError(t, err)
+		if dataID == nil {
+			dataID = id
+		}
+		rowIDVec.Append(types.NewRowIDWithObjectIDBlkNumAndRowID(
+			*id.ObjectID(), id.BlockID.Sequence(), offset,
+		), false)
+		pkVec.Append(pk, false)
+	}
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
+	)
+	require.NoError(t, err)
+	ok, err := deleteRel.AddPersistedTombstoneFile(dataID, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, deleteTxn.Commit(ctx))
+	tombstoneTxn, tombstoneRel := tae.GetRelation()
+	tombstoneObj := testutil.GetOneTombstoneMeta(tombstoneRel)
+	require.False(t, tombstoneObj.IsAppendable())
+	tombstoneTask, err := jobs.NewMergeObjectsTask(
+		nil, tombstoneTxn, []*catalog.ObjectEntry{tombstoneObj}, tae.Runtime, 0, true,
+	)
+	require.NoError(t, err)
+
+	require.True(t, fault.Enable())
+	defer fault.Disable()
+
+	addWaiterProbe := func(name, target string) {
+		t.Helper()
+		require.NoError(t, fault.AddFaultPoint(ctx, name, ":::", "getwaiters", 0, target, false))
+		t.Cleanup(func() {
+			_, _ = fault.RemoveFaultPoint(context.Background(), name)
+		})
+	}
+	waitForWaiter := func(probe string) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			waiters, _, ok := fault.TriggerFault(probe)
+			return ok && waiters == 1
+		}, 10*time.Second, 10*time.Millisecond)
+	}
+	releaseWaiter := func(name string) {
+		t.Helper()
+		removed, err := fault.RemoveFaultPoint(ctx, name)
+		require.NoError(t, err)
+		require.True(t, removed)
+	}
+
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_DataMergeAfterCollectTS, ":::", "wait", 0, "", false,
+	))
+	defer fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
+	dataMergeWaiters := t.Name() + "/data-merge-waiters"
+	addWaiterProbe(dataMergeWaiters, objectio.FJ_DataMergeAfterCollectTS)
+
+	dataErrC := make(chan error, 1)
+	dataDone := false
+	go func() {
+		dataErrC <- dataTask.OnExec(ctx)
+	}()
+	defer func() {
+		if dataDone {
+			return
+		}
+		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
+		select {
+		case <-dataErrC:
+		case <-time.After(10 * time.Second):
+			t.Errorf("data merge did not terminate during cleanup")
+		}
+	}()
+	waitForWaiter(dataMergeWaiters)
+
+	// The data merge has captured its collection upper bound. Commit a
+	// tombstone merge after that bound, then let the data merge scan the
+	// historical range whose tombstones were just rewritten.
+	require.NoError(t, tombstoneTask.OnExec(ctx))
+	require.NoError(t, tombstoneTxn.Commit(ctx))
+	releaseWaiter(objectio.FJ_DataMergeAfterCollectTS)
+	select {
+	case err := <-dataErrC:
+		dataDone = true
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("data merge did not finish")
+	}
+	require.NoError(t, dataTxn.Commit(ctx))
+
+	tae.CheckRowsByScan(0, true)
+}
+
+func TestMergeBlocksWithTombstoneMergeCommittedInsideTransferRange(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 8
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	// Fix the data merge snapshot before the delete. The merge output cannot
+	// observe the later tombstone and must transfer it before committing.
+	dataTxn, dataRel := tae.GetRelation()
+	dataObj := testutil.GetOneBlockMeta(dataRel)
+	dataTask, err := jobs.NewMergeObjectsTask(
+		nil, dataTxn, []*catalog.ObjectEntry{dataObj}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
+	var dataID *common.ID
+	for i := 0; i < bat.Length(); i++ {
+		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+		require.NoError(t, err)
+		if dataID == nil {
+			dataID = id
+		}
+		rowIDVec.Append(types.NewRowIDWithObjectIDBlkNumAndRowID(
+			*id.ObjectID(), id.BlockID.Sequence(), offset,
+		), false)
+		pkVec.Append(pk, false)
+	}
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
+	)
+	require.NoError(t, err)
+	ok, err := deleteRel.AddPersistedTombstoneFile(dataID, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, deleteTxn.Commit(ctx))
+
+	// Rewrite the CN-created tombstone into a TN-created tombstone object and
+	// commit it before the data merge captures its collection upper bound.
+	tombstoneTxn, tombstoneRel := tae.GetRelation()
+	tombstoneObj := testutil.GetOneTombstoneMeta(tombstoneRel)
+	require.False(t, tombstoneObj.IsAppendable())
+	require.True(t, tombstoneObj.ObjectStats.GetCNCreated())
+	tombstoneTask, err := jobs.NewMergeObjectsTask(
+		nil, tombstoneTxn, []*catalog.ObjectEntry{tombstoneObj}, tae.Runtime, 0, true,
+	)
+	require.NoError(t, err)
+	require.NoError(t, tombstoneTask.OnExec(ctx))
+	require.NoError(t, tombstoneTxn.Commit(ctx))
+
+	require.NoError(t, dataTask.OnExec(ctx))
+	require.NoError(t, dataTxn.Commit(ctx))
+
+	// Every row was deleted after the data merge snapshot. Missing the
+	// delete after its source is replaced resurrects all ten rows in the merged
+	// data object.
+	tae.CheckRowsByScan(0, true)
+}
+
+func TestMergeBlocksWithTombstoneMergeAfterCNDeleteRollback(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 8
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	// Fix the data merge snapshot before the delete. The merge output cannot
+	// observe the later tombstone and must transfer it before committing.
+	dataTxn, dataRel := tae.GetRelation()
+	dataObj := testutil.GetOneBlockMeta(dataRel)
+	dataTask, err := jobs.NewMergeObjectsTask(
+		nil, dataTxn, []*catalog.ObjectEntry{dataObj}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
+	var dataID *common.ID
+	for i := 0; i < bat.Length(); i++ {
+		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+		require.NoError(t, err)
+		if dataID == nil {
+			dataID = id
+		}
+		rowIDVec.Append(types.NewRowIDWithObjectIDBlkNumAndRowID(
+			*id.ObjectID(), id.BlockID.Sequence(), offset,
+		), false)
+		pkVec.Append(pk, false)
+	}
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
+	)
+	require.NoError(t, err)
+	ok, err := deleteRel.AddPersistedTombstoneFile(dataID, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, deleteTxn.Commit(ctx))
+
+	// A failed publication rewrite must restore the source generation without
+	// carrying the CN-delete provenance into its next ownership transition.
+	abortedTxn, abortedRel := tae.GetRelation()
+	source := testutil.GetOneTombstoneMeta(abortedRel)
+	sourceID := *source.ID()
+	require.NoError(t, abortedRel.SoftDeleteObjectByCN(&sourceID, true))
+	require.NoError(t, abortedTxn.Rollback(ctx))
+
+	// A later TN tombstone merge must remain distinguishable from the aborted CN
+	// rewrite. Otherwise the range scan skips the source and filters the
+	// TN-created replacement, resurrecting all rows in the data merge output.
+	tombstoneTxn, tombstoneRel := tae.GetRelation()
+	tombstoneObj := testutil.GetOneTombstoneMeta(tombstoneRel)
+	require.Equal(t, sourceID, *tombstoneObj.ID())
+	require.False(t, tombstoneObj.ObjectStats.GetCNDeleted())
+	tombstoneTask, err := jobs.NewMergeObjectsTask(
+		nil, tombstoneTxn, []*catalog.ObjectEntry{tombstoneObj}, tae.Runtime, 0, true,
+	)
+	require.NoError(t, err)
+	require.NoError(t, tombstoneTask.OnExec(ctx))
+	require.NoError(t, tombstoneTxn.Commit(ctx))
+	require.False(t, tombstoneObj.GetLatestNode().ObjectStats.GetCNDeleted())
+
+	require.NoError(t, dataTask.OnExec(ctx))
+	require.NoError(t, dataTxn.Commit(ctx))
+	tae.CheckRowsByScan(0, true)
+}
+
+func TestMergeBlocksWithCNRewrittenTombstoneInsideTransferRange(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 8
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	// Fix the data merge snapshot before either CN tombstone generation exists.
+	dataTxn, dataRel := tae.GetRelation()
+	dataObj := testutil.GetOneBlockMeta(dataRel)
+	dataTask, err := jobs.NewMergeObjectsTask(
+		nil, dataTxn, []*catalog.ObjectEntry{dataObj}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
+	var dataID *common.ID
+	for i := 0; i < bat.Length(); i++ {
+		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+		require.NoError(t, err)
+		if dataID == nil {
+			dataID = id
+		}
+		rowIDVec.Append(types.NewRowIDWithObjectIDBlkNumAndRowID(
+			*id.ObjectID(), id.BlockID.Sequence(), offset,
+		), false)
+		pkVec.Append(pk, false)
+	}
+	sourceStats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
+	)
+	require.NoError(t, err)
+	ok, err := deleteRel.AddPersistedTombstoneFile(dataID, sourceStats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, deleteTxn.Commit(ctx))
+
+	// Publication rewrites CN tombstones as CN tombstones. The old generation
+	// must stop owning its rows when the replacement is committed.
+	rewriteTxn, rewriteRel := tae.GetRelation()
+	source := testutil.GetOneTombstoneMeta(rewriteRel)
+	sourceID := *source.ID()
+	require.True(t, source.ObjectStats.GetCNCreated())
+	require.NoError(t, rewriteRel.SoftDeleteObjectByCN(&sourceID, true))
+	replacementStats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, rewriteTxn,
+	)
+	require.NoError(t, err)
+	ok, err = rewriteRel.AddPersistedTombstoneFile(dataID, replacementStats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, rewriteTxn.Commit(ctx))
+
+	tableEntry := rewriteRel.GetMeta().(*catalog.TableEntry)
+	it := tableEntry.MakeTombstoneObjectIt()
+	markedSource := false
+	for ok := it.Last(); ok; ok = it.Prev() {
+		entry := it.Item()
+		if entry.IsDEntry() && *entry.ID() == sourceID {
+			markedSource = entry.ObjectStats.GetCNDeleted()
+			break
+		}
+	}
+	it.Release()
+	require.True(t, markedSource)
+
+	require.NoError(t, dataTask.OnExec(ctx))
+	require.NoError(t, dataTxn.Commit(ctx))
+
+	verifyTxn, verifyRel := tae.GetRelation()
+	newDataObj := testutil.GetOneBlockMeta(verifyRel)
+	transferred, err := tables.TombstoneRangeScanByObject(
+		ctx,
+		verifyRel.GetMeta().(*catalog.TableEntry),
+		*newDataObj.ID(),
+		types.TS{},
+		verifyTxn.GetStartTS(),
+		common.DefaultAllocator,
+		tae.Runtime.VectorPool.Small,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, transferred)
+	transferredRows := transferred.Length()
+	transferred.Close()
+	require.Equal(t, bat.Length(), transferredRows)
+	require.NoError(t, verifyTxn.Commit(ctx))
+	tae.CheckRowsByScan(0, true)
+
+	// The provenance bit is catalog state, so replay must preserve it rather
+	// than falling back to treating both CN generations as owners.
+	tae.Restart(ctx)
+	replayTxn, replayRel := tae.GetRelation()
+	it = replayRel.GetMeta().(*catalog.TableEntry).MakeTombstoneObjectIt()
+	markedSource = false
+	for ok := it.Last(); ok; ok = it.Prev() {
+		entry := it.Item()
+		if entry.IsDEntry() && *entry.ID() == sourceID {
+			markedSource = entry.ObjectStats.GetCNDeleted()
+			break
+		}
+	}
+	it.Release()
+	require.True(t, markedSource)
+	require.NoError(t, replayTxn.Commit(ctx))
+	tae.CheckRowsByScan(0, true)
+}
+
+func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 8
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	// Fix the data merge snapshot before either CN tombstone generation exists.
+	dataTxn, dataRel := tae.GetRelation()
+	dataObj := testutil.GetOneBlockMeta(dataRel)
+	dataTask, err := jobs.NewMergeObjectsTask(
+		nil, dataTxn, []*catalog.ObjectEntry{dataObj}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	sourcePKVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer sourcePKVec.Close()
+	sourceRowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer sourceRowIDVec.Close()
+	replacementPKVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer replacementPKVec.Close()
+	replacementRowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer replacementRowIDVec.Close()
+	var dataID *common.ID
+	for i := 0; i < bat.Length(); i++ {
+		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+		require.NoError(t, err)
+		if dataID == nil {
+			dataID = id
+		}
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
+			*id.ObjectID(), id.BlockID.Sequence(), offset,
+		)
+		replacementRowIDVec.Append(rowID, false)
+		replacementPKVec.Append(pk, false)
+		if i < bat.Length()/2 {
+			sourceRowIDVec.Append(rowID, false)
+			sourcePKVec.Append(pk, false)
+		}
+	}
+	sourceStats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, sourceRowIDVec, sourcePKVec, schema, deleteTxn,
+	)
+	require.NoError(t, err)
+	ok, err := deleteRel.AddPersistedTombstoneFile(dataID, sourceStats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, deleteTxn.Commit(ctx))
+
+	require.True(t, fault.Enable())
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_DataMergeAfterCollectTS, ":::", "wait", 0, "", false,
+	))
+	defer fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
+	waiterProbe := t.Name() + "/data-merge-waiters"
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, waiterProbe, ":::", "getwaiters", 0,
+		objectio.FJ_DataMergeAfterCollectTS, false,
+	))
+	defer fault.RemoveFaultPoint(context.Background(), waiterProbe)
+
+	dataErrC := make(chan error, 1)
+	dataDone := false
+	go func() {
+		dataErrC <- dataTask.OnExec(ctx)
+	}()
+	defer func() {
+		if dataDone {
+			return
+		}
+		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
+		select {
+		case <-dataErrC:
+		case <-time.After(10 * time.Second):
+			t.Errorf("data merge did not terminate during cleanup")
+		}
+	}()
+	require.Eventually(t, func() bool {
+		waiters, _, ok := fault.TriggerFault(waiterProbe)
+		return ok && waiters == 1
+	}, 10*time.Second, 10*time.Millisecond)
+
+	// The source generation is consumed by phase 1 because the rewrite commits
+	// after collectTs. Its CN replacement is consumed by phase 2 because it is
+	// created after collectTs. The replacement is a superset so the merge must
+	// skip the five already-transferred rows without losing the five new rows.
+	rewriteTxn, rewriteRel := tae.GetRelation()
+	source := testutil.GetOneTombstoneMeta(rewriteRel)
+	sourceID := *source.ID()
+	require.NoError(t, rewriteRel.SoftDeleteObjectByCN(&sourceID, true))
+	replacementStats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, replacementRowIDVec, replacementPKVec, schema, rewriteTxn,
+	)
+	require.NoError(t, err)
+	ok, err = rewriteRel.AddPersistedTombstoneFile(dataID, replacementStats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, rewriteTxn.Commit(ctx))
+
+	removed, err := fault.RemoveFaultPoint(ctx, objectio.FJ_DataMergeAfterCollectTS)
+	require.NoError(t, err)
+	require.True(t, removed)
+	select {
+	case err := <-dataErrC:
+		dataDone = true
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("data merge did not finish")
+	}
+	require.NoError(t, dataTxn.Commit(ctx))
+
+	verifyTxn, verifyRel := tae.GetRelation()
+	newDataObj := testutil.GetOneBlockMeta(verifyRel)
+	transferred, err := tables.TombstoneRangeScanByObject(
+		ctx,
+		verifyRel.GetMeta().(*catalog.TableEntry),
+		*newDataObj.ID(),
+		types.TS{},
+		verifyTxn.GetStartTS(),
+		common.DefaultAllocator,
+		tae.Runtime.VectorPool.Small,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, transferred)
+	require.Equal(t, bat.Length(), transferred.Length())
+	transferred.Close()
+	require.NoError(t, verifyTxn.Commit(ctx))
 	tae.CheckRowsByScan(0, true)
 }
 

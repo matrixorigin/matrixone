@@ -89,7 +89,7 @@ func indexMetadataType(unique bool, algo string) string {
 		return INDEX_TYPE_UNIQUE
 	case catalog.IsRTreeIndexAlgo(algo):
 		return INDEX_TYPE_SPATIAL
-	case catalog.IsFullTextIndexAlgo(algo):
+	case catalog.IsFullTextIndexAlgo(algo) || catalog.IsFullText2IndexAlgo(algo):
 		return INDEX_TYPE_FULLTEXT
 	default:
 		return INDEX_TYPE_MULTIPLE
@@ -284,27 +284,27 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", databaseId)
 
 					// 4.index.IndexName
-					fmt.Fprintf(buffer, "'%s', ", indexDef.IndexName)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(indexDef.IndexName))
 
 					// 5. index_type
 					index_type := indexMetadataType(indexDef.Unique, indexDef.IndexAlgo)
-					fmt.Fprintf(buffer, "'%s', ", index_type)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(index_type))
 
 					//6. algorithm
 					var algorithm = indexDef.IndexAlgo
-					fmt.Fprintf(buffer, "'%s', ", algorithm)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(algorithm))
 
 					//7. algorithm_table_type
 					var algorithm_table_type = indexDef.IndexAlgoTableType
-					fmt.Fprintf(buffer, "'%s', ", algorithm_table_type)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(algorithm_table_type))
 
 					//8. algorithm_params
 					var algorithm_params = indexDef.IndexAlgoParams
 					fmt.Fprintf(buffer, "%s, ", sqlquote.String(algorithm_params))
 
 					// 9. index visible
-					visible := 0
-					if catalog.IsIndexVisible(indexDef) {
+					visible := INDEX_VISIBLE_NO
+					if isVisible, _ := catalog.GetIndexVisibility(indexDef); isVisible {
 						visible = INDEX_VISIBLE_YES
 					}
 					fmt.Fprintf(buffer, "%d, ", visible)
@@ -313,26 +313,24 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
 
 					// 11. index vec_comment
-					fmt.Fprintf(buffer, "'%s', ", indexDef.Comment)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(indexDef.Comment))
 
 					// 12. index vec_column_name
-					fmt.Fprintf(buffer, "'%s', ", getOriginName(part))
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(getOriginName(part)))
 
 					// 13. index vec_ordinal_position
 					fmt.Fprintf(buffer, "%d, ", i+1)
 
 					// 14. index vec_options
-					if indexDef.Option != nil {
-						if indexDef.Option.ParserName != "" {
-							fmt.Fprintf(buffer, "'parser=%s,ngram_token_size=%d', ", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)
-						}
+					if indexDef.Option != nil && indexDef.Option.ParserName != "" {
+						fmt.Fprintf(buffer, "%s, ", sqlquote.String(fmt.Sprintf("parser=%s,ngram_token_size=%d", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)))
 					} else {
 						fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 					}
 
 					// 15. index vec_index_table
 					if indexDef.TableExist {
-						fmt.Fprintf(buffer, "'%s')", indexDef.IndexTableName)
+						fmt.Fprintf(buffer, "%s)", sqlquote.String(indexDef.IndexTableName))
 					} else {
 						fmt.Fprintf(buffer, "%s)", NULL_VALUE)
 					}
@@ -362,19 +360,19 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", databaseId)
 
 					// 4.index.IndexName
-					fmt.Fprintf(buffer, "'%s', ", "PRIMARY")
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String("PRIMARY"))
 
 					// 5.index_type
-					fmt.Fprintf(buffer, "'%s', ", INDEX_TYPE_PRIMARY)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(INDEX_TYPE_PRIMARY))
 
 					//6. algorithm
-					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(EMPTY_STRING))
 
 					//7. algorithm_table_type
-					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(EMPTY_STRING))
 
 					//8. algorithm_params
-					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(EMPTY_STRING))
 
 					//9. index visible
 					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
@@ -383,10 +381,10 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
 
 					// 11. index vec_comment
-					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(EMPTY_STRING))
 
 					// 12. index vec_column_name
-					fmt.Fprintf(buffer, "'%s', ", getOriginName(colName))
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(getOriginName(colName)))
 
 					// 13. index vec_ordinal_position
 					fmt.Fprintf(buffer, "%d, ", i+1)

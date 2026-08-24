@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -384,6 +386,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					runCompile.MessageBoard = message.NewMessageBoard()
 					runCompile.proc.SetMessageBoard(runCompile.MessageBoard)
 				}
+				if runCompile.proc.GetSession() == receiver.warningSession {
+					receiver.warningCount, receiver.warningDiagnostics = receiver.warningSession.SnapshotWarnings()
+				}
+				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
 				runCompile.clear()
 				return nil
 			}))
@@ -391,10 +397,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			participantFinished = true
 			err = joinAllocationLifecycleErrors(err, terminalErr)
 			for _, snapshot := range terminal.allocation {
-				localAllocationQuality |= localAllocation.AddGeneration(
-					snapshot.Peak,
-					snapshot.Used,
-					snapshot.State == mpool.AllocationAccountTerminalValid,
+				localAllocationQuality |= addAllocationAccountTerminal(
+					&localAllocation,
+					snapshot,
 				)
 			}
 			var localMemory resource.MemoryDomainSummary
@@ -780,6 +785,10 @@ type messageReceiverOnServer struct {
 	resourceMissingMemoryDomains      uint64
 	resourcePendingAllocationGroups   []remoteAllocationGroupPending
 	resourceCompletedAllocationGroups []string
+	warningSession                    *remoteWarningCollector
+	warningCount                      uint64
+	warningDiagnostics                []remoteWarningDiagnostic
+	statementLastInsertID             uint64
 }
 
 func newMessageReceiverOnServer(
@@ -907,6 +916,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	receiver.warningSession = &remoteWarningCollector{}
+	proc.Session = receiver.warningSession
 	if pHelper.hasPlanSnapshotTS {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
 	}
@@ -914,6 +925,16 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		proc.GetService(),
 		int(pHelper.prepareParams.Length),
 		pHelper.prepareParams.IsBin,
+	)
+	if err != nil {
+		proc.Free()
+		mpool.DeleteMPool(mp)
+		return nil, err
+	}
+	binaryStringMetadata, err := process.BinaryStringPrepareParamMetadataForRemote(
+		proc.GetService(),
+		int(pHelper.prepareParams.Length),
+		pHelper.prepareParams.IsBinaryString,
 	)
 	if err != nil {
 		proc.Free()
@@ -938,7 +959,11 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
+		proc.SetOwnedPrepareParamsWithMetadata(
+			prepareParams,
+			prepareParamMetadata,
+			binaryStringMetadata,
+		)
 	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.
@@ -997,7 +1022,7 @@ func resolveRemoteCompileMPoolCapFrom(lim process.Limitation, cgroupLimit, memor
 		}
 	}
 	if effective == 0 {
-		return 0, process.ErrHashBuildCeilingMissing
+		return 0, process.ErrExecutionMemoryCeilingMissing
 	}
 	reserve := effective / 10
 	if reserve < 256*mpool.MB {
@@ -1045,7 +1070,30 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return nil
 	}
 
-	data, err := b.MarshalBinary()
+	service := ""
+	if receiver.cnInformation.lockService != nil {
+		service = receiver.cnInformation.lockService.GetConfig().ServiceID
+	}
+	version := int64(0)
+	if runtime := moruntime.ServiceRuntime(service); runtime != nil {
+		if value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			version, _ = value.(int64)
+		}
+	}
+	if b.HasBinaryStringMetadata() && version < defines.MORPCVersion18 {
+		return moerr.NewInvalidStateNoCtx(
+			"binary-string provenance requires MORPCVersion18 for remote results")
+	}
+	if b.HasExplicitTextStringMetadata() && version < defines.MORPCVersion23 {
+		return moerr.NewInvalidStateNoCtx(
+			"explicit-text provenance requires MORPCVersion23 for remote results")
+	}
+	if b.HasPrepareParamKindMetadata() && version < defines.MORPCVersion12 {
+		return moerr.NewInvalidStateNoCtx(
+			"prepared parameter provenance requires MORPCVersion12 for remote results")
+	}
+	var transport bytes.Buffer
+	data, err := b.MarshalBinaryWithPrepareParamKinds(&transport, false)
 	if err != nil {
 		return err
 	}
@@ -1132,6 +1180,8 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:   remoteTerminalResourceVersion,
+		StatementLastInsertID:     receiver.statementLastInsertID,
+		WarningCount:              receiver.warningCount,
 		Delta:                     receiver.resourceDelta,
 		Memory:                    receiver.resourceMemory,
 		Allocation:                receiver.resourceAllocation,
@@ -1143,6 +1193,10 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 	if receiver.phyPlan != nil {
 		envelope.PhyPlan = *receiver.phyPlan
 	}
+	envelope.WarningDiagnostics = append(
+		envelope.WarningDiagnostics,
+		receiver.warningDiagnostics...,
+	)
 	data, err := json.Marshal(envelope)
 	if err != nil {
 		return err

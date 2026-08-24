@@ -209,7 +209,7 @@ func TestBuildHashMap(t *testing.T) {
 
 func TestHashmapBuilderPhysicalAllocationsChargeOnce(t *testing.T) {
 	const budgetCap = uint64(16 << 20)
-	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	budget, err := process.NewExecutionResourceBudget(budgetCap, budgetCap)
 	require.NoError(t, err)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
@@ -287,7 +287,7 @@ func TestHashmapBuilderAccountedBatchCopyOneByteShortRollsBack(t *testing.T) {
 		uint64,
 		error,
 	) {
-		budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+		budget := process.MustNewExecutionResourceBudget(budgetCap, budgetCap)
 		generation, err := budget.OpenGeneration(1)
 		require.NoError(t, err)
 		registry, err := mpool.NewAllocationAccountRegistry(1, metadataSlots)
@@ -331,7 +331,7 @@ func TestHashmapBuilderAccountedBatchCopyOneByteShortRollsBack(t *testing.T) {
 
 func TestAccountedJoinMapTransfersBatchesAndGroupSelsToLastConsumer(t *testing.T) {
 	const budgetCap = uint64(16 << 20)
-	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	budget := process.MustNewExecutionResourceBudget(budgetCap, budgetCap)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
@@ -394,7 +394,7 @@ func TestAccountedEmptyJoinMapUsesPhysicalAllocationAsSoleCharge(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const capBytes = uint64(64 << 20)
-			budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+			budget := process.MustNewExecutionResourceBudget(capBytes, capBytes)
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 64)
@@ -427,7 +427,7 @@ func TestAccountedEmptyJoinMapUsesPhysicalAllocationAsSoleCharge(t *testing.T) {
 func TestAccountedEmptyJoinMapInitialFailureRollsBackController(t *testing.T) {
 	initial := hashtable.Int64HashMapInitialAllocationBytes() +
 		hashtable.HashMapBlockDescriptorBytes()
-	budget := process.MustNewHashBuildBudget(initial, initial)
+	budget := process.MustNewExecutionResourceBudget(initial, initial)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 2)
@@ -449,7 +449,7 @@ func TestAccountedEmptyJoinMapInitialFailureRollsBackController(t *testing.T) {
 
 func TestAccountedJoinMapLateFreeKeepsOriginalGeneration(t *testing.T) {
 	const capBytes = uint64(64 << 20)
-	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	budget := process.MustNewExecutionResourceBudget(capBytes, capBytes)
 	firstGeneration, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	secondGeneration, err := budget.OpenGeneration(2)
@@ -492,7 +492,7 @@ func TestAccountedRuntimeFilterUniqueKeysDegradeWithoutFailingHashBuild(t *testi
 	exprs := []*plan.Expr{newExpr(0, types.T_varchar.ToType())}
 
 	run := func(limit uint64, needUnique bool) (mpool.AllocationAccountSnapshot, bool) {
-		budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+		budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
 		generation, err := budget.OpenGeneration(1)
 		require.NoError(t, err)
 		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
@@ -535,7 +535,7 @@ func TestAccountedRuntimeFilterUniqueKeysDegradeWithoutFailingHashBuild(t *testi
 func TestSpillExpressionStorageUsesRetainedAccount(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	budget := process.MustNewHashBuildBudget(16<<20, 16<<20)
+	budget := process.MustNewExecutionResourceBudget(16<<20, 16<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
@@ -574,7 +574,7 @@ func TestSpillExpressionStorageHonorsAccountCapacity(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	run := func(limit uint64) (uint64, error) {
-		budget := process.MustNewHashBuildBudget(16<<20, 16<<20)
+		budget := process.MustNewExecutionResourceBudget(16<<20, 16<<20)
 		generation, err := budget.OpenGeneration(1)
 		require.NoError(t, err)
 		registry, err := mpool.NewAllocationAccountRegistry(1, 64)
@@ -657,7 +657,7 @@ func TestIssue26454ExpressionKeyBuildUsesActualCapacity(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+			budget := process.MustNewExecutionResourceBudget(capBytes, capBytes)
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
@@ -722,7 +722,7 @@ func TestPreparedParamExpressionExecutorRemainsConst(t *testing.T) {
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.True(t, result.IsConst())
-			require.Equal(t, 1, result.Length())
+			require.Equal(t, input.RowCount(), result.Length())
 		})
 	}
 }
@@ -1082,7 +1082,7 @@ func TestAccountedDedupScratchAndDeleteBitmapFollowJoinMapLifetime(t *testing.T)
 	const capBytes = uint64(64 << 20)
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	budget := process.MustNewExecutionResourceBudget(capBytes, capBytes)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 256)
@@ -1154,7 +1154,7 @@ func TestAccountedDedupBitmapExactBoundaryRollsBack(t *testing.T) {
 		{name: "exact", cap: 8},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			budget := process.MustNewHashBuildBudget(tc.cap, tc.cap)
+			budget := process.MustNewExecutionResourceBudget(tc.cap, tc.cap)
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 1)
@@ -1281,6 +1281,33 @@ func TestDedupBuildIgnoreOnlyMarksCandidateOwnOldKey(t *testing.T) {
 			require.Zero(t, hb.DelRows.Count())
 		})
 	}
+}
+
+func TestDedupBuildIgnoreReleasesAcceptedCandidateOldKey(t *testing.T) {
+	hb := newTestHashmapBuilder(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hb.IsDedup = true
+	hb.OnDuplicateAction = plan.Node_IGNORE
+	defer func() {
+		hb.Reset(proc, true)
+		hb.Free(proc)
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, 1, 2, nil, proc))
+	bat := makeIntKeyValueBatchWithReleaseMarker(
+		proc,
+		[]int32{2, 4},
+		[]int32{1, 2},
+		[]bool{false, true},
+	)
+	require.NoError(t, hb.CopyBuildBatch(bat, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	bat.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+	require.NotNil(t, hb.DelRows)
+	require.True(t, hb.DelRows.Contains(0), "the accepted row migration must release u=2")
 }
 
 func TestDedupBuildIgnorePrefersOriginalKeyOwner(t *testing.T) {
@@ -1621,6 +1648,23 @@ func makeIntKeyValueBatch(proc *process.Process, keys []int32, values []int32) *
 	return bat
 }
 
+func makeIntKeyValueBatchWithReleaseMarker(
+	proc *process.Process,
+	keys []int32,
+	values []int32,
+	released []bool,
+) *batch.Batch {
+	keyVec := testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	valueVec := testutil.MakeInt32Vector(values, nil, proc.Mp())
+	releasedVec := testutil.MakeBoolVector(released, nil, proc.Mp())
+	bat := batch.New([]string{"id", "v", "released"})
+	bat.SetVector(0, keyVec)
+	bat.SetVector(1, valueVec)
+	bat.SetVector(2, releasedVec)
+	bat.SetRowCount(len(keys))
+	return bat
+}
+
 func makeIntKeyValueBatchWithMarker(
 	proc *process.Process,
 	keys []int32,
@@ -1681,7 +1725,7 @@ func BenchmarkCopyBuildBatchAccounting(b *testing.B) {
 		proc.Mp(),
 	)
 	defer input.Clean(proc.Mp())
-	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	budget := process.MustNewExecutionResourceBudget(capBytes, capBytes)
 	generation, err := budget.OpenGeneration(1)
 	if err != nil {
 		b.Fatal(err)
@@ -1754,14 +1798,14 @@ func BenchmarkResidentHashBuildAccounting(b *testing.B) {
 					}
 					defer input.Clean(proc.Mp())
 
-					var generation *process.HashBuildBudgetGeneration
+					var generation *process.ExecutionResourceGeneration
 					registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
 					if err != nil {
 						b.Fatal(err)
 					}
 					var account *mpool.AllocationAccount
 					if controlled {
-						budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+						budget := process.MustNewExecutionResourceBudget(capBytes, capBytes)
 						generation, err = budget.OpenGeneration(1)
 						if err != nil {
 							b.Fatal(err)

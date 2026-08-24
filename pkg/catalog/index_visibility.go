@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,30 +16,46 @@ package catalog
 
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
-// IsIndexVisible reports the persisted visibility of an index.
+// GetIndexVisibility returns an explicitly persisted index visibility value.
 //
-// IndexDef.Visible predates optimizer visibility enforcement and is a proto3
-// bool, so old metadata cannot distinguish an omitted value from an explicitly
-// invisible index. VisibilitySet provides that distinction for newly written
-// metadata. Treating legacy metadata as visible preserves upgrade compatibility
-// instead of disabling every pre-existing index whose Visible field is absent.
-func IsIndexVisible(indexDef *plan.IndexDef) bool {
-	return indexDef != nil && (!indexDef.VisibilitySet || indexDef.Visible)
+// IndexDef.Visible is a legacy proto3 bool. Older constraints omit it for
+// ordinary visible indexes, so false alone cannot distinguish legacy default
+// visibility from an invisible index. Callers that need to reconstruct legacy
+// DDL must reconcile an unset value with mo_indexes.is_visible.
+//
+// Callers that can read authoritative catalog metadata must reconcile against
+// it before rendering a persisted source table. A context-free caller must not
+// reinterpret a marker/raw-field disagreement: existing planner code can carry
+// the proto3 zero value alongside a valid marker, and the raw field alone has
+// no freshness guarantee.
+func GetIndexVisibility(indexDef *plan.IndexDef) (visible bool, isSet bool) {
+	if indexDef == nil || indexDef.Option == nil {
+		return true, false
+	}
+	switch indexDef.Option.Visibility {
+	case plan.IndexOption_VISIBILITY_VISIBLE:
+		return true, true
+	case plan.IndexOption_VISIBILITY_INVISIBLE:
+		return false, true
+	default:
+		return true, false
+	}
 }
 
-// IsIndexOptimizerEligible reports whether an index may participate in query
-// optimization. Keep this policy boundary separate from index maintenance:
-// invisible indexes remain physically maintained and continue enforcing unique
-// constraints even though the optimizer must not select them.
-func IsIndexOptimizerEligible(indexDef *plan.IndexDef) bool {
-	return IsIndexVisible(indexDef)
-}
-
-// SetIndexVisibility records an explicit visibility value on an IndexDef.
+// SetIndexVisibility persists index visibility without relying on the legacy
+// IndexDef.Visible bool. Keep that field synchronized for code paths that
+// still carry it, but use IndexOption.Visibility for new durable metadata.
 func SetIndexVisibility(indexDef *plan.IndexDef, visible bool) {
 	if indexDef == nil {
 		return
 	}
+	if indexDef.Option == nil {
+		indexDef.Option = &plan.IndexOption{}
+	}
 	indexDef.Visible = visible
-	indexDef.VisibilitySet = true
+	if visible {
+		indexDef.Option.Visibility = plan.IndexOption_VISIBILITY_VISIBLE
+	} else {
+		indexDef.Option.Visibility = plan.IndexOption_VISIBILITY_INVISIBLE
+	}
 }

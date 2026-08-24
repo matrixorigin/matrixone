@@ -22,8 +22,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -49,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -62,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -211,6 +211,57 @@ func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	snapshot := ses.diagnosticsSnapshot()
 	snapshot.codes[0] = 2000
 	require.Equal(t, uint16(1001), ses.diagnosticsSnapshot().codes[0])
+}
+
+func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: MoDefaultErrorCount},
+	}
+	ses.appendErrorDiagnostic(1064, "syntax error")
+	ses.appendWarningDiagnostic(1329, "No data")
+
+	execCtx := &ExecCtx{reqCtx: context.Background(), stmt: &tree.ShowErrors{}}
+	require.NoError(t, doShowErrors(ses, execCtx))
+	require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetRowCount())
+	level, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, "Error", level)
+	code, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 1)
+	require.NoError(t, err)
+	require.Equal(t, "1064", code)
+
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	execCtx.stmt = &tree.ShowWarnings{}
+	require.NoError(t, doShowErrors(ses, execCtx))
+	require.Equal(t, uint64(2), ses.GetMysqlResultSet().GetRowCount())
+	level, err = ses.GetMysqlResultSet().GetString(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, "Warning", level)
+}
+
+func TestSetNewResponseIncludesWarningDiagnostics(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.appendWarningDiagnostic(1329, "No data")
+
+	resp := ses.SetNewResponse(OkResponse, 0, int(COM_QUERY), "", true)
+	require.Equal(t, uint16(1), resp.warnings)
+}
+
+func TestAppendWarningBatchBoundsRecordsAndPreservesTotal(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: 3}}
+	ses.AppendWarningBatch(
+		100,
+		[]uint16{1, 2, 3, 4},
+		[]string{"one", "two", "three", "four"},
+	)
+
+	info := ses.diagnosticsSnapshot()
+	require.Len(t, info.codes, 3)
+	require.Equal(t, []uint16{2, 3, 4}, info.codes)
+	require.Equal(t, uint16(100), info.warningCount())
 }
 
 func TestHandleSetTransaction(t *testing.T) {
@@ -746,6 +797,167 @@ func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
 				require.Equal(t, txn.TxnIsolation_SI, isolation)
 				require.Equal(t, txn.TxnIsolation_SI, createTxn())
 				require.Equal(t, txn.TxnIsolation_SI, createTxn())
+			})
+		}
+	})
+}
+
+func TestConsumedNextTransactionAssignmentBecomesReplayable(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		sql := "set transaction isolation level read committed"
+		stmt, err := mysql.ParseOne(ctx, sql, 1)
+		require.NoError(t, err)
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		execCtx.singleStatementQuery = true
+		execCtx.sqlOfStmt = sql
+		require.NoError(t, handleSetTransaction(ses, execCtx, stmt.(*tree.SetTransaction)))
+		require.True(t, ses.hasUnreplayableMigrationSystemVars())
+
+		handler := ses.GetTxnHandler()
+		handler.mu.Lock()
+		err = handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses, stmt: &tree.Select{}})
+		op := handler.txnOp
+		handler.txnOp = nil
+		handler.mu.Unlock()
+		require.NoError(t, err)
+		require.NotNil(t, op)
+		require.NoError(t, op.Rollback(ctx))
+		require.False(t, ses.hasUnreplayableMigrationSystemVars())
+	})
+}
+
+func TestPrepareDoesNotConsumeNextTransactionIsolation(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		execSQL := func(sql string) {
+			t.Helper()
+			stmt, err := mysql.ParseOne(ctx, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.NoError(t, err)
+		}
+		execSQL("set session transaction isolation level read committed")
+
+		prepare, err := mysql.ParseOne(ctx, "prepare s from select ?", 1)
+		require.NoError(t, err)
+		require.IsType(t, &tree.PrepareStmt{}, prepare)
+
+		prepareCases := []struct {
+			name string
+			stmt tree.Statement
+		}{
+			{name: "statement", stmt: prepare},
+			{name: "string", stmt: tree.NewPrepareString("s_string", "select ?")},
+			{name: "variable", stmt: tree.NewPrepareVar("s_variable", tree.NewVarExpr("sql", false, false, nil))},
+		}
+		for _, testCase := range prepareCases {
+			t.Run(testCase.name, func(t *testing.T) {
+				defer testCase.stmt.Free()
+				execSQL("set transaction isolation level repeatable read")
+
+				handler := ses.GetTxnHandler()
+				handler.mu.Lock()
+				err = handler.createTxnOpUnsafe(&ExecCtx{
+					reqCtx: ctx, ses: ses, stmt: testCase.stmt,
+					txnOpt: FeTxnOption{autoCommit: true},
+				})
+				op := handler.txnOp
+				handler.txnOp = nil
+				handler.mu.Unlock()
+				require.NoError(t, err)
+				require.NotNil(t, op)
+				require.Equal(t, txn.TxnIsolation_RC, op.Txn().Isolation)
+				require.NoError(t, op.Rollback(ctx))
+
+				nextIsolation, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+				require.True(t, hasNextIsolation)
+				require.Equal(t, txn.TxnIsolation_SI, nextIsolation)
+
+				handler.mu.Lock()
+				err = handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses, stmt: &tree.Select{}})
+				applicationOp := handler.txnOp
+				handler.txnOp = nil
+				handler.mu.Unlock()
+				require.NoError(t, err)
+				require.NotNil(t, applicationOp)
+				require.Equal(t, txn.TxnIsolation_SI, applicationOp.Txn().Isolation)
+				require.NoError(t, applicationOp.Rollback(ctx))
+				_, hasNextIsolation = handler.nextTxnIsolationSnapshot()
+				require.False(t, hasNextIsolation)
+			})
+		}
+	})
+}
+
+func TestPrepareConsumesNextTransactionIsolationWhenAutocommitOff(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		for _, testCase := range []struct {
+			name string
+			stmt tree.Statement
+		}{
+			{name: "statement", stmt: tree.NewPrepareStmt("s", &tree.Select{})},
+			{name: "string", stmt: tree.NewPrepareString("s_string", "select ?")},
+			{name: "variable", stmt: tree.NewPrepareVar("s_variable", tree.NewVarExpr("sql", false, false, nil))},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				ctrl := gomock.NewController(t)
+				ses := newTestSession(t, ctrl)
+				defer ses.Close()
+				originalTxnClient := getPu("").TxnClient
+				defer func() { getPu("").TxnClient = originalTxnClient }()
+				getPu("").TxnClient = realTxnClient
+
+				handler := ses.GetTxnHandler()
+				handler.setSessionTxnIsolation(txn.TxnIsolation_RC)
+				require.NoError(t, handler.setNextTxnIsolation(ctx, txn.TxnIsolation_SI, false))
+				execCtx := &ExecCtx{
+					reqCtx: ctx,
+					ses:    ses,
+					stmt:   testCase.stmt,
+					txnOpt: FeTxnOption{
+						autoCommit:            false,
+						activeTxnAtStartKnown: true,
+						activeTxnAtStart:      false,
+					},
+				}
+				t.Cleanup(testCase.stmt.Free)
+
+				handler.mu.Lock()
+				handler.optionBits = OPTION_NOT_AUTOCOMMIT
+				handler.serverStatus = uint32(SERVER_STATUS_IN_TRANS)
+				err := handler.createTxnOpUnsafe(execCtx)
+				handler.mu.Unlock()
+				require.NoError(t, err)
+				require.NoError(t, handler.Commit(execCtx))
+				require.True(t, handler.InActiveTxn())
+				require.Equal(t, txn.TxnIsolation_SI, handler.GetTxn().Txn().Isolation)
+				_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+				require.False(t, hasNextIsolation)
+
+				handler.mu.Lock()
+				op := handler.txnOp
+				handler.txnOp = nil
+				handler.mu.Unlock()
+				require.NoError(t, op.Rollback(ctx))
+				require.False(t, handler.InActiveTxn())
 			})
 		}
 	})
@@ -1774,6 +1986,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		}
 
 		batchCase1 := genBatch()
+		defer batchCase1.Clean(mp)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 
@@ -1789,6 +2002,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			}
 			return bat
 		}()
+		defer batchCase2.Clean(mp)
 
 		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
@@ -1862,6 +2076,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			}
 			return bat
 		}()
+		defer batchCase2.Clean(mp)
 
 		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
@@ -2379,6 +2594,123 @@ func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T)
 	}
 }
 
+func TestRebuildStaleCachedStatementsTransfersOwnership(t *testing.T) {
+	for _, testCase := range []struct {
+		name             string
+		cachedSQL        string
+		rebuildSQL       string
+		wantRebuildError bool
+	}{
+		{name: "single statement", cachedSQL: "select 1"},
+		{name: "multiple statements", cachedSQL: "select 1; select 2"},
+		{
+			name:             "reparse error",
+			cachedSQL:        "select 1",
+			rebuildSQL:       "select from",
+			wantRebuildError: true,
+		},
+		{
+			name:             "statement count mismatch",
+			cachedSQL:        "select 1",
+			rebuildSQL:       "select 1; select 2",
+			wantRebuildError: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			ses.planCache = newPlanCache(2)
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			input := &UserInput{sql: testCase.cachedSQL}
+			input.genHash()
+
+			parsed, err := parsers.Parse(ctx, dialect.MYSQL, testCase.cachedSQL, 1)
+			require.NoError(t, err)
+			cachedStmts := make([]tree.Statement, len(parsed))
+			cachedPlans := make([]*plan.Plan, len(parsed))
+			tracked := make([]*trackedStatement, len(parsed))
+			for i := range parsed {
+				parsed[i].Free()
+				tracked[i] = &trackedStatement{}
+				cachedStmts[i] = tracked[i]
+				cachedPlans[i] = &plan.Plan{}
+			}
+			ses.cachePlan(input.getHash(), cachedStmts, cachedPlans)
+			t.Cleanup(ses.planCache.clean)
+
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			execCtx.input = input
+			cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+			require.NoError(t, err)
+			require.Len(t, cws, len(tracked))
+			t.Cleanup(func() {
+				for _, cw := range cws {
+					cw.Free()
+				}
+			})
+			execCtx.cws = cws
+			cacheBorrowed := make([]bool, len(cws))
+
+			for i, cw := range cws {
+				wrapper := cw.(*TxnComputationWrapper)
+				require.Same(t, tracked[i], wrapper.GetAst())
+				cacheBorrowed[i] = wrapper.stmtBorrowed
+			}
+
+			if testCase.rebuildSQL != "" {
+				// Preserve the cache key while varying only the stale-reparse
+				// outcome. This directly exercises cleanup after eviction.
+				input.sql = testCase.rebuildSQL
+			}
+			rebuildErr := rebuildStaleCachedStatements(ses, execCtx)
+			if testCase.wantRebuildError {
+				require.Error(t, rebuildErr)
+			} else {
+				require.NoError(t, rebuildErr)
+			}
+			require.False(t, ses.isCached(input.getHash()))
+			for i, cw := range cws {
+				wrapper := cw.(*TxnComputationWrapper)
+				require.Equal(t, 1, tracked[i].freed, "stale cached statement %d", i)
+				require.True(t, cacheBorrowed[i], "cache must own statement %d", i)
+				if testCase.wantRebuildError {
+					require.True(t, wrapper.stmtBorrowed)
+					require.Same(t, tracked[i], wrapper.GetAst())
+				} else {
+					require.False(t, wrapper.stmtBorrowed)
+					require.NotSame(t, tracked[i], wrapper.GetAst())
+				}
+				wrapper.Free()
+				require.Equal(t, 1, tracked[i].freed, "wrapper must not free stale statement %d again", i)
+			}
+		})
+	}
+}
+
+func TestRebuildStaleCachedStatementsRemapsModeTwoQualifiedColumns(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(2))
+
+	const sql = "insert into SrcMix.T(SrcMix.T.id, SrcMix.T.v) values (1, 10)"
+	wrapper := &TxnComputationWrapper{}
+	wrapper.SetRemapDb(map[string]string{"SrcMix": "DstMix"})
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{sql: sql}
+	execCtx.cws = []ComputationWrapper{wrapper}
+	execCtx.rewriteEnabled = true
+
+	require.NoError(t, rebuildStaleCachedStatements(ses, execCtx))
+	insert := wrapper.GetAst().(*tree.Insert)
+	require.Equal(t, tree.Identifier("DstMix"), insert.TargetDatabaseName)
+	require.Equal(t, "DstMix", insert.ColumnNames[0].DbNameOrigin())
+	require.Equal(t, "dstmix", insert.ColumnNames[0].DbName())
+}
+
 func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -2437,6 +2769,22 @@ func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("alter rename remaps qualified source and destination", func(t *testing.T) {
+		outerSQL, err := rewriteSQL(ctx, ses,
+			`prepare rename_stmt from 'alter table src.t rename to src.t2'`)
+		require.NoError(t, err)
+		execCtx.sqlOfStmt = outerSQL
+		_, stmt, remap, err := prepareStringStatement(execCtx, ses,
+			"alter table src.t rename to src.t2")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.Equal(t, "session_db", remap["src"])
+		formatted := tree.String(stmt, dialect.MYSQL)
+		require.Contains(t, formatted, "session_db.t")
+		require.Contains(t, formatted, "session_db.t2")
+		require.NotContains(t, formatted, "src.t")
+	})
 
 	t.Run("inner inline works without outer policy", func(t *testing.T) {
 		execCtx.sqlOfStmt = `prepare inline_only from 'select 1'`
@@ -2847,6 +3195,10 @@ func TestPrepareReplacementRemovesPreviousStatementBeforeTxnCheck(t *testing.T) 
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestGetPrepareStmtName(t *testing.T) {
+	require.Equal(t, "__mo_stmt_id_42", GetPrepareStmtName(42))
 }
 
 func TestHandlePrepareStmtNameContainingFrom(t *testing.T) {
@@ -3568,6 +3920,528 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	require.Zero(t, ses.diagnosticsSnapshot().length())
 }
 
+func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
+	writer := &testMysqlWriter{writeEOFOrOKFunc: func(uint16, uint16) error { return nil }}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr:      NewMysqlResp(writer),
+			txnHandler: &TxnHandler{},
+		},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	stmt := &PrepareStmt{
+		Name: getPrepareStmtName(271),
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{
+			Data: [][]interface{}{{int64(1)}, {int64(2)}, {int64(3)}},
+		}, owner: ses, bytes: 1, maxBytes: 1, maxRows: 3},
+	}
+	ses.preparedCursorLimit.Store(1)
+	ses.preparedCursorBytes.Store(1)
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 271)
+	binary.LittleEndian.PutUint32(data[4:8], 2)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.NotNil(t, stmt.cursor)
+	require.Equal(t, uint64(2), stmt.cursor.offset)
+
+	resp, err = executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestExecuteStmtFetchEmptyCursorClosesOnFirstFetch(t *testing.T) {
+	var status uint16
+	writer := &testMysqlWriter{writeEOFOrOKFunc: func(_, got uint16) error {
+		status = got
+		return nil
+	}}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr:      NewMysqlResp(writer),
+			txnHandler: &TxnHandler{},
+		},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	stmt := &PrepareStmt{
+		Name:   getPrepareStmtName(272),
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{}},
+	}
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 272)
+	binary.LittleEndian.PutUint32(data[4:8], 32)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, status&SERVER_STATUS_CURSOR_EXISTS)
+	require.NotZero(t, status&SERVER_STATUS_LAST_ROW_SENT)
+}
+
+func TestExecuteStmtFetchBitColumn(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+
+	conn := &testConn{}
+	ioses, err := NewIOSession(conn, pu, "")
+	require.NoError(t, err)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	t.Cleanup(proto.Close)
+	ses := NewSession(context.Background(), "", proto, nil)
+	proto.ses = ses
+	ses.SetCmd(COM_STMT_FETCH)
+	ses.prepareStmts = make(map[string]*PrepareStmt)
+
+	column := &MysqlColumn{}
+	column.SetName("b")
+	column.SetColumnType(defines.MYSQL_TYPE_BIT)
+	column.SetLength(8)
+	stmt := &PrepareStmt{
+		Name: getPrepareStmtName(273),
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{
+			Columns: []Column{column},
+			Data:    [][]any{{uint64(0xab)}},
+		}},
+	}
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 273)
+	binary.LittleEndian.PutUint32(data[4:8], 1)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Nil(t, stmt.cursor)
+	packets := splitProtocolPackets(t, conn.data)
+	require.Len(t, packets, 2)
+	// COM_STMT_FETCH uses a binary row: OK header, one-byte null bitmap,
+	// then the length-encoded BIT payload.  The value must be emitted as the
+	// requested one-byte big-endian representation, not as an unsupported
+	// generic uint64 value.
+	require.Equal(t, []byte{defines.OKHeader, 0, 1, 0xab}, packets[0])
+	require.Equal(t, byte(defines.EOFHeader), packets[1][0])
+}
+
+func TestNewPreparedStmtCursorUsesSessionBudget(t *testing.T) {
+	noSession := newPreparedStmtCursor(nil)
+	require.Equal(t, preparedCursorDefaultMaxBytes, noSession.maxBytes)
+	require.Equal(t, preparedCursorMaxRows, noSession.maxRows)
+
+	ses := &Session{}
+	ses.preparedCursorLimit.Store(8 * preparedCursorBytesPerMegabyte)
+	withSession := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(8*preparedCursorBytesPerMegabyte), withSession.maxBytes)
+	require.Same(t, ses, withSession.owner)
+}
+
+func TestPreparedCursorLimitFollowsDynamicSessionValue(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: map[string]interface{}{
+				QueryResultMaxsize: uint64(8),
+			}},
+		},
+	}
+
+	first := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(8*preparedCursorBytesPerMegabyte), first.maxBytes)
+
+	// Closing a cursor must not freeze the session budget. A subsequent
+	// cursor observes both decreases and increases to the dynamic variable.
+	ses.sesSysVars.Set(QueryResultMaxsize, uint64(1))
+	first.close()
+	second := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(preparedCursorBytesPerMegabyte), second.maxBytes)
+
+	// Lowering the limit while another cursor owns bytes rejects additional
+	// retention; raising it permits the next batch without losing accounting.
+	ses.preparedCursorBytes.Store(2 * preparedCursorBytesPerMegabyte)
+	require.False(t, ses.tryReservePreparedCursorBytes(preparedCursorBytesPerMegabyte, second.maxBytes))
+	ses.sesSysVars.Set(QueryResultMaxsize, uint64(4))
+	require.True(t, ses.tryReservePreparedCursorBytes(preparedCursorBytesPerMegabyte, second.maxBytes))
+	ses.releasePreparedCursorBytes(3 * preparedCursorBytesPerMegabyte)
+	second.close()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	third := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(4*preparedCursorBytesPerMegabyte), third.maxBytes)
+	third.close()
+}
+
+func TestPreparedCursorLimitHonorsExplicitZero(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: map[string]interface{}{
+				QueryResultMaxsize: uint64(0),
+			}},
+		},
+	}
+	cursor := newPreparedStmtCursor(ses)
+	require.True(t, cursor.maxBytesSet)
+	require.Zero(t, cursor.maxBytes)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 1)
+	defer bat.Clean(mp)
+	stmt := &PrepareStmt{cursor: cursor}
+	err := capturePreparedCursorBatch(ses, &ExecCtx{
+		reqCtx:      context.Background(),
+		prepareStmt: stmt,
+	}, bat)
+	require.ErrorContains(t, err, "memory limit")
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	stmt.closeCursor()
+}
+
+func TestEstimatePreparedCursorBatchBytesIncludesArrayDisplay(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := vector.NewVec(types.T_array_uint8.ToType())
+	values := make([]uint8, types.MaxArrayDimension)
+	for i := range values {
+		values[i] = 255
+	}
+	require.NoError(t, vector.AppendArray(vec, values, false, mp))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+	displayBytes := uint64(len(types.ArrayToString(values)))
+	require.GreaterOrEqual(t, estimated, displayBytes)
+}
+
+func TestEstimatePreparedCursorMaterializedBytesArrayAndDecimalFamilies(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	arrayCases := []struct {
+		name string
+		make func(*vector.Vector) error
+	}{
+		{name: "float32", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []float32{1.25, 2.5}, false, mp)
+		}},
+		{name: "float64", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []float64{1.25, 2.5}, false, mp)
+		}},
+		{name: "bf16", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []types.BF16{1, 2}, false, mp)
+		}},
+		{name: "float16", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []types.Float16{1, 2}, false, mp)
+		}},
+		{name: "int8", make: func(vec *vector.Vector) error {
+			return vector.AppendArray(vec, []int8{1, 2}, false, mp)
+		}},
+	}
+	for _, tc := range arrayCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var oid types.T
+			switch tc.name {
+			case "float32":
+				oid = types.T_array_float32
+			case "float64":
+				oid = types.T_array_float64
+			case "bf16":
+				oid = types.T_array_bf16
+			case "float16":
+				oid = types.T_array_float16
+			case "int8":
+				oid = types.T_array_int8
+			}
+			vec := vector.NewVec(oid.ToType())
+			require.NoError(t, tc.make(vec))
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+			estimated, err := estimatePreparedCursorMaterializedBytes(bat)
+			require.NoError(t, err)
+			require.Positive(t, estimated)
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		text string
+	}{
+		{name: "decimal64", typ: types.New(types.T_decimal64, 18, 2), text: "12.34"},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 4), text: "1234.5678"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ)
+			switch tc.typ.Oid {
+			case types.T_decimal64:
+				value, err := types.ParseDecimal64(tc.text, tc.typ.Width, tc.typ.Scale)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			case types.T_decimal128:
+				value, err := types.ParseDecimal128(tc.text, tc.typ.Width, tc.typ.Scale)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+			estimated, err := estimatePreparedCursorMaterializedBytes(bat)
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, estimated, uint64(len(tc.text)+32))
+		})
+	}
+}
+
+func TestPreparedCursorDecimal256MaterializationBoundAndRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	typ := types.New(types.T_decimal256, 65, 0)
+	value, err := types.ParseDecimal256(strings.Repeat("9", 65), typ.Width, typ.Scale)
+	require.NoError(t, err)
+	vec := vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	display := value.Format(typ.Scale)
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, estimated, uint64(len(display))+32)
+
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: estimated - 1,
+		maxRows:  1,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+	err = capturePreparedCursorBatch(ses, ctx, bat)
+	require.ErrorContains(t, err, "memory limit")
+	require.Empty(t, stmt.cursor.result.Data)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+
+	stmt.cursor.maxBytes = estimated
+	require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+	require.Equal(t, display, stmt.cursor.result.Data[0][0])
+	stmt.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	points := make([]geo.Coord, 5000)
+	for i := range points {
+		points[i] = geo.Coord{X: float64(i) + 0.123456, Y: float64(i%97) + 0.654321}
+	}
+	line := geo.LineString{Points: points}
+
+	for _, tc := range []struct {
+		name    string
+		typ     types.T
+		payload []byte
+	}{
+		{name: "geometry", typ: types.T_geometry, payload: geo.WriteWKB(line)},
+		{name: "geometry32", typ: types.T_geometry32, payload: geo.WriteWKBFloat32(line)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ.ToType())
+			require.NoError(t, vector.AppendBytes(vec, tc.payload, false, mp))
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+
+			wantText, err := planfunction.GeometryPayloadToText(tc.payload)
+			require.NoError(t, err)
+			estimated, err := estimatePreparedCursorBatchBytes(bat)
+			require.NoError(t, err)
+			// The WKT allocation is retained in cursor.result.Data. The
+			// reservation must include it in addition to the compact WKB.
+			require.GreaterOrEqual(t, estimated, uint64(len(wantText))+32)
+
+			ses := &Session{}
+			stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+				result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+				maxBytes: estimated - 1,
+				maxRows:  1,
+			}}
+			ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+			err = capturePreparedCursorBatch(ses, ctx, bat)
+			require.ErrorContains(t, err, "memory limit")
+			require.Empty(t, stmt.cursor.result.Data)
+			require.Zero(t, ses.preparedCursorBytes.Load())
+
+			stmt.cursor.maxBytes = estimated
+			require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+			require.Equal(t, []byte(wantText), stmt.cursor.result.Data[0][0])
+			stmt.closeCursor()
+			require.Zero(t, ses.preparedCursorBytes.Load())
+		})
+	}
+}
+
+func TestPreparedCursorHelpersRejectInvalidStateAndReleaseSafely(t *testing.T) {
+	require.NoError(t, func() error {
+		_, err := estimatePreparedCursorBatchBytes(nil)
+		return err
+	}())
+	require.True(t, (&Session{}).tryReservePreparedCursorBytes(0, 0))
+	fallbackSession := &Session{}
+	require.True(t, fallbackSession.tryReservePreparedCursorBytes(1, 2))
+	fallbackSession.releasePreparedCursorBytes(1)
+	var nilSession *Session
+	require.True(t, nilSession.tryReservePreparedCursorBytes(1, 1))
+	nilSession.releasePreparedCursorBytes(1)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 1)
+	defer bat.Clean(mp)
+	require.NoError(t, capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background()}, nil))
+	require.Error(t, capturePreparedCursorBatch(&Session{}, nil, bat))
+	require.Error(t, capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background()}, bat))
+
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: preparedCursorDefaultMaxBytes,
+		maxRows:  preparedCursorMaxRows,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+	require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+	require.Same(t, ses, stmt.cursor.owner)
+	stmt.closeCursor()
+
+	ses.preparedCursorBytes.Store(3)
+	ses.releasePreparedCursorBytes(5)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	ses.releasePreparedCursorBytes(1)
+}
+
+func TestCapturePreparedCursorBatchEnforcesRowAndCursorLimits(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 2)
+	defer bat.Clean(mp)
+
+	rowLimited := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{int64(1)}}},
+		maxRows:  1,
+		maxBytes: preparedCursorDefaultMaxBytes,
+	}}
+	err := capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background(), prepareStmt: rowLimited}, bat)
+	require.ErrorContains(t, err, "row limit")
+
+	sized := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxRows:  preparedCursorMaxRows,
+		maxBytes: 1,
+	}}
+	err = capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background(), prepareStmt: sized}, bat)
+	require.ErrorContains(t, err, "memory limit")
+}
+
+func TestCapturePreparedCursorBatchBoundsAndReleasesSessionBudget(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 4096)
+	defer bat.Clean(mp)
+
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: estimated,
+		maxRows:  4096,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+
+	require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+	require.Equal(t, uint64(4096), stmt.cursor.result.GetRowCount())
+	require.Equal(t, estimated, ses.preparedCursorBytes.Load())
+
+	// The next batch is rejected before another row is copied into the
+	// retained result, and the cursor still owns exactly the first batch.
+	err = capturePreparedCursorBatch(ses, ctx, bat)
+	require.ErrorContains(t, err, "prepared cursor result exceeds the")
+	require.Equal(t, uint64(4096), stmt.cursor.result.GetRowCount())
+
+	stmt.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestCapturePreparedCursorBatchErrorReleasesSessionBudget(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"unsupported"}, []types.Type{types.T_any.ToType()}, 1)
+	defer bat.Clean(mp)
+
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: preparedCursorDefaultMaxBytes,
+		maxRows:  preparedCursorMaxRows,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+
+	err := capturePreparedCursorBatch(ses, ctx, bat)
+	require.Error(t, err)
+	require.Empty(t, stmt.cursor.result.Data)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	stmt.closeCursor()
+}
+
+func TestPreparedCursorSessionBudgetCoversMultipleCursors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 4)
+	defer bat.Clean(mp)
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+
+	ses := &Session{}
+	first := &PrepareStmt{cursor: &preparedStmtCursor{
+		result: &MysqlResultSet{Columns: []Column{&MysqlColumn{}}}, maxBytes: estimated, maxRows: 4,
+	}}
+	second := &PrepareStmt{cursor: &preparedStmtCursor{
+		result: &MysqlResultSet{Columns: []Column{&MysqlColumn{}}}, maxBytes: estimated, maxRows: 4,
+	}}
+	firstCtx := &ExecCtx{reqCtx: context.Background(), prepareStmt: first}
+	secondCtx := &ExecCtx{reqCtx: context.Background(), prepareStmt: second}
+
+	require.NoError(t, capturePreparedCursorBatch(ses, firstCtx, bat))
+	err = capturePreparedCursorBatch(ses, secondCtx, bat)
+	require.ErrorContains(t, err, "prepared cursor session result exceeds")
+	require.Equal(t, estimated, ses.preparedCursorBytes.Load())
+
+	first.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	require.NoError(t, capturePreparedCursorBatch(ses, secondCtx, bat))
+	second.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
 func Test_CMD_FIELD_LIST(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	convey.Convey("cmd field list", t, func() {
@@ -3684,8 +4558,30 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetTransaction{}), convey.ShouldBeFalse)
-		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetTransaction{}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			ses:  &backSession{},
+			stmt: &tree.CreateSequence{},
+		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			ses:  &backSession{},
+			stmt: &tree.DropSequence{},
+		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.SetVar{},
+			txnOpt: FeTxnOption{
+				activeTxnAtStartKnown: true,
+				activeTxnAtStart:      false,
+			},
+		}), convey.ShouldBeTrue)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.SetVar{},
+			txnOpt: FeTxnOption{
+				activeTxnAtStartKnown: true,
+				activeTxnAtStart:      true,
+			},
+		}), convey.ShouldBeFalse)
 		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
 			stmt: &tree.SetTransaction{},
 			txnOpt: FeTxnOption{
@@ -4650,6 +5546,19 @@ func TestPreparedSetExpressionPlanModeIsExplicit(t *testing.T) {
 	require.Equal(t, []int32{0}, queryParamPositions(preparedPlan.GetQuery()))
 }
 
+func TestBuildPlanWithPrepareModeAllowsMissingCompilerProcess(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select 1", 1)
+	require.NoError(t, err)
+
+	compCtx := plan.NewEmptyCompilerContext()
+	compCtx.GetProcessFunc = func() *process.Process { return nil }
+	compCtx.SetContext(nil)
+	_, err = buildPlanWithPrepareMode(ctx, nil, compCtx, stmt, false)
+	require.NoError(t, err)
+	require.NotNil(t, compCtx.GetContext())
+}
+
 func TestPreparedSetExpressionPlanKeepsGlobalParserOrdinal(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ?, ? from dual", 1)
@@ -5306,6 +6215,35 @@ func TestDirectSessionStrictPoolWithoutLabelSelectorFailsClosed(t *testing.T) {
 	require.Equal(t, "strict-missing-label-selector", trace.Attempts[0].Query.PoolFallbackReason)
 	require.Equal(t, 2, trace.Attempts[0].Query.DiscoveredCount)
 	require.Zero(t, trace.Attempts[0].Query.ResolvedCount)
+}
+
+func TestWriteExplainResultSetsValidTextMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ctx := context.Background()
+	query := &plan0.Query{
+		StmtType: plan0.Query_DELETE,
+		Nodes:    []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps:    []int32{0},
+	}
+
+	err := writeExplainResult(
+		ctx,
+		ses,
+		tree.NewExplainStmt(&tree.Delete{}, "text"),
+		&plan0.Plan{Plan: &plan0.Plan_Query{Query: query}},
+		explain.NewExplainDefaultOptions(),
+		"",
+		nil,
+	)
+	require.NoError(t, err)
+
+	column, err := ses.GetMysqlResultSet().GetColumn(ctx, 0)
+	require.NoError(t, err)
+	mysqlColumn := column.(*MysqlColumn)
+	require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, mysqlColumn.ColumnType())
+	require.Equal(t, uint16(charsetVarchar), mysqlColumn.Charset())
+	require.Equal(t, uint32(math.MaxUint32), mysqlColumn.Length())
 }
 
 func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testing.T) {
@@ -6575,87 +7513,6 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 	})
 }
 
-func Test_ExecRequest_SidecarSuccess(t *testing.T) {
-	ctx := context.TODO()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	saved := debugHTTPAddr
-	defer func() { debugHTTPAddr = saved }()
-	debugHTTPAddr = ":8888"
-
-	// Mock sidecar returning a valid JSONCompact response.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"meta":[{"name":"x","type":"INTEGER"}],"data":[[42]],"rows":1}`))
-	}))
-	defer srv.Close()
-
-	ses := newTestSession(t, ctrl)
-	ses.txnHandler = &TxnHandler{}
-	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
-	require.NoError(t, err)
-	ses.SetDatabaseName("testdb")
-	setRowCount(ses, ses.GetProc(), 7)
-	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
-
-	ec := newTestExecCtx(ctx, ctrl)
-	req := &Request{
-		cmd:  COM_QUERY,
-		data: []byte("/*+ SIDECAR */ SELECT 42 AS x FROM testdb.t1"),
-	}
-
-	resp, err := ExecRequest(ses, ec, req)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, ResultResponse, resp.category)
-	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
-	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
-	assert.Zero(t, ses.diagnosticsSnapshot().length())
-}
-
-func Test_ExecRequest_SidecarError(t *testing.T) {
-	ctx := context.TODO()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	saved := debugHTTPAddr
-	defer func() { debugHTTPAddr = saved }()
-	debugHTTPAddr = ":8888"
-
-	// Mock sidecar that returns 500.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("boom"))
-	}))
-	defer srv.Close()
-
-	ses := newTestSession(t, ctrl)
-	ses.txnHandler = &TxnHandler{}
-	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
-	require.NoError(t, err)
-	ses.SetDatabaseName("testdb")
-	setRowCount(ses, ses.GetProc(), 7)
-	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
-
-	ec := newTestExecCtx(ctx, ctrl)
-	req := &Request{
-		cmd:  COM_QUERY,
-		data: []byte("/*+ SIDECAR */ SELECT 1 FROM testdb.t1"),
-	}
-
-	resp, err := ExecRequest(ses, ec, req)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	// Should be an error response (from sidecar), not a success.
-	assert.Equal(t, ErrorResponse, resp.category)
-	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
-	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
-	// Sending the response records the current sidecar error later; ExecRequest
-	// must first discard diagnostics from the preceding statement.
-	assert.Zero(t, ses.diagnosticsSnapshot().length())
-}
-
 func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 	for _, cmd := range []CommandType{COM_QUERY, COM_STMT_PREPARE} {
 		t.Run(cmd.String(), func(t *testing.T) {
@@ -6761,6 +7618,74 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, setVar.Assignments, 2)
 	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 2)
+
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{"review27190.t": "delete from review27190.t"}
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("set @native_invalid = ?"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+
+	ses.ruleCache = map[string]string{"review27190.t": "select 1"}
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("select 1"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	selected, ok := prepared.PrepareStmt.(*tree.Select)
+	require.True(t, ok)
+	require.NotNil(t, selected.RewriteOption)
+	require.Len(t, selected.RewriteOption.Rewrites["review27190.t"], 1)
+
+	ses.rewriteEnabled.Store(false)
+	const sidecarSQL = "/*+ SIDECAR */ select 1"
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte(sidecarSQL),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.Equal(t, sidecarSQL, strings.TrimSpace(prepared.Sql))
+
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte(`/*+ {"rewrites": } */ select 1`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{"review27190.t": "select 1"}
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte(`/*+ {"rewrites": } */ select 1`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+
+	ses.rewriteEnabled.Store(false)
+	const nonPolicyJSON = `/*+ {"optimizer":"keep"} */ select 1`
+	resp, err = ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_PREPARE, data: []byte(nonPolicyJSON)})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.Equal(t, nonPolicyJSON, strings.TrimSpace(prepared.Sql))
 }
 
 func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.T) {
@@ -6905,16 +7830,12 @@ func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 	}
 }
 
-func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
-	// SIDECAR hint present but sidecar not configured → strips hint, falls through.
-	// doComQuery will fail (no engine), but we verify the fallthrough happened.
+func Test_ExecRequest_SidecarHintUsesNormalQueryPath(t *testing.T) {
+	// The hint is stripped and carried as compile intent. With no service Sirius
+	// runtime, compilation remains on the normal native query path.
 	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-
-	saved := debugHTTPAddr
-	defer func() { debugHTTPAddr = saved }()
-	debugHTTPAddr = "" // no manifest URL → errSidecarNotConfigured
 
 	ses := newTestSession(t, ctrl)
 	ses.txnHandler = &TxnHandler{}
@@ -7632,6 +8553,93 @@ func Test_checkModify(t *testing.T) {
 			assert.Nil(t, err)
 		}
 	}
+}
+
+func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {
+	snapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+	}
+	dependency := &plan.ObjectRef{
+		SchemaName: "test_db",
+		ObjName:    "test_view",
+		Server:     3,
+		Obj:        20,
+		Snapshot:   snapshot,
+	}
+	queryPlan := &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{CatalogDependencies: []*plan.ObjectRef{dependency}},
+		},
+	}
+
+	for _, testCase := range []struct {
+		name            string
+		resolved        *plan.TableDef
+		expectedChanged bool
+	}{
+		{
+			name:            "unchanged",
+			resolved:        &plan.TableDef{Version: 3, TblId: 20},
+			expectedChanged: false,
+		},
+		{
+			name:            "missing",
+			expectedChanged: true,
+		},
+		{
+			name:            "version changed",
+			resolved:        &plan.TableDef{Version: 4, TblId: 20},
+			expectedChanged: true,
+		},
+		{
+			name:            "identity changed",
+			resolved:        &plan.TableDef{Version: 3, TblId: 21},
+			expectedChanged: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			changed, err := checkModify(queryPlan, func(
+				databaseName string,
+				tableName string,
+				gotSnapshot *plan.Snapshot,
+			) (*plan.ObjectRef, *plan.TableDef, error) {
+				require.Equal(t, "test_db", databaseName)
+				require.Equal(t, "test_view", tableName)
+				require.Same(t, snapshot, gotSnapshot)
+				return nil, testCase.resolved, nil
+			})
+			require.NoError(t, err)
+			require.Equal(t, testCase.expectedChanged, changed)
+		})
+	}
+
+	t.Run("subscription uses logical database", func(t *testing.T) {
+		subscriptionDependency := &plan.ObjectRef{
+			SchemaName:       "publisher_physical_db",
+			SubscriptionName: "subscriber_alias",
+			ObjName:          "scanless_view",
+			Server:           3,
+			Obj:              20,
+		}
+		subscriptionPlan := &plan.Plan{
+			Plan: &plan.Plan_Query{
+				Query: &plan.Query{CatalogDependencies: []*plan.ObjectRef{subscriptionDependency}},
+			},
+		}
+
+		changed, err := checkModify(subscriptionPlan, func(
+			databaseName string,
+			tableName string,
+			gotSnapshot *plan.Snapshot,
+		) (*plan.ObjectRef, *plan.TableDef, error) {
+			require.Equal(t, "subscriber_alias", databaseName)
+			require.Equal(t, "scanless_view", tableName)
+			require.Nil(t, gotSnapshot)
+			return nil, &plan.TableDef{Version: 3, TblId: 20}, nil
+		})
+		require.NoError(t, err)
+		require.False(t, changed)
+	})
 }
 
 // testMysqlWriterWithError is a test mysql writer that can return error from ParseSendLongData

@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
 	"github.com/prashantv/gostub"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -34,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -45,6 +46,25 @@ import (
 const (
 	ModuleName = "Backup"
 )
+
+func appendBatchesConcurrently(
+	t *testing.T,
+	batches []*containers.Batch,
+	relation string,
+	engine *db.DB,
+) {
+	t.Helper()
+
+	// The fixture bounds batches to a small finite set. One goroutine per batch
+	// preserves concurrent-append coverage without a worker pool and its
+	// purge/ticktock goroutines.
+	var wg sync.WaitGroup
+	wg.Add(len(batches))
+	for _, data := range batches {
+		go testutil.AppendClosure(t, data, relation, engine, &wg)()
+	}
+	wg.Wait()
+}
 
 func TestExecBackupRejectsIncompleteCheckpointResponse(t *testing.T) {
 	testCases := []struct {
@@ -127,17 +147,8 @@ func TestBackupData(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(100)
 
-	var wg sync.WaitGroup
-	pool, _ := ants.NewPool(80)
-	defer pool.Release()
-
 	start := time.Now()
-	for _, data := range bats {
-		wg.Add(1)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
-		assert.Nil(t, err)
-	}
-	wg.Wait()
+	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 
 	deletedRows := 0
@@ -242,21 +253,15 @@ func TestBackupData2(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(100)
 
-	var wg sync.WaitGroup
-	pool, _ := ants.NewPool(80)
-	defer pool.Release()
-
 	start := time.Now()
-	for _, data := range bats {
-		wg.Add(1)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
-		assert.Nil(t, err)
-	}
-	wg.Wait()
+	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
 	opts = config.WithLongScanAndCKPOpts(nil)
-	testutils.WaitExpect(5000, func() bool {
+	// Restart only after the quick-checkpoint generation has been observed.
+	// Use a generous outer guard for loaded race builders; successful runs
+	// return on the first observed watermark.
+	require.Eventually(t, func() bool {
 		return db.DiskCleaner.GetCleaner().GetScanWaterMark() != nil
-	})
+	}, 30*time.Second, 50*time.Millisecond, "scan watermark was not produced before restart")
 	db.Restart(ctx, opts)
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 	deletedRows := 0
@@ -506,17 +511,8 @@ func TestBackupData5(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(100)
 
-	var wg sync.WaitGroup
-	pool, _ := ants.NewPool(80)
-	defer pool.Release()
-
 	start := time.Now()
-	for _, data := range bats {
-		wg.Add(1)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema.Name, db.DB, &wg))
-		assert.Nil(t, err)
-	}
-	wg.Wait()
+	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
 
 	deletedRows := 0

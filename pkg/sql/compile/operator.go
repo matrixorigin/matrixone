@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -228,6 +229,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.CanSkipProbe = t.CanSkipProbe
+		op.EmitCompressedRowCount = t.EmitCompressedRowCount
 		op.IsShuffle = t.IsShuffle
 		if !t.IsShuffle {
 			mailbox := dupCtx.hashJoinMailboxes[t]
@@ -325,6 +327,24 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 			op.TopValueTag = t.TopValueTag + int32(index)<<16
 		}
 		op.Fs = t.Fs
+		op.SetInfo(&info)
+		return op
+	case vm.Partition:
+		t := sourceOp.(*partition.Partition)
+		op := partition.NewArgument()
+		op.OrderBySpecs = t.OrderBySpecs
+		op.Limit = t.Limit
+		op.PartitionByCount = t.PartitionByCount
+		op.PreReduce = t.PreReduce
+		op.SetInfo(&info)
+		return op
+	case vm.Window:
+		t := sourceOp.(*window.Window)
+		op := window.NewArgument()
+		op.WinSpecList = t.WinSpecList
+		op.Fs = t.Fs
+		op.Aggs = t.Aggs
+		op.PartitionTopN = t.PartitionTopN
 		op.SetInfo(&info)
 		return op
 	case vm.MergeTop:
@@ -532,6 +552,10 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
 		op.RejectZeroTemporal = t.RejectZeroTemporal
+		op.HasTargetSelector = t.HasTargetSelector
+		op.TargetRowNumberCol = t.TargetRowNumberCol
+		op.TargetActiveCol = t.TargetActiveCol
+		op.TargetRowIDCol = t.TargetRowIDCol
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -582,19 +606,24 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.TableFunction = table_function.NewArgument()
-		op.TableFunction.FuncName = t.TableFunction.FuncName
-		op.TableFunction.Args = t.TableFunction.Args
-		op.TableFunction.Rets = t.TableFunction.Rets
-		op.TableFunction.Attrs = t.TableFunction.Attrs
-		op.TableFunction.Params = t.TableFunction.Params
-		op.TableFunction.IsSingle = t.TableFunction.IsSingle
-		op.TableFunction.Limit = t.TableFunction.Limit
-		op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
-		op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
-		op.TableFunction.FulltextSourceRef = t.TableFunction.FulltextSourceRef
-		op.TableFunction.FulltextIndexRef = t.TableFunction.FulltextIndexRef
-		op.TableFunction.SetInfo(&info)
+		op.VectorIndexScan = plan2.DeepCopyVectorIndexScan(t.VectorIndexScan)
+		op.VectorAttrs = slices.Clone(t.VectorAttrs)
+		op.TxnOffset = t.TxnOffset
+		if t.TableFunction != nil {
+			op.TableFunction = table_function.NewArgument()
+			op.TableFunction.FuncName = t.TableFunction.FuncName
+			op.TableFunction.Args = t.TableFunction.Args
+			op.TableFunction.Rets = t.TableFunction.Rets
+			op.TableFunction.Attrs = t.TableFunction.Attrs
+			op.TableFunction.Params = t.TableFunction.Params
+			op.TableFunction.IsSingle = t.TableFunction.IsSingle
+			op.TableFunction.Limit = t.TableFunction.Limit
+			op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
+			op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
+			op.TableFunction.FulltextSourceRef = t.TableFunction.FulltextSourceRef
+			op.TableFunction.FulltextIndexRef = t.TableFunction.FulltextIndexRef
+			op.TableFunction.SetInfo(&info)
+		}
 		op.SetInfo(&info)
 		return op
 	case vm.MultiUpdate:
@@ -659,6 +688,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
+		op.InputKeysUnique = t.InputKeysUnique
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
@@ -838,6 +868,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.HasTargetSelector = preCtx.HasTargetSelector
+	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
+	op.TargetActiveCol = preCtx.TargetActiveCol
+	op.TargetRowIDCol = preCtx.TargetRowIdCol
 	op.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
 	if err != nil {
 		return nil, err
@@ -923,6 +957,10 @@ func constructMultiUpdate(
 		for j, col := range updateCtx.PartitionCols {
 			partitionCols[j] = int(col.ColPos)
 		}
+		affectedRowsCols := make([]int, len(updateCtx.AffectedRowsCols))
+		for j, col := range updateCtx.AffectedRowsCols {
+			affectedRowsCols[j] = int(col.ColPos)
+		}
 
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 			ObjRef:             updateCtx.ObjRef,
@@ -933,19 +971,37 @@ func constructMultiUpdate(
 			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
 			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
 			IgnoreAffectedRows: updateCtx.IgnoreAffectedRows,
+			DedupByTargetRowID: updateCtx.DedupByTargetRowId,
+			TargetUpdateCtxIdx: int(updateCtx.TargetUpdateCtxIdx),
+			TargetTableID:      updateCtx.TableDef.TblId,
+			AffectedRowsCols:   affectedRowsCols,
+		}
+		if updateCtx.ChangedRowsCol != nil {
+			changedRowsCol := int(updateCtx.ChangedRowsCol.ColPos)
+			arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
 		}
 	}
 	arg.Action = action
 
 	ps := proc.GetPartitionService()
-	if !ps.Enabled() || !features.IsPartitioned(node.UpdateCtxList[0].TableDef.FeatureFlag) {
+	if !ps.Enabled() {
+		return arg, nil
+	}
+	if !hasPartitionedUpdateTarget(node.UpdateCtxList) {
 		return arg, nil
 	}
 
-	return multi_update.NewPartitionMultiUpdate(
-		arg,
-		node.UpdateCtxList[0].TableDef.TblId,
-	), nil
+	return multi_update.NewPartitionMultiUpdate(arg), nil
+}
+
+func hasPartitionedUpdateTarget(contexts []*plan.UpdateCtx) bool {
+	for _, updateCtx := range contexts {
+		if !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) &&
+			features.IsPartitioned(updateCtx.TableDef.FeatureFlag) {
+			return true
+		}
+	}
+	return false
 }
 
 func constructInsert(
@@ -1301,6 +1357,8 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 				FileSize:        FileSize,
 				ClusterTable:    node.GetClusterTable(),
 				StrictSqlMode:   strictSqlMode,
+				DatastreamScan:  node.ExternScan.GetDatastreamScan(),
+				ForeignScan:     node.ExternScan.GetForeignScan(),
 				LoadEmptyNumericAsZero: param.ExternType == int32(plan.ExternType_LOAD) &&
 					(param.Parallel || param.ParallelLoadRequested),
 			},
@@ -1390,6 +1448,7 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
 	arg.CanSkipProbe = node.JoinType == plan.Node_SEMI && !node.IsRightJoin && left.NodeType == plan.Node_TABLE_SCAN
+	arg.EmitCompressedRowCount = node.EmitCompressedRowCount
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	arg.SpillThreshold = node.SpillMem
 
@@ -1518,6 +1577,7 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.OnDuplicateAction = node.OnDuplicateAction
+	arg.InputKeysUnique = node.DedupInputKeysUnique
 	arg.DedupColName = node.DedupColName
 	arg.DedupColTypes = node.DedupColTypes
 	arg.DelColIdx = -1
@@ -1617,6 +1677,8 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	arg.Ts = node.GroupBy[0]
 	arg.PartitionBy = node.TimeWindowPartitionBy
 	arg.GapFill = node.GapFillMode == plan.Node_GAP_FILL_PARTITION
+	arg.GapFillStart = node.GapFillStart
+	arg.GapFillEnd = node.GapFillEnd
 	// A tumbling window normally uses the interval fast path (EndExpr != nil),
 	// which forwards only groups already produced by the child aggregate. That
 	// path cannot synthesize absent buckets. GAPFILL therefore uses the general
@@ -1637,7 +1699,7 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		resetTimeWindowTsColRef(endExpr)
 		arg.EndExpr = endExpr
 	}
-	arg.TsType = node.Timestamp.Typ
+	arg.TsType = plan2.TimeWindowBoundaryType(node.Timestamp.Typ)
 	return arg
 }
 
@@ -2028,6 +2090,8 @@ func constructMergeOrder(node *plan.Node) *mergeorder.MergeOrder {
 func constructPartition(node *plan.Node) *partition.Partition {
 	arg := partition.NewArgument()
 	arg.OrderBySpecs = node.OrderBy
+	arg.Limit = node.Limit
+	arg.PartitionByCount = node.PartitionByCount
 	return arg
 }
 
@@ -2342,7 +2406,15 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	arg.TableFunction = constructTableFunction(right, nil)
+	if right.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		arg.VectorIndexScan = plan2.DeepCopyVectorIndexScan(right.VectorIndexScan)
+		arg.VectorAttrs = make([]string, len(right.TableDef.Cols))
+		for i, col := range right.TableDef.Cols {
+			arg.VectorAttrs[i] = col.GetOriginCaseName()
+		}
+	} else {
+		arg.TableFunction = constructTableFunction(right, nil)
+	}
 	return arg
 }
 
@@ -2474,13 +2546,18 @@ func constructTableClone(
 		}
 	}()
 
+	dstTableName := clonePlan.DstTableName
+	if createTable := clonePlan.GetCreateTable().GetDdl().GetCreateTable(); createTable.GetTemporary() {
+		dstTableName = physicalTemporaryTableName(c.proc, clonePlan.DstDatabaseName, dstTableName)
+	}
+
 	metaCopy.Ctx = &table_clone.TableCloneCtx{
 		Eng:       c.e,
 		SrcTblDef: clonePlan.SrcTableDef,
 		SrcObjDef: clonePlan.SrcObjDef,
 
 		ScanSnapshot:    clonePlan.ScanSnapshot,
-		DstTblName:      clonePlan.DstTableName,
+		DstTblName:      dstTableName,
 		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
 	dstTblDef := clonePlan.SrcTableDef

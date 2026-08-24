@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/maphash"
 	"io"
@@ -46,11 +47,45 @@ type DiskCache struct {
 
 	updatingPaths struct {
 		*sync.Cond
-		m map[string]bool
+		m                  map[string]*diskCachePathUpdate
+		readGenerations    map[string]diskCachePathReadGeneration
+		nextReadGeneration uint64
 	}
 
 	cache        *fifocache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
+
+	async         diskCacheAsyncState
+	writeFailures diskCacheWriteFailureState
+	fileSync      func(*os.File) error
+	load          struct {
+		cancel context.CancelFunc
+		done   chan struct{}
+	}
+	// beforeFilePublication is a test-only phase barrier. Production instances
+	// leave it nil, so the publication hot path pays only one predictable branch.
+	beforeFilePublication func()
+}
+
+// Keep this type non-zero-sized: pointers to distinct zero-sized allocations
+// are not required to have distinct addresses in Go, but the path owner uses
+// pointer identity as its generation token.
+type diskCachePathUpdate struct {
+	_               byte
+	evictionPending bool
+}
+
+// readGenerations contains only the current generation while at least one Read
+// owns an open file for the path. Path mutation removes it before changing the
+// pathname; stale readers retain only the scalar id and cannot re-index it.
+type diskCachePathReadGeneration struct {
+	id      uint64
+	readers int
+}
+
+type openedDiskCacheFile struct {
+	file       *os.File
+	generation uint64
 }
 
 func NewDiskCache(
@@ -61,6 +96,19 @@ func NewDiskCache(
 	asyncLoad bool,
 	cacheDataAllocator CacheDataAllocator,
 	name string,
+) (ret *DiskCache, err error) {
+	return newDiskCacheWithMetricScope(ctx, path, capacity, perfCounterSets, asyncLoad, cacheDataAllocator, name, "")
+}
+
+func newDiskCacheWithMetricScope(
+	ctx context.Context,
+	path string,
+	capacity fscache.CapacityFunc,
+	perfCounterSets []*perfcounter.CounterSet,
+	asyncLoad bool,
+	cacheDataAllocator CacheDataAllocator,
+	name string,
+	metricScope string,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -74,7 +122,7 @@ func NewDiskCache(
 
 	seed := maphash.MakeSeed()
 
-	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "disk")
+	inuseBytes, capacityBytes := metric.GetFsCacheBytesGaugeWithScope(metricScope, name, "disk")
 	capacityBytes.Set(float64(capacity()))
 
 	capacityFunc := func() int64 {
@@ -91,10 +139,11 @@ func NewDiskCache(
 		path:               path,
 		cacheDataAllocator: cacheDataAllocator,
 		perfCounterSets:    perfCounterSets,
+		fileSync:           func(file *os.File) error { return file.Sync() },
 
 		capacityFunc: capacityFunc,
 	}
-	cache = fifocache.New(
+	cache = fifocache.NewWithPrepareEvict(
 
 		capacityFunc,
 
@@ -108,35 +157,52 @@ func NewDiskCache(
 		},
 
 		nil,
-		func(ctx context.Context, path string, _ struct{}, size int64, _ uint64) {
+		func(path string, _ struct{}, _ int64, _ uint64) func() {
+			doneUpdate, ok := ret.startEviction(path)
+			if !ok {
+				return nil
+			}
+			return func() {
+				defer func() {
+					if err := doneUpdate(); err != nil {
+						logutil.Error("finish disk cache eviction",
+							zap.Any("error", err),
+						)
+					}
+				}()
+				if err := ret.removeEvictedFile(path); err != nil {
+					logutil.Error("delete disk cache file",
+						zap.Any("error", err),
+					)
+				}
+			}
+		},
+		func(_ context.Context, _ string, _ struct{}, size int64, _ uint64) {
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacityFunc()))
-			doneUpdate, ok := ret.tryStartUpdate(path)
-			if !ok {
-				return
-			}
-			defer doneUpdate()
-			if ret.cache.Contains(path) {
-				return
-			}
-			err := os.Remove(path)
-			if err == nil {
-				metric.FSDiskCacheEvictCounter.Add(1)
-			} else if !os.IsNotExist(err) {
-				logutil.Error("delete disk cache file",
-					zap.Any("error", err),
-				)
-			}
 		},
 	)
 	ret.cache = cache
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
-	ret.updatingPaths.m = make(map[string]bool)
+	ret.updatingPaths.m = make(map[string]*diskCachePathUpdate)
+	ret.updatingPaths.readGenerations = make(map[string]diskCachePathReadGeneration)
+	ret.initAsyncUpdates()
+	ret.initWriteFailureState()
+	loadCtx, loadCancel := context.WithCancel(ctx)
+	ret.load.cancel = loadCancel
+	ret.load.done = make(chan struct{})
+	runLoad := func() {
+		defer func() {
+			loadCancel()
+			close(ret.load.done)
+		}()
+		ret.loadCache(loadCtx)
+	}
 
 	if asyncLoad {
-		go ret.loadCache(ctx)
+		go runLoad()
 	} else {
-		ret.loadCache(ctx)
+		runLoad()
 	}
 
 	if name != "" {
@@ -161,14 +227,21 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for work := range works {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case work, ok := <-works:
+					if !ok {
+						return
+					}
+					info, err := work.Entry.Info()
+					if err != nil {
+						continue // ignore
+					}
 
-				info, err := work.Entry.Info()
-				if err != nil {
-					continue // ignore
+					d.cache.Set(ctx, work.Path, struct{}{}, int64(fileSize(info)))
 				}
-
-				d.cache.Set(ctx, work.Path, struct{}{}, int64(fileSize(info)))
 			}
 		}()
 	}
@@ -176,6 +249,9 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 	var numFiles, numCacheFiles, numTempFiles, numDeleted int
 
 	_ = filepath.WalkDir(d.path, func(path string, entry os.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return fs.SkipAll
+		}
 		numFiles++
 		if err != nil {
 			return nil //ignore
@@ -212,9 +288,12 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 		}
 
 		numCacheFiles++
-		works <- Info{
-			Path:  path,
-			Entry: entry,
+		select {
+		case works <- Info{
+			Path: path, Entry: entry,
+		}:
+		case <-ctx.Done():
+			return fs.SkipAll
 		}
 
 		return nil
@@ -230,6 +309,9 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 		zap.Any("deleted files", numDeleted),
 		zap.Any("time", time.Since(t0)),
 	)
+	if ctx.Err() != nil {
+		return
+	}
 
 	done := make(chan int64, 1)
 	d.cache.Evict(ctx, done, 0)
@@ -277,14 +359,45 @@ func (d *DiskCache) Read(
 		return err
 	}
 
-	openedFiles := make(map[string]*os.File)
+	openedFiles := make(map[string]openedDiskCacheFile)
+	// All path waits in one Read share a single budget. Start it lazily on the
+	// first contended path so uncontended reads do not pay for a timer.
+	var waitDeadline time.Time
 	defer func() {
 		LogEvent(ctx, str_close_disk_files_begin)
-		for _, file := range openedFiles {
-			_ = file.Close()
+		for diskPath, opened := range openedFiles {
+			_ = opened.file.Close()
+			d.finishPathRead(diskPath, opened.generation)
 		}
 		LogEvent(ctx, str_close_disk_files_end)
 	}()
+	openPath := func(diskPath string) (opened openedDiskCacheFile, newlyOpened bool, ok bool) {
+		if opened, ok = openedFiles[diskPath]; ok {
+			return opened, false, true
+		}
+		generation, ok := d.startPathReadWithin(
+			ctx,
+			diskPath,
+			&waitDeadline,
+			shortIOWaitDuration,
+		)
+		if !ok {
+			return openedDiskCacheFile{}, false, false
+		}
+		LogEvent(ctx, str_disk_cache_file_open_begin)
+		diskFile, err := os.Open(diskPath)
+		LogEvent(ctx, str_disk_cache_file_open_end)
+		if err != nil {
+			d.finishPathRead(diskPath, generation)
+			return openedDiskCacheFile{}, false, false
+		}
+		opened = openedDiskCacheFile{
+			file:       diskFile,
+			generation: generation,
+		}
+		openedFiles[diskPath] = opened
+		return opened, true, true
+	}
 
 	fillEntry := func(entry *IOEntry) error {
 		LogEvent(ctx, str_disk_cache_fill_entry_begin)
@@ -300,74 +413,52 @@ func (d *DiskCache) Read(
 
 		numRead++
 
-		var file *os.File
+		var opened openedDiskCacheFile
+		var openedOK bool
 
 		// entry file
 		diskPath := d.pathForIOEntry(path.File, *entry)
-		if f, ok := openedFiles[diskPath]; ok {
-			// use opened file
-			LogEvent(ctx, str_disk_cache_file_seek_begin)
-			// An IOEntry cache file contains only this range, so its content
-			// always starts at file offset zero. entry.Offset is only valid for
-			// a full-object cache file.
-			_, err = f.Seek(0, io.SeekStart)
-			LogEvent(ctx, str_disk_cache_file_seek_end)
-			if err == nil {
-				file = f
-			}
-		} else {
-			// open file
-			d.waitUpdateComplete(ctx, diskPath)
-			LogEvent(ctx, str_disk_cache_file_open_begin)
-			diskFile, err := os.Open(diskPath)
-			LogEvent(ctx, str_disk_cache_file_open_end)
-			if err == nil {
-				file = diskFile
-				defer func() {
-					openedFiles[diskPath] = diskFile
-				}()
+		if f, newlyOpened, ok := openPath(diskPath); ok {
+			if newlyOpened {
+				opened = f
+				openedOK = true
 				numOpenIOEntry++
-			}
-		}
-
-		if file == nil {
-			// try full file
-			diskPath = d.pathForFile(path.File)
-			if f, ok := openedFiles[diskPath]; ok {
-				// use opened file
+			} else {
 				LogEvent(ctx, str_disk_cache_file_seek_begin)
-				_, err = f.Seek(entry.Offset, io.SeekStart)
+				// An IOEntry cache file contains only this range, so its content
+				// always starts at file offset zero. entry.Offset is only valid for
+				// a full-object cache file.
+				_, err = f.file.Seek(0, io.SeekStart)
 				LogEvent(ctx, str_disk_cache_file_seek_end)
 				if err == nil {
-					file = f
-				}
-			} else {
-				// open file
-				if d.waitUpdateCompleteFor(ctx, diskPath, shortIOWaitDuration) {
-					LogEvent(ctx, str_disk_cache_file_open_begin)
-					diskFile, err := os.Open(diskPath)
-					LogEvent(ctx, str_disk_cache_file_open_end)
-					if err == nil {
-						defer func() {
-							openedFiles[diskPath] = diskFile
-						}()
-						numOpenFull++
-						// seek
-						LogEvent(ctx, str_disk_cache_file_seek_begin)
-						_, err = diskFile.Seek(entry.Offset, io.SeekStart)
-						LogEvent(ctx, str_disk_cache_file_seek_end)
-						if err == nil {
-							file = diskFile
-						}
-					}
+					opened = f
+					openedOK = true
 				}
 			}
 		}
 
-		if file == nil {
+		if !openedOK {
+			// try full file
+			diskPath = d.pathForFile(path.File)
+			if f, newlyOpened, ok := openPath(diskPath); ok {
+				if newlyOpened {
+					numOpenFull++
+				}
+				LogEvent(ctx, str_disk_cache_file_seek_begin)
+				_, err = f.file.Seek(entry.Offset, io.SeekStart)
+				LogEvent(ctx, str_disk_cache_file_seek_end)
+				if err == nil {
+					opened = f
+					openedOK = true
+				}
+			}
+		}
+
+		if !openedOK {
 			// no file available
 			return nil
 		}
+		file := opened.file
 
 		LogEvent(ctx, str_disk_cache_update_states_begin)
 		if _, ok := d.cache.Get(ctx, diskPath); !ok {
@@ -378,15 +469,26 @@ func (d *DiskCache) Read(
 			if err != nil {
 				return err
 			}
-			d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
+			if doneReindex, ok := d.tryStartReadReindex(diskPath, opened.generation); ok {
+				var reindexErr error
+				func() {
+					defer func() { reindexErr = doneReindex() }()
+					d.cache.Set(ctx, diskPath, struct{}{}, fileSize(stat))
+				}()
+				if reindexErr != nil {
+					return reindexErr
+				}
+			}
 		}
 		LogEvent(ctx, str_disk_cache_update_states_end)
 
 		allocator := d.cacheDataAllocator
 		if entry.ToCacheData != nil && d.memoryCache != nil {
-			allocator = cacheCapacityGuardedAllocator{
-				cache:     d.memoryCache,
-				allocator: allocator,
+			if _, ok := allocator.(capacityGuardedCacheDataAllocator); !ok {
+				allocator = cacheCapacityGuardedAllocator{
+					cache:     d.memoryCache,
+					allocator: allocator,
+				}
 			}
 		}
 		readOffset, readSize := int64(0), entry.Size
@@ -428,6 +530,9 @@ func (d *DiskCache) Update(
 ) (
 	err error,
 ) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if vector.Policy.Any(SkipDiskCacheWrites) {
 		return nil
@@ -441,10 +546,13 @@ func (d *DiskCache) Update(
 	// callback
 	var onWritten []OnDiskCacheWrittenFunc
 	if v := ctx.Value(CtxKeyDiskCacheCallbacks); v != nil {
-		onWritten = v.(*DiskCacheCallbacks).OnWritten
+		onWritten = append(onWritten, v.(*DiskCacheCallbacks).OnWritten...)
 	}
 
 	for _, entry := range vector.Entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if len(entry.Data) == 0 {
 			// no data
 			continue
@@ -459,21 +567,54 @@ func (d *DiskCache) Update(
 		}
 
 		diskPath := d.pathForIOEntry(path.File, entry)
-		written, err := d.writeFile(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
-			return io.NopCloser(bytes.NewReader(entry.Data)), nil
-		})
-		if err != nil {
+		if async {
+			d.scheduleAsyncUpdate(vector.FilePath, diskPath, entry, onWritten)
+			continue
+		}
+		if err := d.updateEntry(ctx, vector.FilePath, diskPath, entry, onWritten); err != nil {
 			return err
 		}
-		if written {
-			for _, fn := range onWritten {
-				fn(vector.FilePath, entry)
-			}
-		}
-
 	}
 
 	return nil
+}
+
+func (d *DiskCache) updateEntry(
+	ctx context.Context,
+	filePath string,
+	diskPath string,
+	entry IOEntry,
+	onWritten []OnDiskCacheWrittenFunc,
+) error {
+	written, err := d.writeEntry(ctx, diskPath, entry, nil)
+	if err != nil || !written {
+		return err
+	}
+	for _, fn := range onWritten {
+		fn(filePath, entry)
+	}
+	return nil
+}
+
+func (d *DiskCache) writeEntry(
+	ctx context.Context,
+	diskPath string,
+	entry IOEntry,
+	claimPublication func() bool,
+) (bool, error) {
+	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(entry.Data)), nil
+	}, false, claimPublication)
+	if writeErr != nil {
+		return false, d.observeWriteResult(diskPath, writeErr)
+	}
+	if !written {
+		return false, nil
+	}
+	if err := d.observeWriteResult(diskPath, nil); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (d *DiskCache) writeFile(
@@ -481,42 +622,58 @@ func (d *DiskCache) writeFile(
 	diskPath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) (written bool, err error) {
+	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil)
+}
 
-	var numError int64
-	defer func() {
-		if numError > 0 {
-			metric.FSDiskCacheErrorCounter.Add(float64(numError))
-		}
-	}()
-
-	defer func() {
-		if err != nil {
-			// ignore errors
-			numError++
-			logutil.Warn(
-				"write disk cache error",
-				zap.Any("error", err),
-				zap.Any("path", diskPath),
-			)
-			err = nil
-		}
-	}()
-
+func (d *DiskCache) writeFileWithFinalizeMode(
+	ctx context.Context,
+	diskPath string,
+	openReader func(context.Context) (io.ReadCloser, error),
+	asyncFinalize bool,
+	claimPublication func() bool,
+) (written bool, err error) {
 	// evict if disk is full
 	defer func() {
 		if isDiskFull(err) {
 			d.cache.ForceEvict(ctx, d.capacityFunc()/10)
 		}
 	}()
+	asyncSlotOwned := false
+	if asyncFinalize {
+		if !d.tryReserveAsyncFileFinalize(diskPath) {
+			return false, nil
+		}
+		asyncSlotOwned = true
+		defer func() {
+			if asyncSlotOwned {
+				d.releaseAsyncFileFinalizeReservation(diskPath)
+			}
+		}()
+	}
 
-	doneUpdate := d.startUpdateWithCleanup(diskPath, func() error {
-		return d.removeUnindexedFile(diskPath)
-	})
+	cleanup := func() error { return d.removeUnindexedFile(diskPath) }
+	var doneUpdate func() error
+	if asyncFinalize {
+		var ok bool
+		doneUpdate, ok = d.tryStartUpdateWithCleanup(diskPath, cleanup)
+		if !ok {
+			return false, nil
+		}
+	} else {
+		doneUpdate, err = d.startUpdateWithCleanupContext(ctx, diskPath, cleanup)
+		if err != nil {
+			return false, err
+		}
+	}
+	updateOwned := true
 	defer func() {
-		if cleanupErr := doneUpdate(); cleanupErr != nil && err == nil {
-			err = cleanupErr
+		if updateOwned {
+			d.mergeWriteCleanupError(diskPath, &err, doneUpdate())
 		}
 	}()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 
 	if _, ok := d.cache.Get(ctx, diskPath); ok {
 		if _, err := os.Stat(diskPath); err == nil {
@@ -546,18 +703,19 @@ func (d *DiskCache) writeFile(
 	if err != nil {
 		return false, err
 	}
+	fileOwned := true
 	defer func() {
-		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(f.Name())
+		if fileOwned {
+			d.mergeWriteCleanupError(diskPath, &err, cleanupDiskCacheTempFile(f))
 		}
 	}()
 
 	from, err := openReader(ctx)
 	if err != nil {
-		return false, err
+		return false, &diskCacheSourceError{err: err}
 	}
 	defer from.Close()
+	source := &diskCacheSourceReader{Reader: from}
 
 	// do eviction before write
 	forceEvict := int64(0)
@@ -573,27 +731,71 @@ func (d *DiskCache) writeFile(
 	var buf []byte
 	put := ioBufferPool.Get(&buf)
 	defer put.Put()
-	_, err = io.CopyBuffer(f, from, buf)
+	_, err = io.CopyBuffer(f, source, buf)
 	if err != nil {
+		if source.err != nil {
+			return false, &diskCacheSourceError{err: source.err}
+		}
 		return false, err
 	}
 
-	if err := f.Sync(); err != nil {
+	if asyncFinalize {
+		d.scheduleReservedAsyncFileFinalize(diskPath, f, doneUpdate)
+		asyncSlotOwned = false
+		fileOwned = false
+		updateOwned = false
+		return true, nil
+	}
+
+	if err = d.finalizeFile(ctx, diskPath, f, claimPublication); err != nil {
 		return false, err
+	}
+	fileOwned = false
+	return true, nil
+}
+
+func (d *DiskCache) finalizeFile(
+	ctx context.Context,
+	diskPath string,
+	f *os.File,
+	claimPublication func() bool,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := d.fileSync(f); err != nil {
+		return err
+	}
+	// Sync is an uninterruptible syscall on the supported platforms. Recheck
+	// cancellation after it returns so Close cannot publish an async cache file
+	// after the cache has entered its terminal generation.
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	fadviseDontNeed(f, 0, 0)
 
-	stat, err = f.Stat()
+	stat, err := f.Stat()
 	if err != nil {
-		return false, err
+		return err
 	}
 	size := fileSize(stat)
+	tempPath := f.Name()
 
 	if err := f.Close(); err != nil {
-		return false, err
+		return err
 	}
-	if err := os.Rename(f.Name(), diskPath); err != nil {
-		return false, err
+	if d.beforeFilePublication != nil {
+		d.beforeFilePublication()
+	}
+	if claimPublication != nil {
+		if !claimPublication() {
+			return context.Canceled
+		}
+	} else if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, diskPath); err != nil {
+		return err
 	}
 	logutil.Debug("disk cache file written",
 		zap.Any("path", diskPath),
@@ -604,14 +806,17 @@ func (d *DiskCache) writeFile(
 	}
 	if !d.cache.Contains(diskPath) {
 		if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
-			return false, err
+			return err
 		}
 	}
 
-	return true, nil
+	return nil
 }
 
 func (d *DiskCache) Flush(ctx context.Context) {
+	// OnWritten callbacks are post-publication notifications and deliberately
+	// outside this barrier, so a callback may safely reenter Flush or Close.
+	d.flushAsyncUpdates(ctx)
 }
 
 const (
@@ -651,54 +856,114 @@ func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
 	return fromOSPath(path), nil
 }
 
-func (d *DiskCache) waitUpdateComplete(ctx context.Context, path string) {
+func (d *DiskCache) startPathReadWithin(
+	ctx context.Context,
+	path string,
+	deadline *time.Time,
+	timeout time.Duration,
+) (
+	generation uint64,
+	ok bool,
+) {
 	LogEvent(ctx, str_disk_cache_wait_update_complete_begin)
 	defer LogEvent(ctx, str_disk_cache_wait_update_complete_end)
 	d.updatingPaths.L.Lock()
-	for d.updatingPaths.m[path] {
+	if d.updatingPaths.m[path] == nil {
+		completed := ctx.Err() == nil
+		if completed {
+			generation = d.addPathReaderLocked(path)
+		}
+		d.updatingPaths.L.Unlock()
+		if !completed {
+			return 0, false
+		}
+		return generation, true
+	}
+	if timeout <= 0 {
+		d.updatingPaths.L.Unlock()
+		return 0, false
+	}
+	if deadline.IsZero() {
+		*deadline = time.Now().Add(timeout)
+	}
+	if !time.Now().Before(*deadline) {
+		d.updatingPaths.L.Unlock()
+		return 0, false
+	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithDeadline(ctx, *deadline)
+	defer cancel()
+	stopWakeup := context.AfterFunc(ctx, func() {
+		d.updatingPaths.L.Lock()
+		d.updatingPaths.Broadcast()
+		d.updatingPaths.L.Unlock()
+	})
+	for d.updatingPaths.m[path] != nil && ctx.Err() == nil {
 		d.updatingPaths.Wait()
+	}
+	completed := d.updatingPaths.m[path] == nil && ctx.Err() == nil
+	if completed {
+		generation = d.addPathReaderLocked(path)
+	}
+	d.updatingPaths.L.Unlock()
+	stopWakeup()
+	if !completed {
+		return 0, false
+	}
+	return generation, true
+}
+
+func (d *DiskCache) addPathReaderLocked(path string) uint64 {
+	generation, ok := d.updatingPaths.readGenerations[path]
+	if !ok {
+		d.updatingPaths.nextReadGeneration++
+		generation.id = d.updatingPaths.nextReadGeneration
+	}
+	generation.readers++
+	d.updatingPaths.readGenerations[path] = generation
+	return generation.id
+}
+
+func (d *DiskCache) finishPathRead(
+	path string,
+	generationID uint64,
+) {
+	d.updatingPaths.L.Lock()
+	if generation, ok := d.updatingPaths.readGenerations[path]; ok && generation.id == generationID {
+		generation.readers--
+		if generation.readers == 0 {
+			delete(d.updatingPaths.readGenerations, path)
+		} else {
+			d.updatingPaths.readGenerations[path] = generation
+		}
 	}
 	d.updatingPaths.L.Unlock()
 }
 
-func (d *DiskCache) waitUpdateCompleteFor(ctx context.Context, path string, timeout time.Duration) bool {
-	d.updatingPaths.L.Lock()
-	updating := d.updatingPaths.m[path]
-	d.updatingPaths.L.Unlock()
-	if !updating {
-		return true
-	}
-	if timeout <= 0 {
-		return false
-	}
+func (d *DiskCache) invalidatePathReadsLocked(path string) {
+	delete(d.updatingPaths.readGenerations, path)
+}
 
-	LogEvent(ctx, str_disk_cache_wait_update_complete_begin)
-	defer LogEvent(ctx, str_disk_cache_wait_update_complete_end)
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	ticker := time.NewTicker(time.Millisecond * 10)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-deadline.C:
-			return false
-		case <-ticker.C:
-		}
-		d.updatingPaths.L.Lock()
-		updating := d.updatingPaths.m[path]
+func (d *DiskCache) tryStartReadReindex(
+	path string,
+	generationID uint64,
+) (done func() error, ok bool) {
+	d.updatingPaths.L.Lock()
+	generation, generationOK := d.updatingPaths.readGenerations[path]
+	if !generationOK || generation.id != generationID || d.updatingPaths.m[path] != nil {
 		d.updatingPaths.L.Unlock()
-		if !updating {
-			return true
-		}
+		return nil, false
 	}
+	update := new(diskCachePathUpdate)
+	d.updatingPaths.m[path] = update
+	d.updatingPaths.L.Unlock()
+	return d.newPathUpdateDone(path, update, nil), true
 }
 
 func (d *DiskCache) isUpdating(path string) bool {
 	d.updatingPaths.L.Lock()
 	defer d.updatingPaths.L.Unlock()
-	return d.updatingPaths.m[path]
+	return d.updatingPaths.m[path] != nil
 }
 
 func (d *DiskCache) startUpdate(path string) (done func()) {
@@ -709,40 +974,142 @@ func (d *DiskCache) startUpdate(path string) (done func()) {
 }
 
 func (d *DiskCache) startUpdateWithCleanup(path string, cleanup func() error) (done func() error) {
-	d.updatingPaths.L.Lock()
-	for d.updatingPaths.m[path] {
-		d.updatingPaths.Wait()
+	done, err := d.startUpdateWithCleanupContext(context.Background(), path, cleanup)
+	if err != nil {
+		panic(err)
 	}
-	d.updatingPaths.m[path] = true
-	d.updatingPaths.L.Unlock()
-	done = func() error {
-		d.updatingPaths.L.Lock()
-		defer d.updatingPaths.L.Unlock()
-		var err error
-		if cleanup != nil {
-			err = cleanup()
-		}
-		delete(d.updatingPaths.m, path)
-		d.updatingPaths.Broadcast()
-		return err
-	}
-	return
+	return done
 }
 
-func (d *DiskCache) tryStartUpdate(path string) (done func(), ok bool) {
+func (d *DiskCache) startUpdateContext(ctx context.Context, path string) (done func(), err error) {
+	doneWithError, err := d.startUpdateWithCleanupContext(ctx, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		_ = doneWithError()
+	}, nil
+}
+
+func (d *DiskCache) startUpdateWithCleanupContext(
+	ctx context.Context,
+	path string,
+	cleanup func() error,
+) (done func() error, err error) {
 	d.updatingPaths.L.Lock()
-	if d.updatingPaths.m[path] {
+	var stopWakeup func() bool
+	if d.updatingPaths.m[path] != nil {
+		stopWakeup = context.AfterFunc(ctx, func() {
+			d.updatingPaths.L.Lock()
+			d.updatingPaths.Broadcast()
+			d.updatingPaths.L.Unlock()
+		})
+	}
+	for d.updatingPaths.m[path] != nil && ctx.Err() == nil {
+		d.updatingPaths.Wait()
+	}
+	if err := ctx.Err(); err != nil {
+		d.updatingPaths.L.Unlock()
+		if stopWakeup != nil {
+			stopWakeup()
+		}
+		return nil, err
+	}
+	d.invalidatePathReadsLocked(path)
+	update := new(diskCachePathUpdate)
+	d.updatingPaths.m[path] = update
+	d.updatingPaths.L.Unlock()
+	if stopWakeup != nil {
+		stopWakeup()
+	}
+	return d.newPathUpdateDone(path, update, cleanup), nil
+}
+
+func (d *DiskCache) tryStartUpdateWithCleanup(
+	path string,
+	cleanup func() error,
+) (done func() error, ok bool) {
+	d.updatingPaths.L.Lock()
+	if d.updatingPaths.m[path] != nil {
 		d.updatingPaths.L.Unlock()
 		return nil, false
 	}
-	d.updatingPaths.m[path] = true
+	d.invalidatePathReadsLocked(path)
+	update := new(diskCachePathUpdate)
+	d.updatingPaths.m[path] = update
 	d.updatingPaths.L.Unlock()
-	return func() {
-		d.updatingPaths.L.Lock()
-		delete(d.updatingPaths.m, path)
-		d.updatingPaths.Broadcast()
+	return d.newPathUpdateDone(path, update, cleanup), true
+}
+
+// startEviction either owns the path cleanup or transfers that responsibility
+// to the current path owner. Both decisions happen while holding the same lock,
+// so eviction cannot be lost between observing and releasing a generation.
+func (d *DiskCache) startEviction(path string) (done func() error, ok bool) {
+	d.updatingPaths.L.Lock()
+	d.invalidatePathReadsLocked(path)
+	if update := d.updatingPaths.m[path]; update != nil {
+		update.evictionPending = true
 		d.updatingPaths.L.Unlock()
-	}, true
+		return nil, false
+	}
+	update := new(diskCachePathUpdate)
+	d.updatingPaths.m[path] = update
+	d.updatingPaths.L.Unlock()
+	return d.newPathUpdateDone(path, update, nil), true
+}
+
+func (d *DiskCache) newPathUpdateDone(
+	path string,
+	update *diskCachePathUpdate,
+	cleanup func() error,
+) func() error {
+	var once sync.Once
+	var cleanupErr error
+	return func() error {
+		once.Do(func() {
+			defer func() {
+				cleanupErr = errors.Join(cleanupErr, d.finishPathUpdate(path, update))
+			}()
+			if cleanup != nil {
+				cleanupErr = cleanup()
+			}
+		})
+		return cleanupErr
+	}
+}
+
+func (d *DiskCache) finishPathUpdate(path string, update *diskCachePathUpdate) (err error) {
+	for {
+		d.updatingPaths.L.Lock()
+		if d.updatingPaths.m[path] != update {
+			d.updatingPaths.L.Unlock()
+			return err
+		}
+		if !update.evictionPending {
+			delete(d.updatingPaths.m, path)
+			d.updatingPaths.Broadcast()
+			d.updatingPaths.L.Unlock()
+			return err
+		}
+		update.evictionPending = false
+		d.updatingPaths.L.Unlock()
+
+		err = errors.Join(err, d.removeEvictedFile(path))
+	}
+}
+
+func (d *DiskCache) removeEvictedFile(path string) error {
+	if d.cache.Contains(path) {
+		return nil
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	metric.FSDiskCacheEvictCounter.Add(1)
+	return nil
 }
 
 func (d *DiskCache) removeUnindexedFile(path string) error {
@@ -762,16 +1129,33 @@ func (d *DiskCache) SetFile(
 	filePath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) error {
+	return d.setFile(ctx, filePath, openReader, false)
+}
+
+func (d *DiskCache) setFile(
+	ctx context.Context,
+	filePath string,
+	openReader func(context.Context) (io.ReadCloser, error),
+	asyncFinalize bool,
+) error {
 	path, err := ParsePath(filePath)
 	if err != nil {
 		return err
 	}
 	diskPath := d.pathForFile(path.File)
-	_, err = d.writeFile(ctx, diskPath, openReader)
-	if err != nil {
-		return err
+	written, writeErr := d.writeFileWithFinalizeMode(ctx, diskPath, openReader, asyncFinalize, nil)
+	if writeErr != nil {
+		return d.observeWriteResult(diskPath, writeErr)
 	}
-	return nil
+	if !written {
+		return nil
+	}
+	if asyncFinalize {
+		// Admission is not a successful disk write. The worker that owns the
+		// finalizer is the only authority allowed to report failure or recovery.
+		return nil
+	}
+	return d.observeWriteResult(diskPath, nil)
 }
 
 func (d *DiskCache) DeletePaths(
@@ -794,7 +1178,10 @@ func (d *DiskCache) DeletePaths(
 
 func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) {
 	diskPath := d.pathForFile(path)
-	doneUpdate := d.startUpdate(diskPath)
+	doneUpdate, err := d.startUpdateContext(ctx, diskPath)
+	if err != nil {
+		return err
+	}
 	defer doneUpdate()
 	if err = os.Remove(diskPath); err != nil {
 		if !os.IsNotExist(err) {
@@ -818,5 +1205,14 @@ func fileSize(info fs.FileInfo) int64 {
 }
 
 func (d *DiskCache) Close(ctx context.Context) {
+	// A canceled ctx means terminal draining is incomplete. Callers must not
+	// reuse the cache directory for a new DiskCache generation until a later
+	// Close returns with a live context.
+	d.load.cancel()
+	d.closeAsyncUpdates(ctx)
+	select {
+	case <-d.load.done:
+	case <-ctx.Done():
+	}
 	allDiskCaches.Delete(d)
 }

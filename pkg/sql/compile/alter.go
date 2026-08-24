@@ -2009,11 +2009,13 @@ func (c *Compile) alterPartitionTables(
 
 func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup) (err error) {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	oldRelationID := qry.GetTableDef().GetTblId()
+	oldLogicalID := qry.GetTableDef().GetLogicalId()
 
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		// COPY ALTER transfers mo_foreign_keys around the source-table drop,
 		// so its catalog statements are executed inside AlterTableCopy.
-		return s.alterTableCopy(c, cleanup)
+		err = s.alterTableCopy(c, cleanup)
 	} else {
 		err = s.alterTableInplace(c, cleanup)
 	}
@@ -2021,7 +2023,7 @@ func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup
 		return err
 	}
 
-	if !plan2.IsFkBannedDatabase(qry.Database) {
+	if qry.AlgorithmType != plan.AlterTable_COPY && !plan2.IsFkBannedDatabase(qry.Database) {
 		//update the mo_foreign_keys
 		for _, sql := range qry.UpdateFkSqls {
 			err = c.runSql(sql)
@@ -2030,7 +2032,33 @@ func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup
 			}
 		}
 	}
-	return err
+	databaseName := qry.Database
+	if databaseName == "" {
+		databaseName = c.db
+	}
+	if qry.AlgorithmType != plan.AlterTable_COPY {
+		changesViewMetadata := false
+		var renamedTo string
+		for _, action := range qry.Actions {
+			if action.GetAlterReplaceDef() != nil {
+				changesViewMetadata = true
+				break
+			}
+			if rename := action.GetAlterName(); rename != nil {
+				renamedTo = rename.NewName
+			}
+		}
+		if renamedTo != "" && c.proc.Base.IsFrontend {
+			return c.enqueueViewsAfterRelationRemoval(
+				databaseName, qry.GetTableDef().GetName(), qry.GetTableDef().GetDbId(),
+				oldRelationID, oldLogicalID)
+		}
+		if !changesViewMetadata {
+			return nil
+		}
+	}
+	return c.refreshViewsAfterRelationMutation(
+		databaseName, qry.GetTableDef().GetName(), oldRelationID, oldLogicalID)
 }
 
 func (s *Scope) RenameTable(c *Compile) (err error) {
@@ -2381,7 +2409,11 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
-		async, err := catalog.IsIndexAsync(oriIdxTblNames.IndexAlgoParams)
+		// IsAsync is the canonical resolution: identity-always-async
+		// (HNSW/CAGRA/IVF-PQ), fulltext VERSION=2, or the per-index async param.
+		// Used for both the whole-index skip below and the per-hidden-table
+		// SkipWhenAsync skip further down.
+		async, err := indexplugin.IsAsync(oriIdxTblNames.IndexAlgo, oriIdxTblNames.IndexAlgoParams)
 		if err != nil {
 			return err
 		}
@@ -2391,8 +2423,7 @@ func cloneUnaffectedIndexes(
 		// policies:
 		//   - SkipWholeIndex: skip the entire index when async. Algorithms that
 		//     leave every hidden table empty at CREATE and rebuild all of them
-		//     via CDC from ts=0 (HNSW / CAGRA / IVF-PQ / fulltext). HNSW is
-		//     AlwaysAsync; the others gate on the per-index async param.
+		//     via CDC from ts=0 (HNSW / CAGRA / IVF-PQ / fulltext).
 		//   - DeleteBeforeClone + SkipWhenAsync (per hidden table): IVF-FLAT is
 		//     the only case today. All three hidden tables get DELETE'd (the
 		//     CREATE on the temp table already seeded them), entries are
@@ -2402,15 +2433,12 @@ func cloneUnaffectedIndexes(
 		var cloneBehavior catalogplugin.AlterTableCloneBehavior
 		if !oriIdxTblNames.Unique {
 			if p, ok := indexplugin.Get(oriIdxTblNames.IndexAlgo); ok {
-				d := p.Catalog().SyncDescriptor()
 				cloneBehavior = p.Catalog().AlterTableCloneBehavior()
 				// Whole-index skip is an EXPLICIT policy (SkipWholeIndex), not
 				// inferred from UsesCDC — a CDC algorithm can still need its model
 				// tables cloned (IVF-FLAT clones metadata + centroids and only
 				// CDC-rebuilds entries via the per-hidden-table policy below).
-				// HNSW is AlwaysAsync; CAGRA / IVF-PQ / fulltext gate on the
-				// per-index async param.
-				if (d.AlwaysAsync || async) && cloneBehavior.SkipWholeIndex {
+				if async && cloneBehavior.SkipWholeIndex {
 					logutil.Infof("cloneUnaffectedIndex: skip whole async index %v\n", oriIdxTblNames)
 					continue
 				}

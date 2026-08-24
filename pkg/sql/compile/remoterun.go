@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
@@ -87,6 +88,17 @@ import (
 func encodeScope(s *Scope) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
+		return nil, err
+	}
+	return p.Marshal()
+}
+
+func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
+	p, err := fillPipeline(s)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -147,6 +159,25 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	p := &pipeline.Pipeline{}
 	err := p.Unmarshal(data)
 	if err != nil {
+		return nil, err
+	}
+	if isRemote {
+		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteUpdateChangedRowsPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
 		return nil, err
 	}
 	ctx := &scopeContext{
@@ -212,6 +243,20 @@ func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 	return p, nil
 }
 
+func sourceNodeForRemoteRun(source *Source) *plan.Node {
+	if source == nil || source.node == nil {
+		return nil
+	}
+	// pipeline.Source does not have wire fields for the execution-time filter
+	// lists. Carry them in a per-message node copy so the reusable plan node is
+	// not mutated and the remote ranges phase sees the same predicates.
+	node := *source.node
+	if source.BlockFilterList != nil {
+		node.BlockFilterList = source.BlockFilterList
+	}
+	return &node
+}
+
 // generatePipeline generate a base pipeline.Pipeline structure without instructions
 // according to source scope.
 func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipeline, int32, error) {
@@ -265,21 +310,11 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			PushdownAddr:           s.DataSource.PushdownAddr,
 			Expr:                   s.DataSource.FilterExpr,
 			TableDef:               s.DataSource.TableDef,
-			Node:                   s.DataSource.node,
+			Node:                   sourceNodeForRemoteRun(s.DataSource),
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
 			RecvMsgList:            s.DataSource.RecvMsgList,
-		}
-		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
-			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.MembershipFilterBytes) > 0 {
-				p.DataSource.MembershipFilter = s.DataSource.MembershipFilterBytes
-			} else if bfVal := s.Proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					p.DataSource.MembershipFilter = bf
-				}
-			}
 		}
 		// Fulltext index table: attach FulltextMembershipFilter from context.
 		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
@@ -404,8 +439,10 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			RecvMsgList:           dsc.RecvMsgList,
 			MembershipFilterBytes: dsc.MembershipFilter,
 		}
-		// Extract IndexReaderParam from node for remote CN execution
 		if dsc.Node != nil {
+			if isRemote {
+				s.DataSource.BlockFilterList = plan2.DeepCopyExprList(dsc.Node.BlockFilterList)
+			}
 			s.DataSource.IndexReaderParam = dsc.Node.IndexReaderParam
 		}
 	}
@@ -533,6 +570,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
+		if err := validateRemoteStatementLastInsertIDProtocol(proc, t.HasAutoCol); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
+			return ctxId, nil, err
+		}
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName:         t.SchemaName,
 			TableDef:           t.TableDef,
@@ -545,6 +588,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ClusterByExpr:      t.ClusterByExpr,
 			ColOffset:          t.ColOffset,
 			RejectZeroTemporal: t.RejectZeroTemporal,
+			HasTargetSelector:  t.HasTargetSelector,
+			TargetRowNumberCol: t.TargetRowNumberCol,
+			TargetActiveCol:    t.TargetActiveCol,
+			TargetRowIdCol:     t.TargetRowIDCol,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
@@ -624,6 +671,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsRightJoin:            t.IsRightJoin,
 			HashOnPk:               t.HashOnPK,
 			CanSkipProbe:           t.CanSkipProbe,
+			EmitCompressedRowCount: t.EmitCompressedRowCount,
 			IsShuffle:              t.IsShuffle,
 			ShuffleIdx:             t.ShuffleIdx,
 			RelList:                relList,
@@ -652,6 +700,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Offset = t.OffsetExpr
 	case *order.Order:
 		in.OrderBy = t.OrderBySpec
+	case *partition.Partition:
+		in.OrderBy = t.OrderBySpecs
+		in.Limit = t.Limit
+		in.PartitionByCount = t.PartitionByCount
+		in.PartitionTopNPreReduce = t.PreReduce
 	case *product.Product:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -757,6 +810,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IcebergPlanningStats:        icebergPlanningStatsToPipeline(t.Es.IcebergPlanningStats),
 			IcebergDeleteMaxMemoryBytes: t.Es.IcebergDeleteMaxMemoryBytes,
 			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
+			DatastreamScan:              t.Es.DatastreamScan,
+			ForeignScan:                 t.Es.ForeignScan,
 		}
 		in.ProjectList = t.ProjectList
 	case *mongoscan.MongoScan:
@@ -837,6 +892,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		in.SpillMem = t.SpillThreshold
 	case *rightdedupjoin.RightDedupJoin:
+		if err := validateRemoteRightDedupInputKeysUniqueProtocol(proc, t.InputKeysUnique); err != nil {
+			return ctxId, nil, err
+		}
 		relList, colList := getRelColList(t.Result)
 		in.RightDedupJoin = &pipeline.RightDedupJoin{
 			RelList:                relList,
@@ -848,6 +906,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:             t.JoinMapTag,
 			ShuffleIdx:             t.ShuffleIdx,
 			OnDuplicateAction:      t.OnDuplicateAction,
+			InputKeysUnique:        t.InputKeysUnique,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
 			DelColIdx:              t.DelColIdx,
@@ -860,24 +919,50 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *apply.Apply:
 		relList, colList := getRelColList(t.Result)
 		in.Apply = &pipeline.Apply{
-			ApplyType: int32(t.ApplyType),
-			RelList:   relList,
-			ColList:   colList,
-			Types:     convertToPlanTypes(t.Typs),
+			ApplyType:       int32(t.ApplyType),
+			RelList:         relList,
+			ColList:         colList,
+			Types:           convertToPlanTypes(t.Typs),
+			VectorIndexScan: t.VectorIndexScan,
+			VectorAttrs:     t.VectorAttrs,
+			TxnOffset:       int64(t.TxnOffset),
 		}
-		in.TableFunction = &pipeline.TableFunction{
-			Attrs:                  t.TableFunction.Attrs,
-			Rets:                   t.TableFunction.Rets,
-			Args:                   t.TableFunction.Args,
-			Params:                 t.TableFunction.Params,
-			Name:                   t.TableFunction.FuncName,
-			IsSingle:               t.TableFunction.IsSingle,
-			IndexReaderParam:       t.TableFunction.IndexReaderParam,
-			RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
-			FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
-			FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
+		if t.TableFunction != nil {
+			in.TableFunction = &pipeline.TableFunction{
+				Attrs:                  t.TableFunction.Attrs,
+				Rets:                   t.TableFunction.Rets,
+				Args:                   t.TableFunction.Args,
+				Params:                 t.TableFunction.Params,
+				Name:                   t.TableFunction.FuncName,
+				IsSingle:               t.TableFunction.IsSingle,
+				IndexReaderParam:       t.TableFunction.IndexReaderParam,
+				RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
+				FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
+				FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
+			}
 		}
 	case *multi_update.MultiUpdate:
+		targetAware := false
+		changedRows := false
+		affectedRowsSelectors := false
+		for _, muCtx := range t.MultiUpdateCtx {
+			if muCtx.DedupByTargetRowID || muCtx.TargetUpdateCtxIdx != 0 {
+				targetAware = true
+			}
+			if muCtx.ChangedRowsCol != nil {
+				changedRows = true
+			}
+			affectedRowsSelectors = affectedRowsSelectors || len(muCtx.AffectedRowsCols) > 0
+		}
+		if err := validateRemoteTargetAwareUpdateProtocol(proc, targetAware); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteUpdateChangedRowsProtocol(proc, changedRows); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteAffectedRowsSelectorsProtocol(proc, affectedRowsSelectors); err != nil {
+			return ctxId, nil, err
+		}
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
 		for i, muCtx := range t.MultiUpdateCtx {
 			updateCtxList[i] = &plan.UpdateCtx{
@@ -887,6 +972,15 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
 				IgnoreAffectedRows:    muCtx.IgnoreAffectedRows,
 				CountDeleteAffectRows: t.CountDeleteAffectRows,
+				DedupByTargetRowId:    muCtx.DedupByTargetRowID,
+				TargetUpdateCtxIdx:    int32(muCtx.TargetUpdateCtxIdx),
+				AffectedRowsCols:      make([]plan.ColRef, len(muCtx.AffectedRowsCols)),
+			}
+			for j, pos := range muCtx.AffectedRowsCols {
+				updateCtxList[i].AffectedRowsCols[j].ColPos = int32(pos)
+			}
+			if muCtx.ChangedRowsCol != nil {
+				updateCtxList[i].ChangedRowsCol = &plan.ColRef{ColPos: int32(*muCtx.ChangedRowsCol)}
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -1008,6 +1102,10 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ClusterByExpr = t.ClusterByExpr
 		arg.ColOffset = t.ColOffset
 		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
+		arg.HasTargetSelector = t.GetHasTargetSelector()
+		arg.TargetRowNumberCol = t.GetTargetRowNumberCol()
+		arg.TargetActiveCol = t.GetTargetActiveCol()
+		arg.TargetRowIDCol = t.GetTargetRowIdCol()
 		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
@@ -1123,6 +1221,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.CanSkipProbe = t.CanSkipProbe
+		arg.EmitCompressedRowCount = t.EmitCompressedRowCount
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
@@ -1151,6 +1250,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Order:
 		arg := order.NewArgument()
 		arg.OrderBySpec = opr.OrderBy
+		op = arg
+	case vm.Partition:
+		arg := partition.NewArgument()
+		arg.OrderBySpecs = opr.OrderBy
+		arg.Limit = opr.Limit
+		arg.PartitionByCount = opr.PartitionByCount
+		arg.PreReduce = opr.PartitionTopNPreReduce
 		op = arg
 	case vm.Product:
 		t := opr.GetProduct()
@@ -1262,6 +1368,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					IcebergPlanningStats:        icebergPlanningStatsFromPipeline(t.IcebergPlanningStats),
 					IcebergDeleteMaxMemoryBytes: t.IcebergDeleteMaxMemoryBytes,
 					IcebergDeleteSpillEnabled:   t.IcebergDeleteSpillEnabled,
+					DatastreamScan:              t.DatastreamScan,
+					ForeignScan:                 t.ForeignScan,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
@@ -1356,6 +1464,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.InputKeysUnique = t.InputKeysUnique
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DelColIdx = t.DelColIdx
@@ -1369,17 +1478,22 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ApplyType = int(t.ApplyType)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.TableFunction = table_function.NewArgument()
-		arg.TableFunction.Attrs = opr.TableFunction.Attrs
-		arg.TableFunction.Rets = opr.TableFunction.Rets
-		arg.TableFunction.Args = opr.TableFunction.Args
-		arg.TableFunction.FuncName = opr.TableFunction.Name
-		arg.TableFunction.Params = opr.TableFunction.Params
-		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
-		arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
-		arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
-		arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
-		arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
+		arg.VectorIndexScan = t.VectorIndexScan
+		arg.VectorAttrs = t.VectorAttrs
+		arg.TxnOffset = int(t.TxnOffset)
+		if opr.TableFunction != nil {
+			arg.TableFunction = table_function.NewArgument()
+			arg.TableFunction.Attrs = opr.TableFunction.Attrs
+			arg.TableFunction.Rets = opr.TableFunction.Rets
+			arg.TableFunction.Args = opr.TableFunction.Args
+			arg.TableFunction.FuncName = opr.TableFunction.Name
+			arg.TableFunction.Params = opr.TableFunction.Params
+			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
+			arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
+			arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+			arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
+			arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
+		}
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()
@@ -1402,6 +1516,17 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:     int(muCtx.InsertPkColIdx),
 				IgnoreAffectedRows: muCtx.IgnoreAffectedRows,
+				DedupByTargetRowID: muCtx.DedupByTargetRowId,
+				TargetUpdateCtxIdx: int(muCtx.TargetUpdateCtxIdx),
+				TargetTableID:      muCtx.TableDef.TblId,
+				AffectedRowsCols:   make([]int, len(muCtx.AffectedRowsCols)),
+			}
+			for j, pos := range muCtx.AffectedRowsCols {
+				arg.MultiUpdateCtx[i].AffectedRowsCols[j] = int(pos.ColPos)
+			}
+			if muCtx.ChangedRowsCol != nil {
+				changedRowsCol := int(muCtx.ChangedRowsCol.ColPos)
+				arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
@@ -1510,6 +1635,191 @@ func validateRemoteAggregateProtocol(
 			return moerr.NewNotSupportedNoCtx(
 				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
+		}
+	}
+	return nil
+}
+
+func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware bool) error {
+	if !targetAware {
+		return nil
+	}
+	if proc == nil || !supportsRemoteTargetAwareUpdate(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"target-aware multi-table UPDATE remote execution requires MORPC protocol version 20",
+		)
+	}
+	return nil
+}
+
+func validateRemoteUpdateChangedRowsProtocol(proc *process.Process, changedRows bool) error {
+	if !changedRows {
+		return nil
+	}
+	if proc == nil || !supportsRemoteUpdateChangedRows(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"UPDATE changed-row counting requires MORPC protocol version 25",
+		)
+	}
+	return nil
+}
+
+func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inputKeysUnique bool) error {
+	if !inputKeysUnique {
+		return nil
+	}
+	if proc == nil || !supportsRemoteRightDedupInputKeysUnique(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"lookup-only RIGHT DEDUP remote execution requires MORPC protocol version 21",
+		)
+	}
+	return nil
+}
+
+func validateRemoteStatementLastInsertIDProtocol(proc *process.Process, hasAutoCol bool) error {
+	if !hasAutoCol {
+		return nil
+	}
+	if proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"remote auto-increment PRE_INSERT requires MORPC protocol version 26",
+		)
+	}
+	return nil
+}
+
+func validateRemoteStringProvenancePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	requiresVersion23, err := plan.RequiresMORPCVersion23StringProvenance(p)
+	if err != nil {
+		return err
+	}
+	if !requiresVersion23 {
+		return nil
+	}
+	if proc == nil || !supportsRemoteCrossDomainStringLiterals(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"cross-domain string provenance requires MORPC protocol version 23",
+		)
+	}
+	return nil
+}
+
+func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if rightDedup := instruction.GetRightDedupJoin(); rightDedup != nil {
+			if err := validateRemoteRightDedupInputKeysUniqueProtocol(
+				proc, rightDedup.InputKeysUnique,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteStatementLastInsertIDPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsert(); preInsert != nil {
+			if err := validateRemoteStatementLastInsertIDProtocol(proc, preInsert.HasAutoCol); err != nil {
+				return err
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteStatementLastInsertIDPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAffectedRowsSelectors(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"per-target affected-row selector metadata requires MORPC protocol version 24",
+		)
+	}
+	return nil
+}
+
+func validateRemoteTargetAwareUpdatePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsert(); preInsert != nil && preInsert.HasTargetSelector {
+			if err := validateRemoteTargetAwareUpdateProtocol(proc, true); err != nil {
+				return err
+			}
+		}
+		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
+			for _, updateCtx := range multiUpdate.UpdateCtxList {
+				if updateCtx.DedupByTargetRowId || updateCtx.TargetUpdateCtxIdx != 0 {
+					if err := validateRemoteTargetAwareUpdateProtocol(proc, true); err != nil {
+						return err
+					}
+				}
+				if len(updateCtx.AffectedRowsCols) > 0 {
+					if err := validateRemoteAffectedRowsSelectorsProtocol(proc, true); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteTargetAwareUpdatePipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteUpdateChangedRowsPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
+			for _, updateCtx := range multiUpdate.UpdateCtxList {
+				if updateCtx.ChangedRowsCol != nil {
+					return validateRemoteUpdateChangedRowsProtocol(proc, true)
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteUpdateChangedRowsPipelineProtocol(proc, child); err != nil {
+			return err
 		}
 	}
 	return nil

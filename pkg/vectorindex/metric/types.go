@@ -102,11 +102,40 @@ func ValidQuantization(val string) bool {
 }
 
 var (
+	// DistFuncOpTypes maps an indexable SQL distance function to the op_type an index
+	// is given by default for it. Membership doubles as "this distance function can be
+	// served by a vector index at all". It is NOT the index-matching test: an index may
+	// carry a different but equivalent op_type — use OpTypeServesDistFunc for that.
 	DistFuncOpTypes = map[string]string{
 		DistFn_L2Distance:     OpType_L2Distance,
 		DistFn_L2sqDistance:   OpType_L2Distance,
 		DistFn_InnerProduct:   OpType_InnerProduct,
 		DistFn_CosineDistance: OpType_CosineDistance,
+		DistFn_L1Distance:     OpType_L1Distance,
+	}
+
+	// DistFuncOpTypeSet lists every index op_type that can serve a query on the given
+	// distance function:
+	//
+	//	vector_l2_ops    -> l2_distance, l2_distance_sq
+	//	vector_l2sq_ops  -> l2_distance, l2_distance_sq
+	//	vector_l1_ops    -> l1_distance
+	//	vector_ip_ops    -> inner_product
+	//	vector_cosine_ops-> cosine_distance
+	//
+	// It is a SET rather than one canonical op_type only because of the L2 pair: the two
+	// op_types build a byte-identical index (each maps to Metric_L2sqDistance) and whether
+	// the score is sqrt-ed is decided at SEARCH time from the query's function name
+	// (OrigFuncName -> DistanceTransformIvfflat / DistanceTransformHnsw), never from the
+	// index. So either one answers either form with a correctly scaled score, and the
+	// distinction is naming only. Matching one canonical op_type per function left every
+	// vector_l2sq_ops index unusable — accepted at CREATE INDEX, never chosen (#25966).
+	DistFuncOpTypeSet = map[string][]string{
+		DistFn_L2Distance:     {OpType_L2Distance, OpType_L2sqDistance},
+		DistFn_L2sqDistance:   {OpType_L2Distance, OpType_L2sqDistance},
+		DistFn_InnerProduct:   {OpType_InnerProduct},
+		DistFn_CosineDistance: {OpType_CosineDistance},
+		DistFn_L1Distance:     {OpType_L1Distance},
 	}
 
 	OpTypeToIvfMetric = map[string]MetricType{
@@ -156,6 +185,18 @@ var (
 	}
 )
 
+// OpTypeServesDistFunc reports whether an index built with opType can answer a query
+// that uses distFn — the index-selection test for every vector algorithm. False for an
+// unindexable distFn and for an op_type whose metric differs from the query's.
+func OpTypeServesDistFunc(opType, distFn string) bool {
+	for _, ok := range DistFuncOpTypeSet[distFn] {
+		if ok == opType {
+			return true
+		}
+	}
+	return false
+}
+
 // DistanceFunction is a function that computes the distance between two vectors
 // NOTE: clusterer already ensures that the all the input vectors are of the same length,
 // so we don't need to check for that here again and return error if the lengths are different.
@@ -176,10 +217,27 @@ func MaxFloat[T types.RealNumbers]() T {
 	}
 }
 
+// DistanceTransformHnsw converts a raw usearch distance to the value MO's SQL distance
+// function named by the QUERY returns, so an index-served score and a brute-force score
+// are the same number. Every conversion is monotonic and the caller applies it after the
+// result heap is ordered, so ranking is unaffected.
+//
+// usearch is the only backend needing this HERE: the Go CPU kernels already return MO's
+// convention (InnerProduct returns -a·b), and cuVS output is negated inside cgo/cuvs
+// (index_base.hpp search path, distance.hpp / distance_c.cpp pairwise) before it reaches
+// Go. (Note: the gpu-tagged pairwise wait in gpu.go negates IP a SECOND time on top of
+// the cgo flip — a separate, pre-existing GPU-only defect, not something this transform
+// compensates for.) Within usearch only inner product differs — its IP metric is 1 - a·b against MO's
+// -a·b, so an untranslated score is exactly 1 too high; ordering stays correct, which is
+// why only a value comparison catches it. usearch.Cosine is already 1 - cos_sim, exactly
+// what cosine_distance returns, and L2sq is the same squared distance MO computes.
 func DistanceTransformHnsw(dist float64, origMetricType MetricType, metricType usearch.Metric) float64 {
 	if origMetricType == Metric_L2Distance && metricType == usearch.L2sq {
 		// metric is l2sq but origin is l2_distance
 		return math.Sqrt(dist)
+	}
+	if metricType == usearch.InnerProduct {
+		return dist - 1
 	}
 	return dist
 }

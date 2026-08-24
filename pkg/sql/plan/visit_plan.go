@@ -112,6 +112,47 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if scan := node.VectorIndexScan; scan != nil {
+		if scan.QueryVector != nil {
+			scan.QueryVector, err = rule.ApplyExpr(scan.QueryVector)
+			if err != nil {
+				return err
+			}
+		}
+		if scan.CandidateLimit != nil {
+			scan.CandidateLimit, err = rule.ApplyExpr(scan.CandidateLimit)
+			if err != nil {
+				return err
+			}
+		}
+		if scan.FirstRoundLimit != nil {
+			scan.FirstRoundLimit, err = rule.ApplyExpr(scan.FirstRoundLimit)
+			if err != nil {
+				return err
+			}
+		}
+		for i := range scan.PreFilters {
+			scan.PreFilters[i], err = rule.ApplyExpr(scan.PreFilters[i])
+			if err != nil {
+				return err
+			}
+		}
+		if scan.DistanceRange != nil {
+			if scan.DistanceRange.LowerBound != nil {
+				scan.DistanceRange.LowerBound, err = rule.ApplyExpr(scan.DistanceRange.LowerBound)
+				if err != nil {
+					return err
+				}
+			}
+			if scan.DistanceRange.UpperBound != nil {
+				scan.DistanceRange.UpperBound, err = rule.ApplyExpr(scan.DistanceRange.UpperBound)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	for i := range node.OnList {
 		node.OnList[i], err = rule.ApplyExpr(node.OnList[i])
 		if err != nil {
@@ -149,6 +190,20 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 
 	for i := range node.TimeWindowPartitionBy {
 		node.TimeWindowPartitionBy[i], err = rule.ApplyExpr(node.TimeWindowPartitionBy[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	if node.GapFillStart != nil {
+		node.GapFillStart, err = rule.ApplyExpr(node.GapFillStart)
+		if err != nil {
+			return err
+		}
+	}
+
+	if node.GapFillEnd != nil {
+		node.GapFillEnd, err = rule.ApplyExpr(node.GapFillEnd)
 		if err != nil {
 			return err
 		}

@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -305,17 +306,19 @@ func TestMinMaxPreservesWinningPrepareParamKind(t *testing.T) {
 		vector.PrepareParamInteger,
 		vector.PrepareParamNone,
 	})
+	require.NoError(t, input.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
 	defer func() {
 		input.Free(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
 
 	for _, tc := range []struct {
-		name string
-		id   int64
-		want vector.PrepareParamKind
+		name   string
+		id     int64
+		want   vector.PrepareParamKind
+		binary bool
 	}{
-		{name: "min", id: AggIdOfMin, want: vector.PrepareParamInteger},
+		{name: "min", id: AggIdOfMin, want: vector.PrepareParamInteger, binary: true},
 		{name: "max", id: AggIdOfMax, want: vector.PrepareParamNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -326,6 +329,7 @@ func TestMinMaxPreservesWinningPrepareParamKind(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, results, 1)
 			require.Equal(t, tc.want, results[0].GetPrepareParamKindAt(0))
+			require.Equal(t, tc.binary, results[0].GetBinaryStringMetadataAt(0))
 			results[0].Free(mp)
 			agg.Free()
 		})
@@ -381,6 +385,132 @@ func TestMinMaxEqualValuesFoldPrepareParamKinds(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMinPreservesExplicitTextFromNullSlot(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("text"), false, mp))
+	require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+	agg := makeMinMaxExec(mp, AggIdOfMin, true, types.T_varbinary.ToType())
+	require.NoError(t, agg.GroupGrow(1))
+	require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+	results, err := agg.Flush()
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(0))
+	results[0].Free(mp)
+	agg.Free()
+	input.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMinMaxEqualValuesPreserveExplicitText(t *testing.T) {
+	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
+		t.Run(fmt.Sprintf("agg_%d", id), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			input := vector.NewVec(types.T_varbinary.ToType())
+			require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+			require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+			require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+			agg := makeMinMaxExec(mp, id, id == AggIdOfMin, types.T_varbinary.ToType())
+			require.NoError(t, agg.GroupGrow(1))
+			require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+			results, err := agg.Flush()
+			require.NoError(t, err)
+			require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(0))
+			results[0].Free(mp)
+			agg.Free()
+			input.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestMinMaxEqualValuesMergeEffectiveStringDomains(t *testing.T) {
+	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
+		for _, textFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("agg_%d_text_first_%t", id, textFirst), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				input := vector.NewVec(types.T_varbinary.ToType())
+				require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+				require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+				textRow := 1
+				if textFirst {
+					textRow = 0
+				}
+				require.NoError(t, input.SetRuntimeStringDomainAtWithMP(textRow, types.RuntimeStringText, mp))
+				agg := makeMinMaxExec(mp, id, id == AggIdOfMin, types.T_varbinary.ToType())
+				require.NoError(t, agg.GroupGrow(1))
+				require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+				results, err := agg.Flush()
+				require.NoError(t, err)
+				require.Equal(t, types.RuntimeStringInherit, results[0].GetRuntimeStringDomainAt(0))
+				results[0].Free(mp)
+				agg.Free()
+				input.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
+func TestMinMaxEqualPartialMergeUsesEffectiveStringDomains(t *testing.T) {
+	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
+		for _, textLeft := range []bool{false, true} {
+			t.Run(fmt.Sprintf("agg_%d_text_left_%t", id, textLeft), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				makeState := func(domain types.RuntimeStringDomain) AggFuncExec {
+					input := vector.NewVec(types.T_varbinary.ToType())
+					require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+					if domain != types.RuntimeStringInherit {
+						require.NoError(t, input.SetRuntimeStringDomainWithMP(domain, mp))
+					}
+					agg := makeMinMaxExec(mp, id, id == AggIdOfMin, types.T_varbinary.ToType())
+					require.NoError(t, agg.GroupGrow(1))
+					require.NoError(t, agg.Fill(0, 0, []*vector.Vector{input}))
+					input.Free(mp)
+					return agg
+				}
+				leftDomain, rightDomain := types.RuntimeStringInherit, types.RuntimeStringText
+				if textLeft {
+					leftDomain, rightDomain = rightDomain, leftDomain
+				}
+				left := makeState(leftDomain)
+				right := makeState(rightDomain)
+				require.NoError(t, left.Merge(right, 0, 0))
+				results, err := left.Flush()
+				require.NoError(t, err)
+				require.Equal(t, types.RuntimeStringInherit, results[0].GetRuntimeStringDomainAt(0))
+				results[0].Free(mp)
+				left.Free()
+				right.Free()
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
+func TestMinEqualMergePreservesExplicitText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeState := func() AggFuncExec {
+		input := vector.NewVec(types.T_varbinary.ToType())
+		require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+		require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+		agg := makeMinMaxExec(mp, AggIdOfMin, true, types.T_varbinary.ToType())
+		require.NoError(t, agg.GroupGrow(1))
+		require.NoError(t, agg.Fill(0, 0, []*vector.Vector{input}))
+		input.Free(mp)
+		return agg
+	}
+	left, right := makeState(), makeState()
+	require.NoError(t, left.Merge(right, 0, 0))
+	results, err := left.Flush()
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(0))
+	results[0].Free(mp)
+	left.Free()
+	right.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestMinMaxBatchMergeEqualValuesFoldsPrepareParamKinds(t *testing.T) {

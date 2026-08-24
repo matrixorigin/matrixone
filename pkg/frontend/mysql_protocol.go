@@ -76,7 +76,8 @@ const defaultSaltReadTimeout = time.Millisecond * 200
 
 const charsetBinary = 0x3f
 const charsetVarchar = 0x21
-const charsetVarcharMaxBytesPerCharacter = 3
+const utf8MaxBytesPerCharacter = 3
+const utf8mb4MaxBytesPerCharacter = 4
 const boolColumnLength = 1
 
 func init() {
@@ -813,8 +814,13 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		return moerr.NewInternalError(ctx, "malform packet")
 
 	}
-	if flag != 0 {
-		// TODO only support CURSOR_TYPE_NO_CURSOR flag now
+	switch flag {
+	case 0: // CURSOR_TYPE_NO_CURSOR
+		stmt.cursorRequested = false
+	case 1: // CURSOR_TYPE_READ_ONLY
+		stmt.cursorRequested = true
+	default:
+		stmt.cursorRequested = false
 		return moerr.NewInvalidInputf(ctx, "unsupported Prepare flag '%v'", flag)
 	}
 
@@ -2097,6 +2103,10 @@ func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMess
 	if mp.ses != nil {
 		mp.ses.appendErrorDiagnostic(errorCode, errorMessage)
 	}
+	return mp.sendErrPacketWithoutDiagnostic(errorCode, sqlState, errorMessage)
+}
+
+func (mp *MysqlProtocolImpl) sendErrPacketWithoutDiagnostic(errorCode uint16, sqlState, errorMessage string) error {
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
 }
@@ -2429,6 +2439,19 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 					return err
 				}
 			}
+		case defines.MYSQL_TYPE_BIT:
+			if value, err := mrs.GetUint64(mp.ctx, rowIdx, i); err != nil {
+				return err
+			} else {
+				bitLength := mysqlColumn.ColumnImpl.Length()
+				byteLength := (bitLength + 7) / 8
+				b := types.EncodeUint64(&value)[:byteLength]
+				slices.Reverse(b)
+				err = AppendCountOfBytesLenEnc(mp, b)
+				if err != nil {
+					return err
+				}
+			}
 		case defines.MYSQL_TYPE_FLOAT:
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
 				return err
@@ -2466,9 +2489,11 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				}
 			}
 
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for binary values, including legacy vectors
+		// described as MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
 				return err
 			} else {
@@ -2727,9 +2752,11 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 					}
 				}
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for binary values, including legacy vectors
+		// described as MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
+			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
 				return err2
 			} else {
@@ -2988,7 +3015,8 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for legacy binary vectors described as
+		// MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR:
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
@@ -3042,7 +3070,8 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 					return err
 				}
 			}
-		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
+		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
 			value, err := GetBytesBased(colSlices, rowIdx, i)
 			if err != nil {
 				return err
@@ -3306,7 +3335,8 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for legacy binary vectors described as
+		// MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR:
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
@@ -3360,7 +3390,8 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			}
-		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
+		case defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+			defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_GEOMETRY:
 			value, err := GetBytesBased(colSlices, r, i)
 			if err != nil {
 				return err
@@ -3509,7 +3540,7 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 	var err error = nil
 
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	useBinaryRow := cmd == COM_STMT_EXECUTE
+	useBinaryRow := cmd == COM_STMT_EXECUTE || cmd == COM_STMT_FETCH
 
 	//make rows into the batch
 	for i := uint64(0); i < cnt; i++ {
@@ -3552,7 +3583,7 @@ func (mp *MysqlProtocolImpl) writeResultSetRow2(
 	var err error = nil
 
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	useBinaryRow := cmd == COM_STMT_EXECUTE
+	useBinaryRow := cmd == COM_STMT_EXECUTE || cmd == COM_STMT_FETCH
 
 	writeRows := func() error {
 		//make rows into the batch
@@ -3824,7 +3855,7 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 	// COM_QUERY returns text rows, while COM_STMT_EXECUTE returns binary rows.
 	// Metadata and row encoding must describe the same command response.
-	if CommandType(cmd) == COM_STMT_EXECUTE {
+	if CommandType(cmd) == COM_STMT_EXECUTE || CommandType(cmd) == COM_STMT_FETCH {
 		for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
 			if err = mp.sendResultSetBinaryRow(mysqlRS, i); err != nil {
 				return err

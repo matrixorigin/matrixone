@@ -70,6 +70,34 @@ func TestDataBranchColumnClassification(t *testing.T) {
 	))
 }
 
+func TestDataBranchGeneratedColumnsTreatLegacyNoneAsOrdinaryText(t *testing.T) {
+	makeGenerated := func(typ types.Type, form plan.StringLiteralForm) *plan.GeneratedCol {
+		return &plan.GeneratedCol{IsStored: true, Expr: &plan.Expr{
+			Typ: plan.Type{Id: int32(typ.Oid), Charset: uint32(typ.Charset)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value:       &plan.Literal_Sval{Sval: "x"},
+				LiteralForm: form,
+			}},
+		}}
+	}
+	require.True(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_NONE),
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
+	))
+	require.False(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(types.T_varbinary.ToType(), plan.StringLiteralForm_STRING_LITERAL_NONE),
+		makeGenerated(types.T_varbinary.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
+	))
+	require.False(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_HEX),
+	))
+	require.False(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm(99)),
+		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm(99)),
+	))
+}
+
 func TestPrepareDataBranchWorkerValidatesBeforeAllocation(t *testing.T) {
 	t.Run("invalid diff projection", func(t *testing.T) {
 		tblStuff := tableStuff{}
@@ -530,6 +558,7 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	varcharVec := vector.NewVec(types.New(types.T_varchar, 64, 0))
+	defer varcharVec.Free(mp)
 	require.NoError(t, appendTupleValueToVector(varcharVec, []byte("hello"), mp))
 	require.Equal(t, 1, varcharVec.Length())
 	require.Equal(t, "hello", string(varcharVec.GetBytesAt(0)))
@@ -539,18 +568,21 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	require.True(t, varcharVec.GetNulls().Contains(1))
 
 	decimalVec := vector.NewVec(types.New(types.T_decimal256, 65, 30))
+	defer decimalVec.Free(mp)
 	decimalValue, err := types.ParseDecimal256("42.000000000000000000000000000000", 65, 30)
 	require.NoError(t, err)
 	require.NoError(t, appendTupleValueToVector(decimalVec, types.EncodeDecimal256(&decimalValue), mp))
 	require.Equal(t, decimalValue, vector.GetFixedAtNoTypeCheck[types.Decimal256](decimalVec, 0))
 
 	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 6))
+	defer datetimeVec.Free(mp)
 	err = appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected byte slice for fixed-width column")
 
 	decimalTyp := types.New(types.T_decimal256, 39, 4)
 	wideDecimalVec := vector.NewVec(decimalTyp)
+	defer wideDecimalVec.Free(mp)
 	decimalVal, err := types.ParseDecimal256("12345678901234567890123456789012344.1234", decimalTyp.Width, decimalTyp.Scale)
 	require.NoError(t, err)
 	require.NoError(t, appendTupleValueToVector(wideDecimalVec, types.EncodeDecimal256(&decimalVal), mp))
@@ -558,6 +590,7 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	require.Equal(t, decimalVal, vector.GetFixedAtNoTypeCheck[types.Decimal256](wideDecimalVec, 0))
 
 	yearVec := vector.NewVec(types.T_year.ToType())
+	defer yearVec.Free(mp)
 	yearVal := types.MoYear(2024)
 	require.NoError(t, appendTupleValueToVector(yearVec, types.EncodeValue(yearVal, types.T_year), mp))
 	require.Equal(t, 1, yearVec.Length())

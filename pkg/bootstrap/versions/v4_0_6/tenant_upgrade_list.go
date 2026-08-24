@@ -18,6 +18,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -32,10 +34,16 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addForeignKeyMetadataColumn("on_update_origin", "varchar(64) not null default 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "on_delete_origin"),
 	upgradeInformationSchemaKeyColumnUsage(),
 	upgradeInformationSchemaReferentialConstraints(),
+	ensureInformationSchemaCharacterSetsTable(),
 	populateInformationSchemaCharacterSets(),
 	upgradeInformationSchemaColumns(),
 	upgradeInformationSchemaCheckConstraints(),
 	upgradeInformationSchemaTableConstraints(),
+	upgradeInformationSchemaColumnsHideInternalColumns(),
+	dropUserDefinedFunctionNameIndex(),
+	addUserDefinedFunctionArgumentTypesColumn(),
+	backfillUserDefinedFunctionArgumentTypes(),
+	addUserDefinedFunctionSignatureIndex(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -57,6 +65,12 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 	}
 }
 
+// Keep a separate entry so tenants that already completed v4.0.6 rerun the
+// COLUMNS upgrade after the view starts filtering att_is_hidden columns.
+func upgradeInformationSchemaColumnsHideInternalColumns() versions.UpgradeEntry {
+	return upgradeInformationSchemaColumns()
+}
+
 func addForeignKeyMetadataColumn(column, definition, after string) versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:    catalog.MO_CATALOG,
@@ -66,6 +80,102 @@ func addForeignKeyMetadataColumn(column, definition, after string) versions.Upgr
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			columnInfo, err := versions.CheckTableColumn(txn, accountID, catalog.MO_CATALOG, catalog.MOForeignKeys, column)
 			return columnInfo.IsExits, err
+		},
+	}
+}
+
+func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "CHARACTER_SETS",
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    sysview.InformationSchemaCharacterSetsDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "character_sets")
+		},
+	}
+}
+
+// User-defined function lookup is scoped by database and argument signature.
+// A global unique name index prevents a database clone from retaining the
+// source and destination function definitions in the same account.
+func dropUserDefinedFunctionNameIndex() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_user_defined_function",
+		UpgType:   versions.DROP_INDEX,
+		UpgSql:    "alter table mo_catalog.mo_user_defined_function drop index name",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			exists, err := versions.CheckIndexDefinition(
+				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name",
+			)
+			return !exists, err
+		},
+	}
+}
+
+func addUserDefinedFunctionArgumentTypesColumn() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_user_defined_function",
+		UpgType:   versions.ADD_COLUMN,
+		UpgSql: fmt.Sprintf("alter table mo_catalog.mo_user_defined_function "+
+			"add column arg_types varchar(%d) not null default '' after args", types.MaxStringSize),
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			column, err := versions.CheckTableColumn(
+				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "arg_types",
+			)
+			return column.IsExits, err
+		},
+	}
+}
+
+func backfillUserDefinedFunctionArgumentTypes() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_user_defined_function",
+		UpgType:   versions.MODIFY_METADATA,
+		UpgSql:    "update mo_catalog.mo_user_defined_function set arg_types = " + catalog.UserDefinedFunctionArgumentTypesSQL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			if err := validateUserDefinedFunctionArgumentTypesFit(txn, accountID); err != nil {
+				return false, err
+			}
+			mismatch, err := versions.CheckTableDataExist(txn, accountID,
+				"select 1 from mo_catalog.mo_user_defined_function where arg_types != "+catalog.UserDefinedFunctionArgumentTypesSQL+" limit 1",
+			)
+			return !mismatch, err
+		},
+	}
+}
+
+// validateUserDefinedFunctionArgumentTypesFit prevents the upgrade backfill
+// from truncating a legacy signature before the unique overload index is built.
+func validateUserDefinedFunctionArgumentTypesFit(txn executor.TxnExecutor, accountID uint32) error {
+	overLimit, err := versions.CheckTableDataExist(txn, accountID, fmt.Sprintf(
+		"select 1 from mo_catalog.mo_user_defined_function where length(%s) > %d limit 1",
+		catalog.UserDefinedFunctionArgumentTypesSQL, types.MaxStringSize,
+	))
+	if err != nil {
+		return err
+	}
+	if overLimit {
+		return moerr.NewInvalidInputNoCtxf(
+			"function argument type signature exceeds the %d-byte catalog limit", types.MaxStringSize,
+		)
+	}
+	return nil
+}
+
+func addUserDefinedFunctionSignatureIndex() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_user_defined_function",
+		UpgType:   versions.ADD_INDEX,
+		UpgSql:    "create unique index name_db_arg_types on mo_catalog.mo_user_defined_function(name, db, arg_types)",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckIndexDefinition(
+				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db_arg_types",
+			)
 		},
 	}
 }
@@ -108,9 +218,10 @@ func upgradeInformationSchemaKeyColumnUsage() versions.UpgradeEntry {
 		Schema:    sysview.InformationDBConst,
 		TableName: "KEY_COLUMN_USAGE",
 		UpgType:   versions.CREATE_VIEW,
-		UpgSql:    sysview.InformationSchemaKeyColumnUsageDDL,
+		UpgSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
 		CheckFunc: checkViewDefinition("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
 		PreSql:    fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
+		PostSql:   sysview.InformationSchemaKeyColumnUsageDDL,
 	}
 }
 

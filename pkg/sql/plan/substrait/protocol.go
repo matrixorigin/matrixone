@@ -25,14 +25,14 @@ import (
 
 const (
 	ProtocolVersion        = 1
-	TaeReadProtocolVersion = 1
+	TaeReadProtocolVersion = 2
 	maxTaeReadSize         = 16 << 10
 	maxResolveRequestSize  = maxTaeReadSize + maxCanonicalSchemaSize + 32
 	// GC protection stores the expiry as Unix nanoseconds. Keep the wire value
 	// within that signed range before any consumer converts it through
 	// time.UnixMilli(...).UnixNano().
 	maxTaeReadExpiryUnixMS = uint64(math.MaxInt64 / 1_000_000)
-	CapabilityDocument     = `{"protocol_version":1,"substrait_version":"0.78.0","tae_read_protocol_version":1,"tae_read_feature_bits":0,"operators":["read","filter","project","aggregate","sort","fetch"],"types":["bool","i8","i16","i32","i64","fp32","fp64","fixed_char","varchar"],"semantic_registry":"exact-mo-overload-argument-result-nullability-v1","scalar_overloads":["and(bool,bool)->bool","or(bool,bool)->bool","not(bool)->bool","equal(i64,i64)->bool","not_equal(i64,i64)->bool","lt(i64,i64)->bool","lte(i64,i64)->bool","gt(i64,i64)->bool","gte(i64,i64)->bool","is_null(i64)->bool","is_not_null(i64)->bool","is_not_distinct_from(i64,i64)->bool","add(i64,i64)->i64","subtract(i64,i64)->i64","multiply(i64,i64)->i64","modulus(i64,i64)->i64","between(i64,i64,i64)->bool"],"aggregate_overloads":["count(i64)->i64","count_all(i64_literal)->i64","min(i64)->i64","max(i64)->i64"],"transport":"arrow-flight","sirius_execution_contract":1,"max_plan_bytes":16777216}`
+	CapabilityDocument     = `{"protocol_version":3,"substrait_version":"0.78.0","tae_read_protocol_version":2,"tae_read_feature_bits":0,"operators":["read","filter","project","aggregate","sort","fetch","join","reference"],"join_types":["inner","left","right","left_semi","left_anti","right_semi","right_anti"],"expressions":["literal","selection","scalar_function","cast","if_then","singular_or_list"],"types":["bool","i8","i16","i32","i64","fp32","fp64","varchar","decimal","date"],"semantic_registry":"exact-mo-bound-overload-and-tpch-family-v1","scalar_functions":["and","or","not","equal","not_equal","lt","lte","gt","gte","is_null","is_not_null","is_not_distinct_from","add","subtract","multiply","divide","modulus","between","like","starts_with","substring","extract"],"aggregate_functions":["count","sum","min","max","avg"],"transport":"arrow-flight","sirius_execution_contract":1,"max_plan_bytes":16777216}`
 )
 
 var CapabilityHash = sha256.Sum256([]byte(CapabilityDocument))
@@ -56,7 +56,7 @@ func (r *TaeRead) Validate(nowUnixMS uint64) error {
 	if len(r.ReadRef) != 32 || len(r.QueryID) == 0 || len(r.QueryID) > 4096 || len(r.SnapshotTS) != 12 || len(r.SchemaDigest) != sha256.Size || len(r.ManifestSHA256) != sha256.Size || len(r.CapabilityHash) != sha256.Size {
 		return moerr.NewInternalErrorNoCtx("invalid TaeRead identity or digest length")
 	}
-	if r.AccountID == 0 || r.DatabaseID == 0 || r.TableID == 0 || r.ExpiresAtUnixMS <= nowUnixMS || r.ExpiresAtUnixMS > maxTaeReadExpiryUnixMS {
+	if r.DatabaseID == 0 || r.TableID == 0 || r.ExpiresAtUnixMS <= nowUnixMS || r.ExpiresAtUnixMS > maxTaeReadExpiryUnixMS {
 		return moerr.NewInternalErrorNoCtx("invalid or expired TaeRead")
 	}
 	if !equalBytes(r.CapabilityHash, CapabilityHash[:]) {
@@ -74,7 +74,7 @@ func MarshalTaeRead(r *TaeRead) ([]byte, error) {
 	b = appendUint(b, 2, r.FeatureBits)
 	b = appendBytes(b, 3, r.ReadRef)
 	b = appendBytes(b, 4, r.QueryID)
-	b = appendUint(b, 5, r.AccountID)
+	b = appendRequiredUint(b, 5, r.AccountID)
 	b = appendUint(b, 6, r.TableID)
 	b = appendBytes(b, 7, r.SnapshotTS)
 	b = appendBytes(b, 8, r.SchemaDigest)
@@ -274,6 +274,10 @@ func appendUint(b []byte, n protowire.Number, v uint64) []byte {
 	if v == 0 {
 		return b
 	}
+	b = protowire.AppendTag(b, n, protowire.VarintType)
+	return protowire.AppendVarint(b, v)
+}
+func appendRequiredUint(b []byte, n protowire.Number, v uint64) []byte {
 	b = protowire.AppendTag(b, n, protowire.VarintType)
 	return protowire.AppendVarint(b, v)
 }

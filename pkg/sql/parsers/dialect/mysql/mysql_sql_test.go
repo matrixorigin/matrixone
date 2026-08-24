@@ -179,6 +179,105 @@ func TestGroupingAcceptsExpressions(t *testing.T) {
 	require.Equal(t, formatted, tree.String(stmt, dialect.MYSQL))
 }
 
+func TestInsertColumnQualification(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		numParts int
+	}{
+		{
+			name:     "unqualified",
+			sql:      "insert into db1.t1 (id, value) values (1, 10)",
+			numParts: 1,
+		},
+		{
+			name:     "table qualified",
+			sql:      "insert into db1.t1 (t1.id, t1.value) values (1, 10)",
+			numParts: 2,
+		},
+		{
+			name:     "database and table qualified",
+			sql:      "insert into db1.t1 (db1.t1.id, db1.t1.value) values (1, 10)",
+			numParts: 3,
+		},
+		{
+			name:     "quoted database and table qualified",
+			sql:      "insert into `db1`.`t1` (`db1`.`t1`.`id`, `db1`.`t1`.`value`) values (1, 10)",
+			numParts: 3,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			insert, ok := stmt.(*tree.Insert)
+			require.True(t, ok)
+			require.Equal(t, tree.Identifier("db1"), insert.TargetDatabaseName)
+			require.Equal(t, tree.Identifier("t1"), insert.TargetTableName)
+			require.Equal(t, tree.IdentifierList{"id", "value"}, insert.Columns)
+			require.Len(t, insert.ColumnNames, 2)
+			for _, columnName := range insert.ColumnNames {
+				require.Equal(t, test.numParts, columnName.NumParts)
+			}
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer roundTripped.Free()
+
+			roundTripInsert, ok := roundTripped.(*tree.Insert)
+			require.True(t, ok)
+			require.Equal(t, insert.Columns, roundTripInsert.Columns)
+			require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
+		})
+	}
+
+	caseSensitive, err := ParseOne(context.Background(),
+		"insert into CaseMode.T (CaseMode.T.id) values (1)", 0)
+	require.NoError(t, err)
+	defer caseSensitive.Free()
+	caseSensitiveInsert := caseSensitive.(*tree.Insert)
+	require.Equal(t, tree.Identifier("CaseMode"), caseSensitiveInsert.TargetDatabaseName)
+	require.Equal(t, tree.Identifier("T"), caseSensitiveInsert.TargetTableName)
+	require.Equal(t, "CaseMode", caseSensitiveInsert.ColumnNames[0].DbName())
+	require.Equal(t, "T", caseSensitiveInsert.ColumnNames[0].TblName())
+
+	_, err = ParseOne(context.Background(),
+		"insert into db1.t1 (catalog.db1.t1.id) values (1)", 1)
+	require.Error(t, err)
+}
+
+func TestQualifiedInsertColumnsDoNotExpandSharedConsumers(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"insert into t(id, v) values (1, 2) on duplicate key update v = values(other.wrong.v)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	insert := stmt.(*tree.Insert)
+	valuesCall := insert.OnDuplicateUpdate[0].Expr.(*tree.FuncExpr)
+	valuesColumn := valuesCall.Exprs[0].(*tree.UnresolvedName)
+	require.Equal(t, 3, valuesColumn.NumParts)
+	require.Equal(t, "other", valuesColumn.DbNameOrigin())
+	require.Equal(t, "wrong", valuesColumn.TblNameOrigin())
+	require.Equal(t, "v", valuesColumn.ColNameOrigin())
+
+	_, err = ParseOne(context.Background(),
+		"merge into target t using source s on t.id = s.id when not matched then insert (id, v) values (s.id, s.v)", 1)
+	require.NoError(t, err)
+
+	merge, err := ParseOne(context.Background(),
+		"merge into target t using source s on t.id = s.id when not matched then insert (t.id, t.v) values (s.id, s.v)", 1)
+	require.NoError(t, err)
+	require.Contains(t, tree.String(merge, dialect.MYSQL), "insert (id, v)")
+
+	_, err = ParseOne(context.Background(),
+		"merge into target t using source s on t.id = s.id when not matched then insert (other.wrong.id, v) values (s.id, s.v)", 1)
+	require.Error(t, err)
+}
+
 func TestQuantifiedTableSubqueryParse(t *testing.T) {
 	tests := []struct {
 		sql  string
@@ -811,6 +910,31 @@ func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	require.Equal(
 		t,
 		"create temporary table if not exists `dst` clone `src` copy grants to account `acc`",
+		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
+	)
+}
+
+func TestCloneDatabaseParsePreservesIfNotExists(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create database if not exists dst clone src{snapshot = 'sp1'} to account acc",
+		1,
+	)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+
+	cloneStmt, ok := stmt.(*tree.CloneDatabase)
+	require.True(t, ok)
+	require.True(t, cloneStmt.IfNotExists)
+	require.Equal(t, tree.Identifier("dst"), cloneStmt.DstDatabase)
+	require.Equal(t, tree.Identifier("src"), cloneStmt.SrcDatabase)
+	require.NotNil(t, cloneStmt.AtTsExpr)
+	require.NotNil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, tree.Identifier("acc"), cloneStmt.ToAccountOpt.AccountName)
+
+	require.Equal(
+		t,
+		"create database if not exists `dst` clone `src`{snapshot = 'sp1'} to account `acc`",
 		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
 	)
 }
@@ -2878,6 +3002,12 @@ var (
 			input:  "create index idx using ivfpq on A (a) LISTS 8 kmeans_train_percent 7 max_index_capacity 2000",
 			output: "create index idx using ivfpq on a (a) LISTS 8 KMEANS_TRAIN_PERCENT 7 MAX_INDEX_CAPACITY 2000 ",
 		}, {
+			input:  "create fulltext2 index idx on A (a) max_index_capacity 500000 max_postings_capacity 8000000",
+			output: "create fulltext2 index idx on a (a) MAX_INDEX_CAPACITY 500000 MAX_POSTINGS_CAPACITY 8000000 ",
+		}, {
+			input:  "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
+			output: "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
+		}, {
 			input: "create index idx1 on a (a)",
 		}, {
 			input:  "create index idx using master on A (a,b,c)",
@@ -4186,6 +4316,12 @@ var (
 			input:  "drop table if exists ssb CASCADE",
 			output: "drop table if exists ssb",
 		}, {
+			input:  "drop view if exists ssb RESTRICT",
+			output: "drop view if exists ssb",
+		}, {
+			input:  "drop view if exists ssb CASCADE",
+			output: "drop view if exists ssb",
+		}, {
 			input: "create table t1 (a int) AUTOEXTEND_SIZE = 10",
 		}, {
 			input:  "create table t1 (a int) ENGINE_ATTRIBUTE = 'abc'",
@@ -5057,6 +5193,111 @@ func TestQuotedUnicodeIdentifierAliases(t *testing.T) {
 	}
 }
 
+func TestUnquotedExtendedIdentifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "UTF-8 continuation",
+			sql:  "CREATE TABLE t_ãg (a INT)",
+			want: "create table t_ãg (a int)",
+		},
+		{
+			name: "UTF-8 leading table and column",
+			sql:  "CREATE TABLE 数量 (值 INT)",
+			want: "create table 数量 (值 int)",
+		},
+		{
+			name: "maximum BMP code point",
+			sql:  "CREATE TABLE \uFFFF (a INT)",
+			want: "create table \uFFFF (a int)",
+		},
+		{
+			name: "digit leading",
+			sql:  "CREATE TABLE 1数量 (a INT)",
+			want: "create table 1数量 (a int)",
+		},
+		{
+			name: "digit leading with exponent letter",
+			sql:  "CREATE TABLE 1e数量 (a INT)",
+			want: "create table 1e数量 (a int)",
+		},
+		{
+			name: "digit leading raw latin1 client byte",
+			sql:  "CREATE TABLE 1\xe9A (a INT)",
+			want: "create table 1\xe9a (a int)",
+		},
+		{
+			name: "raw latin1 client byte",
+			sql:  "CREATE TABLE t_\xe9A (a INT)",
+			want: "create table t_\xe9a (a int)",
+		},
+		{
+			name: "charset prefix with BMP suffix",
+			sql:  "CREATE TABLE _utf8mb4数量 (a INT)",
+			want: "create table _utf8mb4数量 (a int)",
+		},
+		{
+			name: "charset prefix with raw latin1 suffix",
+			sql:  "CREATE TABLE _utf8mb4\xe9A (a INT)",
+			want: "create table _utf8mb4\xe9a (a int)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func TestCharsetIntroducerParses(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "SELECT _utf8mb4'test'", 1)
+	require.NoError(t, err)
+	stmt.Free()
+}
+
+func TestUnquotedSupplementaryIdentifiersRejected(t *testing.T) {
+	for _, sql := range []string{
+		"CREATE TABLE 😀 (a INT)",
+		"CREATE TABLE t😀 (a INT)",
+		"CREATE TABLE 1😀 (a INT)",
+		"CREATE TABLE \U00010000 (a INT)",
+		"CREATE TABLE 0x😀 (a INT)",
+		"CREATE TABLE 0b😀 (a INT)",
+		"SELECT @😀",
+		"SELECT @@😀",
+		"SELECT _utf8mb4😀",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestUnquotedIdentifiersRejectPunctuationBeforeUnicode(t *testing.T) {
+	for _, sql := range []string{
+		"CREATE TABLE 1.数量 (a INT)",
+		"CREATE TABLE 1e+数量 (a INT)",
+		"CREATE TABLE 1e-数量 (a INT)",
+		"CREATE TABLE 0x.数量 (a INT)",
+		"CREATE TABLE 0b+数量 (a INT)",
+		"SELECT @+数量",
+		"SELECT @@-数量",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestShowVariablesGlobalFlag(t *testing.T) {
 	ctx := context.TODO()
 	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)
@@ -5526,6 +5767,253 @@ func TestLimitByRank(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOffsetWithoutLimit(t *testing.T) {
+	testCases := []struct {
+		name   string
+		input  string
+		output string
+	}{
+		{
+			name:   "literal offset",
+			input:  "SELECT id FROM t ORDER BY id OFFSET 1",
+			output: "select id from t order by id offset 1",
+		},
+		{
+			name:   "parenthesized literal offset",
+			input:  "SELECT id FROM t OFFSET (1)",
+			output: "select id from t offset (1)",
+		},
+		{
+			name:   "offset after parenthesized expression",
+			input:  "SELECT (1) OFFSET (c)",
+			output: "select (1) offset (c)",
+		},
+		{
+			name:   "prepared parameter",
+			input:  "SELECT id FROM t ORDER BY id OFFSET ?",
+			output: "select id from t order by id offset ?",
+		},
+		{
+			name:   "parenthesized select",
+			input:  "(SELECT 1) OFFSET 1",
+			output: "(select 1) offset 1",
+		},
+		{
+			name:   "parenthesized select with parenthesized identifier offset",
+			input:  "(SELECT 1) OFFSET (c)",
+			output: "(select 1) offset (c)",
+		},
+		{
+			name:   "parenthesized select with cte",
+			input:  "WITH cte AS (SELECT 1) (SELECT * FROM cte) OFFSET 1",
+			output: "with cte as (select 1) (select * from cte) offset 1",
+		},
+		{
+			name:   "parenthesized select with outer order",
+			input:  "(SELECT 1) ORDER BY 1 OFFSET 1",
+			output: "(select 1) order by 1 offset 1",
+		},
+		{
+			name:   "parenthesized select with cte and outer order",
+			input:  "WITH cte AS (SELECT 1) (SELECT * FROM cte) ORDER BY 1 OFFSET ?",
+			output: "with cte as (select 1) (select * from cte) order by 1 offset ?",
+		},
+		{
+			name:   "offset remains an identifier",
+			input:  "SELECT offset FROM offset ORDER BY offset OFFSET 1",
+			output: "select offset from offset order by offset offset 1",
+		},
+		{
+			name:   "explicit offset alias",
+			input:  "SELECT 1 AS offset OFFSET 1",
+			output: "select 1 as offset offset 1",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tc.input, 1)
+			require.NoError(t, err)
+
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			require.NotNil(t, selectStmt.Limit)
+			require.Nil(t, selectStmt.Limit.Count)
+			require.NotNil(t, selectStmt.Limit.Offset)
+			require.Equal(t, tc.output, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+
+	aliases := []struct {
+		name   string
+		input  string
+		output string
+	}{
+		{
+			name:   "implicit projection alias",
+			input:  "SELECT 1 offset",
+			output: "select 1 as offset",
+		},
+		{
+			name:   "implicit projection alias before from",
+			input:  "SELECT 1 offset FROM t",
+			output: "select 1 as offset from t",
+		},
+		{
+			name:   "implicit table alias",
+			input:  "SELECT * FROM t offset",
+			output: "select * from t as offset",
+		},
+		{
+			name:   "implicit projection alias before limit",
+			input:  "SELECT 1 offset LIMIT 1",
+			output: "select 1 as offset limit 1",
+		},
+		{
+			name:   "implicit table alias before where",
+			input:  "SELECT * FROM t offset WHERE true",
+			output: "select * from t as offset where true",
+		},
+		{
+			name:   "implicit projection alias before rank",
+			input:  "SELECT 1 offset BY RANK WITH OPTION 'nprobe=1'",
+			output: "select 1 as offset by rank with option 'nprobe=1'",
+		},
+		{
+			name:   "implicit projection alias before interval",
+			input:  "SELECT 1 offset INTERVAL(ts, 1, day)",
+			output: "select 1 as offset interval(ts, 1, day)",
+		},
+		{
+			name:   "implicit table alias before full join",
+			input:  "SELECT * FROM t offset FULL JOIN u ON t.a = u.a",
+			output: "select * from t as offset full join u on t.a = u.a",
+		},
+		{
+			name:   "implicit table alias before full outer join",
+			input:  "SELECT * FROM t offset FULL OUTER JOIN u ON t.a = u.a",
+			output: "select * from t as offset full join u on t.a = u.a",
+		},
+		{
+			name:   "implicit projection alias before comment and from",
+			input:  "SELECT 1 offset /* comment */ FROM t",
+			output: "select 1 as offset from t",
+		},
+		{
+			name:   "offset remains a function name",
+			input:  "SELECT offset(1)",
+			output: "select offset(1)",
+		},
+		{
+			name:   "offset remains a table name",
+			input:  "SELECT * FROM offset",
+			output: "select * from offset",
+		},
+		{
+			name:   "implicit derived table alias",
+			input:  "SELECT * FROM (SELECT 1) offset",
+			output: "select * from (select 1) as offset",
+		},
+		{
+			name:   "explicit derived table alias with columns",
+			input:  "SELECT * FROM (SELECT 1) AS offset(c)",
+			output: "select * from (select 1) as offset(c)",
+		},
+		{
+			name:   "implicit derived table alias with spaced columns",
+			input:  "SELECT * FROM (SELECT 1) offset (c)",
+			output: "select * from (select 1) as offset(c)",
+		},
+		{
+			name:   "implicit nested derived table alias with spaced columns",
+			input:  "SELECT * FROM ((SELECT 1)) offset (c)",
+			output: "select * from ((select 1)) as offset(c)",
+		},
+		{
+			name:   "implicit comma derived table alias with spaced columns",
+			input:  "SELECT * FROM t, (SELECT 1) offset (c)",
+			output: "select * from t cross join (select 1) as offset(c)",
+		},
+	}
+
+	for _, tc := range aliases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tc.input, 1)
+			require.NoError(t, err)
+			require.Equal(t, tc.output, tree.String(stmt, dialect.MYSQL))
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			if tc.name != "implicit projection alias before limit" {
+				require.Nil(t, selectStmt.Limit)
+			}
+			if tc.name == "implicit projection alias before interval" {
+				require.NotNil(t, selectStmt.TimeWindow)
+			}
+		})
+	}
+}
+
+func TestParenthesizedTimeWindowPagination(t *testing.T) {
+	testCases := []struct {
+		name       string
+		input      string
+		output     string
+		wantCount  bool
+		wantOffset bool
+		wantOrder  bool
+	}{
+		{
+			name:      "limit",
+			input:     "(SELECT 1) INTERVAL(ts, 1, day) LIMIT 1",
+			output:    "(select 1) interval(ts, 1, day) limit 1",
+			wantCount: true,
+		},
+		{
+			name:       "offset without order",
+			input:      "(SELECT 1) INTERVAL(ts, 1, day) OFFSET 1",
+			output:     "(select 1) interval(ts, 1, day) offset 1",
+			wantOffset: true,
+		},
+		{
+			name:       "offset with order",
+			input:      "(SELECT 1) INTERVAL(ts, 1, day) ORDER BY 1 OFFSET 1",
+			output:     "(select 1) order by 1 interval(ts, 1, day) offset 1",
+			wantOffset: true,
+			wantOrder:  true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tc.input, 1)
+			require.NoError(t, err)
+
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			require.NotNil(t, selectStmt.TimeWindow)
+			require.NotNil(t, selectStmt.Limit)
+			require.Equal(t, tc.wantCount, selectStmt.Limit.Count != nil)
+			require.Equal(t, tc.wantOffset, selectStmt.Limit.Offset != nil)
+			require.Equal(t, tc.wantOrder, len(selectStmt.OrderBy) != 0)
+			require.Equal(t, tc.output, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func TestOffsetContextReset(t *testing.T) {
+	parser := &MySQLParser{}
+	stmts, err := parser.Parse(context.Background(), "SELECT * FROM (SELECT 1) offset (c)", 1)
+	require.NoError(t, err)
+	require.Equal(t, "select * from (select 1) as offset(c)", tree.String(stmts[0], dialect.MYSQL))
+
+	stmts, err = parser.Parse(context.Background(), "(SELECT 1) OFFSET (c)", 1)
+	require.NoError(t, err)
+	require.Equal(t, "(select 1) offset (c)", tree.String(stmts[0], dialect.MYSQL))
+	selectStmt, ok := stmts[0].(*tree.Select)
+	require.True(t, ok)
+	require.NotNil(t, selectStmt.Limit)
 }
 
 // Test WITH clause support for INSERT statement (Issue #22583)

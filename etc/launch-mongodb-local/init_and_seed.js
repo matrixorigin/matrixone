@@ -38,3 +38,19 @@ source.decoded_budget.insertOne({
   _id: ObjectId("64b000000000000000000201"),
   payload: "x".repeat(192 * 1024)
 });
+
+source.json_scalar.drop();
+source.json_scalar.insertOne({
+  _id: 1,
+  value: "text",
+  payload: {a: NumberInt(2)},
+  arr: [NumberInt(1), NumberInt(2)]
+});
+
+source.binary_padding.drop();
+source.binary_padding.insertMany([
+  {_id: "d1", value: BinData(0, "YQ==")},
+  {_id: "d2", value: BinData(0, "YSA=")},
+  {_id: "d3", value: BinData(0, "YSAg")},
+  {_id: "d4", value: BinData(0, "QQ==")}
+]);

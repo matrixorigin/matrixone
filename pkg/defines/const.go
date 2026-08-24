@@ -53,7 +53,16 @@ const (
 	MORPCVersion15     int64 = 15 // CHECK metadata in rename-column alter requests
 	MORPCVersion16     int64 = 16 // information_schema CHECK_CONSTRAINTS table function
 	MORPCVersion17     int64 = 17 // ordered-set percentile aggregate IDs
-	MORPCLatestVersion       = MORPCVersion17
+	MORPCVersion18     int64 = 18 // prepared-parameter binary-string metadata
+	MORPCVersion19     int64 = 19 // remote bounded partition Top-N operator
+	MORPCVersion20     int64 = 20 // target-aware multi-table UPDATE pipeline fields
+	MORPCVersion21     int64 = 21 // lookup-only RIGHT DEDUP for proven-unique insert input
+	MORPCVersion22     int64 = 22 // typed user-defined variable migration
+	MORPCVersion23     int64 = 23 // explicit-text runtime string provenance
+	MORPCVersion24     int64 = 24 // per-target affected-row selectors for repeated physical UPDATE targets
+	MORPCVersion25     int64 = 25 // UPDATE changed-row counting
+	MORPCVersion26     int64 = 26 // statement LAST_INSERT_ID in remote terminal results
+	MORPCLatestVersion       = MORPCVersion26
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

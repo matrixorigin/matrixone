@@ -4482,6 +4482,49 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// LoadText reads a file via the datalink resolver and returns its EXTRACTED plain
+// text: a PDF/DOCX is parsed to text (GetPlainText), any other file is returned as-is.
+// Unlike load_file (raw bytes), this yields the same text the fulltext index build
+// extracts, so it is the datalink resolver used by fulltext2 CDC maintenance to keep
+// CDC parity with the synchronous build.
+func LoadText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		_filePath, null1 := filePathVec.GetStrValue(i)
+		if null1 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath := util.UnsafeBytesToString(_filePath)
+
+		dl, err := datalink.NewDatalink(filePath, proc)
+		if err != nil {
+			return err
+		}
+		fileBytes, err := dl.GetPlainText(proc)
+		if err != nil {
+			return err
+		}
+		if len(fileBytes) > types.MaxBlobLen {
+			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+		}
+		if len(fileBytes) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendBytes(fileBytes, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // WriteFileDatalink write content to file service and return number of byte written
 func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
@@ -4678,6 +4721,7 @@ func DateToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	result.GetResultVector().SetTypeScale(scale)
 	return opUnaryFixedToFixed[types.Datetime, types.Time](ivecs, result, proc, length, func(v types.Datetime) types.Time {
 		return v.ToTime(scale)
 	}, selectList)
@@ -4685,8 +4729,13 @@ func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	result.GetResultVector().SetTypeScale(scale)
+	loc := time.Local
+	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+		loc = proc.GetSessionInfo().TimeZone
+	}
 	return opUnaryFixedToFixed[types.Timestamp, types.Time](ivecs, result, proc, length, func(v types.Timestamp) types.Time {
-		return v.ToDatetime(time.Local).ToTime(scale)
+		return v.ToDatetime(loc).ToTime(scale)
 	}, selectList)
 }
 
@@ -4836,6 +4885,1287 @@ func TimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		_, _, sec, _, _ := v.ClockFormat()
 		return uint8(sec)
 	}, selectList)
+}
+
+func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	selectList *FunctionSelectList,
+	fn func(hour uint32, minute, second uint8) T,
+) error {
+	strParam := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[T](result)
+	var zero T
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		strVal, null := strParam.GetStrValue(i)
+		str := functionUtil.QuickBytesToStr(strVal)
+		if null || mysqlAllWhitespaceForExtract(str) {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		hour, minute, second, ok := timeStringToClockForExtract(str)
+		if !ok {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.Append(fn(uint32(hour), minute, second), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// timeStringToClockForExtract follows MySQL's string-to-TIME coercion for
+// HOUR, MINUTE, and SECOND. Its grammar ownership is ordered deliberately:
+//
+//   - A single outer '-' belongs to the TIME sign.
+//   - An unambiguous separated DATETIME owns its date and clock fields.
+//   - Compact DATETIME owns only its exact numeric/fractional form.
+//   - Remaining input is scanned once as TIME/day-TIME/compact-TIME.
+//   - A complete DATE prefix is the final fallback (00:MM:YY).
+//
+// The general temporal parsers accept different grammars and must not receive
+// arbitrary TIME-shaped user input here.
+func timeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
+	// Leading whitespace belongs to the TIME scanner. Keep trailing whitespace:
+	// it can decide whether an otherwise ambiguous prefix is DATETIME or TIME.
+	str = mysqlTrimLeftWhitespaceForExtract(str)
+	if len(str) == 0 {
+		return 0, 0, 0, false
+	}
+	if str[0] == '-' {
+		str = str[1:]
+		if len(str) == 0 {
+			return 0, 0, 0, false
+		}
+	}
+	// MySQL's str_to_time first attempts a complete DATETIME conversion when
+	// enough input remains after the leading whitespace/sign.  This length gate
+	// is part of the grammar: for example, "01:01:01 x" is a TIME, while
+	// "01:01:01 abc" is a DATE/DATETIME candidate.  Keeping the gate here lets
+	// the datetime scanner and the TIME scanner share one consumed boundary
+	// instead of deciding ownership from individual field widths.
+	if len(str) >= 12 {
+		if result := mysqlSeparatedDatetimeClockForExtract(str); result.matched {
+			return result.hour, result.minute, result.second, result.valid
+		}
+	}
+	if result := parseCompactDatetimeClockForExtract(str); result.matched {
+		return result.hour, result.minute, result.second, result.valid
+	}
+	return mysqlTimeStringToClockForExtract(str)
+}
+
+func mysqlTimeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
+	if mysqlLeadingDigitsExceedUint32(str) {
+		return 0, 0, 0, false
+	}
+
+	// Retain a valid TIME prefix before trailing text, for example
+	// "15:30:45abc". Invalid clocks such as "12:60:00" still fail because
+	// their complete prefix cannot be parsed as TIME.
+	if hour, minute, second, ok := mysqlTimePrefixClockForExtract(str); ok {
+		return hour, minute, second, true
+	}
+
+	// MySQL consumes a complete date prefix through its leading year field:
+	// "2024-12-20" and "2024-12-20foo" both become the compact TIME
+	// 00:20:24. An ISO-T suffix does not make it a DATETIME for this TIME
+	// coercion, so it follows the same date-prefix rule.
+	if mysqlDatePrefixTimeStringForExtract(str) {
+		if hour, minute, second, ok := mysqlTimePrefixClockForExtract(str[:4]); ok {
+			return hour, minute, second, true
+		}
+	}
+	return 0, 0, 0, false
+}
+
+func mysqlDateOnlyStringForExtract(str string) bool {
+	return len(str) == 10 && asciiDigits(str[:4]) && asciiDigits(str[5:7]) &&
+		asciiDigits(str[8:10]) && (str[4] == '-' || str[4] == '/') && str[7] == str[4]
+}
+
+func mysqlDatePrefixTimeStringForExtract(str string) bool {
+	if len(str) < 10 || !mysqlDateOnlyStringForExtract(str[:10]) {
+		return false
+	}
+	year := uint64(mysqlClampedDigitsForExtract(str[:4], math.MaxUint64))
+	month := uint64(mysqlClampedDigitsForExtract(str[5:7], math.MaxUint64))
+	day := uint64(mysqlClampedDigitsForExtract(str[8:10], math.MaxUint64))
+	if year <= math.MaxInt32 && mysqlDatetimeDateForExtract(year, month, day) {
+		return true
+	}
+	suffix := str[10:]
+	if suffix == "" || !mysqlWhitespaceForExtract(suffix[0]) {
+		return true
+	}
+	trimmed := mysqlTrimLeftWhitespaceForExtract(suffix)
+	if trimmed == "" {
+		return true
+	}
+	if !mysqlEndsWithWhitespaceForExtract(suffix) {
+		return false
+	}
+	for i := 0; i < len(trimmed); i++ {
+		if mysqlWhitespaceForExtract(trimmed[i]) {
+			continue
+		}
+		if trimmed[i] < '0' || trimmed[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func mysqlLeadingDigitsExceedUint32(str string) bool {
+	value := uint64(0)
+	for i := 0; i < len(str) && str[i] >= '0' && str[i] <= '9'; i++ {
+		digit := uint64(str[i] - '0')
+		if value > (math.MaxUint32-digit)/10 {
+			return true
+		}
+		value = value*10 + digit
+	}
+	return false
+}
+
+func asciiDigits(str string) bool {
+	for i := 0; i < len(str); i++ {
+		if str[i] < '0' || str[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+type timeExtractParseResult struct {
+	hour           uint64
+	minute, second uint8
+	matched, valid bool
+}
+
+func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
+	pos := 0
+	year, yearDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
+	if !ok || yearDigits > 4 || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
+		return timeExtractParseResult{}
+	}
+	if yearDigits == 2 {
+		year = uint64(adjustYear(int(year)))
+	}
+	dateSeparatorCount := 0
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		dateSeparatorCount++
+		pos++
+	}
+	month, monthDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
+	if !ok || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
+		return timeExtractParseResult{}
+	}
+	secondDateSeparatorCount := 0
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		secondDateSeparatorCount++
+		pos++
+	}
+	day, dayDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
+	if !ok {
+		return timeExtractParseResult{}
+	}
+	// str_to_datetime accepts additional punctuation after the day field
+	// before the separating whitespace (for example, "1:01:01: abc").
+	// Keep consuming that punctuation as part of the same date candidate;
+	// otherwise the length-gated DATETIME attempt is lost and the TIME scanner
+	// rejects the already-consumed clock prefix.
+	postDayPunctuationCount := 0
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		postDayPunctuationCount++
+		pos++
+	}
+	if pos >= len(str) || !mysqlWhitespaceForExtract(str[pos]) {
+		// A complete date without a clock is still handled by the TIME path.
+		return timeExtractParseResult{}
+	}
+	if !mysqlDatetimeDateForExtract(year, month, day) {
+		// Invalid date-shaped values are handed to the same TIME scanner as all
+		// other non-DATETIME input. The scanner still retains the complete
+		// separator/whitespace suffix so it can reject a date-shaped clock when
+		// MySQL would return NULL.
+		return timeExtractParseResult{}
+	}
+	interstitialWhitespaceCount := 0
+	for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
+		interstitialWhitespaceCount++
+		pos++
+	}
+	clockStart := pos
+	// A punctuation separator may precede the first clock field. Keep signs
+	// for the dedicated sign consumer below, but consume the other punctuation
+	// as part of this DATETIME candidate (for example, "2024-12-20 :1").
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) &&
+		str[pos] != '+' && str[pos] != '-' {
+		pos++
+	}
+	signStart := pos
+	mysqlConsumeDatetimeClockSignsForExtract(str, &pos)
+	// A bare sign after the date is not a valid DATETIME clock. Let the TIME
+	// scanner own the original candidate instead (the boundary is observable
+	// for inputs such as "1:01:01: +").
+	if pos > clockStart && (pos == len(str) || str[pos] < '0' || str[pos] > '9') {
+		// A sign terminating a complete date candidate is a zero-time DATETIME
+		// suffix unless the candidate's single post-day separator identifies the
+		// ambiguous TIME spelling (for example, "1:01:01: +"). Keep the sign,
+		// separator count, and token-termination boundary together so a trailing
+		// space cannot make the same consumed candidate invalid.
+		candidate := mysqlDatetimeClockCandidateForExtract(str, clockStart)
+		bareSign := signStart < pos && pos-signStart == 1 &&
+			(str[signStart] == '+' || str[signStart] == '-')
+		if mysqlDatetimeBareSignSuffixForExtract(candidate, postDayPunctuationCount, bareSign, str[pos:]) {
+			return timeExtractParseResult{matched: true, valid: true}
+		}
+		return timeExtractParseResult{}
+	}
+	hour, hourDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
+	if !ok {
+		// Once the complete DATETIME candidate has been selected, a valid date
+		// with no numeric clock is still a successful zero-time conversion.  The
+		// caller applies the same length gate as MySQL's str_to_time, so short
+		// DATE/TIME-looking strings remain available to the TIME scanner.
+		return timeExtractParseResult{matched: true, valid: true}
+	}
+	result := timeExtractParseResult{matched: true}
+	minute := uint64(0)
+	second := uint64(0)
+	clockFields := 1
+	var minuteDigits, secondDigits int
+	if pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		pos++
+		for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+			pos++
+		}
+		if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+			minute, minuteDigits, ok = mysqlVariableDigitsForExtract(str, &pos)
+			if !ok {
+				return result
+			}
+			clockFields = 2
+			// MySQL accepts a DATETIME whose clock ends after the minute and
+			// supplies the omitted seconds as zero. Once a second-field
+			// separator is consumed, repeated separators still retain the
+			// previously parsed hour and minute (for example,
+			// "... 12:34::56").
+			if pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+				pos++
+				for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+					pos++
+				}
+				if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+					second, secondDigits, ok = mysqlVariableDigitsForExtract(str, &pos)
+					if !ok {
+						return result
+					}
+					clockFields = 3
+				}
+			}
+		}
+	}
+	// A one-digit year and an all-one-digit complete clock is the sole
+	// ambiguous spelling that MySQL assigns to compact TIME when it ends at the
+	// clock (or is followed by a sign). Every other consumed clock remains the
+	// DATETIME candidate, including a trailing whitespace/token suffix.
+	if yearDigits == 1 && monthDigits == 1 && dayDigits == 1 && dateSeparatorCount == 1 && secondDateSeparatorCount == 1 &&
+		clockFields == 3 && hourDigits == 1 && minuteDigits == 1 && secondDigits == 1 &&
+		interstitialWhitespaceCount == 1 &&
+		mysqlDatetimeClockSuffixIsCompactTimeForExtract(str, pos) {
+		return timeExtractParseResult{}
+	}
+	// An incomplete clock followed by a whitespace/token suffix is not a
+	// DATETIME prefix. The DATE-prefix fallback then applies its own coercion.
+	if !mysqlDatetimeClockSuffixForExtract(str, pos, clockFields) {
+		return timeExtractParseResult{}
+	}
+	if hour > 23 || minute > 59 || second > 59 {
+		return result
+	}
+	result.hour = hour
+	result.minute = uint8(minute)
+	result.second = uint8(second)
+	result.valid = true
+	return result
+}
+
+func mysqlConsumeDatetimeClockSignsForExtract(str string, pos *int) {
+	for *pos < len(str) && (str[*pos] == '+' || str[*pos] == '-') {
+		*pos = *pos + 1
+	}
+}
+
+func mysqlDatetimeClockSuffixIsCompactTimeForExtract(str string, pos int) bool {
+	return pos == len(str) || str[pos] == '+' || str[pos] == '-'
+}
+
+func mysqlDatetimeClockCandidateForExtract(str string, end int) mysqlTimePrefixCandidate {
+	for end > 0 && mysqlWhitespaceForExtract(str[end-1]) {
+		end--
+	}
+	return mysqlTimePrefixCandidateForExtract(str[:end])
+}
+
+func mysqlDatetimeBareSignSuffixForExtract(
+	candidate mysqlTimePrefixCandidate,
+	postDaySeparators int,
+	bareSign bool,
+	suffix string,
+) bool {
+	if !bareSign || mysqlTrimLeftWhitespaceForExtract(suffix) != "" {
+		return false
+	}
+	if postDaySeparators != 1 {
+		return true
+	}
+	// A single trailing separator is ambiguous only while the sign is the
+	// terminal byte of a short candidate. Once the length-gated path has
+	// established the complete date-shaped candidate, the DATETIME owner keeps
+	// the same H:M:S fields even when the sign is followed by whitespace.
+	return candidate.fieldCount >= 3 && candidate.trailingSeparatorCount == 1
+}
+
+func mysqlDatetimeClockSuffixForExtract(str string, pos int, clockFields int) bool {
+	if pos == len(str) {
+		return true
+	}
+	if mysqlWhitespaceForExtract(str[pos]) {
+		for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
+			pos++
+		}
+		// MySQL retains a complete H:M:S prefix before any whitespace suffix;
+		// an hour-only or H:M prefix falls back to the DATE coercion instead.
+		return clockFields >= 3
+	}
+	if str[pos] == '+' || str[pos] == '-' {
+		return false
+	}
+	return true
+}
+
+func mysqlDatetimeDateForExtract(year, month, day uint64) bool {
+	if year > 9999 || month > 12 || day > 31 {
+		return false
+	}
+	// A zero month or day is an incomplete calendar value; string-to-TIME
+	// coercion can still extract its clock. Once both are nonzero, retain
+	// calendar validation even when the year is zero.
+	if month == 0 || day == 0 {
+		return true
+	}
+	if year == 0 {
+		return day <= mysqlDaysInMonthForExtract(year, month)
+	}
+	return types.ValidDate(int32(year), uint8(month), uint8(day))
+}
+
+func mysqlDaysInMonthForExtract(year, month uint64) uint64 {
+	switch month {
+	case 4, 6, 9, 11:
+		return 30
+	case 2:
+		// MySQL's zero year accepts February 28 but not February 29. Do not
+		// apply the proleptic Gregorian leap-year rule to year zero.
+		if year == 0 {
+			return 28
+		}
+		if year%4 == 0 && (year%100 != 0 || year%400 == 0) {
+			return 29
+		}
+		return 28
+	default:
+		return 31
+	}
+}
+
+func mysqlDatetimePunctuationForExtract(c byte) bool {
+	return (c >= '!' && c <= '/') || (c >= ':' && c <= '@') ||
+		(c >= '[' && c <= '`') || (c >= '{' && c <= '~')
+}
+
+func mysqlWhitespaceForExtract(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '\f', '\v':
+		return true
+	default:
+		return false
+	}
+}
+
+func mysqlAllWhitespaceForExtract(str string) bool {
+	if len(str) == 0 {
+		return true
+	}
+	for i := 0; i < len(str); i++ {
+		if !mysqlWhitespaceForExtract(str[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func mysqlEndsWithWhitespaceForExtract(str string) bool {
+	return len(str) > 0 && mysqlWhitespaceForExtract(str[len(str)-1])
+}
+
+func mysqlTrimLeftWhitespaceForExtract(str string) string {
+	pos := 0
+	for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
+		pos++
+	}
+	return str[pos:]
+}
+
+func mysqlFirstWhitespaceForExtract(str string) int {
+	for i := 0; i < len(str); i++ {
+		if mysqlWhitespaceForExtract(str[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
+	rawPrefix := mysqlTimePrefixForExtract(str)
+	if len(rawPrefix) == 0 {
+		return 0, 0, 0, false
+	}
+
+	prefix := mysqlTrimLeftWhitespaceForExtract(rawPrefix)
+	if len(prefix) == 0 {
+		return 0, 0, 0, false
+	}
+	// prefix is trimmed before scanning, but suffix ownership must still use
+	// offsets into the original value. Keeping this offset avoids dropping or
+	// shifting the token after a leading whitespace prefix.
+	prefixOffset := len(rawPrefix) - len(prefix)
+
+	if dot := strings.IndexByte(prefix, '.'); dot >= 0 {
+		// MySQL consumes the complete TIME prefix before a fractional separator.
+		// The remainder is irrelevant to HOUR/MINUTE/SECOND extraction, including
+		// an empty fraction or trailing non-numeric text.
+		prefix = prefix[:dot]
+	}
+
+	day := uint64(0)
+	hasDay := false
+	if space := mysqlFirstWhitespaceForExtract(prefix); space >= 0 {
+		suffixStart := prefixOffset + space
+		suffix := str[suffixStart:]
+		// Keep the complete post-day candidate, including bytes that terminate
+		// mysqlTimePrefixForExtract. MySQL uses a nonempty suffix to establish
+		// day-TIME ownership for a one-digit hour (for example, "1 2x" and
+		// "1 2 "), while the suffix-free "1 2" remains compact TIME.
+		postDay := mysqlTrimLeftWhitespaceForExtract(suffix)
+		if space > 0 && asciiDigits(prefix[:space]) && mysqlDayTimeClockCandidateForExtract(postDay) {
+			day = mysqlClampedDigitsForExtract(prefix[:space], 35)
+			hasDay = true
+			prefix = postDay
+			if len(prefix) == 0 {
+				return 0, 0, 0, false
+			}
+			if clockEnd := mysqlFirstWhitespaceForExtract(prefix); clockEnd >= 0 {
+				prefix = prefix[:clockEnd]
+			}
+		} else {
+			// Carry the bytes after the actual clock boundary into the same
+			// ownership decision as the whitespace suffix. Previously the parser
+			// classified only bytes after the first whitespace, so an attached
+			// tail such as `123:34:34:+ ` was silently discarded by the clock
+			// parser before MySQL's date/TIME ownership rule could see it.
+			clock := prefix[:space]
+			if _, _, _, consumed, ok := mysqlClockFieldsWithBoundaryForExtract(clock); ok && consumed < len(clock) {
+				base := clock[:consumed]
+				attached := clock[consumed:]
+				// Short numeric tails after an omitted-seconds boundary are
+				// already covered by the legacy whole-candidate classifier (for
+				// example `12:34::56 78`). Split only the four-or-more digit
+				// date-shaped tail, or a punctuation tail after complete seconds.
+				splitAttached := strings.HasPrefix(attached, ":") ||
+					(asciiDigits(attached) && len(attached) >= 4) ||
+					mysqlSignedNumericAttachedTimeSuffixForExtract(attached)
+				if !splitAttached {
+					if mysqlTimePrefixSuffixRejectsForExtract(clock, suffix) {
+						return 0, 0, 0, false
+					}
+					prefix = clock
+					// The original whole-candidate path owns short numeric tails.
+					// Do not reinterpret them as a new H:M prefix.
+				} else {
+					// A separator immediately after a complete H:M:S belongs to the
+					// repeated-boundary candidate. Keep it on the candidate side and
+					// classify the remaining token as the suffix. Omitted seconds
+					// already include their repeated separator in `consumed`.
+					separatorEnd := 0
+					for separatorEnd < len(attached) && attached[separatorEnd] == ':' {
+						separatorEnd++
+					}
+					candidateClock := base + attached[:separatorEnd]
+					candidateSuffix := attached[separatorEnd:] + suffix
+					if mysqlTimePrefixSuffixRejectsAttachedForExtract(candidateClock, candidateSuffix) {
+						return 0, 0, 0, false
+					}
+					prefix = candidateClock
+				}
+			} else {
+				// A date-shaped or repeated-separator prefix keeps its ownership
+				// decision until the complete suffix is visible. The candidate
+				// scanner below decides whether that suffix terminates the already
+				// consumed TIME fields or invalidates the whole candidate.
+				if mysqlTimePrefixSuffixRejectsForExtract(clock, suffix) {
+					return 0, 0, 0, false
+				}
+				// A clock prefix followed by whitespace keeps the fields consumed
+				// before that whitespace. It is not a day separator unless every
+				// byte before it is a digit.
+				prefix = clock
+			}
+		}
+	}
+
+	parseClock := mysqlClockFieldsForExtract
+	if hasDay {
+		parseClock = mysqlDayClockFieldsForExtract
+	}
+	hour, minute, second, ok := parseClock(prefix)
+	if !ok {
+		return 0, 0, 0, false
+	}
+	if hasDay {
+		if day >= 35 || hour > 838-day*24 {
+			hour = 839
+		} else {
+			hour += day * 24
+		}
+	}
+	if hour > 838 {
+		return 838, 59, 59, true
+	}
+	return hour, minute, second, true
+}
+
+type mysqlTimePrefixCandidate struct {
+	leadingDigits          int
+	fieldCount             int
+	hourDigits             int
+	minuteDigits           int
+	secondDigits           int
+	dateInvalid            bool
+	dateYearDigits         int
+	hasOmittedMinute       bool
+	hasOmittedSeconds      bool
+	hasRepeatedBoundary    bool
+	repeatedAfterSeconds   bool
+	trailingSeparatorCount int
+}
+
+// mysqlTimePrefixCandidateForExtract records the field boundary consumed by
+// the TIME scanner before any suffix is classified.  The same candidate is
+// then used for repeated separators and date-shaped prefixes; no branch can
+// reinterpret the numeric fields after a later token is seen.
+func mysqlTimePrefixCandidateForExtract(clock string) mysqlTimePrefixCandidate {
+	candidate := mysqlTimePrefixCandidate{leadingDigits: mysqlLeadingDigitCountForExtract(clock)}
+	if candidate.leadingDigits == 0 {
+		return candidate
+	}
+	candidate.fieldCount = 1
+	candidate.hourDigits = candidate.leadingDigits
+	pos := candidate.leadingDigits
+	for pos < len(clock) && clock[pos] == ':' {
+		separatorStart := pos
+		for pos < len(clock) && clock[pos] == ':' {
+			pos++
+		}
+		separatorCount := pos - separatorStart
+		if separatorCount > 1 {
+			candidate.hasRepeatedBoundary = true
+			if candidate.fieldCount == 1 {
+				candidate.hasOmittedMinute = true
+			}
+			if candidate.fieldCount == 2 {
+				candidate.hasOmittedSeconds = true
+			}
+			if candidate.fieldCount >= 3 {
+				candidate.repeatedAfterSeconds = true
+			}
+		}
+		if pos == len(clock) {
+			if candidate.fieldCount == 2 {
+				candidate.hasOmittedSeconds = true
+			}
+			if candidate.fieldCount >= 3 {
+				candidate.hasRepeatedBoundary = true
+			}
+			break
+		}
+		if clock[pos] < '0' || clock[pos] > '9' {
+			break
+		}
+		candidate.fieldCount++
+		fieldStart := pos
+		for pos < len(clock) && clock[pos] >= '0' && clock[pos] <= '9' {
+			pos++
+		}
+		fieldDigits := pos - fieldStart
+		switch candidate.fieldCount {
+		case 2:
+			candidate.minuteDigits = fieldDigits
+		case 3:
+			candidate.secondDigits = fieldDigits
+		}
+	}
+	if candidate.fieldCount == 1 && candidate.leadingDigits > 0 &&
+		candidate.leadingDigits < len(clock) && strings.HasPrefix(clock[candidate.leadingDigits:], "::") {
+		candidate.hasOmittedMinute = true
+	}
+	if candidate.fieldCount == 2 && strings.HasSuffix(clock, ":") {
+		candidate.hasOmittedSeconds = true
+	}
+	if candidate.fieldCount >= 3 && strings.HasSuffix(clock, ":") {
+		candidate.hasRepeatedBoundary = true
+		candidate.repeatedAfterSeconds = true
+		for pos := len(clock) - 1; pos >= 0 && clock[pos] == ':'; pos-- {
+			candidate.trailingSeparatorCount++
+		}
+	}
+	if year, month, day, yearDigits, _, ok := mysqlSeparatedDatePartsForExtract(clock); ok {
+		candidate.dateYearDigits = yearDigits
+		candidate.dateInvalid = !mysqlDatetimeDateForExtract(year, month, day)
+	}
+	return candidate
+}
+
+func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
+	return mysqlTimePrefixSuffixRejectsWithAttachedForExtract(clock, suffix, false)
+}
+
+// mysqlTimePrefixSuffixRejectsAttachedForExtract applies the same ownership
+// rules when the suffix begins immediately after a valid clock prefix. The
+// caller has moved any trailing colon(s) into clock so the candidate scanner
+// sees the complete repeated-separator boundary.
+func mysqlTimePrefixSuffixRejectsAttachedForExtract(clock, suffix string) bool {
+	return mysqlTimePrefixSuffixRejectsWithAttachedForExtract(clock, suffix, true)
+}
+
+func mysqlTimePrefixSuffixRejectsWithAttachedForExtract(clock, suffix string, attached bool) bool {
+	candidate := mysqlTimePrefixCandidateForExtract(clock)
+	token := mysqlTimeSuffixTokenForExtract(suffix)
+	if !token.present || candidate.hasOmittedMinute {
+		return false
+	}
+	if candidate.hasOmittedSeconds && candidate.fieldCount == 2 {
+		// For an attached numeric tail after omitted seconds, the complete
+		// candidate length is the DATETIME ownership gate once the attached
+		// numeric token is terminated. Short tails such as `12:34::56 ` remain
+		// the consumed H:M prefix; a terminated four-digit tail makes the
+		// 12-byte candidate invalid, as in MySQL's `01:01::0100 `. Without a
+		// terminating whitespace boundary, the wider token is still part of the
+		// consumed TIME prefix (`01:01::0100`).
+		if attached && token.trailingWhitespace &&
+			(token.allDigits || mysqlSignedNumericTimeSuffixForExtract(token)) &&
+			len(token.token) >= 4 && len(clock)+len(suffix) >= 12 {
+			return true
+		}
+		return false
+	}
+	if candidate.hasOmittedSeconds && candidate.fieldCount >= 3 {
+		// The second field was omitted before the scanner encountered a later
+		// token. The complete candidate length is the boundary used by MySQL's
+		// full-DATETIME attempt: a short suffix still terminates the H:M prefix,
+		// while a longer nonnumeric suffix belongs to the failed candidate.
+		// Whitespace terminates the later numeric token. It is therefore outside
+		// the already consumed H:M candidate for signed and unsigned numeric
+		// suffixes. Text tokens still participate in the complete-candidate
+		// length check; this keeps short `x ` suffixes compatible while rejecting
+		// longer text that MySQL treats as an invalid date-shaped candidate.
+		if token.trailingWhitespace {
+			if mysqlSignedNumericTimeSuffixForExtract(token) || token.allDigits {
+				return false
+			}
+			return len(clock)+len(suffix) >= 12
+		}
+		return len(clock)+len(suffix) >= 12
+	}
+	// A signed numeric token after a repeated separator is ambiguous only when
+	// the complete clock candidate or the token boundary makes the consumed
+	// prefix unambiguous. Keep the exact field widths for a final token: a
+	// two-digit H:M:S candidate is invalid for MySQL when the token is attached
+	// directly (for example, "12:34:56: +1"), but trailing bytes terminate the
+	// token and preserve the already consumed clock fields.
+	if mysqlSignedNumericTimeSuffixBelongsToClock(candidate, token) {
+		return false
+	}
+	if !candidate.hasRepeatedBoundary && !candidate.dateInvalid {
+		return false
+	}
+	if candidate.dateYearDigits > 4 {
+		// A long year is still a compact TIME when it is left on its own, but a
+		// following clock-shaped suffix makes the complete date candidate
+		// invalid. Keep that suffix visible instead of truncating at whitespace
+		// and reinterpreting the first digits as HHMMSS.
+		trimmed := mysqlTrimLeftWhitespaceForExtract(suffix)
+		return strings.Contains(trimmed, ":")
+	}
+	if attached && token.trailingWhitespace && token.byteLen == 1 &&
+		(token.token == "+" || token.token == "-") {
+		// An attached bare sign is accepted while the complete candidate stays
+		// below MySQL's 12-byte DATETIME gate. A three-digit hour with one
+		// separator (`123:34:34:+ `) and a two-digit hour with two separators
+		// cross that gate and belong to the invalid date-shaped candidate.
+		return len(clock)+len(suffix) >= 12
+	}
+	// A bare sign after a trailing separator belongs to the already consumed
+	// TIME candidate when its boundary is still unambiguous. Keep this decision
+	// in the shared candidate state; the DATETIME owner handles the same sign
+	// when its length gate has established a complete date-shaped candidate.
+	if mysqlBareSignTimeSuffixBelongsToClock(candidate, token, attached) {
+		return false
+	}
+	// MySQL's full-DATETIME attempt is length based. Numeric tokens followed by
+	// whitespace are consumed by the TIME scanner. Other tokens remain part of
+	// the complete candidate and are rejected once that boundary is reached.
+	if token.allDigits && token.trailingWhitespace {
+		return false
+	}
+	if mysqlSignedNumericTimeSuffixForExtract(token) {
+		return len(clock)+mysqlConsumedSuffixLengthForExtract(suffix) >= 12
+	}
+	return len(clock)+len(suffix) >= 12
+}
+
+func mysqlBareSignTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, token mysqlTimeSuffixToken, attached bool) bool {
+	if candidate.fieldCount != 3 || candidate.trailingSeparatorCount == 0 ||
+		token.byteLen != 1 || (token.token != "+" && token.token != "-") {
+		return false
+	}
+	// MySQL keeps one interstitial separator before a bare sign, but a second
+	// separator changes ownership once the candidate has an omitted/repeated
+	// clock boundary. Leave that case to the complete-candidate length gate;
+	// compact one-digit fields can still remain TIME while wider fields become
+	// an invalid date-shaped candidate.
+	if candidate.trailingSeparatorCount >= 2 && token.leadingWhitespaceCount > 1 &&
+		!token.trailingWhitespace {
+		return false
+	}
+	// A one-digit leading field remains a TIME prefix for short inputs even
+	// when the sign is whitespace-terminated. For the length-gated two-digit
+	// date candidate, the DATETIME scanner owns that same boundary instead.
+	if candidate.leadingDigits == 1 &&
+		(candidate.trailingSeparatorCount <= 2 &&
+			(candidate.trailingSeparatorCount == 1 || !token.trailingWhitespace)) {
+		return true
+	}
+	// With an attached single separator, MySQL keeps one- and two-digit hour
+	// fields as TIME. A three-digit leading field crosses the full-date length
+	// gate once the sign is followed by whitespace and is rejected instead.
+	return attached && token.trailingWhitespace && candidate.trailingSeparatorCount == 1 &&
+		candidate.leadingDigits == 2
+}
+
+// mysqlConsumedSuffixLengthForExtract reports the suffix bytes consumed by
+// the temporal scanner. Trailing whitespace is outside the token boundary and
+// must not change ownership of an already complete H:M:S candidate.
+func mysqlConsumedSuffixLengthForExtract(suffix string) int {
+	end := len(suffix)
+	for end > 0 && mysqlWhitespaceForExtract(suffix[end-1]) {
+		end--
+	}
+	return end
+}
+
+func mysqlSignedNumericTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, token mysqlTimeSuffixToken) bool {
+	if candidate.fieldCount != 3 || !mysqlSignedNumericTimeSuffixForExtract(token) {
+		return false
+	}
+	// The whitespace separating a signed token from the clock is part of the
+	// ownership grammar. One separator is a TIME suffix boundary; two or more
+	// separators without a terminating whitespace token make the complete
+	// candidate date-shaped in MySQL. Keep terminated tokens on the existing
+	// TIME path, then let the caller apply the full-candidate length rule.
+	if token.leadingWhitespaceCount > 1 && !token.trailingWhitespace {
+		return false
+	}
+	// Once the signed token is terminated by whitespace, MySQL keeps the
+	// already consumed clock candidate, regardless of the token's width. The
+	// boundary is significant: the same token without trailing whitespace is
+	// still part of the ambiguous candidate and may make it invalid.
+	if token.trailingWhitespace {
+		return true
+	}
+	if !candidate.repeatedAfterSeconds || len(token.token) != 2 {
+		return false
+	}
+	switch candidate.trailingSeparatorCount {
+	case 1:
+		return candidate.hourDigits == 1 &&
+			candidate.minuteDigits == 2 &&
+			candidate.secondDigits == 2
+	case 2:
+		// MySQL retains a two-separator candidate only when one of the
+		// minute/second fields is itself one digit. A complete two-digit
+		// clock becomes an invalid date-shaped candidate instead.
+		return candidate.hourDigits == 1 &&
+			(candidate.minuteDigits == 1 || candidate.secondDigits == 1)
+	default:
+		return false
+	}
+}
+
+func mysqlSignedNumericTimeSuffixForExtract(token mysqlTimeSuffixToken) bool {
+	// A signed numeric token is only classified here; the candidate-specific
+	// ownership decision is made by mysqlSignedNumericTimeSuffixBelongsToClock.
+	if !token.present || len(token.token) < 2 {
+		return false
+	}
+	if token.token[0] != '+' && token.token[0] != '-' {
+		return false
+	}
+	return asciiDigits(token.token[1:])
+}
+
+func mysqlSignedNumericAttachedTimeSuffixForExtract(suffix string) bool {
+	return len(suffix) >= 2 && (suffix[0] == '+' || suffix[0] == '-') &&
+		asciiDigits(suffix[1:])
+}
+
+type mysqlTimeSuffixToken struct {
+	present                bool
+	valid                  bool
+	allDigits              bool
+	trailingWhitespace     bool
+	leadingWhitespaceCount int
+	byteLen                int
+	token                  string
+}
+
+// mysqlTimeSuffixTokenForExtract keeps the complete token after the first
+// whitespace boundary. The byte width is intentional: MySQL's temporal
+// scanner consumes a byte-oriented prefix, so two ASCII bytes and one
+// two-byte UTF-8 rune occupy the same boundary while two UTF-8 runes do not.
+func mysqlTimeSuffixTokenForExtract(suffix string) mysqlTimeSuffixToken {
+	leadingWhitespaceCount := 0
+	for leadingWhitespaceCount < len(suffix) && mysqlWhitespaceForExtract(suffix[leadingWhitespaceCount]) {
+		leadingWhitespaceCount++
+	}
+	suffix = mysqlTrimLeftWhitespaceForExtract(suffix)
+	if suffix == "" {
+		return mysqlTimeSuffixToken{}
+	}
+
+	tokenEnd := 0
+	for tokenEnd < len(suffix) && !mysqlWhitespaceForExtract(suffix[tokenEnd]) {
+		tokenEnd++
+	}
+	token := suffix[:tokenEnd]
+	if token == "" {
+		return mysqlTimeSuffixToken{}
+	}
+
+	result := mysqlTimeSuffixToken{
+		present:                true,
+		valid:                  true,
+		allDigits:              true,
+		leadingWhitespaceCount: leadingWhitespaceCount,
+		byteLen:                len(token),
+		token:                  token,
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		if c < '0' || c > '9' {
+			result.allDigits = false
+		}
+		if c < utf8.RuneSelf && mysqlDatetimePunctuationForExtract(c) {
+			result.valid = false
+		}
+	}
+	for i := tokenEnd; i < len(suffix); i++ {
+		if !mysqlWhitespaceForExtract(suffix[i]) {
+			result.valid = false
+			break
+		}
+	}
+	result.trailingWhitespace = tokenEnd < len(suffix)
+	return result
+}
+
+func mysqlLeadingDigitCountForExtract(str string) int {
+	pos := 0
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	return pos
+}
+
+func mysqlSeparatedDatePartsForExtract(str string) (year, month, day uint64, yearDigits int, separator byte, ok bool) {
+	pos := 0
+	var yearValue uint64
+	yearValue, yearDigits, ok = mysqlVariableDigitsForExtract(str, &pos)
+	if !ok || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
+		return 0, 0, 0, 0, 0, false
+	}
+	separator = str[pos]
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		pos++
+	}
+	month, _, ok = mysqlVariableDigitsForExtract(str, &pos)
+	if !ok || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
+		return 0, 0, 0, 0, 0, false
+	}
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		pos++
+	}
+	day, _, ok = mysqlVariableDigitsForExtract(str, &pos)
+	if !ok || pos != len(str) {
+		return 0, 0, 0, 0, 0, false
+	}
+	if yearDigits == 2 {
+		yearValue = uint64(adjustYear(int(yearValue)))
+	}
+	return yearValue, month, day, yearDigits, separator, true
+}
+
+func mysqlDayTimeClockCandidateForExtract(str string) bool {
+	digits := 0
+	for digits < len(str) && str[digits] >= '0' && str[digits] <= '9' {
+		digits++
+	}
+	// A zero-padded/multi-digit field owns day-TIME even without a separator.
+	// A one-digit field owns it when the complete candidate has any suffix;
+	// otherwise inputs such as "1 2" retain the compact-TIME prefix.
+	return digits >= 2 || (digits == 1 && digits < len(str))
+}
+
+func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
+	hour, minute, second, _, ok := mysqlClockFieldsWithBoundaryForExtract(str)
+	return hour, minute, second, ok
+}
+
+// mysqlClockFieldsWithBoundaryForExtract parses the same prefix as
+// mysqlClockFieldsForExtract and also returns the first byte not consumed by
+// the clock grammar. The boundary is needed before suffix ownership is
+// decided: the generic clock parser intentionally ignores tolerated trailing
+// punctuation, but those bytes still participate in MySQL's full-candidate
+// length and date/TIME ownership rules.
+func mysqlClockFieldsWithBoundaryForExtract(str string) (uint64, uint8, uint8, int, bool) {
+	if len(str) == 0 {
+		return 0, 0, 0, 0, false
+	}
+
+	pos := 0
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	hourText := str[:pos]
+	if pos == len(str) || str[pos] != ':' {
+		// A punctuation-only suffix terminates a valid compact TIME prefix. This
+		// keeps inputs such as "12-.abc" as 00:00:12 without turning a
+		// date-looking value such as "2024-12-20" into a compact TIME here.
+		if len(hourText) == 0 || !mysqlCompactTimePrefixBoundary(hourText, str[pos:]) {
+			return 0, 0, 0, 0, false
+		}
+		switch len(hourText) {
+		case 1, 2:
+			second := mysqlClampedDigitsForExtract(hourText, 60)
+			if second >= 60 {
+				return 0, 0, 0, 0, false
+			}
+			return 0, 0, uint8(second), len(hourText), true
+		case 3, 4:
+			minute := mysqlClampedDigitsForExtract(hourText[:len(hourText)-2], 60)
+			second := mysqlClampedDigitsForExtract(hourText[len(hourText)-2:], 60)
+			if minute >= 60 || second >= 60 {
+				return 0, 0, 0, 0, false
+			}
+			return 0, uint8(minute), uint8(second), len(hourText), true
+		default:
+			hour := mysqlClampedDigitsForExtract(hourText[:len(hourText)-4], 839)
+			minute := mysqlClampedDigitsForExtract(hourText[len(hourText)-4:len(hourText)-2], 60)
+			second := mysqlClampedDigitsForExtract(hourText[len(hourText)-2:], 60)
+			if minute >= 60 || second >= 60 {
+				return 0, 0, 0, 0, false
+			}
+			return hour, uint8(minute), uint8(second), len(hourText), true
+		}
+	}
+
+	pos++
+	minuteStart := pos
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	minuteText := str[minuteStart:pos]
+	if len(minuteText) == 0 {
+		// MySQL ignores a trailing colon and applies its compact TIME coercion
+		// to the preceding digits. This also stops at the first colon in
+		// "12::56", preserving 00:00:12 rather than rejecting the input.
+		if len(hourText) == 0 {
+			return 0, 0, 0, 0, false
+		}
+		hour, minute, second, _, ok := mysqlClockFieldsWithBoundaryForExtract(hourText)
+		if !ok {
+			return 0, 0, 0, 0, false
+		}
+		// An omitted minute is a compact-TIME spelling (`12::56`), not an
+		// attached suffix boundary. Preserve the entire input for the existing
+		// compact coercion path.
+		return hour, minute, second, len(str), true
+	}
+
+	minute := mysqlClampedDigitsForExtract(minuteText, 60)
+	if minute >= 60 {
+		return 0, 0, 0, 0, false
+	}
+	hour := uint64(0)
+	if len(hourText) > 0 {
+		hour = mysqlClampedDigitsForExtract(hourText, 839)
+	}
+	if pos == len(str) || str[pos] != ':' {
+		// Stop at the valid HOUR:MINUTE prefix. mysqlTimePrefixForExtract has
+		// already retained intentionally tolerated trailing text.
+		return hour, uint8(minute), 0, pos, true
+	}
+
+	pos++
+	secondStart := pos
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	secondText := str[secondStart:pos]
+	if len(secondText) == 0 {
+		// A trailing second separator is a valid prefix with omitted seconds.
+		// Include all repeated separators in the consumed boundary. This is
+		// what distinguishes `12:34::0100` (omitted seconds + attached tail)
+		// from a plain `12:34:...` prefix.
+		for pos < len(str) && str[pos] == ':' {
+			pos++
+		}
+		return hour, uint8(minute), 0, pos, true
+	}
+	second := mysqlClampedDigitsForExtract(secondText, 60)
+	if second >= 60 {
+		return 0, 0, 0, 0, false
+	}
+	// Stop after a complete HOUR:MINUTE:SECOND prefix. Following punctuation,
+	// including a third colon, does not discard the parsed clock.
+	return hour, uint8(minute), uint8(second), pos, true
+}
+
+func mysqlCompactTimePrefixBoundary(prefix, suffix string) bool {
+	// Once compact TIME has consumed its leading digits, later punctuation and
+	// digits cannot reinterpret that field. Preserve the separated-date shape
+	// until its complete suffix is visible. A date-only suffix remains a valid
+	// compact prefix; a nonempty token after the date is date-shaped input and
+	// must not be reinterpreted from the leading number.
+	if len(prefix) < 4 || len(suffix) < 3 || !mysqlDatetimePunctuationForExtract(suffix[0]) {
+		return true
+	}
+	pos := 0
+	for pos < len(suffix) && mysqlDatetimePunctuationForExtract(suffix[pos]) {
+		pos++
+	}
+	if _, _, ok := mysqlVariableDigitsForExtract(suffix, &pos); !ok {
+		return true
+	}
+	for pos < len(suffix) && mysqlDatetimePunctuationForExtract(suffix[pos]) {
+		pos++
+	}
+	if _, _, ok := mysqlVariableDigitsForExtract(suffix, &pos); !ok {
+		return true
+	}
+	if pos == len(suffix) {
+		return true
+	}
+	if !mysqlWhitespaceForExtract(suffix[pos]) {
+		return true
+	}
+	for pos < len(suffix) && mysqlWhitespaceForExtract(suffix[pos]) {
+		pos++
+	}
+	return pos == len(suffix)
+}
+
+func mysqlDayClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
+	pos := 0
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	if pos == 0 {
+		return 0, 0, 0, false
+	}
+	hour := mysqlClampedDigitsForExtract(str[:pos], 839)
+	if pos == len(str) || str[pos] != ':' {
+		return hour, 0, 0, true
+	}
+
+	pos++
+	minuteStart := pos
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	if minuteStart == pos {
+		return hour, 0, 0, true
+	}
+	minute := mysqlClampedDigitsForExtract(str[minuteStart:pos], 60)
+	if minute >= 60 {
+		return 0, 0, 0, false
+	}
+	if pos == len(str) || str[pos] != ':' {
+		return hour, uint8(minute), 0, true
+	}
+
+	pos++
+	secondStart := pos
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	if secondStart == pos {
+		return hour, uint8(minute), 0, true
+	}
+	second := mysqlClampedDigitsForExtract(str[secondStart:pos], 60)
+	if second >= 60 {
+		return 0, 0, 0, false
+	}
+	return hour, uint8(minute), uint8(second), true
+}
+
+func mysqlClampedDigitsForExtract(str string, limit uint64) uint64 {
+	if len(str) == 0 {
+		return limit
+	}
+	value := uint64(0)
+	for i := 0; i < len(str); i++ {
+		if str[i] < '0' || str[i] > '9' || value > (limit-uint64(str[i]-'0'))/10 {
+			return limit
+		}
+		value = value*10 + uint64(str[i]-'0')
+	}
+	return value
+}
+
+func mysqlVariableDigitsForExtract(str string, pos *int) (uint64, int, bool) {
+	start := *pos
+	for *pos < len(str) && str[*pos] >= '0' && str[*pos] <= '9' {
+		*pos = *pos + 1
+	}
+	if *pos == start {
+		return 0, 0, false
+	}
+	return mysqlClampedDigitsForExtract(str[start:*pos], math.MaxUint64), *pos - start, true
+}
+
+func parseCompactDatetimeClockForExtract(str string) timeExtractParseResult {
+	digitCount := 0
+	for digitCount < len(str) && str[digitCount] >= '0' && str[digitCount] <= '9' {
+		digitCount++
+	}
+
+	if digitCount >= 14 {
+		if !mysqlCompactDatetimeSuffixForExtract(str[14:]) {
+			return timeExtractParseResult{matched: true}
+		}
+		hour, minute, second, ok := compactDatetimeClockForExtract(str[:14], false)
+		return timeExtractParseResult{hour: hour, minute: minute, second: second, matched: true, valid: ok}
+	}
+	if digitCount >= 12 {
+		if !mysqlCompactDatetimeSuffixForExtract(str[12:]) {
+			return timeExtractParseResult{matched: true}
+		}
+		hour, minute, second, ok := compactDatetimeClockForExtract(str[:12], true)
+		return timeExtractParseResult{hour: hour, minute: minute, second: second, matched: true, valid: ok}
+	}
+	return timeExtractParseResult{}
+}
+
+func mysqlCompactDatetimeSuffixForExtract(suffix string) bool {
+	if len(suffix) == 0 {
+		return true
+	}
+	// MySQL consumes a compact DATETIME through the fractional separator. The
+	// fraction may be empty or may stop before trailing non-numeric text, but a
+	// suffix without a decimal separator is not part of this coercion.
+	if suffix[0] != '.' {
+		return false
+	}
+	pos := 1
+	for pos < len(suffix) && suffix[pos] >= '0' && suffix[pos] <= '9' {
+		pos++
+	}
+	return pos == len(suffix) || (suffix[pos] != '+' && suffix[pos] != '-')
+}
+
+func compactDatetimeClockForExtract(str string, twoDigitYear bool) (uint64, uint8, uint8, bool) {
+	yearWidth := 4
+	if twoDigitYear {
+		yearWidth = 2
+	}
+
+	year := 0
+	for i := 0; i < yearWidth; i++ {
+		year = year*10 + int(str[i]-'0')
+	}
+	if twoDigitYear {
+		year = adjustYear(year)
+	}
+
+	month := (str[yearWidth]-'0')*10 + str[yearWidth+1] - '0'
+	day := (str[yearWidth+2]-'0')*10 + str[yearWidth+3] - '0'
+	hour := (str[yearWidth+4]-'0')*10 + str[yearWidth+5] - '0'
+	minute := (str[yearWidth+6]-'0')*10 + str[yearWidth+7] - '0'
+	second := (str[yearWidth+8]-'0')*10 + str[yearWidth+9] - '0'
+	if !mysqlDatetimeDateForExtract(uint64(year), uint64(month), uint64(day)) || !types.ValidTimeInDay(hour, minute, second) {
+		return 0, 0, 0, false
+	}
+	return uint64(hour), minute, second, true
+}
+
+func mysqlTimePrefixForExtract(str string) string {
+	end := 0
+	for end < len(str) {
+		c := str[end]
+		if (c < '0' || c > '9') && !mysqlDatetimePunctuationForExtract(c) && !mysqlWhitespaceForExtract(c) {
+			break
+		}
+		end++
+	}
+	return str[:end]
+}
+
+func StringToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(hour uint32, _ uint8, _ uint8) uint32 {
+		return hour
+	})
+}
+
+func StringToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(_ uint32, minute uint8, _ uint8) uint8 {
+		return minute
+	})
+}
+
+func StringToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(_ uint32, _ uint8, second uint8) uint8 {
+		return second
+	})
 }
 
 // TimeToSec returns the time argument, converted to seconds (total seconds)
@@ -7074,10 +8404,12 @@ func makeQueryIdIdx(loc, cnt int64, proc *process.Process) (int, error) {
 		}
 		idx = int(loc + cnt)
 	} else {
-		if loc > cnt {
+		// Positive positions are one-based: 1 is the first query in the
+		// session and cnt is the last. Zero is not a valid position.
+		if loc == 0 || loc > cnt {
 			return 0, moerr.NewInvalidInputf(proc.Ctx, "index out of range: %d", loc)
 		}
-		idx = int(loc)
+		idx = int(loc - 1)
 	}
 	return idx, nil
 }
@@ -7095,6 +8427,7 @@ func LastQueryID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
 		}
 		var idx int
 		idx, err = makeQueryIdIdx(loc, cnt, proc)

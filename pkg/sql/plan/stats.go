@@ -36,10 +36,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1384,6 +1382,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 
+	case plan.Node_VECTOR_INDEX_SCAN:
+		// The index plugin computes this leaf's access-path cardinality and cost
+		// before join ordering. Recalculation must not replace it with child or
+		// synthetic-table statistics.
+		if node.Stats == nil {
+			node.Stats = DefaultStats()
+		}
+
 	case plan.Node_INSERT:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.BlockNum = childStats.BlockNum
@@ -1880,6 +1886,12 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	if node.NodeType != plan.Node_JOIN {
 		return
 	}
+	// A predeclared runtime-filter pair is a physical dependency: child 1 must
+	// build and publish before child 0 may probe. Reversing the children turns
+	// the producer into a consumer and creates a wait cycle.
+	if len(node.RuntimeFilterBuildList) > 0 {
+		return
+	}
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
 	rightChild := builder.qry.Nodes[node.Children[1]]
@@ -1940,19 +1952,25 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 }
 
 // disableMemoryUnsafeRightDedup keeps RIGHT DEDUP as the small-input fast path.
-// Unlike normal DEDUP, RIGHT DEDUP inserts every incoming key into its resident
-// hashmap and cannot start spilling when that probe-side map grows.  Multiple
-// DEDUP operators used for a primary key and unique indexes are chained in one
-// pipeline, so their maps coexist and must be budgeted together.
+// Ordinary RIGHT DEDUP inserts every incoming key into its resident hashmap
+// and cannot start spilling when that probe-side map grows. Lookup-only RIGHT
+// DEDUP retains only the target map. Multiple DEDUP operators used for a
+// primary key and unique indexes are chained in one pipeline, so their maps
+// coexist and must be budgeted together.
 //
-// This pass runs immediately before swapJoinChildren.  At this point a DEDUP's
+// This pass runs immediately before swapJoinChildren. At this point a DEDUP's
 // logical left child is the existing target and its logical right child is the
-// incoming row stream.  If the combined estimate is unsafe, reverting all
-// candidates lets normal DEDUP shuffle when supported and spill that stream.
+// incoming row stream. Input-unique candidates only retain the target map;
+// ordinary candidates retain both sides. The lookup-only class is evaluated
+// first. If it remains right-sided, its retained map is included in the
+// ordinary class's shared pipeline budget; if it is reverted, ordinary
+// candidates are evaluated without it.
 func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
 	const maxUint64 = ^uint64(0)
 
 	var candidates []*plan.Node
+	var inputUniqueCandidates []*plan.Node
+	var ordinaryCandidates []*plan.Node
 	visited := make(map[int32]struct{})
 	var collect func(int32)
 	collect = func(nodeID int32) {
@@ -1967,6 +1985,11 @@ func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
 		}
 		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
 			candidates = append(candidates, node)
+			if node.DedupInputKeysUnique {
+				inputUniqueCandidates = append(inputUniqueCandidates, node)
+			} else {
+				ordinaryCandidates = append(ordinaryCandidates, node)
+			}
 		}
 	}
 	collect(rootID)
@@ -1974,16 +1997,103 @@ func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
 		return
 	}
 
-	var totalBytes, totalRows uint64
-	memoryUnsafe := false
-	for _, node := range candidates {
-		targetRows, targetRowsKnown := builder.estimatedNodeRows(node.Children[0])
-		sourceRows, sourceRowsKnown := builder.estimatedLogicalDedupOutputRows(node.Children[1])
-		if !targetRowsKnown || !sourceRowsKnown || targetRows > maxUint64-sourceRows {
-			memoryUnsafe = true
-			break
+	// InputUnique candidates retain only the target map. Ordinary candidates
+	// retain the existing target+source accounting and all-or-nothing fallback.
+	inputUniqueBytes, inputUniqueRows, inputUniqueUnsafe := builder.rightDedupMemoryTotals(inputUniqueCandidates, true, maxUint64)
+	ordinaryBytes, ordinaryRows, ordinaryUnsafe := builder.rightDedupMemoryTotals(ordinaryCandidates, false, maxUint64)
+
+	var budget uint64
+	if builder.joinSpillMem == 0 {
+		// ResolveSpillThreshold is per worker. RIGHT DEDUP is forced onto one
+		// CN with DOP 1, but this guard budgets the complete chained stage. The
+		// aggregate default therefore restores the GOMAXPROCS factor, yielding
+		// roughly one eighth of CN memory after the file-cache reservation.
+		perWorkerBudget := uint64(colexec.ResolveSpillThreshold(0))
+		workers := uint64(system.GoMaxProcs())
+		if workers != 0 && perWorkerBudget <= maxUint64/workers {
+			budget = perWorkerBudget * workers
 		}
-		keyCount := targetRows + sourceRows
+	}
+	memoryUnsafe := func(totalBytes, totalRows uint64) bool {
+		if builder.joinSpillMem == 0 {
+			return totalBytes > budget
+		}
+		const maxInt64 = uint64(^uint64(0) >> 1)
+		if builder.joinSpillMem <= 100000 {
+			if totalRows > maxInt64 {
+				return true
+			}
+		} else if totalBytes > maxInt64 {
+			return true
+		}
+		return colexec.ShouldSpill(
+			int64(totalBytes),
+			int64(totalRows),
+			builder.joinSpillMem,
+		)
+	}
+
+	// A safe lookup-only map still consumes the same resident pipeline budget
+	// as ordinary maps. Include it in both the byte and row threshold checks.
+	// If it is independently unsafe, it will be reverted and no longer coexists
+	// with the ordinary class.
+	if !inputUniqueUnsafe {
+		inputUniqueUnsafe = memoryUnsafe(inputUniqueBytes, inputUniqueRows)
+	}
+	if !ordinaryUnsafe && !inputUniqueUnsafe {
+		var ok bool
+		ordinaryBytes, ordinaryRows, ok = addRightDedupMemoryTotals(
+			ordinaryBytes, ordinaryRows, inputUniqueBytes, inputUniqueRows, maxUint64,
+		)
+		ordinaryUnsafe = !ok
+	}
+	if !ordinaryUnsafe {
+		ordinaryUnsafe = memoryUnsafe(ordinaryBytes, ordinaryRows)
+	}
+
+	if !inputUniqueUnsafe && !ordinaryUnsafe {
+		return
+	}
+	if inputUniqueUnsafe {
+		for _, node := range inputUniqueCandidates {
+			node.IsRightJoin = false
+		}
+	}
+	if ordinaryUnsafe {
+		for _, node := range ordinaryCandidates {
+			node.IsRightJoin = false
+		}
+	}
+}
+
+// rightDedupMemoryTotals returns the aggregate map estimate for one class of
+// right-side DEDUP candidates. InputUnique candidates intentionally omit the
+// incoming cardinality because the runtime map is lookup-only for that side.
+func (builder *QueryBuilder) rightDedupMemoryTotals(
+	candidates []*plan.Node,
+	inputKeysUnique bool,
+	maxUint64 uint64,
+) (totalBytes, totalRows uint64, unsafe bool) {
+	for _, node := range candidates {
+		if node == nil || len(node.Children) != 2 {
+			return 0, 0, true
+		}
+		if node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) ||
+			node.Children[1] < 0 || int(node.Children[1]) >= len(builder.qry.Nodes) {
+			return 0, 0, true
+		}
+		targetRows, targetRowsKnown := builder.estimatedNodeRows(node.Children[0])
+		if !targetRowsKnown {
+			return 0, 0, true
+		}
+		keyCount := targetRows
+		if !inputKeysUnique {
+			sourceRows, sourceRowsKnown := builder.estimatedLogicalDedupOutputRows(node.Children[1])
+			if !sourceRowsKnown || targetRows > maxUint64-sourceRows {
+				return 0, 0, true
+			}
+			keyCount += sourceRows
+		}
 
 		var mapBytes uint64
 		if rightDedupUsesIntHashMap(node) {
@@ -1991,45 +2101,28 @@ func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
 		} else {
 			mapBytes = hashtable.EstimateStringHashMapSize(keyCount)
 		}
-		if mapBytes == maxUint64 || totalBytes > maxUint64-mapBytes || totalRows > maxUint64-keyCount {
-			memoryUnsafe = true
-			break
+		if mapBytes == maxUint64 {
+			return 0, 0, true
 		}
-		totalBytes += mapBytes
-		totalRows += keyCount
-	}
-
-	if !memoryUnsafe && builder.joinSpillMem != 0 {
-		const maxInt64 = uint64(^uint64(0) >> 1)
-		memoryUnsafe = colexec.ShouldSpill(
-			int64(min(totalBytes, maxInt64)),
-			int64(min(totalRows, maxInt64)),
-			builder.joinSpillMem,
+		var ok bool
+		totalBytes, totalRows, ok = addRightDedupMemoryTotals(
+			totalBytes, totalRows, mapBytes, keyCount, maxUint64,
 		)
-	} else if !memoryUnsafe {
-		// ResolveSpillThreshold is per worker.  RIGHT DEDUP is forced onto one
-		// CN with DOP 1, but this guard budgets the complete chained stage.  The
-		// aggregate default therefore restores the GOMAXPROCS factor, yielding
-		// roughly one eighth of CN memory after the file-cache reservation.
-		perWorkerBudget := uint64(colexec.ResolveSpillThreshold(0))
-		workers := uint64(system.GoMaxProcs())
-		if workers == 0 {
-			memoryUnsafe = true
-		} else {
-			budget := maxUint64
-			if perWorkerBudget <= maxUint64/workers {
-				budget = perWorkerBudget * workers
-			}
-			memoryUnsafe = totalBytes > budget
+		if !ok {
+			return 0, 0, true
 		}
 	}
-	if !memoryUnsafe {
-		return
-	}
+	return totalBytes, totalRows, false
+}
 
-	for _, node := range candidates {
-		node.IsRightJoin = false
+func addRightDedupMemoryTotals(
+	totalBytes, totalRows, extraBytes, extraRows, maxUint64 uint64,
+) (uint64, uint64, bool) {
+	if extraBytes > maxUint64 || extraRows > maxUint64 ||
+		totalBytes > maxUint64-extraBytes || totalRows > maxUint64-extraRows {
+		return 0, 0, false
 	}
+	return totalBytes + extraBytes, totalRows + extraRows, true
 }
 
 // estimatedLogicalDedupOutputRows returns the incoming-side cardinality for a
@@ -2038,6 +2131,9 @@ func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
 // Looking through the chain avoids stale right-join output stats making later
 // unique-index maps appear artificially small.
 func (builder *QueryBuilder) estimatedLogicalDedupOutputRows(nodeID int32) (uint64, bool) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || builder.qry.Nodes[nodeID] == nil {
+		return 0, false
+	}
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP && len(node.Children) == 2 {
 		return builder.estimatedLogicalDedupOutputRows(node.Children[1])
@@ -2046,6 +2142,9 @@ func (builder *QueryBuilder) estimatedLogicalDedupOutputRows(nodeID int32) (uint
 }
 
 func (builder *QueryBuilder) estimatedNodeRows(nodeID int32) (uint64, bool) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || builder.qry.Nodes[nodeID] == nil {
+		return 0, false
+	}
 	stats := builder.qry.Nodes[nodeID].Stats
 	if stats == nil || IsDefaultStats(stats) || math.IsNaN(stats.Outcnt) || math.IsInf(stats.Outcnt, 0) || stats.Outcnt < 0 || stats.Outcnt >= float64(^uint64(0)) {
 		return 0, false
@@ -2225,24 +2324,8 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 		CalcNodeDOP(p, node.Children[i], ncpu, lencn)
 	}
 
-	// Check if node has distinct aggregation, which should run in single CPU
-	hasDistinctAgg := false
-	if node.NodeType == plan.Node_AGG && len(node.AggList) > 0 {
-		for _, agg := range node.AggList {
-			if f, ok := agg.Expr.(*plan.Expr_F); ok {
-				if (uint64(f.F.Func.Obj) & function.Distinct) != 0 {
-					hasDistinctAgg = true
-					break
-				}
-			}
-		}
-	}
-
-	if hasDistinctAgg {
-		// distinct aggregation should run in only one node and without any parallel
+	if node.NodeType == plan.Node_AGG && RequiresSingleStageDistinctAgg(node) {
 		if node.Stats == nil {
-			// If Stats is nil, create it first
-			// This should be rare for AGG nodes, but we handle it for safety
 			node.Stats = DefaultStats()
 		}
 		setNodeDOP(p, rootID, 1)
@@ -2350,7 +2433,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if IsIvfSearchEntriesInternalScan(node) {
+		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
 			execType := ExecTypeAP_MULTICN
 			if stats.GetForceOneCN() || !canUseMultiCN {
 				execType = ExecTypeAP_ONECN
@@ -2378,38 +2461,6 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 	}
 	return ret
-}
-
-func isIvfSearchEntriesTableScan(node *plan.Node) bool {
-	return node != nil &&
-		node.NodeType == plan.Node_TABLE_SCAN &&
-		node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries
-}
-
-func isIvfSearchFunctionScan(node *plan.Node) bool {
-	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN {
-		return false
-	}
-	tblDef := node.GetTableDef()
-	if tblDef == nil || tblDef.GetTblFunc() == nil {
-		return false
-	}
-	return tblDef.GetTblFunc().GetName() == ivfflatplan.IVFFLATSearchFuncName
-}
-
-// IsIvfSearchEntriesInternalScan reports the internal entries table scan issued by ivf_search.
-// It recognizes both the FUNCTION_SCAN form produced by the production ivf_search planner
-// path and the legacy TABLE_SCAN form used by unit tests.
-func IsIvfSearchEntriesInternalScan(node *plan.Node) bool {
-	if isIvfSearchFunctionScan(node) {
-		return isIvfEntriesIndexReaderScan(node)
-	}
-	return isIvfSearchEntriesTableScan(node) && isIvfEntriesIndexReaderScan(node)
-}
-
-func isIvfEntriesIndexReaderScan(node *plan.Node) bool {
-	param := node.GetIndexReaderParam()
-	return param.GetOrigFuncName() != ""
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {

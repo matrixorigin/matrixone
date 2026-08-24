@@ -137,12 +137,13 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	}
 }
 
-func TestBuiltInInternalCharSizeUsesEncodedWidth(t *testing.T) {
+func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typesToEncode := []types.Type{
 		types.New(types.T_char, 8, 0),
 		types.New(types.T_varchar, 128, 0),
 		types.New(types.T_text, 0, 0),
+		types.New(types.T_text, types.MaxTinyTextLen, 0),
 		types.New(types.T_binary, 8, 0),
 		types.New(types.T_varbinary, 128, 0),
 		types.New(types.T_blob, 0, 0),
@@ -155,21 +156,40 @@ func TestBuiltInInternalCharSizeUsesEncodedWidth(t *testing.T) {
 		encoded[i] = string(data)
 	}
 
-	tc := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+	for _, test := range []struct {
+		name   string
+		fn     func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		values []int64
+	}{
+		{
+			name:   "maximum character length",
+			fn:     builtInInternalCharLength,
+			values: []int64{8, 128, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
 		},
-		NewFunctionTestResult(
-			types.T_int64.ToType(),
-			false,
-			[]int64{32, 512, 0, 8, 128, 0, 0},
-			[]bool{false, false, false, false, false, false, true},
-		),
-		builtInInternalCharSize,
-	)
-	ok, info := tc.Run()
-	require.True(t, ok, info)
+		{
+			name:   "maximum octet length",
+			fn:     builtInInternalCharSize,
+			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+				},
+				NewFunctionTestResult(
+					types.T_int64.ToType(),
+					false,
+					test.values,
+					[]bool{false, false, false, false, false, false, false, true},
+				),
+				test.fn,
+			)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestBuiltInNameConst(t *testing.T) {
@@ -488,6 +508,47 @@ func Test_BuiltIn_IntervalRegistered(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(INTERVAL), fn.fid)
 	require.Equal(t, types.T_int64, fn.retType.Oid)
+}
+
+func TestToIntervalCharRegistered(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "to_interval", []types.Type{
+		types.T_char.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(TO_INTERVAL), fn.fid)
+	require.Equal(t, types.T_int64, fn.retType.Oid)
+}
+
+func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("day_second and NULL", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1 02:03:04", ""}, []bool{false, true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Day_Second)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{93784, 0}, []bool{false, true}),
+			ToInterval,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("year_month and invalid value", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1-2", "1-2-3"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Year_Month)}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{14, 0}, []bool{false, true}),
+			ToInterval,
+		)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
 }
 
 func Test_BuiltIn_IntervalCheck(t *testing.T) {
@@ -966,19 +1027,48 @@ func Test_BuiltIn_MoShowVisibleBinGeometryWithLen(t *testing.T) {
 	require.True(t, succeed, tc.info, info)
 }
 
+func Test_BuiltIn_MoShowVisibleBinTextFamilyWithLen(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		want string
+	}{
+		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "TINYTEXT"},
+		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), want: "MEDIUMTEXT"},
+		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), want: "LONGTEXT"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typeBytes, err := types.Encode(&tc.typ)
+			require.NoError(t, err)
+			input := tcTemp{
+				info: "show visible bin text family with len",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+					NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typWithLen}, nil),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil),
+			}
+			tcc := NewFunctionTestCase(proc, input.inputs, input.expect, builtInMoShowVisibleBin)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, input.info, info)
+		})
+	}
+}
+
 func Test_BuiltIn_Repeat(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
-			info: "test repeat('ab', num) with num = -1, 0, 1, 3, null, 1000000000000",
+			info: "test repeat('ab', num) with num = -1, 0, 1, 3, null, 1000000000000, 4611686018427387904",
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(),
 					[]string{"ab"}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-1, 0, 1, 3, 0, 1000000000000}, []bool{false, false, false, false, true, false}),
+					[]int64{-1, 0, 1, 3, 0, 1000000000000, 1 << 62}, []bool{false, false, false, false, true, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"", "", "ab", "ababab", "", ""}, []bool{false, false, false, false, true, true}),
+				[]string{"", "", "ab", "ababab", "", "", ""}, []bool{false, false, false, false, true, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
 		succeed, info := tcc.Run()
@@ -1144,6 +1234,41 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		}
 	}
 
+}
+
+func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	parameters := []*vector.Vector{
+		newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{-1, 0, 42}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a", "b\x00c", "世界"}, nil),
+	}
+	for _, parameter := range parameters {
+		defer parameter.Free(proc.Mp())
+	}
+
+	serialResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer serialResult.Free()
+	serialFullResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer serialFullResult.Free()
+	require.NoError(t, serialResult.PreExtendAndReset(3))
+	require.NoError(t, serialFullResult.PreExtendAndReset(3))
+
+	serialOp := newOpSerial()
+	defer serialOp.Close()
+	serialFullOp := newOpSerial()
+	defer serialFullOp.Close()
+	require.NoError(t, serialOp.BuiltInSerial(parameters, serialResult, proc, 3, nil))
+	require.NoError(t, serialFullOp.BuiltInSerialFull(parameters, serialFullResult, proc, 3, nil))
+
+	for row := 0; row < 3; row++ {
+		require.False(t, serialResult.GetResultVector().IsNull(uint64(row)))
+		require.False(t, serialFullResult.GetResultVector().IsNull(uint64(row)))
+		require.Equal(t,
+			serialResult.GetResultVector().GetBytesAt(row),
+			serialFullResult.GetResultVector().GetBytesAt(row),
+			"non-NULL comparison bounds must be byte-compatible with stored keys",
+		)
+	}
 }
 
 func Test_BuiltIn_SerialFull(t *testing.T) {
@@ -2134,6 +2259,52 @@ func Test_BuiltIn_Math(t *testing.T) {
 }
 
 // TestBuiltInCurrentTimestamp_ScaleValidation tests scale validation for builtInCurrentTimestamp
+func TestBuiltInCurrentTimeNoArgDefaultsToZeroFSP(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		typ  types.Type
+	}{
+		{name: "current_timestamp", fn: builtInCurrentTimestamp, typ: types.T_timestamp.ToType()},
+		{name: "sysdate", fn: builtInSysdate, typ: types.T_timestamp.ToType()},
+		{name: "current_time", fn: builtInCurrentTime, typ: types.T_time.ToType()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(tc.typ, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, tc.fn(nil, result, proc, 1, nil))
+			require.Equal(t, int32(0), result.GetResultVector().GetType().Scale)
+		})
+	}
+}
+
+// TestBuiltInCurrentTimestampReadsStatementTimePerExecution reuses the same
+// overload ID while changing the statement timestamp. This mirrors repeated
+// executions of a cached NOW() plan and proves the value is read at execution
+// time rather than folded when the plan is built.
+func TestBuiltInCurrentTimestampReadsStatementTimePerExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "now", nil)
+	require.NoError(t, err)
+	overloadID := fn.GetEncodedOverloadID()
+
+	for _, unixNano := range []int64{
+		1704150245123456789,
+		1704150246123456789,
+	} {
+		proc.Base.UnixTime = unixNano
+		out, err := RunFunctionDirectly(proc, overloadID, nil, 1)
+		require.NoError(t, err)
+		require.Equal(t, int32(0), out.GetType().Scale)
+		require.Equal(t,
+			types.UnixNanoToTimestamp(unixNano).TruncateToScale(0),
+			vector.MustFixedColWithTypeCheck[types.Timestamp](out)[0])
+		out.Free(proc.Mp())
+	}
+}
+
 func TestBuiltInCurrentTimestamp_ScaleValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

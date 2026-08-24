@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -51,15 +52,24 @@ type MockCompilerContext struct {
 	ctx context.Context
 
 	// Add function fields for test overrides
-	GetAccountNameFunc    func() string
-	GetAccountIdFunc      func() (uint32, error)
-	DatabaseExistsFunc    func(string, *Snapshot) bool
-	GetDatabaseIdFunc     func(string, *Snapshot) (uint64, error)
-	ResolveAccountIdsFunc func([]string) ([]uint32, error)
-	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
-	ResolveVariableFunc   func(string, bool, bool) (interface{}, error)
-	GetProcessFunc        func() *process.Process
+	GetAccountNameFunc      func() string
+	GetAccountIdFunc        func() (uint32, error)
+	DatabaseExistsFunc      func(string, *Snapshot) bool
+	GetDatabaseIdFunc       func(string, *Snapshot) (uint64, error)
+	ResolveAccountIdsFunc   func([]string) ([]uint32, error)
+	ResolveFunc             func(string, string, *Snapshot) (*ObjectRef, *TableDef)
+	ResolveVariableFunc     func(string, bool, bool) (interface{}, error)
+	ResolveVariableTypeFunc func(string, bool, bool) (Type, error)
+	GetProcessFunc          func() *process.Process
+	processHolder           *mockProcessHolder
 }
+
+type mockProcessHolder struct {
+	once sync.Once
+	proc *process.Process
+}
+
+var mockProcessHolderMu sync.RWMutex
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
 	return 1
@@ -137,12 +147,53 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 
 	vars["foreign_key_checks"] = int64(1)
 	vars["sort_spill_mem"] = int64(0)
+	vars["lower_case_table_names"] = int64(1)
+
+	// Vector-index build/search variables (resolved by the hnsw/ivf/ivfpq/cagra
+	// plugin DDL and search paths).
+	vars["cagra_threads_build"] = int64(1)
+	vars["cagra_threads_search"] = int64(1)
+	vars["cagra_batch_window"] = int64(0)
+	vars["ivfpq_threads_build"] = int64(1)
+	vars["ivfpq_threads_search"] = int64(1)
+	vars["ivfpq_batch_window"] = int64(0)
+	vars["hnsw_threads_build"] = int64(1)
+	vars["hnsw_threads_search"] = int64(1)
+	vars["ivf_threads_build"] = int64(1)
+	vars["ivf_threads_search"] = int64(1)
+	vars["gpu_multi_simulation"] = int64(0)
+	vars["probe_limit"] = int64(20)
 
 	if result, ok := vars[varName]; ok {
 		return result, nil
 	}
 
-	return nil, moerr.NewInternalError(m.ctx, "var not found")
+	return nil, moerr.NewInternalErrorf(m.ctx, "var not found: %s", varName)
+}
+
+func (m *MockCompilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error) {
+	if m.ResolveVariableTypeFunc != nil {
+		return m.ResolveVariableTypeFunc(varName, isSystemVar, isGlobalVar)
+	}
+	if isSystemVar {
+		return Type{}, nil
+	}
+	switch varName {
+	case "int_var":
+		return makeSimplePlan2Type(types.T_int64), nil
+	case "float_var":
+		return makeSimplePlan2Type(types.T_float64), nil
+	case "decimal_var":
+		typ := types.T_decimal128.ToType()
+		typ.Width, typ.Scale = 38, 3
+		return makePlan2Type(&typ), nil
+	case "bool_var":
+		return makeSimplePlan2Type(types.T_bool), nil
+	case "null_var", "str_var":
+		return makeSimplePlan2Type(types.T_text), nil
+	default:
+		return Type{}, nil
+	}
 }
 
 type col struct {
@@ -165,9 +216,10 @@ type index struct {
 // NewEmptyCompilerContext for test create/drop statement
 func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
-		objects: make(map[string]*ObjectRef),
-		tables:  make(map[string]*TableDef),
-		ctx:     context.Background(),
+		objects:       make(map[string]*ObjectRef),
+		tables:        make(map[string]*TableDef),
+		ctx:           context.Background(),
+		processHolder: &mockProcessHolder{},
 	}
 }
 
@@ -1856,13 +1908,14 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	return &MockCompilerContext{
-		dbs:     dbs,
-		isDml:   isDml,
-		objects: objects,
-		tables:  tables,
-		id2name: id2name,
-		pks:     pks,
-		ctx:     context.TODO(),
+		dbs:           dbs,
+		isDml:         isDml,
+		objects:       objects,
+		tables:        tables,
+		id2name:       id2name,
+		pks:           pks,
+		ctx:           context.TODO(),
+		processHolder: &mockProcessHolder{},
 	}
 }
 
@@ -1968,14 +2021,33 @@ func (m *MockCompilerContext) GetProcess() *process.Process {
 	if m.GetProcessFunc != nil {
 		return m.GetProcessFunc()
 	}
-	proc := testutil.NewProc(nil)
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
-		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-			return executor.Result{}, nil
-		}),
-	)
-	return proc
+	// CompilerContext represents one session and must return the same Process
+	// throughout planning. Besides matching the production contract, this
+	// avoids rebuilding file services and runtime state at every GetProcess
+	// call. The holder is a pointer so copied mock contexts share the same
+	// Process without copying synchronization primitives.
+	mockProcessHolderMu.RLock()
+	holder := m.processHolder
+	mockProcessHolderMu.RUnlock()
+	if holder == nil {
+		mockProcessHolderMu.Lock()
+		holder = m.processHolder
+		if holder == nil {
+			holder = &mockProcessHolder{}
+			m.processHolder = holder
+		}
+		mockProcessHolderMu.Unlock()
+	}
+	holder.once.Do(func() {
+		holder.proc = testutil.NewProc(nil)
+		moruntime.ServiceRuntime(holder.proc.GetService()).SetGlobalVariables(
+			moruntime.InternalSQLExecutor,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				return executor.Result{}, nil
+			}),
+		)
+	})
+	return holder.proc
 }
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {

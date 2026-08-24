@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -56,12 +57,49 @@ func (builder *QueryBuilder) resolveScanNodeWithIndex(node *plan.Node, depth int
 	return nil
 }
 
+// buildVectorSortContextFromSort builds the same context as buildVectorSortContext, but
+// anchored at the Top-K SORT itself rather than at a PROJECT above it.
+//
+// The project-anchored form only sees a Top-K whose parent is a PROJECT, so any consumer
+// between the two hides it: an outer ORDER BY leaves Project->Sort->Sort->Scan, where the
+// resolver's single hop is spent on the outer sort (#25967), and a join leaves the Top-K
+// as a join input with no project above it at all (#25974). Both then fall back to a full
+// scan with an exact sort — correct, but the index is silently unused. Anchoring here
+// makes the Top-K rewritable wherever it sits; applyIndices repoints whichever parent it
+// has from the returned node id.
+//
+// projNode is deliberately left nil: there is no project to mutate or read column
+// requirements from, which the rewrites detect (see spliceVectorRewrite, and the
+// index-only gate in applyIndicesForSortUsingIvfflat).
+func (builder *QueryBuilder) buildVectorSortContextFromSort(sortNode *plan.Node) *vectorSortContext {
+	if sortNode == nil || sortNode.NodeType != plan.Node_SORT || len(sortNode.OrderBy) != 1 {
+		return nil
+	}
+	// Only a Top-K carries its own limit. A bare ordering node (the outer ORDER BY of
+	// #25967) has none, and rewriting it would discard the ordering its consumer wants.
+	if sortNode.Limit == nil {
+		return nil
+	}
+	// NOTE: only the plain shape is handled here. The vector-provider join
+	// (buildVectorSortContextThroughJoin) also hides behind a consumer in principle, but
+	// no SQL shape reachable in testing produces that context — it needs a single-row,
+	// NOT NULL, limit-1 provider join all at once — so a sort-anchored fallback for it
+	// would be unverifiable code. Left deliberately out; see the decision log.
+	return builder.buildVectorSortContextFrom(nil, sortNode)
+}
+
 func (builder *QueryBuilder) buildVectorSortContext(projNode *plan.Node) *vectorSortContext {
 	sortNode := builder.resolveSortNode(projNode, 1)
 	if sortNode == nil || len(sortNode.OrderBy) != 1 {
 		return nil
 	}
+	return builder.buildVectorSortContextFrom(projNode, sortNode)
+}
 
+// buildVectorSortContextFrom is the shared body of the project- and sort-anchored
+// builders: everything below the Top-K sort is resolved identically, only the anchor
+// differs. projNode may be nil.
+func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan.Node) *vectorSortContext {
 	scanNode := builder.resolveScanNodeWithIndex(sortNode, 1)
 	if scanNode == nil {
 		return nil
@@ -76,11 +114,37 @@ func (builder *QueryBuilder) buildVectorSortContext(projNode *plan.Node) *vector
 		}
 		childNode = builder.qry.Nodes[sortNode.Children[0]]
 		if childNode.NodeType == plan.Node_PROJECT {
-			distFnExpr = childNode.ProjectList[orderExpr.GetCol().ColPos].GetF()
+			// Bounds-check: the ORDER BY column indexes the child project's list, but the
+			// two can disagree. `select count(*) from (<top-k>) t` prunes the derived
+			// table's projection to nothing while the sort still carries ColPos from
+			// before pruning, so indexing blind panics with index out of range.
+			col := orderExpr.GetCol()
+			if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(childNode.ProjectList) {
+				return nil
+			}
+			distFnExpr = childNode.ProjectList[col.ColPos].GetF()
 		}
 		if distFnExpr == nil {
 			return nil
 		}
+	}
+
+	// SORT anchor only (projNode == nil): the child PROJECT is detached and each of its
+	// non-distance expressions is published through idxColMap, which applyIndices then
+	// substitutes into EVERY ancestor referencing that column -- a deep copy per reference.
+	// Fine for a column reference, wrong for anything evaluated: two ancestors would each
+	// get their own rand()/uuid()/now(), so the value a JOIN predicate admitted a row on can
+	// differ from the value projected out of it, and moving evaluation above a JOIN changes
+	// how many times it runs.
+	//
+	// The PROJECT anchor is unaffected: spliceVectorRewrite applies its remap to that one
+	// node, so the expression is still evaluated exactly once.
+	//
+	// exprCanRemoveProject is the planner's existing answer to this same question --
+	// removeSimpleProjections refuses to inline a PROJECT holding a CannotFold or
+	// IsRealTimeRelated function. Reuse it rather than restate it, so the two cannot drift.
+	if projNode == nil && childNode != nil && !vectorChildProjectIsDetachable(childNode, orderExpr) {
+		return nil
 	}
 
 	limit, offset, rankOption := pickVectorPagination(sortNode, scanNode, projNode)
@@ -112,7 +176,6 @@ func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.No
 	if sortNode == nil || len(sortNode.OrderBy) != 1 {
 		return nil
 	}
-
 	joinNode, childNode := builder.resolveJoinNodeForVectorSort(sortNode)
 	if joinNode == nil || len(joinNode.Children) != 2 || !isVectorProviderJoin(joinNode) {
 		return nil
@@ -262,7 +325,7 @@ func (builder *QueryBuilder) directScanWithVectorIndex(node *plan.Node) *plan.No
 		// from drifting back into hardcoded algo lists like the previous
 		// IsIvfIndexAlgo || IsHnswIndexAlgo gate, which silently
 		// excluded CAGRA / IVF-PQ from the join-through path.
-		if catalog.IsIndexOptimizerEligible(idx) && indexplugin.IsVectorIndexAlgo(idx.IndexAlgo) {
+		if idx != nil && indexplugin.IsVectorIndexAlgo(idx.IndexAlgo) {
 			return node
 		}
 	}
@@ -460,7 +523,7 @@ func tableScanHasSingleRowFilter(node *plan.Node) bool {
 		}
 	}
 	for _, idx := range node.TableDef.Indexes {
-		if idx.Unique && filterListHasConstEqualityOnCols(node.FilterList, node.TableDef, tag, idx.Parts) {
+		if idx != nil && idx.Unique && filterListHasConstEqualityOnCols(node.FilterList, node.TableDef, tag, idx.Parts) {
 			return true
 		}
 	}
@@ -603,6 +666,103 @@ func (builder *QueryBuilder) validateVectorIndexSortRewrite(vecCtx *vectorSortCo
 	// which is not equivalent to a true farthest-neighbor query. Keep the original
 	// execution path so the query naturally falls back to the exact/force behavior.
 	return false, nil
+}
+
+// spliceVectorRewrite attaches the rewritten Top-K subtree (newRootID) where the original
+// one was, and returns the node id the caller must hand back to applyIndices.
+//
+// Two anchors exist. When the rewrite was entered from the PROJECT directly above the
+// Top-K sort, that project keeps its identity: its child pointer is repointed and any
+// column remap is applied to it directly, so the returned id is unchanged.
+//
+// When the rewrite was entered from the SORT itself — the Top-K sits under an outer
+// ORDER BY (#25967) or is a join input (#25974), so there is no project to mutate — the
+// new subtree root is returned instead, and applyIndices' caller repoints the parent via
+// `node.Children[i] = applyIndices(childID, ...)`. The remap goes into idxColMap rather
+// than into one node, because the columns it renames (the CTE's distance output becoming
+// the index score) are read by ancestors this function cannot see; applyIndices walks
+// children first and then calls replaceColumnsForNode on each ancestor, so every consumer
+// picks the mapping up on the way back out.
+func (builder *QueryBuilder) spliceVectorRewrite(
+	vecCtx *vectorSortContext,
+	nodeID int32,
+	newRootID int32,
+	remap map[[2]int32]*plan.Expr,
+	idxColMap map[[2]int32]*plan.Expr,
+) int32 {
+	if vecCtx.projNode != nil {
+		vecCtx.projNode.Children[0] = newRootID
+		if len(remap) > 0 {
+			replaceColumnsForNode(vecCtx.projNode, remap)
+		}
+		return nodeID
+	}
+	for k, v := range remap {
+		idxColMap[k] = v
+	}
+	return newRootID
+}
+
+// vectorChildProjectIsDetachable reports whether the PROJECT below the Top-K may be removed
+// with its expressions republished to arbitrarily many ancestors.
+//
+// The distance entry is exempt: it is replaced by a single ColRef to the index score, so it
+// is not duplicated however many ancestors read it. Every other entry is deep-copied per
+// reference, which is only sound for something whose value does not depend on being
+// evaluated once -- precisely what exprCanRemoveProject already decides.
+func vectorChildProjectIsDetachable(childNode *plan.Node, orderExpr *plan.Expr) bool {
+	sortIdx := -1
+	if col := orderExpr.GetCol(); col != nil {
+		sortIdx = int(col.ColPos)
+	}
+	for i, proj := range childNode.ProjectList {
+		if i == sortIdx {
+			continue
+		}
+		if !exprCanRemoveProject(proj) {
+			return false
+		}
+	}
+	return true
+}
+
+// vectorRemapForChildProject builds the column remap for the PROJECT that sits between the
+// Top-K sort and the scan: the sorted-on column becomes the index score, and the rest pass
+// through (optionally rewritten to the table function's columns for an index-only scan).
+// Returns nil when there is no such project, in which case scanRemap applies as-is.
+func vectorRemapForChildProject(
+	childNode *plan.Node,
+	orderExpr *plan.Expr,
+	scoreExpr *plan.Expr,
+	scanRemap map[[2]int32]*plan.Expr,
+) map[[2]int32]*plan.Expr {
+	if childNode == nil {
+		return scanRemap
+	}
+	// sortIdx = -1 when the ORDER BY carries the distance call itself rather than a
+	// reference to the child's projected column (buildVectorSortContextThroughJoin sets
+	// childNode regardless of that form). There is then no column to replace with the
+	// score, but the child is still being detached, so every other column it projects
+	// must be remapped or ancestors keep dangling references to a node that has left the
+	// plan.
+	sortIdx := -1
+	if col := orderExpr.GetCol(); col != nil {
+		sortIdx = int(col.ColPos)
+	}
+	remap := make(map[[2]int32]*plan.Expr, len(childNode.ProjectList))
+	for i, proj := range childNode.ProjectList {
+		key := [2]int32{childNode.BindingTags[0], int32(i)}
+		if i == sortIdx {
+			remap[key] = DeepCopyExpr(scoreExpr)
+			continue
+		}
+		if scanRemap != nil {
+			remap[key] = replaceColumnsForExpr(DeepCopyExpr(proj), scanRemap)
+			continue
+		}
+		remap[key] = proj
+	}
+	return remap
 }
 
 func (builder *QueryBuilder) stabilizeExactVectorSort(vecCtx *vectorSortContext) {
@@ -905,16 +1065,21 @@ func (builder *QueryBuilder) peelAndRewriteDistFnFilters(
 	return filters[:currIdx], peeled
 }
 
-// replaceDistFnExprsWithScoreCol walks each expression in exprs and substitutes
-// every `origFuncName(col[partPos, scanBindingTag], vecLit)` call with a direct
-// ColRef to the table function's score column (RelPos=tableFuncTag, ColPos=1).
+// replaceDistFnExprsWithScoreCol walks each expression in exprs and substitutes every distance call
+// on the base scan's vector column that uses the INDEX's distance function (origFuncName) with a
+// direct ColRef to the table function's score column (RelPos=tableFuncTag, ColPos=1).
 //
-// Use this on SELECT-side projections so the user's `l2_distance(ec, ?) AS dist`
-// reuses the table function's pre-computed score instead of re-running the
-// distance kernel on every scanned row. The existing `replaceColumnsForNode`
-// path only handles the case where ORDER BY uses an alias and the aliased
-// distance expression is the sortIdx entry in childNode.ProjectList; this
-// walker covers the other combinations.
+// Use this on SELECT-side projections so the user's `l2_distance(ec, ?)` — including one WRAPPED by a
+// scalar (CAST/ROUND/arithmetic) or bound to an alias — reuses the table function's pre-computed
+// score instead of leaving an orphaned ColRef to the base scan's vector column (which the base-scan
+// removal cannot remap: "cannot find column reference", issue #26961) and re-running the distance
+// kernel per row. The existing `replaceColumnsForNode` path only handles ORDER BY on an alias whose
+// distance is the sortIdx entry in childNode.ProjectList; this walker covers the other combinations.
+//
+// A candidate distance (right column + origFuncName metric) is rewritten only when it is against the
+// SAME query vector as vecLitArg — see sameQueryVector. This is a real value comparison: a distance
+// on the same column but a DIFFERENT vector must NOT become this index's score (that would silently
+// report the wrong distance).
 func replaceDistFnExprsWithScoreCol(
 	exprs []*plan.Expr,
 	scanBindingTag, partPos int32,
@@ -940,31 +1105,215 @@ func replaceDistFnInExpr(
 	if expr == nil {
 		return expr
 	}
+	if isVectorDistanceExpr(expr, scanBindingTag, partPos) && expr.GetF().Func.ObjName == origFuncName &&
+		sameQueryVector(expr.GetF(), scanBindingTag, partPos, vecLitArg) {
+		return &plan.Expr{
+			Typ: scoreColType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: tableFuncTag, ColPos: 1, Name: "score"},
+			},
+		}
+	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
-		f := e.F
-		if f.Func.ObjName == origFuncName && len(f.Args) == 2 {
-			col := f.Args[0].GetCol()
-			lit := f.Args[1].GetLit()
-			if col != nil && col.ColPos == partPos && col.RelPos == scanBindingTag &&
-				lit != nil && vecLitArg.GetLit() != nil &&
-				lit.GetVecVal() != "" && lit.GetVecVal() == vecLitArg.GetLit().GetVecVal() {
-				return &plan.Expr{
-					Typ: scoreColType,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{RelPos: tableFuncTag, ColPos: 1, Name: "score"},
-					},
-				}
-			}
-		}
-		for i, arg := range f.Args {
-			f.Args[i] = replaceDistFnInExpr(arg, scanBindingTag, partPos,
+		for i, arg := range e.F.Args {
+			e.F.Args[i] = replaceDistFnInExpr(arg, scanBindingTag, partPos,
 				origFuncName, vecLitArg, tableFuncTag, scoreColType)
 		}
 	case *plan.Expr_List:
 		for i, sub := range e.List.List {
 			e.List.List[i] = replaceDistFnInExpr(sub, scanBindingTag, partPos,
 				origFuncName, vecLitArg, tableFuncTag, scoreColType)
+		}
+	}
+	return expr
+}
+
+// sameQueryVector reports whether the distance function fn (already known to reference the base scan's
+// vector column and use the index's metric) is computed against the SAME query vector as vecLitArg —
+// the vector the index/ORDER BY search key uses. The query vector is the arg that is NOT the base-scan
+// column. A distance on a DIFFERENT vector must NOT be rewritten to this index's score (it would
+// silently report the wrong distance — 1 != 2). The comparison is a pure, executor-free parse done at
+// the ACTUAL vector element type (vecLitArg.Typ): both the folded vecLitArg (VecVal) and the
+// possibly-unfolded SELECT-side cast('[...]') resolve to the same canonical byte encoding, so format
+// differences don't matter while distinct vectors never collide. A non-constant (param) query vector
+// yields no key and is left alone (fail-safe).
+func sameQueryVector(fn *plan.Function, scanBindingTag, partPos int32, vecLitArg *plan.Expr) bool {
+	if fn == nil || len(fn.Args) != 2 || vecLitArg == nil {
+		return false
+	}
+	elemType := types.T(vecLitArg.Typ.GetId())
+	litKey, ok := vecFloatKey(vecLitArg, elemType)
+	if !ok {
+		return false
+	}
+	// The query vector is whichever arg is not the base-scan column.
+	vecArg := fn.Args[1]
+	if c := fn.Args[0].GetCol(); c == nil || c.RelPos != scanBindingTag || c.ColPos != partPos {
+		vecArg = fn.Args[0]
+	}
+	argKey, ok := vecFloatKey(vecArg, elemType)
+	return ok && argKey == litKey
+}
+
+// vecFloatKey parses a vector-literal expression into a canonical BYTE key so two references to the
+// same query vector compare equal regardless of how each is encoded, decoding at the ACTUAL element
+// type (elemType) rather than treating every non-f64 vector as float32. It unwraps a value-preserving
+// CAST (one whose input is not itself a vector — a vector-to-vector cast changes the value and is not
+// peeled; see the loop below), then:
+//   - a constant-folded vector literal already stores the raw element bytes in VecVal; those bytes ARE
+//     the canonical type-exact key and are compared directly (decoding narrow/int bytes as float32
+//     collapses distinct vectors onto a shared NaN string — e.g. vecuint8 [0,0,192,127] and
+//     [1,0,192,127] both become "[NaN]");
+//   - an unfolded textual literal (the inner "[...]" of cast('[...]' as vec<T>)) is parsed at elemType
+//     via the length-checked StringToArrayToBytes (returns an error — never panics — on empty /
+//     whitespace / malformed input) and re-encoded to the same byte form.
+//
+// Returns ok=false for a non-constant (param), unsupported-type, or unparseable argument (fail-safe:
+// no rewrite).
+func vecFloatKey(e *plan.Expr, elemType types.T) (string, bool) {
+	for e != nil {
+		f := e.GetF()
+		if f == nil || f.Func.ObjName != "cast" || len(f.Args) < 1 {
+			break
+		}
+		// Only a cast whose INPUT is NOT itself a vector may be peeled — that is the textual
+		// cast('[...]' as vec<T>) shape, where the inner literal spells the query vector verbatim and
+		// parsing it at elemType reproduces the cast exactly. A vector-to-vector cast CONVERTS the
+		// value (vecf16('[1.001]') is 0x3c01, but vecbf16('[1.001]') re-cast to vecf16 is 0x3c00), so
+		// peeling it would parse the inner literal at the wrong type and equate two DIFFERENT vectors,
+		// silently rewriting the SELECT distance to a score computed for the other one. Stop and yield
+		// no key (fail-safe: no rewrite) rather than guess at the conversion.
+		if vecElemByteSize(types.T(f.Args[0].Typ.GetId())) != 0 {
+			return "", false
+		}
+		e = f.Args[0]
+	}
+	lit := e.GetLit()
+	if lit == nil {
+		return "", false
+	}
+	elemSize := vecElemByteSize(elemType)
+	if elemSize == 0 {
+		return "", false
+	}
+	// Folded vector literal: the raw element bytes are the canonical, type-exact key. Guard the length
+	// against the element size so a malformed literal yields no key (fail-safe) rather than a bad decode.
+	if raw := lit.GetVecVal(); raw != "" {
+		if len(raw)%elemSize != 0 {
+			return "", false
+		}
+		return raw, true
+	}
+	// Unfolded textual literal: "[...]" text in Sval, parsed at elemType into the same byte form.
+	sv, ok := lit.Value.(*plan.Literal_Sval)
+	if !ok {
+		return "", false
+	}
+	b, ok := vecTextToBytes(elemType, sv.Sval)
+	if !ok {
+		return "", false
+	}
+	return string(b), true
+}
+
+// vecElemByteSize returns the byte width of a single element of a vector array type, or 0 for a
+// non-vector / unsupported type (fail-safe: callers treat 0 as "no key").
+func vecElemByteSize(t types.T) int {
+	switch t {
+	case types.T_array_float32:
+		return 4
+	case types.T_array_float64:
+		return 8
+	case types.T_array_bf16, types.T_array_float16:
+		return 2
+	case types.T_array_int8, types.T_array_uint8:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// vecTextToBytes parses an unfolded "[...]" literal at the given vector element type into the folded
+// byte encoding, using the length-checked StringToArrayToBytes (returns an error — never panics — on
+// empty/whitespace/malformed input). ok=false on any parse failure (fail-safe: no rewrite).
+func vecTextToBytes(t types.T, s string) ([]byte, bool) {
+	var b []byte
+	var err error
+	switch t {
+	case types.T_array_float32:
+		b, err = types.StringToArrayToBytes[float32](s)
+	case types.T_array_float64:
+		b, err = types.StringToArrayToBytes[float64](s)
+	case types.T_array_bf16:
+		b, err = types.StringToArrayToBytes[types.BF16](s)
+	case types.T_array_float16:
+		b, err = types.StringToArrayToBytes[types.Float16](s)
+	case types.T_array_int8:
+		b, err = types.StringToArrayToBytes[int8](s)
+	case types.T_array_uint8:
+		b, err = types.StringToArrayToBytes[uint8](s)
+	default:
+		return nil, false
+	}
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// exprCallsFunc reports whether expr calls fnName anywhere inside it, including nested in
+// another call's arguments or inside an expression list.
+//
+// Used to spot a predicate that WRAPS an index placeholder rather than being one --
+// `MATCH(...) > 0`, `ROUND(l2_distance(...), 2) < 5` -- which the "is this expression exactly
+// the placeholder?" tests used elsewhere step straight past.
+func exprCallsFunc(expr *plan.Expr, fnName string) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F.Func != nil && e.F.Func.ObjName == fnName {
+			return true
+		}
+		for _, arg := range e.F.Args {
+			if exprCallsFunc(arg, fnName) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, sub := range e.List.List {
+			if exprCallsFunc(sub, fnName) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// replaceScoreFnInExprBy walks expr and offers every function call to rewrite. A non-nil
+// return replaces that call; nil leaves it in place and the walk descends into its arguments.
+// Returns the rewritten expression.
+//
+// Letting the callback see the whole *plan.Function -- not just its name -- is what lets a
+// caller with several candidate index scans decide WHICH one a given call belongs to, and
+// leave alone the ones no scan answers.
+func replaceScoreFnInExprBy(expr *plan.Expr, rewrite func(*plan.Function) *plan.Expr) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if repl := rewrite(e.F); repl != nil {
+			return repl
+		}
+		for i, arg := range e.F.Args {
+			e.F.Args[i] = replaceScoreFnInExprBy(arg, rewrite)
+		}
+	case *plan.Expr_List:
+		for i, sub := range e.List.List {
+			e.List.List[i] = replaceScoreFnInExprBy(sub, rewrite)
 		}
 	}
 	return expr

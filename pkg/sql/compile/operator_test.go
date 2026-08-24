@@ -38,10 +38,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -364,13 +366,38 @@ func TestDupOperatorMergeOrder(t *testing.T) {
 	}
 }
 
+func TestDupOperatorOrderPreservesSpecsAndAllocationContract(t *testing.T) {
+	op := order.NewArgument()
+	defer op.Release()
+	op.OrderBySpec = []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
+
+	duplicated := dupOperator(op, 0, 1).(*order.Order)
+	defer duplicated.Release()
+	require.Equal(t, op.OrderBySpec, duplicated.OrderBySpec)
+	_, ownsAllocation := any(duplicated).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+}
+
 func TestDupOperatorPartitionMultiUpdate(t *testing.T) {
 	innerOp := multi_update.NewArgument()
-	op := multi_update.NewPartitionMultiUpdate(innerOp, 1)
+	op := multi_update.NewPartitionMultiUpdate(innerOp)
 	result := dupOperator(op, 0, 1)
 	if result == nil {
 		t.Fatal("dupOperator returned nil for PartitionMultiUpdate")
 	}
+}
+
+func TestHasPartitionedUpdateTargetChecksEveryMainContext(t *testing.T) {
+	contexts := []*plan.UpdateCtx{
+		{TableDef: &plan.TableDef{TblId: 1}},
+		{TableDef: &plan.TableDef{TblId: 2, FeatureFlag: features.Partitioned}},
+		{TableDef: &plan.TableDef{TblId: 3, FeatureFlag: features.IndexTable}},
+	}
+	require.True(t, hasPartitionedUpdateTarget(contexts))
+
+	contexts[1].TableDef.FeatureFlag = 0
+	contexts[2].TableDef.FeatureFlag = features.Partitioned | features.IndexTable
+	require.False(t, hasPartitionedUpdateTarget(contexts))
 }
 
 func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
@@ -399,12 +426,21 @@ func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
 	}
 }
 
-func TestDupOperatorPreInsertRejectZeroTemporal(t *testing.T) {
+func TestDupOperatorPreInsertState(t *testing.T) {
 	op := preinsert.NewArgument()
 	op.RejectZeroTemporal = true
+	op.HasTargetSelector = true
+	op.TargetRowNumberCol = 7
+	op.TargetActiveCol = 8
+	op.TargetRowIDCol = 9
 	result := dupOperator(op, 0, 1)
 	require.NotNil(t, result)
-	require.True(t, result.(*preinsert.PreInsert).RejectZeroTemporal)
+	cloned := result.(*preinsert.PreInsert)
+	require.True(t, cloned.RejectZeroTemporal)
+	require.True(t, cloned.HasTargetSelector)
+	require.Equal(t, int32(7), cloned.TargetRowNumberCol)
+	require.Equal(t, int32(8), cloned.TargetActiveCol)
+	require.Equal(t, int32(9), cloned.TargetRowIDCol)
 }
 
 func TestRefreshZeroTemporalWritePolicy(t *testing.T) {
@@ -644,21 +680,83 @@ func makeTimeWindowAggNode(functionID int64, name string, config *plan.Expr) *pl
 }
 
 func TestConstructGapFillDisablesTumblingFastPath(t *testing.T) {
+	gapFillStart := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}}
+	gapFillEnd := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}}
 	node := &plan.Node{
-		NodeType:    plan.Node_TIME_WINDOW,
-		Interval:    makeTimeWindowIntervalExpr(1, "minute"),
-		GroupBy:     []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
-		Timestamp:   &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}},
-		WEnd:        &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
-		GapFillMode: plan.Node_GAP_FILL_PARTITION,
-		ProjectList: []*plan.Expr{},
-		BindingTags: []int32{},
-		AggList:     []*plan.Expr{},
+		NodeType:     plan.Node_TIME_WINDOW,
+		Interval:     makeTimeWindowIntervalExpr(1, "minute"),
+		GroupBy:      []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+		Timestamp:    &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}},
+		WEnd:         &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		GapFillMode:  plan.Node_GAP_FILL_PARTITION,
+		GapFillStart: gapFillStart,
+		GapFillEnd:   gapFillEnd,
+		ProjectList:  []*plan.Expr{},
+		BindingTags:  []int32{},
+		AggList:      []*plan.Expr{},
 	}
 	arg := constructTimeWindow(context.Background(), node, nil)
 	require.True(t, arg.GapFill)
 	require.Equal(t, arg.Interval, arg.Sliding)
+	require.Same(t, gapFillStart, arg.GapFillStart)
+	require.Same(t, gapFillEnd, arg.GapFillEnd)
 	require.Nil(t, arg.EndExpr, "GAPFILL must not use the existing-window-only interval fast path")
+	arg.Release()
+}
+
+func TestConstructTimeWindowPromotesDateBoundaryRuntimeType(t *testing.T) {
+	dateTs := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_date)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0},
+		},
+	}
+	datetimeGroup := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+		},
+	}
+	node := &plan.Node{
+		NodeType:    plan.Node_TIME_WINDOW,
+		Interval:    makeTimeWindowIntervalExpr(1, "minute"),
+		GroupBy:     []*plan.Expr{datetimeGroup},
+		Timestamp:   dateTs,
+		WEnd:        datetimeGroup,
+		ProjectList: []*plan.Expr{},
+		BindingTags: []int32{},
+		AggList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{
+						Obj:     function.AggSumOverloadID,
+						ObjName: "sum",
+					},
+					Args: []*plan.Expr{{
+						Typ: plan.Type{Id: int32(types.T_int64)},
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{RelPos: 0, ColPos: 1},
+						},
+					}},
+				}},
+			},
+			{
+				Typ:  plan.Type{Id: int32(types.T_datetime), NotNullable: true},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: plan2.TimeWindowStart}},
+			},
+			{
+				Typ:  plan.Type{Id: int32(types.T_datetime), NotNullable: true},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: plan2.TimeWindowEnd}},
+			},
+		},
+	}
+
+	arg := constructTimeWindow(context.Background(), node, nil)
+	require.Equal(t, int32(types.T_datetime), arg.TsType.Id)
+	require.True(t, arg.TsType.NotNullable)
+	require.True(t, arg.WStart)
+	require.True(t, arg.WEnd)
 	arg.Release()
 }
 
@@ -732,6 +830,7 @@ func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 
 func TestDupOperatorHashJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	op := hashjoin.NewArgument()
+	op.EmitCompressedRowCount = true
 	staleMailbox := hashjoin.NewBitmapMailbox(2)
 	staleMailbox.SealAndDrain(mpool.MustNewZero())
 	op.Mailbox = staleMailbox
@@ -743,6 +842,8 @@ func TestDupOperatorHashJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	require.Same(t, staleMailbox, op.Mailbox, "duplicating must not mutate the reusable template")
 	require.NotSame(t, staleMailbox, dup1.Mailbox, "a stale template mailbox must not enter a new execution")
 	require.Same(t, dup1.Mailbox, dup2.Mailbox)
+	require.True(t, dup1.EmitCompressedRowCount)
+	require.True(t, dup2.EmitCompressedRowCount)
 	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*hashjoin.HashJoin)
 	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
 }
@@ -766,7 +867,9 @@ func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
 	rightDedupJoin := rightdedupjoin.NewArgument()
 	rightDedupJoin.IsShuffle = true
 	rightDedupJoin.ShuffleIdx = -1
+	rightDedupJoin.InputKeysUnique = true
 	require.Equal(t, int32(2), dupOperator(rightDedupJoin, 2, 4).(*rightdedupjoin.RightDedupJoin).ShuffleIdx)
+	require.True(t, dupOperator(rightDedupJoin, 2, 4).(*rightdedupjoin.RightDedupJoin).InputKeysUnique)
 }
 
 func TestConstructShuffleOperatorForJoinSupportsColumnsAndExpressions(t *testing.T) {
@@ -1082,7 +1185,7 @@ func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {
 
 func TestDupOperatorTableFunctionPreservesProbeState(t *testing.T) {
 	op := table_function.NewArgument()
-	op.FuncName = "ivf_search"
+	op.FuncName = "unnest"
 	op.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 		{Tag: 8, UseMembershipFilter: true},
 	}

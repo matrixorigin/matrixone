@@ -81,7 +81,11 @@ func dataBranchGeneratedColumnsEqual(left, right *plan.GeneratedCol) bool {
 		return false
 	}
 	if left.Expr != nil || right.Expr != nil {
-		return proto.Equal(left.Expr, right.Expr)
+		leftExpr := proto.Clone(left.Expr).(*plan.Expr)
+		rightExpr := proto.Clone(right.Expr).(*plan.Expr)
+		return leftExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+			rightExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+			proto.Equal(leftExpr, rightExpr)
 	}
 	return left.OriginString != "" && left.OriginString == right.OriginString
 }
@@ -123,7 +127,10 @@ func dataBranchGeneratedColumnsLogicallyEqual(
 		}
 		return strings.ToLower(col.Name), true
 	})
-	return leftOK && rightOK && proto.Equal(leftExpr, rightExpr)
+	return leftOK && rightOK &&
+		leftExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+		rightExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+		proto.Equal(leftExpr, rightExpr)
 }
 
 func dataBranchGeneratedExprColumn(tblDef *plan.TableDef, pos int32) *plan.ColDef {
@@ -208,6 +215,39 @@ func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 	return &branchHashmapAllocator{
 		upstream:  malloc.GetDefault(nil),
 		throttler: throttler,
+	}
+}
+
+type dataBranchVisibleStateRecoveryResources struct {
+	allocator *branchHashmapAllocator
+}
+
+func (r *dataBranchVisibleStateRecoveryResources) NewVisibleStateStore() (engine.VisibleStateStore, error) {
+	if r == nil || r.allocator == nil {
+		return nil, moerr.NewInternalErrorNoCtx("data branch visible-state recovery requires an allocator")
+	}
+	return databranchutils.NewVisibleStateStore(r.allocator)
+}
+
+func (r *dataBranchVisibleStateRecoveryResources) ReserveBuffer(bytes int64) error {
+	if bytes <= 0 {
+		return nil
+	}
+	if r == nil || r.allocator == nil || r.allocator.throttler == nil {
+		return moerr.NewInternalErrorNoCtx("data branch visible-state recovery requires a memory throttler")
+	}
+	if _, ok := r.allocator.throttler.Acquire(bytes); !ok {
+		return moerr.NewMPoolCapacityNoCtxf(
+			"data branch visible-state recovery cannot reserve %d buffered bytes",
+			bytes,
+		)
+	}
+	return nil
+}
+
+func (r *dataBranchVisibleStateRecoveryResources) ReleaseBuffer(bytes int64) {
+	if bytes > 0 && r != nil && r.allocator != nil && r.allocator.throttler != nil {
+		r.allocator.throttler.Release(bytes)
 	}
 }
 
@@ -533,7 +573,6 @@ func dataBranchCreateDatabase(
 		authStats statistic.StatsArray
 	)
 	stats.Reset()
-
 	if bh, deferred, err = getBackExecutor(
 		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
 	); err != nil {
@@ -562,7 +601,7 @@ func dataBranchCreateDatabase(
 		return
 	}
 
-	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase); err != nil {
+	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase, nil); err != nil {
 		return
 	}
 
@@ -1860,6 +1899,11 @@ func getRelations(
 		)
 		return
 	}
+	if err = validateDataBranchNamedSnapshotScope(
+		ctx, tarName.AtTsExpr, tarSnap, tarDBName, tarTblName, tarRel,
+	); err != nil {
+		return
+	}
 
 	if baseDB, err = eng.Database(ctx, baseDBName, txnOpB); err != nil {
 		logutil.Error(
@@ -1883,6 +1927,11 @@ func getRelations(
 		)
 		return
 	}
+	if err = validateDataBranchNamedSnapshotScope(
+		ctx, baseName.AtTsExpr, baseSnap, baseDBName, baseTblName, baseRel,
+	); err != nil {
+		return
+	}
 
 	logutil.Info(
 		"DataBranch-GetRelations-Done",
@@ -1893,6 +1942,23 @@ func getRelations(
 	)
 
 	return
+}
+
+func validateDataBranchNamedSnapshotScope(
+	ctx context.Context,
+	atTsExpr *tree.AtTimeStamp,
+	snapshot *plan2.Snapshot,
+	databaseName string,
+	tableName string,
+	relation engine.Relation,
+) error {
+	if atTsExpr == nil || atTsExpr.Type != tree.ATTIMESTAMPSNAPSHOT {
+		return nil
+	}
+	tableDef := relation.GetTableDef(ctx)
+	return plan2.ValidateSnapshotScope(
+		snapshot, databaseName, tableName, tableDef.DbId, plan2.SnapshotTableID(tableDef),
+	)
 }
 
 func constructChangeHandle(
@@ -1943,12 +2009,17 @@ func constructChangeHandle(
 		bFrom := betweenFrom.Next()
 		bTo := *betweenTo
 		j := 0
+		boundaries := make([]engine.Relation, 0, len(tarRange.rel))
 		for i := range tarRange.rel {
+			startBoundary := tarRange.startBoundary(i)
 			// Intersect: from = max(original, bFrom), end = min(original, bTo)
 			f := tarRange.from[i]
 			e := tarRange.end[i]
 			if bFrom.GT(&f) {
 				f = bFrom
+				// The lineage boundary represents the state immediately before
+				// the original range, not an arbitrary BETWEEN lower bound.
+				startBoundary = nil
 			}
 			if bTo.LT(&e) {
 				e = bTo
@@ -1957,12 +2028,14 @@ func constructChangeHandle(
 				tarRange.from[j] = f
 				tarRange.end[j] = e
 				tarRange.rel[j] = tarRange.rel[i]
+				boundaries = append(boundaries, startBoundary)
 				j++
 			}
 		}
 		tarRange.from = tarRange.from[:j]
 		tarRange.end = tarRange.end[:j]
 		tarRange.rel = tarRange.rel[:j]
+		tarRange.startBoundaryRel = boundaries
 	}
 	tarHydrationRel := tables.tarRel
 	tarHydrationSnapshot := tarSnapshot
@@ -1974,6 +2047,10 @@ func constructChangeHandle(
 		tarHydrationSnapshot = *betweenTo
 	}
 	targetDef := tables.tarRel.GetTableDef(ctx)
+	ctx = engine.WithVisibleStateRecoveryResources(
+		ctx,
+		&dataBranchVisibleStateRecoveryResources{allocator: tables.hashmapAllocator},
+	)
 
 	// collectFn dispatches to the PK-filtered or plain CollectChanges variant.
 	collectFn := func(
@@ -2007,8 +2084,14 @@ func constructChangeHandle(
 				sourceMapping, len(tables.def.colNames),
 			)
 		}
+		collectCtx := ctx
+		if startBoundary := tarRange.startBoundary(i); startBoundary != nil {
+			collectCtx = engine.WithVisibleStateStartRelation(
+				collectCtx, startBoundary,
+			)
+		}
 		if handle, err = collectFn(
-			ctx,
+			collectCtx,
 			tarRange.rel[i],
 			tarRange.from[i],
 			tarRange.end[i],
@@ -2059,8 +2142,14 @@ func constructChangeHandle(
 				sourceMapping, len(tables.def.colNames),
 			)
 		}
+		collectCtx := ctx
+		if startBoundary := baseRange.startBoundary(i); startBoundary != nil {
+			collectCtx = engine.WithVisibleStateStartRelation(
+				collectCtx, startBoundary,
+			)
+		}
 		if handle, err = collectFn(
-			ctx,
+			collectCtx,
 			baseRange.rel[i],
 			baseRange.from[i],
 			baseRange.end[i],
@@ -2709,6 +2798,7 @@ func buildSideCollectRange(
 ) (cr collectRange, hasZeroHistory bool, err error) {
 
 	endpointID := selfPath[len(selfPath)-1]
+	var previousRel engine.Relation
 	for i, nodeID := range selfPath {
 		var (
 			rel             engine.Relation
@@ -2802,11 +2892,14 @@ func buildSideCollectRange(
 		}
 
 		if windowFrom.GT(&windowEnd) {
+			previousRel = rel
 			continue
 		}
 		cr.rel = append(cr.rel, rel)
 		cr.from = append(cr.from, windowFrom)
 		cr.end = append(cr.end, windowEnd)
+		cr.startBoundaryRel = append(cr.startBoundaryRel, previousRel)
+		previousRel = rel
 	}
 	return
 }
@@ -3200,6 +3293,7 @@ func getTableCreationCommitTSByCollectChanges(
 		ctx = engine.WithPKFilter(ctx, pkFilter)
 	}
 	ctx = engine.WithCollectChangesDebugLabel(ctx, "data-branch-table-cts")
+	ctx = engine.WithCollectChangesPreserveAllVersions(ctx)
 
 	handle, err := rel.CollectChanges(ctx, lowerBound, snapshotTS, true, mp)
 	if err != nil {

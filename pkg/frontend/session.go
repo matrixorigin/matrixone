@@ -36,7 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -49,6 +51,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -150,6 +153,10 @@ type Session struct {
 	ep              *ExportConfig
 	showStmtType    ShowStatementType
 	userDefinedVars map[string]*UserDefinedVar
+	// migrationSystemVarReplayable records whether the latest assignment for a
+	// session system variable is known to be captured by the proxy's raw SET
+	// replay stream. A prepared assignment is not visible to that stream.
+	migrationSystemVarReplayable map[string]bool
 	// tempTables records the relationship between the temporary table created by the session and the actual table.
 	// Key: dbName.alias, Value: realName
 	tempTables map[string]string
@@ -160,6 +167,13 @@ type Session struct {
 	// resolution changes. Prepared statements use it to invalidate plans that
 	// were built against an older temporary-table mapping.
 	tempTableVersion uint64
+	// tempTableTxnJournals mirrors transaction and statement rollback for the
+	// session-local alias map. Physical temporary relations live in the engine
+	// workspace, so publishing an alias without journaling it would let a later
+	// rollback discard the relation while retaining an unusable session name.
+	// The outer key is the engine transaction ID. Entries are allocated lazily,
+	// only when a transaction actually changes a temporary-table alias.
+	tempTableTxnJournals map[string]*tempTableTxnJournal
 	// ddlVersion changes after every successful session DDL. It covers
 	// transaction-local catalog writes that are not visible in CatalogCache.
 	ddlVersion      atomic.Uint64
@@ -167,6 +181,12 @@ type Session struct {
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
+
+	// preparedCursorBytes accounts for rows retained by all active server-side
+	// cursors in this session. Cursor results live on the prepared statement,
+	// so a session-level budget is required in addition to a per-cursor bound.
+	preparedCursorBytes atomic.Uint64
+	preparedCursorLimit atomic.Uint64
 
 	priv *privilege
 
@@ -177,6 +197,19 @@ type Session struct {
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
 	ruleCacheMu sync.RWMutex      // protects ruleCache
+
+	// foreignConns caches connections to foreign data sources (Elasticsearch,
+	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and
+	// consumed by esql_tvf / sql_tvf. It is session-scoped: every connection is
+	// closed when the session ends (see closeForeignConns in Close). See
+	// session_foreignconn.go for the process.ForeignConnCache implementation.
+	foreignConnMu sync.Mutex
+	foreignConns  map[string]process.ForeignConn // handle -> connection
+	// foreignConnsClosed is the terminal tombstone set by closeForeignConns:
+	// a connector racing with session close (KILL CONNECTION during a slow
+	// connect handshake) must have its late connection rejected and closed,
+	// not silently re-admitted into a cache nobody will ever clean up again.
+	foreignConnsClosed bool
 
 	// rewriteEnabled caches the enable_remap_hint system variable state
 	// to avoid expensive GetSessionSysVar calls on every SQL query
@@ -305,6 +338,50 @@ type Session struct {
 	createVersion string
 }
 
+type tempTableAliasState struct {
+	realName string
+	exists   bool
+}
+
+type tempTableTxnJournal struct {
+	before     map[string]tempTableAliasState
+	statements map[string]map[string]tempTableAliasState
+}
+
+func tempTableTxnKey(txnOp TxnOperator) string {
+	if txnOp == nil {
+		return ""
+	}
+	txnID := txnOp.Txn().ID
+	if len(txnID) == 0 {
+		return ""
+	}
+	return string(txnID)
+}
+
+func tempTableStatementKey(ses FeSession, sharedTxn bool) string {
+	if sharedTxn {
+		if owner := upstreamUserSession(ses); owner != nil {
+			stmtID := owner.GetStmtId()
+			return string(stmtID[:])
+		}
+	}
+	stmtID := ses.GetStmtId()
+	return string(stmtID[:])
+}
+
+func tempTableMutationKeys(ses FeSession) (string, string) {
+	if ses == nil || ses.GetTxnHandler() == nil {
+		return "", ""
+	}
+	txnHandler := ses.GetTxnHandler()
+	txnKey := tempTableTxnKey(txnHandler.GetTxn())
+	if txnKey == "" {
+		return "", ""
+	}
+	return txnKey, tempTableStatementKey(ses, txnHandler.IsShareTxn())
+}
+
 func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
 	return &ses.mysqlParser
 }
@@ -384,7 +461,13 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 }
 
 func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
-	return ses.setUserDefinedVarWithKind(name, value, sql, isBin, prepareParamKindFromValue(value))
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, inferUserDefinedVarType(value), prepareParamKindFromValue(value))
+}
+
+func (ses *Session) setUserDefinedVarWithType(name string, value interface{}, sql string, isBin bool, typ plan.Type) error {
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, typ, prepareParamKindFromType(types.T(typ.Id)))
 }
 
 func (ses *Session) setUserDefinedVarWithKind(
@@ -394,15 +477,109 @@ func (ses *Session) setUserDefinedVarWithKind(
 	isBin bool,
 	kind vector.PrepareParamKind,
 ) error {
+	return ses.setUserDefinedVarWithTypeAndKind(
+		name, value, sql, isBin, inferUserDefinedVarType(value), kind)
+}
+
+func (ses *Session) setUserDefinedVarWithKindAndReplayability(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	kind vector.PrepareParamKind,
+	replayable bool,
+) error {
+	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		name, value, sql, isBin, inferUserDefinedVarType(value), kind, replayable)
+}
+
+func (ses *Session) setUserDefinedVarWithTypeAndKind(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	typ plan.Type,
+	kind vector.PrepareParamKind,
+) error {
+	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		name, value, sql, isBin, typ, kind, false)
+}
+
+func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	typ plan.Type,
+	kind vector.PrepareParamKind,
+	replayable bool,
+) error {
+	if typ.Id == 0 {
+		typ = inferUserDefinedVarType(value)
+	}
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
+	key := strings.ToLower(name)
+	if previous := ses.userDefinedVars[key]; previous != nil && !previous.Replayable {
+		replayable = false
+	}
+	ses.userDefinedVars[key] = &UserDefinedVar{
 		Value:            value,
 		Sql:              sql,
 		IsBin:            isBin,
+		Type:             typ,
 		PrepareParamKind: kind,
+		Replayable:       replayable,
 	}
+	ses.mu.Unlock()
+	// User-variable references are typed at bind time. A later assignment can
+	// change that type, so cached plans containing @vars must be rebound.
+	ses.cleanCache()
 	return nil
+}
+
+func (ses *Session) markMigrationSystemVarReplayable(name string, replayable bool) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.migrationSystemVarReplayable == nil {
+		ses.migrationSystemVarReplayable = make(map[string]bool)
+	}
+	ses.migrationSystemVarReplayable[name] = replayable
+}
+
+func (ses *Session) getMigrationSystemVarReplayability(name string) (bool, bool) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	replayable, tracked := ses.migrationSystemVarReplayable[name]
+	return replayable, tracked
+}
+
+func (ses *Session) restoreMigrationSystemVarReplayability(
+	name string, replayable, tracked bool,
+) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if !tracked {
+		delete(ses.migrationSystemVarReplayable, name)
+		return
+	}
+	if ses.migrationSystemVarReplayable == nil {
+		ses.migrationSystemVarReplayable = make(map[string]bool)
+	}
+	ses.migrationSystemVarReplayable[name] = replayable
+}
+
+func (ses *Session) hasUnreplayableMigrationSystemVars() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, replayable := range ses.migrationSystemVarReplayable {
+		if !replayable {
+			return true
+		}
+	}
+	return false
 }
 
 // GetUserDefinedVar gets value of the user defined variable
@@ -418,6 +595,11 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 
 // AddTempTable adds the temporary table to the session
 func (ses *Session) AddTempTable(dbName, alias, realName string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.addTempTable(dbName, alias, realName, txnKey, stmtKey)
+}
+
+func (ses *Session) addTempTable(dbName, alias, realName, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	key := dbName + "." + alias
@@ -425,7 +607,10 @@ func (ses *Session) AddTempTable(dbName, alias, realName string) {
 		if oldRealName == realName {
 			return
 		}
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
 		delete(ses.tempTablesRev, oldRealName)
+	} else {
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
 	}
 	ses.tempTables[key] = realName
 	ses.tempTablesRev[realName] = key
@@ -458,10 +643,16 @@ func (ses *Session) advanceDDLVersion() {
 
 // RemoveTempTable removes the temporary table alias
 func (ses *Session) RemoveTempTable(dbName, alias string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.removeTempTable(dbName, alias, txnKey, stmtKey)
+}
+
+func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	key := dbName + "." + alias
 	if realName, ok := ses.tempTables[key]; ok {
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
 		delete(ses.tempTables, key)
 		delete(ses.tempTablesRev, realName)
 		ses.tempTableVersion++
@@ -470,11 +661,115 @@ func (ses *Session) RemoveTempTable(dbName, alias string) {
 
 // RemoveTempTableByRealName removes the temporary table alias by its real name
 func (ses *Session) RemoveTempTableByRealName(realName string) {
+	txnKey, stmtKey := tempTableMutationKeys(ses)
+	ses.removeTempTableByRealName(realName, txnKey, stmtKey)
+}
+
+func (ses *Session) removeTempTableByRealName(realName, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if alias, ok := ses.tempTablesRev[realName]; ok {
+		ses.recordTempTableMutationLocked(txnKey, stmtKey, alias)
 		delete(ses.tempTables, alias)
 		delete(ses.tempTablesRev, realName)
+		ses.tempTableVersion++
+	}
+}
+
+func (ses *Session) recordTempTableMutationLocked(txnKey, stmtKey, alias string) {
+	if txnKey == "" {
+		return
+	}
+	if ses.tempTableTxnJournals == nil {
+		ses.tempTableTxnJournals = make(map[string]*tempTableTxnJournal)
+	}
+	journal := ses.tempTableTxnJournals[txnKey]
+	if journal == nil {
+		journal = &tempTableTxnJournal{
+			before:     make(map[string]tempTableAliasState),
+			statements: make(map[string]map[string]tempTableAliasState),
+		}
+		ses.tempTableTxnJournals[txnKey] = journal
+	}
+	state := tempTableAliasState{}
+	if realName, ok := ses.tempTables[alias]; ok {
+		state = tempTableAliasState{realName: realName, exists: true}
+	}
+	if _, ok := journal.before[alias]; !ok {
+		journal.before[alias] = state
+	}
+	statement := journal.statements[stmtKey]
+	if statement == nil {
+		statement = make(map[string]tempTableAliasState)
+		journal.statements[stmtKey] = statement
+	}
+	if _, ok := statement[alias]; !ok {
+		statement[alias] = state
+	}
+}
+
+func (ses *Session) commitTempTableStatement(txnKey, stmtKey string) {
+	if txnKey == "" {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if journal := ses.tempTableTxnJournals[txnKey]; journal != nil {
+		delete(journal.statements, stmtKey)
+	}
+}
+
+func (ses *Session) rollbackTempTableStatement(txnKey, stmtKey string) {
+	if txnKey == "" {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if journal := ses.tempTableTxnJournals[txnKey]; journal != nil {
+		ses.restoreTempTableAliasesLocked(journal.statements[stmtKey])
+		delete(journal.statements, stmtKey)
+	}
+}
+
+func (ses *Session) commitTempTableTransaction(txnKey string) {
+	if txnKey == "" {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	delete(ses.tempTableTxnJournals, txnKey)
+}
+
+func (ses *Session) rollbackTempTableTransaction(txnKey string) {
+	if txnKey == "" {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if journal := ses.tempTableTxnJournals[txnKey]; journal != nil {
+		ses.restoreTempTableAliasesLocked(journal.before)
+		delete(ses.tempTableTxnJournals, txnKey)
+	}
+}
+
+func (ses *Session) restoreTempTableAliasesLocked(before map[string]tempTableAliasState) {
+	changed := false
+	for alias, state := range before {
+		current, exists := ses.tempTables[alias]
+		if exists == state.exists && (!exists || current == state.realName) {
+			continue
+		}
+		changed = true
+		if exists {
+			delete(ses.tempTablesRev, current)
+		}
+		delete(ses.tempTables, alias)
+		if state.exists {
+			ses.tempTables[alias] = state.realName
+			ses.tempTablesRev[state.realName] = alias
+		}
+	}
+	if changed {
 		ses.tempTableVersion++
 	}
 }
@@ -761,35 +1056,84 @@ func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 }
 
 type errInfo struct {
-	codes  []uint16
-	msgs   []string
-	maxCnt int
+	codes         []uint16
+	msgs          []string
+	levels        []string
+	maxCnt        int
+	totalWarnings uint64
 }
 
 func (e *errInfo) push(code uint16, msg string) {
-	if e.maxCnt > 0 && len(e.codes) > e.maxCnt {
+	e.pushWithLevel(code, msg, "Error")
+}
+
+func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
+	if !strings.EqualFold(level, "Error") {
+		e.totalWarnings++
+	}
+	e.pushStored(code, msg, level)
+}
+
+func (e *errInfo) pushStored(code uint16, msg, level string) {
+	if e.maxCnt > 0 && len(e.codes) >= e.maxCnt {
 		e.codes = e.codes[1:]
 		e.msgs = e.msgs[1:]
+		e.levels = e.levels[1:]
 	}
 	e.codes = append(e.codes, code)
 	e.msgs = append(e.msgs, msg)
+	e.levels = append(e.levels, level)
+}
+
+func (e *errInfo) appendWarningBatch(total uint64, codes []uint16, msgs []string) {
+	e.totalWarnings += total
+	for i := 0; i < len(codes) && i < len(msgs); i++ {
+		e.pushStored(codes[i], msgs[i], "Warning")
+	}
 }
 
 func (e *errInfo) reset() {
 	e.codes = e.codes[:0]
 	e.msgs = e.msgs[:0]
+	e.levels = e.levels[:0]
+	e.totalWarnings = 0
 }
 
 func (e *errInfo) snapshot() errInfo {
 	return errInfo{
-		codes:  append([]uint16(nil), e.codes...),
-		msgs:   append([]string(nil), e.msgs...),
-		maxCnt: e.maxCnt,
+		codes:         append([]uint16(nil), e.codes...),
+		msgs:          append([]string(nil), e.msgs...),
+		levels:        append([]string(nil), e.levels...),
+		maxCnt:        e.maxCnt,
+		totalWarnings: e.totalWarnings,
 	}
 }
 
 func (e errInfo) length() int {
 	return len(e.codes)
+}
+
+func (e errInfo) warningCount() uint16 {
+	if e.totalWarnings > 0 {
+		if e.totalWarnings >= uint64(^uint16(0)) {
+			return ^uint16(0)
+		}
+		return uint16(e.totalWarnings)
+	}
+	count := 0
+	for i := range e.codes {
+		level := "Error"
+		if i < len(e.levels) && e.levels[i] != "" {
+			level = e.levels[i]
+		}
+		if !strings.EqualFold(level, "Error") {
+			count++
+			if count >= int(^uint16(0)) {
+				return ^uint16(0)
+			}
+		}
+	}
+	return uint16(count)
 }
 
 func NewSession(
@@ -832,6 +1176,7 @@ func NewSession(
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
+	ses.migrationSystemVarReplayable = make(map[string]bool)
 	ses.tempTables = make(map[string]string)
 	ses.tempTablesRev = make(map[string]string)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
@@ -902,6 +1247,7 @@ func (ses *Session) Close() {
 		realName string
 	}
 	var tempTables []tempTableEntry
+	var tenant *TenantInfo
 	ses.mu.Lock()
 	for key, realName := range ses.tempTables {
 		if db, _, ok := strings.Cut(key, "."); ok {
@@ -912,36 +1258,55 @@ func (ses *Session) Close() {
 	}
 	ses.tempTables = nil
 	ses.tempTablesRev = nil
+	ses.tempTableTxnJournals = nil
+	tenant = ses.tenant
 	ses.mu.Unlock()
+	var tenantInfo *TenantInfo
+	if tenant != nil {
+		tenantInfo = tenant.Copy()
+	}
 
 	if len(tempTables) > 0 {
+		service := ses.GetService()
+		timeZone := ses.GetTimeZone()
 		go func() {
 			// use a new context to clean up temp tables
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
 			_, _ = ExecuteFuncWithRecover(func() error {
-				// Use an independent background executor.
-				// We use a "minimal" session or just a way to run SQL.
-				// Here we can use the service's background executor if available,
-				// or just create one that doesn't depend on the closing session's pool.
-				// For now, to keep it simple and following the suggestion of "independent executor",
-				// we'll use GetBackgroundExec but we need to be careful.
-				// Actually, the suggestion implies we should not block Close.
-				// In MatrixOne, we can use the internal executor.
-
-				bh := ses.GetBackgroundExec(ctx)
-				defer bh.Close()
+				serviceRuntime := moruntime.ServiceRuntime(service)
+				if serviceRuntime == nil {
+					logutil.Errorf("failed to clean temporary tables: service runtime is not ready")
+					return nil
+				}
+				v, ok := serviceRuntime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+				if !ok {
+					logutil.Errorf("failed to clean temporary tables: internal SQL executor is not ready")
+					return nil
+				}
+				exec, ok := v.(executor.SQLExecutor)
+				if !ok {
+					logutil.Errorf("failed to clean temporary tables: invalid internal SQL executor")
+					return nil
+				}
+				opts := executor.Options{}.WithTimeZone(timeZone)
+				if tenantInfo != nil {
+					opts = opts.WithAccountID(tenantInfo.GetTenantID()).WithStatementOption(
+						executor.StatementOption{}.
+							WithAccountID(tenantInfo.GetTenantID()).
+							WithUserID(tenantInfo.GetUserID()).
+							WithRoleID(tenantInfo.GetDefaultRoleID()),
+					)
+				}
 				for _, tbl := range tempTables {
-					var dropSQL string
-					if tbl.dbName != "" {
-						dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`", tbl.dbName, tbl.realName)
-					} else {
-						dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS %s", tbl.realName)
-					}
-					if err := bh.Exec(ctx, dropSQL); err != nil {
+					dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
+					res, err := exec.Exec(ctx, dropSQL, opts)
+					if err != nil {
 						logutil.Errorf("failed to drop temp table %s: %v", tbl.realName, err)
+						continue
 					}
+					res.Close()
 				}
 				return nil
 			})
@@ -955,6 +1320,10 @@ func (ses *Session) Close() {
 			function.ReleaseUserLevelLocksOnSessionClose(ses.proc)
 		}
 	}
+
+	// Close any esql_tvf / sql_tvf foreign-data connections opened by this
+	// session so their sockets and driver pools do not outlive it.
+	ses.closeForeignConns()
 
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -978,6 +1347,8 @@ func (ses *Session) Close() {
 		stmt.Close()
 	}
 	ses.prepareStmts = nil
+	ses.preparedCursorBytes.Store(0)
+	ses.preparedCursorLimit.Store(0)
 	ses.allResultSet = nil
 	ses.tenant = nil
 	ses.priv = nil
@@ -1084,6 +1455,17 @@ func (ses *Session) isCached(sql string) bool {
 		return false
 	}
 	return ses.planCache.isCached(sql)
+}
+
+func (ses *Session) removeCachedPlan(sql string) {
+	if len(sql) == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.remove(sql)
+	}
 }
 
 func (ses *Session) cleanCache() {
@@ -1264,6 +1646,12 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute {
+			if err := capturePreparedCursorBatch(ses, execCtx, bat); err != nil {
+				return err
+			}
+			return stagePreparedCursorQueryResult(execCtx, crs, bat)
+		}
 		return ses.outputCallback(ses, execCtx, bat, crs)
 	}
 }
@@ -1281,6 +1669,31 @@ func (ses *Session) appendErrorDiagnostic(code uint16, msg string) {
 	defer ses.mu.Unlock()
 	if ses.errInfo != nil {
 		ses.errInfo.push(code, msg)
+	}
+}
+
+func (ses *Session) appendWarningDiagnostic(code uint16, msg string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.pushWithLevel(code, msg, "Warning")
+	}
+}
+
+// AppendWarningDiagnostic exposes the diagnostic sink to expression
+// evaluation without coupling the process.Session interface to frontend
+// warning storage.
+func (ses *Session) AppendWarningDiagnostic(code uint16, msg string) {
+	ses.appendWarningDiagnostic(code, msg)
+}
+
+// AppendWarningBatch merges the total warning count from a remote fragment
+// while retaining only the bounded records needed by SHOW WARNINGS.
+func (ses *Session) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.appendWarningBatch(total, codes, messages)
 	}
 }
 
@@ -2078,11 +2491,12 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
 	var resp *Response
 	serverStatus := ses.GetTxnHandler().GetServerStatus()
+	warnings := ses.diagnosticsSnapshot().warningCount()
 	if !isLastStmt {
-		resp = NewResponse(category, affectedRows, 0, 0,
+		resp = NewResponse(category, affectedRows, 0, warnings,
 			serverStatus|SERVER_MORE_RESULTS_EXISTS, cmd, d)
 	} else {
-		resp = NewResponse(category, affectedRows, 0, 0, serverStatus, cmd, d)
+		resp = NewResponse(category, affectedRows, 0, warnings, serverStatus, cmd, d)
 	}
 	return resp
 }
@@ -2412,6 +2826,109 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 			"so continue to mirgrate session, conn ID: %d, err: %v",
 			req.DB, req.ConnID, err)
 	}
+	if len(req.UserDefinedVars) > 0 && !req.UserDefinedVarsExported {
+		return moerr.NewInternalError(ctx, "user variables were provided without a typed migration snapshot")
+	}
+	var userVars map[string]*UserDefinedVar
+	if req.UserDefinedVarsExported {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
+			return moerr.NewInternalError(ctx, "typed user-variable migration requires protocol version 22")
+		}
+		var err error
+		userVars, err = decodeUserDefinedVars(
+			migrationCtx, req.UserDefinedVars, req.UserDefinedVarsReplayable)
+		if err != nil {
+			return err
+		}
+	}
+	var systemVars []migratedSystemVariable
+	if req.SystemVariablesExported {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
+			return moerr.NewInternalError(ctx, "typed system-variable migration requires protocol version 22")
+		}
+		var err error
+		systemVars, err = decodeSessionSystemVars(migrationCtx, req.SystemVariables)
+		if err != nil {
+			return err
+		}
+	}
+	if req.UserDefinedVarsExported {
+		ses.installUserDefinedVars(userVars)
+	}
+	if req.SystemVariablesExported {
+		migrationExecCtx := &ExecCtx{
+			reqCtx:      migrationCtx,
+			inMigration: true,
+			ses:         ses,
+		}
+		defer migrationExecCtx.Close()
+		for _, variable := range systemVars {
+			if variable.nextTransaction {
+				isolation, err := txnIsolationFromSystemValue(migrationCtx, variable.value)
+				if err != nil {
+					return err
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(migrationCtx, "transaction handler is not initialized")
+				}
+				if err := txnHandler.setNextTxnIsolation(migrationCtx, isolation, false); err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				ses.markMigrationSystemVarReplayable(
+					migrationNextTxnIsolationKey, req.SystemVariablesReplayable)
+				continue
+			}
+			var oldAutocommit interface{}
+			if variable.name == "autocommit" {
+				oldAutocommit, err = ses.GetSessionSysVar(variable.name)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+			}
+			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
+				return moerr.AttachCause(migrationCtx, err)
+			}
+			ses.markMigrationSystemVarReplayable(variable.name, req.SystemVariablesReplayable)
+			if variable.name == "autocommit" {
+				oldValue, err := valueIsBoolTrue(oldAutocommit)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				newValue, err := valueIsBoolTrue(variable.value)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(migrationCtx, "transaction handler is not initialized")
+				}
+				if err := txnHandler.SetAutocommit(migrationExecCtx, oldValue, newValue); err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+			}
+			if variable.runtimeValuePresent {
+				ses.applySessionSysVarSideEffects(variable.name, variable.runtimeValue)
+			} else {
+				ses.applySessionSysVarSideEffects(variable.name, variable.value)
+			}
+			// The typed snapshot carries only the final value. Invalidate for
+			// both cache-control variables so a source toggle (0->1 or 1->0)
+			// cannot leave stale target entries after migration.
+			if variable.name == "clear_privilege_cache" || variable.name == "enable_privilege_cache" {
+				ses.InvalidatePrivilegeCache()
+			}
+		}
+	} else {
+		for _, stmt := range req.SetVarStmts {
+			tempExecCtx := &ExecCtx{reqCtx: migrationCtx, inMigration: true, ses: ses}
+			err := doComQuery(ses, tempExecCtx, &UserInput{sql: stmt})
+			tempExecCtx.Close()
+			if err != nil {
+				return moerr.AttachCause(migrationCtx, err)
+			}
+		}
+	}
 
 	var maxStmtID uint32
 	for _, p := range req.PrepareStmts {
@@ -2434,6 +2951,30 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		return cause
 	}
 	return nil
+}
+
+func (ses *Session) applySessionSysVarSideEffects(name string, value interface{}) {
+	switch strings.ToLower(name) {
+	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+		moruntime.ServiceRuntime(ses.service).SetGlobalVariables(strings.ToLower(name), value)
+	case "disable_agg_statement":
+		boolVal := InitSystemVariableBoolType("_")
+		ses.disableAgg = boolVal.IsTrue(value)
+	case "clear_privilege_cache":
+		boolVal := InitSystemVariableBoolType("_")
+		if boolVal.IsTrue(value) {
+			if cache := ses.GetPrivilegeCache(); cache != nil {
+				cache.invalidate()
+			}
+		}
+	case "enable_privilege_cache":
+		boolVal := InitSystemVariableBoolType("_")
+		if !boolVal.IsTrue(value) {
+			if cache := ses.GetPrivilegeCache(); cache != nil {
+				cache.invalidate()
+			}
+		}
+	}
 }
 
 func (ses *Session) GetLogger() SessionLogger {

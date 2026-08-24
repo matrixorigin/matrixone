@@ -3505,12 +3505,12 @@ func initJsonUnquoteTestCase() []tcTemp {
 			info: "test json unquote",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{`"hello"`, `"world"`, `""`},
-					[]bool{false, false, true}),
+					[]string{`"hello"`, `"world"`, `""`, `"\"x\""`, `"\"\""`},
+					[]bool{false, false, true, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"hello", "world", ""},
-				[]bool{false, false, true}),
+				[]string{"hello", "world", "", `"x"`, `""`},
+				[]bool{false, false, true, false, false}),
 		},
 	}
 }
@@ -3526,6 +3526,54 @@ func TestJsonUnquote(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
+	values := []string{
+		"plain",
+		"a\"b",
+		"\"leading",
+		"trailing\"",
+		"\"both\"",
+		"\"",
+		"\"\"",
+		"\"你好\"",
+	}
+	inputs := make([]string, len(values))
+	for i, value := range values {
+		inputs[i] = strconv.Quote(value)
+	}
+
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), inputs,
+				make([]bool, len(inputs))),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, values,
+			make([]bool, len(values))),
+		JsonUnquote)
+	s, info := tc.Run()
+	require.True(t, s, info)
+
+	jsonInputs := make([]string, len(values))
+	for i := range values {
+		bj, err := types.ParseStringToByteJson(inputs[i])
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		jsonInputs[i] = string(encoded)
+	}
+	jsonTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), jsonInputs,
+				make([]bool, len(jsonInputs))),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, values,
+			make([]bool, len(values))),
+		JsonUnquote)
+	s, info = jsonTC.Run()
+	require.True(t, s, info)
 }
 
 func TestLoadFile(t *testing.T) {
@@ -3582,6 +3630,12 @@ func TestLoadFile(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestLoadFileRejectsEmptyPath(t *testing.T) {
+	proc := testutil.NewProc(t)
+	_, err := readLoadFileContents("", proc)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 }
 
 func evalLoadFileForTest(
@@ -4062,6 +4116,91 @@ func TestToTime(t *testing.T) {
 	}
 }
 
+func TestTimestampToTimeUsesSessionTimeZone(t *testing.T) {
+	storedUTC, err := types.ParseTimestamp(time.UTC, "2024-01-02 04:30:45.654321", 6)
+	require.NoError(t, err)
+
+	timestampType := types.T_timestamp.ToTypeWithScale(6)
+	timeType := types.T_time.ToTypeWithScale(6)
+	testCases := []struct {
+		name string
+		loc  *time.Location
+		want types.Time
+	}{
+		{
+			name: "utc",
+			loc:  time.UTC,
+			want: types.TimeFromClock(false, 4, 30, 45, 654321),
+		},
+		{
+			name: "utc_plus_8",
+			loc:  time.FixedZone("UTC+8", 8*60*60),
+			want: types.TimeFromClock(false, 12, 30, 45, 654321),
+		},
+		{
+			name: "utc_minus_5",
+			loc:  time.FixedZone("UTC-5", -5*60*60),
+			want: types.TimeFromClock(false, 23, 30, 45, 654321),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().TimeZone = tc.loc
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(timestampType,
+						[]types.Timestamp{storedUTC},
+						[]bool{false}),
+				},
+				NewFunctionTestResult(timeType, false,
+					[]types.Time{tc.want},
+					[]bool{false}),
+				TimestampToTime)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+			require.Equal(t, int32(6), fcTC.GetResultVectorDirectly().GetType().Scale)
+		})
+	}
+}
+
+func TestTimeTemporalOverloadsPreserveInputScale(t *testing.T) {
+	var timeFn *FuncNew
+	for i := range supportedDateAndTimeBuiltIns {
+		if supportedDateAndTimeBuiltIns[i].functionId == TIME {
+			timeFn = &supportedDateAndTimeBuiltIns[i]
+			break
+		}
+	}
+	require.NotNil(t, timeFn)
+
+	testCases := []struct {
+		argType types.T
+		scale   int32
+	}{
+		{argType: types.T_datetime, scale: 6},
+		{argType: types.T_timestamp, scale: 6},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.argType.String(), func(t *testing.T) {
+			var matched *overload
+			for i := range timeFn.Overloads {
+				overload := &timeFn.Overloads[i]
+				if len(overload.args) == 1 && overload.args[0] == tc.argType {
+					matched = overload
+					break
+				}
+			}
+			require.NotNil(t, matched)
+
+			got := matched.retType([]types.Type{tc.argType.ToTypeWithScale(tc.scale)})
+			require.Equal(t, types.T_time, got.Oid)
+			require.Equal(t, tc.scale, got.Scale)
+		})
+	}
+}
+
 func initToTimestampCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2022-01-01", 6)
 	d2, _ := types.ParseDatetime("2022-01-01 00:00:00", 6)
@@ -4400,6 +4539,647 @@ func TestSecond(t *testing.T) {
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestStringTimeExtract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{
+				"12:30:45", "272:59:59", "-272:59:59", "2 03:04:05", "123045",
+				"2024-12-20 15:30:45", "20241220153045", "241220153045", "2024-12-20",
+				"15:30:45abc", "2024-12-20 15:30:45abc", "2024-12-20foo", "invalid", "", "   ", "\t",
+				"2 03:04:05.123", "12:30:45.123456", "272:59:59.123456", "-272:59:59.123456",
+				"-2 03:04:05.123", "839:00:00", "-839:00:00", "20241220", "12:60:00", "12:30:60",
+				"2024-12-20T15:30:45.123456", "  12:34:56  ",
+			},
+			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+				false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+	}
+
+	testCases := []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "hour",
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{12, 272, 272, 51, 12, 15, 15, 15, 0, 15, 15, 0, 0, 0, 0, 0,
+					51, 12, 272, 272, 51, 838, 838, 838, 0, 0, 0, 12},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true,
+					false, false, false, false, false, false, false, false, true, true, false, false}),
+			fn: StringToHour,
+		},
+		{
+			name: "minute",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{30, 59, 59, 4, 30, 30, 30, 30, 20, 30, 30, 20, 0, 0, 0, 0,
+					4, 30, 59, 59, 4, 59, 59, 59, 0, 0, 20, 34},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true,
+					false, false, false, false, false, false, false, false, true, true, false, false}),
+			fn: StringToMinute,
+		},
+		{
+			name: "second",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{45, 59, 59, 5, 45, 45, 45, 45, 24, 45, 45, 24, 0, 0, 0, 0,
+					5, 45, 59, 59, 5, 59, 59, 59, 0, 0, 24, 56},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true,
+					false, false, false, false, false, false, false, false, true, true, false, false}),
+			fn: StringToSecond,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+}
+
+func TestStringTimeExtractZeroDateAndISOSeparator(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"0000-01-01 12:34:56",
+			"2024-00-01 11:22:33",
+			"2024-01-00 10:20:30",
+			"0000-00-00 09:08:07",
+			"2024-12-20T15:30:45.123456",
+		}, nil),
+	}
+
+	for _, tc := range []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{12, 11, 10, 9, 0}, nil), StringToHour},
+		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{34, 22, 20, 8, 20}, nil), StringToMinute},
+		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{56, 33, 30, 7, 24}, nil), StringToSecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringTimeExtractIncompleteDatetimeAndZeroYearCalendar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"2024-12-20 12:34",
+			"0000-02-28 12:34:56",
+			"0000-02-29 12:34:56",
+			"0000-02-31 12:34:56",
+			"0000-04-31 12:34:56",
+			"1900-02-29 12:34:56",
+			"2000-02-29 01:02:03",
+		}, nil),
+	}
+
+	for _, tc := range []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{12, 12, 0, 0, 0, 0, 1}, []bool{false, false, true, true, true, true, false}), StringToHour},
+		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{34, 34, 0, 0, 0, 0, 2}, []bool{false, false, true, true, true, true, false}), StringToMinute},
+		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 56, 0, 0, 0, 0, 3}, []bool{false, false, true, true, true, true, false}), StringToSecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringTimeExtractCompactDatetimeSuffix(t *testing.T) {
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(typ.ToType(), []string{
+					"20241220153045", "241220153045", "20241220153045.999999", "241220153045.9",
+					"20241220153045.123abc", "20241220153045.", "241220153045.123abc", "241220153045.",
+					"202412201530451", "2412201530451",
+					"20241220153045abc", "241220153045abc",
+					"20241220153045.-", "20241220153045.+", "241220153045.-", "241220153045.+",
+					"20241220153045.123-", "20241220153045.123+", "241220153045.123-", "241220153045.123+",
+					"20241220153045.123abc-", "241220153045.123abc+",
+				}, nil),
+			}
+
+			for _, tc := range []struct {
+				name   string
+				expect FunctionTestResult
+				fn     fEvalFn
+			}{
+				{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{15, 15, 15, 15, 15, 15, 15, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 15, 15}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, false, false}), StringToHour},
+				{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{30, 30, 30, 30, 30, 30, 30, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 30}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, false, false}), StringToMinute},
+				{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{45, 45, 45, 45, 45, 45, 45, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 45, 45}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, false, false}), StringToSecond},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+					succeed, info := tcc.Run()
+					require.True(t, succeed, info)
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractPartialClockPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"12:", ":34", "12:34:56-", "12:34:56..", "123:", "1234:", "12345:", "123456:",
+		}, nil),
+	}
+
+	for _, tc := range []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0, 0, 12, 12, 0, 0, 1, 12}, nil), StringToHour},
+		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 34, 34, 34, 1, 12, 23, 34}, nil), StringToMinute},
+		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{12, 0, 56, 56, 23, 34, 45, 56}, nil), StringToSecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringTimeExtractMySQLPartialPrefixBoundaries(t *testing.T) {
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), []string{
+				":34:56", "12:34:", "12::56", "12:34:56:", "12-.abc",
+			}, nil)
+
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour",
+					fn:   StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{0, 12, 0, 12, 0}, nil),
+				},
+				{
+					name: "minute",
+					fn:   StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{34, 34, 0, 34, 0}, nil),
+				},
+				{
+					name: "second",
+					fn:   StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{56, 0, 12, 56, 12}, nil),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractContextAwarePrefixBoundaries(t *testing.T) {
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), []string{
+				"12-34", "1234-56",
+				"1 02", "1 02:", "1 02-34",
+				"2024-12-20 12", "2024-12-20 12:", "2024-12-20 12::56",
+				"2024-12-20foo", "2024-12-20 12:34::56", "2024-12-20 12-34",
+				"2024-12-20 12/34/56", "2024@12@20 12@34@56", "2024-12-20\t12:34:56", "1\t02:34:56",
+				"12:34 56", "1 02:34 56", "1 02 34",
+				"2024--12--20 12:34:56", "2024/-12/-20 12:34:56",
+				"2024-12-20 -12:34:56", "2024-12-20 +12:34:56",
+				"2024-12-20 12:34 56", "2024-12-20 12 34",
+			}, nil)
+
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour",
+					fn:   StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{0, 0, 26, 26, 26, 12, 12, 12, 0, 12, 12, 12, 12, 12, 26, 12, 26, 26, 12, 12, 12, 12, 0, 0}, nil),
+				},
+				{
+					name: "minute",
+					fn:   StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 12, 0, 0, 0, 0, 0, 56, 20, 34, 34, 34, 34, 34, 34, 34, 34, 0, 34, 34, 34, 34, 20, 20}, nil),
+				},
+				{
+					name: "second",
+					fn:   StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{12, 34, 0, 0, 0, 0, 0, 0, 24, 56, 0, 56, 56, 56, 56, 0, 0, 0, 56, 56, 56, 56, 24, 24}, nil),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractAmbiguousPrefixOwnership(t *testing.T) {
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), []string{
+				// A one-digit field before whitespace remains a compact TIME prefix;
+				// a zero-padded post-day field owns the day-TIME grammar instead.
+				"1 2", "1 02",
+				// A colon-delimited TIME prefix must not be claimed as a two-digit
+				// year DATE when its apparent date components are out of range.
+				"12:34:56", "12:34:56 78",
+				// One-digit date-like fields are compact TIME, while a long compact
+				// prefix followed by a repeated date separator is invalid.
+				"1-2-3 4:5:6", "12345:", "12345-1-1 1:2:3",
+				// The outer sign is consumed exactly once.
+				"-12:34", "--12:34",
+				// A DATETIME clock owns a run of leading signs, but a sign followed
+				// by text terminates that clock and leaves the DATE-prefix coercion.
+				"2024-12-20 +12:34", "2024-12-20 ++12:34",
+				"2024-12-20 12:34:56abc",
+				"2024-12-20 12:34:56+abc", "2024-12-20 12:34:56-abc",
+			}, nil)
+
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour",
+					fn:   StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{0, 26, 12, 12, 0, 1, 0, 12, 0, 12, 12, 12, 0, 0},
+						[]bool{false, false, false, false, false, false, true, false, true, false, false, false, false, false}),
+				},
+				{
+					name: "minute",
+					fn:   StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 0, 34, 34, 0, 23, 0, 34, 0, 34, 34, 34, 20, 20},
+						[]bool{false, false, false, false, false, false, true, false, true, false, false, false, false, false}),
+				},
+				{
+					name: "second",
+					fn:   StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{1, 0, 56, 56, 1, 45, 0, 0, 0, 0, 0, 56, 24, 24},
+						[]bool{false, false, false, false, false, false, true, false, true, false, false, false, false, false}),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractReviewerGrammarBoundaries(t *testing.T) {
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), []string{
+				// A bare one-digit post-space field remains a compact prefix. A
+				// following clock separator transfers ownership to day-TIME.
+				"1 2", "1 2:3", "1 2:3:4",
+				"12 3", "12 3:4", "12 3:4:5",
+				// Separated DATETIME accepts two through four year digits. One
+				// digit remains compact TIME, and five digits remain invalid.
+				"1-2-3 4:5:6", "12-2-3 4:5:6", "123-2-3 4:5:6",
+				"1234-2-3 4:5:6", "12345-2-3 4:5:6",
+				// An unconsumed trailing sign after a complete clock terminates
+				// DATETIME ownership and leaves the DATE-prefix fallback.
+				"2024-12-20 12:34:56+", "2024-12-20 12:34:56-",
+			}, nil)
+
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour",
+					fn:   StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{0, 26, 26, 0, 291, 291, 0, 4, 4, 4, 0, 0, 0},
+						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false}),
+				},
+				{
+					name: "minute",
+					fn:   StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 3, 3, 0, 4, 4, 0, 5, 5, 5, 0, 20, 20},
+						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false}),
+				},
+				{
+					name: "second",
+					fn:   StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{1, 0, 4, 12, 0, 5, 1, 6, 6, 6, 0, 24, 24},
+						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false}),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractOneDigitYearAndWhitespaceOwnership(t *testing.T) {
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), []string{
+				// MySQL 8.4.10: for one-digit years only all-one-digit H:M:S
+				// remains compact TIME. Any wider clock field transfers ownership
+				// to DATETIME.
+				"1-1-1 1:2:3", "1-1-1 01:2:3", "1-1-1 1:02:3", "1-1-1 1:2:03",
+				"1-1-1 01:02:3", "1-1-1 01:2:03", "1-1-1 1:02:03", "1-1-1 01:02:03",
+				// The same variable hour/minute rule applies to zero year.
+				"0-1-1 1:2:3", "0-1-1 12:34:56", "0-1-1 1:02:03", "0-1-1 1:2:03",
+				// Trailing whitespace is part of the ordered grammar. It must not
+				// be removed before the date-shaped TIME prefix is classified.
+				"123:34:56 78", "123:34:56 78 ", "\t123:34:56 78\t",
+				"838:59:59 78", "838:59:59 78 ", "\t838:59:59 78\t",
+				// A valid DATETIME remains owned with trailing whitespace; this is
+				// the nearest control for the padded invalid date-shaped prefixes.
+				"2024-12-20 12:34:56 ",
+			}, nil)
+
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour",
+					fn:   StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{0, 1, 1, 1, 1, 1, 1, 1, 0, 12, 1, 1, 0, 123, 123, 0, 838, 838, 12},
+						[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
+				},
+				{
+					name: "minute",
+					fn:   StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 2, 2, 2, 2, 2, 2, 2, 0, 34, 2, 2, 0, 34, 34, 0, 59, 59, 34},
+						[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
+				},
+				{
+					name: "second",
+					fn:   StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{1, 3, 3, 3, 3, 3, 3, 3, 0, 56, 3, 3, 0, 56, 56, 0, 59, 59, 56},
+						[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractWhitespace(t *testing.T) {
+	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(typ.ToType(), []string{"   ", "\t"}, []bool{false, false}),
+			}
+
+			for _, tc := range []struct {
+				name   string
+				expect FunctionTestResult
+				fn     fEvalFn
+			}{
+				{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0, 0}, []bool{true, true}), StringToHour},
+				{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, []bool{true, true}), StringToMinute},
+				{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, []bool{true, true}), StringToSecond},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+					succeed, info := tcc.Run()
+					require.True(t, succeed, info)
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractTomorrowDatetime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tomorrow := types.Today(time.UTC) + 1
+	input := tomorrow.String() + " 01:02:03"
+
+	testCases := []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name:   "hour",
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{1}, []bool{false}),
+			fn:     StringToHour,
+		},
+		{
+			name:   "minute",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{2}, []bool{false}),
+			fn:     StringToMinute,
+		},
+		{
+			name:   "second",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{3}, []bool{false}),
+			fn:     StringToSecond,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, []bool{false}),
+			}
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringTimeExtractRegisteredOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputValues := []string{
+		"12:30:45", "272:59:59", "2024-12-20 15:30:45", "2024-12-20", "invalid", "",
+		"2 03:04:05.123", "12:30:45.123456", "839:00:00", "20241220", "12:60:00", "12:30:60",
+	}
+	wantNulls := []bool{false, false, false, false, true, true, false, false, false, false, true, true}
+
+	typeCases := []types.T{types.T_varchar, types.T_char, types.T_text}
+	functionCases := []struct {
+		name       string
+		returnType types.T
+		hours      []uint32
+		parts      []uint8
+	}{
+		{name: "hour", returnType: types.T_uint32, hours: []uint32{12, 272, 15, 0, 0, 0, 51, 12, 838, 838, 0, 0}},
+		{name: "minute", returnType: types.T_uint8, parts: []uint8{30, 59, 30, 20, 0, 0, 4, 30, 59, 59, 0, 0}},
+		{name: "second", returnType: types.T_uint8, parts: []uint8{45, 59, 45, 24, 0, 0, 5, 45, 59, 59, 0, 0}},
+	}
+
+	for _, inputType := range typeCases {
+		for _, functionCase := range functionCases {
+			t.Run(functionCase.name+"/"+inputType.String(), func(t *testing.T) {
+				input := newVectorByType(proc.Mp(), inputType.ToType(), inputValues, nil)
+				defer input.Free(proc.Mp())
+
+				fn, err := GetFunctionByName(proc.Ctx, functionCase.name, []types.Type{inputType.ToType()})
+				require.NoError(t, err)
+				require.Equal(t, functionCase.returnType, fn.GetReturnType().Oid)
+
+				out, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, len(inputValues))
+				require.NoError(t, err)
+				defer out.Free(proc.Mp())
+
+				for i, wantNull := range wantNulls {
+					require.Equal(t, wantNull, out.IsNull(uint64(i)))
+				}
+				switch functionCase.returnType {
+				case types.T_uint32:
+					require.Equal(t, functionCase.hours, vector.MustFixedColWithTypeCheck[uint32](out))
+				case types.T_uint8:
+					require.Equal(t, functionCase.parts, vector.MustFixedColWithTypeCheck[uint8](out))
+				}
+			})
+		}
+	}
+}
+
+func TestStringTimeExtractMySQLBoundaryRegressions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"-2024-12-20 15:30:45",
+			"-20241220153045",
+			"20240230010203",
+			"2 30:00:00",
+			"60",
+			"24-12-20 15:30:45",
+			"2000:01:01 12:34:56",
+			"1998-01-01 00:00:009",
+			"2024-12-20 15:30:4560",
+			"2001-11-00 01:02:03",
+			"99999990000",
+			"- 12:34:56",
+			"12:34:56.",
+		}, []bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
+	}
+
+	testCases := []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "hour",
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{15, 15, 0, 78, 0, 15, 12, 0, 0, 1, 0, 12, 12},
+				[]bool{false, false, true, false, true, false, false, false, true, false, true, false, false}),
+			fn: StringToHour,
+		},
+		{
+			name: "minute",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{30, 30, 0, 0, 0, 30, 34, 0, 0, 2, 0, 34, 34},
+				[]bool{false, false, true, false, true, false, false, false, true, false, true, false, false}),
+			fn: StringToMinute,
+		},
+		{
+			name: "second",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{45, 45, 0, 0, 0, 45, 56, 9, 0, 3, 0, 56, 56},
+				[]bool{false, false, true, false, true, false, false, false, true, false, true, false, false}),
+			fn: StringToSecond,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringTimeExtractSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"12:30:45", "invalid"}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_uint32.ToType(), false, nil, nil),
+		StringToHour)
+
+	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+	resultVec := fcTC.result.GetResultVector()
+	require.Equal(t, uint32(12), vector.GetFixedAtNoTypeCheck[uint32](resultVec, 0))
+	require.True(t, resultVec.IsNull(1))
+
+	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength,
+		&FunctionSelectList{AllNull: true}))
+	resultVec = fcTC.result.GetResultVector()
+	for i := 0; i < fcTC.fnLength; i++ {
+		require.True(t, resultVec.IsNull(uint64(i)))
 	}
 }
 
@@ -10500,4 +11280,690 @@ func TestDateStringExtractorsYearZeroAndLegacyDelimiters(t *testing.T) {
 			require.True(t, succeed, info)
 		})
 	}
+}
+
+func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "12:34:56 x", want: "12/34/56"},
+		{input: "12:34:56 xy", want: "12/34/56"},
+		{input: "12:34:56 abc", want: "NULL"},
+		{input: "12:34:56 é", want: "12/34/56"},
+		{input: "12:34:56 éé", want: "NULL"},
+		{input: "12:34:56 123", want: "NULL"},
+		{input: "12:34:56 123 ", want: "12/34/56"},
+		{input: "1:34:56 abc", want: "1/34/56"},
+		{input: "1:34:56 abc ", want: "NULL"},
+		{input: "123:34:56 x", want: "123/34/56"},
+		{input: "123:34:56 xy", want: "NULL"},
+		{input: "123:34:56 abc", want: "NULL"},
+		{input: "123:34:34:+", want: "123/34/34"},
+		{input: "123:34:34:+ ", want: "NULL"},
+		{input: "01:01::0100 ", want: "NULL"},
+		{input: "12:34:56: 78", want: "NULL"},
+		{input: "12:34:56: x", want: "12/34/56"},
+		{input: "12:34:56: x ", want: "NULL"},
+		{input: "12:34:56: +1", want: "NULL"},
+		{input: "12:34:56: +1 ", want: "12/34/56"},
+		{input: "12:34:56:: x", want: "NULL"},
+		{input: "12:34:56:: x ", want: "NULL"},
+		{input: "1:01:01: x", want: "1/1/1"},
+		{input: "1:01:01: x ", want: "1/1/1"},
+		{input: "1:01:01:: x", want: "1/1/1"},
+		{input: "1:01:01:: x ", want: "0/0/0"},
+		{input: "12:34::56 78", want: "NULL"},
+		{input: "12:34::56 x", want: "12/34/0"},
+		{input: "1:01::56 x", want: "1/1/0"},
+		{input: "1:01::56 x ", want: "1/1/0"},
+		{input: "1:01::56 +", want: "1/1/0"},
+		{input: "1:01::56 + ", want: "1/1/0"},
+		{input: "1:01::56 xy ", want: "NULL"},
+		{input: "1:01::56 abc ", want: "NULL"},
+		{input: "1:01::56 é ", want: "NULL"},
+		{input: "12:34::56 x ", want: "NULL"},
+		{input: "12:34::56 + ", want: "NULL"},
+		{input: "12:34::56 +1", want: "NULL"},
+		{input: "12:34::56 +1 x", want: "12/34/0"},
+		{input: "12:34::56 abc", want: "NULL"},
+		{input: "12::56 x", want: "0/0/12"},
+		{input: "12::56 abc", want: "0/0/12"},
+		{input: "12::56 78", want: "0/0/12"},
+		{input: " 12:34:56: x", want: "12/34/56"},
+		{input: " 12:34::56 x", want: "12/34/0"},
+		{input: " 12::56 x", want: "0/0/12"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			if tc.want == "NULL" {
+				require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
+func TestStringTimeExtractAttachedSuffixOwnership(t *testing.T) {
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "1:01:01:+ ", want: "1/1/1"},
+		{input: "01:01:01:+ ", want: "1/1/1"},
+		{input: "12:34:56:+ ", want: "12/34/56"},
+		{input: "123:34:34:+ ", want: "NULL"},
+		{input: "1:01:01::+ ", want: "1/1/1"},
+		{input: "12:34:56::+ ", want: "NULL"},
+		{input: "123:34:34::+ ", want: "NULL"},
+		{input: "01:01::0100 ", want: "NULL"},
+		{input: "12:34::0100 ", want: "NULL"},
+		{input: "1:01::0100 ", want: "1/1/0"},
+		{input: "12:34::56 ", want: "12/34/0"},
+		{input: "12:34::56 78", want: "NULL"},
+		{input: "123:34::0100 ", want: "NULL"},
+		{input: "123:34::56 ", want: "123/34/0"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			if tc.want == "NULL" {
+				require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
+func TestStringTimeExtractSignedSuffixTrailingWhitespaceOwnership(t *testing.T) {
+	inputs := []string{
+		"12:34:34 +1",
+		"12:34:34 +1 ",
+		"01:01:34 +1",
+		"01:01:34 +1 ",
+	}
+	want := []string{"12/34/34", "12/34/34", "1/1/34", "1/1/34"}
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			for i, input := range inputs {
+				t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+					hour, minute, second, ok := timeStringToClockForExtract(input)
+					require.True(t, ok)
+					require.Equal(t, want[i], fmt.Sprintf("%d/%d/%d", hour, minute, second))
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractSignedSuffixWidthOwnership(t *testing.T) {
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "01:01:34 +01", want: "NULL"},
+		{input: "01:01:34 +01 ", want: "1/1/34"},
+		{input: "01:01:34 -01", want: "NULL"},
+		{input: "01:01:34 -01 ", want: "1/1/34"},
+		{input: "01:01:34 +123", want: "NULL"},
+		{input: "01:01:34 +123 ", want: "1/1/34"},
+		{input: "01:01:34 -123", want: "NULL"},
+		{input: "01:01:34 -123 ", want: "1/1/34"},
+		{input: "1:01:34: +1", want: "1/1/34"},
+		{input: "1:01:34:: +1", want: "NULL"},
+		{input: "1:1:34:: +1", want: "1/1/34"},
+		{input: "1:01:4:: +1", want: "1/1/4"},
+		{input: "1:01:34:: +1 ", want: "1/1/34"},
+		{input: "0:00:34:: +1", want: "NULL"},
+		{input: "9:59:59:: +1", want: "NULL"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			if tc.want == "NULL" {
+				require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
+func TestStringTimeExtractInterstitialWhitespaceOwnership(t *testing.T) {
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "1-1-1 1:2:3", want: "0/0/1"},
+		{input: "1-1-1  1:2:3", want: "1/2/3"},
+		{input: "1-1-1   1:2:3", want: "1/2/3"},
+		{input: "1-1-1\t1:2:3", want: "0/0/1"},
+		{input: "1-1-1\t 1:2:3", want: "1/2/3"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
+func TestStringTimeExtractAttachedSignedOmittedSecondsOwnership(t *testing.T) {
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "01:01::+1", want: "1/1/0"},
+		{input: "01:01::+12", want: "1/1/0"},
+		{input: "01:01::+123", want: "1/1/0"},
+		{input: "01:01::+1234", want: "1/1/0"},
+		{input: "01:01::+1 ", want: "1/1/0"},
+		{input: "01:01::+12 ", want: "1/1/0"},
+		{input: "01:01::+123 ", want: "NULL"},
+		{input: "01:01::+1234 ", want: "NULL"},
+		{input: "12:34::-123", want: "12/34/0"},
+		{input: "12:34::-123 ", want: "NULL"},
+		{input: "12:34::-1234", want: "12/34/0"},
+		{input: "12:34::-1234 ", want: "NULL"},
+		{input: "01:01::-1 ", want: "1/1/0"},
+		{input: "01:01::-12 ", want: "1/1/0"},
+		{input: "01:01::-123 ", want: "NULL"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			if tc.want == "NULL" {
+				require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
+func TestStringTimeExtractDatetimeSeparatorAndSignedSuffixBoundaries(t *testing.T) {
+	inputs := []string{
+		"01:01:01:: +",
+		"2024-12-20 +",
+		"2024-12-20 -",
+		"2024-12-20 :1",
+		"1:01:01: +1",
+		"1:01:01: +1 ",
+		"12:12:12: +",
+		"12:12:12: + ",
+		"12:12:12: -",
+		"12:12:12: - ",
+		"12:12:12:: +",
+		"12:12:12:: + ",
+		"1:01:01: + ",
+		"1:01:01:: +",
+		"1:01:01:: + ",
+		"1:1:1: + ",
+		"1:1:1:: + ",
+		"123:12:12: +",
+		"123:12:12: + ",
+		"12:001:001: +",
+		"12:001:001: + ",
+	}
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), inputs, nil)
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour", fn: StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{0, 0, 0, 1, 1, 1, 12, 0, 12, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0}, nil),
+				},
+				{
+					name: "minute", fn: StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 0, 0, 0, 1, 1, 12, 0, 12, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0}, nil),
+				},
+				{
+					name: "second", fn: StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 0, 0, 0, 1, 1, 12, 0, 12, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0}, nil),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractReviewerOwnershipMatrix(t *testing.T) {
+	// Keep this matrix orthogonal to the broad generated oracle matrix:
+	// each row varies one ownership boundary (field width, one/two trailing
+	// separators, suffix class/width, token termination, or date candidate)
+	// while retaining the neighboring control. The expected values were
+	// captured from MySQL 8.4.10 for HOUR/MINUTE/SECOND string coercion.
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "12:12:12: +", want: "12/12/12"},
+		{input: "12:12:12: + ", want: "0/0/0"},
+		{input: "12:12:12: -", want: "12/12/12"},
+		{input: "12:12:12: - ", want: "0/0/0"},
+		{input: "1:01:01: +", want: "1/1/1"},
+		{input: "1:01:01: + ", want: "1/1/1"},
+		{input: "1:01:01: -", want: "1/1/1"},
+		{input: "1:01:01: - ", want: "1/1/1"},
+		{input: "1:01:01:: +", want: "1/1/1"},
+		{input: "1:01:01:: + ", want: "0/0/0"},
+		{input: "1:01:01:: -", want: "1/1/1"},
+		{input: "1:01:01:: - ", want: "0/0/0"},
+		{input: "12:12:12:: +", want: "0/0/0"},
+		{input: "12:12:12:: + ", want: "0/0/0"},
+		{input: "12:12:12:: -", want: "0/0/0"},
+		{input: "12:12:12:: - ", want: "0/0/0"},
+		{input: "1:1:1: + ", want: "1/1/1"},
+		{input: "1:1:1: - ", want: "1/1/1"},
+		{input: "12:1:1: + ", want: "12/1/1"},
+		{input: "12:1:1: - ", want: "12/1/1"},
+		{input: "01:01:34 +01", want: "NULL"},
+		{input: "01:01:34 +01 ", want: "1/1/34"},
+		{input: "01:01:34 -01", want: "NULL"},
+		{input: "01:01:34 -01 ", want: "1/1/34"},
+		{input: "01:01:34 +123", want: "NULL"},
+		{input: "01:01:34 +123 ", want: "1/1/34"},
+		{input: "01:01:34 -123", want: "NULL"},
+		{input: "01:01:34 -123 ", want: "1/1/34"},
+		{input: "1:01:34: +1", want: "1/1/34"},
+		{input: "1:01:34:: +1", want: "NULL"},
+		{input: "1:1:34:: +1", want: "1/1/34"},
+		{input: "1:01:4:: +1", want: "1/1/4"},
+		{input: "0:00:34:: +1", want: "NULL"},
+		{input: "9:59:59:: +1", want: "NULL"},
+		{input: "1:01:34:: +1 ", want: "1/1/34"},
+		{input: "12:34::56 +1 x", want: "12/34/0"},
+		{input: "1:01:01: abc", want: "0/0/0"},
+		{input: "1:01:01: 000", want: "0/0/0"},
+		{input: "12:12:12: abc", want: "0/0/0"},
+		{input: "12:12:12: 000", want: "0/0/0"},
+		{input: "1:01:01 abc", want: "1/1/1"},
+		{input: "1:01:01 000", want: "1/1/1"},
+		{input: "12:12:12 abc", want: "0/0/0"},
+		{input: "12:12:12 000", want: "0/0/0"},
+		{input: "01:01:01:: +", want: "0/0/0"},
+		{input: "2024-12-20 +", want: "0/0/0"},
+		{input: "2024-12-20 -", want: "0/0/0"},
+		{input: "2024-12-20 :1", want: "1/0/0"},
+		{input: "1-2-3 4:5:6", want: "0/0/1"},
+		{input: "12-2-3 4:5:6", want: "4/5/6"},
+		{input: "123-2-3 4:5:6", want: "4/5/6"},
+		{input: "12345-2-3 4:5:6", want: "NULL"},
+		{input: " 12:12:12: + ", want: "0/0/0"},
+		{input: " 1:01:01: + ", want: "1/1/1"},
+		{input: " 1:01:01: abc", want: "0/0/0"},
+		{input: " 12:34::56 x", want: "12/34/0"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			if tc.want == "NULL" {
+				require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
+func TestStringTimeExtractSeparatorWhitespaceOwnership(t *testing.T) {
+	// The separator and token boundaries are independent grammar dimensions:
+	// one or two interstitial spaces, one/two/three trailing separators, and a
+	// terminal space after a signed/bare token all affect MySQL ownership.
+	for _, sign := range []string{"+", "-"} {
+		for _, tc := range []struct {
+			input string
+			want  string
+		}{
+			{input: "1:34:56: " + sign, want: "1/34/56"},
+			{input: "1:34:56: " + sign + " ", want: "1/34/56"},
+			{input: "1:34:56:  " + sign, want: "1/34/56"},
+			{input: "1:34:56:  " + sign + " ", want: "NULL"},
+			{input: "1:34:56:: " + sign, want: "1/34/56"},
+			{input: "1:34:56:: " + sign + " ", want: "NULL"},
+			{input: "1:34:56::  " + sign, want: "NULL"},
+			{input: "1:34:56::  " + sign + " ", want: "NULL"},
+			{input: "1:34:56::: " + sign, want: "NULL"},
+			{input: "1:34:56::: " + sign + " ", want: "NULL"},
+			{input: "1:34:56:::  " + sign, want: "NULL"},
+			{input: "1:34:56:::  " + sign + " ", want: "NULL"},
+			// Compact one-digit fields remain TIME for short three-separator
+			// candidates; the fully terminated form crosses the DATETIME gate.
+			{input: "1:1:1::: " + sign, want: "1/1/1"},
+			{input: "1:1:1::: " + sign + " ", want: "1/1/1"},
+			{input: "1:1:1:::  " + sign, want: "1/1/1"},
+			{input: "1:1:1:::  " + sign + " ", want: "0/0/0"},
+		} {
+			t.Run(tc.input, func(t *testing.T) {
+				hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+				if tc.want == "NULL" {
+					require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+					return
+				}
+				require.True(t, ok)
+				require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+			})
+		}
+	}
+
+	for _, sign := range []string{"+1", "-1"} {
+		for _, tc := range []struct {
+			input string
+			want  string
+		}{
+			{input: "0:01:34: " + sign, want: "0/1/34"},
+			{input: "0:01:34:  " + sign, want: "NULL"},
+			{input: "0:01:34:  " + sign + " ", want: "0/1/34"},
+			{input: "0:01:34:: " + sign, want: "NULL"},
+			{input: "0:01:34:: " + sign + " ", want: "0/1/34"},
+			{input: "0:01:34::  " + sign, want: "NULL"},
+			{input: "0:01:34::  " + sign + " ", want: "0/1/34"},
+			{input: "0:01:34::: " + sign, want: "NULL"},
+			{input: "0:01:34::: " + sign + " ", want: "0/1/34"},
+			{input: "0:01:34:::  " + sign, want: "NULL"},
+			{input: "0:01:34:::  " + sign + " ", want: "0/1/34"},
+		} {
+			t.Run(tc.input, func(t *testing.T) {
+				hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+				if tc.want == "NULL" {
+					require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+					return
+				}
+				require.True(t, ok)
+				require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+			})
+		}
+	}
+}
+
+func TestStringTimeExtractAmbiguousCandidateMatrix(t *testing.T) {
+	inputs := []string{
+		"01:01: abc", "1:1: abc", "12:34: 123",
+		"01:01:01 0", "01:01:01 abc",
+		// Adjacent controls keep the same candidate owner when only the token
+		// class changes, and preserve the date/clock distinction for a full
+		// clock suffix.
+		"01:01: 123 ", "01:01:01 78", "01:01:01 x", "01:01:01 123", "01:01:01 12:34:56",
+	}
+	nulls := []bool{false, false, false, false, false, false, false, false, true, false}
+
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), inputs, nil)
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour", fn: StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{1, 1, 12, 1, 0, 1, 1, 1, 0, 12}, nulls),
+				},
+				{
+					name: "minute", fn: StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{1, 1, 34, 1, 0, 1, 1, 1, 0, 34}, nulls),
+				},
+				{
+					name: "second", fn: StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 0, 0, 1, 0, 0, 1, 1, 0, 56}, nulls),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractOracleOwnershipMatrix(t *testing.T) {
+	type want struct {
+		hour           uint32
+		minute, second uint8
+		null           bool
+	}
+
+	cases := []struct {
+		input string
+		want  want
+	}{
+		{input: "01:01:0 abc", want: want{hour: 1, minute: 1}},
+		{input: "01:01:1 abc", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "01:01:01 abc", want: want{}},
+		{input: "01:01:0 000", want: want{hour: 1, minute: 1}},
+		{input: "01:01:01 000", want: want{}},
+		{input: "01:01:01 123", want: want{null: true}},
+		{input: "01:01:01 123 ", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "01:01:01 a:b", want: want{}},
+		{input: "01:01:01: +", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "1 2", want: want{second: 1}},
+		{input: "1 2:3", want: want{hour: 26, minute: 3}},
+		{input: "12 3:4", want: want{hour: 291, minute: 4}},
+		{input: "1-2-3 4:5:6", want: want{second: 1}},
+		{input: "12-2-3 4:5:6", want: want{hour: 4, minute: 5, second: 6}},
+		{input: "123-2-3 4:5:6", want: want{hour: 4, minute: 5, second: 6}},
+		{input: "1234-2-3 4:5:6", want: want{hour: 4, minute: 5, second: 6}},
+		{input: "12345-2-3 4:5:6", want: want{null: true}},
+		{input: "2024-12-20 12", want: want{hour: 12}},
+		{input: "2024-12-20 12:", want: want{hour: 12}},
+		{input: "2024-12-20 12::56", want: want{hour: 12, minute: 56}},
+		{input: "1:01:01: abc", want: want{}},
+		{input: "1:01:01: 000", want: want{}},
+		{input: "1:01:01: +", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "1:01::56 x", want: want{hour: 1, minute: 1}},
+		{input: "1:01::56 x ", want: want{hour: 1, minute: 1}},
+		{input: "1:01::56 +", want: want{hour: 1, minute: 1}},
+		{input: "1:01::56 + ", want: want{hour: 1, minute: 1}},
+		{input: "1:01::56 xy ", want: want{null: true}},
+		{input: "1:01::56 abc ", want: want{null: true}},
+		{input: "1:01::56 é ", want: want{null: true}},
+		{input: "12:34::56 x ", want: want{null: true}},
+		{input: "12:34::56 + ", want: want{null: true}},
+		{input: "12:34:56: x", want: want{hour: 12, minute: 34, second: 56}},
+		{input: "12:34:56: x ", want: want{null: true}},
+		{input: "12:34:56:: x", want: want{null: true}},
+		{input: "12:34:56:: x ", want: want{null: true}},
+		{input: "1:01:01: x", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "1:01:01: x ", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "1:01:01:: x", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "1:01:01:: x ", want: want{}},
+	}
+
+	inputs := make([]string, 0, len(cases))
+	wants := make([]want, 0, len(cases))
+	for _, tc := range cases {
+		inputs = append(inputs, tc.input)
+		wants = append(wants, tc.want)
+	}
+
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), inputs, nil)
+			nulls := make([]bool, len(wants))
+			hours := make([]uint32, len(wants))
+			minutes := make([]uint8, len(wants))
+			seconds := make([]uint8, len(wants))
+			for i, expected := range wants {
+				nulls[i] = expected.null
+				hours[i] = expected.hour
+				minutes[i] = expected.minute
+				seconds[i] = expected.second
+			}
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{name: "hour", fn: StringToHour, expect: NewFunctionTestResult(types.T_uint32.ToType(), false, hours, nulls)},
+				{name: "minute", fn: StringToMinute, expect: NewFunctionTestResult(types.T_uint8.ToType(), false, minutes, nulls)},
+				{name: "second", fn: StringToSecond, expect: NewFunctionTestResult(types.T_uint8.ToType(), false, seconds, nulls)},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
+func TestStringTimeExtractOracleMatrix843(t *testing.T) {
+	cases := make([]string, 0, 843)
+	years := []string{"0", "1", "12", "123", "2024", "12345"}
+	separators := []string{"-", "/", ":", "!", "--"}
+	dates := [][2]string{{"1", "1"}, {"2", "3"}, {"12", "20"}, {"34", "56"}}
+	clocks := []string{"1:2:3", "01:2:3", "1:02:3", "12:34:56", "12::56"}
+	for _, year := range years {
+		for _, separator := range separators {
+			for _, date := range dates {
+				for _, clock := range clocks {
+					cases = append(cases, year+separator+date[0]+separator+date[1]+" "+clock)
+				}
+			}
+		}
+	}
+	for _, year := range years {
+		for _, separator := range []string{"-", "/"} {
+			for _, date := range dates[:2] {
+				for _, clock := range clocks[:3] {
+					for _, suffix := range []string{" ", " x"} {
+						cases = append(cases, year+separator+date[0]+separator+date[1]+" "+clock+suffix)
+					}
+				}
+			}
+		}
+	}
+	for _, day := range []string{"1", "12", "838"} {
+		for _, clock := range clocks {
+			for _, suffix := range []string{"", " ", " x", " 78"} {
+				cases = append(cases, day+" "+clock+suffix)
+			}
+		}
+	}
+	for _, compact := range []string{"202412201234", "20241220123456", "20241220"} {
+		for _, suffix := range []string{"", ".1", "abc", " ", ".123abc"} {
+			cases = append(cases, compact+suffix)
+		}
+	}
+	for _, clock := range []string{"12:34:56", "123:34:56", "838:59:59", "12:34"} {
+		for _, suffix := range []string{"", " ", " 78", " 78 ", " abc", "x"} {
+			cases = append(cases, clock+suffix)
+		}
+	}
+	require.Len(t, cases, 843)
+	expected := strings.Split(`0/0/0|1/2/3|1/2/3|12/34/56|12/56/0|0/0/0|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|0/0/0|1/2/3|1/2/3|12/34/56|12/56/0|0/0/0|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|0/1/1|1/2/3|1/2/3|12/34/56|12/56/0|0/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|0/0/0|1/2/3|1/2/3|12/34/56|12/56/0|0/0/0|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|0/0/1|1/2/3|1/2/3|12/34/56|12/56/0|0/0/1|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|0/0/1|1/2/3|1/2/3|12/34/56|12/56/0|0/0/1|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/1/1|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|0/0/1|1/2/3|1/2/3|12/34/56|12/56/0|0/0/1|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|1/2/3|1/2/3|1/2/3|12/34/56|12/56/0|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|1/2/3|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|25/2/3|25/2/3|25/2/3|25/2/3|25/2/3|25/2/3|25/2/3|25/2/3|25/2/3|25/2/3|25/2/3|25/2/3|36/34/56|36/34/56|36/34/56|36/34/56|36/0/0|36/0/0|36/0/0|36/0/0|289/2/3|289/2/3|289/2/3|289/2/3|289/2/3|289/2/3|289/2/3|289/2/3|289/2/3|289/2/3|289/2/3|289/2/3|300/34/56|300/34/56|300/34/56|300/34/56|300/0/0|300/0/0|300/0/0|300/0/0|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|NULL|NULL|NULL|NULL|NULL|12/34/56|12/34/56|NULL|NULL|12/34/56|838/59/59|838/59/59|838/59/59|838/59/59|838/59/59|12/34/56|12/34/56|12/34/56|12/34/56|NULL|12/34/56|123/34/56|123/34/56|NULL|123/34/56|NULL|123/34/56|838/59/59|838/59/59|NULL|838/59/59|NULL|838/59/59|12/34/0|12/34/0|12/34/0|12/34/0|12/34/0|12/34/0`, "|")
+	require.Len(t, expected, len(cases))
+	for i, input := range cases {
+		hour, minute, second, ok := timeStringToClockForExtract(input)
+		if expected[i] == "NULL" {
+			require.False(t, ok, "case %d (%q): got %d/%d/%d", i, input, hour, minute, second)
+			continue
+		}
+		require.True(t, ok, "case %d (%q): expected %s", i, input, expected[i])
+		require.Equal(t, expected[i], fmt.Sprintf("%d/%d/%d", hour, minute, second), "case %d (%q)", i, input)
+	}
+}
+
+func TestMakeQueryIdIdxUsesOneBasedPositivePositions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name    string
+		loc     int64
+		cnt     int64
+		want    int
+		wantErr bool
+	}{
+		{name: "first positive position", loc: 1, cnt: 2, want: 0},
+		{name: "last positive position", loc: 2, cnt: 2, want: 1},
+		{name: "most recent negative position", loc: -1, cnt: 2, want: 1},
+		{name: "oldest negative position", loc: -2, cnt: 2, want: 0},
+		{name: "zero is invalid", loc: 0, cnt: 2, wantErr: true},
+		{name: "positive position past last is invalid", loc: 3, cnt: 2, wantErr: true},
+		{name: "negative position before first is invalid", loc: -3, cnt: 2, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := makeQueryIdIdx(test.loc, test.cnt, proc)
+			if test.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestLastQueryIDUsesOneBasedPositivePositions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.QueryId = []string{"first-query", "second-query"}
+
+	for _, test := range []struct {
+		name string
+		loc  int64
+		want string
+	}{
+		{name: "first query", loc: 1, want: "first-query"},
+		{name: "second query", loc: 2, want: "second-query"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{test.loc}, []bool{false}),
+			}
+			expected := NewFunctionTestResult(
+				types.T_varchar.ToType(), false, []string{test.want}, []bool{false},
+			)
+
+			testCase := NewFunctionTestCase(proc, input, expected, LastQueryID)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestLastQueryIDWithNoQueryHistoryReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+	}
+	expected := NewFunctionTestResult(
+		types.T_varchar.ToType(), false, []string{""}, []bool{true},
+	)
+
+	testCase := NewFunctionTestCase(proc, input, expected, LastQueryID)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
 }

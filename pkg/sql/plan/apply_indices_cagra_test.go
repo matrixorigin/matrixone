@@ -283,15 +283,15 @@ func TestPrepareCagraIndexContext_Success(t *testing.T) {
 func TestApplyIndicesForSortUsingCagra_NilGuards(t *testing.T) {
 	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 
-	got, err := b.applyIndicesForSortUsingCagra(7, nil, &MultiTableIndex{})
+	got, err := b.applyIndicesForSortUsingCagra(7, nil, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(7), got)
 
-	got, err = b.applyIndicesForSortUsingCagra(7, &vectorSortContext{}, &MultiTableIndex{})
+	got, err = b.applyIndicesForSortUsingCagra(7, &vectorSortContext{}, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(7), got)
 
-	got, err = b.applyIndicesForSortUsingCagra(7, &vectorSortContext{sortNode: &plan.Node{}}, &MultiTableIndex{})
+	got, err = b.applyIndicesForSortUsingCagra(7, &vectorSortContext{sortNode: &plan.Node{}}, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(7), got)
 }
@@ -309,7 +309,7 @@ func TestApplyIndicesForSortUsingCagra_PrepareReturnsNil(t *testing.T) {
 	v.sortNode = &plan.Node{}
 	v.rankOption = &plan.RankOption{Mode: "force"}
 
-	got, err := b.applyIndicesForSortUsingCagra(0, v, &MultiTableIndex{})
+	got, err := b.applyIndicesForSortUsingCagra(0, v, &MultiTableIndex{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(0), got)
 }
@@ -399,7 +399,7 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingCagra(scanNodeID, vecCtx, mti)
+	_, err := builder.applyIndicesForSortUsingCagra(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 
 	// PROJECT now points at SORT → JOIN(SCAN, FUNCTION_SCAN)
@@ -575,7 +575,7 @@ func TestApplyIndicesForSortUsingCagra_RichPushdown(t *testing.T) {
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingCagra(scanNodeID, vecCtx, mti)
+	_, err := builder.applyIndicesForSortUsingCagra(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 
 	// Locate the function-scan node and confirm INCLUDE pushdown produced a
@@ -679,6 +679,6 @@ func TestApplyIndicesForSortUsingCagra_Success_WithFiltersOverFetch(t *testing.T
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingCagra(scanNodeID, vecCtx, mti)
+	_, err := builder.applyIndicesForSortUsingCagra(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
 }

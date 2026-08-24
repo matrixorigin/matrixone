@@ -3834,6 +3834,82 @@ func TestCastJsonToNumeric(t *testing.T) {
 	})
 }
 
+func TestCastJsonToBool(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	require.True(t, IfTypeCastSupported(types.T_json, types.T_bool))
+	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_bool.ToType()})
+	require.NoError(t, err)
+
+	run := func(t *testing.T, name string, jsonTexts []string, nulls []bool,
+		expected []bool, expectedNulls []bool, wantErr bool) {
+		t.Helper()
+		if nulls == nil {
+			nulls = make([]bool, len(jsonTexts))
+		}
+		encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{}, []bool{}),
+		}
+		expect := NewFunctionTestResult(types.T_bool.ToType(), wantErr, expected, expectedNulls)
+		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+		succeed, info := fcTC.Run()
+		if wantErr {
+			require.True(t, succeed, "case %s: expected cast to fail with error, but: %s", name, info)
+			return
+		}
+		require.True(t, succeed, "case %s: %s", name, info)
+	}
+
+	run(t, "literal_and_numeric", []string{"true", "false", "0", "2", "-1"}, nil,
+		[]bool{true, false, false, true, true}, []bool{false, false, false, false, false}, false)
+	run(t, "string_values", []string{`"true"`, `"false"`, `"0"`, `"2"`}, nil,
+		[]bool{true, false, false, true}, []bool{false, false, false, false}, false)
+	run(t, "quoted_string_error", []string{`"\"true\""`}, nil, nil, nil, true)
+	run(t, "json_null", []string{"null", "true"}, []bool{false, true},
+		[]bool{false, false}, []bool{true, true}, false)
+	run(t, "object_error", []string{"{}"}, nil, nil, nil, true)
+	run(t, "array_error", []string{"[true]"}, nil, nil, nil, true)
+	run(t, "string_error", []string{`"not-a-bool"`}, nil, nil, nil, true)
+
+	decimalEncoded := []string{
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0.00")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1.20")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "-0.01")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1e100")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1e-300")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0e-2147483647")),
+	}
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_json.ToType(), decimalEncoded, nil),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false,
+		[]bool{false, true, true, true, true, false}, []bool{false, false, false, false, false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+	succeed, info := fcTC.Run()
+	require.True(t, succeed, "decimal values: %s", info)
+
+	for _, tc := range []struct {
+		name  string
+		value bytejson.ByteJson
+	}{
+		{name: "malformed_literal", value: bytejson.ByteJson{Type: bytejson.TpCodeLiteral}},
+		{name: "malformed_decimal", value: newTypedByteJson(bytejson.TpCodeDecimal, "not-a-decimal")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{encodeJSONCastValue(t, tc.value)}, nil),
+				NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
+			}
+			expect := NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil)
+			fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, "%s: %s", tc.name, info)
+		})
+	}
+}
+
 func TestCastJsonToJson(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	jsonTexts := []string{`{"a":1}`, `[1,true,{"b":"x"}]`, `null`}
@@ -4076,6 +4152,8 @@ func TestCastJsonToVarchar(t *testing.T) {
 // emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
 func emptySliceForCastTarget(oid types.T) any {
 	switch oid {
+	case types.T_bool:
+		return []bool{}
 	case types.T_int8:
 		return []int8{}
 	case types.T_int16:
@@ -4616,6 +4694,182 @@ func TestCompatibilityModeFromProcess(t *testing.T) {
 	require.Equal(t, SQLCompatibilityMySQL, CompatibilityModeFromProcess(proc))
 	proc.GetSessionInfo().MatrixOneNativeMode = true
 	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc))
+}
+
+func TestMySQLDecimalPrefix(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "abc", want: "0"},
+		{input: "", want: "0"},
+		{input: " \t\v\f\r\n", want: "0"},
+		{input: "12.5tail", want: "12.5"},
+		{input: "2026-08-10", want: "2026"},
+		{input: "9007199254740993e0tail", want: "9007199254740993e0"},
+		{input: "1E2", want: "1e2"},
+		{input: "1E-2tail", want: "1e-2"},
+		{input: "1e+tail", want: "1"},
+		{input: "-.5x", want: "-.5"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			require.Equal(t, test.want, mysqlDecimalPrefix(test.input))
+		})
+	}
+
+	value, err := parseMySQLDecimal256Prefix("9007199254740993tail", 65, 30)
+	require.NoError(t, err)
+	want, err := types.ParseDecimal256("9007199254740993", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, want, value)
+
+	clamped, err := parseMySQLDecimal256Prefix("1e100tail", 65, 30)
+	require.NoError(t, err)
+	maximum, err := clampDecimal256Value(false, 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, maximum, clamped)
+
+	wideClamped, err := parseMySQLDecimal256Prefix("1e100tail", 75, 10)
+	require.NoError(t, err)
+	wideMaximum, err := types.ParseDecimal256(strings.Repeat("9", 65)+".0000000000", 75, 10)
+	require.NoError(t, err)
+	require.Equal(t, wideMaximum, wideClamped)
+	wideClamped, err = parseMySQLDecimal256Prefix("1e100tail", 76, 30)
+	require.NoError(t, err)
+	wideMaximum, err = types.ParseDecimal256(strings.Repeat("9", 46)+"."+strings.Repeat("0", 30), 76, 30)
+	require.NoError(t, err)
+	require.Equal(t, wideMaximum, wideClamped)
+
+	uppercase, err := parseMySQLDecimal256Prefix("1E2tail", 65, 30)
+	require.NoError(t, err)
+	wantUppercase, err := types.ParseDecimal256("100", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, wantUppercase, uppercase)
+
+	underflow, err := parseMySQLDecimal256Prefix("1e-2147483648tail", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal256{}, underflow)
+	underflow, err = parseMySQLDecimal256Prefix("9999999999e-2147483648tail", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal256{}, underflow)
+
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: strings.Repeat("0", 77), want: "0"},
+		{input: strings.Repeat("0", 76) + "1", want: "1"},
+		{input: "-" + strings.Repeat("0", 76) + "1.25tail", want: "-1.25"},
+	} {
+		got, parseErr := parseMySQLDecimal256Prefix(test.input, 65, 30)
+		require.NoError(t, parseErr)
+		want, parseErr := types.ParseDecimal256(test.want, 65, 30)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+}
+
+func TestMySQLDecimalPrefixExtremeExponents(t *testing.T) {
+	const (
+		positiveOverflow  = "1e2147483648tail"
+		negativeUnderflow = "1e-2147483648tail"
+		zeroMantissa      = "0e2147483648tail"
+	)
+	started := time.Now()
+	require.False(t, mysqlDecimalPrefixOverflows("1", 18, 6))
+	require.False(t, mysqlDecimalPrefixOverflows("1e-1", 18, 6))
+	require.False(t, mysqlDecimalPrefixOverflows("1.25e+1", 18, 6))
+	require.True(t, mysqlDecimalPrefixOverflows("1234567890123e0", 18, 6))
+
+	max64, err := clampDecimal64Value(false, 18, 6)
+	require.NoError(t, err)
+	min64, err := clampDecimal64Value(true, 18, 6)
+	require.NoError(t, err)
+	for input, want := range map[string]types.Decimal64{
+		positiveOverflow:       max64,
+		"-" + positiveOverflow: min64,
+		"9999999999999999999":  max64,
+		negativeUnderflow:      0,
+		zeroMantissa:           0,
+		"1.25":                 1250000,
+	} {
+		got, parseErr := parseMySQLDecimal64Prefix(input, 18, 6)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+
+	max128, err := clampDecimal128Value(false, 38, 6)
+	require.NoError(t, err)
+	min128, err := clampDecimal128Value(true, 38, 6)
+	require.NoError(t, err)
+	normal128, err := types.ParseDecimal128("1.25", 38, 6)
+	require.NoError(t, err)
+	for input, want := range map[string]types.Decimal128{
+		positiveOverflow:        max128,
+		"-" + positiveOverflow:  min128,
+		strings.Repeat("9", 39): max128,
+		negativeUnderflow:       {},
+		zeroMantissa:            {},
+		"1.25":                  normal128,
+	} {
+		got, parseErr := parseMySQLDecimal128Prefix(input, 38, 6)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+
+	max256, err := clampDecimal256Value(false, 65, 30)
+	require.NoError(t, err)
+	min256, err := clampDecimal256Value(true, 65, 30)
+	require.NoError(t, err)
+	for input, want := range map[string]types.Decimal256{
+		positiveOverflow:       max256,
+		"-" + positiveOverflow: min256,
+		negativeUnderflow:      {},
+		zeroMantissa:           {},
+	} {
+		got, parseErr := parseMySQLDecimal256Prefix(input, 65, 30)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
+
+	// The old Decimal64/128 path scaled by the wrapped exponent and took about
+	// one second for this matrix. The bounded prefix scan should finish with a
+	// large margin even on a loaded CI worker.
+	require.Less(t, time.Since(started), 250*time.Millisecond)
+}
+
+func TestMySQLDecimalPrefixHalfUpUnderflowBoundary(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "4e-3", want: "0.00"},
+		{input: "5e-3", want: "0.01"},
+		{input: "6e-3", want: "0.01"},
+		{input: "-4e-3", want: "0.00"},
+		{input: "-5e-3", want: "-0.01"},
+		{input: "-6e-3", want: "-0.01"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			want64, err := types.ParseDecimal64(test.want, 18, 2)
+			require.NoError(t, err)
+			got64, err := parseMySQLDecimal64Prefix(test.input, 18, 2)
+			require.NoError(t, err)
+			require.Equal(t, want64, got64)
+
+			want128, err := types.ParseDecimal128(test.want, 38, 2)
+			require.NoError(t, err)
+			got128, err := parseMySQLDecimal128Prefix(test.input, 38, 2)
+			require.NoError(t, err)
+			require.Equal(t, want128, got128)
+
+			want256, err := types.ParseDecimal256(test.want, 65, 2)
+			require.NoError(t, err)
+			got256, err := parseMySQLDecimal256Prefix(test.input, 65, 2)
+			require.NoError(t, err)
+			require.Equal(t, want256, got256)
+		})
+	}
 }
 
 func TestParseStringToFloatWithBitSize(t *testing.T) {

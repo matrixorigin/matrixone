@@ -41,6 +41,16 @@ type container struct {
 	bat     *batch.Batch
 	batAggs []aggexec.AggFuncExec
 
+	// runningAgg retains the one-group aggregate for cumulative and bounded
+	// sliding ROWS frames between output chunks. runningNextRow guards against
+	// accidentally reusing the state out of order; runningLeft/runningRight
+	// describe the current half-open sliding frame.
+	runningAgg       aggexec.AggFuncExec
+	runningNextRow   int
+	runningPartition int
+	runningLeft      int
+	runningRight     int
+
 	desc      []bool
 	nullsLast []bool
 	orderVecs []colexec.ExprEvalVector
@@ -65,6 +75,9 @@ type Window struct {
 	Fs []*plan.OrderBySpec
 	// agg func
 	Aggs []aggexec.AggFuncExecExpression
+	// PartitionTopN allows the bounded ROW_NUMBER path to coalesce complete
+	// candidate partitions and evaluate their explicit boundaries once.
+	PartitionTopN bool
 
 	vm.OperatorBase
 }
@@ -112,7 +125,14 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	// otherwise keep their accumulated state (e.g. json payloads, distinct
 	// hashes) in the mpool until the next reuse.
 	ctr.freeAggFun()
-	if ctr.bat != nil {
+	ctr.freeRunningAgg()
+	if ctr.hasAccountedBufferedData() {
+		// AppendWithCopy and Dup preserve a source vector's allocation
+		// selection. Release inherited backing at the prepared-statement
+		// generation boundary; only unaccounted buffers may be reused.
+		ctr.freeBatch(proc.Mp())
+		ctr.freeVector(proc.Mp())
+	} else if ctr.bat != nil {
 		ctr.bat.CleanOnlyData()
 	}
 }
@@ -125,6 +145,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	// Free aggregators before the batch so an error exit from Call (which skips
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
+	ctr.freeRunningAgg()
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
@@ -184,6 +205,17 @@ func (ctr *container) freeAggFun() {
 	ctr.batAggs = nil
 }
 
+func (ctr *container) freeRunningAgg() {
+	if ctr.runningAgg != nil {
+		ctr.runningAgg.Free()
+		ctr.runningAgg = nil
+	}
+	ctr.runningNextRow = 0
+	ctr.runningPartition = 0
+	ctr.runningLeft = 0
+	ctr.runningRight = 0
+}
+
 func (ctr *container) freeExes() {
 	for i := range ctr.orderVecs {
 		ctr.orderVecs[i].Free()
@@ -195,20 +227,46 @@ func (ctr *container) freeExes() {
 }
 
 func (ctr *container) freeVector(mp *mpool.MPool) {
-	for _, e := range ctr.orderVecs {
-		for _, vec := range e.Vec {
+	for i := range ctr.orderVecs {
+		for j, vec := range ctr.orderVecs[i].Vec {
 			if vec != nil {
 				vec.Free(mp)
+				ctr.orderVecs[i].Vec[j] = nil
 			}
 		}
 	}
 
-	for _, e := range ctr.aggVecs {
-		for _, vec := range e.Vec {
+	for i := range ctr.aggVecs {
+		for j, vec := range ctr.aggVecs[i].Vec {
 			if vec != nil {
 				vec.Free(mp)
+				ctr.aggVecs[i].Vec[j] = nil
 			}
 		}
 	}
 
+}
+
+func (ctr *container) hasAccountedBufferedData() bool {
+	if ctr == nil {
+		return false
+	}
+	if ctr.bat != nil && ctr.bat.HasAllocationAccount() {
+		return true
+	}
+	for _, eval := range ctr.orderVecs {
+		for _, vec := range eval.Vec {
+			if vec != nil && vec.AllocationAccountSelection() != nil {
+				return true
+			}
+		}
+	}
+	for _, eval := range ctr.aggVecs {
+		for _, vec := range eval.Vec {
+			if vec != nil && vec.AllocationAccountSelection() != nil {
+				return true
+			}
+		}
+	}
+	return false
 }

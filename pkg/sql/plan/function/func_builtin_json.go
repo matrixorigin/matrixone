@@ -966,6 +966,19 @@ func computeStringJsonReplace(json []byte, paths []*bytejson.Path, newVal []byte
 	return bj.Modify(paths, newVal, bytejson.JsonModifyReplace)
 }
 
+func computeJsonArrayAppend(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj := types.DecodeJson(json)
+	return bj.Modify(paths, newVal, bytejson.JsonModifyArrayAppend)
+}
+
+func computeStringJsonArrayAppend(json []byte, paths []*bytejson.Path, newVal []bytejson.ByteJson) (bytejson.ByteJson, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	return bj.Modify(paths, newVal, bytejson.JsonModifyArrayAppend)
+}
+
 func computeJsonRemove(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
 	bj := types.DecodeJson(json)
 	return bj.Remove(paths)
@@ -1495,6 +1508,10 @@ func (op *opBuiltInJsonSet) buildJsonReplace(parameters []*vector.Vector, result
 	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyReplace)
 }
 
+func (op *opBuiltInJsonSet) buildJsonArrayAppend(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return op.buildJsonFunction(parameters, result, proc, length, selectList, bytejson.JsonModifyArrayAppend)
+}
+
 func (op *opBuiltInJsonRemove) buildJsonRemove(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	var fn computeFn
 
@@ -1767,6 +1784,12 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 		} else {
 			fn = computeStringJsonReplace
 		}
+	case bytejson.JsonModifyArrayAppend:
+		if jsonVec.GetType().Oid == types.T_json {
+			fn = computeJsonArrayAppend
+		} else {
+			fn = computeStringJsonArrayAppend
+		}
 	default:
 		return moerr.NewInvalidInput(proc.Ctx, "invalid json function type")
 	}
@@ -1813,6 +1836,16 @@ rowLoop:
 		// build all values
 		valExprs := make([]bytejson.ByteJson, 0, (len(parameters)-1)/2+1)
 		for j := 2; j < len(parameters); j += 2 {
+			// Unlike JSON_SET/INSERT/REPLACE, JSON_ARRAY_APPEND returns SQL
+			// NULL when any value argument is SQL NULL.  The other JSON
+			// modification functions intentionally convert SQL NULL values to
+			// the JSON null literal, so keep this check local to ARRAY_APPEND.
+			if jsonFuncType == bytejson.JsonModifyArrayAppend && parameters[j].IsNull(i) {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue rowLoop
+			}
 			val, err := op.buildJsonModifyValue(proc, parameters[j], int(i))
 			if err != nil {
 				return err
@@ -1824,7 +1857,7 @@ rowLoop:
 		if err != nil {
 			return err
 		}
-		if out.IsNull() {
+		if out.IsNull() && jsonFuncType != bytejson.JsonModifyArrayAppend {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -1845,6 +1878,8 @@ func jsonModifyFunctionName(jsonFuncType bytejson.JsonModifyType) string {
 		return "json_insert"
 	case bytejson.JsonModifyReplace:
 		return "json_replace"
+	case bytejson.JsonModifyArrayAppend:
+		return "json_array_append"
 	default:
 		return "json_modify"
 	}
@@ -3135,9 +3170,6 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid path expression")
 		}
-		if !path.IsSimple() {
-			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid path expression")
-		}
 		// Extract value at path.
 		var bj bytejson.ByteJson
 		if isStr {
@@ -3148,7 +3180,21 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid JSON document")
 		}
-		val := bj.Query([]*bytejson.Path{&path})
+		val, exists := bj.QueryWithExists([]*bytejson.Path{&path})
+		if !exists {
+			rs.AppendMustNullForBytesResult()
+			continue
+		}
+		if !path.IsSimple() {
+			// QueryWithExists wraps every match of a potentially multi-valued
+			// path in an array. JSON_VALUE accepts a non-simple path only when
+			// it selects exactly one value; zero or multiple matches are NULL.
+			if val.Type != bytejson.TpCodeArray || val.GetElemCnt() != 1 {
+				rs.AppendMustNullForBytesResult()
+				continue
+			}
+			val = val.GetArrayElem(0)
+		}
 		if val.IsNull() {
 			rs.AppendMustNullForBytesResult()
 			continue

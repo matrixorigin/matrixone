@@ -71,7 +71,7 @@ type HashmapBuilder struct {
 	dedupDeleteMarkerColIdx   int32
 	dedupDeleteKeepColIdxList []int32
 	DelRows                   *bitmap.Bitmap
-	budget                    *process.HashBuildBudgetGeneration
+	budget                    *process.ExecutionResourceGeneration
 	keyExprs                  []*plan.Expr
 	// retainedSpillTailSelected is the logical spill materialization of the
 	// one partial CopyIntoBatches tail. It avoids rescanning that growing tail.
@@ -217,8 +217,17 @@ func (hb *HashmapBuilder) Prepare(
 
 	if hb.IsDedup {
 		hb.delColIdx = delColIdx
-		hb.dedupDeleteMarkerColIdx = dedupDeleteMarkerColIdx
-		hb.dedupDeleteKeepColIdxList = dedupDeleteKeepColIdxList
+		// The marker index is optional, while zero is both a valid column index
+		// and the Go zero value for operators built outside the compiler. A real
+		// column-zero marker carries its keep list; zero without one means absent.
+		if dedupDeleteMarkerColIdx > 0 ||
+			(dedupDeleteMarkerColIdx == 0 && len(dedupDeleteKeepColIdxList) > 0) {
+			hb.dedupDeleteMarkerColIdx = dedupDeleteMarkerColIdx
+			hb.dedupDeleteKeepColIdxList = dedupDeleteKeepColIdxList
+		} else {
+			hb.dedupDeleteMarkerColIdx = -1
+			hb.dedupDeleteKeepColIdxList = nil
+		}
 	} else {
 		hb.delColIdx = -1
 		hb.dedupDeleteMarkerColIdx = -1
@@ -569,7 +578,7 @@ func (hb *HashmapBuilder) buildHashmap(
 			hb.InputBatchRowCount,
 			proc.Mp(),
 			hb.mapAllocationAccount,
-			HashBuildAllocationOwner,
+			mpool.AllocationOwnerHashBuild,
 			HashBuildAllocationSiteGroupSels,
 		)
 		if err != nil {
@@ -962,7 +971,7 @@ buildUnits:
 		if hb.DelRows == nil {
 			delRows := max(cardinality, uint64(hb.Batches.RowCount()))
 			if delRows > uint64(math.MaxInt) {
-				return process.ErrHashBuildBudgetInvalid
+				return process.ErrExecutionResourceInvalid
 			}
 			hb.DelRows, err = hb.newDedupBitmap(
 				int(delRows),
@@ -1035,7 +1044,13 @@ buildUnits:
 				}
 				if hb.OnDuplicateAction == plan.Node_IGNORE {
 					row := uint64(i + k)
-					if hb.IgnoreRows.Contains(row) || buildGroups[k] != v {
+					releasedByPriorCandidate := false
+					if hb.dedupDeleteMarkerColIdx >= 0 {
+						markerVec := hb.Batches.Buf[vecIdx1].Vecs[hb.dedupDeleteMarkerColIdx]
+						releasedByPriorCandidate = !markerVec.IsNull(uint64(vecIdx2+k)) &&
+							vector.GetFixedAtNoTypeCheck[bool](markerVec, vecIdx2+k)
+					}
+					if hb.IgnoreRows.Contains(row) || (!releasedByPriorCandidate && buildGroups[k] != v) {
 						continue
 					}
 				}
@@ -1186,7 +1201,7 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		hb.mapAllocationAccount,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteDedupDeleteOnlyData,
 		HashBuildAllocationSiteDedupDeleteOnlyArea,
 		HashBuildAllocationSiteDedupDeleteOnlyNulls,

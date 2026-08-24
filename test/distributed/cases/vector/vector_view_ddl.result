@@ -1,0 +1,57 @@
+set experimental_ivf_index = 1;
+set experimental_hnsw_index = 1;
+drop database if exists vec_view_ddl;
+create database vec_view_ddl;
+use vec_view_ddl;
+create table t (id bigint primary key, v vecf32(4));
+insert into t values
+(1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),
+(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
+create view v_nodix as select id from t order by l2_distance(v,'[1,1,1,1]') limit 3;
+select id from v_nodix order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+create view v_nodix_score as
+select id, l2_distance(v,'[1,1,1,1]') as d from t order by l2_distance(v,'[1,1,1,1]') limit 3;
+select id from v_nodix_score order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+create view v_dist_only as select id, cosine_distance(v,'[1,1,1,1]') as d from t;
+select count(*) as n from v_dist_only;
+➤ n[-5,64,0]  𝄀
+6
+create index ix using ivfflat on t(v) lists=2 op_type 'vector_l2_ops';
+create view v_wrong_metric as select id from t order by cosine_distance(v,'[1,1,1,1]') limit 2;
+select count(*) as n from v_wrong_metric;
+➤ n[-5,64,0]  𝄀
+2
+create view v_match as select id from t order by l2_distance(v,'[1,1,1,1]') limit 3;
+select id from v_match order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+explain select id from v_match;
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Vector Index Scan on ix [l2_distance]  𝄀
+              Vector Index: ix, Metric: l2_distance, Candidate Limit: 3, NProbe: 10
+select id from v_match order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select v_match.id from v_match join t m on m.id = v_match.id order by v_match.id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+drop database vec_view_ddl;

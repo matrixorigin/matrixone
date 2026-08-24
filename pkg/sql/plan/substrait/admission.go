@@ -123,16 +123,27 @@ type LeaseManager struct {
 	leases   map[string]*Lease
 	releases map[string]releasePhase
 
-	protector    Protector
-	journal      LeaseJournal
-	resolveBytes *resolveByteBudget
-	maximum      int
-	now          func() time.Time
-	ready        bool
+	protector     Protector
+	journal       LeaseJournal
+	resolveBytes  *resolveByteBudget
+	maximum       int
+	now           func() time.Time
+	ready         bool
+	benchmarkNoGC bool
 }
 
 func NewLeaseManager(maximum int, protector Protector) *LeaseManager {
 	return NewPersistentLeaseManager(maximum, protector, nil)
+}
+
+// NewBenchmarkLeaseManager creates the process-local lease authority used by
+// the explicitly verified local-CN benchmark profile. It is intentionally
+// separate from NewLeaseManager so non-durable managers cannot accidentally
+// satisfy the Sirius runtime's benchmark admission check.
+func NewBenchmarkLeaseManager(maximum int, protector Protector) *LeaseManager {
+	manager := NewPersistentLeaseManager(maximum, protector, nil)
+	manager.benchmarkNoGC = true
+	return manager
 }
 
 func NewPersistentLeaseManager(maximum int, protector Protector, journal LeaseJournal) *LeaseManager {
@@ -468,9 +479,12 @@ func leaseCleanupContext(ctx context.Context) (context.Context, context.CancelFu
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithTimeoutCause(
-		context.WithoutCancel(ctx),
-		rollbackCleanupTimeout,
+	deadline := time.Now().Add(rollbackCleanupTimeout)
+	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+		deadline = callerDeadline
+	}
+	return context.WithDeadlineCause(
+		context.WithoutCancel(ctx), deadline,
 		moerr.NewInternalErrorNoCtx("substrait: read lease cleanup timed out"),
 	)
 }
@@ -732,6 +746,90 @@ func (m *LeaseManager) Protected() bool {
 	return m != nil && m.protector != nil
 }
 
+// DurableReady reports whether this manager is suitable for a reachable CN
+// runtime: authority is journaled, replay is complete, and GC protection is
+// installed. NewLeaseManager intentionally does not satisfy this predicate.
+func (m *LeaseManager) DurableReady() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	ready := m.ready && m.journal != nil && m.protector != nil
+	m.mu.RUnlock()
+	return ready
+}
+
+// BenchmarkReady reports whether this manager was explicitly constructed for
+// the no-GC benchmark profile. It never reports true for a normal
+// non-durable manager, even when that manager happens to be ready.
+func (m *LeaseManager) BenchmarkReady() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	ready := m.benchmarkNoGC && m.ready && m.journal == nil && m.protector != nil
+	m.mu.RUnlock()
+	return ready
+}
+
+func (m *LeaseManager) currentTime() time.Time {
+	m.mu.RLock()
+	now := m.now
+	m.mu.RUnlock()
+	if now == nil {
+		return time.Now()
+	}
+	return now()
+}
+
+// PendingExecution groups live read references by the statement that owns
+// their terminal sidecar cleanup. The identity is sufficient to
+// reconstruct Flight's cancellation key after a CN restart.
+type PendingExecution struct {
+	AccountID uint64
+	QueryID   []byte
+	ReadRefs  [][]byte
+}
+
+// PendingExecutions returns immutable copies of every live execution group.
+// Released records are cleaned during Replay and are never republished here.
+func (m *LeaseManager) PendingExecutions() []PendingExecution {
+	if m == nil {
+		return nil
+	}
+	type executionKey struct {
+		accountID uint64
+		queryID   string
+	}
+	m.mu.RLock()
+	if !m.ready {
+		m.mu.RUnlock()
+		return nil
+	}
+	grouped := make(map[executionKey]*PendingExecution)
+	for _, lease := range m.leases {
+		if lease == nil || lease.Read == nil || lease.Released {
+			continue
+		}
+		groupKey := executionKey{accountID: lease.Read.AccountID, queryID: string(lease.Read.QueryID)}
+		pending := grouped[groupKey]
+		if pending == nil {
+			pending = &PendingExecution{
+				AccountID: lease.Read.AccountID,
+				QueryID:   append([]byte(nil), lease.Read.QueryID...),
+			}
+			grouped[groupKey] = pending
+		}
+		pending.ReadRefs = append(pending.ReadRefs, append([]byte(nil), lease.Read.ReadRef...))
+	}
+	m.mu.RUnlock()
+	result := make([]PendingExecution, 0, len(grouped))
+	for _, pending := range grouped {
+		result = append(result, *pending)
+	}
+	return result
+}
+
 func validateLease(l *Lease, now uint64, allowReleased bool) error {
 	if l == nil || l.Read == nil || (!allowReleased && l.Released) {
 		return moerr.NewInternalErrorNoCtx("missing or released lease")
@@ -816,16 +914,36 @@ type AdmissionRequest struct {
 	Now         time.Time
 }
 
+// AdmittedReads is the atomic output of snapshot admission. ReadRefs and
+// ExpiresAt are returned from the admission boundary itself so downstream
+// ownership never depends on re-decoding capability wires.
+type AdmittedReads struct {
+	Wires     map[int32][]byte
+	ReadRefs  [][]byte
+	ExpiresAt time.Time
+}
+
 // Admit performs storage work only after Export has accepted the complete
 // logical plan. It publishes all table leases atomically or none of them.
 func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
+	admitted, err := AdmitReads(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	return admitted.Wires, nil
+}
+
+// AdmitReads performs storage work only after Export has accepted the complete
+// logical plan. It publishes all table leases atomically or none of them and
+// returns the immutable cleanup/deadline metadata for the new owner.
+func AdmitReads(ctx context.Context, r AdmissionRequest) (*AdmittedReads, error) {
 	if r.Candidate == nil || r.Provider == nil || r.Leases == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: incomplete admission request")
 	}
 	if !r.ReadOnly || r.PriorWrites {
 		return nil, NotEligible(EligibilityTransaction, "transaction is not an admissible read-only snapshot")
 	}
-	if r.AccountID == 0 || len(r.QueryID) == 0 || len(r.SnapshotTS) != 12 || len(r.AuthorizedClientSPKIHash) != sha256.Size {
+	if len(r.QueryID) == 0 || len(r.SnapshotTS) != 12 || len(r.AuthorizedClientSPKIHash) != sha256.Size {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid admission identity")
 	}
 	if r.TTL <= 0 || r.TTL > MaxLeaseTTL {
@@ -834,18 +952,14 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 	if r.Random == nil {
 		r.Random = rand.Reader
 	}
-	if r.Now.IsZero() {
-		r.Now = time.Now()
+	type preparedRead struct {
+		read  Read
+		facts SnapshotFacts
 	}
-	expires := r.Now.Add(r.TTL).UnixMilli()
-	if expires <= r.Now.UnixMilli() || expires <= 0 {
-		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease expiry")
-	}
-	var wires map[int32][]byte
+	result := &AdmittedReads{}
 	err := r.Leases.acquirePrepared(ctx, func() ([]*Lease, error) {
 		reads := r.Candidate.Reads()
-		leases := make([]*Lease, 0, len(reads))
-		wires = make(map[int32][]byte, len(reads))
+		prepared := make([]preparedRead, 0, len(reads))
 		for _, read := range reads {
 			read.AccountID = r.AccountID
 			facts, err := r.Provider.PrepareSnapshotRead(ctx, read, r.SnapshotTS)
@@ -864,26 +978,42 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 			if len(facts.Manifest) == 0 || !equalBytes(facts.CanonicalSchema, read.Schema) {
 				return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d schema or manifest mismatch", read.TableID)
 			}
+			prepared = append(prepared, preparedRead{read: read, facts: facts})
+		}
+		now := r.Now
+		if now.IsZero() {
+			now = r.Leases.currentTime()
+		}
+		expires := now.Add(r.TTL).UnixMilli()
+		if expires <= now.UnixMilli() || expires <= 0 {
+			return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease expiry")
+		}
+		leases := make([]*Lease, 0, len(prepared))
+		result.Wires = make(map[int32][]byte, len(prepared))
+		result.ReadRefs = make([][]byte, 0, len(prepared))
+		result.ExpiresAt = time.UnixMilli(expires)
+		for _, item := range prepared {
 			ref := make([]byte, 32)
-			if _, err = io.ReadFull(r.Random, ref); err != nil {
+			if _, err := io.ReadFull(r.Random, ref); err != nil {
 				return nil, moerr.NewInternalErrorNoCtxf("substrait: create read reference: %v", err)
 			}
-			schemaHash := sha256.Sum256(facts.CanonicalSchema)
-			manifestHash := sha256.Sum256(facts.Manifest)
-			tr := &TaeRead{ProtocolVersion: TaeReadProtocolVersion, ReadRef: ref, QueryID: append([]byte(nil), r.QueryID...), AccountID: r.AccountID, DatabaseID: read.DatabaseID, TableID: read.TableID, SnapshotTS: append([]byte(nil), r.SnapshotTS...), SchemaDigest: schemaHash[:], ManifestSHA256: manifestHash[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: uint64(expires)}
+			schemaHash := sha256.Sum256(item.facts.CanonicalSchema)
+			manifestHash := sha256.Sum256(item.facts.Manifest)
+			tr := &TaeRead{ProtocolVersion: TaeReadProtocolVersion, ReadRef: ref, QueryID: append([]byte(nil), r.QueryID...), AccountID: r.AccountID, DatabaseID: item.read.DatabaseID, TableID: item.read.TableID, SnapshotTS: append([]byte(nil), r.SnapshotTS...), SchemaDigest: schemaHash[:], ManifestSHA256: manifestHash[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: uint64(expires)}
 			wire, err := MarshalTaeRead(tr)
 			if err != nil {
 				return nil, err
 			}
-			leases = append(leases, &Lease{Read: tr, Wire: wire, Manifest: facts.Manifest, CanonicalSchema: facts.CanonicalSchema, AuthorizedClientSPKIHash: append([]byte(nil), r.AuthorizedClientSPKIHash...), ObjectNames: facts.ObjectNames})
-			wires[read.NodeID] = wire
+			leases = append(leases, &Lease{Read: tr, Wire: wire, Manifest: item.facts.Manifest, CanonicalSchema: item.facts.CanonicalSchema, AuthorizedClientSPKIHash: append([]byte(nil), r.AuthorizedClientSPKIHash...), ObjectNames: item.facts.ObjectNames})
+			result.Wires[item.read.NodeID] = wire
+			result.ReadRefs = append(result.ReadRefs, append([]byte(nil), ref...))
 		}
 		return leases, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return wires, nil
+	return result, nil
 }
 
 // ResolveAuditEvent is emitted exactly once before a successful manifest

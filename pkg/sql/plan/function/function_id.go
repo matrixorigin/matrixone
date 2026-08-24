@@ -817,9 +817,31 @@ const (
 	PERCENTILE_CONT = 567
 	PERCENTILE_DISC = 568
 
+	// LOAD_TEXT reads a datalink and returns its EXTRACTED plain text (PDF/DOCX parsed
+	// via GetPlainText), unlike load_file which returns raw bytes. Renumbered as main
+	// merges claim ids (562->567->569); referenced by name only, so renumbering is safe.
+	LOAD_TEXT = 569
+
+	// Manhattan distance. Completes the op_type set an IVF-FLAT index can be built
+	// with: vector_l1_ops was already accepted at CREATE INDEX, but without this
+	// function neither the user query nor the index's own generated search SQL
+	// (MetricTypeToDistFuncName) could name the metric (#25966).
+	// Takes 570 rather than 569: LOAD_TEXT reached main first, so keeping main's
+	// numbering intact leaves the next merge clean. Ids are referenced by name.
+	L1_DISTANCE = 570
+
+	// JSON_ARRAY_APPEND appends values to arrays within a JSON document.
+	JSON_ARRAY_APPEND = 571
+
+	// Foreign-data TVF connection management (esql_tvf / sql_tvf).
+	ESQL_TVF_CONNECT    = 572
+	ESQL_TVF_DISCONNECT = 573
+	SQL_TVF_CONNECT     = 574
+	SQL_TVF_DISCONNECT  = 575
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 569
+	FUNCTION_END_NUMBER = 576
 )
 
 // functionIdRegister is what function we have registered already.
@@ -945,6 +967,7 @@ var functionIdRegister = map[string]int32{
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,
+	"to_interval": TO_INTERVAL,
 	"str_to_date": STR_TO_DATE,
 	"ts_to_time":  TS_TO_TIME,
 	"date_format": DATE_FORMAT,
@@ -1108,6 +1131,7 @@ var functionIdRegister = map[string]int32{
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
+	"json_array_append":              JSON_ARRAY_APPEND,
 	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,
@@ -1136,6 +1160,10 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
+	"esql_tvf_connect":               ESQL_TVF_CONNECT,
+	"esql_tvf_disconnect":            ESQL_TVF_DISCONNECT,
+	"sql_tvf_connect":                SQL_TVF_CONNECT,
+	"sql_tvf_disconnect":             SQL_TVF_DISCONNECT,
 	"uuid_v7":                        UUID,
 	"uuid_v1":                        UUID_V1,
 	"uuid_v4":                        UUID_V4,
@@ -1146,6 +1174,7 @@ var functionIdRegister = map[string]int32{
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,
+	"load_text":                      LOAD_TEXT,
 	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
@@ -1400,6 +1429,7 @@ var functionIdRegister = map[string]int32{
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
+	"l1_distance":       L1_DISTANCE,
 	"l2_distance":       L2_DISTANCE,
 	"l2_distance_xc":    L2_DISTANCE_XC,
 	"l2_distance_sq":    L2_DISTANCE_SQ,

@@ -23,9 +23,9 @@ update t1 set id2 = id;
 ALTER TABLE t1 DROP PRIMARY KEY, ADD PRIMARY KEY (id, id2);
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    idx1    1    name    A    0    NULL    NULL    YES                    YES    name
 t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
 t1    0    PRIMARY    2    id2    A    0    NULL    NULL                        YES    id2
+t1    1    idx1    1    name    A    0    NULL    NULL    YES                    YES    name
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `id` varchar(20) NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  `id2` varchar(20) NOT NULL,\n  PRIMARY KEY (`id`,`id2`),\n  KEY `idx1` (`name`)\n)
@@ -42,8 +42,8 @@ name    VARCHAR(255)    YES    MUL    null
 age    INT(32)    YES        null        
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    idx1    1    name    A    0    NULL    NULL    YES                    YES    name
 t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+t1    1    idx1    1    name    A    0    NULL    NULL    YES                    YES    name
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `id` varchar(20) NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx1` (`name`)\n)
@@ -88,8 +88,8 @@ idx3    MULTIPLE    __mo_alias_id
 alter table t1 drop column name;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    idx3    1    age    A    0    NULL    NULL    YES                    YES    age
 t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+t1    1    idx3    1    age    A    0    NULL    NULL    YES                    YES    age
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx3";
 name    type    column_name
 idx3    MULTIPLE    age
@@ -129,3 +129,21 @@ Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    C
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx4";
 name    type    column_name
 insert into t1 values(29);
+drop table if exists seq_idx;
+create table seq_idx(a int primary key, b int);
+alter table seq_idx add index idx_seq(b), drop index idx_seq;
+show create table seq_idx;
+Table    Create Table
+seq_idx    CREATE TABLE `seq_idx` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+create index idx_seq on seq_idx(b);
+alter table seq_idx drop index idx_seq, add index idx_seq(b), drop index idx_seq;
+show create table seq_idx;
+Table    Create Table
+seq_idx    CREATE TABLE `seq_idx` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+create index idx_seq on seq_idx(b);
+alter table seq_idx drop index idx_seq, drop index idx_seq;
+Can't DROP 'idx_seq'; check that column/key exists
+show create table seq_idx;
+Table    Create Table
+seq_idx    CREATE TABLE `seq_idx` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx_seq` (`b`)\n)
+drop table seq_idx;

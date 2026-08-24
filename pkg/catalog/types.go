@@ -47,6 +47,14 @@ const (
 	// remapping, unlike TbColToDataCol's original file-field indexes.
 	ExternalFilePathColId = ^uint64(0)
 
+	// ExternalQuery is the hidden column of ESQL/SQL foreign external tables
+	// (ENGINE = ESQL|SQL). The query text plays the role the file name plays
+	// for __mo_filepath: `__mo_query = '<text>'` predicates select what is sent
+	// to the foreign source, and every returned row carries the text of the
+	// query that produced it. See docs/cn/esql_sql_exttab.md.
+	ExternalQuery      = "__mo_query"
+	ExternalQueryColId = ^uint64(0) - 1
+
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 	// TableTailAttr are attrs in table tail
@@ -105,7 +113,24 @@ var InternalTableNames = map[string]int8{
 }
 
 func ContainExternalHidenCol(col string) bool {
+	// Only __mo_filepath is hidden globally BY NAME (pre-existing behavior).
+	// __mo_query is scoped: use IsForeignQueryCol (name + reserved ColId) so a
+	// real __mo_query column in a pre-existing schema keeps working.
 	return col == ExternalFilePath
+}
+
+// IsForeignQueryCol reports whether (name, colId) is the SYNTHETIC __mo_query
+// column of an ESQL/SQL foreign external scan, as opposed to a real user
+// column of the same name in a pre-existing schema (new schemas cannot create
+// one: see IsReservedExternalColName).
+func IsForeignQueryCol(name string, colId uint64) bool {
+	return name == ExternalQuery && colId == ExternalQueryColId
+}
+
+// IsReservedExternalColName reports whether a column name is reserved for the
+// synthetic external-scan columns and must be rejected at CREATE/ALTER.
+func IsReservedExternalColName(name string) bool {
+	return name == ExternalFilePath || name == ExternalQuery
 }
 
 func IsHiddenTable(name string) bool {
@@ -159,6 +184,11 @@ const (
 
 	// MO_SUBS subscriptions meta table
 	MO_SUBS = "mo_subs"
+
+	// MO_VIEW_DEPENDENCIES stores exact reverse bindings for persisted Views.
+	MO_VIEW_DEPENDENCIES = "mo_view_dependencies"
+	// MO_VIEW_REFRESH stores monotonic refresh state and worker leases.
+	MO_VIEW_REFRESH = "mo_view_refresh"
 
 	// MO_SNAPSHOTS
 	MO_SNAPSHOTS = "mo_snapshots"
@@ -420,6 +450,39 @@ const (
 	FullTextIndex_TabCol_Word     = "word"
 	FullTextIndex_TabCol_Id       = "doc_id"
 	FullTextIndex_TabCol_Position = "pos"
+
+	/************ 3c. FULLTEXT v2 (VERSION=2) Index **************/
+
+	// Fulltext v2 (CREATE FULLTEXT INDEX ... VERSION=2, the WAND positional engine)
+	// uses the same chunked storage + metadata layout as bm25 — segments are built
+	// and CDC-maintained, no postings table — as opposed to classic v1's single
+	// (word,doc_id,pos) postings table. The index stays algo="fulltext"; the version
+	// param selects the engine and these hidden tables. Values are <= 11 chars
+	// (IndexAlgoTableType varchar(11) limit), so "ftv2_*" not "fulltext2_*".
+	FullText2Index_TblType_Metadata = "ftv2_meta"
+	FullText2Index_TblType_Storage  = "ftv2_index"
+
+	FullText2Index_TblCol_Storage_Index_Id = "index_id"
+	FullText2Index_TblCol_Storage_Chunk_Id = "chunk_id"
+	FullText2Index_TblCol_Storage_Data     = "data"
+	FullText2Index_TblCol_Storage_Tag      = "tag"
+
+	FullText2Index_TblCol_Metadata_Index_Id  = "index_id"
+	FullText2Index_TblCol_Metadata_Timestamp = "timestamp"
+	FullText2Index_TblCol_Metadata_Checksum  = "checksum"
+	FullText2Index_TblCol_Metadata_Filesize  = "filesize"
+	FullText2Index_TblCol_Metadata_Recency   = "recency"
+	FullText2Index_TblCol_Metadata_Nrow      = "nrow"
+
+	// fulltext2_search TVF RESERVED output-column names. Unlike FullTextIndex_TabCol_Id
+	// ("doc_id", a PHYSICAL classic-index column), these are plan-level output ALIASES of
+	// the fulltext2_search TVF (its storage is segments, not a doc_id column). The covered
+	// fast path emits INCLUDE columns as sibling outputs and the runtime classifies the
+	// output batch BY NAME, so the pk/relevance outputs must use names no user INCLUDE
+	// column can equal — hence the reserved "__mo_ft_" prefix. Referenced by the coldef
+	// builders (tablefunc.go, apply_indices_fulltext2.go) and the classifier (fulltext2_search.go).
+	FullText2Search_OutCol_DocId = "__mo_ft_doc_id"
+	FullText2Search_OutCol_Score = "__mo_ft_score"
 
 	/************ 4. HNSW Index *************/
 

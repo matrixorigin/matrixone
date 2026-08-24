@@ -38,11 +38,12 @@ func buildEdge(parentNode *plan.Node, childNode *plan.Node, index int32) *models
 var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_UNKNOWN: "UnKnown Node",
 
-	plan2.Node_VALUE_SCAN:    "Values Scan",
-	plan2.Node_TABLE_SCAN:    "Table Scan",
-	plan2.Node_FUNCTION_SCAN: "Function Scan",
-	plan2.Node_EXTERNAL_SCAN: "External Scan",
-	plan2.Node_MATERIAL_SCAN: "Material Scan",
+	plan2.Node_VALUE_SCAN:        "Values Scan",
+	plan2.Node_TABLE_SCAN:        "Table Scan",
+	plan2.Node_FUNCTION_SCAN:     "Function Scan",
+	plan2.Node_EXTERNAL_SCAN:     "External Scan",
+	plan2.Node_MATERIAL_SCAN:     "Material Scan",
+	plan2.Node_VECTOR_INDEX_SCAN: "Vector Index Scan",
 
 	plan2.Node_PROJECT: "Project",
 
@@ -74,6 +75,9 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_INSERT:       "Insert",
 	plan2.Node_DELETE:       "Delete",
 	plan2.Node_MULTI_UPDATE: "Multi Update",
+	plan2.Node_POSTDML:      "Post DML",
+	plan2.Node_TABLE_CLONE:  "Table Clone",
+	plan2.Node_APPLY:        "Apply",
 
 	plan2.Node_LOCK_OP: "Lock Operator",
 

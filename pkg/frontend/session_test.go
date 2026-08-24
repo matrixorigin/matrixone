@@ -30,18 +30,24 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -49,6 +55,65 @@ import (
 type legacyZeroRunSQLTxnOperator struct {
 	client.TxnOperator
 	exited chan uint64
+}
+
+type preparedCursorResultStager struct {
+	nonNilBatches int
+	nilBatches    int
+	published     int
+	aborted       int
+}
+
+func (s *preparedCursorResultStager) Stage(_ *ExecCtx, _ *perfcounter.CounterSet, _ *batch.Batch) error {
+	s.nonNilBatches++
+	return nil
+}
+
+func (s *preparedCursorResultStager) FinishStage(_ *ExecCtx) error {
+	s.nilBatches++
+	return nil
+}
+
+func (s *preparedCursorResultStager) Publish(_ *ExecCtx) error {
+	s.published++
+	return nil
+}
+
+func (s *preparedCursorResultStager) Abort(_ *ExecCtx) error {
+	s.aborted++
+	return nil
+}
+
+func TestPreparedCursorOutputCallbackPreservesResultSaver(t *testing.T) {
+	saver := &preparedCursorResultStager{}
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{result: &MysqlResultSet{}}}
+	execCtx := &ExecCtx{
+		reqCtx:            context.Background(),
+		ses:               ses,
+		stmt:              &tree.Select{},
+		prepareStmt:       stmt,
+		input:             &UserInput{isCursorExecute: true},
+		cursorResultSaver: saver,
+	}
+	callback := ses.GetOutputCallback(execCtx)
+	empty := batch.NewWithSize(0)
+	empty.SetRowCount(0)
+	require.NoError(t, callback(empty, nil))
+	require.NoError(t, callback(nil, nil))
+	require.Equal(t, 1, saver.nonNilBatches)
+	require.Equal(t, 1, saver.nilBatches)
+
+	require.NoError(t, publishPreparedCursorQueryResult(execCtx))
+	require.Equal(t, 1, saver.published)
+	require.Nil(t, execCtx.cursorResultSaver)
+
+	// A second execution can stage a new result and must release it when the
+	// statement fails before the transaction is finalized.
+	execCtx.cursorResultSaver = saver
+	require.Error(t, abortPreparedCursorQueryResult(execCtx, context.Canceled))
+	require.Equal(t, 1, saver.aborted)
+	require.Nil(t, execCtx.cursorResultSaver)
 }
 
 func (op *legacyZeroRunSQLTxnOperator) EnterRunSqlWithTokenAndSQL(context.CancelFunc, string) uint64 {
@@ -693,12 +758,27 @@ func TestSession_Migrate(t *testing.T) {
 		defer bhStub.Reset()
 
 		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			DB:               "d1",
-			LastAffectedRows: 7,
+			DB:                      "d1",
+			LastAffectedRows:        7,
+			UserDefinedVarsExported: true,
+			UserDefinedVars: []*query.MigrateUserDefinedVar{
+				{
+					Name:             "ts0",
+					Value:            plan2.MakePlan2StringConstExprWithType("2026-08-07 04:20:01.123456"),
+					Sql:              "set @ts0 = (select updated_at from src limit 1)",
+					PrepareParamKind: uint32(vector.PrepareParamNone),
+				},
+				{
+					Name:  "mode",
+					Value: plan2.MakePlan2StringConstExprWithType("ONLY_FULL_GROUP_BY"),
+				},
+			},
+			SetVarStmts: []string{"set sql_mode = @mode"},
 			PrepareStmts: []*query.PrepareStmt{
 				{Name: "p1", SQL: `select ?`},
 				{Name: "p2", SQL: `select ?`},
@@ -710,6 +790,10 @@ func TestSession_Migrate(t *testing.T) {
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
+		userVar, getErr := s.GetUserDefinedVar("ts0")
+		require.NoError(t, getErr)
+		require.Equal(t, "2026-08-07 04:20:01.123456", userVar.Value)
+		require.Equal(t, "set @ts0 = (select updated_at from src limit 1)", userVar.Sql)
 		assert.Len(t, s.prepareStmts, 6)
 		for _, name := range []string{"a-b", "select", "a`b", "from"} {
 			assert.Contains(t, s.prepareStmts, name)
@@ -733,6 +817,323 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Nil(t, resp)
 		assert.Equal(t, int64(0), s.GetLastAffectedRows())
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
+	})
+
+	t.Run("typed user variables", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		source := genSession(ctrl, "d1", nil)
+		source.SetDatabaseName("d1")
+		source.SetLastAffectedRows(7)
+		require.NoError(t, source.SetUserDefinedVar("ts0", "2026-08-07 04:20:01.123456", "set @ts0 = (select updated_at from src limit 1)"))
+		// This models the source result of:
+		// SET @mode = 'ANSI_QUOTES';
+		// SET @@session.sql_mode = @mode, @mode = 'PIPES_AS_CONCAT';
+		// The target must keep the evaluated sql_mode rather than replaying the
+		// filtered system-variable statement against the final user-variable snapshot.
+		require.NoError(t, source.SetUserDefinedVar("mode", "PIPES_AS_CONCAT", "set @mode = 'PIPES_AS_CONCAT'"))
+		require.NoError(t, source.SetSessionSysVar(context.Background(), "sql_mode", "ANSI_QUOTES"))
+		for _, name := range []string{
+			"character_set_client", "character_set_connection", "character_set_results",
+		} {
+			require.NoError(t, source.SetSessionSysVar(context.Background(), name, "latin1"))
+		}
+		require.NoError(t, source.GetTxnHandler().setNextTxnIsolation(
+			context.Background(), txn.TxnIsolation_RC, false))
+		source.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, false)
+		routine := &Routine{mc: newMigrateController()}
+		routine.setSession(source)
+		exported := &query.MigrateConnFromResponse{}
+		require.NoError(t, routine.migrateConnectionFrom(exported))
+		require.True(t, exported.UserDefinedVarsExported)
+		require.True(t, exported.SystemVariablesExported)
+		require.False(t, exported.SystemVariablesReplayable)
+
+		target := genSession(ctrl, "d1", nil)
+		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			ConnID:      88,
+			DB:          exported.DB,
+			SetVarStmts: []string{"set sql_mode = @mode"},
+			PrepareStmts: append(exported.PrepareStmts, &query.PrepareStmt{
+				Name: "pending_isolation_prepare",
+				SQL:  "select ?",
+			}),
+			LastAffectedRows:        exported.LastAffectedRows,
+			UserDefinedVars:         exported.UserDefinedVars,
+			UserDefinedVarsExported: exported.UserDefinedVarsExported,
+			SystemVariables:         exported.SystemVariables,
+			SystemVariablesExported: exported.SystemVariablesExported,
+		}))
+		restored, err := target.GetUserDefinedVar("ts0")
+		require.NoError(t, err)
+		require.Equal(t, "2026-08-07 04:20:01.123456", restored.Value)
+		require.False(t, restored.Replayable)
+		restoredMode, err := target.GetUserDefinedVar("mode")
+		require.NoError(t, err)
+		require.Equal(t, "PIPES_AS_CONCAT", restoredMode.Value)
+		sqlMode, err := target.GetSessionSysVar("sql_mode")
+		require.NoError(t, err)
+		require.Equal(t, "ANSI_QUOTES", sqlMode)
+		for _, name := range []string{
+			"character_set_client", "character_set_connection", "character_set_results",
+		} {
+			charset, err := target.GetSessionSysVar(name)
+			require.NoError(t, err)
+			require.Equal(t, "latin1", charset)
+		}
+		nextIsolation, hasNextIsolation := target.GetTxnHandler().nextTxnIsolationSnapshot()
+		require.True(t, hasNextIsolation)
+		require.Equal(t, txn.TxnIsolation_RC, nextIsolation)
+		require.Equal(t, "d1", target.GetDatabaseName())
+		require.Equal(t, int64(7), target.GetLastAffectedRows())
+
+		invalidTarget := genSession(ctrl, "d1", nil)
+		err = Migrate(context.Background(), invalidTarget, &query.MigrateConnToRequest{
+			DB:                      "d1",
+			UserDefinedVarsExported: true,
+			UserDefinedVars:         []*query.MigrateUserDefinedVar{{Name: "mode", Value: plan2.MakePlan2StringConstExprWithType("PIPES_AS_CONCAT")}},
+			SystemVariablesExported: true,
+			SystemVariables:         []*query.MigrateSystemVariable{{Name: "sql_mode", Value: &plan.Expr{}}},
+		})
+		require.ErrorContains(t, err, "invalid user variable value")
+		_, err = invalidTarget.GetUserDefinedVar("mode")
+		require.ErrorContains(t, err, "does not exist")
+	})
+
+	t.Run("typed user variables require protocol v22", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		target := genSession(ctrl, "d1", nil)
+		targetRuntime := runtime.ServiceRuntime(target.proc.GetService())
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			DB:                      "d1",
+			UserDefinedVarsExported: true,
+			UserDefinedVars: []*query.MigrateUserDefinedVar{{
+				Name:  "ts0",
+				Value: plan2.MakePlan2StringConstExprWithType("stable-value"),
+			}},
+		})
+		require.ErrorContains(t, err, "requires protocol version 22")
+		_, getErr := target.GetUserDefinedVar("ts0")
+		require.ErrorContains(t, getErr, "does not exist")
+
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
+		err = Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			DB:                      "d1",
+			UserDefinedVarsExported: true,
+			UserDefinedVars: []*query.MigrateUserDefinedVar{{
+				Name:  "ts0",
+				Value: plan2.MakePlan2StringConstExprWithType("stable-value"),
+			}},
+		})
+		require.NoError(t, err, "typed variable migration remains available at version 22")
+		value, getErr := target.GetUserDefinedVar("ts0")
+		require.NoError(t, getErr)
+		require.Equal(t, "stable-value", value.Value)
+	})
+
+	t.Run("typed system variables preserve side effects", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		target := genSession(ctrl, "d1", nil)
+		targetRuntime := runtime.ServiceRuntime(target.service)
+		target.GetPrivilegeCache().add(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect)
+		target.GetPrivilegeCache().add(objectTypeTable, privilegeLevelDatabaseStar, "d1", "", PrivilegeTypeSelect)
+		require.True(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect))
+		require.True(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelDatabaseStar, "d1", "", PrivilegeTypeSelect))
+		oldRuntimeValues := make(map[string]interface{})
+		oldRuntimePresent := make(map[string]bool)
+		for _, name := range []string{
+			"optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter",
+		} {
+			oldRuntimeValues[name], oldRuntimePresent[name] = targetRuntime.GetGlobalVariables(name)
+			targetRuntime.SetGlobalVariables(name, "migration-side-effect-sentinel")
+		}
+		defer func() {
+			for name, value := range oldRuntimeValues {
+				if oldRuntimePresent[name] {
+					targetRuntime.SetGlobalVariables(name, value)
+				} else {
+					targetRuntime.CompareAndDeleteGlobalVariables(name, "migration-side-effect-sentinel")
+				}
+			}
+		}()
+
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			DB:                        "d1",
+			SystemVariablesExported:   true,
+			SystemVariablesReplayable: true,
+			SystemVariables: []*query.MigrateSystemVariable{
+				{Name: "optimizer_hints", Value: plan2.MakePlan2StringConstExprWithType("forceOneCN=1")},
+				{Name: "runtime_filter_limit_in", Value: plan2.MakePlan2Int64ConstExprWithType(77)},
+				{Name: "runtime_filter_limit_bloom_filter", Value: plan2.MakePlan2Int64ConstExprWithType(88)},
+				{Name: "disable_agg_statement", Value: plan2.MakePlan2BoolConstExprWithType(true)},
+				{Name: "clear_privilege_cache", Value: plan2.MakePlan2BoolConstExprWithType(true)},
+				{Name: "enable_privilege_cache", Value: plan2.MakePlan2BoolConstExprWithType(false)},
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, target.hasUnreplayableMigrationSystemVars())
+
+		for name, expected := range map[string]interface{}{
+			"optimizer_hints":                   "forceOneCN=1",
+			"runtime_filter_limit_in":           int64(77),
+			"runtime_filter_limit_bloom_filter": int64(88),
+		} {
+			value, ok := targetRuntime.GetGlobalVariables(name)
+			require.True(t, ok, name)
+			require.Equal(t, expected, value, name)
+		}
+		require.True(t, target.disableAgg)
+		clearPrivilegeCache, err := target.GetSessionSysVar("clear_privilege_cache")
+		require.NoError(t, err)
+		require.Equal(t, int8(1), clearPrivilegeCache)
+		enablePrivilegeCache, err := target.GetSessionSysVar("enable_privilege_cache")
+		require.NoError(t, err)
+		require.Equal(t, int8(0), enablePrivilegeCache)
+		require.False(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect))
+		require.False(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelDatabaseStar, "d1", "", PrivilegeTypeSelect))
+	})
+
+	t.Run("typed system variables invalidate privilege cache after toggle-back", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		target := genSession(ctrl, "d1", nil)
+		target.GetPrivilegeCache().add(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect)
+		require.True(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect))
+
+		// The source can execute SET ...=0/1 (or 1/0), which invalidates its
+		// cache on the edge and then leaves the final value at the safe side.
+		// Typed migration carries only final values, so the target must
+		// invalidate when restoring either cache-control variable.
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			DB:                        "d1",
+			SystemVariablesExported:   true,
+			SystemVariablesReplayable: true,
+			SystemVariables: []*query.MigrateSystemVariable{
+				{Name: "clear_privilege_cache", Value: plan2.MakePlan2BoolConstExprWithType(false)},
+				{Name: "enable_privilege_cache", Value: plan2.MakePlan2BoolConstExprWithType(true)},
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect))
+	})
+
+	t.Run("typed system variables preserve transaction flags and runtime scope", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		source := genSession(ctrl, "d1", nil)
+		source.gSysVars = &SystemVariables{mp: map[string]interface{}{
+			"optimizer_hints": "global-hint",
+			"autocommit":      int64(1),
+		}}
+		source.sesSysVars = &SystemVariables{mp: map[string]interface{}{
+			"optimizer_hints": "inherited-before-global-set",
+			"autocommit":      int64(0),
+		}}
+		runtime.ServiceRuntime(sid).SetGlobalVariables("optimizer_hints", "global-hint")
+		exported, err := source.snapshotSessionSystemVars(context.Background())
+		require.NoError(t, err)
+		var optimizerSnapshot *query.MigrateSystemVariable
+		for _, variable := range exported {
+			if variable.Name == "optimizer_hints" {
+				optimizerSnapshot = variable
+				break
+			}
+		}
+		require.NotNil(t, optimizerSnapshot)
+		require.NotNil(t, optimizerSnapshot.RuntimeValue)
+
+		runtime.ServiceRuntime(sid).SetGlobalVariables("optimizer_hints", "target-sentinel")
+		target := genSession(ctrl, "d1", nil)
+		target.gSysVars = &SystemVariables{mp: map[string]interface{}{
+			"optimizer_hints": "target-global",
+			"autocommit":      int64(1),
+		}}
+		target.sesSysVars = target.gSysVars.Clone()
+		target.GetTxnHandler().setAutocommitOn()
+		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
+
+		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			SystemVariablesExported: true,
+			SystemVariables:         exported,
+		}))
+		value, err := target.GetSessionSysVar("optimizer_hints")
+		require.NoError(t, err)
+		require.Equal(t, "inherited-before-global-set", value)
+		runtimeValue, ok := runtime.ServiceRuntime(sid).GetGlobalVariables("optimizer_hints")
+		require.True(t, ok)
+		require.Equal(t, "global-hint", runtimeValue)
+
+		autocommit, err := target.GetSessionSysVar("autocommit")
+		require.NoError(t, err)
+		require.Equal(t, int8(0), autocommit)
+		require.False(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
+		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT))
+		require.Equal(t, uint16(0), target.GetTxnHandler().GetServerStatus()&SERVER_STATUS_AUTOCOMMIT)
 	})
 
 	t.Run("reject user-level locks", func(t *testing.T) {
@@ -1024,6 +1425,137 @@ func TestSessionTempTableMap(t *testing.T) {
 	assert.Equal(t, uint64(4), ses.GetTempTableVersion())
 	ses.RemoveTempTable("db1", "alias")
 	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
+}
+
+func TestSessionTempTableTransactionJournal(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{
+			tempTables:    make(map[string]string),
+			tempTablesRev: make(map[string]string),
+		}
+	}
+
+	t.Run("statement rollback restores only that statement", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "existing", "real-existing", "", "")
+		ses.addTempTable("db", "created", "real-created", "txn", "stmt-1")
+		ses.commitTempTableStatement("txn", "stmt-1")
+		ses.removeTempTable("db", "existing", "txn", "stmt-2")
+
+		ses.rollbackTempTableStatement("txn", "stmt-2")
+
+		realName, ok := ses.GetTempTable("db", "existing")
+		require.True(t, ok)
+		require.Equal(t, "real-existing", realName)
+		realName, ok = ses.GetTempTable("db", "created")
+		require.True(t, ok)
+		require.Equal(t, "real-created", realName)
+	})
+
+	t.Run("transaction rollback restores its original aliases", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "existing", "real-existing", "", "")
+		ses.addTempTable("db", "created", "real-created", "txn", "stmt-1")
+		ses.commitTempTableStatement("txn", "stmt-1")
+		ses.removeTempTableByRealName("real-existing", "txn", "stmt-2")
+		ses.commitTempTableStatement("txn", "stmt-2")
+
+		ses.rollbackTempTableTransaction("txn")
+
+		realName, ok := ses.GetTempTable("db", "existing")
+		require.True(t, ok)
+		require.Equal(t, "real-existing", realName)
+		_, ok = ses.GetTempTable("db", "created")
+		require.False(t, ok)
+		require.Empty(t, ses.tempTableTxnJournals)
+	})
+
+	t.Run("transaction commit preserves its aliases", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "created", "real-created", "txn", "stmt")
+		ses.commitTempTableStatement("txn", "stmt")
+
+		ses.commitTempTableTransaction("txn")
+
+		realName, ok := ses.GetTempTable("db", "created")
+		require.True(t, ok)
+		require.Equal(t, "real-created", realName)
+		require.Empty(t, ses.tempTableTxnJournals)
+	})
+
+	t.Run("transaction generations restore only aliases they own", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "first", "real-first", "txn-1", "stmt-1")
+		ses.addTempTable("db", "second", "real-second", "txn-2", "stmt-2")
+		ses.commitTempTableStatement("txn-2", "stmt-2")
+		ses.commitTempTableTransaction("txn-2")
+
+		ses.rollbackTempTableTransaction("txn-1")
+
+		_, ok := ses.GetTempTable("db", "first")
+		require.False(t, ok)
+		realName, ok := ses.GetTempTable("db", "second")
+		require.True(t, ok)
+		require.Equal(t, "real-second", realName)
+	})
+}
+
+type sessionCloseExecutor struct {
+	sql  string
+	opts executor.Options
+	done chan struct{}
+}
+
+func (e *sessionCloseExecutor) Exec(
+	ctx context.Context, sql string, opts executor.Options,
+) (executor.Result, error) {
+	e.sql, e.opts = sql, opts
+	close(e.done)
+	return executor.Result{}, nil
+}
+
+func (e *sessionCloseExecutor) ExecTxn(
+	context.Context, func(executor.TxnExecutor) error, executor.Options,
+) error {
+	return nil
+}
+
+func TestSessionCloseDropsTemporaryTablesAsOwningTenant(t *testing.T) {
+	const service = "session-close-temp-table"
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	InitServerLevelVars(service)
+	setPu(service, config.NewParameterUnit(sv, nil, nil, nil))
+	runtime.SetupServiceBasedRuntime(service, runtime.DefaultRuntime())
+	exec := &sessionCloseExecutor{done: make(chan struct{})}
+	runtime.ServiceRuntime(service).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+
+	proto := &testMysqlWriter{}
+	ses := NewSession(context.Background(), service, proto, nil)
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant: "tenant", TenantID: 42,
+		User: "admin", UserID: 7,
+		DefaultRole: "accountadmin", DefaultRoleID: 9,
+	})
+	ses.AddTempTable("db`name", "alias", "physical`table")
+	ses.Close()
+
+	select {
+	case <-exec.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("temporary table cleanup did not run")
+	}
+	require.Equal(t,
+		"DROP TABLE IF EXISTS "+sqlquote.QualifiedIdent("db`name", "physical`table"),
+		exec.sql,
+	)
+	require.Equal(t, uint32(42), exec.opts.AccountID())
+	require.True(t, exec.opts.HasAccountID())
+	statementOpts := exec.opts.StatementOption()
+	require.True(t, statementOpts.HasAccountID())
+	require.Equal(t, uint32(42), statementOpts.AccountID())
+	require.Equal(t, uint32(7), statementOpts.UserID())
+	require.Equal(t, uint32(9), statementOpts.RoleID())
 }
 
 func TestRemoveAllPrepareStmts(t *testing.T) {

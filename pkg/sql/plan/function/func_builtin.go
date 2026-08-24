@@ -73,11 +73,41 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	return nil
 }
 
+// ToInterval normalizes dynamic string interval values per row. Invalid values
+// become NULL, matching DATE_ADD/DATE_SUB invalid-interval behavior.
+func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	values := vector.GenerateFunctionStrParameter(ivecs[0])
+	units := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := values.GetStrValue(i)
+		unit, unitNull := units.GetValue(i)
+		if valueNull || unitNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		number, _, err := types.NormalizeInterval(string(value), types.IntervalType(unit))
+		if err != nil {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.Append(number, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 
-	// TODO: not a good way to solve this problem. and will be fixed by file `specialRule.go`
-	scale := int32(6)
+	// MySQL defaults omitted fractional-seconds precision to zero. An explicit
+	// FSP is supplied as the single argument and overrides this below.
+	scale := int32(0)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
@@ -100,7 +130,9 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 
-	scale := int32(6)
+	// SYSDATE() follows the same default FSP=0 rule as NOW() and
+	// CURRENT_TIMESTAMP(); an explicit argument still selects 0..6.
+	scale := int32(0)
 	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
@@ -372,6 +404,17 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
 				ret = geometryShowColumnType(typ)
+			} else if typ.Oid == types.T_text {
+				switch typ.Width {
+				case types.MaxTinyTextLen:
+					ret = "TINYTEXT"
+				case types.MaxMediumTextLen:
+					ret = "MEDIUMTEXT"
+				case types.MaxLongTextLen:
+					ret = "LONGTEXT"
+				default:
+					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				}
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
@@ -609,6 +652,12 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
+			if typ.Oid == types.T_text {
+				if err := rs.Append(internalTextMetadataLength(typ), false); err != nil {
+					return err
+				}
+				continue
+			}
 			if typ.Oid.IsMySQLString() {
 				if err := rs.Append(int64(typ.Width), false); err != nil {
 					return err
@@ -638,11 +687,19 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 				return err
 			}
 			switch typ.Oid {
-			case types.T_char, types.T_varchar, types.T_text:
+			case types.T_char, types.T_varchar:
 				// Width is measured in characters for character strings. The
 				// information schema needs the maximum encoded byte length, not
 				// the size of MatrixOne's internal Varlena storage slot.
 				if err := rs.Append(int64(typ.Width)*utf8.UTFMax, false); err != nil {
+					return err
+				}
+				continue
+			case types.T_text:
+				// MySQL TEXT-family limits are byte limits. Width zero is
+				// MatrixOne's persisted marker for ordinary TEXT, not a zero-byte
+				// column, so expose the MySQL-compatible 64 KiB catalog bound.
+				if err := rs.Append(internalTextMetadataLength(typ), false); err != nil {
 					return err
 				}
 				continue
@@ -659,6 +716,13 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 		}
 	}
 	return nil
+}
+
+func internalTextMetadataLength(typ types.Type) int64 {
+	if typ.Width > 0 {
+		return int64(typ.Width)
+	}
+	return int64(types.MaxStringSize)
 }
 
 func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1581,7 +1645,10 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
 		// and there is no documentation about the limit of the result length.
 		sourceLen := int64(len(base))
-		if sourceLen*n > types.MaxVarcharLen {
+		if sourceLen == 0 {
+			return "", false
+		}
+		if n > types.MaxVarcharLen/sourceLen {
 			return "", true
 		}
 		return strings.Repeat(base, int(n)), false
@@ -2277,8 +2344,8 @@ func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
 }
 
 func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[int64](result)
 	if len(parameters) == 0 {
+		rs := vector.MustFunctionResult[int64](result)
 		val := types.CurrentTimestamp().Unix()
 		for i := uint64(0); i < uint64(length); i++ {
 			if err := rs.Append(val, false); err != nil {
@@ -2289,6 +2356,27 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	}
 
 	p1 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[0])
+	if result.GetResultVector().GetType().Oid == types.T_decimal128 {
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		var zero types.Decimal128
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			unixMicro := int64(v1) - int64(types.UnixToTimestamp(0))
+			if v1 == types.ZeroTimestamp || unixMicro < 0 || null1 {
+				if err := rs.Append(zero, true); err != nil {
+					return err
+				}
+			} else {
+				val := types.Decimal128{B0_63: uint64(unixMicro), B64_127: 0}
+				if err := rs.Append(val, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		val := v1.Unix()

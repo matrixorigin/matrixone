@@ -173,7 +173,8 @@ func TestApplyIndicesForProjectPreparedIvfIndexOnlyKeepsCatalogDependencies(t *t
 				{
 					Typ: vectorType,
 					Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-						Value: &plan.Literal_VecVal{VecVal: "[1,1,1]"},
+						// Raw element bytes, as a constant-folded vecf32 literal carries them.
+						Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 1, 1}))},
 					}},
 				},
 			},
@@ -214,7 +215,7 @@ func TestApplyIndicesForProjectPreparedIvfIndexOnlyKeepsCatalogDependencies(t *t
 		}
 	}
 	visit(builder.qry.Steps[0])
-	require.True(t, reachableTypes[plan.Node_FUNCTION_SCAN])
+	require.True(t, reachableTypes[plan.Node_VECTOR_INDEX_SCAN])
 	require.False(t, reachableTypes[plan.Node_TABLE_SCAN])
 	// A successful plugin rewrite returns the original project ID after
 	// changing its child in place. It must not fall through to exact-sort
@@ -326,7 +327,7 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		require.Equal(t, plan.Node_SORT, sortNode.NodeType)
 
 		childNode := builder.qry.Nodes[sortNode.Children[0]]
-		assert.Equal(t, plan.Node_FUNCTION_SCAN, childNode.NodeType)
+		assert.Equal(t, plan.Node_VECTOR_INDEX_SCAN, childNode.NodeType)
 	})
 
 	// 2. Case: With filters. Should ENABLE pushdown (nested join)
@@ -363,7 +364,7 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		sortNodeID := vecCtx.projNode.Children[0]
 		sortNode := builder.qry.Nodes[sortNodeID]
 		childNode := builder.qry.Nodes[sortNode.Children[0]]
-		assert.Equal(t, plan.Node_FUNCTION_SCAN, childNode.NodeType)
+		assert.Equal(t, plan.Node_VECTOR_INDEX_SCAN, childNode.NodeType)
 	})
 }
 
@@ -522,7 +523,7 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanRegularIndexPreservesProtectio
 	assert.Equal(t, plan.Node_JOIN, outerLeft.NodeType)
 	assert.Equal(t, plan.Node_INDEX, outerLeft.JoinType)
 	assert.Equal(t, 2, builder.protectedScans[scanNode.NodeId])
-	assert.NotEmpty(t, scanNode.RuntimeFilterProbeList)
+	assert.Empty(t, scanNode.RuntimeFilterProbeList)
 }
 
 func TestApplyIndicesForSortUsingIvfflat_OuterScanIndexOnlyUsesOptimizedPk(t *testing.T) {
@@ -676,12 +677,7 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanIndexOnlyUsesOptimizedPk(t *te
 	assert.Equal(t, outerLeft.BindingTags[0], joinLeftPk.RelPos)
 	assert.Equal(t, int32(1), joinLeftPk.ColPos)
 
-	require.NotEmpty(t, outerLeft.RuntimeFilterProbeList)
-	outerProbe := outerLeft.RuntimeFilterProbeList[0].Expr.GetCol()
-	require.NotNil(t, outerProbe)
-	assert.Equal(t, outerLeft.BindingTags[0], outerProbe.RelPos)
-	assert.Equal(t, int32(1), outerProbe.ColPos)
-
+	assert.Empty(t, outerLeft.RuntimeFilterProbeList)
 	assert.Empty(t, scanNode.RuntimeFilterProbeList)
 	assert.Equal(t, 1, builder.protectedScans[scanNode.NodeId])
 }

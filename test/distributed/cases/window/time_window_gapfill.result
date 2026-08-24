@@ -12,7 +12,7 @@ select pump, _wstart, _wend, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  2026-01-01 10:01:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  2026-01-01 10:02:00  ¦  null  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  2026-01-01 10:03:00  ¦  3  𝄀
@@ -24,7 +24,7 @@ select pump, _wstart, coalesce(count(*), 0) as reading_count
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(null)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  reading_count[-5,64,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  reading_count[-5,64,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  0  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  1  𝄀
@@ -36,7 +36,7 @@ select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(value, 99)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  99  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
@@ -48,7 +48,7 @@ select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(prev)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
@@ -60,7 +60,7 @@ select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(next)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  3  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
@@ -72,7 +72,7 @@ select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(linear)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  2  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
@@ -80,16 +80,167 @@ p2  ¦  2026-01-01 11:00:00  ¦  7  𝄀
 p3  ¦  2026-01-01 23:59:00  ¦  10  𝄀
 p3  ¦  2026-01-02 00:00:00  ¦  20  𝄀
 p3  ¦  2026-01-02 00:01:00  ¦  30
+create table linear_readings(series_id int, ts datetime, value int);
+insert into linear_readings values
+(1, '2026-03-01 00:00:00', 100),
+(1, '2026-03-01 00:03:00', 130),
+(1, '2026-03-01 00:04:00', 140);
+select _wstart, sum(value) as value_sum
+from linear_readings
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by _wstart;
+➤ _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+2026-03-01 00:00:00  ¦  100  𝄀
+2026-03-01 00:01:00  ¦  110  𝄀
+2026-03-01 00:02:00  ¦  120  𝄀
+2026-03-01 00:03:00  ¦  130  𝄀
+2026-03-01 00:04:00  ¦  140
+drop table linear_readings;
+create table linear_decimal256(series_id int, ts datetime, value decimal(65,0));
+insert into linear_decimal256 values
+(1, '2026-03-02 00:00:00', 100),
+(1, '2026-03-02 00:03:00', 130);
+select _wstart, max(value) as value_max
+from linear_decimal256
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by _wstart;
+➤ _wstart[93,64,0]  ¦  value_max[3,65,0]  𝄀
+2026-03-02 00:00:00  ¦  100  𝄀
+2026-03-02 00:01:00  ¦  110  𝄀
+2026-03-02 00:02:00  ¦  120  𝄀
+2026-03-02 00:03:00  ¦  130
+drop table linear_decimal256;
 select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) fill(null)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[-5,64,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  value_sum[-5,64,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
 p2  ¦  2026-01-01 11:00:00  ¦  7  𝄀
 p3  ¦  2026-01-01 23:59:00  ¦  10  𝄀
 p3  ¦  2026-01-02 00:01:00  ¦  30
+set time_zone = '+00:00';
+create table hf_readings(
+device_id bigint,
+event_ts timestamp(6),
+event_dt datetime(6),
+value int
+);
+insert into hf_readings values
+(1, '2026-08-12 10:00:00.000100', '2026-08-12 10:00:00.000100', 10),
+(1, '2026-08-12 10:00:00.000900', '2026-08-12 10:00:00.000900', 20),
+(1, '2026-08-12 10:00:00.001100', '2026-08-12 10:00:00.001100', 30),
+(2, '2026-08-12 10:00:00.000150', '2026-08-12 10:00:00.000150', 40),
+(2, '2026-08-12 10:00:00.001250', '2026-08-12 10:00:00.001250', 60);
+select device_id, _wstart, _wend, count(*) as row_count, avg(value) as avg_value
+from hf_readings
+group by device_id interval(event_ts, 1000, microsecond)
+order by device_id, _wstart;
+➤ device_id[-5,64,0]  ¦  _wstart[93,64,6]  ¦  _wend[93,64,6]  ¦  row_count[-5,64,0]  ¦  avg_value[8,53,31]  𝄀
+1  ¦  2026-08-12 10:00:00  ¦  2026-08-12 10:00:00.001000000  ¦  2  ¦  15.0  𝄀
+1  ¦  2026-08-12 10:00:00.001000000  ¦  2026-08-12 10:00:00.002000000  ¦  1  ¦  30.0  𝄀
+2  ¦  2026-08-12 10:00:00  ¦  2026-08-12 10:00:00.001000000  ¦  1  ¦  40.0  𝄀
+2  ¦  2026-08-12 10:00:00.001000000  ¦  2026-08-12 10:00:00.002000000  ¦  1  ¦  60.0
+select device_id, _wstart, _wend, count(*) as row_count, avg(value) as avg_value
+from hf_readings
+where device_id = 1
+group by device_id interval(event_ts, 1000, microsecond) sliding(500, microsecond)
+order by device_id, _wstart;
+➤ device_id[-5,64,0]  ¦  _wstart[93,64,6]  ¦  _wend[93,64,6]  ¦  row_count[-5,64,0]  ¦  avg_value[8,53,31]  𝄀
+1  ¦  2026-08-12 10:00:00  ¦  2026-08-12 10:00:00.001000000  ¦  2  ¦  15.0  𝄀
+1  ¦  2026-08-12 10:00:00.000500000  ¦  2026-08-12 10:00:00.001500000  ¦  2  ¦  25.0  𝄀
+1  ¦  2026-08-12 10:00:00.001000000  ¦  2026-08-12 10:00:00.002000000  ¦  1  ¦  30.0
+select device_id, _wstart, _wend, sum(value) as value_sum
+from hf_readings
+where device_id = 2
+group by device_id interval(event_dt, 500, microsecond) gapfill(partition) fill(value, -1)
+order by device_id, _wstart;
+➤ device_id[-5,64,0]  ¦  _wstart[93,64,6]  ¦  _wend[93,64,6]  ¦  value_sum[3,38,0]  𝄀
+2  ¦  2026-08-12 10:00:00  ¦  2026-08-12 10:00:00.000500000  ¦  40  𝄀
+2  ¦  2026-08-12 10:00:00.000500000  ¦  2026-08-12 10:00:00.001000000  ¦  -1  𝄀
+2  ¦  2026-08-12 10:00:00.001000000  ¦  2026-08-12 10:00:00.001500000  ¦  60
+create table hf_scale_boundaries(
+id int,
+ts0 datetime,
+ts3 datetime(3),
+ts6 datetime(6)
+);
+insert into hf_scale_boundaries values
+(1, '2026-08-12 10:00:00', '2026-08-12 10:00:00.123', '2026-08-12 10:00:00.123456');
+select 'dt0' as scale_case, _wstart, _wend, timestampdiff(microsecond, _wstart, _wend) as width_us
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts0, 1, microsecond)
+order by _wstart;
+➤ scale_case[12,3,0]  ¦  _wstart[93,64,6]  ¦  _wend[93,64,6]  ¦  width_us[-5,64,0]  𝄀
+dt0  ¦  2026-08-12 10:00:00  ¦  2026-08-12 10:00:00.000001000  ¦  1
+select 'dt3' as scale_case, _wstart, _wend, timestampdiff(microsecond, _wstart, _wend) as width_us
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts3, 1, microsecond)
+order by _wstart;
+➤ scale_case[12,3,0]  ¦  _wstart[93,64,6]  ¦  _wend[93,64,6]  ¦  width_us[-5,64,0]  𝄀
+dt3  ¦  2026-08-12 10:00:00.123000000  ¦  2026-08-12 10:00:00.123001000  ¦  1
+select 'dt6' as scale_case, _wstart, _wend, timestampdiff(microsecond, _wstart, _wend) as width_us
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts6, 1, microsecond)
+order by _wstart;
+➤ scale_case[12,3,0]  ¦  _wstart[93,64,6]  ¦  _wend[93,64,6]  ¦  width_us[-5,64,0]  𝄀
+dt6  ¦  2026-08-12 10:00:00.123456000  ¦  2026-08-12 10:00:00.123457000  ¦  1
+create table hf_scale_materialized as
+select _wstart, _wend, count(*) as row_count
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts0, 1, microsecond);
+select column_name, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'hf_scale_materialized'
+and column_name in ('_wstart', '_wend')
+order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  column_type[12,-1,0]  𝄀
+_wstart  ¦  DATETIME(6)  𝄀
+_wend  ¦  DATETIME(6)
+drop table hf_scale_materialized;
+drop table hf_scale_boundaries;
+drop table hf_readings;
+set time_zone = 'SYSTEM';
+create table bounded_readings(device varchar(8), event_ts datetime, value int);
+insert into bounded_readings values
+('d1', '2026-01-01 00:02:10', 20),
+('d1', '2026-01-01 00:04:20', 40),
+('d2', '2026-01-01 00:01:30', 7);
+select device, _wstart, _wend, sum(value) as value_sum
+from bounded_readings
+where event_ts >= '2026-01-01 00:00:00'
+and event_ts <  '2026-01-01 00:06:00'
+group by device interval(event_ts, 1, minute) gapfill(partition) fill(value, 0)
+order by device, _wstart;
+➤ device[12,-1,0]  ¦  _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+d1  ¦  2026-01-01 00:00:00  ¦  2026-01-01 00:01:00  ¦  0  𝄀
+d1  ¦  2026-01-01 00:01:00  ¦  2026-01-01 00:02:00  ¦  0  𝄀
+d1  ¦  2026-01-01 00:02:00  ¦  2026-01-01 00:03:00  ¦  20  𝄀
+d1  ¦  2026-01-01 00:03:00  ¦  2026-01-01 00:04:00  ¦  0  𝄀
+d1  ¦  2026-01-01 00:04:00  ¦  2026-01-01 00:05:00  ¦  40  𝄀
+d1  ¦  2026-01-01 00:05:00  ¦  2026-01-01 00:06:00  ¦  0  𝄀
+d2  ¦  2026-01-01 00:00:00  ¦  2026-01-01 00:01:00  ¦  0  𝄀
+d2  ¦  2026-01-01 00:01:00  ¦  2026-01-01 00:02:00  ¦  7  𝄀
+d2  ¦  2026-01-01 00:02:00  ¦  2026-01-01 00:03:00  ¦  0  𝄀
+d2  ¦  2026-01-01 00:03:00  ¦  2026-01-01 00:04:00  ¦  0  𝄀
+d2  ¦  2026-01-01 00:04:00  ¦  2026-01-01 00:05:00  ¦  0  𝄀
+d2  ¦  2026-01-01 00:05:00  ¦  2026-01-01 00:06:00  ¦  0
+select _wstart, _wend, sum(value) as value_sum
+from bounded_readings
+where event_ts >= '2026-01-02 00:00:00'
+and event_ts <  '2026-01-02 00:03:00'
+interval(event_ts, 1, minute) gapfill(partition) fill(null)
+order by _wstart;
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+2026-01-02 00:00:00  ¦  2026-01-02 00:01:00  ¦  null  𝄀
+2026-01-02 00:01:00  ¦  2026-01-02 00:02:00  ¦  null  𝄀
+2026-01-02 00:02:00  ¦  2026-01-02 00:03:00  ¦  null
+drop table bounded_readings;
 create table boundary_readings(pump varchar(8), ts datetime, value int);
 insert into boundary_readings values
 ('p8193', '2026-01-01 00:00:00', 1),
@@ -104,7 +255,7 @@ group by pump interval(ts, 1, minute) gapfill(partition)
 ) as windows
 group by pump
 order by pump;
-➤ pump[12,-1,0]  ¦  row_count[-5,64,0]  ¦  distinct_windows[-5,64,0]  𝄀
+➤ pump[12,6,0]  ¦  row_count[-5,64,0]  ¦  distinct_windows[-5,64,0]  𝄀
 p8193  ¦  8194  ¦  8194  𝄀
 p8194  ¦  8195  ¦  8195
 select pump, count(*) as row_count, count(distinct _wstart) as distinct_windows
@@ -115,8 +266,114 @@ group by pump interval(ts, 1, minute) gapfill(partition) fill(next)
 ) as windows
 group by pump
 order by pump;
-➤ pump[12,-1,0]  ¦  row_count[-5,64,0]  ¦  distinct_windows[-5,64,0]  𝄀
+➤ pump[12,6,0]  ¦  row_count[-5,64,0]  ¦  distinct_windows[-5,64,0]  𝄀
 p8193  ¦  8194  ¦  8194  𝄀
 p8194  ¦  8195  ¦  8195
 drop table boundary_readings;
+set time_zone = '+08:00';
+create table boundary_type_dt(k int, event_ts datetime, value int);
+insert into boundary_type_dt values (1, '2026-01-01 00:00:01', 1);
+select _wstart, count(*) as c
+from boundary_type_dt
+group by k interval(event_ts, 1, minute);
+➤ _wstart[93,64,0]  ¦  c[-5,64,0]  𝄀
+2026-01-01 00:00:00  ¦  1
+select min(ws), max(ws)
+from (
+select _wstart as ws, count(*) as c
+from boundary_type_dt
+group by k interval(event_ts, 1, minute)
+) as x;
+➤ min(ws)[93,64,0]  ¦  max(ws)[93,64,0]  𝄀
+2026-01-01 00:00:00  ¦  2026-01-01 00:00:00
+create table boundary_type_rollup_dt as
+select _wstart as ws, count(*) as c
+from boundary_type_dt
+group by k interval(event_ts, 1, minute);
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'boundary_type_rollup_dt'
+and column_name in ('ws', 'c')
+order by ordinal_position;
+➤ column_name[12,192,0]  ¦  data_type[12,49151,0]  ¦  column_type[12,49151,0]  𝄀
+ws  ¦  datetime  ¦  DATETIME(0)  𝄀
+c  ¦  bigint  ¦  BIGINT(0)
+select ws from boundary_type_rollup_dt;
+➤ ws[93,64,0]  𝄀
+2026-01-01 00:00:00
+create table boundary_type_date(k int, event_d date, value int);
+insert into boundary_type_date values (1, '2026-01-01', 1);
+select _wstart, _wend, count(*) as c
+from boundary_type_date
+group by k interval(event_d, 1, minute);
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  c[-5,64,0]  𝄀
+2026-01-01 00:00:00  ¦  2026-01-01 00:01:00  ¦  1
+select min(ws), max(ws)
+from (
+select _wstart as ws, count(*) as c
+from boundary_type_date
+group by k interval(event_d, 1, minute)
+) as x;
+➤ min(ws)[93,64,0]  ¦  max(ws)[93,64,0]  𝄀
+2026-01-01 00:00:00  ¦  2026-01-01 00:00:00
+create table boundary_type_rollup_date as
+select _wstart as ws, _wend as we, count(*) as c
+from boundary_type_date
+group by k interval(event_d, 1, minute);
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'boundary_type_rollup_date'
+and column_name in ('ws', 'we', 'c')
+order by ordinal_position;
+➤ column_name[12,192,0]  ¦  data_type[12,49151,0]  ¦  column_type[12,49151,0]  𝄀
+ws  ¦  datetime  ¦  DATETIME(0)  𝄀
+we  ¦  datetime  ¦  DATETIME(0)  𝄀
+c  ¦  bigint  ¦  BIGINT(0)
+select ws, we from boundary_type_rollup_date;
+➤ ws[93,64,0]  ¦  we[93,64,0]  𝄀
+2026-01-01 00:00:00  ¦  2026-01-01 00:01:00
+create table boundary_type_ts(k int, event_ts timestamp, value int);
+insert into boundary_type_ts values (1, '2026-01-01 00:00:01', 1);
+set time_zone = '+08:00';
+create table gapfill_timezone_ts(k int, event_ts timestamp, value int);
+insert into gapfill_timezone_ts values
+(1, '2026-01-01 10:00:01', 1),
+(1, '2026-01-03 10:00:01', 3);
+select _wstart, _wend, sum(value) as value_sum
+from gapfill_timezone_ts
+group by k interval(event_ts, 1, day) gapfill(partition)
+order by _wstart;
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+2026-01-01 00:00:00  ¦  2026-01-02 00:00:00  ¦  1  𝄀
+2026-01-02 00:00:00  ¦  2026-01-03 00:00:00  ¦  null  𝄀
+2026-01-03 00:00:00  ¦  2026-01-04 00:00:00  ¦  3
+select _wstart, sum(value) as value_sum
+from gapfill_timezone_ts
+group by k interval(event_ts, 1, day) gapfill(partition) fill(value, 99)
+order by _wstart;
+➤ _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+2026-01-01 00:00:00  ¦  1  𝄀
+2026-01-02 00:00:00  ¦  99  𝄀
+2026-01-03 00:00:00  ¦  3
+select _wstart, _wend, sum(value) as value_sum
+from gapfill_timezone_ts
+group by k interval(event_ts, 1, day)
+order by _wstart;
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[-5,64,0]  𝄀
+2026-01-01 00:00:00  ¦  2026-01-02 00:00:00  ¦  1  𝄀
+2026-01-03 00:00:00  ¦  2026-01-04 00:00:00  ¦  3
+drop table gapfill_timezone_ts;
+create table boundary_type_rollup_ts as
+select _wstart as ws, count(*) as c
+from boundary_type_ts
+group by k interval(event_ts, 1, minute);
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'boundary_type_rollup_ts'
+and column_name in ('ws', 'c')
+order by ordinal_position;
+➤ column_name[12,192,0]  ¦  data_type[12,49151,0]  ¦  column_type[12,49151,0]  𝄀
+ws  ¦  timestamp  ¦  TIMESTAMP(0)  𝄀
+c  ¦  bigint  ¦  BIGINT(0)
+set time_zone = '+00:00';
 drop database time_window_gapfill_bvt;

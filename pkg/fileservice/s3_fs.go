@@ -175,21 +175,27 @@ func (s *S3FS) CopyObject(
 	srcPath string,
 	dstPath string,
 ) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if _, err := parseFilePathAtService(srcPath, ""); err != nil {
+		return false, err
+	}
+	dstParsed, err := parseFilePathAtService(dstPath, s.name)
+	if err != nil {
+		return false, err
+	}
 	src, srcPath, err := resolveS3CopySource(srcFS, srcPath)
 	if err != nil || src == nil {
+		return false, err
+	}
+	srcParsed, err := parseFilePathAtService(srcPath, src.name)
+	if err != nil {
 		return false, err
 	}
 	copier, ok := s.storage.(objectStorageCopier)
 	if !ok {
 		return false, nil
-	}
-	srcParsed, err := ParsePathAtService(srcPath, src.name)
-	if err != nil {
-		return false, err
-	}
-	dstParsed, err := ParsePathAtService(dstPath, s.name)
-	if err != nil {
-		return false, err
 	}
 	srcKey := src.pathToKey(srcParsed.File)
 	dstKey := s.pathToKey(dstParsed.File)
@@ -216,13 +222,13 @@ func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error)
 	case *S3FS:
 		return f, filePath, nil
 	case *subPathFS:
-		p, err := f.toUpstreamPath(filePath)
+		p, err := f.toUpstreamFilePath(filePath)
 		if err != nil {
 			return nil, "", err
 		}
 		return resolveS3CopySource(f.upstream, p)
 	case *FileServices:
-		p, err := ParsePathAtService(filePath, "")
+		p, err := parseFilePathAtService(filePath, "")
 		if err != nil {
 			return nil, "", err
 		}
@@ -242,85 +248,40 @@ func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error)
 
 func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	if s.memCache != nil {
-		ensureCacheDataCapacity(ctx, s.memCache.cache, DefaultCacheDataAllocator(), size)
+		return s.memCache.AllocateCacheData(ctx, size)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheData(ctx, size)
 }
 
 func (s *S3FS) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	if s.memCache != nil {
-		ensureCacheDataCapacity(ctx, s.memCache.cache, DefaultCacheDataAllocator(), size)
+		return s.memCache.AllocateCacheDataWithHint(ctx, size, hints)
 	}
 	return DefaultCacheDataAllocator().AllocateCacheDataWithHint(ctx, size, hints)
 }
 
 func (s *S3FS) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
 	if s.memCache != nil {
-		ensureCacheDataCapacity(ctx, s.memCache.cache, DefaultCacheDataAllocator(), len(data))
+		return s.memCache.CopyToCacheData(ctx, data)
 	}
 	return DefaultCacheDataAllocator().CopyToCacheData(ctx, data)
 }
 
 func (s *S3FS) BackingSize(size int) int {
+	if s.memCache != nil {
+		return s.memCache.BackingSize(size)
+	}
 	return DefaultCacheDataAllocator().BackingSize(size)
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
-	config.setDefaults()
-
-	// Init the remote cache first, because the callback needs to be set for mem and disk cache.
-	if config.RemoteCacheEnabled {
-		if config.QueryClient == nil {
-			return moerr.NewInternalError(ctx, "query client is nil")
-		}
-		s.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
-		s.remoteCache.setAllocator(s)
-		logutil.Info("fileservice: remote cache initialized",
-			zap.Any("fs-name", s.name),
-		)
+	caches, err := newFileServiceCaches(ctx, config, s.perfCounterSets, s.name, true, s)
+	if err != nil {
+		return err
 	}
-
-	// memory cache
-	if config.MemoryCapacity != nil &&
-		*config.MemoryCapacity > DisableCacheCapacity {
-		s.memCache = NewMemCache(
-			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
-			&config.CacheCallbacks,
-			s.perfCounterSets,
-			s.name,
-		)
-		logutil.Info("fileservice: memory cache initialized",
-			zap.Any("fs-name", s.name),
-			zap.Any("capacity", config.MemoryCapacity),
-		)
-	}
-
-	// disk cache
-	if config.DiskCapacity != nil &&
-		*config.DiskCapacity > DisableCacheCapacity &&
-		config.DiskPath != nil {
-		var err error
-		s.diskCache, err = NewDiskCache(
-			ctx,
-			*config.DiskPath,
-			fscache.ConstCapacity(int64(*config.DiskCapacity)),
-			s.perfCounterSets,
-			true,
-			nil,
-			s.name,
-		)
-		if err != nil {
-			return err
-		}
-		if s.memCache != nil {
-			s.diskCache.memoryCache = s.memCache.cache
-		}
-		logutil.Info("fileservice: disk cache initialized",
-			zap.Any("fs-name", s.name),
-			zap.Any("config", config),
-		)
-	}
-
+	s.remoteCache = caches.remote
+	s.memCache = caches.memory
+	s.diskCache = caches.disk
 	return nil
 }
 
@@ -393,13 +354,16 @@ func (s *S3FS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, er
 }
 
 func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ctx, span := trace.Start(ctx, "S3FS.StatFile")
 	defer span.End()
 	start := time.Now()
 	defer func() {
 		metric.FSReadDurationStat.Observe(time.Since(start).Seconds())
 	}()
-	path, err := ParsePathAtService(filePath, s.name)
+	path, err := parseFilePathAtService(filePath, s.name)
 	if err != nil {
 		return nil, err
 	}
@@ -418,7 +382,10 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
-	path, err := ParsePathAtService(filePath, s.name)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := parseFilePathAtService(filePath, s.name)
 	if err != nil {
 		return err
 	}
@@ -444,11 +411,12 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	// load to disk cache
-	if err := s.diskCache.SetFile(
+	if err := s.diskCache.setFile(
 		ctx, path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return s.newReadCloser(ctx, filePath)
 		},
+		s.asyncUpdate,
 	); err != nil {
 		return err
 	}
@@ -488,7 +456,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	}()
 
 	// check existence
-	path, err := ParsePathAtService(vector.FilePath, s.name)
+	path, err := parseFilePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
 	}
@@ -511,7 +479,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	ctx, span := trace.Start(ctx, "S3FS.write")
 	defer span.End()
 
-	path, err := ParsePathAtService(vector.FilePath, s.name)
+	path, err := parseFilePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return 0, err
 	}
@@ -595,9 +563,9 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	if writeDiskCache {
 		content := diskCacheBuf.Bytes()
 		diskCacheStart := time.Now()
-		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		if err := s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(content)), nil
-		}); err != nil {
+		}, s.asyncUpdate); err != nil {
 			return 0, err
 		}
 		metric.FSWriteDurationDiskCacheSet.Observe(time.Since(diskCacheStart).Seconds())
@@ -607,9 +575,12 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
-	// A merge leader must not wake its waiters until successful cache updates
-	// have completed. Cache updates are deferred below, so register this defer
+	// A merge leader must not wake its waiters until caller-visible cache work
+	// has completed. Cache updates are deferred below, so register this defer
 	// first and let their later defers run before the merge is marked done.
+	// Async disk finalization is intentionally outside this generation: the
+	// foreground read only admits that bounded work, and subsequent disk-cache
+	// readers use their own bounded wait before falling back to object storage.
 	var finishMerge func()
 	defer func() {
 		if finishMerge != nil {
@@ -638,6 +609,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
+	}
+	if _, err := parseFilePathAtService(vector.FilePath, s.name); err != nil {
+		return err
 	}
 
 	for _, cache := range vector.Caches {
@@ -937,6 +911,9 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+	if _, err := parseFilePathAtService(vector.FilePath, s.name); err != nil {
+		return err
+	}
 
 	for _, cache := range vector.Caches {
 		if err := readCache(ctx, cache, vector); err != nil {
@@ -971,7 +948,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		return nil
 	}
 
-	path, err := ParsePathAtService(vector.FilePath, s.name)
+	path, err := parseFilePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
 	}
@@ -1221,9 +1198,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		!vector.Policy.Any(SkipDiskCacheWrites) {
 		t0 := time.Now()
 		LogEvent(ctx, str_disk_cache_setfile_begin)
-		err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		err := s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(contentBytes)), nil
-		})
+		}, s.asyncUpdate)
 		LogEvent(ctx, str_disk_cache_setfile_end)
 		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 		if err != nil {
@@ -1328,7 +1305,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 
 	t0 := time.Now()
 	LogEvent(ctx, str_disk_cache_setfile_begin)
-	err = s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+	err = s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 		reader, err := getReader(ctx, ptrTo[int64](0), nil)
 		if err != nil {
 			return nil, err
@@ -1336,7 +1313,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		stream.reader = reader
 		stream.opened = true
 		return stream, nil
-	})
+	}, s.asyncUpdate)
 	LogEvent(ctx, str_disk_cache_setfile_end)
 	metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 	if err != nil {
@@ -1474,12 +1451,15 @@ func (r *fullObjectDiskCacheReader) fillVector(
 }
 
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	ctx, span := trace.Start(ctx, "S3FS.Delete")
 	defer span.End()
 
 	keys := make([]string, 0, len(filePaths))
 	for _, filePath := range filePaths {
-		path, err := ParsePathAtService(filePath, s.name)
+		path, err := parseFilePathAtService(filePath, s.name)
 		if err != nil {
 			return err
 		}
@@ -1516,17 +1496,16 @@ func (*S3FS) ETLCompatible() {}
 var _ CachingFileService = new(S3FS)
 
 func (s *S3FS) Close(ctx context.Context) {
-	if s.memCache != nil {
-		s.memCache.Close(ctx)
-	}
-	if s.diskCache != nil {
-		s.diskCache.Close(ctx)
-	}
+	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache}
+	caches.close(ctx)
 }
 
 func (s *S3FS) FlushCache(ctx context.Context) {
 	if s.memCache != nil {
 		s.memCache.Flush(ctx)
+	}
+	if s.diskCache != nil {
+		s.diskCache.Flush(ctx)
 	}
 }
 

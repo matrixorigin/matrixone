@@ -950,6 +950,8 @@ type CreateTable struct {
 	Param              *ExternParam
 	IcebergParam       *IcebergTableParam
 	MongoDBParam       *MongoDBTableParam
+	DataStreamParam    *DataStreamTableParam
+	ForeignParam       *ForeignTableParam
 	AsSource           *Select
 	IsAsSelect         bool
 	IsAsLike           bool
@@ -969,7 +971,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IsClusterTable {
 		ctx.WriteString(" cluster")
 	}
-	if node.Param != nil || node.IcebergParam != nil || node.MongoDBParam != nil {
+	if node.Param != nil || node.IcebergParam != nil || node.MongoDBParam != nil || node.DataStreamParam != nil || node.ForeignParam != nil {
 		ctx.WriteString(" external")
 	}
 	ctx.WriteString(" table")
@@ -1024,6 +1026,14 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.MongoDBParam != nil {
 		ctx.WriteByte(' ')
 		node.MongoDBParam.Format(ctx)
+	}
+	if node.DataStreamParam != nil {
+		ctx.WriteByte(' ')
+		node.DataStreamParam.Format(ctx)
+	}
+	if node.ForeignParam != nil {
+		ctx.WriteByte(' ')
+		node.ForeignParam.Format(ctx)
 	}
 
 	if node.PartitionOption != nil {
@@ -2020,6 +2030,8 @@ func (it IndexType) ToString() string {
 		return "cagra"
 	case INDEX_TYPE_IVFPQ:
 		return "ivfpq"
+	case INDEX_TYPE_FULLTEXT2:
+		return "fulltext2"
 	case INDEX_TYPE_INVALID:
 		return ""
 	default:
@@ -2040,6 +2052,7 @@ const (
 	INDEX_TYPE_HNSW
 	INDEX_TYPE_CAGRA
 	INDEX_TYPE_IVFPQ
+	INDEX_TYPE_FULLTEXT2
 )
 
 type VisibleType int
@@ -2078,9 +2091,11 @@ type IndexOption struct {
 	BitsPerCode              int64
 	Async                    bool
 	ForceSync                bool
+	Merge                    bool
 	AutoUpdate               bool
 	Day                      int64
 	Hour                     int64
+	Second                   int64
 	IntermediateGraphDegree  int64
 	GraphDegree              int64
 	Quantization             string
@@ -2089,6 +2104,9 @@ type IndexOption struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	MaxPostingsCapacity      int64 // fulltext2: max postings (term occurrences) per built segment
+	PositionFree             bool  // fulltext2: build a position-free (bag-of-words only) index
+	PositionFreeSet          bool  // whether POSITION_FREE was specified (tri-state for REINDEX: distinguishes =FALSE from unset)
 	QuantizerTrainLimit      int64
 	IncludeColumns           []*UnresolvedName
 }
@@ -2100,12 +2118,14 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" ||
 		node.AlgoParamM != 0 || node.HnswEfConstruction != 0 ||
 		node.HnswEfSearch != 0 || node.AutoUpdate || node.Day != 0 ||
-		node.Hour != 0 ||
+		node.Hour != 0 || node.Second != 0 ||
 		node.IntermediateGraphDegree != 0 || node.GraphDegree != 0 ||
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
 		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
-		node.MaxIndexCapacity != 0 || node.QuantizerTrainLimit != 0 ||
+		node.MaxIndexCapacity != 0 || node.MaxPostingsCapacity != 0 ||
+		node.QuantizerTrainLimit != 0 || node.PositionFree ||
+		node.Merge || node.ForceSync ||
 		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
@@ -2158,6 +2178,9 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.ForceSync {
 		ctx.WriteString("FORCE_SYNC ")
 	}
+	if node.Merge {
+		ctx.WriteString("MERGE ")
+	}
 	if node.AutoUpdate {
 		ctx.WriteString("AUTO_UPDATE=TRUE ")
 	}
@@ -2169,6 +2192,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.Hour != 0 {
 		ctx.WriteString("HOUR ")
 		ctx.WriteString(strconv.FormatInt(node.Hour, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.Second != 0 {
+		ctx.WriteString("SECOND ")
+		ctx.WriteString(strconv.FormatInt(node.Second, 10))
 		ctx.WriteByte(' ')
 	}
 	if node.IntermediateGraphDegree != 0 {
@@ -2216,10 +2244,18 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
 		ctx.WriteByte(' ')
 	}
+	if node.MaxPostingsCapacity != 0 {
+		ctx.WriteString("MAX_POSTINGS_CAPACITY ")
+		ctx.WriteString(strconv.FormatInt(node.MaxPostingsCapacity, 10))
+		ctx.WriteByte(' ')
+	}
 	if node.QuantizerTrainLimit != 0 {
 		ctx.WriteString("QUANTIZER_TRAIN_LIMIT ")
 		ctx.WriteString(strconv.FormatInt(node.QuantizerTrainLimit, 10))
 		ctx.WriteByte(' ')
+	}
+	if node.PositionFree {
+		ctx.WriteString("POSITION_FREE=TRUE ")
 	}
 	if len(node.IncludeColumns) != 0 {
 		ctx.WriteString("INCLUDE (")
@@ -2521,10 +2557,17 @@ type FullTextIndex struct {
 	Name        string
 	Empty       bool
 	IndexOption *IndexOption
+	// IsV2 marks a CREATE FULLTEXT2 INDEX — the distinct WAND positional engine
+	// (algo="fulltext2"), routed to the fulltext2 plugin. false is classic v1.
+	IsV2 bool
 }
 
 func (node *FullTextIndex) Format(ctx *FmtCtx) {
-	ctx.WriteString("fulltext")
+	if node.IsV2 {
+		ctx.WriteString("fulltext2")
+	} else {
+		ctx.WriteString("fulltext")
+	}
 	if node.Name != "" {
 		ctx.WriteByte(' ')
 		ctx.WriteString(node.Name)
@@ -4188,6 +4231,8 @@ func (ic IndexCategory) ToString() string {
 		return "unique"
 	case INDEX_CATEGORY_FULLTEXT:
 		return "fulltext"
+	case INDEX_CATEGORY_FULLTEXT2:
+		return "fulltext2"
 	case INDEX_CATEGORY_SPATIAL:
 		return "spatial"
 	default:
@@ -4200,6 +4245,7 @@ const (
 	INDEX_CATEGORY_UNIQUE
 	INDEX_CATEGORY_FULLTEXT
 	INDEX_CATEGORY_SPATIAL
+	INDEX_CATEGORY_FULLTEXT2
 )
 
 type CreateIndex struct {

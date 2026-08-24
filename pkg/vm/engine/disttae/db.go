@@ -34,9 +34,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -493,9 +495,285 @@ var RequestSnapshotRead = func(ctx context.Context, tbl *txnTable, snapshot *typ
 		return nil, err
 	}
 	if len(result.Data.([]any)) == 0 {
-		return cmd_util.SnapshotReadResp{Succeed: false}, nil
+		return &cmd_util.SnapshotReadResp{Succeed: false}, nil
 	}
 	return result.Data.([]any)[0], nil
+}
+
+const (
+	snapshotReadRetryInterval = time.Second
+	snapshotReadRetryTimeout  = 30 * time.Second
+)
+
+func snapshotCheckpointsCanServe(
+	checkpointEntries []*checkpoint.CheckpointEntry,
+	ts types.TS,
+) bool {
+	if len(checkpointEntries) == 0 {
+		return false
+	}
+
+	hasAuthoritativeBase, err := validateSnapshotCheckpointChain(checkpointEntries)
+	if err != nil {
+		return false
+	}
+
+	// A fresh snapshot partition can only be rebuilt from an authoritative
+	// checkpoint base. In the absence of a global or compacted checkpoint, the
+	// incremental chain must start at the empty timestamp. A later incremental
+	// may cover ts numerically, but applying it to an empty partition would omit
+	// all state from the missing prefix.
+	if !hasAuthoritativeBase {
+		firstStart := checkpointEntries[0].GetStart()
+		if !firstStart.IsEmpty() {
+			return false
+		}
+	}
+
+	// The requested snapshot can contain data that is flushed only by the
+	// checkpoint following it, so the returned coverage must reach ts.
+	end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
+	return !end.LT(&ts)
+}
+
+// validateSnapshotCheckpointChain validates the structural contract shared by
+// all snapshot-read consumers. A producer may retain one predecessor before a
+// global checkpoint. A compacted checkpoint is authoritative when first, but
+// ConsumeSnapCkps treats one appearing later as a continuation; that shape is
+// reachable while GC has published compacted metadata but has not yet removed
+// an older global metadata file.
+//
+// The returned bool reports whether the chain contains an authoritative global
+// or compacted checkpoint for rebuilding a fresh partition. Stale predecessor
+// metadata does not change the authority of the checkpoint that follows it.
+func validateSnapshotCheckpointChain(
+	checkpointEntries []*checkpoint.CheckpointEntry,
+) (bool, error) {
+	hasAuthoritativeBase := false
+	globalIndex := -1
+	compactedIndex := -1
+	for i, entry := range checkpointEntries {
+		if entry == nil {
+			return false, moerr.NewInternalErrorNoCtxf(
+				"invalid nil checkpoint entry at index %d in snapshot read response", i,
+			)
+		}
+
+		start := entry.GetStart()
+		end := entry.GetEnd()
+		if end.LT(&start) {
+			return false, moerr.NewInternalErrorNoCtxf(
+				"invalid checkpoint range at index %d in snapshot read response: %s-%s",
+				i, start.ToString(), end.ToString(),
+			)
+		}
+
+		switch entry.GetType() {
+		case checkpoint.ET_Global:
+			if !start.IsEmpty() {
+				return false, moerr.NewInternalErrorNoCtxf(
+					"invalid global checkpoint start at index %d in snapshot read response: %s",
+					i, start.ToString(),
+				)
+			}
+			if globalIndex != -1 {
+				return false, moerr.NewInternalErrorNoCtx(
+					"multiple global checkpoints in snapshot read response",
+				)
+			}
+			if i > 1 {
+				return false, moerr.NewInternalErrorNoCtx(
+					"global checkpoint has more than one predecessor in snapshot read response",
+				)
+			}
+			globalIndex = i
+			hasAuthoritativeBase = true
+		case checkpoint.ET_Compacted:
+			if compactedIndex != -1 {
+				return false, moerr.NewInternalErrorNoCtx(
+					"multiple compacted checkpoints in snapshot read response",
+				)
+			}
+			compactedIndex = i
+			hasAuthoritativeBase = true
+		case checkpoint.ET_Incremental:
+		default:
+			return false, moerr.NewInternalErrorNoCtxf(
+				"unsupported checkpoint type %d at index %d in snapshot read response",
+				entry.GetType(), i,
+			)
+		}
+
+		if i > 0 {
+			previous := checkpointEntries[i-1]
+			previousEnd := previous.GetEnd()
+			if end.LT(&previousEnd) {
+				return false, moerr.NewInternalErrorNoCtxf(
+					"out-of-order checkpoint end at index %d in snapshot read response",
+					i,
+				)
+			}
+
+			// Global and non-leading compacted entries are producer-supported
+			// replacement/continuation checkpoints, so their start can overlap
+			// prior history. Incrementals must remain continuous with the entry
+			// immediately before them.
+			if entry.GetType() == checkpoint.ET_Compacted {
+				next := previousEnd.Next()
+				if start.GT(&next) {
+					return false, moerr.NewInternalErrorNoCtxf(
+						"checkpoint gap before compacted entry at index %d in snapshot read response",
+						i,
+					)
+				}
+			}
+			if entry.GetType() == checkpoint.ET_Incremental {
+				// Snapshot metadata selection uses >= to find a candidate after
+				// compacted metadata; that does not make a missing history range
+				// consumable. Checkpoint producers create continuations at the
+				// prior end or its successor, so keep larger gaps fail-closed.
+				if !start.Equal(&previousEnd) {
+					next := previousEnd.Next()
+					if !start.Equal(&next) {
+						return false, moerr.NewInternalErrorNoCtxf(
+							"checkpoint gap or overlap at index %d in snapshot read response",
+							i,
+						)
+					}
+				} else if previous.GetType() != checkpoint.ET_Global &&
+					previous.GetType() != checkpoint.ET_Compacted {
+					return false, moerr.NewInternalErrorNoCtxf(
+						"overlapping incremental checkpoint at index %d in snapshot read response",
+						i,
+					)
+				}
+			}
+		}
+	}
+
+	return hasAuthoritativeBase, nil
+}
+
+func parseSnapshotCheckpointEntries(
+	resp *cmd_util.SnapshotReadResp,
+) (
+	checkpointEntries []*checkpoint.CheckpointEntry,
+	minTS types.TS,
+	maxTS types.TS,
+	err error,
+) {
+	if resp == nil || !resp.Succeed {
+		return nil, types.MaxTs(), types.TS{}, moerr.NewInternalErrorNoCtx(
+			"snapshot read response is not ready",
+		)
+	}
+
+	minTS = types.MaxTs()
+	if len(resp.Entries) == 0 {
+		return nil, minTS, maxTS, nil
+	}
+
+	checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
+	for i, entry := range resp.Entries {
+		if entry == nil || entry.Start == nil || entry.End == nil {
+			return nil, types.MaxTs(), types.TS{}, moerr.NewInternalErrorNoCtxf(
+				"invalid checkpoint entry at index %d in snapshot read response", i,
+			)
+		}
+
+		start := types.TimestampToTS(*entry.Start)
+		end := types.TimestampToTS(*entry.End)
+		checkpointEntry := checkpoint.NewCheckpointEntry(
+			"", start, end, checkpoint.EntryType(entry.EntryType),
+		)
+		checkpointEntry.SetLocation(entry.Location1, entry.Location2)
+		checkpointEntries = append(checkpointEntries, checkpointEntry)
+		if start.LT(&minTS) {
+			minTS = start
+		}
+		if end.GT(&maxTS) {
+			maxTS = end
+		}
+	}
+
+	if _, err = validateSnapshotCheckpointChain(checkpointEntries); err != nil {
+		return nil, types.MaxTs(), types.TS{}, err
+	}
+	return checkpointEntries, minTS, maxTS, nil
+}
+
+// requestSnapshotReadUntilReady distinguishes a temporarily lagging checkpoint
+// from a checkpoint set that cannot cover the requested snapshot. TN reports
+// the former as Succeed=false, so retry it with a bounded, context-aware wait.
+// Once TN reports success, getOrCreateSnapPartBy still validates the returned
+// checkpoint range before using it.
+func requestSnapshotReadUntilReady(
+	ctx context.Context,
+	tbl *txnTable,
+	snapshot *types.TS,
+	retryInterval time.Duration,
+	retryTimeout time.Duration,
+) (*cmd_util.SnapshotReadResp, error) {
+	retryCtx, cancel := context.WithTimeoutCause(
+		ctx,
+		retryTimeout,
+		moerr.NewServiceUnavailableNoCtx("checkpoint not ready for snapshot read"),
+	)
+	defer cancel()
+
+	var resp *cmd_util.SnapshotReadResp
+	err := common.RetryWithInterval(
+		retryCtx,
+		func() (bool, error) {
+			response, err := RequestSnapshotRead(retryCtx, tbl, snapshot)
+			if err != nil {
+				if retryCtx.Err() != nil {
+					return true, context.Cause(retryCtx)
+				}
+				return true, err
+			}
+
+			var ok bool
+			resp, ok = response.(*cmd_util.SnapshotReadResp)
+			if !ok || resp == nil {
+				return true, moerr.NewInternalErrorNoCtxf(
+					"invalid snapshot read response type %T", response,
+				)
+			}
+			if !resp.Succeed {
+				v2.TaskSnapshotReadRetryCounter.Inc()
+			}
+			return resp.Succeed, nil
+		},
+		retryInterval,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func requestSnapshotCheckpointEntries(
+	ctx context.Context,
+	tbl *txnTable,
+	snapshot *types.TS,
+) (
+	checkpointEntries []*checkpoint.CheckpointEntry,
+	minTS types.TS,
+	maxTS types.TS,
+	err error,
+) {
+	resp, err := requestSnapshotReadUntilReady(
+		ctx,
+		tbl,
+		snapshot,
+		snapshotReadRetryInterval,
+		snapshotReadRetryTimeout,
+	)
+	if err != nil {
+		return nil, types.MaxTs(), types.TS{}, err
+	}
+	return parseSnapshotCheckpointEntries(resp)
 }
 
 // getOrCreateSnapPartBy is used to get or create a snapshot partition state by the given timestamp.
@@ -503,39 +781,12 @@ func (e *Engine) getOrCreateSnapPartBy(
 	ctx context.Context,
 	tbl *txnTable,
 	ts types.TS) (*logtailreplay.PartitionState, error) {
-	response, err := RequestSnapshotRead(ctx, tbl, &ts)
+	checkpointEntries, _, _, err := requestSnapshotCheckpointEntries(ctx, tbl, &ts)
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := response.(*cmd_util.SnapshotReadResp)
-	var checkpointEntries []*checkpoint.CheckpointEntry
-	if ok && resp.Succeed && len(resp.Entries) > 0 {
-		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
-		entries := resp.Entries
-		for _, entry := range entries {
-			start := types.TimestampToTS(*entry.Start)
-			end := types.TimestampToTS(*entry.End)
-			entryType := entry.EntryType
-			checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entryType))
-			checkpointEntry.SetLocation(entry.Location1, entry.Location2)
-			checkpointEntries = append(checkpointEntries, checkpointEntry)
-		}
-	}
 
-	ckpsCanServe := func() bool {
-		// The checkpoint entry required by SnapshotRead must meet two or more checkpoints,
-		// otherwise the latest partition can meet this SnapshotRead request
-		if len(checkpointEntries) < 1 {
-			return false
-		}
-
-		// The end time of the penultimate checkpoint must not be less than the ts of the snapshot,
-		// because the data of the snapshot may exist in the wal and be collected to the next checkpoint
-		end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
-		return !end.LT(&ts)
-	}
-
-	if !ckpsCanServe() {
+	if !snapshotCheckpointsCanServe(checkpointEntries, ts) {
 		return nil, moerr.NewInternalErrorNoCtxf(
 			"No available checkpoints for snapshot read at:%s, table:%s, tid:%v, txn:%s",
 			ts.ToString(),

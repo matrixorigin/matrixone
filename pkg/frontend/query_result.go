@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -58,10 +59,11 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	}
 
 	stmtProfile := ses.GetStmtProfile()
-	if stmtProfile.GetSqlSourceType() == constant.InternalSql {
+	sqlSourceType := stmtProfile.GetSqlSourceType()
+	if sqlSourceType == constant.InternalSql || sqlSourceType == constant.CloudNoUserSql {
 		return false
 	}
-	if stmtProfile.GetStmtType() == "Select" && stmtProfile.GetSqlSourceType() != constant.CloudUserSql {
+	if stmtProfile.GetStmtType() == "Select" && sqlSourceType != constant.CloudUserSql {
 		return false
 	}
 
@@ -313,6 +315,9 @@ func saveMeta(ctx context.Context, ses *Session) error {
 	if err != nil {
 		return err
 	}
+	// objectWriterV1 serializes the batch into writer-owned buffers during Write,
+	// so saveMeta retains ownership of this temporary batch on every return path.
+	defer metaBat.Clean(ses.pool)
 	metaPath := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.GetStmtId()).String())
 	metaWriter, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, metaPath, fs)
 	if err != nil {
@@ -381,6 +386,49 @@ func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.
 		}
 	}
 	return nil
+}
+
+// stagePreparedCursorQueryResult keeps cursor query-result blocks invisible
+// until transaction finalization succeeds. The metadata marker is published
+// by publishPreparedCursorQueryResult after the execute transaction commits.
+func stagePreparedCursorQueryResult(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
+	if execCtx == nil || execCtx.ses == nil {
+		return moerr.NewInternalErrorNoCtx("prepared cursor execution context is missing")
+	}
+	if execCtx.cursorResultSaver == nil {
+		ses := execCtx.ses.(*Session)
+		if !canSaveQueryResult(execCtx.reqCtx, ses) {
+			return nil
+		}
+		execCtx.cursorResultSaver = &QueryResult{}
+	}
+	if bat == nil {
+		return execCtx.cursorResultSaver.FinishStage(execCtx)
+	}
+	return execCtx.cursorResultSaver.Stage(execCtx, crs, bat)
+}
+
+func publishPreparedCursorQueryResult(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.cursorResultSaver == nil {
+		return nil
+	}
+	saver := execCtx.cursorResultSaver
+	if err := saver.Publish(execCtx); err != nil {
+		abortErr := saver.Abort(execCtx)
+		execCtx.cursorResultSaver = nil
+		return errors.Join(err, abortErr)
+	}
+	execCtx.cursorResultSaver = nil
+	return nil
+}
+
+func abortPreparedCursorQueryResult(execCtx *ExecCtx, cause error) error {
+	if execCtx == nil || execCtx.cursorResultSaver == nil {
+		return cause
+	}
+	abortErr := execCtx.cursorResultSaver.Abort(execCtx)
+	execCtx.cursorResultSaver = nil
+	return errors.Join(cause, abortErr)
 }
 
 func trySaveQueryResult(ctx context.Context, ses *Session, mrs *MysqlResultSet) (err error) {
@@ -593,6 +641,12 @@ func getTablesFromPlan(p *plan.Plan) string {
 func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, error) {
 	var err error
 	bat := batch.NewWithSize(len(catalog.MetaColTypes))
+	completed := false
+	defer func() {
+		if !completed {
+			bat.Clean(mp)
+		}
+	}()
 	bat.SetAttributes(catalog.MetaColNames)
 	for i, t := range catalog.MetaColTypes {
 		bat.Vecs[i] = vector.NewVec(t)
@@ -645,6 +699,7 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	if err = vector.AppendFixed(bat.Vecs[catalog.QUERY_ROW_COUNT_IDX], m.QueryRowCount, false, mp); err != nil {
 		return nil, err
 	}
+	completed = true
 	return bat, nil
 }
 

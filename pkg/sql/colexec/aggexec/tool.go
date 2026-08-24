@@ -94,15 +94,6 @@ func freeAggResultVectors(vecs []*vector.Vector, mp *mpool.MPool) {
 	}
 }
 
-// vectorUnmarshal is instead of vector.UnmarshalBinary.
-// it will check if mp is nil first.
-func vectorUnmarshal(v *vector.Vector, data []byte, mp *mpool.MPool) error {
-	if mp == nil {
-		return v.UnmarshalBinary(data)
-	}
-	return v.UnmarshalBinaryWithCopy(data, mp)
-}
-
 func FromD64ToD128(v types.Decimal64) types.Decimal128 {
 	k := types.Decimal128{
 		B0_63:   uint64(v),
@@ -121,14 +112,16 @@ func modifyChunkSizeOfAggregator(a AggFuncExec, n int) {
 	}
 }
 
-func SyncAggregatorsToChunkSize(as []AggFuncExec, syncLimit int) {
+func SyncAggregatorsToChunkSize[T AggFuncExec](as []T, syncLimit int) {
 	for _, a := range as {
 		modifyChunkSizeOfAggregator(a, syncLimit)
 	}
 }
 
 type Vectors[T numeric | types.Decimal64 | types.Decimal128] struct {
-	vecs []*vector.Vector
+	vecs       []*vector.Vector
+	allocation *vector.AllocationAccountSelection
+	appendAt   int
 }
 
 const (
@@ -138,6 +131,23 @@ const (
 func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) *Vectors[T] {
 	vec := vector.NewOffHeapVecWithType(typ)
 	return &Vectors[T]{vecs: []*vector.Vector{vec}}
+}
+
+func newAccountedVectors[T numeric | types.Decimal64 | types.Decimal128](
+	typ types.Type,
+	allocation *AllocationAccount,
+) (*Vectors[T], error) {
+	if allocation == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	vec, err := allocation.newVector(typ)
+	if err != nil {
+		return nil, err
+	}
+	return &Vectors[T]{
+		vecs:       []*vector.Vector{vec},
+		allocation: allocation.vectorSelection(),
+	}, nil
 }
 
 func (vs *Vectors[T]) MarshalBinary() ([]byte, error) {
@@ -160,45 +170,57 @@ func (vs *Vectors[T]) MarshalBinary() ([]byte, error) {
 }
 
 func (vs *Vectors[T]) Unmarshal(data []byte, typ types.Type, mp *mpool.MPool) error {
-	bbuf := bytes.NewBuffer(data)
-	length := int64(0)
-	if _, err := bbuf.Read(types.EncodeInt64(&length)); err != nil {
-		return err
-	}
-	for i := int64(0); i < length; i++ {
-		var buf []byte
-		var err error
-		if buf, _, err = ReadBytes(bbuf); err != nil {
-			return err
-		}
-		vec := vector.NewOffHeapVecWithType(typ)
-		if err := vectorUnmarshal(vec, buf, mp); err != nil {
-			return err
-		}
-		vs.vecs = append(vs.vecs, vec)
-	}
-	return nil
+	return vs.UnmarshalFromReader(bytes.NewReader(data), typ, mp)
 }
 
-func (vs *Vectors[T]) UnmarshalFromReader(r io.Reader, typ types.Type, mp *mpool.MPool) error {
+func (vs *Vectors[T]) UnmarshalFromReader(
+	r io.Reader,
+	typ types.Type,
+	mp *mpool.MPool,
+) (retErr error) {
 	length := int64(0)
 	if _, err := io.ReadFull(r, types.EncodeInt64(&length)); err != nil {
 		return err
 	}
+	if length < 0 {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid aggregate vector count %d", length)
+	}
+	start := len(vs.vecs)
+	defer func() {
+		if retErr != nil {
+			for _, vec := range vs.vecs[start:] {
+				vec.Free(mp)
+			}
+			vs.vecs = vs.vecs[:start]
+		}
+	}()
 	for i := int64(0); i < length; i++ {
 		sz, err := types.ReadUint32(r)
 		if err != nil {
 			return err
 		}
-		lr := io.LimitReader(r, int64(sz))
+		lr := &io.LimitedReader{R: r, N: int64(sz)}
 		vec := vector.NewOffHeapVecWithType(typ)
 		if err := vec.UnmarshalWithReader(lr, mp); err != nil {
+			vec.Free(mp)
 			return err
 		}
 		if _, err := io.Copy(io.Discard, lr); err != nil {
+			vec.Free(mp)
 			return err
 		}
+		if lr.N != 0 {
+			vec.Free(mp)
+			return io.ErrUnexpectedEOF
+		}
 		vs.vecs = append(vs.vecs, vec)
+	}
+	if len(vs.vecs) != 0 {
+		vs.appendAt = len(vs.vecs) - 1
+		if vs.vecs[vs.appendAt].Length() >= MaxVectorLength {
+			vs.appendAt++
+		}
 	}
 	return nil
 }
@@ -211,13 +233,68 @@ func (vs *Vectors[T]) Length() int {
 	return length
 }
 
-func (vs *Vectors[T]) getAppendableVector() *vector.Vector {
-	vec := vs.vecs[len(vs.vecs)-1]
-	if vec.Length() >= MaxVectorLength {
-		vec = vector.NewOffHeapVecWithType(*vec.GetType())
+func (vs *Vectors[T]) getAppendableVector() (*vector.Vector, error) {
+	for vs.appendAt < len(vs.vecs) &&
+		vs.vecs[vs.appendAt].Length() >= MaxVectorLength {
+		vs.appendAt++
+	}
+	if vs.appendAt == len(vs.vecs) {
+		var vec *vector.Vector
+		var err error
+		if vs.allocation == nil {
+			vec = vector.NewOffHeapVecWithType(*vs.vecs[0].GetType())
+		} else {
+			vec, err = vector.NewOffHeapVecWithTypeAndAllocation(
+				*vs.vecs[0].GetType(), vs.allocation)
+			if err != nil {
+				return nil, err
+			}
+		}
 		vs.vecs = append(vs.vecs, vec)
 	}
-	return vec
+	return vs.vecs[vs.appendAt], nil
+}
+
+// PreExtend reserves physical fixed-width storage for rows without publishing
+// any logical values. Accounted median uses it as the allocation boundary for
+// a whole work unit, so the following append loop cannot fail part-way through
+// after exposing only a prefix of the input.
+func (vs *Vectors[T]) PreExtend(rows int, mp *mpool.MPool) error {
+	if vs == nil || rows < 0 || len(vs.vecs) == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if rows == 0 {
+		return nil
+	}
+	remaining := rows
+	for index := vs.appendAt; remaining > 0; index++ {
+		if index == len(vs.vecs) {
+			var (
+				vec *vector.Vector
+				err error
+			)
+			if vs.allocation == nil {
+				vec = vector.NewOffHeapVecWithType(*vs.vecs[0].GetType())
+			} else {
+				vec, err = vector.NewOffHeapVecWithTypeAndAllocation(
+					*vs.vecs[0].GetType(), vs.allocation)
+			}
+			if err != nil {
+				return err
+			}
+			vs.vecs = append(vs.vecs, vec)
+		}
+		vec := vs.vecs[index]
+		available := MaxVectorLength - vec.Length()
+		reserve := min(remaining, available)
+		if reserve > 0 {
+			if err := vec.PreExtend(reserve, mp); err != nil {
+				return err
+			}
+			remaining -= reserve
+		}
+	}
+	return nil
 }
 
 // clone other
@@ -229,7 +306,10 @@ func (vs *Vectors[T]) Union(other *Vectors[T], mp *mpool.MPool) error {
 		vals := vector.MustFixedColWithTypeCheck[T](vec)
 		left := len(vals)
 		for {
-			vec := vs.getAppendableVector()
+			vec, err := vs.getAppendableVector()
+			if err != nil {
+				return err
+			}
 			appendableCount := MaxVectorLength - vec.Length()
 			if appendableCount > left {
 				appendableCount = left
@@ -268,7 +348,10 @@ func (vs *Vectors[T]) Size() int64 {
 func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {
 	leftRow := cnt
 	for {
-		vec := vecs.getAppendableVector()
+		vec, err := vecs.getAppendableVector()
+		if err != nil {
+			return err
+		}
 		appendCnt := MaxVectorLength - vec.Length()
 		if appendCnt > leftRow {
 			appendCnt = leftRow
@@ -286,21 +369,26 @@ func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vect
 
 func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
 	size := uint32(len(b))
-	if _, err = w.Write(types.EncodeUint32(&size)); err != nil {
+	written, err := w.Write(types.EncodeUint32(&size))
+	if err != nil {
 		return
+	}
+	if written != 4 {
+		return int64(written), io.ErrShortWrite
 	}
 	wn, err := w.Write(b)
-	return int64(wn + 4), err
+	if err == nil && wn != len(b) {
+		err = io.ErrShortWrite
+	}
+	return int64(wn + written), err
 }
-func ReadBytes(r io.Reader) (buf []byte, n int64, err error) {
-	strLen := uint32(0)
-	if _, err = io.ReadFull(r, types.EncodeUint32(&strLen)); err != nil {
-		return
+
+// writeBytesRaw writes b without a length prefix and rejects writers that
+// report success after consuming only a prefix.
+func writeBytesRaw(b []byte, w io.Writer) (n int, err error) {
+	n, err = w.Write(b)
+	if err == nil && n != len(b) {
+		err = io.ErrShortWrite
 	}
-	buf = make([]byte, strLen)
-	if _, err = io.ReadFull(r, buf); err != nil {
-		return
-	}
-	n = 4 + int64(strLen)
-	return
+	return n, err
 }

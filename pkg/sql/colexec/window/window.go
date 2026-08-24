@@ -16,7 +16,9 @@ package window
 
 import (
 	"bytes"
+	"context"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -99,7 +101,7 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	}
 
 	w := window.WinSpecList[0].Expr.(*plan.Expr_W).W
-	if len(w.PartitionBy) == 0 {
+	if len(w.PartitionBy) == 0 || window.PartitionTopN {
 		ctr.status = receiveAll
 	}
 
@@ -251,6 +253,10 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		case eval:
 			result := vm.NewCallResult()
+			// A new materialized input batch starts a new aggregate generation.
+			// Normally the previous generation is released after its last chunk;
+			// this also closes reuse after an interrupted or failed generation.
+			ctr.freeRunningAgg()
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
@@ -271,7 +277,12 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.os = nil
 			ctr.sels = nil
 			w := window.WinSpecList[0]
-			if window.Fs = makeOrderBy(w); window.Fs != nil {
+			if window.PartitionTopN {
+				window.Fs = makePartitionTopNOrderBy(w)
+			} else {
+				window.Fs = makeOrderBy(w)
+			}
+			if window.Fs != nil {
 				if len(ctr.orderVecs) == 0 {
 					ctr.orderVecs = make([]colexec.ExprEvalVector, len(window.Fs))
 					for j := range ctr.orderVecs {
@@ -394,6 +405,21 @@ func (ctr *container) makeAggregateExecutor(
 ) error {
 	ctr.freeAggFun()
 	ctr.batAggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
+	exec, err := ctr.newAggregateExecutor(idx, ap, proc, groupCount)
+	if err != nil {
+		ctr.batAggs = nil
+		return err
+	}
+	ctr.batAggs[idx] = exec
+	return nil
+}
+
+func (ctr *container) newAggregateExecutor(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	groupCount int,
+) (aggexec.AggFuncExec, error) {
 	ag := ap.Aggs[idx]
 	// Derive one argument type per aggregate argument so multi-argument
 	// window aggregates (for example json_objectagg) match Group's contract.
@@ -405,23 +431,26 @@ func (ctr *container) makeAggregateExecutor(
 		)
 	}
 
-	var err error
-	ctr.batAggs[idx], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
+	exec, err := aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
 	if err != nil {
-		ctr.freeAggFun()
-		return err
+		return nil, err
 	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			exec.Free()
+		}
+	}()
 	if config := ag.GetExtraInformation(); config != nil {
-		if err = ctr.batAggs[idx].SetExtraInformation(config, 0); err != nil {
-			ctr.freeAggFun()
-			return err
+		if err = exec.SetExtraInformation(config, 0); err != nil {
+			return nil, err
 		}
 	}
-	if err = ctr.batAggs[idx].GroupGrow(groupCount); err != nil {
-		ctr.freeAggFun()
-		return err
+	if err = exec.GroupGrow(groupCount); err != nil {
+		return nil, err
 	}
-	return nil
+	succeeded = true
+	return exec, nil
 }
 
 func (ctr *container) processAggregateFuncRange(
@@ -436,8 +465,19 @@ func (ctr *container) processAggregateFuncRange(
 	}
 	defer ctr.freeAggFun()
 
-	n := ctr.bat.RowCount()
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	frame := ctr.frameAt(idx, w.Frame)
+	if cumulativeRowsFrame(frame, ctr.ps, ctr.bat.RowCount()) &&
+		aggexec.MergePreservesSource(ctr.batAggs[idx]) {
+		return ctr.processCumulativeAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
+	}
+	if boundedSlidingRowsFrame(frame) &&
+		aggexec.MergePreservesSource(ctr.batAggs[idx]) &&
+		aggexec.SupportsWindowSliding(ctr.batAggs[idx]) {
+		return ctr.processSlidingAggregateFuncRange(idx, ap, proc, outputStart, outputEnd, frame)
+	}
+
+	n := ctr.bat.RowCount()
 	for j := outputStart; j < outputEnd; j++ {
 		if err := checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
@@ -449,7 +489,7 @@ func (ctr *container) processAggregateFuncRange(
 		}
 
 		left, right, err := ctr.buildInterval(
-			j, partitionStart, partitionEnd, ctr.frameAt(idx, w.Frame))
+			j, partitionStart, partitionEnd, frame)
 		if err != nil {
 			return nil, err
 		}
@@ -484,6 +524,249 @@ func (ctr *container) processAggregateFuncRange(
 	// Aggregate state initializes its physical capacity as NULL. Keep only
 	// logical-row nulls so downstream HasNull checks do not see an unused tail.
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
+	return vec, nil
+}
+
+// cumulativeRowsFrame reports whether every frame in the materialized batch
+// starts at its partition boundary and ends at the current row. A finite
+// PRECEDING bound is equivalent to UNBOUNDED PRECEDING when it covers the
+// largest runtime partition.
+func cumulativeRowsFrame(frame *plan.FrameClause, partitions []int64, rowCount int) bool {
+	if frame == nil || frame.Type != plan.FrameClause_ROWS ||
+		frame.Start == nil || frame.End == nil ||
+		frame.Start.Type != plan.FrameBound_PRECEDING ||
+		frame.End.Type != plan.FrameBound_CURRENT_ROW || frame.End.UnBounded {
+		return false
+	}
+	if frame.Start.UnBounded {
+		return true
+	}
+	if frame.Start.Val == nil || frame.Start.Val.GetLit() == nil {
+		return false
+	}
+	bound, ok := frame.Start.Val.GetLit().Value.(*plan.Literal_U64Val)
+	if !ok {
+		return false
+	}
+
+	maxPartitionRows, ok := largestPartitionSize(partitions, rowCount)
+	if !ok {
+		return false
+	}
+	if maxPartitionRows <= 1 {
+		return true
+	}
+	return bound.U64Val >= uint64(maxPartitionRows-1)
+}
+
+// boundedSlidingRowsFrame recognizes the finite ROWS shape whose left and
+// right edges each advance monotonically by one row. Aggregates that expose an
+// exact inverse can evaluate it with one add and one remove per output row.
+func boundedSlidingRowsFrame(frame *plan.FrameClause) bool {
+	if frame == nil || frame.Type != plan.FrameClause_ROWS ||
+		frame.Start == nil || frame.End == nil ||
+		frame.Start.Type != plan.FrameBound_PRECEDING || frame.Start.UnBounded ||
+		frame.End.Type != plan.FrameBound_CURRENT_ROW || frame.End.UnBounded ||
+		frame.Start.Val == nil || frame.Start.Val.GetLit() == nil {
+		return false
+	}
+	_, ok := frame.Start.Val.GetLit().Value.(*plan.Literal_U64Val)
+	return ok
+}
+
+func largestPartitionSize(partitions []int64, rowCount int) (int, bool) {
+	if rowCount < 0 {
+		return 0, false
+	}
+	if len(partitions) == 0 {
+		return rowCount, true
+	}
+	if partitions[0] != 0 {
+		return 0, false
+	}
+
+	maxRows := 0
+	for i, start := range partitions {
+		end := int64(rowCount)
+		if i+1 < len(partitions) {
+			end = partitions[i+1]
+		}
+		if start < 0 || end <= start || end > int64(rowCount) {
+			return 0, false
+		}
+		maxRows = max(maxRows, int(end-start))
+	}
+	return maxRows, true
+}
+
+func partitionEnd(partitions []int64, partition int, rowCount int) int {
+	if len(partitions) == 0 || partition+1 >= len(partitions) {
+		return rowCount
+	}
+	return int(partitions[partition+1])
+}
+
+// processCumulativeAggregateFuncRange advances one aggregate state per input
+// row and snapshots it into the corresponding output group. This changes
+// fixed-size cumulative aggregates such as SUM from O(partitionRows^2) Fill
+// calls to O(partitionRows), while retaining state across output chunks.
+func (ctr *container) processCumulativeAggregateFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (_ *vector.Vector, retErr error) {
+	if outputStart != ctr.runningNextRow {
+		ctr.freeRunningAgg()
+		return nil, moerr.NewInternalErrorNoCtx("cumulative window output is not sequential")
+	}
+	defer func() {
+		if retErr != nil {
+			ctr.freeRunningAgg()
+		}
+	}()
+
+	if ctr.runningAgg == nil {
+		ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+		if retErr != nil {
+			return nil, retErr
+		}
+	}
+
+	n := ctr.bat.RowCount()
+	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
+	for j := outputStart; j < outputEnd; j++ {
+		if err := checkCanceled(proc, j-outputStart); err != nil {
+			return nil, err
+		}
+		if j == currentPartitionEnd {
+			ctr.runningAgg.Free()
+			ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+			if retErr != nil {
+				return nil, retErr
+			}
+			ctr.runningPartition++
+			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
+		}
+		if err := ctr.runningAgg.Fill(0, j, ctr.aggVecs[idx].Vec); err != nil {
+			return nil, err
+		}
+		if err := ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
+			return nil, err
+		}
+		ctr.runningNextRow = j + 1
+	}
+
+	vecs, err := ctr.batAggs[idx].Flush()
+	if err != nil {
+		return nil, err
+	}
+	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
+	if outputEnd == n {
+		ctr.freeRunningAgg()
+	}
+	return vec, nil
+}
+
+// processSlidingAggregateFuncRange retains one aggregate for a finite
+// PRECEDING/CURRENT ROW frame. Each row adds the new right edge and removes the
+// expired left edge, reducing bounded SUM evaluation from O(N*W) to O(N).
+func (ctr *container) processSlidingAggregateFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+	frame *plan.FrameClause,
+) (_ *vector.Vector, retErr error) {
+	if outputStart != ctr.runningNextRow {
+		ctr.freeRunningAgg()
+		return nil, moerr.NewInternalErrorNoCtx("sliding window output is not sequential")
+	}
+	defer func() {
+		if retErr != nil {
+			ctr.freeRunningAgg()
+		}
+	}()
+
+	if ctr.runningAgg == nil {
+		ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+		if retErr != nil {
+			return nil, retErr
+		}
+		if !aggexec.SupportsWindowSliding(ctr.runningAgg) {
+			return nil, moerr.NewInternalErrorNoCtx("running aggregate does not support sliding windows")
+		}
+	}
+
+	n := ctr.bat.RowCount()
+	partitionStart := 0
+	if len(ctr.ps) > 0 {
+		partitionStart = int(ctr.ps[ctr.runningPartition])
+	}
+	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
+	for j := outputStart; j < outputEnd; j++ {
+		if err := checkCanceled(proc, j-outputStart); err != nil {
+			return nil, err
+		}
+		if j == currentPartitionEnd {
+			ctr.runningAgg.Free()
+			ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+			if retErr != nil {
+				return nil, retErr
+			}
+			ctr.runningPartition++
+			partitionStart = j
+			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
+			ctr.runningLeft = partitionStart
+			ctr.runningRight = partitionStart
+		}
+
+		left, right, err := ctr.buildInterval(j, partitionStart, currentPartitionEnd, frame)
+		if err != nil {
+			return nil, err
+		}
+		left = max(left, partitionStart)
+		right = min(right, currentPartitionEnd)
+		if left < ctr.runningLeft || right < ctr.runningRight || left >= right {
+			return nil, moerr.NewInternalErrorNoCtx("invalid sliding window interval")
+		}
+
+		for row := ctr.runningLeft; row < left; row++ {
+			if err = aggexec.RemoveWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+				return nil, err
+			}
+		}
+		for row := ctr.runningRight; row < right; row++ {
+			if err = aggexec.AddWindowRow(ctr.runningAgg, row, ctr.aggVecs[idx].Vec); err != nil {
+				return nil, err
+			}
+		}
+		ctr.runningLeft = left
+		ctr.runningRight = right
+		if err = ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
+			return nil, err
+		}
+		ctr.runningNextRow = j + 1
+	}
+
+	vecs, err := ctr.batAggs[idx].Flush()
+	if err != nil {
+		return nil, err
+	}
+	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
+	if outputEnd == n {
+		ctr.freeRunningAgg()
+	}
 	return vec, nil
 }
 
@@ -534,7 +817,11 @@ func (ctr *container) processOrderFuncRange(
 			if err := checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
-			values[j-outputStart] = int64(j + 1)
+			partitionStart := 0
+			if ctr.ps != nil {
+				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			values[j-outputStart] = int64(j - partitionStart + 1)
 		}
 	case "ntile":
 		bucketCount, err := ctr.ntileBucketCount(idx)
@@ -605,8 +892,11 @@ func (ctr *container) ntileBucketCount(idx int) (int64, error) {
 		return 1, nil
 	}
 	vec := ctr.aggVecs[idx].Vec[0]
-	if vec.Length() == 0 || vec.IsNull(0) {
+	if vec.Length() == 0 {
 		return 1, nil
+	}
+	if vec.IsNull(0) {
+		return 0, moerr.NewInvalidInputNoCtx("ntile bucket count cannot be NULL")
 	}
 	bucketCount, ok := getInt64FromVec(vec, 0)
 	if !ok {
@@ -816,7 +1106,10 @@ func (ctr *container) processValueFuncRange(
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			nthVec = ctr.aggVecs[idx].Vec[1]
 			if nthVec.IsConst() {
-				constNth, constOK = getInt64FromVec(nthVec, 0)
+				constNth, constOK, err = getNthValueOffsetFromVec(proc.Ctx, nthVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		for j := outputStart; j < outputEnd; j++ {
@@ -825,7 +1118,10 @@ func (ctr *container) processValueFuncRange(
 			}
 			nthVal, ok := constNth, constOK
 			if nthVec != nil && !nthVec.IsConst() {
-				nthVal, ok = getInt64FromVec(nthVec, j)
+				nthVal, ok, err = getNthValueOffsetFromVec(proc.Ctx, nthVec, j)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if !ok || nthVal < 1 {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
@@ -865,6 +1161,26 @@ func (ctr *container) processValueFuncRange(
 	}
 
 	return localResult, nil
+}
+
+func getNthValueOffsetFromVec(ctx context.Context, vec *vector.Vector, row int) (int64, bool, error) {
+	if !types.T(vec.GetType().Oid).IsMySQLString() {
+		value, ok := getInt64FromVec(vec, row)
+		return value, ok, nil
+	}
+
+	if vec.IsConst() {
+		row = 0
+	}
+	if vec.Length() == 0 || vec.IsNull(uint64(row)) ||
+		!vec.HasPrepareParamKind() || vec.GetPrepareParamKindAt(row) != vector.PrepareParamInteger {
+		return 0, false, moerr.NewWrongArguments(ctx, "nth_value")
+	}
+	value, err := strconv.ParseUint(vec.GetStringAt(row), 10, 63)
+	if err != nil || value == 0 {
+		return 0, false, moerr.NewWrongArguments(ctx, "nth_value")
+	}
+	return int64(value), true, nil
 }
 
 // getInt64FromVec extracts an int64 value from a vector at the given row.
@@ -1125,6 +1441,18 @@ func makeOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 	return w.OrderBy
 }
 
+func makePartitionTopNOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
+	w := expr.Expr.(*plan.Expr_W).W
+	orderBy := make([]*plan.OrderBySpec, 0, len(w.PartitionBy)+len(w.OrderBy))
+	for _, partitionExpr := range w.PartitionBy {
+		orderBy = append(orderBy, &plan.OrderBySpec{
+			Expr: partitionExpr,
+			Flag: plan.OrderBySpec_INTERNAL,
+		})
+	}
+	return append(orderBy, w.OrderBy...)
+}
+
 func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (err error) {
 	input := []*batch.Batch{bat}
 
@@ -1153,6 +1481,7 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 
 func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *process.Process) (bool, error) {
 	makeArgFs(ap)
+	ctr.ps = nil
 
 	if err := ctr.evalOrderVector(bat, proc); err != nil {
 		return false, err
@@ -1162,6 +1491,13 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	}
 
 	ovec := ctr.orderVecs[0].Vec[0]
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	partitionKeyCount := 0
+	if ap.PartitionTopN {
+		// PartitionTopN coalesces input partitions, so its order-vector prefix
+		// contains identity partition keys followed by SQL ORDER BY keys.
+		partitionKeyCount = len(w.PartitionBy)
+	}
 
 	rowCount := bat.RowCount()
 	// if ctr.sels == nil {
@@ -1182,7 +1518,11 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 		nullCnt := ovec.GetNulls().Count()
 		if nullCnt < ovec.Length() {
-			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+			if partitionKeyCount > 0 {
+				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+			} else {
+				sort.SortForSQLOrder(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+			}
 		}
 		if err := checkCanceled(proc, 0); err != nil {
 			return false, err
@@ -1192,9 +1532,6 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(ctr.sels))
 
-	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
-	n := len(w.PartitionBy)
-
 	i, j := 1, len(ctr.orderVecs)
 	for ; i < j; i++ {
 		if err := checkCanceled(proc, 0); err != nil {
@@ -1202,20 +1539,29 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 		desc := ctr.desc[i]
 		nullsLast := ctr.nullsLast[i]
-		ps = partition.Partition(ctr.sels, ds, ps, ovec)
+		if i <= partitionKeyCount {
+			ps = partition.Partition(ctr.sels, ds, ps, ovec)
+		} else {
+			ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
+		}
 		vec := ctr.orderVecs[i].Vec[0]
 		// skip sort for const vector
 		if !vec.IsConst() {
 			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
-				for i, j := 0, len(ps); i < j; i++ {
-					if err := checkCanceled(proc, i); err != nil {
+				for group, groupCount := 0, len(ps); group < groupCount; group++ {
+					if err := checkCanceled(proc, group); err != nil {
 						return false, err
 					}
-					if i == j-1 {
-						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec)
+					start := ps[group]
+					end := int64(len(ctr.sels))
+					if group < groupCount-1 {
+						end = ps[group+1]
+					}
+					if i < partitionKeyCount {
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
 					} else {
-						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec)
+						sort.SortForSQLOrder(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
 					}
 				}
 			}
@@ -1224,22 +1570,18 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			return false, err
 		}
 		ovec = vec
-		if n == i {
-			ctr.ps = make([]int64, len(ps))
-			copy(ctr.ps, ps)
+		if i == partitionKeyCount {
+			ctr.ps = append(ctr.ps, ps...)
 		}
 	}
 
-	if n == i {
+	if ap.PartitionTopN && partitionKeyCount == i {
 		ps = partition.Partition(ctr.sels, ds, ps, ovec)
-		ctr.ps = make([]int64, len(ps))
-		copy(ctr.ps, ps)
-	} else if n == 0 {
-		ctr.ps = nil
+		ctr.ps = append(ctr.ps, ps...)
 	}
 
-	if len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.OrderBy) > 0 {
-		ctr.os = partition.Partition(ctr.sels, ds, ps, ovec)
+	if len(w.OrderBy) > 0 {
+		ctr.os = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
 	} else {
 		ctr.os = nil
 	}
@@ -1265,8 +1607,6 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			panic(err)
 		}
 	}
-
-	ctr.ps = nil
 
 	return false, nil
 }
@@ -1459,34 +1799,34 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
-		cmpl := genericGreater[float32]
+		cmpl := float32OrderAscGreater
 		if desc {
-			cmpl = genericLess[float32]
+			cmpl = float32OrderDescGreater
 		}
 		if expr == nil {
-			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[float32], cmpl)
+			left = genericSearchLeft(start, end-1, col, col[rowIdx], float32OrderEqual, cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Fval).Fval
 			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[float32], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, float32OrderEqual, cmpl)
 			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[float32], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, float32OrderEqual, cmpl)
 			}
 		}
 	case types.T_float64:
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
-		cmpl := genericGreater[float64]
+		cmpl := float64OrderAscGreater
 		if desc {
-			cmpl = genericLess[float64]
+			cmpl = float64OrderDescGreater
 		}
 		if expr == nil {
-			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[float64], cmpl)
+			left = genericSearchLeft(start, end-1, col, col[rowIdx], float64OrderEqual, cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Dval).Dval
 			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[float64], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, float64OrderEqual, cmpl)
 			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[float64], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, float64OrderEqual, cmpl)
 			}
 		}
 	case types.T_decimal64:
@@ -1883,34 +2223,34 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
-		cmpl := genericGreater[float32]
+		cmpl := float32OrderAscGreater
 		if desc {
-			cmpl = genericLess[float32]
+			cmpl = float32OrderDescGreater
 		}
 		if expr == nil {
-			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[float32])
+			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], float32OrderEqual)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Fval).Fval
 			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[float32], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, float32OrderEqual, cmpl)
 			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[float32], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, float32OrderEqual, cmpl)
 			}
 		}
 	case types.T_float64:
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
-		cmpl := genericGreater[float64]
+		cmpl := float64OrderAscGreater
 		if desc {
-			cmpl = genericLess[float64]
+			cmpl = float64OrderDescGreater
 		}
 		if expr == nil {
-			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[float64])
+			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], float64OrderEqual)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Dval).Dval
 			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[float64], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, float64OrderEqual, cmpl)
 			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[float64], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, float64OrderEqual, cmpl)
 			}
 		}
 	case types.T_decimal64:
@@ -2178,6 +2518,34 @@ func genericGreater[T types.OrderedT](a, b T) bool {
 
 func genericLess[T types.OrderedT](a, b T) bool {
 	return a < b
+}
+
+// The RANGE binary searches operate on vectors sorted with the SQL ORDER BY
+// relation. Native float comparisons do not provide the peer/equality and
+// boundary behavior required for NaNs, so keep the search predicates aligned
+// with the sort relation for both directions.
+func float32OrderEqual(a, b float32) bool {
+	return types.Float32OrderAscCompare(a, b) == 0
+}
+
+func float32OrderAscGreater(a, b float32) bool {
+	return types.Float32OrderAscCompare(a, b) > 0
+}
+
+func float32OrderDescGreater(a, b float32) bool {
+	return types.Float32OrderDescCompare(a, b) > 0
+}
+
+func float64OrderEqual(a, b float64) bool {
+	return types.Float64OrderAscCompare(a, b) == 0
+}
+
+func float64OrderAscGreater(a, b float64) bool {
+	return types.Float64OrderAscCompare(a, b) > 0
+}
+
+func float64OrderDescGreater(a, b float64) bool {
+	return types.Float64OrderDescCompare(a, b) > 0
 }
 
 func decimal64Equal(a, b types.Decimal64) bool {

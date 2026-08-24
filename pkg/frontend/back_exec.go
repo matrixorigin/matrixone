@@ -407,11 +407,15 @@ func doComQueryInBack(
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
+		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
 	bindBackExecSession(proc, backSes)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
+	if process.HasSystemCTELimits(execCtx.reqCtx) {
+		proc.SetResolveVariableFunc(process.SystemCTEResolver(backSes.txnCompileCtx.ResolveVariable))
+	}
 	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
 	proc.SetResolveVariablePrepareParamKindFunc(backSes.txnCompileCtx.ResolveVariablePrepareParamKind)
 	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
@@ -1545,24 +1549,33 @@ func (backSes *backSession) GetTempTable(dbName, alias string) (string, bool) {
 }
 
 func (backSes *backSession) AddTempTable(dbName, alias, realName string) {
-	if backSes == nil || backSes.upstream == nil {
+	if backSes == nil {
 		return
 	}
-	backSes.upstream.AddTempTable(dbName, alias, realName)
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.addTempTable(dbName, alias, realName, txnKey, stmtKey)
+	}
 }
 
 func (backSes *backSession) RemoveTempTableByRealName(realName string) {
-	if backSes == nil || backSes.upstream == nil {
+	if backSes == nil {
 		return
 	}
-	backSes.upstream.RemoveTempTableByRealName(realName)
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.removeTempTableByRealName(realName, txnKey, stmtKey)
+	}
 }
 
 func (backSes *backSession) RemoveTempTable(dbName, alias string) {
-	if backSes == nil || backSes.upstream == nil {
+	if backSes == nil {
 		return
 	}
-	backSes.upstream.RemoveTempTable(dbName, alias)
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.removeTempTable(dbName, alias, txnKey, stmtKey)
+	}
 }
 
 func (backSes *backSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
@@ -1570,4 +1583,20 @@ func (backSes *backSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
 		return false, false
 	}
 	return backSes.upstream.GetSqlModeNoAutoValueOnZero()
+}
+
+// AppendWarningDiagnostic forwards expression warnings produced by a
+// background/stored-procedure process to the client session that owns it.
+func (backSes *backSession) AppendWarningDiagnostic(code uint16, msg string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AppendWarningDiagnostic(code, msg)
+}
+
+func (backSes *backSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AppendWarningBatch(total, codes, messages)
 }

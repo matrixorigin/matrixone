@@ -1843,7 +1843,7 @@ func Test_checkDatabaseExists_GoodPath(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ctx := context.Background()
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 
 		// Mock result - database exists
 		mockedResult := func(ctrl *gomock.Controller) []interface{} {
@@ -1866,7 +1866,7 @@ func Test_checkDatabaseExists_GoodPath(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ctx := context.Background()
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 
 		// Mock result - database not exists
 		mockedResult := func(ctrl *gomock.Controller) []interface{} {
@@ -2150,10 +2150,13 @@ func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 
 	t.Run("returns nil when Database fails with ExpectedEOB", func(t *testing.T) {
 		mockEngine.EXPECT().Database(gomock.Any(), "invisible_db", mockTxn).Return(nil, moerr.GetOkExpectedEOB())
+		silentSes, logs := newObservedProtocolSession()
+		silentSes.service = ses.GetService()
 
-		sub, err := getSubscriptionMeta(ctx, "invisible_db", ses, mockTxn, mockBh)
+		sub, err := getSubscriptionMeta(ctx, "invisible_db", silentSes, mockTxn, mockBh)
 		require.NoError(t, err, "ExpectedEOB should return nil — database not visible means not a subscription")
 		require.Nil(t, sub)
+		require.Equal(t, 0, logs.Len())
 	})
 
 	t.Run("returns NoDB when Database fails with internal error", func(t *testing.T) {

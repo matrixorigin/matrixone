@@ -46,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -67,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -85,6 +85,13 @@ import (
 )
 
 const schedulingPreviewTimeout = 100 * time.Millisecond
+
+const (
+	preparedCursorDefaultMaxBytes  uint64 = 100 << 20
+	preparedCursorHardMaxBytes     uint64 = 1 << 30
+	preparedCursorMaxRows          uint64 = 1 << 20
+	preparedCursorBytesPerMegabyte uint64 = 1 << 20
+)
 
 func createDropDatabaseErrorInfo() string {
 	return "CREATE/DROP of database is not supported in transactions"
@@ -131,6 +138,13 @@ func getPrepareStmtName(stmtID uint32) string {
 	b = append(b, '_')
 	b = strconv.AppendUint(b, uint64(stmtID), 10)
 	return string(b)
+}
+
+// GetPrepareStmtName returns the session name for a binary-protocol prepared
+// statement. The proxy uses the same identity when carrying a forwarded
+// COM_STMT_CLOSE through connection migration.
+func GetPrepareStmtName(stmtID uint32) string {
+	return getPrepareStmtName(stmtID)
 }
 
 func parsePrepareStmtID(s string) uint32 {
@@ -327,10 +341,20 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 func redactStatementTextForLogging(statement tree.Statement, text string) string {
-	switch statement.(type) {
+	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
 		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
 		return tree.String(statement, dialect.MYSQL)
+	case *tree.CreateTable:
+		// A datastream external table's WITH options may carry an 'apikey'
+		// secret, and an ESQL/SQL foreign table's inline 'config' carries
+		// credentials; re-rendering the AST redacts them
+		// (DataStreamOption.Format / ForeignTableOption.Format), so the raw
+		// CREATE text never reaches statement logging.
+		if stmt.DataStreamParam != nil || stmt.ForeignParam != nil {
+			return tree.String(statement, dialect.MYSQL)
+		}
+		return text
 	default:
 		return text
 	}
@@ -533,8 +557,13 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "yes"); err != nil {
 			return
 		}
+		ses.markMigrationSystemVarReplayable("mo_table_stats.force_update", true)
 		defer func() {
-			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no")
+			if restoreErr := ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no"); restoreErr != nil {
+				ses.markMigrationSystemVarReplayable("mo_table_stats.force_update", false)
+				return
+			}
+			ses.markMigrationSystemVarReplayable("mo_table_stats.force_update", true)
 		}()
 
 		sqlBuilder := strings.Builder{}
@@ -778,6 +807,383 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs 
 	return nil
 }
 
+// newPreparedStmtCursor creates the bounded result retained for COM_STMT_FETCH.
+// query_result_maxsize is already the account-level result budget used by the
+// frontend. Reusing it keeps cursor retention configurable without introducing
+// a second session variable; the hard cap prevents an accidentally huge value
+// from turning the prepared-statement quota into an unbounded heap multiplier.
+func newPreparedStmtCursor(ses *Session) *preparedStmtCursor {
+	limit := currentPreparedCursorLimit(ses, preparedCursorDefaultMaxBytes)
+	return &preparedStmtCursor{
+		result:      &MysqlResultSet{},
+		maxBytes:    limit,
+		maxBytesSet: ses != nil && ses.sesSysVars != nil,
+		maxRows:     preparedCursorMaxRows,
+		owner:       ses,
+	}
+}
+
+func currentPreparedCursorLimit(ses *Session, fallback uint64) uint64 {
+	limit := fallback
+	if limit == 0 {
+		limit = preparedCursorDefaultMaxBytes
+	}
+	if ses == nil {
+		return limit
+	}
+
+	// A live session owns the dynamic query_result_maxsize value. Do not cache
+	// it in preparedCursorLimit: clients can lower or raise the variable after
+	// closing a cursor, and the next cursor must observe the new budget.
+	if ses.sesSysVars != nil {
+		if value, err := ses.GetSessionSysVar(QueryResultMaxsize); err == nil {
+			var megabytes uint64
+			valid := false
+			switch v := value.(type) {
+			case uint64:
+				megabytes = v
+				valid = true
+			case int64:
+				if v >= 0 {
+					megabytes = uint64(v)
+					valid = true
+				}
+			case uint32:
+				megabytes = uint64(v)
+				valid = true
+			case int32:
+				if v >= 0 {
+					megabytes = uint64(v)
+					valid = true
+				}
+			}
+			if valid {
+				maxMegabytes := preparedCursorHardMaxBytes / preparedCursorBytesPerMegabyte
+				if megabytes > maxMegabytes {
+					megabytes = maxMegabytes
+				}
+				return megabytes * preparedCursorBytesPerMegabyte
+			}
+		}
+		return limit
+	}
+
+	// Partially initialized sessions in unit tests do not have a sysvar map.
+	// Keep the atomic field as a compatibility fallback for those callers; it
+	// is never populated by a live session anymore.
+	if existing := ses.preparedCursorLimit.Load(); existing != 0 {
+		return existing
+	}
+	return limit
+}
+
+func (ses *Session) tryReservePreparedCursorBytes(bytes, fallbackLimit uint64) bool {
+	if ses == nil || bytes == 0 {
+		return true
+	}
+	limit := currentPreparedCursorLimit(ses, fallbackLimit)
+	for {
+		current := ses.preparedCursorBytes.Load()
+		if current > limit || bytes > limit-current {
+			return false
+		}
+		if ses.preparedCursorBytes.CompareAndSwap(current, current+bytes) {
+			return true
+		}
+	}
+}
+
+func (ses *Session) releasePreparedCursorBytes(bytes uint64) {
+	if ses == nil || bytes == 0 {
+		return
+	}
+	for {
+		current := ses.preparedCursorBytes.Load()
+		if current == 0 {
+			return
+		}
+		next := uint64(0)
+		if bytes < current {
+			next = current - bytes
+		}
+		if ses.preparedCursorBytes.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
+func estimatePreparedCursorBatchBytes(bat *batch.Batch) (uint64, error) {
+	if bat == nil || bat.RowCount() == 0 {
+		return 0, nil
+	}
+	dataBytes := bat.Size()
+	if allocated := bat.Allocated(); allocated > dataBytes {
+		dataBytes = allocated
+	}
+	if dataBytes < 0 {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	// Each retained row owns a []any backing array and may also own converted
+	// strings/arrays (for example DECIMAL and temporal values). Charge a
+	// conservative per-column allowance in addition to the source vector bytes.
+	rowBytes := uint64(len(bat.Vecs))*32 + 64
+	rows := uint64(bat.RowCount())
+	if rows > math.MaxUint64/rowBytes {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	overhead := rows * rowBytes
+	if uint64(dataBytes) > math.MaxUint64-overhead {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	total := uint64(dataBytes) + overhead
+	materialized, err := estimatePreparedCursorMaterializedBytes(bat)
+	if err != nil {
+		return 0, err
+	}
+	if materialized > math.MaxUint64-total {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	return total + materialized, nil
+}
+
+// estimatePreparedCursorMaterializedBytes charges allocations that are created
+// while fillResultSet converts vectors into retained []any rows. In
+// particular, vecuint8 values are rendered with ArrayToString and decimal
+// values with Format, so their retained representations can be several times
+// larger than the raw vector.
+// Other array families are copied into a new typed slice and are charged for
+// that second backing store as well.
+func estimatePreparedCursorMaterializedBytes(bat *batch.Batch) (uint64, error) {
+	if bat == nil || bat.RowCount() == 0 {
+		return 0, nil
+	}
+	var total uint64
+	add := func(value uint64) error {
+		if value > math.MaxUint64-total {
+			return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+		}
+		total += value
+		return nil
+	}
+	for _, vec := range bat.Vecs {
+		if vec == nil || vec.IsConstNull() {
+			continue
+		}
+		rows := bat.RowCount()
+		switch vec.GetType().Oid {
+		case types.T_array_uint8:
+			for row := 0; row < rows; row++ {
+				if vec.GetNulls().Contains(uint64(row)) {
+					continue
+				}
+				arr := vector.GetArrayAt[uint8](vec, row)
+				// ArrayToString uses at most three decimal digits per
+				// uint8 plus ", " separators and two brackets.
+				displayBytes := uint64(2)
+				if len(arr) > 0 {
+					if uint64(len(arr)) > math.MaxUint64/5 {
+						return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+					}
+					displayBytes = uint64(len(arr)) * 5
+				}
+				// Include the string header/allocation slack in addition to
+				// the character bytes. The row/column overhead above covers
+				// the []any slot itself.
+				if displayBytes > math.MaxUint64-16 {
+					return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+				}
+				if err := add(displayBytes + 16); err != nil {
+					return 0, err
+				}
+			}
+		case types.T_array_float32:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 4, add); err != nil {
+				return 0, err
+			}
+		case types.T_array_float64:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 8, add); err != nil {
+				return 0, err
+			}
+		case types.T_array_bf16, types.T_array_float16:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 2, add); err != nil {
+				return 0, err
+			}
+		case types.T_array_int8:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 1, add); err != nil {
+				return 0, err
+			}
+		case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			for row := 0; row < rows; row++ {
+				if vec.GetNulls().Contains(uint64(row)) {
+					continue
+				}
+				var display string
+				switch vec.GetType().Oid {
+				case types.T_decimal64:
+					display = vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, row).Format(vec.GetType().Scale)
+				case types.T_decimal128:
+					display = vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, row).Format(vec.GetType().Scale)
+				case types.T_decimal256:
+					display = vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, row).Format(vec.GetType().Scale)
+				}
+				if err := addFormattedPreparedCursorValueBytes(uint64(len(display)), add); err != nil {
+					return 0, err
+				}
+			}
+		case types.T_geometry, types.T_geometry32:
+			// fillResultSet exposes geometry values as WKT bytes rather than
+			// retaining the compact WKB payload.  A WKB point uses 16 bytes
+			// per coordinate pair (8 for GEOMETRY32), while the rendered WKT
+			// can be substantially larger for large LINESTRING/POLYGON values.
+			// Decode the same payload before reserving the cursor budget so the
+			// retained representation cannot exceed the reservation.
+			for row := 0; row < rows; row++ {
+				if vec.GetNulls().Contains(uint64(row)) {
+					continue
+				}
+				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(row))
+				if err != nil {
+					return 0, err
+				}
+				// Include the []byte backing allocation and allocator/header
+				// slack in addition to the WKT characters.
+				textBytes := uint64(len(text))
+				if textBytes > math.MaxUint64-32 {
+					return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+				}
+				if err := add(textBytes + 32); err != nil {
+					return 0, err
+				}
+			}
+		}
+	}
+	return total, nil
+}
+
+func addFormattedPreparedCursorValueBytes(displayBytes uint64, add func(uint64) error) error {
+	// fillResultSet retains a separately allocated string for formatted values.
+	// Include the string backing allocation and allocator/header slack in
+	// addition to the displayed bytes; the []any slot is charged by the row
+	// overhead in estimatePreparedCursorBatchBytes.
+	if displayBytes > math.MaxUint64-32 {
+		return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	return add(displayBytes + 32)
+}
+
+func estimatePreparedCursorArrayCopyBytes(
+	vec *vector.Vector,
+	rows int,
+	elementBytes uint64,
+	add func(uint64) error,
+) error {
+	for row := 0; row < rows; row++ {
+		if vec.GetNulls().Contains(uint64(row)) {
+			continue
+		}
+		var length int
+		switch vec.GetType().Oid {
+		case types.T_array_float32:
+			length = len(vector.GetArrayAt[float32](vec, row))
+		case types.T_array_float64:
+			length = len(vector.GetArrayAt[float64](vec, row))
+		case types.T_array_bf16:
+			length = len(vector.GetArrayAt[types.BF16](vec, row))
+		case types.T_array_float16:
+			length = len(vector.GetArrayAt[types.Float16](vec, row))
+		case types.T_array_int8:
+			length = len(vector.GetArrayAt[int8](vec, row))
+		}
+		bytes := uint64(length)
+		if bytes > math.MaxUint64/elementBytes {
+			return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+		}
+		bytes *= elementBytes
+		// Account for the slice header and allocator slack in the copied
+		// value. The raw element bytes are the dominant component.
+		if bytes > math.MaxUint64-24 {
+			return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+		}
+		if err := add(bytes + 24); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// capturePreparedCursorBatch materializes a binary prepared-statement result
+// for COM_STMT_FETCH. The ordinary output callback sends each batch directly
+// to the client; a read-only server cursor must retain those rows until the
+// client asks for them. Retention is bounded and accounted across all active
+// cursors in the session. The result metadata is installed before the pipeline
+// starts; wire column definitions and the cursor terminator are sent only
+// after successful materialization.
+func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch) error {
+	if bat == nil {
+		return nil
+	}
+	if execCtx == nil {
+		return moerr.NewInternalErrorNoCtx("prepared cursor execution context is missing")
+	}
+	if execCtx.prepareStmt == nil || execCtx.prepareStmt.cursor == nil {
+		return moerr.NewInternalError(execCtx.reqCtx, "prepared cursor state is missing")
+	}
+	cursor := execCtx.prepareStmt.cursor
+	if cursor.result == nil {
+		cursor.result = &MysqlResultSet{}
+	}
+	if cursor.owner == nil {
+		cursor.owner = ses
+	}
+	if !cursor.maxBytesSet {
+		if cursor.maxBytes == 0 {
+			cursor.maxBytes = preparedCursorDefaultMaxBytes
+		}
+		cursor.maxBytesSet = true
+	}
+	if cursor.maxRows == 0 {
+		cursor.maxRows = preparedCursorMaxRows
+	}
+	rowCount := cursor.result.GetRowCount()
+	if rowCount > cursor.maxRows || uint64(bat.RowCount()) > cursor.maxRows-rowCount {
+		return moerr.NewInvalidInputf(execCtx.reqCtx,
+			"prepared cursor result exceeds the %d-row limit", cursor.maxRows)
+	}
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	if err != nil {
+		return err
+	}
+	// query_result_maxsize is dynamic. Apply its current value to an active
+	// cursor as well as to newly created cursors: a decrease takes effect
+	// before more rows are retained, and an increase is not stranded behind a
+	// stale per-cursor snapshot.
+	effectiveLimit := currentPreparedCursorLimit(ses, cursor.maxBytes)
+	if cursor.bytes > effectiveLimit || estimated > effectiveLimit-cursor.bytes {
+		return moerr.NewInvalidInputf(execCtx.reqCtx,
+			"prepared cursor result exceeds the %d MB memory limit", effectiveLimit/preparedCursorBytesPerMegabyte)
+	}
+	if !ses.tryReservePreparedCursorBytes(estimated, effectiveLimit) {
+		return moerr.NewInvalidInputf(execCtx.reqCtx,
+			"prepared cursor session result exceeds the %d MB memory limit", effectiveLimit/preparedCursorBytesPerMegabyte)
+	}
+	startRows := len(cursor.result.Data)
+	committed := false
+	defer func() {
+		if !committed {
+			// Keep the result set unchanged if extraction returns an error or
+			// panics after appending a partial row prefix.
+			cursor.result.Data = cursor.result.Data[:startRows]
+			ses.releasePreparedCursorBytes(estimated)
+		}
+	}()
+	if err = fillResultSet(execCtx.reqCtx, bat, ses, cursor.result); err != nil {
+		return err
+	}
+	cursor.bytes += estimated
+	committed = true
+	return nil
+}
+
 func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	defer RecordStatementTxnID(ctx, ses)
 
@@ -929,17 +1335,46 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarType plan.Type
 	var userVarPrepareParamKind vector.PrepareParamKind
 	type evaluatedAssignment struct {
 		assign                  *tree.VarAssignmentExpr
 		value                   interface{}
 		userVarIsBin            bool
+		valueType               plan.Type
 		userVarPrepareParamKind vector.PrepareParamKind
+	}
+	type systemVarReplayabilitySnapshot struct {
+		replayable bool
+		tracked    bool
+	}
+	previousSystemReplayability := make(map[string]systemVarReplayabilitySnapshot)
+	captureSystemReplayability := func(name string) {
+		name = canonicalSystemVariableName(name)
+		if _, captured := previousSystemReplayability[name]; captured {
+			return
+		}
+		replayable, tracked := ses.getMigrationSystemVarReplayability(name)
+		previousSystemReplayability[name] = systemVarReplayabilitySnapshot{
+			replayable: replayable,
+			tracked:    tracked,
+		}
+	}
+	for _, assign := range sv.Assignments {
+		if assign.SetNames {
+			for _, name := range []string{
+				"character_set_client", "character_set_connection", "character_set_results",
+			} {
+				captureSystemReplayability(name)
+			}
+		} else if assign.System {
+			captureSystemReplayability(assign.Name)
+		}
 	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		prepareParamKind := vector.PrepareParamNone
-		value, evalErr := getExprValueWithPrepareMeta(
+		value, valueType, evalErr := getExprValueWithPrepareMeta(
 			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
@@ -962,6 +1397,7 @@ func doSetVar(
 			assign:                  assign,
 			value:                   value,
 			userVarIsBin:            isBin,
+			valueType:               valueType,
 			userVarPrepareParamKind: prepareParamKind,
 		}, nil
 	}
@@ -1001,13 +1437,58 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVarWithKind(
-				name, value, sql, userVarIsBin, userVarPrepareParamKind)
+			err = ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+				name, value, sql, userVarIsBin, userVarType, userVarPrepareParamKind,
+				!preparedExpression && sql != "" && execCtx.singleStatementQuery)
 			if err != nil {
 				return err
 			}
 		}
 		return nil
+	}
+	markSystemReplayability := func(assign *tree.VarAssignmentExpr) {
+		mark := func(name string, replayable bool) {
+			name = canonicalSystemVariableName(name)
+			if replayable {
+				if previous, captured := previousSystemReplayability[name]; captured && previous.tracked && !previous.replayable {
+					// A later captured assignment cannot prove that an earlier
+					// prepared assignment was replayable.
+					replayable = false
+				}
+			}
+			ses.markMigrationSystemVarReplayable(name, replayable)
+		}
+		if !assign.System && !assign.SetNames {
+			return
+		}
+		replayable := !preparedExpression && sql != "" && execCtx.singleStatementQuery
+		if assign.SetNames {
+			for _, name := range []string{
+				"character_set_client", "character_set_connection", "character_set_results",
+			} {
+				mark(name, replayable)
+			}
+			return
+		}
+		if assign.Global {
+			if def, ok := gSysVarsDefs[canonicalSystemVariableName(assign.Name)]; ok && def.Scope == ScopeBoth {
+				// SET GLOBAL changes the value inherited by a future session but
+				// leaves this session's value unchanged. Replaying it on a legacy
+				// target after the handshake would therefore lose the source value.
+				ses.markMigrationSystemVarReplayable(assign.Name, false)
+				return
+			}
+			// Only global variables with a session-migration runtime side
+			// effect need replayability tracking. A prepared or multi-statement
+			// SET GLOBAL for these variables is not present in the proxy raw
+			// stream, so legacy targets must fail closed instead of silently
+			// losing the source runtime value.
+			if hasMigrationRuntimeSideEffect(assign.Name) {
+				mark(assign.Name, replayable)
+			}
+			return
+		}
+		mark(assign.Name, replayable)
 	}
 
 	applyAssignment := func(item evaluatedAssignment) error {
@@ -1015,6 +1496,7 @@ func doSetVar(
 		name := assign.Name
 		value := item.value
 		userVarIsBin = item.userVarIsBin
+		userVarType = item.valueType
 		userVarPrepareParamKind = item.userVarPrepareParamKind
 
 		//TODO : fix SET NAMES after parser is ready
@@ -1048,8 +1530,13 @@ func doSetVar(
 				}
 				allowCurrentStatementTxn := execCtx.txnOpt.activeTxnAtStartKnown &&
 					!execCtx.txnOpt.activeTxnAtStart
-				return txnHandler.setNextTxnIsolation(
-					execCtx.reqCtx, isolation, allowCurrentStatementTxn)
+				if err := txnHandler.setNextTxnIsolation(
+					execCtx.reqCtx, isolation, allowCurrentStatementTxn); err != nil {
+					return err
+				}
+				ses.markMigrationSystemVarReplayable(
+					migrationNextTxnIsolationKey, !preparedExpression && sql != "" && execCtx.singleStatementQuery)
+				return nil
 			case tree.TransactionScopeSession:
 				return setVarFunc(true, false, name, value, sql)
 			case tree.TransactionScopeGlobal:
@@ -1100,26 +1587,25 @@ func doSetVar(
 			if err != nil {
 				return err
 			}
-			runtime.ServiceRuntime(ses.service).SetGlobalVariables("optimizer_hints", value)
+			ses.applySessionSysVarSideEffects(name, value)
 		} else if assign.System && name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
-			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_in", value)
+			ses.applySessionSysVarSideEffects(name, value)
 		} else if assign.System && name == "runtime_filter_limit_bloom_filter" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
-			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
+			ses.applySessionSysVarSideEffects(name, value)
 		} else if assign.System && name == "disable_agg_statement" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
-			boolVal := InitSystemVariableBoolType("_")
-			ses.disableAgg = boolVal.IsTrue(value)
+			ses.applySessionSysVarSideEffects(name, value)
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -1174,6 +1660,7 @@ func doSetVar(
 			if err = applyAssignment(item); err != nil {
 				return err
 			}
+			markSystemReplayability(assign)
 		}
 		completed = true
 		return nil
@@ -1187,6 +1674,7 @@ func doSetVar(
 		if err = applyAssignment(item); err != nil {
 			return err
 		}
+		markSystemReplayability(assign)
 	}
 	return nil
 }
@@ -1280,6 +1768,7 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 		); err != nil {
 			return err
 		}
+		ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, false)
 	case tree.TransactionScopeSession:
 		if err := ses.SetSessionSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
 			return err
@@ -1326,10 +1815,20 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	mrs.AddColumn(MsgCol)
 
 	info := ses.diagnosticsSnapshot()
+	showErrorsOnly := false
+	if execCtx != nil {
+		_, showErrorsOnly = execCtx.stmt.(*tree.ShowErrors)
+	}
 
 	for i := info.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
 		row[0] = "Error"
+		if i < len(info.levels) && info.levels[i] != "" {
+			row[0] = info.levels[i]
+		}
+		if showErrorsOnly && !strings.EqualFold(row[0].(string), "Error") {
+			continue
+		}
 		row[1] = int16(info.codes[i])
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
@@ -1830,9 +2329,12 @@ func writeExplainResult(
 
 	//2. fill the result set
 	//column
+	explainColName := plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL)
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
+	col1.SetName(explainColName)
+	setMysqlColumnTypeMetadata(col1, types.New(types.T_varchar, 0, 0))
+	setCharacter(col1)
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -2108,7 +2610,8 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	rewritten := sql
 	var err error
 	if execCtx.rewriteEnabled {
-		rewritten, err = rewriteSQLFromMaterializedPolicy(execCtx.reqCtx, execCtx.sqlOfStmt, sql)
+		rewritten, err = rewriteSQLFromMaterializedPolicyWithSQLMode(
+			execCtx.reqCtx, execCtx.sqlOfStmt, sql, sessionSQLModeForParser(ses), parserLowerCaseTableNames(ses))
 		if err != nil {
 			return sql, nil, nil, err
 		}
@@ -2139,7 +2642,8 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	var remapDb map[string]string
 	if execCtx.rewriteEnabled {
 		parserSQLMode := sessionSQLModeForParser(ses)
-		if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, rewritten, parserSQLMode); err != nil {
+		if err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+			execCtx.reqCtx, stmts, rewritten, parserSQLMode, v.(int64)); err != nil {
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
@@ -2148,7 +2652,7 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
-		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps, v.(int64)); err != nil {
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
@@ -3189,7 +3693,14 @@ func buildPlanWithPrepareMode(
 	var ret *plan2.Plan
 	var err error
 
-	txnOp := ctx.GetProcess().GetTxnOperator()
+	// A later statement in a multi-statement packet can reuse a compiler
+	// context whose process has already been released.  Planning does not
+	// require a transaction operator, so keep the tracing setup optional
+	// instead of dereferencing the missing process.
+	var txnOp client.TxnOperator
+	if proc := ctx.GetProcess(); proc != nil {
+		txnOp = proc.GetTxnOperator()
+	}
 	start := time.Now()
 	seq := uint64(0)
 	if txnOp != nil {
@@ -3217,8 +3728,18 @@ func buildPlanWithPrepareMode(
 		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
-	// NOTE: The context used by buildPlan comes from the CompilerContext object
+	// NOTE: The context used by buildPlan comes from the CompilerContext object.
+	// A nested expression evaluation can temporarily replace that context with
+	// an ExecCtx which is closed before a later statement in the same packet is
+	// planned.  Keep planning and the tracing helpers on the current request
+	// context instead of passing nil to context.WithValue.
 	planContext := ctx.GetContext()
+	if planContext == nil {
+		planContext = reqCtx
+	}
+	if planContext == nil {
+		planContext = context.Background()
+	}
 	stats := statistic.StatsInfoFromContext(planContext)
 	stats.PlanStart()
 
@@ -3328,21 +3849,33 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		return true, nil
 	}
 
-	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
-		if ref == nil || def == nil {
+	checkCatalogObject := func(
+		ref *plan.ObjectRef,
+		name string,
+		snapshot *plan2.Snapshot,
+		version int64,
+		tableID int64,
+	) (bool, error) {
+		if ref == nil {
 			return true, nil
 		}
-		_, tableDef, err := resolveFn(ref.SchemaName, def.Name, nil)
+		_, tableDef, err := resolveFn(plan2.DbNameOfObjRef(ref), name, snapshot)
 		if err != nil {
 			return true, err
 		}
 		if tableDef == nil {
 			return true, nil
 		}
-		if tableDef.Version != def.Version || tableDef.TblId != def.TblId {
+		if int64(tableDef.Version) != version || int64(tableDef.TblId) != tableID {
 			return true, nil
 		}
 		return false, nil
+	}
+	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
+		if ref == nil || def == nil {
+			return true, nil
+		}
+		return checkCatalogObject(ref, def.Name, nil, int64(def.Version), int64(def.TblId))
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
@@ -3372,6 +3905,18 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 				}
 			}
 		}
+		for _, dependency := range p.Query.GetCatalogDependencies() {
+			flag, err := checkCatalogObject(
+				dependency,
+				dependency.GetObjName(),
+				dependency.GetSnapshot(),
+				dependency.GetServer(),
+				dependency.GetObj(),
+			)
+			if err != nil || flag {
+				return true, err
+			}
+		}
 	default:
 	}
 	return false, nil
@@ -3381,7 +3926,26 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
 		return nil
 	}
-	return ses.getCachedPlan(input.getHash())
+	cached := ses.getCachedPlan(input.getHash())
+	// SELECT ... INTO @var changes the type of a session variable as part of
+	// execution.  A cached SELECT-INTO plan can therefore never be reused: it
+	// may have been bound against the variable's pre-assignment type, and the
+	// assignment also invalidates the session cache.  Drop any stale entry so
+	// it cannot be selected again after this request.
+	if cached != nil && containsSelectInto(cached.stmts) {
+		ses.removeCachedPlan(input.getHash())
+		return nil
+	}
+	return cached
+}
+
+func containsSelectInto(stmts []tree.Statement) bool {
+	for _, stmt := range stmts {
+		if selectStmt, ok := stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
@@ -3430,6 +3994,10 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
+			// The cache owns its ASTs until eviction. Wrappers only borrow them;
+			// otherwise normal cleanup or stale-plan reset can return the same AST
+			// to the parser pool while the cache still owns or already freed it.
+			tcw.stmtBorrowed = true
 			tcw.plan = cached.plans[i]
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
@@ -3506,7 +4074,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			return nil, err
 		}
 		if execCtx.rewriteEnabled {
-			err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), parserSQLMode)
+			err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+				execCtx.reqCtx, stmts, execCtx.input.getSql(), parserSQLMode, parserLowerCaseTableNames(ses))
 			if err != nil {
 				return nil, err
 			}
@@ -3539,7 +4108,9 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 					}
 				}
 			}
-			if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, statementRemaps); err != nil {
+			if err = applyRemapDbByStatement(
+				execCtx.reqCtx, stmts, statementRemaps, parserLowerCaseTableNames(ses),
+			); err != nil {
 				return nil, err
 			}
 		}
@@ -3898,13 +4469,7 @@ func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Ses
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return stats, nil
 	}
-	for {
-		explainStmt, ok := stmt.(*tree.ExplainStmt)
-		if !ok {
-			break
-		}
-		stmt = explainStmt.Statement
-	}
+	stmt = unwrapExecutableExplainStatement(stmt)
 	delta, err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
 	if err != nil {
 		return stats, err
@@ -3917,6 +4482,25 @@ func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Ses
 	}
 	stats.Add(&delta)
 	return stats, err
+}
+
+// unwrapExecutableExplainStatement returns the statement that an executable
+// EXPLAIN wrapper will run. The wrapper itself has no table privileges, while
+// the plan belongs to its inner query and must be checked against that query's
+// privilege set at every prepared execution.
+func unwrapExecutableExplainStatement(stmt tree.Statement) tree.Statement {
+	for {
+		switch explainStmt := stmt.(type) {
+		case *tree.ExplainStmt:
+			stmt = explainStmt.Statement
+		case *tree.ExplainAnalyze:
+			stmt = explainStmt.Statement
+		case *tree.ExplainPhyPlan:
+			stmt = explainStmt.Statement
+		default:
+			return stmt
+		}
+	}
 }
 
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
@@ -4201,9 +4785,14 @@ func executeStmtWithResponse(ses *Session,
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
-	err = executeStmtWithTxn(ses, nil, execCtx)
+	// executeStmtWithMaxExecutionTime returns only after
+	// executeStmtWithWorkspace has run its deferred transaction finalizer.
+	// Cursor responses are staged by executeResultRowStmt and emitted by
+	// RespPostMeta below, so a commit error can never follow an advertised
+	// cursor on the wire.
+	err = executeStmtWithMaxExecutionTime(ses, execCtx)
 	if err != nil {
-		return abortStagedReturning(execCtx, err)
+		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}
 
 	// Record the rows affected by this statement so the ROW_COUNT() builtin in a
@@ -4452,6 +5041,48 @@ func executeStmtWithIncrStmt(ses FeSession,
 	return
 }
 
+func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
+	// Evict this stale entry before rebuilding so a successful replan replaces
+	// it instead of paying the validation/rebuild cost forever.
+	if session, ok := ses.(*Session); ok {
+		session.removeCachedPlan(execCtx.input.getHash())
+	}
+
+	stmts, err := parseSql(execCtx, ses.GetMySQLParser())
+	defer freeStmts(stmts)
+	if err != nil {
+		return err
+	}
+	if len(stmts) != len(execCtx.cws) {
+		return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
+	}
+	if execCtx.rewriteEnabled {
+		if err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+			execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses),
+			parserLowerCaseTableNames(ses)); err != nil {
+			return err
+		}
+		remaps := make([]map[string]string, len(execCtx.cws))
+		for i, cw := range execCtx.cws {
+			if carrier, ok := cw.(interface{ GetRemapDb() map[string]string }); ok {
+				remaps[i] = carrier.GetRemapDb()
+			}
+		}
+		if err = applyRemapDbByStatement(
+			execCtx.reqCtx, stmts, remaps, parserLowerCaseTableNames(ses),
+		); err != nil {
+			return err
+		}
+	}
+	for i, cw := range execCtx.cws {
+		cw.ResetPlanAndStmt(stmts[i])
+		// ResetPlanAndStmt now owns the replacement AST. Keep the deferred
+		// cleanup responsible only for statements that were not transferred.
+		stmts[i] = nil
+	}
+	return nil
+}
+
 func dispatchStmt(ses FeSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx) (err error) {
@@ -4464,32 +5095,8 @@ func dispatchStmt(ses FeSession,
 			return err
 		}
 		if flag {
-			//plan changed
-			//clear all cached plan and parse sql again
-			var stmts []tree.Statement
-			stmts, err = parseSql(execCtx, ses.GetMySQLParser())
-			if err != nil {
+			if err = rebuildStaleCachedStatements(ses, execCtx); err != nil {
 				return err
-			}
-			if len(stmts) != len(execCtx.cws) {
-				return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
-			}
-			if execCtx.rewriteEnabled {
-				if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
-					return err
-				}
-				remaps := make([]map[string]string, len(execCtx.cws))
-				for i, cw := range execCtx.cws {
-					if carrier, ok := cw.(interface{ GetRemapDb() map[string]string }); ok {
-						remaps[i] = carrier.GetRemapDb()
-					}
-				}
-				if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
-					return err
-				}
-			}
-			for i, cw := range execCtx.cws {
-				cw.ResetPlanAndStmt(stmts[i])
 			}
 		}
 	}
@@ -4668,6 +5275,14 @@ func executeStmt(ses *Session,
 }
 
 // execute query
+func countUpdateChangedRows(ses *Session) bool {
+	if ses.GetIsInternal() || ses.IsBackgroundSession() {
+		return false
+	}
+	resper, ok := ses.GetResponser().(*MysqlResp)
+	return ok && resper.GetU32(CAPABILITY)&CLIENT_FOUND_ROWS == 0
+}
+
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
@@ -4719,18 +5334,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.Base.SessionInfo = process.SessionInfo{
-		User:          ses.GetUserName(),
-		Host:          pu.SV.Host,
-		ConnectionID:  uint64(resper.GetU32(CONNID)),
-		Database:      ses.GetDatabaseName(),
-		Version:       makeServerVersion(pu, version),
-		TimeZone:      ses.GetTimeZone(),
-		StorageEngine: pu.StorageEngine,
-		LastInsertID:  ses.GetLastInsertID(),
-		SqlHelper:     ses.GetSqlHelper(),
-		Buf:           ses.GetBuffer(),
-		LogLevel:      zapcore.InfoLevel, //TODO: need set by session level config
-		SessionId:     ses.GetSessId(),
+		User:                   ses.GetUserName(),
+		Host:                   pu.SV.Host,
+		ConnectionID:           uint64(resper.GetU32(CONNID)),
+		Database:               ses.GetDatabaseName(),
+		Version:                makeServerVersion(pu, version),
+		TimeZone:               ses.GetTimeZone(),
+		StorageEngine:          pu.StorageEngine,
+		LastInsertID:           ses.GetLastInsertID(),
+		SqlHelper:              ses.GetSqlHelper(),
+		Buf:                    ses.GetBuffer(),
+		LogLevel:               zapcore.InfoLevel, //TODO: need set by session level config
+		SessionId:              ses.GetSessId(),
+		ApplySQLSelectLimit:    !ses.GetIsInternal() && !ses.IsBackgroundSession() && !ses.IsDerivedStmt(),
+		CountUpdateChangedRows: countUpdateChangedRows(ses),
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	// Carry the previous statement's affected rows into this proc so the
@@ -4896,6 +5513,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	for i := 0; i < len(cws); i++ {
 		cw := cws[i]
 		stmt := cw.GetAst()
+		// The assignment performed by SELECT ... INTO @var changes the
+		// variable's bind-time type.  Do not cache this statement after it has
+		// run; setUserDefinedVarWithTypeAndKind clears the existing cache, but
+		// the outer request must also avoid writing this just-executed plan back.
+		if selectStmt, ok := stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 {
+			canCache = false
+		}
 		currentInput := input
 		currentSQLRecord := ""
 		sqlType := input.getSqlSourceType(i)
@@ -4927,6 +5551,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// clear the previous statement's run result so a statement that does not
 		// set it (e.g. a status statement) does not inherit a stale AffectRows.
 		execCtx.runResult = nil
+		// The process is reused for every statement in a multi-statement
+		// COM_QUERY.  The generated-key field belongs to this statement's OK
+		// packet, so clear it before executing each statement while leaving the
+		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
+		proc.SetStatementLastInsertID(0)
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
@@ -4981,6 +5610,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = !hasMoreStatements
+		execCtx.singleStatementQuery = singleStatement
 		execCtx.tenant = tenant
 		execCtx.userName = userNameOnly
 		execCtx.sqlOfStmt = currentSQLRecord
@@ -5157,9 +5787,58 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
+func wrapNativePrepareSQL(name, materializedSQL string) string {
+	trimmed := strings.TrimLeft(materializedSQL, " \t\r\n\f")
+	if strings.HasPrefix(trimmed, "/*+") || strings.HasPrefix(trimmed, "/*!+") {
+		if end := strings.Index(trimmed, "*/"); end >= 0 {
+			content, ok := leadingHintContent(trimmed)
+			content = strings.TrimSpace(content)
+			var policy map[string]json.RawMessage
+			decodeErr := json.Unmarshal([]byte(content), &policy)
+			isPolicy := policy["rewrites"] != nil || policy["remapdb"] != nil
+			if ok && strings.HasPrefix(content, "{") && (decodeErr != nil || isPolicy) {
+				end += 2
+				return fmt.Sprintf("%s prepare %s from %s", trimmed[:end], quotePrepareStmtName(name),
+					strings.TrimSpace(trimmed[end:]))
+			}
+		}
+	}
+	return fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(name), materializedSQL)
+}
+
+func validateNativePrepareJSONHints(ctx context.Context, materializedSQL string, lowerCaseTableNames int64) error {
+	rest := strings.TrimLeft(materializedSQL, " \t\r\n\f")
+	for strings.HasPrefix(rest, "/*+") || strings.HasPrefix(rest, "/*!+") {
+		contentStart := 3
+		if strings.HasPrefix(rest, "/*!+") {
+			contentStart = 4
+		}
+		end := strings.Index(rest[contentStart:], "*/")
+		if end < 0 {
+			break
+		}
+		end += contentStart
+		content := strings.TrimSpace(rest[contentStart:end])
+		if strings.HasPrefix(content, "{") {
+			if _, _, err := parsers.DecodeRewriteHintWithLowerCaseTableNames(
+				ctx, content, lowerCaseTableNames); err != nil {
+				return err
+			}
+		}
+		rest = strings.TrimLeft(rest[end+2:], " \t\r\n\f")
+	}
+	return nil
+}
+
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
+			// A cursor callback may panic after reserving its batch budget. Close
+			// the statement-owned spool before converting the panic to a client
+			// error so retained rows and the session accounting are released.
+			if execCtx != nil && execCtx.prepareStmt != nil {
+				execCtx.prepareStmt.closeCursor()
+			}
 			markRowCountFailed(ses, ses.GetProc())
 			var serverStatus uint16
 			if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
@@ -5195,34 +5874,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
-		// before normal processing. If sidecar is not configured, silently
-		// fall through to normal MO execution.
-		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
-			ses.addSqlCount(1)
-			if sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
-				query = stripSidecarHint(query)
-			} else {
-				err = handleSidecarOffload(ses, execCtx, query, useGPU)
-				if err == nil {
-					ses.resetDiagnostics()
-					setRowCount(ses, ses.GetProc(), -1)
-					mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-					resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
-					return resp, nil
-				}
-				if err != errSidecarNotConfigured {
-					ses.resetDiagnostics()
-					markRowCountFailed(ses, ses.GetProc())
-					resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
-					return resp, nil
-				}
-				// errSidecarNotConfigured: strip hint and fall through to normal execution
-				query = stripSidecarHint(query)
-			}
-		} else {
-			ses.addSqlCount(1)
-		}
+		// SIDECAR is an explicit statement selector. Keep the raw request intact
+		// so doComQuery can bind each hint to its own computation wrapper; a
+		// request-scoped marker would leak into unhinted sibling statements.
+		ses.addSqlCount(1)
 		// Freeze the policy once, then let doComQuery materialize it under the
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
@@ -5287,6 +5942,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			}
 			preparedRemapDb = extractInlineRemapDb(sql)
 		}
+		if err = validateNativePrepareJSONHints(execCtx.reqCtx, sql, parserLowerCaseTableNames(ses)); err != nil {
+			ses.resetDiagnostics()
+			markRowCountFailed(ses, ses.GetProc())
+			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
+			return resp, nil
+		}
 		ses.addSqlCount(1)
 
 		// Keep the protocol acceptance boundary in prepareable_stmt. EXPLAIN is
@@ -5294,7 +5955,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// before planning.
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
-		sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(newStmtName), sql)
+		sql = wrapNativePrepareSQL(newStmtName, sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		savedRowCount := ses.GetLastAffectedRows()
@@ -5313,6 +5974,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			ses.resetDiagnostics()
 			if prepareStmt != nil {
+				prepareStmt.closeCursor()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 			}
 			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
@@ -5321,14 +5983,43 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
+		cursorRequested := prepareStmt.cursorRequested
+		// A new execute invalidates any rows retained by the previous cursor,
+		// including a normal (non-cursor) execute of the same statement.
+		prepareStmt.closeCursor()
+		if cursorRequested {
+			if _, ok := prepareStmt.PrepareStmt.(*tree.Select); !ok {
+				prepareStmt.clearBinaryParamState(ses.GetProc())
+				markRowCountFailed(ses, ses.GetProc())
+				return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(),
+					moerr.NewNotSupported(execCtx.reqCtx, "server-side cursors require a SELECT statement")), nil
+			}
+		}
+		if cursorRequested {
+			prepareStmt.cursor = newPreparedStmtCursor(ses)
+		}
+		execCtx.prepareStmt = prepareStmt
 		execCtx.prepareColDef = prepareStmt.ColDefData
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, remapDb: prepareStmt.remapDb})
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, isCursorExecute: cursorRequested, remapDb: prepareStmt.remapDb})
 		if err != nil {
+			prepareStmt.closeCursor()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
+		} else if cursorRequested && (prepareStmt.cursor == nil || prepareStmt.cursor.result == nil || prepareStmt.cursor.result.GetColumnCount() == 0) {
+			// Defensive cleanup for a statement shape that does not use the
+			// streaming result-row response path.
+			prepareStmt.closeCursor()
 		}
 		prepareStmt.clearBinaryParamState(ses.GetProc())
 		return resp, nil
+
+	case COM_STMT_FETCH:
+		ses.SetCmd(COM_STMT_FETCH)
+		resp, err = executeStmtFetch(execCtx.reqCtx, ses, req.GetData().([]byte))
+		if err != nil || resp != nil && resp.category == ErrorResponse {
+			markRowCountFailed(ses, ses.GetProc())
+		}
+		return resp, err
 
 	case COM_STMT_SEND_LONG_DATA:
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
@@ -5357,6 +6048,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
+		preStmt.closeCursor()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -5392,6 +6084,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
+		preStmt.closeCursor()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -5455,6 +6148,63 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 		return "", preStmt, err
 	}
 	return sql, preStmt, nil
+}
+
+// executeStmtFetch sends the next batch from a read-only prepared cursor.
+// COM_STMT_FETCH carries only the statement id and requested row count; result
+// metadata was sent by the preceding COM_STMT_EXECUTE response.
+func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response, error) {
+	if len(data) < 8 {
+		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(),
+			moerr.NewInvalidInput(ctx, "invalid COM_STMT_FETCH packet")), nil
+	}
+	stmtID := binary.LittleEndian.Uint32(data[:4])
+	fetchRows := uint64(binary.LittleEndian.Uint32(data[4:8]))
+	stmt, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(stmtID))
+	if err != nil {
+		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(), err), nil
+	}
+	if stmt.cursor == nil || stmt.cursor.result == nil {
+		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(),
+			moerr.NewInvalidState(ctx, "prepared statement has no active cursor")), nil
+	}
+
+	cursor := stmt.cursor
+	total := cursor.result.GetRowCount()
+	start := cursor.offset
+	if start > total {
+		start = total
+	}
+	end := total
+	if fetchRows < total-start {
+		end = start + fetchRows
+	}
+	rows := &MysqlResultSet{
+		Columns: cursor.result.Columns,
+		Data:    cursor.result.Data[start:end],
+	}
+	if end > start {
+		if err = ses.GetResponser().MysqlRrWr().WriteResultSetRow(rows, end-start); err != nil {
+			stmt.closeCursor()
+			return nil, err
+		}
+	}
+	cursor.offset = end
+
+	status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), true)
+	status &^= SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT
+	if end >= total {
+		status |= SERVER_STATUS_LAST_ROW_SENT
+		stmt.closeCursor()
+	} else {
+		status |= SERVER_STATUS_CURSOR_EXISTS
+	}
+	if err = ses.GetResponser().MysqlRrWr().WriteEOFOrOK(0, status); err != nil {
+		stmt.closeCursor()
+		return nil, err
+	}
+	setRowCount(ses, ses.GetProc(), -1)
+	return nil, nil
 }
 
 func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) error {
@@ -5542,9 +6292,9 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_datalink:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_binary:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varbinary:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
@@ -5586,7 +6336,20 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 
 func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 	if col.ColumnType() == defines.MYSQL_TYPE_TEXT {
-		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		// MySQL sends the TEXT family using the corresponding BLOB protocol
+		// type while retaining the text charset. The length determines which
+		// family member the client should expose.
+		switch {
+		case col.Length() <= types.MaxTinyTextLen:
+			col.SetColumnType(defines.MYSQL_TYPE_TINY_BLOB)
+		case col.Length() <= types.MaxStringSize:
+			col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		case col.Length() <= types.MaxMediumTextLen:
+			col.SetColumnType(defines.MYSQL_TYPE_MEDIUM_BLOB)
+		default:
+			col.SetColumnType(defines.MYSQL_TYPE_LONG_BLOB)
+		}
+		col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG))
 	}
 }
 

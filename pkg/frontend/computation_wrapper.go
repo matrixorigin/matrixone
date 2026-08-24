@@ -66,9 +66,10 @@ type TxnComputationWrapper struct {
 	runResult *util2.RunResult
 
 	ifIsExeccute bool
-	// stmtBorrowed is true only when stmt is retained by PrepareStmt and this
-	// wrapper must not return it to the AST pool. The zero value intentionally
-	// means owned so ordinary wrappers preserve their existing lifecycle.
+	// stmtBorrowed is true when another long-lived owner, such as PrepareStmt or
+	// the session plan cache, retains stmt. This wrapper must then not return it
+	// to the AST pool. The zero value intentionally means owned so ordinary
+	// wrappers preserve their existing lifecycle.
 	stmtBorrowed bool
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
@@ -360,12 +361,15 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				return nil, err
 			}
 			if stmtOwned {
-				cwft.stmt.Free()
+				cwft.freeStmt()
 				cwft.stmt = stmt
 				cwft.stmtBorrowed = false
 			}
 			if !cwft.ses.IsBackgroundSession() {
-				authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, owner, stmt, plan)
+				// Prepared plans are cached across privilege-cache refreshes. Recheck
+				// the resolved statement and plan at execution time so a revoke cannot
+				// leave an existing PREPARE/EXECUTE handle authorized.
+				authStats, err := authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, owner, stmt, plan)
 				if err != nil {
 					return nil, err
 				}
@@ -379,7 +383,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 
 			cwft.plan = plan
 			if !stmtOwned {
-				cwft.stmt.Free()
+				cwft.freeStmt()
 				cwft.stmt = stmt
 				cwft.stmtBorrowed = true
 			}
@@ -398,7 +402,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmtBorrowed = false
 			}
 			if !cwft.ses.IsBackgroundSession() {
-				authStats, err := authenticatePreparedDDLOwnerStatement(
+				// Binary prepared execution follows the same execute-time privilege
+				// check as text EXECUTE. Do not rely on authorization captured while
+				// the statement was prepared.
+				authStats, err := authenticateUserCanExecutePrepareOrExecute(
 					execCtx.reqCtx, owner, stmt, cwft.plan)
 				if err != nil {
 					return nil, err
@@ -456,7 +463,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if err = retComp.Reset(
 				cwft.proc,
 				getStatementStartAt(execCtx.reqCtx),
-				compileOutputCallback(cwft.stmt, fill),
+				compileOutputCallback(execCtx, cwft.ses, cwft.stmt, fill),
 				cwft.ses.GetSql(),
 			); err != nil {
 				return nil, err
@@ -491,17 +498,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	}
 
 	return cwft.compile, err
-}
-
-func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
-	var stats statistic.StatsArray
-	stats.Reset()
-	switch stmt.(type) {
-	case *tree.CreateDatabase, *tree.CreateTable:
-		return authenticateUserCanExecutePrepareOrExecute(reqCtx, ses, stmt, p)
-	default:
-		return stats, nil
-	}
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
@@ -943,30 +939,73 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	if err := plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
+	if err := normalizePreparedPaginationBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
 	// A cached prepared Compile already owns a materialized worker topology.
-	// Explicit scheduling intent must be evaluated for this execution, so it
-	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
-	// default cached topology dormant, though: prepared compiles already coexist
-	// with other statement compiles on the session process, and it may become
-	// reusable if a session-level scheduling override is later cleared.
+	// Explicit scheduling or Sirius intent must be evaluated for this execution,
+	// so neither can reuse a native topology compiled under prepare-time defaults.
+	// Keep that cached topology dormant: prepared compiles already coexist with
+	// other statement compiles on the session process, and the ordinary scheduling
+	// cache may become reusable if a session-level override is later cleared.
 	cwft.preparedSchedulingSQLMode = prepareStmt.schedulingSQLMode
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
+	if plan2.PreparedPlanHasPaginationParams(preparePlan.Plan) {
+		// The cached compile was built from the prepare-time parameter types and
+		// cannot execute a plan whose pagination values must be rebound for this
+		// execution.
+		retComp = nil
+	}
 	if executionSes.IsBackgroundSession() {
 		// A cached compile owns pipelines tied to the client process used at
 		// PREPARE time. A procedure executes with a distinct background process.
 		retComp = nil
 	}
-	if retComp != nil && querySchedulingIntentForStatementWithSQLMode(
-		owner, originSQL, prepareStmt.schedulingSQLMode).Explicit {
-		retComp = nil
+	if retComp != nil {
+		executionIntent := querySchedulingIntentForStatementWithSQLMode(
+			owner, originSQL, prepareStmt.schedulingSQLMode)
+		if executionIntent.Explicit || siriusStatementSelected(originSQL, prepareStmt.PrepareStmt) {
+			retComp = nil
+		}
 	}
 	executionStmt, owned, err := freshPreparedCloneStatement(reqCtx, prepareStmt)
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, preparePlan.Plan, executionStmt, originSQL, owned, nil
+}
+
+func normalizePreparedPaginationBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
+	params := proc.GetPrepareParams()
+	if params == nil {
+		return nil
+	}
+	for _, position := range plan2.PreparedPaginationParamPositions(preparePlan) {
+		if position < 0 || int(position) >= len(paramVals) {
+			continue
+		}
+		param, ok := paramVals[position].(plan2.ParamValue)
+		if !ok || param.PrepareParamKind != vector.PrepareParamBoolean {
+			continue
+		}
+		value, ok := param.Value.(bool)
+		if !ok {
+			continue
+		}
+		encoded := "0"
+		if value {
+			encoded = "1"
+		}
+		if err := vector.SetStringAt(params, int(position), encoded, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {
@@ -1090,7 +1129,11 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+		values[i] = plan2.ParamValue{
+			Value:            string(raw),
+			IsBin:            proc.GetPrepareParamIsBin(i),
+			PrepareParamKind: proc.GetPrepareParamKind(i),
+		}
 	}
 	return values, nil
 }
@@ -1141,7 +1184,11 @@ func buildExecuteUserParams(
 		if err != nil {
 			return
 		}
-		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+		paramVals[i] = plan2.ParamValue{
+			Value:            param,
+			IsBin:            paramIsBin[i],
+			PrepareParamKind: paramKinds[i],
+		}
 	}
 	return
 }
@@ -1192,7 +1239,14 @@ func createCompile(
 
 	addr := currentCNPipelineAddress(ses)
 	pu := getPu(ses.GetService())
-	proc.ReplaceTopCtx(execCtx.reqCtx)
+	if schedulingSQL == "" {
+		schedulingSQL = originSQL
+	}
+	crs := new(perfcounter.CounterSet)
+	var compileCtx context.Context
+	execCtx.reqCtx, compileCtx = compileStatementContexts(
+		execCtx.reqCtx, schedulingSQL, stmt, crs)
+	proc.ReplaceTopCtx(compileCtx)
 	proc.Base.FileService = pu.FileService
 
 	var tenant string
@@ -1207,8 +1261,6 @@ func createCompile(
 	if stats != nil {
 		compileIOStart = atomic.LoadInt64(&stats.IOAccessTimeConsumption)
 	}
-	crs := new(perfcounter.CounterSet)
-	execCtx.reqCtx = perfcounter.AttachCompilePlanMarkKey(execCtx.reqCtx, crs)
 	defer func() {
 		if stats != nil {
 			compileIO := atomic.LoadInt64(&stats.IOAccessTimeConsumption) - compileIOStart
@@ -1246,9 +1298,6 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
-	if schedulingSQL == "" {
-		schedulingSQL = originSQL
-	}
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
 			ses, schedulingSQL, *schedulingSQLMode))
@@ -1265,12 +1314,30 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
+	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(execCtx, ses, stmt, fill))
 	if err != nil {
 		return
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+func compileStatementContexts(
+	ctx context.Context,
+	sql string,
+	stmt tree.Statement,
+	crs *perfcounter.CounterSet,
+) (requestCtx, compileCtx context.Context) {
+	requestCtx = perfcounter.AttachCompilePlanMarkKey(ctx, crs)
+	if siriusStatementSelected(sql, stmt) {
+		return requestCtx, compile.WithSiriusOffload(requestCtx)
+	}
+	return requestCtx, requestCtx
+}
+
+func siriusStatementSelected(sql string, stmt tree.Statement) bool {
+	selected, _ := isSidecarQuery(sql)
+	return selected && !isPerformStatement(stmt)
 }
 
 // EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute the inner query only to collect
@@ -1279,6 +1346,8 @@ func createCompile(
 // callback. Apply the same rule both when compiling a fresh pipeline and when
 // resetting a cached prepared pipeline for another execution.
 func compileOutputCallback(
+	execCtx *ExecCtx,
+	ses FeSession,
 	stmt tree.Statement,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 ) func(*batch.Batch, *perfcounter.CounterSet) error {
@@ -1286,7 +1355,7 @@ func compileOutputCallback(
 	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 		return func(*batch.Batch, *perfcounter.CounterSet) error { return nil }
 	default:
-		return fill
+		return selectIntoUserVariablesOutputCallback(execCtx, ses, stmt, fill)
 	}
 }
 

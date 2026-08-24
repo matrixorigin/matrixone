@@ -169,8 +169,18 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if dispatch.MaterializedSource != nil {
-		err = dispatch.MaterializedSource.Append(whichToSend)
-		analyzer.SetMemUsed(dispatch.MaterializedSource.CurrentBytes())
+		// Last/End batches are pipeline control messages, not rows. Ordinary
+		// SINK_SCAN consumers discard them in merge.Call; a materialized source
+		// must do the same before persisting fanout data.
+		if whichToSend.Last() {
+			return result, nil
+		}
+		stats, err := dispatch.MaterializedSource.AppendWithStats(whichToSend)
+		analyzer.SetMemUsed(stats.RetainedBytes)
+		if stats.SpilledBytes > 0 {
+			analyzer.Spill(stats.SpilledBytes)
+			analyzer.SpillRows(stats.SpilledRows)
+		}
 		return result, err
 	}
 

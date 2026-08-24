@@ -147,6 +147,28 @@ func TestAdd(t *testing.T) {
 	})
 }
 
+func TestAddRangeUsesExclusiveEndForExternalStorage(t *testing.T) {
+	var n Nulls
+	n.GetBitmap().InstallExternalStorage(make([]uint64, 2))
+	n.InitWithSize(128)
+	require.NotPanics(t, func() {
+		n.AddRange(0, 128)
+	})
+	require.Equal(t, 128, n.Count())
+}
+
+func TestRangeUsesExclusiveEndForExternalStorage(t *testing.T) {
+	var source, destination Nulls
+	source.Add(7, 63)
+	destination.GetBitmap().InstallExternalStorage(make([]uint64, 1))
+	destination.InitWithSize(64)
+	require.NotPanics(t, func() {
+		Range(&source, 0, 64, 0, &destination)
+	})
+	require.True(t, destination.Contains(7))
+	require.True(t, destination.Contains(63))
+}
+
 func TestDel(t *testing.T) {
 	t.Run("Contains test", func(t *testing.T) {
 		n := &Nulls{}
@@ -281,6 +303,44 @@ func TestFilterByMaskInPlaceMatchesFilter(t *testing.T) {
 			require.Equal(t, legacy.Count(), inPlace.Count())
 		})
 	}
+}
+
+func TestFilterByMaskInPlaceWithOffsetMatchesAllocatingPath(t *testing.T) {
+	source := Build(130, 1, 63, 64, 127, 129)
+	var selection bitmap.Bitmap
+	selection.InitWithSize(129)
+	selection.AddMany([]uint64{0, 62, 128})
+
+	for _, negate := range []bool{false, true} {
+		for _, external := range []bool{false, true} {
+			t.Run(fmt.Sprintf("negate=%t/external=%t", negate, external), func(t *testing.T) {
+				legacy := source.Clone()
+				FilterByMaskWithOffset(legacy, &selection, negate, 1)
+
+				var inPlace Nulls
+				if external {
+					inPlace.GetBitmap().InstallExternalStorage(make([]uint64, 4))
+				}
+				inPlace.InitWith(source)
+				FilterByMaskInPlaceWithOffset(&inPlace, &selection, negate, 1)
+
+				require.True(t, inPlace.GetBitmap().IsSame(legacy.GetBitmap()))
+				require.Equal(t, legacy.GetBitmap().Len(), inPlace.GetBitmap().Len())
+				require.Equal(t, legacy.Count(), inPlace.Count())
+				if negate {
+					require.Equal(t, []uint64{62, 125}, inPlace.ToArray())
+					require.Equal(t, int64(130), inPlace.GetBitmap().Len())
+				} else {
+					require.Equal(t, []uint64{0, 1, 2}, inPlace.ToArray())
+					require.Equal(t, int64(3), inPlace.GetBitmap().Len())
+				}
+			})
+		}
+	}
+
+	var empty Nulls
+	FilterByMaskInPlaceWithOffset(&empty, &selection, true, 1)
+	require.True(t, empty.IsEmpty())
 }
 
 func TestMerge(t *testing.T) {
