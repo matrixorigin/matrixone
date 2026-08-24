@@ -53,6 +53,7 @@ type pipelineClient struct {
 	localServiceAddress string
 	config              *PipelineConfig
 	client              morpc.RPCClient
+	controlClient       morpc.ControlClient
 }
 
 func NewPipelineClient(
@@ -68,6 +69,21 @@ func NewPipelineClient(
 		localServiceAddress: localServiceAddress,
 		config:              cfg,
 	}
+
+	// Keep liveness probes on a physically independent connection. A pipeline
+	// data connection can be stuck dialing a CN that was removed while the
+	// replacement is becoming ready; probing through that same backend would
+	// not make progress. Pipeline endpoint liveness is authoritative, so a
+	// failed probe retires the current data backend generation.
+	controlConfig := cfg.RPC
+	controlClient, err := controlConfig.NewControlClient(
+		sid,
+		"pipeline-control-client",
+		func() morpc.Message { return AcquireMessage() })
+	if err != nil {
+		return nil, err
+	}
+	c.controlClient = controlClient
 
 	codec := morpc.NewMessageCodec(
 		sid,
@@ -93,6 +109,10 @@ func NewPipelineClient(
 		morpc.WithBackendReadTimeout(defaultRPCTimeout),
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
 		morpc.WithBackendLogger(logger),
+		morpc.WithBackendLivenessProbe(func(ctx context.Context, remote string) error {
+			return controlClient.Ping(ctx, remote)
+		}),
+		morpc.WithBackendLivenessProbeFailureIsTerminal(),
 	)
 
 	cli, err := morpc.NewClient(
@@ -102,6 +122,7 @@ func NewPipelineClient(
 		morpc.WithClientLogger(logger),
 	)
 	if err != nil {
+		_ = controlClient.Close()
 		return nil, err
 	}
 
@@ -118,5 +139,9 @@ func (c *pipelineClient) Raw() morpc.RPCClient {
 }
 
 func (c *pipelineClient) Close() error {
-	return c.client.Close()
+	if err := c.client.Close(); err != nil {
+		_ = c.controlClient.Close()
+		return err
+	}
+	return c.controlClient.Close()
 }

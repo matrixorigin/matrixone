@@ -1125,6 +1125,23 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestTerminalLivenessProbeFailureClosesDataGeneration(t *testing.T) {
+	rb := &remoteBackend{
+		metrics:       newMetrics(""),
+		livenessEpoch: time.Now(),
+	}
+	rb.options.readTimeout = time.Second
+	rb.options.livenessProbe = func(context.Context, string) error {
+		return errors.New("peer endpoint is gone")
+	}
+	rb.options.livenessProbeFailureIsTerminal = true
+	rb.livenessMu.pendingSince = rb.livenessTick() - 2*int64(time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.False(t, rb.keepDataConnectionAfterProbe(ctx, context.DeadlineExceeded))
+}
+
 func TestSendWithPayloadCannotTimeout(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {

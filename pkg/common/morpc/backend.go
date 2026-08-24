@@ -138,6 +138,17 @@ func WithBackendLivenessProbe(value func(context.Context, string) error) Backend
 	}
 }
 
+// WithBackendLivenessProbeFailureIsTerminal makes a failed liveness probe
+// terminate the current data connection generation. Use this when the probe
+// is authoritative for the peer endpoint; callers that may observe a
+// temporarily unavailable control transport should leave it disabled so a
+// valid slow data response can still complete.
+func WithBackendLivenessProbeFailureIsTerminal() BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.livenessProbeFailureIsTerminal = true
+	}
+}
+
 // WithBackendMetrics setup backend metrics
 func WithBackendMetrics(metrics *metrics) BackendOption {
 	return func(rb *remoteBackend) {
@@ -195,19 +206,20 @@ type remoteBackend struct {
 	livenessEpoch   time.Time
 
 	options struct {
-		hasPayloadResponse  bool
-		goettyOptions       []goetty.Option
-		connectTimeout      time.Duration
-		bufferSize          int
-		busySize            int
-		batchSendSize       int
-		streamBufferSize    int
-		disconnectAfterRead int
-		filter              func(msg Message, backendAddr string) bool
-		readTimeout         time.Duration
-		livenessProbe       func(context.Context, string) error
-		freeResponse        func(Message)
-		releaseRequest      func(Message)
+		hasPayloadResponse             bool
+		goettyOptions                  []goetty.Option
+		connectTimeout                 time.Duration
+		bufferSize                     int
+		busySize                       int
+		batchSendSize                  int
+		streamBufferSize               int
+		disconnectAfterRead            int
+		filter                         func(msg Message, backendAddr string) bool
+		readTimeout                    time.Duration
+		livenessProbe                  func(context.Context, string) error
+		livenessProbeFailureIsTerminal bool
+		freeResponse                   func(Message)
+		releaseRequest                 func(Message)
 	}
 
 	stateMu struct {
@@ -1387,6 +1399,9 @@ func (rb *remoteBackend) keepDataConnectionAfterProbe(
 	defer cancel()
 	if err := rb.options.livenessProbe(probeCtx, rb.remote); err != nil {
 		rb.metrics.observeBackendError(rb.remote, "liveness-probe", err)
+		if rb.options.livenessProbeFailureIsTerminal {
+			return false
+		}
 		// The control transport is independent from this data connection. Its
 		// failure is therefore inconclusive: the peer may still return a valid
 		// slow response on the data connection. Leave reset and Future failure to
