@@ -156,6 +156,33 @@ func TestBuildMedianWithinGroupAcceptsEquivalentColumnQualifications(t *testing.
 	}
 }
 
+func TestBuildMedianWithinGroupRejectsScopedOrMismatchedQualifications(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "inner versus correlated outer column",
+			sql: `select median((select a from select_test.bind_select y limit 1))
+  within group (order by (select x.a from select_test.bind_select y limit 1))
+  from select_test.bind_select x`,
+		},
+		{
+			name: "wrong database qualifier",
+			sql:  "select median(a) within group (order by wrong_database.bind_select.a) from select_test.bind_select",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.ErrorContains(t, err, "median requires the WITHIN GROUP ORDER BY expression to match")
+		})
+	}
+}
+
 func TestBuildMedianWithinGroupRejectsWindowForm(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select median(a) within group (order by a) over () from select_test.bind_select", 1)

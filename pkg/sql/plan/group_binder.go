@@ -49,6 +49,13 @@ func resolveGroupByColumnIdentity(ctx *BindContext, name *tree.UnresolvedName) (
 	if binding == nil {
 		return nil, 0, false
 	}
+	// An explicit database qualifier is part of column identity. Do not let a
+	// table-name match discard a typo or a reference to a different database.
+	// The regular binder performs the same validation when it resolves the
+	// column; canonicalization must not collapse the qualifier before then.
+	if db := name.DbName(); db != "" && !strings.EqualFold(db, binding.db) {
+		return nil, 0, false
+	}
 
 	colPos := binding.FindColumn(col)
 	if colPos == NotFound || colPos == AmbiguousName {
@@ -83,6 +90,11 @@ func canonicalGroupByAstKey(ctx *BindContext, astExpr tree.Expr) string {
 				resolvedColumns.WriteString(strconv.FormatInt(int64(colPos), 10))
 				resolvedColumns.WriteByte(';')
 			}
+		case *tree.Subquery:
+			// A scalar subquery owns a separate bind context. Resolving its
+			// columns against ctx can confuse an inner column with a correlated
+			// outer column and make distinct MEDIAN expressions compare equal.
+			return false
 		case *tree.FuncExpr:
 			if node.FuncName != nil {
 				node.FuncName = tree.NewCStr(node.FuncName.Compare(), 0)
