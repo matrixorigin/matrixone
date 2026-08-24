@@ -5,9 +5,10 @@ use ft_gojieba_precise;
 select f.pos, f.word
 from (
 select cast(column_0 as bigint) as id, column_1 as body
-from (values row(1, '我来到北京清华大学'))
+from (values row(1, '我来到北京清华大学')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f
+order by f.word = '__DocLen', f.pos;
 ➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
 0  ¦  我  𝄀
 3  ¦  来到  𝄀
@@ -17,9 +18,10 @@ cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 select f.pos, f.word
 from (
 select cast(column_0 as bigint) as id, column_1 as body
-from (values row(1, 'Hello, WORLD! MatrixOne数据库'))
+from (values row(1, 'Hello, WORLD! MatrixOne数据库')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f
+order by f.word = '__DocLen', f.pos;
 ➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
 0  ¦  hello  𝄀
 7  ¦  world  𝄀
@@ -29,18 +31,20 @@ cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 select f.pos, f.word
 from (
 select cast(column_0 as bigint) as id, column_1 as body
-from (values row(1, 'abcdefghijklmnopqrstuvwxyzabcd'))
+from (values row(1, 'abcdefghijklmnopqrstuvwxyzabcd')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f
+order by f.word = '__DocLen', f.pos;
 ➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
 0  ¦  abcdefghijklmnopqrstuvw  𝄀
 1  ¦  __DocLen
 select f.pos, f.word
 from (
 select cast(column_0 as bigint) as id, column_1 as body
-from (values row(1, 'red red red'))
+from (values row(1, 'red red red')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f
+order by f.word = '__DocLen', f.pos;
 ➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
 0  ¦  red  𝄀
 4  ¦  red  𝄀
@@ -49,9 +53,10 @@ cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 select f.pos, f.word
 from (
 select cast(column_0 as bigint) as id, column_1 as body, column_2 as title
-from (values row(1, '我来到北京', 'MatrixOne 数据库'))
+from (values row(1, '我来到北京', 'MatrixOne 数据库')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body, title) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body, title) as f
+order by f.word = '__DocLen', f.pos;
 ➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
 0  ¦  我  𝄀
 3  ¦  来到  𝄀
@@ -62,9 +67,10 @@ cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body, title)
 select f.pos, f.word
 from (
 select cast(column_0 as bigint) as id, column_1 as body
-from (values row(1, '他来到了网易杭研大厦'))
+from (values row(1, '他来到了网易杭研大厦')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f
+order by f.word = '__DocLen', f.pos;
 ➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
 0  ¦  他  𝄀
 3  ¦  来到  𝄀
@@ -77,7 +83,7 @@ cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 select count(*)
 from (
 select cast(column_0 as bigint) as id, column_1 as body
-from (values row(1, '     '))
+from (values row(1, '     ')) as input_rows
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 ➤ count(*)[-5,64,0]  𝄀
@@ -85,7 +91,7 @@ cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 select count(*)
 from (
 select cast(column_0 as bigint) as id, column_1 as body
-from (values row(1, '，。！？；：、（）【】'))
+from (values row(1, '，。！？；：、（）【】')) as input_rows
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 ➤ count(*)[-5,64,0]  𝄀
@@ -93,7 +99,7 @@ cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 select count(*)
 from (
 select cast(column_0 as bigint) as id, column_1 as body
-from (values row(1, ''))
+from (values row(1, '')) as input_rows
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 ➤ count(*)[-5,64,0]  𝄀
@@ -101,7 +107,7 @@ cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 select count(*)
 from (
 select cast(column_0 as bigint) as id, cast(column_1 as varchar) as body
-from (values row(1, null))
+from (values row(1, null)) as input_rows
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 ➤ count(*)[-5,64,0]  𝄀
@@ -128,7 +134,8 @@ order by id;
 select id from docs
 where match(title, body) against('+nulltitletoken' in boolean mode)
 order by id;
-➤ id[4,32,0]
+➤ id[4,32,0]  𝄀
+2
 select id from docs
 where match(title, body) against('+bodyonlytoken' in boolean mode)
 order by id;
@@ -137,7 +144,8 @@ order by id;
 select id from docs
 where match(title, body) against('+nullbodytoken' in boolean mode)
 order by id;
-➤ id[4,32,0]
+➤ id[4,32,0]  𝄀
+4
 select id from docs
 where match(title, body) against('"校园我来到"' in boolean mode)
 order by id;
@@ -167,7 +175,8 @@ where match(title, body) against('+lifecycletitle +lifecyclebody' in boolean mod
 update docs set title = null where id = 6;
 select id from docs
 where match(title, body) against('+lifecyclebody' in boolean mode);
-➤ id[4,32,0]
+➤ id[4,32,0]  𝄀
+6
 update docs set title = '' where id = 6;
 select id from docs
 where match(title, body) against('+lifecyclebody' in boolean mode);

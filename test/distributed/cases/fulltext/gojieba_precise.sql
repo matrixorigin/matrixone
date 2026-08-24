@@ -6,80 +6,86 @@ drop database if exists ft_gojieba_precise;
 create database ft_gojieba_precise;
 use ft_gojieba_precise;
 
--- Exact dictionary words, UTF-8 byte offsets, and trailing DocLen.
+-- Exact dictionary words, deterministic UTF-8 byte offsets, and trailing DocLen.
 select f.pos, f.word
 from (
     select cast(column_0 as bigint) as id, column_1 as body
-    from (values row(1, '我来到北京清华大学'))
+    from (values row(1, '我来到北京清华大学')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f
+order by f.word = '__DocLen', f.pos;
 
 -- ASCII tokens are lower-cased; punctuation is omitted; Chinese keeps byte offsets.
 select f.pos, f.word
 from (
     select cast(column_0 as bigint) as id, column_1 as body
-    from (values row(1, 'Hello, WORLD! MatrixOne数据库'))
+    from (values row(1, 'Hello, WORLD! MatrixOne数据库')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f
+order by f.word = '__DocLen', f.pos;
 
 -- Latin tokens are capped at 23 bytes.
 select f.pos, f.word
 from (
     select cast(column_0 as bigint) as id, column_1 as body
-    from (values row(1, 'abcdefghijklmnopqrstuvwxyzabcd'))
+    from (values row(1, 'abcdefghijklmnopqrstuvwxyzabcd')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f
+order by f.word = '__DocLen', f.pos;
 
 -- Repeated terms retain every position and contribute independently to DocLen.
 select f.pos, f.word
 from (
     select cast(column_0 as bigint) as id, column_1 as body
-    from (values row(1, 'red red red'))
+    from (values row(1, 'red red red')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f
+order by f.word = '__DocLen', f.pos;
 
 -- Multiple indexed columns are joined by one boundary newline.
 select f.pos, f.word
 from (
     select cast(column_0 as bigint) as id, column_1 as body, column_2 as title
-    from (values row(1, '我来到北京', 'MatrixOne 数据库'))
+    from (values row(1, '我来到北京', 'MatrixOne 数据库')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body, title) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body, title) as f
+order by f.word = '__DocLen', f.pos;
 
 -- The SQL index path uses dictionary-only segmentation (HMM disabled).
 select f.pos, f.word
 from (
     select cast(column_0 as bigint) as id, column_1 as body
-    from (values row(1, '他来到了网易杭研大厦'))
+    from (values row(1, '他来到了网易杭研大厦')) as input_rows
 ) as src
-cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f
+order by f.word = '__DocLen', f.pos;
 
 -- Inputs without searchable text emit neither tokens nor a DocLen row.
 select count(*)
 from (
     select cast(column_0 as bigint) as id, column_1 as body
-    from (values row(1, '     '))
+    from (values row(1, '     ')) as input_rows
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 
 select count(*)
 from (
     select cast(column_0 as bigint) as id, column_1 as body
-    from (values row(1, '，。！？；：、（）【】'))
+    from (values row(1, '，。！？；：、（）【】')) as input_rows
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 
 select count(*)
 from (
     select cast(column_0 as bigint) as id, column_1 as body
-    from (values row(1, ''))
+    from (values row(1, '')) as input_rows
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 
 select count(*)
 from (
     select cast(column_0 as bigint) as id, cast(column_1 as varchar) as body
-    from (values row(1, null))
+    from (values row(1, null)) as input_rows
 ) as src
 cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
 
@@ -100,7 +106,7 @@ insert into docs values
 
 create fulltext index ft_docs on docs(title, body) with parser gojieba;
 
--- Empty strings keep the other indexed column; NULL suppresses the composite document.
+-- Empty and NULL columns both leave the other indexed column searchable.
 select id from docs
 where match(title, body) against('+titleonlytoken' in boolean mode)
 order by id;
@@ -143,12 +149,12 @@ update docs set title = 'LifecycleTitle', body = 'LifecycleBody' where id = 6;
 select id from docs
 where match(title, body) against('+lifecycletitle +lifecyclebody' in boolean mode);
 
--- text -> NULL removes the whole composite entry.
+-- text -> NULL retains tokens from the other indexed column.
 update docs set title = null where id = 6;
 select id from docs
 where match(title, body) against('+lifecyclebody' in boolean mode);
 
--- NULL -> empty restores tokens from the populated column.
+-- NULL -> empty keeps the populated column searchable.
 update docs set title = '' where id = 6;
 select id from docs
 where match(title, body) against('+lifecyclebody' in boolean mode);
