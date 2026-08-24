@@ -156,7 +156,7 @@ func TestCoverage_buildShowIndex(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
-func TestShowKeysOrdersPrimaryIndexFirst(t *testing.T) {
+func TestShowKeysUsesMySQLIndexOrder(t *testing.T) {
 	testCases := []string{
 		"show keys from tpch.nation",
 		"show keys from tpch.nation where Key_name = 'PRIMARY'",
@@ -176,7 +176,7 @@ func TestShowKeysOrdersPrimaryIndexFirst(t *testing.T) {
 			require.Len(t, sortNodes, 1)
 			require.Len(t, sortNodes[0].GetOrderBy(), 3)
 			require.Equal(t, "case", sortNodes[0].GetOrderBy()[0].GetExpr().GetF().GetFunc().GetObjName())
-			require.Equal(t, "idx.name", sortNodes[0].GetOrderBy()[1].GetExpr().GetCol().GetName())
+			require.Equal(t, "MIN(idx.id)", sortNodes[0].GetOrderBy()[1].GetExpr().GetCol().GetName())
 			require.Equal(t, "idx.ordinal_position", sortNodes[0].GetOrderBy()[2].GetExpr().GetCol().GetName())
 		})
 	}

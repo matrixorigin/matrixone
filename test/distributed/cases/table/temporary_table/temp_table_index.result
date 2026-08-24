@@ -86,8 +86,8 @@ alter table t3 add index idx_new (c2);
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t3    0    PRIMARY    1    c1    A    0    NULL    NULL                        YES    c1
-t3    1    idx_new    1    c2    A    0    NULL    NULL    YES                    YES    c2
 t3    0    idx_unique_c3    1    c3    A    0    NULL    NULL    YES                    YES    c3
+t3    1    idx_new    1    c2    A    0    NULL    NULL    YES                    YES    c2
 create temporary table t4 (
 id int primary key,
 title varchar(50),

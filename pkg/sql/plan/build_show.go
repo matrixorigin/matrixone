@@ -935,8 +935,10 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"GROUP BY `tcl`.`att_relname`, `idx`.`type`, `idx`.`name`, `idx`.`ordinal_position`, " +
 		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
 		"`idx`.`algo_params`, `idx`.`is_visible` " +
-		"ORDER BY CASE WHEN `idx`.`type` = 'PRIMARY' THEN 0 ELSE 1 END, " +
-		"`idx`.`name`, `idx`.`ordinal_position`"
+		// Match MySQL's index classes, then preserve catalog creation order within each class.
+		// MIN(id) supplies one stable key without defeating the GROUP BY deduplication above.
+		"ORDER BY CASE `idx`.`type` WHEN 'PRIMARY' THEN 0 WHEN 'UNIQUE' THEN 1 ELSE 2 END, " +
+		"MIN(`idx`.`id`), `idx`.`ordinal_position`"
 
 	displayTblName := tblName
 	if tableDef.IsTemporary {

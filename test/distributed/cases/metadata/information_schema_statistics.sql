@@ -25,6 +25,20 @@ where table_schema = 'stat_view_db'
 
 show keys from t;
 
+create table show_keys_order (
+    a int primary key,
+    b int,
+    c int,
+    d int,
+    e int,
+    unique key z_uq (b),
+    key z_idx (c, d),
+    key a_idx (e)
+);
+
+show keys from show_keys_order;
+drop table show_keys_order;
+
 create database stat_view_db_a;
 create database stat_view_db_b;
 

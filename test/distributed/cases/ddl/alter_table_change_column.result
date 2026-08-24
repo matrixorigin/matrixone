@@ -413,10 +413,10 @@ alter table t1 change x y VARCHAR(20) UNIQUE KEY;
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    y
 t1    1    a    1    a    A    0    NULL    NULL                        YES    a
 t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
 t1    1    c    1    y    A    0    NULL    NULL    YES                    YES    y
-t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    y
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -1414,9 +1414,9 @@ alter table index02 change b bnewNew VARCHAR(20) UNIQUE KEY;
 show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+index02    0    bnewnew    1    bnewNew    A    0    NULL    NULL    YES                    YES    bnewNew
 index02    1    a    1    a    A    0    NULL    NULL                        YES    a
 index02    1    a    2    bnewNew    A    0    NULL    NULL    YES                    YES    bnewNew
-index02    0    bnewnew    1    bnewNew    A    0    NULL    NULL    YES                    YES    bnewNew
 index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
 show create table index02;
 Table    Create Table

@@ -29,9 +29,27 @@ count(*)
 show keys from t;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+t    0    uniq_b    1    b    A    0    NULL    NULL    YES                    YES    b
 t    1    idx_bc    1    b    A    0    NULL    NULL    YES                    YES    b
 t    1    idx_bc    2    c    A    0    NULL    NULL    YES                    YES    c
-t    0    uniq_b    1    b    A    0    NULL    NULL    YES                    YES    b
+create table show_keys_order (
+a int primary key,
+b int,
+c int,
+d int,
+e int,
+unique key z_uq (b),
+key z_idx (c, d),
+key a_idx (e)
+);
+show keys from show_keys_order;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+show_keys_order    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+show_keys_order    0    z_uq    1    b    A    0    NULL    NULL    YES                    YES    b
+show_keys_order    1    z_idx    1    c    A    0    NULL    NULL    YES                    YES    c
+show_keys_order    1    z_idx    2    d    A    0    NULL    NULL    YES                    YES    d
+show_keys_order    1    a_idx    1    e    A    0    NULL    NULL    YES                    YES    e
+drop table show_keys_order;
 create database stat_view_db_a;
 create database stat_view_db_b;
 use stat_view_db_a;
