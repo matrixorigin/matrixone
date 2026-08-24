@@ -216,9 +216,15 @@ func TestLoadReasonRegistryIsDatabaseQualified(t *testing.T) {
 	key2 := loadReasonKey("db2", "store")
 	rememberLoadReason(key1, LoadMissCDCFlush)
 	rememberLoadReason(key2, LoadMissMerge)
-	require.Equal(t, LoadMissCDCFlush, takeLoadReason(key1))
-	require.Equal(t, LoadMissMerge, takeLoadReason(key2))
-	require.Empty(t, takeLoadReason(key1))
+	reason, at := peekLoadReason(key1)
+	require.Equal(t, LoadMissCDCFlush, reason)
+	consumeLoadReason(key1, at)
+	reason, at = peekLoadReason(key2)
+	require.Equal(t, LoadMissMerge, reason)
+	consumeLoadReason(key2, at)
+	reason, at = peekLoadReason(key1)
+	require.Empty(t, reason)
+	require.True(t, at.IsZero())
 }
 
 func TestLoadReasonRegistryIsDisabledWithObserverOff(t *testing.T) {
@@ -226,5 +232,7 @@ func TestLoadReasonRegistryIsDisabledWithObserverOff(t *testing.T) {
 	defer cleanup()
 	key := loadReasonKey("db", "store")
 	rememberLoadReason(key, LoadMissCDCFlush)
-	require.Empty(t, takeLoadReason(key))
+	reason, at := peekLoadReason(key)
+	require.Empty(t, reason)
+	require.True(t, at.IsZero())
 }

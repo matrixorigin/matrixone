@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -98,6 +99,41 @@ func TestFulltext2SearchLoadFailureClearsReusableGeneration(t *testing.T) {
 	require.Zero(t, tailStates)
 }
 
+func TestFulltext2SearchLoadConsumesInvalidationReasonAfterSuccess(t *testing.T) {
+	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
+	mp := mpool.MustNewZero()
+	cfg := testStorageCfg()
+	var events []LoadEvent
+	restore := setLoadObserver(func(event LoadEvent) { events = append(events, event) })
+	defer restore()
+	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "CAST(COALESCE"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+		case strings.Contains(sql, "MAX(timestamp)"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
+		case strings.Contains(sql, "MAX(chunk_id)"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
+		case strings.Contains(sql, "LENGTH("):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+		default:
+			return executor.Result{Mp: mp}, nil
+		}
+	})
+
+	s := NewFulltext2Search(cfg)
+	require.NoError(t, s.Load(sp))
+	s.FinishLoadObservation()
+	require.Len(t, events, 1)
+	require.Equal(t, LoadMissCDCFlush, events[0].MissReason)
+	require.True(t, events[0].LoadSuccess)
+	reason, at := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Empty(t, reason)
+	require.True(t, at.IsZero())
+	s.Destroy()
+}
+
 func TestFulltext2SearchLoadClassifiesQueryInterruptionAsCancel(t *testing.T) {
 	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
 	var event LoadEvent
@@ -113,6 +149,41 @@ func TestFulltext2SearchLoadClassifiesQueryInterruptionAsCancel(t *testing.T) {
 	require.True(t, event.LoadCancel)
 	require.False(t, event.LoadError)
 	require.False(t, event.LoadSuccess)
+}
+
+func TestFulltext2SearchLoadRetainsInvalidationReasonAfterFailure(t *testing.T) {
+	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
+	cfg := testStorageCfg()
+	var events []LoadEvent
+	restore := setLoadObserver(func(got LoadEvent) { events = append(events, got) })
+	defer restore()
+
+	pendingLoadReasons.Lock()
+	old := pendingLoadReasons.m
+	pendingLoadReasons.m = make(map[string]pendingLoadReason)
+	pendingLoadReasons.Unlock()
+	t.Cleanup(func() {
+		pendingLoadReasons.Lock()
+		pendingLoadReasons.m = old
+		pendingLoadReasons.Unlock()
+	})
+
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewQueryInterrupted(context.Background())
+	})
+	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
+
+	s := NewFulltext2Search(cfg)
+	require.Error(t, s.Load(sp))
+	s.FinishLoadObservation()
+	require.Error(t, s.Load(sp))
+	s.FinishLoadObservation()
+
+	require.Len(t, events, 2)
+	require.Equal(t, LoadMissCDCFlush, events[0].MissReason)
+	require.Equal(t, LoadMissCDCFlush, events[1].MissReason)
+	require.True(t, events[0].LoadCancel)
+	require.True(t, events[1].LoadCancel)
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the

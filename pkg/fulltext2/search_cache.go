@@ -102,9 +102,11 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	ensureReusableLoadLifecycle()
 	reason := LoadMissProcessStart
+	var reasonAt time.Time
 	if loadObservationEnabled() {
-		if observed := takeLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)); observed != "" {
+		if observed, at := peekLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)); observed != "" {
 			reason = observed
+			reasonAt = at
 		}
 	}
 	trace := newLoadTrace(s.cfg.IndexTable, reason)
@@ -170,6 +172,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
+	consumeLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable), reasonAt)
 	trace.setGeneration(baseGeneration, appliedTail)
 
 	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
