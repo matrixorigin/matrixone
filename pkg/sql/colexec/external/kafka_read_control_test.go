@@ -137,9 +137,12 @@ func TestDeriveKafkaReadControl(t *testing.T) {
 	node = kafkaControlNode(false, kafkaCtrlEq(1, catalog.KafkaReadStartID, -2))
 	require.ErrorContains(t, DeriveKafkaReadControl(ctx, node, proc), ">= -1")
 
-	// size must be positive, timeout non-negative
+	// size 0 is the documented "unlimited"; negatives are invalid
 	node = kafkaControlNode(true, kafkaCtrlEq(2, catalog.KafkaReadSize, 0))
-	require.ErrorContains(t, DeriveKafkaReadControl(ctx, node, proc), "positive")
+	require.NoError(t, DeriveKafkaReadControl(ctx, node, proc))
+	require.Equal(t, int64(0), node.ExternScan.KafkaScan.Size)
+	node = kafkaControlNode(true, kafkaCtrlEq(2, catalog.KafkaReadSize, -3))
+	require.ErrorContains(t, DeriveKafkaReadControl(ctx, node, proc), ">= 0")
 	node = kafkaControlNode(true, kafkaCtrlEq(3, catalog.KafkaReadTimeout, -5))
 	require.ErrorContains(t, DeriveKafkaReadControl(ctx, node, proc), ">= 0")
 

@@ -43,8 +43,11 @@ alter table kt add column c int;
 select * from kt;
 -- start id below -1
 select * from kt where __mo_read_start_id = -2;
--- non-positive size
+-- size 0 is the documented "unlimited": accepted at compile, the read then
+-- fails at the (unreachable) broker. negative sizes stay compile errors.
+-- @regex("cannot reach", true)
 select * from kt where __mo_read_start_id = 0 and __mo_read_size = 0;
+select * from kt where __mo_read_start_id = 0 and __mo_read_size = -3;
 -- negative timeout
 select * from kt where __mo_read_start_id = 0 and __mo_read_timeout = -1;
 -- contradictory duplicate controls

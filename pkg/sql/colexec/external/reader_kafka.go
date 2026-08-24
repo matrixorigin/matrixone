@@ -80,44 +80,18 @@ type KafkaMsgMeta struct {
 	Value  string
 }
 
-// KafkaMetaState synchronizes per-message metadata with the row conversion:
-// the stream reader appends one entry per message it emits into the byte
-// stream, and makeBatchRows pops one entry per record it converts. Everything
-// runs on the scan goroutine — no locking. A Kafka message must parse to
-// exactly one record; the counts are re-checked when the stream ends.
+// KafkaMetaState carries the CURRENT message's metadata for the hidden
+// __mo_message_* columns plus the effective read controls. Each message is
+// parsed independently (KafkaReader.ReadBatch), so record↔message pairing is
+// exact by construction — malformed messages can never compensate for each
+// other across boundaries.
 type KafkaMetaState struct {
-	pending []KafkaMsgMeta
-	cur     KafkaMsgMeta
-	rows    int64
-	msgs    int64
-	loc     *time.Location
+	cur KafkaMsgMeta
+	loc *time.Location
 	// effective read controls, surfaced through the __mo_read_* columns
 	startID int64
 	size    int64
 	timeout int64
-}
-
-// advance pops the metadata of the next record's message.
-func (m *KafkaMetaState) advance(ctx context.Context) error {
-	if len(m.pending) == 0 {
-		return moerr.NewInvalidInput(ctx,
-			"kafka message did not parse to exactly one record (more records than messages)")
-	}
-	m.cur = m.pending[0]
-	m.pending = m.pending[1:]
-	m.rows++
-	return nil
-}
-
-// finishCheck runs when the stream is exhausted: every message must have
-// produced exactly one record.
-func (m *KafkaMetaState) finishCheck(ctx context.Context) error {
-	if m.rows != m.msgs {
-		return moerr.NewInvalidInputf(ctx,
-			"kafka read consumed %d messages but parsed %d records; every message value must be exactly one %s record",
-			m.msgs, m.rows, "csv/jsonl")
-	}
-	return nil
 }
 
 // kafkaMetaField synthesizes the hidden-column field values of the current
@@ -164,38 +138,42 @@ func isKafkaSyntheticAttr(param *ExternalParam, colName string) bool {
 	return false
 }
 
-// kafkaStreamReader adapts a Kafka partition read into the io.ReadCloser the
-// shared CSV machinery consumes: each message value becomes one line, and its
-// metadata is appended to the KafkaMetaState FIFO in the same order. The read
-// ends at the size cap, or when no new message arrives within the timeout.
-type kafkaStreamReader struct {
-	cl        *kgo.Client
-	meta      *KafkaMetaState
-	topic     string
-	partition int32
-	buf       []byte
-	done      bool
-	timeout   time.Duration // 0 = block forever
-	sizeCap   int64         // 0 = unlimited
-	readCnt   int64
-	last      int64 // offset of the last message emitted
-	anyRead   bool
-	ctx       context.Context
+// kafkaMessageSource yields Kafka messages one at a time. The read ends at
+// the size cap, or when no new message arrives within the idle timeout; a
+// deadline/cancel on the QUERY context always aborts (it is never a clean
+// end). Everything runs on the scan goroutine.
+type kafkaMessageSource struct {
+	cl      *kgo.Client
+	buf     []KafkaMsgMeta // fetched, not yet consumed
+	done    bool
+	timeout time.Duration // 0 = block forever
+	sizeCap int64         // 0 = unlimited
+	readCnt int64
+	last    int64 // offset of the last message returned
+	anyRead bool
+	ctx     context.Context
 }
 
-func (s *kafkaStreamReader) Read(p []byte) (int, error) {
+// next returns the next message; ok=false with a nil error is the clean end
+// of the read (size cap reached or idle timeout expired).
+func (s *kafkaMessageSource) next() (KafkaMsgMeta, bool, error) {
 	for {
-		if len(s.buf) > 0 {
-			n := copy(p, s.buf)
-			s.buf = s.buf[n:]
-			return n, nil
-		}
-		if s.done {
-			return 0, io.EOF
-		}
+		// the size cap applies to messages SERVED, including ones already
+		// buffered from an earlier poll
 		if s.sizeCap > 0 && s.readCnt >= s.sizeCap {
 			s.done = true
-			return 0, io.EOF
+			return KafkaMsgMeta{}, false, nil
+		}
+		if len(s.buf) > 0 {
+			msg := s.buf[0]
+			s.buf = s.buf[1:]
+			s.readCnt++
+			s.last = msg.Offset
+			s.anyRead = true
+			return msg, true, nil
+		}
+		if s.done {
+			return KafkaMsgMeta{}, false, nil
 		}
 		pollCtx := s.ctx
 		var cancel context.CancelFunc
@@ -230,53 +208,35 @@ func (s *kafkaStreamReader) Read(p []byte) (int, error) {
 			}
 		})
 		if pollErr != nil {
-			return 0, pollErr
+			return KafkaMsgMeta{}, false, pollErr
 		}
 		got := false
 		fetches.EachRecord(func(rec *kgo.Record) {
-			if s.sizeCap > 0 && s.readCnt >= s.sizeCap {
-				return
-			}
 			got = true
-			s.readCnt++
-			s.last = rec.Offset
-			s.anyRead = true
 			key := ""
 			nilKey := rec.Key == nil
 			if !nilKey {
 				key = string(rec.Key)
 			}
-			value := string(rec.Value)
-			s.meta.pending = append(s.meta.pending, KafkaMsgMeta{
+			s.buf = append(s.buf, KafkaMsgMeta{
 				Offset: rec.Offset,
 				Ts:     rec.Timestamp,
 				Key:    key,
 				NilKey: nilKey,
-				Value:  value,
+				Value:  string(rec.Value),
 			})
-			s.meta.msgs++
-			// one message value = one record line; strip a trailing newline
-			// the producer may have included so the line boundary stays 1:1
-			line := strings.TrimRight(value, "\r\n")
-			s.buf = append(s.buf, line...)
-			s.buf = append(s.buf, '\n')
 		})
 		if !got {
 			if timedOut {
 				s.done = true
-				return 0, io.EOF
+				return KafkaMsgMeta{}, false, nil
 			}
 			if err := s.ctx.Err(); err != nil {
-				return 0, err
+				return KafkaMsgMeta{}, false, err
 			}
 			// blocking mode (timeout 0) with an empty poll: poll again
 		}
 	}
-}
-
-func (s *kafkaStreamReader) Close() error {
-	s.done = true
-	return nil
 }
 
 // KafkaReader is the ExternalFileReader of a Kafka external table: it reads
@@ -285,13 +245,13 @@ func (s *kafkaStreamReader) Close() error {
 // metadata through the hidden __mo_message_* columns.
 type KafkaReader struct {
 	csv    CsvReader
-	stream *kafkaStreamReader
+	source *kafkaMessageSource
 	cl     *kgo.Client
 	ks     *plan.KafkaScan
 	proc   *process.Process
-	// completed is set only when ReadBatch drained the stream without error;
-	// commit/session-id updates in Close depend on it (an aborted read must
-	// change nothing).
+	// completed is set only when ReadBatch drained the source without error;
+	// the pending-progress handoff in Close depends on it (an aborted read
+	// must change nothing).
 	completed bool
 }
 
@@ -398,37 +358,93 @@ func (r *KafkaReader) Open(param *ExternalParam, proc *process.Process) (fileEmp
 	}
 	param.KafkaMeta = meta
 
-	stream := &kafkaStreamReader{
-		cl:        cl,
-		meta:      meta,
-		topic:     ks.Topic,
-		partition: ks.Partition,
-		timeout:   time.Duration(ks.TimeoutSeconds) * time.Second,
-		sizeCap:   ks.Size,
-		ctx:       proc.Ctx,
-	}
-
-	parser, err := newCSVParserFromReader(param.Extern, stream)
-	if err != nil {
-		cl.Close()
-		return false, err
+	r.source = &kafkaMessageSource{
+		cl:      cl,
+		timeout: time.Duration(ks.TimeoutSeconds) * time.Second,
+		sizeCap: ks.Size,
+		ctx:     proc.Ctx,
 	}
 	r.cl = cl
-	r.stream = stream
 	r.ks = ks
 	r.proc = proc
 	r.csv.param = param
-	r.csv.reader = stream
-	r.csv.plh = &ParseLineHandler{csvReader: parser}
 	return false, nil
 }
 
-func (r *KafkaReader) ReadBatch(ctx context.Context, bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) (fileFinished bool, err error) {
-	fileFinished, err = r.csv.makeBatchRows(proc, bat)
-	if err == nil && fileFinished {
-		r.completed = true
+// parseOneMessage parses ONE message value into exactly one record of the
+// table's format. Each message is parsed independently, so a malformed
+// message fails on its own boundary with its own offset — messages can never
+// compensate for each other.
+func (r *KafkaReader) parseOneMessage(ctx context.Context, param *ExternalParam, msg *KafkaMsgMeta) ([]csvparser.Field, error) {
+	value := strings.TrimRight(msg.Value, "\r\n")
+	if param.Extern.Format == tree.JSONLINE {
+		fields, err := r.csv.transJson2Lines(ctx, value, param.Attrs, param.Cols, param.Extern.JsonData)
+		if err != nil {
+			// no streaming-LOAD resume across message boundaries
+			r.csv.prevStr = ""
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"kafka message at offset %d is not a complete JSON object", msg.Offset)
+			}
+			return nil, moerr.NewInvalidInputf(ctx,
+				"kafka message at offset %d is not exactly one JSON object: %v", msg.Offset, err)
+		}
+		return fields, nil
 	}
-	return fileFinished, err
+	parser, err := newCSVParserFromReader(param.Extern, strings.NewReader(value+"\n"))
+	if err != nil {
+		return nil, err
+	}
+	row, err := parser.Read(nil)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, moerr.NewInvalidInputf(ctx,
+				"kafka message at offset %d did not parse to exactly one record (empty value)", msg.Offset)
+		}
+		return nil, err
+	}
+	if _, err := parser.Read(nil); !errors.Is(err, io.EOF) {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"kafka message at offset %d did not parse to exactly one record", msg.Offset)
+	}
+	return row, nil
+}
+
+func (r *KafkaReader) ReadBatch(ctx context.Context, bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) (fileFinished bool, err error) {
+	if bat == nil || bat.VectorCount() == 0 {
+		return false, moerr.NewInternalError(proc.Ctx, "kafka reader requires at least one materialized column")
+	}
+	param := r.csv.param
+	var curBatchSize uint64
+	for i := 0; i < OneBatchMaxRow; i++ {
+		// a cancelled/timed-out QUERY aborts; it is never a clean end
+		if err := proc.Ctx.Err(); err != nil {
+			return false, err
+		}
+		msg, ok, err := r.source.next()
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			fileFinished = true
+			r.completed = true
+			break
+		}
+		row, err := r.parseOneMessage(proc.Ctx, param, &msg)
+		if err != nil {
+			return false, err
+		}
+		param.KafkaMeta.cur = msg
+		if err := getOneRowData(proc, bat, row, i, param); err != nil {
+			return false, err
+		}
+		curBatchSize += uint64(len(msg.Value))
+		if curBatchSize >= param.maxBatchSize {
+			break
+		}
+	}
+	bat.SetRowCount(bat.Vecs[0].Length())
+	return fileFinished, nil
 }
 
 func (r *KafkaReader) Close() error {
@@ -442,11 +458,11 @@ func (r *KafkaReader) Close() error {
 	// only when the whole statement succeeded and discards it otherwise —
 	// an aborted statement must change nothing, no matter where it aborts.
 	// An aborted read (error/cancel before EOF) just closes the transport.
-	if r.completed && r.stream != nil && r.stream.anyRead && r.csv.param != nil {
+	if r.completed && r.source != nil && r.source.anyRead && r.csv.param != nil {
 		r.csv.param.KafkaPending = &KafkaPendingProgress{
 			cl:     r.cl,
 			ks:     r.ks,
-			lastID: r.stream.last,
+			lastID: r.source.last,
 		}
 		r.cl = nil // ownership moved to the pending progress
 	}
@@ -454,7 +470,7 @@ func (r *KafkaReader) Close() error {
 		r.cl.Close()
 		r.cl = nil
 	}
-	r.stream = nil
+	r.source = nil
 	if r.csv.param != nil {
 		r.csv.param.KafkaMeta = nil
 	}
@@ -533,8 +549,14 @@ func kafkaCommit(ctx context.Context, cl *kgo.Client, ks *plan.KafkaScan, at int
 	adm := kadm.NewClient(cl)
 	offsets := make(kadm.Offsets)
 	offsets.Add(kadm.Offset{Topic: ks.Topic, Partition: ks.Partition, At: at, LeaderEpoch: -1})
-	if _, err := adm.CommitOffsets(ctx, ks.Group, offsets); err != nil {
+	resp, err := adm.CommitOffsets(ctx, ks.Group, offsets)
+	if err != nil {
 		return moerr.NewInternalErrorf(ctx, "kafka: commit offset %d for group %s failed: %v", at, ks.Group, err)
+	}
+	// kadm reports authorization and partition-level failures inside the
+	// response while the request-level error stays nil
+	if perr := resp.Error(); perr != nil {
+		return moerr.NewInternalErrorf(ctx, "kafka: commit offset %d for group %s failed: %v", at, ks.Group, perr)
 	}
 	return nil
 }

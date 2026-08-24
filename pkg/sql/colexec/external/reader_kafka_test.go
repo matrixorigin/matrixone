@@ -24,6 +24,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,11 +42,22 @@ type fakeKafkaSession struct {
 	fakeScanSession
 	lastID  int64
 	lastSet bool
+	queue   []func(publish bool)
 }
 
 func (s *fakeKafkaSession) SetLastKafkaMessageID(id int64) { s.lastID, s.lastSet = id, true }
 func (s *fakeKafkaSession) LastKafkaMessageID() (int64, bool) {
 	return s.lastID, s.lastSet
+}
+func (s *fakeKafkaSession) EnqueueKafkaProgress(f func(publish bool)) { s.queue = append(s.queue, f) }
+
+// finalizeAll is what the frontend statement terminal does.
+func (s *fakeKafkaSession) finalizeAll(publish bool) {
+	q := s.queue
+	s.queue = nil
+	for _, f := range q {
+		f(publish)
+	}
 }
 
 // startKafka spins an in-process fake Kafka cluster with one seeded topic and
@@ -147,8 +159,8 @@ func readAllKafka(t *testing.T, param *ExternalParam, proc *process.Process, bat
 		}
 	}
 	require.NoError(t, r.Close())
-	// what External.Reset does on statement success: publish the pending
-	// progress (commit + session last id)
+	// what External.Reset + the statement terminal do on full success:
+	// publish the pending progress (commit + session last id)
 	param.KafkaPending.Finalize(proc, true)
 	param.KafkaPending = nil
 	return r
@@ -571,24 +583,21 @@ func TestKafkaReaderTimestampInstant(t *testing.T) {
 	require.NotZero(t, utcTS)
 }
 
-// TestKafkaScanStatementBoundary is the pipeline-boundary regression: the
-// SOURCE drains (EOF reached, batch produced) but the STATEMENT then fails —
-// a downstream operator error or a cancel after the source call returned.
-// The drained scan's progress must publish only from the success terminal
-// path (External.Reset with pipelineFailed=false): a failed statement leaves
-// the committed offset and the session last id untouched, so retry/chaining
-// replays instead of skipping. Reader-only tests cannot cover this boundary;
-// this drives the full External operator.
+// TestKafkaScanStatementBoundary: progress must publish only at the WHOLE-
+// statement terminal. Source-pipeline success (External.Reset with
+// pipelineFailed=false) is NOT statement success — on split scopes the
+// source pipeline resets before downstream pipelines consume the final
+// batch — so a successful Reset only ENQUEUES the pending progress on the
+// session; the statement terminal (FinalizeKafkaProgress) publishes on
+// success and discards on failure. A failed source pipeline discards
+// immediately.
 func TestKafkaScanStatementBoundary(t *testing.T) {
-	run := func(topic string, pipelineFailed bool, failErr error) (*process.Process, string) {
+	drain := func(topic string) (*ExternalParam, *process.Process, *External, string) {
 		addr := startKafka(t, topic, [][2]string{{"", "1,a"}, {"", "2,b"}})
 		ks := kafkaScan(addr, topic, sqlkafka.FormatCSV)
 		param, proc, _ := newKafkaTestParam(t, ks)
 		op := NewArgument().WithEs(param)
 		require.NoError(t, op.Prepare(proc))
-
-		// drive Call until the source drains; batches are produced but (in
-		// the failure scenario) never survive downstream
 		for {
 			result, err := op.Call(proc)
 			require.NoError(t, err)
@@ -597,28 +606,51 @@ func TestKafkaScanStatementBoundary(t *testing.T) {
 			}
 		}
 		require.NotNil(t, param.KafkaPending, "a drained scan hands off pending progress")
-
-		// the statement terminal: pipeline Reset with the outcome
-		op.Reset(proc, pipelineFailed, failErr)
-		require.Nil(t, param.KafkaPending, "Reset consumes the pending progress")
-		op.Free(proc, pipelineFailed, failErr)
-		return proc, addr
+		return param, proc, op, addr
 	}
 
-	// downstream failure: nothing is published
-	proc, addr := run("t_stmt_fail", true, moerr.NewInternalErrorNoCtx("downstream operator failed"))
-	require.False(t, proc.GetSession().(*fakeKafkaSession).lastSet,
-		"failed statement must not record a last id")
-	_, ok := fetchCommitted(t, addr, "g_test", "t_stmt_fail")
-	require.False(t, ok, "failed statement must not commit")
+	// source pipeline success: Reset only DEFERS — nothing published yet
+	param, proc, op, addr := drain("t_stmt_defer")
+	ses := proc.GetSession().(*fakeKafkaSession)
+	op.Reset(proc, false, nil)
+	require.Nil(t, param.KafkaPending, "Reset consumes the pending progress")
+	require.Len(t, ses.queue, 1, "source-pipeline success must enqueue, not publish")
+	require.False(t, ses.lastSet, "publication must wait for the statement terminal")
+	if _, ok := fetchCommitted(t, addr, "g_test", "t_stmt_defer"); ok {
+		t.Fatal("source-pipeline Reset must not commit")
+	}
+	// ... and the statement then FAILS downstream: discard
+	ses.finalizeAll(false)
+	require.False(t, ses.lastSet, "failed statement must not record a last id")
+	if _, ok := fetchCommitted(t, addr, "g_test", "t_stmt_defer"); ok {
+		t.Fatal("failed statement must not commit")
+	}
+	op.Free(proc, true, nil)
 
-	// statement success: both side effects publish
-	proc2, addr2 := run("t_stmt_ok", false, nil)
-	require.True(t, proc2.GetSession().(*fakeKafkaSession).lastSet)
-	require.Equal(t, int64(1), proc2.GetSession().(*fakeKafkaSession).lastID)
+	// statement success: the terminal publishes both side effects
+	param2, proc2, op2, addr2 := drain("t_stmt_ok")
+	ses2 := proc2.GetSession().(*fakeKafkaSession)
+	op2.Reset(proc2, false, nil)
+	ses2.finalizeAll(true)
+	require.True(t, ses2.lastSet)
+	require.Equal(t, int64(1), ses2.lastID)
 	at, ok := fetchCommitted(t, addr2, "g_test", "t_stmt_ok")
 	require.True(t, ok)
 	require.Equal(t, int64(2), at, "success commits last+1")
+	op2.Free(proc2, false, nil)
+	_ = param2
+
+	// source pipeline FAILURE: discarded immediately, nothing enqueued
+	param3, proc3, op3, addr3 := drain("t_stmt_srcfail")
+	ses3 := proc3.GetSession().(*fakeKafkaSession)
+	op3.Reset(proc3, true, moerr.NewInternalErrorNoCtx("pipeline failed"))
+	require.Nil(t, param3.KafkaPending)
+	require.Empty(t, ses3.queue)
+	require.False(t, ses3.lastSet)
+	if _, ok := fetchCommitted(t, addr3, "g_test", "t_stmt_srcfail"); ok {
+		t.Fatal("failed source pipeline must not commit")
+	}
+	op3.Free(proc3, true, nil)
 }
 
 // produceTxn produces one record inside a producer transaction and ends it
@@ -717,4 +749,83 @@ func TestKafkaReaderOpenTransactionInvisible(t *testing.T) {
 	as := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
 	require.Equal(t, int32(1), as[0])
 	require.Equal(t, int64(0), proc.GetSession().(*fakeKafkaSession).lastID)
+}
+
+// TestKafkaReaderNoCrossMessageCompensation is the cross-boundary repro: a
+// message containing TWO records followed by an empty message has matching
+// aggregate counts (2 rows / 2 messages) and slipped through order-based
+// pairing with wrong offset attribution. Per-message parsing fails each
+// malformed message on its own boundary, with its own offset in the error.
+func TestKafkaReaderNoCrossMessageCompensation(t *testing.T) {
+	// jsonl: two objects in message 0, empty message 1
+	addr := startKafka(t, "t_comp_j", [][2]string{
+		{"", "{\"a\": 1, \"s\": \"x\"}\n{\"a\": 2, \"s\": \"y\"}"}, {"", ""},
+	})
+	ks := kafkaScan(addr, "t_comp_j", sqlkafka.FormatJSONL)
+	param, proc, bat := newKafkaTestParam(t, ks)
+	r := NewKafkaReader(param)
+	_, err := r.Open(param, proc)
+	require.NoError(t, err)
+	_, err = r.ReadBatch(proc.Ctx, bat, proc, nil)
+	require.Error(t, err, "a two-record message must fail its own boundary")
+	require.Contains(t, err.Error(), "offset 0")
+	require.NoError(t, r.Close())
+	require.Nil(t, param.KafkaPending)
+	require.False(t, proc.GetSession().(*fakeKafkaSession).lastSet)
+
+	// csv variant: two records in one message
+	addr2 := startKafka(t, "t_comp_c", [][2]string{{"", "1,a\n2,b"}, {"", ""}})
+	ks2 := kafkaScan(addr2, "t_comp_c", sqlkafka.FormatCSV)
+	param2, proc2, bat2 := newKafkaTestParam(t, ks2)
+	r2 := NewKafkaReader(param2)
+	_, err = r2.Open(param2, proc2)
+	require.NoError(t, err)
+	_, err = r2.ReadBatch(proc2.Ctx, bat2, proc2, nil)
+	require.ErrorContains(t, err, "offset 0")
+	require.ErrorContains(t, err, "exactly one record")
+	require.NoError(t, r2.Close())
+}
+
+// TestKafkaCommitPartitionError: kadm reports authorization/partition
+// failures inside the response while the request-level error stays nil; the
+// commit must fail loudly, so an autocommit=false Open cannot proceed
+// without its required pre-read checkpoint.
+func TestKafkaCommitPartitionError(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "t_cfail"))
+	require.NoError(t, err)
+	t.Cleanup(c.Close)
+	addr := c.ListenAddrs()[0]
+	{
+		cl, err := kgo.NewClient(kgo.SeedBrokers(addr))
+		require.NoError(t, err)
+		defer cl.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		require.NoError(t, cl.ProduceSync(ctx, &kgo.Record{Topic: "t_cfail", Value: []byte("1,a")}).FirstErr())
+	}
+	// inject GROUP_AUTHORIZATION_FAILED (30) into every OffsetCommit response
+	c.ControlKey(8, func(req kmsg.Request) (kmsg.Response, error, bool) {
+		r := req.(*kmsg.OffsetCommitRequest)
+		resp := r.ResponseKind().(*kmsg.OffsetCommitResponse)
+		for _, rt := range r.Topics {
+			topic := kmsg.NewOffsetCommitResponseTopic()
+			topic.Topic = rt.Topic
+			for _, rp := range rt.Partitions {
+				part := kmsg.NewOffsetCommitResponseTopicPartition()
+				part.Partition = rp.Partition
+				part.ErrorCode = 30
+				topic.Partitions = append(topic.Partitions, part)
+			}
+			resp.Topics = append(resp.Topics, topic)
+		}
+		return resp, nil, true
+	})
+
+	ks := kafkaScan(addr, "t_cfail", sqlkafka.FormatCSV)
+	ks.Autocommit = false
+	ks.StartId = -1
+	param, proc, _ := newKafkaTestParam(t, ks)
+	_, err = NewKafkaReader(param).Open(param, proc)
+	require.ErrorContains(t, err, "commit offset")
+	require.ErrorContains(t, err, "failed")
 }

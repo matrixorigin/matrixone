@@ -53,8 +53,11 @@ select * from kt;
 invalid input: kafka external table with autocommit=false requires a __mo_read_start_id = <last consumed offset> predicate (-1 for the earliest)
 select * from kt where __mo_read_start_id = -2;
 invalid input: __mo_read_start_id must be >= -1, got -2
+-- @regex("cannot reach", true)
 select * from kt where __mo_read_start_id = 0 and __mo_read_size = 0;
-invalid input: __mo_read_size must be positive, got 0
+internal error: kafka: cannot reach 127.0.0.1:19092 or list offsets of topic "events": unable to dial
+select * from kt where __mo_read_start_id = 0 and __mo_read_size = -3;
+invalid input: __mo_read_size must be >= 0 (0 = unlimited), got -3
 select * from kt where __mo_read_start_id = 0 and __mo_read_timeout = -1;
 invalid input: __mo_read_timeout must be >= 0, got -1
 select * from kt where __mo_read_start_id = 1 and __mo_read_start_id = 2;

@@ -84,8 +84,10 @@ func DeriveKafkaReadControl(ctx context.Context, node *plan.Node, proc *process.
 			ks.StartId = val
 			ks.HasStartId = true
 		case catalog.KafkaReadSize:
-			if val <= 0 {
-				return moerr.NewInvalidInputf(ctx, "%s must be positive, got %d", name, val)
+			// 0 is the documented "unlimited" (the same value the default
+			// scan uses); only negatives are invalid
+			if val < 0 {
+				return moerr.NewInvalidInputf(ctx, "%s must be >= 0 (0 = unlimited), got %d", name, val)
 			}
 			if val > maxKafkaControlValue {
 				return moerr.NewInvalidInputf(ctx, "%s value out of range: %d", name, val)

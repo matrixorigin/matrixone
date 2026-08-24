@@ -282,10 +282,22 @@ func (external *External) Release() {
 
 func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if external.Es != nil && external.Es.KafkaPending != nil {
-		// publish the drained Kafka scan's progress only when the WHOLE
-		// statement succeeded; a failed/cancelled statement discards it
-		external.Es.KafkaPending.Finalize(proc, !pipelineFailed && err == nil)
+		pending := external.Es.KafkaPending
 		external.Es.KafkaPending = nil
+		if pipelineFailed || err != nil {
+			pending.Finalize(proc, false)
+		} else if ses, ok := proc.GetSession().(process.KafkaSessionState); ok {
+			// SOURCE-pipeline success is not STATEMENT success: on split
+			// scopes this Reset runs before downstream pipelines consume the
+			// final batch. Defer publication to the statement terminal.
+			pendingProc := proc
+			ses.EnqueueKafkaProgress(func(publish bool) {
+				pending.Finalize(pendingProc, publish)
+			})
+		} else {
+			// no statement coordinator (internal executor): best effort
+			pending.Finalize(proc, true)
+		}
 	}
 	if external.reader != nil {
 		if closeErr := external.reader.Close(); closeErr != nil {

@@ -207,6 +207,13 @@ type KafkaSessionState interface {
 	// LastKafkaMessageID returns the recorded offset; ok=false when no Kafka
 	// scan has completed in this session yet.
 	LastKafkaMessageID() (int64, bool)
+	// EnqueueKafkaProgress defers a drained Kafka scan's progress publication
+	// to the STATEMENT terminal: on split scopes the source pipeline resets
+	// before downstream pipelines consume the final batch, so source-pipeline
+	// success is not statement success. The session runs every queued
+	// finalizer exactly once with the statement's outcome (publish=false
+	// discards) when the whole statement completes.
+	EnqueueKafkaProgress(finalize func(publish bool))
 }
 
 type ExecStatus int

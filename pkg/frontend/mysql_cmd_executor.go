@@ -4791,6 +4791,11 @@ func executeStmtWithResponse(ses *Session,
 	// RespPostMeta below, so a commit error can never follow an advertised
 	// cursor on the wire.
 	err = executeStmtWithMaxExecutionTime(ses, execCtx)
+	// the WHOLE-statement terminal for deferred Kafka scan progress: every
+	// pipeline (including downstream consumers on split scopes) has finished
+	// by the time executeStmtWithMaxExecutionTime returns, so publish on
+	// success and discard on failure here — never earlier.
+	ses.FinalizeKafkaProgress(err == nil)
 	if err != nil {
 		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}

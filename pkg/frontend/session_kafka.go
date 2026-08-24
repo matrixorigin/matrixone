@@ -38,3 +38,26 @@ func (ses *Session) LastKafkaMessageID() (int64, bool) {
 	defer ses.lastKafkaMessageMu.Unlock()
 	return ses.lastKafkaMessageID, ses.lastKafkaMessageSet
 }
+
+// EnqueueKafkaProgress queues a drained Kafka scan's progress finalizer for
+// the statement terminal (see process.KafkaSessionState).
+func (ses *Session) EnqueueKafkaProgress(finalize func(publish bool)) {
+	ses.lastKafkaMessageMu.Lock()
+	defer ses.lastKafkaMessageMu.Unlock()
+	ses.kafkaProgressQueue = append(ses.kafkaProgressQueue, finalize)
+}
+
+// FinalizeKafkaProgress runs every queued Kafka progress finalizer with the
+// statement's outcome and clears the queue. Called from the statement
+// terminal (executeStmtWithResponse) with publish = statement succeeded, and
+// from Session.Close with publish=false (an interrupted statement must not
+// advance the exactly-once chain).
+func (ses *Session) FinalizeKafkaProgress(publish bool) {
+	ses.lastKafkaMessageMu.Lock()
+	queue := ses.kafkaProgressQueue
+	ses.kafkaProgressQueue = nil
+	ses.lastKafkaMessageMu.Unlock()
+	for _, finalize := range queue {
+		finalize(publish)
+	}
+}
