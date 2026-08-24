@@ -266,6 +266,7 @@ func TestBindTimestampAddFSPByUnit(t *testing.T) {
 		{"date_microsecond", "MICROSECOND", types.T_date, 0, types.T_datetime, 6},
 		{"date_day", "DAY", types.T_date, 0, types.T_date, 0},
 		{"char_string", "SECOND", types.T_char, 0, types.T_varchar, 0},
+		{"datetime_unknown_unit", "UNKNOWN", types.T_datetime, 3, types.T_datetime, 6},
 	}
 
 	for _, tc := range tests {

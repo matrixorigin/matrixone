@@ -47,8 +47,8 @@ func TestIssue27379TimestampAddPreservesFSP(t *testing.T) {
 			dt0 datetime(0), dt3 datetime(3), dt6 datetime(6),
 			ts0 timestamp(0), ts3 timestamp(3), ts6 timestamp(6))`)
 		execSQLRequire(t, ctx, db, "insert into "+dbName+`.t values
-			('2026-08-12 10:00:00', '2026-08-12 10:00:00.000100', '2026-08-12 10:00:00.000100',
-			 '2026-08-12 10:00:00', '2026-08-12 10:00:00.000100', '2026-08-12 10:00:00.000100')`)
+			('2026-08-12 10:00:00', '2026-08-12 10:00:00.123', '2026-08-12 10:00:00.000100',
+			 '2026-08-12 10:00:00', '2026-08-12 10:00:00.123', '2026-08-12 10:00:00.000100')`)
 
 		rows, err := db.QueryContext(ctx, `select
 			timestampadd(second, 1, dt0), timestampadd(second, 1, dt3), timestampadd(second, 1, dt6),
@@ -77,10 +77,10 @@ func TestIssue27379TimestampAddPreservesFSP(t *testing.T) {
 		}
 		require.NoError(t, rows.Scan(dest...))
 		require.Equal(t, []string{
-			"2026-08-12 10:00:01", "2026-08-12 10:00:01.000100", "2026-08-12 10:00:01.000100",
-			"2026-08-12 10:00:01", "2026-08-12 10:00:01.000100", "2026-08-12 10:00:01.000100",
-			"2026-08-12 10:00:00.000001", "2026-08-12 10:00:00.000101", "2026-08-12 10:00:00.000101",
-			"2026-08-12 10:00:00.000001", "2026-08-12 10:00:00.000101", "2026-08-12 10:00:00.000101",
+			"2026-08-12 10:00:01", "2026-08-12 10:00:01.123", "2026-08-12 10:00:01.000100",
+			"2026-08-12 10:00:01", "2026-08-12 10:00:01.123", "2026-08-12 10:00:01.000100",
+			"2026-08-12 10:00:00.000001", "2026-08-12 10:00:00.123001", "2026-08-12 10:00:00.000101",
+			"2026-08-12 10:00:00.000001", "2026-08-12 10:00:00.123001", "2026-08-12 10:00:00.000101",
 		}, values)
 		require.False(t, rows.Next())
 		require.NoError(t, rows.Err())
@@ -92,8 +92,8 @@ func TestIssue27379TimestampAddPreservesFSP(t *testing.T) {
 			cast(timestampadd(microsecond, 1, dt3) as char),
 			timestampdiff(microsecond, dt3, timestampadd(microsecond, 1, dt3))
 			from `+dbName+`.t`).Scan(&formatted, &casted, &delta))
-		require.Equal(t, "2026-08-12 10:00:00.000101", formatted)
-		require.Equal(t, "2026-08-12 10:00:00.000101", casted)
+		require.Equal(t, "2026-08-12 10:00:00.123001", formatted)
+		require.Equal(t, "2026-08-12 10:00:00.123001", casted)
 		require.Equal(t, int64(1), delta)
 
 		windowRows, err := db.QueryContext(ctx, `select
