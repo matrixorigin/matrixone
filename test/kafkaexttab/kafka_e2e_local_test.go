@@ -73,7 +73,20 @@ type simDriver struct{}
 type simConn struct {
 	lastID  int64
 	lastSet bool
+	// explicit-transaction modeling: reads inside an open transaction stage
+	// their effects; COMMIT applies them, ROLLBACK drops them
+	txnOpen     bool
+	pendLast    int64
+	pendLastSet bool
+	pendDst     int64
 }
+
+// simDstRows models the kafka_e2e.dst_txn destination table.
+var simDstRows int64
+
+// simGTxOffset models the g_tx group's committed offset (-1 = none).
+var simGTxOffset int64 = -1
+
 type simStmt struct {
 	conn *simConn
 	q    string
@@ -84,13 +97,35 @@ type simRows struct {
 	next int
 }
 
-func (simDriver) Open(string) (driver.Conn, error)            { return &simConn{}, nil }
-func (c *simConn) Prepare(q string) (driver.Stmt, error)      { return &simStmt{conn: c, q: q}, nil }
-func (c *simConn) Close() error                               { return nil }
-func (c *simConn) Begin() (driver.Tx, error)                  { return nil, driver.ErrSkip }
-func (s *simStmt) Close() error                               { return nil }
-func (s *simStmt) NumInput() int                              { return 0 }
-func (s *simStmt) Exec([]driver.Value) (driver.Result, error) { return driver.ResultNoRows, nil }
+func (simDriver) Open(string) (driver.Conn, error)       { return &simConn{}, nil }
+func (c *simConn) Prepare(q string) (driver.Stmt, error) { return &simStmt{conn: c, q: q}, nil }
+func (c *simConn) Close() error                          { return nil }
+func (c *simConn) Begin() (driver.Tx, error)             { return nil, driver.ErrSkip }
+func (s *simStmt) Close() error                          { return nil }
+func (s *simStmt) NumInput() int                         { return 0 }
+func (s *simStmt) Exec([]driver.Value) (driver.Result, error) {
+	q := s.q
+	switch {
+	case q == "BEGIN":
+		s.conn.txnOpen = true
+	case q == "COMMIT":
+		if s.conn.pendLastSet {
+			s.conn.lastID, s.conn.lastSet = s.conn.pendLast, true
+			simGTxOffset = s.conn.pendLast + 1
+		}
+		simDstRows += s.conn.pendDst
+		s.conn.txnOpen, s.conn.pendLastSet, s.conn.pendDst = false, false, 0
+	case q == "ROLLBACK":
+		s.conn.txnOpen, s.conn.pendLastSet, s.conn.pendDst = false, false, 0
+	case strings.Contains(q, "insert into kafka_e2e.dst_txn select"):
+		lo, hi, ok := simRange(q)
+		if ok {
+			s.conn.pendLast, s.conn.pendLastSet = hi, true
+			s.conn.pendDst += hi - lo + 1
+		}
+	}
+	return driver.ResultNoRows, nil
+}
 
 func (s *simStmt) Query([]driver.Value) (driver.Rows, error) {
 	q := s.q
@@ -104,6 +139,8 @@ func (s *simStmt) Query([]driver.Value) (driver.Rows, error) {
 		return &simRows{cols: cols, rows: [][]driver.Value{vals}}, nil
 	}
 	switch {
+	case strings.Contains(q, "count(*) from kafka_e2e.dst_txn"):
+		return one([]string{"c"}, simDstRows)
 	case strings.Contains(q, "last_kafka_message_id"):
 		if !s.conn.lastSet {
 			return one([]string{"v"}, nil)
@@ -165,6 +202,15 @@ func TestRunAgainstSimulator(t *testing.T) {
 	}
 	defer db.Close()
 	simHigh = 0
+	simDstRows = 0
+	simGTxOffset = -1
+	committedOffsetFn = func(group string) (int64, bool) {
+		if group == "g_tx" && simGTxOffset >= 0 {
+			return simGTxOffset, true
+		}
+		return 0, false
+	}
+	defer func() { committedOffsetFn = nil }()
 
 	var r report
 	if err := run(context.Background(), db, "127.0.0.1:9092", simSeed, &r); err != nil {
@@ -174,7 +220,7 @@ func TestRunAgainstSimulator(t *testing.T) {
 		"setup-seed", "read-to-end-timeout-clean", "exactly-once-chaining",
 		"repeated-start-id-replays", "pickup-after-produce",
 		"zero-messages-null-and-preserved", "metadata-key-null",
-		"autocommit-earliest-and-last-id",
+		"autocommit-earliest-and-last-id", "txn-rollback-discards-commit-publishes",
 	}
 	if len(r.Cases) != len(want) {
 		t.Fatalf("cases = %v, want %v", r.Cases, want)

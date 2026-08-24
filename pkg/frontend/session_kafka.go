@@ -47,6 +47,17 @@ func (ses *Session) EnqueueKafkaProgress(finalize func(publish bool)) {
 	ses.kafkaProgressQueue = append(ses.kafkaProgressQueue, finalize)
 }
 
+// sessionFinalizeKafkaProgress finalizes deferred Kafka progress from a
+// transaction terminal; sessions without the capability have nothing queued.
+func sessionFinalizeKafkaProgress(execCtx *ExecCtx, publish bool) {
+	if execCtx == nil || execCtx.ses == nil {
+		return
+	}
+	if ses, ok := execCtx.ses.(*Session); ok {
+		ses.FinalizeKafkaProgress(publish)
+	}
+}
+
 // FinalizeKafkaProgress runs every queued Kafka progress finalizer with the
 // statement's outcome and clears the queue. Called from the statement
 // terminal (executeStmtWithResponse) with publish = statement succeeded, and

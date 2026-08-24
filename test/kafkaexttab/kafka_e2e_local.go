@@ -188,6 +188,8 @@ func run(ctx context.Context, db *sql.DB, bootstrap string, seed seedFunc, r *re
 		"create database kafka_e2e",
 		"create external table kafka_e2e.korders (id bigint, name varchar(100)) engine = kafka with ('brokers' = '" + bootstrap + "', 'topic' = '" + topic + "')",
 		"create external table kafka_e2e.korders_auto (id bigint, name varchar(100)) engine = kafka with ('brokers' = '" + bootstrap + "', 'topic' = '" + topic + "', 'autocommit' = 'true', 'group' = 'g_auto')",
+		"create external table kafka_e2e.korders_tx (id bigint, name varchar(100)) engine = kafka with ('brokers' = '" + bootstrap + "', 'topic' = '" + topic + "', 'autocommit' = 'true', 'group' = 'g_tx')",
+		"create table kafka_e2e.dst_txn (id bigint, name varchar(100))",
 	} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("setup %q: %w", stmt, err)
@@ -394,10 +396,110 @@ func run(ctx context.Context, db *sql.DB, bootstrap string, seed seedFunc, r *re
 	}
 	r.Cases = append(r.Cases, "autocommit-earliest-and-last-id")
 
+	// ---- H: explicit-transaction ownership — progress publishes only when
+	// the ENCLOSING transaction commits. BEGIN; INSERT..SELECT FROM kafka;
+	// ROLLBACK must leave the chain untouched (no last id, no committed
+	// group offset); the same statement followed by COMMIT publishes both.
+	connF, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer connF.Close()
+	insertSQL := "insert into kafka_e2e.dst_txn select id, name from kafka_e2e.korders_tx where __mo_read_timeout = 2"
+	if _, err := connF.ExecContext(ctx, "BEGIN"); err != nil {
+		return err
+	}
+	if _, err := connF.ExecContext(ctx, insertSQL); err != nil {
+		return fmt.Errorf("txn insert: %w", err)
+	}
+	// MID-transaction: nothing may be published yet
+	if _, ok, err := lastID(ctx, connF); err != nil {
+		return err
+	} else if ok {
+		return fmt.Errorf("last_kafka_message_id must stay NULL inside an open transaction")
+	}
+	if _, err := connF.ExecContext(ctx, "ROLLBACK"); err != nil {
+		return err
+	}
+	if _, ok, err := lastID(ctx, connF); err != nil {
+		return err
+	} else if ok {
+		return fmt.Errorf("ROLLBACK must not publish the kafka last id")
+	}
+	var dstCnt int64
+	if err := connF.QueryRowContext(ctx, "select count(*) from kafka_e2e.dst_txn").Scan(&dstCnt); err != nil {
+		return err
+	}
+	if dstCnt != 0 {
+		return fmt.Errorf("rolled-back insert left %d rows", dstCnt)
+	}
+	// the rolled-back read must not have advanced the g_tx group offset
+	if committedOffset(ctx, bootstrap, "g_tx") >= 0 {
+		return fmt.Errorf("ROLLBACK must not commit the kafka group offset")
+	}
+
+	if _, err := connF.ExecContext(ctx, "BEGIN"); err != nil {
+		return err
+	}
+	if _, err := connF.ExecContext(ctx, insertSQL); err != nil {
+		return fmt.Errorf("txn insert (commit round): %w", err)
+	}
+	if _, err := connF.ExecContext(ctx, "COMMIT"); err != nil {
+		return err
+	}
+	if err := expectLastID(ctx, connF, 12); err != nil {
+		return fmt.Errorf("COMMIT must publish the kafka last id: %w", err)
+	}
+	if err := connF.QueryRowContext(ctx, "select count(*) from kafka_e2e.dst_txn").Scan(&dstCnt); err != nil {
+		return err
+	}
+	if dstCnt != 13 {
+		return fmt.Errorf("committed insert rows = %d, want 13", dstCnt)
+	}
+	if got := committedOffset(ctx, bootstrap, "g_tx"); got != 13 {
+		return fmt.Errorf("committed g_tx offset = %d, want 13", got)
+	}
+	r.Cases = append(r.Cases, "txn-rollback-discards-commit-publishes")
+
 	if _, err := db.ExecContext(ctx, "drop database kafka_e2e"); err != nil {
 		return err
 	}
 	return nil
+}
+
+// committedOffsetFn is a test seam: the broker-free simulator substitutes
+// its own committed-offset model (a real run uses the kadm lookup below).
+var committedOffsetFn func(group string) (int64, bool)
+
+// committedOffset returns the committed offset of partition 0 for group, or
+// -1 when the group has committed nothing.
+func committedOffset(ctx context.Context, bootstrap, group string) int64 {
+	if committedOffsetFn != nil {
+		if v, ok := committedOffsetFn(group); ok {
+			return v
+		}
+		return -1
+	}
+	return committedOffsetReal(ctx, bootstrap, group)
+}
+
+func committedOffsetReal(ctx context.Context, bootstrap, group string) int64 {
+	cl, err := kgo.NewClient(kgo.SeedBrokers(bootstrap))
+	if err != nil {
+		return -1
+	}
+	defer cl.Close()
+	fctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	resp, err := kadm.NewClient(cl).FetchOffsets(fctx, group)
+	if err != nil {
+		return -1
+	}
+	o, ok := resp.Lookup(topic, 0)
+	if !ok || o.At < 0 {
+		return -1
+	}
+	return o.At
 }
 
 func writeReport(dir string, value report) error {
