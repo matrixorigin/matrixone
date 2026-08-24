@@ -1447,6 +1447,9 @@ func ctasExprCanBeNull(expr *Expr) bool {
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
 	viewName := stmt.Name.ObjectName
+	if err := validateIdentifier(ctx.GetContext(), string(viewName)); err != nil {
+		return nil, err
+	}
 
 	createView := &plan.CreateView{
 		Replace:     stmt.Replace,
@@ -1484,6 +1487,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
+		return nil, err
+	}
+	if err := validatePersistedTableIdentifiers(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
 
@@ -2029,6 +2035,9 @@ func buildCreateTable(
 	if err := validateCreateTableIdentifier(ctx, tableName); err != nil {
 		return nil, err
 	}
+	if err := validateTableDefinitionIdentifiers(ctx.GetContext(), stmt.Defs); err != nil {
+		return nil, err
+	}
 
 	if stmt.IsAsLike {
 		var err error
@@ -2446,6 +2455,9 @@ func buildCreateTable(
 	if !isPrepareStmt {
 		asSelectQuery = nil
 	}
+	if err := validatePersistedTableIdentifiers(ctx.GetContext(), createTable.TableDef); err != nil {
+		return nil, err
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -2460,7 +2472,7 @@ func buildCreateTable(
 	}, nil
 }
 
-func validateTableIdentifier(ctx context.Context, name string) error {
+func validateIdentifier(ctx context.Context, name string) error {
 	if getNumOfCharacters(name) <= MaxIdentifierLength {
 		return nil
 	}
@@ -2469,7 +2481,7 @@ func validateTableIdentifier(ctx context.Context, name string) error {
 }
 
 func validateCreateTableIdentifier(ctx CompilerContext, name string) error {
-	err := validateTableIdentifier(ctx.GetContext(), name)
+	err := validateIdentifier(ctx.GetContext(), name)
 	if err == nil {
 		return nil
 	}
@@ -2481,6 +2493,93 @@ func validateCreateTableIdentifier(ctx CompilerContext, name string) error {
 	}
 
 	return err
+}
+
+func validateTableDefinitionIdentifiers(ctx context.Context, defs tree.TableDefs) error {
+	for _, def := range defs {
+		if err := validateTableDefinitionIdentifier(ctx, def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTableDefinitionIdentifier(ctx context.Context, def tree.TableDef) error {
+	validateNames := func(names ...string) error {
+		for _, name := range names {
+			if err := validateIdentifier(ctx, name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	switch def := def.(type) {
+	case *tree.ColumnTableDef:
+		if err := validateNames(def.Name.ColNameOrigin()); err != nil {
+			return err
+		}
+		for _, attr := range def.Attributes {
+			if check, ok := attr.(*tree.AttributeCheckConstraint); ok {
+				if err := validateNames(check.Name); err != nil {
+					return err
+				}
+			}
+		}
+	case *tree.PrimaryKeyIndex:
+		return validateNames(def.Name, def.ConstraintSymbol)
+	case *tree.Index:
+		return validateNames(def.Name)
+	case *tree.UniqueIndex:
+		return validateNames(def.Name, def.ConstraintSymbol)
+	case *tree.ForeignKey:
+		return validateNames(def.Name, def.ConstraintSymbol)
+	case *tree.FullTextIndex:
+		return validateNames(def.Name)
+	case *tree.CheckIndex:
+		return validateNames(def.ConstraintSymbol)
+	}
+	return nil
+}
+
+func validatePersistedTableIdentifiers(ctx context.Context, tableDef *plan.TableDef) error {
+	if tableDef == nil {
+		return nil
+	}
+	for _, col := range tableDef.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		name := col.OriginName
+		if name == "" {
+			name = col.Name
+		}
+		if err := validateIdentifier(ctx, name); err != nil {
+			return err
+		}
+	}
+	for _, index := range tableDef.Indexes {
+		if index != nil {
+			if err := validateIdentifier(ctx, index.IndexName); err != nil {
+				return err
+			}
+		}
+	}
+	for _, foreignKey := range tableDef.Fkeys {
+		if foreignKey != nil {
+			if err := validateIdentifier(ctx, foreignKey.Name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, check := range tableDef.Checks {
+		if check != nil {
+			if err := validateIdentifier(ctx, check.Name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func isGeneratedSessionTempTableName(ctx CompilerContext, name string) bool {
@@ -4801,6 +4900,9 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
+	if err := validateIdentifier(ctx.GetContext(), string(stmt.Name)); err != nil {
+		return nil, err
+	}
 
 	createDB := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,
@@ -4877,6 +4979,9 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 
 // In MySQL, the CREATE INDEX syntax can only create one index instance at a time
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
+	if err := validateIdentifier(ctx.GetContext(), string(stmt.Name)); err != nil {
+		return nil, err
+	}
 	createIndex := &plan.CreateIndex{}
 	if len(stmt.Table.SchemaName) == 0 {
 		createIndex.Database = ctx.DefaultDatabase()
@@ -5248,6 +5353,9 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validatePersistedTableIdentifiers(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 
 	alterView.TableDef.Cols = tableDef.Cols
 	alterView.TableDef.ViewSql = tableDef.ViewSql
@@ -5361,7 +5469,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 			case *tree.AlterOptionTableName:
 				oldName := tableName
 				newName := string(opt.Name.ToTableName().ObjectName)
-				if err := validateTableIdentifier(ctx.GetContext(), newName); err != nil {
+				if err := validateIdentifier(ctx.GetContext(), newName); err != nil {
 					return nil, err
 				}
 				dstKey := schemaName + "." + newName
@@ -5955,9 +6063,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)
-			if err := validateTableIdentifier(ctx.GetContext(), newName); err != nil {
-				return nil, err
-			}
 			if oldName == newName {
 				continue
 			}

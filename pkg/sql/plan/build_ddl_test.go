@@ -4243,6 +4243,125 @@ func TestBuildCreateTableIdentifierLength(t *testing.T) {
 	require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
 }
 
+func TestBuildCatalogIdentifierLength(t *testing.T) {
+	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
+	invalidName := "表" + strings.Repeat("b", MaxIdentifierLength)
+	testCases := []struct {
+		name string
+		sql  func(string) string
+	}{
+		{
+			name: "database",
+			sql: func(name string) string {
+				return fmt.Sprintf("create database `%s`", name)
+			},
+		},
+		{
+			name: "view",
+			sql: func(name string) string {
+				return fmt.Sprintf("create view `%s` as select 1", name)
+			},
+		},
+		{
+			name: "view column",
+			sql: func(name string) string {
+				return fmt.Sprintf("create view v as select 1 as `%s`", name)
+			},
+		},
+		{
+			name: "table column",
+			sql: func(name string) string {
+				return fmt.Sprintf("create table t (`%s` int)", name)
+			},
+		},
+		{
+			name: "table index",
+			sql: func(name string) string {
+				return fmt.Sprintf("create table t (a int, index `%s` (a))", name)
+			},
+		},
+		{
+			name: "table constraint",
+			sql: func(name string) string {
+				return fmt.Sprintf("create table t (a int, constraint `%s` unique (a))", name)
+			},
+		},
+		{
+			name: "create index",
+			sql: func(name string) string {
+				return fmt.Sprintf("create index `%s` on nation (n_nationkey)", name)
+			},
+		},
+		{
+			name: "alter add column",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation add column `%s` int", name)
+			},
+		},
+		{
+			name: "alter change column",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation change column n_name `%s` varchar(25)", name)
+			},
+		},
+		{
+			name: "alter rename column",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation rename column n_name to `%s`", name)
+			},
+		},
+		{
+			name: "alter add index",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation add index `%s` (n_nationkey)", name)
+			},
+		},
+		{
+			name: "alter add constraint",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation add constraint `%s` unique (n_nationkey)", name)
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name+" accepts 64 characters", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(validName))
+			require.NoError(t, err)
+		})
+		t.Run(testCase.name+" rejects 65 characters", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(invalidName))
+			require.Error(t, err)
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok, "unexpected error type %T: %v", err, err)
+			require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+			require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+		})
+	}
+
+	buildAlterView := func(t *testing.T, name string) error {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["v"] = &plan.TableDef{
+			Name:    "v",
+			ViewSql: &plan.ViewDef{View: `{"Stmt":"create view v as select 1","DefaultDatabase":"tpch"}`},
+		}
+		mock.ctxt.objects["v"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v"}
+		_, err := runOneStmt(mock, t, fmt.Sprintf("alter view v (`%s`) as select 1", name))
+		return err
+	}
+	t.Run("alter view column accepts 64 characters", func(t *testing.T) {
+		require.NoError(t, buildAlterView(t, validName))
+	})
+	t.Run("alter view column rejects 65 characters", func(t *testing.T) {
+		err := buildAlterView(t, invalidName)
+		require.Error(t, err)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok, "unexpected error type %T: %v", err, err)
+		require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+		require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+	})
+}
+
 func TestBuildCreateTableAcceptsTextBlobDisplayLength(t *testing.T) {
 	tests := []struct {
 		name    string

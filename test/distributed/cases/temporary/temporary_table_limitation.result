@@ -208,6 +208,7 @@ drop table if exists temp_very_long_table_name_that_exceeds_normal_limits_and_mi
 create temporary table temp_long_column (
 very_long_column_name_that_exceeds_normal_limits_and_might_cause_issues int
 );
+Identifier name 'very_long_column_name_that_exceeds_normal_limits_and_might_cause_issues' is too long
 drop table if exists temp_long_column;
 drop database unnormal_db;
 drop database temporary_table_limitation;
