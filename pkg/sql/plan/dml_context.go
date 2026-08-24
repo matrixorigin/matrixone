@@ -29,6 +29,10 @@ type DMLContext struct {
 	isClusterTable  []bool
 	targetDBName    string
 	targetTableName string
+	// hasReadOnlySource records UPDATE table-list entries which participate in
+	// the source SELECT but cannot be writable DML targets, such as derived
+	// tables and CTEs.
+	hasReadOnlySource bool
 
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
 	// updateTargetOrder records writable targets in the table-list binding order.
@@ -66,7 +70,8 @@ func NewDMLContext() *DMLContext {
 
 func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Update) error {
 	dmlCtx.updateTargetOrder = nil
-	err := dmlCtx.resolveTables(ctx, stmt.Tables, stmt.With, nil, foreignKeyResolveDeferred)
+	dmlCtx.hasReadOnlySource = false
+	err := dmlCtx.resolveTables(ctx, stmt.Tables, stmt.With, nil, foreignKeyResolveDeferred, true)
 	if err != nil {
 		return classifyUpdateTableResolutionError(ctx, stmt, err)
 	}
@@ -227,10 +232,10 @@ func classifyUpdateTableResolutionError(ctx CompilerContext, stmt *tree.Update, 
 			moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table"),
 		)
 	case foreignKeyUnsupportedDMLMsg:
-		return newLegacyUpdatePlannerRouteError(updateRouteReasonForeignKey, err)
+		return newRejectedUpdatePlannerRouteError(updateRouteReasonForeignKey, err)
 	case unsupportedTableTypeDMLMsg:
 		if updateHasMultiTableTargetShape(stmt) {
-			return newLegacyUpdatePlannerRouteError(updateRouteReasonMultiTarget, err)
+			return newRejectedUpdatePlannerRouteError(updateRouteReasonMultiTarget, err)
 		}
 		return newUpdatePlannerRouteError(
 			updatePlannerRejected,
@@ -299,7 +304,7 @@ func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.Tab
 	if respectFKCheck {
 		policy = foreignKeyResolveRespectSession
 	}
-	return dmlCtx.resolveTables(ctx, tableExprs, with, aliasMap, policy)
+	return dmlCtx.resolveTables(ctx, tableExprs, with, aliasMap, policy, false)
 }
 
 func (dmlCtx *DMLContext) resolveTables(
@@ -308,6 +313,7 @@ func (dmlCtx *DMLContext) resolveTables(
 	with *tree.With,
 	aliasMap map[string][2]string,
 	foreignKeyPolicy foreignKeyResolvePolicy,
+	allowReadOnlySources bool,
 ) error {
 	cteMap := make(map[string]bool)
 	if with != nil {
@@ -317,7 +323,7 @@ func (dmlCtx *DMLContext) resolveTables(
 	}
 
 	for _, tbl := range tableExprs {
-		err := dmlCtx.resolveSingleTable(ctx, tbl, aliasMap, cteMap, foreignKeyPolicy)
+		err := dmlCtx.resolveSingleTable(ctx, tbl, aliasMap, cteMap, foreignKeyPolicy, allowReadOnlySources)
 		if err != nil {
 			return err
 		}
@@ -331,7 +337,7 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 	if respectFKCheck {
 		policy = foreignKeyResolveRespectSession
 	}
-	return dmlCtx.resolveSingleTable(ctx, tbl, aliasMap, withMap, policy)
+	return dmlCtx.resolveSingleTable(ctx, tbl, aliasMap, withMap, policy, false)
 }
 
 func (dmlCtx *DMLContext) resolveSingleTable(
@@ -340,6 +346,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	aliasMap map[string][2]string,
 	withMap map[string]bool,
 	foreignKeyPolicy foreignKeyResolvePolicy,
+	allowReadOnlySources bool,
 ) error {
 	var tblName, dbName, alias string
 
@@ -363,6 +370,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 			aliasMap,
 			withMap,
 			foreignKeyPolicy,
+			allowReadOnlySources,
 		); err != nil {
 			return err
 		}
@@ -373,6 +381,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 				aliasMap,
 				withMap,
 				foreignKeyPolicy,
+				allowReadOnlySources,
 			)
 		}
 		return nil
@@ -382,10 +391,17 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 		dbName = string(baseTbl.SchemaName)
 		tblName = string(baseTbl.ObjectName)
 	} else {
+		if allowReadOnlySources {
+			dmlCtx.hasReadOnlySource = true
+			return nil
+		}
 		return moerr.NewUnsupportedDML(ctx.GetContext(), "unsupported table type")
 	}
 
 	if withMap[tblName] {
+		if allowReadOnlySources {
+			dmlCtx.hasReadOnlySource = true
+		}
 		return nil
 	}
 
@@ -415,10 +431,10 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	}
 
 	// External tables are not handled by the modern DML binder. Writable ones
-	// (WRITE_FILE_PATTERN) defer to the legacy planner, whose buildInsert /
-	// buildLoad implement INSERT/LOAD into them; read-only ones reject all DML
-	// directly with the user-facing error, so statement kinds without a legacy
-	// fallback (REPLACE) don't leak the internal fallback sentinel.
+	// (WRITE_FILE_PATTERN) emit a classified sentinel: INSERT/LOAD can select
+	// their dedicated compatibility path, while UPDATE and REPLACE reject it.
+	// Read-only external tables reject every DML statement directly with the
+	// user-facing error.
 	if tableDef.TableType == catalog.SystemExternalRel {
 		isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
 		if err != nil {

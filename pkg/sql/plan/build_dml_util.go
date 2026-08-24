@@ -111,7 +111,6 @@ type dmlPlanCtx struct {
 	allDelTables           map[FkReferKey]struct{}
 	isFkRecursionCall      bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
 	lockTable              bool //we need lock table in stmt: delete from tbl
-	checkInsertPkDup       bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
 	updatePkCol            bool //if update stmt will update the primary key or one of pks
 	pkFilterExprs          []*Expr
 	isDeleteWithoutFilters bool

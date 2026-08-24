@@ -1369,7 +1369,15 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	default:
 		var rs *Scope
 		if c.IsSingleScope(ss) {
-			rs = ss[0]
+			// Output owns a callback created by this Compile and cannot be
+			// serialized for execution on another CN. Keep the result sink on
+			// its owner and return the remote child through the existing
+			// connector/merge path.
+			if ss[0].Magic == Remote && !ss[0].ipAddrMatch(c.addr) {
+				rs = c.newMergeScope(ss)
+			} else {
+				rs = ss[0]
+			}
 		} else {
 			ss = c.mergeShuffleScopesIfNeeded(ss, false)
 			rs = c.newMergeScope(ss)
@@ -2454,6 +2462,10 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		return c.compileDatastreamScan(node, strictSqlMode)
 	}
 
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_FOREIGN_TB) {
+		return c.compileForeignScan(node, strictSqlMode)
+	}
+
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_ICEBERG_TB) {
 		access, err := c.checkIcebergScanAccess(node)
 		if err != nil {
@@ -2575,6 +2587,55 @@ func (c *Compile) compileDatastreamScan(node *plan.Node, strictSqlMode bool) ([]
 	scope := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
+}
+
+// compileForeignScan compiles a scan of an ESQL/SQL foreign external table.
+// The query texts to run are derived from __mo_query predicates (falling back
+// to the table's 'query' option) and become the scan's FileList: one query is
+// one virtual file. The scope is pinned to the session's CN with Mcpu=1 --
+// the session-local connection cache must be reachable, and foreign queries
+// within one scan run sequentially. Separate scans in one MO query are
+// separate scopes and run concurrently.
+func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	fs := node.ExternScan.GetForeignScan()
+	if fs == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "foreign external table is missing scan metadata")
+	}
+
+	queryList, err := external.DeriveForeignQueryList(c.proc.Ctx, node, c.proc)
+	if err != nil {
+		return nil, err
+	}
+	if len(queryList) == 0 {
+		if fs.DefaultQuery == "" {
+			return nil, moerr.NewInvalidInputf(c.proc.Ctx,
+				"%s external table requires a __mo_query = '<text>' predicate or a 'query' table option", fs.Kind)
+		}
+		queryList = []string{fs.DefaultQuery}
+	}
+	// Apply ALL query-level conjuncts to the candidate list (the generating
+	// =/IN ones trivially pass; non-generating ones like LIKE may prune) and
+	// keep only row-level conjuncts in the compile-owned node's FilterList.
+	fileSize := make([]int64, len(queryList))
+	for i := range fileSize {
+		fileSize[i] = -1
+	}
+	queryList, fileSize, residual, err := external.FilterFileList(c.proc.Ctx, node, c.proc, queryList, fileSize)
+	if err != nil {
+		return nil, err
+	}
+	node.FilterList = residual
+
+	param := external.ForeignExternParam(fs.Kind)
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, queryList, fileSize, nil, strictSqlMode)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
@@ -4510,17 +4571,23 @@ func (c *Compile) setProjection(node *plan.Node, s *Scope) {
 func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) []*Scope {
 	left = c.mergeShuffleScopesIfNeeded(left, false)
 	right = c.mergeShuffleScopesIfNeeded(right, false)
-	left = append(left, right...)
-	rs := c.newMergeScope(left)
+	return c.mergeDistinctSetScopes(node, append(left, right...), c.anal.isFirst)
+}
+
+// mergeDistinctSetScopes applies the global distinct phase required after a
+// parallel distinct set operation.  INTERSECT and MINUS may each produce one
+// copy of a set key per worker, so their local operator-level deduplication is
+// insufficient once those worker outputs are merged.
+func (c *Compile) mergeDistinctSetScopes(node *plan.Node, scopes []*Scope, isFirst bool) []*Scope {
+	rs := c.newMergeScope(scopes)
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(node.ProjectList))
 	for i := range gn.GroupBy {
 		gn.GroupBy[i] = plan2.DeepCopyExpr(node.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
-	currentFirstFlag := c.anal.isFirst
 	op := constructGroup(c.proc.Ctx, gn, node, true, 0, c.proc)
-	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, isFirst)
 	rs.setRootOperator(op)
 	c.anal.isFirst = false
 	return []*Scope{rs}
@@ -4605,6 +4672,9 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
 		}
+	}
+	if nodeType != plan.Node_INTERSECT_ALL {
+		return c.mergeDistinctSetScopes(node, rs, currentFirstFlag)
 	}
 	c.anal.isFirst = false
 	return rs
@@ -6724,12 +6794,21 @@ func scopeTreeSinkScanNode(s *Scope, visitedScopes map[*Scope]bool, visitedOps m
 	return engine.Node{}, false
 }
 
+// operatorTreeContainsSinkScan reports whether the operator tree contains a
+// CN-pinned local source: a SINK_SCAN merge (consumes an in-process
+// PipelineEdge) or an ESQL/SQL foreign external scan (its connection cache
+// lives only on the interactive session's CN). Either one must keep its
+// owning CN inside the shuffle receiver stage set, or no receiver tree would
+// ever start the scope and every shuffle receiver would wait forever.
 func operatorTreeContainsSinkScan(op vm.Operator, visited map[vm.Operator]bool) bool {
 	if op == nil || visited[op] {
 		return false
 	}
 	visited[op] = true
 	if mergeOp, ok := op.(*merge.Merge); ok && mergeOp.SinkScan {
+		return true
+	}
+	if ext, ok := op.(*external.External); ok && ext.Es != nil && ext.Es.ForeignScan != nil {
 		return true
 	}
 	base := op.GetOperatorBase()

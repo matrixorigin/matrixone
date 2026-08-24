@@ -401,7 +401,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
-		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnStatementBuildUpdateHistogram.Observe(time.Since(start).Seconds())
 	}()
 	if err := validateMultiTableUpdateClauses(ctx, stmt); err != nil {
 		return nil, err
@@ -424,15 +424,6 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		route, reason, routedErr := classifyUpdatePlannerError(err)
 		switch route {
-		case updatePlannerLegacy:
-			recordUpdatePlannerRoute(route, reason, "selected")
-			if stmt.HasReturning() {
-				if reason == updateRouteReasonExternalTable {
-					return nil, returningNotSupported(builder, "external table")
-				}
-				return nil, returningNotSupported(builder, "legacy UPDATE path")
-			}
-			return buildTableUpdate(stmt, ctx, isPrepareStmt)
 		case updatePlannerSpecialized:
 			recordUpdatePlannerRoute(route, reason, "selected")
 			if stmt.HasReturning() {

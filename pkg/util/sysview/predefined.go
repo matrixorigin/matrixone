@@ -16,6 +16,7 @@ package sysview
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
@@ -243,7 +244,7 @@ var (
 		"'def' AS CATALOG_NAME," +
 		"datname AS SCHEMA_NAME," +
 		"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
-		"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
+		"'" + DefaultCollationForCharset("utf8mb4") + "' AS DEFAULT_COLLATION_NAME," +
 		"if(true, NULL, '') AS SQL_PATH," +
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 		"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))"
@@ -255,10 +256,7 @@ var (
 		"MAXLEN int unsigned" +
 		")"
 
-	InformationSchemaCharacterSetsData = "INSERT INTO information_schema.CHARACTER_SETS VALUES " +
-		"('binary','binary','Binary pseudo charset',1)," +
-		"('utf8','utf8_bin','UTF-8 Unicode',4)," +
-		"('utf8mb4','utf8mb4_bin','UTF-8 Unicode',4)"
+	InformationSchemaCharacterSetsData = informationSchemaCharacterSetsDataSQL()
 
 	InformationSchemaTriggersDDL = "CREATE TABLE information_schema.TRIGGERS (" +
 		"TRIGGER_CATALOG varchar(64)," +
@@ -307,7 +305,7 @@ var (
 		"created_time AS CREATE_TIME,"+
 		"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,"+
 		"if(relkind = 'v', NULL, created_time) AS CHECK_TIME,"+
-		"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION,"+
+		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION,"+
 		"if(relkind = 'v', NULL, 0) AS CHECKSUM,"+
 		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
@@ -380,7 +378,7 @@ var (
 		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
 		"'DEFINER' AS `SECURITY_TYPE`," +
 		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
-		"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` " +
+		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
 		"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
 		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
 
@@ -543,6 +541,15 @@ var (
 		"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') NOT NULL" +
 		")"
 
+	InformationSchemaCollationsData = informationSchemaCollationsDataSQL()
+
+	// MySQL exposes the collation-to-character-set mapping as a separate
+	// information_schema object.  Keep it derived from COLLATIONS so the two
+	// metadata surfaces cannot disagree when collation rows are populated.
+	InformationSchemaCollationCharacterSetApplicabilityDDL = "CREATE VIEW information_schema.COLLATION_CHARACTER_SET_APPLICABILITY AS " +
+		"SELECT COLLATION_NAME, CHARACTER_SET_NAME " +
+		"FROM information_schema.COLLATIONS"
+
 	InformationSchemaTableConstraintsDDL = fmt.Sprintf("CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT "+
 		"'def' AS CONSTRAINT_CATALOG, "+
 		"tbl.reldatabase AS CONSTRAINT_SCHEMA, "+
@@ -643,3 +650,28 @@ var (
 		"EXTRA  varchar(256)" +
 		")"
 )
+
+func informationSchemaCollationsDataSQL() string {
+	values := make([]string, 0, len(SupportedCollationDefinitions))
+	for _, collation := range SupportedCollationDefinitions {
+		values = append(values, fmt.Sprintf("('%s', '%s', %d, '%s', '%s', %d, '%s')",
+			collation.Name,
+			collation.Charset,
+			collation.ID,
+			collation.IsDefault,
+			collation.IsCompiled,
+			collation.SortLen,
+			collation.PadAttribute,
+		))
+	}
+	return "INSERT INTO information_schema.COLLATIONS VALUES " + strings.Join(values, ",")
+}
+
+func informationSchemaCharacterSetsDataSQL() string {
+	values := []string{
+		fmt.Sprintf("('binary','%s','Binary pseudo charset',1)", DefaultCollationForCharset("binary")),
+		fmt.Sprintf("('utf8','%s','UTF-8 Unicode',4)", DefaultCollationForCharset("utf8")),
+		fmt.Sprintf("('utf8mb4','%s','UTF-8 Unicode',4)", DefaultCollationForCharset("utf8mb4")),
+	}
+	return "INSERT INTO information_schema.CHARACTER_SETS VALUES " + strings.Join(values, ",")
+}

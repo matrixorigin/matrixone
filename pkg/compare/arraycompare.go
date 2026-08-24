@@ -15,7 +15,6 @@
 package compare
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -31,16 +30,6 @@ func (c arrayCompare) Set(idx int, v *vector.Vector) {
 }
 
 func (c arrayCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
-	if c.vs[vecSrc].GetGrouping().Contains(uint64(src)) {
-		nulls.Add(c.vs[vecDst].GetGrouping(), uint64(dst))
-	} else {
-		nulls.Del(c.vs[vecDst].GetGrouping(), uint64(dst))
-	}
-	if c.isConstNull[vecSrc] || c.vs[vecSrc].GetNulls().Contains(uint64(src)) {
-		nulls.Add(c.vs[vecDst].GetNulls(), uint64(dst))
-		return nil
-	}
-	nulls.Del(c.vs[vecDst].GetNulls(), uint64(dst))
 	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 }
 

@@ -15,10 +15,14 @@
 package frontend
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -65,6 +69,29 @@ func TestExecCtxCloseClearsRootSQLOverride(t *testing.T) {
 	execCtx := &ExecCtx{rootSQLOverride: &rootSQL}
 	execCtx.Close()
 	require.Nil(t, execCtx.rootSQLOverride)
+}
+
+func TestDatabaseExistsSuppressesOnlyExpectedEOBLog(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	storage.EXPECT().Database(gomock.Any(), "invisible", txnOp).
+		Return(nil, moerr.GetOkExpectedEOB())
+	realErr := moerr.NewInternalErrorNoCtx("database lookup failed")
+	storage.EXPECT().Database(gomock.Any(), "broken", txnOp).
+		Return(nil, realErr)
+
+	ses, logs := newObservedProtocolSession()
+	ses.txnHandler = InitTxnHandler("", storage, ctx, txnOp)
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+
+	require.False(t, tcc.DatabaseExists("invisible", nil))
+	require.Equal(t, 0, logs.Len())
+
+	require.False(t, tcc.DatabaseExists("broken", nil))
+	require.Equal(t, 1, logs.Len())
+	require.Equal(t, "Failed to get database", logs.All()[0].Message)
 }
 
 func TestResolveViewDependencyAccount(t *testing.T) {

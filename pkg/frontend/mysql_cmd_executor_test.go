@@ -1986,6 +1986,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		}
 
 		batchCase1 := genBatch()
+		defer batchCase1.Clean(mp)
 		ec := newTestExecCtx(ctx, ctrl)
 		ec.ses = ses
 
@@ -2001,6 +2002,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			}
 			return bat
 		}()
+		defer batchCase2.Clean(mp)
 
 		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
@@ -2074,6 +2076,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 			}
 			return bat
 		}()
+		defer batchCase2.Clean(mp)
 
 		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)

@@ -198,6 +198,7 @@ const (
 	// Keep the error code added by the variables PR distinct from the
 	// field-duplicate code introduced on main.
 	ErrWrongNumberOfColumnsInSelect uint16 = 20478
+	ErrTooLongIdent                 uint16 = 20479
 
 	// Group 5: rpc errors
 	//
@@ -537,6 +538,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
 	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
 	ErrWrongNumberOfColumnsInSelect:             {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"}, "The used SELECT statements have a different number of columns"},
+	ErrTooLongIdent:                             {ER_TOO_LONG_IDENT, []string{"42000", "S1009"}, "Identifier name '%-.100s' is too long"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1803,6 +1805,10 @@ func NewErrDupFieldName(ctx context.Context, k any) *Error {
 
 func NewFieldSpecifiedTwice(ctx context.Context, column string) *Error {
 	return newError(ctx, ErrFieldSpecifiedTwice, column)
+}
+
+func NewTooLongIdent(ctx context.Context, identifier string) *Error {
+	return newError(ctx, ErrTooLongIdent, identifier)
 }
 
 func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {

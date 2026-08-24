@@ -380,6 +380,79 @@ func TestSQLSelectLimitResolverFailureReleasesCompileStepsTree(t *testing.T) {
 	}
 }
 
+func TestCompileStepsKeepsOutputOnCurrentCNForSingleRemoteScope(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local-cn:6001"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+
+	remote := newScope(Remote)
+	remote.NodeInfo = engine.Node{Addr: "remote-cn:6001", Mcpu: 1}
+	remote.Proc = c.proc.NewNoContextChildProc(0)
+	remote.setRootOperator(projection.NewArgument())
+
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_PROJECT,
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{remote}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	t.Cleanup(func() { ReleaseScopes(compiled) })
+
+	resultScope := compiled[0]
+	require.Equal(t, Merge, resultScope.Magic)
+	require.Equal(t, c.addr, resultScope.NodeInfo.Addr)
+	require.Equal(t, vm.Output, resultScope.RootOp.OpType())
+	require.Equal(t, vm.Merge, resultScope.RootOp.GetOperatorBase().GetChildren(0).OpType())
+	require.Len(t, resultScope.PreScopes, 1)
+
+	remote = resultScope.PreScopes[0]
+	require.Equal(t, Remote, remote.Magic)
+	require.Equal(t, vm.Connector, remote.RootOp.OpType())
+	require.Equal(t, vm.Projection, remote.RootOp.GetOperatorBase().GetChildren(0).OpType())
+
+	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(remote)
+	require.False(t, withoutOutput)
+	require.Equal(t, vm.Projection, encodedScope.RootOp.OpType())
+	_, err = encodeScope(encodedScope)
+	require.NoError(t, err)
+}
+
+func TestCompileStepsReusesSingleScopeExecutingOnCurrentCNForOutput(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local-cn:6001"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.anal = &AnalyzeModule{}
+
+	local := newScope(Remote)
+	local.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	local.Proc = c.proc.NewNoContextChildProc(0)
+	local.setRootOperator(projection.NewArgument())
+
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_PROJECT,
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{local}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	t.Cleanup(func() { ReleaseScopes(compiled) })
+
+	require.Same(t, local, compiled[0])
+	require.Empty(t, compiled[0].PreScopes)
+	require.Equal(t, vm.Output, compiled[0].RootOp.OpType())
+	require.Equal(t, vm.Projection, compiled[0].RootOp.GetOperatorBase().GetChildren(0).OpType())
+}
+
 func compiledScopesContainOperator(scopes []*Scope, opType vm.OpType) bool {
 	for _, scope := range scopes {
 		found := false
