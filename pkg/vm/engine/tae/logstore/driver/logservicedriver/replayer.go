@@ -816,9 +816,14 @@ func (r *replayer) readNextBatch(
 				)
 
 				for _, dsn := range skipDSNs {
-					if _, ok := r.replayedState.dsn2PSNMap[dsn]; !ok {
+					// A later record may reuse a skipped DSN. Remove both the logical
+					// mapping and cached physical record so the old copy cannot be
+					// scheduled or left orphaned.
+					skippedPSN, ok := r.replayedState.dsn2PSNMap[dsn]
+					if !ok {
 						panic(fmt.Sprintf("dsn %d not found in the dsn2PSNMap", dsn))
 					}
+					r.replayedState.readCache.removeRecord(skippedPSN)
 					delete(r.replayedState.dsn2PSNMap, dsn)
 				}
 
@@ -827,21 +832,76 @@ func (r *replayer) readNextBatch(
 
 			// 4. update the DSN->PSN mapping
 			dsn := entry.GetStartDSN()
-			r.replayedState.dsn2PSNMap[dsn] = psn
 			safe := entry.GetSafeDSN()
+			dsnRange := entry.DSNRange()
+
+			// PSN is the physical order and DSN is the logical order. A record may
+			// appear again at a larger PSN, for example when an append times out
+			// after being committed and the caller retries it. Once a complete DSN
+			// range has been scheduled, a later physical copy has no new logical
+			// work and can be ignored. A partial overlap is not a retry of the same
+			// record and violates the atomic DSN-range invariant.
+			if r.stats.schedulePSNCount != 0 && dsnRange.Start <= r.waterMarks.dsnScheduled {
+				if dsnRange.End > r.waterMarks.dsnScheduled {
+					r.replayedState.readCache.removeRecord(psn)
+					err = moerr.NewInternalErrorNoCtxf(
+						"wal record dsn range [%d, %d] at psn %d partially overlaps scheduled dsn %d",
+						dsnRange.Start, dsnRange.End, psn, r.waterMarks.dsnScheduled,
+					)
+					logutil.Error(
+						"Wal-Replay-DSN-Overlap",
+						zap.Error(err),
+						zap.Uint64("safe-dsn", safe),
+					)
+					return false, err
+				}
+
+				r.replayedState.readCache.removeRecord(psn)
+				logutil.Info(
+					"Wal-Replay-Duplicate-Entry",
+					zap.Uint64("start-dsn", dsnRange.Start),
+					zap.Uint64("end-dsn", dsnRange.End),
+					zap.Uint64("psn", psn),
+					zap.Uint64("safe-dsn", safe),
+					zap.Uint64("dsn-scheduled", r.waterMarks.dsnScheduled),
+				)
+				continue
+			}
+
+			// The same logical record may be read more than once before it is
+			// scheduled. Keep the first physical copy so the DSN->PSN mapping is
+			// stable and the other copy does not remain orphaned in readCache.
+			if firstPSN, ok := r.replayedState.dsn2PSNMap[dsn]; ok {
+				firstEntry, getErr := r.replayedState.readCache.getRecord(firstPSN)
+				if getErr != nil {
+					return false, getErr
+				}
+				firstRange := firstEntry.DSNRange()
+				if firstRange.End != dsnRange.End {
+					r.replayedState.readCache.removeRecord(psn)
+					err = moerr.NewInternalErrorNoCtxf(
+						"wal records at psn %d and %d have the same start dsn %d but different end dsn %d and %d",
+						firstPSN, psn, dsn, firstRange.End, dsnRange.End,
+					)
+					return false, err
+				}
+
+				r.replayedState.readCache.removeRecord(psn)
+				logutil.Info(
+					"Wal-Replay-Duplicate-Entry",
+					zap.Uint64("start-dsn", dsnRange.Start),
+					zap.Uint64("end-dsn", dsnRange.End),
+					zap.Uint64("first-psn", firstPSN),
+					zap.Uint64("duplicate-psn", psn),
+				)
+				continue
+			}
+
+			r.replayedState.dsn2PSNMap[dsn] = psn
 
 			// 5. init the scheduled DSN watermark
 			// it only happens there is no record scheduled for apply
 			if dsn-1 < r.waterMarks.dsnScheduled {
-				if r.stats.schedulePSNCount != 0 {
-					// it means a bigger DSN has been scheduled for apply and then there is
-					// a smaller DSN with bigger PSN. it should not happen
-					logutil.Errorf(
-						"safe: %d, dsn: %d, psn: %d, scheduled: %d",
-						safe, dsn, psn, r.waterMarks.dsnScheduled,
-					)
-					panic("logic error")
-				}
 				// logutil.Infof("DEBUG-3: dsn %d, psn %d, scheduled %d, safe %d", dsn, psn, r.waterMarks.dsnScheduled, safe)
 				if safe == 0 {
 					r.waterMarks.dsnScheduled = 0

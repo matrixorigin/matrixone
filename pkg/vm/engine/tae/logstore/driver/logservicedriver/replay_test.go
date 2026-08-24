@@ -546,6 +546,182 @@ func Test_ReplayerRecoveryBatchUsesPreviousSafeDSN(t *testing.T) {
 	)
 }
 
+func Test_ReplayerIgnoresDuplicateDSNAcrossBatches(t *testing.T) {
+	for _, readBatchSize := range []int{1, 3} {
+		t.Run(fmt.Sprintf("read-batch-size-%d", readBatchSize), func(t *testing.T) {
+			ctx := context.Background()
+			mockDriver := newMockDriver(
+				0,
+				[][5]uint64{
+					{uint64(Cmd_Normal), 1, 1, 1, 0},
+					{uint64(Cmd_Normal), 2, 2, 2, 1},
+					{uint64(Cmd_Normal), 3, 1, 1, 0},
+				},
+				30,
+			)
+			var appliedDSNs []uint64
+			mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
+				appliedDSNs = append(appliedDSNs, e.DSN)
+			})
+			r := newReplayer(
+				mockHandle,
+				mockDriver,
+				readBatchSize,
+				WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+				WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+			)
+
+			require.NoError(t, r.Replay(ctx))
+			require.Equal(t, []uint64{1, 2}, appliedDSNs)
+		})
+	}
+}
+
+func Test_ReplayerIgnoresLateDuplicateInContinuousReplay(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		[][5]uint64{
+			{uint64(Cmd_Normal), 1, 1, 1, 0},
+			{uint64(Cmd_Normal), 2, 2, 2, 1},
+		},
+		30,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.DSN)
+	})
+	endOfLogCount := 0
+	r := newReplayer(
+		mockHandle,
+		mockDriver,
+		30,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+		WithReplayerWaitMore(func() bool {
+			endOfLogCount++
+			if endOfLogCount == 2 {
+				mockDriver.recordSpecs = append(mockDriver.recordSpecs,
+					[5]uint64{uint64(Cmd_Normal), 3, 1, 1, 0},
+				)
+			}
+			return endOfLogCount < 3
+		}),
+	)
+
+	require.NoError(t, r.Replay(ctx))
+	require.Equal(t, []uint64{1, 2}, appliedDSNs)
+}
+
+func Test_ReplayerIgnoresDuplicateDSNRange(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		[][5]uint64{
+			{uint64(Cmd_Normal), 1, 1, 3, 0},
+			{uint64(Cmd_Normal), 2, 4, 4, 3},
+			{uint64(Cmd_Normal), 3, 1, 3, 0},
+		},
+		30,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.DSN)
+	})
+	r := newReplayer(
+		mockHandle,
+		mockDriver,
+		1,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	require.NoError(t, r.Replay(ctx))
+	require.Equal(t, []uint64{1, 2, 3, 4}, appliedDSNs)
+}
+
+func Test_ReplayerRejectsPartiallyOverlappingRange(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		[][5]uint64{
+			{uint64(Cmd_Normal), 1, 1, 3, 0},
+			{uint64(Cmd_Normal), 2, 4, 4, 3},
+			{uint64(Cmd_Normal), 3, 3, 5, 0},
+		},
+		30,
+	)
+	mockHandle := mockHandleFactory(1, func(*entry.Entry) {})
+	r := newReplayer(
+		mockHandle,
+		mockDriver,
+		1,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	err := r.Replay(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "partially overlaps scheduled dsn 3")
+}
+
+func Test_ReplayerRejectsPendingRangeConflict(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		[][5]uint64{
+			{uint64(Cmd_Normal), 1, 1, 2, 0},
+			{uint64(Cmd_Normal), 2, 1, 3, 0},
+		},
+		30,
+	)
+	mockHandle := mockHandleFactory(1, func(*entry.Entry) {})
+	r := newReplayer(
+		mockHandle,
+		mockDriver,
+		30,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	err := r.Replay(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "same start dsn 1 but different end dsn 2 and 3")
+}
+
+func Test_ReplayerSkipThenReuseDSNAcrossBatches(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		[][5]uint64{
+			{uint64(Cmd_Normal), 1, 1, 1, 0},
+			{uint64(Cmd_Normal), 2, 2, 2, 1},
+			{uint64(Cmd_Normal), 3, 3, 3, 2},
+			{uint64(Cmd_Normal), 4, 5, 5, 3},
+			{uint64(Cmd_SkipDSN), 5, 0, 0, 0},
+			{uint64(Cmd_Normal), 6, 6, 6, 3},
+			{uint64(Cmd_Normal), 7, 4, 4, 3},
+			{uint64(Cmd_Normal), 8, 5, 5, 4},
+		},
+		30,
+	)
+	mockDriver.addSkipMap(5, 5, 4)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.DSN)
+	})
+	r := newReplayer(
+		mockHandle,
+		mockDriver,
+		1,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	require.NoError(t, r.Replay(ctx))
+	require.Equal(t, []uint64{1, 2, 3, 4, 5, 6}, appliedDSNs)
+}
+
 func Test_Replayer2(t *testing.T) {
 	ctx := context.Background()
 	mockDriver := newMockDriver(
@@ -868,7 +1044,6 @@ func Test_Replayer8(t *testing.T) {
 			{uint64(Cmd_Normal), 6, 6, 6, 4},
 			{uint64(Cmd_Normal), 7, 4, 4, 3},
 			{uint64(Cmd_Normal), 8, 5, 5, 4},
-			// PXU TODO: add UT to test after replaying the skip, the DSN can be reused later
 		},
 		30,
 	)
