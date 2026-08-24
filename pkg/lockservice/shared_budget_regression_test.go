@@ -40,7 +40,7 @@ func requireExactTxnTableBookkeeping(
 	h := txn.lockHolders[0]
 	require.NotNil(t, h)
 	require.Equal(t, expected, h.tableKeys[table].mustGet().len())
-	require.Contains(t, h.nonCoarsenableTables, table)
+	require.Contains(t, h.nonCoarsenableTables(), table)
 }
 
 func requireExactMixedModeLockStore(

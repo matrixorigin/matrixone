@@ -7669,6 +7669,51 @@ func TestTxnClosureAdmissionSingleSourceFastPathDoesNotAllocate(t *testing.T) {
 	require.Zero(t, allocations)
 }
 
+func TestLockSynchronousTxnClosureRejectsPublishedOrMutatingGeneration(t *testing.T) {
+	logger := getLogger("")
+	holder := newMapBasedTxnHandler(
+		"s1",
+		logger,
+		newFixedSlicePool(32),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(pb.WaitTxn) (bool, error) { return true, nil },
+	)
+	defer holder.close()
+	s := &service{activeTxnHolder: holder}
+
+	synchronousID := []byte("synchronous-close")
+	synchronousTxn := holder.getActiveTxn(synchronousID, true, "")
+	locked, ok := s.lockSynchronousTxnClosure(synchronousID, nil)
+	require.True(t, ok)
+	require.Same(t, synchronousTxn, locked)
+	locked.Unlock()
+
+	locked, ok = s.lockSynchronousTxnClosure(
+		synchronousID,
+		[]pb.ExtraMutation{{Key: []byte("row")}},
+	)
+	require.False(t, ok)
+	require.Nil(t, locked)
+
+	publishedID := []byte("published-close")
+	publishedTxn := holder.getActiveTxn(publishedID, true, "")
+	publishedTxn.Lock()
+	_, finishLockOp := publishedTxn.beginLockOpLocked(context.Background())
+	publishedTxn.Unlock()
+	defer finishLockOp()
+
+	locked, ok = s.lockSynchronousTxnClosure(publishedID, nil)
+	require.False(t, ok)
+	require.Nil(t, locked)
+
+	locked, ok = s.lockSynchronousTxnClosure([]byte("absent-close"), nil)
+	require.False(t, ok)
+	require.Nil(t, locked)
+}
+
 func BenchmarkTxnClosureAdmissionSingleSource(b *testing.B) {
 	s := &service{}
 	ctx := context.Background()

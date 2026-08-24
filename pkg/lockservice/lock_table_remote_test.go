@@ -660,7 +660,7 @@ func TestRemoteOwnerSnapshotCompactsOriginLedgerAcrossCapacitySkew(t *testing.T)
 			originTxn.RLock()
 			holder := originTxn.lockHolders[0]
 			route := holder.tableKeys[table].slice()
-			_, negotiated := holder.ownerLocalWaitSnapshots[table]
+			_, negotiated := holder.ownerLocalWaitSnapshots()[table]
 			originTxn.RUnlock()
 			require.True(t, negotiated)
 			require.Equal(t, rows[:1], route.all())
@@ -936,7 +936,7 @@ func TestNewOriginKeepsExactTraversalAgainstLegacyOwner(t *testing.T) {
 		require.Equal(t, pb.Granularity_Row, client.lockOptions.Granularity)
 		txn.RLock()
 		holder := txn.lockHolders[bind.Group]
-		_, negotiated := holder.ownerLocalWaitSnapshots[bind.Table]
+		_, negotiated := holder.ownerLocalWaitSnapshots()[bind.Table]
 		recorded := holder.tableKeys[bind.Table].slice()
 		txn.RUnlock()
 		require.False(t, negotiated)
@@ -1029,7 +1029,7 @@ func TestLegacyOwnerRetryRepairsExactProbeLedger(t *testing.T) {
 		txn.RLock()
 		holder := txn.lockHolders[bind.Group]
 		recorded := holder.tableKeys[bind.Table].slice()
-		uncertain := len(holder.uncertainLockKeys[bind.Table])
+		uncertain := len(holder.uncertainLockKeys()[bind.Table])
 		txn.RUnlock()
 		require.Equal(t, logicalRows, recorded.all())
 		recorded.unref()
@@ -1269,9 +1269,9 @@ func TestRemoteMixedModeTransportFailureKeepsExistingCleanupRoute(t *testing.T) 
 		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
 		require.Equal(t, oldRows, locks.all())
 		locks.unref()
-		require.Empty(t, txn.lockHolders[bind.Group].uncertainLockKeys)
+		require.Empty(t, txn.lockHolders[bind.Group].uncertainLockKeys())
 		require.Contains(t,
-			txn.lockHolders[bind.Group].nonCoarsenableTables,
+			txn.lockHolders[bind.Group].nonCoarsenableTables(),
 			bind.Table,
 		)
 		txn.Unlock()
@@ -1773,7 +1773,7 @@ func TestLockRemoteWithContextTimeoutTracksLockForUnlock(t *testing.T) {
 			holder := txn.getHoldLocksLocked(l.bind.Group)
 			require.Contains(t, holder.tableKeys, l.bind.Table)
 			require.Contains(t, holder.tableBinds, l.bind.Table)
-			require.Contains(t, holder.uncertainLockKeys[l.bind.Table], string([]byte{1}))
+			require.Contains(t, holder.uncertainLockKeys()[l.bind.Table], string([]byte{1}))
 
 			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(pb.LockTable) (lockTable, error) {
 				return l, nil
@@ -2171,7 +2171,7 @@ func TestLockRemoteWithNeedUpgrade(t *testing.T) {
 			require.Equal(t, rows[:1], route.all(),
 				"an acknowledged owner must remain reachable after probe-ledger overflow")
 			route.unref()
-			require.Contains(t, holder.remoteUnlockRequired, l.bind.Table)
+			require.Contains(t, holder.remoteUnlockRequiredTables(), l.bind.Table)
 			reuse.Free(txn, nil)
 		},
 		func(lt pb.LockTable) {},

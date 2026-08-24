@@ -313,6 +313,14 @@ func (l *localLockTable) unlock(
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) {
+	if len(mutations) == 0 {
+		start := time.Now()
+		defer func() {
+			v2.TxnUnlockBtreeTotalDurationHistogram.Observe(time.Since(start).Seconds())
+		}()
+		_ = l.unlockWithoutMutations(nil, txn, ls, commitTS, start)
+		return
+	}
 	_ = l.unlockWithContext(
 		context.Background(),
 		txn,
@@ -320,6 +328,36 @@ func (l *localLockTable) unlock(
 		commitTS,
 		mutations...,
 	)
+}
+
+func (l *localLockTable) unlockWithoutMutations(
+	ctx context.Context,
+	txn *activeTxn,
+	ls *cowSlice,
+	commitTS timestamp.Timestamp,
+	start time.Time,
+) error {
+	logUnlockTableOnLocal(l.logger, txn, l.bind)
+	locks := ls.slice()
+	defer locks.unref()
+	b, ok := txn.getHoldLocksLocked(l.bind.Group).tableBinds[l.bind.Table]
+	if !ok {
+		panic("BUG: missing bind")
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
+	l.mu.Lock()
+	v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
+	defer l.mu.Unlock()
+	if l.mu.closed {
+		return nil
+	}
+	l.unlockLocksLocked(txn, locks, commitTS, b)
+	return nil
 }
 
 func (l *localLockTable) unlockWithContext(
@@ -337,11 +375,24 @@ func (l *localLockTable) unlockWithContext(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	var mutationByKey map[string]int
-	if len(mutations) > 0 {
-		mutationByKey = make(map[string]int, len(mutations))
+	if len(mutations) == 0 {
+		return l.unlockWithoutMutations(ctx, txn, ls, commitTS, start)
 	}
+
+	logUnlockTableOnLocal(
+		l.logger,
+		txn,
+		l.bind,
+	)
+
+	locks := ls.slice()
+	defer locks.unref()
+	b, ok := txn.getHoldLocksLocked(l.bind.Group).tableBinds[l.bind.Table]
+	if !ok {
+		panic("BUG: missing bind")
+	}
+
+	mutationByKey := make(map[string]int, len(mutations))
 	hasHandoff := false
 	for idx := range mutations {
 		key := string(mutations[idx].Key)
@@ -359,15 +410,6 @@ func (l *localLockTable) unlockWithContext(
 		return -1
 	}
 
-	logUnlockTableOnLocal(
-		l.logger,
-		txn,
-		l.bind,
-	)
-
-	locks := ls.slice()
-	defer locks.unref()
-
 	// A proxy handoff changes two ownership surfaces: the replacement
 	// transaction ledger and the physical holder set. Discover the conditional
 	// mutations first, then prepare every ledger update before changing either
@@ -384,10 +426,6 @@ func (l *localLockTable) unlockWithContext(
 		discoveredHandoffs = make(map[string]struct{})
 	}
 
-	b, ok := txn.getHoldLocksLocked(l.bind.Group).tableBinds[l.bind.Table]
-	if !ok {
-		panic("BUG: missing bind")
-	}
 	if hasHandoff {
 		l.mu.Lock()
 		v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
@@ -600,7 +638,84 @@ func (l *localLockTable) unlockWithContext(
 		}
 	}
 	handoffCommitted = true
+	l.unlockLocksWithMutationsLocked(txn, locks, commitTS, b, mutations, getMutation)
+	return nil
+}
 
+// unlockLocksLocked is the mutation-free physical cleanup hot path. Keeping it
+// separate avoids carrying handoff callbacks and mutation lookups through every
+// ordinary transaction close. The caller holds l.mu.
+func (l *localLockTable) unlockLocksLocked(
+	txn *activeTxn,
+	locks *fixedSlice,
+	commitTS timestamp.Timestamp,
+	b pb.LockTable,
+) {
+	var startKey []byte
+	tableDefChanged := false
+	locks.iter(func(key []byte) bool {
+		if lock, ok := l.mu.store.Get(key); ok {
+			if lock.isLockRangeStart() {
+				startKey = key
+				return true
+			}
+
+			if !lock.holders.contains(txn.txnID) {
+				if b.Changed(l.bind) {
+					return true
+				}
+
+				l.logger.Fatal("BUG: unlock a lock that is not held by the current txn",
+					zap.Bool("row", lock.isLockRow()),
+					zap.Int("keys-count", locks.len()),
+					zap.String("hold-bind", b.DebugString()),
+					zap.String("bind", l.bind.DebugString()),
+					waitTxnArrayField("holders", lock.holders.getTxnSlice()),
+					txnField(txn))
+			}
+			if len(startKey) > 0 && !lock.isLockRangeEnd() {
+				panic("BUG: missing range end key")
+			}
+
+			if lock.isLockTableDefChanged() {
+				tableDefChanged = true
+			}
+			if commitTS.IsEmpty() && lock.isLockTableDefChanged() {
+				lock = l.setTableDefChangedLocked(key, lock, false)
+			}
+
+			lockCanRemoved := lock.closeTxn(
+				txn,
+				notifyValue{ts: commitTS})
+			l.removeInactiveOwnerLocalWaitEdgesLocked(lock)
+			logLockUnlocked(l.logger, txn, key, lock)
+
+			if lockCanRemoved {
+				v2.TxnHoldLockDurationHistogram.Observe(time.Since(lock.createAt).Seconds())
+				l.mu.store.Delete(key)
+				if len(startKey) > 0 {
+					l.mu.store.Delete(startKey)
+					startKey = nil
+				}
+				lock.release()
+			}
+		}
+		return true
+	})
+	l.finishUnlockLocked(commitTS, tableDefChanged)
+}
+
+// unlockLocksWithMutationsLocked removes the source transaction's physical
+// holders after conditional handoff bookkeeping has committed. The caller
+// holds l.mu.
+func (l *localLockTable) unlockLocksWithMutationsLocked(
+	txn *activeTxn,
+	locks *fixedSlice,
+	commitTS timestamp.Timestamp,
+	b pb.LockTable,
+	mutations []pb.ExtraMutation,
+	getMutation func([]byte) int,
+) {
 	var startKey []byte
 	tableDefChanged := false
 	locks.iter(func(key []byte) bool {
@@ -678,6 +793,13 @@ func (l *localLockTable) unlockWithContext(
 		}
 		return true
 	})
+	l.finishUnlockLocked(commitTS, tableDefChanged)
+}
+
+func (l *localLockTable) finishUnlockLocked(
+	commitTS timestamp.Timestamp,
+	tableDefChanged bool,
+) {
 	if l.mu.tableCommittedAt.Less(commitTS) {
 		l.mu.tableCommittedAt = commitTS
 	}
@@ -689,7 +811,6 @@ func (l *localLockTable) unlockWithContext(
 		changedAt := commitTS
 		l.mu.tableDefChangedAt = &changedAt
 	}
-	return nil
 }
 
 func txnLedgerContainsKeyLocked(

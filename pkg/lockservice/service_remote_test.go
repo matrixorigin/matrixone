@@ -344,7 +344,7 @@ func TestOwnerLocalSnapshotsDoNotCrossSaturateWaitingListWorkers(t *testing.T) {
 				txn.RLock()
 				negotiated := false
 				for _, holder := range txn.lockHolders {
-					if len(holder.ownerLocalWaitSnapshots) > 0 {
+					if len(holder.ownerLocalWaitSnapshots()) > 0 {
 						negotiated = true
 						break
 					}

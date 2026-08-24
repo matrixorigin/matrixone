@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -33,6 +34,21 @@ type retryableUnlockTestTable struct {
 	bind      pb.LockTable
 	calls     int
 	failFirst bool
+}
+
+func TestTableLockHolderKeepsCommonAllocationCompact(t *testing.T) {
+	require.Equal(
+		t,
+		uintptr(4)*unsafe.Sizeof(uintptr(0)),
+		unsafe.Sizeof(tableLockHolder{}),
+	)
+
+	holder := &tableLockHolder{}
+	require.Nil(t, holder.extra)
+	require.Nil(t, holder.nonCoarsenableTables())
+	require.Nil(t, holder.ownerLocalWaitSnapshots())
+	require.Nil(t, holder.remoteUnlockRequiredTables())
+	require.Nil(t, holder.uncertainLockKeys())
 }
 
 func (l *retryableUnlockTestTable) lock(
@@ -126,24 +142,24 @@ func TestCleanupOnlyLockStateTransitions(t *testing.T) {
 		holder := txn.getHoldLocksLocked(bind.Group)
 		require.Contains(t, holder.tableKeys, bind.Table,
 			"cleanup-only locks must remain available to transaction close")
-		require.Contains(t, holder.uncertainLockKeys[bind.Table], string(key1))
+		require.Contains(t, holder.uncertainLockKeys()[bind.Table], string(key1))
 
 		// A successful retry promotes the row to a confirmed holder.
 		require.NoError(t, txn.lockAdded(
 			bind.Group, bind, [][]byte{key1}, pb.LockOptions{}, logger))
-		require.Nil(t, holder.uncertainLockKeys)
+		require.Nil(t, holder.uncertainLockKeys())
 
 		// A later failed retry must not downgrade a row already confirmed held.
 		require.NoError(t, txn.lockAddedForCleanup(
 			bind.Group, bind, [][]byte{key1, key2}, pb.LockOptions{}, logger))
-		require.NotContains(t, holder.uncertainLockKeys[bind.Table], string(key1))
-		require.Contains(t, holder.uncertainLockKeys[bind.Table], string(key2))
+		require.NotContains(t, holder.uncertainLockKeys()[bind.Table], string(key1))
+		require.Contains(t, holder.uncertainLockKeys()[bind.Table], string(key2))
 
 		// The current range-merge path replaces the complete transaction ledger
 		// atomically; stale cleanup-only state must follow that representation.
 		require.NoError(t, txn.replaceLocks(
 			bind.Group, bind, [][]byte{[]byte("k3")}, logger))
-		require.Nil(t, holder.uncertainLockKeys)
+		require.Nil(t, holder.uncertainLockKeys())
 	})
 }
 
@@ -306,7 +322,7 @@ func TestCoarsenLockRequestRequiresCompleteExclusiveOwnership(t *testing.T) {
 		require.Equal(t, rows, gotRows)
 		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
 		require.Contains(t,
-			txn.lockHolders[sharedBind.Group].nonCoarsenableTables,
+			txn.lockHolders[sharedBind.Group].nonCoarsenableTables(),
 			sharedBind.Table,
 		)
 
@@ -345,7 +361,7 @@ func TestCoarsenLockRequestRequiresCompleteExclusiveOwnership(t *testing.T) {
 		))
 		txn.beforeLockAdded = nil
 		require.NotContains(t,
-			txn.lockHolders[failedBind.Group].nonCoarsenableTables,
+			txn.lockHolders[failedBind.Group].nonCoarsenableTables(),
 			failedBind.Table,
 		)
 		require.NoError(t, txn.lockAdded(
@@ -744,6 +760,44 @@ func TestCloseWithoutFreeWithContextRetriesOnlyFailedTables(t *testing.T) {
 			},
 			getLogger(""),
 		))
+		require.Equal(t, 1, tables[1].calls, "successful tables must not be replayed")
+		require.Equal(t, 2, tables[2].calls)
+		require.Empty(t, txn.lockHolders)
+	})
+}
+
+func TestCloseSynchronousWithoutFreeDetachesRetryableTableSuccesses(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		id := []byte("synchronous-retry")
+		txn := newActiveTxn(id, string(id), newFixedSlicePool(2), "")
+		defer reuse.Free(txn, nil)
+
+		tables := map[uint64]*retryableUnlockTestTable{
+			1: {bind: pb.LockTable{Group: 0, Table: 1}},
+			2: {bind: pb.LockTable{Group: 0, Table: 2}, failFirst: true},
+		}
+		require.NoError(t, txn.lockAdded(0, tables[1].bind, [][]byte{[]byte("k1")}, pb.LockOptions{}, getLogger("")))
+		require.NoError(t, txn.lockAdded(0, tables[2].bind, [][]byte{[]byte("k2")}, pb.LockOptions{}, getLogger("")))
+
+		closeTxn := func() error {
+			return txn.closeSynchronousWithoutFreeWithContext(
+				context.Background(),
+				id,
+				timestamp.Timestamp{},
+				func(bind pb.LockTable) (lockTable, error) {
+					return tables[bind.Table], nil
+				},
+				getLogger(""),
+			)
+		}
+		require.ErrorIs(t, closeTxn(), context.DeadlineExceeded)
+		require.Equal(t, 1, tables[1].calls)
+		require.Equal(t, 1, tables[2].calls)
+		holder := txn.getHoldLocksLocked(0)
+		require.NotContains(t, holder.tableKeys, uint64(1))
+		require.Contains(t, holder.tableKeys, uint64(2))
+
+		require.NoError(t, closeTxn())
 		require.Equal(t, 1, tables[1].calls, "successful tables must not be replayed")
 		require.Equal(t, 2, tables[2].calls)
 		require.Empty(t, txn.lockHolders)

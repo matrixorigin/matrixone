@@ -112,9 +112,11 @@ type service struct {
 }
 
 type txnClosureAdmission struct {
-	token chan struct{}
-	refs  int
-	txnID []byte
+	token         chan struct{}
+	refs          int
+	txnID         []byte
+	hash          uint64
+	collisionNext *txnClosureAdmission
 }
 
 var txnClosureAdmissionPool = sync.Pool{
@@ -152,44 +154,56 @@ func (g *txnClosureAdmissionGuard) release() {
 
 type txnClosureAdmissionShard struct {
 	sync.Mutex
-	entries map[string]*txnClosureAdmission
+	entries map[uint64]*txnClosureAdmission
 }
 
-// acquireTxnClosureAdmission serializes every close for the source transaction
-// before its mutex is acquired. Handoffs also acquire replacement transaction IDs;
-// without that ordering, concurrent A -> B and B -> A transfers on different
-// tables can each hold a source mutex while waiting for the other's replacement
-// mutex. IDs are acquired in byte order, so overlapping closures serialize
-// while unrelated transactions remain fully concurrent. The fixed shards guard
-// only short map operations; wait duration never occupies a shard-wide token.
+// acquireTxnClosureAdmission serializes async, absent-generation and handoff
+// closes before a source transaction mutex is acquired. Handoffs also acquire
+// replacement transaction IDs; without that ordering, concurrent A -> B and
+// B -> A transfers on different tables can each hold a source mutex while
+// waiting for the other's replacement mutex. IDs are acquired in byte order,
+// so overlapping closures serialize while unrelated transactions remain fully
+// concurrent. A local synchronous close instead keeps its sole transaction
+// mutex throughout. The fixed shards guard only short map operations; wait
+// duration never occupies a shard-wide token.
 const txnClosureAdmissionShards = 64
 
 func txnClosureAdmissionShardIndex(txnID []byte) int {
-	hash := uint32(2166136261)
+	return int(txnClosureAdmissionHash(txnID) % txnClosureAdmissionShards)
+}
+
+func txnClosureAdmissionHash(txnID []byte) uint64 {
+	hash := uint64(14695981039346656037)
 	for _, value := range txnID {
-		hash ^= uint32(value)
-		hash *= 16777619
+		hash ^= uint64(value)
+		hash *= 1099511628211
 	}
-	return int(hash % txnClosureAdmissionShards)
+	return hash
 }
 
 func (s *service) refTxnClosureAdmission(txnID []byte) *txnClosureAdmission {
-	shard := &s.txnClosureAdmissions[txnClosureAdmissionShardIndex(txnID)]
+	hash := txnClosureAdmissionHash(txnID)
+	shard := &s.txnClosureAdmissions[hash%txnClosureAdmissionShards]
 	shard.Lock()
 	defer shard.Unlock()
 	if shard.entries == nil {
-		shard.entries = make(map[string]*txnClosureAdmission)
+		shard.entries = make(map[uint64]*txnClosureAdmission)
 	}
-	txnKey := util.UnsafeBytesToString(txnID)
-	entry := shard.entries[txnKey]
+	entry := shard.entries[hash]
+	for entry != nil && !bytes.Equal(entry.txnID, txnID) {
+		entry = entry.collisionNext
+	}
 	if entry == nil {
 		entry = txnClosureAdmissionPool.Get().(*txnClosureAdmission)
 		if entry.refs != 0 || len(entry.token) != 0 ||
-			len(entry.txnID) != 0 {
+			len(entry.txnID) != 0 || entry.hash != 0 ||
+			entry.collisionNext != nil {
 			panic("BUG: dirty transaction closure admission from pool")
 		}
 		entry.txnID = append(entry.txnID[:0], txnID...)
-		shard.entries[util.UnsafeBytesToString(entry.txnID)] = entry
+		entry.hash = hash
+		entry.collisionNext = shard.entries[hash]
+		shard.entries[hash] = entry
 	}
 	entry.refs++
 	return entry
@@ -198,18 +212,32 @@ func (s *service) refTxnClosureAdmission(txnID []byte) *txnClosureAdmission {
 func (s *service) unrefTxnClosureAdmission(
 	entry *txnClosureAdmission,
 ) {
-	shard := &s.txnClosureAdmissions[txnClosureAdmissionShardIndex(entry.txnID)]
+	shard := &s.txnClosureAdmissions[entry.hash%txnClosureAdmissionShards]
 	shard.Lock()
 	defer shard.Unlock()
-	txnKey := util.UnsafeBytesToString(entry.txnID)
-	current := shard.entries[txnKey]
-	if current != entry || entry.refs <= 0 {
+	current := shard.entries[entry.hash]
+	var previous *txnClosureAdmission
+	for current != nil && current != entry {
+		previous = current
+		current = current.collisionNext
+	}
+	if current == nil || entry.refs <= 0 {
 		panic("BUG: invalid transaction closure admission reference")
 	}
 	entry.refs--
 	if entry.refs == 0 {
-		delete(shard.entries, txnKey)
+		if previous == nil {
+			if entry.collisionNext == nil {
+				delete(shard.entries, entry.hash)
+			} else {
+				shard.entries[entry.hash] = entry.collisionNext
+			}
+		} else {
+			previous.collisionNext = entry.collisionNext
+		}
 		entry.txnID = entry.txnID[:0]
+		entry.hash = 0
+		entry.collisionNext = nil
 		txnClosureAdmissionPool.Put(entry)
 	}
 }
@@ -232,6 +260,20 @@ func (s *service) acquireTxnClosureAdmission(
 		guard := txnClosureAdmissionGuard{
 			service: s,
 			single:  entry,
+		}
+		// The ordinary close path is overwhelmingly uncontended. Avoid the
+		// general select machinery unless another close already owns this exact
+		// transaction admission; cancellation is checked immediately after the
+		// fast acquisition and remains part of the contended wait below.
+		select {
+		case entry.token <- struct{}{}:
+			guard.acquired = 1
+			if err := ctx.Err(); err != nil {
+				guard.release()
+				return txnClosureAdmissionGuard{}, err
+			}
+			return guard, nil
+		default:
 		}
 		select {
 		case entry.token <- struct{}{}:
@@ -270,6 +312,12 @@ func (s *service) acquireTxnClosureAdmission(
 		if err := ctx.Err(); err != nil {
 			guard.release()
 			return txnClosureAdmissionGuard{}, err
+		}
+		select {
+		case refs[idx].token <- struct{}{}:
+			guard.acquired++
+			continue
+		default:
 		}
 		select {
 		case refs[idx].token <- struct{}{}:
@@ -398,21 +446,34 @@ func (s *service) Lock(
 		return s.forwardLock(ctx, tableID, rows, txnID, options)
 	}
 
-	bindCtx, cancel := newLockWaitContext(ctx, options)
-	if cancel != nil {
-		defer cancel()
+	physicalTableID := tableID
+	if options.Sharding == pb.Sharding_ByRow {
+		physicalTableID = ShardingByRow(rows[0])
 	}
-	l, err := s.getLockTableWithCreateContext(
-		bindCtx,
-		options.Group,
-		tableID,
-		rows,
-		options.Sharding)
-	if err != nil {
+	var err error
+	l := s.tableGroups.get(options.Group, physicalTableID)
+	if l == nil {
+		// Only bind allocation can block before the lock-table wait begins. Avoid
+		// creating and canceling a long-lived deadline timer when the table is
+		// already published, but keep the exact bounded context for every miss.
+		bindCtx, cancel := newLockWaitContext(ctx, options)
+		if cancel != nil {
+			defer cancel()
+		}
+		l, err = s.getLockTableWithCreateContext(
+			bindCtx,
+			options.Group,
+			tableID,
+			rows,
+			options.Sharding)
+		if err != nil {
+			return pb.Result{}, err
+		}
+		if err := bindCtx.Err(); err != nil {
+			return pb.Result{}, lockWaitContextError(bindCtx, err)
+		}
+	} else if err := ctx.Err(); err != nil {
 		return pb.Result{}, err
-	}
-	if err := bindCtx.Err(); err != nil {
-		return pb.Result{}, lockWaitContextError(bindCtx, err)
 	}
 	// Binding can finish concurrently with the deadline. Recheck after it
 	// returns so an uncontended local table cannot admit an expired request.
@@ -639,23 +700,26 @@ func (s *service) Unlock(
 	if err := s.wait(unlockCtx); err != nil {
 		return err
 	}
-	releaseClosure, err := s.acquireTxnClosureAdmission(unlockCtx, txnID, mutations)
-	if err != nil {
-		return err
-	}
-	defer releaseClosure.release()
-
 	// Keep every source generation registered until all of its physical tables
 	// acknowledge cleanup. Besides making conditional proxy handoff retryable,
 	// this closes the ordinary Unlock generation gap: a concurrent/delayed Lock
 	// with the same transaction ID observes closing instead of creating a second
 	// activeTxn whose holders an old cleanup could remove.
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
-	if txn == nil {
-		return nil
+	txn, synchronousClosure := s.lockSynchronousTxnClosure(txnID, mutations)
+	if !synchronousClosure {
+		releaseClosure, err := s.acquireTxnClosureAdmission(unlockCtx, txnID, mutations)
+		if err != nil {
+			return err
+		}
+		defer releaseClosure.release()
+
+		txn = s.activeTxnHolder.getActiveTxn(txnID, false, "")
+		if txn == nil {
+			return nil
+		}
+		txn.Lock()
 	}
 
-	txn.Lock()
 	defer txn.Unlock()
 	if !bytes.Equal(txn.txnID, txnID) {
 		return nil
@@ -670,14 +734,15 @@ func (s *service) Unlock(
 	lockTableFunc := func(bind pb.LockTable) (lockTable, error) {
 		return s.getLockTableForTxnUnlock(bind), nil
 	}
-	if err := txn.closeWithoutFreeWithContext(
-		unlockCtx,
-		txnID,
-		commitTS,
-		lockTableFunc,
-		s.logger,
-		mutations...,
-	); err != nil {
+	var err error
+	if synchronousClosure {
+		err = txn.closeSynchronousWithoutFreeWithContext(
+			unlockCtx, txnID, commitTS, lockTableFunc, s.logger, mutations...)
+	} else {
+		err = txn.closeWithoutFreeWithContext(
+			unlockCtx, txnID, commitTS, lockTableFunc, s.logger, mutations...)
+	}
+	if err != nil {
 		// The source remains registered and fenced. A retry resumes only the
 		// tables that did not already acknowledge cleanup.
 		return err
@@ -997,20 +1062,23 @@ func (s *service) unlockWithContext(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	releaseClosure, err := s.acquireTxnClosureAdmission(ctx, txnID, mutations)
-	if err != nil {
-		return err
-	}
-	defer releaseClosure.release()
-
 	// This cleanup is cancellation-aware and therefore retryable. Keep the
 	// transaction registered until every table acknowledges release, and fence
 	// late Lock calls with closing instead of opening a same-ID generation gap.
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
-	if txn == nil {
-		return nil
+	txn, synchronousClosure := s.lockSynchronousTxnClosure(txnID, mutations)
+	if !synchronousClosure {
+		releaseClosure, err := s.acquireTxnClosureAdmission(ctx, txnID, mutations)
+		if err != nil {
+			return err
+		}
+		defer releaseClosure.release()
+
+		txn = s.activeTxnHolder.getActiveTxn(txnID, false, "")
+		if txn == nil {
+			return nil
+		}
+		txn.Lock()
 	}
-	txn.Lock()
 	defer txn.Unlock()
 	if !bytes.Equal(txn.txnID, txnID) {
 		return nil
@@ -1022,7 +1090,7 @@ func (s *service) unlockWithContext(
 
 	defer logUnlockTxn(s.logger, txn)()
 	binds := txn.lockTableBindsLocked()
-	err = txn.closeWithoutFreeWithContext(ctx, txnID, commitTS, func(bind pb.LockTable) (lockTable, error) {
+	err := txn.closeWithoutFreeWithContext(ctx, txnID, commitTS, func(bind pb.LockTable) (lockTable, error) {
 		return s.getLockTableForTxnUnlock(bind), nil
 	}, s.logger, mutations...)
 	if err != nil {
@@ -2166,6 +2234,30 @@ func (s *service) wait(ctx context.Context) error {
 		return nil
 	}
 	return s.option.wait(ctx)
+}
+
+// lockSynchronousTxnClosure takes the common synchronous close path without a
+// separate keyed admission. Such a generation has never published async work,
+// so closing keeps its transaction mutex for the entire operation. An ordinary
+// close never acquires a replacement transaction mutex and therefore cannot
+// participate in the cross-handoff cycle that closure admission prevents.
+func (s *service) lockSynchronousTxnClosure(
+	txnID []byte,
+	mutations []pb.ExtraMutation,
+) (*activeTxn, bool) {
+	if len(mutations) != 0 {
+		return nil, false
+	}
+	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+	if txn == nil {
+		return nil, false
+	}
+	txn.Lock()
+	if bytes.Equal(txn.txnID, txnID) && txn.lockOpsCtx == nil {
+		return txn, true
+	}
+	txn.Unlock()
+	return nil, false
 }
 
 type activeTxnHolder interface {

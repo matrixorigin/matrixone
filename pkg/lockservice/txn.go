@@ -36,8 +36,18 @@ var (
 )
 
 type tableLockHolder struct {
-	tableKeys            map[uint64]*cowSlice
-	tableBinds           map[uint64]pb.LockTable
+	tableKeys  map[uint64]*cowSlice
+	tableBinds map[uint64]pb.LockTable
+	// Keep uncommon ownership metadata behind one lazy pointer. A holder is
+	// allocated for every transaction/group, while these maps are needed only
+	// for remote, uncertain, Shared or sharded ownership. Keeping them inline
+	// doubles the common holder allocation size and regresses Lock+Unlock.
+	extra *tableLockHolderExtra
+	// tableBindIntents is common admission bookkeeping and remains inline.
+	tableBindIntents map[uint64]pb.LockTable
+}
+
+type tableLockHolderExtra struct {
 	nonCoarsenableTables map[uint64]struct{}
 	// ownerLocalWaitSnapshots records tables whose physical owner explicitly
 	// negotiated the owner-local transaction wait-for snapshot protocol. Only
@@ -52,9 +62,51 @@ type tableLockHolder struct {
 	// response failed. They remain in tableKeys for conservative cleanup, but
 	// do not prove that this transaction holds the row for deadlock detection.
 	uncertainLockKeys map[uint64]map[string]struct{}
-	// tableBindIntents records bind versions touched before a lock attempt
-	// finishes, so bind-change fencing also covers failed in-flight attempts.
-	tableBindIntents map[uint64]pb.LockTable
+}
+
+func (h *tableLockHolder) ensureExtra() *tableLockHolderExtra {
+	if h.extra == nil {
+		h.extra = &tableLockHolderExtra{}
+	}
+	return h.extra
+}
+
+func (h *tableLockHolder) nonCoarsenableTables() map[uint64]struct{} {
+	if h.extra == nil {
+		return nil
+	}
+	return h.extra.nonCoarsenableTables
+}
+
+func (h *tableLockHolder) ownerLocalWaitSnapshots() map[uint64]struct{} {
+	if h.extra == nil {
+		return nil
+	}
+	return h.extra.ownerLocalWaitSnapshots
+}
+
+func (h *tableLockHolder) remoteUnlockRequiredTables() map[uint64]struct{} {
+	if h.extra == nil {
+		return nil
+	}
+	return h.extra.remoteUnlockRequired
+}
+
+func (h *tableLockHolder) uncertainLockKeys() map[uint64]map[string]struct{} {
+	if h.extra == nil {
+		return nil
+	}
+	return h.extra.uncertainLockKeys
+}
+
+func (h *tableLockHolder) clearExtraIfEmpty() {
+	if h.extra != nil &&
+		len(h.extra.nonCoarsenableTables) == 0 &&
+		len(h.extra.ownerLocalWaitSnapshots) == 0 &&
+		len(h.extra.remoteUnlockRequired) == 0 &&
+		len(h.extra.uncertainLockKeys) == 0 {
+		h.extra = nil
+	}
 }
 
 // activeTxn one goroutine write, multi goroutine read
@@ -116,6 +168,12 @@ func (txn *activeTxn) beginClosingLocked(logger *log.MOLogger) {
 // The caller holds txn's mutex before and after this method. closing must be
 // set before calling it so no later handler can add another operation.
 func (txn *activeTxn) waitAsyncLockOpsLocked(txnID []byte) bool {
+	if txn.lockOpsCtx == nil {
+		// A synchronous generation never admits work into asyncLockOps. Once
+		// closing is set under the transaction mutex, a nil generation context
+		// proves the WaitGroup is empty and avoids an unnecessary unlock/relock.
+		return bytes.Equal(txn.txnID, txnID)
+	}
 	txn.Unlock()
 	txn.asyncLockOps.Wait()
 	txn.Lock()
@@ -169,13 +227,15 @@ func (p *preparedTxnLocks) commit() {
 	p.holder.tableBinds[p.table] = p.bind
 	p.txn.markTableNonCoarsenableLocked(p.holder, p.table, p.opts)
 	if p.hadUncertainKeys {
+		extra := p.holder.ensureExtra()
 		if len(p.uncertainKeys) == 0 {
-			delete(p.holder.uncertainLockKeys, p.table)
-			if len(p.holder.uncertainLockKeys) == 0 {
-				p.holder.uncertainLockKeys = nil
+			delete(extra.uncertainLockKeys, p.table)
+			if len(extra.uncertainLockKeys) == 0 {
+				extra.uncertainLockKeys = nil
 			}
+			p.holder.clearExtraIfEmpty()
 		} else {
-			p.holder.uncertainLockKeys[p.table] = p.uncertainKeys
+			extra.uncertainLockKeys[p.table] = p.uncertainKeys
 		}
 	}
 	p.next = nil
@@ -350,10 +410,11 @@ func (txn *activeTxn) markTableNonCoarsenableLocked(
 	if opts.Mode == pb.LockMode_Exclusive && opts.Sharding == pb.Sharding_None {
 		return
 	}
-	if h.nonCoarsenableTables == nil {
-		h.nonCoarsenableTables = make(map[uint64]struct{})
+	extra := h.ensureExtra()
+	if extra.nonCoarsenableTables == nil {
+		extra.nonCoarsenableTables = make(map[uint64]struct{})
 	}
-	h.nonCoarsenableTables[table] = struct{}{}
+	extra.nonCoarsenableTables[table] = struct{}{}
 }
 
 func (txn *activeTxn) canCoarsenTableLocked(group uint32, table uint64) bool {
@@ -361,16 +422,17 @@ func (txn *activeTxn) canCoarsenTableLocked(group uint32, table uint64) bool {
 	if !ok {
 		return true
 	}
-	_, disabled := h.nonCoarsenableTables[table]
+	_, disabled := h.nonCoarsenableTables()[table]
 	return !disabled
 }
 
 func (txn *activeTxn) markRemoteUnlockRequiredLocked(group uint32, table uint64) {
 	h := txn.getHoldLocksLocked(group)
-	if h.remoteUnlockRequired == nil {
-		h.remoteUnlockRequired = make(map[uint64]struct{})
+	extra := h.ensureExtra()
+	if extra.remoteUnlockRequired == nil {
+		extra.remoteUnlockRequired = make(map[uint64]struct{})
 	}
-	h.remoteUnlockRequired[table] = struct{}{}
+	extra.remoteUnlockRequired[table] = struct{}{}
 }
 
 func (txn *activeTxn) isRemoteUnlockRequiredLocked(group uint32, table uint64) bool {
@@ -378,16 +440,17 @@ func (txn *activeTxn) isRemoteUnlockRequiredLocked(group uint32, table uint64) b
 	if !ok {
 		return false
 	}
-	_, required := h.remoteUnlockRequired[table]
+	_, required := h.remoteUnlockRequiredTables()[table]
 	return required
 }
 
 func (txn *activeTxn) markOwnerLocalWaitSnapshotLocked(group uint32, table uint64) {
 	h := txn.getHoldLocksLocked(group)
-	if h.ownerLocalWaitSnapshots == nil {
-		h.ownerLocalWaitSnapshots = make(map[uint64]struct{})
+	extra := h.ensureExtra()
+	if extra.ownerLocalWaitSnapshots == nil {
+		extra.ownerLocalWaitSnapshots = make(map[uint64]struct{})
 	}
-	h.ownerLocalWaitSnapshots[table] = struct{}{}
+	extra.ownerLocalWaitSnapshots[table] = struct{}{}
 }
 
 func (txn *activeTxn) hasOwnerLocalWaitSnapshotLocked(group uint32, table uint64) bool {
@@ -395,7 +458,7 @@ func (txn *activeTxn) hasOwnerLocalWaitSnapshotLocked(group uint32, table uint64
 	if !ok {
 		return false
 	}
-	_, ok = h.ownerLocalWaitSnapshots[table]
+	_, ok = h.ownerLocalWaitSnapshots()[table]
 	return ok
 }
 
@@ -419,7 +482,7 @@ func (txn *activeTxn) prepareLockUpdate(
 
 	h := txn.getHoldLocksLocked(group)
 	old := h.tableKeys[bind.Table]
-	oldUncertain := h.uncertainLockKeys[bind.Table]
+	oldUncertain := h.uncertainLockKeys()[bind.Table]
 	capacity := len(added)
 	if old != nil {
 		capacity += old.mustGet().len()
@@ -674,7 +737,7 @@ func (txn *activeTxn) coarsenLockRequest(
 	var held *cowSlice
 	heldCount := 0
 	if h, ok := txn.lockHolders[group]; ok {
-		if _, disabled := h.nonCoarsenableTables[table]; disabled {
+		if _, disabled := h.nonCoarsenableTables()[table]; disabled {
 			return rows, opts, false
 		}
 		held = h.tableKeys[table]
@@ -796,7 +859,8 @@ func (txn *activeTxn) replaceLocks(
 }
 
 func (h *tableLockHolder) markLocksConfirmed(table uint64, locks [][]byte) {
-	uncertain := h.uncertainLockKeys[table]
+	uncertainByTable := h.uncertainLockKeys()
+	uncertain := uncertainByTable[table]
 	if len(uncertain) == 0 {
 		return
 	}
@@ -804,10 +868,11 @@ func (h *tableLockHolder) markLocksConfirmed(table uint64, locks [][]byte) {
 		delete(uncertain, util.UnsafeBytesToString(key))
 	}
 	if len(uncertain) == 0 {
-		delete(h.uncertainLockKeys, table)
-		if len(h.uncertainLockKeys) == 0 {
-			h.uncertainLockKeys = nil
+		delete(uncertainByTable, table)
+		if len(uncertainByTable) == 0 {
+			h.extra.uncertainLockKeys = nil
 		}
+		h.clearExtraIfEmpty()
 	}
 }
 
@@ -820,13 +885,14 @@ func (h *tableLockHolder) markNewLocksUncertain(
 		if _, ok := existing[util.UnsafeBytesToString(key)]; ok {
 			continue
 		}
-		if h.uncertainLockKeys == nil {
-			h.uncertainLockKeys = make(map[uint64]map[string]struct{})
+		extra := h.ensureExtra()
+		if extra.uncertainLockKeys == nil {
+			extra.uncertainLockKeys = make(map[uint64]map[string]struct{})
 		}
-		uncertain := h.uncertainLockKeys[table]
+		uncertain := extra.uncertainLockKeys[table]
 		if uncertain == nil {
 			uncertain = make(map[string]struct{})
-			h.uncertainLockKeys[table] = uncertain
+			extra.uncertainLockKeys[table] = uncertain
 		}
 		uncertain[string(key)] = struct{}{}
 	}
@@ -898,7 +964,9 @@ func (txn *activeTxn) closeWithContext(
 		commitTS,
 		lockTableFunc,
 		logger,
-		true,
+		true,  // release
+		false, // detachSuccessful
+		false, // directLocalUnlock
 		mutations...,
 	)
 }
@@ -917,7 +985,34 @@ func (txn *activeTxn) closeWithoutFreeWithContext(
 		commitTS,
 		lockTableFunc,
 		logger,
-		false,
+		false, // release
+		true,  // detachSuccessful
+		false, // directLocalUnlock
+		mutations...,
+	)
+}
+
+// closeSynchronousWithoutFreeWithContext is the durable synchronous close
+// path. Concrete local tables cannot return a retryable error, so their ledgers
+// stay attached for the caller's immediate final Free. Uncommon context-aware
+// table implementations still detach each success if a later table fails.
+func (txn *activeTxn) closeSynchronousWithoutFreeWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	lockTableFunc func(pb.LockTable) (lockTable, error),
+	logger *log.MOLogger,
+	mutations ...pb.ExtraMutation,
+) error {
+	return txn.closeWithContextInternal(
+		ctx,
+		txnID,
+		commitTS,
+		lockTableFunc,
+		logger,
+		false, // release
+		false, // detachSuccessful
+		true,  // directLocalUnlock
 		mutations...,
 	)
 }
@@ -929,6 +1024,8 @@ func (txn *activeTxn) closeWithContextInternal(
 	lockTableFunc func(pb.LockTable) (lockTable, error),
 	logger *log.MOLogger,
 	release bool,
+	detachSuccessful bool,
+	directLocalUnlock bool,
 	mutations ...pb.ExtraMutation,
 ) error {
 	logTxnReadyToClose(logger, txn)
@@ -976,7 +1073,7 @@ func (txn *activeTxn) closeWithContextInternal(
 				panic(err)
 			}
 			if l == nil || canSkipTable(isRemoteTable, l) {
-				if !release {
+				if detachSuccessful {
 					txn.removeClosedLockTable(group, table, cs)
 				}
 				continue
@@ -990,7 +1087,10 @@ func (txn *activeTxn) closeWithContextInternal(
 						table,
 					)
 					var err error
-					if unlocker, ok := l.(contextUnlocker); ok {
+					_, local := l.(*localLockTable)
+					if directLocalUnlock && local {
+						l.unlock(txn, cs, commitTS, mutations...)
+					} else if unlocker, ok := l.(contextUnlocker); ok {
 						err = unlocker.unlockWithContext(ctx, txn, cs, commitTS, mutations...)
 					} else {
 						l.unlock(txn, cs, commitTS, mutations...)
@@ -1001,7 +1101,7 @@ func (txn *activeTxn) closeWithContextInternal(
 							firstErr = err
 						}
 						errMu.Unlock()
-					} else if !release {
+					} else if detachSuccessful || (directLocalUnlock && !local) {
 						txn.removeClosedLockTable(group, table, cs)
 					}
 					logTxnUnlockTableCompleted(
@@ -1048,21 +1148,19 @@ func (txn *activeTxn) removeClosedLockTable(
 	}
 	delete(h.tableKeys, table)
 	delete(h.tableBinds, table)
-	delete(h.nonCoarsenableTables, table)
-	delete(h.remoteUnlockRequired, table)
-	delete(h.ownerLocalWaitSnapshots, table)
-	delete(h.uncertainLockKeys, table)
-	if len(h.uncertainLockKeys) == 0 {
-		h.uncertainLockKeys = nil
+	if h.extra != nil {
+		delete(h.extra.nonCoarsenableTables, table)
+		delete(h.extra.remoteUnlockRequired, table)
+		delete(h.extra.ownerLocalWaitSnapshots, table)
+		delete(h.extra.uncertainLockKeys, table)
+		h.clearExtraIfEmpty()
 	}
 	// Keep the intent until the whole transaction closes. It owns the service
 	// drain reference even after this table was successfully released during a
 	// retryable, multi-table cleanup.
 	cs.close()
 	if len(h.tableKeys) == 0 && len(h.tableBinds) == 0 &&
-		len(h.nonCoarsenableTables) == 0 &&
-		len(h.remoteUnlockRequired) == 0 &&
-		len(h.ownerLocalWaitSnapshots) == 0 &&
+		h.extra == nil &&
 		len(h.tableBindIntents) == 0 {
 		delete(txn.lockHolders, group)
 	}
@@ -1082,15 +1180,7 @@ func (txn *activeTxn) reset() {
 		for table := range h.tableBinds {
 			delete(h.tableBinds, table)
 		}
-		for table := range h.nonCoarsenableTables {
-			delete(h.nonCoarsenableTables, table)
-		}
-		for table := range h.remoteUnlockRequired {
-			delete(h.remoteUnlockRequired, table)
-		}
-		for table := range h.ownerLocalWaitSnapshots {
-			delete(h.ownerLocalWaitSnapshots, table)
-		}
+		h.extra = nil
 		for table := range h.tableBindIntents {
 			delete(h.tableBindIntents, table)
 		}
@@ -1312,14 +1402,14 @@ func (txn *activeTxn) fetchWhoWaitingMeInternal(
 			lockKeys = append(lockKeys, cs.slice())
 			groups = append(groups, g)
 			var uncertainCopy map[string]struct{}
-			if uncertain := m.uncertainLockKeys[table]; len(uncertain) > 0 {
+			if uncertain := m.uncertainLockKeys()[table]; len(uncertain) > 0 {
 				uncertainCopy = make(map[string]struct{}, len(uncertain))
 				for key := range uncertain {
 					uncertainCopy[key] = struct{}{}
 				}
 			}
 			uncertainLockKeys = append(uncertainLockKeys, uncertainCopy)
-			_, ownerLocalSnapshot := m.ownerLocalWaitSnapshots[table]
+			_, ownerLocalSnapshot := m.ownerLocalWaitSnapshots()[table]
 			ownerLocalSnapshots = append(ownerLocalSnapshots, ownerLocalSnapshot)
 		}
 	}

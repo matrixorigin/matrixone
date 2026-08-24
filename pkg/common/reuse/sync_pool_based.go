@@ -46,15 +46,21 @@ func newSyncPoolBased[T any, P ReusableObject[T]](
 
 func (p *syncPoolBased[T, P]) Alloc() P {
 	v := p.pool.Get().(P)
-	if p.c.gotFromPool(v) {
-		p.installFinalizer(v)
+	if p.c.enable {
+		if epoch := checkerActive.current(); epoch != 0 &&
+			p.c.gotActive(v, epoch, true) {
+			p.installFinalizer(v)
+		}
 	}
 	return v
 }
 
 func (p *syncPoolBased[T, P]) Free(v P) {
-	if p.c.freeToPool(v) {
-		p.installFinalizer(v)
+	if p.c.enable {
+		if epoch := checkerActive.current(); epoch != 0 &&
+			p.c.freeActive(v, epoch, true) {
+			p.installFinalizer(v)
+		}
 	}
 	p.reset(v)
 	p.pool.Put(v)
