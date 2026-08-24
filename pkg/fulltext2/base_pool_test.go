@@ -40,6 +40,12 @@ func TestSegmentLeaseFreeIsIdempotent(t *testing.T) {
 	lease.retire()
 }
 
+func TestSegmentLeaseAcquireAfterRetire(t *testing.T) {
+	lease := newSegmentLease(NewSegment("base", 0))
+	lease.retire()
+	require.Nil(t, lease.acquire(0))
+}
+
 func TestImmutableBasePoolSingleflightAndRetire(t *testing.T) {
 	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
 	key := baseKey{index: "db.store", id: "base-0", checksum: "sum", filesize: 1}

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
@@ -118,7 +119,9 @@ func TestLoadReasonRegistryBoundariesAndInvalidation(t *testing.T) {
 		at:     time.Now().Add(-loadReasonTTL),
 	}
 	pendingLoadReasons.Unlock()
+	rememberLoadReason("fresh", LoadMissMerge)
 	require.Empty(t, takeLoadReason("expired"))
+	require.Equal(t, LoadMissMerge, takeLoadReason("fresh"))
 
 	for i := 0; i < loadReasonSize+1; i++ {
 		rememberLoadReason(fmt.Sprintf("db.%d", i), LoadMissCDCFlush)
@@ -135,6 +138,29 @@ func TestLoadReasonRegistryBoundariesAndInvalidation(t *testing.T) {
 	invalidateLoadGeneration(cfg, LoadMissMerge)
 	invalidateLoadGeneration(cfg, LoadMissRebuild)
 	invalidateLoadGeneration(cfg, LoadMissReason("process_shutdown"))
+}
+
+func TestReusableLoadLifecycleHookRunsHousekeepingAndShutdown(t *testing.T) {
+	ensureReusableLoadLifecycle()
+	c := veccache.NewVectorIndexCache()
+	c.HouseKeeping()
+	c.Destroy()
+}
+
+func TestLoadTailWithReuseReusesUnchangedState(t *testing.T) {
+	index := "db.store"
+	loadedTailPool.clear(index)
+	t.Cleanup(func() { loadedTailPool.clear(index) })
+	state := newTailState(7, 11, []*Segment{NewSegment("tail", 11)}, nil)
+	views, _ := loadedTailPool.installAndAcquire(index, state)
+	freeSegs(views)
+
+	segs, deletes, maxChunk, err := loadTailWithReuse(nil, TableConfig{DbName: "db", IndexTable: "store"}, 7, 11, nil)
+	require.NoError(t, err)
+	require.Len(t, segs, 1)
+	require.Nil(t, deletes)
+	require.Equal(t, int64(11), maxChunk)
+	freeSegs(segs)
 }
 
 func TestTailPoolBoundaryAccountingAndReplacement(t *testing.T) {
