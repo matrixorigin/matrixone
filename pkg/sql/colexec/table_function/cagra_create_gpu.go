@@ -405,8 +405,11 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
 			return err
 		}
-		// vimemory.HostIDBytesPerRow covers host_ids + id_to_index_, which the C++ side reserves
-		// and populates for every row regardless of how narrow the vector is.
+		// vimemory.HostIDBytesPerRow covers host_ids, which the chunked constructor
+		// reserves for every row regardless of how narrow the vector is. It does NOT
+		// cover id_to_index_: that map is built on demand and is never allocated
+		// during a build (index_base.hpp, ensure_id_index), so charging for it would
+		// reserve host memory against a structure this path never creates.
 		hostPerRow := uint64(u.idxcfg.CuvsCagra.Dimensions)*quantizationBytes(qt) +
 			uint64(includeBytesPerRowFromCols(u.filterCols)) + vimemory.HostIDBytesPerRow
 

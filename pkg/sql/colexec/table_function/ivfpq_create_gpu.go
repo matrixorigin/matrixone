@@ -462,8 +462,11 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// makes capacity ~7.7x larger than the old dataset-based bound did, so the host
 		// side now needs its own limit -- otherwise a 20 GB card derives 63M rows and
 		// asks the host for 97 GB.
-		// vimemory.HostIDBytesPerRow covers host_ids + id_to_index_, which the C++ side reserves
-		// and populates for every row regardless of how narrow the vector is.
+		// vimemory.HostIDBytesPerRow covers host_ids, which the chunked constructor
+		// reserves for every row regardless of how narrow the vector is. It does NOT
+		// cover id_to_index_: that map is built on demand and is never allocated
+		// during a build (index_base.hpp, ensure_id_index), so charging for it would
+		// reserve host memory against a structure this path never creates.
 		hostPerRow := dim*quantizationBytes(qt) + ibprHost + vimemory.HostIDBytesPerRow
 		hostRowsFit, availBytes, herr := vimemory.HostRowsFitting(hostPerRow)
 		if herr != nil {

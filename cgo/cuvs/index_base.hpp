@@ -1012,6 +1012,23 @@ public:
     // external id 0.
     void ensure_id_index() {
         if (this->id_index_built_) return;
+        // Completeness check for the OTHER direction of the all-ids-or-none contract.
+        // The writers refuse a hole before the ids (add_chunk / set_ids_internal /
+        // the flush span), and run_extend refuses an id-less extend of an id-bearing
+        // index -- but rows can be appended from several independent sites and there
+        // is no single choke point to guard, so the invariant is asserted here, where
+        // the ambiguity actually bites and every one of those paths converges.
+        //
+        // host_ids.size() >= current_offset_ for a well-formed index: equal normally,
+        // greater when a constructor pre-filled ids to `count` and current_offset_ has
+        // not caught up. Smaller means rows exist that no id addresses, so the map
+        // cannot be complete and delete_id would silently miss them.
+        if (this->host_ids.size() < this->current_offset_) {
+            throw std::runtime_error(
+                "ensure_id_index: index has " + std::to_string(this->current_offset_) +
+                " rows but ids for only " + std::to_string(this->host_ids.size()) +
+                "; an index is either all-ids or all-id-less, not a mix");
+        }
         this->id_to_index_.reserve(this->host_ids.size());
         for (uint64_t i = 0; i < this->host_ids.size(); ++i) {
             this->id_to_index_[this->host_ids[i]] = i;
