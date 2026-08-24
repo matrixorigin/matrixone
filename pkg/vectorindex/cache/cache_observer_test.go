@@ -23,14 +23,18 @@ import (
 
 type observerMock struct {
 	MockSearch
-	waiters     int64
-	finished    bool
-	invalidated string
+	waiters          int64
+	finished         bool
+	invalidated      string
+	invalidatedCalls int
 }
 
-func (m *observerMock) SetLoadWaiters(n int64)           { m.waiters = n }
-func (m *observerMock) FinishLoadObservation()           { m.finished = true }
-func (m *observerMock) OnCacheInvalidated(reason string) { m.invalidated = reason }
+func (m *observerMock) SetLoadWaiters(n int64) { m.waiters = n }
+func (m *observerMock) FinishLoadObservation() { m.finished = true }
+func (m *observerMock) OnCacheInvalidated(reason string) {
+	m.invalidated = reason
+	m.invalidatedCalls++
+}
 
 func TestVectorIndexSearchCompletesLoadObserverAfterWaiterSample(t *testing.T) {
 	mock := &observerMock{}
@@ -66,4 +70,18 @@ func TestVectorIndexCacheRemoveDoesNotNotifyOptionalHook(t *testing.T) {
 
 	c.Remove("key")
 	require.Empty(t, mock.invalidated)
+}
+
+func TestVectorIndexCacheExplicitInvalidationThenRemoveNotifiesOnce(t *testing.T) {
+	mock := &observerMock{}
+	s := &VectorIndexSearch{Algo: mock}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	c := NewVectorIndexCache()
+	c.IndexMap.Store("key", s)
+
+	mock.OnCacheInvalidated("merge")
+	c.Remove("key")
+
+	require.Equal(t, 1, mock.invalidatedCalls)
+	require.Equal(t, "merge", mock.invalidated)
 }
