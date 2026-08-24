@@ -633,7 +633,6 @@ func expectScalar(ctx context.Context, db *sql.DB, query, expected string) error
 	return nil
 }
 
-<<<<<<< HEAD
 func verifyPreparedMongoDBScan(ctx context.Context, db *sql.DB) error {
 	const query = "select count(*) from mongodb_ci.events where measurement > ?"
 	stmt, err := db.PrepareContext(ctx, query)
@@ -725,7 +724,7 @@ func verifyTextPreparedMongoDBScan(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, "deallocate prepare mongo_pruned_text"); err != nil {
 		return fmt.Errorf("deallocate text-protocol MongoDB scan: %w", err)
- 	}
+	}
 }
 
 func expectExplainRedacted(ctx context.Context, db *sql.DB, query string, required, forbidden []string) error {
