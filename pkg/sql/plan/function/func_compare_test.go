@@ -39,20 +39,30 @@ func TestJsonComparisonParamPreservesPreparedScalarType(t *testing.T) {
 
 	inputs := []FunctionTestInput{NewFunctionTestInput(
 		types.T_text.ToType(),
-		[]string{"true", "false", "7", "true"},
-		nil,
+		[]string{"true", "false", "7", "1.25", "true"},
+		[]bool{false, false, false, false, true},
 	)}
 	expect := NewFunctionTestResult(types.T_json.ToType(), false,
-		[]string{encode(true), encode(false), encode(int64(7)), encode("true")}, nil)
+		[]string{encode(true), encode(false), encode(int64(7)), encode(1.25), ""}, []bool{false, false, false, false, true})
 	testCase := NewFunctionTestCase(proc, inputs, expect, normalizeJsonComparisonParam)
 	testCase.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
 		vector.PrepareParamBoolean,
 		vector.PrepareParamBoolean,
 		vector.PrepareParamInteger,
+		vector.PrepareParamFloat,
 		vector.PrepareParamNone,
 	})
 	ok, info := testCase.Run()
 	require.True(t, ok, info)
+
+	t.Run("invalid prepared value", func(t *testing.T) {
+		invalid := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{"not-an-integer"}, nil)},
+			NewFunctionTestResult(types.T_json.ToType(), true, nil, nil), normalizeJsonComparisonParam)
+		invalid.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamInteger})
+		ok, info := invalid.Run()
+		require.True(t, ok, info)
+	})
 }
 
 func TestDatetimeTimestampComparisonPreservesInstantSemantics(t *testing.T) {
