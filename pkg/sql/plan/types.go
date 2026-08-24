@@ -77,6 +77,7 @@ type SubscriptionMeta = plan.SubscriptionMeta
 type Snapshot = plan.Snapshot
 type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
+type DataStreamScan = plan.DataStreamScan
 
 const ViewSnapshotKeySuffix = "@ts="
 const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
@@ -353,6 +354,7 @@ type QueryBuilder struct {
 	indexHintOwnerByNode        map[int32]int32
 	preserveSinkProjection      map[int32]struct{}
 	preserveLockProjection      map[int32]struct{}
+	preserveFilterProjection    map[int32]struct{}
 	preservePreInsertProjection map[int32]struct{}
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
@@ -438,12 +440,25 @@ type QueryBuilder struct {
 	// The mutation plan and the returning projection use independent SINK_SCAN
 	// readers, so index/FK side-effect branches cannot multiply returned rows.
 	returningSourceStep int32
-	returningRequested  bool
-	returningTableDef   *plan.TableDef
-	returningObjRef     *plan.ObjectRef
-	returningTableName  string
-	returningAlias      string
-	returningColPos     map[string]int32
+	// returningFilterPos identifies an optional semantic eligibility selector in
+	// the materialized row image. It filters only the RETURNING reader; mutation
+	// readers continue to consume implicit FK action rows.
+	returningFilterPos int32
+	returningRequested bool
+	returningTableDef  *plan.TableDef
+	returningObjRef    *plan.ObjectRef
+	returningTableName string
+	returningAlias     string
+	returningColPos    map[string]int32
+	// updateParentActionStack bounds recursive ON UPDATE actions by the active
+	// physical-table path. Acyclic multi-layer cascades recurse normally; a
+	// cycle is rejected before any mutation step is appended.
+	updateParentActionStack map[uint64]int
+	// updateAffectedRowsCols records selector columns added while self-referencing
+	// FK action rows are folded into a root UPDATE stream. The physical writer
+	// consumes every row, but SQL affected-row accounting includes only rows
+	// selected by the original statement.
+	updateAffectedRowsCols map[uint64]updateAffectedRowsColumn
 	// insertInputKeysUnique is set while binding a plain INSERT ... SELECT when
 	// the source primary key proves uniqueness of the target primary-key key.
 	// It is consumed only by the target-PK DEDUP node; secondary unique-index
@@ -654,15 +669,17 @@ type BindContext struct {
 	// boundary column references.
 	timeBoundaryType *plan.Type
 
-	groupByAst          map[string]int32
-	groupByCanonicalAst map[string]int32
-	groupByParamAst     map[string]int32
-	aggregateByAst      map[string]int32
-	sampleByAst         map[string]int32
-	windowByAst         map[string]int32
-	projectByExpr       map[string]int32
-	timeByAst           map[string]int32
-	whereFilters        []*plan.Expr
+	groupByAst             map[string]int32
+	groupByCanonicalAst    map[string]int32
+	groupByParamAst        map[string]int32
+	aggregateByAst         map[string]int32
+	sampleByAst            map[string]int32
+	windowByAst            map[string]int32
+	projectByExpr          map[string]int32
+	timeByAst              map[string]int32
+	whereFilters           []*plan.Expr
+	volatileExprMemoID     int32
+	flattenedVolatileExprs map[int32]*plan.Expr
 	// gapFillWhereFilters preserves the complete bound WHERE tree before
 	// subqueries are flattened into joins. Bounded GAPFILL inference must see
 	// every timestamp predicate, including IN/ANY/ALL subquery operands.

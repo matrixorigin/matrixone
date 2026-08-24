@@ -378,6 +378,11 @@ func (writer *s3WriterDelegate) append(
 			}
 		}
 
+		if tableType == UpdateMainTable && updateCtx.ChangedRowsCol != nil &&
+			len(updateCtx.AffectedRowsCols) == 0 && !updateCtx.SuppressPhysicalAffectedRows {
+			writer.addAffectedRows(insertAffectedRows(updateCtx, contextBatch))
+		}
+
 		// Index tables with a sort key need null rows stripped — the sinker
 		// sorts by this key and nulls cannot participate.
 		needNullFilter := tableType != UpdateMainTable &&
@@ -980,6 +985,9 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 	bat *batch.Batch,
 ) (err error) {
 	output := writer.outputBat
+	if action == actionInsert {
+		rowCount = physicalInsertAffectedRows(writer.updateCtxs[idx], rowCount)
+	}
 
 	if err = vector.AppendFixed(output.Vecs[0], uint8(action), false, mp); err != nil {
 		return

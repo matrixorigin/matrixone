@@ -362,6 +362,244 @@ func TestCanceledResetAdmissionDoesNotTouchSession(t *testing.T) {
 	routine.mc.endOperation()
 }
 
+func TestCanceledResetWaitingForRequestKeepsSession(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	routine := NewRoutine(context.Background(), oldSession.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	rm.setBaseService(&testMOServerBaseService{id: ""})
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	t.Cleanup(func() {
+		if current := routine.getSession(); current != nil {
+			rm.sessionManager.RemoveSession(current)
+			current.Close()
+		}
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+
+	oldProc := oldSession.GetProc()
+	oldTxnHandler := oldSession.GetTxnHandler()
+	require.True(t, routine.mc.tryBeginRequest())
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resetResult := make(chan error, 1)
+	go func() {
+		resetResult <- routine.resetSessionWithContext(ctx, "", &query.ResetSessionResponse{})
+	}()
+	select {
+	case err := <-resetResult:
+		t.Fatalf("reset returned before the request was canceled: %v", err)
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("reset did not enter the request-only admission wait")
+	}
+
+	cancel()
+	select {
+	case err := <-resetResult:
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, routine.mc.resetWaiterPending)
+	case <-time.After(time.Second):
+		t.Fatal("reset did not honor cancellation while waiting for request")
+	}
+	require.Same(t, oldSession, routine.getSession())
+	require.Same(t, oldProc, oldSession.GetProc())
+	require.Same(t, oldTxnHandler, oldSession.GetTxnHandler())
+	routine.mc.endRequest()
+}
+
+func TestResetAdmissionRejectsConcurrentLifecycleOperation(t *testing.T) {
+	for _, owner := range []string{"reset", "migration"} {
+		t.Run(owner, func(t *testing.T) {
+			routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+			t.Cleanup(routine.cancelRoutineFunc)
+			require.True(t, routine.mc.tryBeginOperation())
+			defer routine.mc.endOperation()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, ok := routine.mc.beginOperationAfterRequestWithContext(ctx)
+			require.False(t, ok, "reset admission must not queue behind concurrent %s", owner)
+		})
+	}
+}
+
+func TestResetAdmissionRejectsStaleLifecycleAttempt(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	routine := NewRoutine(context.Background(), oldSession.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	t.Cleanup(func() {
+		if current := routine.getSession(); current != nil {
+			rm.sessionManager.RemoveSession(current)
+			current.Close()
+		}
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+
+	// Model lifecycle A. The reset must reject this generation even if A ends
+	// before the reset caller's next scheduling point.
+	require.True(t, routine.mc.tryBeginOperation())
+	lifecycleHeld := true
+	defer func() {
+		if lifecycleHeld {
+			routine.mc.endOperation()
+		}
+	}()
+
+	attemptReached := make(chan struct{})
+	resumeAttempt := make(chan struct{})
+	routine.mc.tryBeginOperationHook = func() {
+		close(attemptReached)
+		<-resumeAttempt
+	}
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		result <- routine.resetSessionWithContext(ctx, "", &query.ResetSessionResponse{})
+	}()
+
+	select {
+	case err := <-result:
+		// The fixed path makes one atomic admission decision while lifecycle A
+		// is still active and therefore never invokes the optimistic hook.
+		require.ErrorContains(t, err, "cannot reset session as routine is closed or busy")
+		require.Same(t, oldSession, routine.getSession())
+		require.False(t, routine.mc.resetWaiterPending)
+	case <-attemptReached:
+		// The pre-fix two-step path reaches this hook after its first failed
+		// attempt. Let A finish, start request N+1, and resume the stale reset.
+		routine.mc.endOperation()
+		lifecycleHeld = false
+		require.True(t, routine.mc.tryBeginRequest())
+		close(resumeAttempt)
+
+		select {
+		case err := <-result:
+			t.Fatalf("stale reset completed before request N+1 ended: %v", err)
+		case <-waitEntered:
+		}
+		routine.mc.endRequest()
+
+		select {
+		case err := <-result:
+			require.ErrorContains(t, err, "cannot reset session as routine is closed or busy")
+		case <-time.After(time.Second):
+			t.Fatal("stale reset did not finish after request N+1 ended")
+		}
+	}
+}
+
+func TestResetAdmissionStopsWhenRoutineClosesDuringRequestWait(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	require.True(t, routine.mc.tryBeginRequest())
+	defer routine.mc.endRequest()
+
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
+	result := make(chan bool, 1)
+	go func() {
+		_, ok := routine.mc.beginOperationAfterRequestWithContext(context.Background())
+		result <- ok
+	}()
+	select {
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("reset admission did not enter the request-only wait")
+	}
+	routine.mc.startClose()
+	select {
+	case ok := <-result:
+		require.False(t, ok)
+		require.False(t, routine.mc.resetWaiterPending)
+	case <-time.After(time.Second):
+		t.Fatal("reset admission did not stop after routine close")
+	}
+}
+
+func TestResetAdmissionAllowsOnlyOnePendingRequestWaiter(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	require.True(t, routine.mc.tryBeginRequest())
+
+	waitEntered := make(chan struct{})
+	var waitOnce sync.Once
+	routine.mc.requestWaitHook = func() {
+		waitOnce.Do(func() { close(waitEntered) })
+	}
+
+	firstCtx, cancelFirst := context.WithTimeout(context.Background(), time.Second)
+	defer cancelFirst()
+	firstResult := make(chan bool, 1)
+	go func() {
+		_, ok := routine.mc.beginOperationAfterRequestWithContext(firstCtx)
+		firstResult <- ok
+	}()
+	select {
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first reset did not enter the request-only admission wait")
+	}
+
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecond()
+	secondResult := make(chan bool, 1)
+	go func() {
+		_, ok := routine.mc.beginOperationAfterRequestWithContext(secondCtx)
+		secondResult <- ok
+	}()
+	select {
+	case ok := <-secondResult:
+		require.False(t, ok, "a second reset must not reserve another request waiter")
+	case <-time.After(100 * time.Millisecond):
+		routine.mc.endRequest()
+		select {
+		case ok := <-firstResult:
+			if ok {
+				routine.mc.endOperation()
+			}
+		case <-time.After(time.Second):
+			t.Fatal("first reset did not finish after request release")
+		}
+		select {
+		case ok := <-secondResult:
+			require.False(t, ok, "second reset waiter must not be admitted after the first completes")
+		case <-time.After(time.Second):
+			t.Fatal("second reset waiter did not finish after request release")
+		}
+		t.Fatal("second reset incorrectly waited behind the same request")
+	}
+
+	routine.mc.endRequest()
+	select {
+	case ok := <-firstResult:
+		require.True(t, ok)
+		routine.mc.endOperation()
+	case <-time.After(time.Second):
+		t.Fatal("first reset did not finish after request release")
+	}
+}
+
 func TestRoutineCloseCancelsResetRollback(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)

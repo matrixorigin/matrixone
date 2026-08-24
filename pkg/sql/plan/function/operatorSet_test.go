@@ -1342,6 +1342,76 @@ func Test_IffCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Zero(t, result.finalType[2].Width)
 }
 
+func TestConditionalTextFamilyMarkersStayBounded(t *testing.T) {
+	medium := types.New(types.T_text, types.MaxMediumTextLen, 0)
+	long := types.New(types.T_text, types.MaxLongTextLen, 0)
+	tiny := types.New(types.T_text, types.MaxTinyTextLen, 0)
+
+	for _, tc := range []struct {
+		name   string
+		result checkResult
+		width  int32
+		length int
+	}{
+		{
+			name:   "case mediumtext",
+			result: caseCheck(nil, []types.Type{types.T_bool.ToType(), medium, types.New(types.T_varchar, 10, 0)}),
+			width:  types.MaxMediumTextLen,
+			length: 3,
+		},
+		{
+			name:   "if longtext",
+			result: iffCheck(nil, []types.Type{types.T_bool.ToType(), long, long}),
+			width:  types.MaxLongTextLen,
+			length: 0,
+		},
+		{
+			name: "coalesce mediumtext",
+			result: coalesceCheck([]overload{
+				{args: []types.T{types.T_varchar}},
+				{args: []types.T{types.T_char}},
+				{args: []types.T{types.T_text}},
+			}, []types.Type{medium, medium}),
+			width:  types.MaxMediumTextLen,
+			length: 0,
+		},
+		{
+			name:   "case mixed text markers",
+			result: caseCheck(nil, []types.Type{types.T_bool.ToType(), tiny, types.T_bool.ToType(), medium, long}),
+			width:  types.MaxLongTextLen,
+			length: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.length == 0 {
+				require.Contains(t, []overloadCheckSituation{succeedMatched, succeedWithCast}, tc.result.status)
+				return
+			}
+			require.Equal(t, succeedWithCast, tc.result.status)
+			require.Len(t, tc.result.finalType, tc.length)
+			for i, typ := range tc.result.finalType {
+				if tc.length > 2 && i%2 == 0 && i < tc.length-1 {
+					continue
+				}
+				require.Equal(t, types.T_text, typ.Oid)
+				require.Equal(t, tc.width, typ.Width)
+			}
+		})
+	}
+	require.Equal(t, int32(types.MaxLongTextLen),
+		iffReturnType([]types.Type{types.T_bool.ToType(), long, long}).Width)
+	require.Equal(t, int32(types.MaxMediumTextLen),
+		caseReturnType([]types.Type{types.T_bool.ToType(), medium, medium}).Width)
+	require.Equal(t, int32(types.MaxMediumTextLen),
+		coalesceStringReturnType(types.T_text, []types.Type{medium, medium}).Width)
+
+	// Plain TEXT has no persisted subtype bound. It must keep the existing
+	// conservative width when combined with a bounded TEXT-family marker.
+	result := caseCheck(nil, []types.Type{types.T_bool.ToType(), types.T_text.ToType(), medium})
+	require.NotEqual(t, failedFunctionParametersWrong, result.status)
+	require.Zero(t, caseReturnType([]types.Type{types.T_bool.ToType(), types.T_text.ToType(), medium}).Width)
+}
+
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
 	overloads := []overload{
 		{args: []types.T{types.T_varchar}},

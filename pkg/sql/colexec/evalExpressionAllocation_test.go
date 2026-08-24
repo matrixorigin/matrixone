@@ -104,3 +104,44 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	executor.Free()
 	require.Zero(t, account.Snapshot().Used)
 }
+
+func TestAccountedFixedCrossDomainConstBroadcastUsesPhysicalMetadata(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	expression := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varbinary)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value:       &plan.Literal_Sval{Sval: "selected"},
+			LiteralForm: plan.StringLiteralForm_STRING_LITERAL_TEXT,
+		}},
+	}
+	executor, err := NewExpressionExecutorWithAllocation(proc, expression, selection)
+	require.NoError(t, err)
+	used := account.Snapshot().Used
+	input := batch.NewWithSize(0)
+	input.SetRowCount(65)
+
+	var result *vector.Vector
+	require.NotPanics(t, func() {
+		result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	})
+	require.NoError(t, err)
+	require.Equal(t, 65, result.Length())
+	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(64))
+	require.Equal(t, used, account.Snapshot().Used)
+
+	executor.Free()
+	require.Zero(t, account.Snapshot().Used)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}

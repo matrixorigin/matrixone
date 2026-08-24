@@ -143,7 +143,7 @@ func TestCNS3DataWriterChunkedColumnProtocolGateIsLive(t *testing.T) {
 	enabledAfterConstruction := NewCNS3DataWriterForService(
 		serviceID, proc.Mp(), fs, tableDef, -1, true,
 	)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
 	require.Equal(t, uint8(compress.Lz4Chunked), writeAndColumnAlgorithm(enabledAfterConstruction))
 
 	disabledAfterConstruction := NewCNS3DataWriterForService(
@@ -168,9 +168,9 @@ func TestChunkedColumnPolicyProtocolThreshold(t *testing.T) {
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
 	require.False(t, policy())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
 	require.True(t, policy())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int32(defines.MORPCVersion23))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int32(defines.MORPCVersion27))
 	require.False(t, policy())
 
 	missingPolicy := chunkedColumnPolicyForService("missing-" + serviceID)
@@ -197,7 +197,7 @@ func TestCNS3TombstoneWriterProtocolGate(t *testing.T) {
 	require.NotNil(t, legacy)
 	require.NoError(t, legacy.Close())
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
 	chunked := NewCNS3TombstoneWriterForService(
 		serviceID, proc.Mp(), fs, types.T_int32.ToType(), -1,
 	)

@@ -219,6 +219,17 @@ select * from auto_increment15;
 Drop table auto_increment15;
 
 
+-- LAST_INSERT_ID() for a multi-row insert is the first generated value.
+drop table if exists auto_increment_first_generated;
+create table auto_increment_first_generated(
+    id int auto_increment primary key,
+    v int
+) auto_increment = 100;
+insert into auto_increment_first_generated(v) values (1), (2), (3);
+select last_insert_id();
+select * from auto_increment_first_generated order by id;
+drop table auto_increment_first_generated;
+
 -- abnormal test:auto_increment < 0
 Drop table if exists auto_increment16;
 Create table auto_increment16(col1 int auto_increment)auto_increment < 0;
@@ -535,3 +546,23 @@ insert into auto_increment_alter_create_txn(v) values (1);
 select * from auto_increment_alter_create_txn order by new_id;
 commit;
 drop table auto_increment_alter_create_txn;
+
+-- LAST_INSERT_ID reports the first generated value even when one INSERT ...
+-- SELECT is split into multiple execution batches.
+drop table if exists auto_increment_multi_batch;
+create table auto_increment_multi_batch(id bigint auto_increment primary key, v bigint);
+insert into auto_increment_multi_batch(v)
+select result from generate_series(1, 20000) g;
+select last_insert_id();
+select min(id), max(id), count(*) from auto_increment_multi_batch;
+drop table auto_increment_multi_batch;
+
+-- An all-manual INSERT reports zero in its OK packet but must not change the
+-- session value observed by LAST_INSERT_ID().
+drop table if exists auto_increment_manual_result;
+create table auto_increment_manual_result(id bigint auto_increment primary key, v int);
+insert into auto_increment_manual_result(v) values (1);
+select last_insert_id();
+insert into auto_increment_manual_result(id, v) values (100, 2);
+select last_insert_id();
+drop table auto_increment_manual_result;

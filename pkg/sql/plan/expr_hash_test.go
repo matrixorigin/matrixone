@@ -67,6 +67,27 @@ func TestExprStructuralHashDistinguishesObjectRef(t *testing.T) {
 	require.True(t, exprStructuralEqual(a, c))
 }
 
+func TestExprStructuralIdentityIncludesNegativeAuxID(t *testing.T) {
+	a := int64Lit(1)
+	a.AuxId = -1
+	b := int64Lit(1)
+	b.AuxId = -2
+	c := int64Lit(1)
+	c.AuxId = -1
+
+	require.NotEqual(t, exprStructuralHash(a), exprStructuralHash(b))
+	require.False(t, exprStructuralEqual(a, b))
+	require.Equal(t, exprStructuralHash(a), exprStructuralHash(c))
+	require.True(t, exprStructuralEqual(a, c))
+
+	ordinaryA := int64Lit(1)
+	ordinaryA.AuxId = 1
+	ordinaryB := int64Lit(1)
+	ordinaryB.AuxId = 2
+	require.Equal(t, exprStructuralHash(ordinaryA), exprStructuralHash(ordinaryB))
+	require.True(t, exprStructuralEqual(ordinaryA, ordinaryB))
+}
+
 func int64Lit(v int64) *planpb.Expr {
 	return &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_int64)},
@@ -174,6 +195,45 @@ func TestExprStructuralHashDistinguishesIsBin(t *testing.T) {
 	c := binStrLit("1")
 	require.Equal(t, exprStructuralHash(b), exprStructuralHash(c))
 	require.True(t, exprStructuralEqual(b, c))
+}
+
+func TestExprStructuralHashDistinguishesLiteralForm(t *testing.T) {
+	a := strLit("1")
+	b := strLit("1")
+	a.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+	b.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_BIT
+
+	require.NotEqual(t, exprStructuralHash(a), exprStructuralHash(b))
+	require.False(t, exprStructuralEqual(a, b))
+}
+
+func TestExprStructuralIdentityNormalizesTextFormOnlyInTextDomain(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		typ   types.Type
+		equal bool
+	}{
+		{name: "text domain", typ: types.T_varchar.ToType(), equal: true},
+		{name: "binary domain", typ: types.T_varbinary.ToType(), equal: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			none := &planpb.Expr{Typ: planpb.Type{
+				Id: int32(test.typ.Oid), Charset: uint32(test.typ.Charset),
+			}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Sval{Sval: "same"},
+			}}}
+			text := DeepCopyExpr(none)
+			text.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_TEXT
+
+			if test.equal {
+				require.Equal(t, exprStructuralHash(none), exprStructuralHash(text))
+				require.True(t, exprStructuralEqual(none, text))
+			} else {
+				require.NotEqual(t, exprStructuralHash(none), exprStructuralHash(text))
+				require.False(t, exprStructuralEqual(none, text))
+			}
+		})
+	}
 }
 
 func TestExprStructuralHashIgnoresDiagnosticProvenance(t *testing.T) {
@@ -523,4 +583,42 @@ func TestApplyDistributivityIsBinNotFactored(t *testing.T) {
 	require.NotNil(t, fn)
 	require.Equal(t, "or", fn.Func.ObjName,
 		"_binary '1' and '1' must not be factored as common; OR must remain at top")
+}
+
+func TestApplyDistributivityDoesNotFactorCrossDomainTextOverride(t *testing.T) {
+	ctx := context.Background()
+	varbinaryType := planpb.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)}
+	col := &planpb.Expr{Typ: varbinaryType, Expr: &planpb.Expr_Col{
+		Col: &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "a"},
+	}}
+	mkEq := func(form planpb.StringLiteralForm) *planpb.Expr {
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_F{
+			F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "="}, Args: []*planpb.Expr{
+				DeepCopyExpr(col),
+				{Typ: varbinaryType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+					Value: &planpb.Literal_Sval{Sval: "same"}, LiteralForm: form,
+				}}},
+			}},
+		}}
+	}
+	p := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Col{
+		Col: &planpb.ColRef{RelPos: 1, ColPos: 0, Name: "p"},
+	}}
+	q := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Col{
+		Col: &planpb.ColRef{RelPos: 1, ColPos: 1, Name: "q"},
+	}}
+	left, err := BindFuncExprImplByPlanExpr(ctx, "and", []*planpb.Expr{
+		mkEq(planpb.StringLiteralForm_STRING_LITERAL_TEXT), p,
+	})
+	require.NoError(t, err)
+	right, err := BindFuncExprImplByPlanExpr(ctx, "and", []*planpb.Expr{
+		mkEq(planpb.StringLiteralForm_STRING_LITERAL_NONE), q,
+	})
+	require.NoError(t, err)
+	orExpr, err := BindFuncExprImplByPlanExpr(ctx, "or", []*planpb.Expr{left, right})
+	require.NoError(t, err)
+
+	result := applyDistributivity(ctx, orExpr)
+	require.NotNil(t, result.GetF())
+	require.Equal(t, "or", result.GetF().Func.ObjName)
 }

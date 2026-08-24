@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -52,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1036,6 +1038,8 @@ var (
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
 		MoCatalogMoSubsDDL,
+		MoCatalogMoViewDependenciesDDL,
+		MoCatalogMoViewRefreshDDL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
 		MoCatalogMoSessionsDDL,
@@ -1133,6 +1137,7 @@ var (
 			name,
 			owner,
 			args,
+			arg_types,
 			retType,
 			body,
 			language,
@@ -1146,11 +1151,12 @@ var (
 			character_set_client,
 			collation_connection,
 			database_collation,
-			sql_mode) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			sql_mode) values ("%s",%d,'%s','%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	updateMoUserDefinedFunctionFormat = `update mo_catalog.mo_user_defined_function
 			set owner = %d, 
 			    args = '%s',
+			    arg_types = '%s',
 			    retType = '%s',
 			    body = "%s",
 			    language = '%s',
@@ -1542,7 +1548,7 @@ const (
 
 	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
 
-	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$[*].type') %s order by function_id;`
+	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and arg_types = %s order by function_id;`
 
 	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
@@ -9997,14 +10003,33 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName str
 }
 
 func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	return checkDatabaseExistsOrNotWithLock(ctx, bh, dbName, false)
+}
+
+// lockDatabaseForUDFCreation serializes function definitions in one database.
+// The caller must own a pessimistic transaction and keep it open through the
+// following exact-signature read and write.
+func lockDatabaseForUDFCreation(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	return checkDatabaseExistsOrNotWithLock(ctx, bh, dbName, true)
+}
+
+func checkDatabaseExistsOrNotWithLock(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	forUpdate bool,
+) (bool, error) {
 	var sqlForCheckDatabase string
 	var erArray []ExecResult
 	var err error
-	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
+	ctx, span := trace.Debug(ctx, "checkDatabaseExistsOrNot")
 	defer span.End()
 	sqlForCheckDatabase, err = getSqlForCheckDatabaseByAccount(ctx, dbName)
 	if err != nil {
 		return false, err
+	}
+	if forUpdate {
+		sqlForCheckDatabase = strings.TrimSuffix(sqlForCheckDatabase, ";") + " for update;"
 	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sqlForCheckDatabase)
@@ -10188,6 +10213,9 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
+		if rtnErr = inheritViewMetadataRevalidation(ctx, bh, ses.GetService(), newTenant.GetTenantID()); rtnErr != nil {
+			return rtnErr
+		}
 
 		return rtnErr
 	}
@@ -10200,6 +10228,37 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if err = createSubscription(ctx, bh, newTenant); err != nil {
 			return err
 		}
+	}
+	return err
+}
+
+func inheritViewMetadataRevalidation(
+	ctx context.Context,
+	bh BackgroundExec,
+	serviceID string,
+	accountID uint32,
+) error {
+	if err := bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		if !compile.ViewMetadataRefreshEnabled(serviceID) &&
+			(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+			return nil
+		}
+		return err
+	}
+	err := bh.Exec(ctx, fmt.Sprintf(
+		"insert into %s.%s (%s) select %d,0,0,0,'%s','%s',0,0,0,0,0,'','','','',d.source_relation_kind,'',0,null,0,d.dependency_generation "+
+			"from %s.%s d where d.account_id=0 and d.target_relation_id=0 and d.dependency_ordinal=0 "+
+			"and d.source_relation_kind in ('%s','%s','%s','%s') and not exists (select 1 from %s.%s a "+
+			"where a.account_id=%d and a.target_relation_id=0 and a.dependency_ordinal=0)",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
+		accountID, catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+		catalog.ViewRefreshStatusRevalidateRequired, catalog.ViewRefreshStatusRevalidateScan,
+		catalog.ViewRefreshStatusActivated, catalog.ViewRefreshStatusLegacyScan,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID))
+	if !compile.ViewMetadataRefreshEnabled(serviceID) &&
+		(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+		return nil
 	}
 	return err
 }
@@ -10309,6 +10368,10 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_depend") ||
+			strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_refresh") {
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
@@ -10995,7 +11058,6 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 }
 
 func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
-	var initMoUdf string
 	var retTypeStr string
 	var dbName string
 	var dbExists bool
@@ -11017,11 +11079,25 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		dbName = string(cf.Name.Name.SchemaName)
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	// Exact function signatures need an exclusion boundary in every deployment
+	// mode. The catalog unique index documents the identity, but optimistic/SI
+	// transactions do not acquire FOR UPDATE locks. This private transaction is
+	// therefore explicitly pessimistic RC, locks the target database row, then
+	// rechecks and writes the signature before releasing that lock.
+	bh := ses.GetBackgroundExec(execCtx.reqCtx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
-	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, bh, dbName)
+	err = bh.Exec(execCtx.reqCtx, "begin;")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(execCtx.reqCtx, bh, err)
+	}()
+
+	// Lock and authenticate the target database before the exact-signature
+	// read. The lock stays held through persistence and commit.
+	dbExists, err = lockDatabaseForUDFCreation(execCtx.reqCtx, bh, dbName)
 	if err != nil {
 		return err
 	}
@@ -11055,14 +11131,11 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		return err
 	}
 
-	if len(typeList) == 0 {
-		argsCondition = "is null"
-	} else if len(typeList) == 1 {
-		argsCondition = fmt.Sprintf(`= '"%v"'`, typeList[0])
-	} else {
-		typesJson, _ := json.Marshal(typeList)
-		argsCondition = fmt.Sprintf(`= '%v'`, string(typesJson))
+	argTypes, err := userDefinedFunctionArgumentTypes(typeList)
+	if err != nil {
+		return err
 	}
+	argsCondition = fmt.Sprintf("'%s'", argTypes)
 
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
@@ -11080,15 +11153,6 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	if execResultArrayHasData(erArray) && !cf.Replace {
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
-
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
 	var body string
 	if cf.Language == string(tree.SQL) {
 		body = cf.Body
@@ -11130,36 +11194,28 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		// in storage and break json.Unmarshal when invoking python UDFs.
 		body = string(byt)
 	}
-	body = escapeSQLStringForDoubleQuotes(body)
-	parserSQLMode := plan2.EscapeFormat(sessionSQLModeForParser(ses))
-
+	definition := userDefinedFunctionDefinition{
+		name:     string(cf.Name.Name.ObjectName),
+		args:     string(argsJson),
+		argTypes: argTypes,
+		retType:  retTypeStr,
+		body:     body,
+		lang:     cf.Language,
+		sqlMode:  sessionSQLModeForParser(ses),
+		dbName:   dbName,
+	}
 	if execResultArrayHasData(erArray) { // replace
-		var id int64
-		id, err = erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
+		id, err := erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
 		if err != nil {
 			return err
 		}
-		initMoUdf = fmt.Sprintf(updateMoUserDefinedFunctionFormat,
-			ses.GetTenantInfo().GetDefaultRoleID(),
-			string(argsJson),
-			retTypeStr, body, cf.Language,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", parserSQLMode,
-			int32(id))
-	} else { // create
-		initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
-			string(cf.Name.Name.ObjectName),
-			ses.GetTenantInfo().GetDefaultRoleID(),
-			string(argsJson),
-			retTypeStr, body, cf.Language, dbName,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", parserSQLMode)
+		return persistUserDefinedFunction(
+			execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, &id,
+		)
 	}
-
-	err = bh.Exec(execCtx.reqCtx, initMoUdf)
-	if err != nil {
-		return err
-	}
-
-	return err
+	return persistUserDefinedFunction(
+		execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, nil,
+	)
 }
 
 func escapeSQLStringForDoubleQuotes(s string) string {
@@ -11191,44 +11247,132 @@ func escapeSQLStringForDoubleQuotes(s string) string {
 	return b.String()
 }
 
-func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tree.CreateProcedure) (err error) {
-	var initMoProcedure string
-	var dbName string
-	var checkExistence string
-	parserSQLMode := sessionSQLModeForParser(ses)
-	var argsJson []byte
-	// var fmtctx *tree.FmtCtx
-	var erArray []ExecResult
+// userDefinedFunctionDefinition is the function metadata kept outside
+// mo_tables. Callers control the transaction that persists it.
+type userDefinedFunctionDefinition struct {
+	name     string
+	args     string
+	argTypes string
+	retType  string
+	body     string
+	lang     string
+	sqlMode  string
+	dbName   string
+}
 
-	// a database must be selected or specified as qualifier when create a function
-	if cp.Name.HasNoNameQualifier() {
-		if ses.DatabaseNameIsEmpty() {
-			return moerr.NewNoDBNoCtx()
-		}
-		dbName = ses.GetDatabaseName()
-	} else {
-		dbName = string(cp.Name.Name.SchemaName)
+// userDefinedFunctionArgumentTypes is the canonical identity of a function
+// overload. Argument names do not participate in function resolution, while
+// their ordered types do. Keep the zero-argument identity empty to match the
+// legacy json_extract(args, '$[*].type') IS NULL representation.
+func userDefinedFunctionArgumentTypes(argumentTypes []string) (string, error) {
+	if len(argumentTypes) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(argumentTypes)
+	if err != nil {
+		return "", err
+	}
+	value, err := bytejson.ParseFromByteSlice(encoded)
+	if err != nil {
+		return "", err
+	}
+	// JSON_EXTRACT renders arrays through ByteJson. Use that same rendering
+	// rather than encoding/json's compact form, otherwise a migrated
+	// multi-argument function receives a different overload identity from an
+	// equivalent CREATE FUNCTION issued after the upgrade.
+	canonical := value.String()
+	if len(canonical) > types.MaxStringSize {
+		return "", moerr.NewInvalidInputNoCtxf(
+			"function argument type signature exceeds the %d-byte catalog limit", types.MaxStringSize,
+		)
+	}
+	return canonical, nil
+}
+
+func userDefinedFunctionArgumentTypesFromJSON(args string) (string, error) {
+	if args == "" || args == "{}" {
+		return "", nil
+	}
+	var argList []function.Arg
+	if err := json.Unmarshal([]byte(args), &argList); err != nil {
+		return "", err
+	}
+	types := make([]string, len(argList))
+	for i := range argList {
+		types[i] = argList[i].Type
+	}
+	return userDefinedFunctionArgumentTypes(types)
+}
+
+// persistUserDefinedFunction writes function metadata into the caller-owned
+// transaction. A non-nil functionID replaces that existing definition.
+func persistUserDefinedFunction(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	ownerRoleID uint32,
+	definition userDefinedFunctionDefinition,
+	functionID *int64,
+) error {
+	body := escapeSQLStringForDoubleQuotes(definition.body)
+	sqlMode := plan2.EscapeFormat(definition.sqlMode)
+	if functionID != nil {
+		return bh.Exec(ctx, fmt.Sprintf(updateMoUserDefinedFunctionFormat,
+			ownerRoleID,
+			definition.args,
+			definition.argTypes, definition.retType, body, definition.lang,
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode,
+			int32(*functionID)))
+	}
+	return bh.Exec(ctx, fmt.Sprintf(initMoUserDefinedFunctionFormat,
+		definition.name,
+		ownerRoleID,
+		definition.args,
+		definition.argTypes, definition.retType, body, definition.lang, definition.dbName,
+		tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode))
+}
+
+// storedProcedureDefinition is the procedure metadata kept outside mo_tables.
+// Callers control the transaction that persists it.
+type storedProcedureDefinition struct {
+	name    string
+	args    string
+	lang    string
+	body    string
+	sqlMode string
+	dbName  string
+}
+
+func newStoredProcedureDefinition(ctx context.Context, ses *Session, cp *tree.CreateProcedure) (storedProcedureDefinition, error) {
+	definition := storedProcedureDefinition{
+		name:    string(cp.Name.Name.ObjectName),
+		lang:    cp.Lang,
+		body:    cp.Body,
+		sqlMode: sessionSQLModeForParser(ses),
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
+	if cp.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return storedProcedureDefinition{}, moerr.NewNoDBNoCtx()
+		}
+		definition.dbName = ses.GetDatabaseName()
+	} else {
+		definition.dbName = string(cp.Name.Name.SchemaName)
+	}
 
-	// build argmap and marshal as json
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-
-	// build argmap and marshal as json
 	argList := make([]tree.ProcedureArgForMarshal, len(cp.Args))
 	for i := 0; i < len(cp.Args); i++ {
 		curName := cp.Args[i].GetName(fmtctx)
 		fmtctx.Reset()
 
 		if curName == "mo" || strings.HasPrefix(curName, "mo.") || strings.HasPrefix(curName, "out_") {
-			return moerr.NewInvalidInput(ctx, "mo, mo.*, out_* are reserved and cannot be used as a procedure argument name")
+			return storedProcedureDefinition{}, moerr.NewInvalidInput(ctx, "mo, mo.*, out_* are reserved and cannot be used as a procedure argument name")
 		}
 
 		argType, ok := cp.Args[i].(*tree.ProcedureArgDecl).Type.(*tree.T)
 		if !ok {
-			return moerr.NewInternalError(ctx, "unknown stored procedure argument type")
+			return storedProcedureDefinition{}, moerr.NewInternalError(ctx, "unknown stored procedure argument type")
 		}
 		argList[i] = tree.ProcedureArgForMarshal{
 			ArgName:   curName,
@@ -11237,59 +11381,99 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 			InOutType: cp.Args[i].(*tree.ProcedureArgDecl).InOutType,
 		}
 	}
-	argsJson, err = json.Marshal(argList)
+
+	argsJSON, err := json.Marshal(argList)
+	if err != nil {
+		return storedProcedureDefinition{}, err
+	}
+	definition.args = string(argsJSON)
+	return definition, nil
+}
+
+// upsertStoredProcedure persists a procedure in the caller-owned transaction.
+func upsertStoredProcedure(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	definition storedProcedureDefinition,
+	replace bool,
+) error {
+	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, replace)
 	if err != nil {
 		return err
 	}
+	return persistStoredProcedure(ctx, bh, tenant, definition, erArray)
+}
 
-	// validate duplicate procedure declaration
+func prepareStoredProcedurePersistence(
+	ctx context.Context,
+	bh BackgroundExec,
+	definition storedProcedureDefinition,
+	replace bool,
+) ([]ExecResult, error) {
 	bh.ClearExecResultSet()
-	checkExistence = getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), dbName)
-	err = bh.Exec(ctx, checkExistence)
+	if err := bh.Exec(ctx, getSqlForCheckProcedureExistence(definition.name, definition.dbName)); err != nil {
+		return nil, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
+	if execResultArrayHasData(erArray) && !replace {
+		return nil, moerr.NewProcedureAlreadyExistsNoCtx(definition.name)
 	}
+	return erArray, nil
+}
 
-	if execResultArrayHasData(erArray) && !cp.Replace {
-		return moerr.NewProcedureAlreadyExistsNoCtx(string(cp.Name.Name.ObjectName))
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
+func persistStoredProcedure(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	definition storedProcedureDefinition,
+	erArray []ExecResult,
+) error {
+	var persistSQL string
 	if execResultArrayHasData(erArray) {
-		var id int64
-		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		id, err := erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			return err
 		}
-		initMoProcedure = fmt.Sprintf(updateMoStoredProcedureFormat,
-			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
+		persistSQL = fmt.Sprintf(updateMoStoredProcedureFormat,
+			definition.args,
+			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else {
-		initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
-			string(cp.Name.Name.ObjectName),
-			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
+		persistSQL = fmt.Sprintf(initMoStoredProcedureFormat,
+			definition.name,
+			definition.args,
+			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
-	err = bh.Exec(ctx, initMoProcedure)
+	return bh.Exec(ctx, persistSQL)
+}
+
+func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tree.CreateProcedure) (err error) {
+	definition, err := newStoredProcedureDefinition(ctx, ses, cp)
 	if err != nil {
 		return err
 	}
-	return err
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, cp.Replace)
+	if err != nil {
+		return err
+	}
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	return persistStoredProcedure(ctx, bh, tenant, definition, erArray)
 }
 
 func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {

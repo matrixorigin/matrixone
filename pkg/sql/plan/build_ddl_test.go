@@ -120,6 +120,47 @@ type autoIncrementOffsetCompilerContext struct {
 	offset int64
 }
 
+type subscriptionScopeCompilerContext struct {
+	*MockCompilerContext
+	subscription  *SubscriptionMeta
+	querying      *SubscriptionMeta
+	publisherByID map[uint64]*TableDef
+}
+
+func (c *subscriptionScopeCompilerContext) SetQueryingSubscription(meta *SubscriptionMeta) {
+	c.querying = meta
+}
+
+func (c *subscriptionScopeCompilerContext) GetQueryingSubscription() *SubscriptionMeta {
+	return c.querying
+}
+
+func (c *subscriptionScopeCompilerContext) GetSubscriptionMeta(
+	dbName string,
+	_ *Snapshot,
+) (*SubscriptionMeta, error) {
+	if dbName == c.subscription.SubName {
+		return c.subscription, nil
+	}
+	if c.querying != nil && dbName != c.querying.SubName {
+		publisherBinding := *c.querying
+		publisherBinding.DbName = dbName
+		return &publisherBinding, nil
+	}
+	return nil, nil
+}
+
+func (c *subscriptionScopeCompilerContext) ResolveSubscriptionTableById(
+	tableID uint64,
+	_ *SubscriptionMeta,
+) (*ObjectRef, *TableDef, error) {
+	tableDef := DeepCopyTableDef(c.publisherByID[tableID], true)
+	if tableDef == nil {
+		return nil, nil, nil
+	}
+	return &ObjectRef{SchemaName: tableDef.DbName, ObjName: tableDef.Name}, tableDef, nil
+}
+
 func (c *autoIncrementOffsetCompilerContext) ResolveVariable(
 	varName string, isSystemVar, isGlobalVar bool,
 ) (interface{}, error) {
@@ -2181,6 +2222,18 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 		require.Len(t, leftJoinDef.GetCols(), 1)
 		require.True(t, leftJoinDef.GetCols()[0].GetDefault().GetNullAbility())
 		require.Equal(t, "9", leftJoinDef.GetCols()[0].GetDefault().GetOriginString())
+		leftJoinDef.Name = "v_left_join"
+		leftJoinDef.DbName = "tpch"
+		leftJoinDef.TableType = catalog.SystemViewRel
+		ctx.tables[leftJoinDef.Name] = leftJoinDef
+		ctx.objects[leftJoinDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: leftJoinDef.Name}
+		ctasStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+			"create table copied_left_join as select * from v_left_join", 1)
+		require.NoError(t, err)
+		defer ctasStmt.Free()
+		ctasPlan, err := BuildPlan(ctx, ctasStmt, false)
+		require.NoError(t, err)
+		require.True(t, ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault().GetNullAbility())
 
 		ambiguousSQL := "create view v_ambiguous as select n_nationkey from nation l join nation2 r " +
 			"on l.n_nationkey = r.n_nationkey"
@@ -3250,6 +3303,169 @@ func TestBuildCreateTableLikePersistsExpandedSQL(t *testing.T) {
 	require.Contains(t, strings.ToUpper(persisted), "TINYTEXT")
 }
 
+func TestBuildCreateTableLikeRestoresSubscriptionBeforePlanningTarget(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepared=%t", prepared), func(t *testing.T) {
+			const rootSQL = "CREATE TABLE localdb.clone LIKE subdb.source"
+			base := NewMockCompilerContext(false)
+			base.dbs["localdb"] = true
+			base.dbs["subdb"] = true
+			base.tables["source"] = &plan.TableDef{
+				Name:      "source",
+				TableType: catalog.SystemOrdinaryRel,
+				Cols: []*plan.ColDef{{
+					Name: "id", OriginName: "id",
+					Typ:     plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{NullAbility: true},
+				}},
+			}
+			base.objects["source"] = &plan.ObjectRef{
+				SchemaName:       "publisherdb",
+				ObjName:          "source",
+				SubscriptionName: "subdb",
+				PubInfo:          &plan.PubInfo{TenantId: 7},
+			}
+			ctx := &subscriptionScopeCompilerContext{
+				MockCompilerContext: base,
+				subscription: &SubscriptionMeta{
+					AccountId: 7, DbName: "publisherdb", SubName: "subdb",
+					Tables: "*",
+				},
+			}
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, prepared)
+			require.NoError(t, err)
+			require.Equal(t, "localdb", built.GetDdl().GetCreateTable().GetDatabase())
+			require.Nil(t, ctx.GetQueryingSubscription())
+		})
+	}
+}
+
+func TestBuildCreateTableLikeSubscriptionForeignKeysUseSourceOnlyContext(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		foreignTbl uint64
+	}{
+		{name: "self reference", foreignTbl: 0},
+		{name: "other table", foreignTbl: 101},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			const rootSQL = "CREATE TABLE localdb.child_copy LIKE subdb.child"
+			base := NewMockCompilerContext(false)
+			base.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+				if name == "foreign_key_checks" {
+					return int64(0), nil
+				}
+				return nil, moerr.NewInternalError(t.Context(), fmt.Sprintf("unexpected variable %s", name))
+			}
+			base.dbs["localdb"] = true
+			base.dbs["subdb"] = true
+			parent := &plan.TableDef{
+				Name: "parent", DbName: "publisherdb", TblId: 101,
+				Cols: []*plan.ColDef{{
+					ColId: 1, Name: "id", OriginName: "id",
+					Typ: plan.Type{Id: int32(types.T_int32)},
+				}},
+				Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
+			}
+			child := &plan.TableDef{
+				Name: "child", DbName: "publisherdb", TblId: 102,
+				Cols: []*plan.ColDef{{
+					ColId: 2, Name: "parent_id", OriginName: "parent_id",
+					Typ:     plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{NullAbility: true},
+				}},
+				Fkeys: []*plan.ForeignKeyDef{{
+					Name: "fk_parent", Cols: []uint64{2}, ForeignTbl: testCase.foreignTbl,
+					ForeignCols: []uint64{1},
+				}},
+			}
+			if testCase.foreignTbl == 0 {
+				child.Cols[0].ColId = 1
+				child.Fkeys[0].Cols = []uint64{1}
+				child.Pkey = &plan.PrimaryKeyDef{Names: []string{"parent_id"}}
+			}
+			base.tables["child"] = child
+			base.objects["child"] = &plan.ObjectRef{
+				SchemaName: "publisherdb", ObjName: "child", SubscriptionName: "subdb",
+				PubInfo: &plan.PubInfo{TenantId: 7},
+			}
+			base.tables["parent"] = parent
+			base.objects["parent"] = &plan.ObjectRef{
+				SchemaName: "publisherdb", ObjName: "parent", SubscriptionName: "subdb",
+				PubInfo: &plan.PubInfo{TenantId: 7},
+			}
+			ctx := &subscriptionScopeCompilerContext{
+				MockCompilerContext: base,
+				subscription: &SubscriptionMeta{
+					AccountId: 7, DbName: "publisherdb", SubName: "subdb", Tables: "*",
+				},
+				publisherByID: map[uint64]*TableDef{101: parent},
+			}
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			require.Equal(t, "localdb", built.GetDdl().GetCreateTable().GetDatabase())
+			require.Nil(t, ctx.GetQueryingSubscription())
+		})
+	}
+}
+
+func TestConstructCreateTableSQLSubscriptionCloneMapsPublisherForeignKeyToTarget(t *testing.T) {
+	base := NewMockCompilerContext(false)
+	base.dbs["clone_fk_chain"] = true
+	parent := &plan.TableDef{
+		Name: "parent", DbName: "publisherdb", TblId: 101,
+		Cols: []*plan.ColDef{{
+			ColId: 1, Name: "id", OriginName: "id",
+			Typ: plan.Type{Id: int32(types.T_int32)},
+		}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
+	}
+	child := &plan.TableDef{
+		Name: "child", DbName: "clone_fk_chain", TblId: 102,
+		Cols: []*plan.ColDef{{
+			ColId: 2, Name: "parent_id", OriginName: "parent_id",
+			Typ:     plan.Type{Id: int32(types.T_int32)},
+			Default: &plan.Default{NullAbility: true},
+		}},
+		Fkeys: []*plan.ForeignKeyDef{{
+			Name: "fk_parent", Cols: []uint64{2}, ForeignTbl: 101, ForeignCols: []uint64{1},
+		}},
+	}
+	base.tables["parent"] = parent
+	base.objects["parent"] = &plan.ObjectRef{SchemaName: "clone_fk_chain", ObjName: "parent"}
+	subscription := &SubscriptionMeta{
+		AccountId: 7, DbName: "publisherdb", SubName: "sub_fk_chain", Tables: "*",
+	}
+	ctx := &subscriptionScopeCompilerContext{
+		MockCompilerContext: base,
+		subscription:        subscription,
+		publisherByID:       map[uint64]*TableDef{101: parent},
+	}
+	cloneStmt := &tree.CloneTable{
+		SrcTable: *tree.NewTableName("child", tree.ObjectNamePrefix{
+			SchemaName: "sub_fk_chain", ExplicitSchema: true,
+		}, nil),
+		StmtType: tree.WithinAccCloneDB,
+	}
+
+	createSQL, statement, err := constructCreateTableSQL(
+		ctx, child, nil, true, cloneStmt, true, subscription,
+	)
+	require.NoError(t, err)
+	defer statement.Free()
+	require.Contains(t, createSQL, "REFERENCES `clone_fk_chain`.`parent`")
+	require.NotContains(t, createSQL, "`publisherdb`.`parent`")
+	require.Nil(t, ctx.GetQueryingSubscription())
+}
+
 func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -4157,6 +4373,23 @@ func TestBuildMongoDBExternalTableRejectsForeignKeys(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err.Error())
 }
 
+func TestBuildMongoDBExternalTableRejectsAutoIncrementBeforeCatalogDDL(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_auto_increment (
+			id BIGINT AUTO_INCREMENT MONGODB_PATH '_id'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`)
+	require.ErrorContains(t, err, "MongoDB external table does not support AUTO_INCREMENT column 'id'")
+	require.Nil(t, logicPlan, "validation must fail before a catalog DDL plan can be emitted")
+}
+
 func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	ctx := mock.CurrentContext().(*MockCompilerContext)
@@ -4515,6 +4748,39 @@ func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDynamicStringIntervalCanProduceNullInCTASAndView(t *testing.T) {
+	const selectSQL = "select " +
+		"date_add(cast('2026-01-01' as date), interval n_name year_month) as add_result, " +
+		"date_sub(cast('2026-01-01' as date), interval n_name year_month) as sub_result " +
+		"from nation"
+
+	t.Run("CTAS", func(t *testing.T) {
+		mock := NewMockOptimizer(false)
+		logicPlan, err := buildSingleStmt(mock, t, "create table ctas_interval as "+selectSQL)
+		require.NoError(t, err)
+
+		for _, column := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[:2] {
+			require.True(t, column.GetDefault().GetNullAbility(),
+				"invalid values in NOT NULL n_name can make to_interval and date arithmetic return NULL")
+		}
+	})
+
+	t.Run("view", func(t *testing.T) {
+		ctx := NewMockCompilerContext(false)
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create view interval_view as "+selectSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		logicPlan, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+
+		for _, column := range logicPlan.GetDdl().GetCreateView().GetTableDef().GetCols()[:2] {
+			require.True(t, column.GetDefault().GetNullAbility(),
+				"view metadata must preserve date arithmetic nullability from dynamic interval normalization")
+		}
+	})
 }
 
 func TestCreateTableAsSelectPreservesSpecialTypeNullability(t *testing.T) {

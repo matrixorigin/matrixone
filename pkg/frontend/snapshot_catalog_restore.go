@@ -75,6 +75,54 @@ var systemCatalogPostRestoreHandlers = []systemCatalogPostRestoreHandler{
 
 const rolePrivilegeRestoreInsertBatchSize = 256
 
+const userDefinedFunctionCatalogColumns = `function_id, name, owner, args, arg_types, retType, body, language, db, definer, modified_time, created_time, type, security_type, comment, character_set_client, collation_connection, database_collation, sql_mode`
+
+const userDefinedFunctionCatalogSourceColumns = `function_id, name, owner, args, ` +
+	catalog.UserDefinedFunctionArgumentTypesSQL + `, retType, body, language, db, definer, modified_time, created_time, type, security_type, comment, character_set_client, collation_connection, database_collation, sql_mode`
+
+// isCurrentSchemaUserDefinedFunctionCatalog identifies the catalog whose
+// schema is owned by the running binary. Restoring a historical CREATE TABLE
+// for it would remove arg_types even when the current tenant-upgrade state is
+// already complete.
+func isCurrentSchemaUserDefinedFunctionCatalog(tblInfo *tableInfo) bool {
+	return tblInfo != nil && tblInfo.dbName == moCatalog && tblInfo.tblName == "mo_user_defined_function"
+}
+
+// restoreUserDefinedFunctionCatalogWithCurrentSchema restores historical UDF
+// rows into the current catalog shape. The source may predate arg_types, so
+// the copy deliberately derives it from args through the same ByteJson SQL
+// expression used by the v4.0.6 backfill. This keeps restore independent of
+// the snapshot's DDL generation and preserves exact overload identities.
+func restoreUserDefinedFunctionCatalogWithCurrentSchema(
+	ctx context.Context,
+	bh BackgroundExec,
+	sourceSnapshot string,
+	sourceAccount uint32,
+	targetAccount uint32,
+) error {
+	targetCtx := defines.AttachAccountId(ctx, targetAccount)
+	tableName := qualifiedTableName(moCatalog, "mo_user_defined_function")
+	if err := bh.Exec(targetCtx, dropTableIfExistsSQL(moCatalog, "mo_user_defined_function")); err != nil {
+		return err
+	}
+	if err := bh.Exec(targetCtx, MoCatalogMoUserDefinedFunctionDDL); err != nil {
+		return err
+	}
+
+	copySQL := fmt.Sprintf(
+		"insert into %s (%s) select %s from %s%s",
+		tableName,
+		userDefinedFunctionCatalogColumns,
+		userDefinedFunctionCatalogSourceColumns,
+		tableName,
+		sourceSnapshot,
+	)
+	if sourceAccount == targetAccount {
+		return bh.Exec(targetCtx, copySQL)
+	}
+	return bh.ExecRestore(targetCtx, copySQL, sourceAccount, targetAccount)
+}
+
 func restoreSystemCatalogsAfterObjects(
 	ctx context.Context,
 	sid string,

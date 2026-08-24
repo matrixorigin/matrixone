@@ -94,6 +94,12 @@ func TestNew_MyErrorCode(t *testing.T) {
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 
+	err = NewPreparedParamOutOfRange(context.TODO(), "unsigned integer", "EXECUTE")
+	require.Equal(t, ErrPreparedParamOutOfRange, err.ErrorCode())
+	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
+	require.Equal(t, "22003", err.SqlState())
+	require.Equal(t, "unsigned integer value is out of range in 'EXECUTE'", err.Error())
+
 	err = NewUnknownStmtHandler(context.TODO(), "stmt1", "DEALLOCATE PREPARE")
 	require.Equal(t, ErrUnknownStmtHandler, err.ErrorCode())
 	require.Equal(t, ER_UNKNOWN_STMT_HANDLER, err.MySQLCode())

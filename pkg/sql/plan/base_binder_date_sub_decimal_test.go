@@ -151,6 +151,21 @@ func makeFloat64ColumnExpr(relPos, colPos int32) *plan.Expr {
 	}
 }
 
+func makeVarcharColumnExpr(relPos, colPos int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: colPos,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_varchar),
+			NotNullable: true,
+		},
+	}
+}
+
 func makeFunctionExprForResetDate(name string, typ plan.Type, args ...*plan.Expr) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
@@ -386,4 +401,49 @@ func TestResetDateFunctionArgsDoesNotFoldLiteralFirstDynamicFunction(t *testing.
 
 	intervalType := extractInt64Value(args[2])
 	require.Equal(t, int64(types.Second), intervalType, "non-constant dynamic SECOND interval must not be rewritten to constant MICROSECOND")
+}
+
+func TestResetDateFunctionArgsDoesNotFoldVarcharColumn(t *testing.T) {
+	ctx := context.Background()
+	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
+	varcharColumn := makeVarcharColumnExpr(0, 0)
+	require.True(t, varcharColumn.Typ.NotNullable)
+
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(varcharColumn, "SECOND"))
+	require.NoError(t, err)
+	require.Len(t, args, 3)
+	require.Equal(t, dateExpr, args[0])
+
+	normalizeExpr := args[1].GetF()
+	require.NotNil(t, normalizeExpr, "VARCHAR column interval must be normalized at execution time, not folded to a literal")
+	require.NotNil(t, normalizeExpr.Func)
+	require.Equal(t, "to_interval", normalizeExpr.Func.GetObjName())
+	require.Len(t, normalizeExpr.Args, 2)
+	require.Equal(t, varcharColumn, normalizeExpr.Args[0])
+	require.Equal(t, int64(types.Second), extractInt64Value(normalizeExpr.Args[1]))
+	require.False(t, args[1].Typ.NotNullable,
+		"to_interval can return NULL for an invalid non-NULL VARCHAR value")
+
+	intervalType := extractInt64Value(args[2])
+	require.Equal(t, int64(types.Second), intervalType)
+}
+
+func TestResetDateFunctionArgsDoesNotFoldCharColumn(t *testing.T) {
+	ctx := context.Background()
+	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
+	charColumn := makeVarcharColumnExpr(0, 0)
+	charColumn.Typ.Id = int32(types.T_char)
+
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(charColumn, "YEAR_MONTH"))
+	require.NoError(t, err)
+	require.Len(t, args, 3)
+
+	normalizeExpr := args[1].GetF()
+	require.NotNil(t, normalizeExpr)
+	require.NotNil(t, normalizeExpr.Func)
+	require.Equal(t, "to_interval", normalizeExpr.Func.GetObjName())
+	require.Len(t, normalizeExpr.Args, 2)
+	require.Equal(t, charColumn, normalizeExpr.Args[0])
+	require.Equal(t, int64(types.Year_Month), extractInt64Value(normalizeExpr.Args[1]))
+	require.Equal(t, int64(types.Month), extractInt64Value(args[2]))
 }

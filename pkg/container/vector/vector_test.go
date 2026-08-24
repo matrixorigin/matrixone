@@ -66,6 +66,71 @@ func TestLength(t *testing.T) {
 	}
 }
 
+func TestRuntimeStringDomainRejectsNonStringVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	require.ErrorContains(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp),
+		"requires a MySQL string vector")
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestRuntimeStringDomainPublicSettersRejectUnknownAndKeepUniformFastPath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("a"), []byte("b")}, nil, mp))
+	require.ErrorContains(t, vec.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringDomain(99), mp),
+		"invalid runtime string domain")
+	require.NoError(t, vec.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+		types.RuntimeStringBinary, types.RuntimeStringBinary,
+	}, mp))
+	require.False(t, vec.HasBinaryStringRows())
+	require.Equal(t, types.RuntimeStringBinary, vec.GetRuntimeStringDomainAt(0))
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestRuntimeStringDomainsRejectMixedConstantVectorAtomically(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, err := NewConstBytes(types.T_varbinary.ToType(), []byte("x"), 2, mp)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.ErrorContains(t, vec.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+		types.RuntimeStringText, types.RuntimeStringBinary,
+	}, mp), "constant vector requires one uniform runtime string domain")
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(1))
+
+	require.NoError(t, vec.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+		types.RuntimeStringText, types.RuntimeStringText,
+	}, mp))
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(1))
+}
+
+func TestConstRuntimeStringDomainSurvivesZeroLengthReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, err := NewConstBytes(types.T_varbinary.ToType(), []byte("selected"), 1, mp)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+
+	vec.SetLength(0)
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	vec.SetLength(4)
+	for row := 0; row < vec.Length(); row++ {
+		require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(row))
+	}
+}
+
 func TestAppendCheckpointRollback(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_varchar.ToType())
@@ -1286,6 +1351,47 @@ func TestShrinkByMask(t *testing.T) {
 	}
 }
 
+func TestShrinkByMaskKeepsNullsAlignedWithOffset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var mask bitmap.Bitmap
+	mask.InitWithSize(3)
+	mask.AddMany([]uint64{0, 2})
+
+	t.Run("negate", func(t *testing.T) {
+		vec := NewVec(types.T_int32.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, AppendFixedList(
+			vec,
+			[]int32{10, 11, 12, 13, 14, 15, 16, 17},
+			[]bool{false, false, false, true, false, true, false, false},
+			mp,
+		))
+		vec.GetGrouping().Add(3, 4)
+
+		vec.ShrinkByMask(&mask, true, 2)
+		require.Equal(t, []int32{10, 11, 0, 0, 16, 17}, MustFixedColWithTypeCheck[int32](vec))
+		require.Equal(t, []uint64{2, 3}, vec.GetNulls().ToArray())
+		require.Equal(t, []uint64{2}, vec.GetGrouping().ToArray())
+	})
+
+	t.Run("select", func(t *testing.T) {
+		vec := NewVec(types.T_int32.ToType())
+		defer vec.Free(mp)
+		require.NoError(t, AppendFixedList(
+			vec,
+			[]int32{10, 11, 12, 13, 14, 15, 16, 17},
+			[]bool{false, false, true, false, false, false, false, false},
+			mp,
+		))
+		vec.GetGrouping().Add(2, 4)
+
+		vec.ShrinkByMask(&mask, false, 2)
+		require.Equal(t, []int32{0, 14}, MustFixedColWithTypeCheck[int32](vec))
+		require.Equal(t, []uint64{0}, vec.GetNulls().ToArray())
+		require.Equal(t, []uint64{0, 1}, vec.GetGrouping().ToArray())
+	})
+}
+
 func TestShuffle(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -2042,6 +2148,138 @@ func TestBinaryStringMetadataUnionMultiAndLifecycle(t *testing.T) {
 	require.False(t, bulkNull.GetIsBinaryString())
 	require.False(t, bulkNull.HasBinaryStringRows())
 	bulkNull.Free(mp)
+}
+
+func TestSelectedValueRuntimeStringDomainOverridesStaticBinary(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_varbinary.ToType()
+	vec := NewVec(typ)
+	uniform := NewVec(typ)
+	t.Cleanup(func() {
+		uniform.Free(mp)
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendBytesList(uniform, [][]byte{[]byte("a"), []byte("b")}, nil, mp))
+	before := mp.CurrNB()
+	require.NoError(t, uniform.SetSelectedValueBinaryStringRowsWithMP([]bool{true, true}, mp))
+	require.Equal(t, before, mp.CurrNB())
+	require.False(t, uniform.HasBinaryStringRows())
+	require.Equal(t, types.RuntimeStringInherit, uniform.GetRuntimeStringDomainAt(0))
+
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("text"), []byte("binary")}, nil, mp))
+
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	require.True(t, vec.GetIsBinaryStringAt(0), "static binary type applies while runtime semantics inherit")
+	require.NoError(t, vec.SetSelectedValueBinaryStringRowsWithMP([]bool{false, true}, mp))
+	require.True(t, vec.HasBinaryStringRows())
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringBinary, vec.GetRuntimeStringDomainAt(1))
+	require.False(t, vec.GetIsBinaryStringAt(0), "selected text overrides the common binary type")
+	require.True(t, vec.GetIsBinaryStringAt(1))
+
+	vec.CleanOnlyData()
+	require.NoError(t, AppendBytes(vec, []byte("reused"), false, mp))
+	require.False(t, vec.HasBinaryStringRows())
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	require.True(t, vec.GetIsBinaryStringAt(0))
+}
+
+func TestSelectedValueRuntimeStringDomainAllocationFailureIsAtomic(t *testing.T) {
+	mp := mpool.MustNewZero()
+	state := newTestVectorAllocationAccount(t, 8<<20, 3)
+
+	vec := newAccountedTestVector(t, types.T_varbinary.ToType(), state.selection)
+	values := make([][]byte, 1024)
+	rows := make([]bool, len(values))
+	for row := range values {
+		values[row] = []byte("a")
+		rows[row] = row%2 != 0
+	}
+	require.NoError(t, vec.PreExtend(len(values), mp))
+	require.NoError(t, AppendBytesList(vec, values, nil, mp))
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+		finalizeTestVectorAllocationAccount(t, state)
+	}()
+
+	err := vec.SetSelectedValueBinaryStringRowsWithMP(rows, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.False(t, vec.HasBinaryStringRows())
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(1))
+}
+
+func TestExplicitTextRuntimeDomainSurvivesVectorLifecycle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	newText := func(t *testing.T) *Vector {
+		t.Helper()
+		vec := NewVec(types.T_varbinary.ToType())
+		require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("b"), []byte("a")}, nil, mp))
+		require.NoError(t, vec.SetSelectedValueBinaryStringRowsWithMP([]bool{false, false}, mp))
+		for row := 0; row < vec.Length(); row++ {
+			require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(row))
+			require.False(t, vec.GetIsBinaryStringAt(row))
+		}
+		return vec
+	}
+	assertText := func(t *testing.T, vec *Vector) {
+		t.Helper()
+		for row := 0; row < vec.Length(); row++ {
+			if !vec.IsNull(uint64(row)) {
+				require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(row))
+				require.False(t, vec.GetIsBinaryStringAt(row))
+			}
+		}
+	}
+
+	source := newText(t)
+	defer source.Free(mp)
+	dup, err := source.Dup(mp)
+	require.NoError(t, err)
+	assertText(t, dup)
+	dup.Free(mp)
+	window, err := source.Window(0, source.Length())
+	require.NoError(t, err)
+	assertText(t, window)
+	window.Free(mp)
+
+	nullable := newText(t)
+	nullable.SetNull(0)
+	assertText(t, nullable)
+	nullable.SetLength(1)
+	assertText(t, nullable)
+	nullable.Free(mp)
+
+	shrunk := newText(t)
+	shrunk.Shrink([]int64{1}, false)
+	assertText(t, shrunk)
+	shrunk.Free(mp)
+	shuffled := newText(t)
+	require.NoError(t, shuffled.Shuffle([]int64{1, 0}, mp))
+	assertText(t, shuffled)
+	shuffled.Free(mp)
+
+	sorted := newText(t)
+	sorted.InplaceSortAndCompact()
+	assertText(t, sorted)
+	sorted.Free(mp)
+
+	union := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, union.UnionBatch(source, 0, source.Length(), nil, mp))
+	assertText(t, union)
+	union.Free(mp)
+	copyVec := newText(t)
+	require.NoError(t, copyVec.Copy(source, 0, 1, mp))
+	assertText(t, copyVec)
+	copyVec.Free(mp)
+
+	geometry := NewVec(types.T_geometry.ToType())
+	require.NoError(t, AppendBytes(geometry, []byte("shape"), false, mp))
+	require.Equal(t, types.RuntimeStringInherit, geometry.GetRuntimeStringDomainAt(0))
+	require.False(t, geometry.GetIsBinaryStringAt(0))
+	geometry.Free(mp)
 }
 
 func TestRollbackAppendAfterBinaryRowsNormalizeToScalar(t *testing.T) {

@@ -62,6 +62,13 @@ func TestIrregularIndexAffectedByUpdate(t *testing.T) {
 	}
 }
 
+func TestSequentialUpdateProjectionLimit(t *testing.T) {
+	require.True(t, withinSequentialUpdateProjectionLimit(3, 3))
+	require.True(t, withinSequentialUpdateProjectionLimit(4096, 31))
+	require.False(t, withinSequentialUpdateProjectionLimit(4096, 32))
+	require.False(t, withinSequentialUpdateProjectionLimit(4096, 4096))
+}
+
 func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 	newTableDef := func(indexes ...*IndexDef) *TableDef {
 		return &TableDef{
@@ -81,12 +88,12 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		tableDef   *TableDef
-		updateCols map[string]tree.Expr
-		wantInline int
-		wantLegacy bool
-		wantReject bool
+		name            string
+		tableDef        *TableDef
+		updateCols      map[string]tree.Expr
+		wantInline      int
+		wantUnsupported bool
+		wantReject      bool
 	}{
 		{
 			name:       "synchronous ivfflat indexed part",
@@ -165,11 +172,19 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			updateCols: map[string]tree.Expr{"id": nil},
 			wantInline: 1,
 		},
+		{
+			name:            "unknown affected algorithm is rejected",
+			tableDef:        newTableDef(newIndex("unknown", "UNKNOWN", "", "body")),
+			updateCols:      map[string]tree.Expr{"body": nil},
+			wantUnsupported: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inline, legacy, err := classifyIrregularIndexesForUpdate(context.Background(), tt.tableDef, tt.updateCols)
+			inline, unsupported, err := classifyIrregularIndexesForUpdate(
+				context.Background(), tt.tableDef, tt.updateCols,
+			)
 			if tt.wantReject {
 				require.Error(t, err)
 				var routeErr *updatePlannerRouteError
@@ -179,10 +194,36 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, tt.wantLegacy, legacy)
+			require.Equal(t, tt.wantUnsupported, unsupported)
 			require.Len(t, inline, tt.wantInline)
 		})
 	}
+}
+
+func TestCoalesceRepeatedPhysicalTargetIndexes(t *testing.T) {
+	regular := &IndexDef{IndexName: "idx", IndexTableName: "idx_table"}
+	irregular := &IndexDef{IndexName: "ft", IndexTableName: "ft_table"}
+	dmlCtx := &DMLContext{
+		aliases: []string{"a", "b"},
+		tableDefs: []*TableDef{
+			{TblId: 100, Indexes: []*IndexDef{regular}},
+			{TblId: 100, Indexes: []*IndexDef{regular}},
+		},
+		updateCol2Expr: []map[string]tree.Expr{
+			{"x": nil},
+			{"y": nil},
+		},
+	}
+
+	regularNeedsUpdate := [][]bool{{false}, {true}}
+	coalesceRepeatedPhysicalTargetRegularIndexes(dmlCtx, regularNeedsUpdate)
+	require.Equal(t, []bool{true}, regularNeedsUpdate[0])
+	require.Equal(t, []bool{false}, regularNeedsUpdate[1])
+
+	irregularIndexes := [][]*IndexDef{{irregular}, {irregular}}
+	coalesceRepeatedPhysicalTargetIrregularIndexes(dmlCtx, irregularIndexes)
+	require.Equal(t, []*IndexDef{irregular}, irregularIndexes[0])
+	require.Empty(t, irregularIndexes[1])
 }
 
 func TestPrimaryKeyUpdatedDetectsSingleAndCompositeKeys(t *testing.T) {
