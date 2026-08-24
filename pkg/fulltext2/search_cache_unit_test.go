@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
@@ -153,6 +155,53 @@ func TestFulltext2SearchLoadRetainsInvalidationReasonAfterFailure(t *testing.T) 
 	require.Equal(t, LoadMissCDCFlush, events[1].MissReason)
 	require.True(t, events[0].LoadCancel)
 	require.True(t, events[1].LoadCancel)
+}
+
+func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
+	cleanupObserver := setLoadObserver(func(LoadEvent) {})
+	defer cleanupObserver()
+
+	pendingLoadReasons.Lock()
+	previousReasons := pendingLoadReasons.m
+	pendingLoadReasons.m = make(map[string]pendingLoadReason)
+	pendingLoadReasons.Unlock()
+	t.Cleanup(func() {
+		pendingLoadReasons.Lock()
+		pendingLoadReasons.m = previousReasons
+		pendingLoadReasons.Unlock()
+	})
+
+	previousCache := veccache.Cache
+	veccache.Cache = veccache.NewVectorIndexCache()
+	t.Cleanup(func() { veccache.Cache = previousCache })
+
+	cfg := testStorageCfg()
+	old := NewFulltext2Search(cfg)
+	old.idx = NewIndex(nil, nil)
+	old.loaded = true
+	oldEntry := &veccache.VectorIndexSearch{Algo: old}
+	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
+	veccache.Cache.IndexMap.Store(cfg.IndexTable, oldEntry)
+
+	// This is the production mutation order: record the reason before evicting the
+	// local entry, then let the next query install a replacement.
+	old.OnCacheInvalidated(string(LoadMissCDCFlush))
+	veccache.Cache.Remove(cfg.IndexTable)
+	replacement := NewFulltext2Search(cfg)
+	replacement.idx = NewIndex(nil, nil)
+	replacement.loaded = true
+	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
+	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
+	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
+
+	reason, observedAt := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Equal(t, LoadMissCDCFlush, reason)
+	require.NotZero(t, observedAt)
+	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), observedAt)
+	reason, observedAt = peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Empty(t, reason)
+	require.True(t, observedAt.IsZero())
+	veccache.Cache.Remove(cfg.IndexTable)
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the

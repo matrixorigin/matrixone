@@ -490,8 +490,8 @@ func (c *VectorIndexCache) Remove(key string) {
 	c.RemoveWithReason(key, "")
 }
 
-// RemoveWithReason is the internal reason-aware variant used by FULLTEXT2.
-// The empty reason preserves the historical behavior for all other algorithms.
+// RemoveWithReason is the internal reason-aware variant. The empty reason
+// preserves the historical behavior for all algorithms.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	value, loaded := c.IndexMap.LoadAndDelete(key)
 	if loaded {

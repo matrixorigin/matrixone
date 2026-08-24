@@ -56,3 +56,14 @@ func TestVectorIndexSearchDestroyWithReasonNotifiesOptionalHook(t *testing.T) {
 	s.Destroy()
 	require.Empty(t, mock.invalidated)
 }
+
+func TestVectorIndexCacheRemoveDoesNotNotifyOptionalHook(t *testing.T) {
+	mock := &observerMock{}
+	s := &VectorIndexSearch{Algo: mock}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	c := NewVectorIndexCache()
+	c.IndexMap.Store("key", s)
+
+	c.Remove("key")
+	require.Empty(t, mock.invalidated)
+}
