@@ -27,9 +27,31 @@ const (
 )
 
 type pendingLoadReason struct {
-	reason LoadMissReason
-	at     time.Time
+	reason     LoadMissReason
+	generation uint64
+	at         time.Time
 }
+
+// loadGeneration identifies one cache-load attempt and the invalidation epoch
+// it observed. The invalidation epoch is monotonic per index; the attempt is
+// unique per index so an older replacement load cannot publish over a newer
+// one even when both observe the same invalidation.
+type loadGeneration struct {
+	index        string
+	invalidation uint64
+	attempt      uint64
+}
+
+var loadGenerations = struct {
+	sync.Mutex
+	m map[string]struct {
+		invalidation uint64
+		attempt      uint64
+	}
+}{m: make(map[string]struct {
+	invalidation uint64
+	attempt      uint64
+})}
 
 // pendingLoadReasons bridges an invalidation event and the next cache miss. A
 // failed load leaves the cause available for its retry; a successful load
@@ -69,12 +91,21 @@ func loadReasonKey(db, index string) string {
 }
 
 func rememberLoadReason(index string, reason LoadMissReason) {
-	if !loadObservationEnabled() || index == "" || reason == "" {
+	pendingLoadReasons.Lock()
+	defer pendingLoadReasons.Unlock()
+	loadGenerations.Lock()
+	defer loadGenerations.Unlock()
+	state := loadGenerations.m[index]
+	state.invalidation++
+	loadGenerations.m[index] = state
+	rememberLoadReasonLocked(index, reason, state.invalidation)
+}
+
+func rememberLoadReasonLocked(index string, reason LoadMissReason, generation uint64) {
+	if !loadObservationEnabled() || index == "" || reason == "" || reason == LoadMissReason("process_shutdown") {
 		return
 	}
 	now := time.Now()
-	pendingLoadReasons.Lock()
-	defer pendingLoadReasons.Unlock()
 	for k, v := range pendingLoadReasons.m {
 		if now.Sub(v.at) >= loadReasonTTL {
 			delete(pendingLoadReasons.m, k)
@@ -92,36 +123,74 @@ func rememberLoadReason(index string, reason LoadMissReason) {
 			delete(pendingLoadReasons.m, oldestKey)
 		}
 	}
-	pendingLoadReasons.m[index] = pendingLoadReason{reason: reason, at: now}
+	pendingLoadReasons.m[index] = pendingLoadReason{reason: reason, generation: generation, at: now}
 }
 
-func peekLoadReason(index string) (LoadMissReason, time.Time) {
+func peekLoadReason(index string) (LoadMissReason, uint64) {
 	if !loadObservationEnabled() {
-		return "", time.Time{}
+		return "", 0
 	}
 	now := time.Now()
 	pendingLoadReasons.Lock()
 	defer pendingLoadReasons.Unlock()
 	v, ok := pendingLoadReasons.m[index]
 	if !ok {
-		return "", time.Time{}
+		return "", 0
 	}
 	if now.Sub(v.at) >= loadReasonTTL {
 		delete(pendingLoadReasons.m, index)
-		return "", time.Time{}
+		return "", 0
 	}
-	return v.reason, v.at
+	return v.reason, v.generation
 }
 
-func consumeLoadReason(index string, at time.Time) {
-	if index == "" || at.IsZero() {
+func consumeLoadReason(index string, generation uint64) {
+	if index == "" || generation == 0 {
 		return
 	}
 	pendingLoadReasons.Lock()
 	defer pendingLoadReasons.Unlock()
-	if v, ok := pendingLoadReasons.m[index]; ok && v.at == at {
+	if v, ok := pendingLoadReasons.m[index]; ok && v.generation == generation {
 		delete(pendingLoadReasons.m, index)
 	}
+}
+
+func consumeLoadReasonIfCurrent(index string, reasonGeneration uint64, current loadGeneration) bool {
+	if index == "" || reasonGeneration == 0 {
+		return false
+	}
+	pendingLoadReasons.Lock()
+	defer pendingLoadReasons.Unlock()
+	loadGenerations.Lock()
+	defer loadGenerations.Unlock()
+	state, ok := loadGenerations.m[current.index]
+	if !ok || state.invalidation != current.invalidation || state.attempt != current.attempt {
+		return false
+	}
+	if v, ok := pendingLoadReasons.m[index]; ok && v.generation == reasonGeneration {
+		delete(pendingLoadReasons.m, index)
+		return true
+	}
+	return false
+}
+
+func beginLoadGeneration(index string) loadGeneration {
+	loadGenerations.Lock()
+	defer loadGenerations.Unlock()
+	state := loadGenerations.m[index]
+	state.attempt++
+	loadGenerations.m[index] = state
+	return loadGeneration{index: index, invalidation: state.invalidation, attempt: state.attempt}
+}
+
+func loadGenerationCurrent(g loadGeneration) bool {
+	if g.index == "" || g.attempt == 0 {
+		return true
+	}
+	loadGenerations.Lock()
+	defer loadGenerations.Unlock()
+	state, ok := loadGenerations.m[g.index]
+	return ok && state.invalidation == g.invalidation && state.attempt == g.attempt
 }
 
 func clearReusableLoadGeneration(cfg TableConfig) {
@@ -135,9 +204,8 @@ func clearReusableLoadGeneration(cfg TableConfig) {
 // It runs from the generic cache's invalidation hook, so the existing cache
 // lifecycle remains the only integration surface for other index algorithms.
 func invalidateLoadGeneration(cfg TableConfig, reason LoadMissReason) {
-	if reason != LoadMissReason("process_shutdown") {
-		rememberLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), reason)
-	}
+	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
+	rememberLoadReason(index, reason)
 	switch reason {
 	case LoadMissMerge, LoadMissRebuild, LoadMissReason("process_shutdown"):
 		if reason == LoadMissReason("process_shutdown") {

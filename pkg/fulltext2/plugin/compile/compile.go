@@ -118,7 +118,7 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 			}
 		}
 		fulltext2.NewFulltext2Search(cfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
-		cache.Cache.RemoveWithReason(storeDef.IndexTableName, string(fulltext2.LoadMissRebuild))
+		cache.Cache.Remove(storeDef.IndexTableName)
 	}
 	// buildFromSource clears the prior tag=0 bases (idempotent) and rebuilds them.
 	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {
@@ -419,7 +419,7 @@ func (Hooks) HandleDropIndex(ctx compileplugin.CompileContext, indexDefs map[str
 	}
 	cfg := fulltext2.TableConfig{DbName: ctx.QryDatabase(), IndexTable: storeDef.IndexTableName}
 	fulltext2.NewFulltext2Search(cfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
-	cache.Cache.RemoveWithReason(storeDef.IndexTableName, string(fulltext2.LoadMissRebuild))
+	cache.Cache.Remove(storeDef.IndexTableName)
 	return nil
 }
 

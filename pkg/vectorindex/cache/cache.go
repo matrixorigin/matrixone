@@ -171,7 +171,7 @@ func (s *VectorIndexSearch) DestroyWithReason(reason string) {
 		s.Mutex.Unlock()
 		s.Cond.Broadcast()
 	}()
-	if aware, ok := s.Algo.(cacheInvalidationAware); ok {
+	if aware, ok := s.Algo.(cacheInvalidationAware); ok && reason != "" {
 		aware.OnCacheInvalidated(reason)
 	}
 	s.Algo.Destroy()

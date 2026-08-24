@@ -51,12 +51,12 @@ func TestVectorIndexSearchCompletesLoadObserverAfterWaiterSample(t *testing.T) {
 	s.Destroy()
 }
 
-func TestVectorIndexSearchNotifiesEmptyInvalidationReason(t *testing.T) {
+func TestVectorIndexSearchDoesNotNotifyEmptyInvalidationReason(t *testing.T) {
 	mock := &invalidationMock{}
 	s := &VectorIndexSearch{Algo: mock}
 	s.Cond = sync.NewCond(s.Mutex.RLocker())
 	s.Destroy()
-	require.Equal(t, []string{""}, mock.reasons)
+	require.Empty(t, mock.reasons)
 }
 
 func TestVectorIndexCacheLifecycleHookRunsForEmptyShutdown(t *testing.T) {

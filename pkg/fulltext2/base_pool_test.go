@@ -209,6 +209,31 @@ func TestImmutableBasePoolInvalidationDuringLoadDoesNotRepoolStaleLease(t *testi
 	require.Empty(t, p.entries)
 }
 
+func TestImmutableBasePoolCommittedReplacementSurvivesObsoleteRollback(t *testing.T) {
+	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
+	key := baseKey{index: "db.store", id: "base-0", checksum: "sum", filesize: 1}
+
+	first, err := p.acquireOwned(context.Background(), key, func() (*Segment, error) {
+		return NewSegment("base-0", 0), nil
+	}, 0, 11)
+	require.NoError(t, err)
+	first.Free()
+
+	// The replacement reuses the same immutable bytes and commits them before
+	// the obsolete loader reports its later failure. Commit transfers ownership
+	// away from the obsolete attempt, so its rollback must not retire this entry.
+	replacement, err := p.acquireOwned(context.Background(), key, func() (*Segment, error) {
+		return nil, errors.New("replacement unexpectedly became the loader")
+	}, 0, 22)
+	require.NoError(t, err)
+	replacement.Free()
+	p.commitOwned(key.index, map[baseKey]struct{}{key: {}}, 22)
+	p.rollback(11)
+
+	require.Contains(t, p.entries, key)
+	p.clearAll()
+}
+
 func TestLoadReasonRegistryIsDatabaseQualified(t *testing.T) {
 	cleanup := setLoadObserver(func(LoadEvent) {})
 	defer cleanup()
@@ -216,15 +241,15 @@ func TestLoadReasonRegistryIsDatabaseQualified(t *testing.T) {
 	key2 := loadReasonKey("db2", "store")
 	rememberLoadReason(key1, LoadMissCDCFlush)
 	rememberLoadReason(key2, LoadMissMerge)
-	reason, at := peekLoadReason(key1)
+	reason, generation := peekLoadReason(key1)
 	require.Equal(t, LoadMissCDCFlush, reason)
-	consumeLoadReason(key1, at)
-	reason, at = peekLoadReason(key2)
+	consumeLoadReason(key1, generation)
+	reason, generation = peekLoadReason(key2)
 	require.Equal(t, LoadMissMerge, reason)
-	consumeLoadReason(key2, at)
-	reason, at = peekLoadReason(key1)
+	consumeLoadReason(key2, generation)
+	reason, generation = peekLoadReason(key1)
 	require.Empty(t, reason)
-	require.True(t, at.IsZero())
+	require.Zero(t, generation)
 }
 
 func TestLoadReasonRegistryIsDisabledWithObserverOff(t *testing.T) {
@@ -232,7 +257,7 @@ func TestLoadReasonRegistryIsDisabledWithObserverOff(t *testing.T) {
 	defer cleanup()
 	key := loadReasonKey("db", "store")
 	rememberLoadReason(key, LoadMissCDCFlush)
-	reason, at := peekLoadReason(key)
+	reason, generation := peekLoadReason(key)
 	require.Empty(t, reason)
-	require.True(t, at.IsZero())
+	require.Zero(t, generation)
 }

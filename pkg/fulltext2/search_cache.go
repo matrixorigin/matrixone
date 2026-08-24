@@ -87,6 +87,8 @@ type Fulltext2Search struct {
 	pendingCancel  bool
 }
 
+var errLoadGenerationSuperseded = errors.New("fulltext2 load superseded by a newer generation")
+
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
 
 // NewFulltext2Search returns an unloaded search handle; the cache calls Load before
@@ -101,12 +103,14 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	ensureReusableLoadLifecycle()
+	index := loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)
+	generation := beginLoadGeneration(index)
 	reason := LoadMissProcessStart
-	var reasonAt time.Time
+	var reasonGeneration uint64
 	if loadObservationEnabled() {
-		if observed, at := peekLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)); observed != "" {
+		if observed, observedGeneration := peekLoadReason(index); observed != "" {
 			reason = observed
-			reasonAt = at
+			reasonGeneration = observedGeneration
 		}
 	}
 	trace := newLoadTrace(s.cfg.IndexTable, reason)
@@ -114,7 +118,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	defer func() {
 		if err != nil {
 			canceled = isLoadCancellationError(err)
-			clearReusableLoadGeneration(s.cfg)
+			loadedBasePool.rollback(generation.attempt)
 		}
 		// VectorIndexCache finishes the event after it samples the shared
 		// entry's waiter count, so waiters that arrived during this load are
@@ -153,15 +157,19 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if err == nil {
 		generationReady = true
 	}
-	bases, err := loadAllBases(sqlproc, s.cfg, trace)
+	bases, err := loadAllBases(sqlproc, s.cfg, trace, generation)
 	if err != nil {
 		return err
+	}
+	if !loadGenerationCurrent(generation) {
+		freeSegs(bases)
+		return errLoadGenerationSuperseded
 	}
 	var tails []*Segment
 	var deletes map[any]int64
 	var appliedTail int64
 	if generationReady {
-		tails, deletes, appliedTail, err = loadTailWithReuse(sqlproc, s.cfg, baseGeneration, observedTail, trace)
+		tails, deletes, appliedTail, err = loadTailWithReuseForGeneration(sqlproc, s.cfg, baseGeneration, observedTail, trace, generation)
 	} else {
 		tails, deletes, appliedTail, err = loadTailSegmentsAfter(sqlproc, s.cfg, -1, trace)
 	}
@@ -172,7 +180,9 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
-	consumeLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable), reasonAt)
+	if loadGenerationCurrent(generation) {
+		consumeLoadReasonIfCurrent(index, reasonGeneration, generation)
+	}
 	trace.setGeneration(baseGeneration, appliedTail)
 
 	// Capture the generation + durable handles for IsStale. Same txn as the load, so the

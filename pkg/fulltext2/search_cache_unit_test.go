@@ -18,7 +18,9 @@ import (
 	"context"
 	"math"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
@@ -64,7 +67,7 @@ func TestFulltext2SearchNewAndUnloaded(t *testing.T) {
 	require.ErrorContains(t, s.SearchFloat32(proc, nil, vectorindex.RuntimeConfig{}, nil, nil), "not supported")
 }
 
-func TestFulltext2SearchLoadFailureClearsReusableGeneration(t *testing.T) {
+func TestFulltext2SearchLoadFailurePreservesOtherGeneration(t *testing.T) {
 	loadedBasePool.clearAll()
 	loadedTailPool.clearAll()
 	t.Cleanup(func() {
@@ -95,8 +98,8 @@ func TestFulltext2SearchLoadFailureClearsReusableGeneration(t *testing.T) {
 	loadedTailPool.mu.Lock()
 	tailStates := len(loadedTailPool.states)
 	loadedTailPool.mu.Unlock()
-	require.Zero(t, baseEntries)
-	require.Zero(t, tailStates)
+	require.Equal(t, 1, baseEntries)
+	require.Equal(t, 1, tailStates)
 }
 
 func TestFulltext2SearchLoadConsumesInvalidationReasonAfterSuccess(t *testing.T) {
@@ -128,9 +131,9 @@ func TestFulltext2SearchLoadConsumesInvalidationReasonAfterSuccess(t *testing.T)
 	require.Len(t, events, 1)
 	require.Equal(t, LoadMissCDCFlush, events[0].MissReason)
 	require.True(t, events[0].LoadSuccess)
-	reason, at := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	reason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
 	require.Empty(t, reason)
-	require.True(t, at.IsZero())
+	require.Zero(t, generation)
 	s.Destroy()
 }
 
@@ -184,6 +187,71 @@ func TestFulltext2SearchLoadRetainsInvalidationReasonAfterFailure(t *testing.T) 
 	require.Equal(t, LoadMissCDCFlush, events[1].MissReason)
 	require.True(t, events[0].LoadCancel)
 	require.True(t, events[1].LoadCancel)
+}
+
+func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
+	cleanupObserver := setLoadObserver(func(LoadEvent) {})
+	defer cleanupObserver()
+
+	pendingLoadReasons.Lock()
+	previousReasons := pendingLoadReasons.m
+	pendingLoadReasons.m = make(map[string]pendingLoadReason)
+	pendingLoadReasons.Unlock()
+	t.Cleanup(func() {
+		pendingLoadReasons.Lock()
+		pendingLoadReasons.m = previousReasons
+		pendingLoadReasons.Unlock()
+	})
+
+	previousCache := veccache.Cache
+	veccache.Cache = veccache.NewVectorIndexCache()
+	t.Cleanup(func() { veccache.Cache = previousCache })
+
+	cfg := testStorageCfg()
+	old := NewFulltext2Search(cfg)
+	old.idx = NewIndex(nil, nil)
+	old.loaded = true
+	oldEntry := &veccache.VectorIndexSearch{Algo: old}
+	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
+	veccache.Cache.IndexMap.Store(cfg.IndexTable, oldEntry)
+
+	// Production mutation order: record the reason before evicting the local
+	// entry. Hold the old entry lock so Remove has deleted the old map entry but
+	// is blocked before destruction; a replacement can therefore start while
+	// the old eviction is still in flight.
+	oldEntry.Mutex.Lock()
+	old.OnCacheInvalidated(string(LoadMissCDCFlush))
+	removed := make(chan struct{})
+	go func() {
+		veccache.Cache.Remove(cfg.IndexTable)
+		close(removed)
+	}()
+	require.Eventually(t, func() bool {
+		_, loaded := veccache.Cache.IndexMap.Load(cfg.IndexTable)
+		return !loaded
+	}, time.Second, time.Millisecond)
+
+	replacement := NewFulltext2Search(cfg)
+	replacement.idx = NewIndex(nil, nil)
+	replacement.loaded = true
+	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
+	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
+	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
+
+	reason, generation := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Equal(t, LoadMissCDCFlush, reason)
+	require.NotZero(t, generation)
+	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), generation)
+	oldEntry.Mutex.Unlock()
+	select {
+	case <-removed:
+	case <-time.After(time.Second):
+		t.Fatal("old cache eviction did not finish")
+	}
+	reason, generation = peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Empty(t, reason)
+	require.Zero(t, generation)
+	veccache.Cache.Remove(cfg.IndexTable)
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the

@@ -47,6 +47,7 @@ type baseEntry struct {
 	err      error
 	loading  bool
 	retired  bool
+	owner    uint64
 	lastUsed time.Time
 }
 
@@ -235,6 +236,13 @@ func (p *immutableBasePool) evict(now time.Time) {
 }
 
 func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func() (*Segment, error), recency int64) (*Segment, error) {
+	return p.acquireOwned(ctx, key, load, recency, 0)
+}
+
+// acquireOwned is the load-path variant. A newly created pooled entry is
+// attributed to the load attempt that created it, allowing an obsolete failed
+// load to roll back only its own unpublished entries.
+func (p *immutableBasePool) acquireOwned(ctx context.Context, key baseKey, load func() (*Segment, error), recency int64, owner uint64) (*Segment, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -253,7 +261,7 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 				e.lastUsed = time.Now()
 				return nil, nil, e.lease.acquire(recency), true
 			}
-			e := &baseEntry{ready: make(chan struct{}), loading: true, lastUsed: time.Now()}
+			e := &baseEntry{ready: make(chan struct{}), loading: true, owner: owner, lastUsed: time.Now()}
 			p.entries[key] = e
 			return e, nil, nil, false
 		}()
@@ -359,9 +367,22 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 // generation. A retired lease remains alive for old readers but cannot be
 // acquired by a later generation.
 func (p *immutableBasePool) commit(index string, used map[baseKey]struct{}) {
+	p.commitOwned(index, used, 0)
+}
+
+func (p *immutableBasePool) commitOwned(index string, used map[baseKey]struct{}, owner uint64) {
+	p.commitOwnedIfCurrent(index, used, owner, nil)
+}
+
+func (p *immutableBasePool) commitOwnedIfCurrent(index string, used map[baseKey]struct{}, owner uint64, current func() bool) bool {
+	published := true
 	retire := func() []*segmentLease {
 		p.mu.Lock()
 		defer p.mu.Unlock()
+		if current != nil && !current() {
+			published = false
+			return nil
+		}
 		retire := make([]*segmentLease, 0, len(p.entries))
 		for key, entry := range p.entries {
 			if key.index != index {
@@ -372,6 +393,7 @@ func (p *immutableBasePool) commit(index string, used map[baseKey]struct{}) {
 				continue
 			}
 			if _, ok := used[key]; ok {
+				entry.owner = 0
 				entry.lastUsed = time.Now()
 				continue
 			}
@@ -380,6 +402,39 @@ func (p *immutableBasePool) commit(index string, used map[baseKey]struct{}) {
 			retire = append(retire, entry.lease)
 		}
 		return append(retire, p.evictLocked(time.Now())...)
+	}()
+	retireBaseLeases(retire)
+	return published
+}
+
+// rollback removes only entries created by owner. Entries committed by a newer
+// load transfer ownership to zero before an obsolete loader can reach here.
+func (p *immutableBasePool) rollback(owner uint64) {
+	if owner == 0 {
+		return
+	}
+	retire := func() []*segmentLease {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		retire := make([]*segmentLease, 0)
+		for key, entry := range p.entries {
+			if entry.owner != owner {
+				continue
+			}
+			if entry.loading {
+				entry.retired = true
+				continue
+			}
+			delete(p.entries, key)
+			p.totalBytes -= baseEntryBytes(key)
+			if p.totalBytes < 0 {
+				p.totalBytes = 0
+			}
+			if entry.lease != nil {
+				retire = append(retire, entry.lease)
+			}
+		}
+		return retire
 	}()
 	retireBaseLeases(retire)
 }

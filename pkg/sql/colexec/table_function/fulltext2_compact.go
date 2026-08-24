@@ -125,7 +125,7 @@ func (u *fulltext2CompactState) end(tf *TableFunction, proc *process.Process) er
 	// search index so the next query reloads the merged base instead of the stale one
 	// held until the TTL.
 	fulltext2.NewFulltext2Search(u.tblcfg).OnCacheInvalidated(string(fulltext2.LoadMissMerge))
-	veccache.Cache.RemoveWithReason(u.tblcfg.IndexTable, string(fulltext2.LoadMissMerge))
+	veccache.Cache.Remove(u.tblcfg.IndexTable)
 	return nil
 }
 

@@ -241,8 +241,17 @@ func (p *tailPool) current(index string, expected *tailState) bool {
 }
 
 func (p *tailPool) installDeltaAndAcquire(index string, expected, state *tailState) ([]*Segment, map[any]int64, bool) {
+	return p.installDeltaAndAcquireIfCurrent(index, expected, state, nil)
+}
+
+func (p *tailPool) installDeltaAndAcquireIfCurrent(index string, expected, state *tailState, current func() bool) ([]*Segment, map[any]int64, bool) {
 	p.mu.Lock()
 	retire := p.evictLocked(time.Now())
+	if current != nil && !current() {
+		p.mu.Unlock()
+		retireTailStates(retire)
+		return nil, nil, false
+	}
 	if p.states[index] != expected {
 		p.mu.Unlock()
 		retireTailStates(retire)
@@ -260,8 +269,18 @@ func (p *tailPool) installDeltaAndAcquire(index string, expected, state *tailSta
 }
 
 func (p *tailPool) installAndAcquire(index string, state *tailState) ([]*Segment, map[any]int64) {
+	segs, deletes, _ := p.installAndAcquireIfCurrent(index, state, nil)
+	return segs, deletes
+}
+
+func (p *tailPool) installAndAcquireIfCurrent(index string, state *tailState, current func() bool) ([]*Segment, map[any]int64, bool) {
 	p.mu.Lock()
 	retire := p.evictLocked(time.Now())
+	if current != nil && !current() {
+		p.mu.Unlock()
+		retireTailStates(retire)
+		return nil, nil, false
+	}
 	old := p.states[index]
 	if old != nil {
 		p.totalBytes -= old.bytes
@@ -274,17 +293,17 @@ func (p *tailPool) installAndAcquire(index string, state *tailState) ([]*Segment
 	p.mu.Unlock()
 	if old == nil || old == state {
 		retireTailStates(retire)
-		return segs, deletes
+		return segs, deletes, true
 	}
 	// Appending a delta transfers old segment leases into the new state. A full
 	// reset (MERGE/REBUILD or tail regression) has no shared leases to transfer.
 	if len(state.segments) > 0 && len(old.segments) > 0 && state.segments[0] == old.segments[0] {
 		retireTailStates(retire)
-		return segs, deletes
+		return segs, deletes, true
 	}
 	retire = append(retire, old)
 	retireTailStates(retire)
-	return segs, deletes
+	return segs, deletes, true
 }
 
 func (p *tailPool) clear(index string) {
@@ -349,7 +368,14 @@ func newTailState(baseGeneration, maxChunk int64, segs []*Segment, deletes map[a
 // advanced. A base generation change or tail regression forces a full tail
 // reload and retires the old tail leases after active readers release them.
 func loadTailWithReuse(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseGeneration, tailMax int64, trace *loadTrace) ([]*Segment, map[any]int64, int64, error) {
+	return loadTailWithReuseForGeneration(sqlproc, cfg, baseGeneration, tailMax, trace, loadGeneration{})
+}
+
+func loadTailWithReuseForGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseGeneration, tailMax int64, trace *loadTrace, generation loadGeneration) ([]*Segment, map[any]int64, int64, error) {
 	index := cfg.DbName + "." + cfg.IndexTable
+	current := func() bool {
+		return generation.attempt == 0 || loadGenerationCurrent(generation)
+	}
 	old := loadedTailPool.state(index)
 	if old != nil && old.baseGeneration == baseGeneration && tailMax == old.maxChunk {
 		segs, deletes, ok := loadedTailPool.acquireViews(index, old)
@@ -397,7 +423,7 @@ func loadTailWithReuse(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseGenerat
 		}
 	}
 	if after >= 0 && old != nil {
-		segs, deletes, ok := loadedTailPool.installDeltaAndAcquire(index, old, state)
+		segs, deletes, ok := loadedTailPool.installDeltaAndAcquireIfCurrent(index, old, state, current)
 		if ok {
 			return segs, deletes, appliedMax, nil
 		}
@@ -406,12 +432,19 @@ func loadTailWithReuse(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseGenerat
 		for _, lease := range state.segments[len(old.segments):] {
 			lease.retire()
 		}
+		if !current() {
+			return nil, nil, 0, errLoadGenerationSuperseded
+		}
 		newSegs, newDeletes, appliedMax, err = loadTailSegmentsAfter(sqlproc, cfg, -1, trace)
 		if err != nil {
 			return nil, nil, 0, err
 		}
 		state = newTailState(baseGeneration, appliedMax, newSegs, newDeletes)
 	}
-	segs, deletes := loadedTailPool.installAndAcquire(index, state)
+	segs, deletes, ok := loadedTailPool.installAndAcquireIfCurrent(index, state, current)
+	if !ok {
+		retireTailStates([]*tailState{state})
+		return nil, nil, 0, errLoadGenerationSuperseded
+	}
 	return segs, deletes, appliedMax, nil
 }

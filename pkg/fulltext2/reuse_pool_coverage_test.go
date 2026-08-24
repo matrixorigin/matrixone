@@ -111,9 +111,9 @@ func TestLoadReasonRegistryBoundariesAndInvalidation(t *testing.T) {
 	require.Equal(t, "store", loadReasonKey("", "store"))
 	rememberLoadReason("", LoadMissCDCFlush)
 	rememberLoadReason("store", "")
-	reason, at := peekLoadReason("store")
+	reason, generation := peekLoadReason("store")
 	require.Empty(t, reason)
-	require.True(t, at.IsZero())
+	require.Zero(t, generation)
 
 	pendingLoadReasons.Lock()
 	pendingLoadReasons.m["expired"] = pendingLoadReason{
@@ -122,12 +122,12 @@ func TestLoadReasonRegistryBoundariesAndInvalidation(t *testing.T) {
 	}
 	pendingLoadReasons.Unlock()
 	rememberLoadReason("fresh", LoadMissMerge)
-	reason, at = peekLoadReason("expired")
+	reason, generation = peekLoadReason("expired")
 	require.Empty(t, reason)
-	require.True(t, at.IsZero())
-	reason, at = peekLoadReason("fresh")
+	require.Zero(t, generation)
+	reason, generation = peekLoadReason("fresh")
 	require.Equal(t, LoadMissMerge, reason)
-	consumeLoadReason("fresh", at)
+	consumeLoadReason("fresh", generation)
 
 	for i := 0; i < loadReasonSize+1; i++ {
 		rememberLoadReason(fmt.Sprintf("db.%d", i), LoadMissCDCFlush)
@@ -138,9 +138,9 @@ func TestLoadReasonRegistryBoundariesAndInvalidation(t *testing.T) {
 
 	cfg := TableConfig{DbName: "db", IndexTable: "store"}
 	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
-	reason, at = peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	reason, generation = peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
 	require.Equal(t, LoadMissCDCFlush, reason)
-	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), at)
+	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), generation)
 	invalidateLoadGeneration(cfg, LoadMissTTLExpired)
 	invalidateLoadGeneration(cfg, LoadMissGenerationChange)
 	invalidateLoadGeneration(cfg, LoadMissMerge)
@@ -164,13 +164,13 @@ func TestLoadReasonRegistryDoesNotConsumeNewerInvalidation(t *testing.T) {
 
 	key := loadReasonKey("db", "store")
 	rememberLoadReason(key, LoadMissCDCFlush)
-	firstReason, firstAt := peekLoadReason(key)
+	firstReason, firstGeneration := peekLoadReason(key)
 	require.Equal(t, LoadMissCDCFlush, firstReason)
 	rememberLoadReason(key, LoadMissRebuild)
-	consumeLoadReason(key, firstAt)
-	secondReason, secondAt := peekLoadReason(key)
+	consumeLoadReason(key, firstGeneration)
+	secondReason, secondGeneration := peekLoadReason(key)
 	require.Equal(t, LoadMissRebuild, secondReason)
-	consumeLoadReason(key, secondAt)
+	consumeLoadReason(key, secondGeneration)
 }
 
 func TestReusableLoadLifecycleHookRunsHousekeepingAndShutdown(t *testing.T) {
