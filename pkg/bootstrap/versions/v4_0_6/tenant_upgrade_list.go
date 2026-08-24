@@ -15,6 +15,7 @@ package v4_0_6
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,6 +36,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaKeyColumnUsage(),
 	upgradeInformationSchemaReferentialConstraints(),
 	ensureInformationSchemaCharacterSetsTable(),
+	populateInformationSchemaCollations(),
 	populateInformationSchemaCharacterSets(),
 	upgradeInformationSchemaColumns(),
 	upgradeInformationSchemaCheckConstraints(),
@@ -44,6 +46,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addUserDefinedFunctionArgumentTypesColumn(),
 	backfillUserDefinedFunctionArgumentTypes(),
 	addUserDefinedFunctionSignatureIndex(),
+	upgradeInformationSchemaCollationCharacterSetApplicability(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -93,6 +96,67 @@ func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "character_sets")
 		},
+	}
+}
+
+func populateInformationSchemaCollations() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "COLLATIONS",
+		UpgType:   versions.MODIFY_METADATA,
+		UpgSql:    sysview.InformationSchemaCollationsData,
+		PreSql:    "DELETE FROM information_schema.COLLATIONS",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDataExist(txn, accountID, informationSchemaCollationsCheckSQL())
+		},
+	}
+}
+
+func informationSchemaCollationsCheckSQL() string {
+	if len(sysview.SupportedCollationDefinitions) == 0 {
+		return "SELECT 1 WHERE FALSE"
+	}
+
+	conditions := make([]string, 0, len(sysview.SupportedCollationDefinitions))
+	for _, collation := range sysview.SupportedCollationDefinitions {
+		conditions = append(conditions, fmt.Sprintf(
+			"COLLATION_NAME = '%s' AND CHARACTER_SET_NAME = '%s' AND ID = %d AND IS_DEFAULT = '%s' AND IS_COMPILED = '%s' AND SORTLEN = %d AND PAD_ATTRIBUTE = '%s'",
+			collation.Name,
+			collation.Charset,
+			collation.ID,
+			collation.IsDefault,
+			collation.IsCompiled,
+			collation.SortLen,
+			collation.PadAttribute,
+		))
+	}
+
+	checks := make([]string, 0, len(conditions))
+	checks = append(checks, conditions[0])
+	for _, condition := range conditions[1:] {
+		checks = append(checks, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM information_schema.COLLATIONS WHERE %s)", condition,
+		))
+	}
+	return fmt.Sprintf("SELECT 1 FROM information_schema.COLLATIONS WHERE (SELECT COUNT(*) FROM information_schema.COLLATIONS) = %d AND %s LIMIT 1", len(sysview.SupportedCollationDefinitions), strings.Join(checks, " AND "))
+}
+
+func upgradeInformationSchemaCollationCharacterSetApplicability() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "COLLATION_CHARACTER_SET_APPLICABILITY",
+		UpgType:   versions.CREATE_VIEW,
+		UpgSql:    sysview.InformationSchemaCollationCharacterSetApplicabilityDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID,
+				sysview.InformationDBConst, "COLLATION_CHARACTER_SET_APPLICABILITY")
+			if err != nil {
+				return false, err
+			}
+			return exists && viewDef == sysview.InformationSchemaCollationCharacterSetApplicabilityDDL, nil
+		},
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLLATION_CHARACTER_SET_APPLICABILITY;",
+			sysview.InformationDBConst),
 	}
 }
 
@@ -189,16 +253,24 @@ func populateInformationSchemaCharacterSets() versions.UpgradeEntry {
 			"WHERE lower(CHARACTER_SET_NAME) IN ('binary','utf8','utf8mb4')",
 		UpgSql: sysview.InformationSchemaCharacterSetsData,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			return versions.CheckTableDataExist(txn, accountID,
-				"SELECT 1 FROM information_schema.CHARACTER_SETS "+
-					"WHERE CHARACTER_SET_NAME = 'binary' AND DEFAULT_COLLATE_NAME = 'binary' AND MAXLEN = 1 "+
-					"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
-					"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = 'utf8_bin' AND MAXLEN = 4) "+
-					"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
-					"WHERE CHARACTER_SET_NAME = 'utf8mb4' AND DEFAULT_COLLATE_NAME = 'utf8mb4_bin' AND MAXLEN = 4) "+
-					"LIMIT 1")
+			return versions.CheckTableDataExist(txn, accountID, informationSchemaCharacterSetsCheckSQL())
 		},
 	}
+}
+
+func informationSchemaCharacterSetsCheckSQL() string {
+	return fmt.Sprintf(
+		"SELECT 1 FROM information_schema.CHARACTER_SETS "+
+			"WHERE CHARACTER_SET_NAME = 'binary' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 1 "+
+			"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+			"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 4) "+
+			"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+			"WHERE CHARACTER_SET_NAME = 'utf8mb4' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 4) "+
+			"LIMIT 1",
+		sysview.DefaultCollationForCharset("binary"),
+		sysview.DefaultCollationForCharset("utf8"),
+		sysview.DefaultCollationForCharset("utf8mb4"),
+	)
 }
 
 func newMongoDBCatalogTable(name, ddl string) versions.UpgradeEntry {

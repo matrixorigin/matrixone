@@ -320,7 +320,7 @@ select count(*),table_name, column_name  from information_schema.columns group b
 ➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select * from information_schema.schemata where schema_name='ac_db';
 ➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]  𝄀
-def  ¦  ac_db  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  null  ¦  NO
+def  ¦  ac_db  ¦  utf8mb4  ¦  utf8mb4_general_ci  ¦  null  ¦  NO
 select * from information_schema.schemata where schema_name='sys_db1';
 ➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]
 select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
@@ -334,7 +334,7 @@ select count(*),table_name from information_schema.tables group by table_name ha
 ➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select * from information_schema.views where table_name='ac_v1';
 ➤ TABLE_CATALOG[12,2,0]  ¦  TABLE_SCHEMA[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  ¦  VIEW_DEFINITION[12,0,0]  ¦  CHECK_OPTION[12,3,0]  ¦  IS_UPDATABLE[12,2,0]  ¦  DEFINER[12,49151,0]  ¦  SECURITY_TYPE[12,5,0]  ¦  CHARACTER_SET_CLIENT[12,5,0]  ¦  COLLATION_CONNECTION[12,13,0]  𝄀
-def  ¦  ac_db  ¦  ac_v1  ¦  create view `ac_db`.`ac_v1` as select `ac_t1`.`c1` as `c1` from `ac_db`.`ac_t1`  ¦  NONE  ¦  YES  ¦  admin@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci
+def  ¦  ac_db  ¦  ac_v1  ¦  create view `ac_db`.`ac_v1` as select `ac_t1`.`c1` as `c1` from `ac_db`.`ac_t1`  ¦  NONE  ¦  YES  ¦  admin@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from information_schema.views where table_name='sys_v1';
 ➤ TABLE_CATALOG[12,2,0]  ¦  TABLE_SCHEMA[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  ¦  VIEW_DEFINITION[12,0,0]  ¦  CHECK_OPTION[12,3,0]  ¦  IS_UPDATABLE[12,2,0]  ¦  DEFINER[12,49151,0]  ¦  SECURITY_TYPE[12,5,0]  ¦  CHARACTER_SET_CLIENT[12,5,0]  ¦  COLLATION_CONNECTION[12,13,0]
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
@@ -356,7 +356,7 @@ select * from information_schema.schemata where schema_name='ac_db';
 ➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]
 select * from information_schema.schemata where schema_name='sys_db1';
 ➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]  𝄀
-def  ¦  sys_db1  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  null  ¦  NO
+def  ¦  sys_db1  ¦  utf8mb4  ¦  utf8mb4_general_ci  ¦  null  ¦  NO
 select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
 ➤ count(*)[-5,64,0]  ¦  schema_name[12,-1,0]
 select table_schema,table_name from information_schema.tables where table_name='sys_t1';
@@ -368,7 +368,7 @@ select count(*),table_name from information_schema.tables group by table_name ha
 ➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select * from information_schema.views where table_name='sys_v1';
 ➤ TABLE_CATALOG[12,2,0]  ¦  TABLE_SCHEMA[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  ¦  VIEW_DEFINITION[12,0,0]  ¦  CHECK_OPTION[12,3,0]  ¦  IS_UPDATABLE[12,2,0]  ¦  DEFINER[12,49151,0]  ¦  SECURITY_TYPE[12,5,0]  ¦  CHARACTER_SET_CLIENT[12,5,0]  ¦  COLLATION_CONNECTION[12,13,0]  𝄀
-def  ¦  sys_db1  ¦  sys_v1  ¦  create view `sys_db1`.`sys_v1` as select `sys_t1`.`c1` as `c1` from `sys_db1`.`sys_t1`  ¦  NONE  ¦  YES  ¦  dump@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci
+def  ¦  sys_db1  ¦  sys_v1  ¦  create view `sys_db1`.`sys_v1` as select `sys_t1`.`c1` as `c1` from `sys_db1`.`sys_t1`  ¦  NONE  ¦  YES  ¦  dump@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from information_schema.views where table_name='ac_v1';
 ➤ TABLE_CATALOG[12,2,0]  ¦  TABLE_SCHEMA[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  ¦  VIEW_DEFINITION[12,0,0]  ¦  CHECK_OPTION[12,3,0]  ¦  IS_UPDATABLE[12,2,0]  ¦  DEFINER[12,49151,0]  ¦  SECURITY_TYPE[12,5,0]  ¦  CHARACTER_SET_CLIENT[12,5,0]  ¦  COLLATION_CONNECTION[12,13,0]
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
@@ -435,7 +435,7 @@ select count(*),table_name, column_name  from information_schema.columns group b
 ➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select * from information_schema.schemata where schema_name='acuser_db';
 ➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]  𝄀
-def  ¦  acuser_db  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  null  ¦  NO
+def  ¦  acuser_db  ¦  utf8mb4  ¦  utf8mb4_general_ci  ¦  null  ¦  NO
 select * from information_schema.schemata where schema_name='user_db1';
 ➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]
 select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
@@ -472,7 +472,7 @@ select * from information_schema.schemata where schema_name='acuser_db';
 ➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]
 select * from information_schema.schemata where schema_name='user_db';
 ➤ catalog_name[12,-1,0]  ¦  schema_name[12,-1,0]  ¦  default_character_set_name[12,-1,0]  ¦  default_collation_name[12,-1,0]  ¦  sql_path[1,0,0]  ¦  default_encryption[12,-1,0]  𝄀
-def  ¦  user_db  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  null  ¦  NO
+def  ¦  user_db  ¦  utf8mb4  ¦  utf8mb4_general_ci  ¦  null  ¦  NO
 select count(*),schema_name from information_schema.schemata group by schema_name having count(*)>1;
 ➤ count(*)[-5,64,0]  ¦  schema_name[12,-1,0]
 select table_schema,table_name from information_schema.tables where table_name='user_t1';
