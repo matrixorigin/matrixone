@@ -401,7 +401,7 @@ nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦  2  ¦  null  ¦  null  𝄀
 coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
 greatest_date  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
 select * from v_flow_metadata_safe;
-➤ if_str_num[12,2,0]  ¦  if_unsigned_signed[3,21,0]  ¦  case_date_dt[93,64,0]  ¦  case_binary_char[12,8,0]  ¦  ifnull_decimal[3,2,1]  ¦  nullif_mixed[12,2,0]  ¦  coalesce_str_num[12,2,0]  ¦  greatest_date[91,64,0]  𝄀
+➤ if_str_num[12,2,0]  ¦  if_unsigned_signed[3,21,0]  ¦  case_date_dt[93,64,0]  ¦  case_binary_char[-3,8,0]  ¦  ifnull_decimal[3,2,1]  ¦  nullif_mixed[12,2,0]  ¦  coalesce_str_num[12,2,0]  ¦  greatest_date[91,64,0]  𝄀
 2  ¦  1  ¦  2024-01-01 00:00:00  ¦  a  ¦  9.5  ¦  null  ¦  8  ¦  2024-01-02
 drop view v_flow_metadata_safe;
 drop view if exists v_case_temporal_else;
