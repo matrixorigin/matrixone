@@ -343,6 +343,12 @@ const (
 	ErrTooManyParameter                    uint16 = 20824
 	ErrCteMemoryQuotaExceeded              uint16 = 20825
 	ErrTooManyWindows                      uint16 = 20826
+	ErrWindowNoSuchWindow                  uint16 = 20827
+	ErrWindowCircularityInWindowGraph      uint16 = 20828
+	ErrWindowNoChildPartitioning           uint16 = 20829
+	ErrWindowNoInheritFrame                uint16 = 20830
+	ErrWindowNoRedefineOrderBy             uint16 = 20831
+	ErrWindowDuplicateName                 uint16 = 20832
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -644,6 +650,12 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
 	ErrCteMemoryQuotaExceeded:              {ErrCteMemoryQuotaExceeded, []string{MySQLDefaultSqlState}, "recursive CTE memory quota exceeded on this CN: projected %d bytes, query limit %d bytes; increase @@cte_max_memory_bytes or rewrite the query to converge"},
 	ErrTooManyWindows:                      {ER_TOO_MANY_WINDOWS, []string{MySQLDefaultSqlState}, "Too many windows in SELECT: %d. Maximum allowed is %d. Use named windows to share windows between window functions."},
+	ErrWindowNoSuchWindow:                  {ER_WINDOW_NO_SUCH_WINDOW, []string{MySQLDefaultSqlState}, "Window name '%s' is not defined."},
+	ErrWindowCircularityInWindowGraph:      {ER_WINDOW_CIRCULARITY_IN_WINDOW_GRAPH, []string{MySQLDefaultSqlState}, "There is a circularity in the window dependency graph."},
+	ErrWindowNoChildPartitioning:           {ER_WINDOW_NO_CHILD_PARTITIONING, []string{MySQLDefaultSqlState}, "A window which depends on another cannot define partitioning."},
+	ErrWindowNoInheritFrame:                {ER_WINDOW_NO_INHERIT_FRAME, []string{MySQLDefaultSqlState}, "Window '%s' has a frame definition, so cannot be referenced by another window."},
+	ErrWindowNoRedefineOrderBy:             {ER_WINDOW_NO_REDEFINE_ORDER_BY, []string{MySQLDefaultSqlState}, "Window '%s' cannot inherit '%s' since both contain an ORDER BY clause."},
+	ErrWindowDuplicateName:                 {ER_WINDOW_DUPLICATE_NAME, []string{MySQLDefaultSqlState}, "Window '%s' is defined twice."},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -1943,6 +1955,30 @@ func NewErrTooManyParameter(ctx context.Context) *Error {
 
 func NewErrTooManyWindows(ctx context.Context, count, maximum int) *Error {
 	return newError(ctx, ErrTooManyWindows, count, maximum)
+}
+
+func NewWindowNoSuchWindow(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrWindowNoSuchWindow, name)
+}
+
+func NewWindowCircularityInWindowGraph(ctx context.Context) *Error {
+	return newError(ctx, ErrWindowCircularityInWindowGraph)
+}
+
+func NewWindowNoChildPartitioning(ctx context.Context) *Error {
+	return newError(ctx, ErrWindowNoChildPartitioning)
+}
+
+func NewWindowNoInheritFrame(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrWindowNoInheritFrame, name)
+}
+
+func NewWindowNoRedefineOrderBy(ctx context.Context, name, orderBy string) *Error {
+	return newError(ctx, ErrWindowNoRedefineOrderBy, name, orderBy)
+}
+
+func NewWindowDuplicateName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrWindowDuplicateName, name)
 }
 
 func NewErrFKRowIsReferenced(ctx context.Context) *Error {

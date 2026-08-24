@@ -816,39 +816,46 @@ func TestSnapshotWindowValidationCTEState(t *testing.T) {
 
 func TestBuildPlanRejectsInvalidNamedWindows(t *testing.T) {
 	tests := []struct {
-		name    string
-		sql     string
-		wantErr string
+		name      string
+		sql       string
+		wantErr   string
+		mysqlCode uint16
 	}{
 		{
-			name:    "unknown",
-			sql:     "select sum(n_nationkey) over missing from nation",
-			wantErr: "Window name 'missing' is not defined",
+			name:      "unknown",
+			sql:       "select sum(n_nationkey) over missing from nation",
+			wantErr:   "Window name 'missing' is not defined",
+			mysqlCode: moerr.ER_WINDOW_NO_SUCH_WINDOW,
 		},
 		{
-			name:    "duplicate",
-			sql:     "select 1 from nation window w as (), w as ()",
-			wantErr: "Window 'w' is defined twice",
+			name:      "duplicate",
+			sql:       "select 1 from nation window w as (), w as ()",
+			wantErr:   "Window 'w' is defined twice",
+			mysqlCode: moerr.ER_WINDOW_DUPLICATE_NAME,
 		},
 		{
-			name:    "cycle",
-			sql:     "select 1 from nation window w1 as (w2), w2 as (w1)",
-			wantErr: "Window circularity",
+			name:      "cycle",
+			sql:       "select 1 from nation window w1 as (w2), w2 as (w1)",
+			wantErr:   "circularity",
+			mysqlCode: moerr.ER_WINDOW_CIRCULARITY_IN_WINDOW_GRAPH,
 		},
 		{
-			name:    "inherited partition",
-			sql:     "select 1 from nation window w1 as (), w2 as (w1 partition by n_regionkey)",
-			wantErr: "cannot define partitioning",
+			name:      "inherited partition",
+			sql:       "select 1 from nation window w1 as (), w2 as (w1 partition by n_regionkey)",
+			wantErr:   "cannot define partitioning",
+			mysqlCode: moerr.ER_WINDOW_NO_CHILD_PARTITIONING,
 		},
 		{
-			name:    "inherited order",
-			sql:     "select 1 from nation window w1 as (order by n_regionkey), w2 as (w1 order by n_nationkey)",
-			wantErr: "already has an ORDER BY clause",
+			name:      "inherited order",
+			sql:       "select 1 from nation window w1 as (order by n_regionkey), w2 as (w1 order by n_nationkey)",
+			wantErr:   "cannot inherit",
+			mysqlCode: moerr.ER_WINDOW_NO_REDEFINE_ORDER_BY,
 		},
 		{
-			name:    "inherited frame",
-			sql:     "select 1 from nation window w1 as (rows unbounded preceding), w2 as (w1)",
-			wantErr: "has a frame definition",
+			name:      "inherited frame",
+			sql:       "select 1 from nation window w1 as (rows unbounded preceding), w2 as (w1)",
+			wantErr:   "has a frame definition",
+			mysqlCode: moerr.ER_WINDOW_NO_INHERIT_FRAME,
 		},
 		{
 			name:    "unused unknown column",
@@ -871,7 +878,34 @@ func TestBuildPlanRejectsInvalidNamedWindows(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := buildNamedWindowPlan(t, test.sql)
 			require.ErrorContains(t, err, test.wantErr)
+			if test.mysqlCode != 0 {
+				moErr := err.(*moerr.Error)
+				require.Equal(t, test.mysqlCode, moErr.MySQLCode())
+				require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+			}
 		})
+	}
+}
+
+func TestResolveNamedWindowDefinitionsReportsFirstDefinitionError(t *testing.T) {
+	ctx := context.Background()
+	definitions := tree.WindowDefinitions{
+		{
+			Name: tree.NewCStr("first", 1),
+			Spec: &tree.WindowSpec{RefName: tree.NewCStr("MissingFirst", 1)},
+		},
+		{
+			Name: tree.NewCStr("second", 1),
+			Spec: &tree.WindowSpec{RefName: tree.NewCStr("missing_second", 1)},
+		},
+	}
+
+	for range 1000 {
+		_, err := resolveNamedWindowDefinitions(ctx, definitions)
+		require.ErrorContains(t, err, "Window name 'MissingFirst' is not defined")
+		moErr := err.(*moerr.Error)
+		require.Equal(t, moerr.ER_WINDOW_NO_SUCH_WINDOW, moErr.MySQLCode())
+		require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
 	}
 }
 

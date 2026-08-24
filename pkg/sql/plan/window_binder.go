@@ -321,15 +321,13 @@ func cloneWindowSpec(spec *tree.WindowSpec) *tree.WindowSpec {
 
 func inheritWindowSpec(ctx context.Context, base, local *tree.WindowSpec, baseName string) (*tree.WindowSpec, error) {
 	if len(local.PartitionBy) > 0 {
-		return nil, moerr.NewSyntaxError(ctx, "A window which depends on another cannot define partitioning")
+		return nil, moerr.NewWindowNoChildPartitioning(ctx)
 	}
 	if base.HasFrame {
-		return nil, moerr.NewSyntaxErrorf(ctx,
-			"Window '%s' has a frame definition, so cannot be referenced by another window", baseName)
+		return nil, moerr.NewWindowNoInheritFrame(ctx, baseName)
 	}
 	if len(base.OrderBy) > 0 && len(local.OrderBy) > 0 {
-		return nil, moerr.NewSyntaxErrorf(ctx,
-			"Window '%s' cannot inherit ORDER BY because its base window already has an ORDER BY clause", baseName)
+		return nil, moerr.NewWindowNoRedefineOrderBy(ctx, baseName, "ORDER BY")
 	}
 
 	merged := cloneWindowSpec(base)
@@ -360,24 +358,24 @@ func resolveNamedWindowDefinitions(ctx context.Context, definitions tree.WindowD
 		}
 		name := definition.Name.Compare()
 		if _, exists := raw[name]; exists {
-			return nil, moerr.NewSyntaxErrorf(ctx, "Window '%s' is defined twice", definition.Name.Origin())
+			return nil, moerr.NewWindowDuplicateName(ctx, definition.Name.Origin())
 		}
 		raw[name] = definition
 	}
 
 	resolved := make(map[string]*tree.WindowSpec, len(raw))
 	state := make(map[string]uint8, len(raw))
-	var resolve func(string) (*tree.WindowSpec, error)
-	resolve = func(name string) (*tree.WindowSpec, error) {
+	var resolve func(string, string) (*tree.WindowSpec, error)
+	resolve = func(name, origin string) (*tree.WindowSpec, error) {
 		if spec, ok := resolved[name]; ok {
 			return spec, nil
 		}
 		definition, ok := raw[name]
 		if !ok {
-			return nil, moerr.NewSyntaxErrorf(ctx, "Window name '%s' is not defined", name)
+			return nil, moerr.NewWindowNoSuchWindow(ctx, origin)
 		}
 		if state[name] == 1 {
-			return nil, moerr.NewSyntaxErrorf(ctx, "Window circularity in window '%s'", definition.Name.Origin())
+			return nil, moerr.NewWindowCircularityInWindowGraph(ctx)
 		}
 		state[name] = 1
 		local := cloneWindowSpec(definition.Spec)
@@ -387,7 +385,7 @@ func resolveNamedWindowDefinitions(ctx context.Context, definitions tree.WindowD
 			spec.ReferencedOnly = false
 		} else {
 			baseName := local.RefName.Compare()
-			base, err := resolve(baseName)
+			base, err := resolve(baseName, local.RefName.Origin())
 			if err != nil {
 				return nil, err
 			}
@@ -401,8 +399,8 @@ func resolveNamedWindowDefinitions(ctx context.Context, definitions tree.WindowD
 		return spec, nil
 	}
 
-	for name := range raw {
-		if _, err := resolve(name); err != nil {
+	for _, definition := range definitions {
+		if _, err := resolve(definition.Name.Compare(), definition.Name.Origin()); err != nil {
 			return nil, err
 		}
 	}
@@ -421,7 +419,7 @@ func resolveWindowSpecReference(
 	baseName := local.RefName.Compare()
 	base, ok := namedWindows[baseName]
 	if !ok {
-		return nil, moerr.NewSyntaxErrorf(ctx, "Window name '%s' is not defined", local.RefName.Origin())
+		return nil, moerr.NewWindowNoSuchWindow(ctx, local.RefName.Origin())
 	}
 	if local.ReferencedOnly {
 		resolved := cloneWindowSpec(base)
@@ -890,7 +888,7 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "Window function '%s' requires an OVER clause", funcName)
 	}
 	if ws.RefName != nil {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "Window name '%s' is not defined", ws.RefName.Origin())
+		return nil, moerr.NewWindowNoSuchWindow(b.GetContext(), ws.RefName.Origin())
 	}
 	ensureDefaultWindowFrame(ws)
 	resolvedAstExpr := *astExpr
