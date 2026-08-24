@@ -1144,7 +1144,8 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 		executors, err = NewExpressionExecutors(
 			proc, evalArgs, hashBuild.ctr.hashmapBuilder.mapAllocationAccount)
 		if err != nil {
-			return nil, nil, 0, false, err
+			return nil, nil, 0, false,
+				runtimefilter.MarkOptionalAllocationError(err)
 		}
 		defer func() {
 			for _, executor := range executors {
@@ -1159,7 +1160,8 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 		for i, executor := range executors {
 			components[i], err = executor.Eval(proc, []*batch.Batch{keyBatch}, nil)
 			if err != nil {
-				return nil, nil, 0, false, err
+				return nil, nil, 0, false,
+					runtimefilter.MarkOptionalAllocationError(err)
 			}
 			componentSlots[i] = i
 		}

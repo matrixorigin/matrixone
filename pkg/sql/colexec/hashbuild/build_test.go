@@ -1638,17 +1638,20 @@ func makeSerializedRuntimeFilterSpec(
 	}
 }
 
-func TestHashBuildSerializedRuntimeFilterAllocationFailureFallsBackToPass(t *testing.T) {
+func TestHashBuildSerializedRuntimeFilterCastAllocationFailureFallsBackToPass(t *testing.T) {
 	mp, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	proc.SetMessageBoard(message.NewMessageBoard())
 
-	componentType := types.T_int32.ToType()
+	sourceType := types.T_int64.ToType()
+	probeType := types.T_int32.ToType()
 	spec := makeSerializedRuntimeFilterSpec(
-		t, proc, 106, 100, []types.Type{componentType}, false)
+		t, proc, 106, 100, []types.Type{probeType}, false)
+	spec.BuildExpr.GetF().Args[0] = makeSerializedRuntimeFilterCastExpr(
+		t, proc, 0, sourceType, probeType)
 	arg := &HashBuild{
-		Conditions:        []*plan.Expr{newExpr(0, componentType)},
+		Conditions:        []*plan.Expr{newExpr(0, sourceType)},
 		RuntimeFilterSpec: spec,
 	}
 	arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
@@ -1658,7 +1661,7 @@ func TestHashBuildSerializedRuntimeFilterAllocationFailureFallsBackToPass(t *tes
 	installTestExecutionResourceBudget(t, arg, generation)
 	arg.ctr.hashmapBuilder.InputBatchRowCount = 1
 	arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
-		testutil.MakeInt32Vector([]int32{1}, nil, mp),
+		testutil.MakeInt64Vector([]int64{1}, nil, mp),
 	}
 
 	service := proc.GetService()
