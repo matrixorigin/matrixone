@@ -5204,7 +5204,7 @@ func (v *Vector) UnionBatchPreflighted(
 	v.preflightRowCount = 0
 	return v.unionBatchPreflightedWithStringSources(
 		w, offset, cnt, flags, nil, mp,
-		selectedAreaBytes, preflightRowCount)
+		selectedAreaBytes, preflightRowCount, true)
 }
 
 // UnionBatchPreflightedWithStringSources publishes selected rows with an
@@ -5217,6 +5217,34 @@ func (v *Vector) UnionBatchPreflightedWithStringSources(
 	flags []uint8,
 	stringSources []types.StringSource,
 	mp *mpool.MPool,
+) error {
+	return v.unionBatchPreflightedWithStringSourcesOverride(
+		w, offset, cnt, flags, stringSources, mp, true)
+}
+
+// UnionBatchPreflightedWithStringSourcesDeferredNormalization keeps the
+// preflighted source sidecar alive after publication. The caller must invoke
+// FinalizeStringSourcePreflight after all correlated row updates are complete.
+func (v *Vector) UnionBatchPreflightedWithStringSourcesDeferredNormalization(
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	stringSources []types.StringSource,
+	mp *mpool.MPool,
+) error {
+	return v.unionBatchPreflightedWithStringSourcesOverride(
+		w, offset, cnt, flags, stringSources, mp, false)
+}
+
+func (v *Vector) unionBatchPreflightedWithStringSourcesOverride(
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	stringSources []types.StringSource,
+	mp *mpool.MPool,
+	finalize bool,
 ) error {
 	if len(flags) != cnt || len(stringSources) != cnt {
 		return mpool.ErrAllocationAccountInvalid
@@ -5237,7 +5265,7 @@ func (v *Vector) UnionBatchPreflightedWithStringSources(
 	v.preflightRowCount = 0
 	return v.unionBatchPreflightedWithStringSources(
 		w, offset, cnt, flags, stringSources, mp,
-		selectedAreaBytes, preflightRowCount)
+		selectedAreaBytes, preflightRowCount, finalize)
 }
 
 func (v *Vector) unionBatchPreflightedWithStringSources(
@@ -5249,13 +5277,25 @@ func (v *Vector) unionBatchPreflightedWithStringSources(
 	mp *mpool.MPool,
 	selectedAreaBytes int,
 	preflightRowCount int,
+	finalize bool,
 ) error {
 	err := v.unionBatch(
 		w, offset, cnt, flags, stringSources, mp,
 		selectedAreaBytes, preflightRowCount, true)
+	if finalize {
+		v.FinalizeStringSourcePreflight()
+	}
+	return err
+}
+
+// FinalizeStringSourcePreflight ends a deferred source publication. Capacity
+// normalization cannot allocate or fail.
+func (v *Vector) FinalizeStringSourcePreflight() {
+	if v == nil {
+		return
+	}
 	v.preflightStringSourceReady = false
 	v.normalizeStringSources()
-	return err
 }
 
 // Dup use to copy an identical vector

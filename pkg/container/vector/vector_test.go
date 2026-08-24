@@ -6016,6 +6016,30 @@ func TestSelectedBatchPreflightProtocol(t *testing.T) {
 	}, destination.GetStringSources())
 	require.False(t, source.HasStringSourceMetadata())
 
+	// Keep a temporarily uniform sidecar until a correlated existing-row update
+	// completes, then normalize only the final mixed state.
+	destination.ResetWithSameType()
+	require.NoError(t, AppendBytes(destination, []byte("old"), false, mp))
+	require.NoError(t, destination.SetStringSource(types.StringSourceLiteral))
+	oneFlag := []uint8{1}
+	require.NoError(t, destination.PreExtendSelectedBatchValidated(
+		source, 0, 1, oneFlag, 2, mp))
+	require.NoError(t, destination.PreflightSetStringSourceAtLength(
+		0, 2, types.StringSourceExpression, mp))
+	require.NoError(t, destination.UnionBatchPreflightedWithStringSourcesDeferredNormalization(
+		source, 0, 1, oneFlag, []types.StringSource{types.StringSourceLiteral}, mp))
+	require.Equal(t, []types.StringSource{
+		types.StringSourceLiteral, types.StringSourceLiteral,
+	}, destination.GetStringSources())
+	admitted = mp.CurrNB()
+	require.NoError(t, destination.SetStringSourceAtWithMP(
+		0, types.StringSourceExpression, mp))
+	require.Equal(t, admitted, mp.CurrNB())
+	destination.FinalizeStringSourcePreflight()
+	require.Equal(t, []types.StringSource{
+		types.StringSourceExpression, types.StringSourceLiteral,
+	}, destination.GetStringSources())
+
 	constant, err := NewConstBytes(
 		types.T_varchar.ToType(), []byte(strings.Repeat("constant", 8)),
 		len(flags)+4, mp)

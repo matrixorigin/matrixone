@@ -1078,6 +1078,77 @@ func TestGroupSamePreviewDuplicateSourcePreflightsBeforeHashCommit(t *testing.T)
 	}
 }
 
+func TestGroupExistingAndNewSourcesStayPreflightedThroughPublication(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	makeInput := func(values []string, sources []types.StringSource) *batch.Batch {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		for _, value := range values {
+			require.NoError(t, vector.AppendBytes(
+				input.Vecs[0], []byte(value), false, proc.Mp()))
+		}
+		require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(sources, proc.Mp()))
+		input.SetRowCount(len(values))
+		return input
+	}
+	first := makeInput([]string{"a"}, []types.StringSource{types.StringSourceLiteral})
+	second := makeInput(
+		[]string{"a", "b"},
+		[]types.StringSource{types.StringSourceExpression, types.StringSourceLiteral})
+
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
+	generation, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
+	require.NoError(t, err)
+	controller := &rejectNextGroupAllocationController{}
+	account, err := registry.OpenWithController(64<<20, controller)
+	require.NoError(t, err)
+	require.NoError(t, g.ctr.setAllocationAccount(account))
+	allocation := groupTestAllocation{
+		generation: generation, registry: registry, account: account,
+	}
+	require.NoError(t, g.Prepare(proc))
+	require.NoError(t, g.ctr.buildHashTable(proc.Ctx, 0))
+
+	commit := func(input *batch.Batch) error {
+		require.NoError(t, g.ctr.hr.TxnItr.PreviewInsert(
+			0, input.RowCount(), g.ctr.hashKeyVectors(input.Vecs),
+			g.ctr.hr.Hash.GroupCount(), &g.ctr.hr.insertPlan))
+		preview := groupInsertPreview{
+			values: g.ctr.hr.insertPlan.Values(), inserted: g.ctr.hr.insertPlan.Inserted(),
+			newGroups: int(g.ctr.hr.insertPlan.NewGroups()),
+		}
+		require.NoError(t, g.ctr.hr.Hash.PreAlloc(g.ctr.hr.insertPlan.NewGroups()))
+		require.NoError(t, g.ctr.preflightBuildChunk(
+			input.Vecs, 0, input.RowCount(), preview.inserted, preview.newGroups))
+		_, _, err := g.ctr.commitGroupByChunk(
+			input.Vecs, 0, input.RowCount(), preview)
+		return err
+	}
+	require.NoError(t, commit(first))
+	require.Equal(t, uint64(1), g.ctr.hr.Hash.GroupCount())
+	controller.rejectWhen = func() bool {
+		return g.ctr.hr.Hash.GroupCount() == 2
+	}
+	require.NoError(t, commit(second))
+	_, rejected := controller.snapshot()
+	require.False(t, rejected,
+		"existing and new source publication must not allocate after hash commit")
+	require.Equal(t, uint64(2), g.ctr.hr.Hash.GroupCount())
+	require.Equal(t, []types.StringSource{
+		types.StringSourceExpression, types.StringSourceLiteral,
+	}, g.ctr.groupByBatches[0].Vecs[0].GetStringSources())
+
+	controller.rejectWhen = nil
+	g.Free(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+	finalizeGroupTestAllocation(t, g, allocation)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+}
+
 func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

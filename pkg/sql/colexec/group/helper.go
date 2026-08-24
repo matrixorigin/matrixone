@@ -166,6 +166,26 @@ type groupInsertPreview struct {
 	newGroups int
 }
 
+type groupKeySourcePublication struct {
+	overrides    [][]types.StringSource
+	destinations []*vector.Vector
+}
+
+func (publication *groupKeySourcePublication) addDestination(destination *vector.Vector) {
+	for _, existing := range publication.destinations {
+		if existing == destination {
+			return
+		}
+	}
+	publication.destinations = append(publication.destinations, destination)
+}
+
+func (publication *groupKeySourcePublication) finalize() {
+	for _, destination := range publication.destinations {
+		destination.FinalizeStringSourcePreflight()
+	}
+}
+
 func (ctr *container) commitGroupByChunk(
 	vectors []*vector.Vector,
 	offset, rows int,
@@ -180,12 +200,12 @@ func (ctr *container) commitGroupByChunk(
 			}
 		}
 	}
-	var sourceOverrides [][]types.StringSource
+	var sourcePublication groupKeySourcePublication
 	if hasStringSourceMetadata {
-		var err error
-		sourceOverrides, err = ctr.preflightPreviewGroupKeyStringSources(
-			vectors, offset, preview.values, preview.inserted)
-		if err != nil {
+		defer sourcePublication.finalize()
+		if err := ctr.preflightPreviewGroupKeyStringSources(
+			vectors, offset, preview.values, preview.inserted,
+			&sourcePublication); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -195,7 +215,7 @@ func (ctr *container) commitGroupByChunk(
 	}
 
 	more, err := ctr.appendGroupByBatchWithStringSources(
-		vectors, offset, preview.inserted, sourceOverrides, 0)
+		vectors, offset, preview.inserted, sourcePublication.overrides, 0)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -281,24 +301,26 @@ func (ctr *container) preflightPreviewGroupKeyStringSources(
 	offset int,
 	groups []uint64,
 	inserted []uint8,
-) ([][]types.StringSource, error) {
-	if len(groups) > hashmap.UnitLimit || len(inserted) != len(groups) {
-		return nil, mpool.ErrAllocationAccountInvalid
+	publication *groupKeySourcePublication,
+) error {
+	if len(groups) > hashmap.UnitLimit || len(inserted) != len(groups) || publication == nil {
+		return mpool.ErrAllocationAccountInvalid
 	}
 	if err := ctr.forEachPreviewGroupKeyStringSource(
 		vectors, offset, groups,
 		func(destination *vector.Vector, row int, source types.StringSource) error {
+			publication.addDestination(destination)
 			return destination.PreflightSetStringSourceAtLength(
 				row, max(destination.Length(), row+1), source, ctr.mp)
 		},
 	); err != nil {
-		return nil, err
+		return err
 	}
 	// Keep preview results in operator-owned, UnitLimit-bounded scratch. The
 	// selected append consumes these overrides without modifying borrowed input.
-	overrides := make([][]types.StringSource, len(vectors))
-	for column := range overrides {
-		overrides[column] = make([]types.StringSource, len(groups))
+	publication.overrides = make([][]types.StringSource, len(vectors))
+	for column := range publication.overrides {
+		publication.overrides[column] = make([]types.StringSource, len(groups))
 	}
 	for row, flag := range inserted {
 		if flag == 0 {
@@ -315,13 +337,13 @@ func (ctr *container) preflightPreviewGroupKeyStringSources(
 				merged, err = types.MergeStringSources(
 					merged, sourceVector.GetStringSourceAt(offset+candidate))
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
-			overrides[column][row] = merged
+			publication.overrides[column][row] = merged
 		}
 	}
-	return overrides, nil
+	return nil
 }
 
 func (ctr *container) applyPreviewGroupKeyStringSources(

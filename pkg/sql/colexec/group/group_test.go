@@ -211,6 +211,41 @@ func TestGroupKeyMergesDuplicateStringSourcesDeterministically(t *testing.T) {
 	}
 }
 
+func TestGroupExistingAndNewStringSourcesPublishAtomically(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	makeInput := func(values []string, sources []types.StringSource) *batch.Batch {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		for _, value := range values {
+			require.NoError(t, vector.AppendBytes(
+				input.Vecs[0], []byte(value), false, proc.Mp()))
+		}
+		require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(sources, proc.Mp()))
+		input.SetRowCount(len(values))
+		return input
+	}
+	first := makeInput([]string{"a"}, []types.StringSource{types.StringSourceLiteral})
+	second := makeInput(
+		[]string{"a", "b"},
+		[]types.StringSource{types.StringSourceExpression, types.StringSourceLiteral})
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 2, outputs[0].RowCount())
+	require.Equal(t, []types.StringSource{
+		types.StringSourceExpression, types.StringSourceLiteral,
+	}, outputs[0].Vecs[0].GetStringSources())
+
+	g.Reset(proc, false, nil)
+	g.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	require.Zero(t, proc.Mp().CurrNB())
+	proc.Free()
+}
+
 func TestGroupKeySourceMergeDoesNotMutateSharedAggregateArgument(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	input := batch.NewWithSize(1)

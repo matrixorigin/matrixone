@@ -917,7 +917,7 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 			stringSourceOffset+len(thisTime) > len(stringSources[i]) {
 			return 0, mpool.ErrAllocationAccountInvariant
 		} else {
-			err = vec.UnionBatchPreflightedWithStringSources(
+			err = vec.UnionBatchPreflightedWithStringSourcesDeferredNormalization(
 				vs[i], int64(offset), len(thisTime), thisTime,
 				stringSources[i][stringSourceOffset:stringSourceOffset+len(thisTime)], ctr.mp)
 		}
