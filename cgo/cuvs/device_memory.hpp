@@ -72,11 +72,26 @@ namespace matrixone {
 // ---------------------------------------------------------------------------
 class device_memory_governor {
 public:
-    // Fraction of currently-free VRAM a governed allocation may consume. Same
-    // 60% rows_fitting_gpu_mem applies, kept here as the single definition used
-    // by the admission path.
-    static constexpr size_t kBudgetNumerator   = 6;
-    static constexpr size_t kBudgetDenominator = 10;
+    // Fraction of currently-free VRAM a governed allocation may consume. The
+    // single definition: rows_fitting_gpu_mem (helper.cpp) reads these same
+    // constants, so capacity sizing and admission cannot disagree.
+    //
+    // 75%, raised from 60%. 60% refused work the card could hold: a 1M-row CAGRA
+    // index at dim 768 / igd 256 needs ~70% of free, so it rotated into two
+    // sub-indexes on a device with room for it whole, and both build and query
+    // were slower for it. At 75% it builds as one index.
+    //
+    // The remaining 25% covers concurrent queries and kernel scratch, and also
+    // absorbs the cuVS build workspace the per-index cost models do not fold in
+    // (see the KNOWN GAP note on ivf_pq_cost in index_cost.hpp). That second job
+    // is why this should not be raised further without folding the workspace into
+    // the cost models first.
+    static constexpr size_t kBudgetNumerator   = 3;
+    static constexpr size_t kBudgetDenominator = 4;
+
+    // Budget as a percentage, for messages -- derived so the text cannot drift
+    // from the constants the way a hardcoded "60%" did.
+    static constexpr size_t kBudgetPercent = kBudgetNumerator * 100 / kBudgetDenominator;
 
     // RAII claim. Move-only; releasing twice is a no-op, so an explicit
     // release() alongside scope exit is safe.
@@ -209,7 +224,8 @@ public:
                 throw std::runtime_error(
                     std::string(who) + ": needs " + std::to_string(need_bytes) +
                     " bytes of VRAM on device " + std::to_string(device_id) + " but only " +
-                    std::to_string(left) + " are available (60% of " + std::to_string(free_bytes) +
+                    std::to_string(left) + " are available (" + std::to_string(kBudgetPercent) +
+                    "% of " + std::to_string(free_bytes) +
                     " free, " + std::to_string(inflight) + " already reserved by concurrent " +
                     "builds/loads); evict cached indexes, drop and rebuild at a smaller " +
                     "max_index_capacity, or use a larger GPU / more GPUs");

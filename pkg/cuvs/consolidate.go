@@ -32,6 +32,73 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
+// hostResidentComponents are the packed components that live in HOST memory when
+// an index loads, not on the device: host_ids, the INCLUDE-column filter store,
+// the scalar-quantizer min/max, the deleted bitset, and the manifest itself.
+// Everything else -- index.bin, shard_N.bin -- is deserialized onto the GPU.
+//
+// Anything NOT listed here counts as device-resident. That default is deliberate:
+// a component added later and not classified will over-state device demand, which
+// over-refuses, rather than under-state it and let a build through that cannot be
+// loaded.
+var hostResidentComponents = map[string]bool{
+	"ids.bin":         true,
+	"filter_data.bin": true,
+	"quantizer.bin":   true,
+	"bitset.bin":      true,
+	"manifest.json":   true,
+}
+
+// IsHostResidentComponent reports whether a packed component stays in host
+// memory rather than being deserialized onto the GPU. Unknown names are treated
+// as device-resident; see hostResidentComponents.
+func IsHostResidentComponent(name string) bool { return hostResidentComponents[name] }
+
+// PackSizes reports what a save_dir wrote, split by where each component becomes
+// resident when the index is loaded again. Callers admitting VRAM want Device;
+// callers sizing a download or a temp file want Total.
+type PackSizes struct {
+	Total  int64            // every component -- the tar payload
+	Device int64            // index.bin / shard_N.bin, deserialized onto the GPU
+	Host   int64            // ids, INCLUDE blobs, quantizer, bitset, manifest
+	Files  map[string]int64 // per component, for diagnostics
+}
+
+// MeasureComponents stats a saved index directory and classifies every file.
+//
+// The tar total is the wrong number for a VRAM question: it also carries
+// host_ids and the INCLUDE blobs, which never reach the GPU. At 1M rows that is
+// ~8 MB each -- around 8% of an IVF-PQ tar and 11% of a narrow-vector one -- all
+// of it over-stating device demand.
+//
+// Measured from the component directory rather than by re-reading the tar,
+// because Pack already stats these files; see each index's Pack method.
+func MeasureComponents(dirPath string) (PackSizes, error) {
+	out := PackSizes{Files: make(map[string]int64)}
+	files, err := os.ReadDir(dirPath)
+	if err != nil {
+		return out, err
+	}
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		fi, err := os.Stat(filepath.Join(dirPath, f.Name()))
+		if err != nil {
+			return out, err
+		}
+		sz := fi.Size()
+		out.Files[f.Name()] = sz
+		out.Total += sz
+		if hostResidentComponents[f.Name()] {
+			out.Host += sz
+		} else {
+			out.Device += sz
+		}
+	}
+	return out, nil
+}
+
 // Pack archives all files in dirPath into a single .tar or .tar.gz file.
 // save_dir already writes manifest.json to dirPath, so it is included automatically.
 // If outputPath ends with .gz, gzip compression is used.
@@ -283,19 +350,19 @@ func PeekTarManifestNShards(tarPath string) (uint32, error) {
 //   - shardCount < len(devices): trims to devices[:shardCount] so we do not
 //     spawn worker threads / RMM pools on devices that will not host a shard.
 //   - shardCount > len(devices):
-//       * single-GPU host (len(devices) == 1): pads with copies of devices[0]
-//         so all shards land on the one physical GPU. This is the
-//         gpu_multi_simulation case: an index built under sim=N on a
-//         single-GPU host is queried on the same single-GPU host — the
-//         loader auto-detects and pads, so the operator does not need to
-//         also SET gpu_multi_simulation at search time.
-//       * multi-GPU host (len(devices) >= 2): ERROR. If the operator has
-//         multiple real GPUs and the saved index expects more shards than
-//         they exposed, that is a genuine deployment misconfig — silently
-//         piling shards onto some GPUs would just tank throughput. The
-//         error names the counts so the operator can pick a remedy (add
-//         GPUs, or query with gpu_multi_simulation=N so SimulateDevices
-//         produces a list of the right size).
+//   - single-GPU host (len(devices) == 1): pads with copies of devices[0]
+//     so all shards land on the one physical GPU. This is the
+//     gpu_multi_simulation case: an index built under sim=N on a
+//     single-GPU host is queried on the same single-GPU host — the
+//     loader auto-detects and pads, so the operator does not need to
+//     also SET gpu_multi_simulation at search time.
+//   - multi-GPU host (len(devices) >= 2): ERROR. If the operator has
+//     multiple real GPUs and the saved index expects more shards than
+//     they exposed, that is a genuine deployment misconfig — silently
+//     piling shards onto some GPUs would just tank throughput. The
+//     error names the counts so the operator can pick a remedy (add
+//     GPUs, or query with gpu_multi_simulation=N so SimulateDevices
+//     produces a list of the right size).
 func ResolveDevicesForTarLoad(devices []int, tarPath string) ([]int, uint32, error) {
 	shardCount, err := PeekTarManifestNShards(tarPath)
 	if err != nil {

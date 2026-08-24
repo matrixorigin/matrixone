@@ -564,14 +564,18 @@ func (gi *GpuIvfPq[B, Q]) Save(filename string) error {
 // spillDir hosts the intermediate save_dir tree; pass the LocalSpillDir the
 // caller is already using for the final .tar so this scratch does NOT land in
 // $TMPDIR (/tmp) where a wiki_all-scale build would ENOSPC.
-func (gi *GpuIvfPq[B, Q]) Pack(filename, spillDir string) error {
+// Pack writes the index components and archives them, returning the size of every
+// component split by where it becomes resident (see PackSizes). The build-side
+// aggregate admission needs Device rather than the tar total, which also counts
+// host-only components.
+func (gi *GpuIvfPq[B, Q]) Pack(filename, spillDir string) (PackSizes, error) {
 	if gi.cIvfPq == nil {
-		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+		return PackSizes{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
 
 	tmpDir, err := os.MkdirTemp(spillDir, "ivf-pq-pack-*")
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
+		return PackSizes{}, moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -583,10 +587,19 @@ func (gi *GpuIvfPq[B, Q]) Pack(filename, spillDir string) error {
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
-		return moerr.NewInternalErrorNoCtx(errStr)
+		return PackSizes{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
-	return Pack(tmpDir, filename)
+	// Measure BEFORE archiving: Pack removes nothing, but taking the figure from
+	// the component directory keeps it independent of tar framing overhead.
+	sizes, err := MeasureComponents(tmpDir)
+	if err != nil {
+		return PackSizes{}, err
+	}
+	if err := Pack(tmpDir, filename); err != nil {
+		return PackSizes{}, err
+	}
+	return sizes, nil
 }
 
 // Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.

@@ -142,7 +142,7 @@ func TestGpuCagraPackUnpack(t *testing.T) {
 
 	for _, filename := range []string{"test_cagra_pack.tar", "test_cagra_pack.tar.gz"} {
 		t.Run(filename, func(t *testing.T) {
-			if err := index.Pack(filename, ""); err != nil {
+			if _, err := index.Pack(filename, ""); err != nil {
 				t.Fatalf("Pack failed: %v", err)
 			}
 			defer os.Remove(filename)
@@ -207,7 +207,7 @@ func TestGpuCagraFromDataDirectory(t *testing.T) {
 
 	// Pack to tar, then extract to a directory, then load via NewGpuCagraFromDataDirectory
 	tarFile := "test_cagra_dir.tar"
-	if err := index.Pack(tarFile, ""); err != nil {
+	if _, err := index.Pack(tarFile, ""); err != nil {
 		t.Fatalf("Pack failed: %v", err)
 	}
 	defer os.Remove(tarFile)

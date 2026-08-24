@@ -285,7 +285,18 @@ public:
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
 
-        this->host_ids.reserve(this->count);
+        // resize()+clear(), not reserve(): reserve() obtains the allocation but leaves
+        // every page unfaulted, and MemoryAvailableIncludingCache reads cgroup usage
+        // (or MemAvailable), both of which only move when a page is touched. The host
+        // claim covering these bytes is settled as soon as this constructor returns,
+        // so with a bare reserve() it settles against memory the kernel has not
+        // charged -- a second build can pass the same admission, and both fault their
+        // promised pages later during ingest. resize() value-initialises (a memset for
+        // a trivial IdT) which faults them now; clear() then returns size() to 0 while
+        // KEEPING the capacity, so the append path and the host_ids.empty() id-less
+        // test below are both unchanged.
+        this->host_ids.resize(this->count);
+        this->host_ids.clear();
         if (ids) {
             this->set_ids(ids, this->count);
         }
@@ -315,7 +326,18 @@ public:
             this->dimension, sizeof(T), bp.intermediate_graph_degree);
 
         this->flattened_host_dataset.resize(this->count * this->dimension);
-        this->host_ids.reserve(this->count);
+        // resize()+clear(), not reserve(): reserve() obtains the allocation but leaves
+        // every page unfaulted, and MemoryAvailableIncludingCache reads cgroup usage
+        // (or MemAvailable), both of which only move when a page is touched. The host
+        // claim covering these bytes is settled as soon as this constructor returns,
+        // so with a bare reserve() it settles against memory the kernel has not
+        // charged -- a second build can pass the same admission, and both fault their
+        // promised pages later during ingest. resize() value-initialises (a memset for
+        // a trivial IdT) which faults them now; clear() then returns size() to 0 while
+        // KEEPING the capacity, so the append path and the host_ids.empty() id-less
+        // test below are both unchanged.
+        this->host_ids.resize(this->count);
+        this->host_ids.clear();
         if (ids) {
             this->set_ids(ids, this->count);
         }

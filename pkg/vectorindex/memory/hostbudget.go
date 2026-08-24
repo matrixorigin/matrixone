@@ -62,6 +62,17 @@ import (
 // alone overcommits the host budget.
 const HostIDBytesPerRow = 8
 
+// HostIDMapBytesPerRow is the id_to_index_ cost -- 24 map node + 8 allocator
+// header + 8 bucket slot -- charged ONLY where that map is actually allocated.
+//
+// A build never allocates it: ensure_id_index builds the map on demand and no
+// build path reads it (index_base.hpp), which is why HostIDBytesPerRow above is
+// 8 and not 48. A LOAD can: LoadIndex replays CDC deletes right after Unpack,
+// and the first delete_id materialises the whole map. At 88M rows that is ~3.5 GB
+// appearing on a path that used to charge nothing for it, where an allocation
+// failure leaves the index unloadable rather than merely refused.
+const HostIDMapBytesPerRow = 40
+
 // hostBudgetNumerator/Denominator take 75% of what is actually available. The
 // budget is now derived from an accurate baseline — cgroup limit (regardless of
 // PID) or MemAvailable (cache-aware) — and the per-row cost model includes every

@@ -219,6 +219,15 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
 // because a Go-side claim can span the whole decided-but-not-yet-allocated
 // window, which a claim taken inside the C++ build cannot.
 //
+// gpu_device_total_mem reports a device's TOTAL VRAM in bytes -- hardware
+// capacity, NOT free memory. Free is a moving target; total is a property of the
+// card, so an index whose resident footprint exceeds it can never be searched
+// there however much is evicted.
+// out_total: the device's total VRAM. out_max_admissible: the most any admission
+// could ever grant there (the budget fraction of total) -- a demand above it can
+// never load however empty the card is. Either out-param may be NULL.
+int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_admissible, void* errmsg);
+
 // gpu_device_memory_reserve returns an opaque token, or NULL with errmsg set
 // when the device cannot accommodate the request. The caller MUST pass the
 // token to gpu_device_memory_release exactly once; releasing NULL is a no-op.

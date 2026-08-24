@@ -79,6 +79,10 @@ type ivfpqBuilder interface {
 	// against the per-CN ledger before InitEmpty spends it.
 	SetHostBytesPerRow(perRow uint64)
 	ToInsertSql(ts int64) ([]string, error)
+	// PerDeviceBytes is what ONE device must hold to serve this index, valid after
+	// ToInsertSql. end() checks it against the hardware so CREATE cannot succeed
+	// for an index no query could ever load.
+	PerDeviceBytes() int64
 	Destroy() error
 }
 
@@ -89,6 +93,10 @@ type ivfpqCreateState struct {
 	tblcfg  vectorindex.IndexTableConfig
 	idxcfg  vectorindex.IndexConfig
 	offset  int
+
+	// devices resolved at build setup; kept so end() can admit the finished
+	// aggregate against the same device set the search will use.
+	devices []int
 
 	// baseOid is the base (source) vector column element type — f32 or f16.
 	// The storage/quantization type (which builder is non-nil) may differ:
@@ -138,6 +146,29 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// side; the CDC tail (if any) below still emits.
 	if err != nil {
 		return err
+	}
+
+	// The sub-indexes are packed now, so their real GPU-resident footprint is
+	// known exactly -- index.bin / shard_N.bin, excluding the host-only members
+	// the tar also carries (ids.bin, INCLUDE blobs).
+	//
+	// Compared against the device's TOTAL VRAM, not its free memory or a modelled
+	// per-row cost. Total is the only basis on which a refusal is permanent: a
+	// free-memory check refuses situationally (evict something and it loads), and
+	// a modelled check over-refuses because rows_fitting's per-row cost includes
+	// CAGRA's transient kNN graph -- a rotated 1M index rejected on that basis went
+	// on to search at recall 0.9945. Exceeding the card itself admits no such
+	// escape: every query reads all sub-indexes at once, and distribution_mode is
+	// persisted, so no future device set redistributes it.
+	//
+	// Placed after ToInsertSql (which packs and stamps the sizes) and before the
+	// statements are executed, so a refusal persists nothing.
+	if perDev := u.builder.PerDeviceBytes(); perDev > 0 {
+		if aerr := vimemory.DeviceAggregateFitsHardware(
+			u.devices, uint64(perDev), cuvs.DeviceMaxAdmissible,
+		); aerr != nil {
+			return aerr
+		}
 	}
 
 	// Emit any buffered CDC tail records as tag=1 INSERTs under
@@ -397,6 +428,7 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// test-only: present N logical GPUs (all on device 0) so SHARDED / REPLICATED
 		// modes can be built on a single-GPU host. No-op when gpu_multi_simulation < 2.
 		devices = vectorindex.SimulateDevices(devices, u.tblcfg.GpuMultiSimulation)
+		u.devices = devices
 
 		// ---- capacity, bounded by what the GPU can actually hold ----
 		// Every build is bounded, not just the default one: an explicit
@@ -506,9 +538,6 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			logutil.Infof("IVFPQ create: capacity=%d (requested=%d, vram_bound=%v, host_bound=%v) -> %d sub-index(es) for %d rows; cdc_cutoff=%d",
 				plan.Capacity, requestedCapacity, plan.VRAMBound, plan.HostBound, plan.NumSubIdx, srcRowCount, plan.CdcCutoff)
 		}
-		// Rotation just bounded each build; say now if their SUM cannot be searched
-		// here, rather than leaving it for memory.DeviceLoadFits at the first query.
-		warnAggregateNotResident("IVFPQ", plan, rowsFit, perRow)
 
 		// Resolve the training sample against the capacity just chosen, and record the
 		// EFFECTIVE fraction rather than the requested one. Without this the clamp is

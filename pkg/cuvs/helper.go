@@ -279,6 +279,55 @@ func GetGpuDeviceList() ([]int, error) {
 	return devices, nil
 }
 
+// DeviceTotalMem reports a device's TOTAL VRAM in bytes -- the hardware capacity,
+// not what is currently free.
+//
+// Admission normally works off free memory, but "can this index EVER be searched
+// on this GPU" is a different question with a stable answer: if its resident
+// footprint exceeds the card itself, no amount of eviction helps. That makes
+// total the right basis for refusing a build outright, where using free would
+// refuse builds that merely collided with whatever else was resident at the time.
+// DeviceMaxAdmissible reports the most VRAM any admission could EVER grant on a
+// device: the governor's budget fraction of TOTAL memory.
+//
+// The load gate admits against that fraction of FREE memory, and free is at most
+// total, so an index needing more than this can never be loaded however empty the
+// card becomes. That makes it the exact threshold for refusing a build outright --
+// tighter than total (which would let through indexes that always fail at query
+// time) and not situational like a free-memory check.
+//
+// Derived in C++ from the same constants the admission path uses, so the two
+// cannot drift.
+func DeviceMaxAdmissible(deviceID int) (uint64, error) {
+	var errmsg *C.char
+	var maxAdm C.uint64_t
+	rc := C.gpu_device_total_mem(C.int(deviceID), nil, &maxAdm, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if rc != 0 {
+		return 0, moerr.NewInternalErrorNoCtxf("cuvs: cannot read admissible VRAM of device %d", deviceID)
+	}
+	return uint64(maxAdm), nil
+}
+
+func DeviceTotalMem(deviceID int) (uint64, error) {
+	var errmsg *C.char
+	var total C.uint64_t
+	rc := C.gpu_device_total_mem(C.int(deviceID), &total, nil, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if rc != 0 {
+		return 0, moerr.NewInternalErrorNoCtxf("cuvs: cannot read total VRAM of device %d", deviceID)
+	}
+	return uint64(total), nil
+}
+
 // RowsFittingFreeMem reports how many rows of perRowBytes fit in ~60% of the free VRAM on
 // deviceID, together with the free-byte reading used. It shares one implementation with the
 // quantizer's staging bound (matrixone::rows_fitting_gpu_mem in cgo/cuvs/helper.h), so a

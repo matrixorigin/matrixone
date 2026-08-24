@@ -292,6 +292,27 @@ func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 }
 
 // Destroy frees all GPU memory and removes any temporary files.
+// PerDeviceBytes is how many GPU-resident bytes the BUSIEST single device must
+// hold to serve this index.
+//
+// Delegated to memory.PeakDeviceBytes because the reduction depends on the device
+// list, not just the sizes: with distinct cards each holds one shard per
+// sub-index, but under gpu_multi_simulation every rank aliases onto the same
+// physical card and it holds all of them. Reducing to a max here would under-state
+// the simulated case by the shard count.
+//
+// Excludes the host-only members of each tar (ids.bin, INCLUDE blobs), which never
+// reach the GPU. Valid only after ToInsertSql, which packs and stamps the sizes.
+func (b *CagraBuild[B, Q]) PerDeviceBytes() int64 {
+	comps := make([]map[string]int64, 0, len(b.indexes))
+	for _, idx := range b.indexes {
+		if len(idx.DeviceComponentBytes) > 0 {
+			comps = append(comps, idx.DeviceComponentBytes)
+		}
+	}
+	return memory.PeakDeviceBytes(b.devices, comps)
+}
+
 func (b *CagraBuild[B, Q]) Destroy() error {
 	var errs error
 	if b.current != nil {

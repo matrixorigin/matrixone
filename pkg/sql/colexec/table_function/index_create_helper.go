@@ -175,21 +175,6 @@ func planCapacity(
 	return plan, nil
 }
 
-// aggregateNotResident reports whether the sub-indexes this plan will produce cannot
-// all be resident at once on the devices that measured rowsFit -- i.e. whether
-// memory.DeviceLoadFits will refuse this index at its first query.
-//
-// plan.CdcCutoff, not srcRowCount, is the indexed row count: rows past the cutoff go to
-// the brute-force CDC tail and are never resident as sub-index data.
-//
-// rowsFit is already the AGGREGATE the participating devices admit (rows_fitting() in
-// C++ scales it by distribution mode), so this is a total-vs-total comparison. rowsFit
-// <= 0 means the device could not be measured; planCapacity has already decided what to
-// do about that, and there is nothing honest to compare here.
-func aggregateNotResident(plan capacityPlan, rowsFit int64) bool {
-	return rowsFit > 0 && plan.CdcCutoff > rowsFit
-}
-
 // kmeansPointsPerCentroid is the conventional floor for k-means to have enough
 // evidence per cluster. cuVS does not enforce it — validate_build_params only
 // checks rows >= n_lists — so a build can train 16 points per centroid, succeed,

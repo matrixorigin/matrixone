@@ -237,7 +237,8 @@ int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const 
     int64_t max_rows = rows_fitting_gpu_mem(per_row_bytes, who, &free_bytes);
     if (requested_rows > max_rows) {
         std::cerr << "[" << who << "] capped " << requested_rows << " -> " << max_rows
-                  << " rows to fit 60% of " << (free_bytes >> 20)
+                  << " rows to fit " << device_memory_governor::kBudgetPercent
+                  << "% of " << (free_bytes >> 20)
                   << " MB free GPU mem (per_row=" << per_row_bytes << "B)" << std::endl;
         return max_rows;
     }
@@ -344,6 +345,55 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
     }
 }
 
+
+// gpu_device_total_mem reports the device's TOTAL VRAM, not its free bytes.
+//
+// Free memory is a moving target; total is a property of the card. An index whose
+// resident footprint exceeds it can never be searched on this GPU no matter what
+// else is evicted, which makes it the honest basis for refusing a build outright
+// rather than deferring the failure to a query.
+int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_admissible, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        int prev_device = device_id;
+        cudaGetDevice(&prev_device);
+        const bool rebind = (prev_device != device_id);
+        if (rebind) {
+            const cudaError_t serr = cudaSetDevice(device_id);
+            if (serr != cudaSuccess) {
+                cudaGetLastError();  // consume, so it cannot latch into unrelated code
+                throw std::runtime_error(std::string("gpu_device_total_mem: cannot select device ") +
+                                         std::to_string(device_id) + ": " + cudaGetErrorString(serr));
+            }
+        }
+        size_t free_bytes = 0, total_bytes = 0;
+        cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
+        if (rebind) cudaSetDevice(prev_device);
+        if (err != cudaSuccess) {
+            cudaGetLastError();
+            throw std::runtime_error(std::string("gpu_device_total_mem: cudaMemGetInfo failed: ") +
+                                     cudaGetErrorString(err));
+        }
+        if (out_total) *out_total = static_cast<uint64_t>(total_bytes);
+        if (out_max_admissible) {
+            // The most any admission on this device could EVER grant: the budget
+            // fraction of total. device_memory_governor::reserve admits against the
+            // same fraction of FREE, and free <= total, so a demand above this can
+            // never be admitted however empty the card gets. Derived from the same
+            // constants the admission path uses so the two cannot drift.
+            *out_max_admissible = static_cast<uint64_t>(
+                total_bytes / matrixone::device_memory_governor::kBudgetDenominator *
+                matrixone::device_memory_governor::kBudgetNumerator);
+        }
+        return 0;
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_device_total_mem", e.what());
+        return -1;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_device_total_mem", "unknown C++ exception");
+        return -1;
+    }
+}
 
 void* gpu_device_memory_reserve(int device_id, uint64_t bytes, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;

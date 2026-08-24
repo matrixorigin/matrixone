@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -54,8 +55,21 @@ type IvfpqModel[B, Q cuvs.VectorType] struct {
 	// TmpDir scopes this model's packed tar to its builder's private directory so
 	// the builder can reclaim every tar with one RemoveAll. Empty means $TMPDIR,
 	// which keeps any non-builder caller behaving exactly as before.
-	FileSize    int64
-	MaxCapacity uint64
+	FileSize int64
+	// DeviceFileSize is the part of FileSize that becomes GPU-resident on load
+	// (index.bin / shard_N.bin), set when this model is packed. Zero for a model
+	// loaded from metadata, which only persists the tar total -- the load-side
+	// pre-flight keeps using FileSize, and the authoritative per-deserialize
+	// claim in C++ sizes itself from the actual component anyway.
+	DeviceFileSize int64
+	// DeviceComponentBytes is every GPU-resident component of this sub-index by
+	// name -- index.bin, or shard_N.bin per rank under SHARDED. Kept per component
+	// rather than pre-reduced to a max because which device holds which shard
+	// depends on the device list: with distinct cards each holds one shard, but
+	// under gpu_multi_simulation several ranks alias onto the same physical device
+	// and it holds all of theirs.
+	DeviceComponentBytes map[string]int64
+	MaxCapacity          uint64
 
 	Idxcfg  vectorindex.IndexConfig
 	NThread uint32
@@ -261,7 +275,8 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 
 	logutil.Infof("IvfpqModel.saveToFile: idx=%s len=%d calling Pack -> %s", idx.Id, idx.Len, tarPath)
 	t0 := time.Now()
-	if err = idx.Index.Pack(tarPath, idx.TmpDir); err != nil {
+	packSizes, err := idx.Index.Pack(tarPath, idx.TmpDir)
+	if err != nil {
 		logutil.Errorf("IvfpqModel.saveToFile: Pack FAILED idx=%s after %v: %v", idx.Id, time.Since(t0), err)
 		os.Remove(tarPath)
 		return err
@@ -286,6 +301,21 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 	// failure does not invalidate the on-disk artifact, and removing it here
 	// would lose committed data.
 	idx.Path = tarPath
+	// What of this tar lands on the GPU. The tar also carries host-only members
+	// (ids.bin, the INCLUDE blobs), so its total size is the wrong basis for a
+	// VRAM decision; the build-side aggregate gate uses this instead.
+	idx.DeviceFileSize = packSizes.Device
+	// The largest single device-resident component. Under SHARDED each device
+	// receives ONE shard, so the per-device demand is the biggest shard, not the
+	// sum of all of them -- and not the sum divided by the device count, which
+	// under-states the largest whenever the split is uneven (the last shard
+	// absorbs the remainder). With one index.bin it is simply that file.
+	idx.DeviceComponentBytes = make(map[string]int64, len(packSizes.Files))
+	for name, sz := range packSizes.Files {
+		if !cuvs.IsHostResidentComponent(name) {
+			idx.DeviceComponentBytes[name] = sz
+		}
+	}
 
 	if err = idx.Index.Destroy(); err != nil {
 		logutil.Errorf("IvfpqModel.saveToFile: Destroy FAILED idx=%s (tar RETAINED at %s): %v", idx.Id, tarPath, err)
@@ -601,6 +631,34 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 		return err
 	}
 
+	// Host admission for the id storage this load allocates. VRAM is claimed in
+	// C++ (see above); host memory was not claimed here at all, so a load could
+	// take capacity*HostIDBytesPerRow for host_ids with nothing checking the CN
+	// has it -- and an allocation failure at load leaves the index UNLOADABLE,
+	// which is worse than being refused up front.
+	//
+	// Settled once Unpack returns: by then the constructor has committed the
+	// host_ids pages (resize+clear) and load_ids has filled them, so the bytes
+	// are visible to MemoryAvailableIncludingCache and holding the claim longer
+	// would count them twice.
+	//
+	// Skipped when IndexCapacity is 0: the constructor then sizes host_ids to 0
+	// and allocates nothing here, so there is no claim to take. (load_ids still
+	// grows it from the tar, which this cannot size in advance -- an index
+	// persisted without a capacity stays unadmitted on this path, as it was
+	// before.) ReserveHostMemory refuses a zero claim by design, so the guard is
+	// required, not cosmetic.
+	var idClaim *vimemory.HostReservation
+	if idxcfg.IndexCapacity > 0 {
+		var herr error
+		idClaim, herr = vimemory.ReserveHostMemory(
+			uint64(idxcfg.IndexCapacity)*vimemory.HostIDBytesPerRow, "ivfpq load ids")
+		if herr != nil {
+			return herr
+		}
+	}
+	defer idClaim.Settle()
+
 	gi, err := cuvs.NewGpuIvfPqEmpty[B, Q](
 		uint64(idxcfg.IndexCapacity),
 		uint32(idxcfg.CuvsIvfpq.Dimensions),
@@ -627,6 +685,8 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 		gi.Destroy()
 		return err
 	}
+	// host_ids is materialised now; the deferred Settle below becomes a no-op.
+	idClaim.Settle()
 
 	// Replay the event log now that we know the INCLUDE col layout.
 	colMetaJSON := gi.GetFilterColMetaJSON()
@@ -651,9 +711,23 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 	idx.IncludeBytesPerRow = includeBytesPerRow
 
 	// Replay CDC deletes onto the freshly-loaded cuvs index.
-	if err = gi.DeleteIds(idx.DeletedPkids); err != nil {
-		gi.Destroy()
-		return err
+	// The FIRST delete materialises id_to_index_ for every row (ensure_id_index),
+	// which no admission has charged for -- ~40 B/row, so ~3.5 GB at 88M. Claim it
+	// only when a delete actually replays, since an index with no deletes never
+	// builds the map at all, and settle once the map exists.
+	if len(idx.DeletedPkids) > 0 && gi.Len() > 0 {
+		mapClaim, merr := vimemory.ReserveHostMemory(
+			uint64(gi.Len())*vimemory.HostIDMapBytesPerRow, "ivfpq load id-map")
+		if merr != nil {
+			gi.Destroy()
+			return merr
+		}
+		defer mapClaim.Settle()
+		if err = gi.DeleteIds(idx.DeletedPkids); err != nil {
+			gi.Destroy()
+			return err
+		}
+		mapClaim.Settle()
 	}
 
 	idx.Index = gi

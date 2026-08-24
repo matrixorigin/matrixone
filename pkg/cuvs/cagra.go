@@ -559,14 +559,18 @@ func (gi *GpuCagra[B, Q]) Save(filename string) error {
 // deleted_bitset.bin + host_ids.bin + manifest.json + filter blobs); pass the
 // LocalSpillDir the caller is already using for the final .tar so this scratch
 // does NOT land in $TMPDIR (/tmp) where a wiki_all-scale build would ENOSPC.
-func (gi *GpuCagra[B, Q]) Pack(filename, spillDir string) error {
+// Pack writes the index components and archives them, returning the size of every
+// component split by where it becomes resident (see PackSizes). The build-side
+// aggregate admission needs Device rather than the tar total, which also counts
+// host-only components.
+func (gi *GpuCagra[B, Q]) Pack(filename, spillDir string) (PackSizes, error) {
 	if gi.cCagra == nil {
-		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+		return PackSizes{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 
 	tmpDir, err := os.MkdirTemp(spillDir, "cagra-pack-*")
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
+		return PackSizes{}, moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -581,7 +585,7 @@ func (gi *GpuCagra[B, Q]) Pack(filename, spillDir string) error {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
 		logutil.Errorf("GpuCagra.Pack: gpu_cagra_save_dir returned error after %v: %s", time.Since(t0), errStr)
-		return moerr.NewInternalErrorNoCtx(errStr)
+		return PackSizes{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	// List what save_dir actually wrote so we know cuVS finished cleanly (vs died mid-write).
 	if entries, err := os.ReadDir(tmpDir); err == nil {
@@ -598,14 +602,20 @@ func (gi *GpuCagra[B, Q]) Pack(filename, spillDir string) error {
 	} else {
 		logutil.Infof("GpuCagra.Pack: gpu_cagra_save_dir returned in %v (ReadDir failed: %v)", time.Since(t0), err)
 	}
-	logutil.Infof("GpuCagra.Pack: -> Pack (tar) tmpDir=%s target=%s", tmpDir, filename)
+	// Measure BEFORE archiving: taking the figure from the component directory
+	// keeps it independent of tar framing overhead.
+	sizes, derr := MeasureComponents(tmpDir)
+	if derr != nil {
+		return PackSizes{}, derr
+	}
+	logutil.Infof("GpuCagra.Pack: -> Pack (tar) tmpDir=%s target=%s device_bytes=%d", tmpDir, filename, sizes.Device)
 	t1 := time.Now()
 	if err := Pack(tmpDir, filename); err != nil {
 		logutil.Errorf("GpuCagra.Pack: Pack (tar) FAILED after %v: %v", time.Since(t1), err)
-		return err
+		return PackSizes{}, err
 	}
 	logutil.Infof("GpuCagra.Pack: Pack (tar) done in %v", time.Since(t1))
-	return nil
+	return sizes, nil
 }
 
 // Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.
