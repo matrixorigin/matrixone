@@ -55,6 +55,19 @@ type pipelineClient struct {
 	client              morpc.RPCClient
 }
 
+func pipelineBackendCreateOptions(cfg *PipelineConfig) []morpc.ClientOption {
+	// A scheduled Pipeline scope is pinned to one remote CN. Bound both global
+	// factory admission and all connect/retry attempts for that fixed address so
+	// a stale cluster-service route fails the statement instead of inheriting a
+	// potentially day-long SQL context. The existing per-connect timeout bounds
+	// each of the two wait phases, so the total wait is finite and at most twice
+	// that value. It is always positive after cfg.fill().
+	return []morpc.ClientOption{
+		morpc.WithClientAutoCreateQueueWaitTimeout(cfg.TimeOutForEachConnect),
+		morpc.WithClientAutoCreateWaitTimeout(cfg.TimeOutForEachConnect),
+	}
+}
+
 func NewPipelineClient(
 	sid string,
 	localServiceAddress string,
@@ -95,11 +108,15 @@ func NewPipelineClient(
 		morpc.WithBackendLogger(logger),
 	)
 
+	clientOptions := []morpc.ClientOption{
+		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
+		morpc.WithClientLogger(logger),
+	}
+	clientOptions = append(clientOptions, pipelineBackendCreateOptions(cfg)...)
 	cli, err := morpc.NewClient(
 		"pipeline-client",
 		factory,
-		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
-		morpc.WithClientLogger(logger),
+		clientOptions...,
 	)
 	if err != nil {
 		return nil, err

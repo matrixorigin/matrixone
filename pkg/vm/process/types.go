@@ -165,6 +165,35 @@ type Session interface {
 	GetSqlModeNoAutoValueOnZero() (bool, bool)
 }
 
+// ForeignConn is a connection to a foreign data source (Elasticsearch, an
+// external SQL database, ...) cached on an interactive session for esql_tvf /
+// sql_tvf. The session owns its lifetime and closes it when the session ends.
+// Close must be safe to call more than once.
+type ForeignConn interface {
+	Close() error
+}
+
+// ForeignConnCache is an OPTIONAL capability implemented only by the interactive
+// frontend session. esql_tvf / sql_tvf and their connect/disconnect builtins
+// reach it via proc.GetSession().(ForeignConnCache); a session that does not
+// implement it (internal executor, background session) cannot use those TVFs.
+// A handle is derived from the connection config, so reconnecting with the same
+// config yields the same handle and reuses the cached connection.
+type ForeignConnCache interface {
+	// PutForeignConn stores conn under handle unless an entry already exists,
+	// and returns the entry that is cached after the call (first-wins). Two
+	// scans sharing one config can race to connect; the loser must close its
+	// own conn and use the returned winner — the cache never closes a
+	// connection another operator may already be using. Admission is bounded:
+	// when the cache is full a non-nil error is returned and nothing is
+	// stored; the caller owns (and must close) the rejected conn.
+	PutForeignConn(ctx context.Context, handle string, conn ForeignConn) (ForeignConn, error)
+	GetForeignConn(handle string) (ForeignConn, bool)
+	// RemoveForeignConn detaches and returns the connection for handle so the
+	// caller can close it; ok=false if no such handle.
+	RemoveForeignConn(handle string) (ForeignConn, bool)
+}
+
 type ExecStatus int
 
 const (
