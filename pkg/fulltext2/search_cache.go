@@ -105,6 +105,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	ensureReusableLoadLifecycle()
 	index := loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)
 	generation := beginLoadGeneration(index)
+	defer endLoadGeneration(generation)
 	reason := LoadMissProcessStart
 	var reasonGeneration uint64
 	if loadObservationEnabled() {
@@ -118,7 +119,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	defer func() {
 		if err != nil {
 			canceled = isLoadCancellationError(err)
-			loadedBasePool.rollback(generation.attempt)
+			loadedBasePool.rollback(generation.owner)
 		}
 		// VectorIndexCache finishes the event after it samples the shared
 		// entry's waiter count, so waiters that arrived during this load are

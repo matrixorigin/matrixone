@@ -159,10 +159,27 @@ type VectorIndexSearch struct {
 	loadWaiters atomic.Int64
 	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
+	evicting         atomic.Bool
+	invalidationOnce sync.Once
 }
 
 func (s *VectorIndexSearch) Destroy() {
 	s.DestroyWithReason("")
+}
+
+func (s *VectorIndexSearch) notifyCacheInvalidated(reason string) {
+	if reason == "" {
+		return
+	}
+	s.invalidationOnce.Do(func() {
+		if aware, ok := s.Algo.(cacheInvalidationAware); ok {
+			aware.OnCacheInvalidated(reason)
+		}
+	})
+}
+
+func (s *VectorIndexSearch) beginEviction() bool {
+	return s.evicting.CompareAndSwap(false, true)
 }
 
 func (s *VectorIndexSearch) DestroyWithReason(reason string) {
@@ -171,9 +188,7 @@ func (s *VectorIndexSearch) DestroyWithReason(reason string) {
 		s.Mutex.Unlock()
 		s.Cond.Broadcast()
 	}()
-	if aware, ok := s.Algo.(cacheInvalidationAware); ok && reason != "" {
-		aware.OnCacheInvalidated(reason)
-	}
+	s.notifyCacheInvalidated(reason)
 	s.Algo.Destroy()
 	// destroyed
 	s.Status.Store(STATUS_DESTROYED)
@@ -200,6 +215,9 @@ func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 		s.Mutex.Unlock()
 		s.Cond.Broadcast()
 	}()
+	if s.evicting.Load() {
+		return moerr.NewInvalidStateNoCtx("Index destroyed")
+	}
 
 	err := s.Algo.Load(sqlproc)
 	if aware, ok := s.Algo.(loadWaiterAware); ok {
@@ -257,6 +275,9 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	if preloadWaiter {
 		s.loadWaiters.Add(-1)
 	}
+	if s.evicting.Load() {
+		return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+	}
 	for s.Status.Load() == 0 {
 		s.loadWaiters.Add(1)
 		s.Cond.Wait()
@@ -292,6 +313,9 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 	defer s.Cond.L.Unlock()
 	if preloadWaiter {
 		s.loadWaiters.Add(-1)
+	}
+	if s.evicting.Load() {
+		return moerr.NewInvalidStateNoCtx("Index destroyed")
 	}
 	for s.Status.Load() == 0 {
 		s.loadWaiters.Add(1)
@@ -376,30 +400,54 @@ func (c *VectorIndexCache) Once() {
 	c.once.Do(func() { c.serve() })
 }
 
+func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, reason string) bool {
+	value, loaded := c.IndexMap.Load(key)
+	if !loaded {
+		return false
+	}
+	algo, ok := value.(*VectorIndexSearch)
+	if !ok || (expected != nil && algo != expected) || !algo.beginEviction() {
+		return false
+	}
+	value, loaded = c.IndexMap.Load(key)
+	if !loaded || value != algo {
+		return false
+	}
+	// Publish the invalidation while the old entry still occupies the key. A
+	// replacement can only be inserted after CompareAndDelete, so it cannot
+	// observe a later generation bump from the old entry's blocked destroy.
+	algo.notifyCacheInvalidated(reason)
+	if !c.IndexMap.CompareAndDelete(key, algo) {
+		return false
+	}
+	algo.Destroy()
+	return true
+}
+
 // house keeping to check expired keys and delete from cache
 func (c *VectorIndexCache) HouseKeeping() {
 
-	expiredkeys := make([]string, 0, 16)
+	type expiredEntry struct {
+		key  string
+		algo *VectorIndexSearch
+	}
+	expiredkeys := make([]expiredEntry, 0, 16)
 
 	c.IndexMap.Range(func(key, value any) bool {
 		algo := value.(*VectorIndexSearch)
 		if algo.Expired() || algo.stale.Load() {
-			expiredkeys = append(expiredkeys, key.(string))
+			expiredkeys = append(expiredkeys, expiredEntry{key: key.(string), algo: algo})
 		}
 		return true
 	})
 
-	for _, k := range expiredkeys {
-		value, loaded := c.IndexMap.LoadAndDelete(k)
-		if loaded {
-			algo := value.(*VectorIndexSearch)
-			reason := "ttl_expired"
-			if algo.stale.Load() {
-				reason = "generation_changed"
-			}
-			algo.DestroyWithReason(reason)
-			algo = nil
-			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", k)
+	for _, entry := range expiredkeys {
+		reason := "ttl_expired"
+		if entry.algo.stale.Load() {
+			reason = "generation_changed"
+		}
+		if c.evictEntry(entry.key, entry.algo, reason) {
+			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", entry.key)
 		}
 	}
 	runLifecycleHooks(false)
@@ -457,10 +505,9 @@ func (c *VectorIndexCache) Destroy() {
 	}
 	// remove all keys
 	c.IndexMap.Range(func(key, value any) bool {
-		c.IndexMap.Delete(key)
-		algo := value.(*VectorIndexSearch)
-		algo.DestroyWithReason("process_shutdown")
-		algo = nil
+		if k, ok := key.(string); ok {
+			c.evictEntry(k, value.(*VectorIndexSearch), "process_shutdown")
+		}
 		return true
 	})
 	runLifecycleHooks(true)
@@ -480,6 +527,9 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			// key-wide invalidation hook; the loader owns reusable-state rollback.
 			err := algo.Load(sqlproc)
 			if err != nil {
+				if algo.evicting.Load() || moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+					continue
+				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
 					algo.destroyFailedLoad()
 				}
@@ -511,6 +561,9 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
 			if err := algo.Load(sqlproc); err != nil {
+				if algo.evicting.Load() || moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+					continue
+				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
 					algo.destroyFailedLoad()
 				}
@@ -541,12 +594,7 @@ func (c *VectorIndexCache) Remove(key string) {
 // RemoveWithReason is the internal reason-aware variant used by FULLTEXT2.
 // The empty reason preserves the historical behavior for all other algorithms.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
-	value, loaded := c.IndexMap.LoadAndDelete(key)
-	if loaded {
-		algo := value.(*VectorIndexSearch)
-		algo.DestroyWithReason(reason)
-		algo = nil
-	}
+	c.evictEntry(key, nil, reason)
 }
 
 // RemovePrefix removes every cached index whose key starts with prefix.

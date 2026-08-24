@@ -16,14 +16,17 @@ package fulltext2
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
 
 const (
-	loadReasonTTL  = 15 * time.Minute
-	loadReasonSize = 1024
+	loadReasonTTL      = 15 * time.Minute
+	loadReasonSize     = 1024
+	loadGenerationTTL  = 15 * time.Minute
+	loadGenerationSize = 1024
 )
 
 type pendingLoadReason struct {
@@ -40,18 +43,22 @@ type loadGeneration struct {
 	index        string
 	invalidation uint64
 	attempt      uint64
+	owner        uint64
+}
+
+type loadGenerationState struct {
+	invalidation uint64
+	attempt      uint64
+	active       uint32
+	lastUsed     time.Time
 }
 
 var loadGenerations = struct {
 	sync.Mutex
-	m map[string]struct {
-		invalidation uint64
-		attempt      uint64
-	}
-}{m: make(map[string]struct {
-	invalidation uint64
-	attempt      uint64
-})}
+	m map[string]loadGenerationState
+}{m: make(map[string]loadGenerationState)}
+
+var nextLoadOwner atomic.Uint64
 
 // pendingLoadReasons bridges an invalidation event and the next cache miss. A
 // failed load leaves the cause available for its retry; a successful load
@@ -71,6 +78,7 @@ func ensureReusableLoadLifecycle() {
 			if shutdown {
 				loadedBasePool.clearAll()
 				loadedTailPool.clearAll()
+				clearLoadGenerationRegistry()
 				return
 			}
 			now := time.Now()
@@ -91,14 +99,41 @@ func loadReasonKey(db, index string) string {
 }
 
 func rememberLoadReason(index string, reason LoadMissReason) {
+	now := time.Now()
 	pendingLoadReasons.Lock()
 	defer pendingLoadReasons.Unlock()
 	loadGenerations.Lock()
 	defer loadGenerations.Unlock()
 	state := loadGenerations.m[index]
 	state.invalidation++
+	state.lastUsed = now
 	loadGenerations.m[index] = state
+	pruneLoadGenerationsLocked(now)
 	rememberLoadReasonLocked(index, reason, state.invalidation)
+}
+
+func pruneLoadGenerationsLocked(now time.Time) {
+	for index, state := range loadGenerations.m {
+		if state.active == 0 && !state.lastUsed.IsZero() && now.Sub(state.lastUsed) >= loadGenerationTTL {
+			delete(loadGenerations.m, index)
+		}
+	}
+	for len(loadGenerations.m) > loadGenerationSize {
+		var oldestIndex string
+		var oldest time.Time
+		for index, state := range loadGenerations.m {
+			if state.active != 0 {
+				continue
+			}
+			if oldestIndex == "" || state.lastUsed.Before(oldest) {
+				oldestIndex, oldest = index, state.lastUsed
+			}
+		}
+		if oldestIndex == "" {
+			return
+		}
+		delete(loadGenerations.m, oldestIndex)
+	}
 }
 
 func rememberLoadReasonLocked(index string, reason LoadMissReason, generation uint64) {
@@ -169,18 +204,48 @@ func consumeLoadReasonIfCurrent(index string, reasonGeneration uint64, current l
 	}
 	if v, ok := pendingLoadReasons.m[index]; ok && v.generation == reasonGeneration {
 		delete(pendingLoadReasons.m, index)
+		state.lastUsed = time.Now()
+		loadGenerations.m[current.index] = state
 		return true
 	}
 	return false
 }
 
 func beginLoadGeneration(index string) loadGeneration {
+	now := time.Now()
 	loadGenerations.Lock()
 	defer loadGenerations.Unlock()
+	pruneLoadGenerationsLocked(now)
 	state := loadGenerations.m[index]
 	state.attempt++
+	state.active++
+	state.lastUsed = now
 	loadGenerations.m[index] = state
-	return loadGeneration{index: index, invalidation: state.invalidation, attempt: state.attempt}
+	return loadGeneration{
+		index:        index,
+		invalidation: state.invalidation,
+		attempt:      state.attempt,
+		owner:        nextLoadOwner.Add(1),
+	}
+}
+
+func endLoadGeneration(g loadGeneration) {
+	if g.index == "" || g.attempt == 0 {
+		return
+	}
+	now := time.Now()
+	loadGenerations.Lock()
+	defer loadGenerations.Unlock()
+	state, ok := loadGenerations.m[g.index]
+	if !ok {
+		return
+	}
+	if state.active > 0 {
+		state.active--
+	}
+	state.lastUsed = now
+	loadGenerations.m[g.index] = state
+	pruneLoadGenerationsLocked(now)
 }
 
 func loadGenerationCurrent(g loadGeneration) bool {
@@ -190,13 +255,52 @@ func loadGenerationCurrent(g loadGeneration) bool {
 	loadGenerations.Lock()
 	defer loadGenerations.Unlock()
 	state, ok := loadGenerations.m[g.index]
-	return ok && state.invalidation == g.invalidation && state.attempt == g.attempt
+	if !ok || state.invalidation != g.invalidation || state.attempt != g.attempt {
+		return false
+	}
+	state.lastUsed = time.Now()
+	loadGenerations.m[g.index] = state
+	return true
+}
+
+func clearLoadGeneration(index string) {
+	if index == "" {
+		return
+	}
+	pendingLoadReasons.Lock()
+	loadGenerations.Lock()
+	defer func() {
+		loadGenerations.Unlock()
+		pendingLoadReasons.Unlock()
+	}()
+	delete(pendingLoadReasons.m, index)
+	state, ok := loadGenerations.m[index]
+	if !ok {
+		return
+	}
+	if state.active == 0 {
+		delete(loadGenerations.m, index)
+		return
+	}
+	state.invalidation++
+	state.lastUsed = time.Now()
+	loadGenerations.m[index] = state
+}
+
+func clearLoadGenerationRegistry() {
+	pendingLoadReasons.Lock()
+	loadGenerations.Lock()
+	pendingLoadReasons.m = make(map[string]pendingLoadReason)
+	loadGenerations.m = make(map[string]loadGenerationState)
+	loadGenerations.Unlock()
+	pendingLoadReasons.Unlock()
 }
 
 func clearReusableLoadGeneration(cfg TableConfig) {
 	index := loadReasonKey(cfg.DbName, cfg.IndexTable)
 	loadedBasePool.clearIndex(index)
 	loadedTailPool.clear(index)
+	clearLoadGeneration(index)
 }
 
 // invalidateLoadGeneration records why the next load will miss and clears

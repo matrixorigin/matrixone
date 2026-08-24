@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -70,4 +71,47 @@ func TestVectorIndexCacheLifecycleHookRunsForEmptyShutdown(t *testing.T) {
 	c := NewVectorIndexCache()
 	c.Destroy()
 	require.True(t, shutdown.Load())
+}
+
+type blockingInvalidationMock struct {
+	invalidationMock
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m *blockingInvalidationMock) OnCacheInvalidated(reason string) {
+	close(m.started)
+	<-m.release
+	m.invalidationMock.OnCacheInvalidated(reason)
+}
+
+func TestVectorIndexCacheHouseKeepingPublishesBeforeDelete(t *testing.T) {
+	mock := &blockingInvalidationMock{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	s := &VectorIndexSearch{Algo: mock}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	c := NewVectorIndexCache()
+	c.IndexMap.Store("key", s)
+
+	done := make(chan struct{})
+	go func() {
+		c.HouseKeeping()
+		close(done)
+	}()
+
+	<-mock.started
+	replacement := &VectorIndexSearch{Algo: &MockSearch{}}
+	replacement.Cond = sync.NewCond(replacement.Mutex.RLocker())
+	value, loaded := c.IndexMap.LoadOrStore("key", replacement)
+	require.True(t, loaded)
+	require.Same(t, s, value)
+
+	close(mock.release)
+	<-done
+	_, loaded = c.IndexMap.Load("key")
+	require.False(t, loaded)
+	require.Equal(t, []string{"ttl_expired"}, mock.reasons)
 }

@@ -173,6 +173,38 @@ func TestLoadReasonRegistryDoesNotConsumeNewerInvalidation(t *testing.T) {
 	consumeLoadReason(key, secondGeneration)
 }
 
+func TestLoadGenerationRegistryBoundsInactiveKeys(t *testing.T) {
+	restoreObserver := setLoadObserver(nil)
+	defer restoreObserver()
+
+	loadGenerations.Lock()
+	previous := loadGenerations.m
+	loadGenerations.m = make(map[string]loadGenerationState)
+	loadGenerations.Unlock()
+	defer func() {
+		loadGenerations.Lock()
+		loadGenerations.m = previous
+		loadGenerations.Unlock()
+	}()
+
+	active := beginLoadGeneration("db.active")
+	for i := 0; i < loadGenerationSize*2; i++ {
+		generation := beginLoadGeneration(fmt.Sprintf("db.%d", i))
+		endLoadGeneration(generation)
+	}
+	require.True(t, loadGenerationCurrent(active))
+
+	loadGenerations.Lock()
+	require.LessOrEqual(t, len(loadGenerations.m), loadGenerationSize)
+	require.Equal(t, uint32(1), loadGenerations.m[active.index].active)
+	loadGenerations.Unlock()
+
+	endLoadGeneration(active)
+	loadGenerations.Lock()
+	require.LessOrEqual(t, len(loadGenerations.m), loadGenerationSize)
+	loadGenerations.Unlock()
+}
+
 func TestReusableLoadLifecycleHookRunsHousekeepingAndShutdown(t *testing.T) {
 	ensureReusableLoadLifecycle()
 	c := veccache.NewVectorIndexCache()

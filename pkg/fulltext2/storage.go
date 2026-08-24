@@ -366,7 +366,7 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 			// A later base can fail after earlier segments have been acquired.
 			// Roll back only entries created by this load; another generation may
 			// have committed reusable state for the same index in the meantime.
-			loadedBasePool.rollback(generation.attempt)
+			loadedBasePool.rollback(generation.owner)
 		}
 	}()
 	idSQL := fmt.Sprintf("SELECT %s FROM %s",
@@ -419,7 +419,7 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 		key := baseKey{index: indexKey, id: id, checksum: checksum, filesize: filesize}
 		m, lerr := loadedBasePool.acquireOwned(sqlproc.GetContext(), key, func() (*Segment, error) {
 			return loadFromStorageMetadata(sqlproc, cfg, id, checksum, filesize, recency, trace)
-		}, recency, generation.attempt)
+		}, recency, generation.owner)
 		if lerr != nil {
 			// Free the segments already mapped this call before bailing: each owns an
 			// mmap (+ a linked /tmp spill file on the fallback path), so returning without
@@ -432,13 +432,13 @@ func loadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig, trace *loadTrace
 		used[key] = struct{}{}
 	}
 	if !loadGenerationCurrent(generation) {
-		loadedBasePool.rollback(generation.attempt)
+		loadedBasePool.rollback(generation.owner)
 	} else {
-		published := loadedBasePool.commitOwnedIfCurrent(indexKey, used, generation.attempt, func() bool {
+		published := loadedBasePool.commitOwnedIfCurrent(indexKey, used, generation.owner, func() bool {
 			return loadGenerationCurrent(generation)
 		})
 		if !published {
-			loadedBasePool.rollback(generation.attempt)
+			loadedBasePool.rollback(generation.owner)
 		}
 	}
 	committed = true

@@ -254,6 +254,65 @@ func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
 	veccache.Cache.Remove(cfg.IndexTable)
 }
 
+func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
+	cleanupObserver := setLoadObserver(func(LoadEvent) {})
+	defer cleanupObserver()
+
+	previousCache := veccache.Cache
+	veccache.Cache = veccache.NewVectorIndexCache()
+	defer func() { veccache.Cache = previousCache }()
+
+	loadGenerations.Lock()
+	previousGenerations := loadGenerations.m
+	loadGenerations.m = make(map[string]loadGenerationState)
+	loadGenerations.Unlock()
+	defer func() {
+		loadGenerations.Lock()
+		loadGenerations.m = previousGenerations
+		loadGenerations.Unlock()
+	}()
+
+	cfg := testStorageCfg()
+	old := NewFulltext2Search(cfg)
+	old.idx = NewIndex(nil, nil)
+	old.loaded = true
+	oldEntry := &veccache.VectorIndexSearch{Algo: old}
+	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
+	oldEntry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	veccache.Cache.IndexMap.Store(cfg.IndexTable, oldEntry)
+
+	oldEntry.Mutex.Lock()
+	done := make(chan struct{})
+	go func() {
+		veccache.Cache.HouseKeeping()
+		close(done)
+	}()
+	require.Eventually(t, func() bool {
+		_, loaded := veccache.Cache.IndexMap.Load(cfg.IndexTable)
+		return !loaded
+	}, time.Second, time.Millisecond)
+
+	replacement := NewFulltext2Search(cfg)
+	replacement.idx = NewIndex(nil, nil)
+	replacement.loaded = true
+	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
+	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
+	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
+
+	generation := beginLoadGeneration(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.True(t, loadGenerationCurrent(generation))
+	endLoadGeneration(generation)
+
+	oldEntry.Mutex.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("housekeeping eviction did not finish")
+	}
+	require.True(t, loadGenerationCurrent(generation))
+	veccache.Cache.Remove(cfg.IndexTable)
+}
+
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the
 // metadata table (REBUILD/MERGE signal) and MAX(chunk_id) over the tag=1 CdcTail (CDC-append
 // signal), scoped to (CdcTailId, tag=1) so a base sub-index cannot mask a fresh append.

@@ -234,6 +234,33 @@ func TestImmutableBasePoolCommittedReplacementSurvivesObsoleteRollback(t *testin
 	p.clearAll()
 }
 
+func TestImmutableBasePoolRollbackOwnerIsGlobalAcrossIndexes(t *testing.T) {
+	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
+	firstGeneration := beginLoadGeneration("db.a")
+	secondGeneration := beginLoadGeneration("db.b")
+	require.NotEqual(t, firstGeneration.owner, secondGeneration.owner)
+
+	firstKey := baseKey{index: "db.a", id: "base-0", checksum: "sum", filesize: 1}
+	secondKey := baseKey{index: "db.b", id: "base-0", checksum: "sum", filesize: 1}
+	first, err := p.acquireOwned(context.Background(), firstKey, func() (*Segment, error) {
+		return NewSegment("base-a", 0), nil
+	}, 0, firstGeneration.owner)
+	require.NoError(t, err)
+	first.Free()
+	second, err := p.acquireOwned(context.Background(), secondKey, func() (*Segment, error) {
+		return NewSegment("base-b", 0), nil
+	}, 0, secondGeneration.owner)
+	require.NoError(t, err)
+	second.Free()
+
+	p.rollback(firstGeneration.owner)
+	require.NotContains(t, p.entries, firstKey)
+	require.Contains(t, p.entries, secondKey)
+	p.clearAll()
+	endLoadGeneration(firstGeneration)
+	endLoadGeneration(secondGeneration)
+}
+
 func TestLoadReasonRegistryIsDatabaseQualified(t *testing.T) {
 	cleanup := setLoadObserver(func(LoadEvent) {})
 	defer cleanup()
