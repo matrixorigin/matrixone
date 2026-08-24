@@ -568,7 +568,16 @@ public:
                 {
                     std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
                     matrixone::device_memory_governor::reservation build_claim;
-                    const size_t peak = this->build_peak_bytes(this->count);
+                    // SHARDED claims THIS SHARD, not the logical index. rows_fitting()
+                    // returns min_rows * distinct_devices for SHARDED (index_cost.hpp), so
+                    // this->count is the N-card total while this rank only ever builds its
+                    // own num_rows slice. Claiming the total against one card's budget
+                    // refuses every SHARDED build that is sized to fill the cards -- two
+                    // 27 GiB shards make a 54 GiB count, and each rank asked its own 27 GiB
+                    // budget to admit 54. Taken from the view so the claim cannot drift
+                    // from what is actually built. REPLICATED and SINGLE_GPU keep
+                    // this->count: they each hold the whole index.
+                    const size_t peak = this->build_peak_bytes(dataset_host.extent(0));
                     if (peak > 0) {
                         // Claim what this build is about to allocate: max(kmeans
                         // trainset, PQ codes), the peak of two phases that never
