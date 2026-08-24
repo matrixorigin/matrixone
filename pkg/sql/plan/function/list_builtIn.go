@@ -13561,6 +13561,32 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `last_kafka_message_id`: the offset of the last message a
+	// completed Kafka external-table scan returned in this session (NULL
+	// before any scan). Feed it back as __mo_read_start_id for exactly-once
+	// chaining. See docs/cn/kafka_exttab.md.
+	{
+		functionId: LAST_KAFKA_MESSAGE_ID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return builtInLastKafkaMessageID
+				},
+			},
+		},
+	},
+
 	// function `last_query_id`, `last_uuid`
 	{
 		functionId: LAST_QUERY_ID,

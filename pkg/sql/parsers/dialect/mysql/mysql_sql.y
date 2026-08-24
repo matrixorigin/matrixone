@@ -120,6 +120,9 @@ func sqlTaskInt64(v any) int64 {
     datastreamOption *tree.DataStreamOption
     datastreamOptions tree.DataStreamOptions
     datastreamTableParam *tree.DataStreamTableParam
+    kafkaTableParam *tree.KafkaTableParam
+    kafkaTableOptions tree.KafkaTableOptions
+    kafkaTableOption *tree.KafkaTableOption
     foreignTableOption tree.ForeignTableOption
     foreignTableOptions tree.ForeignTableOptions
     foreignTableParam *tree.ForeignTableParam
@@ -599,7 +602,7 @@ func sqlTaskInt64(v any) int64 {
 // Iceberg
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
-%token <str> DATASTREAM ESQL
+%token <str> DATASTREAM ESQL KAFKA
 
 // ROLLUP
 %token <str> GROUPING SETS CUBE ROLLUP 
@@ -760,6 +763,9 @@ func sqlTaskInt64(v any) int64 {
 %type <datastreamOption> datastream_option
 %type <str> datastream_option_key datastream_option_value
 %type <foreignTableParam> foreign_table_param
+%type <kafkaTableParam> kafka_table_param
+%type <kafkaTableOptions> kafka_option_list_opt kafka_option_list
+%type <kafkaTableOption> kafka_option
 %type <foreignTableOptions> foreign_option_list_opt foreign_option_list
 %type <foreignTableOption> foreign_option
 %type <str> foreign_engine_kind
@@ -10231,6 +10237,15 @@ create_table_stmt:
         t.ForeignParam = $9
         $$ = t
     }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' kafka_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.KafkaParam = $9
+        $$ = t
+    }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name iceberg_table_param
     {
         t := tree.NewCreateTable()
@@ -11095,6 +11110,37 @@ foreign_table_param:
     ENGINE equal_opt foreign_engine_kind foreign_option_list_opt
     {
         $$ = tree.NewForeignTableParam($3, $4)
+    }
+
+kafka_table_param:
+    ENGINE equal_opt KAFKA kafka_option_list_opt
+    {
+        $$ = tree.NewKafkaTableParam($4)
+    }
+
+kafka_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' kafka_option_list ')'
+    {
+        $$ = $3
+    }
+
+kafka_option_list:
+    kafka_option
+    {
+        $$ = tree.KafkaTableOptions{$1}
+    }
+|   kafka_option_list ',' kafka_option
+    {
+        $$ = append($1, $3)
+    }
+
+kafka_option:
+    datastream_option_key '=' datastream_option_value
+    {
+        $$ = tree.NewKafkaTableOption(tree.Identifier($1), $3)
     }
 
 foreign_engine_kind:
@@ -15681,6 +15727,7 @@ non_reserved_keyword:
 |   MONGODB_CONVERT
 |   DATASTREAM
 |   ESQL
+|   KAFKA
 |   CONNECTIONS
 |   INTERMEDIATE_GRAPH_DEGREE
 |   ISOLATION

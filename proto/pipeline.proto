@@ -492,6 +492,7 @@ message ExternalScan {
   bool iceberg_delete_spill_enabled = 23;
   plan.DataStreamScan datastream_scan = 24;
   plan.ForeignScan foreign_scan = 25;
+  plan.KafkaScan kafka_scan = 26;
 }
 
 message TableScan {

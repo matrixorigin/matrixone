@@ -194,6 +194,21 @@ type ForeignConnCache interface {
 	RemoveForeignConn(handle string) (ForeignConn, bool)
 }
 
+// KafkaSessionState is an OPTIONAL capability implemented only by the
+// interactive frontend session. The Kafka external-table reader records the
+// highest message offset a completed scan consumed, and the
+// LAST_KAFKA_MESSAGE_ID() builtin reads it back — the pair gives a consumer
+// exactly-once chaining (feed the last id as the next __mo_read_start_id).
+// Reached via proc.GetSession().(KafkaSessionState).
+type KafkaSessionState interface {
+	// SetLastKafkaMessageID records the offset of the last message a
+	// successfully completed Kafka scan returned in this session.
+	SetLastKafkaMessageID(id int64)
+	// LastKafkaMessageID returns the recorded offset; ok=false when no Kafka
+	// scan has completed in this session yet.
+	LastKafkaMessageID() (int64, bool)
+}
+
 type ExecStatus int
 
 const (

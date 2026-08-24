@@ -146,6 +146,11 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		}
 
 		if finish {
+			if param.KafkaMeta != nil {
+				if err := param.KafkaMeta.finishCheck(ctx); err != nil {
+					return false, err
+				}
+			}
 			closeErr := r.reader.Close()
 			if closeErr != nil {
 				logutil.Errorf("close file failed. err:%v", closeErr)
@@ -170,6 +175,13 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		}
 
 		rowIdx := i
+		if param.KafkaMeta != nil {
+			// pair this record with its message's metadata (1 message = 1
+			// record; the pairing is order-based and re-checked at EOF)
+			if err := param.KafkaMeta.advance(ctx); err != nil {
+				return false, err
+			}
+		}
 		if param.Extern.Format == tree.JSONLINE {
 			row, err = r.transJson2Lines(proc.Ctx, row[0].Val, param.Attrs, param.Cols, param.Extern.JsonData)
 			if err != nil {
@@ -218,8 +230,9 @@ func (r *CsvReader) transJson2Lines(ctx context.Context, str string, attrs []pla
 
 func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs []plan.ExternAttr, cols []*plan.ColDef) ([]csvparser.Field, error) {
 	resultSize := 0
+	realCnt := 0
 	for idx, attr := range attrs {
-		if catalog.ContainExternalHidenCol(attr.ColName) {
+		if catalog.ContainExternalHidenCol(attr.ColName) || isKafkaSyntheticAttr(r.param, attr.ColName) {
 			continue
 		}
 		if idx >= len(cols) || cols[idx] == nil {
@@ -234,6 +247,7 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 				"invalid external field index %d for column %s", attr.ColFieldIndex, attr.ColName)
 		}
 		resultSize = max(resultSize, int(attr.ColFieldIndex)+1)
+		realCnt++
 	}
 	res := make([]csvparser.Field, resultSize)
 	if r.prevStr != "" {
@@ -251,11 +265,12 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 	if !ok || !g.Obj {
 		return nil, moerr.NewInvalidInput(ctx, "not a object")
 	}
-	if len(g.Keys) < getRealAttrCnt(attrs) {
+	if len(g.Keys) < realCnt {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
 	for idx, attr := range attrs {
-		if catalog.ContainExternalHidenCol(attr.ColName) || cols[idx].Hidden {
+		if catalog.ContainExternalHidenCol(attr.ColName) || cols[idx].Hidden ||
+			isKafkaSyntheticAttr(r.param, attr.ColName) {
 			continue
 		}
 		ki := slices.Index(g.Keys, attr.ColName)

@@ -257,6 +257,7 @@ func init() {
 		"mongodb":                    MONGODB,
 		"datastream":                 DATASTREAM,
 		"esql":                       ESQL,
+		"kafka":                      KAFKA,
 		"mongodb_convert":            MONGODB_CONVERT,
 		"mongodb_path":               MONGODB_PATH,
 		"if":                         IF,

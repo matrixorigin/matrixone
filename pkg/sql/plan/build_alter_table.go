@@ -670,6 +670,12 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNotSupported(ctx.GetContext(),
 			"ALTER TABLE on a datastream external table; drop and recreate the external table to change its schema")
 	}
+	if _, isKafka, err := IsKafkaTableDef(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	} else if isKafka {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a kafka external table; drop and recreate the external table to change its schema")
+	}
 
 	if tableDef.IsTemporary {
 		// Only allow a safe subset of alter operations on temporary tables.

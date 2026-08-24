@@ -95,6 +95,9 @@ type ExParamConst struct {
 	// ForeignScan marks this scan as an ESQL/SQL foreign external table read
 	// and carries the connection config reference and default query.
 	ForeignScan *plan.ForeignScan
+	// KafkaScan marks this scan as a Kafka external table read and carries
+	// the broker/topic/partition plus the compile-resolved read controls.
+	KafkaScan *plan.KafkaScan
 	// ESQLTemporalUTC marks a scan whose CSV source renders temporal values as
 	// ISO 8601 UTC (ES|QL); getColData then rewrites them as session-zone wall
 	// clock, preserving the instant. Set for ESQL foreign tables (Prepare) and
@@ -106,7 +109,10 @@ type ExParamConst struct {
 }
 
 type ExParam struct {
-	Fileparam                   *ExFileparam
+	Fileparam *ExFileparam
+	// KafkaMeta carries the per-message metadata FIFO of a running Kafka
+	// scan (set by KafkaReader.Open, consumed row-by-row in makeBatchRows).
+	KafkaMeta                   *KafkaMetaState
 	Filter                      *FilterParam
 	currentPartValues           map[string]string
 	parquetProfile              process.ParquetProfileStats

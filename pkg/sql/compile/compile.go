@@ -2465,6 +2465,9 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_FOREIGN_TB) {
 		return c.compileForeignScan(node, strictSqlMode)
 	}
+	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_KAFKA_TB) {
+		return c.compileKafkaScan(node, strictSqlMode)
+	}
 
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_ICEBERG_TB) {
 		access, err := c.checkIcebergScanAccess(node)
@@ -2636,6 +2639,32 @@ func (c *Compile) compileForeignScan(node *plan.Node, strictSqlMode bool) ([]*Sc
 	scope := c.constructScopeForExternal(c.addr, false)
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(node, param, c.proc.Ctx, queryList, fileSize, nil, strictSqlMode)
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	scope.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{scope}, nil
+}
+
+// compileKafkaScan compiles a scan of a Kafka external table. The read
+// position/limits come from the __mo_read_* control predicates (consumed
+// here); the scope is pinned to the session's CN with Mcpu=1 — the read is a
+// single ordered partition consume, and LAST_KAFKA_MESSAGE_ID() lives in the
+// session.
+func (c *Compile) compileKafkaScan(node *plan.Node, strictSqlMode bool) ([]*Scope, error) {
+	ks := node.ExternScan.GetKafkaScan()
+	if ks == nil {
+		return nil, moerr.NewInvalidInput(c.proc.Ctx, "kafka external table is missing scan metadata")
+	}
+	if err := external.DeriveKafkaReadControl(c.proc.Ctx, node, c.proc); err != nil {
+		return nil, err
+	}
+
+	param := external.KafkaExternParam(ks)
+	param.Ctx = c.proc.Ctx
+
+	scope := c.constructScopeForExternal(c.addr, false)
+	currentFirstFlag := c.anal.isFirst
+	op := constructExternal(node, param, c.proc.Ctx, nil, nil, nil, strictSqlMode)
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	scope.setRootOperator(op)
 	c.anal.isFirst = false
@@ -6799,7 +6828,8 @@ func operatorTreeContainsSinkScan(op vm.Operator, visited map[vm.Operator]bool) 
 	if mergeOp, ok := op.(*merge.Merge); ok && mergeOp.SinkScan {
 		return true
 	}
-	if ext, ok := op.(*external.External); ok && ext.Es != nil && ext.Es.ForeignScan != nil {
+	if ext, ok := op.(*external.External); ok && ext.Es != nil &&
+		(ext.Es.ForeignScan != nil || ext.Es.KafkaScan != nil) {
 		return true
 	}
 	base := op.GetOperatorBase()

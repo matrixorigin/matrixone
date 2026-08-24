@@ -55,6 +55,26 @@ const (
 	ExternalQuery      = "__mo_query"
 	ExternalQueryColId = ^uint64(0) - 1
 
+	// Kafka external table (ENGINE = KAFKA) synthetic columns. The four
+	// message columns are selectable per-row metadata; the three read
+	// controls are WHERE-only knobs resolved at compile time (their conjuncts
+	// are consumed, and selecting them returns the effective value used by
+	// the scan). See docs/cn/kafka_exttab.md and issue #27518.
+	KafkaMessageID         = "__mo_message_id"
+	KafkaMessageIDColId    = ^uint64(0) - 2
+	KafkaMessageTS         = "__mo_message_ts"
+	KafkaMessageTSColId    = ^uint64(0) - 3
+	KafkaMessageKey        = "__mo_message_key"
+	KafkaMessageKeyColId   = ^uint64(0) - 4
+	KafkaMessageValue      = "__mo_message_value"
+	KafkaMessageValueColId = ^uint64(0) - 5
+	KafkaReadStartID       = "__mo_read_start_id"
+	KafkaReadStartIDColId  = ^uint64(0) - 6
+	KafkaReadSize          = "__mo_read_size"
+	KafkaReadSizeColId     = ^uint64(0) - 7
+	KafkaReadTimeout       = "__mo_read_timeout"
+	KafkaReadTimeoutColId  = ^uint64(0) - 8
+
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 	// TableTailAttr are attrs in table tail
@@ -127,10 +147,40 @@ func IsForeignQueryCol(name string, colId uint64) bool {
 	return name == ExternalQuery && colId == ExternalQueryColId
 }
 
+// IsKafkaHiddenCol reports whether (name, colId) is one of the SYNTHETIC
+// Kafka external-scan columns (scoped by reserved ColId like
+// IsForeignQueryCol, so a real column of the same name in a pre-existing
+// schema keeps working).
+func IsKafkaHiddenCol(name string, colId uint64) bool {
+	switch name {
+	case KafkaMessageID:
+		return colId == KafkaMessageIDColId
+	case KafkaMessageTS:
+		return colId == KafkaMessageTSColId
+	case KafkaMessageKey:
+		return colId == KafkaMessageKeyColId
+	case KafkaMessageValue:
+		return colId == KafkaMessageValueColId
+	case KafkaReadStartID:
+		return colId == KafkaReadStartIDColId
+	case KafkaReadSize:
+		return colId == KafkaReadSizeColId
+	case KafkaReadTimeout:
+		return colId == KafkaReadTimeoutColId
+	}
+	return false
+}
+
 // IsReservedExternalColName reports whether a column name is reserved for the
 // synthetic external-scan columns and must be rejected at CREATE/ALTER.
 func IsReservedExternalColName(name string) bool {
-	return name == ExternalFilePath || name == ExternalQuery
+	switch name {
+	case ExternalFilePath, ExternalQuery,
+		KafkaMessageID, KafkaMessageTS, KafkaMessageKey, KafkaMessageValue,
+		KafkaReadStartID, KafkaReadSize, KafkaReadTimeout:
+		return true
+	}
+	return false
 }
 
 func IsHiddenTable(name string) bool {

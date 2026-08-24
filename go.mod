@@ -63,7 +63,7 @@ require (
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/jonboulle/clockwork v0.4.0
 	github.com/json-iterator/go v1.1.12
-	github.com/klauspost/compress v1.18.2
+	github.com/klauspost/compress v1.18.7
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376
@@ -76,7 +76,7 @@ require (
 	github.com/panjf2000/ants/v2 v2.12.0
 	github.com/parquet-go/parquet-go v0.25.1
 	github.com/petermattis/goid v0.0.0-20241025130422-66cb2e6d7274
-	github.com/pierrec/lz4/v4 v4.1.21
+	github.com/pierrec/lz4/v4 v4.1.26
 	github.com/pkg/errors v0.9.1
 	github.com/plar/go-adaptive-radix-tree v1.0.5
 	github.com/prashantv/gostub v1.1.0
@@ -110,7 +110,7 @@ require (
 	go.uber.org/zap v1.24.0
 	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90
 	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.42.0
+	golang.org/x/sys v0.44.0
 	golang.org/x/time v0.15.0
 	gonum.org/v1/gonum v0.14.0
 	google.golang.org/grpc v1.65.0
@@ -250,6 +250,10 @@ require (
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
+	github.com/twmb/franz-go v1.21.6 // indirect
+	github.com/twmb/franz-go/pkg/kadm v1.18.0 // indirect
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260820024614-9b174ed31afe // indirect
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
@@ -268,11 +272,11 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
-	golang.org/x/crypto v0.49.0 // indirect
-	golang.org/x/mod v0.34.0 // indirect
-	golang.org/x/net v0.52.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
-	golang.org/x/tools v0.43.0 // indirect
+	golang.org/x/crypto v0.51.0 // indirect
+	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/tools v0.44.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240814211410-ddb44dafa142 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

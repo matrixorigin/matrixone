@@ -1,0 +1,73 @@
+drop database if exists kafka_exttab;
+create database kafka_exttab;
+use kafka_exttab;
+create external table kt (a int, b varchar(100)) engine = kafka with ('brokers' = '127.0.0.1:19092', 'topic' = 'events');
+show create table kt;
+➤ Table[12,2,0]  ¦  Create Table[12,303,0]  𝄀
+kt  ¦  CREATE EXTERNAL TABLE `kt` (
+  `a` int DEFAULT NULL,
+  `b` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL
+) ENGINE = KAFKA WITH ("brokers" = '127.0.0.1:19092', "topic" = 'events', "partition" = '0', "autocommit" = 'false', "group" = 'mo_kafka_kafka_exttab_kt', "format" = 'csv', "separator" = ',')
+create external table kt2 (a int, b varchar(100)) engine = kafka with ('brokers' = 'h1:9092,h2:9092', 'topic' = 't2', 'partition' = '3', 'autocommit' = 'true', 'group' = 'g2', 'format' = 'jsonl');
+show create table kt2;
+➤ Table[12,3,0]  ¦  Create Table[12,260,0]  𝄀
+kt2  ¦  CREATE EXTERNAL TABLE `kt2` (
+  `a` int DEFAULT NULL,
+  `b` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL
+) ENGINE = KAFKA WITH ("brokers" = 'h1:9092,h2:9092', "topic" = 't2', "partition" = '3', "autocommit" = 'true', "group" = 'g2', "format" = 'jsonl')
+create external table kt3 (a int) engine = kafka with ('brokers' = 'h:9092', 'topic' = 't3', 'separator' = '|');
+show create table kt3;
+➤ Table[12,3,0]  ¦  Create Table[12,232,0]  𝄀
+kt3  ¦  CREATE EXTERNAL TABLE `kt3` (
+  `a` int DEFAULT NULL
+) ENGINE = KAFKA WITH ("brokers" = 'h:9092', "topic" = 't3', "partition" = '0', "autocommit" = 'false', "group" = 'mo_kafka_kafka_exttab_kt3', "format" = 'csv', "separator" = '|')
+create external table bad1 (a int) engine = kafka;
+invalid input: kafka external table requires the 'brokers' option
+create external table bad2 (a int) engine = kafka with ('brokers' = 'h:9092');
+invalid input: kafka external table requires the 'topic' option
+create external table bad3 (a int) engine = kafka with ('topic' = 't');
+invalid input: kafka external table requires the 'brokers' option
+create external table bad4 (a int) engine = kafka with ('brokers' = 'nohostport', 'topic' = 't');
+invalid input: kafka option 'brokers' entry 'nohostport' is not host:port
+create external table bad5 (a int) engine = kafka with ('brokers' = 'h:9092', 'topic' = 't', 'partition' = '-1');
+invalid input: kafka option 'partition' must be a non-negative integer, got '-1'
+create external table bad6 (a int) engine = kafka with ('brokers' = 'h:9092', 'topic' = 't', 'format' = 'xml');
+invalid input: kafka option 'format' must be csv or jsonl, got 'xml'
+create external table bad7 (a int) engine = kafka with ('brokers' = 'h:9092', 'topic' = 't', 'format' = 'jsonl', 'separator' = '|');
+invalid input: kafka option 'separator' is only valid with format csv
+create external table bad8 (a int) engine = kafka with ('brokers' = 'h:9092', 'topic' = 't', 'separator' = '||');
+invalid input: kafka option 'separator' must be a single character, got '||'
+create external table bad9 (a int) engine = kafka with ('brokers' = 'h:9092', 'topic' = 't', 'bogus' = 'v');
+invalid input: unknown kafka option 'bogus' (supported: brokers, topic, partition, autocommit, group, format, separator)
+create external table bad10 (a int) engine = kafka with ('brokers' = 'h:9092', 'topic' = 't', 'topic' = 't2');
+invalid input: duplicate kafka option 'topic'
+create external table bad11 (a int, __mo_message_id bigint) engine = kafka with ('brokers' = 'h:9092', 'topic' = 't');
+invalid input: column name __mo_message_id is reserved for external table scans
+create table bad12 (a int, __mo_read_start_id bigint);
+invalid input: column name __mo_read_start_id is reserved for external table scans
+alter table kt3 add column __mo_message_ts timestamp;
+not supported: ALTER TABLE on a kafka external table; drop and recreate the external table to change its schema
+alter table kt add column c int;
+not supported: ALTER TABLE on a kafka external table; drop and recreate the external table to change its schema
+select * from kt;
+invalid input: kafka external table with autocommit=false requires a __mo_read_start_id = <last consumed offset> predicate (-1 for the earliest)
+select * from kt where __mo_read_start_id = -2;
+invalid input: __mo_read_start_id must be >= -1, got -2
+select * from kt where __mo_read_start_id = 0 and __mo_read_size = 0;
+invalid input: __mo_read_size must be positive, got 0
+select * from kt where __mo_read_start_id = 0 and __mo_read_timeout = -1;
+invalid input: __mo_read_timeout must be >= 0, got -1
+select * from kt where __mo_read_start_id = 1 and __mo_read_start_id = 2;
+invalid input: contradictory __mo_read_start_id predicates: 1 and 2
+create table plain_t (a int) engine = kafka;
+drop table plain_t;
+create table kafka (kafka int);
+insert into kafka values (1);
+select kafka from kafka;
+➤ kafka[4,32,0]  𝄀
+1
+drop table kafka;
+select last_kafka_message_id();
+➤ last_kafka_message_id()[-5,64,0]  𝄀
+null
+drop database kafka_exttab;

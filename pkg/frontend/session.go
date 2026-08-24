@@ -211,6 +211,13 @@ type Session struct {
 	// not silently re-admitted into a cache nobody will ever clean up again.
 	foreignConnsClosed bool
 
+	// lastKafkaMessageID is the offset of the last message a completed Kafka
+	// external-table scan returned in this session; read back by
+	// LAST_KAFKA_MESSAGE_ID(). See session_kafka.go.
+	lastKafkaMessageMu  sync.Mutex
+	lastKafkaMessageID  int64
+	lastKafkaMessageSet bool
+
 	// rewriteEnabled caches the enable_remap_hint system variable state
 	// to avoid expensive GetSessionSysVar calls on every SQL query
 	rewriteEnabled atomic.Bool

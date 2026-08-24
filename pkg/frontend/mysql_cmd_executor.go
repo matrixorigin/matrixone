@@ -351,7 +351,7 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 		// credentials; re-rendering the AST redacts them
 		// (DataStreamOption.Format / ForeignTableOption.Format), so the raw
 		// CREATE text never reaches statement logging.
-		if stmt.DataStreamParam != nil || stmt.ForeignParam != nil {
+		if stmt.DataStreamParam != nil || stmt.ForeignParam != nil || stmt.KafkaParam != nil {
 			return tree.String(statement, dialect.MYSQL)
 		}
 		return text

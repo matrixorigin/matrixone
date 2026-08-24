@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreigntvf"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2358,6 +2359,31 @@ func buildCreateTable(
 		properties := []*plan.Property{
 			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
 			{Key: catalog.SystemRelAttr_CreateSQL, Value: foreignext.BuildCreateSQLEnvelope(cfg)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
+	} else if stmt.KafkaParam != nil {
+		cfg, err := sqlkafka.ParseTableOptions(ctx.GetContext(), stmt.KafkaParam)
+		if err != nil {
+			return nil, err
+		}
+		// The consumer group carries the committed-offset exactly-once
+		// bookmark; default it per table so it is stable across sessions and
+		// persisted concretely in the envelope.
+		if cfg.Group == "" {
+			cfg.Group = sqlkafka.DefaultGroup(createTable.Database, createTable.TableDef.Name)
+		}
+		// Like MongoDB/datastream/foreign, the durable typed feature bit is
+		// the discriminator that cannot be injected through the
+		// user-controlled rel_createsql JSON of a generic external table.
+		createTable.TableDef.FeatureFlag |= features.KafkaExternal
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqlkafka.BuildCreateSQLEnvelope(cfg)},
 		}
 		createTable.TableDef.TableType = catalog.SystemExternalRel
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
