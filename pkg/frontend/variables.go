@@ -996,48 +996,53 @@ func resolveServerID(ses *Session) string {
 
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
-	m.Lock()
-	sysVars, ok := m.accountsGlobalSysVarsMap[accountId]
-	refreshEpoch := m.publicationEpoch
-	var mutationGeneration uint64
-	if ok {
-		mutationGeneration = sysVars.getMutationGeneration()
-	}
-	m.Unlock()
+	for {
+		m.Lock()
+		sysVars, ok := m.accountsGlobalSysVarsMap[accountId]
+		refreshEpoch := m.publicationEpoch
+		var mutationGeneration uint64
+		if ok {
+			mutationGeneration = sysVars.getMutationGeneration()
+		}
+		m.Unlock()
 
-	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
+		sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
+		if err != nil {
+			return nil, err
+		}
 
-	CNServiceConfig := getPu(ses.service).SV
-	useTomlConfigOverOtherConfigs(CNServiceConfig, sysVarsMp)
-	sysVarsMp["server_id"] = resolveServerID(ses)
+		CNServiceConfig := getPu(ses.service).SV
+		useTomlConfigOverOtherConfigs(CNServiceConfig, sysVarsMp)
+		sysVarsMp["server_id"] = resolveServerID(ses)
 
-	m.Lock()
-	defer m.Unlock()
-	current, exists := m.accountsGlobalSysVarsMap[accountId]
-	if m.publicationEpoch != refreshEpoch {
-		// This read started before a completed SyncCommit fence. It may still
-		// serve its original caller, but it must never publish into shared state.
-		if exists {
+		m.Lock()
+		current, exists := m.accountsGlobalSysVarsMap[accountId]
+		if m.publicationEpoch != refreshEpoch {
+			// Neither the catalog result nor current is proven to satisfy the
+			// newer fence. Retry from that fence instead of returning stale state.
+			m.Unlock()
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if !exists {
+			current = &SystemVariables{mp: sysVarsMp}
+			m.accountsGlobalSysVarsMap[accountId] = current
+			m.Unlock()
 			return current, nil
 		}
-		return &SystemVariables{mp: sysVarsMp}, nil
-	}
-	if !exists {
-		current = &SystemVariables{mp: sysVarsMp}
-		m.accountsGlobalSysVarsMap[accountId] = current
+		// The account entry was created or replaced while the catalog read was in
+		// flight. Keep the currently published object instead of updating a stale,
+		// detached one.
+		if !ok || current != sysVars {
+			m.Unlock()
+			return current, nil
+		}
+		current.replaceIfMutationGeneration(mutationGeneration, sysVarsMp)
+		m.Unlock()
 		return current, nil
 	}
-	// The account entry was created or replaced while the catalog read was in
-	// flight. Keep the currently published object instead of updating a stale,
-	// detached one.
-	if !ok || current != sysVars {
-		return current, nil
-	}
-	current.replaceIfMutationGeneration(mutationGeneration, sysVarsMp)
-	return current, nil
 }
 
 func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {

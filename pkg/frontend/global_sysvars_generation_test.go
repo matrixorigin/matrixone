@@ -183,7 +183,7 @@ func TestGlobalSysVarsFencePreventsOldRefreshFromOverwritingNewPublication(t *te
 	require.Equal(t, int64(0), cloned.Get(PasswordHistory))
 }
 
-func TestGlobalSysVarsFencePreventsOldRefreshFromCreatingSharedEntry(t *testing.T) {
+func TestGlobalSysVarsFenceRetriesOldRefreshBeforeCreatingSharedEntry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newSes(nil, ctrl)
 	accountID := ses.GetTenantInfo().GetTenantID()
@@ -193,19 +193,24 @@ func TestGlobalSysVarsFencePreventsOldRefreshFromCreatingSharedEntry(t *testing.
 	releaseOldRead := make(chan struct{})
 	var releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseOldRead) }) })
+	var reads atomic.Int32
 	oldSnapshot := newMrsForGlobalSystemVariables([][]interface{}{{PasswordHistory, "5"}})
+	newSnapshot := newMrsForGlobalSystemVariables([][]interface{}{{PasswordHistory, "0"}})
 	execStub := gostub.Stub(&ExeSqlInBgSes, func(
 		ctx context.Context,
 		_ BackgroundExec,
 		_ string,
 	) ([]ExecResult, error) {
-		close(oldReadCaptured)
-		select {
-		case <-releaseOldRead:
-			return []ExecResult{oldSnapshot}, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		if reads.Add(1) == 1 {
+			close(oldReadCaptured)
+			select {
+			case <-releaseOldRead:
+				return []ExecResult{oldSnapshot}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
+		return []ExecResult{newSnapshot}, nil
 	})
 	t.Cleanup(execStub.Reset)
 
@@ -229,14 +234,83 @@ func TestGlobalSysVarsFencePreventsOldRefreshFromCreatingSharedEntry(t *testing.
 	select {
 	case result := <-resultC:
 		require.NoError(t, result.err)
-		require.Equal(t, int64(5), result.vars.Get(PasswordHistory))
+		require.Equal(t, int64(0), result.vars.Get(PasswordHistory))
 	case <-time.After(5 * time.Second):
 		t.Fatal("old refresh did not complete")
 	}
 	mgr.Lock()
-	_, published := mgr.accountsGlobalSysVarsMap[accountID]
+	published := mgr.accountsGlobalSysVarsMap[accountID]
 	mgr.Unlock()
-	require.False(t, published, "a pre-fence read must not create a shared cache entry after ACK")
+	require.NotNil(t, published)
+	require.Equal(t, int64(0), published.Get(PasswordHistory))
+	require.Equal(t, int32(2), reads.Load())
+}
+
+func TestGlobalSysVarsLaterFenceCannotReturnOlderSharedCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	accountID := ses.GetTenantInfo().GetTenantID()
+	globalVars := &SystemVariables{mp: map[string]interface{}{
+		PasswordHistory: int64(5),
+	}}
+	mgr := &GlobalSysVarsMgr{
+		accountsGlobalSysVarsMap: map[uint32]*SystemVariables{accountID: globalVars},
+	}
+
+	// E1 represents the completed SET GLOBAL whose value the new session must see.
+	mgr.AdvancePublicationEpoch()
+	firstReadCaptured := make(chan struct{})
+	releaseFirstRead := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseFirstRead) }) })
+	var reads atomic.Int32
+	newSnapshot := newMrsForGlobalSystemVariables([][]interface{}{{PasswordHistory, "0"}})
+	execStub := gostub.Stub(&ExeSqlInBgSes, func(
+		ctx context.Context,
+		_ BackgroundExec,
+		_ string,
+	) ([]ExecResult, error) {
+		if reads.Add(1) == 1 {
+			close(firstReadCaptured)
+			select {
+			case <-releaseFirstRead:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return []ExecResult{newSnapshot}, nil
+	})
+	t.Cleanup(execStub.Reset)
+
+	type refreshResult struct {
+		vars *SystemVariables
+		err  error
+	}
+	resultC := make(chan refreshResult, 1)
+	go func() {
+		vars, err := mgr.Get(accountID, ses, context.Background(), nil)
+		resultC <- refreshResult{vars: vars, err: err}
+	}()
+	select {
+	case <-firstReadCaptured:
+	case <-time.After(5 * time.Second):
+		t.Fatal("post-E1 refresh did not capture the new catalog value")
+	}
+
+	// An unrelated SyncCommit advances the CN-wide epoch to E2 while the E1
+	// refresh is waiting to publish. The old shared cache still contains 5.
+	mgr.AdvancePublicationEpoch()
+	releaseOnce.Do(func() { close(releaseFirstRead) })
+
+	select {
+	case result := <-resultC:
+		require.NoError(t, result.err)
+		require.Equal(t, int64(0), result.vars.Clone().Get(PasswordHistory))
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not retry after the later fence")
+	}
+	require.Equal(t, int64(0), globalVars.Get(PasswordHistory))
+	require.Equal(t, int32(2), reads.Load())
 }
 
 func TestGlobalSysVarsRefreshDoesNotAdvanceMutationGeneration(t *testing.T) {
