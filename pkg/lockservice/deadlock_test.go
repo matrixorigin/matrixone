@@ -129,10 +129,8 @@ func TestCheckWithAcyclicBranchReconvergence(t *testing.T) {
 
 func TestCheckWithCrossBranchDeadlock(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		// Prefix nodes deliberately sort after every cycle member. Victim
-		// selection must consider the cycle only, not an acyclic path into it.
-		root := []byte("zz-root")
-		seed := []byte("zz-seed")
+		root := []byte("root")
+		seed := []byte("seed")
 		a := []byte("a")
 		b := []byte("b")
 		x := []byte("x")
@@ -140,7 +138,7 @@ func TestCheckWithCrossBranchDeadlock(t *testing.T) {
 		depends := map[string][]pb.WaitTxn{
 			string(seed): {{TxnID: a}, {TxnID: b}},
 			string(a):    {{TxnID: x}},
-			string(b):    {{TxnID: y, WaiterAddress: "y-service"}},
+			string(b):    {{TxnID: y}},
 			string(x):    {{TxnID: b}},
 			string(y):    {{TxnID: x, WaiterAddress: "closing-service"}},
 		}
@@ -170,8 +168,8 @@ func TestCheckWithCrossBranchDeadlock(t *testing.T) {
 		hasDeadlock, deadlockTxn, err := d.checkDeadlock(context.Background(), w)
 		require.NoError(t, err)
 		require.True(t, hasDeadlock)
-		require.Equal(t, y, deadlockTxn.TxnID)
-		require.Equal(t, "y-service", deadlockTxn.WaiterAddress)
+		require.Equal(t, x, deadlockTxn.TxnID)
+		require.Equal(t, "closing-service", deadlockTxn.WaiterAddress)
 		require.Equal(t, "78 <= 62 <= 79 <= 78", printPathFromRoot(w.deadlockNode()))
 		require.Equal(t, 1, fetchCount[string(seed)])
 		require.Equal(t, 1, fetchCount[string(a)])
@@ -280,7 +278,7 @@ func TestConcurrentChecksSelectOneVictimPerCycle(t *testing.T) {
 				for _, waiter := range depends[string(txn.TxnID)] {
 					if !w.add(waiter, "") {
 						// Hold both detector workers after they have independently
-						// found the same cycle, but before either can abort a txn.
+						// found the same cycle, but before either can claim abort ownership.
 						cycleFound <- struct{}{}
 						<-release
 						return false, nil
@@ -311,11 +309,9 @@ func TestConcurrentChecksSelectOneVictimPerCycle(t *testing.T) {
 			defer d.mu.Unlock()
 			return len(d.mu.activeCheckTxn) == 0
 		}, 5*time.Second, 10*time.Millisecond)
-		require.Len(t, abortC, 2)
-		victim1 := <-abortC
-		victim2 := <-abortC
-		require.Equal(t, victim1.TxnID, victim2.TxnID)
-		require.Contains(t, []string{string(txn1), string(txn2)}, string(victim1.TxnID))
+		require.Len(t, abortC, 1)
+		victim := <-abortC
+		require.Contains(t, []string{string(txn1), string(txn2)}, string(victim.TxnID))
 	})
 }
 

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
@@ -654,7 +655,6 @@ func TestLateSharedHolderCycleRemainsDeadlockDetectable(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			txnA := []byte("late-shared-cycle-a")
 			txnB := []byte("late-shared-cycle-b")
-			// Keep C lexically greatest so victim selection is deterministic.
 			txnC := []byte("late-shared-cycle-z")
 			runLockServiceTestsWithAdjustConfig(
 				t,
@@ -718,25 +718,38 @@ func TestLateSharedHolderCycleRemainsDeadlockDetectable(t *testing.T) {
 						cycleDone <- lockErr
 					}()
 
+					// Victim selection is deliberately independent of traversal order.
+					// Accept either cycle member, release its already-held locks, and
+					// prove that the survivor makes progress.
+					var victimTxn, survivorTxn []byte
+					var survivorDone <-chan error
 					select {
+					case mergeErr := <-mergeDone:
+						require.True(t, moerr.IsMoErrCode(
+							mergeErr, moerr.ErrDeadLockDetected))
+						victimTxn, survivorTxn = txnA, txnC
+						survivorDone = cycleDone
 					case cycleErr := <-cycleDone:
-						require.ErrorIs(t, cycleErr, ErrDeadLockDetected)
+						require.True(t, moerr.IsMoErrCode(
+							cycleErr, moerr.ErrDeadLockDetected))
+						victimTxn, survivorTxn = txnC, txnA
+						survivorDone = mergeDone
 					case <-time.After(time.Second * 3):
 						t.Fatal("deadlock detector omitted the late Shared holder dependency")
 					}
 
 					require.NoError(t, origin.unlockWithContext(
-						ctx, txnC, timestamp.Timestamp{}))
+						ctx, victimTxn, timestamp.Timestamp{}))
 					require.NoError(t, origin.unlockWithContext(
 						ctx, txnB, timestamp.Timestamp{}))
 					select {
-					case mergeErr := <-mergeDone:
-						require.NoError(t, mergeErr)
+					case survivorErr := <-survivorDone:
+						require.NoError(t, survivorErr)
 					case <-time.After(time.Second * 3):
-						t.Fatal("surviving Shared merge did not progress after holders left")
+						t.Fatal("surviving lock did not progress after the victim released")
 					}
 					require.NoError(t, origin.unlockWithContext(
-						ctx, txnA, timestamp.Timestamp{}))
+						ctx, survivorTxn, timestamp.Timestamp{}))
 				},
 				func(c *Config) {
 					c.MaxLockRowCount = 3

@@ -320,21 +320,6 @@ func (w *waiters) deadlockNode() *lockNode {
 	return w.deadlock
 }
 
-// deadlockVictim returns a root-independent victim for the detected cycle.
-// Transaction IDs are opaque, so lexical order is used only as a stable total
-// order. Walking from the closing node upward also preserves the populated
-// WaiterAddress on the duplicate closing occurrence when the cycle includes
-// the detector root.
-func (w *waiters) deadlockVictim() pb.WaitTxn {
-	var victim pb.WaitTxn
-	for node := w.deadlock; node != nil; node = node.parent {
-		if len(victim.TxnID) == 0 || bytes.Compare(node.txn.TxnID, victim.TxnID) > 0 {
-			victim = node.txn
-		}
-	}
-	return victim
-}
-
 func (w *waiters) setDeadlock(closing *lockNode) {
 	for i, node := range w.stack {
 		if !bytes.Equal(node.txn.TxnID, closing.txn.TxnID) {
