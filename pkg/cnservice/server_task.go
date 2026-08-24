@@ -213,6 +213,21 @@ func (s *service) publishTaskRunner() error {
 	return nil
 }
 
+func (s *service) revokeTaskRunner() {
+	s.task.Lock()
+	s.task.generationRevoked = true
+	s.task.runnerReady.Store(false)
+	runner := s.task.runner
+	s.task.runner = nil
+	s.task.Unlock()
+
+	if runner != nil {
+		if err := runner.Stop(); err != nil {
+			s.logger.Error("stop revoked generation task runner failed", zap.Error(err))
+		}
+	}
+}
+
 func (s *service) startTaskRunnerLocked() {
 	if s.task.generationRevoked || s.viewMetadataGenerationRevoked.Load() {
 		s.task.runnerReady.Store(false)

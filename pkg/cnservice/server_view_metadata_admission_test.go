@@ -172,8 +172,10 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 			return errors.New("expected close error")
 		},
 	}
+	runner := &testRunner{}
 	s.viewMetadataIngressReady.Store(true)
 	s.task.runnerReady.Store(true)
+	s.task.runner = runner
 	pipelineCtx, releasePipeline, admitted := s.admitPipelineHandler(context.Background())
 	require.True(t, admitted)
 	releaseQuery, admitted := s.queryWork.admit()
@@ -189,6 +191,9 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 	require.False(t, s.viewMetadataIngressReady.Load())
 	require.False(t, s.task.runnerReady.Load(),
 		"generation revocation must synchronously withdraw task-runner eligibility")
+	require.Equal(t, 1, runner.stopped,
+		"generation revocation must synchronously stop the running task runner")
+	require.Nil(t, s.GetTaskRunner(), "the stopped task runner must be detached")
 	select {
 	case <-pipelineCtx.Done():
 	default:
@@ -211,6 +216,39 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 
 	releasePipeline()
 	releaseQuery()
+}
+
+func TestCNGenerationRevocationStopsTaskRunnerStartInFlight(t *testing.T) {
+	s := &service{
+		cfg:                             &Config{UUID: "task-runner-revoked-during-start"},
+		logger:                          zap.NewNop(),
+		viewMetadataAdmissionGeneration: 8,
+		viewMetadataCloseFn:             func() error { return nil },
+	}
+	runner := &testRunner{}
+
+	// Model TaskRunner.Start in progress: it owns task.Lock and publishes the
+	// runner immediately before releasing the lock. Revocation must wait for
+	// that publication, then detach and stop the runner before returning.
+	s.task.Lock()
+	revokeDone := make(chan struct{})
+	go func() {
+		s.revokeViewMetadataGeneration(9)
+		close(revokeDone)
+	}()
+	require.Eventually(t, s.viewMetadataGenerationRevoked.Load, time.Second, time.Millisecond)
+	s.task.runner = runner
+	s.task.runnerReady.Store(true)
+	s.task.Unlock()
+
+	select {
+	case <-revokeDone:
+	case <-time.After(time.Second):
+		t.Fatal("generation revocation did not finish stopping the in-flight task runner")
+	}
+	require.Equal(t, 1, runner.stopped)
+	require.False(t, s.task.runnerReady.Load())
+	require.Nil(t, s.GetTaskRunner())
 }
 
 func TestCNGenerationRevocationCancelsIngressStart(t *testing.T) {

@@ -121,12 +121,9 @@ func (s *service) revokeViewMetadataGeneration(authoritative uint64) {
 	s.viewMetadataRevocationOnce.Do(func() {
 		s.viewMetadataGenerationRevoked.Store(true)
 		s.viewMetadataIngressReady.Store(false)
-		s.task.Lock()
-		s.task.generationRevoked = true
-		s.task.runnerReady.Store(false)
-		s.task.Unlock()
 		_ = s.closePipelineAdmission()
 		s.queryWork.beginClose()
+		s.revokeTaskRunner()
 		// Serialize physical frontend shutdown with MOServer.Start without waiting
 		// for the broader lifecycleMu held by the complete Start sequence.
 		if s.mo != nil {
