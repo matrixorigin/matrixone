@@ -109,9 +109,9 @@ func (c *clientConn) migrateConnToContext(
 			return err
 		}
 		typedMigrationSupported = targetProtocol >= defines.MORPCVersion22
-		if info.FoundRows != 0 && !typedMigrationSupported {
+		if info.FoundRows != 0 && targetProtocol < defines.MORPCVersion29 {
 			return moerr.NewInternalError(ctx,
-				"cannot migrate non-zero FOUND_ROWS state to a pre-v22 target")
+				"cannot migrate non-zero FOUND_ROWS state to a pre-v29 target")
 		}
 		if typedMigrationSupported && info.SystemVariablesSnapshotTooLarge {
 			return moerr.NewInternalError(ctx,

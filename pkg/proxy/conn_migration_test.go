@@ -250,12 +250,12 @@ func TestQueryServiceMigrateToRejectsReadDeadlineClearFailure(t *testing.T) {
 	})
 }
 
-func TestQueryServiceMigrateToRejectsNonZeroFoundRowsForPreV22Target(t *testing.T) {
+func TestQueryServiceMigrateToRejectsNonZeroFoundRowsForPreV29Target(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
 	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
 		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
 		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
-		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion28)
 		defer func() {
 			if hadVersion {
 				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
@@ -270,7 +270,7 @@ func TestQueryServiceMigrateToRejectsNonZeroFoundRowsForPreV22Target(t *testing.
 		defer sc.Close()
 
 		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{FoundRows: 11})
-		assert.ErrorContains(t, err, "cannot migrate non-zero FOUND_ROWS state to a pre-v22 target")
+		assert.ErrorContains(t, err, "cannot migrate non-zero FOUND_ROWS state to a pre-v29 target")
 		assert.Empty(t, sc.statements)
 	})
 }
