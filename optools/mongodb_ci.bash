@@ -10,6 +10,15 @@ REPORT_DIR="${MO_MONGODB_REPORT_DIR:-${ROOT_DIR}/test/mongodb/reports/ci_$(date 
 TMP_DIR=""
 MO_PID=""
 
+readonly PORT_BLOCK_WIDTH=80
+# AddressManager permits its base port plus 20 fallback slots when an address
+# is claimed concurrently, so reserve all 21 possible listener ports.
+readonly ADDRESS_MANAGER_PORT_COUNT=21
+readonly TN_PORT_OFFSET=24
+readonly CN_PORT_OFFSET=48
+readonly FRONTEND_PORT_OFFSET=72
+readonly STATUS_PORT_OFFSET=73
+
 log() { printf '[mongodb-ci] %s\n' "$*"; }
 die() { printf '[mongodb-ci] ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
@@ -112,9 +121,9 @@ find_free_port_block() {
 import random
 import socket
 
-# A CN/TN address manager may use up to 20 adjacent ports. Keep the LogService,
-# TN, and CN ranges in one verified block so a local developer cluster cannot
-# collide with this disposable E2E deployment.
+# A CN/TN address manager can claim its base port plus 20 fallback ports. Keep every
+# MatrixOne listener in one verified block so this disposable E2E deployment
+# cannot collide with itself or a local developer cluster.
 width = 80
 candidates = list(range(36000, 57000 - width, width))
 random.shuffle(candidates)
@@ -137,14 +146,82 @@ raise SystemExit("could not find a free 80-port range for the MongoDB E2E cluste
 PY
 }
 
-find_free_port() {
-  python3 - <<'PY'
-import socket
+is_tcp_port() {
+  local port="$1"
+  [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && (( 10#$port <= 65535 ))
+}
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-    sock.bind(("127.0.0.1", 0))
-    print(sock.getsockname()[1])
-PY
+validate_tcp_port() {
+  local name="$1" port="$2"
+  is_tcp_port "$port" || die "$name must be between 1 and 65535"
+}
+
+validate_port_block_base() {
+  local name="$1" port="$2"
+  validate_tcp_port "$name" "$port"
+  (( 10#$port + PORT_BLOCK_WIDTH - 1 <= 65535 )) || \
+    die "$name must leave room for the ${PORT_BLOCK_WIDTH}-port block"
+}
+
+assert_disjoint_port_ranges() {
+  local left_name="$1" left_start="$2" left_end="$3"
+  local right_name="$4" right_start="$5" right_end="$6"
+  if (( left_start <= right_end && right_start <= left_end )); then
+    die "$left_name overlaps $right_name (${left_start}-${left_end} vs ${right_start}-${right_end})"
+  fi
+}
+
+validate_port_allocation() {
+  validate_tcp_port "MO_MONGODB_FRONTEND_PORT" "$MO_PORT"
+  validate_tcp_port "MO_MONGODB_STATUS_PORT" "$STATUS_PORT"
+  validate_port_block_base "MO_MONGODB_LOG_PORT_BASE" "$LOG_PORT_BASE"
+
+  assert_disjoint_port_ranges "LogService" "$LOG_RAFT_PORT" "$LOG_GOSSIP_PORT" \
+    "TN" "$TN_PORT_BASE" "$((TN_PORT_BASE + ADDRESS_MANAGER_PORT_COUNT - 1))"
+  assert_disjoint_port_ranges "LogService" "$LOG_RAFT_PORT" "$LOG_GOSSIP_PORT" \
+    "CN" "$CN_PORT_BASE" "$((CN_PORT_BASE + ADDRESS_MANAGER_PORT_COUNT - 1))"
+  assert_disjoint_port_ranges "LogService" "$LOG_RAFT_PORT" "$LOG_GOSSIP_PORT" \
+    "frontend" "$MO_PORT" "$MO_PORT"
+  assert_disjoint_port_ranges "LogService" "$LOG_RAFT_PORT" "$LOG_GOSSIP_PORT" \
+    "status" "$STATUS_PORT" "$STATUS_PORT"
+  assert_disjoint_port_ranges "TN" "$TN_PORT_BASE" "$((TN_PORT_BASE + ADDRESS_MANAGER_PORT_COUNT - 1))" \
+    "CN" "$CN_PORT_BASE" "$((CN_PORT_BASE + ADDRESS_MANAGER_PORT_COUNT - 1))"
+  assert_disjoint_port_ranges "TN" "$TN_PORT_BASE" "$((TN_PORT_BASE + ADDRESS_MANAGER_PORT_COUNT - 1))" \
+    "frontend" "$MO_PORT" "$MO_PORT"
+  assert_disjoint_port_ranges "TN" "$TN_PORT_BASE" "$((TN_PORT_BASE + ADDRESS_MANAGER_PORT_COUNT - 1))" \
+    "status" "$STATUS_PORT" "$STATUS_PORT"
+  assert_disjoint_port_ranges "CN" "$CN_PORT_BASE" "$((CN_PORT_BASE + ADDRESS_MANAGER_PORT_COUNT - 1))" \
+    "frontend" "$MO_PORT" "$MO_PORT"
+  assert_disjoint_port_ranges "CN" "$CN_PORT_BASE" "$((CN_PORT_BASE + ADDRESS_MANAGER_PORT_COUNT - 1))" \
+    "status" "$STATUS_PORT" "$STATUS_PORT"
+  assert_disjoint_port_ranges "frontend" "$MO_PORT" "$MO_PORT" \
+    "status" "$STATUS_PORT" "$STATUS_PORT"
+}
+
+allocate_mo_ports() {
+  LOG_PORT_BASE="${MO_MONGODB_LOG_PORT_BASE:-$(find_free_port_block)}"
+  validate_port_block_base "MO_MONGODB_LOG_PORT_BASE" "$LOG_PORT_BASE"
+
+  LOG_RAFT_PORT="$LOG_PORT_BASE"
+  LOG_SERVICE_PORT="$((LOG_PORT_BASE + 1))"
+  LOG_GOSSIP_PORT="$((LOG_PORT_BASE + 2))"
+  TN_PORT_BASE="$((LOG_PORT_BASE + TN_PORT_OFFSET))"
+  CN_PORT_BASE="$((LOG_PORT_BASE + CN_PORT_OFFSET))"
+  MO_PORT="${MO_MONGODB_FRONTEND_PORT:-$((LOG_PORT_BASE + FRONTEND_PORT_OFFSET))}"
+  STATUS_PORT="${MO_MONGODB_STATUS_PORT:-$((LOG_PORT_BASE + STATUS_PORT_OFFSET))}"
+
+  validate_port_allocation
+}
+
+print_port_plan() {
+  printf 'LOG_PORT_BASE=%s\n' "$LOG_PORT_BASE"
+  printf 'LOG_RAFT_PORT=%s\n' "$LOG_RAFT_PORT"
+  printf 'LOG_SERVICE_PORT=%s\n' "$LOG_SERVICE_PORT"
+  printf 'LOG_GOSSIP_PORT=%s\n' "$LOG_GOSSIP_PORT"
+  printf 'TN_PORT_BASE=%s\n' "$TN_PORT_BASE"
+  printf 'CN_PORT_BASE=%s\n' "$CN_PORT_BASE"
+  printf 'MO_PORT=%s\n' "$MO_PORT"
+  printf 'STATUS_PORT=%s\n' "$STATUS_PORT"
 }
 
 generate_mo_config() {
@@ -208,26 +285,10 @@ run_e2e() {
   trap cleanup EXIT
   export COMPOSE_PROJECT_NAME="mo-mongodb-$(basename "$TMP_DIR" | tr '[:upper:].' '[:lower:]-')"
   # Docker owns its published listener. MatrixOne treats a frontend port of 0
-  # as its default (6001), so allocate an explicit port for this disposable
-  # cluster instead of accidentally sharing a developer's local frontend.
-  export MONGODB_PORT="" MO_PORT="${MO_MONGODB_FRONTEND_PORT:-$(find_free_port)}"
-  [[ "$MO_PORT" =~ ^[1-9][0-9]*$ ]] || die "MO_MONGODB_FRONTEND_PORT must be a TCP port"
-  STATUS_PORT="${MO_MONGODB_STATUS_PORT:-$(python3 - <<'PY'
-import socket
-
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-    sock.bind(("127.0.0.1", 0))
-    print(sock.getsockname()[1])
-PY
-)}"
-  [[ "$STATUS_PORT" =~ ^[1-9][0-9]*$ ]] || die "MO_MONGODB_STATUS_PORT must be a TCP port"
-  LOG_PORT_BASE="${MO_MONGODB_LOG_PORT_BASE:-$(find_free_port_block)}"
-  [[ "$LOG_PORT_BASE" =~ ^[1-9][0-9]*$ ]] || die "MO_MONGODB_LOG_PORT_BASE must be a TCP port"
-  LOG_RAFT_PORT="$LOG_PORT_BASE"
-  LOG_SERVICE_PORT="$((LOG_PORT_BASE + 1))"
-  LOG_GOSSIP_PORT="$((LOG_PORT_BASE + 2))"
-  TN_PORT_BASE="$((LOG_PORT_BASE + 24))"
-  CN_PORT_BASE="$((LOG_PORT_BASE + 48))"
+  # as its default (6001), so use one verified reservation for this disposable
+  # cluster instead of separately selecting ports that can overlap each other.
+  allocate_mo_ports
+  export MONGODB_PORT="" MO_PORT
   export MONGODB_ROOT_USER="root_$(openssl rand -hex 6)"
   export MONGODB_ROOT_PASSWORD="$(openssl rand -hex 24)"
   export MONGODB_READER_PASSWORD="$(openssl rand -hex 24)"
@@ -280,6 +341,11 @@ run_unit() {
 case "$PROFILE" in
   unit) run_unit ;;
   e2e-local) run_e2e ;;
+  port-plan)
+    require python3
+    allocate_mo_ports
+    print_port_plan
+    ;;
   nightly)
 	run_unit
 	run_e2e

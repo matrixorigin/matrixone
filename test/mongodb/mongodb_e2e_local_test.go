@@ -18,9 +18,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -49,16 +51,148 @@ func TestMongoDBLocalE2ERunnerDoesNotImportKernelPackages(t *testing.T) {
 	}
 }
 
-func TestMongoDBLocalE2EUsesDedicatedStatusPort(t *testing.T) {
+func TestMongoDBLocalE2EPortPlanUsesOneReservedBlock(t *testing.T) {
+	for range 5 {
+		ports, output, err := runMongoDBPortPlan(t, nil)
+		require.NoError(t, err, output)
+
+		base := ports["LOG_PORT_BASE"]
+		require.GreaterOrEqual(t, base, 1)
+		require.LessOrEqual(t, base+79, 65535)
+		require.Equal(t, base, ports["LOG_RAFT_PORT"])
+		require.Equal(t, base+1, ports["LOG_SERVICE_PORT"])
+		require.Equal(t, base+2, ports["LOG_GOSSIP_PORT"])
+		require.Equal(t, base+24, ports["TN_PORT_BASE"])
+		require.Equal(t, base+48, ports["CN_PORT_BASE"])
+		require.Equal(t, base+72, ports["MO_PORT"])
+		require.Equal(t, base+73, ports["STATUS_PORT"])
+
+		for name, port := range ports {
+			require.GreaterOrEqualf(t, port, base, "%s is below the reserved block", name)
+			require.LessOrEqualf(t, port, base+79, "%s is above the reserved block", name)
+		}
+
+		ranges := []struct {
+			name       string
+			start, end int
+		}{
+			{name: "LogService", start: base, end: base + 2},
+			{name: "TN", start: ports["TN_PORT_BASE"], end: ports["TN_PORT_BASE"] + 20},
+			{name: "CN", start: ports["CN_PORT_BASE"], end: ports["CN_PORT_BASE"] + 20},
+			{name: "frontend", start: ports["MO_PORT"], end: ports["MO_PORT"]},
+			{name: "status", start: ports["STATUS_PORT"], end: ports["STATUS_PORT"]},
+		}
+		for left := range ranges {
+			for right := left + 1; right < len(ranges); right++ {
+				require.Truef(t,
+					ranges[left].end < ranges[right].start || ranges[right].end < ranges[left].start,
+					"%s range %d-%d overlaps %s range %d-%d",
+					ranges[left].name, ranges[left].start, ranges[left].end,
+					ranges[right].name, ranges[right].start, ranges[right].end,
+				)
+			}
+		}
+	}
+}
+
+func TestMongoDBLocalE2EPortPlanValidatesOverrides(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		overrides map[string]string
+		want      string
+	}{
+		{
+			name:      "frontend above TCP range",
+			overrides: map[string]string{"MO_MONGODB_FRONTEND_PORT": "65536"},
+			want:      "MO_MONGODB_FRONTEND_PORT must be between 1 and 65535",
+		},
+		{
+			name:      "status below TCP range",
+			overrides: map[string]string{"MO_MONGODB_STATUS_PORT": "0"},
+			want:      "MO_MONGODB_STATUS_PORT must be between 1 and 65535",
+		},
+		{
+			name:      "port block exceeds TCP range",
+			overrides: map[string]string{"MO_MONGODB_LOG_PORT_BASE": "65457"},
+			want:      "MO_MONGODB_LOG_PORT_BASE must leave room for the 80-port block",
+		},
+		{
+			name: "frontend overlaps LogService",
+			overrides: map[string]string{
+				"MO_MONGODB_LOG_PORT_BASE": "40000",
+				"MO_MONGODB_FRONTEND_PORT": "40000",
+			},
+			want: "LogService overlaps frontend",
+		},
+		{
+			name: "frontend overlaps status",
+			overrides: map[string]string{
+				"MO_MONGODB_LOG_PORT_BASE": "40000",
+				"MO_MONGODB_FRONTEND_PORT": "40072",
+				"MO_MONGODB_STATUS_PORT":   "40072",
+			},
+			want: "frontend overlaps status",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, output, err := runMongoDBPortPlan(t, test.overrides)
+			require.Error(t, err)
+			require.Contains(t, output, test.want)
+		})
+	}
+}
+
+func runMongoDBPortPlan(t *testing.T, overrides map[string]string) (map[string]int, string, error) {
+	t.Helper()
 	repoRoot := mongoDBTestRepoRoot(t)
-	script, err := os.ReadFile(filepath.Join(repoRoot, "optools", "mongodb_ci.bash"))
-	require.NoError(t, err)
-	require.Contains(t, string(script), "MO_MONGODB_STATUS_PORT")
-	require.Contains(t, string(script), "MO_MONGODB_FRONTEND_PORT")
-	require.Contains(t, string(script), "status-port = $STATUS_PORT")
-	require.Contains(t, string(script), "MO_MONGODB_LOG_PORT_BASE")
-	require.Contains(t, string(script), "printf 'logservice-port = %s\\n' \"$LOG_SERVICE_PORT\"")
-	require.Contains(t, string(script), "printf 'service-addresses = [\"127.0.0.1:%s\"]\\n' \"$LOG_SERVICE_PORT\"")
+	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
+	command.Dir = repoRoot
+	command.Env = mongoDBPortPlanEnv(overrides)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return nil, string(output), err
+	}
+
+	ports := make(map[string]int)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		name, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return nil, string(output), fmt.Errorf("unexpected MongoDB port-plan output line %q", line)
+		}
+		port, err := strconv.Atoi(value)
+		if err != nil {
+			return nil, string(output), fmt.Errorf("parse MongoDB port-plan %s: %w", name, err)
+		}
+		if _, exists := ports[name]; exists {
+			return nil, string(output), fmt.Errorf("duplicate MongoDB port-plan value %q", name)
+		}
+		ports[name] = port
+	}
+	for _, name := range []string{
+		"LOG_PORT_BASE", "LOG_RAFT_PORT", "LOG_SERVICE_PORT", "LOG_GOSSIP_PORT",
+		"TN_PORT_BASE", "CN_PORT_BASE", "MO_PORT", "STATUS_PORT",
+	} {
+		if _, exists := ports[name]; !exists {
+			return nil, string(output), fmt.Errorf("MongoDB port-plan omitted %s", name)
+		}
+	}
+	return ports, string(output), nil
+}
+
+func mongoDBPortPlanEnv(overrides map[string]string) []string {
+	environment := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, "MO_MONGODB_") || name == "LC_ALL" {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	environment = append(environment, "LC_ALL=C")
+	for name, value := range overrides {
+		environment = append(environment, name+"="+value)
+	}
+	return environment
 }
 
 func TestMongoDBLocalE2ERunContract(t *testing.T) {
