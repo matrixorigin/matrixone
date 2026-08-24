@@ -4684,6 +4684,91 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCTASDoesNotCopyAutoIncrement(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := &mock.ctxt
+	sourceCol := ctx.tables["nation"].Cols[0]
+	sourceCol.Typ.AutoIncr = true
+	sourceCol.Default = nil
+
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"create table copied as select n_nationkey as id, n_name as payload from nation",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	var visible []*plan.ColDef
+	for _, col := range cols {
+		if !col.GetHidden() {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 2)
+	var idCol *plan.ColDef
+	for _, col := range visible {
+		if col.Name == "id" {
+			idCol = col
+			break
+		}
+	}
+	require.NotNil(t, idCol)
+	require.False(t, idCol.Typ.AutoIncr)
+	require.NotNil(t, idCol.Default)
+	require.False(t, idCol.Default.NullAbility)
+	require.Equal(t, "0", idCol.Default.OriginString)
+	require.NotNil(t, idCol.Default.Expr)
+	require.Equal(t, int32(types.T_int32), idCol.Default.Expr.Typ.Id)
+	require.Equal(t, int32(0), idCol.Default.Expr.GetLit().GetI32Val())
+
+	target := p.GetDdl().GetCreateTable()
+	tableDef := target.GetTableDef()
+	tableDef.TblId = 99102
+	ctx.objects[tableDef.Name] = &ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
+	ctx.tables[tableDef.Name] = tableDef
+	ctx.id2name[tableDef.TblId] = tableDef.Name
+	ctx.pks[tableDef.Name] = nil
+	_, err = runOneStmt(mock, t, "insert into copied(payload) values ('omitted-id')")
+	require.NoError(t, err)
+}
+
+func TestBuildCTASExplicitTargetDefaultOverridesAutoIncrementTypeDefault(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	sourceCol := ctx.tables["nation"].Cols[0]
+	sourceCol.Typ.AutoIncr = true
+	sourceCol.Default = nil
+
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"create table copied_explicit (id int not null default 42, payload varchar(25)) as select n_nationkey as id, n_name as payload from nation",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	var idCol *plan.ColDef
+	for _, col := range cols {
+		if !col.Hidden && col.Name == "id" {
+			idCol = col
+			break
+		}
+	}
+	require.NotNil(t, idCol)
+	require.False(t, idCol.Typ.AutoIncr)
+	require.Equal(t, "42", idCol.Default.OriginString)
+	require.NotNil(t, idCol.Default.Expr)
+	require.Equal(t, int32(42), idCol.Default.Expr.GetLit().GetI32Val())
+}
+
 func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
 	tests := []struct {
 		name        string
