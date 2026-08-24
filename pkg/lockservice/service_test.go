@@ -1177,21 +1177,76 @@ func TestDeadLockWith2Txn(t *testing.T) {
 					mustAddTestLock(t, ctx, s, 1, txn1, row1, pb.Granularity_Row)
 					mustAddTestLock(t, ctx, s, 1, txn2, row2, pb.Granularity_Row)
 
-					var wg sync.WaitGroup
-					wg.Add(2)
-					go func() {
-						defer wg.Done()
-						maybeAddTestLockWithDeadlock(t, ctx, s, 1, txn1, row2,
-							pb.Granularity_Row)
-						require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					// Make both detector workers finish traversing the same cycle
+					// before either one can choose and abort a victim.
+					originalFetch := s.deadlockDetector.waitTxnsFetchFunc
+					cycleFound := make(chan struct{}, 2)
+					release := make(chan struct{})
+					released := false
+					defer func() {
+						if !released {
+							close(release)
+						}
 					}()
-					go func() {
-						defer wg.Done()
-						maybeAddTestLockWithDeadlock(t, ctx, s, 1, txn2, row1,
-							pb.Granularity_Row)
-						require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
-					}()
-					wg.Wait()
+					var blockedChecks atomic.Int32
+					s.deadlockDetector.waitTxnsFetchFunc = func(
+						ctx context.Context,
+						txn pb.WaitTxn,
+						waiters *waiters,
+					) (bool, error) {
+						added, err := originalFetch(ctx, txn, waiters)
+						if err == nil && !added && blockedChecks.Add(1) <= 2 {
+							cycleFound <- struct{}{}
+							<-release
+						}
+						return added, err
+					}
+
+					type lockResult struct {
+						lockErr   error
+						unlockErr error
+					}
+					results := make(chan lockResult, 2)
+					lock := func(txnID []byte, rows [][]byte) {
+						_, lockErr := s.Lock(ctx, 1, rows, txnID, newTestRowExclusiveOptions())
+						results <- lockResult{
+							lockErr:   lockErr,
+							unlockErr: s.Unlock(ctx, txnID, timestamp.Timestamp{}),
+						}
+					}
+					go lock(txn1, row2)
+					go lock(txn2, row1)
+
+					for range 2 {
+						select {
+						case <-cycleFound:
+						case <-time.After(5 * time.Second):
+							require.FailNow(t, "detector workers did not both find the cycle")
+						}
+					}
+					close(release)
+					released = true
+
+					deadlocks := 0
+					successes := 0
+					for range 2 {
+						select {
+						case result := <-results:
+							require.NoError(t, result.unlockErr)
+							if result.lockErr == nil {
+								successes++
+								continue
+							}
+							require.True(t,
+								moerr.IsMoErrCode(result.lockErr, moerr.ErrDeadLockDetected),
+								"unexpected lock error: %v", result.lockErr)
+							deadlocks++
+						case <-time.After(5 * time.Second):
+							require.FailNow(t, "lock attempts did not finish")
+						}
+					}
+					require.Equal(t, 1, deadlocks)
+					require.Equal(t, 1, successes)
 				})
 		})
 	}
