@@ -328,6 +328,7 @@ select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_first');
     }
   ]
 }
+
 set @ddl_first_until = (select watermark from change_watermark() w);
 select change_type, added, id, payload
 from table_changes('table_changes_db', 'ddl_order_first', @ddl_first_after, @ddl_first_until) c;
@@ -347,6 +348,7 @@ select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_after');
     }
   ]
 }
+
 set @ddl_after_until = (select watermark from change_watermark() w);
 select change_type, id, added, payload, tail
 from table_changes('table_changes_db', 'ddl_order_after', @ddl_after_after, @ddl_after_until) c;
@@ -366,6 +368,7 @@ select mo_ctl('dn', 'flush', 'table_changes_db.ddl_order_drop');
     }
   ]
 }
+
 set @ddl_drop_until = (select watermark from change_watermark() w);
 select change_type, id, tail
 from table_changes('table_changes_db', 'ddl_order_drop', @ddl_drop_after, @ddl_drop_until) c;
