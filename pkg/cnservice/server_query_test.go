@@ -73,8 +73,24 @@ func TestHandleSyncCommit(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	requested := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
 	applied := requested.Next()
-	txnClient.EXPECT().SyncLatestCommitTSWithContext(gomock.Any(), requested).Return(nil)
-	txnClient.EXPECT().GetLatestCommitTS().Return(applied)
+	epochAdvanced := false
+	previousAdvance := advanceGlobalSysVarsPublicationEpochFn
+	advanceGlobalSysVarsPublicationEpochFn = func() {
+		require.False(t, epochAdvanced)
+		epochAdvanced = true
+	}
+	t.Cleanup(func() { advanceGlobalSysVarsPublicationEpochFn = previousAdvance })
+	gomock.InOrder(
+		txnClient.EXPECT().SyncLatestCommitTSWithContext(gomock.Any(), requested).
+			DoAndReturn(func(context.Context, timestamp.Timestamp) error {
+				require.False(t, epochAdvanced)
+				return nil
+			}),
+		txnClient.EXPECT().GetLatestCommitTS().DoAndReturn(func() timestamp.Timestamp {
+			require.True(t, epochAdvanced, "publication epoch must advance before ACK is constructed")
+			return applied
+		}),
+	)
 
 	resp := &query.Response{}
 	err := (&service{_txnClient: txnClient}).handleSyncCommit(
@@ -86,6 +102,7 @@ func TestHandleSyncCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.SyncCommit)
 	require.Equal(t, applied, resp.SyncCommit.CurrentCommitTS)
+	require.True(t, epochAdvanced)
 }
 
 func TestHandleSyncCommitRejectsInvalidRequest(t *testing.T) {
@@ -104,6 +121,10 @@ func TestHandleSyncCommitRejectsInvalidRequest(t *testing.T) {
 func TestHandleSyncCommitPropagatesCancellation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	advanced := false
+	previousAdvance := advanceGlobalSysVarsPublicationEpochFn
+	advanceGlobalSysVarsPublicationEpochFn = func() { advanced = true }
+	t.Cleanup(func() { advanceGlobalSysVarsPublicationEpochFn = previousAdvance })
 	ts := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
 	entered := make(chan struct{})
 	txnClient.EXPECT().SyncLatestCommitTSWithContext(gomock.Any(), ts).
@@ -134,6 +155,7 @@ func TestHandleSyncCommitPropagatesCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("handler did not stop after cancellation")
 	}
+	require.False(t, advanced, "a failed fence must not advance the publication epoch")
 }
 
 func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {

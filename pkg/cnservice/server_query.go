@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -52,8 +53,9 @@ import (
 )
 
 var (
-	iscpExecutorReadyTimeout = 2 * time.Second
-	iscpGetExecutorRuntimeFn = iscp.GetExecutorRuntime
+	iscpExecutorReadyTimeout               = 2 * time.Second
+	iscpGetExecutorRuntimeFn               = iscp.GetExecutorRuntime
+	advanceGlobalSysVarsPublicationEpochFn = frontend.GSysVarsMgr.AdvancePublicationEpoch
 )
 
 type queryWorkLifecycle struct {
@@ -457,6 +459,10 @@ func (s *service) handleSyncCommit(
 	if err := s._txnClient.SyncLatestCommitTSWithContext(ctx, commitTS); err != nil {
 		return err
 	}
+	// Invalidate the publication right of catalog refreshes that started before
+	// this fence. The epoch must advance before ACK so a new session cannot be
+	// raced back to an older shared snapshot after SET GLOBAL reports success.
+	advanceGlobalSysVarsPublicationEpochFn()
 	resp.SyncCommit = &query.SyncCommitResponse{
 		CurrentCommitTS: s._txnClient.GetLatestCommitTS(),
 	}

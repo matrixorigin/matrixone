@@ -969,6 +969,9 @@ func (sv SystemVariable) GetDefault() interface{} {
 type GlobalSysVarsMgr struct {
 	sync.Mutex
 	accountsGlobalSysVarsMap map[uint32]*SystemVariables
+	// publicationEpoch invalidates catalog reads that started before a remote
+	// SyncCommit fence. It is independent from per-account local mutations.
+	publicationEpoch uint64
 }
 
 func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, sysVarsMp map[string]interface{}) {
@@ -995,6 +998,7 @@ func resolveServerID(ses *Session) string {
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
 	m.Lock()
 	sysVars, ok := m.accountsGlobalSysVarsMap[accountId]
+	refreshEpoch := m.publicationEpoch
 	var mutationGeneration uint64
 	if ok {
 		mutationGeneration = sysVars.getMutationGeneration()
@@ -1013,6 +1017,14 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 	m.Lock()
 	defer m.Unlock()
 	current, exists := m.accountsGlobalSysVarsMap[accountId]
+	if m.publicationEpoch != refreshEpoch {
+		// This read started before a completed SyncCommit fence. It may still
+		// serve its original caller, but it must never publish into shared state.
+		if exists {
+			return current, nil
+		}
+		return &SystemVariables{mp: sysVarsMp}, nil
+	}
 	if !exists {
 		current = &SystemVariables{mp: sysVarsMp}
 		m.accountsGlobalSysVarsMap[accountId] = current
@@ -1032,6 +1044,14 @@ func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {
 	m.Lock()
 	defer m.Unlock()
 	m.accountsGlobalSysVarsMap[accountId] = vars
+}
+
+// AdvancePublicationEpoch prevents every catalog refresh that started before
+// this call from publishing into the shared account cache.
+func (m *GlobalSysVarsMgr) AdvancePublicationEpoch() {
+	m.Lock()
+	defer m.Unlock()
+	m.publicationEpoch++
 }
 
 var GSysVarsMgr = &GlobalSysVarsMgr{
