@@ -39,6 +39,10 @@ Each Kafka message **value** must parse to exactly one record:
 A message that parses to zero or multiple records fails the query ("did not
 parse to exactly one record"), as does a wrong field count.
 
+The scan consumes at Kafka's `read_committed` isolation: records of aborted
+or still-open producer transactions never surface as rows, never become
+`LAST_KAFKA_MESSAGE_ID()`, and never advance committed progress.
+
 ## 3. Synthetic columns
 
 Hidden from `SELECT *`, selectable by name, ColId-scoped

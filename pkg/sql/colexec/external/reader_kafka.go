@@ -362,6 +362,11 @@ func (r *KafkaReader) Open(param *ExternalParam, proc *process.Process) (fileEmp
 		// skip expired messages but can never silently REPLAY delivered ones
 		// (kgo's default reset is AtStart, which would).
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
+		// SQL rows are Kafka's COMMITTED view: records from aborted (or
+		// still-open) producer transactions must never surface as rows,
+		// become the last message id, or advance committed progress. kgo's
+		// default is read_uncommitted.
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 	)
 	if err != nil {
 		return false, moerr.NewInternalErrorf(proc.Ctx, "kafka: cannot create client for %s: %v", ks.Brokers, err)

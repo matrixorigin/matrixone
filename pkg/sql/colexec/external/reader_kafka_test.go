@@ -620,3 +620,101 @@ func TestKafkaScanStatementBoundary(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int64(2), at, "success commits last+1")
 }
+
+// produceTxn produces one record inside a producer transaction and ends it
+// (commit or abort).
+func produceTxn(t *testing.T, addr, topic, value, txnID string, commit bool) {
+	t.Helper()
+	cl, err := kgo.NewClient(kgo.SeedBrokers(addr), kgo.TransactionalID(txnID))
+	require.NoError(t, err)
+	defer cl.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	require.NoError(t, cl.BeginTransaction())
+	require.NoError(t, cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte(value)}).FirstErr())
+	end := kgo.TryAbort
+	if commit {
+		end = kgo.TryCommit
+	}
+	require.NoError(t, cl.EndTransaction(ctx, end))
+}
+
+// TestKafkaReaderReadCommittedIsolation: the SQL view is Kafka's COMMITTED
+// view. Aborted-transaction records must not surface as rows, must not
+// become the last message id, and must not advance committed progress —
+// including at the __mo_read_size boundary (the reviewer's repro: aborted
+// record first, size=1 must return the first COMMITTED row).
+func TestKafkaReaderReadCommittedIsolation(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "t_txn"))
+	require.NoError(t, err)
+	t.Cleanup(c.Close)
+	addr := c.ListenAddrs()[0]
+
+	produceTxn(t, addr, "t_txn", "1,aborted", "tx_abort", false)
+	{ // a plain committed record after the aborted one
+		cl, err := kgo.NewClient(kgo.SeedBrokers(addr))
+		require.NoError(t, err)
+		defer cl.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		require.NoError(t, cl.ProduceSync(ctx, &kgo.Record{Topic: "t_txn", Value: []byte("2,committed")}).FirstErr())
+	}
+
+	// size=1 from the earliest: the first COMMITTED row, not the aborted one
+	ks := kafkaScan(addr, "t_txn", sqlkafka.FormatCSV)
+	ks.Size = 1
+	param, proc, bat := newKafkaTestParam(t, ks)
+	readAllKafka(t, param, proc, bat)
+	require.Equal(t, 1, bat.RowCount())
+	as := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+	require.Equal(t, int32(2), as[0], "aborted-transaction record must not surface")
+	require.Equal(t, "2,committed", bat.Vecs[5].GetStringAt(0))
+	// the last id is the committed record's offset, and progress follows it
+	require.GreaterOrEqual(t, proc.GetSession().(*fakeKafkaSession).lastID, int64(1))
+
+	// a committed transactional record IS visible
+	produceTxn(t, addr, "t_txn", "3,txcommitted", "tx_commit", true)
+	ks2 := kafkaScan(addr, "t_txn", sqlkafka.FormatCSV)
+	ks2.Group = "g_txn2"
+	param2, proc2, bat2 := newKafkaTestParam(t, ks2)
+	readAllKafka(t, param2, proc2, bat2)
+	vals := make([]int32, bat2.RowCount())
+	copy(vals, vector.MustFixedColWithTypeCheck[int32](bat2.Vecs[0])[:bat2.RowCount()])
+	require.Equal(t, []int32{2, 3}, vals, "committed rows only, in order")
+}
+
+// TestKafkaReaderOpenTransactionInvisible: records of a STILL-OPEN producer
+// transaction are not visible; the read returns only committed rows and then
+// ends via its idle timeout (the timeout boundary of isolation).
+func TestKafkaReaderOpenTransactionInvisible(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "t_open"))
+	require.NoError(t, err)
+	t.Cleanup(c.Close)
+	addr := c.ListenAddrs()[0]
+
+	{ // one committed record
+		cl, err := kgo.NewClient(kgo.SeedBrokers(addr))
+		require.NoError(t, err)
+		defer cl.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		require.NoError(t, cl.ProduceSync(ctx, &kgo.Record{Topic: "t_open", Value: []byte("1,a")}).FirstErr())
+	}
+	// an OPEN transaction: produced, never ended (client closed by cleanup)
+	txCl, err := kgo.NewClient(kgo.SeedBrokers(addr), kgo.TransactionalID("tx_open"))
+	require.NoError(t, err)
+	t.Cleanup(txCl.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	require.NoError(t, txCl.BeginTransaction())
+	require.NoError(t, txCl.ProduceSync(ctx, &kgo.Record{Topic: "t_open", Value: []byte("9,open")}).FirstErr())
+
+	ks := kafkaScan(addr, "t_open", sqlkafka.FormatCSV)
+	ks.TimeoutSeconds = 1
+	param, proc, bat := newKafkaTestParam(t, ks)
+	readAllKafka(t, param, proc, bat)
+	require.Equal(t, 1, bat.RowCount(), "the open transaction's record must be invisible")
+	as := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+	require.Equal(t, int32(1), as[0])
+	require.Equal(t, int64(0), proc.GetSession().(*fakeKafkaSession).lastID)
+}
