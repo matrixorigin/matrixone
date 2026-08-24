@@ -131,7 +131,9 @@ func TestAsofBuildLeftCostBoundary(t *testing.T) {
 		want      bool
 	}{
 		{name: "review example", leftRows: 2, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000, want: true},
-		{name: "large left still cheaper", leftRows: 10_000, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000, want: true},
+		{name: "bounded hot key amplification", leftRows: 64, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000, want: true},
+		{name: "hot key exceeds amplification bound", leftRows: 65, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000},
+		{name: "retained memory cannot hide excessive work amplification", leftRows: 10_000, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000},
 		{name: "candidate retention changes choice", leftRows: 60, leftSize: 1000, rightRows: 100, rightSize: 1000},
 		{name: "right is smaller", leftRows: 2, leftSize: 1000, rightRows: 1, rightSize: 100},
 		{name: "unknown left", leftRows: 0, rightRows: 1_000_000_000, rightSize: 1000},

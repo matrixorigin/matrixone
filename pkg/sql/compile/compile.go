@@ -4771,11 +4771,20 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 	return branches
 }
 
-// shouldBuildLeftForAsof compares the payload retained by the two physical
-// ASOF strategies. Building the logical left retains every left row plus one
-// projected best-right candidate per left row; building the logical right
-// retains the right input for predecessor lookup. Unknown or invalid estimates
-// stay on the established build-right path.
+// asofBuildLeftMaxEstimatedProbeAmplification bounds the worst-case number of
+// logical-left candidates visited for each streamed logical-right row. The
+// planner has equality-key NDV estimates, but no trustworthy maximum group
+// frequency, so the total estimated left cardinality is the only safe skew
+// upper bound available here.
+const asofBuildLeftMaxEstimatedProbeAmplification = 64
+
+// shouldBuildLeftForAsof compares both work amplification and retained payload
+// for the two physical ASOF strategies. Building the logical left retains every
+// left row plus one projected best-right candidate per left row, but every
+// streamed right row can visit the entire matching left equality group.
+// Building the logical right retains the right input for predecessor lookup.
+// Unknown, invalid, or insufficiently bounded estimates stay on the established
+// build-right path.
 func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 	if node == nil || left == nil || right == nil ||
 		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
@@ -4787,6 +4796,9 @@ func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 	if leftRows <= 0 || leftRowSize <= 0 ||
 		math.IsNaN(leftRows) || math.IsNaN(leftRowSize) ||
 		math.IsInf(leftRows, 0) || math.IsInf(leftRowSize, 0) {
+		return false
+	}
+	if leftRows > asofBuildLeftMaxEstimatedProbeAmplification {
 		return false
 	}
 	if right.Stats == nil {
