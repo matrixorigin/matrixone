@@ -2881,10 +2881,12 @@ func TestSendNotifyMessageReportsSenderFactoryError(t *testing.T) {
 func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 	duplicateErr := moerr.NewDuplicateEntryNoCtx("1", "primary")
 	tests := []struct {
-		name        string
-		cancelCause error
-		factoryErr  func(context.Context) error
-		wantErr     error
+		name               string
+		cancelCause        error
+		cancelQuery        bool
+		keepPipelineActive bool
+		factoryErr         func(context.Context) error
+		wantErr            error
 	}{
 		{
 			name:        "query interruption recovers substantive cancellation cause",
@@ -2909,7 +2911,22 @@ func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 			wantErr: duplicateErr,
 		},
 		{
-			name: "raw cancellation without substantive cause remains visible",
+			name: "raw pipeline cancellation without substantive cause is secondary",
+			factoryErr: func(context.Context) error {
+				return context.Canceled
+			},
+		},
+		{
+			name:        "raw query cancellation remains visible",
+			cancelQuery: true,
+			factoryErr: func(context.Context) error {
+				return context.Canceled
+			},
+			wantErr: context.Canceled,
+		},
+		{
+			name:               "raw cancellation while pipeline is active remains visible",
+			keepPipelineActive: true,
 			factoryErr: func(context.Context) error {
 				return context.Canceled
 			},
@@ -2922,7 +2939,13 @@ func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
 			proc.BuildPipelineContext(queryCtx)
 			scopeProc := proc.NewContextChildProc(1)
-			scopeProc.Cancel(tt.cancelCause)
+			if tt.cancelQuery {
+				_, cancelQuery := process.GetQueryCtxFromProc(proc)
+				require.NotNil(t, cancelQuery)
+				cancelQuery()
+			} else if !tt.keepPipelineActive {
+				scopeProc.Cancel(tt.cancelCause)
+			}
 
 			uid, err := uuid.NewV7()
 			require.NoError(t, err)
@@ -3248,7 +3271,8 @@ func TestSendNotifyMessageSuccessfulAttachUsesQueryContext(t *testing.T) {
 
 func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	proc.BuildPipelineContext(context.Background())
+	queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+	proc.BuildPipelineContext(queryCtx)
 	scopeProc := proc.NewContextChildProc(1)
 
 	uid, err := uuid.NewV7()
@@ -3298,7 +3322,9 @@ func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 	resultCh := make(chan notifyMessageResult, 1)
 	s.sendNotifyMessageWithFactoryAndWait(&wg, resultCh, factory, waitRetry)
 	<-retryEntered
-	scopeProc.Cancel(nil)
+	_, cancelQuery := process.GetQueryCtxFromProc(proc)
+	require.NotNil(t, cancelQuery)
+	cancelQuery()
 
 	select {
 	case result := <-resultCh:
