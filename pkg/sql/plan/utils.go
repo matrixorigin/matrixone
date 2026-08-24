@@ -3465,6 +3465,10 @@ type ParamValue struct {
 	// the cached plan.
 	RuntimeType    types.Type
 	HasRuntimeType bool
+	// RetainParamRef records that a specialized query plan will be cached and
+	// therefore must retain this parameter as runtime provenance even when the
+	// parameter itself is unrelated to numeric-prefix specialization.
+	RetainParamRef bool
 	// EnableNumericPrefix records that the deployment-wide protocol version can
 	// execute planner-injected MySQL numeric-prefix casts.  Keep the negotiated
 	// capability on each value so execute-time plan specialization does not need
@@ -3927,12 +3931,14 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 		runtimeType := types.T_text.ToType()
 		hasRuntimeType := false
 		numericPrefixSource := false
+		retainParamRef := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
+			retainParamRef = param.RetainParamRef
 		}
 		paramType := plan.Type{Id: int32(types.T_text)}
 		if hasRuntimeType {
@@ -3955,7 +3961,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 				if err != nil {
 					return false, err
 				}
-				if numericPrefixSource && params[i].GetLit() != nil {
+				if (numericPrefixSource || retainParamRef) && params[i].GetLit() != nil {
 					params[i].GetLit().Src = &plan.Expr{
 						Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					}
@@ -3971,7 +3977,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) (bool, 
 				},
 			}
 		}
-		if numericPrefixSource && params[i].GetLit() != nil {
+		if (numericPrefixSource || retainParamRef) && params[i].GetLit() != nil {
 			params[i].GetLit().Src = &plan.Expr{
 				Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 			}

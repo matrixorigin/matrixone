@@ -613,6 +613,33 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	require.Same(t, textParams, cw.proc.GetPrepareParams())
 }
 
+func TestPreparedRuntimeCacheSupportsMixedAndStringCategories(t *testing.T) {
+	decimal := func(value string) plan2.ParamValue {
+		return plan2.ParamValue{Value: value, PrepareParamKind: vector.PrepareParamDecimal,
+			RuntimeType: types.New(types.T_decimal64, 2, 1), HasRuntimeType: true}
+	}
+	integer := func(value string) plan2.ParamValue {
+		return plan2.ParamValue{Value: value, PrepareParamKind: vector.PrepareParamInteger,
+			RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}
+	}
+	mixedA := []any{decimal("9.0"), integer("1")}
+	mixedB := []any{decimal("8.0"), integer("2")}
+	require.True(t, preparedRuntimeCacheSupports(mixedA))
+	require.Equal(t, preparedRuntimeSemanticKey(mixedA), preparedRuntimeSemanticKey(mixedB))
+
+	textA := []any{plan2.ParamValue{
+		Value: "9.0", PrepareParamKind: vector.PrepareParamDecimal,
+		RuntimeType: types.T_text.ToType(), HasRuntimeType: true,
+	}}
+	textB := []any{plan2.ParamValue{
+		Value: "8.0", PrepareParamKind: vector.PrepareParamDecimal,
+		RuntimeType: types.T_text.ToType(), HasRuntimeType: true,
+	}}
+	require.True(t, preparedRuntimeCacheSupports(textA))
+	require.Equal(t, preparedRuntimeSemanticKey(textA), preparedRuntimeSemanticKey(textB))
+	require.False(t, preparedRuntimeCacheSupports([]any{plan2.ParamValue{}}))
+}
+
 func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategory(b *testing.B) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(b, 207, "select ?")
 	defer func() {

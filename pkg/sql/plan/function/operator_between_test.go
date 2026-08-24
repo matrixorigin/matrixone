@@ -223,6 +223,35 @@ func TestOpBetweenBool(t *testing.T) {
 	}
 }
 
+func TestOpBetweenRowsFalseDominatesNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name   string
+		typ    types.Type
+		values any
+		lower  any
+		upper  any
+	}{
+		{name: "fixed", typ: types.T_int64.ToType(), values: []int64{3, 1}, lower: []int64{0, 2}, upper: []int64{2, 0}},
+		{name: "bytes", typ: types.T_varchar.ToType(), values: []string{"3", "1"}, lower: []string{"", "2"}, upper: []string{"2", ""}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fn := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(test.typ, test.values, nil),
+					NewFunctionTestInput(test.typ, test.lower, []bool{true, false}),
+					NewFunctionTestInput(test.typ, test.upper, []bool{false, true}),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), false,
+					[]bool{false, false}, []bool{false, false}),
+				betweenImpl,
+			)
+			ok, info := fn.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestOpBetweenFixedNullBound(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	int64Type := types.T_int64.ToType()

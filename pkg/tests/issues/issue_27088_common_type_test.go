@@ -156,6 +156,18 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			require.Equal(t, "2", stringValue)
 		})
 
+		t.Run("COM_STMT prepared-left mixed decimal float IN uses float domain", func(t *testing.T) {
+			stmt, prepareErr := conn.PrepareContext(ctx,
+				"select ? in (cast('9007199254740992' as decimal(20,0)), cast(0 as double))")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			for range 2 {
+				var matched bool
+				require.NoError(t, stmt.QueryRowContext(ctx, "9007199254740993").Scan(&matched))
+				require.True(t, matched)
+			}
+		})
+
 		t.Run("SQL PREPARE uses the same prefix domain", func(t *testing.T) {
 			mustExec(t, ctx, conn,
 				"prepare issue27088_sql from 'select id from common_type where d = ? order by id'")

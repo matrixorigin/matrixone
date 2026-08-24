@@ -5191,6 +5191,18 @@ func normalizeDecimalParamInArgs(ctx context.Context, name string, args []*Expr)
 	}
 
 	if isDirectDynamicParam(args[0]) {
+		// Inspect the complete list before choosing a provisional envelope.
+		// DECIMAL mixed with any approximate member has one FLOAT64 common
+		// domain; selecting an earlier DECIMAL item would freeze the marker and
+		// violate the precision/rounding behavior of the complete IN list.
+		for _, item := range list.List {
+			if item != nil && types.T(item.Typ.Id).IsFloat() {
+				var err error
+				floatType := makePlan2Type(&types.Type{Oid: types.T_float64})
+				args[0], err = appendCastBeforeExpr(ctx, args[0], floatType)
+				return err
+			}
+		}
 		for _, item := range list.List {
 			if item != nil && types.T(item.Typ.Id).IsDecimal() {
 				var err error

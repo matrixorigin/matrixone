@@ -573,11 +573,21 @@ func opBetweenFixedRows[T types.FixedSizeTExceptStrType](
 		value, valueNull := valueParam.GetValue(valueIndex)
 		lower, lowerNull := lowerParam.GetValue(lowerIndex)
 		upper, upperNull := upperParam.GetValue(upperIndex)
-		if valueNull || lowerNull || upperNull {
+		if valueNull {
 			resultNulls.Add(i)
 			continue
 		}
-		values[i] = compareFunc(value, lower) >= 0 && compareFunc(value, upper) <= 0
+		lowerFalse := !lowerNull && compareFunc(value, lower) < 0
+		upperFalse := !upperNull && compareFunc(value, upper) > 0
+		if lowerFalse || upperFalse {
+			values[i] = false
+			continue
+		}
+		if lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		values[i] = true
 	}
 	return nil
 }
@@ -608,11 +618,21 @@ func opBetweenBytesRows(
 		value, valueNull := valueParam.GetStrValue(valueIndex)
 		lower, lowerNull := lowerParam.GetStrValue(lowerIndex)
 		upper, upperNull := upperParam.GetStrValue(upperIndex)
-		if valueNull || lowerNull || upperNull {
+		if valueNull {
 			resultNulls.Add(i)
 			continue
 		}
-		values[i] = compareFunc(value, lower) >= 0 && compareFunc(value, upper) <= 0
+		lowerFalse := !lowerNull && compareFunc(value, lower) < 0
+		upperFalse := !upperNull && compareFunc(value, upper) > 0
+		if lowerFalse || upperFalse {
+			values[i] = false
+			continue
+		}
+		if lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		values[i] = true
 	}
 	return nil
 }

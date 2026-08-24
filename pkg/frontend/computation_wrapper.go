@@ -759,25 +759,93 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
-func markBinaryTextNumericPrefixCandidates(paramVals []any, paramTypes []byte) {
+func filterBinaryNumericPrefixCandidates(
+	preparePlan *plan2.Plan,
+	paramVals []any,
+	paramTypes []byte,
+) bool {
+	anyRelevant := false
 	for i := range paramVals {
-		if i*2+1 >= len(paramTypes) {
-			return
-		}
-		mysqlType := defines.MysqlType(paramTypes[i*2])
-		if mysqlType != defines.MYSQL_TYPE_VARCHAR && mysqlType != defines.MYSQL_TYPE_VAR_STRING &&
-			mysqlType != defines.MYSQL_TYPE_STRING {
-			continue
-		}
 		param, ok := paramVals[i].(plan2.ParamValue)
 		if !ok {
 			continue
 		}
-		param.PrepareParamKind = vector.PrepareParamDecimal
-		param.RuntimeType = types.T_text.ToType()
-		param.HasRuntimeType = true
-		paramVals[i] = param
+		candidates := append([]any(nil), paramVals...)
+		for candidatePos, value := range candidates {
+			candidate, candidateOK := value.(plan2.ParamValue)
+			if candidateOK {
+				candidate.EnableNumericPrefix = candidatePos == i
+				candidates[candidatePos] = candidate
+			}
+		}
+		relevant := plan2.PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, candidates)
+		if !relevant && preparedPositionHasStaticExactNumericPeer(preparePlan, i) && i*2+1 < len(paramTypes) {
+			mysqlType := defines.MysqlType(paramTypes[i*2])
+			if mysqlType == defines.MYSQL_TYPE_VARCHAR || mysqlType == defines.MYSQL_TYPE_VAR_STRING ||
+				mysqlType == defines.MYSQL_TYPE_STRING {
+				param.PrepareParamKind = vector.PrepareParamDecimal
+				param.RuntimeType = types.T_text.ToType()
+				param.HasRuntimeType = true
+				candidates[i] = param
+				relevant = plan2.PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, candidates)
+			}
+		}
+		param.EnableNumericPrefix = relevant
+		param.RetainParamRef = true
+		if relevant {
+			paramVals[i] = param
+			anyRelevant = true
+		} else {
+			paramVals[i] = param
+		}
 	}
+	return anyRelevant
+}
+
+func preparedPositionHasStaticExactNumericPeer(preparePlan *plan2.Plan, position int) bool {
+	found := false
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if found || fn == nil {
+			return nil
+		}
+		containsPosition := false
+		hasExactEnvelope := false
+		hasExactSibling := false
+		for _, arg := range fn.Args {
+			argContainsPosition := exprContainsPreparedPosition(arg, position)
+			if argContainsPosition {
+				containsPosition = true
+				_ = plan.VisitExprTree(arg, func(candidate *plan.Expr) error {
+					candidateType := types.T(candidate.Typ.Id)
+					if (candidateType.IsInteger() || candidateType.IsDecimal()) &&
+						exprContainsPreparedPosition(candidate, position) {
+						hasExactEnvelope = true
+					}
+					return nil
+				})
+			} else {
+				argType := types.T(arg.Typ.Id)
+				hasExactSibling = hasExactSibling || argType.IsInteger() || argType.IsDecimal()
+			}
+		}
+		isPrefixFilter := fn.Func != nil && (fn.Func.ObjName == "prefix_eq" || fn.Func.ObjName == "prefix_in" ||
+			fn.Func.ObjName == "prefix_between" || fn.Func.ObjName == "prefix_in_range")
+		found = containsPosition && (hasExactEnvelope || (!isPrefixFilter && hasExactSibling))
+		return nil
+	})
+	return found
+}
+
+func exprContainsPreparedPosition(expr *plan.Expr, position int) bool {
+	found := false
+	_ = plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+		if param := candidate.GetP(); param != nil && int(param.Pos) == position {
+			found = true
+		}
+		return nil
+	})
+	return found
 }
 
 func binaryProtocolMayNeedNumericPrefix(mysqlType defines.MysqlType) bool {
@@ -1076,13 +1144,9 @@ func initExecuteStmtParamWithResolverInSession(
 			if err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
-			if runtimeNumericPrefixCandidate && executionPlan.GetQuery() != nil &&
-				!plan2.PreparedPlanNeedsNumericPrefixSpecialization(executionPlan, cwft.paramVals) {
-				// Exact-integer consumers need a potential decimal admission for a
-				// binary text value such as "9.0". Static DECIMAL consumers already
-				// admit the unmodified text kind and must retain prefix parsing for
-				// values with a nonnumeric suffix.
-				markBinaryTextNumericPrefixCandidates(cwft.paramVals, prepareStmt.ParamTypes)
+			if runtimeNumericPrefixCandidate && executionPlan.GetQuery() != nil {
+				runtimeNumericPrefixCandidate = filterBinaryNumericPrefixCandidates(
+					executionPlan, cwft.paramVals, prepareStmt.ParamTypes)
 			}
 		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
@@ -1206,8 +1270,9 @@ func preparedRuntimeCacheSupports(paramVals []any) bool {
 	}
 	for _, value := range paramVals {
 		param, ok := value.(plan2.ParamValue)
-		if !ok || param.PrepareParamKind != vector.PrepareParamDecimal || !param.HasRuntimeType ||
-			!param.RuntimeType.IsDecimal() {
+		if !ok || (param.Value == nil && !param.HasRuntimeType) {
+			// NULL has no stable physical category and the compile setup may
+			// detach its empty parameter vector. Rebuild this rare category.
 			return false
 		}
 	}

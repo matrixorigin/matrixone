@@ -268,3 +268,21 @@
 - 新增一项 bounded semantic-category cache：仅对显式 binary DECIMAL query 生效；specialized plan 恢复为 TEXT ParamRef + typed cast，避免嵌入上一轮 literal；相同 OID/width/scale category 复用 plan/compile，category/definition generation 变化清理。
 - repeated DECIMAL category benchmark 三轮 4097/4190/4098 ns/op、376 B/op、12 allocs/op；普通 COM_STMT 仍为 606.2-616.0 ns/op、200 B/op、3 allocs/op。前者不再包含每轮 5.5us plan copy/specialization及后续完整 recompile。
 - frontend/plan/compile/process/pb 全包、issue #26725/#26866/#26840/#26685/#27088、build、vet、sqlclosecheck、rowserrcheck 均通过。
+
+## 第十轮：处理 head 8e4e357025 的三个 P1 与 CI
+
+1. 修正 BETWEEN row helper 的三值逻辑：先计算两侧比较，FALSE 优先于 NULL；覆盖 fixed/bytes、lower NULL/upper false 与 lower false/upper NULL，并验证 NOT BETWEEN。
+2. 修正 prepared-left mixed DECIMAL/DOUBLE IN：在给左参数插入 provisional cast 前扫描完整列表，任一 approximate peer 强制统一 FLOAT64 域；增加 2^53 precision COM_STMT 回归。
+3. 扩展 bounded runtime cache：只将真正参与 specialization 的参数纳入类别约束；无关 integer/string 参数不阻断缓存；支持 binary string numeric-prefix 的稳定 prefix domain，并覆盖 mixed packet/repeated string benchmark。
+4. 调查当前 coverage CI 失败，区分代码问题与基础设施问题；补齐相应测试。
+5. 运行 affected full CGo suite、issue 回归、benchmark、build/vet/SCA/self-review，推送并 resolve threads/re-request review。
+
+### 第十轮执行结果
+
+- fixed/bytes row BETWEEN 现在按 `(>= lower) AND (<= upper)` 实现 FALSE-dominates-NULL；两种 NULL bound orientation 回归通过，NOT BETWEEN 可正确对 FALSE 取反。
+- prepared-left IN 在插入 provisional cast 前扫描完整 list；DECIMAL+FLOAT/DOUBLE 强制 FLOAT64。真实 COM_STMT 2^53 precision 边界 fresh/reuse 返回 true。
+- runtime candidate 改为逐参数隔离判定：只有真正位于 exact numeric consumer 的 text 参数会标记 numeric-prefix；无关 status/code 文本不再被误转 DECIMAL。所有参数用独立 RetainParamRef provenance 恢复，故 mixed unrelated 参数变值时 cache 不嵌入旧 literal。
+- cache 接受 mixed integer/string 与 marked binary string category；NULL 因无稳定物理 category 保守重建。类别 key 仍覆盖所有参数 OID/width/scale，保持 bounded one-entry cache。
+- 定位 coverage CI 首个根因是 `TestIssue25526PreparedUpdateJoinSecondExecute` 中无关 `open` 被误转 Decimal64，后续大量 branch tests 是环境级 cascade；逐参数过滤修复后该测试本地通过。
+- benchmark：普通 fast path 623.2-674.9 ns/op、200 B/op、3 allocs；repeated specialized category 4.35-4.37 us/op、488 B/op、15 allocs，仍复用 plan/compile且远低于 cache miss 19.15us/14KB/164 allocs。
+- function/plan/frontend/compile/process/pb 全包、issue #25526/#26725/#26866/#26840/#26685/#27088、build、vet、SCA/Rows 检查均通过。
