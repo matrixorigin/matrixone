@@ -169,10 +169,10 @@ private:
 // KNOWN GAP, measured: the real peak during extend runs above this figure, for
 // cuVS workspace not folded in. At 87.5M / dim 768 / f16 / m=192 the tar is
 // 17.6 GB but the device peak is ~24 GB (measured on an L40S). The device budget
-// on top absorbs it on every workload measured so far; the margin is narrower at
-// 75% than it was at 60%, so a build tuned to exactly the advertised ceiling has
-// less headroom than before. Folding the workspace into the per-row cost is the
-// durable fix.
+// leaves enough slack that this has not bitten on any workload measured so far,
+// but that is incidental -- the fraction exists to let one large allocation
+// succeed, not to cover a modelling shortfall -- and the slack is narrower at 75%
+// than at 60%. Folding the workspace into the per-row cost is the durable fix.
 class ivf_pq_cost final : public index_cost_base {
 public:
     ivf_pq_cost(size_t dim, size_t m, size_t bits_per_code, size_t elem_size,

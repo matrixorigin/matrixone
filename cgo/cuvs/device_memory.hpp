@@ -81,11 +81,18 @@ public:
     // sub-indexes on a device with room for it whole, and both build and query
     // were slower for it. At 75% it builds as one index.
     //
-    // The remaining 25% covers concurrent queries and kernel scratch, and also
-    // absorbs the cuVS build workspace the per-index cost models do not fold in
-    // (see the KNOWN GAP note on ivf_pq_cost in index_cost.hpp). That second job
-    // is why this should not be raised further without folding the workspace into
-    // the cost models first.
+    // The fraction is headroom for ONE large allocation to succeed, not a
+    // reservation for a second build. cudaMemGetInfo reports total free bytes, but
+    // the largest contiguous block is smaller -- fragmentation, allocator
+    // granularity and the driver's own reserve -- so a build sized at 100% of free
+    // fails on the single allocation that needs it. CONCURRENCY is handled by the
+    // ledger below instead: in-flight claims are summed, so two builds cannot both
+    // pass the same free-memory snapshot however generous this fraction is.
+    //
+    // It also happens to absorb the cuVS build workspace the per-index cost models
+    // do not fold in (see the KNOWN GAP note on ivf_pq_cost in index_cost.hpp).
+    // That is a side effect, not the reason for the number, and it is why raising
+    // this further is better done after the workspace is modelled.
     static constexpr size_t kBudgetNumerator   = 3;
     static constexpr size_t kBudgetDenominator = 4;
 
