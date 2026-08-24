@@ -110,7 +110,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	canceled := false
 	defer func() {
 		if err != nil {
-			canceled = errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+			canceled = isLoadCancellationError(err)
 		}
 		s.pendingTrace = trace
 		s.pendingLoadErr = err
@@ -133,13 +133,6 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if trace != nil {
 		trace.addInternalSQL(time.Since(budgetStart))
 	}
-	var loadedTs, loadedTail int64
-	var genErr error
-	if trace != nil {
-		generationStart := time.Now()
-		loadedTs, loadedTail, genErr = LoadGeneration(sqlproc, s.cfg)
-		trace.addInternalSQL(time.Since(generationStart))
-	}
 	bases, err := loadAllBasesUncached(sqlproc, s.cfg, trace)
 	if err != nil {
 		return err
@@ -152,9 +145,6 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
-	if genErr == nil {
-		trace.setGeneration(loadedTs, loadedTail)
-	}
 
 	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
 	// captured generation matches the loaded snapshot exactly. On any capture failure genValid
@@ -166,14 +156,25 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		if trace != nil {
 			genStart = time.Now()
 		}
-		if ts, tail, e2 := LoadGeneration(sqlproc, s.cfg); e2 == nil {
+		ts, tail, e2 := LoadGeneration(sqlproc, s.cfg)
+		if trace != nil {
+			trace.addInternalSQL(time.Since(genStart))
+		}
+		if e2 == nil {
 			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
 			if trace != nil {
-				trace.addInternalSQL(time.Since(genStart))
+				trace.setGeneration(ts, tail)
 			}
 		}
 	}
 	return nil
+}
+
+func isLoadCancellationError(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryTimeout)
 }
 
 // OnCacheInvalidated records the reason for the next cache miss without

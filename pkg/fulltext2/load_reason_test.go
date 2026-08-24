@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -34,4 +35,40 @@ func TestLoadReasonRegistryStoresOnlyWhenEnabled(t *testing.T) {
 	key := loadReasonKey("db", "store")
 	rememberLoadReason(key, LoadMissCDCFlush)
 	require.Equal(t, LoadMissCDCFlush, takeLoadReason(key))
+}
+
+func TestLoadReasonRegistryBoundsExpiryAndInvalidation(t *testing.T) {
+	cleanupObserver := setLoadObserver(func(LoadEvent) {})
+	defer cleanupObserver()
+
+	pendingLoadReasons.Lock()
+	previous := pendingLoadReasons.m
+	pendingLoadReasons.m = make(map[string]pendingLoadReason)
+	pendingLoadReasons.Unlock()
+	t.Cleanup(func() {
+		pendingLoadReasons.Lock()
+		pendingLoadReasons.m = previous
+		pendingLoadReasons.Unlock()
+	})
+
+	require.Equal(t, "index", loadReasonKey("", "index"))
+	pendingLoadReasons.Lock()
+	pendingLoadReasons.m["expired"] = pendingLoadReason{reason: LoadMissTTLExpired, at: time.Now().Add(-loadReasonTTL - time.Second)}
+	pendingLoadReasons.m["oldest"] = pendingLoadReason{reason: LoadMissCDCFlush, at: time.Now().Add(-time.Second)}
+	for i := 0; i < loadReasonSize-1; i++ {
+		pendingLoadReasons.m["seed-"+string(rune(i))] = pendingLoadReason{reason: LoadMissMerge, at: time.Now()}
+	}
+	pendingLoadReasons.Unlock()
+
+	rememberLoadReason("overflow", LoadMissRebuild)
+	require.Empty(t, takeLoadReason("expired"))
+	require.Empty(t, takeLoadReason("oldest"))
+	require.Equal(t, LoadMissRebuild, takeLoadReason("overflow"))
+	require.Empty(t, takeLoadReason("missing"))
+
+	cfg := TableConfig{DbName: "db", IndexTable: "store"}
+	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
+	require.Equal(t, LoadMissCDCFlush, takeLoadReason("db.store"))
+	invalidateLoadGeneration(cfg, LoadMissReason("process_shutdown"))
+	require.Empty(t, takeLoadReason("db.store"))
 }

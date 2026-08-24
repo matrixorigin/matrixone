@@ -15,11 +15,13 @@
 package fulltext2
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,6 +72,24 @@ func TestLoadTraceCancellationClassification(t *testing.T) {
 	require.True(t, got.LoadCancel)
 	require.False(t, got.LoadError)
 	require.False(t, got.LoadSuccess)
+}
+
+func TestLoadCancellationErrorRecognizesProductionErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "context canceled", err: context.Canceled},
+		{name: "context deadline", err: context.DeadlineExceeded},
+		{name: "query interrupted", err: moerr.NewQueryInterrupted(context.Background())},
+		{name: "query timeout", err: moerr.NewQueryTimeout(context.Background())},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.True(t, isLoadCancellationError(tt.err))
+		})
+	}
+	require.False(t, isLoadCancellationError(errors.New("storage failure")))
 }
 
 func TestFulltext2SearchFinishesPendingTraceAfterWaiterSample(t *testing.T) {

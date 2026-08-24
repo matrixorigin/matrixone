@@ -23,12 +23,14 @@ import (
 
 type observerMock struct {
 	MockSearch
-	waiters  int64
-	finished bool
+	waiters     int64
+	finished    bool
+	invalidated string
 }
 
-func (m *observerMock) SetLoadWaiters(n int64) { m.waiters = n }
-func (m *observerMock) FinishLoadObservation() { m.finished = true }
+func (m *observerMock) SetLoadWaiters(n int64)           { m.waiters = n }
+func (m *observerMock) FinishLoadObservation()           { m.finished = true }
+func (m *observerMock) OnCacheInvalidated(reason string) { m.invalidated = reason }
 
 func TestVectorIndexSearchCompletesLoadObserverAfterWaiterSample(t *testing.T) {
 	mock := &observerMock{}
@@ -39,4 +41,18 @@ func TestVectorIndexSearchCompletesLoadObserverAfterWaiterSample(t *testing.T) {
 	require.Equal(t, int64(5), mock.waiters)
 	require.True(t, mock.finished)
 	s.Destroy()
+}
+
+func TestVectorIndexSearchDestroyWithReasonNotifiesOptionalHook(t *testing.T) {
+	mock := &observerMock{}
+	s := &VectorIndexSearch{Algo: mock}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s.DestroyWithReason("cdc_flush")
+	require.Equal(t, "cdc_flush", mock.invalidated)
+
+	mock = &observerMock{}
+	s = &VectorIndexSearch{Algo: mock}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s.Destroy()
+	require.Empty(t, mock.invalidated)
 }
