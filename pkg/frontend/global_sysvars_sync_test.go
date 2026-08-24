@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -41,24 +42,26 @@ type globalSysVarSyncRequest struct {
 type globalSysVarSyncQueryClient struct {
 	mu sync.Mutex
 
-	serviceID    string
-	requests     []globalSysVarSyncRequest
-	errors       map[string]error
-	applied      map[string]timestamp.Timestamp
-	empty        map[string]bool
-	entered      map[string]chan struct{}
-	blocks       map[string]chan struct{}
-	releaseCount int
+	serviceID       string
+	requests        []globalSysVarSyncRequest
+	errors          map[string]error
+	applied         map[string]timestamp.Timestamp
+	protocolVersion map[string]int64
+	empty           map[string]bool
+	entered         map[string]chan struct{}
+	blocks          map[string]chan struct{}
+	releaseCount    int
 }
 
 func newGlobalSysVarSyncQueryClient() *globalSysVarSyncQueryClient {
 	return &globalSysVarSyncQueryClient{
-		serviceID: "global-sysvar-sync-test",
-		errors:    make(map[string]error),
-		applied:   make(map[string]timestamp.Timestamp),
-		empty:     make(map[string]bool),
-		entered:   make(map[string]chan struct{}),
-		blocks:    make(map[string]chan struct{}),
+		serviceID:       "global-sysvar-sync-test",
+		errors:          make(map[string]error),
+		applied:         make(map[string]timestamp.Timestamp),
+		protocolVersion: make(map[string]int64),
+		empty:           make(map[string]bool),
+		entered:         make(map[string]chan struct{}),
+		blocks:          make(map[string]chan struct{}),
 	}
 }
 
@@ -77,10 +80,20 @@ func (m *globalSysVarSyncQueryClient) SendMessage(
 	m.requests = append(m.requests, record)
 	err := m.errors[address]
 	applied, hasApplied := m.applied[address]
+	protocolVersion, hasProtocolVersion := m.protocolVersion[address]
 	empty := m.empty[address]
 	entered := m.entered[address]
 	block := m.blocks[address]
 	m.mu.Unlock()
+
+	if req.CmdMethod == querypb.CmdMethod_GetProtocolVersion {
+		if !hasProtocolVersion {
+			protocolVersion = defines.MORPCVersion27
+		}
+		return &querypb.Response{GetProtocolVersion: &querypb.GetProtocolVersionResponse{
+			Version: protocolVersion,
+		}}, nil
+	}
 
 	if entered != nil {
 		close(entered)
@@ -153,10 +166,14 @@ func TestSyncCommitTimestampToCNs(t *testing.T) {
 
 	requests, releaseCount := qc.snapshot()
 	require.ElementsMatch(t, []globalSysVarSyncRequest{
+		{address: "cn-1", method: querypb.CmdMethod_GetProtocolVersion},
+		{address: "cn-2", method: querypb.CmdMethod_GetProtocolVersion},
+		{address: "cn-timeout", method: querypb.CmdMethod_GetProtocolVersion},
 		{address: "cn-1", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
 		{address: "cn-2", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+		{address: "cn-timeout", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
 	}, requests)
-	require.Equal(t, 2, releaseCount)
+	require.Equal(t, 6, releaseCount)
 }
 
 func TestSyncCommitTimestampToCNsWaitsAndReturnsPartialFailure(t *testing.T) {
@@ -191,8 +208,8 @@ func TestSyncCommitTimestampToCNsWaitsAndReturnsPartialFailure(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cn-2")
 	requests, releaseCount := qc.snapshot()
-	require.Len(t, requests, 2)
-	require.Equal(t, 1, releaseCount)
+	require.Len(t, requests, 4)
+	require.Equal(t, 3, releaseCount)
 }
 
 func TestSyncCommitTimestampToCNsValidatesAndReleasesResponse(t *testing.T) {
@@ -208,10 +225,29 @@ func TestSyncCommitTimestampToCNsValidatesAndReleasesResponse(t *testing.T) {
 	err := syncCommitTimestampToCNs(context.Background(), qc, cnStores, commitTS)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cn-old")
-	require.NotContains(t, err.Error(), "cn-empty",
-		"an empty legacy response is still a successful SyncCommit acknowledgement")
+	require.Contains(t, err.Error(), "cn-empty",
+		"protocol-gated SyncCommit responses must report the applied timestamp")
 	_, releaseCount := qc.snapshot()
-	require.Equal(t, 2, releaseCount)
+	require.Equal(t, 4, releaseCount)
+}
+
+func TestSyncCommitTimestampToCNsRejectsLegacyHandlerBeforeSync(t *testing.T) {
+	commitTS := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	qc := newGlobalSysVarSyncQueryClient()
+	qc.protocolVersion["cn-old"] = defines.MORPCVersion26
+
+	err := syncCommitTimestampToCNs(
+		context.Background(),
+		qc,
+		[]logpb.CNStore{normalCN("cn-old", metadata.WorkState_Working)},
+		commitTS,
+	)
+	require.ErrorContains(t, err, "does not support context-aware SyncCommit")
+	requests, releaseCount := qc.snapshot()
+	require.Equal(t, []globalSysVarSyncRequest{{
+		address: "cn-old", method: querypb.CmdMethod_GetProtocolVersion,
+	}}, requests)
+	require.Equal(t, 1, releaseCount)
 }
 
 func TestSyncCommitTimestampToCNsHonorsCancellation(t *testing.T) {
@@ -320,10 +356,11 @@ func TestSyncGlobalSysVarCommitUsesSessionCommitTimestamp(t *testing.T) {
 
 	require.NoError(t, syncGlobalSysVarCommit(context.Background(), ses))
 	requests, releaseCount := qc.snapshot()
-	require.Equal(t, []globalSysVarSyncRequest{{
-		address: "cn-1", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS,
-	}}, requests)
-	require.Equal(t, 1, releaseCount)
+	require.Equal(t, []globalSysVarSyncRequest{
+		{address: "cn-1", method: querypb.CmdMethod_GetProtocolVersion},
+		{address: "cn-1", method: querypb.CmdMethod_SyncCommit, commitTS: commitTS},
+	}, requests)
+	require.Equal(t, 2, releaseCount)
 }
 
 func TestSyncGlobalSysVarCommitPropagatesInventoryFailure(t *testing.T) {

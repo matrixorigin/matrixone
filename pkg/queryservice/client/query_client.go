@@ -32,7 +32,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_GetLockInfo:              defines.MORPCVersion1,
 	pb.CmdMethod_GetTxnInfo:               defines.MORPCVersion1,
 	pb.CmdMethod_GetCacheInfo:             defines.MORPCVersion1,
-	pb.CmdMethod_SyncCommit:               defines.MORPCVersion1,
+	pb.CmdMethod_SyncCommit:               defines.MORPCVersion27,
 	pb.CmdMethod_GetCommit:                defines.MORPCVersion1,
 	pb.CmdMethod_RunTask:                  defines.MORPCVersion1,
 	pb.CmdMethod_RemoveRemoteLockTable:    defines.MORPCVersion1,

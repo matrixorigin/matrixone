@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -90,9 +91,11 @@ func syncCommitTimestampToCNs(
 	nodes := make([]string, 0, len(cnStores))
 	seen := make(map[string]struct{}, len(cnStores))
 	for _, cn := range cnStores {
-		if cn.State != logpb.NormalState ||
-			(cn.WorkState != metadata.WorkState_Working &&
-				cn.WorkState != metadata.WorkState_Unknown) ||
+		// Proxy routing drops CNStore.State when it builds metadata.CNService and
+		// filters only by WorkState. Fence the same set: a TimeoutState CN that is
+		// still Working remains routable and must acknowledge or make SET fail.
+		if (cn.WorkState != metadata.WorkState_Working &&
+			cn.WorkState != metadata.WorkState_Unknown) ||
 			cn.QueryAddress == "" {
 			continue
 		}
@@ -104,6 +107,13 @@ func syncCommitTimestampToCNs(
 	}
 	if len(nodes) == 0 {
 		return moerr.NewInternalError(ctx, "no CN query service is available for commit synchronization")
+	}
+
+	// QueryClient method-version checks use the caller's negotiated runtime
+	// version, not the target binary's capability. Preflight every endpoint so a
+	// mixed-version cluster never invokes the legacy fatal-on-timeout handler.
+	if err := requireContextAwareSyncCommit(ctx, qc, nodes); err != nil {
+		return err
 	}
 
 	genRequest := func() *querypb.Request {
@@ -118,15 +128,55 @@ func syncCommitTimestampToCNs(
 				ctx, "CN %s returned an empty sync commit response", address))
 			return
 		}
-		// Older CNs acknowledge SyncCommit with an empty response. A populated
-		// response is an additional assertion, not a rolling-upgrade requirement.
-		if resp.SyncCommit != nil && resp.SyncCommit.CurrentCommitTS.Less(commitTS) {
+		if resp.SyncCommit == nil {
+			responseErr = errors.Join(responseErr, moerr.NewInternalErrorf(
+				ctx, "CN %s returned no applied commit timestamp", address))
+			return
+		}
+		if resp.SyncCommit.CurrentCommitTS.Less(commitTS) {
 			responseErr = errors.Join(responseErr, moerr.NewInternalErrorf(
 				ctx,
 				"CN %s applied commit timestamp %s before required %s",
 				address,
 				resp.SyncCommit.CurrentCommitTS.DebugString(),
 				commitTS.DebugString(),
+			))
+		}
+	}
+	requestErr := queryservice.RequestMultipleCn(
+		ctx,
+		nodes,
+		qc,
+		genRequest,
+		handleResponse,
+		nil,
+	)
+	return errors.Join(requestErr, responseErr)
+}
+
+func requireContextAwareSyncCommit(
+	ctx context.Context,
+	qc queryclient.QueryClient,
+	nodes []string,
+) error {
+	genRequest := func() *querypb.Request {
+		req := qc.NewRequest(querypb.CmdMethod_GetProtocolVersion)
+		req.GetProtocolVersion = &querypb.GetProtocolVersionRequest{}
+		return req
+	}
+	var responseErr error
+	handleResponse := func(address string, resp *querypb.Response) {
+		if resp == nil || resp.GetProtocolVersion == nil {
+			responseErr = errors.Join(responseErr, moerr.NewInternalErrorf(
+				ctx, "CN %s returned no protocol version", address))
+			return
+		}
+		if resp.GetProtocolVersion.Version < defines.MORPCVersion27 {
+			responseErr = errors.Join(responseErr, moerr.NewInternalErrorf(
+				ctx,
+				"CN %s does not support context-aware SyncCommit: protocol version %d",
+				address,
+				resp.GetProtocolVersion.Version,
 			))
 		}
 	}

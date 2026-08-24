@@ -217,8 +217,11 @@ type connCache struct {
 		allConns map[ServerConn]*serverConnAuth
 		closed   bool
 	}
-	// resetSessionFunc is the function used to reset session.
-	resetSessionFunc func(ServerConn) ([]byte, error)
+	// resetSessionFunc cleans the old client generation before a backend enters
+	// the cache. refreshSessionFunc creates a fresh generation immediately before
+	// the backend is handed to another client.
+	resetSessionFunc   func(ServerConn) ([]byte, error)
+	refreshSessionFunc func(context.Context, ServerConn) ([]byte, error)
 	// connTimeout is the timeout for all connections in cache.
 	connTimeout time.Duration
 	// OpStrategy is the strategy to operate a connection on the store.
@@ -258,6 +261,12 @@ func withAuthConstructor(ac authenticatorConstructor) connCacheOption {
 func withResetSessionFunc(f func(ServerConn) ([]byte, error)) connCacheOption {
 	return func(c *connCache) {
 		c.resetSessionFunc = f
+	}
+}
+
+func withRefreshSessionFunc(f func(context.Context, ServerConn) ([]byte, error)) connCacheOption {
+	return func(c *connCache) {
+		c.refreshSessionFunc = f
 	}
 }
 
@@ -306,8 +315,10 @@ func newConnCache(
 		moCluster:       mc,
 		authConstructor: newPwdAuthenticator,
 	}
-	// Set the default resetSession function.
+	// Reset once when the old generation is cached, then refresh again at Pop so
+	// changes committed while the backend was idle cannot leak a stale snapshot.
 	cc.resetSessionFunc = cc.resetSession
+	cc.refreshSessionFunc = cc.resetSessionWithContext
 	cc.mu.cache = make(map[cacheKey]*cacheStore)
 	cc.mu.allConns = make(map[ServerConn]*serverConnAuth)
 	for _, opt := range opts {
@@ -317,12 +328,19 @@ func newConnCache(
 }
 
 func (c *connCache) resetSession(sc ServerConn) ([]byte, error) {
+	return c.resetSessionWithContext(c.ctx, sc)
+}
+
+func (c *connCache) resetSessionWithContext(parent context.Context, sc ServerConn) ([]byte, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
 	// Clear the session in frontend.
 	req := c.queryClient.NewRequest(query.CmdMethod_ResetSession)
 	req.ResetSessionRequest = &query.ResetSessionRequest{
 		ConnID: sc.ConnID(),
 	}
-	ctx, cancel := context.WithTimeoutCause(c.ctx, time.Second*3, moerr.CauseResetSession)
+	ctx, cancel := context.WithTimeoutCause(parent, time.Second*3, moerr.CauseResetSession)
 	defer cancel()
 	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 	if addr == "" {
@@ -484,6 +502,32 @@ func (c *connCache) PopContext(
 
 		// Check if the connection is expired.
 		if time.Since(sc.CreateTime()) < c.connTimeout {
+			// ResetSession at Push cleaned the previous client generation, but its
+			// account snapshot may have become stale while this backend was idle.
+			// Refresh under the Pop lifecycle immediately before handoff and rebuild
+			// the authenticator from the same current account snapshot.
+			if c.refreshSessionFunc != nil {
+				authString, err := c.refreshSessionFunc(ctx, sc.ServerConn)
+				if err != nil {
+					if operationContextCause(ctx) != nil {
+						c.logger.Debug("cached session refresh canceled",
+							zap.Uint32("conn ID", sc.ConnID()),
+							zap.Error(err),
+						)
+					} else {
+						c.logger.Error("failed to refresh cached session",
+							zap.Uint32("conn ID", sc.ConnID()),
+							zap.Error(err),
+						)
+					}
+					c.closeCachedConnection(sc)
+					continue
+				}
+				if c.authConstructor != nil {
+					sc.Authenticator = c.authConstructor(authString)
+				}
+			}
+
 			ok, err := execStmtWithContext(ctx, sc, internalStmt{
 				cmdType: cmdQuery,
 				s:       fmt.Sprintf(setConnectionIDSQL, connID),

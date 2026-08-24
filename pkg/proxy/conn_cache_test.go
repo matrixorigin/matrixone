@@ -45,6 +45,14 @@ func (a *mockGoodAuthenticator) Authenticate(_, _ []byte) bool {
 	return true
 }
 
+type snapshotAuthenticator struct {
+	expected string
+}
+
+func (a *snapshotAuthenticator) Authenticate(_, authResp []byte) bool {
+	return string(authResp) == a.expected
+}
+
 func TestEntryOperation(t *testing.T) {
 	var nilStore *cacheStore
 	assert.Equal(t, 0, nilStore.count())
@@ -230,6 +238,9 @@ func runTestWithNewConnCache(
 		withResetSessionFunc(func(conn ServerConn) ([]byte, error) {
 			return nil, nil
 		}),
+		withRefreshSessionFunc(func(context.Context, ServerConn) ([]byte, error) {
+			return nil, nil
+		}),
 		withMaxNumTotal(maxNumTotal),
 		withMaxNumPerTenant(maxNumPerTenant),
 		withAuthConstructor(ac),
@@ -395,6 +406,106 @@ func TestConnCache(t *testing.T) {
 	})
 }
 
+func TestConnCachePopRefreshesSnapshotCommittedWhileIdle(t *testing.T) {
+	currentSnapshot := "old"
+	var pushedSnapshots []string
+	var poppedSnapshots []string
+	cache := newConnCache(
+		context.Background(),
+		"",
+		runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) {
+			pushedSnapshots = append(pushedSnapshots, currentSnapshot)
+			return []byte(currentSnapshot), nil
+		}),
+		withRefreshSessionFunc(func(ctx context.Context, _ ServerConn) ([]byte, error) {
+			require.NoError(t, ctx.Err())
+			poppedSnapshots = append(poppedSnapshots, currentSnapshot)
+			return []byte(currentSnapshot), nil
+		}),
+		withAuthConstructor(func(authString []byte) Authenticator {
+			return &snapshotAuthenticator{expected: string(authString)}
+		}),
+	)
+	defer cache.Close()
+
+	clientSide, serverSide := net.Pipe()
+	defer clientSide.Close()
+	backend := newMockServerConn(serverSide)
+	require.True(t, cache.Push("tenant-a", backend))
+	require.Equal(t, []string{"old"}, pushedSnapshots)
+
+	// Model another connection committing SET GLOBAL while this backend is idle.
+	currentSnapshot = "new"
+	popped := cache.Pop("tenant-a", 42, nil, []byte("new"), clientInfo{})
+	require.Same(t, backend, popped)
+	require.Equal(t, []string{"new"}, poppedSnapshots)
+	require.Zero(t, cache.Count())
+	require.NoError(t, popped.Close())
+}
+
+func TestConnCachePopRefreshFailureDiscardsBackend(t *testing.T) {
+	cache := newConnCache(
+		context.Background(),
+		"",
+		runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withRefreshSessionFunc(func(context.Context, ServerConn) ([]byte, error) {
+			return nil, assert.AnError
+		}),
+		withAuthConstructor(nil),
+	)
+	defer cache.Close()
+
+	clientSide, serverSide := net.Pipe()
+	defer clientSide.Close()
+	backend := newMockServerConn(serverSide)
+	require.True(t, cache.Push("tenant-a", backend))
+	require.Nil(t, cache.Pop("tenant-a", 42, nil, nil, clientInfo{}))
+	require.Zero(t, cache.Count())
+}
+
+func TestConnCachePopRefreshHonorsCancellation(t *testing.T) {
+	entered := make(chan struct{})
+	cache := newConnCache(
+		context.Background(),
+		"",
+		runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withRefreshSessionFunc(func(ctx context.Context, _ ServerConn) ([]byte, error) {
+			close(entered)
+			<-ctx.Done()
+			return nil, context.Cause(ctx)
+		}),
+		withAuthConstructor(nil),
+	)
+	defer cache.Close()
+
+	clientSide, serverSide := net.Pipe()
+	defer clientSide.Close()
+	backend := newMockServerConn(serverSide)
+	require.True(t, cache.Push("tenant-a", backend))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan ServerConn, 1)
+	go func() {
+		result <- cache.(*connCache).PopContext(ctx, "tenant-a", 42, nil, nil, clientInfo{})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("PopContext did not enter cached session refresh")
+	}
+	cancel()
+	select {
+	case popped := <-result:
+		require.Nil(t, popped)
+	case <-time.After(time.Second):
+		t.Fatal("PopContext did not cancel cached session refresh")
+	}
+	require.Zero(t, cache.Count())
+}
+
 func TestConnCachePopClearsReadDeadlineAfterConnectionID(t *testing.T) {
 	runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
 		local, remote := net.Pipe()
@@ -437,6 +548,7 @@ func TestConnCacheBlockedPopDoesNotBlockOtherTenantsOrClose(t *testing.T) {
 	logger := runtime.DefaultRuntime().Logger()
 	cache := newConnCache(ctx, "", logger,
 		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withRefreshSessionFunc(func(context.Context, ServerConn) ([]byte, error) { return nil, nil }),
 		withAuthConstructor(nil),
 	)
 
@@ -490,6 +602,7 @@ func TestConnCacheBlockedPopDoesNotBlockOtherTenantsOrClose(t *testing.T) {
 func TestConnCachePopContextCancelsBackendValidation(t *testing.T) {
 	cache := newConnCache(context.Background(), "", runtime.DefaultRuntime().Logger(),
 		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withRefreshSessionFunc(func(context.Context, ServerConn) ([]byte, error) { return nil, nil }),
 		withAuthConstructor(nil),
 	)
 	clientSide, serverSide := net.Pipe()
@@ -529,6 +642,7 @@ func TestConnCacheCloseDoesNotWaitForPushReset(t *testing.T) {
 			<-releaseReset
 			return nil, nil
 		}),
+		withRefreshSessionFunc(func(context.Context, ServerConn) ([]byte, error) { return nil, nil }),
 		withAuthConstructor(nil),
 	)
 
@@ -572,6 +686,7 @@ func TestConnCachePopWaitsForOriginGenerationCleanup(t *testing.T) {
 		"",
 		runtime.DefaultRuntime().Logger(),
 		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withRefreshSessionFunc(func(context.Context, ServerConn) ([]byte, error) { return nil, nil }),
 		withAuthConstructor(nil),
 	)
 	defer cache.Close()
@@ -650,7 +765,7 @@ func TestResetSession(t *testing.T) {
 
 func TestPreparedShortConnectionQuitPublishesReusableBackend(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
-	resetEntered := make(chan struct{})
+	resetEntered := make(chan struct{}, 2)
 	runTestWithQueryServiceResetHandler(t, cn, func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 		if req.ResetSessionRequest == nil {
 			return fmt.Errorf("missing ResetSession request")
@@ -658,7 +773,7 @@ func TestPreparedShortConnectionQuitPublishesReusableBackend(t *testing.T) {
 		if _, ok := ctx.Deadline(); !ok {
 			return fmt.Errorf("ResetSession request is missing its production deadline")
 		}
-		close(resetEntered)
+		resetEntered <- struct{}{}
 		resp.ResetSessionResponse = &query.ResetSessionResponse{Success: true, AuthString: []byte("auth")}
 		return nil
 	}, func(cc *clientConn, _ string) {

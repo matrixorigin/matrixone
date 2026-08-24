@@ -15,11 +15,15 @@
 package client
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/assert"
 )
@@ -32,6 +36,20 @@ func testCreateQueryClient(t *testing.T) QueryClient {
 
 func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion5, methodVersions[query.CmdMethod_MongoDBClientRetire])
+}
+
+func TestSyncCommitRequiresContextAwareProtocolVersion(t *testing.T) {
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, t.Name(), logutil.GetPanicLogger())
+	req := &query.Request{CmdMethod: query.CmdMethod_SyncCommit}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion26)
+	err := moruntime.CheckMethodVersionWithRuntime(
+		context.Background(), rt, methodVersions, req)
+	assert.ErrorContains(t, err, "unsupported protocol version 27")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
+	assert.NoError(t, moruntime.CheckMethodVersionWithRuntime(
+		context.Background(), rt, methodVersions, req))
 }
 
 func TestNewCacheClient(t *testing.T) {
