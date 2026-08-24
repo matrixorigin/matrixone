@@ -420,6 +420,13 @@ func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) 
 	// fresh DML compile cannot change the positional write layout.
 	require.True(t, PreparedPlanNeedsRuntimeSpecialization(withWriteParameter.Plan))
 
+	writeExpressionPredicate := buildPreparedAggregatePlan(t,
+		"update nation set n_comment = (? = ?) where n_nationkey = 1")
+	// A domain-sensitive expression may be nested below the assignment cast;
+	// scanning must descend into the write root while preserving its outer
+	// positional contract.
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(writeExpressionPredicate.Plan))
+
 	columnBoundPredicate := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ? where n_nationkey = ? and n_regionkey = ?")
 	// Column-owned casts keep ordinary parameterized DML on its cached path.

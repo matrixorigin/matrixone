@@ -3356,6 +3356,11 @@ func (rule *preparedRuntimeSpecializationScanRule) ApplyNode(_ *Node) error {
 
 func (rule *preparedRuntimeSpecializationScanRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
 	if _, ok := rule.skipExprs[expr]; ok {
+		// The outer expression is a positional write value and must not make
+		// the write layout look like a different plan.  Its children are still
+		// ordinary expressions, however: a comparison or CASE below the
+		// assignment can have an execute-time parameter domain of its own.
+		rule.scanExpr(expr, false)
 		return expr, nil
 	}
 	rule.scanExpr(expr, true)

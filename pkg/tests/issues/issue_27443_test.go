@@ -132,6 +132,33 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
 		require.Equal(t, int64(2), status)
 
+		// The assigned value itself may contain a domain-sensitive expression.
+		// Preserve the assignment cast, but specialize the nested comparison so
+		// the binary integer and text numeric values compare numerically.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		writeExpressionStmt, err := db.PrepareContext(ctx, "update `"+dbName+"`.predicate_dst set status = (? = ?) where id = 1")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, writeExpressionStmt.Close())
+		}()
+		_, err = writeExpressionStmt.ExecContext(ctx, int64(1), "1.00")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(1), status)
+
+		// CASE is another write-root expression whose predicate must be
+		// specialized independently of the positional assignment wrapper.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		caseWriteStmt, err := db.PrepareContext(ctx, "update `"+dbName+"`.predicate_dst set status = case when ? = ? then 3 else 4 end where id = 1")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, caseWriteStmt.Close())
+		}()
+		_, err = caseWriteStmt.ExecContext(ctx, int64(1), "1.00")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(3), status)
+
 		sumStmt, err := db.PrepareContext(ctx, "select sum(?)")
 		require.NoError(t, err)
 		defer func() {
