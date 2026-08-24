@@ -71,6 +71,7 @@ func TestFulltext2SearchLoadEmitsTrace(t *testing.T) {
 	var events []LoadEvent
 	restore := setLoadObserver(func(event LoadEvent) { events = append(events, event) })
 	defer restore()
+	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		switch {
 		case strings.Contains(sql, "CAST(COALESCE"):
@@ -91,11 +92,14 @@ func TestFulltext2SearchLoadEmitsTrace(t *testing.T) {
 	s.SetLoadWaiters(3)
 	s.FinishLoadObservation()
 	require.Len(t, events, 1)
-	require.Equal(t, LoadMissProcessStart, events[0].MissReason)
+	require.Equal(t, LoadMissCDCFlush, events[0].MissReason)
 	require.Equal(t, int64(11), events[0].BaseGeneration)
 	require.Equal(t, int64(22), events[0].TailGeneration)
 	require.Equal(t, int64(3), events[0].SingleflightWaiters)
 	require.True(t, events[0].LoadSuccess)
+	reason, at := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
+	require.Empty(t, reason)
+	require.True(t, at.IsZero())
 	s.Destroy()
 }
 
@@ -114,6 +118,41 @@ func TestFulltext2SearchLoadClassifiesQueryInterruptionAsCancel(t *testing.T) {
 	require.True(t, event.LoadCancel)
 	require.False(t, event.LoadError)
 	require.False(t, event.LoadSuccess)
+}
+
+func TestFulltext2SearchLoadRetainsInvalidationReasonAfterFailure(t *testing.T) {
+	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
+	cfg := testStorageCfg()
+	var events []LoadEvent
+	restore := setLoadObserver(func(got LoadEvent) { events = append(events, got) })
+	defer restore()
+
+	pendingLoadReasons.Lock()
+	previous := pendingLoadReasons.m
+	pendingLoadReasons.m = make(map[string]pendingLoadReason)
+	pendingLoadReasons.Unlock()
+	t.Cleanup(func() {
+		pendingLoadReasons.Lock()
+		pendingLoadReasons.m = previous
+		pendingLoadReasons.Unlock()
+	})
+
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewQueryInterrupted(context.Background())
+	})
+	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
+
+	s := NewFulltext2Search(cfg)
+	require.Error(t, s.Load(sp))
+	s.FinishLoadObservation()
+	require.Error(t, s.Load(sp))
+	s.FinishLoadObservation()
+
+	require.Len(t, events, 2)
+	require.Equal(t, LoadMissCDCFlush, events[0].MissReason)
+	require.Equal(t, LoadMissCDCFlush, events[1].MissReason)
+	require.True(t, events[0].LoadCancel)
+	require.True(t, events[1].LoadCancel)
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the

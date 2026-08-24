@@ -101,9 +101,11 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	reason := LoadMissProcessStart
+	var reasonAt time.Time
 	if loadObservationEnabled() {
-		if observed := takeLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)); observed != "" {
+		if observed, at := peekLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)); observed != "" {
 			reason = observed
+			reasonAt = at
 		}
 	}
 	trace := newLoadTrace(s.cfg.IndexTable, reason)
@@ -145,6 +147,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
+	consumeLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable), reasonAt)
 
 	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
 	// captured generation matches the loaded snapshot exactly. On any capture failure genValid

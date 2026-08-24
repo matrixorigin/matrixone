@@ -29,10 +29,11 @@ type pendingLoadReason struct {
 	at     time.Time
 }
 
-// pendingLoadReasons bridges an invalidation event and the next cache miss.
-// It is bounded and expiring because an index may be invalidated without being
-// queried again. The registry is touched only on invalidation/load paths, never
-// by a warm search.
+// pendingLoadReasons bridges an invalidation event and the next cache miss. A
+// failed load leaves the cause available for its retry; a successful load
+// consumes only the entry observed by that load. It is bounded and expiring
+// because an index may be invalidated without being queried again. The
+// registry is touched only on invalidation/load paths, never by a warm search.
 var pendingLoadReasons = struct {
 	sync.Mutex
 	m map[string]pendingLoadReason
@@ -75,22 +76,33 @@ func rememberLoadReason(index string, reason LoadMissReason) {
 	pendingLoadReasons.m[index] = pendingLoadReason{reason: reason, at: now}
 }
 
-func takeLoadReason(index string) LoadMissReason {
+func peekLoadReason(index string) (LoadMissReason, time.Time) {
 	if !loadObservationEnabled() {
-		return ""
+		return "", time.Time{}
 	}
 	now := time.Now()
 	pendingLoadReasons.Lock()
 	defer pendingLoadReasons.Unlock()
 	v, ok := pendingLoadReasons.m[index]
 	if !ok {
-		return ""
+		return "", time.Time{}
 	}
-	delete(pendingLoadReasons.m, index)
 	if now.Sub(v.at) >= loadReasonTTL {
-		return ""
+		delete(pendingLoadReasons.m, index)
+		return "", time.Time{}
 	}
-	return v.reason
+	return v.reason, v.at
+}
+
+func consumeLoadReason(index string, at time.Time) {
+	if index == "" || at.IsZero() {
+		return
+	}
+	pendingLoadReasons.Lock()
+	defer pendingLoadReasons.Unlock()
+	if v, ok := pendingLoadReasons.m[index]; ok && v.at == at {
+		delete(pendingLoadReasons.m, index)
+	}
 }
 
 // invalidateLoadGeneration records why the next load will miss. The

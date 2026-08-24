@@ -26,7 +26,9 @@ func TestLoadReasonRegistryDisabledObserverIsNoOp(t *testing.T) {
 	defer cleanup()
 	key := loadReasonKey("db", "store")
 	rememberLoadReason(key, LoadMissCDCFlush)
-	require.Empty(t, takeLoadReason(key))
+	reason, at := peekLoadReason(key)
+	require.Empty(t, reason)
+	require.True(t, at.IsZero())
 }
 
 func TestLoadReasonRegistryStoresOnlyWhenEnabled(t *testing.T) {
@@ -34,7 +36,13 @@ func TestLoadReasonRegistryStoresOnlyWhenEnabled(t *testing.T) {
 	defer cleanup()
 	key := loadReasonKey("db", "store")
 	rememberLoadReason(key, LoadMissCDCFlush)
-	require.Equal(t, LoadMissCDCFlush, takeLoadReason(key))
+	reason, at := peekLoadReason(key)
+	require.Equal(t, LoadMissCDCFlush, reason)
+	require.NotZero(t, at)
+	consumeLoadReason(key, at)
+	reason, at = peekLoadReason(key)
+	require.Empty(t, reason)
+	require.True(t, at.IsZero())
 }
 
 func TestLoadReasonRegistryBoundsExpiryAndInvalidation(t *testing.T) {
@@ -61,14 +69,51 @@ func TestLoadReasonRegistryBoundsExpiryAndInvalidation(t *testing.T) {
 	pendingLoadReasons.Unlock()
 
 	rememberLoadReason("overflow", LoadMissRebuild)
-	require.Empty(t, takeLoadReason("expired"))
-	require.Empty(t, takeLoadReason("oldest"))
-	require.Equal(t, LoadMissRebuild, takeLoadReason("overflow"))
-	require.Empty(t, takeLoadReason("missing"))
+	reason, at := peekLoadReason("expired")
+	require.Empty(t, reason)
+	require.True(t, at.IsZero())
+	reason, at = peekLoadReason("oldest")
+	require.Empty(t, reason)
+	require.True(t, at.IsZero())
+	reason, at = peekLoadReason("overflow")
+	require.Equal(t, LoadMissRebuild, reason)
+	consumeLoadReason("overflow", at)
+	reason, at = peekLoadReason("missing")
+	require.Empty(t, reason)
+	require.True(t, at.IsZero())
 
 	cfg := TableConfig{DbName: "db", IndexTable: "store"}
 	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
-	require.Equal(t, LoadMissCDCFlush, takeLoadReason("db.store"))
+	reason, at = peekLoadReason("db.store")
+	require.Equal(t, LoadMissCDCFlush, reason)
+	consumeLoadReason("db.store", at)
 	invalidateLoadGeneration(cfg, LoadMissReason("process_shutdown"))
-	require.Empty(t, takeLoadReason("db.store"))
+	reason, at = peekLoadReason("db.store")
+	require.Empty(t, reason)
+	require.True(t, at.IsZero())
+}
+
+func TestLoadReasonRegistryDoesNotConsumeNewerInvalidation(t *testing.T) {
+	cleanupObserver := setLoadObserver(func(LoadEvent) {})
+	defer cleanupObserver()
+
+	pendingLoadReasons.Lock()
+	previous := pendingLoadReasons.m
+	pendingLoadReasons.m = make(map[string]pendingLoadReason)
+	pendingLoadReasons.Unlock()
+	t.Cleanup(func() {
+		pendingLoadReasons.Lock()
+		pendingLoadReasons.m = previous
+		pendingLoadReasons.Unlock()
+	})
+
+	key := loadReasonKey("db", "store")
+	rememberLoadReason(key, LoadMissCDCFlush)
+	firstReason, firstAt := peekLoadReason(key)
+	require.Equal(t, LoadMissCDCFlush, firstReason)
+	rememberLoadReason(key, LoadMissRebuild)
+	consumeLoadReason(key, firstAt)
+	secondReason, secondAt := peekLoadReason(key)
+	require.Equal(t, LoadMissRebuild, secondReason)
+	consumeLoadReason(key, secondAt)
 }
