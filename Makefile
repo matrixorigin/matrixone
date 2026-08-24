@@ -494,6 +494,10 @@ test-mongodb-e2e-local:
 test-mongodb-unit:
 	@optools/mongodb_ci.bash unit
 
+.PHONY: test-esql-tvf-e2e-local
+test-esql-tvf-e2e-local:
+	@optools/esql_ci.bash e2e-local
+
 .PHONY: test-iceberg-local
 test-iceberg-local:
 	@optools/iceberg_ci.bash local
