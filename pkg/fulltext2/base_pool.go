@@ -280,7 +280,7 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 			}()
 			return load()
 		}()
-		retired, resultErr, directTemplate := func() (bool, error, *Segment) {
+		retired, directTemplate, resultErr := func() (bool, *Segment, error) {
 			p.mu.Lock()
 			defer p.mu.Unlock()
 			e.loading = false
@@ -290,12 +290,12 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 				e.err = errBaseLeaseGone
 				close(e.ready)
 				if err != nil {
-					return true, err, template
+					return true, template, err
 				}
 				if template == nil {
-					return true, errBaseLeaseGone, nil
+					return true, nil, errBaseLeaseGone
 				}
-				return true, nil, template
+				return true, template, nil
 			}
 			if err == nil {
 				if template == nil {
@@ -311,7 +311,7 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 			if err != nil {
 				delete(p.entries, key)
 			}
-			return false, err, nil
+			return false, nil, err
 		}()
 		if retired {
 			if directTemplate != nil && resultErr != nil {
