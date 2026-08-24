@@ -483,7 +483,18 @@ func TestGpuIvfPqExtend(t *testing.T) {
 	bp := DefaultIvfPqBuildParams()
 	bp.NLists = 10
 	bp.M = 8
-	index, err := NewGpuIvfPq[float32, float32](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	// Explicit ids for the base rows, equal to their internal positions -- which is
+	// exactly what an id-less index means by "id". Passing nil here instead built an
+	// index with NO host_ids, and the id-bearing Extend below then zero-filled
+	// host_ids[0..nBase) to make room for the extended ids. Every base row therefore
+	// reported external id 0, which made the "expect ID 0" assertion below vacuous:
+	// it passed for any base row, not just row 0. That mix is now refused outright
+	// (index_base.hpp: an index is all-ids or all-id-less), so state the intent.
+	baseIDs := make([]int64, nBase)
+	for i := range baseIDs {
+		baseIDs[i] = int64(i)
+	}
+	index, err := NewGpuIvfPq[float32, float32](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, baseIDs)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq: %v", err)
 	}
@@ -558,7 +569,18 @@ func TestGpuIvfPqExtendFloat(t *testing.T) {
 	bp.M = 8
 	bp.KmeansTrainsetFraction = 1.0
 	// Use Float16 so ExtendFloat exercises quantization
-	index, err := NewGpuIvfPq[Float16, Float16](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, nil)
+	// Explicit ids for the base rows, equal to their internal positions -- which is
+	// exactly what an id-less index means by "id". Passing nil here instead built an
+	// index with NO host_ids, and the id-bearing Extend below then zero-filled
+	// host_ids[0..nBase) to make room for the extended ids. Every base row therefore
+	// reported external id 0, which made the "expect ID 0" assertion below vacuous:
+	// it passed for any base row, not just row 0. That mix is now refused outright
+	// (index_base.hpp: an index is all-ids or all-id-less), so state the intent.
+	baseIDs := make([]int64, nBase)
+	for i := range baseIDs {
+		baseIDs[i] = int64(i)
+	}
+	index, err := NewGpuIvfPq[Float16, Float16](dataset, nBase, dimension, L2Expanded, bp, devices, 1, SingleGpu, baseIDs)
 	if err != nil {
 		t.Fatalf("Failed to create GpuIvfPq[Float16]: %v", err)
 	}

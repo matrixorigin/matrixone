@@ -1005,6 +1005,11 @@ public:
     //
     // Sized up front, so the build the reader pays for is one allocation and n
     // inserts rather than the doubling rehash sequence the per-row path incurred.
+    //
+    // Trusts the WHOLE of host_ids, which is sound because the writers refuse to
+    // leave a hole in it (see the all-ids-or-all-id-less guard in add_chunk). A
+    // hole would zero-fill, and a zero is indistinguishable from a legitimate
+    // external id 0.
     void ensure_id_index() {
         if (this->id_index_built_) return;
         this->id_to_index_.reserve(this->host_ids.size());
@@ -1019,6 +1024,14 @@ public:
         // std::cout << "[DEBUG] set_ids: count=" << count_vectors << " offset=" << offset 
         //           << " first_id=" << ids[0] << " last_id=" << ids[count_vectors-1] 
         //           << " sizeof(IdT)=" << sizeof(IdT) << std::endl;
+        // See the contract note in add_chunk: ids must extend or overwrite the
+        // existing range, never start past its end and leave a zero-filled hole.
+        if (this->host_ids.size() < offset) {
+            throw std::runtime_error(
+                "set_ids: would leave rows " + std::to_string(this->host_ids.size()) +
+                ".." + std::to_string(offset) + " without ids; an index is either "
+                "all-ids or all-id-less, not a mix");
+        }
         if (this->host_ids.size() < offset + count_vectors) {
             this->host_ids.resize(offset + count_vectors);
         }
@@ -1128,6 +1141,21 @@ public:
         }
 
         if (ids) {
+            // An index is all-ids or all-id-less; a MIX is rejected here rather than
+                // silently tolerated. Writing ids at target_offset when host_ids ends
+                // before it leaves the rows in between zero-filled, and a zero is
+                // indistinguishable from a legitimate external id 0: search would report
+                // 0 for those rows (map_neighbor_id subscripts host_ids directly) and
+                // ensure_id_index would map id 0 onto one of them. Nothing constructs
+                // such an index today -- every entry point supplies ids for all chunks
+                // or none -- so this turns an unwritten assumption into a checked one,
+                // and is what lets ensure_id_index trust the whole of host_ids.
+            if (host_ids.size() < target_offset) {
+                throw std::runtime_error(
+                    "add_chunk: would leave rows " + std::to_string(host_ids.size()) +
+                    ".." + std::to_string(target_offset) + " without ids; an index is "
+                    "either all-ids or all-id-less, not a mix");
+            }
             if (host_ids.size() < current_offset_) {
                 host_ids.resize(current_offset_);
             }
@@ -1463,6 +1491,14 @@ public:
             }
 
             if (sp.has_ids) {
+                // Same all-ids-or-none contract as add_chunk; a span that starts past
+                // the end of host_ids would zero-fill the gap.
+                if (host_ids.size() < target_offset) {
+                    throw std::runtime_error(
+                        "flush_pending: would leave rows " + std::to_string(host_ids.size()) +
+                        ".." + std::to_string(target_offset) + " without ids; an index is "
+                        "either all-ids or all-id-less, not a mix");
+                }
                 if (host_ids.size() < current_offset_) {
                     host_ids.resize(current_offset_);
                 }
