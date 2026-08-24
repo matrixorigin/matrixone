@@ -159,6 +159,20 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
 		require.Equal(t, int64(3), status)
 
+		// A scalar subquery can hide a domain-sensitive expression in a derived
+		// table. Only the final assignment cast is positional; the nested
+		// comparison must still be rebound for the binary parameter domains.
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		nestedWriteStmt, err := db.PrepareContext(ctx, "update `"+dbName+"`.predicate_dst set status = (select d.v from (select ? = ? as v) d) where id = 1")
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, nestedWriteStmt.Close())
+		}()
+		_, err = nestedWriteStmt.ExecContext(ctx, int64(1), "1.00")
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+		require.Equal(t, int64(1), status)
+
 		sumStmt, err := db.PrepareContext(ctx, "select sum(?)")
 		require.NoError(t, err)
 		defer func() {

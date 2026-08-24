@@ -3285,52 +3285,78 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 	if query == nil || !isPreparedDMLStmt(query.StmtType) {
 		return writeExprs
 	}
-	visited := make(map[int32]struct{})
-	var visit func(int32)
-	visit = func(nodeID int32) {
-		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
-			return
+	add := func(expr *plan.Expr) {
+		if preparedExprContainsParam(expr) {
+			writeExprs[expr] = struct{}{}
 		}
-		if _, ok := visited[nodeID]; ok {
-			return
+	}
+
+	// ProjectList is used for every relational projection, including the
+	// private projects that implement derived tables and scalar subqueries.
+	// Only projections directly feeding a DML writer carry the positional
+	// assignment contract that must be preserved.  Walking every reachable
+	// project incorrectly treats a nested `select ? = ?` as a write root and
+	// prevents its comparison from being rebound at execute time.
+	isWriteParent := func(nodeType plan.Node_NodeType) bool {
+		switch nodeType {
+		case plan.Node_INSERT, plan.Node_MULTI_UPDATE,
+			plan.Node_PRE_INSERT, plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK,
+			plan.Node_LOCK_OP:
+			return true
+		default:
+			return false
 		}
-		visited[nodeID] = struct{}{}
-		node := query.Nodes[nodeID]
+	}
+	parents := make(map[int32][]plan.Node_NodeType)
+	for _, node := range query.Nodes {
 		if node == nil {
-			return
+			continue
 		}
-		for _, expr := range node.ProjectList {
-			if preparedExprContainsParam(expr) {
-				writeExprs[expr] = struct{}{}
+		for _, childID := range node.Children {
+			if childID >= 0 && int(childID) < len(query.Nodes) {
+				parents[childID] = append(parents[childID], node.NodeType)
+			}
+		}
+	}
+	for nodeID, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		if node.NodeType == plan.Node_PROJECT {
+			for _, parentType := range parents[int32(nodeID)] {
+				if isWriteParent(parentType) {
+					for _, expr := range node.ProjectList {
+						add(expr)
+					}
+					break
+				}
+			}
+		}
+		// INSERT/MULTI_UPDATE may carry a writer projection directly on the
+		// sink node.  DELETE has no value projection; its parameters belong to
+		// filter expressions and must remain eligible for specialization.
+		if node.NodeType == plan.Node_INSERT || node.NodeType == plan.Node_MULTI_UPDATE {
+			for _, expr := range node.ProjectList {
+				add(expr)
 			}
 		}
 		for _, expr := range node.OnUpdateExprs {
-			if preparedExprContainsParam(expr) {
-				writeExprs[expr] = struct{}{}
-			}
+			add(expr)
 		}
 		if node.DedupJoinCtx != nil {
 			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
-				if preparedExprContainsParam(expr) {
-					writeExprs[expr] = struct{}{}
-				}
+				add(expr)
 			}
 		}
 		if node.RowsetData != nil {
 			for _, col := range node.RowsetData.Cols {
 				for _, row := range col.Data {
-					if row != nil && preparedExprContainsParam(row.Expr) {
-						writeExprs[row.Expr] = struct{}{}
+					if row != nil {
+						add(row.Expr)
 					}
 				}
 			}
 		}
-		for _, childID := range node.Children {
-			visit(childID)
-		}
-	}
-	for _, step := range query.Steps {
-		visit(step)
 	}
 	return writeExprs
 }

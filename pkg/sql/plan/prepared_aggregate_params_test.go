@@ -427,6 +427,13 @@ func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) 
 	// positional contract.
 	require.True(t, PreparedPlanNeedsRuntimeSpecialization(writeExpressionPredicate.Plan))
 
+	nestedWriteExpression := buildPreparedAggregatePlan(t,
+		"update nation set n_comment = (select d.v from (select ? = ? as v) d) where n_nationkey = 1")
+	// A derived-table projection is not a positional DML write root. Its
+	// marker comparison must therefore remain visible to the specialization
+	// scan instead of being preserved as if it were an assignment cast.
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(nestedWriteExpression.Plan))
+
 	columnBoundPredicate := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ? where n_nationkey = ? and n_regionkey = ?")
 	// Column-owned casts keep ordinary parameterized DML on its cached path.
