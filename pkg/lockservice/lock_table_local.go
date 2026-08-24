@@ -318,7 +318,7 @@ func (l *localLockTable) unlock(
 		defer func() {
 			v2.TxnUnlockBtreeTotalDurationHistogram.Observe(time.Since(start).Seconds())
 		}()
-		_ = l.unlockWithoutMutations(nil, txn, ls, commitTS, start)
+		l.unlockWithoutMutations(txn, ls, commitTS, start)
 		return
 	}
 	_ = l.unlockWithContext(
@@ -331,7 +331,6 @@ func (l *localLockTable) unlock(
 }
 
 func (l *localLockTable) unlockWithoutMutations(
-	ctx context.Context,
 	txn *activeTxn,
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
@@ -344,12 +343,6 @@ func (l *localLockTable) unlockWithoutMutations(
 	if !ok {
 		panic("BUG: missing bind")
 	}
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
-
 	l.mu.Lock()
 	v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
 	defer l.mu.Unlock()
@@ -376,7 +369,8 @@ func (l *localLockTable) unlockWithContext(
 		return err
 	}
 	if len(mutations) == 0 {
-		return l.unlockWithoutMutations(ctx, txn, ls, commitTS, start)
+		l.unlockWithoutMutations(txn, ls, commitTS, start)
+		return nil
 	}
 
 	logUnlockTableOnLocal(

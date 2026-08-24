@@ -134,16 +134,6 @@ func (c *checker[T, P]) got(v P) {
 	c.gotActive(v, epoch, false)
 }
 
-// gotFromPool adopts objects that entered sync.Pool while checker validation
-// was disabled. It returns true when the caller must install a finalizer.
-func (c *checker[T, P]) gotFromPool(v P) bool {
-	epoch := checkerActive.current()
-	if epoch == 0 || !c.enable {
-		return false
-	}
-	return c.gotActive(v, epoch, true)
-}
-
 func (c *checker[T, P]) gotActive(v P, epoch uint64, adopt bool) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -174,16 +164,6 @@ func (c *checker[T, P]) free(v P) {
 		return
 	}
 	c.freeActive(v, epoch, false)
-}
-
-// freeToPool adopts an object acquired before the current checker generation.
-// It returns true when the caller must install a finalizer before pooling it.
-func (c *checker[T, P]) freeToPool(v P) bool {
-	epoch := checkerActive.current()
-	if epoch == 0 || !c.enable {
-		return false
-	}
-	return c.freeActive(v, epoch, true)
 }
 
 func (c *checker[T, P]) freeActive(v P, epoch uint64, adopt bool) bool {
