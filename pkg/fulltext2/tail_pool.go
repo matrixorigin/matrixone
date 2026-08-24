@@ -78,9 +78,17 @@ func estimateSegmentBytes(s *Segment) int64 {
 	if s == nil {
 		return 0
 	}
-	n := int64(len(s.pks))*24 + int64(len(s.pkOffsets))*4 + int64(len(s.pkRaw)) +
-		int64(len(s.docLen))*4 + int64(len(s.includeTypes))*4 + int64(len(s.includeRaw)) +
-		int64(len(s.includeVarOffsets))*4
+	n := s.ownedBytes
+	if n == 0 {
+		n = int64(len(s.pks))*24 + int64(len(s.pkOffsets))*4 + int64(len(s.pkRaw)) +
+			int64(len(s.docLen))*4 + int64(len(s.includeTypes))*4 + int64(len(s.includeRaw)) +
+			int64(len(s.includeVarOffsets))*4
+	} else {
+		// pkRaw, includeRaw, the FST, ranking, blocks, and positions are all
+		// views into ownedBytes and must not be counted again.
+		n += int64(len(s.pkOffsets))*4 + int64(len(s.docLen))*4 +
+			int64(len(s.includeTypes))*4 + int64(len(s.includeVarOffsets))*4
+	}
 	for _, values := range s.includeVals {
 		n += int64(len(values)) * 16
 	}
@@ -98,12 +106,26 @@ func estimateSegmentBytes(s *Segment) int64 {
 	return n
 }
 
+func estimateDeleteKeyBytes(key any) int64 {
+	const mapEntryOverhead = int64(32)
+	switch v := key.(type) {
+	case string:
+		return mapEntryOverhead + int64(len(v))
+	case []byte:
+		return mapEntryOverhead + int64(len(v))
+	default:
+		return mapEntryOverhead
+	}
+}
+
 func estimateTailStateBytes(segs []*Segment, deletes map[any]int64) int64 {
 	n := int64(len(segs)) * 8
 	for _, seg := range segs {
 		n += estimateSegmentBytes(seg)
 	}
-	n += int64(len(deletes)) * 32
+	for key := range deletes {
+		n += estimateDeleteKeyBytes(key)
+	}
 	return n
 }
 

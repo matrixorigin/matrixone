@@ -15,9 +15,11 @@
 package fulltext2
 
 import (
+	"context"
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,6 +61,58 @@ func TestFulltext2SearchNewAndUnloaded(t *testing.T) {
 
 	// SearchFloat32 is unsupported.
 	require.ErrorContains(t, s.SearchFloat32(proc, nil, vectorindex.RuntimeConfig{}, nil, nil), "not supported")
+}
+
+func TestFulltext2SearchLoadFailureClearsReusableGeneration(t *testing.T) {
+	loadedBasePool.clearAll()
+	loadedTailPool.clearAll()
+	t.Cleanup(func() {
+		loadedBasePool.clearAll()
+		loadedTailPool.clearAll()
+	})
+
+	cfg := testStorageCfg()
+	baseKey := baseKey{index: "db.__store", id: "base-0", checksum: "sum", filesize: 1}
+	view, err := loadedBasePool.acquire(context.Background(), baseKey, func() (*Segment, error) {
+		return NewSegment("base-0", 0), nil
+	}, 0)
+	require.NoError(t, err)
+	view.Free()
+	tailViews, _ := loadedTailPool.installAndAcquire("db.__store", newTailState(1, 1, []*Segment{NewSegment("tail-1", 0)}, nil))
+	freeSegs(tailViews)
+
+	sp, mp := mockSqlProc(t)
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, int64(1)<<50)}}, nil
+	})
+	s := NewFulltext2Search(cfg)
+	require.Error(t, s.Load(sp))
+
+	loadedBasePool.mu.Lock()
+	baseEntries := len(loadedBasePool.entries)
+	loadedBasePool.mu.Unlock()
+	loadedTailPool.mu.Lock()
+	tailStates := len(loadedTailPool.states)
+	loadedTailPool.mu.Unlock()
+	require.Zero(t, baseEntries)
+	require.Zero(t, tailStates)
+}
+
+func TestFulltext2SearchLoadClassifiesQueryInterruptionAsCancel(t *testing.T) {
+	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
+	var event LoadEvent
+	restore := setLoadObserver(func(got LoadEvent) { event = got })
+	defer restore()
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewQueryInterrupted(context.Background())
+	})
+
+	s := NewFulltext2Search(testStorageCfg())
+	require.Error(t, s.Load(sp))
+	s.FinishLoadObservation()
+	require.True(t, event.LoadCancel)
+	require.False(t, event.LoadError)
+	require.False(t, event.LoadSuccess)
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the

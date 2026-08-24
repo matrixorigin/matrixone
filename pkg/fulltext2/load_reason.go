@@ -17,6 +17,8 @@ package fulltext2
 import (
 	"sync"
 	"time"
+
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 )
 
 const (
@@ -37,6 +39,23 @@ var pendingLoadReasons = struct {
 	sync.Mutex
 	m map[string]pendingLoadReason
 }{m: make(map[string]pendingLoadReason)}
+
+var reusableLoadLifecycleOnce sync.Once
+
+func ensureReusableLoadLifecycle() {
+	reusableLoadLifecycleOnce.Do(func() {
+		veccache.RegisterLifecycleHook(func(shutdown bool) {
+			if shutdown {
+				loadedBasePool.clearAll()
+				loadedTailPool.clearAll()
+				return
+			}
+			now := time.Now()
+			loadedBasePool.evict(now)
+			loadedTailPool.evict(now)
+		})
+	})
+}
 
 // loadReasonKey is the bounded registry key used by cache invalidation hooks.
 // The database qualifier avoids conflating identically named hidden stores in

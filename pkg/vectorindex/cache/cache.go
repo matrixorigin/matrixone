@@ -61,6 +61,32 @@ var (
 	Cache               *VectorIndexCache = NewVectorIndexCache()
 )
 
+var lifecycleHooks struct {
+	sync.RWMutex
+	hooks []func(shutdown bool)
+}
+
+// RegisterLifecycleHook lets an algorithm-owned pool attach cleanup to the
+// cache's housekeeping and process-shutdown lifecycle. Hooks are invoked
+// outside the cache map operations, including when the map is empty.
+func RegisterLifecycleHook(hook func(shutdown bool)) {
+	if hook == nil {
+		return
+	}
+	lifecycleHooks.Lock()
+	lifecycleHooks.hooks = append(lifecycleHooks.hooks, hook)
+	lifecycleHooks.Unlock()
+}
+
+func runLifecycleHooks(shutdown bool) {
+	lifecycleHooks.RLock()
+	hooks := append([]func(bool){}, lifecycleHooks.hooks...)
+	lifecycleHooks.RUnlock()
+	for _, hook := range hooks {
+		hook(shutdown)
+	}
+}
+
 // Various vector index algorithm wants to share with VectorIndexCache need to implement VectorIndexSearchIf interface (see HnswSearch)
 type VectorIndexSearchIf interface {
 	Search(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error)
@@ -150,6 +176,21 @@ func (s *VectorIndexSearch) DestroyWithReason(reason string) {
 	}
 	s.Algo.Destroy()
 	// destroyed
+	s.Status.Store(STATUS_DESTROYED)
+}
+
+// destroyFailedLoad releases an entry whose load failed after the caller has
+// removed that exact entry from the map. It deliberately skips the optional
+// invalidation hook: FULLTEXT2 clears reusable state in Load's error defer, and
+// invoking a key-wide hook after a replacement load starts could clear the new
+// generation. The lock still serializes destruction with waiters/searchers.
+func (s *VectorIndexSearch) destroyFailedLoad() {
+	s.Mutex.Lock()
+	defer func() {
+		s.Mutex.Unlock()
+		s.Cond.Broadcast()
+	}()
+	s.Algo.Destroy()
 	s.Status.Store(STATUS_DESTROYED)
 }
 
@@ -361,6 +402,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", k)
 		}
 	}
+	runLifecycleHooks(false)
 }
 
 // checkStale asks every loaded StaleChecker entry whether it is stale and marks the stale ones
@@ -421,6 +463,7 @@ func (c *VectorIndexCache) Destroy() {
 		algo = nil
 		return true
 	})
+	runLifecycleHooks(true)
 }
 
 // Get index from cache and return VectorIndexSearchIf interface
@@ -433,10 +476,13 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
-			// load model from database and if error during loading, remove the entry from gIndexMap
+			// Remove only this exact failed entry, then destroy it without a
+			// key-wide invalidation hook; the loader owns reusable-state rollback.
 			err := algo.Load(sqlproc)
 			if err != nil {
-				c.IndexMap.Delete(key)
+				if c.IndexMap.CompareAndDelete(key, algo) {
+					algo.destroyFailedLoad()
+				}
 				return nil, nil, err
 			}
 		}
@@ -465,7 +511,9 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
 			if err := algo.Load(sqlproc); err != nil {
-				c.IndexMap.Delete(key)
+				if c.IndexMap.CompareAndDelete(key, algo) {
+					algo.destroyFailedLoad()
+				}
 				return err
 			}
 		}

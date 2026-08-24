@@ -15,9 +15,12 @@
 package fulltext2
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,4 +93,32 @@ func TestTailPoolBoundsIndexesAndEvictsIdle(t *testing.T) {
 	p.evict(time.Now().Add(time.Second))
 	require.Empty(t, p.states)
 	p.clearAll()
+}
+
+func TestTailPoolByteBoundCountsDeserializedArchiveAndDeletePayload(t *testing.T) {
+	b := NewBuilder("tail", int32(types.T_int64))
+	words := make([]string, 100)
+	for i := range words {
+		words[i] = "repeated"
+	}
+	for doc := int64(0); doc < 100; doc++ {
+		feed(t, b, doc, words...)
+	}
+	seg, err := b.Finish()
+	require.NoError(t, err)
+	archive, err := seg.Serialize()
+	require.NoError(t, err)
+	loaded, err := Deserialize("tail", bytes.NewReader(archive))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = loaded.dict.Close()
+		loaded.Free()
+	})
+
+	require.Equal(t, int64(len(archive)), loaded.ownedBytes)
+	deleteKey := strings.Repeat("varchar-pk-", 128)
+	state := newTailState(1, 1, []*Segment{loaded}, map[any]int64{deleteKey: 1})
+	require.GreaterOrEqual(t, state.bytes, int64(len(archive)))
+	require.GreaterOrEqual(t, state.bytes, int64(len(archive)+len(deleteKey)+32))
+	state.segments[0].retire()
 }

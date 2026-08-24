@@ -395,7 +395,11 @@ type Segment struct {
 	// in-memory (tail) segment, whose bytes are GC-managed Go slices.
 	mmapData []byte
 	mmapPath string
-	lease    *segmentLease // non-nil for a view into the immutable base pool
+	// ownedBytes is the unique serialized archive retained by a loaded segment.
+	// The tail pool counts this once because pkRaw, FST, ranking, blocks, and
+	// positions are views into the same archive.
+	ownedBytes int64
+	lease      *segmentLease // non-nil for a view into the immutable base pool
 }
 
 // numDocs is the segment's document count, valid for both a build-side segment (== len(pks))
@@ -684,6 +688,7 @@ func (s *Segment) freeOwned() {
 		s.mmapPath = ""
 	}
 	s.ranking, s.blocks, s.positions = nil, nil, nil
+	s.ownedBytes = 0
 }
 
 // freeSegs frees every segment's off-heap buffers (nil-safe on build-side segs).

@@ -172,7 +172,7 @@ func TestImmutableBasePoolLoadFailureDoesNotRetainEntry(t *testing.T) {
 	require.Zero(t, p.totalBytes)
 }
 
-func TestImmutableBasePoolInvalidationDuringLoadRetriesWithoutRetainingStaleLease(t *testing.T) {
+func TestImmutableBasePoolInvalidationDuringLoadDoesNotRepoolStaleLease(t *testing.T) {
 	p := &immutableBasePool{entries: make(map[baseKey]*baseEntry)}
 	key := baseKey{index: "db.store", id: "base-0", checksum: "sum", filesize: 1}
 	started := make(chan struct{})
@@ -197,8 +197,8 @@ func TestImmutableBasePoolInvalidationDuringLoadRetriesWithoutRetainingStaleLeas
 	p.clearIndex(key.index)
 	close(release)
 	require.NoError(t, <-done)
-	require.Equal(t, int32(2), loads.Load(), "the invalidated in-flight result must not be reused")
-	require.NotEmpty(t, p.entries, "the retry may install the current generation")
+	require.Equal(t, int32(1), loads.Load(), "the invalidated in-flight result must not be retried in place")
+	require.Empty(t, p.entries, "the stale in-flight result is owned by the current query, not the pool")
 	p.clearAll()
 	require.Empty(t, p.entries)
 }

@@ -16,6 +16,7 @@ package cache
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -56,4 +57,17 @@ func TestVectorIndexSearchNotifiesEmptyInvalidationReason(t *testing.T) {
 	s.Cond = sync.NewCond(s.Mutex.RLocker())
 	s.Destroy()
 	require.Equal(t, []string{""}, mock.reasons)
+}
+
+func TestVectorIndexCacheLifecycleHookRunsForEmptyShutdown(t *testing.T) {
+	var shutdown atomic.Bool
+	RegisterLifecycleHook(func(isShutdown bool) {
+		if isShutdown {
+			shutdown.Store(true)
+		}
+	})
+
+	c := NewVectorIndexCache()
+	c.Destroy()
+	require.True(t, shutdown.Load())
 }

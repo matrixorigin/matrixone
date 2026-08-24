@@ -100,6 +100,7 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // global stats and per-pk liveness. An index created on an empty table has no tag=0
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
+	ensureReusableLoadLifecycle()
 	reason := LoadMissProcessStart
 	if loadObservationEnabled() {
 		if observed := takeLoadReason(loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)); observed != "" {
@@ -110,7 +111,8 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	canceled := false
 	defer func() {
 		if err != nil {
-			canceled = errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+			canceled = isLoadCancellationError(err)
+			clearReusableLoadGeneration(s.cfg)
 		}
 		// VectorIndexCache finishes the event after it samples the shared
 		// entry's waiter count, so waiters that arrived during this load are
@@ -197,6 +199,13 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		}
 	}
 	return nil
+}
+
+func isLoadCancellationError(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryTimeout)
 }
 
 // OnCacheInvalidated is called by the generic cache only on invalidation paths;

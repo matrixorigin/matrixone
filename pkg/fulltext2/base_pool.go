@@ -67,8 +67,8 @@ func newSegmentLease(template *Segment) *segmentLease {
 
 func (l *segmentLease) acquire(recency int64) *Segment {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.template == nil {
-		l.mu.Unlock()
 		return nil
 	}
 	l.refs++
@@ -78,24 +78,24 @@ func (l *segmentLease) acquire(recency int64) *Segment {
 	}
 	view.Recency = recency
 	view.lease = l
-	l.mu.Unlock()
 	return &view
 }
 
 func (l *segmentLease) release() {
-	l.mu.Lock()
-	if l.refs <= 0 {
-		l.mu.Unlock()
-		return
-	}
-	l.refs--
-	if l.refs != 0 {
-		l.mu.Unlock()
-		return
-	}
-	template := l.template
-	l.template = nil
-	l.mu.Unlock()
+	template := func() *Segment {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if l.refs <= 0 {
+			return nil
+		}
+		l.refs--
+		if l.refs != 0 {
+			return nil
+		}
+		template := l.template
+		l.template = nil
+		return template
+	}()
 	if template != nil {
 		template.freeOwned()
 	}
@@ -104,21 +104,22 @@ func (l *segmentLease) release() {
 // retire removes the pool's reference. Active generations keep the mapping
 // alive until their Segment views are freed.
 func (l *segmentLease) retire() {
-	l.mu.Lock()
-	if !l.pooled {
-		l.mu.Unlock()
-		return
-	}
-	l.pooled = false
-	l.retired = true
-	l.refs-- // drop the pool reference
-	if l.refs != 0 {
-		l.mu.Unlock()
-		return
-	}
-	template := l.template
-	l.template = nil
-	l.mu.Unlock()
+	template := func() *Segment {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if !l.pooled {
+			return nil
+		}
+		l.pooled = false
+		l.retired = true
+		l.refs-- // drop the pool reference
+		if l.refs != 0 {
+			return nil
+		}
+		template := l.template
+		l.template = nil
+		return template
+	}()
 	if template != nil {
 		template.freeOwned()
 	}
@@ -208,10 +209,10 @@ func (p *immutableBasePool) evictLocked(now time.Time) (retire []*segmentLease) 
 	return retire
 }
 
-// retireLoadingLocked marks an in-flight entry so its loader will discard the
-// result when it completes. The entry stays in the map until the loader closes
-// ready; this keeps existing waiters from being stranded on a channel that can
-// never be signaled.
+// retireLoadingLocked marks an in-flight entry so its loader will not repool
+// the result when it completes. The entry stays in the map until the loader
+// closes ready; this keeps existing waiters from being stranded on a channel
+// that can never be signaled.
 func (p *immutableBasePool) retireLoadingLocked(entry *baseEntry) {
 	if entry != nil && entry.loading {
 		entry.retired = true
@@ -225,9 +226,11 @@ func retireBaseLeases(leases []*segmentLease) {
 }
 
 func (p *immutableBasePool) evict(now time.Time) {
-	p.mu.Lock()
-	retire := p.evictLocked(now)
-	p.mu.Unlock()
+	retire := func() []*segmentLease {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.evictLocked(now)
+	}()
 	retireBaseLeases(retire)
 }
 
@@ -240,11 +243,22 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
-		p.mu.Lock()
-		if e, ok := p.entries[key]; ok {
-			if e.loading {
-				ready := e.ready
-				p.mu.Unlock()
+		e, ready, view, found := func() (*baseEntry, chan struct{}, *Segment, bool) {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if e, ok := p.entries[key]; ok {
+				if e.loading {
+					return nil, e.ready, nil, true
+				}
+				e.lastUsed = time.Now()
+				return nil, nil, e.lease.acquire(recency), true
+			}
+			e := &baseEntry{ready: make(chan struct{}), loading: true, lastUsed: time.Now()}
+			p.entries[key] = e
+			return e, nil, nil, false
+		}()
+		if found {
+			if ready != nil {
 				select {
 				case <-ready:
 				case <-ctx.Done():
@@ -252,17 +266,11 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 				}
 				continue
 			}
-			e.lastUsed = time.Now()
-			view := e.lease.acquire(recency)
-			p.mu.Unlock()
 			if view == nil {
 				continue
 			}
 			return view, nil
 		}
-		e := &baseEntry{ready: make(chan struct{}), loading: true, lastUsed: time.Now()}
-		p.entries[key] = e
-		p.mu.Unlock()
 
 		template, err := func() (template *Segment, err error) {
 			defer func() {
@@ -272,48 +280,73 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 			}()
 			return load()
 		}()
-		p.mu.Lock()
-		e.loading = false
-		e.err = err
-		retired := e.retired
-		if err == nil && !retired {
-			if template == nil {
-				err = errBaseLeaseGone
-				e.err = err
-			} else {
-				e.lease = newSegmentLease(template)
-				e.lastUsed = time.Now()
-				p.totalBytes += baseEntryBytes(key)
+		retired, resultErr, directTemplate := func() (bool, error, *Segment) {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			e.loading = false
+			e.err = err
+			if e.retired {
+				delete(p.entries, key)
+				e.err = errBaseLeaseGone
+				close(e.ready)
+				if err != nil {
+					return true, err, template
+				}
+				if template == nil {
+					return true, errBaseLeaseGone, nil
+				}
+				return true, nil, template
 			}
-		}
-		close(e.ready)
+			if err == nil {
+				if template == nil {
+					err = errBaseLeaseGone
+					e.err = err
+				} else {
+					e.lease = newSegmentLease(template)
+					e.lastUsed = time.Now()
+					p.totalBytes += baseEntryBytes(key)
+				}
+			}
+			close(e.ready)
+			if err != nil {
+				delete(p.entries, key)
+			}
+			return false, err, nil
+		}()
 		if retired {
-			delete(p.entries, key)
-			e.err = errBaseLeaseGone
-			err = e.err
-		} else if err != nil {
-			delete(p.entries, key)
-		}
-		p.mu.Unlock()
-		if template != nil && (retired || err != nil) {
-			template.Free()
-		}
-		if retired && err == errBaseLeaseGone {
+			if directTemplate != nil && resultErr != nil {
+				directTemplate.Free()
+			}
+			if resultErr != nil {
+				return nil, resultErr
+			}
+			if directTemplate == nil {
+				return nil, errBaseLeaseGone
+			}
 			if ctxErr := context.Cause(ctx); ctxErr != nil {
+				directTemplate.Free()
 				return nil, ctxErr
 			}
-			continue
+			// The invalidation retired the pool entry while this query was
+			// loading it. Let this in-flight query finish with direct ownership;
+			// the stale closure result is never repooled or retried here.
+			return directTemplate, nil
 		}
-		if err != nil {
-			return nil, err
+		if resultErr != nil {
+			if template != nil {
+				template.Free()
+			}
+			return nil, resultErr
 		}
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
-		p.mu.Lock()
-		e.lastUsed = time.Now()
-		view := e.lease.acquire(recency)
-		p.mu.Unlock()
+		view = func() *Segment {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			e.lastUsed = time.Now()
+			return e.lease.acquire(recency)
+		}()
 		if view == nil {
 			continue
 		}
@@ -326,26 +359,28 @@ func (p *immutableBasePool) acquire(ctx context.Context, key baseKey, load func(
 // generation. A retired lease remains alive for old readers but cannot be
 // acquired by a later generation.
 func (p *immutableBasePool) commit(index string, used map[baseKey]struct{}) {
-	var retire []*segmentLease
-	p.mu.Lock()
-	for key, entry := range p.entries {
-		if key.index != index {
-			continue
+	retire := func() []*segmentLease {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		retire := make([]*segmentLease, 0, len(p.entries))
+		for key, entry := range p.entries {
+			if key.index != index {
+				continue
+			}
+			if entry.loading {
+				p.retireLoadingLocked(entry)
+				continue
+			}
+			if _, ok := used[key]; ok {
+				entry.lastUsed = time.Now()
+				continue
+			}
+			delete(p.entries, key)
+			p.totalBytes -= baseEntryBytes(key)
+			retire = append(retire, entry.lease)
 		}
-		if entry.loading {
-			p.retireLoadingLocked(entry)
-			continue
-		}
-		if _, ok := used[key]; ok {
-			entry.lastUsed = time.Now()
-			continue
-		}
-		delete(p.entries, key)
-		p.totalBytes -= baseEntryBytes(key)
-		retire = append(retire, entry.lease)
-	}
-	retire = append(retire, p.evictLocked(time.Now())...)
-	p.mu.Unlock()
+		return append(retire, p.evictLocked(time.Now())...)
+	}()
 	retireBaseLeases(retire)
 }
 
@@ -354,20 +389,23 @@ func (p *immutableBasePool) clearIndex(index string) {
 }
 
 func (p *immutableBasePool) clearAll() {
-	p.mu.Lock()
-	retire := make([]*segmentLease, 0, len(p.entries))
-	for key, entry := range p.entries {
-		if entry.loading {
-			p.retireLoadingLocked(entry)
-			continue
+	retire := func() []*segmentLease {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		retire := make([]*segmentLease, 0, len(p.entries))
+		for key, entry := range p.entries {
+			if entry.loading {
+				p.retireLoadingLocked(entry)
+				continue
+			}
+			delete(p.entries, key)
+			if entry.lease != nil {
+				retire = append(retire, entry.lease)
+			}
 		}
-		delete(p.entries, key)
-		if entry.lease != nil {
-			retire = append(retire, entry.lease)
-		}
-	}
-	p.totalBytes = 0
-	p.mu.Unlock()
+		p.totalBytes = 0
+		return retire
+	}()
 	retireBaseLeases(retire)
 }
 
