@@ -287,6 +287,9 @@ func TestReturningFallbackFeature(t *testing.T) {
 		),
 	))
 	require.Empty(t, returningUpdatePlannerFeature(
-		newLegacyUpdatePlannerRouteError(updateRouteReasonIrregularIndex, moerr.NewUnsupportedDML(ctx, "legacy")),
+		newRejectedUpdatePlannerRouteError(
+			updateRouteReasonIrregularIndex,
+			moerr.NewUnsupportedDML(ctx, "update vector/full-text index"),
+		),
 	))
 }
