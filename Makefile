@@ -498,6 +498,10 @@ test-mongodb-unit:
 test-esql-tvf-e2e-local:
 	@optools/esql_ci.bash e2e-local
 
+.PHONY: test-kafka-exttab-e2e-local
+test-kafka-exttab-e2e-local:
+	@optools/kafka_ci.bash e2e-local
+
 .PHONY: test-iceberg-local
 test-iceberg-local:
 	@optools/iceberg_ci.bash local

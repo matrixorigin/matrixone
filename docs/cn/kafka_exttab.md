@@ -126,3 +126,15 @@ autocommit earliest/latest).
   receiver pinning, builtin.
 * BVT `test/distributed/cases/function/kafka_exttab.sql`: DDL/SHOW
   CREATE/guard/control-validation paths that need no broker.
+* E2E (`make test-kafka-exttab-e2e-local`, mirrors the mongodb/esql
+  harnesses): `optools/kafka_ci.bash` boots a single-node KRaft Kafka via
+  docker compose plus a fresh mo-service; the driver
+  (`test/kafkaexttab/kafka_e2e_local.go`) seeds the topic itself and proves
+  the exactly-once contract end to end — a drain-the-stream read that ends
+  by timeout is not an error and records the right last id; chaining
+  LAST_KAFKA_MESSAGE_ID() into the next __mo_read_start_id tiles the stream
+  with no overlap or gap; a repeated start id replays the same data; after
+  new messages the chained read resumes at the right offset; a 0-message
+  read leaves the last id NULL in a fresh session and untouched in a
+  chained one. The same script also runs broker-free as a unit test against
+  an offset-semantics simulator (kafka_e2e_local_test.go).
