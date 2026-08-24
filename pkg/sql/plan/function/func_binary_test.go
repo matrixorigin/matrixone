@@ -1948,7 +1948,7 @@ func TestTimestampAddRetType(t *testing.T) {
 		// Call retType function
 		retType := matchedOverload.retType(parameters)
 		require.Equal(t, types.T_datetime, retType.Oid, "retType returns DATETIME type (to match MySQL behavior)")
-		require.Equal(t, int32(6), retType.Scale, "retType must expose MICROSECOND precision")
+		require.Equal(t, int32(0), retType.Scale, "retType uses a conservative zero-FSP default")
 
 		// Document the behavior: retType returns DATETIME, which ensures MySQL column metadata is MYSQL_TYPE_DATETIME
 		// This prevents "Invalid length (19) for type DATE" errors when actual vector type is DATETIME
@@ -1990,7 +1990,7 @@ func TestTimestampAddRetType(t *testing.T) {
 		// Call retType function
 		retType := matchedOverload2.retType(parameters)
 		require.Equal(t, types.T_datetime, retType.Oid, "retType returns DATETIME type for DATETIME input")
-		require.Equal(t, int32(6), retType.Scale, "retType must preserve MICROSECOND precision")
+		require.Equal(t, int32(0), retType.Scale, "retType preserves the input FSP")
 	})
 
 	t.Run("TIMESTAMP input - retType preserves MICROSECOND precision", func(t *testing.T) {
@@ -2014,39 +2014,8 @@ func TestTimestampAddRetType(t *testing.T) {
 
 		retType := matchedOverload.retType(parameters)
 		require.Equal(t, types.T_timestamp, retType.Oid)
-		require.Equal(t, int32(6), retType.Scale, "retType must expose MICROSECOND precision")
+		require.Equal(t, int32(0), retType.Scale, "retType preserves the input FSP")
 	})
-}
-
-func TestTimestampAddRetTypeAllTemporalOverloads(t *testing.T) {
-	fnID, err := getFunctionIdByName(context.Background(), "timestampadd")
-	require.NoError(t, err)
-
-	tests := []struct {
-		name       string
-		overload   int
-		parameters []types.Type
-		resultOID  types.T
-	}{
-		{"varchar_date", 0, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_date.ToType()}, types.T_datetime},
-		{"varchar_datetime", 1, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_datetime.ToType()}, types.T_datetime},
-		{"varchar_timestamp", 2, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_timestamp.ToType()}, types.T_timestamp},
-		{"char_date", 4, []types.Type{types.T_char.ToType(), types.T_int64.ToType(), types.T_date.ToType()}, types.T_datetime},
-		{"char_datetime", 5, []types.Type{types.T_char.ToType(), types.T_int64.ToType(), types.T_datetime.ToType()}, types.T_datetime},
-		{"char_timestamp", 6, []types.Type{types.T_char.ToType(), types.T_int64.ToType(), types.T_timestamp.ToType()}, types.T_timestamp},
-		{"char_string", 7, []types.Type{types.T_char.ToType(), types.T_int64.ToType(), types.T_char.ToType()}, types.T_datetime},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			fn := allSupportedFunctions[fnID]
-			require.Equal(t, tc.overload, fn.Overloads[tc.overload].overloadId)
-			overload := &fn.Overloads[tc.overload]
-			result := overload.retType(tc.parameters)
-			require.Equal(t, tc.resultOID, result.Oid)
-			require.Equal(t, int32(6), result.Scale)
-		})
-	}
 }
 
 // TestTimestampAddMySQLProtocolColumnType tests that MySQL protocol column type matches actual vector type

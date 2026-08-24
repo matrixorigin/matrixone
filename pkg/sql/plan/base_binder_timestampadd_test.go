@@ -217,3 +217,65 @@ func TestBindTimestampAddReturnType(t *testing.T) {
 		// which prevents "Invalid length (10) for type TIMESTAMP" errors
 	})
 }
+
+func TestBindTimestampAddFSPByUnit(t *testing.T) {
+	ctx := context.Background()
+
+	unitExpr := func(unit string) *plan.Expr {
+		return &plan.Expr{
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: unit},
+			}},
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+		}
+	}
+	intervalExpr := func() *plan.Expr {
+		return &plan.Expr{
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 1},
+			}},
+			Typ: plan.Type{Id: int32(types.T_int64)},
+		}
+	}
+	temporalExpr := func(oid types.T, scale int32) *plan.Expr {
+		return &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
+			Typ:  plan.Type{Id: int32(oid), Scale: scale},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		unit      string
+		inputType types.T
+		inputFSP  int32
+		resultOID types.T
+		resultFSP int32
+	}{
+		{"datetime0_second", "SECOND", types.T_datetime, 0, types.T_datetime, 0},
+		{"datetime3_second", "SECOND", types.T_datetime, 3, types.T_datetime, 3},
+		{"datetime6_second", "SECOND", types.T_datetime, 6, types.T_datetime, 6},
+		{"datetime0_microsecond", "MICROSECOND", types.T_datetime, 0, types.T_datetime, 6},
+		{"datetime3_microsecond", "MICROSECOND", types.T_datetime, 3, types.T_datetime, 6},
+		{"timestamp0_second", "SECOND", types.T_timestamp, 0, types.T_timestamp, 0},
+		{"timestamp3_second", "SECOND", types.T_timestamp, 3, types.T_timestamp, 3},
+		{"timestamp6_second", "SECOND", types.T_timestamp, 6, types.T_timestamp, 6},
+		{"timestamp0_microsecond", "MICROSECOND", types.T_timestamp, 0, types.T_timestamp, 6},
+		{"timestamp3_microsecond", "MICROSECOND", types.T_timestamp, 3, types.T_timestamp, 6},
+		{"date_second", "SECOND", types.T_date, 0, types.T_datetime, 0},
+		{"date_microsecond", "MICROSECOND", types.T_date, 0, types.T_datetime, 6},
+		{"date_day", "DAY", types.T_date, 0, types.T_date, 0},
+		{"char_string", "SECOND", types.T_char, 0, types.T_varchar, 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "timestampadd", []*plan.Expr{
+				unitExpr(tc.unit), intervalExpr(), temporalExpr(tc.inputType, tc.inputFSP),
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.resultOID), expr.Typ.Id)
+			require.Equal(t, tc.resultFSP, expr.Typ.Scale)
+		})
+	}
+}

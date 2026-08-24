@@ -9358,9 +9358,8 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					// At runtime, TimestampAddDate will use TempSetType appropriately:
 					// - For time units: DATETIME with scale 0 (HOUR/MINUTE/SECOND) or 6 (MICROSECOND)
 					// - For date units: DATETIME with scale 0, but formatted as DATE when time is 00:00:00
-					// The declared scale is 6 because the unit is a runtime constant and MICROSECOND
-					// must be representable in result metadata.
-					return types.T_datetime.ToTypeWithScale(6)
+					// The binder refines the scale when the unit literal is available.
+					return types.T_datetime.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDate
@@ -9370,7 +9369,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToTypeWithScale(6)
+					return types.T_datetime.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDatetime
@@ -9380,7 +9379,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToTypeWithScale(6)
+					return types.T_timestamp.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddTimestamp
@@ -9403,7 +9402,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_char, types.T_int64, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToTypeWithScale(6)
+					return types.T_datetime.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDate
@@ -9413,7 +9412,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_char, types.T_int64, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToTypeWithScale(6)
+					return types.T_datetime.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDatetime
@@ -9423,7 +9422,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_char, types.T_int64, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToTypeWithScale(6)
+					return types.T_timestamp.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddTimestamp
@@ -9433,7 +9432,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_char, types.T_int64, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToTypeWithScale(6)
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddString
