@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -4770,12 +4771,11 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 	return branches
 }
 
-const asofBuildLeftMaxRows = 64
-
-// shouldBuildLeftForAsof chooses the streaming-retention path only when the
-// logical left input is both absolutely small and no larger in estimated bytes
-// than the logical right input. The absolute cap bounds the per-right-row
-// comparison work even when statistics badly underestimate the right side.
+// shouldBuildLeftForAsof compares the payload retained by the two physical
+// ASOF strategies. Building the logical left retains every left row plus one
+// projected best-right candidate per left row; building the logical right
+// retains the right input for predecessor lookup. Unknown or invalid estimates
+// stay on the established build-right path.
 func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 	if node == nil || left == nil || right == nil ||
 		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
@@ -4783,15 +4783,26 @@ func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 		return false
 	}
 	leftRows := left.Stats.Outcnt
-	if leftRows <= 0 || leftRows > asofBuildLeftMaxRows {
+	leftRowSize := left.Stats.Rowsize
+	if leftRows <= 0 || leftRowSize <= 0 ||
+		math.IsNaN(leftRows) || math.IsNaN(leftRowSize) ||
+		math.IsInf(leftRows, 0) || math.IsInf(leftRowSize, 0) {
 		return false
 	}
-	if right.Stats == nil || right.Stats.Outcnt <= 0 {
+	if right.Stats == nil {
 		return false
 	}
-	leftRowSize := max(left.Stats.Rowsize, 1)
-	rightRowSize := max(right.Stats.Rowsize, 1)
-	return leftRows*leftRowSize <= right.Stats.Outcnt*rightRowSize
+	rightRows := right.Stats.Outcnt
+	rightRowSize := right.Stats.Rowsize
+	if rightRows <= 0 || rightRowSize <= 0 ||
+		math.IsNaN(rightRows) || math.IsNaN(rightRowSize) ||
+		math.IsInf(rightRows, 0) || math.IsInf(rightRowSize, 0) {
+		return false
+	}
+	buildLeftBytes := leftRows * (leftRowSize + rightRowSize)
+	buildRightBytes := rightRows * rightRowSize
+	return !math.IsInf(buildLeftBytes, 0) && !math.IsInf(buildRightBytes, 0) &&
+		buildLeftBytes < buildRightBytes
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {

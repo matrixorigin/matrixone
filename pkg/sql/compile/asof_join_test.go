@@ -131,11 +131,13 @@ func TestAsofBuildLeftCostBoundary(t *testing.T) {
 		want      bool
 	}{
 		{name: "review example", leftRows: 2, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000, want: true},
-		{name: "threshold", leftRows: 64, leftSize: 100, rightRows: 1000, rightSize: 100, want: true},
-		{name: "over threshold", leftRows: 65, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000},
+		{name: "large left still cheaper", leftRows: 10_000, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000, want: true},
+		{name: "candidate retention changes choice", leftRows: 60, leftSize: 1000, rightRows: 100, rightSize: 1000},
 		{name: "right is smaller", leftRows: 2, leftSize: 1000, rightRows: 1, rightSize: 100},
 		{name: "unknown left", leftRows: 0, rightRows: 1_000_000_000, rightSize: 1000},
 		{name: "unknown right", leftRows: 2, leftSize: 100, rightRows: 0},
+		{name: "unknown left width", leftRows: 2, rightRows: 1_000_000_000, rightSize: 1000},
+		{name: "unknown right width", leftRows: 2, leftSize: 100, rightRows: 1_000_000_000},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
