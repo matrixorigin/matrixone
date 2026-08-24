@@ -181,6 +181,7 @@ show tables;
 ➤ Tables_in_information_schema[12,5000,0]  𝄀
 character_sets  𝄀
 check_constraints  𝄀
+collation_character_set_applicability  𝄀
 collations  𝄀
 column_privileges  𝄀
 columns  𝄀
@@ -506,7 +507,7 @@ create database test_for_navicat;
 create database test_for_navicat;
 SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA where SCHEMA_NAME = 'test_for_navicat';
 ➤ SCHEMA_NAME[12,5000,0]  ¦  DEFAULT_CHARACTER_SET_NAME[12,7,0]  ¦  DEFAULT_COLLATION_NAME[12,18,0]  𝄀
-test_for_navicat  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci
+test_for_navicat  ¦  utf8mb4  ¦  utf8mb4_general_ci
 drop database test_for_navicat;
 drop account acc_idx;
 select @@profiling;
