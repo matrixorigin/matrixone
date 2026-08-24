@@ -196,6 +196,7 @@ func TestInformationSchemaCharacterSetsData(t *testing.T) {
 }
 
 func TestInformationSchemaDefaultCollationsMatchCanonicalDefinitions(t *testing.T) {
+	assert.Empty(t, DefaultCollationForCharset("unknown_charset"))
 	for _, charset := range []string{"binary", "utf8", "utf8mb4"} {
 		defaultCollation := DefaultCollationForCharset(charset)
 		assert.NotEmpty(t, defaultCollation, "missing canonical default for %s", charset)
