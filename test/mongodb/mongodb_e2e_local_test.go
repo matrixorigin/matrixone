@@ -376,6 +376,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 	mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 		"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+	expectMongoDBE2EScalar(mock, "STRING")
 	expectMongoDBE2EScalar(mock, "text")
 	expectMongoDBE2EScalar(mock, "2")
 	expectMongoDBE2EScalar(mock, "1")
@@ -414,6 +415,9 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	expectMongoDBE2EScalar(mock, `{"filter":{"site_id":"site-west"}}`)
 	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
 	expectMongoDBE2EScalar(mock, "1")
+	mock.ExpectQuery("explain select").WillReturnRows(sqlmock.NewRows([]string{"QUERY PLAN"}).
+		AddRow("MongoDB Scan: operation=aggregate query_digest=0123456789ab").
+		AddRow("Filter Cond: event_count >= 1"))
 	for range 4 {
 		mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB pipeline stage is not allowed"))
 	}
@@ -480,6 +484,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"prepared-scan-binary-and-text-reuse-recovery-metadata",
 		"explicit-filter-and-query-column",
 		"explicit-reducing-aggregation-pipeline",
+		"explicit-query-explain-redaction",
 		"explicit-query-fail-closed",
 		"insert-select-primary-key-targets",
 		"date-format-order-by",
@@ -521,6 +526,7 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			}).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 			mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 				"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+			expectMongoDBE2EScalar(mock, "STRING")
 			expectMongoDBE2EScalar(mock, "text")
 			if tc.failedQuery == "json_contains" {
 				expectMongoDBE2EScalar(mock, "2")

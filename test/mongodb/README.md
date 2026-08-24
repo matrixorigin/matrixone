@@ -44,7 +44,7 @@ SELECT device_id, event_count, avg_measurement
 FROM mongo_events_aggregate
 WHERE __mo_query = '{
   "pipeline": [
-    {"$match": {"measurement": {"$type": "double"}}},
+    {"$match": {"measurement": {"$type": "number"}}},
     {"$group": {
       "_id": "$device_id",
       "event_count": {"$sum": 1},

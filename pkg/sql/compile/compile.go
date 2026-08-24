@@ -3096,7 +3096,12 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 			parseErr = moerr.NewInvalidInput(c.proc.Ctx, "MongoDB table mapping changed during planning; retry the statement")
 			return false
 		}
-		columns, parseErr = projectedMongoColumns(c.proc.Ctx, columns, node.TableDef)
+		columns, parseErr = projectedMongoColumns(
+			c.proc.Ctx,
+			columns,
+			node.TableDef,
+			scan.IncludeQueryColumn || scan.EmptyResult || scan.UserQueryKind != int32(sqlmongodb.UserQueryInvalid),
+		)
 		if parseErr != nil {
 			return false
 		}
@@ -3131,7 +3136,12 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 	return nil
 }
 
-func projectedMongoColumns(ctx context.Context, columns []sqlmongodb.ColumnMapping, tableDef *plan.TableDef) ([]sqlmongodb.ColumnMapping, error) {
+func projectedMongoColumns(
+	ctx context.Context,
+	columns []sqlmongodb.ColumnMapping,
+	tableDef *plan.TableDef,
+	allowEmpty bool,
+) ([]sqlmongodb.ColumnMapping, error) {
 	if tableDef == nil {
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan is missing its table definition")
 	}
@@ -3142,6 +3152,9 @@ func projectedMongoColumns(ctx context.Context, columns []sqlmongodb.ColumnMappi
 		}
 	}
 	if len(names) == 0 {
+		if allowEmpty {
+			return nil, nil
+		}
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan has no retained mapped columns")
 	}
 	return sqlmongodb.ProjectColumnsByName(ctx, columns, names)

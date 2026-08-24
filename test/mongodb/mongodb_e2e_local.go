@@ -121,6 +121,9 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		}
 		r.Cases = append(r.Cases, "non-admin-marker-injection-boundary")
 	}
+	if err := expectScalar(ctx, db, "select json_type(value) from mongodb_ci.json_scalar", "STRING"); err != nil {
+		return err
+	}
 	if err := expectScalar(ctx, db, "select cast(value as char) from mongodb_ci.json_scalar", "text"); err != nil {
 		return err
 	}
@@ -182,7 +185,7 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	}
 	r.Cases = append(r.Cases, "explicit-filter-and-query-column")
 
-	pipelineQuery := `{"pipeline":[{"$match":{"device_id":"device-001","measurement":{"$type":"double"}}},{"$group":{"_id":"$device_id","event_count":{"$sum":1},"avg_measurement":{"$avg":"$measurement"}}},{"$project":{"_id":0,"device_id":"$_id","event_count":1,"avg_measurement":1}}]}`
+	pipelineQuery := `{"pipeline":[{"$match":{"device_id":"device-001","measurement":{"$type":"number"}}},{"$group":{"_id":"$device_id","event_count":{"$sum":1},"avg_measurement":{"$avg":"$measurement"}}},{"$project":{"_id":0,"device_id":"$_id","event_count":1,"avg_measurement":1}}]}`
 	if err := expectScalar(ctx, db,
 		"select concat(device_id,'|',cast(event_count as char),'|',cast(avg_measurement as char)) from mongodb_ci.events_aggregate where __mo_query = '"+pipelineQuery+"'",
 		"device-001|4|18.5"); err != nil {
@@ -193,6 +196,13 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		return err
 	}
 	r.Cases = append(r.Cases, "explicit-reducing-aggregation-pipeline")
+	if err := expectExplainRedacted(ctx, db,
+		"explain select device_id,event_count from mongodb_ci.events_aggregate where __mo_query = '"+pipelineQuery+"' and event_count >= 1",
+		[]string{"operation=aggregate", "query_digest=", "event_count"},
+		[]string{pipelineQuery, "device-001", "__mo_query"}); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "explicit-query-explain-redaction")
 
 	for _, rejected := range []string{
 		`{"pipeline":[{"$out":"archive"}]}`,
@@ -623,6 +633,7 @@ func expectScalar(ctx context.Context, db *sql.DB, query, expected string) error
 	return nil
 }
 
+<<<<<<< HEAD
 func verifyPreparedMongoDBScan(ctx context.Context, db *sql.DB) error {
 	const query = "select count(*) from mongodb_ci.events where measurement > ?"
 	stmt, err := db.PrepareContext(ctx, query)
@@ -714,6 +725,36 @@ func verifyTextPreparedMongoDBScan(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, "deallocate prepare mongo_pruned_text"); err != nil {
 		return fmt.Errorf("deallocate text-protocol MongoDB scan: %w", err)
+ 	}
+}
+
+func expectExplainRedacted(ctx context.Context, db *sql.DB, query string, required, forbidden []string) error {
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("query %s: %w", redact(query), err)
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return fmt.Errorf("scan EXPLAIN result: %w", err)
+		}
+		lines = append(lines, line)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read EXPLAIN result: %w", err)
+	}
+	text := strings.Join(lines, "\n")
+	for _, fragment := range required {
+		if !strings.Contains(text, fragment) {
+			return fmt.Errorf("query %s: EXPLAIN omitted %q", redact(query), fragment)
+		}
+	}
+	for _, fragment := range forbidden {
+		if strings.Contains(text, fragment) {
+			return fmt.Errorf("query %s: EXPLAIN exposed forbidden MongoDB query text", redact(query))
+		}
 	}
 	return nil
 }
