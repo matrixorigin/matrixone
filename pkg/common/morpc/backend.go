@@ -256,6 +256,10 @@ type remoteBackend struct {
 		pending      map[uint64]struct{}
 		pendingSince int64
 		overflow     bool
+		// activeStreamSince marks the oldest currently-owned pipeline stream.
+		// A stream is data-plane state even though stream messages do not have
+		// unary request/response liveness tracking.
+		activeStreamSince int64
 	}
 
 	atomic struct {
@@ -433,6 +437,7 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	st := rb.acquireStream()
 	st.init(rb.nextID(), unlockAfterClose)
 	rb.mu.activeStreams[st.ID()] = st
+	rb.recordActiveStream(rb.livenessTick())
 	// stateMu is already read-locked here. Keep the activity update in the
 	// same state snapshot so Close cannot publish stateStopped between the
 	// state check and the timestamp write.
@@ -971,6 +976,7 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 	delete(rb.mu.activeStreams, s.id)
 	rb.deleteFutureLocked(s.id)
 	channelNotEmpty := len(s.c) > 0
+	rb.removeActiveStreamLiveness()
 	rb.finishDrainingLocked()
 	rb.mu.Unlock()
 	if channelNotEmpty {
@@ -1362,8 +1368,12 @@ func (rb *remoteBackend) keepDataConnectionAfterProbe(
 	// control transport that may be temporarily unavailable when there is no
 	// outstanding or unacknowledged user traffic to diagnose.
 	oldestWritten := rb.dataPendingSince()
-	if oldestWritten == 0 {
+	oldestStream := rb.activeStreamSince()
+	if oldestWritten == 0 && oldestStream == 0 {
 		return true
+	}
+	if oldestWritten == 0 || (oldestStream != 0 && oldestStream < oldestWritten) {
+		oldestWritten = oldestStream
 	}
 	if elapsed := rb.livenessTick() - oldestWritten; elapsed >= 0 &&
 		elapsed < rb.options.readTimeout.Nanoseconds() {
@@ -1476,6 +1486,29 @@ func (rb *remoteBackend) dataPendingSince() int64 {
 	rb.livenessMu.Lock()
 	defer rb.livenessMu.Unlock()
 	return rb.livenessMu.pendingSince
+}
+
+func (rb *remoteBackend) recordActiveStream(at int64) {
+	rb.livenessMu.Lock()
+	if rb.livenessMu.activeStreamSince == 0 {
+		rb.livenessMu.activeStreamSince = at
+	}
+	rb.livenessMu.Unlock()
+}
+
+func (rb *remoteBackend) removeActiveStreamLiveness() {
+	if len(rb.mu.activeStreams) != 0 {
+		return
+	}
+	rb.livenessMu.Lock()
+	rb.livenessMu.activeStreamSince = 0
+	rb.livenessMu.Unlock()
+}
+
+func (rb *remoteBackend) activeStreamSince() int64 {
+	rb.livenessMu.Lock()
+	defer rb.livenessMu.Unlock()
+	return rb.livenessMu.activeStreamSince
 }
 
 func (rb *remoteBackend) resetDataProgress() {
