@@ -63,6 +63,14 @@ func TestHostRowsFitting(t *testing.T) {
 func TestHostIDBytesPerRowIsCharged(t *testing.T) {
 	require.Positive(t, HostIDBytesPerRow)
 
+	// Pin availability rather than reading the live host. Measuring for real made
+	// this test fail under -count=N: a cgroup momentarily at its limit reports
+	// (0, measured), HostRowsFitting then refuses to hold one row, and the test
+	// fails on an environment condition that has nothing to do with the ID term
+	// it exists to prove. Every other test in this package pins it for the same
+	// reason.
+	withHostAvail(t, 1<<30, true)
+
 	const narrowVector = 8 // int8 x dim 8
 
 	vectorOnly, avail, err := HostRowsFitting(narrowVector)
@@ -78,4 +86,3 @@ func TestHostIDBytesPerRowIsCharged(t *testing.T) {
 	require.LessOrEqual(t, withIDs*2, vectorOnly,
 		"for a narrow row the ID term is a full share; omitting it overstates capacity")
 }
-

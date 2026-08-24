@@ -32,7 +32,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/system"
 )
 
 // HostIDBytesPerRow is the HOST cost of the per-row identity bookkeeping every GPU
@@ -108,7 +107,12 @@ func HostRowsFitting(perRowBytes uint64) (rows int64, availBytes uint64, err err
 	if perRowBytes == 0 {
 		return 0, 0, nil
 	}
-	avail, measured := system.MemoryAvailableIncludingCache()
+	// Through hostAvailFn, the same seam ReserveHostMemory uses. Calling
+	// system.MemoryAvailableIncludingCache directly left the package with two
+	// sources of truth for availability, only one of them injectable: the budget
+	// rule could not be tested without depending on the machine's live memory,
+	// and two consecutive calls could legitimately disagree.
+	avail, measured := hostAvailFn()
 	if !measured {
 		return 0, 0, nil
 	}
