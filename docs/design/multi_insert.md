@@ -214,6 +214,37 @@ Conditions are bound with `splitAndBindCondition` (WhereBinder, cast to
 bool); `VALUES` expressions with the same binder; subqueries in either are
 flattened with `flattenSubqueries` before the FILTER/PROJECT node is added.
 
+### Runtime: the sink is a streaming fan-out, not a materialization
+
+Nothing is written to temporary storage. At compile time
+(`pkg/sql/compile/compile.go`):
+
+- `Node_SINK` becomes a `dispatch` operator in `SendToAllLocal` mode
+  (`compileSinkNode`). Each batch produced by the source pipeline is handed
+  to a spool and pushed to every registered consumer as one shared,
+  reference-counted batch — it is not copied per target.
+- `Node_SINK_SCAN` becomes a `merge` operator reading a `PipelineEdge`
+  (`compileSinkScanNode`), i.e. a Go channel with **buffer size 1**
+  (`NewPipelineEdge(1, 0)` in `compileSinkScan`), so each consumer holds at
+  most one batch in flight.
+- All steps — the source and every target — are launched concurrently by
+  `Compile.runOnce`, so targets consume while the source produces.
+
+Memory is therefore one batch per consumer edge plus whatever the target
+pipelines hold, which is what a single `INSERT ... SELECT` holds: the DEDUP
+joins build their hash tables on the *existing target table* side and stream
+the incoming rows through as probes; `Multi Update` buffers and flushes to S3
+as for a plain insert. Backpressure is natural — the dispatcher cannot run
+ahead of the slowest target — so there is no unbounded buffering.
+
+Two related facts: the engine's disk/memory-materializing sink variant
+(`ExtraOptions == materialized.CTESinkOption`) exists only for explicitly
+materialized CTEs and is not used here; and `reduceSinkSinkScanNodes`
+collapses a sink with a single consumer, so a statement whose clauses all hit
+one table (merged via UNION ALL) has no dispatch at all. The real extra cost
+of N targets is CPU — the source rows are pushed through N filter/project
+stages — not storage.
+
 ---
 
 ## Implementation map
