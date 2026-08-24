@@ -2647,10 +2647,13 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 
 	if node.ExternScan != nil && node.ExternScan.Type == int32(plan.ExternType_MONGODB_TB) {
 		// Hydration resolves execution-time catalog state and prunes the source
-		// mapping to the physical projection.  Keep that mutation isolated even
+		// mapping to the physical projection. Keep that mutation isolated even
 		// when this helper is called outside compilePlanScope, because a prepared
 		// execution may otherwise hand us its cached logical plan directly.
 		executionNode := plan2.DeepCopyNode(node)
+		if err := c.configureMongoUserQuery(executionNode); err != nil {
+			return nil, err
+		}
 		if err := c.hydrateMongoScan(executionNode); err != nil {
 			return nil, err
 		}
@@ -2953,6 +2956,94 @@ func (c *Compile) constructMongoScanScope() *Scope {
 	return scope
 }
 
+// configureMongoUserQuery extracts at most one explicit __mo_query value from
+// the compile-owned node. The text is parsed and reduced to validated BSON
+// before it enters the execution plan. Query-level predicates are evaluated
+// against that one candidate and removed; every ordinary predicate remains an
+// MO residual.
+func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
+	if node == nil || node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
+		return moerr.NewInvalidInput(c.proc.Ctx, "MongoDB external table is missing scan metadata")
+	}
+	scan := node.ExternScan.MongodbScan
+	queryList, err := external.DeriveForeignQueryList(c.proc.Ctx, node, c.proc)
+	if err != nil {
+		return err
+	}
+	if len(queryList) > 1 {
+		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP accepts exactly one __mo_query value")
+	}
+	if len(queryList) == 0 {
+		if mongoQueryColumnUsed(node, node.FilterList) {
+			return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires __mo_query = <constant>")
+		}
+		scan.IncludeQueryColumn = mongoQueryColumnUsed(node, node.ProjectList)
+		return nil
+	}
+
+	queryList, _, residual, err := external.FilterFileList(
+		c.proc.Ctx, node, c.proc, queryList, []int64{-1})
+	if err != nil {
+		return err
+	}
+	node.FilterList = residual
+	scan.IncludeQueryColumn = mongoQueryColumnUsed(node, node.FilterList) ||
+		mongoQueryColumnUsed(node, node.ProjectList)
+	if len(queryList) == 0 {
+		scan.EmptyResult = true
+		return nil
+	}
+	if len(queryList) != 1 {
+		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP accepts exactly one __mo_query value")
+	}
+	query, err := sqlmongodb.ParseUserQuery(c.proc.Ctx, queryList[0])
+	if err != nil {
+		return err
+	}
+	return sqlmongodb.ApplyUserQueryToPlan(c.proc.Ctx, query, scan)
+}
+
+func mongoQueryColumnUsed(node *plan.Node, expressions []*plan.Expr) bool {
+	if node == nil || node.TableDef == nil {
+		return false
+	}
+	usesQueryColumn := func(expr *plan.Expr) bool {
+		var visit func(*plan.Expr) bool
+		visit = func(current *plan.Expr) bool {
+			if current == nil {
+				return false
+			}
+			if col := current.GetCol(); col != nil {
+				position := int(col.ColPos)
+				return position >= 0 && position < len(node.TableDef.Cols) &&
+					catalog.IsForeignQueryCol(node.TableDef.Cols[position].Name, node.TableDef.Cols[position].ColId)
+			}
+			if functionExpr := current.GetF(); functionExpr != nil {
+				for _, arg := range functionExpr.Args {
+					if visit(arg) {
+						return true
+					}
+				}
+			}
+			if list := current.GetList(); list != nil {
+				for _, item := range list.List {
+					if visit(item) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		return visit(expr)
+	}
+	for _, expr := range expressions {
+		if usesQueryColumn(expr) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 	if node == nil || node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
 		return moerr.NewInvalidInput(c.proc.Ctx, "MongoDB external table is missing scan metadata")
@@ -3030,7 +3121,13 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 	if scan.MaxParallelism != 1 {
 		return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires max_parallelism=1")
 	}
-	scan.PushedPredicate, scan.ResidualFilterDigest = sqlmongodb.PushdownPlanFilters(c.proc.Ctx, node.FilterList, scan.Columns)
+	pushed, residualDigest := sqlmongodb.PushdownPlanFilters(c.proc.Ctx, node.FilterList, scan.Columns)
+	if scan.UserQueryKind == int32(sqlmongodb.UserQueryPipeline) {
+		// Ordinary MO predicates refer to the pipeline output. Moving them ahead
+		// of an opaque user pipeline can change its meaning, so they remain local.
+		pushed = nil
+	}
+	scan.PushedPredicate, scan.ResidualFilterDigest = pushed, residualDigest
 	return nil
 }
 
@@ -3040,7 +3137,7 @@ func projectedMongoColumns(ctx context.Context, columns []sqlmongodb.ColumnMappi
 	}
 	names := make([]string, 0, len(tableDef.Cols))
 	for _, column := range tableDef.Cols {
-		if column != nil && !column.Hidden {
+		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
 			names = append(names, column.Name)
 		}
 	}

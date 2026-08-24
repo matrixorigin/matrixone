@@ -85,6 +85,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -4909,12 +4910,16 @@ func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
 		regs:  make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx
+	querySource := `{"filter":{"meta.pump":"pump-1"}}`
+	query, err := sqlmongodb.ParseUserQuery(t.Context(), querySource)
+	require.NoError(t, err)
 	spec := &planpb.MongoScan{
 		TableId: 33, MappingId: 11, MappingVersion: 4, ConnectionId: 22, ConnectionVersion: 3,
 		Database: "telemetry", Collection: "raw", MaxParallelism: 1,
 		Columns:         []*planpb.MongoColumnMapping{{Name: "pump", Path: "meta.pump", MoType: planpb.Type{Id: int32(types.T_varchar)}}},
 		PushedPredicate: &planpb.MongoPredicate{Op: planpb.MongoPredicateOp_MONGO_PREDICATE_EQUAL, Path: "meta.pump", ValueBson: []byte{3, 0, 0, 0, 10, 0}},
 	}
+	require.NoError(t, sqlmongodb.ApplyUserQueryToPlan(t.Context(), query, spec))
 	original := mongoscan.NewArgument().WithScan(spec)
 	defer original.Release()
 
@@ -4925,6 +4930,7 @@ func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
 	for _, forbidden := range []string{"mongodb://", "secret://", "username", "password", "credential", "token"} {
 		require.False(t, bytes.Contains(bytes.ToLower(wire), []byte(forbidden)))
 	}
+	require.False(t, bytes.Contains(wire, []byte(querySource)), "raw __mo_query text must not be transported")
 
 	decoded := new(pipeline.Instruction)
 	require.NoError(t, decoded.Unmarshal(wire))

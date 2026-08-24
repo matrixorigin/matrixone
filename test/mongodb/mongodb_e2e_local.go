@@ -94,6 +94,7 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		"create database mongodb_ci",
 		"create mongodb connection if not exists mongodb_ci with ('hosts'='" + host + "','replica_set'='rs0','auth_source'='mongodb_source','auth_mechanism'='SCRAM-SHA-256','credential_secret_ref'='secret://env/MO_MONGODB_E2E_CREDENTIAL','tls_mode'='disabled','read_preference'='primary','read_concern'='majority','options_json'='{\"direct\":true}')",
 		"create external table mongodb_ci.events(mongo_id char(24) mongodb_path '_id', device_id varchar(20), site_id varchar(10), ts datetime(3) mongodb_convert 'try_null', measurement double mongodb_convert 'try_null', source_batch varchar(50)) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='events','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
+		"create external table mongodb_ci.events_aggregate(device_id varchar(20), event_count bigint, avg_measurement double) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='events','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.temporal_edges(ts datetime(0) mongodb_convert 'try_null') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='temporal_edges','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.decoded_budget(payload_1 text mongodb_path 'payload', payload_2 text mongodb_path 'payload', payload_3 text mongodb_path 'payload', payload_4 text mongodb_path 'payload', payload_5 text mongodb_path 'payload', payload_6 text mongodb_path 'payload', payload_7 text mongodb_path 'payload', payload_8 text mongodb_path 'payload') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='decoded_budget','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 		"create external table mongodb_ci.json_scalar(value json, payload json, arr json) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='json_scalar','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
@@ -169,6 +170,50 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		return err
 	}
 	r.Cases = append(r.Cases, "prepared-scan-binary-and-text-reuse-recovery-metadata")
+
+	filterQuery := `{"filter":{"site_id":"site-west"}}`
+	if err := expectScalar(ctx, db,
+		"select count(*) from mongodb_ci.events where __mo_query = '"+filterQuery+"'", "1"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db,
+		"select __mo_query from mongodb_ci.events where __mo_query = '"+filterQuery+"'", filterQuery); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "explicit-filter-and-query-column")
+
+	pipelineQuery := `{"pipeline":[{"$match":{"device_id":"device-001","measurement":{"$type":"double"}}},{"$group":{"_id":"$device_id","event_count":{"$sum":1},"avg_measurement":{"$avg":"$measurement"}}},{"$project":{"_id":0,"device_id":"$_id","event_count":1,"avg_measurement":1}}]}`
+	if err := expectScalar(ctx, db,
+		"select concat(device_id,'|',cast(event_count as char),'|',cast(avg_measurement as char)) from mongodb_ci.events_aggregate where __mo_query = '"+pipelineQuery+"'",
+		"device-001|4|18.5"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db,
+		"select count(*) from mongodb_ci.events_aggregate where __mo_query = '"+pipelineQuery+"'", "1"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "explicit-reducing-aggregation-pipeline")
+
+	for _, rejected := range []string{
+		`{"pipeline":[{"$out":"archive"}]}`,
+		`{"pipeline":[{"$lookup":{"from":"events","as":"joined","pipeline":[]}}]}`,
+		`{"pipeline":[{"$project":{"value":{"$function":{"body":"function(){}","args":[],"lang":"js"}}}}]}`,
+		`{"pipeline":[{"$futureStage":{}}]}`,
+	} {
+		if err := expectQueryFailure(ctx, db,
+			"select count(*) from mongodb_ci.events_aggregate where __mo_query = '"+rejected+"'", "is not allowed"); err != nil {
+			return err
+		}
+	}
+	if err := expectQueryFailure(ctx, db,
+		`select count(*) from mongodb_ci.events where __mo_query = '{"filter":{"site_id":"east","site_id":"west"}}'`,
+		"strict Extended JSON"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
+		return fmt.Errorf("scan after rejected explicit queries: %w", err)
+	}
+	r.Cases = append(r.Cases, "explicit-query-fail-closed")
 
 	if err := verifyPrimaryKeyInsertSelect(ctx, db); err != nil {
 		return err
@@ -570,6 +615,9 @@ func expectScalar(ctx context.Context, db *sql.DB, query, expected string) error
 		return fmt.Errorf("query %s: %w", redact(query), err)
 	}
 	if actual != expected {
+		if strings.Contains(strings.ToLower(query), "__mo_query") {
+			return fmt.Errorf("query %s: result mismatch", redact(query))
+		}
 		return fmt.Errorf("query %s: expected %q, got %q", redact(query), expected, actual)
 	}
 	return nil
@@ -700,8 +748,12 @@ func expectStatementRejected(ctx context.Context, db *sql.DB, query, contains st
 }
 
 func redact(value string) string {
-	if strings.Contains(strings.ToLower(value), "credential_secret_ref") {
+	lower := strings.ToLower(value)
+	if strings.Contains(lower, "credential_secret_ref") {
 		return "<redacted MongoDB DDL>"
+	}
+	if strings.Contains(lower, "__mo_query") {
+		return "<redacted MongoDB __mo_query statement>"
 	}
 	return value
 }

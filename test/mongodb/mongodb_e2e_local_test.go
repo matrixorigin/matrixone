@@ -410,6 +410,15 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectExec("set @mongo_measurement = 19").WillReturnResult(sqlmock.NewResult(0, 0))
 	expectMongoDBE2EScalar(mock, "2")
 	mock.ExpectExec("deallocate prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, `{"filter":{"site_id":"site-west"}}`)
+	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
+	expectMongoDBE2EScalar(mock, "1")
+	for range 4 {
+		mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB pipeline stage is not allowed"))
+	}
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must be strict Extended JSON"))
+	expectMongoDBE2EScalar(mock, "5")
 	mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMongoDBE2EScalar(mock, "1")
@@ -469,6 +478,9 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"truncate-read-only-source-preserved",
 		"scan-projection-pushdown-null-conversion",
 		"prepared-scan-binary-and-text-reuse-recovery-metadata",
+		"explicit-filter-and-query-column",
+		"explicit-reducing-aggregation-pipeline",
+		"explicit-query-fail-closed",
 		"insert-select-primary-key-targets",
 		"date-format-order-by",
 		"low-precision-temporal-residual",
@@ -738,6 +750,10 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.ErrorContains(t, expectScalar(t.Context(), db, "scalar-error", "1"), "query failed")
 		mock.ExpectQuery("scalar-mismatch").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("2"))
 		require.ErrorContains(t, expectScalar(t.Context(), db, "scalar-mismatch", "1"), "expected")
+		mock.ExpectQuery("select __mo_query").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("secret-actual"))
+		err := expectScalar(t.Context(), db, "select __mo_query /* secret-query */", "secret-expected")
+		require.ErrorContains(t, err, "result mismatch")
+		require.NotContains(t, err.Error(), "secret-")
 		mock.ExpectQuery("unexpected-success").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("1"))
 		require.ErrorContains(t, expectQueryFailure(t.Context(), db, "unexpected-success", ""), "unexpectedly succeeded")
 		mock.ExpectQuery("wrong-error").WillReturnError(errors.New("different"))
@@ -835,6 +851,7 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 
 	t.Run("redaction and report", func(t *testing.T) {
 		require.Equal(t, "<redacted MongoDB DDL>", redact("CREDENTIAL_SECRET_REF='secret'"))
+		require.Equal(t, "<redacted MongoDB __mo_query statement>", redact("select __mo_query from t"))
 		require.Equal(t, "select 1", redact("select 1"))
 		dir := t.TempDir()
 		require.NoError(t, writeReport(dir, report{Status: "passed", Cases: []string{"scan"}}))

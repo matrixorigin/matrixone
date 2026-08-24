@@ -133,6 +133,18 @@ func TestMappingSnapshotMatchesPlan(t *testing.T) {
 	}
 	require.True(t, MappingDefinitionMatchesPlan(mapping, scan))
 	require.True(t, MappingSnapshotMatchesPlan(mapping, scan))
+	queryOnly := *scan
+	queryOnly.Columns = nil
+	queryOnly.IncludeQueryColumn = true
+	require.True(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "explicit __mo_query projection needs no mapped vectors")
+	queryOnly.IncludeQueryColumn = false
+	queryOnly.UserQueryKind = int32(UserQueryFilter)
+	require.True(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "COUNT(*) over an explicit query needs only a row carrier")
+	queryOnly.UserQueryKind = int32(UserQueryInvalid)
+	queryOnly.EmptyResult = true
+	require.True(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "a pruned explicit query opens no row source")
+	queryOnly.EmptyResult = false
+	require.False(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "ordinary scans require a mapped row carrier")
 	mapping.Columns = append(mapping.Columns, ColumnMapping{Name: "quality", Path: "quality", TypeID: int32(types.T_varchar), Conversion: ConversionStrict})
 	require.False(t, MappingDefinitionMatchesPlan(mapping, scan), "compile compares the full rel_createsql definition")
 	require.True(t, MappingSnapshotMatchesPlan(mapping, scan), "execution accepts a verified projected subset")

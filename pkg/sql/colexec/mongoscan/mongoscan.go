@@ -18,14 +18,19 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func (scan *MongoScan) String(buf *bytes.Buffer) {
@@ -48,6 +53,10 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 	}
 	if scan.Scan.Split != nil {
 		return moerr.NewNotSupported(proc.Ctx, "MongoDB local split execution is not enabled in the MVP")
+	}
+	scan.ctr.userQuery, err = mongodb.UserQueryFromPlan(proc.Ctx, scan.Scan)
+	if err != nil {
+		return err
 	}
 	deps, err := scan.runtimeDependencies(proc)
 	if err != nil {
@@ -80,6 +89,16 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 		connection.Version != scan.Scan.ConnectionVersion || connection.Disabled {
 		return moerr.NewInvalidInput(proc.Ctx, "MongoDB connection is disabled, stale, or belongs to another account")
 	}
+	if scan.Scan.EmptyResult {
+		scan.ctr.done = true
+		scan.ctr.rows = 0
+		scan.ctr.rawBytes = 0
+		scan.ctr.pendingRaw = nil
+		if scan.ProjectList != nil {
+			return scan.PrepareProjection(proc)
+		}
+		return nil
+	}
 	if deps.Limiter != nil {
 		scan.ctr.releaseLimit, err = deps.Limiter.Acquire(proc.Ctx, accountID, connection.ConnectionID)
 		if err != nil {
@@ -103,9 +122,13 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 	scan.ctr.lease = lease
 
 	columns := mongodb.ColumnsFromPlan(scan.Scan.Columns)
-	scan.ctr.converter, err = mongodb.NewConverter(proc.Ctx, columns, deps.Config.MaxValueBytes)
-	if err != nil {
-		return err
+	if len(columns) == 0 {
+		scan.ctr.converter = mongodb.NewRowCountConverter(deps.Config.MaxValueBytes)
+	} else {
+		scan.ctr.converter, err = mongodb.NewConverter(proc.Ctx, columns, deps.Config.MaxValueBytes)
+		if err != nil {
+			return err
+		}
 	}
 	scan.ctr.converter.SetConversionErrorLimits(deps.Config.MaxConversionErrors, deps.Config.MaxConversionErrorRate)
 	predicate, err := mongodb.PredicateFromPlan(proc.Ctx, scan.Scan.PushedPredicate)
@@ -121,19 +144,31 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 	if batchRows <= 0 {
 		batchRows = mongodb.DefaultRuntimeConfig().BatchRows
 	}
-	findStarted := time.Now()
-	scan.ctr.cursor, err = lease.Client().Collection(scan.Scan.Database, scan.Scan.Collection).Find(
-		proc.Ctx,
-		mongodb.FindSpec{
+	collection := lease.Client().Collection(scan.Scan.Database, scan.Scan.Collection)
+	operation := "find"
+	started := time.Now()
+	if scan.ctr.userQuery != nil && scan.ctr.userQuery.Kind == mongodb.UserQueryPipeline {
+		operation = "aggregate"
+		pipeline := append([]bson.D(nil), scan.ctr.userQuery.Pipeline...)
+		pipeline = append(pipeline, bson.D{{Key: "$project", Value: projection}})
+		scan.ctr.cursor, err = collection.Aggregate(proc.Ctx, mongodb.AggregateSpec{
+			Pipeline:  pipeline,
+			BatchSize: batchRows,
+		})
+	} else {
+		if scan.ctr.userQuery != nil {
+			filter = mongodb.CombineFilters(scan.ctr.userQuery.Filter, filter)
+		}
+		scan.ctr.cursor, err = collection.Find(proc.Ctx, mongodb.FindSpec{
 			Filter:     filter,
 			Projection: projection,
 			BatchSize:  batchRows,
-		},
-	)
-	metric.MongoDBPhaseDurationHistogram.WithLabelValues("find").Observe(time.Since(findStarted).Seconds())
+		})
+	}
+	metric.MongoDBPhaseDurationHistogram.WithLabelValues(operation).Observe(time.Since(started).Seconds())
 	if err != nil {
-		metric.MongoDBCursorEventCounter.WithLabelValues("find_error").Inc()
-		return moerr.NewInternalError(proc.Ctx, "MongoDB find failed")
+		metric.MongoDBCursorEventCounter.WithLabelValues(operation + "_error").Inc()
+		return moerr.NewInternalErrorf(proc.Ctx, "MongoDB %s failed", operation)
 	}
 	metric.MongoDBCursorEventCounter.WithLabelValues("open").Inc()
 	scan.ctr.generation++
@@ -253,6 +288,12 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
+	if err = scan.appendQueryColumn(proc, bat, maxBatchBytes); err != nil {
+		bat.Clean(proc.Mp())
+		scan.ctr.done = true
+		scan.closeResources(proc.Ctx)
+		return result, err
+	}
 	scan.ctr.buf = bat
 	scan.OpAnalyzer.Input(bat)
 	result.Batch, err = scan.ExecProjection(proc, bat)
@@ -262,6 +303,36 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 	return result, nil
+}
+
+func (scan *MongoScan) appendQueryColumn(proc *process.Process, bat *batch.Batch, maxBatchBytes int64) error {
+	if !scan.Scan.IncludeQueryColumn || bat == nil || bat.RowCount() == 0 {
+		return nil
+	}
+	queryType := types.T_varchar.ToType()
+	var queryVector *vector.Vector
+	var err error
+	if scan.ctr.userQuery == nil {
+		queryVector = vector.NewConstNull(queryType, bat.RowCount(), proc.Mp())
+	} else {
+		queryVector, err = vector.NewConstBytes(
+			queryType, []byte(scan.ctr.userQuery.Source), bat.RowCount(), proc.Mp())
+		if err != nil {
+			if queryVector != nil {
+				queryVector.Free(proc.Mp())
+			}
+			return err
+		}
+	}
+	bat.Attrs = append(bat.Attrs, catalog.ExternalQuery)
+	bat.Vecs = append(bat.Vecs, queryVector)
+	if maxBatchBytes > 0 && int64(bat.Size()) > maxBatchBytes {
+		bat.Attrs = bat.Attrs[:len(bat.Attrs)-1]
+		bat.Vecs = bat.Vecs[:len(bat.Vecs)-1]
+		queryVector.Free(proc.Mp())
+		return moerr.NewInvalidInput(proc.Ctx, "MongoDB batch byte limit exceeded")
+	}
+	return nil
 }
 
 func (scan *MongoScan) runtimeDependencies(proc *process.Process) (*mongodb.RuntimeDependencies, error) {

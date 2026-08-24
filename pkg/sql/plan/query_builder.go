@@ -11801,9 +11801,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					},
 				}
 				tableDef.Cols = append(tableDef.Cols, col)
-			} else if externType == plan.ExternType_FOREIGN_TB {
+			} else if externType == plan.ExternType_FOREIGN_TB || externType == plan.ExternType_MONGODB_TB {
 				// The hidden query-text column: `__mo_query = '<text>'`
-				// predicates select what is sent to the foreign source, and
+				// predicates select what is sent to the foreign/MongoDB source, and
 				// each returned row carries the text that produced it. Must
 				// stay the LAST column (the query-level filter classifier
 				// requires it).
@@ -12088,7 +12088,7 @@ func (builder *QueryBuilder) refreshMongoScanPushdown(node *plan.Node) error {
 	scan := node.ExternScan.MongodbScan
 	names := make([]string, 0, len(node.TableDef.Cols))
 	for _, column := range node.TableDef.Cols {
-		if column != nil && !column.Hidden {
+		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
 			names = append(names, column.Name)
 		}
 	}

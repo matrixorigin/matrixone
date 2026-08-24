@@ -91,6 +91,10 @@ func TestMongoScanDeepCopyAndCredentialFreeProto(t *testing.T) {
 			Database: "telemetry", Collection: "events", ProjectedPaths: []string{"meta.device_id"},
 			Columns:         []*pb.MongoColumnMapping{{Name: "device_id", Path: "meta.device_id"}},
 			PushedPredicate: &pb.MongoPredicate{Op: pb.MongoPredicateOp_MONGO_PREDICATE_EQUAL, Path: "meta.device_id", ValueBson: []byte{1, 2, 3}},
+			UserQueryKind:       1,
+			UserFilterBson:      []byte{4, 5, 6},
+			UserQueryDigest:     strings.Repeat("a", 64),
+			IncludeQueryColumn: true,
 		},
 	}}
 	copied := DeepCopyNode(original)
@@ -98,9 +102,12 @@ func TestMongoScanDeepCopyAndCredentialFreeProto(t *testing.T) {
 	copied.ExternScan.MongodbScan.Columns[0].Path = "changed"
 	copied.ExternScan.MongodbScan.ProjectedPaths[0] = "changed"
 	copied.ExternScan.MongodbScan.PushedPredicate.ValueBson[0] = 9
+	copied.ExternScan.MongodbScan.UserFilterBson[0] = 9
 	require.Equal(t, "meta.device_id", original.ExternScan.MongodbScan.Columns[0].Path)
 	require.Equal(t, "meta.device_id", original.ExternScan.MongodbScan.ProjectedPaths[0])
 	require.Equal(t, byte(1), original.ExternScan.MongodbScan.PushedPredicate.ValueBson[0])
+	require.Equal(t, byte(4), original.ExternScan.MongodbScan.UserFilterBson[0])
+	require.True(t, copied.ExternScan.MongodbScan.IncludeQueryColumn)
 
 	payload, err := proto.Marshal(original)
 	require.NoError(t, err)

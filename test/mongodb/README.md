@@ -19,6 +19,53 @@ Kubernetes is not an egress security boundary by itself. `NetworkPolicy`, CNI po
 - Incremental bounds are `[low, high)`. `low` includes the configured overlap and `high` includes a safety lag. A cursor failure restarts from the last committed watermark.
 - MO does not yet expose an external-connection `USAGE` privilege object. Until it does, creating a MongoDB connection or a table mapping requires the account-admin role; ordinary users consume an existing mapping through normal table `SELECT` grants. Execution revalidates the tenant-scoped mapping ID/version, namespace, schema and connection generation before opening a cursor.
 
+## Explicit MongoDB read operations
+
+`ENGINE = MONGODB` tables expose a synthetic `__mo_query` column for an explicit, constant read selector. It is omitted from `SELECT *` and catalog table definitions, but can be named directly. The value must be strict MongoDB Extended JSON with exactly one top-level operation:
+
+| Envelope | MongoDB path | Semantics |
+|---|---|---|
+| `{"filter": {...}}` | `Collection.Find` | Intersects the explicit filter with safe automatic MO predicate candidates; MO still evaluates ordinary SQL predicates as residuals. |
+| `{"pipeline": [...]}` | `Collection.Aggregate` | Runs the pipeline as written, then adds a connector-owned mapped-field projection; ordinary SQL predicates run over the pipeline output in MO. |
+
+```sql
+-- A MongoDB filter outside the automatic SQL-pushdown subset.
+SELECT device_id, ts, measurement
+FROM mongo_events
+WHERE __mo_query = '{
+  "filter": {
+    "ts": {"$gte": {"$date": "2026-07-27T10:00:00Z"}},
+    "device_id": "pump-1"
+  }
+}';
+
+-- The aggregate output paths must match this external table's explicit mapping.
+SELECT device_id, event_count, avg_measurement
+FROM mongo_events_aggregate
+WHERE __mo_query = '{
+  "pipeline": [
+    {"$match": {"measurement": {"$type": "double"}}},
+    {"$group": {
+      "_id": "$device_id",
+      "event_count": {"$sum": 1},
+      "avg_measurement": {"$avg": "$measurement"}
+    }},
+    {"$project": {
+      "_id": 0,
+      "device_id": "$_id",
+      "event_count": 1,
+      "avg_measurement": 1
+    }}
+  ]
+}';
+```
+
+The first version accepts one equality selector per scan. Prepared parameters remain gated on #27411. The query is bounded to 1 MiB, 100 nesting levels, and 100 stages. Pipelines use `allowDiskUse=false`; the statement context and driver operation timeout bound the initial command and every `getMore`.
+
+The stage allowlist is `$match`, `$project`, `$set`, `$addFields`, `$unset`, `$group`, `$sort`, `$limit`, `$skip`, `$unwind`, and `$count`. Unknown stages/operators fail closed. Write stages (`$out`, `$merge`), cross-collection stages (`$lookup`, `$graphLookup`, `$unionWith`), metadata stages, and server-side JavaScript (`$where`, `$function`, `$accumulator`) are rejected before a MongoDB operation is sent. The external table mapping remains the authorization boundary; this is not an arbitrary command interface.
+
+When explicitly selected, `__mo_query` is populated on every returned row as canonical relaxed Extended JSON (insignificant input whitespace is not preserved). Diagnostics expose only the operation kind and a digest prefix; errors, metrics labels, E2E reports, and EXPLAIN output do not include the raw query body.
+
 ## Backfill, cutover and rollback
 
 1. Run `sql/key_conflict_audit.js` against live data and every archive segment for the whole old-key period. Record gaps and the earliest recoverable timestamp; the old MO target cannot prove that no site was overwritten.

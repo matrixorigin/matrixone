@@ -335,8 +335,26 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			}
 		}
 		countPredicate(scan.PushedPredicate)
-		lines = append(lines, fmt.Sprintf("MongoDB Scan: table=%d columns=%d pushed=%d residual=%s",
-			scan.TableId, len(scan.Columns), pushed, scan.ResidualFilterDigest))
+		operation := "find"
+		queryDigest := "none"
+		if scan.EmptyResult {
+			operation = "empty"
+		} else if scan.UserQueryKind != 0 {
+			switch scan.UserQueryKind {
+			case 1:
+				operation = "find-filter"
+			case 2:
+				operation = "aggregate"
+			default:
+				operation = "invalid"
+			}
+			queryDigest = scan.UserQueryDigest
+			if len(queryDigest) > 12 {
+				queryDigest = queryDigest[:12]
+			}
+		}
+		lines = append(lines, fmt.Sprintf("MongoDB Scan: table=%d columns=%d pushed=%d residual=%s operation=%s query_digest=%s",
+			scan.TableId, len(scan.Columns), pushed, scan.ResidualFilterDigest, operation, queryDigest))
 	}
 
 	// Get Sort list info
