@@ -56,12 +56,6 @@ type IvfpqModel[B, Q cuvs.VectorType] struct {
 	// the builder can reclaim every tar with one RemoveAll. Empty means $TMPDIR,
 	// which keeps any non-builder caller behaving exactly as before.
 	FileSize int64
-	// DeviceFileSize is the part of FileSize that becomes GPU-resident on load
-	// (index.bin / shard_N.bin), set when this model is packed. Zero for a model
-	// loaded from metadata, which only persists the tar total -- the load-side
-	// pre-flight keeps using FileSize, and the authoritative per-deserialize
-	// claim in C++ sizes itself from the actual component anyway.
-	DeviceFileSize int64
 	// DeviceComponentBytes is every GPU-resident component of this sub-index by
 	// name -- index.bin, or shard_N.bin per rank under SHARDED. Kept per component
 	// rather than pre-reduced to a max because which device holds which shard
@@ -304,7 +298,6 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 	// What of this tar lands on the GPU. The tar also carries host-only members
 	// (ids.bin, the INCLUDE blobs), so its total size is the wrong basis for a
 	// VRAM decision; the build-side aggregate gate uses this instead.
-	idx.DeviceFileSize = packSizes.Device
 	// The largest single device-resident component. Under SHARDED each device
 	// receives ONE shard, so the per-device demand is the biggest shard, not the
 	// sum of all of them -- and not the sum divided by the device count, which
