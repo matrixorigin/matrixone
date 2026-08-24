@@ -17,6 +17,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // The scripted driver simulates the Kafka external-table read semantics over
@@ -90,6 +94,12 @@ func (s *simStmt) Exec([]driver.Value) (driver.Result, error) { return driver.Re
 
 func (s *simStmt) Query([]driver.Value) (driver.Rows, error) {
 	q := s.q
+	// server-side chaining: the builtin as the control value resolves to this
+	// session's last id
+	if strings.Contains(q, "__mo_read_start_id = last_kafka_message_id()") && s.conn.lastSet {
+		q = strings.Replace(q, "__mo_read_start_id = last_kafka_message_id()",
+			fmt.Sprintf("__mo_read_start_id = %d", s.conn.lastID), 1)
+	}
 	one := func(cols []string, vals ...driver.Value) (driver.Rows, error) {
 		return &simRows{cols: cols, rows: [][]driver.Value{vals}}, nil
 	}
@@ -204,5 +214,49 @@ func TestWriteReportAndWaitForMO(t *testing.T) {
 	defer db.Close()
 	if err := waitForMO(context.Background(), db); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestSeedKafka runs the real seeding path against an in-process kfake
+// broker: topic creation (idempotent) and ordered production.
+func TestSeedKafka(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	addr := c.ListenAddrs()[0]
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if err := seedKafka(ctx, addr, 1, 3); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// second call: topic already exists, production continues at offset 3
+	if err := seedKafka(ctx, addr, 4, 2); err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+
+	cl, err := kgo.NewClient(kgo.SeedBrokers(addr),
+		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{topic: {0: kgo.NewOffset().AtStart()}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	fetchCtx, fcancel := context.WithTimeout(ctx, 20*time.Second)
+	defer fcancel()
+	var got []string
+	for len(got) < 5 {
+		fetches := cl.PollFetches(fetchCtx)
+		if err := fetchCtx.Err(); err != nil {
+			t.Fatalf("only fetched %v: %v", got, err)
+		}
+		fetches.EachRecord(func(r *kgo.Record) { got = append(got, string(r.Value)) })
+	}
+	want := []string{"1,item1", "2,item2", "3,item3", "4,item4", "5,item5"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("message[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }

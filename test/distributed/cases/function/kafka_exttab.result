@@ -59,6 +59,28 @@ select * from kt where __mo_read_start_id = 0 and __mo_read_timeout = -1;
 invalid input: __mo_read_timeout must be >= 0, got -1
 select * from kt where __mo_read_start_id = 1 and __mo_read_start_id = 2;
 invalid input: contradictory __mo_read_start_id predicates: 1 and 2
+select * from kt where __mo_read_start_id = 9223372036854775807;
+invalid input: __mo_read_start_id value out of range: 9223372036854775807
+select * from kt where __mo_read_start_id = 0 and __mo_read_timeout = 10000000000;
+invalid input: __mo_read_timeout must be <= 2147483648 seconds (0 blocks forever), got 10000000000
+select * from kt where __mo_read_start_id = 0 and __mo_read_size = 9223372036854775807;
+invalid input: __mo_read_size value out of range: 9223372036854775807
+insert into kt values (1, 'x');
+invalid input: cannot insert/update/delete from external table
+desc kt;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦  
+create table kt_like like kt;
+internal error: kafka_exttab.kt is not BASE TABLE
+desc kt_like;
+no such table kafka_exttab.kt_like
+insert into kt_like values (1, 'x');
+no such table kafka_exttab.kt_like
+select * from kt_like;
+SQL parser error: table "kt_like" does not exist
+drop table kt_like;
+no such table kafka_exttab.kt_like
 create table plain_t (a int) engine = kafka;
 drop table plain_t;
 create table kafka (kafka int);

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -209,7 +210,15 @@ func (s *kafkaStreamReader) Read(p []byte) (int, error) {
 		timedOut := false
 		fetches.EachError(func(t string, part int32, err error) {
 			if errors.Is(err, context.DeadlineExceeded) {
-				timedOut = true
+				// only OUR per-poll deadline is a clean idle-timeout end; a
+				// deadline on the query context itself (max_execution_time)
+				// must abort the scan, or a timed-out query would commit and
+				// record messages the client never received
+				if s.ctx.Err() == nil {
+					timedOut = true
+				} else if pollErr == nil {
+					pollErr = s.ctx.Err()
+				}
 				return
 			}
 			if errors.Is(err, context.Canceled) && s.ctx.Err() != nil {
@@ -296,33 +305,63 @@ func (r *KafkaReader) Open(param *ExternalParam, proc *process.Process) (fileEmp
 		return false, moerr.NewInternalError(proc.Ctx, "kafka reader without scan metadata")
 	}
 
-	// Resolve the first offset to read. start_id is "the last consumed
+	// Fetch the partition bounds first. This fails FAST and LOUDLY on an
+	// unreachable broker, a missing topic, or a nonexistent partition — the
+	// alternative is a poll that quietly times out and returns an empty
+	// result indistinguishable from "no new messages". The bounds also
+	// validate an explicit start id (below the log start or beyond the end
+	// is an error, never a silent reset) and resolve the -1/earliest
+	// boundary without a second admin round-trip.
+	seedCl, err := kgo.NewClient(kgo.SeedBrokers(strings.Split(ks.Brokers, ",")...))
+	if err != nil {
+		return false, moerr.NewInternalErrorf(proc.Ctx, "kafka: cannot create client for %s: %v", ks.Brokers, err)
+	}
+	logStart, logEnd, err := kafkaPartitionBounds(proc.Ctx, seedCl, ks)
+	seedCl.Close()
+	if err != nil {
+		return false, err
+	}
+
+	// Resolve the FIRST offset to read. start_id is "the last consumed
 	// offset": reading begins after it. -1 means earliest (inclusive) with
 	// autocommit=false, latest with autocommit=true; 0 with autocommit=true
 	// keeps the issue-specified "0 = earliest (inclusive)" meaning.
-	var kOff kgo.Offset
-	explicitAfter := int64(-1) // >=0: first offset to read is this value
+	var readFrom int64
 	switch {
 	case ks.HasStartId && ks.StartId == -1 && ks.Autocommit:
-		kOff = kgo.NewOffset().AtEnd()
+		readFrom = logEnd
 	case ks.HasStartId && ks.StartId == -1 && !ks.Autocommit:
-		kOff = kgo.NewOffset().AtStart()
+		readFrom = logStart
 	case ks.HasStartId && ks.StartId == 0 && ks.Autocommit:
-		kOff = kgo.NewOffset().AtStart()
+		readFrom = logStart
 	case ks.HasStartId:
-		explicitAfter = ks.StartId + 1
-		kOff = kgo.NewOffset().At(explicitAfter)
+		readFrom = ks.StartId + 1
+		if readFrom < logStart {
+			return false, moerr.NewInvalidInputf(proc.Ctx,
+				"kafka: __mo_read_start_id %d is below the partition log start %d (messages expired?); use -1 to read from the earliest",
+				ks.StartId, logStart)
+		}
+		if readFrom > logEnd {
+			return false, moerr.NewInvalidInputf(proc.Ctx,
+				"kafka: __mo_read_start_id %d is beyond the partition end (last offset %d)",
+				ks.StartId, logEnd-1)
+		}
 	default:
 		// only reachable with autocommit=true (compile enforces the
 		// requirement for autocommit=false): default 0 = earliest
-		kOff = kgo.NewOffset().AtStart()
+		readFrom = logStart
 	}
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(strings.Split(ks.Brokers, ",")...),
 		kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
-			ks.Topic: {ks.Partition: kOff},
+			ks.Topic: {ks.Partition: kgo.NewOffset().At(readFrom)},
 		}),
+		// A validated exact offset can only fall out of range if retention
+		// trims the log mid-scan; resetting to the END means such a race can
+		// skip expired messages but can never silently REPLAY delivered ones
+		// (kgo's default reset is AtStart, which would).
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
 	)
 	if err != nil {
 		return false, moerr.NewInternalErrorf(proc.Ctx, "kafka: cannot create client for %s: %v", ks.Brokers, err)
@@ -332,23 +371,7 @@ func (r *KafkaReader) Open(param *ExternalParam, proc *process.Process) (fileEmp
 	// (issue #27518): committing the same start twice is idempotent, so a
 	// retried read with the same __mo_read_start_id returns the same data.
 	if !ks.Autocommit {
-		commitAt := explicitAfter
-		if commitAt < 0 {
-			// start from the earliest: commit the partition log start
-			adm := kadm.NewClient(cl)
-			listed, lerr := adm.ListStartOffsets(proc.Ctx, ks.Topic)
-			if lerr != nil {
-				cl.Close()
-				return false, moerr.NewInternalErrorf(proc.Ctx, "kafka: cannot list start offsets: %v", lerr)
-			}
-			lo, ok := listed.Lookup(ks.Topic, ks.Partition)
-			if !ok || lo.Err != nil {
-				cl.Close()
-				return false, moerr.NewInternalErrorf(proc.Ctx, "kafka: no start offset for %s[%d]", ks.Topic, ks.Partition)
-			}
-			commitAt = lo.Offset
-		}
-		if err := kafkaCommit(proc.Ctx, cl, ks, commitAt); err != nil {
+		if err := kafkaCommit(proc.Ctx, cl, ks, readFrom); err != nil {
 			cl.Close()
 			return false, err
 		}
@@ -412,8 +435,17 @@ func (r *KafkaReader) Close() error {
 	// or cancel) commits nothing and leaves the session id untouched.
 	if r.completed && r.stream != nil && r.stream.anyRead {
 		if r.ks.Autocommit {
-			// committed offset is the NEXT offset to read (Kafka convention)
-			_ = kafkaCommit(context.Background(), r.cl, r.ks, r.stream.last+1)
+			// committed offset is the NEXT offset to read (Kafka convention).
+			// Bounded: Close runs synchronously in the query teardown and
+			// must not stall behind kgo's retry budget on a dead broker; a
+			// failed progress commit is logged (the read itself succeeded,
+			// and ON-mode reads never depend on committed progress).
+			cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if err := kafkaCommit(cctx, r.cl, r.ks, r.stream.last+1); err != nil {
+				logutil.Warnf("kafka: autocommit of offset %d for group %s failed: %v",
+					r.stream.last+1, r.ks.Group, err)
+			}
+			cancel()
 		}
 		if r.proc != nil {
 			if ses, ok := r.proc.GetSession().(process.KafkaSessionState); ok {
@@ -430,6 +462,29 @@ func (r *KafkaReader) Close() error {
 	r.csv.plh = nil
 	r.csv.reader = nil
 	return nil
+}
+
+// kafkaPartitionBounds returns the partition's [logStart, logEnd) offsets.
+// logEnd is the high watermark: the offset the NEXT produced message gets.
+func kafkaPartitionBounds(ctx context.Context, cl *kgo.Client, ks *plan.KafkaScan) (int64, int64, error) {
+	adm := kadm.NewClient(cl)
+	starts, err := adm.ListStartOffsets(ctx, ks.Topic)
+	if err != nil {
+		return 0, 0, moerr.NewInternalErrorf(ctx, "kafka: cannot reach %s or list offsets of topic %q: %v", ks.Brokers, ks.Topic, err)
+	}
+	lo, ok := starts.Lookup(ks.Topic, ks.Partition)
+	if !ok || lo.Err != nil {
+		return 0, 0, moerr.NewInvalidInputf(ctx, "kafka: topic %q has no partition %d", ks.Topic, ks.Partition)
+	}
+	ends, err := adm.ListEndOffsets(ctx, ks.Topic)
+	if err != nil {
+		return 0, 0, moerr.NewInternalErrorf(ctx, "kafka: cannot list end offsets of topic %q: %v", ks.Topic, err)
+	}
+	hi, ok := ends.Lookup(ks.Topic, ks.Partition)
+	if !ok || hi.Err != nil {
+		return 0, 0, moerr.NewInvalidInputf(ctx, "kafka: topic %q has no partition %d", ks.Topic, ks.Partition)
+	}
+	return lo.Offset, hi.Offset, nil
 }
 
 // kafkaCommit commits `at` as the consumer group's offset (the next offset to

@@ -78,6 +78,18 @@ where __mo_read_start_id = 1000
 * `__mo_read_timeout` ends the read when no new message arrives within that
   many seconds (default 10; 0 blocks until cancelled).
 
+An explicit start id is validated against the partition's real bounds at scan
+open: below the log start (messages expired) or beyond the partition end is a
+clear error, never a silent reset (Kafka clients otherwise auto-reset an
+out-of-range offset, which would replay or skip data under the exactly-once
+contract; a mid-scan retention race can at worst skip, never replay). The
+same open-time check makes an unreachable broker or a missing
+topic/partition a loud error instead of an empty result. Control values that
+would overflow arithmetic (start/size > 2^62, timeout > 2^31 seconds) are
+rejected at compile. A cancelled or timed-out QUERY always aborts the scan —
+only the scan's own idle timeout is a clean end; an aborted scan never
+commits and never updates LAST_KAFKA_MESSAGE_ID().
+
 Contradictory duplicate controls are an error. Any other use of a control
 column (ranges, ORs) stays an ordinary row filter over the effective value.
 

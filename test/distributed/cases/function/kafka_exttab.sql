@@ -49,6 +49,23 @@ select * from kt where __mo_read_start_id = 0 and __mo_read_size = 0;
 select * from kt where __mo_read_start_id = 0 and __mo_read_timeout = -1;
 -- contradictory duplicate controls
 select * from kt where __mo_read_start_id = 1 and __mo_read_start_id = 2;
+-- overflow caps: values that would wrap arithmetic are rejected at compile
+select * from kt where __mo_read_start_id = 9223372036854775807;
+select * from kt where __mo_read_start_id = 0 and __mo_read_timeout = 10000000000;
+select * from kt where __mo_read_start_id = 0 and __mo_read_size = 9223372036854775807;
+
+-- writes into a kafka external table are rejected
+insert into kt values (1, 'x');
+
+-- DESC shows only the declared columns (synthetic columns are bind-time)
+desc kt;
+
+-- CREATE TABLE LIKE copies only the declared columns and yields an ordinary table
+create table kt_like like kt;
+desc kt_like;
+insert into kt_like values (1, 'x');
+select * from kt_like;
+drop table kt_like;
 
 -- an ordinary table may use ENGINE = kafka as a plain table option, and
 -- kafka stays usable as an identifier

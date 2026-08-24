@@ -359,7 +359,19 @@ func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
 		return false
 	}
 	overload, exists := function.GetFunctionByIdWithoutError(ref.Obj)
-	if !exists || overload.IsRealTimeRelated() {
+	if !exists {
+		return false
+	}
+	// last_kafka_message_id is realTimeRelated (never constant-folded into a
+	// cached plan) but is deterministic WITHIN one compile on the session CN —
+	// it reads session state. Allowing it here is what makes server-side
+	// exactly-once chaining work:
+	//   where __mo_read_start_id = last_kafka_message_id()
+	functionID, _ := function.DecodeOverloadID(ref.Obj)
+	if functionID == function.LAST_KAFKA_MESSAGE_ID {
+		return true
+	}
+	if overload.IsRealTimeRelated() {
 		return false
 	}
 	if !overload.CannotFold() {
@@ -370,7 +382,6 @@ func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
 	// it is a deterministic transform of __mo_filepath and is the established
 	// file-pruning primitive. Other volatile functions (for example rand) are
 	// row-dependent and must remain at row level.
-	functionID, _ := function.DecodeOverloadID(ref.Obj)
 	return functionID == function.MO_LOG_DATE
 }
 

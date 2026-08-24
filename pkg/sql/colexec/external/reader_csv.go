@@ -126,11 +126,13 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 	var finish bool
 	var row []csvparser.Field
 	var unexpectEOF bool
+	var ctxDone bool
 
 	for i := 0; i < OneBatchMaxRow; i++ {
 		select {
 		case <-ctx.Done():
 			finish = true
+			ctxDone = true
 		default:
 		}
 		if !finish {
@@ -147,6 +149,14 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 
 		if finish {
 			if param.KafkaMeta != nil {
+				if ctxDone {
+					// a cancelled/timed-out Kafka scan must ABORT, not
+					// complete: completing would commit offsets and record a
+					// last message id for rows the client never received
+					// (KILL landing exactly at a batch boundary). Plain file
+					// scans keep the historical treat-cancel-as-EOF shortcut.
+					return false, ctx.Err()
+				}
 				if err := param.KafkaMeta.finishCheck(ctx); err != nil {
 					return false, err
 				}
@@ -186,6 +196,16 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			row, err = r.transJson2Lines(proc.Ctx, row[0].Val, param.Attrs, param.Cols, param.Extern.JsonData)
 			if err != nil {
 				if errors.Is(err, io.ErrUnexpectedEOF) {
+					if param.KafkaMeta != nil {
+						// one Kafka message must be one complete JSON object;
+						// the streaming-LOAD "wait for the next chunk" resume
+						// would silently merge this fragment with the NEXT
+						// message (or drop rows at EOF) and then commit past
+						// the corruption
+						r.prevStr = ""
+						return false, moerr.NewInvalidInput(proc.Ctx,
+							"kafka message value is not a complete JSON object")
+					}
 					logutil.Infof("unexpected EOF, wait for next batch")
 					unexpectEOF = true
 					continue

@@ -27,6 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	// maxKafkaControlValue bounds start_id/size: far above any real Kafka
+	// offset, far below the +1/arithmetic overflow line.
+	maxKafkaControlValue = int64(1) << 62
+	// maxKafkaTimeoutSeconds keeps time.Duration(v)*time.Second in range.
+	maxKafkaTimeoutSeconds = int64(1) << 31
+)
+
 // DeriveKafkaReadControl resolves the read-control pseudo-columns of a Kafka
 // external table scan (__mo_read_start_id / __mo_read_size /
 // __mo_read_timeout) from the scan's filter conjuncts into the KafkaScan and
@@ -68,16 +76,31 @@ func DeriveKafkaReadControl(ctx context.Context, node *plan.Node, proc *process.
 			if val < -1 {
 				return moerr.NewInvalidInputf(ctx, "%s must be >= -1, got %d", name, val)
 			}
+			// bound so StartId+1 cannot overflow (MaxInt64 would wrap to a
+			// negative offset and read from the wrong position)
+			if val > maxKafkaControlValue {
+				return moerr.NewInvalidInputf(ctx, "%s value out of range: %d", name, val)
+			}
 			ks.StartId = val
 			ks.HasStartId = true
 		case catalog.KafkaReadSize:
 			if val <= 0 {
 				return moerr.NewInvalidInputf(ctx, "%s must be positive, got %d", name, val)
 			}
+			if val > maxKafkaControlValue {
+				return moerr.NewInvalidInputf(ctx, "%s value out of range: %d", name, val)
+			}
 			ks.Size = val
 		case catalog.KafkaReadTimeout:
 			if val < 0 {
 				return moerr.NewInvalidInputf(ctx, "%s must be >= 0, got %d", name, val)
+			}
+			// bound so time.Duration(val)*time.Second cannot overflow into a
+			// negative duration (which would expire the poll instantly and
+			// silently return 0 rows)
+			if val > maxKafkaTimeoutSeconds {
+				return moerr.NewInvalidInputf(ctx,
+					"%s must be <= %d seconds (0 blocks forever), got %d", name, int64(maxKafkaTimeoutSeconds), val)
 			}
 			ks.TimeoutSeconds = val
 		}

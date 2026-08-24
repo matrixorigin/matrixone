@@ -268,9 +268,11 @@ func run(ctx context.Context, db *sql.DB, bootstrap string, seed seedFunc, r *re
 	if last, ok, err = lastID(ctx, connB); err != nil || !ok || last != 7 {
 		return fmt.Errorf("chain r2 last id = %d (ok=%v): %w", last, ok, err)
 	}
+	// r3 chains SERVER-SIDE: the builtin is used directly as the control
+	// value, no client round-trip
 	if err := expectStats(ctx, connB,
-		fmt.Sprintf("__mo_read_start_id = %d and __mo_read_timeout = 2", last), 2, 8, 9); err != nil {
-		return fmt.Errorf("chain r3: %w", err)
+		"__mo_read_start_id = last_kafka_message_id() and __mo_read_timeout = 2", 2, 8, 9); err != nil {
+		return fmt.Errorf("chain r3 (server-side): %w", err)
 	}
 	if err := expectLastID(ctx, connB, 9); err != nil {
 		return fmt.Errorf("chain r3: %w", err)
