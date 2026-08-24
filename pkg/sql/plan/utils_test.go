@@ -534,6 +534,30 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 	})
 }
 
+func TestPreparedDirectResultParamUsesRuntimeNumericType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt1 from 'select ? as result'")
+	require.NoError(t, err)
+	queryPlan := prepared.GetDcl().GetPrepare().GetPlan()
+	require.True(t, PreparedPlanHasDirectResultParams(queryPlan))
+
+	functionPrepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt2 from 'select abs(?)'")
+	require.NoError(t, err)
+	require.False(t, PreparedPlanHasDirectResultParams(functionPrepared.GetDcl().GetPrepare().GetPlan()))
+
+	filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
+		ParamValue{
+			Value:          "-42",
+			RuntimeType:    types.T_int64.ToType(),
+			HasRuntimeType: true,
+		},
+	})
+	require.NoError(t, err)
+	root := filled.GetQuery().Nodes[filled.GetQuery().Steps[len(filled.GetQuery().Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_int64), root.ProjectList[0].Typ.Id)
+	require.Equal(t, int64(-42), root.ProjectList[0].GetLit().GetI64Val())
+}
+
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 	tests := []struct {
 		name         string

@@ -716,6 +716,50 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
+// binaryProtocolPrepareParamType maps the type descriptor sent with
+// COM_STMT_EXECUTE to the execution type of a direct result parameter. Keep
+// this helper off the ordinary prepared-statement path: the descriptor is
+// needed only when a parameter itself is exposed as a result column.
+func binaryProtocolPrepareParamType(
+	mysqlType defines.MysqlType,
+	isUnsigned bool,
+	value []byte,
+) (types.Type, bool) {
+	signed := func(signedType, unsignedType types.T) types.Type {
+		if isUnsigned {
+			return unsignedType.ToType()
+		}
+		return signedType.ToType()
+	}
+	switch mysqlType {
+	case defines.MYSQL_TYPE_TINY:
+		return signed(types.T_int8, types.T_uint8), true
+	case defines.MYSQL_TYPE_SHORT:
+		return signed(types.T_int16, types.T_uint16), true
+	case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
+		return signed(types.T_int32, types.T_uint32), true
+	case defines.MYSQL_TYPE_LONGLONG:
+		return signed(types.T_int64, types.T_uint64), true
+	case defines.MYSQL_TYPE_BIT:
+		return signed(types.T_bit, types.T_uint64), true
+	case defines.MYSQL_TYPE_YEAR:
+		return types.T_year.ToType(), true
+	case defines.MYSQL_TYPE_FLOAT:
+		return types.T_float32.ToType(), true
+	case defines.MYSQL_TYPE_DOUBLE:
+		return types.T_float64.ToType(), true
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		if typ, ok := plan2.PreparedRuntimeTypeFromString(string(value)); ok && typ.IsDecimal() {
+			return typ, true
+		}
+		return types.New(types.T_decimal128, 38, 18), true
+	case defines.MYSQL_TYPE_NULL:
+		return types.Type{}, false
+	default:
+		return types.T_text.ToType(), false
+	}
+}
+
 func initExecuteStmtParamWithResolverInSession(
 	execCtx *ExecCtx,
 	owner *Session,
@@ -735,6 +779,7 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	executionPlan := preparePlan.Plan
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 
@@ -840,6 +885,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 
 		preparePlan = newPreparePlan
+		executionPlan = preparePlan.Plan
 		prepareStmt.PreparePlan = newPlan
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
@@ -945,6 +991,43 @@ func initExecuteStmtParamWithResolverInSession(
 	if err := normalizePreparedPaginationBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
 		return nil, nil, nil, originSQL, false, err
 	}
+
+	// A direct SELECT parameter is part of the result-column contract. When a
+	// binary client supplies a numeric type, execute an isolated value-filled
+	// copy so both the row vector and the column definition use that type. Do
+	// not run this path for ordinary prepared statements: those keep their
+	// cached compile and avoid the per-execute type-inference regression from
+	// the original broad specialization fix.
+	runtimeSpecialized := false
+	if execCtx.input != nil && execCtx.input.isBinaryProtExecute &&
+		plan2.PreparedPlanHasDirectResultParams(executionPlan) {
+		var specialized bool
+		cwft.paramVals, specialized, err = preparedParamValuesWithRuntimeTypes(
+			cwft.proc, prepareStmt.ParamTypes)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		if specialized {
+			runtimePlan, fillErr := plan2.FillValuesOfParamsInPlan(
+				reqCtx, executionPlan, cwft.paramVals)
+			if fillErr != nil {
+				return nil, nil, nil, originSQL, false, fillErr
+			}
+			executionPlan = runtimePlan
+			runtimeSpecialized = true
+			columns := getPreparedResultColumnsFor(
+				prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes))
+			resper := execCtx.resper
+			if executionSes.IsBackgroundSession() {
+				resper = owner.GetResponser()
+			}
+			colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+			if metadataErr != nil {
+				return nil, nil, nil, originSQL, false, metadataErr
+			}
+			execCtx.prepareColDef = colDefData
+		}
+	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling or Sirius intent must be evaluated for this execution,
 	// so neither can reuse a native topology compiled under prepare-time defaults.
@@ -955,7 +1038,7 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
-	if plan2.PreparedPlanHasPaginationParams(preparePlan.Plan) {
+	if runtimeSpecialized || plan2.PreparedPlanHasPaginationParams(preparePlan.Plan) {
 		// The cached compile was built from the prepare-time parameter types and
 		// cannot execute a plan whose pagination values must be rebound for this
 		// execution.
@@ -977,7 +1060,7 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
-	return retComp, preparePlan.Plan, executionStmt, originSQL, owned, nil
+	return retComp, executionPlan, executionStmt, originSQL, owned, nil
 }
 
 func normalizePreparedPaginationBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
@@ -1136,6 +1219,57 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 		}
 	}
 	return values, nil
+}
+
+// preparedParamValuesWithRuntimeTypes enriches the already materialized
+// parameter values with COM_STMT_EXECUTE's numeric type descriptors. It is
+// deliberately called only for a direct result projection; ordinary prepared
+// statements retain the cheap cached-plan path and do not infer a type on each
+// execute.
+func preparedParamValuesWithRuntimeTypes(
+	proc *process.Process,
+	paramTypes []byte,
+) ([]any, bool, error) {
+	values, err := preparedParamValues(proc)
+	if err != nil {
+		return nil, false, err
+	}
+	params := proc.GetPrepareParams()
+	if params == nil {
+		return values, false, nil
+	}
+	specialized := false
+	for i := 0; i < params.Length(); i++ {
+		if i*2+1 >= len(paramTypes) {
+			continue
+		}
+		raw, err := proc.GetPrepareParamsAt(i)
+		if err != nil {
+			return nil, false, err
+		}
+		mysqlType := defines.MysqlType(paramTypes[i*2])
+		isUnsigned := paramTypes[i*2+1]&0x80 != 0
+		runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, raw)
+		if !ok {
+			continue
+		}
+		if paramValue, ok := values[i].(plan2.ParamValue); ok &&
+			paramValue.PrepareParamKind == vector.PrepareParamBoolean {
+			runtimeType = types.T_bool.ToType()
+		}
+		paramValue := plan2.ParamValue{
+			IsBin:            proc.GetPrepareParamIsBin(i),
+			PrepareParamKind: proc.GetPrepareParamKind(i),
+			RuntimeType:      runtimeType,
+			HasRuntimeType:   true,
+		}
+		if existing, ok := values[i].(plan2.ParamValue); ok {
+			paramValue.Value = existing.Value
+		}
+		values[i] = paramValue
+		specialized = true
+	}
+	return values, specialized, nil
 }
 
 func buildExecuteUserParams(

@@ -20,6 +20,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -477,9 +478,18 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}
+		param := rule.params[int(exprImpl.P.Pos)]
+		typ := e.Typ
+		// A binary direct-result parameter may carry an explicit numeric type on
+		// the execute-time replacement. Preserve that type for both metadata and
+		// the expression executor; ordinary TEXT replacements retain the
+		// prepare-time expression type.
+		if param != nil && param.Typ.Id != int32(types.T_text) {
+			typ = param.Typ
+		}
 		return &plan.Expr{
-			Typ:  e.Typ,
-			Expr: rule.params[int(exprImpl.P.Pos)].Expr,
+			Typ:  typ,
+			Expr: param.Expr,
 		}, nil
 	case *plan.Expr_List:
 		for i, arg := range exprImpl.List.List {
