@@ -3738,6 +3738,42 @@ order by max(value), series_id, _wstart`)
 		err.Error())
 }
 
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsOrderByOnlyNumericAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_order"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_order", Obj: 42}
+	mock.ctxt.tables["tw_numeric_order"] = &plan.TableDef{
+		Name: "tw_numeric_order",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_order
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(sort_key), series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
 func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 

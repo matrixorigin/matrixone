@@ -5339,9 +5339,21 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	}
-	if astTimeWindow != nil && astTimeWindow.Fill != nil && astTimeWindow.Fill.Mode == tree.FillLinear {
-		if err = builder.validateLinearFillTypes(collectTimeWindowFillCols(ctx)); err != nil {
-			return
+	if astTimeWindow != nil && astTimeWindow.Fill != nil {
+		fillMode := astTimeWindow.Fill.Mode
+		if fillMode != tree.FillNone && fillMode != tree.FillNull {
+			finalFillCols := collectTimeWindowFillCols(ctx)
+			if fillMode == tree.FillLinear {
+				if err = builder.validateLinearFillTypes(finalFillCols); err != nil {
+					return
+				}
+			}
+			if len(finalFillCols) != len(fillCols) {
+				fillType, fillVals, fillCols, err = builder.bindTimeWindowFill(ctx, projectionBinder, astTimeWindow)
+				if err != nil {
+					return
+				}
+			}
 		}
 	}
 	if len(boundOrderBys) > 0 && len(viewRawProjects) > 0 {
@@ -8300,63 +8312,86 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 
-	if astTimeWindow.Fill != nil && astTimeWindow.Fill.Mode != tree.FillNone && astTimeWindow.Fill.Mode != tree.FillNull {
-		switch astTimeWindow.Fill.Mode {
-		case tree.FillPrev:
-			fillType = plan.Node_PREV
-		case tree.FillNext:
-			fillType = plan.Node_NEXT
-		case tree.FillValue:
-			fillType = plan.Node_VALUE
-		case tree.FillLinear:
-			fillType = plan.Node_LINEAR
-		}
+	if fillType, fillVals, fillCols, err = builder.bindTimeWindowFill(ctx, projectionBinder, astTimeWindow); err != nil {
+		return
+	}
+	return
+}
 
-		var v, castedExpr *Expr
+func (builder *QueryBuilder) bindTimeWindowFill(
+	ctx *BindContext,
+	projectionBinder *ProjectionBinder,
+	astTimeWindow *tree.TimeWindow,
+) (
+	fillType plan.Node_FillType,
+	fillVals, fillCols []*Expr,
+	err error,
+) {
+	timeAstCount := len(ctx.timeAsts)
+	defer func() {
+		ctx.timeAsts = ctx.timeAsts[:timeAstCount]
+	}()
+
+	if astTimeWindow == nil || astTimeWindow.Fill == nil ||
+		astTimeWindow.Fill.Mode == tree.FillNone || astTimeWindow.Fill.Mode == tree.FillNull {
+		return
+	}
+
+	switch astTimeWindow.Fill.Mode {
+	case tree.FillPrev:
+		fillType = plan.Node_PREV
+	case tree.FillNext:
+		fillType = plan.Node_NEXT
+	case tree.FillValue:
+		fillType = plan.Node_VALUE
+	case tree.FillLinear:
+		fillType = plan.Node_LINEAR
+	}
+
+	var v, castedExpr *Expr
+	if astTimeWindow.Fill.Val != nil {
+		if v, err = projectionBinder.BindExpr(astTimeWindow.Fill.Val, 0, true); err != nil {
+			return
+		}
+	}
+
+	for _, t := range ctx.times {
+		if isTimeWindowFillBoundary(t) {
+			continue
+		}
 		if astTimeWindow.Fill.Val != nil {
-			if v, err = projectionBinder.BindExpr(astTimeWindow.Fill.Val, 0, true); err != nil {
+			if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, t.Typ); err != nil {
 				return
 			}
+			fillVals = append(fillVals, castedExpr)
+		}
+		fillCols = append(fillCols, t)
+	}
+
+	if astTimeWindow.Fill.Mode == tree.FillLinear {
+		if err = builder.validateLinearFillTypes(fillCols); err != nil {
+			return
 		}
 
-		for _, t := range ctx.times {
-			if isTimeWindowFillBoundary(t) {
-				continue
-			}
-			if astTimeWindow.Fill.Val != nil {
-				if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, t.Typ); err != nil {
-					return
-				}
-				fillVals = append(fillVals, castedExpr)
-			}
-			fillCols = append(fillCols, t)
-		}
-
-		if astTimeWindow.Fill.Mode == tree.FillLinear {
-			if err = builder.validateLinearFillTypes(fillCols); err != nil {
-				return
-			}
-
-			for i, timeAst := range ctx.timeAsts {
-				b := &tree.BinaryExpr{
-					Op: tree.DIV,
-					Left: &tree.ParenExpr{
-						Expr: &tree.BinaryExpr{
-							Op:    tree.PLUS,
-							Left:  timeAst,
-							Right: timeAst,
-						},
+		for i, timeAst := range ctx.timeAsts {
+			b := &tree.BinaryExpr{
+				Op: tree.DIV,
+				Left: &tree.ParenExpr{
+					Expr: &tree.BinaryExpr{
+						Op:    tree.PLUS,
+						Left:  timeAst,
+						Right: timeAst,
 					},
-					Right: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
-				}
-				if v, err = projectionBinder.BindExpr(b, 0, true); err != nil {
-					return
-				}
-				if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ); err != nil {
-					return
-				}
-				fillVals = append(fillVals, castedExpr)
+				},
+				Right: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
 			}
+			if v, err = projectionBinder.BindExpr(b, 0, true); err != nil {
+				return
+			}
+			if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ); err != nil {
+				return
+			}
+			fillVals = append(fillVals, castedExpr)
 		}
 	}
 	return
@@ -9566,6 +9601,19 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support time window in recursive cte")
 		return
+	}
+	if fillType == plan.Node_LINEAR {
+		realAggCount := len(collectTimeWindowFillCols(ctx))
+		if len(fillCols) != realAggCount || len(fillVals) != realAggCount {
+			err = moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"linear fill layout mismatch: aggregates=%d fill columns=%d fill values=%d",
+				realAggCount,
+				len(fillCols),
+				len(fillVals),
+			)
+			return
+		}
 	}
 
 	// A GROUP BY alongside the window puts extra keys in ctx.groups next to the

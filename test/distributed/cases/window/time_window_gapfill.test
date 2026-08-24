@@ -64,6 +64,18 @@ order by series_id, _wstart;
 
 drop table linear_varchar;
 
+create table linear_order_numeric(series_id int, ts datetime, shown bigint, sort_key bigint);
+insert into linear_order_numeric values
+    (1, '2026-03-04 00:00:00', 10, 100),
+    (1, '2026-03-04 00:02:00', 30, 200);
+
+select series_id, _wstart, max(shown) as shown_fill
+from linear_order_numeric
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(sort_key), series_id, _wstart;
+
+drop table linear_order_numeric;
+
 # A maximal run of k missing buckets is divided into k+1 equal steps. All rows
 # use one logical series key; no table-partition capability is involved.
 create table linear_readings(series_id int, ts datetime, value int);
