@@ -191,12 +191,12 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 		return true, nil
 	}
 	// opt rule #2.2: single char matches _
-	// XXX in UTF8 world, should we do single RUNE matches _?
 	if n == 1 && pat[0] == '_' {
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			v1 = specialFnForV(v1)
-			if err := rs.Append(len(v1) == 1, null1); err != nil {
+			_, runeSize := utf8.DecodeRune(v1)
+			if err := rs.Append(runeSize > 0 && runeSize == len(v1), null1); err != nil {
 				return true, err
 			}
 		}
@@ -240,7 +240,8 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
-					if err := rs.Append(len(v1) == len(literal)+1 && bytes.Equal(literal, v1[1:]), null1); err != nil {
+					_, runeSize := utf8.DecodeRune(v1)
+					if err := rs.Append(runeSize > 0 && len(v1) == len(literal)+runeSize && bytes.Equal(literal, v1[runeSize:]), null1); err != nil {
 						return true, err
 					}
 				}
@@ -259,12 +260,13 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				return true, nil
 
 			case c1 == '_' && !(c0 == '%' || c0 == '_'):
-				// Rule 4.4, foobarzoo_, it turns into eq ingoring last char.
+				// Rule 4.4, foobarzoo_, it turns into eq ignoring the last character.
 				prefix := functionUtil.RemoveEscapeChar(pat[:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
-					if err := rs.Append(len(v1) == len(prefix)+1 && bytes.Equal(prefix, v1[:len(prefix)]), null1); err != nil {
+					_, runeSize := utf8.DecodeLastRune(v1)
+					if err := rs.Append(runeSize > 0 && len(v1) == len(prefix)+runeSize && bytes.Equal(prefix, v1[:len(prefix)]), null1); err != nil {
 						return true, err
 					}
 				}
@@ -300,7 +302,8 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
-					if err := rs.Append(len(v1) > 0 && bytes.HasSuffix(v1[:len(v1)-1], suffix), null1); err != nil {
+					_, runeSize := utf8.DecodeLastRune(v1)
+					if err := rs.Append(runeSize > 0 && bytes.HasSuffix(v1[:len(v1)-runeSize], suffix), null1); err != nil {
 						return true, err
 					}
 				}
@@ -312,7 +315,8 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
-					if err := rs.Append(len(v1) > 0 && bytes.HasPrefix(v1[1:], prefix), null1); err != nil {
+					_, runeSize := utf8.DecodeRune(v1)
+					if err := rs.Append(runeSize > 0 && bytes.HasPrefix(v1[runeSize:], prefix), null1); err != nil {
 						return true, err
 					}
 				}

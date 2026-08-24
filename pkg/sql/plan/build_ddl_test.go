@@ -201,6 +201,69 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	require.Equal(t, "t3", renames[1].GetActions()[0].GetAlterName().GetNewName())
 }
 
+func TestBuildTableRenameIdentifierLength(t *testing.T) {
+	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
+
+	testCases := []struct {
+		name string
+		sql  func(string) string
+	}{
+		{
+			name: "rename table",
+			sql: func(name string) string {
+				return fmt.Sprintf("rename table nation to `%s`", name)
+			},
+		},
+		{
+			name: "alter table rename",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation rename to `%s`", name)
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name+" accepts 64 characters", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(validName))
+			require.NoError(t, err)
+		})
+
+		invalidNames := []struct {
+			name string
+			make func(*MockOptimizer) string
+		}{
+			{
+				name: "65 characters",
+				make: func(*MockOptimizer) string {
+					return "表" + strings.Repeat("b", MaxIdentifierLength)
+				},
+			},
+			{
+				name: "generated temporary table prefix",
+				make: func(mock *MockOptimizer) string {
+					return defines.GenTempTableName(
+						mock.ctxt.GetProcess().GetSessionInfo().SessionId,
+						"database",
+						strings.Repeat("t", MaxIdentifierLength),
+					)
+				},
+			},
+		}
+
+		for _, invalidName := range invalidNames {
+			t.Run(testCase.name+" rejects "+invalidName.name, func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				_, err := runOneStmt(mock, t, testCase.sql(invalidName.make(mock)))
+				require.Error(t, err)
+				moErr, ok := err.(*moerr.Error)
+				require.True(t, ok, "unexpected error type %T: %v", err, err)
+				require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+				require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+			})
+		}
+	}
+}
+
 func TestBuildRejectsCrossDatabaseTableRename(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -4118,6 +4181,187 @@ func TestBuildCreateTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCreateTableIdentifierLength(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
+	plan, err := runOneStmt(mock, t, fmt.Sprintf("create table `%s` (id int)", validName))
+	require.NoError(t, err)
+	require.Equal(t, validName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
+
+	for _, invalidName := range []string{
+		"表" + strings.Repeat("b", MaxIdentifierLength),
+		"表" + strings.Repeat("c", MaxIdentifierLength+1),
+	} {
+		_, err = runOneStmt(mock, t, fmt.Sprintf("create table `%s` (id int)", invalidName))
+		require.Error(t, err)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok, "unexpected error type %T: %v", err, err)
+		require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+		require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+		require.Equal(t, fmt.Sprintf("Identifier name '%s' is too long", invalidName), moErr.Error())
+	}
+
+	internalMock := NewMockOptimizer(false)
+	internalMock.ctxt.SetContext(context.WithValue(
+		internalMock.ctxt.GetContext(),
+		defines.InternalExecutorKey{},
+		true,
+	))
+	internalName := "表" + strings.Repeat("i", MaxIdentifierLength)
+	plan, err = runOneStmt(internalMock, t, fmt.Sprintf("create table `%s` (id int)", internalName))
+	require.NoError(t, err)
+	require.Equal(t, internalName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
+
+	tempMock := NewMockOptimizer(false)
+	tempCtx := &rootSQLCompilerContext{
+		MockCompilerContext: &tempMock.ctxt,
+		rootSQL:             "delete from temp_table",
+	}
+	physicalTempName := defines.GenTempTableName(
+		tempCtx.GetProcess().GetSessionInfo().SessionId,
+		"database",
+		strings.Repeat("t", MaxIdentifierLength),
+	)
+	createTempSQL := fmt.Sprintf("create table `%s` (id int)", physicalTempName)
+	stmt, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		createTempSQL,
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+	plan, err = BuildPlan(tempCtx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, physicalTempName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
+
+	tempCtx.rootSQL = createTempSQL
+	_, err = BuildPlan(tempCtx, stmt, false)
+	require.Error(t, err)
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok, "unexpected error type %T: %v", err, err)
+	require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+}
+
+func TestBuildCatalogIdentifierLength(t *testing.T) {
+	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
+	invalidName := "表" + strings.Repeat("b", MaxIdentifierLength)
+	testCases := []struct {
+		name string
+		sql  func(string) string
+	}{
+		{
+			name: "database",
+			sql: func(name string) string {
+				return fmt.Sprintf("create database `%s`", name)
+			},
+		},
+		{
+			name: "view",
+			sql: func(name string) string {
+				return fmt.Sprintf("create view `%s` as select 1", name)
+			},
+		},
+		{
+			name: "view column",
+			sql: func(name string) string {
+				return fmt.Sprintf("create view v as select 1 as `%s`", name)
+			},
+		},
+		{
+			name: "table column",
+			sql: func(name string) string {
+				return fmt.Sprintf("create table t (`%s` int)", name)
+			},
+		},
+		{
+			name: "table index",
+			sql: func(name string) string {
+				return fmt.Sprintf("create table t (a int, index `%s` (a))", name)
+			},
+		},
+		{
+			name: "table constraint",
+			sql: func(name string) string {
+				return fmt.Sprintf("create table t (a int, constraint `%s` unique (a))", name)
+			},
+		},
+		{
+			name: "create index",
+			sql: func(name string) string {
+				return fmt.Sprintf("create index `%s` on nation (n_nationkey)", name)
+			},
+		},
+		{
+			name: "alter add column",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation add column `%s` int", name)
+			},
+		},
+		{
+			name: "alter change column",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation change column n_name `%s` varchar(25)", name)
+			},
+		},
+		{
+			name: "alter rename column",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation rename column n_name to `%s`", name)
+			},
+		},
+		{
+			name: "alter add index",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation add index `%s` (n_nationkey)", name)
+			},
+		},
+		{
+			name: "alter add constraint",
+			sql: func(name string) string {
+				return fmt.Sprintf("alter table nation add constraint `%s` unique (n_nationkey)", name)
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name+" accepts 64 characters", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(validName))
+			require.NoError(t, err)
+		})
+		t.Run(testCase.name+" rejects 65 characters", func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(invalidName))
+			require.Error(t, err)
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok, "unexpected error type %T: %v", err, err)
+			require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+			require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+		})
+	}
+
+	buildAlterView := func(t *testing.T, name string) error {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["v"] = &plan.TableDef{
+			Name:    "v",
+			ViewSql: &plan.ViewDef{View: `{"Stmt":"create view v as select 1","DefaultDatabase":"tpch"}`},
+		}
+		mock.ctxt.objects["v"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v"}
+		_, err := runOneStmt(mock, t, fmt.Sprintf("alter view v (`%s`) as select 1", name))
+		return err
+	}
+	t.Run("alter view column accepts 64 characters", func(t *testing.T) {
+		require.NoError(t, buildAlterView(t, validName))
+	})
+	t.Run("alter view column rejects 65 characters", func(t *testing.T) {
+		err := buildAlterView(t, invalidName)
+		require.Error(t, err)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok, "unexpected error type %T: %v", err, err)
+		require.Equal(t, moerr.ErrTooLongIdent, moErr.ErrorCode())
+		require.Equal(t, uint16(moerr.ER_TOO_LONG_IDENT), moErr.MySQLCode())
+	})
+}
+
 func TestBuildCreateTableAcceptsTextBlobDisplayLength(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -4682,6 +4926,91 @@ func TestCreateTableAsSelect(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestBuildCTASDoesNotCopyAutoIncrement(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := &mock.ctxt
+	sourceCol := ctx.tables["nation"].Cols[0]
+	sourceCol.Typ.AutoIncr = true
+	sourceCol.Default = nil
+
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"create table copied as select n_nationkey as id, n_name as payload from nation",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	var visible []*plan.ColDef
+	for _, col := range cols {
+		if !col.GetHidden() {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 2)
+	var idCol *plan.ColDef
+	for _, col := range visible {
+		if col.Name == "id" {
+			idCol = col
+			break
+		}
+	}
+	require.NotNil(t, idCol)
+	require.False(t, idCol.Typ.AutoIncr)
+	require.NotNil(t, idCol.Default)
+	require.False(t, idCol.Default.NullAbility)
+	require.Equal(t, "0", idCol.Default.OriginString)
+	require.NotNil(t, idCol.Default.Expr)
+	require.Equal(t, int32(types.T_int32), idCol.Default.Expr.Typ.Id)
+	require.Equal(t, int32(0), idCol.Default.Expr.GetLit().GetI32Val())
+
+	target := p.GetDdl().GetCreateTable()
+	tableDef := target.GetTableDef()
+	tableDef.TblId = 99102
+	ctx.objects[tableDef.Name] = &ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
+	ctx.tables[tableDef.Name] = tableDef
+	ctx.id2name[tableDef.TblId] = tableDef.Name
+	ctx.pks[tableDef.Name] = nil
+	_, err = runOneStmt(mock, t, "insert into copied(payload) values ('omitted-id')")
+	require.NoError(t, err)
+}
+
+func TestBuildCTASExplicitTargetDefaultOverridesAutoIncrementTypeDefault(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	sourceCol := ctx.tables["nation"].Cols[0]
+	sourceCol.Typ.AutoIncr = true
+	sourceCol.Default = nil
+
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"create table copied_explicit (id int not null default 42, payload varchar(25)) as select n_nationkey as id, n_name as payload from nation",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	var idCol *plan.ColDef
+	for _, col := range cols {
+		if !col.Hidden && col.Name == "id" {
+			idCol = col
+			break
+		}
+	}
+	require.NotNil(t, idCol)
+	require.False(t, idCol.Typ.AutoIncr)
+	require.Equal(t, "42", idCol.Default.OriginString)
+	require.NotNil(t, idCol.Default.Expr)
+	require.Equal(t, int32(42), idCol.Default.Expr.GetLit().GetI32Val())
 }
 
 func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
