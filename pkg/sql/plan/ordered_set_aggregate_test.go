@@ -102,17 +102,28 @@ func TestBuildMedianWithinGroupRejectsDifferentOrderExpression(t *testing.T) {
 }
 
 func TestBuildMedianWithinGroupAcceptsIdenticalScalarSubquery(t *testing.T) {
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
-		"select median((select 1)) within group (order by (select 1)) from select_test.bind_select", 1)
-	require.NoError(t, err)
-	t.Cleanup(stmt.Free)
+	for _, sql := range []string{
+		"select median((select 1)) within group (order by (select 1)) from select_test.bind_select",
+		`select median((select a from select_test.bind_select y limit 1))
+  within group (order by (select y.a from select_test.bind_select y limit 1))
+  from select_test.bind_select x`,
+		`select median((select abs(y.a) from select_test.bind_select y limit 1))
+  within group (order by (select ABS(y.A) from select_test.bind_select y limit 1))
+  from select_test.bind_select x`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
-	require.NoError(t, err)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
 
-	fn := findAggregateByName(queryPlan.GetQuery(), "median")
-	require.NotNil(t, fn)
-	require.Len(t, fn.Args, 1)
+			fn := findAggregateByName(queryPlan.GetQuery(), "median")
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, 1)
+		})
+	}
 }
 
 func TestBuildMedianWithinGroupAcceptsCaseInsensitiveIdentifiers(t *testing.T) {
