@@ -5339,6 +5339,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	}
+	if astTimeWindow != nil && astTimeWindow.Fill != nil && astTimeWindow.Fill.Mode == tree.FillLinear {
+		if err = builder.validateLinearFillTypes(collectTimeWindowFillCols(ctx)); err != nil {
+			return
+		}
+	}
 	if len(boundOrderBys) > 0 && len(viewRawProjects) > 0 {
 		ctx.mysqlSpecialRawProjectPositions = make(map[int32]int32, len(viewRawProjects))
 		for visiblePos, rawExpr := range viewRawProjects {
@@ -8315,10 +8320,8 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 
 		for _, t := range ctx.times {
-			if e, ok := t.Expr.(*plan.Expr_Col); ok {
-				if e.Col.Name == TimeWindowStart || e.Col.Name == TimeWindowEnd {
-					continue
-				}
+			if isTimeWindowFillBoundary(t) {
+				continue
 			}
 			if astTimeWindow.Fill.Val != nil {
 				if castedExpr, err = appendCastBeforeExpr(builder.GetContext(), v, t.Typ); err != nil {
@@ -8330,16 +8333,8 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 
 		if astTimeWindow.Fill.Mode == tree.FillLinear {
-			for _, fillCol := range fillCols {
-				fillColType := makeTypeByPlan2Type(fillCol.Typ)
-				if !fillColType.IsNumeric() {
-					err = moerr.NewNotSupportedf(
-						builder.GetContext(),
-						"FILL(LINEAR) does not support aggregate result type %s",
-						fillColType.String(),
-					)
-					return
-				}
+			if err = builder.validateLinearFillTypes(fillCols); err != nil {
+				return
 			}
 
 			for i, timeAst := range ctx.timeAsts {
@@ -8365,6 +8360,39 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 	return
+}
+
+func isTimeWindowFillBoundary(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	return col != nil && (col.Name == TimeWindowStart || col.Name == TimeWindowEnd)
+}
+
+func collectTimeWindowFillCols(ctx *BindContext) []*Expr {
+	fillCols := make([]*Expr, 0, len(ctx.times))
+	for _, expr := range ctx.times {
+		if isTimeWindowFillBoundary(expr) {
+			continue
+		}
+		fillCols = append(fillCols, expr)
+	}
+	return fillCols
+}
+
+func (builder *QueryBuilder) validateLinearFillTypes(fillCols []*Expr) error {
+	for _, fillCol := range fillCols {
+		fillColType := makeTypeByPlan2Type(fillCol.Typ)
+		if !fillColType.IsNumeric() {
+			return moerr.NewNotSupportedf(
+				builder.GetContext(),
+				"FILL(LINEAR) does not support aggregate result type %s",
+				fillColType.String(),
+			)
+		}
+	}
+	return nil
 }
 
 // inferGapFillBounds recognizes only the exact half-open predicate shape used

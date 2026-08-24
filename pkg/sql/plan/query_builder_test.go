@@ -3715,6 +3715,29 @@ func TestQueryBuilder_bindTimeWindowLinearFillTypeValidation(t *testing.T) {
 	}
 }
 
+func TestQueryBuilder_bindTimeWindowLinearFillRejectsOrderByOnlyAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_order"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_order", Obj: 42}
+	mock.ctxt.tables["tw_order"] = &plan.TableDef{
+		Name: "tw_order",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "value", Typ: plan.Type{Id: int32(types.T_varchar), Width: 16}},
+		},
+	}
+
+	_, err := runOneStmt(mock, t, `select series_id, _wstart, max(series_id) as numeric_fill
+from tw_order
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(value), series_id, _wstart`)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Equal(t,
+		"not supported: FILL(LINEAR) does not support aggregate result type VARCHAR",
+		err.Error())
+}
+
 func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 

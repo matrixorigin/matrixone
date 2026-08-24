@@ -91,6 +91,11 @@ from linear_varchar
 group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
 order by series_id, _wstart;
 not supported: FILL(LINEAR) does not support aggregate result type VARCHAR
+select series_id, _wstart, max(series_id) as numeric_fill
+from linear_varchar
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(value), series_id, _wstart;
+not supported: FILL(LINEAR) does not support aggregate result type VARCHAR
 select series_id, _wstart, max(value) as value_max
 from linear_varchar
 group by series_id interval(ts, 1, minute) gapfill(partition) fill(prev)
