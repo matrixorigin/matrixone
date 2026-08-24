@@ -19,9 +19,11 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -133,5 +135,127 @@ func TestExpectScalarAndWaitForMO(t *testing.T) {
 	}
 	if err := expectScalar(ctx, db, "select 42", "43"); err == nil {
 		t.Fatal("expectScalar should report a mismatch")
+	}
+}
+
+// scriptedDriver answers each statement of run()'s E2E script the way the
+// real MO+ES stack does, so the whole driver flow (both TVF paths, the
+// external-table cases, redaction, timezone-sensitive timestamps, and the
+// cross-kind rejection) is executable as a unit test. The answers mirror the
+// seeded employees index in optools/esql_ci.bash; if the script and this
+// oracle drift, the test fails loudly.
+type scriptedDriver struct{}
+type scriptedConn struct{}
+type scriptedStmt struct{ q string }
+type scriptedRows struct {
+	cols []string
+	rows [][]driver.Value
+	next int
+}
+
+// scriptedTZ is the fake session time zone, updated by "set time_zone" execs.
+// The test is single-goroutine, so package state is race-free.
+var scriptedTZ = "+00:00"
+
+func (scriptedDriver) Open(string) (driver.Conn, error)    { return scriptedConn{}, nil }
+func (scriptedConn) Prepare(q string) (driver.Stmt, error) { return scriptedStmt{q: q}, nil }
+func (scriptedConn) Close() error                          { return nil }
+func (scriptedConn) Begin() (driver.Tx, error)             { return nil, driver.ErrSkip }
+func (s scriptedStmt) Close() error                        { return nil }
+func (s scriptedStmt) NumInput() int                       { return 0 }
+
+func (s scriptedStmt) Exec([]driver.Value) (driver.Result, error) {
+	if strings.HasPrefix(s.q, "set time_zone = ") {
+		scriptedTZ = strings.Trim(strings.TrimPrefix(s.q, "set time_zone = "), "'")
+	}
+	return driver.ResultNoRows, nil
+}
+
+func (s scriptedStmt) Query([]driver.Value) (driver.Rows, error) {
+	one := func(v string) (driver.Rows, error) {
+		return &scriptedRows{cols: []string{"v"}, rows: [][]driver.Value{{[]byte(v)}}}, nil
+	}
+	q := s.q
+	switch {
+	case strings.Contains(q, "'I', @hsql"):
+		// the kind check fires before any query is sent
+		return nil, errors.New(`invalid input: connection handle "sql:feedfacefeedface" is a sql connection; esql_tvf accepts only esql connections`)
+	case strings.HasPrefix(q, "show create table"):
+		return &scriptedRows{
+			cols: []string{"Table", "Create Table"},
+			rows: [][]driver.Value{{[]byte("emp_inline"),
+				[]byte(`CREATE EXTERNAL TABLE emp_inline (...) engine = esql with ("config" = '<redacted>')`)}},
+		}, nil
+	case strings.Contains(q, "count(distinct __mo_query)"):
+		return one("2")
+	case strings.Contains(q, "salary is null"):
+		return one("1")
+	case strings.Contains(q, "max(salary)"):
+		return one("150000")
+	case strings.Contains(q, "salary > 100000"):
+		return one("2")
+	case strings.Contains(q, "__mo_query in ("):
+		return one("4")
+	case strings.Contains(q, "hired >="):
+		return one("3")
+	case strings.Contains(q, "cast(hired as char)") && strings.Contains(q, "emp_ts"):
+		if scriptedTZ == "+08:00" {
+			return one("2023-06-15 16:30:00.123")
+		}
+		return one("2023-06-15 08:30:00.123")
+	case strings.Contains(q, "cast(hired as char)"):
+		// schema-mode TVF renders the +08:00 instant at timestamp(0)
+		return one("2023-06-15 16:30:00")
+	case strings.Contains(q, "count(*)"):
+		return one("5")
+	default:
+		return one("1")
+	}
+}
+
+func (r *scriptedRows) Columns() []string { return r.cols }
+func (r *scriptedRows) Close() error      { return nil }
+func (r *scriptedRows) Next(dest []driver.Value) error {
+	if r.next >= len(r.rows) {
+		return io.EOF
+	}
+	copy(dest, r.rows[r.next])
+	r.next++
+	return nil
+}
+
+// TestRunAgainstScriptedDriver executes the complete E2E script against the
+// scripted oracle: every case the real run records must be recorded here too,
+// in the same order.
+func TestRunAgainstScriptedDriver(t *testing.T) {
+	sql.Register("esqltvf-script", scriptedDriver{})
+	db, err := sql.Open("esqltvf-script", "any")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	scriptedTZ = "+00:00"
+
+	var r report
+	dsn := "root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s"
+	if err := run(context.Background(), db, dsn, "http://127.0.0.1:9200", "elastic", "pw", &r); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	want := []string{
+		"esql_tvf_connect", "count-all", "esql-where", "mo-where", "null-salary",
+		"max-salary", "no-schema-default-conn", "esql_tvf_disconnect",
+		"tvf-short-schema", "exttab-create", "exttab-count-all",
+		"exttab-local-predicate", "exttab-null", "exttab-in-two-queries",
+		"exttab-session-config", "exttab-inline-config",
+		"exttab-iso8601-timestamp", "exttab-timestamp-non-utc-session",
+		"tvf-iso8601-timestamp", "cross-kind-handle-rejected",
+	}
+	if len(r.Cases) != len(want) {
+		t.Fatalf("cases = %v, want %v", r.Cases, want)
+	}
+	for i := range want {
+		if r.Cases[i] != want[i] {
+			t.Fatalf("case[%d] = %q, want %q (all: %v)", i, r.Cases[i], want[i], r.Cases)
+		}
 	}
 }
