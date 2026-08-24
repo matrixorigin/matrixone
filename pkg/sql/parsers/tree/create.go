@@ -946,6 +946,7 @@ type CreateTable struct {
 	MongoDBParam       *MongoDBTableParam
 	DataStreamParam    *DataStreamTableParam
 	ForeignParam       *ForeignTableParam
+	KafkaParam         *KafkaTableParam
 	AsSource           *Select
 	IsAsSelect         bool
 	IsAsLike           bool
@@ -965,7 +966,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IsClusterTable {
 		ctx.WriteString(" cluster")
 	}
-	if node.Param != nil || node.IcebergParam != nil || node.MongoDBParam != nil || node.DataStreamParam != nil || node.ForeignParam != nil {
+	if node.Param != nil || node.IcebergParam != nil || node.MongoDBParam != nil || node.DataStreamParam != nil || node.ForeignParam != nil || node.KafkaParam != nil {
 		ctx.WriteString(" external")
 	}
 	ctx.WriteString(" table")
@@ -1028,6 +1029,10 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.ForeignParam != nil {
 		ctx.WriteByte(' ')
 		node.ForeignParam.Format(ctx)
+	}
+	if node.KafkaParam != nil {
+		ctx.WriteByte(' ')
+		node.KafkaParam.Format(ctx)
 	}
 
 	if node.PartitionOption != nil {

@@ -191,6 +191,16 @@ type Session struct {
 	// not silently re-admitted into a cache nobody will ever clean up again.
 	foreignConnsClosed bool
 
+	// lastKafkaMessageID is the offset of the last message a completed Kafka
+	// external-table scan returned in this session; read back by
+	// LAST_KAFKA_MESSAGE_ID(). See session_kafka.go.
+	lastKafkaMessageMu  sync.Mutex
+	lastKafkaMessageID  int64
+	lastKafkaMessageSet bool
+	// kafkaProgressQueue holds drained Kafka scans' deferred progress
+	// finalizers until the statement terminal (see session_kafka.go).
+	kafkaProgressQueue []func(publish bool)
+
 	// rewriteEnabled caches the enable_remap_hint system variable state
 	// to avoid expensive GetSessionSysVar calls on every SQL query
 	rewriteEnabled atomic.Bool
@@ -940,6 +950,8 @@ func (ses *Session) Close() {
 	// Close any esql_tvf / sql_tvf foreign-data connections opened by this
 	// session so their sockets and driver pools do not outlive it.
 	ses.closeForeignConns()
+	// a session closing mid-statement must not advance the kafka chain
+	ses.FinalizeKafkaProgress(false)
 
 	ses.mu.Lock()
 	defer ses.mu.Unlock()

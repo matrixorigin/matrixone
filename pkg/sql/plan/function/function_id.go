@@ -813,9 +813,12 @@ const (
 	SQL_TVF_CONNECT     = 565
 	SQL_TVF_DISCONNECT  = 566
 
+	// Kafka external table (issue #27518).
+	LAST_KAFKA_MESSAGE_ID = 567
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 567
+	FUNCTION_END_NUMBER = 568
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1134,6 +1137,7 @@ var functionIdRegister = map[string]int32{
 	"esql_tvf_disconnect":            ESQL_TVF_DISCONNECT,
 	"sql_tvf_connect":                SQL_TVF_CONNECT,
 	"sql_tvf_disconnect":             SQL_TVF_DISCONNECT,
+	"last_kafka_message_id":          LAST_KAFKA_MESSAGE_ID,
 	"is_uuid":                        IS_UUID,
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
