@@ -397,6 +397,16 @@ func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
 	}
 }
 
+func TestPreparedRuntimeSpecializationCoversResultDomainAggregates(t *testing.T) {
+	for _, name := range []string{
+		"min", "max", "any_value", "max_by", "max_by_non_null",
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, preparedRuntimeSpecializationFunction(name))
+		})
+	}
+}
+
 func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) {
 	predicateOnly := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ''x'' where ? = ?")

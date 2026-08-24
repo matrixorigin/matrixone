@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
@@ -345,4 +347,66 @@ func TestCompilerContextBuildTableDefByMoColumnsNoSuchTable(t *testing.T) {
 	require.Nil(t, actual)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+}
+
+func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		databaseErr error
+		wantMissing bool
+	}{
+		{
+			name:        "ExpectedEOB is a missing database",
+			databaseErr: moerr.GetOkExpectedEOB(),
+			wantMissing: true,
+		},
+		{
+			name:        "unexpected database error is preserved",
+			databaseErr: moerr.NewInternalErrorNoCtx("database lookup failed"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, tc.databaseErr)
+
+			c := &compilerContext{
+				defaultDB: "db",
+				engine:    eng,
+				proc:      proc,
+			}
+			obj, tableDef, err := c.Resolve("db", "missing", nil)
+			if tc.wantMissing {
+				require.NoError(t, err)
+				require.Nil(t, obj)
+				require.Nil(t, tableDef)
+				return
+			}
+			require.ErrorIs(t, err, tc.databaseErr)
+			require.Nil(t, obj)
+			require.Nil(t, tableDef)
+		})
+	}
+}
+
+func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "gone", gomock.Any()).
+		Return(nil, moerr.GetOkExpectedEOB())
+	c := &compilerContext{engine: eng, proc: proc}
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"drop table if exists gone.__mo_tmp_table", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := plan.BuildPlan(c, stmt, false)
+	require.NoError(t, err)
+	drop := p.GetDdl().GetDropTable()
+	require.Equal(t, "gone", drop.GetDatabase())
+	require.Equal(t, "__mo_tmp_table", drop.GetTable())
+	require.Nil(t, drop.GetTableDef())
 }

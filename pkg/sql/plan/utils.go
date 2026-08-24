@@ -3519,6 +3519,10 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	if isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) {
 		return true
 	}
+	// Result-domain-polymorphic functions must stay on the specialization path
+	// even when their overload itself is stable. For example, max_by returns
+	// the type of its first argument, so a binary parameter can change the
+	// result-column type from the prepare-time placeholder domain.
 	switch name {
 	case "case", "greatest", "least", "sum", "avg", "min", "max", "any_value", "max_by", "max_by_non_null",
 		"first_value", "last_value", "lag", "lead", "ntile", "nth_value", "sleep",

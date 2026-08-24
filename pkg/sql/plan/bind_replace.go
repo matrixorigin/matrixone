@@ -262,7 +262,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		oldScanNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     tableDef,
+			TableDef:     CloneTableDefForPlan(tableDef, true),
 			ObjRef:       objRef,
 			BindingTags:  []int32{oldScanTag},
 			ScanSnapshot: bindCtx.snapshot,
