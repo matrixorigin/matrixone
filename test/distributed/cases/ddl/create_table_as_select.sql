@@ -1489,3 +1489,24 @@ show tables like 'explicit_not_null_reject';
 
 select table_name, column_name, is_nullable from information_schema.columns where table_schema = 'ctas_null_extension_26828' and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
 drop database ctas_null_extension_26828;
+
+-- CTAS must not copy AUTO_INCREMENT from a source column.
+drop database if exists ctas_auto_increment_24436;
+create database ctas_auto_increment_24436;
+use ctas_auto_increment_24436;
+create table source_ai (id int primary key auto_increment, payload varchar(20));
+insert into source_ai(payload) values ('one'), ('two');
+create table target_ctas as select id, payload from source_ai;
+select count(*) from information_schema.columns
+where table_schema = database() and table_name = 'source_ai'
+  and column_name = 'id' and extra = 'auto_increment';
+select count(*) from information_schema.columns
+where table_schema = database() and table_name = 'target_ctas'
+  and column_name = 'id' and extra = 'auto_increment';
+insert into target_ctas(payload) values ('omitted-id');
+select id, payload from target_ctas where payload = 'omitted-id';
+create table target_explicit (id int not null default 42, payload varchar(20))
+as select id, payload from source_ai;
+insert into target_explicit(payload) values ('explicit-default');
+select id, payload from target_explicit where payload = 'explicit-default';
+drop database ctas_auto_increment_24436;
