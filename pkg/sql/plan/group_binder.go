@@ -245,6 +245,8 @@ func canonicalizeMedianSubquery(
 		parentBuilder.isPrepareStatement, parentBuilder.skipStats)
 	tempBuilder.nextBindTag = parentBuilder.nextBindTag
 	subCtx := NewBindContext(tempBuilder, parentCtx)
+	stateSnapshot := snapshotMedianBindState(parentCtx)
+	defer restoreMedianBindState(stateSnapshot)
 	var err error
 	switch subquery := node.Select.(type) {
 	case *tree.Select:
@@ -266,6 +268,161 @@ func canonicalMedianNodeKey(node tree.NodeFormatter) string {
 		return display
 	}
 	return identity + "\x00" + display
+}
+
+type medianCTEStateSnapshot struct {
+	isRecursive  bool
+	occurrences  []cteOccurrence
+	hasNestedRef bool
+	hasNestedUse bool
+}
+
+type medianBindStateSnapshot struct {
+	contexts map[*BindContext]medianBindContextState
+	ctes     map[*CTERef]medianCTEStateSnapshot
+}
+
+type medianBindContextState struct {
+	views            []string
+	cteByName        map[string]*CTERef
+	cteByNameEntries map[string]*CTERef
+	boundCtes        map[string]*CTERef
+	boundCteEntries  map[string]*CTERef
+	boundViews       map[[2]string]*tree.CreateView
+	boundViewEntries map[[2]string]*tree.CreateView
+	cteState         CteBindState
+}
+
+func cloneMedianStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string(nil), values...)
+}
+
+func cloneMedianCTEMap(values map[string]*CTERef) map[string]*CTERef {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]*CTERef, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneMedianViewMap(values map[[2]string]*tree.CreateView) map[[2]string]*tree.CreateView {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[[2]string]*tree.CreateView, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func restoreMedianCTEMap(original, entries map[string]*CTERef) map[string]*CTERef {
+	if original == nil {
+		return nil
+	}
+	for key := range original {
+		delete(original, key)
+	}
+	for key, value := range entries {
+		original[key] = value
+	}
+	return original
+}
+
+func restoreMedianViewMap(original, entries map[[2]string]*tree.CreateView) map[[2]string]*tree.CreateView {
+	if original == nil {
+		return nil
+	}
+	for key := range original {
+		delete(original, key)
+	}
+	for key, value := range entries {
+		original[key] = value
+	}
+	return original
+}
+
+// snapshotMedianBindState records mutable state reachable through the real
+// parent context.  Validation binds use a separate QueryBuilder, but CTE and
+// view resolution deliberately walks the real parent chain.  Without this
+// snapshot, discarded validation consumers alter CTE reuse decisions in the
+// actual plan.
+func snapshotMedianBindState(root *BindContext) *medianBindStateSnapshot {
+	snapshot := &medianBindStateSnapshot{
+		contexts: make(map[*BindContext]medianBindContextState),
+		ctes:     make(map[*CTERef]medianCTEStateSnapshot),
+	}
+	var visitContext func(*BindContext)
+	var visitCTE func(*CTERef)
+	visitContext = func(ctx *BindContext) {
+		if ctx == nil {
+			return
+		}
+		if _, exists := snapshot.contexts[ctx]; exists {
+			return
+		}
+		snapshot.contexts[ctx] = medianBindContextState{
+			views:            cloneMedianStrings(ctx.views),
+			cteByName:        ctx.cteByName,
+			cteByNameEntries: cloneMedianCTEMap(ctx.cteByName),
+			boundCtes:        ctx.boundCtes,
+			boundCteEntries:  cloneMedianCTEMap(ctx.boundCtes),
+			boundViews:       ctx.boundViews,
+			boundViewEntries: cloneMedianViewMap(ctx.boundViews),
+			cteState:         ctx.cteState,
+		}
+		for _, cte := range ctx.cteByName {
+			visitCTE(cte)
+		}
+		for _, cte := range ctx.boundCtes {
+			visitCTE(cte)
+		}
+		visitCTE(ctx.cteState.cte)
+		visitContext(ctx.cteState.recursiveRefQueryBlock)
+		visitContext(ctx.parent)
+	}
+	visitCTE = func(cte *CTERef) {
+		if cte == nil {
+			return
+		}
+		if _, exists := snapshot.ctes[cte]; exists {
+			return
+		}
+		snapshot.ctes[cte] = medianCTEStateSnapshot{
+			isRecursive:  cte.isRecursive,
+			occurrences:  append([]cteOccurrence(nil), cte.occurrences...),
+			hasNestedRef: cte.hasNestedRef,
+			hasNestedUse: cte.hasNestedUse,
+		}
+		visitContext(cte.declarationCtx)
+	}
+	visitContext(root)
+	return snapshot
+}
+
+func restoreMedianBindState(snapshot *medianBindStateSnapshot) {
+	if snapshot == nil {
+		return
+	}
+	for ctx, state := range snapshot.contexts {
+		ctx.views = cloneMedianStrings(state.views)
+		ctx.cteByName = restoreMedianCTEMap(state.cteByName, state.cteByNameEntries)
+		ctx.boundCtes = restoreMedianCTEMap(state.boundCtes, state.boundCteEntries)
+		ctx.boundViews = restoreMedianViewMap(state.boundViews, state.boundViewEntries)
+		ctx.cteState = state.cteState
+	}
+	for cte, state := range snapshot.ctes {
+		cte.isRecursive = state.isRecursive
+		cte.occurrences = append([]cteOccurrence(nil), state.occurrences...)
+		cte.hasNestedRef = state.hasNestedRef
+		cte.hasNestedUse = state.hasNestedUse
+	}
 }
 
 // canonicalGroupByAstKey folds identifiers and function names through their

@@ -207,6 +207,42 @@ func TestBuildMedianWithinGroupRejectsScopedOrMismatchedQualifications(t *testin
 	}
 }
 
+func TestMedianWithinGroupValidationDoesNotLeakCTEConsumers(t *testing.T) {
+	sql := `with totals as (
+  select a, count(*) as n
+  from select_test.bind_select
+  group by a
+)
+select median((select max(n) from totals))
+within group (order by (select max(n) from totals))
+from totals x`
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	selectStmt, ok := stmt.(*tree.Select)
+	require.True(t, ok)
+
+	var bindCtx *BindContext
+	_, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
+		planpb.Query_SELECT,
+		NewMockCompilerContext(true),
+		selectStmt,
+		false,
+		true,
+		func(*Query) error { return nil },
+		func(ctx *BindContext) { bindCtx = ctx },
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, bindCtx)
+	cteRef := bindCtx.cteByName["totals"]
+	require.NotNil(t, cteRef)
+	// Only the two scalar subqueries are real consumers.  The equality
+	// validation binds cloned subqueries, but must not append those temporary
+	// consumers to the shared CTE reference.
+	require.Len(t, cteRef.occurrences, 2)
+}
+
 func TestBuildMedianWithinGroupRejectsWindowForm(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select median(a) within group (order by a) over () from select_test.bind_select", 1)
