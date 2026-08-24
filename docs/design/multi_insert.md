@@ -245,6 +245,108 @@ one table (merged via UNION ALL) has no dispatch at all. The real extra cost
 of N targets is CPU — the source rows are pushed through N filter/project
 stages — not storage.
 
+### Alternative considered and not chosen: chained inserts in one pipeline
+
+An alternative design is to have no sink at all: put every target into a
+**single pipeline** and stream each batch through the targets in turn, each
+one writing the rows it wants and passing the batch on. In its literal form
+this is `Insert(t1) → Insert(t2) → ... → Insert(tN)`, with `INSERT FIRST`
+dropping a row from the batch once a target has taken it and `INSERT ALL`
+passing the whole batch untouched.
+
+In MatrixOne terms a "target" is not one operator but `PROJECT → PreInsert →
+Lock → DEDUP join(s) → MULTI_UPDATE`, so the practical form of this idea is
+the shape MERGE INTO already uses: **one `MULTI_UPDATE` node holding every
+target as an update context, with one selector column per target**:
+
+```
+Source
+  -> PROJECT   (every target's cast/default/serial columns side by side,
+                plus sel_1 .. sel_N; sel_i = cond_i for ALL,
+                cond_i AND NOT (sel_1 OR .. OR sel_{i-1}) for FIRST,
+                NOT (sel_1 OR .. OR sel_N) for ELSE)
+  -> PreInsert x N  -> Lock x N
+  -> DEDUP join per (target, key), probing only the rows with sel_i
+  -> MULTI_UPDATE { ctx_1 .. ctx_N, ctx_i filtered by sel_i }
+```
+
+`Multi Update` already routes rows to contexts by selector
+(`filterTargetRows`, `TargetUpdateCtxIdx`, used by MERGE), keys its in-batch
+dedup (`seenTargetRows`) by table id, and keeps per-table S3 sinkers, so most
+of the operator plumbing exists.
+
+Benefits over the sink design:
+
+- **Conditions evaluated once per row.** Today target *i* re-evaluates
+  `cond_1 .. cond_{i-1}` as `IS NOT TRUE` filters, so `INSERT FIRST` costs
+  O(rows × branches) condition evaluations; selectors make it O(rows).
+- **No fan-out machinery.** One goroutine and no channel handoff per batch
+  per target; the batch flows through once. Lower per-row overhead,
+  especially with many small targets.
+- **Natural FIRST/ALL/ELSE.** Routing is data (selector columns) instead of
+  plan structure, and a row never needs to be physically removed from a
+  batch — each context just ignores rows whose selector is false.
+- **Same-table clauses dedup for free** within the operator: contexts for
+  the same table share `seenTargetRows`.
+
+Costs and risks, which are why it was not chosen for the first version:
+
+- **The "no memory copy" gain is smaller than it looks.** The sink design
+  already shares one ref-counted batch across all consumers (the dispatch
+  spool duplicates nothing), and the write path copies in both designs:
+  `insert_main_table` extends every row into a per-table off-heap buffer,
+  and the S3 writer into per-table sorted sinkers, before writing. The chain
+  saves a channel handoff per batch, not a data copy. Physically dropping
+  rows for FIRST would in fact *add* a copy (the batch may still be pinned
+  by the S3 writer or the spool, so it cannot be shrunk in place).
+- **Loses cross-target parallelism.** The sink design runs N target
+  pipelines concurrently — dedup probes, locking, sorting and encoding for
+  S3 overlap across targets. One pipeline does the N targets sequentially
+  per batch (its S3-mode `mcpu` split still parallelizes within the
+  pipeline). Which effect dominates is a benchmark question, not obvious.
+- **One S3-mode decision for all targets.** The write mode is chosen per
+  `MULTI_UPDATE` node from the planner's estimate. With one node, the skew
+  case (300k rows to one table, 3 to another) puts the 3-row target on the
+  S3 path and writes tiny objects — a condition MatrixOne explicitly flags
+  (`LogCNFlushSmallObjs`). Per-context write modes would have to be added
+  to the writer.
+- **Long, wide pipelines.** N targets × k keys means N·k chained DEDUP hash
+  builds, N locks, N PreInserts and a projection carrying every target's
+  columns side by side; ten targets with two unique keys each is twenty
+  chained joins in one scope. The per-target shape keeps each target's
+  runtime-filter, shuffle and remap handling identical to a single INSERT.
+- **Same table in several clauses still multiplies rows.** With `INSERT
+  ALL`, one source row can legitimately become two rows of the same table;
+  selector routing is one-row-in/one-row-out per context, so such clauses
+  remain separate contexts and the widening logic stays.
+- **Fulltext / IVF maintenance still needs a materialized row image**, so
+  the sink machinery cannot be removed anyway.
+- **It is operator and compiler work, not just planner work.** The sink
+  design touched no operator and inherits every single-table behaviour by
+  construction, which is what made it verifiable quickly (415 BVT
+  statements). The MERGE-style node needs multi-table selectors on the
+  insert path of `Multi Update`, per-context S3 modes, pass-through of the
+  pre-cast columns, and re-verification of the single-table INSERT path
+  that shares the operator. The literal "insert node streaming into the
+  next insert node" variant is weaker still: `Multi Update` in S3 mode
+  emits flush-info batches to a merge scope, and an operator has one output
+  stream, so data cannot continue to the next target past that merge
+  without restructuring flush-info collection.
+
+**Decision: the sink / per-target-pipeline design is what is implemented.**
+It was chosen because it reuses the single-table insert tail unchanged
+(correctness inherited, no operator changes), gives per-target parallelism
+and per-target S3 decisions, and handles skew, same-table clauses and
+irregular indexes with the machinery the engine already has. The chained,
+selector-based design remains the natural evolution if profiling shows the
+per-target fan-out or the repeated condition evaluation to be a bottleneck:
+it can be added as a second planning mode for targets with only regular
+indexes (falling back to the sink shape for fulltext/IVF targets and
+same-table clauses), and the BVT suite is design-independent, so it would
+validate that mode as-is. Any such switch should be driven by a benchmark on
+the `multi_insert_big.sql` / `multi_insert_skew.sql` shapes — many small
+targets versus few big indexed targets — rather than by reasoning alone.
+
 ---
 
 ## Implementation map
@@ -573,6 +675,8 @@ On the isolated single-node server:
 
 ## Possible follow-ups
 
+- The chained, selector-based single-pipeline design described above, as a
+  benchmark-driven second planning mode.
 - `INSERT OVERWRITE ALL` (Snowflake truncates targets first).
 - Allow a parenthesized source after a bare `INTO` via a lexer-level
   lookahead instead of the `%prec` resolution.
