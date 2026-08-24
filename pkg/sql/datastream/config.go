@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 
@@ -41,12 +40,6 @@ const (
 	optionTable   = "table"
 	optionRecheck = "recheck"
 	optionAPIKey  = "apikey"
-
-	// apiKeyEnvPrefix marks an apikey value as a reference to a process
-	// environment variable resolved on the CN at scan time, instead of an
-	// inline secret. Using it keeps the actual secret out of the catalog
-	// (rel_createsql), the plan, and statement logs.
-	apiKeyEnvPrefix = "env:"
 )
 
 // Config is the validated content of the WITH (...) option list.
@@ -69,23 +62,18 @@ func (c Config) Address() string {
 	return net.JoinHostPort(c.Server, strconv.Itoa(int(c.Port)))
 }
 
-// ResolveAPIKey resolves an apikey option value into the secret to present to
-// the server. A value "env:NAME" is a reference resolved from the process
-// environment at scan time (so the secret is never stored in the catalog,
-// plan, or logs); any other value is used literally. "" stays "" (no key).
-func ResolveAPIKey(ctx context.Context, raw string) (string, error) {
-	if !strings.HasPrefix(raw, apiKeyEnvPrefix) {
-		return raw, nil
+// RejectEnvAPIKeyRef fails closed on the retired "env:NAME" apikey syntax.
+// Query processing no longer reads the CN process environment, so an env:
+// reference cannot be resolved; erroring beats silently sending the literal
+// "env:NAME" string as the credential (a pre-existing table created with the
+// old syntax must be recreated with the apikey value itself — SHOW CREATE
+// never emits the apikey, so nothing else needs migrating).
+func RejectEnvAPIKeyRef(ctx context.Context, raw string) error {
+	if strings.HasPrefix(raw, "env:") {
+		return moerr.NewInvalidInput(ctx,
+			"datastream: 'env:NAME' apikey references are no longer supported (query processing does not read the CN process environment); recreate the table with the apikey value itself")
 	}
-	name := strings.TrimPrefix(raw, apiKeyEnvPrefix)
-	if name == "" {
-		return "", moerr.NewInvalidInput(ctx, "datastream apikey 'env:' reference has no variable name")
-	}
-	value := os.Getenv(name)
-	if value == "" {
-		return "", moerr.NewInvalidInputf(ctx, "datastream apikey env var %q is unset or empty", name)
-	}
-	return value, nil
+	return nil
 }
 
 // ParseTableOptions validates the WITH (...) list of ENGINE = DATASTREAM.
@@ -120,6 +108,9 @@ func ParseTableOptions(ctx context.Context, param *tree.DataStreamTableParam) (C
 			}
 			cfg.Recheck = recheck
 		case optionAPIKey:
+			if err := RejectEnvAPIKeyRef(ctx, value); err != nil {
+				return Config{}, err
+			}
 			cfg.APIKey = value
 		default:
 			return Config{}, moerr.NewInvalidInputf(ctx, "unknown datastream option '%s' (supported: server, port, table, recheck, apikey)", key)
