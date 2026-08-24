@@ -1855,6 +1855,12 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		selfRef := mock.ctxt.tables["self_ref"]
 		selfRef.Fkeys[0].OnUpdate = planpb.ForeignKeyDef_CASCADE
 		emp := mock.ctxt.tables["emp"]
+		const empTableID = uint64(88999)
+		// RefChildTbls reserves 0 as the self-reference sentinel.
+		emp.TblId = empTableID
+		mock.ctxt.objects["emp"].Obj = int64(empTableID)
+		mock.ctxt.id2name[empTableID] = "emp"
+		require.Equal(t, empTableID, emp.TblId)
 		empDeptno := emp.Fkeys[0].Cols[0]
 		selfParentID := selfRef.Fkeys[0].Cols[0]
 		emp.Fkeys = append(emp.Fkeys, &planpb.ForeignKeyDef{
