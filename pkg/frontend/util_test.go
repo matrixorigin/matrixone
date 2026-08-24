@@ -1159,6 +1159,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	params1 := vector.NewVec(types.T_text.ToType())
+	defer params1.Free(testProc.GetMPool())
 	for i := 0; i < 3; i++ {
 		err = vector.AppendBytes(params1, []byte{}, false, testProc.GetMPool())
 		assert.NoError(t, err)

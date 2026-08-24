@@ -506,6 +506,12 @@ func (c *compilerContext) getRelation(
 
 	db, err := c.engine.Database(ctx, dbName, txnOpt)
 	if err != nil {
+		// A database that is not visible at this transaction's snapshot is
+		// indistinguishable from a missing database for name resolution. Let
+		// callers such as DROP TABLE IF EXISTS build their normal no-op plan.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return ctx, nil, nil
+		}
 		return nil, nil, err
 	}
 

@@ -1647,6 +1647,114 @@ func TestJsonSetCheckFn(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestJsonArrayAppend(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("string document", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{
+					`{"arr":[1,2]}`,
+					`{"value":1}`,
+					`{"arr":[1]}`,
+					`{"a":1}`,
+				}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{
+					"$.arr", "$.value", "$.missing", "$",
+				}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, nil),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonArrayAppend, nil)
+
+		require.Equal(t, `{"arr": [1, 2, 3]}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `{"value": [1, 3]}`, jsonVectorRowString(t, vec, 1))
+		require.Equal(t, `{"arr": [1]}`, jsonVectorRowString(t, vec, 2))
+		require.Equal(t, `[{"a": 1}, 3]`, jsonVectorRowString(t, vec, 3))
+	})
+
+	t.Run("json document and left to right pairs", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{mustJsonBinaryString(t, `{"arr":[]}`)}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.arr"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.arr"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2}, nil),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonArrayAppend, nil)
+
+		require.Equal(t, `{"arr": [1, 2]}`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("sql null value and json null document", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{
+					`{"arr":[]}`,
+					`null`,
+				}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{
+					"$.arr",
+					"$.missing",
+				}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 2}, []bool{true, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonArrayAppend, nil)
+
+		require.True(t, vec.IsNull(0))
+		require.False(t, vec.IsNull(1))
+		require.Equal(t, `null`, jsonVectorRowString(t, vec, 1))
+	})
+
+	t.Run("rejects wildcard paths", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_array_append rejects wildcard path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"arr":[1]}`}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.*"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonSet().buildJsonArrayAppend)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
+func TestJsonArrayAppendCheckFn(t *testing.T) {
+	ctx := context.Background()
+	resolved, err := GetFunctionByName(ctx, "json_array_append", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(JSON_ARRAY_APPEND), resolved.fid)
+	require.Equal(t, types.T_json, resolved.retType.Oid)
+
+	_, err = GetFunctionByName(ctx, "json_array_append", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_any.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_array_append", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_array_append", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.Error(t, err)
+}
+
 func TestJsonContainsCheckFn(t *testing.T) {
 	ctx := context.Background()
 
@@ -2788,6 +2896,23 @@ func TestJsonFunctionsRespectSelectList(t *testing.T) {
 
 		require.True(t, vec.IsNull(0))
 		require.Equal(t, `{"a": 2}`, jsonVectorRowString(t, vec, 1))
+	})
+
+	t.Run("json_array_append", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `{"a":[1]}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`bad path`, `$.a`},
+					[]bool{false, false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonArrayAppend, selectList)
+
+		require.True(t, vec.IsNull(0))
+		require.Equal(t, `{"a": [1, 2]}`, jsonVectorRowString(t, vec, 1))
 	})
 
 	t.Run("json_schema_valid", func(t *testing.T) {

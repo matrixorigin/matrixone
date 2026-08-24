@@ -657,6 +657,22 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNotSupported(ctx.GetContext(),
 			"ALTER TABLE on a MongoDB external table; drop and recreate the external table to change its schema")
 	}
+	// The copy-based ALTER path cannot work for envelope-backed external
+	// tables: it recreates the table from SHOW CREATE output (whose inline
+	// config/secret is redacted) and would run the foreign/default query for
+	// the data-copy step. Same rationale as the MongoDB guard above.
+	if _, isForeign, err := IsForeignTableDef(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	} else if isForeign {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on an ESQL/SQL external table; drop and recreate the external table to change its schema")
+	}
+	if _, isDataStream, err := IsDataStreamTableDef(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	} else if isDataStream {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a datastream external table; drop and recreate the external table to change its schema")
+	}
 
 	if tableDef.IsTemporary {
 		// Only allow a safe subset of alter operations on temporary tables.
