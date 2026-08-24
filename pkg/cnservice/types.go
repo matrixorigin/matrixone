@@ -799,12 +799,14 @@ type service struct {
 	viewMetadataCatalogFenceMu      sync.Mutex
 	viewMetadataCatalogFenceReady   atomic.Bool
 	viewMetadataIngressReady        atomic.Bool
+	viewMetadataGenerationRevoked   atomic.Bool
 	viewMetadataRevocationOnce      sync.Once
 	// viewMetadataCloseFn is a deterministic test hook for the asynchronous
 	// close request issued after synchronous ingress revocation.
 	viewMetadataCloseFn func() error
 	aicm                *defines.AutoIncrCacheManager
 	lifecycleMu         sync.Mutex
+	frontendLifecycleMu sync.Mutex
 	lifecycle           serviceLifecycleState
 	closeOnce           sync.Once
 	closeErr            error

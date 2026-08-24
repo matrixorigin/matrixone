@@ -26,6 +26,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -35,18 +36,29 @@ import (
 )
 
 type admissionRevocationMOServer struct {
-	stopped chan struct{}
-	once    sync.Once
+	stopped      chan struct{}
+	startEntered chan struct{}
+	releaseStart chan struct{}
+	startOnce    sync.Once
+	stopOnce     sync.Once
+	startCount   atomic.Int32
 }
 
 func (s *admissionRevocationMOServer) GetRoutineManager() *frontend.RoutineManager {
 	return nil
 }
 
-func (s *admissionRevocationMOServer) Start() error { return nil }
+func (s *admissionRevocationMOServer) Start() error {
+	s.startCount.Add(1)
+	if s.startEntered != nil {
+		s.startOnce.Do(func() { close(s.startEntered) })
+		<-s.releaseStart
+	}
+	return nil
+}
 
 func (s *admissionRevocationMOServer) Stop() error {
-	s.once.Do(func() { close(s.stopped) })
+	s.stopOnce.Do(func() { close(s.stopped) })
 	return nil
 }
 
@@ -155,6 +167,7 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
 		viewMetadataCloseFn: func() error {
+			_ = mo.Stop()
 			close(closeRequested)
 			return errors.New("expected close error")
 		},
@@ -179,14 +192,14 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 		t.Fatal("active pipeline was not canceled after generation revocation")
 	}
 	select {
-	case <-mo.stopped:
-	default:
-		t.Fatal("SQL frontend and active direct sessions were not stopped")
-	}
-	select {
 	case <-closeRequested:
 	case <-time.After(time.Second):
 		t.Fatal("superseded CN did not request full service closure")
+	}
+	select {
+	case <-mo.stopped:
+	default:
+		t.Fatal("serialized full closure did not stop SQL frontend")
 	}
 	_, _, admitted = s.admitPipelineHandler(context.Background())
 	require.False(t, admitted)
@@ -195,6 +208,54 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 
 	releasePipeline()
 	releaseQuery()
+}
+
+func TestCNGenerationRevocationCancelsIngressStart(t *testing.T) {
+	mo := &admissionRevocationMOServer{
+		stopped:      make(chan struct{}),
+		startEntered: make(chan struct{}),
+		releaseStart: make(chan struct{}),
+	}
+	closeRequested := make(chan struct{})
+	s := &service{
+		cfg:                             &Config{UUID: "revoked-during-start"},
+		logger:                          zap.NewNop(),
+		mo:                              mo,
+		cancelMoServerFunc:              func() {},
+		viewMetadataAdmissionGeneration: 8,
+		viewMetadataCloseFn: func() error {
+			close(closeRequested)
+			return nil
+		},
+	}
+	startDone := make(chan error, 1)
+	go func() { startDone <- s.startFrontendUnlessViewMetadataGenerationRevoked() }()
+	<-mo.startEntered
+	revokeDone := make(chan struct{})
+	go func() {
+		s.revokeViewMetadataGeneration(9)
+		close(revokeDone)
+	}()
+	require.Eventually(t, s.viewMetadataGenerationRevoked.Load, time.Second, time.Millisecond)
+	require.False(t, s.viewMetadataIngressReady.Load())
+	close(mo.releaseStart)
+
+	err := <-startDone
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
+	<-revokeDone
+	require.Equal(t, int32(1), mo.startCount.Load(), "revocation must not restart frontend")
+	require.False(t, s.viewMetadataIngressReady.Load())
+	select {
+	case <-mo.stopped:
+	default:
+		t.Fatal("revocation did not stop frontend after the in-flight Start completed")
+	}
+	select {
+	case <-closeRequested:
+	case <-time.After(time.Second):
+		t.Fatal("revocation did not request serialized full closure")
+	}
 }
 
 func TestCNViewMetadataAdmissionWaitsForAuthoritativeResponse(t *testing.T) {

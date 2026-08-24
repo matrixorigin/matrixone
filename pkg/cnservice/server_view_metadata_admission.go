@@ -119,11 +119,14 @@ func (s *service) applyViewMetadataAdmission(
 // runs outside the heartbeat stopper task to avoid waiting for itself.
 func (s *service) revokeViewMetadataGeneration(authoritative uint64) {
 	s.viewMetadataRevocationOnce.Do(func() {
+		s.viewMetadataGenerationRevoked.Store(true)
 		s.viewMetadataIngressReady.Store(false)
 		_ = s.closePipelineAdmission()
 		s.queryWork.beginClose()
+		// Serialize physical frontend shutdown with MOServer.Start without waiting
+		// for the broader lifecycleMu held by the complete Start sequence.
 		if s.mo != nil {
-			if err := s.stopFrontend(); err != nil && s.logger != nil {
+			if err := s.stopFrontendSerialized(); err != nil && s.logger != nil {
 				s.logger.Error("failed to stop superseded CN frontend",
 					zap.Uint64("local-generation", s.viewMetadataAdmissionGeneration),
 					zap.Uint64("authoritative-generation", authoritative),
