@@ -5140,6 +5140,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		expandedSelectClause = selectClause
+		if err = validateQueryBlockWindowCount(builder.GetContext(), selectClause, astOrderBy); err != nil {
+			return 0, err
+		}
 		selectClause, astOrderBy, err = expandNamedWindowReferences(builder.GetContext(), selectClause, astOrderBy)
 		if err != nil {
 			return 0, err

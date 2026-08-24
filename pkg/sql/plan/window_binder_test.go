@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -671,6 +672,117 @@ func TestBuildPlanNamedWindows(t *testing.T) {
 			select n_nationkey
 			from c
 			window win as (order by (select max(n_nationkey) from c))`)
+		require.NoError(t, err)
+	})
+}
+
+func TestPreparedNamedWindowParameterMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "used",
+			sql:  "select sum(n_nationkey) over w from nation window w as (order by n_nationkey rows ? preceding)",
+		},
+		{
+			name: "unused",
+			sql:  "select 1 from nation window w as (order by n_nationkey rows ? preceding)",
+		},
+		{
+			name: "reused by multiple functions",
+			sql:  "select sum(n_nationkey) over w, avg(n_nationkey) over w from nation window w as (order by n_nationkey rows ? preceding)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(
+				NewMockOptimizer(false),
+				t,
+				"prepare named_window_param from '"+test.sql+"'",
+			)
+			require.NoError(t, err)
+			prepare := logicPlan.GetDcl().GetPrepare()
+			require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
+			require.Len(t, prepare.Plan.GetQuery().Params, 1)
+			require.Equal(t, int32(0), prepare.Plan.GetQuery().Params[0].GetP().Pos)
+		})
+	}
+
+	t.Run("nested definitions are globally deduplicated", func(t *testing.T) {
+		logicPlan, err := runOneStmt(
+			NewMockOptimizer(false),
+			t,
+			`prepare nested_named_window_param from '
+				select 1 from nation
+				window outer_w as (order by (
+					select 1 from nation
+					window inner_w as (order by n_nationkey rows ? preceding)
+				))'`,
+		)
+		require.NoError(t, err)
+		prepare := logicPlan.GetDcl().GetPrepare()
+		require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
+		require.Len(t, prepare.Plan.GetQuery().Params, 1)
+	})
+}
+
+func namedWindowsSQL(prefix string, count int) string {
+	var sql strings.Builder
+	for i := 0; i < count; i++ {
+		if i > 0 {
+			sql.WriteString(", ")
+		}
+		sql.WriteString(prefix)
+		sql.WriteString(strconv.Itoa(i))
+		sql.WriteString(" as ()")
+	}
+	return sql.String()
+}
+
+func TestNamedWindowLimitPerQueryBlock(t *testing.T) {
+	t.Run("127 named windows", func(t *testing.T) {
+		_, err := buildNamedWindowPlan(t, "select 1 from nation window "+namedWindowsSQL("w", 127))
+		require.NoError(t, err)
+	})
+
+	t.Run("128 named windows", func(t *testing.T) {
+		_, err := buildNamedWindowPlan(t, "select 1 from nation window "+namedWindowsSQL("w", 128))
+		require.Error(t, err)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok)
+		require.Equal(t, moerr.ER_TOO_MANY_WINDOWS, moErr.MySQLCode())
+		require.ErrorContains(t, err, "Too many windows in SELECT: 128. Maximum allowed is 127")
+	})
+
+	t.Run("named plus implicit", func(t *testing.T) {
+		_, err := buildNamedWindowPlan(t,
+			"select row_number() over () from nation window "+namedWindowsSQL("w", 126))
+		require.NoError(t, err)
+		_, err = buildNamedWindowPlan(t,
+			"select row_number() over (), rank() over () from nation window "+namedWindowsSQL("w", 126))
+		require.NoError(t, err)
+
+		_, err = buildNamedWindowPlan(t,
+			"select row_number() over (), rank() over () from nation window "+namedWindowsSQL("w", 127))
+		require.ErrorContains(t, err, "Too many windows in SELECT: 128. Maximum allowed is 127")
+	})
+
+	t.Run("named references reuse but parenthesized references are implicit", func(t *testing.T) {
+		_, err := buildNamedWindowPlan(t,
+			"select row_number() over w0 from nation window "+namedWindowsSQL("w", 127))
+		require.NoError(t, err)
+
+		_, err = buildNamedWindowPlan(t,
+			"select row_number() over (w0) from nation window "+namedWindowsSQL("w", 127))
+		require.ErrorContains(t, err, "Too many windows in SELECT: 128. Maximum allowed is 127")
+	})
+
+	t.Run("nested selects have independent limits", func(t *testing.T) {
+		sql := "select (select 1 from nation window " + namedWindowsSQL("inner_w", 127) +
+			") from nation window " + namedWindowsSQL("outer_w", 127)
+		_, err := buildNamedWindowPlan(t, sql)
 		require.NoError(t, err)
 	})
 }

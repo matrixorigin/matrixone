@@ -41,6 +41,62 @@ type windowFuncExprBinder interface {
 	GetContext() context.Context
 }
 
+const maxWindowsPerQueryBlock = 127
+
+func validateQueryBlockWindowCount(ctx context.Context, clause *tree.SelectClause, orderBy tree.OrderBy) error {
+	count := len(clause.Windows)
+	implicitWindows := make(map[string]struct{})
+	countExpr := func(expr tree.Expr) {
+		if expr == nil || count > maxWindowsPerQueryBlock {
+			return
+		}
+		walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+			if _, subquery := candidate.(*tree.Subquery); subquery {
+				return false
+			}
+			if function, ok := candidate.(*tree.FuncExpr); ok && function.WindowSpec != nil {
+				// OVER name reuses a named window. OVER (...) defines an
+				// additional implicit window, including OVER (name ...).
+				if function.WindowSpec.RefName == nil || !function.WindowSpec.ReferencedOnly {
+					key := semanticNodeKey(function.WindowSpec)
+					if _, exists := implicitWindows[key]; !exists {
+						implicitWindows[key] = struct{}{}
+						count++
+					}
+				}
+			}
+			return count <= maxWindowsPerQueryBlock
+		})
+	}
+
+	for _, selectExpr := range clause.Exprs {
+		countExpr(selectExpr.Expr)
+	}
+	if clause.Where != nil {
+		countExpr(clause.Where.Expr)
+	}
+	if clause.GroupBy != nil {
+		for _, group := range clause.GroupBy.GroupByExprsList {
+			for _, expr := range group {
+				countExpr(expr)
+			}
+		}
+	}
+	if clause.Having != nil {
+		countExpr(clause.Having.Expr)
+	}
+	for _, order := range orderBy {
+		if order != nil {
+			countExpr(order.Expr)
+		}
+	}
+
+	if count > maxWindowsPerQueryBlock {
+		return moerr.NewErrTooManyWindows(ctx, count, maxWindowsPerQueryBlock)
+	}
+	return nil
+}
+
 func windowExprAstKey(astExpr tree.Expr) string {
 	funcExpr, ok := astExpr.(*tree.FuncExpr)
 	if !ok || funcExpr.WindowSpec == nil || funcExpr.WindowSpec.Frame == nil || funcExpr.WindowSpec.HasFrame {
@@ -55,8 +111,12 @@ func windowExprAstKey(astExpr tree.Expr) string {
 }
 
 func semanticAstKey(astExpr tree.Expr) string {
-	display := tree.String(astExpr, dialect.MYSQL)
-	identity := tree.StringWithOpts(astExpr, dialect.MYSQL, tree.WithParamExprOffset())
+	return semanticNodeKey(astExpr)
+}
+
+func semanticNodeKey(node tree.NodeFormatter) string {
+	display := tree.String(node, dialect.MYSQL)
+	identity := tree.StringWithOpts(node, dialect.MYSQL, tree.WithParamExprOffset())
 	if identity == display {
 		return display
 	}
@@ -608,6 +668,52 @@ func validateNamedWindowDefinitions(builder *QueryBuilder, ctx *BindContext, def
 			projectionBinder, validationCtx, "", windowSpec, 0, true, false,
 		); err != nil {
 			return err
+		}
+	}
+	if builder.isPrepareStatement {
+		seen := make(map[int]struct{})
+		for _, metadata := range builder.qry.Params {
+			if param := metadata.GetP(); param != nil {
+				seen[int(param.Pos)] = struct{}{}
+			}
+		}
+		collect := func(expr tree.Expr) {
+			walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+				param, ok := candidate.(*tree.ParamExpr)
+				if !ok {
+					return true
+				}
+				if _, exists := seen[param.Offset]; exists {
+					return false
+				}
+				seen[param.Offset] = struct{}{}
+				builder.qry.Params = append(builder.qry.Params, &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_any)},
+					Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(param.Offset)}},
+				})
+				return false
+			})
+		}
+		for _, definition := range definitions {
+			if definition == nil || definition.Spec == nil {
+				continue
+			}
+			for _, expr := range definition.Spec.PartitionBy {
+				collect(expr)
+			}
+			for _, order := range definition.Spec.OrderBy {
+				if order != nil {
+					collect(order.Expr)
+				}
+			}
+			if definition.Spec.Frame != nil {
+				if definition.Spec.Frame.Start != nil {
+					collect(definition.Spec.Frame.Start.Expr)
+				}
+				if definition.Spec.Frame.End != nil {
+					collect(definition.Spec.Frame.End.Expr)
+				}
+			}
 		}
 	}
 	return nil

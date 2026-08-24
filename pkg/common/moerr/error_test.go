@@ -257,6 +257,14 @@ func TestErrTooManyRowsContract(t *testing.T) {
 	require.Equal(t, err, decoded)
 }
 
+func TestErrTooManyWindowsContract(t *testing.T) {
+	err := NewErrTooManyWindows(context.Background(), 128, 127)
+	require.Equal(t, ErrTooManyWindows, err.ErrorCode())
+	require.Equal(t, ER_TOO_MANY_WINDOWS, err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t, "Too many windows in SELECT: 128. Maximum allowed is 127. Use named windows to share windows between window functions.", err.Error())
+}
+
 func TestErrCantChangeTxnCodeRemainsStable(t *testing.T) {
 	// This code is part of the client-visible compatibility contract. New
 	// MatrixOne errors must use a fresh code instead of renumbering it.
