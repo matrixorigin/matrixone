@@ -36,6 +36,23 @@ type batchTestCase struct {
 	types []types.Type
 }
 
+type failAfterBatchWriter struct {
+	remaining int
+}
+
+func (w *failAfterBatchWriter) Write(p []byte) (int, error) {
+	if w.remaining <= 0 {
+		return 0, io.ErrClosedPipe
+	}
+	if len(p) > w.remaining {
+		n := w.remaining
+		w.remaining = 0
+		return n, io.ErrClosedPipe
+	}
+	w.remaining -= len(p)
+	return len(p), nil
+}
+
 var (
 	tcs []batchTestCase
 )
@@ -1075,6 +1092,33 @@ func TestPrepareParamKindMarshalInvalidBoundaryMatrix(t *testing.T) {
 	_, err = NewWithSize(0).MarshalBinaryWithPrepareParamKinds(nil, true)
 	require.ErrorIs(t, err, io.ErrClosedPipe)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindMetadataPropagatesEveryWriterFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := NewWithSize(3)
+	for column := range bat.Vecs {
+		bat.Vecs[column] = vector.NewVec(types.T_text.ToType())
+		for range 2 {
+			require.NoError(t, vector.AppendBytes(
+				bat.Vecs[column], []byte("value"), false, mp))
+		}
+	}
+	require.NoError(t, bat.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral, types.StringSourceCOMStmt,
+	}, mp))
+	require.NoError(t, bat.Vecs[1].SetStringSource(types.StringSourceSQLPrepare))
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	var encoded bytes.Buffer
+	require.NoError(t, bat.AppendPrepareParamKindMetadataTo(&encoded))
+	for failAfter := 0; failAfter < encoded.Len(); failAfter++ {
+		err := bat.AppendPrepareParamKindMetadataTo(&failAfterBatchWriter{
+			remaining: failAfter,
+		})
+		require.Error(t, err, "writer failure at byte %d must propagate", failAfter)
+	}
 }
 
 func TestPrepareParamKindTransportRejectsMalformedTrailer(t *testing.T) {

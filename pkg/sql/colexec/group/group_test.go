@@ -120,6 +120,15 @@ func minTextColumnAgg(pos int32) aggexec.AggFuncExecExpression {
 	)
 }
 
+func anyTextColumnAgg(pos int32) aggexec.AggFuncExecExpression {
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfAny,
+		false,
+		[]*plan.Expr{colExpr(pos, types.T_text)},
+		nil,
+	)
+}
+
 func orderedGroupConcatAgg(distinct bool) aggexec.AggFuncExecExpression {
 	config := []byte{2}
 	config = binary.BigEndian.AppendUint32(config, 1)
@@ -200,6 +209,50 @@ func TestGroupKeyMergesDuplicateStringSourcesDeterministically(t *testing.T) {
 			proc.Free()
 		})
 	}
+}
+
+func TestGroupKeySourceMergeDoesNotMutateSharedAggregateArgument(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	for range 2 {
+		require.NoError(t, vector.AppendBytes(
+			input.Vecs[0], []byte("same"), false, proc.Mp()))
+	}
+	require.NoError(t, input.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+	}, proc.Mp()))
+	input.SetRowCount(2)
+	inputSources := input.Vecs[0].GetStringSources()
+	inputSourceBacking := &inputSources[0]
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_text)},
+		[]aggexec.AggFuncExecExpression{anyTextColumnAgg(0)},
+	)
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 1, outputs[0].RowCount())
+	require.Equal(t, types.StringSourceExpression,
+		outputs[0].Vecs[0].GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceLiteral,
+		outputs[0].Vecs[1].GetStringSourceAt(0))
+	require.Equal(t, []types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceExpression,
+	}, input.Vecs[0].GetStringSources())
+	require.Same(t, inputSourceBacking, &input.Vecs[0].GetStringSources()[0])
+
+	g.Reset(proc, false, nil)
+	g.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	require.Zero(t, proc.Mp().CurrNB())
+	proc.Free()
 }
 
 func TestGroupKeyStringSourceMergeSurvivesSpillReload(t *testing.T) {

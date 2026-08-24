@@ -166,12 +166,6 @@ type groupInsertPreview struct {
 	newGroups int
 }
 
-type groupKeySourceOverride struct {
-	vector   *vector.Vector
-	row      int
-	original types.StringSource
-}
-
 func (ctr *container) commitGroupByChunk(
 	vectors []*vector.Vector,
 	offset, rows int,
@@ -186,18 +180,12 @@ func (ctr *container) commitGroupByChunk(
 			}
 		}
 	}
-	var sourceOverrides []groupKeySourceOverride
+	var sourceOverrides [][]types.StringSource
 	if hasStringSourceMetadata {
-		defer func() {
-			for _, override := range sourceOverrides {
-				// The input already owns a mixed-source sidecar, so restoring the
-				// representative cannot allocate or fail.
-				_ = override.vector.SetStringSourceAtWithMP(
-					override.row, override.original, ctr.mp)
-			}
-		}()
-		if err := ctr.preflightPreviewGroupKeyStringSources(
-			vectors, offset, preview.values, preview.inserted, &sourceOverrides); err != nil {
+		var err error
+		sourceOverrides, err = ctr.preflightPreviewGroupKeyStringSources(
+			vectors, offset, preview.values, preview.inserted)
+		if err != nil {
 			return nil, 0, err
 		}
 	}
@@ -206,7 +194,8 @@ func (ctr *container) commitGroupByChunk(
 		return nil, 0, err
 	}
 
-	more, err := ctr.appendGroupByBatch(vectors, offset, preview.inserted)
+	more, err := ctr.appendGroupByBatchWithStringSources(
+		vectors, offset, preview.inserted, sourceOverrides, 0)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -292,8 +281,10 @@ func (ctr *container) preflightPreviewGroupKeyStringSources(
 	offset int,
 	groups []uint64,
 	inserted []uint8,
-	overrides *[]groupKeySourceOverride,
-) error {
+) ([][]types.StringSource, error) {
+	if len(groups) > hashmap.UnitLimit || len(inserted) != len(groups) {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
 	if err := ctr.forEachPreviewGroupKeyStringSource(
 		vectors, offset, groups,
 		func(destination *vector.Vector, row int, source types.StringSource) error {
@@ -301,17 +292,20 @@ func (ctr *container) preflightPreviewGroupKeyStringSources(
 				row, max(destination.Length(), row+1), source, ctr.mp)
 		},
 	); err != nil {
-		return err
+		return nil, err
 	}
-	// Make each newly selected representative carry the preview's final source
-	// before append. Otherwise a uniform selected-row append can normalize away
-	// the reserved sidecar and force applyPreview... to allocate after commit.
+	// Keep preview results in operator-owned, UnitLimit-bounded scratch. The
+	// selected append consumes these overrides without modifying borrowed input.
+	overrides := make([][]types.StringSource, len(vectors))
+	for column := range overrides {
+		overrides[column] = make([]types.StringSource, len(groups))
+	}
 	for row, flag := range inserted {
 		if flag == 0 {
 			continue
 		}
 		group := groups[row]
-		for _, sourceVector := range vectors {
+		for column, sourceVector := range vectors {
 			merged := sourceVector.GetStringSourceAt(offset + row)
 			for candidate := row + 1; candidate < len(groups); candidate++ {
 				if groups[candidate] != group {
@@ -321,23 +315,13 @@ func (ctr *container) preflightPreviewGroupKeyStringSources(
 				merged, err = types.MergeStringSources(
 					merged, sourceVector.GetStringSourceAt(offset+candidate))
 				if err != nil {
-					return err
+					return nil, err
 				}
 			}
-			representativeRow := offset + row
-			original := sourceVector.GetStringSourceAt(representativeRow)
-			if merged == original {
-				continue
-			}
-			*overrides = append(*overrides, groupKeySourceOverride{
-				vector: sourceVector, row: representativeRow, original: original,
-			})
-			if err := sourceVector.SetStringSourceAtWithMP(representativeRow, merged, ctr.mp); err != nil {
-				return err
-			}
+			overrides[column][row] = merged
 		}
 	}
-	return nil
+	return overrides, nil
 }
 
 func (ctr *container) applyPreviewGroupKeyStringSources(

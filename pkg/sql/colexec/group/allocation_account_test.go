@@ -996,10 +996,13 @@ func TestGroupSamePreviewDuplicateSourcePreflightsBeforeHashCommit(t *testing.T)
 			}
 			require.NoError(t, input.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
 				types.StringSourceLiteral,
-				types.StringSourceUserVariable,
+				types.StringSourceExpression,
 				types.StringSourceLiteral,
 			}, proc.Mp()))
 			input.SetRowCount(3)
+			inputSources := input.Vecs[0].GetStringSources()
+			require.Len(t, inputSources, 3)
+			inputSourceBacking := &inputSources[0]
 
 			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
 			generation, err := proc.GetExecutionResourceBudget()
@@ -1039,6 +1042,13 @@ func TestGroupSamePreviewDuplicateSourcePreflightsBeforeHashCommit(t *testing.T)
 			}
 			values, added, commitErr := g.ctr.commitGroupByChunk(
 				input.Vecs, 0, input.RowCount(), preview)
+			require.Equal(t, []types.StringSource{
+				types.StringSourceLiteral,
+				types.StringSourceExpression,
+				types.StringSourceLiteral,
+			}, input.Vecs[0].GetStringSources())
+			require.Same(t, inputSourceBacking, &input.Vecs[0].GetStringSources()[0],
+				"group preview must not replace borrowed input sidecar ownership")
 			if rejectPreflight {
 				require.ErrorIs(t, commitErr, mpool.ErrAllocationAccountCapacity)
 				require.Zero(t, g.ctr.hr.Hash.GroupCount(),
@@ -1083,6 +1093,12 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(
 			input.Vecs[0], []byte(value), false, proc.Mp()))
 	}
+	inputSources := []types.StringSource{
+		types.StringSourceLiteral,
+		types.StringSourceCOMStmt,
+		types.StringSourceUserVariable,
+	}
+	require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(inputSources, proc.Mp()))
 	input.SetRowCount(len(values))
 
 	g := newGroupOp(
@@ -1105,8 +1121,9 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 		input.Vecs, 0, input.RowCount(), insertedFlags, len(insertedFlags)))
 	require.NotNil(t, g.ctr.groupByStandby)
 	before := allocation.account.Snapshot().Used
-	inserted, err := g.ctr.appendGroupByBatch(
-		input.Vecs, 0, []uint8{1, 1, 1})
+	inserted, err := g.ctr.appendGroupByBatchWithStringSources(
+		input.Vecs, 0, []uint8{1, 1, 1},
+		[][]types.StringSource{inputSources}, 0)
 	require.NoError(t, err)
 	require.Equal(t, 3, inserted)
 	require.Equal(t, before, allocation.account.Snapshot().Used)
@@ -1117,6 +1134,12 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 		g.ctr.groupByBatches[1].Vecs[0].GetBytesAt(0)))
 	require.Equal(t, values[2], string(
 		g.ctr.groupByBatches[1].Vecs[0].GetBytesAt(1)))
+	require.Equal(t, types.StringSourceLiteral,
+		g.ctr.groupByBatches[0].Vecs[0].GetStringSourceAt(aggBatchSize-1))
+	require.Equal(t, []types.StringSource{
+		types.StringSourceCOMStmt,
+		types.StringSourceUserVariable,
+	}, g.ctr.groupByBatches[1].Vecs[0].GetStringSources())
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)

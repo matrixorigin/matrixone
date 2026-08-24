@@ -29,7 +29,7 @@
 | join | join output vector append/union owner | copied columns透明；新计算表达式为 Expression | vector union/join package UT |
 | SQL UNION / UNION ALL | set operator与group/vector owner | UNION ALL逐行透明；UNION仍按SQL值去重，不改变行数，同值代表来源按同源保持/异源→Expression合并 | group正反序与spill/reload typed UT；UNION public reachability BVT |
 | DISTINCT | distinct/hash/group owner | SQL key identity忽略来源；重复key的代表来源按所有贡献行确定性合并 | group正反序、same/mixed source UT |
-| GROUP BY | `pkg/sql/colexec/group` | key按SQL值分组；preview内先按group ID汇总最终source，新代表行携带最终source；全部sidecar容量在hash commit前预留；同源保持、异源→Expression | hash-group正反序、same-preview allocation rejection、spill/reload、reset UT |
+| GROUP BY | `pkg/sql/colexec/group` | key按SQL值分组；preview内按group ID把最终source保存在UnitLimit有界的operator-owned scratch，selected append以override发布且绝不修改borrowed input；全部sidecar容量在hash commit前预留；同源保持、异源→Expression | hash-group正反序、borrowed sidecar identity/MPool ownership、共享ANY_VALUE参数、same-preview/post-commit allocation rejection、跨batch、spill/reload、reset UT |
 | aggregate | `pkg/sql/colexec/aggexec` | MIN/MAX/MAX_BY winner replacement（含NULL）保留完整代表来源；equal candidate同源保持、异源→Expression；MIN/MAX extra作为Expression贡献者参与wins/ties；source merge独立于字符串runtime-domain | fixed/bytes extra wins/ties/loses；MAX_BY NULL first/replacement/same/mixed/partial；其余state round-trip UT |
 | window | window operator / aggregate state | value window按实际 lag/lead/first/last/nth row透明；窗口聚合使用 aggregate merge | `TestValueWindowExecPreservesRowStringSources`；window/agg UT |
 

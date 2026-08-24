@@ -5988,6 +5988,34 @@ func TestSelectedBatchPreflightProtocol(t *testing.T) {
 		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp))
 	require.Equal(t, 2, destination.Length())
 
+	destination.ResetWithSameType()
+	require.NoError(t, destination.PreExtendSelectedBatchValidated(
+		source, 0, len(flags), flags, 2, mp))
+	require.NoError(t, destination.PreflightSetStringSourceAtLength(
+		0, 2, types.StringSourceCOMStmt, mp))
+	require.ErrorIs(t, destination.UnionBatchPreflightedWithStringSources(
+		source, 0, len(flags), flags, []types.StringSource{types.StringSourceCOMStmt}, mp),
+		mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, destination.UnionBatchPreflightedWithStringSources(
+		source, 0, len(flags), flags[:2], []types.StringSource{
+			types.StringSourceCOMStmt, types.StringSourceExpression,
+		}, mp), mpool.ErrAllocationAccountInvalid)
+	require.Error(t, destination.UnionBatchPreflightedWithStringSources(
+		source, 0, len(flags), flags, []types.StringSource{
+			types.StringSourceCOMStmt, types.StringSourceExpression, 255,
+		}, mp))
+	require.NoError(t, destination.UnionBatchPreflightedWithStringSources(
+		source, 0, len(flags), flags, []types.StringSource{
+			types.StringSourceCOMStmt,
+			types.StringSourceExpression,
+			types.StringSourceUserVariable,
+		}, mp))
+	require.Equal(t, []types.StringSource{
+		types.StringSourceCOMStmt,
+		types.StringSourceUserVariable,
+	}, destination.GetStringSources())
+	require.False(t, source.HasStringSourceMetadata())
+
 	constant, err := NewConstBytes(
 		types.T_varchar.ToType(), []byte(strings.Repeat("constant", 8)),
 		len(flags)+4, mp)

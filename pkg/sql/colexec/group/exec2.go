@@ -862,7 +862,18 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 func (ctr *container) appendGroupByBatch(
 	vs []*vector.Vector,
 	offset int,
-	insertList []uint8) (int, error) {
+	insertList []uint8,
+) (int, error) {
+	return ctr.appendGroupByBatchWithStringSources(vs, offset, insertList, nil, 0)
+}
+
+func (ctr *container) appendGroupByBatchWithStringSources(
+	vs []*vector.Vector,
+	offset int,
+	insertList []uint8,
+	stringSources [][]types.StringSource,
+	stringSourceOffset int,
+) (int, error) {
 	toIncrease, _ := countNonZeroAndFindKth(insertList, len(insertList)+1)
 	if toIncrease == 0 {
 		// A duplicate-only chunk must not create a fresh retained batch after
@@ -898,9 +909,19 @@ func (ctr *container) appendGroupByBatch(
 
 	// there is enough space in the current batch to insert thisTime.
 	for i, vec := range currBatch.Vecs {
-		if err := vec.UnionBatchPreflighted(
-			vs[i], int64(offset), len(thisTime), thisTime, ctr.mp,
-		); err != nil {
+		var err error
+		if stringSources == nil {
+			err = vec.UnionBatchPreflighted(
+				vs[i], int64(offset), len(thisTime), thisTime, ctr.mp)
+		} else if i >= len(stringSources) || stringSourceOffset < 0 ||
+			stringSourceOffset+len(thisTime) > len(stringSources[i]) {
+			return 0, mpool.ErrAllocationAccountInvariant
+		} else {
+			err = vec.UnionBatchPreflightedWithStringSources(
+				vs[i], int64(offset), len(thisTime), thisTime,
+				stringSources[i][stringSourceOffset:stringSourceOffset+len(thisTime)], ctr.mp)
+		}
+		if err != nil {
 			return 0, err
 		}
 	}
@@ -909,7 +930,9 @@ func (ctr *container) appendGroupByBatch(
 	if toIncrease > spaceLeft {
 		// there is not enough space in the current batch to insert thisTime.
 		// so we need to append the rest of the insertList to the next batch.
-		_, err := ctr.appendGroupByBatch(vs, offset+kth+1, insertList[kth+1:])
+		_, err := ctr.appendGroupByBatchWithStringSources(
+			vs, offset+kth+1, insertList[kth+1:], stringSources,
+			stringSourceOffset+kth+1)
 		if err != nil {
 			return 0, err
 		}

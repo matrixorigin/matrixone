@@ -1486,7 +1486,7 @@ func (v *Vector) preExtendStringSources(n int, mp *mpool.MPool) error {
 }
 
 func (v *Vector) normalizeStringSources() {
-	if v.stringSources == nil || len(v.stringSources) == 0 {
+	if len(v.stringSources) == 0 {
 		return
 	}
 	first := v.stringSources[0]
@@ -2542,6 +2542,7 @@ func (v *Vector) propagatePrepareParamKindsBatch(
 	offset int64,
 	cnt int,
 	flags []uint8,
+	stringSourceOverrides []types.StringSource,
 	mp *mpool.MPool,
 ) error {
 	if w == nil || cnt <= 0 {
@@ -2553,7 +2554,11 @@ func (v *Vector) propagatePrepareParamKindsBatch(
 			continue
 		}
 		row := int(offset) + i
-		if err := v.appendStringSourceAt(output, oldLength, w.GetStringSourceAt(row), mp); err != nil {
+		source := w.GetStringSourceAt(row)
+		if stringSourceOverrides != nil {
+			source = stringSourceOverrides[i]
+		}
+		if err := v.appendStringSourceAt(output, oldLength, source, mp); err != nil {
 			return err
 		}
 		output++
@@ -5197,8 +5202,56 @@ func (v *Vector) UnionBatchPreflighted(
 	v.preflightAreaBytes = 0
 	v.preflightAreaReady = false
 	v.preflightRowCount = 0
+	return v.unionBatchPreflightedWithStringSources(
+		w, offset, cnt, flags, nil, mp,
+		selectedAreaBytes, preflightRowCount)
+}
+
+// UnionBatchPreflightedWithStringSources publishes selected rows with an
+// operator-owned source override aligned to flags. It never mutates the source
+// vector and consumes only capacity admitted before the caller's commit point.
+func (v *Vector) UnionBatchPreflightedWithStringSources(
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	stringSources []types.StringSource,
+	mp *mpool.MPool,
+) error {
+	if len(flags) != cnt || len(stringSources) != cnt {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	for row, selected := range flags {
+		if selected != 0 && !stringSources[row].Valid() {
+			return moerr.NewInvalidInputNoCtxf(
+				"invalid string source %d", stringSources[row])
+		}
+	}
+	if v == nil || !v.preflightAreaReady {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	selectedAreaBytes := v.preflightAreaBytes
+	preflightRowCount := v.preflightRowCount
+	v.preflightAreaBytes = 0
+	v.preflightAreaReady = false
+	v.preflightRowCount = 0
+	return v.unionBatchPreflightedWithStringSources(
+		w, offset, cnt, flags, stringSources, mp,
+		selectedAreaBytes, preflightRowCount)
+}
+
+func (v *Vector) unionBatchPreflightedWithStringSources(
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	stringSources []types.StringSource,
+	mp *mpool.MPool,
+	selectedAreaBytes int,
+	preflightRowCount int,
+) error {
 	err := v.unionBatch(
-		w, offset, cnt, flags, mp,
+		w, offset, cnt, flags, stringSources, mp,
 		selectedAreaBytes, preflightRowCount, true)
 	v.preflightStringSourceReady = false
 	v.normalizeStringSources()
@@ -7946,7 +7999,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 }
 
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
-	return v.unionBatch(w, offset, cnt, flags, mp, 0, 0, false)
+	return v.unionBatch(w, offset, cnt, flags, nil, mp, 0, 0, false)
 }
 
 func (v *Vector) unionBatch(
@@ -7954,6 +8007,7 @@ func (v *Vector) unionBatch(
 	offset int64,
 	cnt int,
 	flags []uint8,
+	stringSourceOverrides []types.StringSource,
 	mp *mpool.MPool,
 	selectedAreaBytes int,
 	preflightRowCount int,
@@ -8058,7 +8112,8 @@ func (v *Vector) unionBatch(
 			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
 		}
 
-		if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
+		if err := v.propagatePrepareParamKindsBatch(
+			w, oldLen, offset, cnt, flags, stringSourceOverrides, mp); err != nil {
 			return err
 		}
 		if err := v.propagateBinaryStringBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
@@ -8088,7 +8143,8 @@ func (v *Vector) unionBatch(
 				return err
 			}
 			if fast {
-				if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
+				if err := v.propagatePrepareParamKindsBatch(
+					w, oldLen, offset, cnt, flags, stringSourceOverrides, mp); err != nil {
 					return err
 				}
 				if err := v.propagateBinaryStringBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
@@ -8242,7 +8298,8 @@ func (v *Vector) unionBatch(
 		}
 	}
 
-	if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
+	if err := v.propagatePrepareParamKindsBatch(
+		w, oldLen, offset, cnt, flags, stringSourceOverrides, mp); err != nil {
 		return err
 	}
 	if err := v.propagateBinaryStringBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
