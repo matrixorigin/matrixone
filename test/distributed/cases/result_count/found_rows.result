@@ -175,6 +175,7 @@ after_offset_session_limit_second
 5
 set sql_select_limit = 0;
 execute ps_offset_session_limit;
+id[-5,64,0]
 select found_rows() as after_offset_session_limit_zero limit 1;
 after_offset_session_limit_zero
 5
