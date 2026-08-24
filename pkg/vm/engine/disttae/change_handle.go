@@ -123,11 +123,24 @@ type PartitionChangesHandle struct {
 	toTs   types.TS
 	tbl    *txnTable
 
-	skipDeletes        bool
-	primarySeqnum      int
-	snapshotReadPolicy engine.SnapshotReadPolicy
-	mp                 *mpool.MPool
-	fs                 fileservice.FileService
+	skipDeletes         bool
+	primarySeqnum       int
+	snapshotReadPolicy  engine.SnapshotReadPolicy
+	preserveAllVersions bool
+	mp                  *mpool.MPool
+	fs                  fileservice.FileService
+
+	bufferedBatches     []queuedChangeBatch
+	currentRangeDrained bool
+	visibleResources    engine.VisibleStateRecoveryResources
+	visibleStartRel     engine.Relation
+}
+
+type queuedChangeBatch struct {
+	data          *batch.Batch
+	tombstone     *batch.Batch
+	hint          engine.ChangesHandle_Hint
+	reservedBytes int64
 }
 
 func NewPartitionChangesHandle(
@@ -142,14 +155,19 @@ func NewPartitionChangesHandle(
 		return nil, moerr.NewInternalErrorNoCtx("invalid timestamp")
 	}
 	handle := &PartitionChangesHandle{
-		tbl:                tbl,
-		fromTs:             from,
-		toTs:               to,
-		skipDeletes:        skipDeletes,
-		primarySeqnum:      tbl.primarySeqnum,
-		snapshotReadPolicy: snapshotReadPolicy,
-		mp:                 mp,
-		fs:                 tbl.getTxn().engine.fs,
+		tbl:                 tbl,
+		fromTs:              from,
+		toTs:                to,
+		skipDeletes:         skipDeletes,
+		primarySeqnum:       tbl.primarySeqnum,
+		snapshotReadPolicy:  snapshotReadPolicy,
+		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
+		mp:                  mp,
+		fs:                  tbl.getTxn().engine.fs,
+	}
+	if snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
+		handle.visibleResources = engine.VisibleStateRecoveryResourcesFromContext(ctx)
+		handle.visibleStartRel = engine.VisibleStateStartRelationFromContext(ctx)
 	}
 	end, err := handle.getNextChangeHandle(ctx)
 	if err != nil {
@@ -162,7 +180,21 @@ func NewPartitionChangesHandle(
 }
 
 func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	// DATA BRANCH supplies governed recovery resources and needs failure-atomic
+	// replay so a missing compacted predecessor can be rebuilt from the two
+	// visible boundary snapshots. Bounded table_changes callers intentionally
+	// omit these resources and keep the streaming range path below.
+	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState && h.visibleResources != nil {
+		return h.nextWithSnapshotRecovery(ctx, mp)
+	}
 	return h.nextReplay(ctx, mp)
+}
+
+func (h *PartitionChangesHandle) collectChangesContext(ctx context.Context) context.Context {
+	if h.preserveAllVersions {
+		return engine.WithCollectChangesPreserveAllVersions(ctx)
+	}
+	return ctx
 }
 
 func (h *PartitionChangesHandle) nextReplay(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
@@ -184,6 +216,117 @@ func (h *PartitionChangesHandle) nextReplay(ctx context.Context, mp *mpool.MPool
 		if end {
 			return
 		}
+	}
+}
+
+func (h *PartitionChangesHandle) nextWithSnapshotRecovery(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	hint = engine.ChangesHandle_Tail_done
+	for {
+		if len(h.bufferedBatches) > 0 {
+			next := h.bufferedBatches[0]
+			h.bufferedBatches[0] = queuedChangeBatch{}
+			h.bufferedBatches = h.bufferedBatches[1:]
+			if len(h.bufferedBatches) == 0 {
+				h.bufferedBatches = nil
+			}
+			h.releaseBufferedReservation(next.reservedBytes)
+			return next.data, next.tombstone, next.hint, nil
+		}
+		if h.currentRangeDrained {
+			var end bool
+			end, err = h.getNextChangeHandle(ctx)
+			if err != nil || end {
+				return nil, nil, hint, err
+			}
+			h.currentRangeDrained = false
+		}
+		if err = h.bufferCurrentRange(ctx, mp); err != nil {
+			return nil, nil, hint, err
+		}
+	}
+}
+
+func (h *PartitionChangesHandle) bufferCurrentRange(ctx context.Context, mp *mpool.MPool) (err error) {
+	var queued []queuedChangeBatch
+	snapshotStateRangeTried := false
+	visibleStateTried := false
+	cleanQueued := func() {
+		for i := range queued {
+			if queued[i].data != nil {
+				queued[i].data.Clean(mp)
+			}
+			if queued[i].tombstone != nil {
+				queued[i].tombstone.Clean(mp)
+			}
+			h.releaseBufferedReservation(queued[i].reservedBytes)
+		}
+		queued = nil
+	}
+	for {
+		data, tombstone, hint, nextErr := h.currentChangeHandle.Next(ctx, mp)
+		if nextErr != nil {
+			if !isVisibleStateRecoveryError(nextErr) {
+				cleanQueued()
+				return nextErr
+			}
+			cleanQueued()
+			if !snapshotStateRangeTried {
+				snapshotStateRangeTried = true
+				swapErr := h.swapCurrentHandleToSnapshotStateRange(ctx)
+				if swapErr == nil {
+					continue
+				}
+				if !isVisibleStateRecoveryError(swapErr) {
+					return swapErr
+				}
+			}
+			if !visibleStateTried {
+				visibleStateTried = true
+				if swapErr := h.swapCurrentHandleToVisibleState(ctx); swapErr != nil {
+					return swapErr
+				}
+				continue
+			}
+			return nextErr
+		}
+		if data == nil && tombstone == nil {
+			h.bufferedBatches = append(h.bufferedBatches, queued...)
+			h.currentRangeDrained = true
+			return nil
+		}
+		reservedBytes := bufferedChangeBatchBytes(data, tombstone)
+		if err = h.visibleResources.ReserveBuffer(reservedBytes); err != nil {
+			if data != nil {
+				data.Clean(mp)
+			}
+			if tombstone != nil {
+				tombstone.Clean(mp)
+			}
+			cleanQueued()
+			return err
+		}
+		queued = append(queued, queuedChangeBatch{
+			data: data, tombstone: tombstone, hint: hint, reservedBytes: reservedBytes,
+		})
+	}
+}
+
+const bufferedChangeBatchOverhead = int64(256)
+
+func bufferedChangeBatchBytes(data, tombstone *batch.Batch) int64 {
+	bytes := bufferedChangeBatchOverhead
+	if data != nil {
+		bytes += int64(data.Size())
+	}
+	if tombstone != nil {
+		bytes += int64(tombstone.Size())
+	}
+	return bytes
+}
+
+func (h *PartitionChangesHandle) releaseBufferedReservation(bytes int64) {
+	if bytes > 0 && h.visibleResources != nil {
+		h.visibleResources.ReleaseBuffer(bytes)
 	}
 }
 
@@ -236,7 +379,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	} else {
 		nextFrom = h.currentPSTo.Next()
 	}
-	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
+	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState && h.visibleResources == nil {
 		// Visible-state callers require the exact net effect of the requested
 		// range. Build that range from its end snapshot up front and stream the
 		// resulting handle one batch at a time. This avoids replaying first and
@@ -309,6 +452,16 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	logutil.Info("ChangesHandle-Split request snapshot read",
 		zap.String("from", nextFrom.ToString()),
 	)
+	if h.snapshotReadPolicy == engine.SnapshotReadPolicyVisibleState {
+		h.currentPSFrom = nextFrom
+		h.currentPSTo = h.toTs
+		h.handleIdx++
+		_, err = initializeVisibleStateRange(
+			func() error { return h.swapCurrentHandleToSnapshotStateRange(ctx) },
+			func(error) error { return h.swapCurrentHandleToVisibleState(ctx) },
+		)
+		return false, err
+	}
 	var checkpointEntries []*checkpoint.CheckpointEntry
 	var minTS, maxTS types.TS
 	checkpointEntries, minTS, maxTS, err = h.loadCheckpointEntries(ctx, nextFrom)
@@ -364,7 +517,27 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	return false, nil
 }
 
+func isVisibleStateRecoveryError(err error) bool {
+	// The current range reader maps both physical object loss and compacted
+	// blocks without evaluable per-row commit timestamps to ErrFileNotFound.
+	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound)
+}
+
+func initializeVisibleStateRange(
+	initSnapshotRange func() error,
+	initVisibleState func(snapshotErr error) error,
+) (usedVisibleState bool, err error) {
+	if err = initSnapshotRange(); err == nil {
+		return false, nil
+	}
+	if !isVisibleStateRecoveryError(err) {
+		return false, err
+	}
+	return true, initVisibleState(err)
+}
+
 func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx context.Context) (err error) {
+	ctx = h.collectChangesContext(ctx)
 	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
 		return nil
 	}
@@ -390,6 +563,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	spillConfig := engine.ChangeRangeSpillFromContext(ctx)
 	debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
 	retainRowID := engine.RetainRowIDFromContext(ctx)
+	preserveAllVersions := h.preserveAllVersions
 	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
 	skipDeletes, primarySeqnum, primaryIdx := h.skipDeletes, snapshotTbl.primarySeqnum, snapshotTbl.primaryIdx
 	logicalSeqnums := append([]uint16(nil), snapshotTbl.seqnums...)
@@ -401,6 +575,9 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 			nextCtx = engine.WithChangeRangeSpill(nextCtx, spillConfig)
 			nextCtx = engine.WithCollectChangesDebugLabel(nextCtx, debugLabel)
 			nextCtx = engine.WithRetainRowID(nextCtx, retainRowID)
+			if preserveAllVersions {
+				nextCtx = engine.WithCollectChangesPreserveAllVersions(nextCtx)
+			}
 			return logtailreplay.NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 				nextCtx,
 				state,
@@ -415,6 +592,34 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 				rangeFS,
 			)
 		},
+	}
+	return nil
+}
+
+func (h *PartitionChangesHandle) swapCurrentHandleToVisibleState(ctx context.Context) (err error) {
+	if h.snapshotReadPolicy != engine.SnapshotReadPolicyVisibleState {
+		return nil
+	}
+	if err = h.closeCurrentChangeHandle(); err != nil {
+		return err
+	}
+	h.currentChangeHandle, err = NewVisibleStateChangesHandle(
+		h.collectChangesContext(ctx),
+		h.tbl,
+		h.currentPSFrom,
+		h.currentPSTo,
+		h.skipDeletes,
+		objectio.BlockMaxRows,
+		h.mp,
+		h.visibleResources,
+		h.visibleStateStartRelation(),
+	)
+	return err
+}
+
+func (h *PartitionChangesHandle) visibleStateStartRelation() engine.Relation {
+	if h.currentPSFrom.EQ(&h.fromTs) {
+		return h.visibleStartRel
 	}
 	return nil
 }
@@ -475,6 +680,16 @@ func (h *PartitionChangesHandle) Close() error {
 	if h == nil {
 		return nil
 	}
+	for i := range h.bufferedBatches {
+		if h.bufferedBatches[i].data != nil {
+			h.bufferedBatches[i].data.Clean(h.mp)
+		}
+		if h.bufferedBatches[i].tombstone != nil {
+			h.bufferedBatches[i].tombstone.Clean(h.mp)
+		}
+		h.releaseBufferedReservation(h.bufferedBatches[i].reservedBytes)
+	}
+	h.bufferedBatches = nil
 	return h.closeCurrentChangeHandle()
 }
 

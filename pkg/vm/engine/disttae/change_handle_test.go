@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -130,6 +131,31 @@ func TestPartitionChangesHandleCloseClosesCurrentHandle(t *testing.T) {
 	require.Nil(t, handle.currentChangeHandle)
 }
 
+func TestPartitionChangesHandleCloseCleansBufferedBatches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	baseline := mp.CurrNB()
+
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(1), false, mp))
+	data.SetRowCount(1)
+
+	resources := newTestVisibleStateResources()
+	resources.reserved = 123
+	stub := &stubChangesHandle{}
+	handle := &PartitionChangesHandle{
+		mp: mp, visibleResources: resources, currentChangeHandle: stub,
+		bufferedBatches: []queuedChangeBatch{{data: data, reservedBytes: 123}},
+	}
+
+	require.NoError(t, handle.Close())
+	require.True(t, stub.closed)
+	require.Empty(t, handle.bufferedBatches)
+	require.Zero(t, resources.reserved)
+	require.Equal(t, baseline, mp.CurrNB())
+}
+
 func TestPartitionChangesHandleDelegatesOneBatchPerNext(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
@@ -151,6 +177,72 @@ func TestPartitionChangesHandleDelegatesOneBatchPerNext(t *testing.T) {
 	require.LessOrEqual(t, mp.CurrNB(), int64(1<<20), "retained mpool memory must stay batch-bounded")
 	gotData.Clean(mp)
 	require.Zero(t, mp.CurrNB(), "the partition handle must not retain prior batches")
+}
+
+func TestPartitionChangesHandleVisibleStateResourcesUseBufferedReplay(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(7), false, mp))
+	data.SetRowCount(1)
+	defer data.Clean(mp)
+
+	resources := newTestVisibleStateResources()
+	resources.reserved = 77
+	handle := &PartitionChangesHandle{
+		snapshotReadPolicy: engine.SnapshotReadPolicyVisibleState,
+		visibleResources:   resources,
+		bufferedBatches: []queuedChangeBatch{{
+			data: data, hint: engine.ChangesHandle_Snapshot, reservedBytes: 77,
+		}},
+	}
+
+	gotData, gotTombstone, hint, err := handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.Same(t, data, gotData)
+	require.Nil(t, gotTombstone)
+	require.Equal(t, engine.ChangesHandle_Snapshot, hint)
+	require.Empty(t, handle.bufferedBatches)
+	require.Zero(t, resources.reserved)
+}
+
+func TestPartitionChangesHandlePreservesHistoryContext(t *testing.T) {
+	base := context.Background()
+	require.False(t, engine.CollectChangesPreserveAllVersionsFromContext(
+		(&PartitionChangesHandle{}).collectChangesContext(base),
+	))
+	require.True(t, engine.CollectChangesPreserveAllVersionsFromContext(
+		(&PartitionChangesHandle{preserveAllVersions: true}).collectChangesContext(base),
+	))
+}
+
+func TestInitializeVisibleStateRangeRecovery(t *testing.T) {
+	missing := moerr.NewFileNotFoundNoCtx("gc-ed-object")
+	recoveryCalls := 0
+	used, err := initializeVisibleStateRange(
+		func() error { return missing },
+		func(got error) error {
+			recoveryCalls++
+			require.Equal(t, missing, got)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, used)
+	require.Equal(t, 1, recoveryCalls)
+
+	internal := moerr.NewInternalErrorNoCtx("not recoverable")
+	used, err = initializeVisibleStateRange(
+		func() error { return internal },
+		func(error) error {
+			t.Fatal("unexpected visible-state recovery")
+			return nil
+		},
+	)
+	require.Equal(t, internal, err)
+	require.False(t, used)
 }
 
 func TestDeferredChangesHandleBuildsOnFirstNext(t *testing.T) {
