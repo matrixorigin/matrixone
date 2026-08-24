@@ -17,6 +17,7 @@ package hashjoin
 import (
 	"bytes"
 	"context"
+	"math/bits"
 	"strings"
 	"testing"
 	"time"
@@ -1404,6 +1405,224 @@ func TestAsofBuildLeftEmptyLeftSkipsRightScan(t *testing.T) {
 	require.Zero(t, probeCalls, "an empty logical left must short-circuit the huge right scan")
 }
 
+func TestAsofBuildLeftRejectsRecursiveProbeBeforeInput(t *testing.T) {
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
+	tc := newTestCase(t,
+		[]bool{false},
+		[]types.Type{keyType, keyType},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		equality,
+	)
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+
+	tc.arg.JoinType = plan.Node_ASOF_LEFT
+	tc.arg.LeftTypes = []types.Type{keyType, timeType}
+	tc.arg.RightTypes = []types.Type{keyType, timeType}
+	tc.arg.AsofRightCol = 1
+	tc.arg.AsofBuildLeft = true
+	tc.arg.NonEqCond = makeAsofCondition(t, timeType, ">=")
+	probeCalls := 0
+	probe := &recursiveHashJoinProbe{MockOperator: colexec.NewMockOperator().
+		WithBatchCallback(func(int) { probeCalls++ })}
+	tc.arg.Children = nil
+	tc.arg.AppendChild(probe)
+
+	err := tc.arg.Prepare(tc.proc)
+	require.ErrorContains(t, err, "recursive probe")
+	require.Zero(t, probeCalls, "the invalid topology must fail before consuming a generation")
+}
+
+func TestAsofBuildLeftActualHotGroupUsesBoundedRangeIndex(t *testing.T) {
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	textType := types.T_varchar.ToType()
+	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
+	tc := newTestCase(t,
+		[]bool{false, true},
+		[]types.Type{keyType, keyType},
+		[]colexec.ResultPos{
+			colexec.NewResultPos(0, 1),
+			colexec.NewResultPos(1, 1),
+			colexec.NewResultPos(1, 2),
+		},
+		equality,
+	)
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+
+	tc.arg.JoinType = plan.Node_ASOF_LEFT
+	tc.arg.LeftTypes = []types.Type{keyType, timeType}
+	tc.arg.RightTypes = []types.Type{keyType, timeType, textType}
+	tc.arg.AsofRightCol = 1
+	tc.arg.AsofBuildLeft = true
+	tc.arg.NonEqCond = makeAsofConditionWithRightLowerBound(t, timeType, ">", 2)
+	tc.barg.Conditions = equality[0]
+
+	const (
+		hotKeyRows = 65
+		leftRows   = hotKeyRows + 1
+	)
+	keys := make([]int32, leftRows)
+	leftTimes := make([]types.Timestamp, leftRows)
+	for i := range hotKeyRows {
+		keys[i] = 1
+		leftTimes[i] = types.Timestamp(hotKeyRows - i)
+	}
+	keys[hotKeyRows] = 2
+	leftTimes[hotKeyRows] = 40
+	logicalLeft := makeAsofPayloadBatch(tc.proc, keys, leftTimes, make([]string, leftRows))
+	logicalLeft.Vecs[2].Free(tc.proc.Mp())
+	logicalLeft.Vecs = logicalLeft.Vecs[:2]
+	logicalRight := makeAsofPayloadBatch(
+		tc.proc,
+		[]int32{1, 1, 1, 1, 2},
+		[]types.Timestamp{30, 1, 50, 30, 35},
+		[]string{"p30-first", "p01", "p50", "p30-later", "p35-key2"},
+	)
+	resetHashBuildChildrenWithBatch(tc.barg, logicalLeft)
+	resetChildrenWithBatch(tc.arg, logicalRight)
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, leftRows, result.Batch.RowCount())
+	require.Equal(t, 2*leftRows, len(tc.arg.ctr.asofBuildLeftBestTimes),
+		"actual hot groups must use bounded range updates even when planning underestimated them")
+	resultRightTimes := vector.MustFixedColWithTypeCheck[types.Timestamp](result.Batch.Vecs[1])
+	resultPayloads := vector.InefficientMustStrCol(result.Batch.Vecs[2])
+	for row, leftTime := range leftTimes {
+		if keys[row] == 2 {
+			require.Equal(t, types.Timestamp(35), resultRightTimes[row])
+			require.Equal(t, "p35-key2", resultPayloads[row])
+			continue
+		}
+		var wantTime types.Timestamp
+		var wantPayload string
+		switch {
+		case leftTime > 50:
+			wantTime, wantPayload = 50, "p50"
+		case leftTime > 30:
+			wantTime, wantPayload = 30, "p30-first"
+		default:
+			require.True(t, result.Batch.Vecs[1].GetNulls().Contains(uint64(row)))
+			require.True(t, result.Batch.Vecs[2].GetNulls().Contains(uint64(row)))
+			continue
+		}
+		require.False(t, result.Batch.Vecs[1].GetNulls().Contains(uint64(row)))
+		require.Equal(t, wantTime, resultRightTimes[row])
+		require.Equal(t, wantPayload, resultPayloads[row])
+	}
+	require.LessOrEqual(t, tc.arg.ctr.asofBuildLeftNextPayload, logicalRight.RowCount(),
+		"one source row must share one retained payload across its O(log L) tree nodes")
+	visits, err := tc.arg.ctr.updateAsofBuildLeftRange(
+		0, 0, 1, tc.arg.ctr.asofBuildLeftProbeSequence+1)
+	require.NoError(t, err)
+	require.LessOrEqual(t, visits, 2*bits.Len(uint(leftRows)),
+		"one right row must visit logarithmically many range-tree nodes, not every actual left row")
+}
+
+func TestAsofBuildLeftRangeIndexSharesAndRecyclesPayload(t *testing.T) {
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	textType := types.T_varchar.ToType()
+	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
+	tc := newTestCase(t,
+		[]bool{false},
+		[]types.Type{keyType, keyType},
+		[]colexec.ResultPos{colexec.NewResultPos(1, 2)},
+		equality,
+	)
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+
+	tc.arg.JoinType = plan.Node_ASOF
+	tc.arg.LeftTypes = []types.Type{keyType, timeType}
+	tc.arg.RightTypes = []types.Type{keyType, timeType, textType}
+	tc.arg.AsofRightCol = 1
+	tc.arg.AsofBuildLeft = true
+	tc.arg.NonEqCond = makeAsofCondition(t, timeType, ">=")
+	tc.barg.Conditions = equality[0]
+
+	const leftRows = asofBuildLeftDirectGroupLimit + 1
+	keys := make([]int32, leftRows)
+	leftTimes := make([]types.Timestamp, leftRows)
+	for row := range leftRows {
+		keys[row] = 1
+		leftTimes[row] = 100
+	}
+	logicalLeft := makeAsofPayloadBatch(tc.proc, keys, leftTimes, make([]string, leftRows))
+	logicalLeft.Vecs[2].Free(tc.proc.Mp())
+	logicalLeft.Vecs = logicalLeft.Vecs[:2]
+	rightBatches := make([]*batch.Batch, 0, 10)
+	var finalPayload string
+	for rightTime := 1; rightTime <= 10; rightTime++ {
+		payload := strings.Repeat(string(rune('a'+rightTime)), 1000)
+		finalPayload = payload
+		rightBatches = append(rightBatches, makeAsofPayloadBatch(
+			tc.proc,
+			[]int32{1},
+			[]types.Timestamp{types.Timestamp(rightTime)},
+			[]string{payload},
+		))
+	}
+	resetHashBuildChildrenWithBatch(tc.barg, logicalLeft)
+	tc.arg.Children = nil
+	tc.arg.AppendChild(colexec.NewMockOperator().WithBatchs(rightBatches))
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, leftRows, result.Batch.RowCount())
+	for _, payload := range vector.InefficientMustStrCol(result.Batch.Vecs[0]) {
+		require.Equal(t, finalPayload, payload)
+	}
+	activePayloads := 0
+	for _, refs := range tc.arg.ctr.asofBuildLeftPayloadRefs {
+		if refs > 0 {
+			activePayloads++
+		}
+	}
+	require.Equal(t, 1, activePayloads,
+		"one right row must be retained once even when it covers every left leaf")
+	require.LessOrEqual(t, tc.arg.ctr.asofBuildLeftNextPayload, 2,
+		"superseded shared payload slots must be recycled across input batches")
+	require.Equal(t, int64(len(finalPayload)), tc.arg.ctr.asofBuildLeftLiveBytes)
+	require.LessOrEqual(t, tc.arg.ctr.asofBuildLeftDeadBytes, tc.arg.ctr.asofBuildLeftLiveBytes)
+	require.LessOrEqual(t,
+		len(tc.arg.ctr.asofBuildLeftBestRight.Vecs[2].GetArea()),
+		2*len(finalPayload),
+	)
+}
+
 func TestAsofBuildLeftStrictPredicateRejectsEqualTimestamp(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
@@ -1570,6 +1789,43 @@ func makeAsofCondition(t *testing.T, timeType types.Type, operator string) *plan
 		Expr: &plan.Expr_F{F: &plan.Function{
 			Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: operator},
 			Args: []*plan.Expr{leftTime, rightTime},
+		}},
+	}
+}
+
+func makeAsofConditionWithRightLowerBound(
+	t *testing.T,
+	timeType types.Type,
+	operator string,
+	lowerBound types.Timestamp,
+) *plan.Expr {
+	temporal := makeAsofCondition(t, timeType, operator)
+	rightTime := newExpr(1, timeType)
+	rightTime.GetCol().RelPos = 1
+	bound := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_timestamp), NotNullable: true},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Timestampval{Timestampval: int64(lowerBound)},
+		}},
+	}
+	lowerFn, err := function.GetFunctionByName(
+		context.Background(), ">=", []types.Type{timeType, timeType})
+	require.NoError(t, err)
+	lower := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: lowerFn.GetEncodedOverloadID(), ObjName: ">="},
+			Args: []*plan.Expr{rightTime, bound},
+		}},
+	}
+	andFn, err := function.GetFunctionByName(
+		context.Background(), "and", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()})
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: andFn.GetEncodedOverloadID(), ObjName: "and"},
+			Args: []*plan.Expr{temporal, lower},
 		}},
 	}
 }

@@ -4771,20 +4771,13 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 	return branches
 }
 
-// asofBuildLeftMaxEstimatedProbeAmplification bounds the worst-case number of
-// logical-left candidates visited for each streamed logical-right row. The
-// planner has equality-key NDV estimates, but no trustworthy maximum group
-// frequency, so the total estimated left cardinality is the only safe skew
-// upper bound available here.
-const asofBuildLeftMaxEstimatedProbeAmplification = 64
-
-// shouldBuildLeftForAsof compares both work amplification and retained payload
-// for the two physical ASOF strategies. Building the logical left retains every
-// left row plus one projected best-right candidate per left row, but every
-// streamed right row can visit the entire matching left equality group.
-// Building the logical right retains the right input for predecessor lookup.
-// Unknown, invalid, or insufficiently bounded estimates stay on the established
-// build-right path.
+// shouldBuildLeftForAsof compares the conservative retained payload of the two
+// physical ASOF strategies. Build-left keeps the logical left and uses direct
+// candidate slots for small actual groups. A larger actual group switches to a
+// range-update tree with at most two full-right candidate slots per left
+// row, so stale cardinality estimates cannot reintroduce O(actual-L*R) work.
+// Build-right retains the right input for predecessor lookup. Unknown or
+// invalid estimates stay on the established build-right path.
 func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 	if node == nil || left == nil || right == nil ||
 		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
@@ -4798,9 +4791,6 @@ func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 		math.IsInf(leftRows, 0) || math.IsInf(leftRowSize, 0) {
 		return false
 	}
-	if leftRows > asofBuildLeftMaxEstimatedProbeAmplification {
-		return false
-	}
 	if right.Stats == nil {
 		return false
 	}
@@ -4811,14 +4801,47 @@ func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 		math.IsInf(rightRows, 0) || math.IsInf(rightRowSize, 0) {
 		return false
 	}
-	buildLeftBytes := leftRows * (leftRowSize + rightRowSize)
+	buildLeftBytes := leftRows * (leftRowSize + 2*rightRowSize)
 	buildRightBytes := rightRows * rightRowSize
 	return !math.IsInf(buildLeftBytes, 0) && !math.IsInf(buildRightBytes, 0) &&
 		buildLeftBytes < buildRightBytes
 }
 
+func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
+	visited := make(map[*Scope]struct{}, len(scopes))
+	stack := append([]*Scope(nil), scopes...)
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		scope := stack[last]
+		stack = stack[:last]
+		if scope == nil {
+			continue
+		}
+		if _, ok := visited[scope]; ok {
+			continue
+		}
+		visited[scope] = struct{}{}
+		found := false
+		if scope.RootOp != nil {
+			_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+				if op.OpType() == target {
+					found = true
+				}
+				return nil
+			})
+		}
+		if found {
+			return true
+		}
+		stack = append(stack, scope.PreScopes...)
+	}
+	return false
+}
+
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
-	if shouldBuildLeftForAsof(node, left, right) {
+	if shouldBuildLeftForAsof(node, left, right) &&
+		!scopesContainOperator(probeScopes, vm.MergeRecursive) &&
+		!scopesContainOperator(buildScopes, vm.MergeRecursive) {
 		if node.Stats.HashmapStats.Shuffle {
 			return c.compileShuffleJoinWithBuildLeft(
 				node, left, right, probeScopes, buildScopes, true)

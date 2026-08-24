@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -117,6 +118,52 @@ func TestCompileAsofBuildLeftForSmallLeftHugeRight(t *testing.T) {
 	require.Len(t, build.Conditions, 1)
 }
 
+func TestCompileAsofBuildLeftAvoidsRecursiveInputs(t *testing.T) {
+	for _, recursiveSide := range []string{"logical-left", "logical-right"} {
+		t.Run(recursiveSide, func(t *testing.T) {
+			node := newShuffleJoinTestNode(1)
+			node.JoinType = plan.Node_ASOF_LEFT
+			node.AsofRightCol = 1
+			node.Stats.HashmapStats.Shuffle = false
+			node.OnList = []*plan.Expr{
+				makeMarkJoinTestCondition(t, "=", 0, true),
+				makeMarkJoinTestCondition(t, ">=", 1, true),
+			}
+			colType := plan.Type{Id: int32(types.T_int64)}
+			left := &plan.Node{
+				Stats: &plan.Stats{Outcnt: 2, Rowsize: 100},
+				ProjectList: []*plan.Expr{
+					makeMarkJoinTestColumn(0, 0, true),
+					{Typ: colType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+				},
+			}
+			right := &plan.Node{
+				Stats: &plan.Stats{Outcnt: 1_000_000_000, Rowsize: 1000},
+				ProjectList: []*plan.Expr{
+					makeMarkJoinTestColumn(1, 0, true),
+					{Typ: colType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 1}}},
+				},
+			}
+			c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+			leftScope := newShuffleJoinTestScope(t, c.cnList[0], 1)
+			rightScope := newShuffleJoinTestScope(t, c.cnList[0], 1)
+			if recursiveSide == "logical-left" {
+				leftScope.setRootOperator(mergerecursive.NewArgument())
+			} else {
+				rightScope.setRootOperator(mergerecursive.NewArgument())
+			}
+
+			result := c.compileJoin(
+				node, left, right, []*Scope{leftScope}, []*Scope{rightScope})
+			require.Len(t, result, 1)
+			op, ok := result[0].RootOp.(*hashjoin.HashJoin)
+			require.True(t, ok)
+			require.False(t, op.AsofBuildLeft,
+				"build-left ASOF cannot preserve recursive generations on either physical side")
+		})
+	}
+}
+
 func TestAsofBuildLeftCostBoundary(t *testing.T) {
 	node := &plan.Node{
 		JoinType: plan.Node_ASOF,
@@ -131,10 +178,10 @@ func TestAsofBuildLeftCostBoundary(t *testing.T) {
 		want      bool
 	}{
 		{name: "review example", leftRows: 2, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000, want: true},
-		{name: "bounded hot key amplification", leftRows: 64, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000, want: true},
-		{name: "hot key exceeds amplification bound", leftRows: 65, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000},
-		{name: "retained memory cannot hide excessive work amplification", leftRows: 10_000, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000},
-		{name: "candidate retention changes choice", leftRows: 60, leftSize: 1000, rightRows: 100, rightSize: 1000},
+		{name: "direct candidate boundary", leftRows: 64, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000, want: true},
+		{name: "actual hot group uses runtime range index", leftRows: 65, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000, want: true},
+		{name: "large memory-saving left uses runtime range index", leftRows: 10_000, leftSize: 100, rightRows: 1_000_000_000, rightSize: 1000, want: true},
+		{name: "range tree candidate retention changes choice", leftRows: 40, leftSize: 1000, rightRows: 100, rightSize: 1000},
 		{name: "right is smaller", leftRows: 2, leftSize: 1000, rightRows: 1, rightSize: 100},
 		{name: "unknown left", leftRows: 0, rightRows: 1_000_000_000, rightSize: 1000},
 		{name: "unknown right", leftRows: 2, leftSize: 100, rightRows: 0},

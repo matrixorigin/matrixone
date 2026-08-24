@@ -114,6 +114,10 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 			return nil
 		})
 	}
+	if hashJoin.AsofBuildLeft && hashJoin.recursiveProbe {
+		return moerr.NewInternalError(proc.Ctx,
+			"ASOF build-left does not support a recursive probe")
+	}
 
 	if hashJoin.OpAnalyzer == nil {
 		hashJoin.OpAnalyzer = process.NewAnalyzer(hashJoin.GetIdx(), hashJoin.IsFirst, hashJoin.IsLast, opName)

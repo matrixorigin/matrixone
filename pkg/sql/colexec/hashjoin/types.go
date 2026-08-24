@@ -106,20 +106,45 @@ type container struct {
 	asofIndexes            []asofIndex
 	asofIndexCount         int
 	// The build-left ASOF path retains the logical left input and scans the
-	// logical right input once. bestTimes/matched and bestRight are aligned by
-	// the materialized left-row ordinal. Only projected right columns are kept.
+	// logical right input once. Small actual equality groups keep candidate
+	// slots aligned by materialized left-row ordinal. If any actual group is
+	// larger than the direct-work bound, all groups share one range-update tree:
+	// the leaves are ordered by equality group and logical-left timestamp, and
+	// every retained candidate slot is one tree node.
 	asofBuildLeftBestTimes []int64
-	asofBuildLeftMatched   []uint8
-	// asofBuildLeftBatchRows records at most one source row per logical-left
-	// row for the current physical-right input batch. Deferring the payload copy
-	// until the batch winner is known avoids repeatedly appending varlen values
-	// when many right rows improve the same predecessor in one scan batch.
-	asofBuildLeftBatchRows   []int32
-	asofBuildLeftBestRight   *batch.Batch
-	asofBuildLeftInitialized bool
-	asofBuildLeftFinalRow    int64
-	asofBuildLeftLiveBytes   int64
-	asofBuildLeftDeadBytes   int64
+	// Sequence breaks equal-timestamp ties across different range-tree nodes in
+	// favor of the first row in the physical logical-right stream.
+	asofBuildLeftBestSequences []uint64
+	asofBuildLeftMatched       []uint8
+	// Indexed candidates share one retained right payload across every tree
+	// node updated by the same source row. Refcounts make superseded payload
+	// slots reusable without copying a full right row O(log L) times.
+	asofBuildLeftNodePayload      []int32
+	asofBuildLeftPayloadRefs      []int32
+	asofBuildLeftPayloadLive      []uint8
+	asofBuildLeftFreePayloadSlots []int32
+	asofBuildLeftFreePayloadCount int
+	asofBuildLeftNextPayload      int
+	// asofBuildLeftBatchRows records at most one source row per candidate slot
+	// for the current physical-right input batch. touchedSlots avoids scanning
+	// every slot after a small batch and is bounded by the slot count.
+	asofBuildLeftBatchRows    []int32
+	asofBuildLeftTouchedSlots []int32
+	asofBuildLeftTouchedCount int
+	// Indexed mode metadata is immutable for one JoinMap/spill generation.
+	// groups are addressed by JoinMap group id; order stores logical-left row
+	// ordinals sorted by timestamp inside each contiguous group range; leafPos
+	// maps a materialized left ordinal back to its point-query position.
+	asofBuildLeftGroups        []asofBuildLeftGroup
+	asofBuildLeftOrder         []int32
+	asofBuildLeftLeafPos       []int32
+	asofBuildLeftIndexed       bool
+	asofBuildLeftProbeSequence uint64
+	asofBuildLeftBestRight     *batch.Batch
+	asofBuildLeftInitialized   bool
+	asofBuildLeftFinalRow      int64
+	asofBuildLeftLiveBytes     int64
+	asofBuildLeftDeadBytes     int64
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -181,6 +206,13 @@ type asofIndex struct {
 	occupied       bool
 }
 
+// asofBuildLeftGroup identifies one half-open range in asofBuildLeftOrder.
+// It is pointer-free because it is allocated from the off-heap query mpool.
+type asofBuildLeftGroup struct {
+	start  int32
+	length int32
+}
+
 type HashJoin struct {
 	ctr container
 
@@ -210,9 +242,9 @@ type HashJoin struct {
 	JoinMapTag         int32
 	SpillThreshold     int64
 	AsofRightCol       int32
-	// AsofBuildLeft selects the bounded-memory physical path for a small logical
-	// left input: build/hash the left rows, stream the logical right input, keep
-	// one replaceable right candidate per left row, then finalize the left rows.
+	// AsofBuildLeft selects the bounded-memory physical path for a memory-cheaper
+	// logical left input: build/hash the left rows, stream the logical right,
+	// retain bounded predecessor candidates, then finalize the left rows.
 	AsofBuildLeft           bool
 	allocationAccount       *mpool.AllocationAccount
 	resultAllocation        *vector.AllocationAccountSelection
@@ -277,8 +309,17 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
 		len(hashJoin.ctr.asofIndexes) != 0 ||
 		len(hashJoin.ctr.asofBuildLeftBestTimes) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftBestSequences) != 0 ||
 		len(hashJoin.ctr.asofBuildLeftMatched) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftNodePayload) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftPayloadRefs) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftPayloadLive) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftFreePayloadSlots) != 0 ||
 		len(hashJoin.ctr.asofBuildLeftBatchRows) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftTouchedSlots) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftGroups) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftOrder) != 0 ||
+		len(hashJoin.ctr.asofBuildLeftLeafPos) != 0 ||
 		hashJoin.ctr.asofBuildLeftBestRight != nil ||
 		hashJoin.ctr.asofBuildLeftInitialized ||
 		len(hashJoin.ctr.eqCondExecs) != 0 ||
@@ -413,12 +454,35 @@ func (ctr *container) cleanAsofBuildLeftState(proc *process.Process) {
 	}
 	if proc != nil {
 		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftBestTimes)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftBestSequences)
 		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftMatched)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftNodePayload)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftPayloadRefs)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftPayloadLive)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftFreePayloadSlots)
 		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftBatchRows)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftTouchedSlots)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftGroups)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftOrder)
+		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftLeafPos)
 	}
 	ctr.asofBuildLeftBestTimes = nil
+	ctr.asofBuildLeftBestSequences = nil
 	ctr.asofBuildLeftMatched = nil
+	ctr.asofBuildLeftNodePayload = nil
+	ctr.asofBuildLeftPayloadRefs = nil
+	ctr.asofBuildLeftPayloadLive = nil
+	ctr.asofBuildLeftFreePayloadSlots = nil
+	ctr.asofBuildLeftFreePayloadCount = 0
+	ctr.asofBuildLeftNextPayload = 0
 	ctr.asofBuildLeftBatchRows = nil
+	ctr.asofBuildLeftTouchedSlots = nil
+	ctr.asofBuildLeftTouchedCount = 0
+	ctr.asofBuildLeftGroups = nil
+	ctr.asofBuildLeftOrder = nil
+	ctr.asofBuildLeftLeafPos = nil
+	ctr.asofBuildLeftIndexed = false
+	ctr.asofBuildLeftProbeSequence = 0
 	ctr.asofBuildLeftBestRight = nil
 	ctr.asofBuildLeftInitialized = false
 	ctr.asofBuildLeftFinalRow = 0
