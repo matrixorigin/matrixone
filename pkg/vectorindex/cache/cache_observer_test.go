@@ -169,3 +169,64 @@ func TestVectorIndexCacheHouseKeepingPublishesReasonBeforeRemovingEntry(t *testi
 	require.Equal(t, 1, mock.invalidatedCalls)
 	require.Equal(t, "ttl_expired", mock.invalidated)
 }
+
+func TestVectorIndexCacheHouseKeepingSkipsReplacedSnapshotEntry(t *testing.T) {
+	makeExpired := func(mock *observerMock) *VectorIndexSearch {
+		s := &VectorIndexSearch{Algo: mock}
+		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		s.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+		return s
+	}
+	oldA := makeExpired(&observerMock{
+		invalidatedReady:  make(chan struct{}),
+		allowInvalidation: make(chan struct{}),
+	})
+	oldB := makeExpired(&observerMock{
+		invalidatedReady:  make(chan struct{}),
+		allowInvalidation: make(chan struct{}),
+	})
+	c := NewVectorIndexCache()
+	c.IndexMap.Store("a", oldA)
+	c.IndexMap.Store("b", oldB)
+
+	done := make(chan struct{})
+	go func() {
+		c.HouseKeeping()
+		close(done)
+	}()
+
+	var capturedKey string
+	var capturedMock *observerMock
+	select {
+	case <-oldA.Algo.(*observerMock).invalidatedReady:
+		capturedKey = "a"
+		capturedMock = oldA.Algo.(*observerMock)
+		c.Remove("b")
+	case <-oldB.Algo.(*observerMock).invalidatedReady:
+		capturedKey = "b"
+		capturedMock = oldB.Algo.(*observerMock)
+		c.Remove("a")
+	}
+
+	replacementKey := "a"
+	if capturedKey == "a" {
+		replacementKey = "b"
+	}
+	replacement := &VectorIndexSearch{Algo: &observerMock{}}
+	replacement.Cond = sync.NewCond(replacement.Mutex.RLocker())
+	replacement.ExpireAt.Store(time.Now().Add(time.Hour).UnixMicro())
+	c.IndexMap.Store(replacementKey, replacement)
+
+	close(capturedMock.allowInvalidation)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("housekeeping did not finish after the captured entry was released")
+	}
+
+	value, loaded := c.IndexMap.Load(replacementKey)
+	require.True(t, loaded)
+	require.Same(t, replacement, value)
+	_, loaded = c.IndexMap.Load(capturedKey)
+	require.False(t, loaded, "the captured expired entry should be evicted")
+}

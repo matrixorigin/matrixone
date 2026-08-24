@@ -359,30 +359,37 @@ func (c *VectorIndexCache) Once() {
 // house keeping to check expired keys and delete from cache
 func (c *VectorIndexCache) HouseKeeping() {
 
-	expiredkeys := make([]string, 0, 16)
+	type expiredEntry struct {
+		key  string
+		algo *VectorIndexSearch
+	}
+	expiredEntries := make([]expiredEntry, 0, 16)
 
 	c.IndexMap.Range(func(key, value any) bool {
 		algo := value.(*VectorIndexSearch)
 		if algo.Expired() || algo.stale.Load() {
-			expiredkeys = append(expiredkeys, key.(string))
+			expiredEntries = append(expiredEntries, expiredEntry{key: key.(string), algo: algo})
 		}
 		return true
 	})
 
-	for _, k := range expiredkeys {
-		value, loaded := c.IndexMap.Load(k)
-		if loaded {
-			algo := value.(*VectorIndexSearch)
-			reason := "ttl_expired"
-			if algo.stale.Load() {
-				reason = "generation_changed"
-			}
-			if algo.claimDestroy(reason) {
-				c.IndexMap.CompareAndDelete(k, value)
-				algo.destroyClaimed()
-			}
-			algo = nil
-			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", k)
+	for _, entry := range expiredEntries {
+		value, loaded := c.IndexMap.Load(entry.key)
+		if !loaded || value != entry.algo {
+			continue
+		}
+		algo := entry.algo
+		if !algo.Expired() && !algo.stale.Load() {
+			continue
+		}
+		reason := "ttl_expired"
+		if algo.stale.Load() {
+			reason = "generation_changed"
+		}
+		if algo.claimDestroy(reason) {
+			c.IndexMap.CompareAndDelete(entry.key, algo)
+			algo.destroyClaimed()
+			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", entry.key)
 		}
 	}
 }
