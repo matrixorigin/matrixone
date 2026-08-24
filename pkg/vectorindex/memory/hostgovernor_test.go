@@ -239,4 +239,3 @@ func TestHostReservation_DeferredAndExplicitSettlePair(t *testing.T) {
 	full.Settle()
 	require.Zero(t, HostReservedBytes())
 }
-
