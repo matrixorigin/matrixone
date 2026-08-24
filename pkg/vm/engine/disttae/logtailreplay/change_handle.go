@@ -2764,16 +2764,17 @@ func (p *baseHandle) objectFileExists(ctx context.Context, obj *objectio.ObjectE
 }
 
 type ChangeHandler struct {
-	isRecoveryMode  bool // When true, Case 2.2 (insert->delete) will keep the delete for CDC restart scenarios
-	tombstoneHandle *baseHandle
-	dataHandle      *baseHandle
-	coarseMaxRow    int
-	quick           bool
-	primarySeqnum   int
-	primaryIdx      int
-	logicalSeqnums  []uint16
-	scheduler       tasks.JobScheduler
-	mp              *mpool.MPool
+	isRecoveryMode      bool // When true, Case 2.2 (insert->delete) will keep the delete for CDC restart scenarios
+	preserveAllVersions bool
+	tombstoneHandle     *baseHandle
+	dataHandle          *baseHandle
+	coarseMaxRow        int
+	quick               bool
+	primarySeqnum       int
+	primaryIdx          int
+	logicalSeqnums      []uint16
+	scheduler           tasks.JobScheduler
+	mp                  *mpool.MPool
 
 	readDuration, copyDuration    time.Duration
 	updateDuration, totalDuration time.Duration
@@ -3017,6 +3018,7 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 		spillConfig:              spillConfig,
 		debugLabel:               engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:              engine.RetainRowIDFromContext(ctx),
+		preserveAllVersions:      engine.CollectChangesPreserveAllVersionsFromContext(ctx),
 	}
 	defer func() {
 		if err != nil {
@@ -3093,20 +3095,21 @@ func newChangesHandlerWithCheckpointEntries(
 	isRecoveryMode bool,
 ) (changeHandle *ChangeHandler, err error) {
 	changeHandle = &ChangeHandler{
-		coarseMaxRow:   int(maxRow),
-		start:          start,
-		end:            end,
-		fs:             fs,
-		minTS:          start,
-		skipDeletes:    skipDeletes,
-		LogThreshold:   LogThreshold,
-		primarySeqnum:  primarySeqnum,
-		primaryIdx:     primarySeqnum,
-		mp:             mp,
-		scheduler:      tasks.NewParallelJobScheduler(LoadParallism),
-		isRecoveryMode: isRecoveryMode,
-		debugLabel:     engine.CollectChangesDebugLabelFromContext(ctx),
-		retainRowID:    engine.RetainRowIDFromContext(ctx),
+		coarseMaxRow:        int(maxRow),
+		start:               start,
+		end:                 end,
+		fs:                  fs,
+		minTS:               start,
+		skipDeletes:         skipDeletes,
+		LogThreshold:        LogThreshold,
+		primarySeqnum:       primarySeqnum,
+		primaryIdx:          primarySeqnum,
+		mp:                  mp,
+		scheduler:           tasks.NewParallelJobScheduler(LoadParallism),
+		isRecoveryMode:      isRecoveryMode,
+		debugLabel:          engine.CollectChangesDebugLabelFromContext(ctx),
+		retainRowID:         engine.RetainRowIDFromContext(ctx),
+		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
 	}
 	defer func() {
 		if err == nil {
@@ -3448,7 +3451,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 			dataEnd = true
 			err = nil
 		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
+			if err = p.coalesceBatch(data, tombstone); err != nil {
 				return
 			}
 			return
@@ -3461,7 +3464,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 			tombstoneEnd = true
 			err = nil
 		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
+			if err = p.coalesceBatch(data, tombstone); err != nil {
 				return
 			}
 			return
@@ -3469,7 +3472,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if err != nil {
 			return
 		}
-		if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
+		if err = p.coalesceBatch(data, tombstone); err != nil {
 			return
 		}
 		if tombstoneEnd && dataEnd {
@@ -3483,6 +3486,15 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		}
 	}
 	return
+}
+
+// coalesceBatch applies net-effect filtering to a pair of batches unless the
+// caller explicitly requests all historical versions.
+func (p *ChangeHandler) coalesceBatch(data, tombstone *batch.Batch) error {
+	if p.preserveAllVersions {
+		return nil
+	}
+	return filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode)
 }
 
 // filterBatch merges operations on the same primary key (pk) from data and tombstone batches.
@@ -3718,7 +3730,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
 			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
+				if err = p.coalesceBatch(data, tombstone); err != nil {
 					return
 				}
 				if data.Vecs[0].Length() > p.coarseMaxRow {
@@ -3735,7 +3747,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
 			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
+				if err = p.coalesceBatch(data, tombstone); err != nil {
 					return
 				}
 				if tombstone.Vecs[0].Length() > p.coarseMaxRow {
@@ -3753,7 +3765,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			err = nil
 			if data != nil || tombstone != nil {
-				if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
+				if err = p.coalesceBatch(data, tombstone); err != nil {
 					return
 				}
 				p.totalDuration += time.Since(t0)
@@ -3769,7 +3781,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
-			if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
+			if err = p.coalesceBatch(data, tombstone); err != nil {
 				return
 			}
 			p.totalDuration += time.Since(t0)
