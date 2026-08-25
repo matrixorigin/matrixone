@@ -71,6 +71,25 @@ public:
         return static_cast<size_t>(rows) * bytes_per_row();
     }
 
+    // Fraction of free VRAM this index may size against and claim, as a percentage.
+    //
+    // Per index, because the algorithms differ in how much of their peak the
+    // per-row cost above accounts for. An index whose cost covers its whole
+    // build can safely use more of the card; one whose peak includes phases cuVS
+    // manages internally needs the difference held back. A single global number
+    // would have to be the strictest of them, and would cost the others capacity
+    // they could use.
+    //
+    // 75% is the default: it suits an index whose bytes_per_row covers what the
+    // build actually allocates, leaving the remainder for the one large
+    // allocation to land in, plus concurrent queries and kernel scratch.
+    //
+    // Capacity sizing (rows_fitting) and the admission that follows both read this
+    // same value, so a build cannot be sized against one fraction and admitted
+    // against another.
+    static constexpr size_t kDefaultBudgetPercent = 75;
+    virtual size_t budget_percent() const { return kDefaultBudgetPercent; }
+
     // rows_fitting: how many rows fit across a device set.
     //
     // Sized from the SMALLEST participating card, because heterogeneous free
@@ -121,7 +140,8 @@ public:
                                              cudaGetErrorString(serr));
                 }
                 size_t free_bytes = 0;
-                const int64_t rows = rows_fitting_gpu_mem(per_row, who, &free_bytes);
+                const int64_t rows = rows_fitting_gpu_mem(per_row, who, &free_bytes,
+                                                          this->budget_percent());
                 if (distinct == 0 || rows < min_rows) {
                     min_rows = rows;
                     min_free = free_bytes;
@@ -166,13 +186,12 @@ private:
 // search reaches every list, so the whole index stays resident and sub-index
 // rotation does not shrink the sum.
 //
-// KNOWN GAP, measured: the real peak during extend runs above this figure, for
-// cuVS workspace not folded in. At 87.5M / dim 768 / f16 / m=192 the tar is
-// 17.6 GB but the device peak is ~24 GB (measured on an L40S). The device budget
-// leaves enough slack that this has not bitten on any workload measured so far,
-// but that is incidental -- the fraction exists to let one large allocation
-// succeed, not to cover a modelling shortfall -- and the slack is narrower at 75%
-// than at 60%. Folding the workspace into the per-row cost is the durable fix.
+// This figure is the RESIDENT index, not the build peak: extend also holds
+// cuVS-managed workspace, which the vendor sizes internally and does not expose.
+// At 87.5M / dim 768 / f16 / m=192 the resident index is 17.6 GB against a ~24 GB
+// peak on an L40S, so the workspace runs about 0.36x the modelled figure. That is
+// what budget_percent() below holds back for, rather than trying to model a
+// vendor internal from outside -- see the 65% there.
 class ivf_pq_cost final : public index_cost_base {
 public:
     ivf_pq_cost(size_t dim, size_t m, size_t bits_per_code, size_t elem_size,
@@ -184,6 +203,24 @@ public:
                     : 0.5) {}  // cuVS default when unset
 
     size_t bytes_per_row() const override { return (m_ * bits_ + 7) / 8 + 8; }
+
+    // 65%, deliberately below the default. bytes_per_row here is the PQ codes plus
+    // their payloads -- the index that stays resident -- while the extend phase
+    // also holds cuVS-managed workspace that the vendor sizes internally and does
+    // not expose. Modelling that from outside would be guesswork tied to a cuVS
+    // version; reserving for it is stable and needs no such coupling.
+    //
+    // The reserve is sized from a real build rather than a rule of thumb: at
+    // 87.5M / dim 768 / f16 / m=192 the resident index is 17.6 GB against a ~24 GB
+    // peak on an L40S, so the workspace runs about 0.36x the modelled figure.
+    // Holding back 35% covers that with margin at the capacity boundary, where a
+    // build sized to fill the budget is exactly where it would otherwise bite.
+    //
+    // CAGRA takes the 75% default because cagra_cost already charges both halves
+    // of its peak explicitly -- the resident dataset and the intermediate kNN
+    // graph -- so there is no comparable unmodelled term to hold back for.
+    static constexpr size_t kBudgetPercent = 65;
+    size_t budget_percent() const override { return kBudgetPercent; }
 
     // trainset_bytes_per_row: cuVS materialises the k-means trainset as float32
     // whatever the storage type, and for a non-float T also allocates a

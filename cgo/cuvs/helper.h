@@ -188,10 +188,15 @@ SearchResult cpu_topk_merge_sharded(const std::vector<SearchResult>& shard_resul
 // out_free_bytes, when non-null, receives the free-memory reading that was used.
 // Pure query: how many rows of per_row_bytes fit ~60% of free VRAM. Does not log --
 // callers that are merely sizing something have capped nothing.
-int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_free_bytes);
+// budget_percent is the caller's per-index fraction of free VRAM (index_cost.hpp,
+// index_cost_base::budget_percent). 0 falls back to the governor's default, for
+// callers with no cost class to ask.
+int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_free_bytes,
+                             size_t budget_percent = 0);
 
 // Caps requested_rows to what fits, logging only when it actually caps.
-int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const char* who);
+int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const char* who,
+                            size_t budget_percent = 0);
 
 } // namespace matrixone
 #endif
@@ -208,8 +213,22 @@ extern "C" {
 // gpu_rows_fitting_free_mem exposes rows_fitting_gpu_mem to Go. It makes device_id current
 // first: cudaMemGetInfo reports the CURRENT device, and the Go caller runs on an arbitrary
 // thread with no device bound. Returns 0 on success, -1 on failure (errmsg set).
+//
+// budget_percent is the algorithm's own fraction of free VRAM
+// (index_cost_base::budget_percent, reachable from Go via gpu_index_budget_percent);
+// 0 uses the governor default. A Go-side pre-flight MUST pass the index's own value:
+// admitting against a larger fraction than the C++ load claim uses would let a load
+// through here only to have the first deserialize refuse it, after the whole artifact
+// had been downloaded.
 int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
-                              int64_t* out_rows, uint64_t* out_free_bytes, void* errmsg);
+                              int64_t* out_rows, uint64_t* out_free_bytes,
+                              uint64_t budget_percent, void* errmsg);
+
+// gpu_index_budget_percent reports an algorithm's VRAM budget fraction
+// (index_cost_base::budget_percent) without constructing an index. index_type is the
+// name IndexConfig.Type already carries ("IVFPQ", "CAGRA", ...); unknown names take
+// the default.
+uint64_t gpu_index_budget_percent(const char* index_type);
 
 // ---- device memory governor, exposed to Go ------------------------------
 // One ledger for every large device allocation. C++ index LOADS claim through
@@ -218,7 +237,7 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
 // trainset as max(train,index) — restating that in C++ would fork it) and
 // because a Go-side claim can span the whole decided-but-not-yet-allocated
 // window, which a claim taken inside the C++ build cannot.
-//
+
 // gpu_device_total_mem reports a device's TOTAL VRAM in bytes -- hardware
 // capacity, NOT free memory. Free is a moving target; total is a property of the
 // card, so an index whose resident footprint exceeds it can never be searched
@@ -226,7 +245,8 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
 // out_total: the device's total VRAM. out_max_admissible: the most any admission
 // could ever grant there (the budget fraction of total) -- a demand above it can
 // never load however empty the card is. Either out-param may be NULL.
-int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_admissible, void* errmsg);
+int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_admissible,
+                         uint64_t budget_percent, void* errmsg);
 
 // gpu_device_memory_reserve returns an opaque token, or NULL with errmsg set
 // when the device cannot accommodate the request. The caller MUST pass the

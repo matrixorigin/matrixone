@@ -84,18 +84,23 @@ func TestDeviceMaxAdmissible(t *testing.T) {
 	}
 	total, err := DeviceTotalMem(devices[0])
 	require.NoError(t, err)
-	maxAdm, err := DeviceMaxAdmissible(devices[0])
+	maxAdm, err := DeviceMaxAdmissible(devices[0], IndexBudgetPercent("CAGRA"))
 	require.NoError(t, err)
 
 	require.Positive(t, maxAdm)
 	require.Less(t, maxAdm, total, "the admissible bound must be strictly below total")
 	// Pin it to the governor's fraction rather than a literal, so raising the
 	// budget moves both the admission path and this gate together.
-	require.Equal(t, total/4*3, maxAdm, "must be the 75%% budget fraction of TOTAL")
+	require.Equal(t, total/100*IndexBudgetPercent("CAGRA"), maxAdm,
+		"must be the cost class's fraction of TOTAL, not a literal")
+	// IVF-PQ deliberately holds back more, so the two must differ.
+	require.Less(t, IndexBudgetPercent("IVFPQ"), IndexBudgetPercent("CAGRA"),
+		"IVF-PQ reserves more for its unexposed extend workspace")
 
 	// It must NOT track free memory: free moves, and a refusal derived from it
 	// would be situational rather than permanent.
 	_, free, err := RowsFittingFreeMem(devices[0], 1)
 	require.NoError(t, err)
-	require.NotEqual(t, free/4*3, maxAdm, "must be a fraction of total, not of free")
+	require.NotEqual(t, free/100*IndexBudgetPercent("CAGRA"), maxAdm,
+		"must be a fraction of total, not of free")
 }

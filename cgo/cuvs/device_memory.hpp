@@ -72,14 +72,11 @@ namespace matrixone {
 // ---------------------------------------------------------------------------
 class device_memory_governor {
 public:
-    // Fraction of currently-free VRAM a governed allocation may consume. The
-    // single definition: rows_fitting_gpu_mem (helper.cpp) reads these same
-    // constants, so capacity sizing and admission cannot disagree.
-    //
-    // 75%, raised from 60%. 60% refused work the card could hold: a 1M-row CAGRA
-    // index at dim 768 / igd 256 needs ~70% of free, so it rotated into two
-    // sub-indexes on a device with room for it whole, and both build and query
-    // were slower for it. At 75% it builds as one index.
+    // DEFAULT fraction of currently-free VRAM a governed allocation may consume,
+    // for callers with no cost class to ask. The real value is per index --
+    // index_cost_base::budget_percent in index_cost.hpp -- because how much of an
+    // algorithm's build peak its per-row cost accounts for differs between them;
+    // IVF-PQ holds back more, CAGRA takes this default.
     //
     // The fraction is headroom for ONE large allocation to succeed, not a
     // reservation for a second build. cudaMemGetInfo reports total free bytes, but
@@ -88,11 +85,6 @@ public:
     // fails on the single allocation that needs it. CONCURRENCY is handled by the
     // ledger below instead: in-flight claims are summed, so two builds cannot both
     // pass the same free-memory snapshot however generous this fraction is.
-    //
-    // It also happens to absorb the cuVS build workspace the per-index cost models
-    // do not fold in (see the KNOWN GAP note on ivf_pq_cost in index_cost.hpp).
-    // That is a side effect, not the reason for the number, and it is why raising
-    // this further is better done after the workspace is modelled.
     static constexpr size_t kBudgetNumerator   = 3;
     static constexpr size_t kBudgetDenominator = 4;
 
@@ -163,10 +155,14 @@ public:
     //
     // THROWS std::runtime_error naming the demand, the budget and the free
     // figure when it does not fit, or when need_bytes is 0.
-    static reservation reserve(size_t need_bytes, const char* who) {
+    // budget_percent is the caller's per-index fraction (index_cost.hpp,
+    // index_cost_base::budget_percent). 0 falls back to the default below, for
+    // callers with no cost class to ask. Capacity sizing reads the same value, so
+    // a build cannot be sized against one fraction and admitted against another.
+    static reservation reserve(size_t need_bytes, const char* who, size_t budget_percent = 0) {
         int device_id = 0;
         if (cudaGetDevice(&device_id) != cudaSuccess) device_id = 0;
-        return reserve_on(device_id, need_bytes, who);
+        return reserve_on(device_id, need_bytes, who, budget_percent);
     }
 
     // reserve_on names the device explicitly, for callers that are not running
@@ -175,7 +171,8 @@ public:
     // from there is what covers the decided-but-not-yet-allocated window: a
     // claim taken inside the C++ build would only start at the allocation,
     // leaving the minutes between planning and allocating uncovered.
-    static reservation reserve_on(int device_id, size_t need_bytes, const char* who) {
+    static reservation reserve_on(int device_id, size_t need_bytes, const char* who,
+                                  size_t budget_percent = 0) {
         if (need_bytes == 0) {
             throw std::runtime_error(
                 std::string(who) + ": refusing a zero-byte VRAM claim; a zero demand means the "
@@ -217,7 +214,8 @@ public:
                                      " bytes: " + cudaGetErrorString(err));
         }
 
-        const size_t budget = free_bytes / kBudgetDenominator * kBudgetNumerator;
+        if (budget_percent == 0) budget_percent = kBudgetPercent;
+        const size_t budget = free_bytes / 100 * budget_percent;
 
         // Check-and-claim as one CAS so two concurrent callers cannot both pass
         // against the same ledger value. On CAS failure `inflight` is refreshed
@@ -231,7 +229,7 @@ public:
                 throw std::runtime_error(
                     std::string(who) + ": needs " + std::to_string(need_bytes) +
                     " bytes of VRAM on device " + std::to_string(device_id) + " but only " +
-                    std::to_string(left) + " are available (" + std::to_string(kBudgetPercent) +
+                    std::to_string(left) + " are available (" + std::to_string(budget_percent) +
                     "% of " + std::to_string(free_bytes) +
                     " free, " + std::to_string(inflight) + " already reserved by concurrent " +
                     "builds/loads); evict cached indexes, drop and rebuild at a smaller " +

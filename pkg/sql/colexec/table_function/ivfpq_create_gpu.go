@@ -164,8 +164,14 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// Placed after ToInsertSql (which packs and stamps the sizes) and before the
 	// statements are executed, so a refusal persists nothing.
 	if perDev := u.builder.PerDeviceBytes(); perDev > 0 {
+		// This algorithm's own fraction, read from its cost class, so the gate
+		// admits against exactly what the build was sized and claimed with.
+		budgetPct := cuvs.IndexBudgetPercent(u.idxcfg.Type)
 		if aerr := vimemory.DeviceAggregateFitsHardware(
-			u.devices, uint64(perDev), cuvs.DeviceMaxAdmissible,
+			u.devices, uint64(perDev),
+			func(dev int) (uint64, error) {
+				return cuvs.DeviceMaxAdmissible(dev, budgetPct)
+			},
 		); aerr != nil {
 			return aerr
 		}

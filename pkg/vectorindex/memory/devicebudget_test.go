@@ -84,11 +84,15 @@ func TestDeviceBuildBytes(t *testing.T) {
 	})
 }
 
-// fakeRowsFitting mirrors cuvs.RowsFittingFreeMem EXACTLY, including the two
-// details that matter: the budget is 60% of free, and the result is CLAMPED to a
-// minimum of 1 (helper.cpp rows_fitting_gpu_mem). A fake without that clamp lets
-// a "did anything fit?" predicate pass in tests while being always-true against
-// real hardware -- which is precisely the bug this fake now reproduces.
+// fakeRowsFitting stands in for cuvs.RowsFittingFreeMem. It reproduces the one
+// detail that matters to the code under test: the result is CLAMPED to a minimum
+// of 1 (helper.cpp rows_fitting_gpu_mem). A fake without that clamp lets a "did
+// anything fit?" predicate pass in tests while being always-true against real
+// hardware -- which is precisely the bug this fake now reproduces.
+//
+// The 60% here is an arbitrary stand-in, NOT the production fraction. That is per
+// index (index_cost.hpp: 75% default, 65% for IVF-PQ) and is chosen by the caller,
+// so pinning a number here would only test the fake.
 func fakeRowsFitting(free uint64) DeviceRowsFittingFunc {
 	return func(device int, perRow uint64) (int64, uint64, error) {
 		if perRow == 0 {
@@ -260,10 +264,11 @@ func TestPeakDeviceBytes(t *testing.T) {
 // this were sized from the whole tar again, CREATE would commit artifacts refused
 // here at every free level.
 func TestDeviceAggregateFitsFree(t *testing.T) {
-	// 1000 free -> 600 admissible at the 60% device fraction the fake mirrors,
-	// clamp included: a fake without that clamp models a contract the real
-	// rows_fitting_gpu_mem does not have, which is how an always-true predicate
-	// shipped here once before.
+	// 1000 free -> 600 admissible at the fake's stand-in fraction, clamp included:
+	// a fake without that clamp models a contract the real rows_fitting_gpu_mem
+	// does not have, which is how an always-true predicate shipped here once
+	// before. Production passes cuvs.RowsFittingFreeMemAt with the index's own
+	// fraction; what is under test here is the comparison, not the fraction.
 	fn := fakeRowsFitting(1000)
 
 	t.Run("under the budget is admitted, over is refused", func(t *testing.T) {

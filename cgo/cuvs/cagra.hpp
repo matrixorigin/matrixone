@@ -725,7 +725,7 @@ public:
                     // landed", and it is freed again before build() returns, so the
                     // bytes really are spoken for from here to there.
                     auto graph_claim = matrixone::device_memory_governor::reserve(
-                        graph_peak_bytes(dataset_host.extent(0)), "cagra::build graph");
+                        graph_peak_bytes(dataset_host.extent(0)), "cagra::build graph", this->budget_percent());
                     local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
                         *res, index_params, local_padded->as_dataset_view()));
                 }
@@ -813,7 +813,7 @@ public:
                     // landed", and it is freed again before build() returns, so the
                     // bytes really are spoken for from here to there.
                     auto graph_claim = matrixone::device_memory_governor::reserve(
-                        graph_peak_bytes(dataset_host.extent(0)), "cagra::build graph");
+                        graph_peak_bytes(dataset_host.extent(0)), "cagra::build graph", this->budget_percent());
                     local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
                         *res, index_params, local_padded->as_dataset_view()));
                 }
@@ -879,7 +879,7 @@ public:
                     // landed", and it is freed again before build() returns, so the
                     // bytes really are spoken for from here to there.
                     auto graph_claim = matrixone::device_memory_governor::reserve(
-                        graph_peak_bytes(dataset_host.extent(0)), "cagra::build graph");
+                        graph_peak_bytes(dataset_host.extent(0)), "cagra::build graph", this->budget_percent());
                     new_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
                         *res, index_params, new_padded->as_dataset_view()));
                 }
@@ -1751,7 +1751,7 @@ public:
             // claim holds no lock; it is dropped at scope exit, by which point the
             // memory is resident and cudaMemGetInfo accounts for it.
             const size_t load_bytes = matrixone::required_path_bytes(filename, "cagra::load");
-            auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load");
+            auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load", this->budget_percent());
             cuvs::neighbors::cagra::deserialize(*res, filename, local_idx.get(), &out_dataset);
             // Drain `res`'s stream so the dataset H2D copy committed by
             // deserialize is visible before any search thread reads it.
@@ -1917,7 +1917,7 @@ public:
                 // claim holds no lock; it is dropped at scope exit, by which point the
                 // memory is resident and cudaMemGetInfo accounts for it.
                 const size_t load_bytes = matrixone::required_path_bytes(full_path, "cagra::load");
-                auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load");
+                auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load", this->budget_percent());
                 cuvs::neighbors::cagra::deserialize(*res, full_path, local_idx.get(), &out_dataset);
                 // cuVS' cagra::deserialize stages the dataset host→device on
                 // `res`'s stream and returns BEFORE the H2D copy is committed.
@@ -1953,7 +1953,7 @@ public:
                     // claim holds no lock; it is dropped at scope exit, by which point the
                     // memory is resident and cudaMemGetInfo accounts for it.
                     const size_t load_bytes = matrixone::required_path_bytes(full_path, "cagra::load");
-                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load", this->budget_percent());
                     cuvs::neighbors::cagra::deserialize(*res, full_path, local_idx.get(), &out_dataset);
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
@@ -1981,7 +1981,7 @@ public:
                     // claim holds no lock; it is dropped at scope exit, by which point the
                     // memory is resident and cudaMemGetInfo accounts for it.
                     const size_t load_bytes = matrixone::required_path_bytes(shard_path, "cagra::load");
-                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load", this->budget_percent());
                     cuvs::neighbors::cagra::deserialize(*res, shard_path, local_idx.get(), &out_dataset);
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);

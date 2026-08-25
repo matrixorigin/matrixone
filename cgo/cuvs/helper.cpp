@@ -16,6 +16,7 @@
 
 #include "helper.h"
 #include "device_memory.hpp"
+#include "index_cost.hpp"
 #include <unordered_map>
 #include <stdexcept>
 #include <cuda_runtime.h>
@@ -210,7 +211,8 @@ void cast_float_to_half_host(const float* __restrict__ src,
 #endif
 }
 
-int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_free_bytes) {
+int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_free_bytes,
+                             size_t budget_percent) {
     if (per_row_bytes == 0) {
         throw std::runtime_error(std::string(who) + ": per-row size is 0");
     }
@@ -225,19 +227,22 @@ int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_
     // ONE definition of the budget fraction, shared with the admission path.
     // Planning and claiming drifting apart would let a build be planned against
     // one budget and refused against another.
-    const size_t budget = free_bytes / device_memory_governor::kBudgetDenominator *
-                          device_memory_governor::kBudgetNumerator;
+    // Per-index fraction, supplied by the caller's cost class; the governor's
+    // default stands in for callers that have no cost class to ask.
+    if (budget_percent == 0) budget_percent = device_memory_governor::kBudgetPercent;
+    const size_t budget = free_bytes / 100 * budget_percent;
     int64_t max_rows = static_cast<int64_t>(budget / per_row_bytes);
     return max_rows < 1 ? 1 : max_rows;
 }
 
-int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const char* who) {
+int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const char* who,
+                            size_t budget_percent) {
     if (requested_rows < 1) requested_rows = 1;
     size_t free_bytes = 0;
-    int64_t max_rows = rows_fitting_gpu_mem(per_row_bytes, who, &free_bytes);
+    int64_t max_rows = rows_fitting_gpu_mem(per_row_bytes, who, &free_bytes, budget_percent);
     if (requested_rows > max_rows) {
         std::cerr << "[" << who << "] capped " << requested_rows << " -> " << max_rows
-                  << " rows to fit " << device_memory_governor::kBudgetPercent
+                  << " rows to fit " << budget_percent
                   << "% of " << (free_bytes >> 20)
                   << " MB free GPU mem (per_row=" << per_row_bytes << "B)" << std::endl;
         return max_rows;
@@ -325,14 +330,16 @@ void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements
 }
 
 int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
-                              int64_t* out_rows, uint64_t* out_free_bytes, void* errmsg) {
+                              int64_t* out_rows, uint64_t* out_free_bytes,
+                              uint64_t budget_percent, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         // cudaMemGetInfo reads the CURRENT device; bind the requested one first.
         RAFT_CUDA_TRY(cudaSetDevice(device_id));
         size_t free_bytes = 0;
         int64_t rows = matrixone::rows_fitting_gpu_mem(
-            static_cast<size_t>(per_row_bytes), "index capacity", &free_bytes);
+            static_cast<size_t>(per_row_bytes), "index capacity", &free_bytes,
+            static_cast<size_t>(budget_percent));
         if (out_rows) *out_rows = rows;
         if (out_free_bytes) *out_free_bytes = static_cast<uint64_t>(free_bytes);
         return 0;
@@ -352,7 +359,8 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
 // resident footprint exceeds it can never be searched on this GPU no matter what
 // else is evicted, which makes it the honest basis for refusing a build outright
 // rather than deferring the failure to a query.
-int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_admissible, void* errmsg) {
+int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_admissible,
+                         uint64_t budget_percent, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         int prev_device = device_id;
@@ -381,9 +389,10 @@ int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_a
             // same fraction of FREE, and free <= total, so a demand above this can
             // never be admitted however empty the card gets. Derived from the same
             // constants the admission path uses so the two cannot drift.
-            *out_max_admissible = static_cast<uint64_t>(
-                total_bytes / matrixone::device_memory_governor::kBudgetDenominator *
-                matrixone::device_memory_governor::kBudgetNumerator);
+            // The caller's per-index fraction; 0 means "use the governor default".
+            uint64_t pct = budget_percent;
+            if (pct == 0) pct = matrixone::device_memory_governor::kBudgetPercent;
+            *out_max_admissible = static_cast<uint64_t>(total_bytes / 100 * pct);
         }
         return 0;
     } catch (const std::exception& e) {
@@ -393,6 +402,28 @@ int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_a
         matrixone::set_errmsg(errmsg, "Error in gpu_device_total_mem", "unknown C++ exception");
         return -1;
     }
+}
+
+// gpu_index_budget_percent reports an algorithm's VRAM budget fraction without
+// constructing an index: the value is a per-class constant (index_cost.hpp), and
+// callers on the Go side need it to admit a build or a load against the same
+// fraction the C++ claim will use.
+//
+// index_type is the index type name already carried by IndexConfig.Type
+// ("IVFPQ", "CAGRA", ...); unknown or null names take the default.
+//
+// MAINTENANCE: every cost class that overrides budget_percent() must appear here.
+// A name that falls through to the default is admitted by the Go-side gates at a
+// LARGER fraction than its own claim will accept, so a load passes the aggregate
+// pre-flight and then throws on the first deserialize -- after the whole artifact
+// has been downloaded, and naming one sub-index instead of the aggregate. There is
+// no compile-time enumeration of the subclasses to key off, so this list is the
+// only thing keeping the two in step.
+uint64_t gpu_index_budget_percent(const char* index_type) {
+    if (index_type != nullptr && std::strcmp(index_type, "IVFPQ") == 0) {
+        return static_cast<uint64_t>(matrixone::ivf_pq_cost::kBudgetPercent);
+    }
+    return static_cast<uint64_t>(matrixone::index_cost_base::kDefaultBudgetPercent);
 }
 
 void* gpu_device_memory_reserve(int device_id, uint64_t bytes, void* errmsg) {

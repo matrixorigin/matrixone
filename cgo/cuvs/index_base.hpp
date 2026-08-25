@@ -576,6 +576,11 @@ public:
 
     // build_peak_bytes: what a build of `rows` rows is about to allocate. Routed
     // through cost_ so the claim cannot drift from the planner's model.
+    // The per-index budget fraction, for the claim sites below and for
+    // rows_fitting. 0 when no cost class is attached, which the governor reads as
+    // "use the default".
+    size_t budget_percent() const { return cost_ ? cost_->budget_percent() : 0; }
+
     size_t build_peak_bytes(uint64_t rows) const {
         return cost_ ? cost_->build_peak_bytes(rows) : 0;
     }
@@ -2372,7 +2377,7 @@ protected:
         const size_t upload_bytes = static_cast<size_t>(n_rows) * this->dimension * sizeof(T);
         matrixone::device_memory_governor::reservation upload_claim;
         if (upload_bytes > 0) {
-            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload");
+            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload", this->budget_percent());
         }
         rmm::device_uvector<T> storage(
             static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
@@ -2408,7 +2413,7 @@ protected:
         }
         matrixone::device_memory_governor::reservation upload_claim;
         if (upload_bytes > 0) {
-            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload");
+            upload_claim = matrixone::device_memory_governor::reserve(upload_bytes, "index::upload", this->budget_percent());
         }
         rmm::device_uvector<T> storage(
             static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());

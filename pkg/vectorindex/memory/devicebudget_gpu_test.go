@@ -35,13 +35,18 @@ func TestDeviceAggregateOnRealDevice(t *testing.T) {
 		t.Skip("no GPU devices")
 	}
 
+	// The default fraction; the per-algo value is exercised through the create path.
+	maxAdm := func(dev int) (uint64, error) {
+		return cuvs.DeviceMaxAdmissible(dev, cuvs.IndexBudgetPercent("CAGRA"))
+	}
+
 	// A megabyte fits on any card this code supports.
-	require.NoError(t, DeviceAggregateFitsHardware(devices, 1<<20, cuvs.DeviceMaxAdmissible),
+	require.NoError(t, DeviceAggregateFitsHardware(devices, 1<<20, maxAdm),
 		"1 MiB must be admitted")
 
 	// 256 TiB fits on nothing, so this exercises the refusal against a real
 	// cudaMemGetInfo reading rather than a stub.
-	err = DeviceAggregateFitsHardware(devices, 1<<48, cuvs.DeviceMaxAdmissible)
+	err = DeviceAggregateFitsHardware(devices, 1<<48, maxAdm)
 	require.Error(t, err, "an impossible demand must be refused")
 	require.Contains(t, err.Error(), "even when completely idle")
 }

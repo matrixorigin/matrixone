@@ -279,14 +279,18 @@ func GetGpuDeviceList() ([]int, error) {
 	return devices, nil
 }
 
-// DeviceTotalMem reports a device's TOTAL VRAM in bytes -- the hardware capacity,
-// not what is currently free.
+// IndexBudgetPercent reports an algorithm's VRAM budget fraction, read from its
+// cost class rather than duplicated here, so a CREATE-time gate cannot admit
+// against a different fraction than the build was sized and claimed with.
 //
-// Admission normally works off free memory, but "can this index EVER be searched
-// on this GPU" is a different question with a stable answer: if its resident
-// footprint exceeds the card itself, no amount of eviction helps. That makes
-// total the right basis for refusing a build outright, where using free would
-// refuse builds that merely collided with whatever else was resident at the time.
+// indexType is the name IndexConfig.Type already carries (vectorindex.IVFPQ,
+// vectorindex.CAGRA, ...); unknown names take the default.
+func IndexBudgetPercent(indexType string) uint64 {
+	cs := C.CString(indexType)
+	defer C.free(unsafe.Pointer(cs))
+	return uint64(C.gpu_index_budget_percent(cs))
+}
+
 // DeviceMaxAdmissible reports the most VRAM any admission could EVER grant on a
 // device: the governor's budget fraction of TOTAL memory.
 //
@@ -298,10 +302,13 @@ func GetGpuDeviceList() ([]int, error) {
 //
 // Derived in C++ from the same constants the admission path uses, so the two
 // cannot drift.
-func DeviceMaxAdmissible(deviceID int) (uint64, error) {
+// budgetPercent is the algorithm's own fraction (index_cost_base::budget_percent);
+// 0 uses the governor default. Passing the index's own value keeps this gate on
+// the same fraction the build was sized and admitted against.
+func DeviceMaxAdmissible(deviceID int, budgetPercent uint64) (uint64, error) {
 	var errmsg *C.char
 	var maxAdm C.uint64_t
-	rc := C.gpu_device_total_mem(C.int(deviceID), nil, &maxAdm, unsafe.Pointer(&errmsg))
+	rc := C.gpu_device_total_mem(C.int(deviceID), nil, &maxAdm, C.uint64_t(budgetPercent), unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -313,10 +320,18 @@ func DeviceMaxAdmissible(deviceID int) (uint64, error) {
 	return uint64(maxAdm), nil
 }
 
+// DeviceTotalMem reports a device's TOTAL VRAM in bytes -- the hardware capacity,
+// not what is currently free.
+//
+// Admission normally works off free memory, but "can this index EVER be searched
+// on this GPU" is a different question with a stable answer: if its resident
+// footprint exceeds the card itself, no amount of eviction helps. That makes
+// total the right basis for refusing a build outright, where using free would
+// refuse builds that merely collided with whatever else was resident at the time.
 func DeviceTotalMem(deviceID int) (uint64, error) {
 	var errmsg *C.char
 	var total C.uint64_t
-	rc := C.gpu_device_total_mem(C.int(deviceID), &total, nil, unsafe.Pointer(&errmsg))
+	rc := C.gpu_device_total_mem(C.int(deviceID), &total, nil, 0, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
@@ -340,6 +355,27 @@ func DeviceTotalMem(deviceID int) (uint64, error) {
 // Sample this BEFORE constructing any index: the RMM pool that worker->start() creates counts
 // as used memory, so a later reading understates what is actually available for the build.
 func RowsFittingFreeMem(deviceID int, perRowBytes uint64) (rows int64, freeBytes uint64, err error) {
+	return rowsFittingFreeMem(deviceID, perRowBytes, 0)
+}
+
+// RowsFittingFreeMemAt is RowsFittingFreeMem against an explicit budget fraction --
+// the algorithm's own, from IndexBudgetPercent. 0 means the governor default.
+//
+// A pre-flight that admits against a LARGER fraction than the C++ load claim uses is
+// worse than no pre-flight: IVF-PQ claims at 65% (ivf_pq_cost::kBudgetPercent), so a
+// gate left on the 75% default admits an index sized between the two, and the first
+// deserialize then refuses it -- after the whole artifact has been downloaded, and
+// with a message naming one sub-index instead of the aggregate. That is precisely
+// the failure the aggregate gate exists to turn into an up-front refusal.
+//
+// Returned as a closure so it drops straight into memory.DeviceRowsFittingFunc.
+func RowsFittingFreeMemAt(budgetPercent uint64) func(deviceID int, perRowBytes uint64) (int64, uint64, error) {
+	return func(deviceID int, perRowBytes uint64) (rows int64, freeBytes uint64, err error) {
+		return rowsFittingFreeMem(deviceID, perRowBytes, budgetPercent)
+	}
+}
+
+func rowsFittingFreeMem(deviceID int, perRowBytes uint64, budgetPercent uint64) (rows int64, freeBytes uint64, err error) {
 	if perRowBytes == 0 {
 		return 0, 0, moerr.NewInternalErrorNoCtx("RowsFittingFreeMem: per-row size is 0")
 	}
@@ -351,6 +387,7 @@ func RowsFittingFreeMem(deviceID int, perRowBytes uint64) (rows int64, freeBytes
 		C.uint64_t(perRowBytes),
 		&cRows,
 		&cFree,
+		C.uint64_t(budgetPercent),
 		unsafe.Pointer(&errmsg),
 	)
 	if errmsg != nil {

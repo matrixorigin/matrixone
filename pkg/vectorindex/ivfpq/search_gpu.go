@@ -19,6 +19,7 @@ package ivfpq
 import (
 	"context"
 	"math"
+	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -458,14 +459,16 @@ func (s *IvfpqSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[B, Q], error)
 // current free VRAM even though each individual model fit at build time.
 // Without an admission gate the first query would OOM after committing.
 //
-// That admission is enforced per sub-index inside IvfpqModel.LoadIndex, not as
-// an aggregate pre-pass here. It has to run after the tar is local, because
-// SHARDED attribution reads the shard count out of the tar manifest and a model
-// straight from LoadMetadata carries no Path yet; checking up front opened "".
-// Sub-indexes also load sequentially, so re-sampling free VRAM per sub-index
-// accounts for the ones already resident more precisely than one up-front sum,
-// and cgo/cuvs/device_memory.hpp claims the bytes across the window where an
-// admitted load is not resident yet.
+// That is admitted here as an aggregate, BEFORE the first deserialize. Doing it
+// per sub-index instead admits the early ones, spends the budget on them, and
+// refuses a later one -- failing after most of the memory is already taken, and
+// naming one sub-index rather than the total. The per-sub-index claims in
+// cgo/cuvs/device_memory.hpp remain the authoritative admission; this is a
+// pre-flight, and takes no reservation of its own.
+//
+// The aggregate needs the tars local (SHARDED attribution reads the shard sizes
+// out of the archive), so the download is split out of LoadIndex into
+// FetchArtifact and run first.
 func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q]) ([]*IvfpqModel[B, Q], error) {
 	// Fetch every sub-index first, then admit the aggregate, then load. Splitting
 	// the download from the load is what lets the gate see the SAME quantity CREATE
@@ -474,10 +477,29 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 	// FileSize instead would charge the whole tar -- ids.bin, the INCLUDE blobs,
 	// the quantizer, the bitset -- none of which reach the GPU, and CREATE would
 	// then commit artifacts refused here at every free level.
-	//
-	// Checked before the first deserialize on purpose: per-sub-index admission
-	// alone admits the early ones, spends the budget, and fails on a later one
-	// having already paid for most of the memory.
+
+	// Tars this call fetched, and only those. Until the load loop below takes
+	// them over -- LoadIndex removes each one in view mode once Unpack has read
+	// it, and Destroy removes it on a failed load -- nothing else will: Load
+	// returns before it assigns s.Indexes or arms its deferred Destroy, so an
+	// early return from here is the end of the line. While the download lived
+	// inside LoadIndex its own defer covered this; now that it is hoisted out,
+	// a refusal from the aggregate gate would otherwise leak the whole
+	// multi-gigabyte download on every retried query.
+	var fetchedHere []*IvfpqModel[B, Q]
+	admitted := false
+	defer func() {
+		if admitted {
+			return
+		}
+		for _, idx := range fetchedHere {
+			if len(idx.Path) > 0 {
+				os.Remove(idx.Path)
+				idx.Path = ""
+			}
+		}
+	}()
+
 	comps := make([]map[string]int64, 0, len(indexes))
 	for _, idx := range indexes {
 		if len(idx.Path) == 0 {
@@ -486,6 +508,7 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 				return nil, ferr
 			}
 			idx.Path = fetched
+			fetchedHere = append(fetchedHere, idx)
 		}
 		sizes, merr := cuvs.MeasureTar(idx.Path)
 		if merr != nil {
@@ -499,11 +522,18 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		}
 		comps = append(comps, device)
 	}
+	// This algorithm's own fraction, not the governor default: IVF-PQ claims at
+	// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
+	// index the very first deserialize then refuses.
 	if err := memory.DeviceAggregateFitsFree(
-		s.Devices, uint64(memory.PeakDeviceBytes(s.Devices, comps)), cuvs.RowsFittingFreeMem,
+		s.Devices, uint64(memory.PeakDeviceBytes(s.Devices, comps)),
+		cuvs.RowsFittingFreeMemAt(cuvs.IndexBudgetPercent(s.Idxcfg.Type)),
 	); err != nil {
 		return nil, err
 	}
+
+	// Past the gate the loads own the tars; the cleanup above must not race them.
+	admitted = true
 
 	for _, idx := range indexes {
 		idx.Devices = s.Devices

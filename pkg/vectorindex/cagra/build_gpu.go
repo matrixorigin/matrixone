@@ -303,7 +303,6 @@ func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 //
 // Excludes the host-only members of each tar (ids.bin, INCLUDE blobs), which never
 // reach the GPU. Valid only after ToInsertSql, which packs and stamps the sizes.
-
 func (b *CagraBuild[B, Q]) PerDeviceBytes() int64 {
 	comps := make([]map[string]int64, 0, len(b.indexes))
 	for _, idx := range b.indexes {
