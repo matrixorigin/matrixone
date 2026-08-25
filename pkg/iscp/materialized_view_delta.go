@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -36,9 +37,14 @@ import (
 )
 
 const (
-	materializedViewDeltaBatchRows = 512
+	// Keep enough rows in one delta statement to amortize parsing, planning and
+	// target-table joins. The SQL-size guard below remains the hard safety bound
+	// for wide rows.
+	materializedViewDeltaBatchRows = 8192
 	materializedViewDeltaMaxSQL    = 8 << 20
 )
+
+var errMaterializedViewDeltaSQLTooLarge = errors.New("materialized view delta SQL is too large")
 
 func execMaterializedViewDeltaSQL(
 	ctx context.Context,
@@ -97,6 +103,9 @@ func decodeIncrementalDescription(encoded string) (*incrementalDescription, erro
 		case "sum":
 			if agg.InputExpression == "" || agg.StateCountColumn == "" {
 				return nil, fmt.Errorf("incremental SUM requires input and state")
+			}
+			if desc.GroupKeyColumn != "" && agg.StateSumColumn == "" {
+				return nil, fmt.Errorf("incremental SUM with a group key requires sum state")
 			}
 		case "avg":
 			if agg.InputExpression == "" || agg.StateSumColumn == "" || agg.StateCountColumn == "" {
@@ -195,7 +204,7 @@ func (c *MaterializedViewConsumer) consumeIncremental(ctx context.Context, r Dat
 				}
 				for start := 0; start < len(rows); start += materializedViewDeltaBatchRows {
 					end := min(start+materializedViewDeltaBatchRows, len(rows))
-					if err := applyMaterializedViewDeltaBatch(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, sourceTypes, rows[start:end]); err != nil {
+					if err := applyMaterializedViewDeltaRows(refreshCtx, sqlctx.GetService(), sqlctx.Txn(), c.info, desc, sourceTypes, rows[start:end]); err != nil {
 						data.Done()
 						return err
 					}
@@ -246,23 +255,148 @@ func applyMaterializedViewDeltaBatch(
 	if len(rows) == 0 {
 		return nil
 	}
+	needsDeleteCleanup := false
+	for _, row := range rows {
+		if row.sign < 0 {
+			needsDeleteCleanup = true
+			break
+		}
+	}
+	target := sqlquote.QualifiedIdent(info.DBName, info.TableName)
+	if materializedViewDeltaCanUpsert(desc) {
+		if !needsDeleteCleanup {
+			return execMaterializedViewDeltaUpsert(ctx, service, txn, info, desc, sourceTypes, rows)
+		}
+		negative := make([]materializedViewSignedRow, 0, len(rows))
+		positive := make([]materializedViewSignedRow, 0, len(rows))
+		for _, row := range rows {
+			if row.sign < 0 {
+				negative = append(negative, row)
+			} else {
+				positive = append(positive, row)
+			}
+		}
+		// Validate both statements before executing either one so the adaptive
+		// SQL-size split below never retries after a partial negative delta.
+		for _, partition := range [][]materializedViewSignedRow{negative, positive} {
+			if len(partition) == 0 {
+				continue
+			}
+			if _, err := materializedViewDeltaCTE(ctx, desc, sourceTypes, partition); err != nil {
+				return err
+			}
+		}
+		if err := execMaterializedViewDeltaUpsert(ctx, service, txn, info, desc, sourceTypes, negative); err != nil {
+			return err
+		}
+		if err := execMaterializedViewDeltaAndClose(ctx, fmt.Sprintf("DELETE FROM %s WHERE %s <= 0", target, sqlquote.Ident(desc.RowCountColumn)), service, txn); err != nil {
+			return err
+		}
+		return execMaterializedViewDeltaUpsert(ctx, service, txn, info, desc, sourceTypes, positive)
+	}
 	cte, err := materializedViewDeltaCTE(ctx, desc, sourceTypes, rows)
 	if err != nil {
 		return err
 	}
-	target := sqlquote.QualifiedIdent(info.DBName, info.TableName)
+	columns, values := materializedViewDeltaInsertProjection(desc, "d")
 	join := materializedViewDeltaJoin(desc, "t", "d")
 	sets := materializedViewDeltaUpdateSets(desc, "t", "d")
 	if err := execMaterializedViewDeltaAndClose(ctx, fmt.Sprintf("%s UPDATE %s AS t JOIN delta AS d ON %s SET %s", cte, target, join, strings.Join(sets, ",")), service, txn); err != nil {
 		return err
 	}
-	columns, values := materializedViewDeltaInsertProjection(desc, "d")
+	missingColumn := catalog.FakePrimaryKeyColName
+	if desc.GroupKeyColumn != "" {
+		missingColumn = desc.GroupKeyColumn
+	}
 	insert := fmt.Sprintf("%s INSERT INTO %s (%s) SELECT %s FROM delta AS d LEFT JOIN %s AS t ON %s WHERE t.%s IS NULL AND d.__mo_row_delta > 0",
-		cte, target, strings.Join(columns, ","), strings.Join(values, ","), target, join, sqlquote.Ident(catalog.FakePrimaryKeyColName))
+		cte, target, strings.Join(columns, ","), strings.Join(values, ","), target, join, sqlquote.Ident(missingColumn))
 	if err := execMaterializedViewDeltaAndClose(ctx, insert, service, txn); err != nil {
 		return err
 	}
+	if !needsDeleteCleanup {
+		return nil
+	}
 	return execMaterializedViewDeltaAndClose(ctx, fmt.Sprintf("DELETE FROM %s WHERE %s <= 0", target, sqlquote.Ident(desc.RowCountColumn)), service, txn)
+}
+
+func execMaterializedViewDeltaUpsert(
+	ctx context.Context,
+	service string,
+	txn client.TxnOperator,
+	info *ConsumerInfo,
+	desc *incrementalDescription,
+	sourceTypes []*types.Type,
+	rows []materializedViewSignedRow,
+) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	cte, err := materializedViewDeltaCTE(ctx, desc, sourceTypes, rows)
+	if err != nil {
+		return err
+	}
+	columns, values := materializedViewDeltaInsertProjection(desc, "d")
+	upsert := fmt.Sprintf("%s INSERT INTO %s (%s) SELECT %s FROM delta AS d ON DUPLICATE KEY UPDATE %s",
+		cte, sqlquote.QualifiedIdent(info.DBName, info.TableName), strings.Join(columns, ","), strings.Join(values, ","), strings.Join(materializedViewDeltaUpsertSets(desc), ","))
+	return execMaterializedViewDeltaAndClose(ctx, upsert, service, txn)
+}
+
+func materializedViewDeltaCanUpsert(desc *incrementalDescription) bool {
+	return desc != nil && len(desc.Groups) > 0 && desc.GroupKeyColumn != ""
+}
+
+func materializedViewDeltaUpsertSets(desc *incrementalDescription) []string {
+	sets := make([]string, 0, len(desc.Aggregates)*3+1)
+	value := func(column string) string {
+		quoted := sqlquote.Ident(column)
+		return "VALUES(" + quoted + ")"
+	}
+	for _, agg := range desc.Aggregates {
+		out := sqlquote.Ident(agg.OutputColumn)
+		switch agg.Kind {
+		case "count_star", "count_column":
+			sets = append(sets, fmt.Sprintf("%s = %s + %s", out, out, value(agg.OutputColumn)))
+		case "sum":
+			stateSum := sqlquote.Ident(agg.StateSumColumn)
+			stateCount := sqlquote.Ident(agg.StateCountColumn)
+			sets = append(sets,
+				fmt.Sprintf("%s = CASE WHEN %s + %s = 0 THEN NULL ELSE coalesce(%s,0) + coalesce(%s,0) END", out, stateCount, value(agg.StateCountColumn), stateSum, value(agg.StateSumColumn)),
+				fmt.Sprintf("%s = coalesce(%s,0) + coalesce(%s,0)", stateSum, stateSum, value(agg.StateSumColumn)),
+				fmt.Sprintf("%s = %s + %s", stateCount, stateCount, value(agg.StateCountColumn)))
+		case "avg":
+			stateSum := sqlquote.Ident(agg.StateSumColumn)
+			stateCount := sqlquote.Ident(agg.StateCountColumn)
+			sets = append(sets,
+				fmt.Sprintf("%s = CASE WHEN %s + %s = 0 THEN NULL ELSE (coalesce(%s,0) + coalesce(%s,0)) / (%s + %s) END", out, stateCount, value(agg.StateCountColumn), stateSum, value(agg.StateSumColumn), stateCount, value(agg.StateCountColumn)),
+				fmt.Sprintf("%s = coalesce(%s,0) + coalesce(%s,0)", stateSum, stateSum, value(agg.StateSumColumn)),
+				fmt.Sprintf("%s = %s + %s", stateCount, stateCount, value(agg.StateCountColumn)))
+		}
+	}
+	rowCount := sqlquote.Ident(desc.RowCountColumn)
+	sets = append(sets, fmt.Sprintf("%s = %s + %s", rowCount, rowCount, value(desc.RowCountColumn)))
+	return sets
+}
+
+// applyMaterializedViewDeltaRows preserves the configured row batch for the
+// common case while splitting unusually wide rows before any DML is executed.
+func applyMaterializedViewDeltaRows(
+	ctx context.Context,
+	service string,
+	txn client.TxnOperator,
+	info *ConsumerInfo,
+	desc *incrementalDescription,
+	sourceTypes []*types.Type,
+	rows []materializedViewSignedRow,
+) error {
+	err := applyMaterializedViewDeltaBatch(ctx, service, txn, info, desc, sourceTypes, rows)
+	if !errors.Is(err, errMaterializedViewDeltaSQLTooLarge) || len(rows) <= 1 {
+		return err
+	}
+	middle := len(rows) / 2
+	if err = applyMaterializedViewDeltaRows(ctx, service, txn, info, desc, sourceTypes, rows[:middle]); err != nil {
+		return err
+	}
+	return applyMaterializedViewDeltaRows(ctx, service, txn, info, desc, sourceTypes, rows[middle:])
 }
 
 func execMaterializedViewDeltaAndClose(
@@ -356,7 +490,7 @@ func materializedViewDeltaCTE(
 	cte := fmt.Sprintf("WITH src AS (SELECT %s FROM (VALUES %s) AS __mo_mv_values), delta AS (SELECT %s FROM src AS %s%s GROUP BY %s)",
 		strings.Join(columns, ","), string(values), strings.Join(projection, ","), sqlquote.Ident(desc.SourceAlias), where, strings.Join(groupBy, ","))
 	if len(cte) > materializedViewDeltaMaxSQL {
-		return "", fmt.Errorf("materialized view delta SQL exceeds %d bytes", materializedViewDeltaMaxSQL)
+		return "", fmt.Errorf("%w: exceeds %d bytes", errMaterializedViewDeltaSQLTooLarge, materializedViewDeltaMaxSQL)
 	}
 	return cte, nil
 }
@@ -370,7 +504,14 @@ func materializedViewDeltaJoin(desc *incrementalDescription, targetAlias, deltaA
 	for i, group := range desc.Groups {
 		target := targetAlias + "." + sqlquote.Ident(group.OutputColumn)
 		delta := deltaAlias + "." + materializedViewDeltaGroupAlias(i)
-		predicates[i] = fmt.Sprintf("(%s = %s OR (%s IS NULL AND %s IS NULL))", target, delta, target, delta)
+		if group.NotNullable {
+			// Keep this as a plain equality so the optimizer can use a hash join.
+			// Null-safe equality is only required for nullable GROUP BY keys and
+			// can prevent the plain-equality hash-join optimization.
+			predicates[i] = target + " = " + delta
+		} else {
+			predicates[i] = target + " <=> " + delta
+		}
 	}
 	return strings.Join(predicates, " AND ")
 }
@@ -386,9 +527,17 @@ func materializedViewDeltaUpdateSets(desc *incrementalDescription, targetAlias, 
 			sets = append(sets, fmt.Sprintf("%s = %s + %s", out, out, countDelta))
 		case "sum":
 			stateCount := targetAlias + "." + sqlquote.Ident(agg.StateCountColumn)
-			sets = append(sets,
-				fmt.Sprintf("%s = CASE WHEN %s + %s = 0 THEN NULL ELSE coalesce(%s,0) + coalesce(%s,0) END", out, stateCount, countDelta, out, sumDelta),
-				fmt.Sprintf("%s = %s + %s", stateCount, stateCount, countDelta))
+			if agg.StateSumColumn == "" {
+				sets = append(sets,
+					fmt.Sprintf("%s = CASE WHEN %s + %s = 0 THEN NULL ELSE coalesce(%s,0) + coalesce(%s,0) END", out, stateCount, countDelta, out, sumDelta),
+					fmt.Sprintf("%s = %s + %s", stateCount, stateCount, countDelta))
+			} else {
+				stateSum := targetAlias + "." + sqlquote.Ident(agg.StateSumColumn)
+				sets = append(sets,
+					fmt.Sprintf("%s = CASE WHEN %s + %s = 0 THEN NULL ELSE coalesce(%s,0) + coalesce(%s,0) END", out, stateCount, countDelta, stateSum, sumDelta),
+					fmt.Sprintf("%s = coalesce(%s,0) + coalesce(%s,0)", stateSum, stateSum, sumDelta),
+					fmt.Sprintf("%s = %s + %s", stateCount, stateCount, countDelta))
+			}
 		case "avg":
 			stateSum := targetAlias + "." + sqlquote.Ident(agg.StateSumColumn)
 			stateCount := targetAlias + "." + sqlquote.Ident(agg.StateCountColumn)
@@ -410,6 +559,14 @@ func materializedViewDeltaInsertProjection(desc *incrementalDescription, deltaAl
 		columns = append(columns, sqlquote.Ident(group.OutputColumn))
 		values = append(values, deltaAlias+"."+materializedViewDeltaGroupAlias(i))
 	}
+	if desc.GroupKeyColumn != "" {
+		groupArgs := make([]string, len(desc.Groups))
+		for i := range desc.Groups {
+			groupArgs[i] = deltaAlias + "." + materializedViewDeltaGroupAlias(i)
+		}
+		columns = append(columns, sqlquote.Ident(desc.GroupKeyColumn))
+		values = append(values, "serial_full("+strings.Join(groupArgs, ",")+")")
+	}
 	for i, agg := range desc.Aggregates {
 		countDelta := deltaAlias + "." + materializedViewDeltaCountAlias(i)
 		sumDelta := deltaAlias + "." + materializedViewDeltaSumAlias(i)
@@ -419,6 +576,10 @@ func materializedViewDeltaInsertProjection(desc *incrementalDescription, deltaAl
 			values = append(values, countDelta)
 		case "sum":
 			values = append(values, fmt.Sprintf("CASE WHEN %s = 0 THEN NULL ELSE %s END", countDelta, sumDelta))
+			if agg.StateSumColumn != "" {
+				columns = append(columns, sqlquote.Ident(agg.StateSumColumn))
+				values = append(values, sumDelta)
+			}
 			columns = append(columns, sqlquote.Ident(agg.StateCountColumn))
 			values = append(values, countDelta)
 		case "avg":

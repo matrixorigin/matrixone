@@ -1359,6 +1359,32 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 	}
 }
 
+func TestMaterializedViewIncrementalSpecPreservesGroupNullability(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select service, count(*) requests from events group by service", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	outputs := []*ColDef{
+		{Name: "service", Typ: Type{Id: int32(types.T_int64), NotNullable: true}},
+		{Name: "requests", Typ: Type{Id: int32(types.T_int64), NotNullable: true}},
+	}
+	spec, _, _ := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputs)
+	require.NotEmpty(t, spec)
+	decoded, err := base64.StdEncoding.DecodeString(spec)
+	require.NoError(t, err)
+	var desc materializedViewIncrementalDescription
+	require.NoError(t, json.Unmarshal(decoded, &desc))
+	require.Len(t, desc.Groups, 1)
+	require.True(t, desc.Groups[0].NotNullable)
+	require.NotEmpty(t, desc.GroupKeyColumn)
+	require.Equal(t, []string{desc.GroupKeyColumn}, materializedViewIncrementalPrimaryKey(spec))
+	desc.Groups[0].NotNullable = false
+	decoded, err = json.Marshal(desc)
+	require.NoError(t, err)
+	require.Equal(t, []string{desc.GroupKeyColumn}, materializedViewIncrementalPrimaryKey(base64.StdEncoding.EncodeToString(decoded)))
+}
+
 func TestMaterializedViewRefreshCanWriteHiddenState(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	ctx := &mock.ctxt

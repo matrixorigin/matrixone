@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -63,6 +64,7 @@ type incrementalAggregate struct {
 type incrementalGroup struct {
 	Expression   string `json:"expression"`
 	OutputColumn string `json:"output_column"`
+	NotNullable  bool   `json:"not_nullable,omitempty"`
 }
 
 type incrementalDescription struct {
@@ -71,6 +73,7 @@ type incrementalDescription struct {
 	Filter         string                 `json:"filter,omitempty"`
 	Groups         []incrementalGroup     `json:"groups"`
 	Aggregates     []incrementalAggregate `json:"aggregates"`
+	GroupKeyColumn string                 `json:"group_key_column,omitempty"`
 	RowCountColumn string                 `json:"row_count_column"`
 	StateColumns   []string               `json:"state_columns"`
 }
@@ -180,11 +183,22 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
 			sqlctx := sqlproc.SqlCtx
 			refreshCtx := context.WithValue(sqlproc.GetContext(), defines.MaterializedViewRefreshKey{}, true)
+			var incrementalDesc *incrementalDescription
+			if c.info.IncrementalSpec != "" {
+				var decodeErr error
+				incrementalDesc, decodeErr = decodeIncrementalDescription(c.info.IncrementalSpec)
+				if decodeErr != nil {
+					return decodeErr
+				}
+			}
 			// Keep this as a row DELETE. A predicate is required because a
 			// predicate-free DELETE is optimized to TRUNCATE, which replaces the
-			// physical relation and unregisters the source ISCP job as a side
-			// effect. The fake primary key is present on every MV result row.
-			deleteSQL := fmt.Sprintf("delete from `%s`.`%s` where `__mo_fake_pk_col` is not null", c.info.DBName, c.info.TableName)
+			// physical relation and unregisters the source ISCP job as a side effect.
+			deleteColumn := catalog.FakePrimaryKeyColName
+			if materializedViewDeltaCanUpsert(incrementalDesc) {
+				deleteColumn = incrementalDesc.GroupKeyColumn
+			}
+			deleteSQL := fmt.Sprintf("delete from `%s`.`%s` where %s is not null", c.info.DBName, c.info.TableName, sqlquote.Ident(deleteColumn))
 			res, err := ExecWithResult(refreshCtx, deleteSQL, sqlctx.GetService(), sqlctx.Txn())
 			if err != nil {
 				return err
@@ -201,12 +215,8 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 			insertSQL := fmt.Sprintf("insert into `%s`.`%s` %s", c.info.DBName, c.info.TableName, refreshSQL)
 			if len(c.info.Columns) > 0 {
 				targetColumns := append([]string(nil), c.info.Columns...)
-				if c.info.IncrementalSpec != "" {
-					desc, decodeErr := decodeIncrementalDescription(c.info.IncrementalSpec)
-					if decodeErr != nil {
-						return decodeErr
-					}
-					targetColumns = append(targetColumns, desc.StateColumns...)
+				if incrementalDesc != nil {
+					targetColumns = append(targetColumns, incrementalDesc.StateColumns...)
 				}
 				columns := make([]string, 0, len(targetColumns)+1)
 				selectColumns := make([]string, 0, len(targetColumns))
@@ -215,8 +225,12 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 					columns = append(columns, quoted)
 					selectColumns = append(selectColumns, quoted)
 				}
-				columns = append(columns, "`__mo_fake_pk_col`")
-				insertSQL = fmt.Sprintf("insert into `%s`.`%s` (%s) select %s, row_number() over () from (%s) as `__mo_mv_refresh`", c.info.DBName, c.info.TableName, strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
+				if materializedViewDeltaCanUpsert(incrementalDesc) {
+					insertSQL = fmt.Sprintf("insert into `%s`.`%s` (%s) select %s from (%s) as `__mo_mv_refresh`", c.info.DBName, c.info.TableName, strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
+				} else {
+					columns = append(columns, sqlquote.Ident(catalog.FakePrimaryKeyColName))
+					insertSQL = fmt.Sprintf("insert into `%s`.`%s` (%s) select %s, row_number() over () from (%s) as `__mo_mv_refresh`", c.info.DBName, c.info.TableName, strings.Join(columns, ","), strings.Join(selectColumns, ","), refreshSQL)
+				}
 			}
 			res, err = ExecWithResult(refreshCtx, insertSQL, sqlctx.GetService(), sqlctx.Txn())
 			if err != nil {

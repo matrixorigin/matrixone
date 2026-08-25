@@ -15,6 +15,9 @@
 package iscp
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -37,7 +40,7 @@ func TestMaterializedViewDeltaSQLIsBatchedAndReparseable(t *testing.T) {
 		},
 		Aggregates: []incrementalAggregate{
 			{Kind: "count_star", OutputColumn: "requests"},
-			{Kind: "sum", InputExpression: "case when e.status >= 500 then 1 else 0 end", OutputColumn: "errors", StateCountColumn: "__sum_count"},
+			{Kind: "sum", InputExpression: "case when e.status >= 500 then 1 else 0 end", OutputColumn: "errors", StateSumColumn: "__sum_sum", StateCountColumn: "__sum_count"},
 			{Kind: "avg", InputExpression: "e.duration", OutputColumn: "avg_duration", StateSumColumn: "__avg_sum", StateCountColumn: "__avg_count"},
 		},
 		RowCountColumn: "__row_count",
@@ -69,10 +72,63 @@ func TestMaterializedViewDeltaSQLIsBatchedAndReparseable(t *testing.T) {
 		require.NoError(t, parseErr, sql)
 		stmt.Free()
 	}
+	for i := range desc.Groups {
+		desc.Groups[i].NotNullable = true
+	}
+	desc.GroupKeyColumn = "__group_key"
+	columns, values = materializedViewDeltaInsertProjection(desc, "d")
+	upsert := fmt.Sprintf("%s INSERT INTO %s (%s) SELECT %s FROM delta AS d ON DUPLICATE KEY UPDATE %s",
+		cte, target, strings.Join(columns, ","), strings.Join(values, ","), strings.Join(materializedViewDeltaUpsertSets(desc), ","))
+	stmt, parseErr := parsers.ParseOne(t.Context(), dialect.MYSQL, upsert, 1)
+	require.NoError(t, parseErr, upsert)
+	stmt.Free()
+	require.Contains(t, upsert, "ON DUPLICATE KEY UPDATE")
+	require.Contains(t, upsert, "VALUES(`__sum_sum`)")
+	require.Contains(t, upsert, "serial_full(d.__mo_g_0,d.__mo_g_1)")
+
+	legacy := *desc
+	legacy.GroupKeyColumn = ""
+	legacy.StateColumns = []string{"__row_count", "__sum_count", "__avg_sum", "__avg_count"}
+	legacy.Aggregates = append([]incrementalAggregate(nil), desc.Aggregates...)
+	legacy.Aggregates[1].StateSumColumn = ""
+	b, err := json.Marshal(&legacy)
+	require.NoError(t, err)
+	decoded, err := decodeIncrementalDescription(base64.StdEncoding.EncodeToString(b))
+	require.NoError(t, err)
+	legacySets := strings.Join(materializedViewDeltaUpdateSets(decoded, "t", "d"), ",")
+	require.Contains(t, legacySets, "coalesce(t.`errors`,0) + coalesce(d.__mo_a_1_sum,0)")
+	legacyColumns, _ := materializedViewDeltaInsertProjection(decoded, "d")
+	require.NotContains(t, legacyColumns, "`__sum_sum`")
 }
 
 func TestMaterializedViewDeltaExecOptionsAdvanceStatementBoundary(t *testing.T) {
 	opts := materializedViewDeltaExecOptions(nil)
 	require.False(t, opts.DisableIncrStatement(),
 		"successive delta DML must finalize preceding workspace writes as separate statements")
+}
+
+func TestMaterializedViewDeltaJoinUsesEqualityForNonNullableGroups(t *testing.T) {
+	desc := &incrementalDescription{Groups: []incrementalGroup{
+		{OutputColumn: "service", NotNullable: true},
+		{OutputColumn: "region"},
+	}}
+	join := materializedViewDeltaJoin(desc, "t", "d")
+	require.Contains(t, join, "t.`service` = d.__mo_g_0")
+	require.NotContains(t, join, "t.`service` IS NULL")
+	require.Contains(t, join, "t.`region` <=> d.__mo_g_1")
+}
+
+func TestMaterializedViewDeltaCTEReportsOversizedRows(t *testing.T) {
+	desc := &incrementalDescription{
+		SourceAlias: "e", SourceColumns: []string{"payload"},
+		Groups:         []incrementalGroup{{Expression: "e.payload", OutputColumn: "payload"}},
+		Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "rows"}},
+		RowCountColumn: "__row_count",
+	}
+	varcharType := types.T_varchar.ToType()
+	_, err := materializedViewDeltaCTE(t.Context(), desc, []*types.Type{&varcharType}, []materializedViewSignedRow{{
+		values: map[string]any{"payload": []byte(strings.Repeat("x", materializedViewDeltaMaxSQL))}, sign: 1,
+	}})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errMaterializedViewDeltaSQLTooLarge))
 }

@@ -93,6 +93,7 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 				return "", nil, ""
 			}
 			spec.Groups[groupIdx].OutputColumn = outputName
+			spec.Groups[groupIdx].NotNullable = outputCols[i].Typ.NotNullable
 			continue
 		}
 		fn, ok := selectExpr.Expr.(*tree.FuncExpr)
@@ -123,9 +124,12 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 				materializedViewStateColumn(agg.StateCountColumn, Type{Id: int32(types.T_int64)}, false))
 			stateExprs = append(stateExprs, "sum("+agg.InputExpression+")", "count("+agg.InputExpression+")")
 		} else if name == "sum" {
+			agg.StateSumColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_sum_sum_%d", i))
 			agg.StateCountColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_sum_count_%d", i))
-			stateCols = append(stateCols, materializedViewStateColumn(agg.StateCountColumn, Type{Id: int32(types.T_int64)}, false))
-			stateExprs = append(stateExprs, "count("+agg.InputExpression+")")
+			stateCols = append(stateCols,
+				materializedViewStateColumn(agg.StateSumColumn, outputCols[i].Typ, true),
+				materializedViewStateColumn(agg.StateCountColumn, Type{Id: int32(types.T_int64)}, false))
+			stateExprs = append(stateExprs, "sum("+agg.InputExpression+")", "count("+agg.InputExpression+")")
 		}
 		spec.Aggregates = append(spec.Aggregates, agg)
 	}
@@ -137,6 +141,15 @@ func buildMaterializedViewIncrementalPlan(stmt *tree.Select, outputCols []*ColDe
 	if len(spec.Aggregates) == 0 {
 		return "", nil, ""
 	}
+	spec.GroupKeyColumn = materializedViewUniqueStateColumn(outputCols, "__mo_mv_group_key")
+	stateCols = append(stateCols, materializedViewStateColumn(spec.GroupKeyColumn, Type{
+		Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Charset: uint32(types.CharsetBinary),
+	}, false))
+	groupKeyArgs := make([]string, len(spec.Groups))
+	for i := range spec.Groups {
+		groupKeyArgs[i] = spec.Groups[i].Expression
+	}
+	stateExprs = append(stateExprs, "serial_full("+strings.Join(groupKeyArgs, ",")+")")
 
 	spec.SourceColumns = collector.columns()
 	spec.StateColumns = make([]string, len(stateCols))

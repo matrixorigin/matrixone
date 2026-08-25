@@ -20,10 +20,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -99,6 +102,25 @@ type boundaryOnlyIterationConsumer struct {
 	gotBoundary bool
 }
 
+type batchAttrsIterationConsumer struct {
+	attrs []string
+}
+
+func (c *batchAttrsIterationConsumer) Consume(_ context.Context, data DataRetriever) error {
+	for {
+		d := data.Next()
+		if d.insertBatch != nil && len(d.insertBatch.Batches) > 0 {
+			c.attrs = append([]string(nil), d.insertBatch.Batches[0].Attrs...)
+		}
+		done := d.noMoreData
+		err := d.err
+		d.Done()
+		if err != nil || done {
+			return err
+		}
+	}
+}
+
 func (c *boundaryOnlyIterationConsumer) NeedsChangePayload(int8) bool { return false }
 
 func (c *boundaryOnlyIterationConsumer) Consume(_ context.Context, data DataRetriever) error {
@@ -171,6 +193,7 @@ func runIterationConsumersWithStatusesForTest(
 			0,
 			1,
 			0,
+			false,
 		)
 	}()
 	return done, statuses
@@ -231,6 +254,46 @@ func TestRunIterationKeepsChangesForMixedConsumers(t *testing.T) {
 	}
 	require.True(t, nextCalled)
 	require.True(t, boundaryConsumer.gotBoundary)
+}
+
+func TestRunIterationRestoresAttrsWithRetainedRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	var block types.Blockid
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.NewRowid(&block, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(2), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], types.BuildTS(1, 0), false, mp))
+	bat.SetRowCount(1)
+
+	sent := false
+	changes := &iterationChangesHandle{next: func(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+		if sent {
+			return nil, nil, engine.ChangesHandle_Tail_done, nil
+		}
+		sent = true
+		return bat, nil, engine.ChangesHandle_Tail_done, nil
+	}}
+	consumer := &batchAttrsIterationConsumer{}
+	packer := types.NewPacker()
+	defer packer.Close()
+	runISCPTaskIterationConsumers(
+		context.Background(), nil, testIterationContext(), changes,
+		[]Consumer{consumer}, []*JobStatus{{}},
+		&planpb.TableDef{Cols: []*planpb.ColDef{
+			{Name: "event_id"}, {Name: "bytes_sent"}, {Name: objectio.DefaultCommitTS_Attr},
+		}},
+		ISCPDataType_Tail, packer, mp, 3, 0, 2, 1, true,
+	)
+	require.Equal(t, []string{
+		catalog.Row_ID, "event_id", "bytes_sent", objectio.DefaultCommitTS_Attr,
+	}, consumer.attrs)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestRunInitSQLWithRuntimeCancelInFlightInitSQL(t *testing.T) {

@@ -1538,26 +1538,31 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 				refreshSQL = stateRefreshSQL
 			}
 		}
-		// A materialized view is stored as a physical ordinary table. Views do
-		// not normally need a primary key, so add the same fake key used by an
-		// ordinary CREATE TABLE without an explicit key.
-		fakePK := &ColDef{
-			ColId:  uint64(len(createView.TableDef.Cols)),
-			Name:   catalog.FakePrimaryKeyColName,
-			Hidden: true,
-			// The storage engine treats the synthetic primary key as its hidden
-			// auto-increment key. CreateView initializes its sequence explicitly
-			// before the consumer starts refreshing.
-			Typ:     Type{Id: int32(types.T_uint64), AutoIncr: true},
-			Default: &plan.Default{NullAbility: false},
-			NotNull: true,
-			Primary: true,
-			Comment: materializedViewMarkerComment,
-		}
-		createView.TableDef.Cols = append(createView.TableDef.Cols, fakePK)
-		createView.TableDef.Pkey = &PrimaryKeyDef{
-			Names:       []string{catalog.FakePrimaryKeyColName},
-			PkeyColName: catalog.FakePrimaryKeyColName,
+		if primaryKeys := materializedViewIncrementalPrimaryKey(incrementalSpec); len(primaryKeys) > 0 {
+			for _, col := range createView.TableDef.Cols {
+				if strings.EqualFold(col.Name, primaryKeys[0]) {
+					col.Primary = true
+					col.NotNull = true
+					col.Typ.NotNullable = true
+					if col.Default != nil {
+						col.Default.NullAbility = false
+					}
+					break
+				}
+			}
+			createView.TableDef.Pkey = &PrimaryKeyDef{Names: primaryKeys, PkeyColName: primaryKeys[0]}
+		} else {
+			// Full-refresh-only and legacy incremental definitions retain the
+			// ordinary fake key used by existing materialized views.
+			fakePK := &ColDef{
+				ColId: uint64(len(createView.TableDef.Cols)), Name: catalog.FakePrimaryKeyColName, Hidden: true,
+				Typ: Type{Id: int32(types.T_uint64), AutoIncr: true}, Default: &plan.Default{NullAbility: false},
+				NotNull: true, Primary: true, Comment: materializedViewMarkerComment,
+			}
+			createView.TableDef.Cols = append(createView.TableDef.Cols, fakePK)
+			createView.TableDef.Pkey = &PrimaryKeyDef{
+				Names: []string{catalog.FakePrimaryKeyColName}, PkeyColName: catalog.FakePrimaryKeyColName,
+			}
 		}
 		// Keep the marker in the structured table properties as well as the
 		// legacy definition properties. Hidden column metadata is not guaranteed
@@ -1747,6 +1752,7 @@ type materializedViewIncrementalAggregate struct {
 type materializedViewIncrementalGroup struct {
 	Expression   string `json:"expression"`
 	OutputColumn string `json:"output_column"`
+	NotNullable  bool   `json:"not_nullable,omitempty"`
 }
 
 type materializedViewIncrementalDescription struct {
@@ -1755,6 +1761,7 @@ type materializedViewIncrementalDescription struct {
 	Filter         string                                 `json:"filter,omitempty"`
 	Groups         []materializedViewIncrementalGroup     `json:"groups"`
 	Aggregates     []materializedViewIncrementalAggregate `json:"aggregates"`
+	GroupKeyColumn string                                 `json:"group_key_column,omitempty"`
 	RowCountColumn string                                 `json:"row_count_column"`
 	StateColumns   []string                               `json:"state_columns"`
 }
@@ -1766,6 +1773,21 @@ func materializedViewRefreshSQL(stmt *tree.Select) string {
 func materializedViewIncrementalSpec(stmt *tree.Select, outputCols []*ColDef) string {
 	spec, _, _ := buildMaterializedViewIncrementalPlan(stmt, outputCols)
 	return spec
+}
+
+func materializedViewIncrementalPrimaryKey(encoded string) []string {
+	if encoded == "" {
+		return nil
+	}
+	b, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil
+	}
+	var desc materializedViewIncrementalDescription
+	if json.Unmarshal(b, &desc) != nil || desc.GroupKeyColumn == "" {
+		return nil
+	}
+	return []string{desc.GroupKeyColumn}
 }
 
 func materializedViewDirectColumn(expr tree.Expr) (string, bool) {

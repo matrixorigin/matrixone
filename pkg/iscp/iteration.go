@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,51 @@ type iterationSourceChanges struct {
 	rel     engine.Relation
 	def     *plan.TableDef
 	changes engine.ChangesHandle
+}
+
+// ensureISCPInsertBatchAttrs restores the logical column names for persisted
+// object batches returned by CollectChanges. Object reads carry vectors and
+// special-column layout, but may not carry Attrs; consumers such as incremental
+// materialized views need names to bind expressions to values.
+func ensureISCPInsertBatchAttrs(bat *batch.Batch, def *plan.TableDef, retainRowID bool) error {
+	if bat == nil || def == nil {
+		return nil
+	}
+
+	attrs := make([]string, 0, len(def.Cols)+1)
+	if retainRowID {
+		attrs = append(attrs, catalog.Row_ID)
+	}
+	hasCommitTS := false
+	for _, col := range def.Cols {
+		if strings.EqualFold(col.Name, catalog.Row_ID) {
+			continue
+		}
+		attrs = append(attrs, col.Name)
+		hasCommitTS = hasCommitTS || strings.EqualFold(col.Name, objectio.DefaultCommitTS_Attr)
+	}
+	if !hasCommitTS {
+		attrs = append(attrs, objectio.DefaultCommitTS_Attr)
+	}
+	expectedCount := len(attrs)
+	if len(bat.Vecs) != expectedCount {
+		return moerr.NewInternalErrorNoCtxf(
+			"ISCP insert batch schema mismatch: got %d vectors, expected %d",
+			len(bat.Vecs), expectedCount,
+		)
+	}
+	if retainRowID && (bat.Vecs[0] == nil || bat.Vecs[0].GetType().Oid != types.T_Rowid) {
+		return moerr.NewInternalErrorNoCtx("ISCP insert batch is missing the retained rowid")
+	}
+	if len(bat.Vecs) == 0 || bat.Vecs[len(bat.Vecs)-1] == nil || bat.Vecs[len(bat.Vecs)-1].GetType().Oid != types.T_TS {
+		return moerr.NewInternalErrorNoCtx("ISCP insert batch is missing the commit timestamp")
+	}
+
+	if slices.Equal(bat.Attrs, attrs) {
+		return nil
+	}
+	bat.Attrs = attrs
+	return nil
 }
 
 func resolveMVBatchIndexes(bat *batch.Batch, def *plan.TableDef, insert bool, retainRowID bool) (tsIdx, pkIdx int) {
@@ -456,6 +502,7 @@ func ExecuteIterationWithRuntime(
 		insCompositedPkColIdx,
 		delTSColIdx,
 		delCompositedPkColIdx,
+		retainRowID,
 	)
 	for i, status := range statuses {
 		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
@@ -508,6 +555,7 @@ func runISCPTaskIterationConsumers(
 	insCompositedPkColIdx int,
 	delTSColIdx int,
 	delCompositedPkColIdx int,
+	retainRowID bool,
 ) {
 	var changeStreams []iterationSourceChanges
 	switch changes := changeInput.(type) {
@@ -608,7 +656,7 @@ func runISCPTaskIterationConsumers(
 				streamDelTSColIdx = 1
 				streamDelPKColIdx = 0
 			}
-			if stream.def != nil && engine.RetainRowIDFromContext(ctxWithCancel) {
+			if stream.def != nil && retainRowID {
 				streamInsTSColIdx++
 				streamInsPKColIdx++
 				streamDelTSColIdx = 2
@@ -628,11 +676,14 @@ func runISCPTaskIterationConsumers(
 			if streamDef == nil {
 				streamDef = defaultTableDef
 			}
-			if insertData != nil && streamDef != nil {
-				streamInsTSColIdx, streamInsPKColIdx = resolveMVBatchIndexes(insertData, streamDef, true, engine.RetainRowIDFromContext(ctxWithCancel))
+			if err == nil && retainRowID && insertData != nil && streamDef != nil {
+				err = ensureISCPInsertBatchAttrs(insertData, streamDef, retainRowID)
 			}
-			if deleteData != nil && streamDef != nil {
-				streamDelTSColIdx, streamDelPKColIdx = resolveMVBatchIndexes(deleteData, streamDef, false, engine.RetainRowIDFromContext(ctxWithCancel))
+			if err == nil && insertData != nil && streamDef != nil {
+				streamInsTSColIdx, streamInsPKColIdx = resolveMVBatchIndexes(insertData, streamDef, true, retainRowID)
+			}
+			if err == nil && deleteData != nil && streamDef != nil {
+				streamDelTSColIdx, streamDelPKColIdx = resolveMVBatchIndexes(deleteData, streamDef, false, retainRowID)
 			}
 			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
