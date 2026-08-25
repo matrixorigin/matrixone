@@ -85,8 +85,15 @@ public:
     // allocation to land in, plus concurrent queries and kernel scratch.
     //
     // Capacity sizing (rows_fitting) and the admission that follows both read this
-    // same value, so a build cannot be sized against one fraction and admitted
-    // against another.
+    // same value, so within C++ a build is sized and admitted against one fraction.
+    //
+    // That is NOT an invariant across the whole system. The Go-side gates get the
+    // fraction from gpu_index_budget_percent, which maps index type NAMES to
+    // classes by hand -- a class that overrides this and is not listed there falls
+    // back to the strictest known value, which over-refuses rather than
+    // over-admits, but is still a different number from its own. A subclass that
+    // forgot to override at all is how the trainset probe came to size at 75%
+    // while the build claimed at 65%.
     // Derived, not restated: device_memory_governor is where the default lives, and
     // a second literal here would be a number two headers can disagree about.
     static constexpr size_t kDefaultBudgetPercent =

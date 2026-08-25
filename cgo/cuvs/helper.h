@@ -260,7 +260,9 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
 uint64_t gpu_index_budget_percent(const char* index_type);
 
 // ---- device memory governor, exposed to Go ------------------------------
-// One ledger for every large device allocation. C++ index LOADS claim through
+// One ledger for the large device allocations listed in device_memory.hpp:
+// build peaks, index loads, row uploads and quantizer training. C++ index LOADS
+// claim through
 // it directly; BUILDS claim from Go, because Go owns the per-algo cost model
 // (CAGRA charges dataset+graph, IVF-PQ charges PQ codes and budgets the k-means
 // trainset as max(train,index) — restating that in C++ would fork it) and

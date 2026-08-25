@@ -35,9 +35,15 @@ import (
 // builds that each fit can therefore OOM-kill the CN together.
 //
 // This ledger closes that window the same way device_memory_governor closes it
-// for VRAM: a claim is taken BEFORE the allocation and held until the memory is
-// the allocator has taken it, and admission is check-and-claim under a single CAS so two
+// for VRAM: a claim is taken BEFORE the allocation and held until the allocator
+// has taken the bytes, and admission is check-and-claim under a single CAS so two
 // callers cannot both pass against the same ledger value.
+//
+// WHAT CLAIMS HERE. Only large allocations, and only these: the build's
+// capacity-sized buffers, the host components a cold load materialises, and the id
+// map a delete replay builds. A site joins the list when a claim is the right tool
+// for it -- the int8/uint8 quantizer staging arena is charged through
+// HostRowsFitting's reservedBytes instead, subtracted before capacity is derived.
 //
 // Deliberate differences from the device side:
 //

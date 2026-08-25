@@ -27,7 +27,12 @@
 namespace matrixone {
 
 // ---------------------------------------------------------------------------
-// device_memory_governor — one account for every large DEVICE allocation.
+// device_memory_governor — the account large DEVICE allocations claim through.
+//
+// WHAT CLAIMS HERE. Only large allocations, and only these: build peaks, index
+// loads, row uploads (upload_T_matrix / upload_float_matrix_as_T) and the
+// scalar-quantizer training upload. A site joins the list when its size becomes
+// knowable before the allocation.
 //
 // THE PROBLEM. cudaMemGetInfo reports memory that is already resident. An
 // allocation that has been DECIDED but not yet made is invisible to it, so two
