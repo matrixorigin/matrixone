@@ -310,11 +310,63 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
 		typ = ID
 	}
+	// ASOF stays contextual. The grammar resolves whether the phrase starts a
+	// native join or whether ASOF still occupies the current table's alias slot.
+	// This preserves legacy `t asof JOIN u`, while an already completed alias or
+	// table-factor suffix makes the same phrase a native ASOF JOIN.
+	if typ == ID && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
+		typ = ASOF
+	}
 
 	l.lastToken = typ
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ
+}
+
+func (l *Lexer) asofJoinPhraseAhead() bool {
+	lookahead := Scanner{}
+	lookahead.setSql(l.scanner.buf[l.scanner.Pos:])
+	lookahead.setSQLMode(l.sqlMode)
+
+	next, _ := lookahead.Scan()
+	if next == JOIN {
+		return true
+	}
+	if next != LEFT {
+		return false
+	}
+	next, _ = lookahead.Scan()
+	if next == JOIN {
+		return true
+	}
+	if next != OUTER {
+		return false
+	}
+	next, _ = lookahead.Scan()
+	return next == JOIN
+}
+
+// hasAsofLeftFactorAlias follows the right edge of a table-reference chain,
+// which is the table factor immediately preceding an ASOF modifier.
+func hasAsofLeftFactorAlias(expr tree.TableExpr) bool {
+	for expr != nil {
+		switch e := expr.(type) {
+		case *tree.AliasedTableExpr:
+			return e.As.Alias != ""
+		case *tree.JoinTableExpr:
+			if e.Right != nil {
+				expr = e.Right
+			} else {
+				expr = e.Left
+			}
+		case *tree.ApplyTableExpr:
+			expr = e.Right
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (l *Lexer) recordSyntaxToken(token int) {

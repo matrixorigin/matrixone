@@ -594,3 +594,46 @@ func TestCommentRawFirstByte(t *testing.T) {
 	_, err = parser.Read(nil)
 	require.ErrorIs(t, err, io.EOF)
 }
+
+// TestParserReset: one parser reused across independent inputs must show no
+// cross-input bleed — including after a partial/failed read — and must keep
+// its configuration.
+func TestParserReset(t *testing.T) {
+	cfg := &CSVConfig{
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+		LinesTerminatedBy:  "\n",
+	}
+	parser, err := NewCSVParser(cfg, strings.NewReader(""), ReadBlockSize, false)
+	require.NoError(t, err)
+
+	readOne := func(input string) ([]Field, error) {
+		parser.Reset(strings.NewReader(input))
+		return parser.Read(nil)
+	}
+
+	row, err := readOne("a,b,c")
+	require.NoError(t, err)
+	require.Len(t, row, 3)
+	require.Equal(t, "a", row[0].Val)
+
+	// an unterminated quoted field fails; the NEXT input must be clean
+	_, err = readOne(`"unterminated`)
+	require.Error(t, err)
+	row, err = readOne("x,y")
+	require.NoError(t, err)
+	require.Len(t, row, 2)
+	require.Equal(t, "x", row[0].Val)
+	require.Equal(t, "y", row[1].Val)
+
+	// leftover unread content of a previous input never bleeds into the next
+	row, err = readOne("1,2\n3,4\n5,6")
+	require.NoError(t, err)
+	require.Equal(t, "1", row[0].Val)
+	row, err = readOne("7,8")
+	require.NoError(t, err)
+	require.Equal(t, "7", row[0].Val)
+	require.Equal(t, "8", row[1].Val)
+	_, err = parser.Read(nil)
+	require.ErrorIs(t, err, io.EOF)
+}

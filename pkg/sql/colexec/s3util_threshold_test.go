@@ -139,17 +139,17 @@ func TestCNS3DataWriterChunkedColumnProtocolGateIsLive(t *testing.T) {
 	}
 
 	// The latest pre-feature protocol must remain on the legacy extent format.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion28)
 	enabledAfterConstruction := NewCNS3DataWriterForService(
 		serviceID, proc.Mp(), fs, tableDef, -1, true,
 	)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
 	require.Equal(t, uint8(compress.Lz4Chunked), writeAndColumnAlgorithm(enabledAfterConstruction))
 
 	disabledAfterConstruction := NewCNS3DataWriterForService(
 		serviceID, proc.Mp(), fs, tableDef, -1, true,
 	)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion28)
 	require.Equal(t, uint8(compress.Lz4), writeAndColumnAlgorithm(disabledAfterConstruction))
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion16)
@@ -166,11 +166,11 @@ func TestChunkedColumnPolicyProtocolThreshold(t *testing.T) {
 	policy := chunkedColumnPolicyForService(serviceID)
 	require.NotNil(t, policy)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion28)
 	require.False(t, policy())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
 	require.True(t, policy())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int32(defines.MORPCVersion27))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int32(defines.MORPCVersion29))
 	require.False(t, policy())
 
 	missingPolicy := chunkedColumnPolicyForService("missing-" + serviceID)
@@ -190,14 +190,14 @@ func TestCNS3TombstoneWriterProtocolGate(t *testing.T) {
 	rt := moruntime.DefaultRuntime()
 	moruntime.SetupServiceBasedRuntime(serviceID, rt)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion28)
 	legacy := NewCNS3TombstoneWriterForService(
 		serviceID, proc.Mp(), fs, types.T_int32.ToType(), -1,
 	)
 	require.NotNil(t, legacy)
 	require.NoError(t, legacy.Close())
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion27)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion29)
 	chunked := NewCNS3TombstoneWriterForService(
 		serviceID, proc.Mp(), fs, types.T_int32.ToType(), -1,
 	)
