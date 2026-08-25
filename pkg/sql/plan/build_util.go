@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -43,28 +43,32 @@ import (
 // 	return nodeID
 // }
 
-// reCheckifNeedLockWholeTable checks if the whole table needs to be locked based on the last node's statistics.
-// It returns true if the out count of the last node is greater than the maximum lock count, otherwise it returns false.
-func reCheckifNeedLockWholeTable(builder *QueryBuilder) {
-	lockService := builder.compCtx.GetProcess().Base.LockService
-	if lockService == nil {
-		// MockCompilerContext
+// applySharedLockTableFallback upgrades cardinality-known shared lock targets
+// before their first row lock is acquired. An exclusive owner can safely
+// coarsen its own rows later, but a shared row may already have other holders;
+// converting that ownership in the middle of a transaction is not always
+// possible without changing Shared compatibility. Estimates that are low and
+// transactions with many statements retain exact Shared rows up to the fixed
+// bookkeeping-pool ceiling rather than changing lock semantics at this budget.
+func applySharedLockTableFallback(builder *QueryBuilder) {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil || proc.Base.LockService == nil {
 		return
 	}
-	lockconfig := lockService.GetConfig()
+	maxRows := float64(proc.Base.LockService.GetConfig().MaxLockRowCount)
+	if maxRows <= 0 {
+		return
+	}
 
-	for _, n := range builder.qry.Nodes {
-		if n.NodeType != plan.Node_LOCK_OP {
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType != plan.Node_LOCK_OP ||
+			node.Stats == nil ||
+			node.Stats.Outcnt <= maxRows {
 			continue
 		}
-		if !n.LockTargets[0].LockTable {
-			reCheckIfNeed := n.Stats.Outcnt > float64(lockconfig.MaxLockRowCount)
-			if reCheckIfNeed {
-				logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
-				logutil.Infof("the outcnt stats is %f", n.Stats.Outcnt)
-				for _, target := range n.LockTargets {
-					target.LockTable = reCheckIfNeed
-				}
+		for _, target := range node.LockTargets {
+			if target.Mode == lockpb.LockMode_Shared {
+				target.LockTable = true
 			}
 		}
 	}

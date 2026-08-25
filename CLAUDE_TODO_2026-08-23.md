@@ -293,3 +293,9 @@
 2. 逐块比较 main 新语义与 PR prepared-decimal/runtime-cache 语义，保留双方非互斥修复，不使用 ours/theirs 整文件覆盖。
 3. 对冲突涉及包运行定向与全包 CGo 测试，并重跑 issue #25526/#26685/#26725/#26840/#26866/#27088。
 4. 运行 build/vet/SCA、diff check，推送 merge commit并确认 PR 恢复 MERGEABLE。
+
+### 第十一轮执行结果
+
+- 合并 `mo/main@22b91fe986`，唯一冲突为 `pkg/defines/const.go` 的 MORPC capability 编号。
+- 保留 main 的 v27 ASOF JOIN 与 v28 owner-local lock capability，将 prepared numeric-prefix capability 顺延为 v29，并同步 frontend/compile/pb 检测、错误消息及测试命名。
+- defines/pb/compile/frontend/plan/function/process 全包及 issue #25526/#26685/#26725/#26840/#26866/#27088 通过；build、vet、sqlclosecheck、rowserrcheck、diff check 通过。

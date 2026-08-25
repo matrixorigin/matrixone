@@ -471,7 +471,7 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
 	project := projectNode.ProjectList[0]
 	require.True(t, types.T(project.Typ.Id).IsDecimal(), project.String())
-	requiresV26, scanErr := plan.RequiresMORPCVersion27NumericPrefix(project)
+	requiresV26, scanErr := plan.RequiresMORPCVersion29NumericPrefix(project)
 	require.NoError(t, scanErr)
 	require.True(t, requiresV26, project.String())
 
@@ -488,7 +488,7 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0))
 
 	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
-	requiresV26, scanErr = plan.RequiresMORPCVersion27NumericPrefix(originalProjectNode.ProjectList[0])
+	requiresV26, scanErr = plan.RequiresMORPCVersion29NumericPrefix(originalProjectNode.ProjectList[0])
 	require.NoError(t, scanErr)
 	require.False(t, requiresV26)
 }
@@ -1392,8 +1392,8 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
 		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
 		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
-		{name: "numeric prefix upgrade", from: defines.MORPCVersion25, to: defines.MORPCVersion27},
-		{name: "numeric prefix rollback", from: defines.MORPCVersion27, to: defines.MORPCVersion25},
+		{name: "numeric prefix upgrade", from: defines.MORPCVersion25, to: defines.MORPCVersion29},
+		{name: "numeric prefix rollback", from: defines.MORPCVersion29, to: defines.MORPCVersion25},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
