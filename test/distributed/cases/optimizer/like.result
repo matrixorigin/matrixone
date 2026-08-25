@@ -7,7 +7,7 @@ insert into t1 select *,*,* from generate_series(1,100000) g;
 select mo_ctl('dn', 'flush', 'd1.t1');
 mo_ctl(dn, flush, d1.t1)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-select table_name, table_cnt from table_stats('d1.t1', 'refresh', 'full') g;
+select table_name, table_cnt from table_stats('d1.t1') g;
 table_name  ¦  table_cnt  𝄀
 d1.t1  ¦  100000.0
 explain select * from t1 where c2 like '1%';

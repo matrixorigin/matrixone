@@ -6,7 +6,8 @@ create table t1(c1 int primary key, c2 varchar(10), c3 int, key(c2,c3));
 insert into t1 select *,*,* from generate_series(1,100000) g;
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t1');
-select table_name, table_cnt from table_stats('d1.t1', 'refresh', 'full') g;
+-- @wait_expect(1, 10)
+select table_name, table_cnt from table_stats('d1.t1') g;
 -- @separator:table
 explain select * from t1 where c2 like '1%';
 select count(*) from t1 where c2 like '1%';

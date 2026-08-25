@@ -30,7 +30,7 @@ select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
   ]
 }
 
-select table_name, table_cnt from table_stats('table_func_table_stats.t1', 'refresh', 'full') g;
+select table_name, table_cnt from table_stats('table_func_table_stats.t1') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
 table_func_table_stats.t1  ¦  2048.0
 select * from table_stats('table_func_table_stats.t1') g;

@@ -26,7 +26,7 @@ select mo_ctl('dn', 'flush', 'regular_index_order_limit_cursor.t');
   ]
 }
 
-select table_name, table_cnt from table_stats('regular_index_order_limit_cursor.t', 'refresh', 'full') g;
+select table_name, table_cnt from table_stats('regular_index_order_limit_cursor.t') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
 regular_index_order_limit_cursor.t  ¦  50.0
 select id

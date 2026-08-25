@@ -31,10 +31,10 @@ select mo_ctl('dn', 'flush', 'd1.t2');
   ]
 }
 
-select table_name, table_cnt from table_stats('d1.t1', 'refresh', 'full') g;
+select table_name, table_cnt from table_stats('d1.t1') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
 d1.t1  ¦  150000.0
-select table_name, table_cnt from table_stats('d1.t2', 'refresh', 'full') g;
+select table_name, table_cnt from table_stats('d1.t2') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
 d1.t2  ¦  150000.0
 explain select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
