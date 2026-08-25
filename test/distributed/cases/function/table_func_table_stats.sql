@@ -26,7 +26,9 @@ select count(*) from t1;
 -- Flush to ensure stats are available
 select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
 
-select sleep(1);
+-- Refresh explicitly and assert the flushed cardinality instead of waiting for
+-- an assumed background-stats delay.
+select table_name, table_cnt from table_stats('table_func_table_stats.t1', 'refresh', 'full') g;
 
 -- Query table stats - basic columns (new column structure)
 select * from table_stats('table_func_table_stats.t1') g;

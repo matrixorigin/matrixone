@@ -35,9 +35,12 @@ select mo_ctl('dn', 'flush', 'd1.t2');
   ]
 }
 
-select Sleep(1);
-➤ Sleep(1)[-6,8,0]  𝄀
-0
+select table_name, table_cnt from table_stats('d1.t1', 'refresh', 'full') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+d1.t1  ¦  100000.0
+select table_name, table_cnt from table_stats('d1.t2', 'refresh', 'full') g;
+➤ table_name[12,-1,0]  ¦  table_cnt[8,54,0]  𝄀
+d1.t2  ¦  1000000.0
 explain select count(*) from t1 where c1 = 1;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀

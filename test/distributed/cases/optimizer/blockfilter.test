@@ -15,7 +15,8 @@ select count(*) from t2;
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
-select Sleep(1);
+select table_name, table_cnt from table_stats('d1.t1', 'refresh', 'full') g;
+select table_name, table_cnt from table_stats('d1.t2', 'refresh', 'full') g;
 -- @separator:table
 explain select count(*) from t1 where c1 = 1;
 select count(*) from t1 where c1 = 1;

@@ -14,7 +14,8 @@ insert into t2 select *,*,1111,* from generate_series(100001,150000) g;
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
-select Sleep(1);
+select table_name, table_cnt from table_stats('d1.t1', 'refresh', 'full') g;
+select table_name, table_cnt from table_stats('d1.t2', 'refresh', 'full') g;
 -- @separator:table
 explain select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;
 select * from t1,t2 where t1.c1=t2.c0 and t1.c3=11;

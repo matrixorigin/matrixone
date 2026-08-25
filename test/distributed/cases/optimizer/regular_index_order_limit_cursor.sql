@@ -24,7 +24,7 @@ select
 from generate_series(1, 50) g;
 
 select mo_ctl('dn', 'flush', 'regular_index_order_limit_cursor.t');
-select Sleep(1);
+select table_name, table_cnt from table_stats('regular_index_order_limit_cursor.t', 'refresh', 'full') g;
 
 select id
 from t
