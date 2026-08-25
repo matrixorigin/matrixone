@@ -490,11 +490,12 @@ func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error)
 //
 // The aggregate needs the tars local (SHARDED attribution reads the shard sizes
 // out of the archive), so the download is split out of LoadIndex into
-// FetchArtifact and run first.
+// FetchArtifact and run first -- but it is re-checked after EACH tar rather than
+// only after the last, so an index that cannot fit is refused as soon as the
+// running total says so instead of after the whole download.
 func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q]) ([]*CagraModel[B, Q], error) {
-	// Fetch every sub-index first, then admit the aggregate, then load. Splitting
-	// the download from the load is what lets the gate see the SAME quantity CREATE
-	// checked: the device-resident components of each packed artifact, measured
+	// Fetch, admit, and only then load. Splitting the download from the load is
+	// what lets the gate see the SAME quantity CREATE checked: the device-resident components of each packed artifact, measured
 	// with cuvs.MeasureTar and reduced per physical device. Admitting metadata
 	// FileSize instead would charge the whole tar -- ids.bin, the INCLUDE blobs,
 	// the quantizer, the bitset -- none of which reach the GPU, and CREATE would
@@ -522,6 +523,11 @@ func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		}
 	}()
 
+	// This algorithm's own fraction, not the governor default: IVF-PQ claims at
+	// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
+	// index the very first deserialize then refuses.
+	budget := cuvs.RowsFittingFreeMemAt(cuvs.IndexBudgetPercent(s.Idxcfg.Type))
+
 	comps := make([]map[string]int64, 0, len(indexes))
 	for _, idx := range indexes {
 		if len(idx.Path) == 0 {
@@ -543,15 +549,19 @@ func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 			}
 		}
 		comps = append(comps, device)
-	}
-	// This algorithm's own fraction, not the governor default: IVF-PQ claims at
-	// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
-	// index the very first deserialize then refuses.
-	if err := memory.DeviceAggregateFitsFree(
-		s.Devices, uint64(memory.PeakDeviceBytes(s.Devices, comps)),
-		cuvs.RowsFittingFreeMemAt(cuvs.IndexBudgetPercent(s.Idxcfg.Type)),
-	); err != nil {
-		return nil, err
+
+		// Re-check the RUNNING aggregate rather than waiting for the last tar.
+		// A sub-index only adds bytes to the device that holds it, so the peak is
+		// monotone and a running total over budget can only grow: downloading the
+		// rest would cost minutes and gigabytes to reach the same refusal. On the
+		// final pass measured == len(indexes), so this is also the complete gate --
+		// there is no separate check after the loop.
+		if err := memory.DeviceAggregateFitsFree(
+			s.Devices, uint64(memory.PeakDeviceBytes(s.Devices, comps)),
+			len(comps), len(indexes), budget,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	// Past the gate the loads own the tars; the cleanup above must not race them.

@@ -272,12 +272,12 @@ func TestDeviceAggregateFitsFree(t *testing.T) {
 	fn := fakeRowsFitting(1000)
 
 	t.Run("under the budget is admitted, over is refused", func(t *testing.T) {
-		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 600, fn))
-		require.Error(t, DeviceAggregateFitsFree([]int{0}, 601, fn))
+		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 600, 1, 1, fn))
+		require.Error(t, DeviceAggregateFitsFree([]int{0}, 601, 1, 1, fn))
 	})
 
 	t.Run("the refusal is situational, naming free rather than the card", func(t *testing.T) {
-		err := DeviceAggregateFitsFree([]int{0}, 900, fn)
+		err := DeviceAggregateFitsFree([]int{0}, 900, 1, 1, fn)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "right now")
 		require.Contains(t, err.Error(), "device 0")
@@ -297,21 +297,79 @@ func TestDeviceAggregateFitsFree(t *testing.T) {
 				return rows, f, nil
 			}
 		}
-		err := DeviceAggregateFitsFree([]int{0, 1}, 700, perDev(map[int]uint64{0: 100000, 1: 1000}))
+		err := DeviceAggregateFitsFree([]int{0, 1}, 700, 2, 2, perDev(map[int]uint64{0: 100000, 1: 1000}))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "device 1")
 	})
 
 	t.Run("an unmeasurable device refuses rather than guesses", func(t *testing.T) {
 		boom := func(int, uint64) (int64, uint64, error) { return 0, 0, errors.New("unreadable") }
-		err := DeviceAggregateFitsFree([]int{0}, 10, boom)
+		err := DeviceAggregateFitsFree([]int{0}, 10, 1, 1, boom)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cannot measure device")
 	})
 
 	t.Run("degenerate inputs are no-ops", func(t *testing.T) {
-		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 0, fn))
-		require.NoError(t, DeviceAggregateFitsFree(nil, 600, fn))
-		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 600, nil))
+		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 0, 1, 1, fn))
+		require.NoError(t, DeviceAggregateFitsFree(nil, 600, 1, 1, fn))
+		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 600, 1, 1, nil))
+	})
+}
+
+// The loader refuses as soon as the RUNNING total is over budget, without
+// downloading the sub-indexes it has not measured. Two things have to hold for
+// that to be sound, and both are asserted here.
+func TestDeviceAggregateFitsFreePartial(t *testing.T) {
+	fn := fakeRowsFitting(1000) // budget 600
+
+	t.Run("a partial refusal does not present its figure as the whole index", func(t *testing.T) {
+		// Sizing a fix from "needs 700 MB" when only 2 of 5 sub-indexes were
+		// measured sends the operator after a target that is too small.
+		err := DeviceAggregateFitsFree([]int{0}, 700, 2, 5, fn)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "at least")
+		require.Contains(t, err.Error(), "2 of 5 sub-indexes measured")
+
+		// The complete aggregate states the figure plainly, with no hedge.
+		err = DeviceAggregateFitsFree([]int{0}, 700, 5, 5, fn)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "at least")
+		require.NotContains(t, err.Error(), "sub-indexes measured")
+	})
+
+	t.Run("a partial total under budget is still admitted", func(t *testing.T) {
+		// Fail-fast must not become fail-early: the loop has to keep going while
+		// the running total still fits, or a large index could never load.
+		require.NoError(t, DeviceAggregateFitsFree([]int{0}, 300, 1, 5, fn))
+	})
+
+	t.Run("PeakDeviceBytes is monotone, which is what makes early refusal sound", func(t *testing.T) {
+		// If adding a sub-index could LOWER the peak, a running total over budget
+		// would not imply the finished one is, and the loader would refuse indexes
+		// that fit. Checked across both attribution shapes: whole-index components
+		// charged to every device, and shards charged to one each.
+		devices := []int{0, 1}
+		subs := []map[string]int64{
+			{"index.bin": 100},
+			{"shard_0.bin": 40, "shard_1.bin": 90},
+			{"index.bin": 7},
+			{"shard_0.bin": 300, "shard_1.bin": 1},
+		}
+		prev := int64(0)
+		for i := 1; i <= len(subs); i++ {
+			cur := PeakDeviceBytes(devices, subs[:i])
+			require.GreaterOrEqual(t, cur, prev,
+				"peak fell when sub-index %d was added: %d -> %d", i-1, prev, cur)
+			prev = cur
+		}
+
+		// Same with the aliased device list gpu_multi_simulation produces, where
+		// every shard lands back on the one physical card.
+		prev = 0
+		for i := 1; i <= len(subs); i++ {
+			cur := PeakDeviceBytes([]int{0, 0}, subs[:i])
+			require.GreaterOrEqual(t, cur, prev)
+			prev = cur
+		}
 	})
 }

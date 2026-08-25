@@ -15,6 +15,7 @@
 package memory
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -170,11 +171,32 @@ func PeakDeviceBytes(devices []int, perSubIndex []map[string]int64) int64 {
 // cannot express an aggregate: each fits, so the loader admits the early ones,
 // spends the budget, and is refused on a later one having already paid for most
 // of the memory, reporting a single sub-index rather than the total.
+//
+// SAFE TO CALL ON A PARTIAL AGGREGATE, which is how the loader fails fast. Every
+// sub-index only ADDS bytes to the device that holds it, so PeakDeviceBytes is
+// monotone: a running peak over budget guarantees the finished one is too, at
+// that same free reading. The caller therefore re-checks after each sub-index it
+// measures and refuses as soon as the running total is over, rather than
+// downloading the remaining tars to reach a conclusion it already has.
+//
+// measured/total say how much of the index the figure covers. A partial refusal
+// must not print its number as though it were the whole index: the operator sizes
+// their fix from it, and the untouched sub-indexes only make it larger. Pass
+// measured == total for a complete aggregate.
 func DeviceAggregateFitsFree(
-	devices []int, perDeviceBytes uint64, rowsFitting DeviceRowsFittingFunc,
+	devices []int, perDeviceBytes uint64, measured, total int, rowsFitting DeviceRowsFittingFunc,
 ) error {
 	if perDeviceBytes == 0 || len(devices) == 0 || rowsFitting == nil {
 		return nil
+	}
+	// "needs N MB" for the whole index; "needs at least N MB" while sub-indexes
+	// remain unmeasured, with the count so the shortfall is not read as the total.
+	scope := ""
+	atLeast := ""
+	if measured < total {
+		atLeast = "at least "
+		scope = fmt.Sprintf(" (%d of %d sub-indexes measured; the rest were not downloaded)",
+			measured, total)
 	}
 	for _, dev := range DeviceDistinct(devices) {
 		// perRow = 1 makes rows_fitting_gpu_mem return the byte budget itself,
@@ -190,11 +212,11 @@ func DeviceAggregateFitsFree(
 		}
 		if budget < 0 || perDeviceBytes > uint64(budget) {
 			return moerr.NewInternalErrorNoCtxf(
-				"vector index load: this index needs %d MB resident on device %d to be searched, "+
+				"vector index load: this index needs %s%d MB resident on device %d to be searched%s, "+
 					"but only %d MB may be claimed there right now (%d MB free), because a query "+
 					"reads every sub-index at once. Evict cached indexes, or retry when the device "+
 					"is quieter",
-				perDeviceBytes>>20, dev, uint64(budget)>>20, free>>20)
+				atLeast, perDeviceBytes>>20, dev, scope, uint64(budget)>>20, free>>20)
 		}
 	}
 	return nil
