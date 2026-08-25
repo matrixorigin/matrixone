@@ -59,19 +59,17 @@ composite  ¦  a:1  𝄀
 null-column  ¦  1  𝄀
 pk  ¦  10
 update ft_async_pk set id = 20 where id = 10;
-select id from ft_async_pk where match(body) against('identity') order by id;
-➤ id[-5,64,0]  𝄀
-20
+update ft_async_composite set tenant = 'b', id = 2 where tenant = 'a' and id = 1;
+select case_name, identity from (select 'composite' as case_name, concat(tenant, ':', id) as identity from ft_async_composite where match(body) against('composite') union all select 'pk', cast(id as char) from ft_async_pk where match(body) against('identity')) readiness order by case_name;
+➤ case_name[12,-1,0]  ¦  identity[12,-1,0]  𝄀
+composite  ¦  b:2  𝄀
+pk  ¦  20
 begin;
 update ft_async_pk set id = 30 where id = 20;
 rollback;
 select id from ft_async_pk where match(body) against('identity') order by id;
 ➤ id[-5,64,0]  𝄀
 20
-update ft_async_composite set tenant = 'b', id = 2 where tenant = 'a' and id = 1;
-select tenant, id from ft_async_composite where match(body) against('composite') order by tenant, id;
-➤ tenant[12,-1,0]  ¦  id[-5,64,0]  𝄀
-b  ¦  2
 create table ft_null_default(id int primary key, left_text text, right_text text);
 insert into ft_null_default values
 (1, null, 'defaultrighttoken'),

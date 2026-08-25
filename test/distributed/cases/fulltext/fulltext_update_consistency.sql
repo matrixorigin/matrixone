@@ -64,8 +64,12 @@ select case_name, identity from (select 'composite' as case_name, concat(tenant,
 -- Async maintenance is CDC-only. A committed PK update must replace the CDC
 -- identity rather than retain an entry keyed by the old PK.
 update ft_async_pk set id = 20 where id = 10;
+-- Composite source identities exercise CDC tombstone and insert encoding. The
+-- two tables are independent, so publish both mutations before one exact wait.
+update ft_async_composite set tenant = 'b', id = 2 where tenant = 'a' and id = 1;
+-- @metacmp(false)
 -- @wait_expect(2, 30)
-select id from ft_async_pk where match(body) against('identity') order by id;
+select case_name, identity from (select 'composite' as case_name, concat(tenant, ':', id) as identity from ft_async_composite where match(body) against('composite') union all select 'pk', cast(id as char) from ft_async_pk where match(body) against('identity')) readiness order by case_name;
 
 -- Rolled-back PK changes never become visible to the CDC consumer.
 begin;
@@ -73,12 +77,6 @@ update ft_async_pk set id = 30 where id = 20;
 rollback;
 -- @wait_expect(2, 30)
 select id from ft_async_pk where match(body) against('identity') order by id;
-
--- Composite source identities exercise CDC tombstone and insert encoding.
-update ft_async_composite set tenant = 'b', id = 2 where tenant = 'a' and id = 1;
--- @metacmp(false)
--- @wait_expect(2, 30)
-select tenant, id from ft_async_composite where match(body) against('composite') order by tenant, id;
 
 -- A NULL in one indexed content column skips only that column. Cover index
 -- creation for every parser accepted by fulltext_index_tokenize.
