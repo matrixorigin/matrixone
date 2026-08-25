@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/btree"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -42,6 +43,12 @@ const (
 const (
 	DefaultPollTruncateInterval = time.Second * 5
 )
+
+type pendingDSNRange struct {
+	start uint64
+	end   uint64
+	psn   uint64
+}
 
 type ReplayOption func(*replayer)
 
@@ -198,9 +205,11 @@ type replayer struct {
 	waitMoreRecords func() bool
 
 	replayedState struct {
-		// DSN->PSN mapping
-		dsn2PSNMap map[uint64]uint64
-		readCache  readCache
+		// Pending records are ordered by their start DSN. Requiring the ranges
+		// in this tree to be disjoint makes the next record schedulable by an
+		// exact lookup while allowing overlap checks against only its neighbors.
+		pendingRecords *btree.BTreeG[pendingDSNRange]
+		readCache      readCache
 
 		// the DSN is monotonically continuously increasing and the corresponding
 		// PSN may not be monotonically increasing due to the concurrent write.
@@ -255,7 +264,9 @@ func newReplayer(
 		readBatchSize: readBatchSize,
 	}
 	r.replayedState.readCache = newReadCache()
-	r.replayedState.dsn2PSNMap = make(map[uint64]uint64)
+	r.replayedState.pendingRecords = btree.NewG(32, func(a, b pendingDSNRange) bool {
+		return a.start < b.start
+	})
 	r.waterMarks.dsnScheduled = math.MaxUint64
 	r.waterMarks.minDSN = math.MaxUint64
 	for _, opt := range opts {
@@ -326,10 +337,50 @@ func (r *replayer) exportFields(level int) []zap.Field {
 	}
 	if level > 1 {
 		ret = append(ret,
-			zap.Any("dsn-psn-map", r.replayedState.dsn2PSNMap),
+			zap.Any("dsn-psn-map", r.pendingDSNToPSNMap()),
 		)
 	}
 	return ret
+}
+
+func (r *replayer) pendingDSNToPSNMap() map[uint64]uint64 {
+	pending := make(map[uint64]uint64, r.replayedState.pendingRecords.Len())
+	r.replayedState.pendingRecords.Ascend(func(record pendingDSNRange) bool {
+		pending[record.start] = record.psn
+		return true
+	})
+	return pending
+}
+
+func (r *replayer) findPendingOverlap(current pendingDSNRange) (pendingDSNRange, bool) {
+	var (
+		overlap pendingDSNRange
+		found   bool
+	)
+	r.replayedState.pendingRecords.DescendLessOrEqual(
+		current,
+		func(record pendingDSNRange) bool {
+			if record.end >= current.start {
+				overlap = record
+				found = true
+			}
+			return false
+		},
+	)
+	if found {
+		return overlap, true
+	}
+	r.replayedState.pendingRecords.AscendGreaterOrEqual(
+		current,
+		func(record pendingDSNRange) bool {
+			if record.start <= current.end {
+				overlap = record
+				found = true
+			}
+			return false
+		},
+	)
+	return overlap, found
 }
 
 func (r *replayer) initReadWatermarks(ctx context.Context) (err error) {
@@ -501,11 +552,12 @@ func (r *replayer) tryScheduleApply(
 	}
 
 	dsn := r.waterMarks.dsnScheduled + 1
-	psn, ok := r.replayedState.dsn2PSNMap[dsn]
+	pendingRecord, ok := r.replayedState.pendingRecords.Get(pendingDSNRange{start: dsn})
+	psn := pendingRecord.psn
 	// logutil.Infof("DEBUG-1: dsn %d, psn %d, ok %v, %v", dsn, psn, ok, r.waterMarks.dsnScheduled)
 
 	// Senario 1 [dsn not found]:
-	// dsn is not found in the dsn2PSNMap, which means the record
+	// dsn is not found in pendingRecords, which means the record
 	// with the dsn has not been read from the backend
 	if !ok {
 		appliedLSNCount := r.stats.appliedLSNCount.Load()
@@ -547,14 +599,14 @@ func (r *replayer) tryScheduleApply(
 					zap.Error(err),
 					zap.Uint64("dsn", dsn),
 					zap.Uint64("safe-dsn", r.replayedState.safeDSN),
-					zap.Any("dsn-psn", r.replayedState.dsn2PSNMap),
+					zap.Any("dsn-psn", r.pendingDSNToPSNMap()),
 				)
 				return
 			}
 		} else {
 			// [dsn not found && dsn > safeDSN && allReaded]
 			// it can only get in here when allReaded. it means even all records have been read,
-			// there are some big DSNs not found in the dsn2PSNMap.
+			// there are some big DSNs not found in pendingRecords.
 			// Truncated: PSN 11
 			// PSN: 10,     11,     12,     13,     14,	    15
 			// DSN: [37,37],[35,35],[40,40],[36,36],[39,39],[38,38]
@@ -564,7 +616,7 @@ func (r *replayer) tryScheduleApply(
 				"Wal-Replay-Info",
 				zap.Uint64("dsn", dsn),
 				zap.Uint64("safe-dsn", r.replayedState.safeDSN),
-				zap.Any("dsn-psn", r.replayedState.dsn2PSNMap),
+				zap.Any("dsn-psn", r.pendingDSNToPSNMap()),
 				zap.Uint64("dsn-scheduled", r.waterMarks.dsnScheduled),
 			)
 
@@ -583,7 +635,7 @@ func (r *replayer) tryScheduleApply(
 				)
 				r.waterMarks.minDSN = dsn + 1
 				r.waterMarks.dsnScheduled = dsn
-				if len(r.replayedState.dsn2PSNMap) == 0 {
+				if r.replayedState.pendingRecords.Len() == 0 {
 					err = ErrAllRecordsRead
 					return
 				}
@@ -591,12 +643,13 @@ func (r *replayer) tryScheduleApply(
 			}
 
 			// [dsn not found && dsn > safeDSN]
-			if len(r.replayedState.dsn2PSNMap) != 0 && (r.needWriteSkip == nil || r.needWriteSkip()) {
+			if r.replayedState.pendingRecords.Len() != 0 && (r.needWriteSkip == nil || r.needWriteSkip()) {
+				skipMap := r.pendingDSNToPSNMap()
 				if r.onWriteSkip != nil {
-					r.onWriteSkip(r.replayedState.dsn2PSNMap)
+					r.onWriteSkip(skipMap)
 				}
 				if err = r.appendSkipCmd(
-					ctx, r.replayedState.dsn2PSNMap,
+					ctx, skipMap,
 				); err != nil {
 					return
 				}
@@ -636,8 +689,8 @@ func (r *replayer) tryScheduleApply(
 	r.stats.schedulePSNCount++
 
 	r.replayedState.readCache.removeRecord(psn)
-	// dsn2PSNMap is produced by the readNextBatch and consumed if it is scheduled apply
-	delete(r.replayedState.dsn2PSNMap, dsn)
+	// pendingRecords is produced by readNextBatch and consumed when scheduled.
+	r.replayedState.pendingRecords.Delete(pendingRecord)
 
 	if r.onScheduled != nil {
 		r.onScheduled(psn, record)
@@ -812,25 +865,27 @@ func (r *replayer) readNextBatch(
 					zap.Any("skip-psns", cmd.GetPSNSlice()),
 					zap.Uint64("psn", psn),
 					zap.Uint64("safe-dsn", entry.GetSafeDSN()),
-					// zap.Any("dsn-psn", r.replayedState.dsn2PSNMap),
+					// zap.Any("dsn-psn", r.pendingDSNToPSNMap()),
 				)
 
 				for _, dsn := range skipDSNs {
 					// A later record may reuse a skipped DSN. Remove both the logical
 					// mapping and cached physical record so the old copy cannot be
 					// scheduled or left orphaned.
-					skippedPSN, ok := r.replayedState.dsn2PSNMap[dsn]
+					skippedRecord, ok := r.replayedState.pendingRecords.Get(
+						pendingDSNRange{start: dsn},
+					)
 					if !ok {
-						panic(fmt.Sprintf("dsn %d not found in the dsn2PSNMap", dsn))
+						panic(fmt.Sprintf("dsn %d not found in pending records", dsn))
 					}
-					r.replayedState.readCache.removeRecord(skippedPSN)
-					delete(r.replayedState.dsn2PSNMap, dsn)
+					r.replayedState.readCache.removeRecord(skippedRecord.psn)
+					r.replayedState.pendingRecords.Delete(skippedRecord)
 				}
 
 				continue
 			}
 
-			// 4. update the DSN->PSN mapping
+			// 4. update the pending record index
 			dsn := entry.GetStartDSN()
 			safe := entry.GetSafeDSN()
 			dsnRange := entry.DSNRange()
@@ -868,36 +923,44 @@ func (r *replayer) readNextBatch(
 				continue
 			}
 
-			// The same logical record may be read more than once before it is
-			// scheduled. Keep the first physical copy so the DSN->PSN mapping is
-			// stable and the other copy does not remain orphaned in readCache.
-			if firstPSN, ok := r.replayedState.dsn2PSNMap[dsn]; ok {
-				firstEntry, getErr := r.replayedState.readCache.getRecord(firstPSN)
-				if getErr != nil {
-					return false, getErr
-				}
-				firstRange := firstEntry.DSNRange()
-				if firstRange.End != dsnRange.End {
+			current := pendingDSNRange{
+				start: dsnRange.Start,
+				end:   dsnRange.End,
+				psn:   psn,
+			}
+			if overlap, ok := r.findPendingOverlap(current); ok {
+				// Duplicate append is a possible source of out-of-order physical
+				// records. Only an identical logical range is an idempotent retry;
+				// every other overlap would make one pending record unreachable.
+				if overlap.start != current.start || overlap.end != current.end {
 					r.replayedState.readCache.removeRecord(psn)
 					err = moerr.NewInternalErrorNoCtxf(
-						"wal records at psn %d and %d have the same start dsn %d but different end dsn %d and %d",
-						firstPSN, psn, dsn, firstRange.End, dsnRange.End,
+						"wal record dsn range [%d, %d] at psn %d overlaps pending dsn range [%d, %d] at psn %d",
+						current.start, current.end, current.psn,
+						overlap.start, overlap.end, overlap.psn,
+					)
+					logutil.Error(
+						"Wal-Replay-DSN-Overlap",
+						zap.Error(err),
+						zap.Uint64("safe-dsn", safe),
 					)
 					return false, err
 				}
 
+				// Keep the first physical copy so scheduling stays stable and the
+				// duplicate does not remain orphaned in readCache.
 				r.replayedState.readCache.removeRecord(psn)
 				logutil.Info(
 					"Wal-Replay-Duplicate-Entry",
 					zap.Uint64("start-dsn", dsnRange.Start),
 					zap.Uint64("end-dsn", dsnRange.End),
-					zap.Uint64("first-psn", firstPSN),
+					zap.Uint64("first-psn", overlap.psn),
 					zap.Uint64("duplicate-psn", psn),
 				)
 				continue
 			}
 
-			r.replayedState.dsn2PSNMap[dsn] = psn
+			r.replayedState.pendingRecords.ReplaceOrInsert(current)
 
 			// 5. init the scheduled DSN watermark
 			// it only happens there is no record scheduled for apply

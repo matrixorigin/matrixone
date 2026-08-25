@@ -614,30 +614,34 @@ func Test_ReplayerIgnoresLateDuplicateInContinuousReplay(t *testing.T) {
 }
 
 func Test_ReplayerIgnoresDuplicateDSNRange(t *testing.T) {
-	ctx := context.Background()
-	mockDriver := newMockDriver(
-		0,
-		[][5]uint64{
-			{uint64(Cmd_Normal), 1, 1, 3, 0},
-			{uint64(Cmd_Normal), 2, 4, 4, 3},
-			{uint64(Cmd_Normal), 3, 1, 3, 0},
-		},
-		30,
-	)
-	var appliedDSNs []uint64
-	mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
-		appliedDSNs = append(appliedDSNs, e.DSN)
-	})
-	r := newReplayer(
-		mockHandle,
-		mockDriver,
-		1,
-		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
-		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
-	)
+	for _, readBatchSize := range []int{1, 30} {
+		t.Run(fmt.Sprintf("read-batch-size-%d", readBatchSize), func(t *testing.T) {
+			ctx := context.Background()
+			mockDriver := newMockDriver(
+				0,
+				[][5]uint64{
+					{uint64(Cmd_Normal), 1, 1, 3, 0},
+					{uint64(Cmd_Normal), 2, 4, 4, 3},
+					{uint64(Cmd_Normal), 3, 1, 3, 0},
+				},
+				30,
+			)
+			var appliedDSNs []uint64
+			mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
+				appliedDSNs = append(appliedDSNs, e.DSN)
+			})
+			r := newReplayer(
+				mockHandle,
+				mockDriver,
+				readBatchSize,
+				WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+				WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+			)
 
-	require.NoError(t, r.Replay(ctx))
-	require.Equal(t, []uint64{1, 2, 3, 4}, appliedDSNs)
+			require.NoError(t, r.Replay(ctx))
+			require.Equal(t, []uint64{1, 2, 3, 4}, appliedDSNs)
+		})
+	}
 }
 
 func Test_ReplayerRejectsPartiallyOverlappingRange(t *testing.T) {
@@ -686,7 +690,49 @@ func Test_ReplayerRejectsPendingRangeConflict(t *testing.T) {
 
 	err := r.Replay(ctx)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "same start dsn 1 but different end dsn 2 and 3")
+	require.Contains(t, err.Error(), "overlaps pending dsn range")
+}
+
+func Test_ReplayerRejectsOverlappingPendingRanges(t *testing.T) {
+	testCases := []struct {
+		name   string
+		ranges [][2]uint64
+	}{
+		{name: "overlap-right", ranges: [][2]uint64{{1, 3}, {3, 5}}},
+		{name: "overlap-left", ranges: [][2]uint64{{3, 5}, {1, 3}}},
+		{name: "existing-contains-new", ranges: [][2]uint64{{1, 5}, {2, 3}}},
+		{name: "new-contains-existing", ranges: [][2]uint64{{2, 3}, {1, 5}}},
+	}
+	for _, test := range testCases {
+		for _, readBatchSize := range []int{1, 30} {
+			t.Run(fmt.Sprintf("%s/read-batch-size-%d", test.name, readBatchSize), func(t *testing.T) {
+				ctx := context.Background()
+				recordSpecs := make([][5]uint64, 0, len(test.ranges))
+				for i, dsnRange := range test.ranges {
+					recordSpecs = append(recordSpecs, [5]uint64{
+						uint64(Cmd_Normal), uint64(i + 1), dsnRange[0], dsnRange[1], 0,
+					})
+				}
+				mockDriver := newMockDriver(0, recordSpecs, 30)
+				var appliedDSNs []uint64
+				mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
+					appliedDSNs = append(appliedDSNs, e.DSN)
+				})
+				r := newReplayer(
+					mockHandle,
+					mockDriver,
+					readBatchSize,
+					WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+					WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+				)
+
+				err := r.Replay(ctx)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "overlaps pending dsn range")
+				require.Empty(t, appliedDSNs)
+			})
+		}
+	}
 }
 
 func Test_ReplayerSkipThenReuseDSNAcrossBatches(t *testing.T) {
