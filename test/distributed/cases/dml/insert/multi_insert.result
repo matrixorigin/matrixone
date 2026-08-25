@@ -158,6 +158,18 @@ not supported: multi-table INSERT where INTO clauses disagree on whether auto_in
 select count(*) from seqs5;
 ➤ count(*)[-5,64,0]  𝄀
 0
+create table seqs7 (seq int auto_increment primary key, val int);
+insert all into seqs7 (seq, val) values (0.0, lo) into seqs7 (seq, val) values (9, hi) select id, lo, hi from wide where id = 1;
+not supported: multi-table INSERT where INTO clauses disagree on whether auto_increment column 'seq' of table 'seqs7' is generated (every clause must omit it or supply a value that cannot be NULL)
+select count(*) from seqs7;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table seqs8 (seq int auto_increment primary key, val int);
+insert all into seqs8 (seq, val) values ('0', lo) into seqs8 (seq, val) values (9, hi) select id, lo, hi from wide where id = 1;
+not supported: multi-table INSERT where INTO clauses disagree on whether auto_increment column 'seq' of table 'seqs8' is generated (every clause must omit it or supply a value that cannot be NULL)
+select count(*) from seqs8;
+➤ count(*)[-5,64,0]  𝄀
+0
 set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
 create table seqs6 (seq int auto_increment primary key, val int);
 insert all into seqs6 (seq, val) values (id * 100, lo) into seqs6 (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;

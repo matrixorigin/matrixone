@@ -314,6 +314,35 @@ select count(*) from e1;
 select count(*) from e2;
 ➤ count(*)[-5,64,0]  𝄀
 0
+create table bad (s varchar(16));
+insert into bad values ('bad');
+insert first
+when id = 1 then into e1 (id) values (id)
+when (select cast(s as signed) from bad limit 1) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+not supported: INSERT FIRST with a subquery in WHEN #2: it cannot be skipped for rows an earlier WHEN already matched
+delete from e1; delete from e2;
+insert first
+when (select count(*) from bad) > 0 then into e1 (id) values (id)
+else into e2 (id) values (id)
+select id, s from esrc;
+select count(*) from e1;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from e2;
+➤ count(*)[-5,64,0]  𝄀
+0
+delete from e1; delete from e2;
+insert all
+when id >= 0 then into e1 (id) values (id)
+when (select count(*) from bad) > 0 then into e2 (id) values (id)
+select id, s from esrc;
+select count(*) from e1;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from e2;
+➤ count(*)[-5,64,0]  𝄀
+2
 insert all
 when id = 1 then into e1 (id) values (id)
 when cast(s as signed) = 1 then into e2 (id) values (id)

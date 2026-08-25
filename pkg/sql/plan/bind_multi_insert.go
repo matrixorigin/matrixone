@@ -22,10 +22,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // multiInsertSourceAlias is the table name under which the materialized source
@@ -302,10 +304,28 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 	srcTag := binding.tag
 	lastNodeID := srcID
 	conds := make([]*plan.Expr, 0, len(whens))
-	for _, when := range whens {
-		cond, nodeID, err := builder.bindMultiInsertCondition(condCtx, when.Cond, lastNodeID)
+	for i, when := range whens {
+		cond, err := builder.bindMultiInsertConditionExpr(condCtx, when.Cond)
 		if err != nil {
 			return out, err
+		}
+		// A subquery is flattened into a JOIN below the selector projections,
+		// and a join processes the whole batch: no projection-level mask can
+		// stop it running for rows an earlier WHEN already claimed. Masking the
+		// column the join produces does not restore first-match semantics, so
+		// refuse the shape instead of silently violating it. The first WHEN is
+		// fine — it applies to every row by definition — and INSERT ALL has no
+		// first-match rule at all.
+		if first && i > 0 && exprHasSubquery(cond) {
+			return out, moerr.NewNotSupportedf(builder.GetContext(),
+				"INSERT FIRST with a subquery in WHEN #%d: it cannot be skipped for rows an earlier WHEN already matched", i+1)
+		}
+		var nodeID int32
+		if nodeID, cond, err = builder.flattenSubqueries(lastNodeID, cond, condCtx); err != nil {
+			return out, err
+		}
+		if cond == nil {
+			return out, moerr.NewInternalError(builder.GetContext(), "multi-table insert WHEN condition vanished during binding")
 		}
 		lastNodeID = nodeID
 		conds = append(conds, cond)
@@ -475,29 +495,50 @@ func rewriteMultiInsertColRefs(expr *plan.Expr, idx map[[2]int32]int, tag int32,
 	}
 }
 
-// bindMultiInsertCondition binds one WHEN condition against the source binding,
-// ANDing its conjuncts back into a single boolean and flattening any subquery.
-func (builder *QueryBuilder) bindMultiInsertCondition(
-	condCtx *BindContext, astCond tree.Expr, lastNodeID int32,
-) (*plan.Expr, int32, error) {
+// bindMultiInsertConditionExpr binds one WHEN condition against the source
+// binding, ANDing its conjuncts back into a single boolean. Subquery flattening
+// is deliberately left to the caller, which must first decide whether the shape
+// is maskable.
+func (builder *QueryBuilder) bindMultiInsertConditionExpr(
+	condCtx *BindContext, astCond tree.Expr,
+) (*plan.Expr, error) {
 	conds, err := splitAndBindCondition(astCond, NoAlias, condCtx)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	cond := conds[0]
 	for _, extra := range conds[1:] {
 		if cond, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and",
 			[]*plan.Expr{cond, extra}); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 	}
-	if lastNodeID, cond, err = builder.flattenSubqueries(lastNodeID, cond, condCtx); err != nil {
-		return nil, 0, err
+	return cond, nil
+}
+
+// exprHasSubquery reports whether a bound expression still carries a subquery,
+// i.e. before flattenSubqueries has turned it into a join.
+func exprHasSubquery(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
 	}
-	if cond == nil {
-		return nil, 0, moerr.NewInternalError(builder.GetContext(), "multi-table insert WHEN condition vanished during binding")
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		return true
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if exprHasSubquery(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprHasSubquery(item) {
+				return true
+			}
+		}
 	}
-	return cond, lastNodeID, nil
+	return false
 }
 
 // validateMultiInsertTarget rejects target tables the multi-table INSERT does
@@ -682,63 +723,107 @@ const (
 )
 
 // classifyAutoIncrValue decides what a clause supplies for an AUTO_INCREMENT
-// column. zeroIsGenerated reflects sql_mode: unless NO_AUTO_VALUE_ON_ZERO is
-// set, an explicit 0 is converted to NULL and generated like an omitted value
-// (see shouldConvertZeroToNull in the preinsert operator), so a literal 0 is
-// not an explicit value in the default mode.
-func classifyAutoIncrValue(expr *plan.Expr, zeroIsGenerated bool) autoIncrValueKind {
+// column, judging the value that actually reaches PRE_INSERT.
+//
+// The branch projection holds the value already cast to the column's integer
+// type, so the expression is constant-folded first: that is what turns 0.0,
+// '0', or a decimal zero into the integer 0 that PRE_INSERT sees. Unless
+// NO_AUTO_VALUE_ON_ZERO is set, that 0 is converted to NULL and generated like
+// an omitted value (shouldConvertZeroToNull in the preinsert operator), so a
+// zero in ANY literal representation is not an explicit value in the default
+// mode. Anything that does not fold to a constant is unknown, and unknown is
+// refused rather than assumed safe.
+func classifyAutoIncrValue(expr *plan.Expr, zeroIsGenerated bool, proc *process.Process) autoIncrValueKind {
 	if expr == nil {
 		return autoIncrGenerated
 	}
-	// The branch projection holds the value already cast to the column type, so
-	// look through the cast to reach the literal underneath.
-	expr = unwrapAutoIncrCast(expr)
-	if lit := expr.GetLit(); lit != nil {
-		if lit.Isnull {
-			return autoIncrGenerated
+	folded := expr
+	if proc != nil {
+		if out, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, true, true); err == nil && out != nil {
+			folded = out
 		}
-		if zeroIsGenerated && isZeroIntLiteral(lit) {
-			return autoIncrGenerated
+	}
+	lit := folded.GetLit()
+	if lit == nil {
+		// Not a constant. Under NO_AUTO_VALUE_ON_ZERO a value is generated only
+		// when it is NULL, so a provably non-null expression is explicit. In the
+		// default mode it could still evaluate to 0 and be generated, which
+		// cannot be decided here.
+		if !zeroIsGenerated && expr.Typ.NotNullable {
+			return autoIncrExplicit
 		}
+		return autoIncrUnknown
+	}
+	if lit.Isnull {
+		return autoIncrGenerated
+	}
+	if !zeroIsGenerated {
+		// NO_AUTO_VALUE_ON_ZERO: a non-NULL value is used as written.
 		return autoIncrExplicit
 	}
-	if expr.Typ.NotNullable {
-		// Provably non-NULL, but a non-literal could still evaluate to 0 and be
-		// generated in the default mode, so it is only explicit when zero keeps
-		// its value.
-		if zeroIsGenerated {
-			return autoIncrUnknown
-		}
+	switch classifyZeroLiteral(lit) {
+	case literalZero:
+		return autoIncrGenerated
+	case literalNonZero:
 		return autoIncrExplicit
-	}
-	return autoIncrUnknown
-}
-
-// unwrapAutoIncrCast strips assignment casts so a literal value stays
-// recognizable as one.
-func unwrapAutoIncrCast(expr *plan.Expr) *plan.Expr {
-	for {
-		fn := expr.GetF()
-		if fn == nil || len(fn.Args) == 0 {
-			return expr
-		}
-		switch fn.Func.ObjName {
-		case "cast", "assignment_cast":
-			expr = fn.Args[0]
-		default:
-			return expr
-		}
+	default:
+		return autoIncrUnknown
 	}
 }
 
-func isZeroIntLiteral(lit *plan.Literal) bool {
+// zeroLiteralKind classifies a folded literal as zero, non-zero, or an
+// unrecognized representation. Whichever integer width the folder picks for the
+// AUTO_INCREMENT column, a zero value means PRE_INSERT generates the key in the
+// default sql_mode, so every width must be handled — and a representation this
+// does not understand must be reported as such rather than guessed, since
+// guessing "zero" silently disables the caller's guard and guessing "non-zero"
+// silently admits a generated value.
+type zeroLiteralKind int
+
+const (
+	literalZero zeroLiteralKind = iota
+	literalNonZero
+	literalUnrecognized
+)
+
+func classifyZeroLiteral(lit *plan.Literal) zeroLiteralKind {
+	zero := func(isZero bool) zeroLiteralKind {
+		if isZero {
+			return literalZero
+		}
+		return literalNonZero
+	}
 	switch v := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return zero(v.I8Val == 0)
+	case *plan.Literal_I16Val:
+		return zero(v.I16Val == 0)
+	case *plan.Literal_I32Val:
+		return zero(v.I32Val == 0)
 	case *plan.Literal_I64Val:
-		return v.I64Val == 0
+		return zero(v.I64Val == 0)
+	case *plan.Literal_U8Val:
+		return zero(v.U8Val == 0)
+	case *plan.Literal_U16Val:
+		return zero(v.U16Val == 0)
+	case *plan.Literal_U32Val:
+		return zero(v.U32Val == 0)
 	case *plan.Literal_U64Val:
-		return v.U64Val == 0
+		return zero(v.U64Val == 0)
+	case *plan.Literal_Fval:
+		return zero(v.Fval == 0)
+	case *plan.Literal_Dval:
+		return zero(v.Dval == 0)
+	case *plan.Literal_Bval:
+		return zero(!v.Bval)
+	case *plan.Literal_Sval:
+		text := strings.TrimSpace(v.Sval)
+		if value, err := strconv.ParseFloat(text, 64); err == nil {
+			return zero(value == 0)
+		}
+		return literalUnrecognized
 	}
-	return false
+	return literalUnrecognized
 }
 
 // validateMergedAutoIncrColumns rejects a same-table merge whose clauses do not
@@ -792,7 +877,7 @@ func (builder *QueryBuilder) validateMergedAutoIncrColumns(
 				return moerr.NewInternalErrorf(builder.GetContext(),
 					"multi-table insert branch is missing column %s", col.Name)
 			}
-			switch classifyAutoIncrValue(node.ProjectList[pos], zeroIsGenerated) {
+			switch classifyAutoIncrValue(node.ProjectList[pos], zeroIsGenerated, builder.compCtx.GetProcess()) {
 			case autoIncrGenerated:
 				generated = true
 			case autoIncrExplicit:

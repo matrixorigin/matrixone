@@ -115,6 +115,14 @@ select count(*) from seqs0;
 create table seqs5 (seq int auto_increment primary key, val int);
 insert all into seqs5 (seq, val) values (5, lo) into seqs5 (seq, val) values (null, hi) select id, lo, hi from wide;
 select count(*) from seqs5;
+-- Zero in ANY literal form reaches PRE_INSERT as 0 and is generated, so mixing
+-- it with an explicit value is refused too.
+create table seqs7 (seq int auto_increment primary key, val int);
+insert all into seqs7 (seq, val) values (0.0, lo) into seqs7 (seq, val) values (9, hi) select id, lo, hi from wide where id = 1;
+select count(*) from seqs7;
+create table seqs8 (seq int auto_increment primary key, val int);
+insert all into seqs8 (seq, val) values ('0', lo) into seqs8 (seq, val) values (9, hi) select id, lo, hi from wide where id = 1;
+select count(*) from seqs8;
 -- Under NO_AUTO_VALUE_ON_ZERO a 0 keeps its value, so non-NULL means explicit.
 set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
 create table seqs6 (seq int auto_increment primary key, val int);

@@ -217,6 +217,32 @@ insert first
 select id, s from esrc;
 select count(*) from e1;
 select count(*) from e2;
+-- A subquery in a later WHEN cannot be gated by the mask (flattening turns it
+-- into a join over the whole batch), so INSERT FIRST refuses the shape rather
+-- than silently evaluating an unreachable clause.
+create table bad (s varchar(16));
+insert into bad values ('bad');
+insert first
+  when id = 1 then into e1 (id) values (id)
+  when (select cast(s as signed) from bad limit 1) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+-- the FIRST WHEN may still contain a subquery: it applies to every row anyway
+delete from e1; delete from e2;
+insert first
+  when (select count(*) from bad) > 0 then into e1 (id) values (id)
+  else into e2 (id) values (id)
+select id, s from esrc;
+select count(*) from e1;
+select count(*) from e2;
+-- INSERT ALL has no first-match rule, so a subquery in any WHEN is fine
+delete from e1; delete from e2;
+insert all
+  when id >= 0 then into e1 (id) values (id)
+  when (select count(*) from bad) > 0 then into e2 (id) values (id)
+select id, s from esrc;
+select count(*) from e1;
+select count(*) from e2;
+
 -- INSERT ALL has no first-match rule, so every WHEN applies and the error surfaces
 insert all
   when id = 1 then into e1 (id) values (id)

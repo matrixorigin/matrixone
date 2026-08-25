@@ -479,20 +479,26 @@ func TestClassifyAutoIncrValue(t *testing.T) {
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
 	}
 	zeroLit := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}}}
+	zeroFloat := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 0}}}}
+	zeroStr := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: " 0 "}}}}
 
 	// default sql_mode: an explicit 0 is converted to NULL and generated
-	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nil, true), "an omitted column is generated")
-	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nullLit, true), "a listed column holding NULL is still generated")
-	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroLit, true), "0 is generated unless NO_AUTO_VALUE_ON_ZERO")
-	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(intLit, true))
-	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(notNullExpr, true), "a non-literal could still evaluate to 0")
-	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(nullableExpr, true), "a nullable expression may be either per row")
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nil, true, nil), "an omitted column is generated")
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nullLit, true, nil), "a listed column holding NULL is still generated")
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroLit, true, nil), "0 is generated unless NO_AUTO_VALUE_ON_ZERO")
+	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(intLit, true, nil))
+	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(notNullExpr, true, nil), "a non-literal could still evaluate to 0")
+	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(nullableExpr, true, nil), "a nullable expression may be either per row")
+
+	// every representation of zero counts, not just an int64 literal
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroFloat, true, nil), "0.0 reaches PRE_INSERT as 0")
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroStr, true, nil), "'0' reaches PRE_INSERT as 0")
 
 	// NO_AUTO_VALUE_ON_ZERO: 0 keeps its value, so non-NULL means explicit
-	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(zeroLit, false))
-	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(notNullExpr, false))
-	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nullLit, false))
-	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(nullableExpr, false))
+	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(zeroLit, false, nil))
+	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(notNullExpr, false, nil))
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nullLit, false, nil))
+	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(nullableExpr, false, nil))
 }
 
 func TestMultiInsertRejectsTooManyTargets(t *testing.T) {
@@ -507,4 +513,44 @@ func TestMultiInsertRejectsTooManyTargets(t *testing.T) {
 	_, err := runOneStmt(mock, t, sb.String())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "INTO clauses")
+}
+
+// The merged auto_increment guard must judge the value that reaches PRE_INSERT,
+// so every representation of zero and NULL counts as "generated" in the default
+// sql_mode, whatever literal the user wrote.
+func TestMultiInsertMergedAutoIncrRejectsGeneratedMixes(t *testing.T) {
+	rejected := []struct {
+		name string
+		sql  string
+	}{
+		{"null and literal", "insert all into auto_t (seq, val) values (null, a) into auto_t (seq, val) values (5, a) select a from t3"},
+		{"int zero and literal", "insert all into auto_t (seq, val) values (0, a) into auto_t (seq, val) values (5, a) select a from t3"},
+		{"float zero and literal", "insert all into auto_t (seq, val) values (0.0, a) into auto_t (seq, val) values (5, a) select a from t3"},
+		{"string zero and literal", "insert all into auto_t (seq, val) values ('0', a) into auto_t (seq, val) values (5, a) select a from t3"},
+		{"omitted and literal", "insert all into auto_t (val) values (a) into auto_t (seq, val) values (5, a) select a from t3"},
+		{"nullable expression and literal", "insert all into auto_t (seq, val) values (a, a) into auto_t (seq, val) values (5, a) select a from t3"},
+	}
+	for _, test := range rejected {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			_, err := runOneStmt(mock, t, test.sql)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "auto_increment")
+		})
+	}
+
+	accepted := []struct {
+		name string
+		sql  string
+	}{
+		{"all generated", "insert all into auto_t (val) values (a) into auto_t (val) values (a + 1) select a from t3"},
+		{"all non-zero literals", "insert all into auto_t (seq, val) values (5, a) into auto_t (seq, val) values (6, a) select a from t3"},
+	}
+	for _, test := range accepted {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			_, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+		})
+	}
 }
