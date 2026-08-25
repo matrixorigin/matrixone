@@ -319,6 +319,90 @@ func TestGlobalSysVarsLaterFenceCannotReturnOlderSharedCache(t *testing.T) {
 	require.Equal(t, int64(0), globalVars.Get(PasswordHistory))
 }
 
+func TestGlobalSysVarsCrossCNNewerFenceForcesDelayedSetterRefresh(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	accountID := ses.GetTenantInfo().GetTenantID()
+	cn1Vars := &SystemVariables{mp: map[string]interface{}{PasswordHistory: int64(5)}}
+	cn2Vars := &SystemVariables{mp: map[string]interface{}{PasswordHistory: int64(5)}}
+	cn1Mgr := &GlobalSysVarsMgr{
+		accountsGlobalSysVarsMap: map[uint32]*SystemVariables{accountID: cn1Vars},
+	}
+	cn2Mgr := &GlobalSysVarsMgr{
+		accountsGlobalSysVarsMap: map[uint32]*SystemVariables{accountID: cn2Vars},
+	}
+	ses.gSysVars = cn1Vars
+
+	commitTS1 := timestamp.Timestamp{PhysicalTime: 100}
+	commitTS2 := timestamp.Timestamp{PhysicalTime: 200}
+	newSnapshot := newMrsForGlobalSystemVariables([][]interface{}{{PasswordHistory, "1"}})
+	var reads atomic.Int32
+	execStub := gostub.Stub(&ExeSqlInBgSes, func(
+		context.Context,
+		BackgroundExec,
+		string,
+	) ([]ExecResult, error) {
+		reads.Add(1)
+		return []ExecResult{newSnapshot}, nil
+	})
+	t.Cleanup(execStub.Reset)
+
+	releaseTS1Fence := make(chan struct{})
+	ts1Done := make(chan error, 1)
+	go func() {
+		<-releaseTS1Fence
+		ts1Done <- cn1Mgr.PublishCommittedGlobalSysVar(
+			context.Background(), ses, PasswordHistory, int64(0), commitTS1)
+	}()
+
+	// CN2 publishes TS2 in its independent cache, then its SyncCommit reaches
+	// CN1 before CN1's older TS1 fence returns.
+	require.NoError(t, cn2Mgr.PublishCommittedGlobalSysVar(
+		context.Background(), &Session{feSessionImpl: feSessionImpl{
+			tenant:   ses.GetTenantInfo(),
+			gSysVars: cn2Vars,
+		}}, PasswordHistory, int64(1), commitTS2))
+	cn1Mgr.AdvancePublicationEpoch(commitTS2)
+	close(releaseTS1Fence)
+
+	select {
+	case err := <-ts1Done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("delayed TS1 setter did not complete")
+	}
+	require.Equal(t, int64(1), cn2Vars.Get(PasswordHistory))
+	require.Equal(t, int64(1), cn1Vars.Get(PasswordHistory))
+	require.Same(t, cn1Vars, ses.gSysVars)
+	require.Equal(t, int32(1), reads.Load(), "CN1 must reload catalog after observing TS2")
+}
+
+func TestGlobalSysVarsCrossCNRefreshFailureRejectsDelayedPublication(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	accountID := ses.GetTenantInfo().GetTenantID()
+	cn1Vars := &SystemVariables{mp: map[string]interface{}{PasswordHistory: int64(5)}}
+	cn1Mgr := &GlobalSysVarsMgr{
+		accountsGlobalSysVarsMap: map[uint32]*SystemVariables{accountID: cn1Vars},
+	}
+	ses.gSysVars = cn1Vars
+	cn1Mgr.AdvancePublicationEpoch(timestamp.Timestamp{PhysicalTime: 200})
+	execStub := gostub.Stub(&ExeSqlInBgSes, func(
+		context.Context,
+		BackgroundExec,
+		string,
+	) ([]ExecResult, error) {
+		return nil, context.Canceled
+	})
+	t.Cleanup(execStub.Reset)
+
+	err := cn1Mgr.PublishCommittedGlobalSysVar(
+		context.Background(), ses, PasswordHistory, int64(0), timestamp.Timestamp{PhysicalTime: 100})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int64(5), cn1Vars.Get(PasswordHistory),
+		"failed authoritative refresh must not publish delayed TS1")
+}
+
 func TestGlobalSysVarsConcurrentSetPublishesInCommitOrder(t *testing.T) {
 	globalVars := &SystemVariables{mp: map[string]interface{}{
 		PasswordHistory: int64(5),

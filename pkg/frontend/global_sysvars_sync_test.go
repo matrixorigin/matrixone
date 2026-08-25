@@ -312,6 +312,19 @@ func TestSetGlobalSysVarPublishesCacheOnlyAfterCommitSync(t *testing.T) {
 	t.Cleanup(stub.Reset)
 
 	globalVars := &SystemVariables{mp: map[string]interface{}{PasswordHistory: int64(0)}}
+	GSysVarsMgr.Lock()
+	previousVars, hadPreviousVars := GSysVarsMgr.accountsGlobalSysVarsMap[42]
+	GSysVarsMgr.accountsGlobalSysVarsMap[42] = globalVars
+	GSysVarsMgr.Unlock()
+	t.Cleanup(func() {
+		GSysVarsMgr.Lock()
+		defer GSysVarsMgr.Unlock()
+		if hadPreviousVars {
+			GSysVarsMgr.accountsGlobalSysVarsMap[42] = previousVars
+		} else {
+			delete(GSysVarsMgr.accountsGlobalSysVarsMap, 42)
+		}
+	})
 	ses := &Session{feSessionImpl: feSessionImpl{
 		tenant: &TenantInfo{
 			Tenant:   "account-a",

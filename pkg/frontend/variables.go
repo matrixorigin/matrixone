@@ -1055,6 +1055,38 @@ func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {
 	m.accountsGlobalSysVarsMap[accountId] = vars
 }
 
+// PublishCommittedGlobalSysVar publishes directly only when no newer remote
+// fence has already been applied on this CN. Otherwise it reloads the catalog
+// after that fence so a delayed local setter cannot regress the shared cache.
+func (m *GlobalSysVarsMgr) PublishCommittedGlobalSysVar(
+	ctx context.Context,
+	ses *Session,
+	name string,
+	value interface{},
+	commitTS timestamp.Timestamp,
+) error {
+	accountID := ses.GetTenantInfo().GetTenantID()
+	m.Lock()
+	if !commitTS.IsEmpty() && commitTS.Less(m.publicationFenceTS) {
+		m.Unlock()
+		vars, err := m.Get(accountID, ses, ctx, nil)
+		if err != nil {
+			return err
+		}
+		ses.gSysVars = vars
+		return nil
+	}
+	vars, ok := m.accountsGlobalSysVarsMap[accountID]
+	if !ok {
+		vars = ses.gSysVars
+		m.accountsGlobalSysVarsMap[accountID] = vars
+	}
+	vars.SetIfNewerCommitTS(name, value, commitTS)
+	m.Unlock()
+	ses.gSysVars = vars
+	return nil
+}
+
 // AdvancePublicationEpoch prevents every catalog refresh that started before
 // this call from publishing into the shared account cache.
 func (m *GlobalSysVarsMgr) AdvancePublicationEpoch(fenceTS timestamp.Timestamp) {

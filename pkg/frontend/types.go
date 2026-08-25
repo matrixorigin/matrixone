@@ -1544,7 +1544,14 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if err = syncGlobalSysVarCommit(ctx, ses, commitTS); err != nil {
 		return
 	}
-	ses.gSysVars.SetIfNewerCommitTS(canonicalName, val, commitTS)
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.QueryClient == nil {
+		// Focused frontend tests and non-CN users have no distributed cache.
+		ses.gSysVars.SetIfNewerCommitTS(canonicalName, val, commitTS)
+		return nil
+	}
+	err = GSysVarsMgr.PublishCommittedGlobalSysVar(
+		ctx, ses, canonicalName, val, commitTS)
 	return
 }
 
