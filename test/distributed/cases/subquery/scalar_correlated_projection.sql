@@ -37,6 +37,24 @@ select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a =
 select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a = 1;
 
 -- @case
+-- @desc:wrapped outer references are evaluated after correlated scalar matching
+-- @label:bvt
+delete from t2;
+insert into t2 values (50);
+insert into t1 values (11, 23, 34);
+select a, b, (select a + 1 from t2 where d > a limit 1) as arithmetic_wrap from t1 order by a, b;
+select a, b, (select cast(a as signed) from t2 where d > a limit 1) as cast_wrap from t1 order by a, b;
+select a, b, (select coalesce(a, 0) from t2 where d > a limit 1) as coalesce_wrap from t1 order by a, b;
+select a, b, (select if(a > 0, a, 0) from t2 where d > a limit 1) as if_wrap from t1 order by a, b;
+select a, b, (select case when a > 0 then a else 0 end from t2 where d > a limit 1) as case_wrap from t1 order by a, b;
+select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as mixed_case_wrap from t1 order by a, b;
+delete from t2;
+select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as empty_mixed from t1 order by a, b;
+insert into t2 values (50), (60), (70);
+select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as multi_mixed from t1 order by a, b;
+delete from t1 where b = 23;
+
+-- @case
 -- @desc:issue #25959 - evaluate the final scalar aggregate projection after LEFT JOIN null extension
 -- @label:bvt
 select p.id, (select coalesce(sum(c.v), 0) from child_agg c where c.corr_key = p.corr_key) as sum_value from parent_agg p order by p.id;

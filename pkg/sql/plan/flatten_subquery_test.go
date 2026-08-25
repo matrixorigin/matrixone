@@ -2120,6 +2120,72 @@ func newFlattenSubqueryTestAggregate(name string, typ plan.Type) *plan.Expr {
 	}
 }
 
+func TestWrappedCorrelatedScalarProjectionIsEvaluatedAfterJoin(t *testing.T) {
+	for _, projection := range []string{
+		"n.n_regionkey + 1",
+		"cast(n.n_regionkey as signed)",
+		"coalesce(n.n_regionkey, 0)",
+		"if(n.n_regionkey > 0, n.n_regionkey, 0)",
+		"case when n.n_regionkey > 0 then n.n_regionkey else 0 end",
+	} {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+			SELECT n.n_nationkey,
+			       (SELECT `+projection+`
+			          FROM region r
+			         WHERE r.r_regionkey > n.n_regionkey
+			         LIMIT 1)
+			  FROM nation n`)
+		require.NoError(t, err, projection)
+		assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+	}
+
+	_, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n.n_nationkey,
+		       (SELECT rand() + n.n_regionkey
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`)
+	require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+}
+
+func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	assertReachablePlanHasNoCorrelatedExpr(t, query)
+	var leftJoin, perOuterWindow bool
+	for _, node := range reachableFlattenSubqueryNodes(query) {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT {
+			leftJoin = true
+		}
+		if node.NodeType == plan.Node_WINDOW && len(node.WinSpecList) == 1 {
+			window := node.WinSpecList[0].GetW()
+			if window != nil && window.Name == "row_number" && len(window.PartitionBy) == 1 {
+				perOuterWindow = true
+			}
+		}
+	}
+	require.True(t, leftJoin)
+	require.True(t, perOuterWindow)
+
+	_, err = runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM (SELECT n_nationkey, n_regionkey FROM nation) n`)
+	require.ErrorContains(t, err, "outer input without a stable row identity")
+}
+
 func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 
@@ -2140,7 +2206,7 @@ func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 	}
 }
 
-func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
+func TestNormalizeCorrelatedScalarProjectionFallsBack(t *testing.T) {
 	const (
 		projectTag int32 = 10
 		outerTag   int32 = 20
@@ -2267,12 +2333,13 @@ func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
 				projects:   tt.projects,
 			}
 
-			nodeID, match, outerResult, existential :=
-				builder.normalizeDirectCorrelatedScalarProjection(tt.subID, ctx)
+			nodeID, match, outerResult, existential, perOuterLimitOne :=
+				builder.normalizeCorrelatedScalarProjection(tt.subID, ctx)
 			require.Equal(t, tt.subID, nodeID)
 			require.Nil(t, match)
 			require.Nil(t, outerResult)
 			require.False(t, existential)
+			require.False(t, perOuterLimitOne)
 		})
 	}
 }
