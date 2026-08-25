@@ -260,6 +260,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
+			if err = ctr.validateLagLeadOffsets(0, window, proc); err != nil {
+				return result, err
+			}
 			for i := range window.Aggs {
 				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
 					arg := ctr.aggVecs[i].Vec[0]
@@ -927,6 +930,32 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	return ctr.processValueFuncRange(idx, ap, proc, 0, ctr.bat.RowCount())
 }
 
+// validateLagLeadOffsets checks the complete evaluated offset vector before
+// the first output chunk is emitted. Literal offsets are rejected by the
+// binder; this pass covers prepared parameters and row-dependent expressions.
+func (ctr *container) validateLagLeadOffsets(idx int, ap *Window, proc *process.Process) error {
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	if (w.Name != "lag" && w.Name != "lead") ||
+		idx >= len(ctr.aggVecs) || len(ctr.aggVecs[idx].Vec) < 2 {
+		return nil
+	}
+
+	offsetVec := ctr.aggVecs[idx].Vec[1]
+	rows := offsetVec.Length()
+	if offsetVec.IsConst() && rows > 1 {
+		rows = 1
+	}
+	for row := 0; row < rows; row++ {
+		if err := checkCanceled(proc, row); err != nil {
+			return err
+		}
+		if _, err := getLagLeadOffsetFromVec(proc.Ctx, w.Name, offsetVec, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ctr *container) processValueFuncRange(
 	idx int,
 	ap *Window,
@@ -955,11 +984,14 @@ func (ctr *container) processValueFuncRange(
 	switch funcName {
 	case "lag":
 		var offsetVec *vector.Vector
-		constOffset, constOK := int64(1), true
+		constOffset := int64(1)
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			offsetVec = ctr.aggVecs[idx].Vec[1]
 			if offsetVec.IsConst() {
-				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+				constOffset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		var defaultVec *vector.Vector
@@ -970,15 +1002,12 @@ func (ctr *container) processValueFuncRange(
 			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
-			offset, ok := constOffset, constOK
+			offset := constOffset
 			if offsetVec != nil && !offsetVec.IsConst() {
-				offset, ok = getInt64FromVec(offsetVec, j)
-			}
-			if !ok || offset < 0 {
-				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
+				offset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, j)
+				if err != nil {
 					return nil, err
 				}
-				continue
 			}
 			start, _ := 0, n
 			if ctr.ps != nil {
@@ -998,11 +1027,14 @@ func (ctr *container) processValueFuncRange(
 
 	case "lead":
 		var offsetVec *vector.Vector
-		constOffset, constOK := int64(1), true
+		constOffset := int64(1)
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			offsetVec = ctr.aggVecs[idx].Vec[1]
 			if offsetVec.IsConst() {
-				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+				constOffset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		var defaultVec *vector.Vector
@@ -1013,15 +1045,12 @@ func (ctr *container) processValueFuncRange(
 			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
-			offset, ok := constOffset, constOK
+			offset := constOffset
 			if offsetVec != nil && !offsetVec.IsConst() {
-				offset, ok = getInt64FromVec(offsetVec, j)
-			}
-			if !ok || offset < 0 {
-				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
+				offset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, j)
+				if err != nil {
 					return nil, err
 				}
-				continue
 			}
 			_, end := 0, n
 			if ctr.ps != nil {
@@ -1213,6 +1242,17 @@ func getInt64FromVec(vec *vector.Vector, row int) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func getLagLeadOffsetFromVec(ctx context.Context, name string, vec *vector.Vector, row int) (int64, error) {
+	if vec.IsConst() {
+		row = 0
+	}
+	offset, ok := getInt64FromVec(vec, row)
+	if !ok || offset < 0 {
+		return 0, moerr.NewWrongArguments(ctx, name)
+	}
+	return offset, nil
 }
 
 // appendDefaultOrNull appends the default value (if provided) or NULL to the result vector.
