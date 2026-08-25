@@ -17,7 +17,6 @@ from generate_series(80000) g;
 select mo_ctl('dn', 'flush', 'd1.t1');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
-select Sleep(1);
 -- Keep the production planner's original 5M/4M estimates. Unlike forcing an
 -- exec type, patched table statistics still exercise shuffle selection.
 set @shuffle_t1_stats = '{"table_cnt":5000000,"block_number":640,"accurate_object_number":40,"approx_object_number":40,"ndv_map":{"c1":5000000,"c2":5000000,"c3":5000000},"min_val_map":{"c1":1,"c2":1,"c3":1},"max_val_map":{"c1":5000000,"c2":5000000,"c3":5000000},"shuffle_range_map":{"c1":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]},"c2":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]},"c3":{"overlap":0.1,"uniform":1,"result":[1,1250000,2500000,3750000,5000000]}}}';
