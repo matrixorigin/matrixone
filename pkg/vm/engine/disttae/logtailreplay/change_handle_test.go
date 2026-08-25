@@ -948,6 +948,30 @@ func TestDataBranchVisibleStateRangeExceedingTableChangesCapIsUnbounded(t *testi
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestNewChangesHandlerPreservesAllVersionsPolicy(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state := NewPartitionState("", true, 42, false)
+	state.start = types.TS{}
+	ctx := engine.WithCollectChangesPreserveAllVersions(context.Background())
+
+	handle, err := NewChangesHandler(
+		ctx,
+		state,
+		types.TS{},
+		types.BuildTS(10, 0),
+		false,
+		objectio.BlockMaxRows,
+		0,
+		mp,
+		nil,
+	)
+	require.NoError(t, err)
+	require.True(t, handle.preserveAllVersions)
+	require.NoError(t, handle.Close())
+	require.Zero(t, mp.CurrNB())
+}
+
 func newPartitionStateRangeRows(
 	t *testing.T,
 	mp *mpool.MPool,

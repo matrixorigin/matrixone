@@ -3329,20 +3329,21 @@ func NewChangesHandler(
 		return nil, moerr.NewErrStaleReadNoCtx(state.start.ToString(), start.ToString())
 	}
 	changeHandle = &ChangeHandler{
-		coarseMaxRow:  int(maxRow),
-		start:         start,
-		end:           end,
-		fs:            fs,
-		minTS:         state.start,
-		skipDeletes:   skipDeletes,
-		LogThreshold:  LogThreshold,
-		primarySeqnum: primarySeqnum,
-		primaryIdx:    primarySeqnum,
-		mp:            mp,
-		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
-		pkFilter:      engine.PKFilterFromContext(ctx),
-		debugLabel:    engine.CollectChangesDebugLabelFromContext(ctx),
-		retainRowID:   engine.RetainRowIDFromContext(ctx),
+		coarseMaxRow:        int(maxRow),
+		start:               start,
+		end:                 end,
+		fs:                  fs,
+		minTS:               state.start,
+		skipDeletes:         skipDeletes,
+		LogThreshold:        LogThreshold,
+		primarySeqnum:       primarySeqnum,
+		primaryIdx:          primarySeqnum,
+		mp:                  mp,
+		scheduler:           tasks.NewParallelJobScheduler(LoadParallism),
+		pkFilter:            engine.PKFilterFromContext(ctx),
+		debugLabel:          engine.CollectChangesDebugLabelFromContext(ctx),
+		retainRowID:         engine.RetainRowIDFromContext(ctx),
+		preserveAllVersions: engine.CollectChangesPreserveAllVersionsFromContext(ctx),
 	}
 	defer func() {
 		if err != nil {
