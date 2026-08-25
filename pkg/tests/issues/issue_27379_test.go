@@ -107,6 +107,7 @@ func TestIssue27379TimestampAddPreservesFSP(t *testing.T) {
 		defer execSQLMaybe(t, ctx, db, "drop view if exists "+dbName+".timestampadd_v")
 		viewRows, err := db.QueryContext(ctx, "select shifted from "+dbName+".timestampadd_v")
 		require.NoError(t, err)
+		defer viewRows.Close()
 		viewTypes, err := viewRows.ColumnTypes()
 		require.NoError(t, err)
 		require.Len(t, viewTypes, 1)
@@ -117,7 +118,7 @@ func TestIssue27379TimestampAddPreservesFSP(t *testing.T) {
 		var viewValue string
 		require.NoError(t, viewRows.Scan(&viewValue))
 		require.Equal(t, "2026-08-12 10:00:01", viewValue)
-		require.NoError(t, viewRows.Close())
+		require.NoError(t, viewRows.Err())
 
 		windowRows, err := db.QueryContext(ctx, `select
 			_wstart, timestampadd(second, 1, _wstart),
