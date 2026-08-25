@@ -39,12 +39,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
-// exactPkFilterThreshold controls when WaitUniqueJoinKeys converts the received
-// unique join keys into an exact "pk IN (...)" filter instead of building a
-// bloom filter. For very small PK sets, bloom filter false positives interact
-// poorly with centroid pruning in IVF pre mode. Keeping this threshold small
-// avoids overly large IN lists while preserving the bloom filter performance
-// path for larger sets. Adjust this number if future workloads show a better cutoff.
+// exactPkFilterThreshold controls when a small runtime membership set keeps
+// the exact all-centroid PRE path. Generated-SQL search represents that path as
+// "pk IN (...)"; relation search filters the same set before local Top-K.
+// Larger sets use the bounded docfilter path to avoid all-centroid scans.
 const exactPkFilterThreshold = 100
 
 var runSql = sqlexec.RunSql
@@ -395,6 +393,27 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	}
 	sqlproc.IvfMembershipFilter = payload
 	return nil
+}
+
+// exactRelationMembershipScan preserves the legacy PRE policy for small key
+// sets, where scanning every centroid and filtering before Top-K is bounded and
+// avoids under-filling selective queries. Larger sets use the approximate,
+// nprobe-bounded storage Top-K path.
+func exactRelationMembershipScan(sqlproc *sqlexec.SqlProcess) (exact, empty bool, err error) {
+	if sqlproc == nil || sqlproc.RelationScanner == nil || !sqlproc.IvfHasMembershipFilter {
+		return false, false, nil
+	}
+	if len(sqlproc.IvfRuntimeFilterData) == 0 {
+		return false, true, nil
+	}
+	keyvec := new(vector.Vector)
+	if err = keyvec.UnmarshalBinary(sqlproc.IvfRuntimeFilterData); err != nil {
+		return false, false, err
+	}
+	if keyvec.Length() == 0 {
+		return false, true, nil
+	}
+	return exactPkFilterThreshold > 0 && keyvec.Length() <= exactPkFilterThreshold, false, nil
 }
 
 func filterRequestedIncludeColumns(requested []string, configured []string) []string {
@@ -764,27 +783,36 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			}
 		}
 
-		relationMembership := sqlproc != nil && sqlproc.RelationScanner != nil &&
-			sqlproc.IvfHasMembershipFilter
-		if relationMembership && len(sqlproc.IvfRuntimeFilterData) == 0 {
+		directExactMembership, emptyMembership, membershipErr := exactRelationMembershipScan(sqlproc)
+		if membershipErr != nil {
+			return nil, nil, membershipErr
+		}
+		if emptyMembership {
 			// The build side produced an exact empty set. Never interpret that as
 			// an absent filter and scan the index unrestricted.
 			return []any{}, []float64{}, nil
 		}
-		if err = idx.getBloomFilter(sqlproc); err != nil {
-			return nil, nil, err
+		if !directExactMembership {
+			if err = idx.getBloomFilter(sqlproc); err != nil {
+				return nil, nil, err
+			}
 		}
 
 		var sql string
 		var res executor.Result
 		if sqlproc != nil && sqlproc.RelationScanner != nil {
+			scanCentroidIDs := activeCentroidIDs
+			if directExactMembership {
+				scanCentroidIDs = nil
+				cursor.Exhausted = true
+			}
 			res, err = idx.scanEntries(
 				sqlproc,
 				idxcfg,
 				tblcfg,
 				query,
 				idx.Version,
-				activeCentroidIDs,
+				scanCentroidIDs,
 				includeCols,
 				rt.PushdownFilters,
 				roundLimit,

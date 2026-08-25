@@ -1342,7 +1342,11 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	}
 	membershipVec := vector.NewVec(types.T_int64.ToType())
 	defer membershipVec.Free(mp)
-	require.NoError(t, vector.AppendFixedList(membershipVec, []int64{1, 2, 3, 4, 5}, nil, mp))
+	membershipValues := make([]int64, exactPkFilterThreshold+1)
+	for i := range membershipValues {
+		membershipValues[i] = int64(i + 1)
+	}
+	require.NoError(t, vector.AppendFixedList(membershipVec, membershipValues, nil, mp))
 	membership, err := membershipVec.MarshalBinary()
 	require.NoError(t, err)
 	sqlproc.IvfHasMembershipFilter = true
