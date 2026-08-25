@@ -71,10 +71,13 @@ type Config struct {
 	// execution path forgets to propagate a session or task deadline. Callers
 	// that retry across Lock calls still need to own and propagate a deadline.
 	MaxLockWaitDuration toml.Duration `toml:"max-lock-wait-duration"`
-	// MaxLockRowCount each time a lock is added, some LockRow is stored in the lockservice, if
-	// too many LockRows are put in each time, it will cause too much memory overhead, this value
-	// limits the maximum count of LocRow put into the LockService each time, beyond this value it
-	// will be converted into a Range of locks
+	// MaxLockRowCount bounds lock keys retained for one transaction and physical lock table
+	// only while its complete ownership consists of non-sharded Exclusive locks, which can be
+	// conservatively coarsened to their observed range. Once the table records a Shared or
+	// row-sharded lock, it stays exact for the rest of the transaction: an overlapping range
+	// cannot preserve independent compatible ownership, and sharded endpoints can belong to
+	// different physical tables. The planner upgrades cardinality-known Shared targets before
+	// acquisition instead.
 	MaxLockRowCount toml.ByteSize `toml:"max-row-lock-count"`
 	// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will
 	// continuously hold the bind, and if no hold request is received after the configured time,
@@ -102,6 +105,9 @@ func (c *Config) Validate() {
 	if c.MaxFixedSliceSize == 0 {
 		c.MaxFixedSliceSize = toml.ByteSize(defaultMaxFixedSliceSize)
 	}
+	// Preserve the compatibility contract of existing deployments. Remote
+	// cleanup is routed by table and transaction ID, so cumulative coarsening
+	// must not require extra endpoint capacity in the origin-side key snapshot.
 	if c.MaxLockRowCount > c.MaxFixedSliceSize {
 		panic("This parameter configuration may trigger scenarios that violate MaxFixedSliceSize")
 	}

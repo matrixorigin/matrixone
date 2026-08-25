@@ -14,9 +14,22 @@ insert into j1 values (1,'{"title":"quantum physics","tag":"science"}'), (2,'{"t
 create table j2 (id bigint primary key, a json, b json);
 create fulltext2 index ftidx on j2(a,b) with parser json;
 insert into j2 values (1,'{"x":"hello world"}','{"y":"foo bar"}'), (2,'{"x":"lorem ipsum"}','{"y":"dolor sit"}');
-select sleep(45);
-sleep(45)
-0
+set @pk_dt_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'pk_dt') limit 1);
+set @pk_dec_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'pk_dec') limit 1);
+set @j1_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'j1') limit 1);
+set @j2_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'j2') limit 1);
+set @wait_bugfix_initial_sql = concat(
+'select ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @pk_dt_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as pk_dt_ready, ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @pk_dec_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as pk_dec_ready, ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @j1_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as j1_ready, ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @j2_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as j2_ready'
+);
+prepare wait_bugfix_initial from @wait_bugfix_initial_sql;
+execute wait_bugfix_initial;
+➤ pk_dt_ready[-7,1,0]  ¦  pk_dec_ready[-7,1,0]  ¦  j1_ready[-7,1,0]  ¦  j2_ready[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+deallocate prepare wait_bugfix_initial;
 select id from pk_dt where match(body) against('beta') order by id;
 id
 2020-01-02 03:04:05
@@ -46,9 +59,16 @@ id
 create table reb (id bigint primary key, body text);
 create fulltext2 index ftidx on reb(body);
 insert into reb values (1,'stale zebra'),(2,'stale zebra');
-select sleep(45);
-sleep(45)
-0
+set @reb_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'reb') limit 1);
+set @wait_reb_initial_sql = concat(
+'select coalesce(max(chunk_id), -1) >= 0 as reb_ready from `', database(), '`.`', @reb_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_reb_initial from @wait_reb_initial_sql;
+execute wait_reb_initial;
+➤ reb_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_reb_initial;
 select count(*) from reb where match(body) against('zebra');
 count(*)
 2

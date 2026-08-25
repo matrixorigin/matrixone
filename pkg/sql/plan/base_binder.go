@@ -21,6 +21,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -4228,6 +4229,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	if err := normalizeLagLeadOffsetParam(ctx, name, args); err != nil {
 		return nil, err
 	}
+	if err := validateLagLeadOffsetLiteral(ctx, name, args); err != nil {
+		return nil, err
+	}
 
 	// get args(exprs) & types
 	argsLength := len(args)
@@ -4513,30 +4517,43 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "timestampadd":
-		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
-		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
-		// This ensures GetResultColumnsFromPlan returns correct column type for MySQL protocol layer
-		if len(args) >= 3 && argsType[2].Oid == types.T_date {
-			// Check if first argument (unit) is a constant string
-			if unitExpr, ok := args[0].Expr.(*plan.Expr_Lit); ok && unitExpr.Lit != nil && !unitExpr.Lit.Isnull {
-				if sval, ok := unitExpr.Lit.GetValue().(*plan.Literal_Sval); ok {
-					unitStr := strings.ToUpper(sval.Sval)
-					// Parse interval type
-					iTyp, err := types.IntervalTypeOf(unitStr)
-					if err == nil {
-						// Check if it's a date unit (DAY, WEEK, MONTH, QUARTER, YEAR)
-						isDateUnit := iTyp == types.Day || iTyp == types.Week ||
-							iTyp == types.Month || iTyp == types.Quarter ||
-							iTyp == types.Year
-						if isDateUnit {
-							// Return DATE type for date units (MySQL compatible)
-							returnType = types.T_date.ToType()
+		if len(args) >= 3 {
+			inputType := argsType[2]
+			switch inputType.Oid {
+			case types.T_date, types.T_datetime, types.T_timestamp:
+				unit, known := timestampAddUnitFromPlanExpr(args[0])
+				if !known {
+					// A runtime unit can still be MICROSECOND, so retain a safe
+					// upper bound until execution resolves it.
+					if inputType.Oid == types.T_date {
+						returnType = types.T_datetime.ToTypeWithScale(6)
+					} else {
+						returnType.Oid = inputType.Oid
+						returnType.Scale = inputType.Scale
+						if returnType.Scale < 6 {
+							returnType.Scale = 6
 						}
-						// For time units (HOUR, MINUTE, SECOND, MICROSECOND), keep DATETIME (from retType)
+					}
+					break
+				}
+
+				if inputType.Oid == types.T_date {
+					if timestampAddDateUnit(unit) {
+						returnType = types.T_date.ToType()
+					} else {
+						returnType = types.T_datetime.ToTypeWithScale(0)
+						if unit == types.MicroSecond {
+							returnType.Scale = 6
+						}
+					}
+				} else {
+					returnType.Oid = inputType.Oid
+					returnType.Scale = inputType.Scale
+					if unit == types.MicroSecond && returnType.Scale < 6 {
+						returnType.Scale = 6
 					}
 				}
 			}
-			// If unit is not constant, keep DATETIME (conservative approach)
 		}
 
 	case "python_user_defined_function":
@@ -4712,6 +4729,24 @@ func temporalFunctionFSPFromPlanExpr(expr *Expr) (int32, bool) {
 	return int32(fsp.I64Val), true
 }
 
+func timestampAddUnitFromPlanExpr(expr *Expr) (types.IntervalType, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, false
+	}
+	value, ok := literal.GetValue().(*plan.Literal_Sval)
+	if !ok {
+		return 0, false
+	}
+	unit, err := types.IntervalTypeOf(strings.ToUpper(value.Sval))
+	return unit, err == nil
+}
+
+func timestampAddDateUnit(unit types.IntervalType) bool {
+	return unit == types.Day || unit == types.Week || unit == types.Month ||
+		unit == types.Quarter || unit == types.Year
+}
+
 // adjustControlFlowMetadata keeps MySQL-visible metadata for conditional
 // expressions precise after overload selection.  The overload resolver only
 // sees types, whereas a literal branch has a narrower domain than its default
@@ -4729,6 +4764,8 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 	switch {
 	case returnType.Oid == types.T_varchar:
 		changed = adjustControlFlowVarcharMetadata(args, argTypes, valueIndexes, returnType)
+	case returnType.Oid == types.T_varbinary:
+		changed = adjustControlFlowBinaryMetadata(args, argTypes, valueIndexes, returnType)
 	case returnType.Oid.IsDecimal():
 		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
 	}
@@ -4745,6 +4782,12 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 	if returnType.Oid == types.T_varchar {
 		for _, idx := range valueIndexes {
 			argsCastType[idx] = conservativeReturnType
+		}
+		return
+	}
+	if returnType.Oid == types.T_varbinary {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = *returnType
 		}
 		return
 	}
@@ -4843,6 +4886,87 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 		return changed
 	}
 	return false
+}
+
+// adjustControlFlowBinaryMetadata narrows a binary/character conditional
+// result only when every character branch is a known literal. The result is
+// VARBINARY, so a character branch's declared width must first be converted
+// from characters to bytes using its effective charset. MatrixOne currently
+// exposes UTF-8 text as utf8mb4 on the wire and in persisted view metadata;
+// CharsetLegacy is only the zero-value marker on pre-collation plans, not a
+// promise that the client session uses utf8mb3. Keep the advertised utf8mb4
+// bound for that legacy identity as well. New text expressions carry
+// CharsetUTF8/CharsetUTF8MB4Bin and use the same utf8mb4 bound.
+func adjustControlFlowBinaryMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	hasBinary := false
+	hasCharacter := false
+	width := int32(0)
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) || controlFlowNullExpr(args[idx]) {
+			continue
+		}
+		typ := argTypes[idx]
+		switch typ.Oid {
+		case types.T_binary, types.T_varbinary:
+			hasBinary = true
+			if typ.Width > width {
+				width = typ.Width
+			}
+		case types.T_char, types.T_varchar:
+			hasCharacter = true
+			lit := args[idx].GetLit()
+			if lit == nil || lit.Isnull {
+				return false
+			}
+			value, ok := lit.Value.(*plan.Literal_Sval)
+			if !ok {
+				return false
+			}
+			candidate := int32(0)
+			maxBytesPerCharacter := controlFlowMaxBytesPerCharacter(typ.Charset)
+			if typ.Width > 0 && typ.Width <= types.MaxVarBinaryLen/maxBytesPerCharacter {
+				candidate = typ.Width * maxBytesPerCharacter
+			} else if typ.Width > 0 {
+				candidate = types.MaxVarBinaryLen
+			}
+			if byteWidth := int32(len(value.Sval)); byteWidth > candidate {
+				candidate = byteWidth
+			}
+			if candidate > width {
+				width = candidate
+			}
+		default:
+			return false
+		}
+	}
+	if !hasBinary || !hasCharacter || width <= 0 || width >= returnType.Width {
+		return false
+	}
+	returnType.Width = width
+	return true
+}
+
+func controlFlowMaxBytesPerCharacter(charset uint8) int32 {
+	switch charset {
+	case types.CharsetBinary:
+		return 1
+	case types.CharsetLegacy:
+		// CharsetLegacy is the zero value in plans written before collation
+		// metadata became meaningful. MatrixOne's effective/public text charset
+		// is utf8mb4, so use its four-byte bound instead of treating this
+		// historical marker as an explicit utf8mb3 setting.
+		return int32(utf8.UTFMax)
+	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
+		// Both explicit text identities are utf8mb4 in MatrixOne. This is the
+		// effective charset of newly bound literals and view expressions, so a
+		// two-character literal has an eight-byte VARBINARY capacity.
+		return int32(utf8.UTFMax)
+	default:
+		// Unknown identities can come from a plan produced by a newer node. Keep
+		// the public utf8mb4 capacity until that identity is understood rather
+		// than understate a value that may contain four-byte UTF-8 code points.
+		return int32(utf8.UTFMax)
+	}
 }
 
 func controlFlowNullExpr(expr *Expr) bool {
@@ -5209,6 +5333,42 @@ func normalizeLagLeadOffsetParam(ctx context.Context, name string, args []*Expr)
 	}
 	args[1] = offset
 	return nil
+}
+
+// LAG/LEAD offsets must be non-NULL, non-negative integers. Prepared markers
+// are normalized to int64 above and checked before execution or plan filling;
+// row-dependent integer expressions are checked after evaluation by the
+// window operator.
+func validateLagLeadOffsetLiteral(ctx context.Context, name string, args []*Expr) error {
+	if (name != "lag" && name != "lead") || len(args) < 2 {
+		return nil
+	}
+
+	offsetExpr := args[1]
+	if lagLeadOffsetIsNullLiteral(offsetExpr) || !types.T(offsetExpr.Typ.Id).IsInteger() {
+		return moerr.NewWrongArguments(ctx, name)
+	}
+	lit := offsetExpr.GetLit()
+	if lit != nil {
+		if offset, ok := literalSignedValue(lit); ok && offset < 0 {
+			return moerr.NewWrongArguments(ctx, name)
+		}
+	}
+	return nil
+}
+
+func lagLeadOffsetIsNullLiteral(expr *Expr) bool {
+	for expr != nil {
+		if lit := expr.GetLit(); lit != nil {
+			return lit.Isnull
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.GetFunc().GetObjName() != "cast" || len(fn.Args) == 0 {
+			return false
+		}
+		expr = fn.Args[0]
+	}
+	return false
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {

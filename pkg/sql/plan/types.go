@@ -78,6 +78,8 @@ type Snapshot = plan.Snapshot
 type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
 type DataStreamScan = plan.DataStreamScan
+type ForeignScan = plan.ForeignScan
+type KafkaScan = plan.KafkaScan
 
 const ViewSnapshotKeySuffix = "@ts="
 const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
@@ -405,6 +407,9 @@ type QueryBuilder struct {
 	sortSpillMem int64
 
 	optimizerHints *OptimizerHints
+	// sqlCalcFoundRows disables limit pushdown that would otherwise stop a
+	// source before the complete result count can be observed.
+	sqlCalcFoundRows bool
 
 	// optimizationHistory records key optimization steps for debugging remap errors
 	// Only records when optimizations actually change the plan structure

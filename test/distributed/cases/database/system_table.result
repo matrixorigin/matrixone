@@ -4,8 +4,8 @@ def  ¦  mo_catalog  ¦  mo_tables  ¦  BASE TABLE
 SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
 ➤ character_set_name[12,64,0]  ¦  default_collate_name[12,64,0]  ¦  description[12,2048,0]  ¦  maxlen[4,32,0]  𝄀
 binary  ¦  binary  ¦  Binary pseudo charset  ¦  1  𝄀
-utf8  ¦  utf8_bin  ¦  UTF-8 Unicode  ¦  4  𝄀
-utf8mb4  ¦  utf8mb4_bin  ¦  UTF-8 Unicode  ¦  4
+utf8  ¦  utf8_general_ci  ¦  UTF-8 Unicode  ¦  4  𝄀
+utf8mb4  ¦  utf8mb4_general_ci  ¦  UTF-8 Unicode  ¦  4
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
 ➤ TABLE_CATALOG[12,3,0]  ¦  TABLE_SCHEMA[12,256,0]  ¦  TABLE_NAME[12,256,0]  ¦  COLUMN_NAME[12,256,0]  ¦  ORDINAL_POSITION[4,32,0]  ¦  COLUMN_DEFAULT[12,65535,0]  ¦  IS_NULLABLE[12,3,0]  ¦  DATA_TYPE[12,65535,0]  ¦  CHARACTER_MAXIMUM_LENGTH[-5,64,0]  ¦  CHARACTER_OCTET_LENGTH[-5,64,0]  ¦  NUMERIC_PRECISION[-5,64,0]  ¦  NUMERIC_SCALE[-5,64,0]  ¦  DATETIME_PRECISION[-5,64,0]  ¦  CHARACTER_SET_NAME[12,4,0]  ¦  COLLATION_NAME[12,8,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  COLUMN_KEY[12,3,0]  ¦  EXTRA[12,24,0]  ¦  PRIVILEGES[12,31,0]  ¦  COLUMN_COMMENT[12,2048,0]  ¦  GENERATION_EXPRESSION[12,500,0]  ¦  SRS_ID[-5,64,0]  𝄀
 def  ¦  mo_catalog  ¦  mo_tables  ¦  rel_id  ¦  1  ¦  null  ¦  YES  ¦  bigint  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  BIGINT UNSIGNED(0)  ¦    ¦    ¦  select,insert,update,references  ¦    ¦    ¦  null  𝄀
@@ -16,7 +16,7 @@ SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 ➤ query_id[4,32,0]  ¦  seq[4,32,0]  ¦  state[12,30,0]  ¦  duration[3,9,6]  ¦  cpu_user[3,9,6]  ¦  cpu_system[3,9,6]  ¦  context_voluntary[4,32,0]  ¦  context_involuntary[4,32,0]  ¦  block_ops_in[4,32,0]  ¦  block_ops_out[4,32,0]  ¦  messages_sent[4,32,0]  ¦  messages_received[4,32,0]  ¦  page_faults_major[4,32,0]  ¦  page_faults_minor[4,32,0]  ¦  swaps[4,32,0]  ¦  source_function[12,30,0]  ¦  source_file[12,20,0]  ¦  source_line[4,32,0]
 SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
 ➤ CATALOG_NAME[12,3,0]  ¦  SCHEMA_NAME[12,5000,0]  ¦  DEFAULT_CHARACTER_SET_NAME[12,7,0]  ¦  DEFAULT_COLLATION_NAME[12,18,0]  ¦  SQL_PATH[1,0,0]  ¦  DEFAULT_ENCRYPTION[12,3,0]  𝄀
-def  ¦  information_schema  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci  ¦  null  ¦  NO
+def  ¦  information_schema  ¦  utf8mb4  ¦  utf8mb4_general_ci  ¦  null  ¦  NO
 SELECT * FROM `information_schema`.`triggers` LIMIT 0,1000;
 ➤ trigger_catalog[12,64,0]  ¦  trigger_schema[12,64,0]  ¦  trigger_name[12,64,0]  ¦  event_manipulation[12,10,0]  ¦  event_object_catalog[12,64,0]  ¦  event_object_schema[12,64,0]  ¦  event_object_table[12,64,0]  ¦  action_order[4,32,0]  ¦  action_condition[12,0,0]  ¦  action_statement[12,0,0]  ¦  action_orientation[12,3,0]  ¦  action_timing[12,10,0]  ¦  action_reference_old_table[12,0,0]  ¦  action_reference_new_table[12,0,0]  ¦  action_reference_old_row[12,3,0]  ¦  action_reference_new_row[12,3,0]  ¦  created[93,64,0]  ¦  sql_mode[12,10,0]  ¦  definer[12,288,0]  ¦  character_set_client[12,64,0]  ¦  collation_connection[12,64,0]  ¦  database_collation[12,64,0]
 SELECT * FROM `information_schema`.`user_privileges` LIMIT 0,1000;
@@ -101,6 +101,7 @@ show tables;
 ➤ Tables_in_information_schema[12,5000,0]  𝄀
 character_sets  𝄀
 check_constraints  𝄀
+collation_character_set_applicability  𝄀
 collations  𝄀
 column_privileges  𝄀
 columns  𝄀

@@ -2255,6 +2255,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_array_append`
+	{
+		functionId: JSON_ARRAY_APPEND,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSetCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonSet().buildJsonArrayAppend
+				},
+			},
+		},
+	},
+
 	// function `json_remove`
 	{
 		functionId: JSON_REMOVE,
@@ -9338,6 +9358,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					// At runtime, TimestampAddDate will use TempSetType appropriately:
 					// - For time units: DATETIME with scale 0 (HOUR/MINUTE/SECOND) or 6 (MICROSECOND)
 					// - For date units: DATETIME with scale 0, but formatted as DATE when time is 00:00:00
+					// The binder refines the scale when the unit literal is available.
 					return types.T_datetime.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
@@ -9348,7 +9369,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_datetime.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDatetime
@@ -9358,7 +9379,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
+					return types.T_timestamp.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddTimestamp
@@ -9391,7 +9412,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_char, types.T_int64, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_datetime.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDatetime
@@ -9401,7 +9422,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_char, types.T_int64, types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
+					return types.T_timestamp.ToTypeWithScale(parameters[2].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddTimestamp
@@ -9411,7 +9432,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_char, types.T_int64, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddString
@@ -13541,6 +13562,32 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `last_kafka_message_id`: the offset of the last message a
+	// completed Kafka external-table scan returned in this session (NULL
+	// before any scan). Feed it back as __mo_read_start_id for exactly-once
+	// chaining. See docs/cn/kafka_exttab.md.
+	{
+		functionId: LAST_KAFKA_MESSAGE_ID,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return builtInLastKafkaMessageID
+				},
+			},
+		},
+	},
+
 	// function `last_query_id`, `last_uuid`
 	{
 		functionId: LAST_QUERY_ID,
@@ -14374,6 +14421,84 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// esql_tvf / sql_tvf connection management. Volatile so the connect side
+	// effect runs and is never constant-folded.
+	{
+		functionId: ESQL_TVF_CONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInEsqlTvfConnect
+				},
+			},
+		},
+	},
+	{
+		functionId: SQL_TVF_CONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqlTvfConnect
+				},
+			},
+		},
+	},
+	{
+		functionId: ESQL_TVF_DISCONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInEsqlTvfDisconnect
+				},
+			},
+		},
+	},
+	{
+		functionId: SQL_TVF_DISCONNECT,
+		class:      plan.Function_NONE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSqlTvfDisconnect
+				},
+			},
+		},
+	},
 	// function `uuid`
 	{
 		functionId: UUID,
