@@ -74,6 +74,16 @@ create external table em_json_trunc (a int, s varchar(20))
 infile{'filepath'='$resources/external_table_file/error_mode_trunc.jsonl', 'format'='jsonline', 'jsondata'='object'};
 select a, s, __mo_file_line, __mo_error_message, __mo_error_text from em_json_trunc;
 
+-- ---------------------------------------------------------------- parquet
+-- Parquet is decoded as typed columnar values, not text: there is no line and
+-- no record text to report, so the error-mode columns do not resolve there.
+-- Ordinary reads are unaffected.
+create external table em_parquet (`sepal.length` double, `sepal.width` double,
+  `petal.length` double, `petal.width` double, variety varchar(20))
+infile{'filepath'='$resources/parquet/Iris.parquet', 'format'='parquet'};
+select count(*) from em_parquet;
+select variety, __mo_error_message from em_parquet limit 1;
+
 -- ---------------------------------------------------------------- reserved names
 -- the column names are reserved: a user table cannot declare them
 drop table if exists em_reserved;

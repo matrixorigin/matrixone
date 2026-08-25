@@ -159,9 +159,11 @@ All three were latent before error mode and are fixed here.
 
 - **Parquet and Iceberg.** Their readers decode typed columnar values, not
   text. There is no "line" and no per-record text to report, and a decode
-  failure is a corrupt file rather than a bad record. The columns exist on
-  those tables (they share the external table shape) but no record ever fails
-  into them.
+  failure is a corrupt file rather than a bad record. Naming an error-mode
+  column on such a table is refused at bind time (`column __mo_error_message
+  not found`), because those readers resolve columns against the file's own
+  schema; ordinary reads and `select *` are unaffected. The BVT pins this
+  boundary.
 - **Constraint violations at the destination.** Error mode reports what the
   *scan* could not parse. An `insert ... select` that fails a primary key or a
   NOT NULL constraint fails the statement as usual.
@@ -176,4 +178,4 @@ All three were latent before error mode and are fixed here.
 | `pkg/sql/util/csvparser` `TestRecordLine` | line counting: one record per line, a multi-line quoted record reporting its first line, exactness across a small read block, and blank lines still counted |
 | `pkg/sql/colexec/external` `error_mode_test.go` | the switch (error columns tolerate, `__mo_file_line` alone does not, a lookalike user column does not), a pruned scan failing exactly as before, and CSV / JSONLINE / Kafka each reporting a bad record with its position, message and source text while the records around it are unaffected |
 | `pkg/sql/plan` `TestExternalScanTolerates` | the pruning rule is driven by the two error columns only, keyed on column id |
-| BVT `table/external_table_error_mode` | end to end over CSV and JSONLINE: hidden from `select *` / `desc` / `show create table`, the same bad record found regardless of which user columns are projected, the good/rejects split loaded into real tables, multi-line records, blank lines, an unterminated object, and the reserved names refused by DDL |
+| BVT `table/external_table_error_mode` | end to end over CSV, JSONLINE and the parquet boundary: hidden from `select *` / `desc` / `show create table`, the same bad record found regardless of which user columns are projected, the good/rejects split loaded into real tables, multi-line records, blank lines, an unterminated object, and the reserved names refused by DDL |
