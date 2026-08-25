@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -199,8 +198,7 @@ func buildColumnAndConstraint(
 			constrNames := map[string]bool{}
 			// Check not empty constraint name whether is duplicated.
 			for _, idx := range targetTableDef.Indexes {
-				nameLower := strings.ToLower(idx.IndexName)
-				constrNames[nameLower] = true
+				constrNames[indexNameKey(idx.IndexName)] = true
 			}
 			// set empty constraint names(index and unique index)
 			setEmptyUniqueIndexName(constrNames, uniqueIndex)

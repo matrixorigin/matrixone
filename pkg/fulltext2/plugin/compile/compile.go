@@ -418,7 +418,7 @@ func (Hooks) HandleDropIndex(ctx compileplugin.CompileContext, indexDefs map[str
 		return nil
 	}
 	cfg := fulltext2.TableConfig{DbName: ctx.QryDatabase(), IndexTable: storeDef.IndexTableName}
-	fulltext2.NewFulltext2Search(cfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
+	fulltext2.NewFulltext2Search(cfg).OnCacheInvalidated("")
 	cache.Cache.Remove(storeDef.IndexTableName)
 	return nil
 }

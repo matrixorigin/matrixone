@@ -403,11 +403,30 @@ func (n *Bitmap) IsSame(b *Bitmap) bool {
 
 func (n *Bitmap) Or(b *Bitmap) {
 	n.TryExpand(b)
-	size := (int(b.logicalLen()) + 63) / 64
-	for i := range size {
-		cnt := bits.OnesCount64(n.data[i])
-		n.data[i] |= b.data[i]
-		n.count += int64(bits.OnesCount64(n.data[i]) - cnt)
+	n.OrBounded(b, b.logicalLen())
+}
+
+// OrBounded merges source bits below limit without growing or changing the
+// destination's logical length. It is intended for caller-owned storage whose
+// physical capacity can be larger than its current logical row domain.
+func (n *Bitmap) OrBounded(b *Bitmap, limit int64) {
+	if n == nil || b == nil || limit <= 0 {
+		return
+	}
+	limit = min(limit, n.logicalLen(), b.logicalLen())
+	if limit <= 0 {
+		return
+	}
+
+	words := int((limit + 63) / 64)
+	for i := range words {
+		source := b.data[i]
+		if i == words-1 && limit&63 != 0 {
+			source &= (uint64(1) << uint(limit&63)) - 1
+		}
+		added := source &^ n.data[i]
+		n.data[i] |= source
+		n.count += int64(bits.OnesCount64(added))
 	}
 }
 
@@ -447,11 +466,14 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 		return
 	}
 	requiredCap := (size + 63) / 64
+	if requiredCap > cap(n.data) && n.HasExternalStorage() {
+		// Keep the previous logical bitmap intact when caller-owned storage is
+		// insufficient. A recovered panic must not expose a length that its
+		// backing data cannot represent.
+		panic("bitmap external storage capacity exceeded")
+	}
 	n.setLogicalLen(int64(size))
 	if requiredCap > cap(n.data) {
-		if n.HasExternalStorage() {
-			panic("bitmap external storage capacity exceeded")
-		}
 		newCap := requiredCap
 		currentCap := cap(n.data)
 		if currentCap <= int(^uint(0)>>1)/2 {
