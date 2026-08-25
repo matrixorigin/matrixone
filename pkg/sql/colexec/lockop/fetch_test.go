@@ -33,7 +33,7 @@ func TestFetchBoolRows(t *testing.T) {
 		t,
 		types.New(types.T_bool, 0, 0),
 		values,
-		lock.Granularity_Range,
+		lock.Granularity_Row,
 		values,
 		values,
 		values,

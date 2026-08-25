@@ -1859,9 +1859,11 @@ func TestBindUpdateSelfReferencingForeignKeyRouting(t *testing.T) {
 		// can receive 0, which foreign-key metadata reserves for self references.
 		// Keep this non-self child deterministic so the recursive RESTRICT edge is
 		// always resolved as emp.
-		const empTableID = uint64(88895)
+		const empTableID = uint64(88999)
 		emp.TblId = empTableID
 		mock.ctxt.objects["emp"].Obj = int64(empTableID)
+		mock.ctxt.id2name[empTableID] = "emp"
+		require.Equal(t, empTableID, emp.TblId)
 		empDeptno := emp.Fkeys[0].Cols[0]
 		selfParentID := selfRef.Fkeys[0].Cols[0]
 		emp.Fkeys = append(emp.Fkeys, &planpb.ForeignKeyDef{
