@@ -673,6 +673,19 @@ func TestRecordLine(t *testing.T) {
 		require.Equal(t, int64(4), parser.RecordLine(), "the next record starts on line 4")
 	})
 
+	t.Run("skipped blank lines still count", func(t *testing.T) {
+		// line 1: a,1   lines 2-3 blank   line 4: b,2   line 5 whitespace
+		// line 6: c,3 -- a record starts where its content starts, not where
+		// the scan for it started.
+		parser, err := NewCSVParser(&cfg, NewStringReader("a,1\n\n\nb,2\n   \nc,3\n"), int64(ReadBlockSize), false)
+		require.NoError(t, err)
+		for _, want := range []int64{1, 4, 6} {
+			_, err = parser.Read(nil)
+			require.NoError(t, err)
+			require.Equal(t, want, parser.RecordLine())
+		}
+	})
+
 	t.Run("counter is exact across a small read block", func(t *testing.T) {
 		// a tiny block size forces the refill paths (readUntil's loop) that
 		// advance position in bulk rather than byte by byte

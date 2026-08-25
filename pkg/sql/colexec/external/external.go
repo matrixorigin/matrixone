@@ -1352,6 +1352,9 @@ func appendErrorRow(proc *process.Process, bat *batch.Batch, line []csvparser.Fi
 // the configured terminator: quoting and escaping are normalized rather than
 // byte-identical to the file.
 func recordText(line []csvparser.Field, param *ExternalParam) string {
+	if param.ErrorMode.RawText != "" {
+		return param.ErrorMode.RawText
+	}
 	sep := ","
 	if param.Extern != nil && param.Extern.Tail != nil && param.Extern.Tail.Fields != nil &&
 		param.Extern.Tail.Fields.Terminated != nil && param.Extern.Tail.Fields.Terminated.Value != "" {

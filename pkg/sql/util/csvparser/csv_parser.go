@@ -694,11 +694,15 @@ outside:
 			prevToken = firstToken
 			if !parser.allowEmptyLine {
 				if isEmptyLine {
+					// The record has not started yet: it begins at the first
+					// line with content, not where the scan started.
+					parser.recordStartLine = parser.lineNo
 					continue
 				}
 				// skip lines only contain whitespaces
 				if err == nil && whitespaceLine && len(bytes.TrimSpace(parser.recordBuffer)) == 0 {
 					parser.recordBuffer = parser.recordBuffer[:0]
+					parser.recordStartLine = parser.lineNo
 					continue
 				}
 			}

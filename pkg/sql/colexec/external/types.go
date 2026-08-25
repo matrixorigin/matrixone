@@ -119,6 +119,11 @@ type ExternalErrorMode struct {
 	Tolerate bool
 	// WantLine is true when __mo_file_line survived pruning.
 	WantLine bool
+	// RawText overrides the reconstructed record text for __mo_error_text.
+	// The JSONLINE reader sets it to the source line, which is the record as
+	// written; the CSV reader leaves it empty and the fields are re-joined.
+	RawText string
+
 	// RecordLine is the physical line the record being materialized starts on,
 	// refreshed per record by the reader. Readers with no file (Kafka,
 	// datastream) use the record ordinal of the current read instead.
