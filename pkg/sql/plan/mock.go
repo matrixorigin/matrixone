@@ -38,13 +38,16 @@ import (
 var _ CompilerContext = &MockCompilerContext{}
 
 type MockCompilerContext struct {
-	dbs             map[string]bool
-	objects         map[string]*ObjectRef
-	tables          map[string]*TableDef
-	pks             map[string][]int
-	id2name         map[uint64]string
-	isDml           bool
-	mysqlCompatible bool
+	dbs                    map[string]bool
+	objects                map[string]*ObjectRef
+	tables                 map[string]*TableDef
+	objectsByQualifiedName map[string]*ObjectRef
+	tablesByQualifiedName  map[string]*TableDef
+	ambiguousTableNames    map[string]struct{}
+	pks                    map[string][]int
+	id2name                map[uint64]string
+	isDml                  bool
+	mysqlCompatible        bool
 	// sqlModeOverride, when non-nil, is returned for ResolveVariable("sql_mode")
 	// so tests can exercise mode-dependent paths (e.g. NO_BACKSLASH_ESCAPES).
 	sqlModeOverride *string
@@ -217,11 +220,25 @@ type index struct {
 // NewEmptyCompilerContext for test create/drop statement
 func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
-		objects:       make(map[string]*ObjectRef),
-		tables:        make(map[string]*TableDef),
-		ctx:           context.Background(),
-		processHolder: &mockProcessHolder{},
+		objects:                make(map[string]*ObjectRef),
+		tables:                 make(map[string]*TableDef),
+		objectsByQualifiedName: make(map[string]*ObjectRef),
+		tablesByQualifiedName:  make(map[string]*TableDef),
+		ambiguousTableNames:    make(map[string]struct{}),
+		ctx:                    context.Background(),
+		processHolder:          &mockProcessHolder{},
 	}
+}
+
+func mockQualifiedTableName(dbName, tableName string) string {
+	return strings.ToLower(dbName) + "\x00" + strings.ToLower(tableName)
+}
+
+func mockUnqualifiedTableName(name string) string {
+	if separator := strings.IndexByte(name, 0); separator >= 0 {
+		return name[separator+1:]
+	}
+	return name
 }
 
 type Schema struct {
@@ -1698,15 +1715,25 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
+	objectsByQualifiedName := make(map[string]*ObjectRef)
+	tablesByQualifiedName := make(map[string]*TableDef)
 	stats := make(map[string]*Stats)
 	pks := make(map[string][]int)
 	id2name := make(map[uint64]string)
 	usedTableIDs := make(map[uint64]struct{})
+	tableNameCounts := make(map[string]int)
 	for _, schema := range schemas {
-		for _, table := range schema {
+		for tableName, table := range schema {
+			tableNameCounts[tableName]++
 			if table.tblId != 0 {
 				usedTableIDs[uint64(table.tblId)] = struct{}{}
 			}
+		}
+	}
+	ambiguousTableNames := make(map[string]struct{})
+	for tableName, count := range tableNameCounts {
+		if count > 1 {
+			ambiguousTableNames[tableName] = struct{}{}
 		}
 	}
 	nextTableID := uint64(catalog.MO_RESERVED_MAX + 1)
@@ -1797,7 +1824,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				colDefs = append(colDefs, colDef)
 			}
 
-			objects[tableName] = &ObjectRef{
+			objRef := &ObjectRef{
 				Server:     0,
 				Db:         0,
 				Schema:     0,
@@ -1807,6 +1834,8 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				SchemaName: db,
 				ObjName:    tableName,
 			}
+			objects[tableName] = objRef
+			objectsByQualifiedName[mockQualifiedTableName(db, tableName)] = objRef
 
 			tableType := catalog.SystemOrdinaryRel
 			if table.tableType != "" {
@@ -1927,11 +1956,10 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				})
 			}
 
-			if previous := tables[tableName]; previous != nil {
-				delete(id2name, previous.TblId)
-			}
+			qualifiedName := mockQualifiedTableName(db, tableName)
 			tables[tableName] = tableDef
-			id2name[tableDef.TblId] = tableName
+			tablesByQualifiedName[qualifiedName] = tableDef
+			id2name[tableDef.TblId] = qualifiedName
 
 			if table.outcnt == 0 {
 				table.outcnt = 1
@@ -1945,14 +1973,17 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	}
 
 	return &MockCompilerContext{
-		dbs:           dbs,
-		isDml:         isDml,
-		objects:       objects,
-		tables:        tables,
-		id2name:       id2name,
-		pks:           pks,
-		ctx:           context.TODO(),
-		processHolder: &mockProcessHolder{},
+		dbs:                    dbs,
+		isDml:                  isDml,
+		objects:                objects,
+		tables:                 tables,
+		objectsByQualifiedName: objectsByQualifiedName,
+		tablesByQualifiedName:  tablesByQualifiedName,
+		ambiguousTableNames:    ambiguousTableNames,
+		id2name:                id2name,
+		pks:                    pks,
+		ctx:                    context.TODO(),
+		processHolder:          &mockProcessHolder{},
 	}
 }
 
@@ -1987,7 +2018,19 @@ func (m *MockCompilerContext) GetUserName() string {
 
 func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	name := strings.ToLower(tableName)
-	tableDef := DeepCopyTableDef(m.tables[name], true)
+	qualifiedName := mockQualifiedTableName(dbName, name)
+	table := m.tablesByQualifiedName[qualifiedName]
+	objRef := m.objectsByQualifiedName[qualifiedName]
+	compatibilityTable := m.tables[name]
+	compatibilityObjRef := m.objects[name]
+	_, ambiguousName := m.ambiguousTableNames[name]
+	if table == nil || (compatibilityTable != nil && (!ambiguousName ||
+		(compatibilityObjRef != nil && strings.EqualFold(compatibilityObjRef.SchemaName, dbName) &&
+			compatibilityTable != table))) {
+		table = compatibilityTable
+		objRef = compatibilityObjRef
+	}
+	tableDef := DeepCopyTableDef(table, true)
 	if tableDef != nil && !m.isDml {
 		for i, col := range tableDef.Cols {
 			if col.Typ.Id == int32(types.T_Rowid) {
@@ -2007,12 +2050,20 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot 
 	if tableDef != nil {
 		tableDef.DbName = dbName
 	}
-	return m.objects[name], tableDef, nil
+	return objRef, tableDef, nil
 }
 
 func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	name := m.id2name[tableId]
-	tableDef := DeepCopyTableDef(m.tables[name], true)
+	table := m.tablesByQualifiedName[name]
+	objRef := m.objectsByQualifiedName[name]
+	unqualifiedName := mockUnqualifiedTableName(name)
+	_, ambiguousName := m.ambiguousTableNames[unqualifiedName]
+	if compatibilityTable := m.tables[unqualifiedName]; table == nil || (!ambiguousName && compatibilityTable != nil) {
+		table = compatibilityTable
+		objRef = m.objects[unqualifiedName]
+	}
+	tableDef := DeepCopyTableDef(table, true)
 	if tableDef != nil && !m.isDml {
 		for i, col := range tableDef.Cols {
 			if col.Typ.Id == int32(types.T_Rowid) {
@@ -2021,7 +2072,7 @@ func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*
 			}
 		}
 	}
-	return m.objects[name], tableDef, nil
+	return objRef, tableDef, nil
 }
 
 func (m *MockCompilerContext) Stats(obj *ObjectRef, snapshot *Snapshot) (*pb.StatsInfo, error) {

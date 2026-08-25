@@ -696,9 +696,10 @@ func TestAlterTableCopyDoesNotSkipDedupForSameNamePrimaryKeyReplacement(t *testi
 	// Match the type metadata produced by ADD COLUMN so the only difference is
 	// the source-column identity. A name/type comparison alone must not prove
 	// that the replacement key is copied from the old key.
-	mock.ctxt.tables["t1"].Cols[0].Typ.NotNullable = false
-	mock.ctxt.tables["t1"].Cols[0].Typ.Width = 64
-	mock.ctxt.tables["t1"].Cols[0].Typ.Scale = -1
+	tableDef := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
+	tableDef.Cols[0].Typ.NotNullable = false
+	tableDef.Cols[0].Typ.Width = 64
+	tableDef.Cols[0].Typ.Scale = -1
 	logicPlan, err := buildSingleStmt(mock, t,
 		`ALTER TABLE constraint_test.t1 DROP COLUMN a, ADD COLUMN a BIGINT NOT NULL DEFAULT 0 PRIMARY KEY;`)
 	require.NoError(t, err)
