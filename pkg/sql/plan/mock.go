@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"sync"
 
@@ -1700,13 +1701,47 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	stats := make(map[string]*Stats)
 	pks := make(map[string][]int)
 	id2name := make(map[uint64]string)
-	// build tpch/mo context data(schema)
-	for db, schema := range schemas {
-		tableIdx := 0
-		for tableName, table := range schema {
-			tblId := table.tblId
-			if tblId == 0 {
-				tblId = int64(tableIdx)
+	usedTableIDs := make(map[uint64]struct{})
+	for _, schema := range schemas {
+		for _, table := range schema {
+			if table.tblId != 0 {
+				usedTableIDs[uint64(table.tblId)] = struct{}{}
+			}
+		}
+	}
+	nextTableID := uint64(1)
+	allocateTableID := func() uint64 {
+		for {
+			if _, used := usedTableIDs[nextTableID]; !used {
+				id := nextTableID
+				usedTableIDs[id] = struct{}{}
+				nextTableID++
+				return id
+			}
+			nextTableID++
+		}
+	}
+
+	// Build the mock catalog in stable order. Table ID 0 is reserved as the
+	// self-reference sentinel in foreign-key metadata, so automatic IDs must be
+	// non-zero and globally unique across schemas.
+	dbNames := make([]string, 0, len(schemas))
+	for db := range schemas {
+		dbNames = append(dbNames, db)
+	}
+	sort.Strings(dbNames)
+	for _, db := range dbNames {
+		schema := schemas[db]
+		tableNames := make([]string, 0, len(schema))
+		for tableName := range schema {
+			tableNames = append(tableNames, tableName)
+		}
+		sort.Strings(tableNames)
+		for _, tableName := range tableNames {
+			table := schema[tableName]
+			tblID := uint64(table.tblId)
+			if tblID == 0 {
+				tblID = allocateTableID()
 			}
 			colDefs := make([]*ColDef, 0, len(table.cols))
 
@@ -1766,7 +1801,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				Server:     0,
 				Db:         0,
 				Schema:     0,
-				Obj:        int64(tableIdx),
+				Obj:        int64(tblID),
 				ServerName: "",
 				DbName:     "",
 				SchemaName: db,
@@ -1779,7 +1814,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 			tableDef := &TableDef{
 				TableType: tableType,
-				TblId:     uint64(tblId),
+				TblId:     tblID,
 				Name:      tableName,
 				Cols:      colDefs,
 				Indexes:   make([]*IndexDef, len(table.idxs)),
@@ -1894,7 +1929,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 			tables[tableName] = tableDef
 			id2name[tableDef.TblId] = tableName
-			tableIdx++
 
 			if table.outcnt == 0 {
 				table.outcnt = 1
