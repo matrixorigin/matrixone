@@ -4907,6 +4907,9 @@ func (builder *QueryBuilder) bindCte(
 	cteRef *CTERef,
 	table string,
 ) (nodeID int32, err error) {
+	if builder.medianValidationBoundCTEs != nil {
+		builder.medianValidationBoundCTEs[cteRef] = struct{}{}
+	}
 	viewCount := len(cteRef.declarationCtx.views)
 	var s *tree.Select
 	switch stmt := cteRef.ast.Stmt.(type) {
@@ -4986,6 +4989,12 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
 	ctx.queryBlockOwner = ctx
+	if builder.medianValidationContexts != nil {
+		builder.medianValidationContexts[stmt] = ctx
+		if stmt.Select != nil {
+			builder.medianValidationStatementContexts[stmt.Select] = ctx
+		}
+	}
 	if ctx.bindingRecurStmt() && ctx.cteState.recursiveRefQueryBlock == nil {
 		ctx.cteState.recursiveRefQueryBlock = ctx
 	}

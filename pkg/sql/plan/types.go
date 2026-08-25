@@ -339,6 +339,15 @@ type ViewData struct {
 type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
+	// medianValidationContexts is allocated only by the isolated MEDIAN
+	// expression validator. It associates each cloned SELECT AST with the
+	// BindContext that actually owns that query block, including CTE and
+	// derived-table bodies. medianValidationBoundCTEs records which declarations
+	// lazy CTE binding actually visited, including recursive CTEs whose occurrence
+	// list is not populated by the recursive binding path.
+	medianValidationContexts          map[*tree.Select]*BindContext
+	medianValidationStatementContexts map[tree.SelectStatement]*BindContext
+	medianValidationBoundCTEs         map[*CTERef]struct{}
 
 	ctxByNode            []*BindContext
 	nameByColRef         map[[2]int32]string

@@ -142,6 +142,75 @@ func TestBuildMedianWithinGroupAcceptsEquivalentScalarSubquery(t *testing.T) {
   within group (order by (with rhs as (select a from select_test.bind_select)
     select a from rhs limit 1))
   from select_test.bind_select x`,
+		`select median((with c as (
+    select l.a from select_test.bind_select l
+  ) select a from c limit 1))
+  within group (order by (with d as (
+    select r.a from select_test.bind_select r
+  ) select a from d limit 1))
+  from select_test.bind_select`,
+		`select median((
+    select d.a from (select l.a from select_test.bind_select l) d limit 1
+  )) within group (order by (
+    select e.a from (select r.a from select_test.bind_select r) e limit 1
+  )) from select_test.bind_select`,
+		`select median((with unused_left as (
+    select l.a from select_test.bind_select l
+  ) select 1))
+  within group (order by (with unused_right as (
+    select r.a from select_test.bind_select r
+  ) select 1))
+  from select_test.bind_select`,
+		`select median((with unused as (
+    select a from select_test.bind_select
+  ) select 1))
+  within group (order by (select 1))
+  from select_test.bind_select`,
+		`select median((with recursive unused as (
+    select a from select_test.bind_select
+  ) select 1))
+  within group (order by (select 1))
+  from select_test.bind_select`,
+		`select median((
+    select l.a from select_test.bind_select l
+    union all
+    select l2.a from select_test.bind_select l2
+    limit 1
+  )) within group (order by (
+    select r.a from select_test.bind_select r
+    union all
+    select r2.a from select_test.bind_select r2
+    limit 1
+  )) from select_test.bind_select`,
+		`select median((
+    select a as lhs from select_test.bind_select
+    union all
+    select a from select_test.bind_select
+    order by lhs limit 1
+  )) within group (order by (
+    select a as rhs from select_test.bind_select
+    union all
+    select a from select_test.bind_select
+    order by rhs limit 1
+  )) from select_test.bind_select`,
+		`select median((with recursive c(n) as (
+    select 1 union all select n + 1 from c where n < 2
+  ) select max(n) from c))
+  within group (order by (with recursive d(m) as (
+    select 1 union all select m + 1 from d where m < 2
+  ) select max(m) from d))
+  from select_test.bind_select`,
+		`select median((with recursive unused_left as (
+    select a from select_test.bind_select
+  ), c(n) as (
+    select 1 union all select n + 1 from c where n < 2
+  ) select max(n) from c))
+  within group (order by (with recursive unused_right as (
+    select a from select_test.bind_select
+  ), d(m) as (
+    select 1 union all select m + 1 from d where m < 2
+  ) select max(m) from d))
+  from select_test.bind_select`,
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
@@ -160,8 +229,11 @@ func TestBuildMedianWithinGroupAcceptsEquivalentScalarSubquery(t *testing.T) {
 
 func TestMedianWithinGroupValidationDoesNotChangeParentAggregateState(t *testing.T) {
 	type parentState struct {
-		aggregates int
-		boundCols  []boundColumn
+		nodes, nextBindTag                          int
+		groups, aggregates, projects, results       int
+		windows, times, whereFilters, boundCTEs     int
+		views, expandedSelectLists, binderBoundCols int
+		boundCols                                   []boundColumn
 	}
 	capture := func(sql string) parentState {
 		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
@@ -169,19 +241,34 @@ func TestMedianWithinGroupValidationDoesNotChangeParentAggregateState(t *testing
 		t.Cleanup(stmt.Free)
 		selectStmt, ok := stmt.(*tree.Select)
 		require.True(t, ok)
+		mock := NewMockCompilerContext(true)
+		mock.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
 
 		var state parentState
 		_, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			planpb.Query_SELECT,
-			NewMockCompilerContext(true),
+			mock,
 			selectStmt,
 			false,
 			true,
 			func(*Query) error { return nil },
 			func(ctx *BindContext) {
+				state.groups = len(ctx.groups)
 				state.aggregates = len(ctx.aggregates)
+				state.projects = len(ctx.projects)
+				state.results = len(ctx.results)
+				state.windows = len(ctx.windows)
+				state.times = len(ctx.times)
+				state.whereFilters = len(ctx.whereFilters)
+				state.boundCTEs = len(ctx.boundCtes)
+				state.views = len(ctx.views)
+				state.expandedSelectLists = len(ctx.expandedSelectLists)
 				if provider, ok := ctx.binder.(interface{ medianValidationBaseBinder() *baseBinder }); ok {
-					state.boundCols = append([]boundColumn(nil), provider.medianValidationBaseBinder().boundCols...)
+					base := provider.medianValidationBaseBinder()
+					state.boundCols = append([]boundColumn(nil), base.boundCols...)
+					state.binderBoundCols = len(base.boundCols)
+					state.nodes = len(base.builder.qry.Nodes)
+					state.nextBindTag = int(base.builder.nextBindTag)
 				}
 			},
 			false,
@@ -208,33 +295,67 @@ func TestCloneMedianBindScopeDoesNotShareMutableParentState(t *testing.T) {
 	parent.times = []*planpb.Expr{{Typ: planpb.Type{Id: 1}}}
 	parent.timeByAst["existing"] = 0
 	parent.aggregates = []*planpb.Expr{{Typ: planpb.Type{Id: 2}}}
+	parent.groups = []*planpb.Expr{{Typ: planpb.Type{Id: 5}}}
+	parent.timeAsts = []tree.Expr{tree.NewUnresolvedColName("time_source")}
+	parent.orderResolution = &orderResolutionMetadata{
+		bindAsts: []tree.Expr{tree.NewUnresolvedColName("order_source")},
+	}
 	selectClause := &tree.SelectClause{}
 	parent.expandedSelectLists = map[*tree.SelectClause]tree.SelectExprs{
 		selectClause: {{Expr: tree.NewNumVal(int64(1), "1", false, tree.P_int64)}},
 	}
+	binding := &Binding{
+		tag:         7,
+		nodeId:      0,
+		cols:        []string{"a"},
+		types:       []*planpb.Type{{Id: 6}},
+		refCnts:     []uint{1},
+		colIdByName: map[string]int32{"a": 0},
+	}
+	parent.bindings = []*Binding{binding}
+	parent.bindingByTag[7] = binding
+	parent.bindingByTable["t"] = binding
+	parent.bindingByCol["a"] = binding
 	cteRef := &CTERef{
-		ast: &tree.CTE{Name: &tree.AliasClause{Alias: tree.Identifier("c")}},
+		ast:         &tree.CTE{Name: &tree.AliasClause{Alias: tree.Identifier("c")}},
 		occurrences: []cteOccurrence{{rootID: 1}},
 	}
 	parent.cteByName = map[string]*CTERef{"c": cteRef}
 	havingBinder := NewHavingBinder(builder, parent)
 	havingBinder.boundCols = []boundColumn{{name: "existing"}}
-	parent.binder = havingBinder
+	parent.binder = NewProjectionBinder(builder, parent, havingBinder)
 
 	isolated := cloneMedianBindScope(parent, builder)
 	require.NotSame(t, parent, isolated)
 	require.NotSame(t, parent.binder, isolated.binder)
+	clonedProjection := isolated.binder.(*ProjectionBinder)
+	require.NotSame(t, havingBinder, clonedProjection.havingBinder)
+	require.NotSame(t, binding, isolated.bindingByTag[7])
+	require.Same(t, isolated.bindingByTag[7], isolated.bindingByTable["t"])
+	require.Same(t, isolated.bindingByTag[7], isolated.bindingByCol["a"])
 	require.NotSame(t, cteRef, isolated.cteByName["c"])
 	require.NotSame(t, cteRef.ast, isolated.cteByName["c"].ast)
+	require.NotSame(t, parent.timeAsts[0], isolated.timeAsts[0])
+	require.NotSame(t, parent.orderResolution.bindAsts[0], isolated.orderResolution.bindAsts[0])
+	var isolatedSelectClause *tree.SelectClause
+	for key := range isolated.expandedSelectLists {
+		isolatedSelectClause = key
+	}
+	require.NotNil(t, isolatedSelectClause)
+	require.NotSame(t, selectClause, isolatedSelectClause)
 
 	isolated.isCorrelated = true
 	isolated.times = append(isolated.times, &planpb.Expr{Typ: planpb.Type{Id: 3}})
+	isolated.groups[0].Typ.Id = 50
 	isolated.timeByAst["temporary"] = 1
 	isolated.aggregates = append(isolated.aggregates, &planpb.Expr{Typ: planpb.Type{Id: 4}})
-	isolated.expandedSelectLists[selectClause] = append(
-		isolated.expandedSelectLists[selectClause],
+	isolated.expandedSelectLists[isolatedSelectClause] = append(
+		isolated.expandedSelectLists[isolatedSelectClause],
 		tree.SelectExpr{Expr: tree.NewNumVal(int64(2), "2", false, tree.P_int64)},
 	)
+	isolated.bindingByTag[7].cols[0] = "temporary"
+	isolated.bindingByTag[7].types[0].Id = 60
+	isolated.bindingByTag[7].refCnts[0] = 2
 	isolated.cteByName["c"].occurrences = append(
 		isolated.cteByName["c"].occurrences,
 		cteOccurrence{rootID: 2},
@@ -242,15 +363,74 @@ func TestCloneMedianBindScopeDoesNotShareMutableParentState(t *testing.T) {
 	isolated.cteByName["c"].ast.Name.Alias = tree.Identifier("temporary")
 	clonedBinder := isolated.binder.(interface{ medianValidationBaseBinder() *baseBinder }).medianValidationBaseBinder()
 	clonedBinder.boundCols = append(clonedBinder.boundCols, boundColumn{name: "temporary"})
+	clonedProjection.havingBinder.boundCols = append(
+		clonedProjection.havingBinder.boundCols,
+		boundColumn{name: "temporary having"},
+	)
 
 	require.False(t, parent.isCorrelated)
 	require.Len(t, parent.times, 1)
+	require.Equal(t, int32(5), parent.groups[0].Typ.Id)
 	require.NotContains(t, parent.timeByAst, "temporary")
 	require.Len(t, parent.aggregates, 1)
 	require.Len(t, parent.expandedSelectLists[selectClause], 1)
+	require.Equal(t, "a", binding.cols[0])
+	require.Equal(t, int32(6), binding.types[0].Id)
+	require.Equal(t, uint(1), binding.refCnts[0])
 	require.Len(t, cteRef.occurrences, 1)
 	require.Equal(t, tree.Identifier("c"), cteRef.ast.Name.Alias)
 	require.Equal(t, []boundColumn{{name: "existing"}}, havingBinder.boundCols)
+}
+
+func TestMedianValidationBuilderPreservesDetachedParentMetadata(t *testing.T) {
+	parent := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	parent.qry.Nodes = []*planpb.Node{{
+		NodeId:   0,
+		NodeType: planpb.Node_TABLE_SCAN,
+		TableDef: &planpb.TableDef{
+			Name:          "t",
+			Name2ColIndex: map[string]int32{"id": 0},
+			Pkey: &planpb.PrimaryKeyDef{
+				PkeyColName: "id",
+				Names:       []string{"id"},
+			},
+		},
+	}}
+	parent.ctxByNode = []*BindContext{nil}
+	parent.tag2NodeID[4] = 0
+	parent.tag2Table[4] = parent.qry.Nodes[0].TableDef
+	parentCtx := NewBindContext(parent, nil)
+	binding := &Binding{
+		tag:         4,
+		nodeId:      0,
+		cols:        []string{"id", "value"},
+		colIdByName: map[string]int32{"id": 0, "value": 1},
+	}
+	parentCtx.bindings = []*Binding{binding}
+	parentCtx.bindingByTag[4] = binding
+	parentCtx.bindingByCol["id"] = binding
+	parentCtx.bindingByCol["value"] = binding
+	parentCtx.groups = []*planpb.Expr{{
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 4, ColPos: 0}},
+	}}
+
+	validation := newMedianValidationBuilder(parent)
+	isolatedParent := cloneMedianBindScope(parentCtx, validation)
+	require.Len(t, validation.qry.Nodes, 1)
+	require.NotSame(t, parent.qry.Nodes[0], validation.qry.Nodes[0])
+	require.NotSame(t, parent.qry.Nodes[0].TableDef, validation.qry.Nodes[0].TableDef)
+	require.NotSame(t, parent.tag2Table[4], validation.tag2Table[4])
+	require.Equal(t, int32(0), validation.tag2NodeID[4])
+	require.True(t, validation.groupByIncludesPrimaryKey(isolatedParent, isolatedParent.bindingByTag[4]))
+
+	validation.qry.Nodes[0].TableDef.Name = "temporary"
+	validation.qry.Nodes[0].TableDef.Name2ColIndex["temporary"] = 1
+	validation.tag2Table[4].Name = "temporary"
+	validation.tag2Table[4].Name2ColIndex["temporary"] = 1
+	require.Equal(t, "t", parent.qry.Nodes[0].TableDef.Name)
+	require.NotContains(t, parent.qry.Nodes[0].TableDef.Name2ColIndex, "temporary")
+	require.Equal(t, "t", parent.tag2Table[4].Name)
+	require.NotContains(t, parent.tag2Table[4].Name2ColIndex, "temporary")
 }
 
 func TestBuildMedianWithinGroupAcceptsCaseInsensitiveIdentifiers(t *testing.T) {
@@ -317,6 +497,36 @@ func TestBuildMedianWithinGroupRejectsScopedOrMismatchedQualifications(t *testin
 			name: "different outer bindings with the same column name",
 			sql: `select median((select x.a)) within group (order by (select y.a))
 from select_test.bind_select x join select_test.bind_select y on x.a = y.a`,
+		},
+		{
+			name: "result alias marker cannot collide with an input column",
+			sql: `select median((
+  select a as lhs
+  from (select a, b as __mo_result_0 from select_test.bind_select) d
+  order by lhs limit 1
+)) within group (order by (
+  select a as rhs
+  from (select a, b as __mo_result_0 from select_test.bind_select) d
+  order by __mo_result_0 limit 1
+)) from select_test.bind_select`,
+		},
+		{
+			name: "CTE local alias versus correlated outer alias",
+			sql: `select median((with c as (
+  select l.a from select_test.bind_select l
+) select a from c limit 1)) within group (order by (with d as (
+  select l.a
+) select a from d limit 1))
+from select_test.bind_select l`,
+		},
+		{
+			name: "recursive CTE bodies remain semantic",
+			sql: `select median((with recursive c(n) as (
+  select 1 union all select n + 1 from c where n < 2
+) select max(n) from c)) within group (order by (with recursive d(m) as (
+  select 1 union all select m + 2 from d where m < 2
+) select max(m) from d))
+from select_test.bind_select`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

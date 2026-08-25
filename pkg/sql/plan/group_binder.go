@@ -139,7 +139,9 @@ func medianNameHasMismatchedDatabase(ctx *BindContext, name *tree.UnresolvedName
 }
 
 func medianResolvedColumnMarker(binding *Binding, colPos, depth int32) string {
-	return fmt.Sprintf("__mo_resolved_%d_%d_%d", binding.tag, colPos, depth)
+	// The NUL prefix cannot be written as a SQL identifier, so a user column
+	// can never collide with this validation-only marker.
+	return fmt.Sprintf("\x00mo_resolved_%d_%d_%d", binding.tag, colPos, depth)
 }
 
 func canonicalizeMedianAliasReferences(expr tree.Expr, aliases map[string]string) {
@@ -169,6 +171,7 @@ func canonicalizeMedianCTEValue(
 	value reflect.Value,
 	aliases map[string]string,
 	path string,
+	builder *QueryBuilder,
 	visited map[treeClonePointer]struct{},
 ) {
 	if !value.IsValid() {
@@ -176,7 +179,7 @@ func canonicalizeMedianCTEValue(
 	}
 	if value.Kind() == reflect.Interface {
 		if !value.IsNil() {
-			canonicalizeMedianCTEValue(value.Elem(), aliases, path, visited)
+			canonicalizeMedianCTEValue(value.Elem(), aliases, path, builder, visited)
 		}
 		return
 	}
@@ -192,7 +195,7 @@ func canonicalizeMedianCTEValue(
 		if value.CanInterface() {
 			switch node := value.Interface().(type) {
 			case *tree.Select:
-				canonicalizeMedianSelectCTEs(node, aliases, path, visited)
+				canonicalizeMedianSelectCTEs(node, aliases, path, builder, visited)
 				return
 			case *tree.TableName:
 				if !node.ExplicitCatalog && !node.ExplicitSchema {
@@ -202,7 +205,7 @@ func canonicalizeMedianCTEValue(
 				}
 			}
 		}
-		canonicalizeMedianCTEValue(value.Elem(), aliases, path, visited)
+		canonicalizeMedianCTEValue(value.Elem(), aliases, path, builder, visited)
 		return
 	}
 
@@ -211,12 +214,12 @@ func canonicalizeMedianCTEValue(
 		valueType := value.Type()
 		for i := 0; i < value.NumField(); i++ {
 			if valueType.Field(i).PkgPath == "" {
-				canonicalizeMedianCTEValue(value.Field(i), aliases, path, visited)
+				canonicalizeMedianCTEValue(value.Field(i), aliases, path, builder, visited)
 			}
 		}
 	case reflect.Slice, reflect.Array:
 		for i := 0; i < value.Len(); i++ {
-			canonicalizeMedianCTEValue(value.Index(i), aliases, path, visited)
+			canonicalizeMedianCTEValue(value.Index(i), aliases, path, builder, visited)
 		}
 	}
 }
@@ -225,6 +228,7 @@ func canonicalizeMedianSelectCTEs(
 	node *tree.Select,
 	inherited map[string]string,
 	path string,
+	builder *QueryBuilder,
 	visited map[treeClonePointer]struct{},
 ) {
 	if node == nil {
@@ -234,28 +238,54 @@ func canonicalizeMedianSelectCTEs(
 	if aliases == nil {
 		aliases = make(map[string]string)
 	}
+	if node.With != nil && builder != nil {
+		if selectCtx := builder.medianValidationContexts[node]; selectCtx != nil {
+			// Lazy binding never visits an unused CTE. It cannot affect the
+			// scalar value, so omit it from the semantic key instead of retaining
+			// unbound local alias spellings. Track actual binding rather than the
+			// WITH RECURSIVE declaration flag: that flag also applies to ordinary
+			// unused members of the same WITH clause.
+			kept := node.With.CTEs[:0]
+			for _, cte := range node.With.CTEs {
+				if cte == nil || cte.Name == nil {
+					continue
+				}
+				ref := selectCtx.cteByName[strings.ToLower(string(cte.Name.Alias))]
+				if ref != nil {
+					if _, bound := builder.medianValidationBoundCTEs[ref]; !bound {
+						continue
+					}
+				}
+				kept = append(kept, cte)
+			}
+			node.With.CTEs = kept
+			if len(kept) == 0 {
+				node.With = nil
+			}
+		}
+	}
 	if node.With != nil {
 		for i, cte := range node.With.CTEs {
 			if cte == nil || cte.Name == nil {
 				continue
 			}
-			marker := fmt.Sprintf("__mo_cte_%s_%d", path, i)
+			marker := fmt.Sprintf("\x00mo_cte_%s_%d", path, i)
 			aliases[strings.ToLower(string(cte.Name.Alias))] = marker
 			cte.Name.Alias = tree.Identifier(marker)
 			for col := range cte.Name.Cols {
-				cte.Name.Cols[col] = tree.Identifier(fmt.Sprintf("__mo_cte_col_%s_%d_%d", path, i, col))
+				cte.Name.Cols[col] = tree.Identifier(fmt.Sprintf("\x00mo_cte_col_%s_%d_%d", path, i, col))
 			}
 		}
 		for i, cte := range node.With.CTEs {
 			if cte != nil {
 				canonicalizeMedianCTEValue(
-					reflect.ValueOf(cte.Stmt), aliases, fmt.Sprintf("%s_%d", path, i), visited,
+					reflect.ValueOf(cte.Stmt), aliases, fmt.Sprintf("%s_%d", path, i), builder, visited,
 				)
 			}
 		}
 	}
 
-	canonicalizeMedianCTEValue(reflect.ValueOf(node.Select), aliases, path+"_body", visited)
+	canonicalizeMedianCTEValue(reflect.ValueOf(node.Select), aliases, path+"_body", builder, visited)
 	value := reflect.ValueOf(node).Elem()
 	valueType := value.Type()
 	for i := 0; i < value.NumField(); i++ {
@@ -263,11 +293,11 @@ func canonicalizeMedianSelectCTEs(
 		if field.PkgPath != "" || field.Name == "With" || field.Name == "Select" {
 			continue
 		}
-		canonicalizeMedianCTEValue(value.Field(i), aliases, path+"_tail", visited)
+		canonicalizeMedianCTEValue(value.Field(i), aliases, path+"_tail", builder, visited)
 	}
 }
 
-func canonicalizeMedianSelectAliases(node *tree.Select) {
+func canonicalizeMedianSelectAliases(node *tree.Select, ctx *BindContext) {
 	if node == nil {
 		return
 	}
@@ -276,7 +306,22 @@ func canonicalizeMedianSelectAliases(node *tree.Select) {
 	case *tree.SelectClause:
 		clause = selectStmt
 	case *tree.ParenSelect:
-		canonicalizeMedianSelectAliases(selectStmt.Select)
+		canonicalizeMedianSelectAliases(selectStmt.Select, ctx)
+		return
+	case *tree.UnionClause:
+		aliases := make(map[string]string)
+		if ctx != nil {
+			for name, item := range ctx.aliasMap {
+				if item != nil {
+					aliases[name] = fmt.Sprintf("\x00mo_result_%d", item.idx)
+				}
+			}
+		}
+		for _, order := range node.OrderBy {
+			if order != nil {
+				canonicalizeMedianAliasReferences(order.Expr, aliases)
+			}
+		}
 		return
 	default:
 		return
@@ -288,7 +333,7 @@ func canonicalizeMedianSelectAliases(node *tree.Select) {
 		if alias == nil || alias.Empty() {
 			continue
 		}
-		aliases[alias.Compare()] = fmt.Sprintf("__mo_result_%d", i)
+		aliases[alias.Compare()] = fmt.Sprintf("\x00mo_result_%d", i)
 		clause.Exprs[i].As = nil
 	}
 	for _, order := range node.OrderBy {
@@ -343,9 +388,17 @@ func canonicalizeMedianAstValue(
 		}
 		visited[key] = struct{}{}
 		if value.CanInterface() {
+			var selectCtx *BindContext
 			switch node := value.Interface().(type) {
 			case *tree.Select:
-				canonicalizeMedianSelectAliases(node)
+				if builder != nil {
+					selectCtx = builder.medianValidationContexts[node]
+				}
+				aliasCtx := ctx
+				if selectCtx != nil {
+					aliasCtx = selectCtx
+				}
+				canonicalizeMedianSelectAliases(node, aliasCtx)
 			case *tree.SelectClause:
 				// A scalar SELECT result alias is a heading, not part of the
 				// value produced by the scalar subquery.
@@ -357,6 +410,15 @@ func canonicalizeMedianAstValue(
 				// The declaration spelling of a local table alias is therefore
 				// non-semantic and must not affect the equality key.
 				node.As = tree.AliasClause{}
+			}
+			if selectCtx == nil && builder != nil {
+				if statement, ok := value.Interface().(tree.SelectStatement); ok {
+					selectCtx = builder.medianValidationStatementContexts[statement]
+				}
+			}
+			if selectCtx != nil && selectCtx != ctx {
+				canonicalizeMedianAstValue(value.Elem(), selectCtx, builder, valid, visited)
+				return
 			}
 			if expr, ok := value.Interface().(tree.Expr); ok {
 				switch node := expr.(type) {
@@ -428,9 +490,7 @@ func canonicalizeMedianSubquery(
 	// the local binding maps without appending temporary nodes to the real
 	// query, and starts tags after the real builder's current range so parent
 	// and child identities cannot collide while the scope is inspected.
-	tempBuilder := NewQueryBuilder(plan.Query_SELECT, parentBuilder.compCtx,
-		parentBuilder.isPrepareStatement, parentBuilder.skipStats)
-	tempBuilder.nextBindTag = parentBuilder.nextBindTag
+	tempBuilder := newMedianValidationBuilder(parentBuilder)
 	isolatedParent := cloneMedianBindScope(parentCtx, tempBuilder)
 	subCtx := NewBindContext(tempBuilder, isolatedParent)
 	var err error
@@ -448,9 +508,47 @@ func canonicalizeMedianSubquery(
 		return
 	}
 	canonicalizeMedianSelectCTEs(
-		selectNode, nil, "root", make(map[treeClonePointer]struct{}),
+		selectNode, nil, "root", tempBuilder, make(map[treeClonePointer]struct{}),
 	)
 	canonicalizeMedianAstValue(reflect.ValueOf(node.Select), subCtx, tempBuilder, valid, visited)
+}
+
+// newMedianValidationBuilder preserves the read-only metadata needed to bind
+// correlated references while keeping every mutable planner object detached.
+// Parent node IDs remain stable because Bindings store those IDs directly.
+func newMedianValidationBuilder(parent *QueryBuilder) *QueryBuilder {
+	builder := NewQueryBuilder(plan.Query_SELECT, parent.compCtx,
+		parent.isPrepareStatement, parent.skipStats)
+	builder.nextBindTag = parent.nextBindTag
+	builder.nextMsgTag = parent.nextMsgTag
+	builder.nextSQLUdfCallID = parent.nextSQLUdfCallID
+	builder.medianValidationContexts = make(map[*tree.Select]*BindContext)
+	builder.medianValidationStatementContexts = make(map[tree.SelectStatement]*BindContext)
+	builder.medianValidationBoundCTEs = make(map[*CTERef]struct{})
+	builder.nameByColRef = cloneMedianMap(parent.nameByColRef)
+	builder.tag2NodeID = cloneMedianMap(parent.tag2NodeID)
+	builder.tag2Table = make(map[int32]*TableDef, len(parent.tag2Table))
+	for tag, tableDef := range parent.tag2Table {
+		builder.tag2Table[tag] = cloneMedianTableDef(tableDef)
+	}
+
+	// Validation only needs source-node identity and catalog metadata from the
+	// outer query. Keep lightweight detached placeholders instead of copying the
+	// entire in-progress plan twice for the two MEDIAN expressions.
+	builder.qry.Nodes = make([]*plan.Node, len(parent.qry.Nodes))
+	builder.ctxByNode = make([]*BindContext, len(parent.qry.Nodes))
+	for i, node := range parent.qry.Nodes {
+		if node == nil {
+			continue
+		}
+		builder.qry.Nodes[i] = &plan.Node{
+			NodeId:      node.NodeId,
+			NodeType:    node.NodeType,
+			BindingTags: cloneMedianSlice(node.BindingTags),
+			TableDef:    cloneMedianTableDef(node.TableDef),
+		}
+	}
+	return builder
 }
 
 func canonicalMedianNodeKey(node tree.NodeFormatter) string {
@@ -480,6 +578,26 @@ func cloneMedianSlice[V any](values []V) []V {
 	return append([]V(nil), values...)
 }
 
+func cloneMedianTableDef(tableDef *TableDef) *TableDef {
+	cloned := DeepCopyTableDef(tableDef, true)
+	if cloned != nil {
+		cloned.Name2ColIndex = cloneMedianMap(tableDef.Name2ColIndex)
+	}
+	return cloned
+}
+
+func cloneMedianBaseBinder(original baseBinder, ctx *BindContext, builder *QueryBuilder, impl Binder) baseBinder {
+	cloned := original
+	cloned.builder = builder
+	cloned.ctx = ctx
+	cloned.impl = impl
+	cloned.boundCols = cloneMedianSlice(original.boundCols)
+	cloned.numericParamType = DeepCopyType(original.numericParamType)
+	cloned.numericSubqueryTarget = DeepCopyType(original.numericSubqueryTarget)
+	cloned.mysqlSpecialTargetType = DeepCopyType(original.mysqlSpecialTargetType)
+	return cloned
+}
+
 func cloneMedianBinder(original Binder, ctx *BindContext, builder *QueryBuilder) Binder {
 	if original == nil {
 		return nil
@@ -499,10 +617,29 @@ func cloneMedianBinder(original Binder, ctx *BindContext, builder *QueryBuilder)
 		return nil
 	}
 	base := provider.medianValidationBaseBinder()
-	base.builder = builder
-	base.ctx = ctx
-	base.impl = cloned
-	base.boundCols = cloneMedianSlice(base.boundCols)
+	*base = cloneMedianBaseBinder(*base, ctx, builder, cloned)
+	switch binder := cloned.(type) {
+	case *DefaultBinder:
+		binder.cols = cloneMedianSlice(binder.cols)
+	case *ReplaceValueBinder:
+		binder.tableDef = cloneMedianTableDef(binder.tableDef)
+	case *UpdateBinder:
+		binder.cols = make([]*ColDef, len(binder.cols))
+		for i, col := range original.(*UpdateBinder).cols {
+			binder.cols[i] = DeepCopyColDef(col)
+		}
+	case *OndupUpdateBinder:
+		binder.tableDef = cloneMedianTableDef(binder.tableDef)
+	case *GroupBinder:
+		binder.selectList = cloneTreeSelectExprs(binder.selectList)
+	case *ProjectionBinder:
+		binder.numericTargetType = DeepCopyType(binder.numericTargetType)
+		if binder.havingBinder != nil {
+			binder.havingBinder = cloneMedianBinder(
+				binder.havingBinder, ctx, builder,
+			).(*HavingBinder)
+		}
+	}
 	return cloned
 }
 
@@ -513,9 +650,69 @@ func cloneMedianBinder(original Binder, ctx *BindContext, builder *QueryBuilder)
 func cloneMedianBindScope(root *BindContext, builder *QueryBuilder) *BindContext {
 	contexts := make(map[*BindContext]*BindContext)
 	ctes := make(map[*CTERef]*CTERef)
+	bindings := make(map[*Binding]*Binding)
+	bindingTrees := make(map[*BindingTreeNode]*BindingTreeNode)
 
 	var cloneContext func(*BindContext) *BindContext
 	var cloneCTE func(*CTERef) *CTERef
+	var cloneBinding func(*Binding) *Binding
+	var cloneBindingTree func(*BindingTreeNode) *BindingTreeNode
+	cloneBinding = func(original *Binding) *Binding {
+		if original == nil {
+			return nil
+		}
+		if cloned, ok := bindings[original]; ok {
+			return cloned
+		}
+		cloned := *original
+		bindings[original] = &cloned
+		cloned.cols = cloneMedianSlice(original.cols)
+		cloned.originCols = cloneMedianSlice(original.originCols)
+		cloned.colIsHidden = cloneMedianSlice(original.colIsHidden)
+		cloned.types = make([]*plan.Type, len(original.types))
+		for i, typ := range original.types {
+			cloned.types[i] = DeepCopyType(typ)
+		}
+		cloned.mysqlSpecialOrderTypes = make([]*plan.Type, len(original.mysqlSpecialOrderTypes))
+		for i, typ := range original.mysqlSpecialOrderTypes {
+			cloned.mysqlSpecialOrderTypes[i] = DeepCopyType(typ)
+		}
+		cloned.mysqlSpecialCanonicalTypes = make([]*plan.Type, len(original.mysqlSpecialCanonicalTypes))
+		for i, typ := range original.mysqlSpecialCanonicalTypes {
+			cloned.mysqlSpecialCanonicalTypes[i] = DeepCopyType(typ)
+		}
+		cloned.outputColumnProvenance = cloneMedianSlice(original.outputColumnProvenance)
+		for i := range cloned.outputColumnProvenance {
+			if original.outputColumnProvenance[i].Source != nil {
+				source := *original.outputColumnProvenance[i].Source
+				source.Metadata.Typ = *DeepCopyType(&source.Metadata.Typ)
+				source.Metadata.Default = DeepCopyDefault(source.Metadata.Default)
+				cloned.outputColumnProvenance[i].Source = &source
+			}
+		}
+		cloned.refCnts = cloneMedianSlice(original.refCnts)
+		cloned.colIdByName = cloneMedianMap(original.colIdByName)
+		cloned.defaults = cloneMedianSlice(original.defaults)
+		return &cloned
+	}
+	cloneBindingTree = func(original *BindingTreeNode) *BindingTreeNode {
+		if original == nil {
+			return nil
+		}
+		if cloned, ok := bindingTrees[original]; ok {
+			return cloned
+		}
+		cloned := *original
+		bindingTrees[original] = &cloned
+		cloned.using = cloneMedianSlice(original.using)
+		for i := range cloned.using {
+			cloned.using[i].coalesceArms = cloneMedianSlice(original.using[i].coalesceArms)
+		}
+		cloned.binding = cloneBinding(original.binding)
+		cloned.left = cloneBindingTree(original.left)
+		cloned.right = cloneBindingTree(original.right)
+		return &cloned
+	}
 	cloneCTE = func(original *CTERef) *CTERef {
 		if original == nil {
 			return nil
@@ -525,6 +722,7 @@ func cloneMedianBindScope(root *BindContext, builder *QueryBuilder) *BindContext
 		}
 		cloned := *original
 		ctes[original] = &cloned
+		cloned.snapshot = DeepCopySnapshot(original.snapshot)
 		if original.ast != nil {
 			cloned.ast = cloneTreeValue(
 				reflect.ValueOf(original.ast),
@@ -552,8 +750,23 @@ func cloneMedianBindScope(root *BindContext, builder *QueryBuilder) *BindContext
 		contexts[original] = &cloned
 
 		cloned.outputColumnProvenance = cloneMedianMap(original.outputColumnProvenance)
+		for pos, provenance := range cloned.outputColumnProvenance {
+			if provenance.Source != nil {
+				source := *provenance.Source
+				source.Metadata.Typ = *DeepCopyType(&source.Metadata.Typ)
+				source.Metadata.Default = DeepCopyDefault(source.Metadata.Default)
+				provenance.Source = &source
+				cloned.outputColumnProvenance[pos] = provenance
+			}
+		}
 		cloned.mysqlSpecialOrderTypes = cloneMedianMap(original.mysqlSpecialOrderTypes)
+		for pos, typ := range cloned.mysqlSpecialOrderTypes {
+			cloned.mysqlSpecialOrderTypes[pos] = DeepCopyType(typ)
+		}
 		cloned.mysqlSpecialCanonicalTypes = cloneMedianMap(original.mysqlSpecialCanonicalTypes)
+		for pos, typ := range cloned.mysqlSpecialCanonicalTypes {
+			cloned.mysqlSpecialCanonicalTypes[pos] = DeepCopyType(typ)
+		}
 		cloned.mysqlSpecialRawProjectPositions = cloneMedianMap(original.mysqlSpecialRawProjectPositions)
 		cloned.groupingSetOrderAliases = cloneMedianMap(original.groupingSetOrderAliases)
 		for key, exprs := range cloned.groupingSetOrderAliases {
@@ -571,16 +784,26 @@ func cloneMedianBindScope(root *BindContext, builder *QueryBuilder) *BindContext
 			}
 		}
 		cloned.headings = cloneMedianSlice(original.headings)
-		cloned.expandedSelectLists = cloneMedianMap(original.expandedSelectLists)
-		for key, exprs := range cloned.expandedSelectLists {
-			cloned.expandedSelectLists[key] = cloneMedianSlice(exprs)
+		if original.expandedSelectLists != nil {
+			cloned.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs, len(original.expandedSelectLists))
+			for key, exprs := range original.expandedSelectLists {
+				var clonedKey *tree.SelectClause
+				if key != nil {
+					clonedKey = cloneTreeValue(
+						reflect.ValueOf(key),
+						make(map[treeClonePointer]reflect.Value),
+					).Interface().(*tree.SelectClause)
+				}
+				cloned.expandedSelectLists[clonedKey] = cloneTreeSelectExprs(exprs)
+			}
 		}
-		cloned.groups = cloneMedianSlice(original.groups)
-		cloned.aggregates = cloneMedianSlice(original.aggregates)
-		cloned.projects = cloneMedianSlice(original.projects)
-		cloned.results = cloneMedianSlice(original.results)
-		cloned.windows = cloneMedianSlice(original.windows)
-		cloned.times = cloneMedianSlice(original.times)
+		cloned.groups = DeepCopyExprList(original.groups)
+		cloned.aggregates = DeepCopyExprList(original.aggregates)
+		cloned.projects = DeepCopyExprList(original.projects)
+		cloned.results = DeepCopyExprList(original.results)
+		cloned.windows = DeepCopyExprList(original.windows)
+		cloned.times = DeepCopyExprList(original.times)
+		cloned.timeBoundaryType = DeepCopyType(original.timeBoundaryType)
 		cloned.groupByAst = cloneMedianMap(original.groupByAst)
 		cloned.groupByCanonicalAst = cloneMedianMap(original.groupByCanonicalAst)
 		cloned.groupByParamAst = cloneMedianMap(original.groupByParamAst)
@@ -589,11 +812,17 @@ func cloneMedianBindScope(root *BindContext, builder *QueryBuilder) *BindContext
 		cloned.windowByAst = cloneMedianMap(original.windowByAst)
 		cloned.projectByExpr = cloneMedianMap(original.projectByExpr)
 		cloned.timeByAst = cloneMedianMap(original.timeByAst)
-		cloned.whereFilters = cloneMedianSlice(original.whereFilters)
+		cloned.whereFilters = DeepCopyExprList(original.whereFilters)
 		cloned.flattenedVolatileExprs = cloneMedianMap(original.flattenedVolatileExprs)
-		cloned.gapFillWhereFilters = cloneMedianSlice(original.gapFillWhereFilters)
+		for key, expr := range cloned.flattenedVolatileExprs {
+			cloned.flattenedVolatileExprs[key] = DeepCopyExpr(expr)
+		}
+		cloned.gapFillWhereFilters = DeepCopyExprList(original.gapFillWhereFilters)
 		cloned.projectColByAst = cloneMedianMap(original.projectColByAst)
 		cloned.projectByAst = cloneMedianSlice(original.projectByAst)
+		for i := range cloned.projectByAst {
+			cloned.projectByAst[i].ast = cloneTreeExpr(original.projectByAst[i].ast)
+		}
 		cloned.projectSemanticKeys = cloneMedianSlice(original.projectSemanticKeys)
 		cloned.numericProjectionTypes = cloneMedianSlice(original.numericProjectionTypes)
 		cloned.numericTableProjectionTypes = cloneMedianMap(original.numericTableProjectionTypes)
@@ -613,7 +842,10 @@ func cloneMedianBindScope(root *BindContext, builder *QueryBuilder) *BindContext
 				).Interface().(*tree.CTE)
 			}
 		}
-		cloned.timeAsts = cloneMedianSlice(original.timeAsts)
+		cloned.timeAsts = make([]tree.Expr, len(original.timeAsts))
+		for i, expr := range original.timeAsts {
+			cloned.timeAsts[i] = cloneTreeExpr(expr)
+		}
 		cloned.aliasMap = make(map[string]*aliasItem, len(original.aliasMap))
 		for name, item := range original.aliasMap {
 			if item == nil {
@@ -625,16 +857,31 @@ func cloneMedianBindScope(root *BindContext, builder *QueryBuilder) *BindContext
 			cloned.aliasMap[name] = &clonedItem
 		}
 		cloned.aliasFrequency = cloneMedianMap(original.aliasFrequency)
-		cloned.bindings = cloneMedianSlice(original.bindings)
-		cloned.bindingByTag = cloneMedianMap(original.bindingByTag)
-		cloned.bindingByTable = cloneMedianMap(original.bindingByTable)
-		cloned.bindingByCol = cloneMedianMap(original.bindingByCol)
+		cloned.bindings = make([]*Binding, len(original.bindings))
+		for i, binding := range original.bindings {
+			cloned.bindings[i] = cloneBinding(binding)
+		}
+		cloned.bindingByTag = make(map[int32]*Binding, len(original.bindingByTag))
+		for tag, binding := range original.bindingByTag {
+			cloned.bindingByTag[tag] = cloneBinding(binding)
+		}
+		cloned.bindingByTable = make(map[string]*Binding, len(original.bindingByTable))
+		for name, binding := range original.bindingByTable {
+			cloned.bindingByTable[name] = cloneBinding(binding)
+		}
+		cloned.bindingByCol = make(map[string]*Binding, len(original.bindingByCol))
+		for name, binding := range original.bindingByCol {
+			cloned.bindingByCol[name] = cloneBinding(binding)
+		}
 		cloned.outerUsingCols = cloneMedianMap(original.outerUsingCols)
 		for key, cols := range cloned.outerUsingCols {
 			cloned.outerUsingCols[key] = cloneMedianSlice(cols)
 		}
 		cloned.sqlUdfArgs = cloneMedianMap(original.sqlUdfArgs)
-		cloned.sampleFunc.columns = cloneMedianSlice(original.sampleFunc.columns)
+		for name, expr := range cloned.sqlUdfArgs {
+			cloned.sqlUdfArgs[name] = DeepCopyExpr(expr)
+		}
+		cloned.sampleFunc.columns = DeepCopyExprList(original.sampleFunc.columns)
 		cloned.views = cloneMedianSlice(original.views)
 		cloned.boundViews = cloneMedianMap(original.boundViews)
 		for key, view := range cloned.boundViews {
@@ -647,9 +894,14 @@ func cloneMedianBindScope(root *BindContext, builder *QueryBuilder) *BindContext
 		}
 		cloned.viewChain = cloneMedianSlice(original.viewChain)
 		cloned.groupingFlag = cloneMedianSlice(original.groupingFlag)
+		cloned.bindingTree = cloneBindingTree(original.bindingTree)
+		cloned.snapshot = DeepCopySnapshot(original.snapshot)
 		if original.orderResolution != nil {
 			orderResolution := *original.orderResolution
-			orderResolution.bindAsts = cloneMedianSlice(original.orderResolution.bindAsts)
+			orderResolution.bindAsts = make([]tree.Expr, len(original.orderResolution.bindAsts))
+			for i, expr := range original.orderResolution.bindAsts {
+				orderResolution.bindAsts[i] = cloneTreeExpr(expr)
+			}
 			orderResolution.semanticKeysByTag = cloneMedianMap(original.orderResolution.semanticKeysByTag)
 			for key, values := range orderResolution.semanticKeysByTag {
 				orderResolution.semanticKeysByTag[key] = cloneMedianSlice(values)
