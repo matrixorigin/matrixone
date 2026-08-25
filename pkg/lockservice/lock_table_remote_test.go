@@ -424,6 +424,8 @@ func TestRemoteCoarsenedLockTransportFailureKeepsBoundedRouting(t *testing.T) {
 }
 
 func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
+	holderTxn := []byte("remote-repeat-range")
+	waiterTxn := []byte("remote-repeat-range-waiter")
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1", "s2"},
@@ -441,16 +443,15 @@ func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
 			client.dropAt.Store(3)
 			origin.remote.client = client
 
-			txnID := []byte("remote-repeat-range")
 			rangeOptions := newTestRangeExclusiveOptions()
 			for range 2 {
 				_, err = origin.Lock(
-					ctx, table, newTestRows(1, 2), txnID, rangeOptions)
+					ctx, table, newTestRows(1, 2), holderTxn, rangeOptions)
 				require.NoError(t, err)
 			}
 
 			for idx, s := range []*service{owner, origin} {
-				txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+				txn := s.activeTxnHolder.getActiveTxn(holderTxn, false, "")
 				require.NotNil(t, txn)
 				txn.RLock()
 				keys := txn.lockHolders[0].tableKeys[table].slice()
@@ -466,7 +467,7 @@ func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
 			}
 
 			_, err = origin.Lock(
-				ctx, table, newTestRows(3), txnID, newTestRowExclusiveOptions())
+				ctx, table, newTestRows(3), holderTxn, newTestRowExclusiveOptions())
 			require.Error(t, err, "the owner response must be lost after commit")
 
 			lt := owner.tableGroups.get(0, table).(*localLockTable)
@@ -482,7 +483,7 @@ func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
 			// The origin keeps its bounded table route. The owner-side ledger is the
 			// authoritative deadlock snapshot and unlock by txnID releases the owner's
 			// committed replacement even though the response never arrived.
-			originTxn := origin.activeTxnHolder.getActiveTxn(txnID, false, "")
+			originTxn := origin.activeTxnHolder.getActiveTxn(holderTxn, false, "")
 			require.NotNil(t, originTxn)
 			originTxn.RLock()
 			originKeys := originTxn.lockHolders[0].tableKeys[table].slice()
@@ -490,7 +491,6 @@ func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
 			require.Equal(t, newTestRows(1), originKeys.all())
 			originKeys.unref()
 
-			waiterTxn := []byte("remote-repeat-range-waiter")
 			waiterDone := make(chan error, 1)
 			go func() {
 				_, lockErr := owner.Lock(
@@ -504,7 +504,7 @@ func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
 			ok, err := originTxn.fetchWhoWaitingMe(
 				ctx,
 				origin.serviceID,
-				txnID,
+				holderTxn,
 				func(waiter pb.WaitTxn, _ string) bool {
 					seen[string(waiter.TxnID)] = struct{}{}
 					return true
@@ -515,7 +515,7 @@ func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
 			require.True(t, ok)
 			require.Contains(t, seen, string(waiterTxn))
 
-			require.NoError(t, origin.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			require.NoError(t, origin.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
 			require.NoError(t, <-waiterDone)
 			require.NoError(t, owner.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
 			probeTxn := []byte("remote-repeat-range-probe")
@@ -528,11 +528,17 @@ func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
 		func(c *Config) {
 			c.MaxLockRowCount = 2
 			c.MaxFixedSliceSize = 4
+			c.TxnIterFunc = newTestTxnIterFunc(holderTxn, waiterTxn)
 		},
 	)
 }
 
 func TestRemoteExactRetryUsesAuthoritativeOwnerSnapshot(t *testing.T) {
+	holderTxn := []byte("remote-exact-holder")
+	waiterTxns := [][]byte{
+		[]byte("remote-exact-waiter-2"),
+		[]byte("remote-exact-waiter-3"),
+	}
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"owner", "origin"},
@@ -550,7 +556,6 @@ func TestRemoteExactRetryUsesAuthoritativeOwnerSnapshot(t *testing.T) {
 			client.dropAt.Store(1)
 			origin.remote.client = client
 
-			holderTxn := []byte("remote-exact-holder")
 			rows := newTestRows(1, 2, 3)
 			_, err = origin.Lock(
 				ctx, table, rows, holderTxn, newTestRowExclusiveOptions())
@@ -567,10 +572,6 @@ func TestRemoteExactRetryUsesAuthoritativeOwnerSnapshot(t *testing.T) {
 			require.Equal(t, rows[:1], route.all())
 			route.unref()
 
-			waiterTxns := [][]byte{
-				[]byte("remote-exact-waiter-2"),
-				[]byte("remote-exact-waiter-3"),
-			}
 			waiterDone := make(chan error, len(waiterTxns))
 			for idx, txnID := range waiterTxns {
 				row := rows[idx+1]
@@ -609,6 +610,8 @@ func TestRemoteExactRetryUsesAuthoritativeOwnerSnapshot(t *testing.T) {
 		func(c *Config) {
 			c.MaxLockRowCount = 8
 			c.MaxFixedSliceSize = 8
+			c.TxnIterFunc = newTestTxnIterFunc(
+				append([][]byte{holderTxn}, waiterTxns...)...)
 		},
 	)
 }
@@ -686,6 +689,8 @@ func TestRemoteOwnerSnapshotCompactsOriginLedgerAcrossCapacitySkew(t *testing.T)
 }
 
 func TestRemoteCoarseningUsesOwnerRepresentationForDeadlockProbes(t *testing.T) {
+	holderTxn := []byte("remote-divergent-holder")
+	waiterTxn := []byte("remote-divergent-interior-waiter")
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"owner", "origin"},
@@ -704,7 +709,6 @@ func TestRemoteCoarseningUsesOwnerRepresentationForDeadlockProbes(t *testing.T) 
 				ctx, 0, table, nil, pb.Sharding_None)
 			require.NoError(t, err)
 
-			holderTxn := []byte("remote-divergent-holder")
 			rows := newTestRows(1, 2, 3)
 			_, err = origin.Lock(
 				ctx, table, rows, holderTxn, newTestRowExclusiveOptions())
@@ -713,7 +717,6 @@ func TestRemoteCoarseningUsesOwnerRepresentationForDeadlockProbes(t *testing.T) 
 				_ = origin.Unlock(context.Background(), holderTxn, timestamp.Timestamp{})
 			}()
 
-			waiterTxn := []byte("remote-divergent-interior-waiter")
 			waiterDone := make(chan error, 1)
 			go func() {
 				_, lockErr := owner.Lock(
@@ -751,6 +754,7 @@ func TestRemoteCoarseningUsesOwnerRepresentationForDeadlockProbes(t *testing.T) 
 		func(c *Config) {
 			c.MaxLockRowCount = 8
 			c.MaxFixedSliceSize = 8
+			c.TxnIterFunc = newTestTxnIterFunc(holderTxn, waiterTxn)
 		},
 	)
 }
