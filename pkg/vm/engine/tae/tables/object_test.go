@@ -16,10 +16,13 @@ package tables
 
 import (
 	"context"
+	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -36,6 +39,73 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMemoryNodeTombstoneReadersSynchronizeDataAccess(t *testing.T) {
+	mvcc := updates.NewAppendMVCCHandle(nil)
+	base := &baseObject{RWMutex: mvcc.RWMutex, appendMVCC: mvcc}
+	first := &containers.Batch{}
+	second := &containers.Batch{}
+	node := &memoryNode{object: base, data: first}
+	mp := mpool.MustNewZero()
+	txn := updates.MockTxnWithStartTS(types.BuildTS(1, 0))
+	blockID := objectio.Blockid{}
+	objectID := types.Objectid{}
+
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		<-start
+		for range 256 {
+			base.Lock()
+			if node.data == first {
+				node.data = second
+			} else {
+				node.data = first
+			}
+			// Let readers run while the write lock owns node.data. A reader
+			// that checks node.data before RLock races with this mutation.
+			runtime.Gosched()
+			base.Unlock()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range 256 {
+			var deletes *nulls.Nulls
+			if err := node.FillBlockTombstones(
+				context.Background(), txn, &blockID, &deletes, 0, 1, mp,
+			); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range 256 {
+			var tombstoneBatch *containers.Batch
+			if err := node.CollectObjectTombstoneInRange(
+				context.Background(), types.TS{}, types.BuildTS(1, 0),
+				&objectID, &tombstoneBatch, mp, nil,
+			); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+}
 
 func TestValidatePersistedCommitTSVectors(t *testing.T) {
 	mp := mpool.MustNewZero()
