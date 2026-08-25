@@ -624,6 +624,90 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	return nodeID, nil
 }
 
+// applyVectorIndicesEarly splices ANN access paths before statistics, join
+// ordering and distribution are finalized. Other secondary-index rewrites stay
+// in the established late pass; this traversal handles only the two vector
+// anchors and propagates their column remaps to ancestors.
+func (builder *QueryBuilder) applyVectorIndicesEarly(
+	nodeID int32,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+) (int32, error) {
+	node := builder.qry.Nodes[nodeID]
+	for i, childID := range node.Children {
+		newChild, err := builder.applyVectorIndicesEarly(childID, colRefCnt, idxColMap)
+		if err != nil {
+			return nodeID, err
+		}
+		node.Children[i] = newChild
+	}
+	replaceColumnsForNode(node, idxColMap)
+
+	switch node.NodeType {
+	case plan.Node_PROJECT:
+		vecCtx := builder.buildVectorSortContext(node)
+		if vecCtx == nil {
+			vecCtx = builder.buildVectorSortContextThroughJoin(node)
+		}
+		if vecCtx == nil {
+			return nodeID, nil
+		}
+		newNodeID, handled, err := builder.applyLogicalVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
+		if handled || err != nil {
+			return newNodeID, err
+		}
+	case plan.Node_SORT:
+		if _, projectOwned := builder.projectAnchoredSorts[nodeID]; projectOwned {
+			return nodeID, nil
+		}
+		vecCtx := builder.buildVectorSortContextFromSort(node)
+		if vecCtx == nil {
+			return nodeID, nil
+		}
+		newNodeID, _, err := builder.applyLogicalVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
+		return newNodeID, err
+	}
+	return nodeID, nil
+}
+
+func (builder *QueryBuilder) applyLogicalVectorIndexForSortContext(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+) (int32, bool, error) {
+	if vecCtx == nil || vecCtx.scanNode == nil {
+		return nodeID, false, nil
+	}
+	indexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
+	if err != nil {
+		return nodeID, true, err
+	}
+	if len(indexes) == 0 {
+		return nodeID, false, nil
+	}
+	opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
+	for _, multi := range indexes {
+		p, ok := indexplugin.Get(multi.IndexAlgo)
+		if !ok || !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) {
+			continue
+		}
+		logical, ok := p.Plan().(planplugin.LogicalSearchHooks)
+		if !ok {
+			continue
+		}
+		if err := builder.recordPreparedPluginDependencies(vecCtx.scanNode); err != nil {
+			return nodeID, true, err
+		}
+		vctxExt, mtiExt := toPlanplugin(vecCtx, multi)
+		newNodeID, applied, err := logical.BuildLogicalSearch(builder, vctxExt, mtiExt, nodeID, opts)
+		if err != nil || applied {
+			return newNodeID, true, err
+		}
+	}
+	return nodeID, false, nil
+}
+
 func joinCanConsumeIndexHints(node *plan.Node) bool {
 	return node != nil && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT ||
 		node.JoinType == plan.Node_SEMI || (node.JoinType == plan.Node_ANTI && node.IsRightJoin))
@@ -744,7 +828,6 @@ func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *full
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	defer builder.clearProjectGuard(projNode.NodeId)
-	var vecCtx *vectorSortContext
 	// FullText
 	{
 		// Rewrites either a direct projection path or the aggregate input/scan
@@ -800,14 +883,20 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 	// 1. Vector Index Check
 	// Handle Queries like
 	// SELECT id,embedding FROM tbl ORDER BY l2_distance(embedding, "[1,2,3]") LIMIT 10;
-	vecCtx = builder.buildVectorSortContext(projNode)
-	if vecCtx == nil {
-		vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
-	}
-	if vecCtx != nil {
-		newNodeID, handled, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
-		if handled || err != nil {
-			return newNodeID, err
+	//
+	// ANN index rewrites use LIMIT as the candidate-search budget. That is not
+	// compatible with SQL_CALC_FOUND_ROWS, which must count the complete exact
+	// result before the top-level LIMIT. Keep the exact scan+sort plan instead.
+	if !builder.sqlCalcFoundRows {
+		vecCtx := builder.buildVectorSortContext(projNode)
+		if vecCtx == nil {
+			vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
+		}
+		if vecCtx != nil {
+			newNodeID, handled, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
+			if handled || err != nil {
+				return newNodeID, err
+			}
 		}
 	}
 	// 2. Regular Index Check
@@ -920,6 +1009,11 @@ func (builder *QueryBuilder) markProjectAnchoredSort(sortID int32) {
 // return value orphans the rewrite.
 func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	if builder.sqlCalcFoundRows {
+		// The sort-anchored vector rewrite has the same ANN candidate cap as the
+		// project-anchored path. Preserve the complete exact input stream.
+		return nodeID, nil
+	}
 	if _, ok := builder.projectAnchoredSorts[nodeID]; ok {
 		// The PROJECT above will anchor this Top-K with full column information.
 		return nodeID, nil
@@ -1073,6 +1167,8 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 	}
 
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		return true
 	case *plan.Expr_F:
 		if exprImpl.F == nil || exprImpl.F.Func == nil {
 			return true
@@ -1098,6 +1194,13 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 	}
 
 	return false
+}
+
+// ContainsVolatileFunction reports whether an expression can produce a new
+// value on repeated evaluation. Storage-side filtering uses it to keep such
+// predicates at the row-level execution boundary.
+func ContainsVolatileFunction(expr *plan.Expr) bool {
+	return containsVolatileFunction(expr)
 }
 
 type forceIndexScope int
@@ -1318,7 +1421,7 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 					Flag: requirement.orderFlag,
 				}}
 				if covering && len(idxNode.FilterList) == 0 && requirement.limit != nil && requirement.canPushLim {
-					applyRegularIndexOrderedLimitParam(idxNode, idxNode.OrderBy[0], requirement.limit)
+					builder.applyRegularIndexOrderedLimitParam(idxNode, idxNode.OrderBy[0], requirement.limit)
 				}
 			}
 			return accessNodeID, nil
@@ -1727,7 +1830,7 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 		Flag: ctx.sortNode.OrderBy[0].Flag,
 	})
 	if ctx.sortNode.Offset == nil && ctx.sortNode.RankOption == nil && ctx.pushOrderedLimit {
-		applyRegularIndexOrderedLimitParam(ctx.scanNode, ctx.scanNode.OrderBy[len(ctx.scanNode.OrderBy)-1], ctx.sortNode.Limit)
+		builder.applyRegularIndexOrderedLimitParam(ctx.scanNode, ctx.scanNode.OrderBy[len(ctx.scanNode.OrderBy)-1], ctx.sortNode.Limit)
 	}
 
 	if !hasTopValueMessage(ctx.sortNode) {
@@ -1748,6 +1851,13 @@ func applyRegularIndexOrderedLimitParam(scanNode *plan.Node, orderBy *plan.Order
 		OrderBy: []*plan.OrderBySpec{DeepCopyOrderBySpec(orderBy)},
 		Limit:   DeepCopyExpr(limit),
 	}
+}
+
+func (builder *QueryBuilder) applyRegularIndexOrderedLimitParam(scanNode *plan.Node, orderBy *plan.OrderBySpec, limit *plan.Expr) {
+	if builder.sqlCalcFoundRows {
+		return
+	}
+	applyRegularIndexOrderedLimitParam(scanNode, orderBy, limit)
 }
 
 func isPositiveLiteralLimit(limit *plan.Expr) bool {
@@ -4782,7 +4892,7 @@ func (builder *QueryBuilder) indexAccessUsesIndex(nodeID int32, indexName string
 		return false
 	}
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		return node.IndexScanInfo.IsIndexScan && strings.EqualFold(node.IndexScanInfo.IndexName, indexName)
+		return node.IndexScanInfo.IsIndexScan && IndexNamesEqual(node.IndexScanInfo.IndexName, indexName)
 	}
 	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INDEX {
 		return false

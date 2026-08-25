@@ -119,7 +119,9 @@ func SyncAggregatorsToChunkSize[T AggFuncExec](as []T, syncLimit int) {
 }
 
 type Vectors[T numeric | types.Decimal64 | types.Decimal128] struct {
-	vecs []*vector.Vector
+	vecs       []*vector.Vector
+	allocation *vector.AllocationAccountSelection
+	appendAt   int
 }
 
 const (
@@ -129,6 +131,23 @@ const (
 func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) *Vectors[T] {
 	vec := vector.NewOffHeapVecWithType(typ)
 	return &Vectors[T]{vecs: []*vector.Vector{vec}}
+}
+
+func newAccountedVectors[T numeric | types.Decimal64 | types.Decimal128](
+	typ types.Type,
+	allocation *AllocationAccount,
+) (*Vectors[T], error) {
+	if allocation == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	vec, err := allocation.newVector(typ)
+	if err != nil {
+		return nil, err
+	}
+	return &Vectors[T]{
+		vecs:       []*vector.Vector{vec},
+		allocation: allocation.vectorSelection(),
+	}, nil
 }
 
 func (vs *Vectors[T]) MarshalBinary() ([]byte, error) {
@@ -197,6 +216,12 @@ func (vs *Vectors[T]) UnmarshalFromReader(
 		}
 		vs.vecs = append(vs.vecs, vec)
 	}
+	if len(vs.vecs) != 0 {
+		vs.appendAt = len(vs.vecs) - 1
+		if vs.vecs[vs.appendAt].Length() >= MaxVectorLength {
+			vs.appendAt++
+		}
+	}
 	return nil
 }
 
@@ -208,13 +233,68 @@ func (vs *Vectors[T]) Length() int {
 	return length
 }
 
-func (vs *Vectors[T]) getAppendableVector() *vector.Vector {
-	vec := vs.vecs[len(vs.vecs)-1]
-	if vec.Length() >= MaxVectorLength {
-		vec = vector.NewOffHeapVecWithType(*vec.GetType())
+func (vs *Vectors[T]) getAppendableVector() (*vector.Vector, error) {
+	for vs.appendAt < len(vs.vecs) &&
+		vs.vecs[vs.appendAt].Length() >= MaxVectorLength {
+		vs.appendAt++
+	}
+	if vs.appendAt == len(vs.vecs) {
+		var vec *vector.Vector
+		var err error
+		if vs.allocation == nil {
+			vec = vector.NewOffHeapVecWithType(*vs.vecs[0].GetType())
+		} else {
+			vec, err = vector.NewOffHeapVecWithTypeAndAllocation(
+				*vs.vecs[0].GetType(), vs.allocation)
+			if err != nil {
+				return nil, err
+			}
+		}
 		vs.vecs = append(vs.vecs, vec)
 	}
-	return vec
+	return vs.vecs[vs.appendAt], nil
+}
+
+// PreExtend reserves physical fixed-width storage for rows without publishing
+// any logical values. Accounted median uses it as the allocation boundary for
+// a whole work unit, so the following append loop cannot fail part-way through
+// after exposing only a prefix of the input.
+func (vs *Vectors[T]) PreExtend(rows int, mp *mpool.MPool) error {
+	if vs == nil || rows < 0 || len(vs.vecs) == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if rows == 0 {
+		return nil
+	}
+	remaining := rows
+	for index := vs.appendAt; remaining > 0; index++ {
+		if index == len(vs.vecs) {
+			var (
+				vec *vector.Vector
+				err error
+			)
+			if vs.allocation == nil {
+				vec = vector.NewOffHeapVecWithType(*vs.vecs[0].GetType())
+			} else {
+				vec, err = vector.NewOffHeapVecWithTypeAndAllocation(
+					*vs.vecs[0].GetType(), vs.allocation)
+			}
+			if err != nil {
+				return err
+			}
+			vs.vecs = append(vs.vecs, vec)
+		}
+		vec := vs.vecs[index]
+		available := MaxVectorLength - vec.Length()
+		reserve := min(remaining, available)
+		if reserve > 0 {
+			if err := vec.PreExtend(reserve, mp); err != nil {
+				return err
+			}
+			remaining -= reserve
+		}
+	}
+	return nil
 }
 
 // clone other
@@ -226,7 +306,10 @@ func (vs *Vectors[T]) Union(other *Vectors[T], mp *mpool.MPool) error {
 		vals := vector.MustFixedColWithTypeCheck[T](vec)
 		left := len(vals)
 		for {
-			vec := vs.getAppendableVector()
+			vec, err := vs.getAppendableVector()
+			if err != nil {
+				return err
+			}
 			appendableCount := MaxVectorLength - vec.Length()
 			if appendableCount > left {
 				appendableCount = left
@@ -265,7 +348,10 @@ func (vs *Vectors[T]) Size() int64 {
 func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {
 	leftRow := cnt
 	for {
-		vec := vecs.getAppendableVector()
+		vec, err := vecs.getAppendableVector()
+		if err != nil {
+			return err
+		}
 		appendCnt := MaxVectorLength - vec.Length()
 		if appendCnt > leftRow {
 			appendCnt = leftRow

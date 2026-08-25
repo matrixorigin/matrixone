@@ -32,7 +32,7 @@ insert into t values
 create index ti_l1 using ivfflat on t(v) lists=2 op_type 'vector_l1_ops';
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from t order by l1_distance(v,'[1,1,1,1]') limit 3;
 
 select a from t order by l1_distance(v,'[1,1,1,1]') limit 3;
@@ -41,9 +41,9 @@ select a from t order by l1_distance(v,'[54,54,54,54]') limit 3;
 -- The distance itself is the Manhattan distance, not L2: |3-1|*4 = 8.
 select a, l1_distance(v,'[1,1,1,1]') as d from t order by d limit 2;
 
--- A different metric must NOT be answered by the L1 index (no ivf_search).
+-- A different metric must NOT be answered by the L1 vector index scan.
 -- @separator:table
--- @regex("Table Function on ivf_search", false)
+-- @regex("Vector Index Scan", false)
 explain select a from t order by l2_distance(v,'[1,1,1,1]') limit 3;
 
 alter table t drop index ti_l1;
@@ -53,13 +53,13 @@ alter table t drop index ti_l1;
 create index ti_l2sq using ivfflat on t(v) lists=2 op_type 'vector_l2sq_ops';
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 
 select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from t order by l2_distance(v,'[54,54,54,54]') limit 3;
 
 select a from t order by l2_distance(v,'[54,54,54,54]') limit 3;
@@ -78,7 +78,7 @@ alter table t drop index ti_l2sq;
 create index ti_l2 using ivfflat on t(v) lists=2 op_type 'vector_l2_ops';
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 
 select a from t order by l2_distance_sq(v,'[1,1,1,1]') limit 3;

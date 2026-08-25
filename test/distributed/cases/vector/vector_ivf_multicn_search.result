@@ -12,39 +12,27 @@ insert into t_int values
 create index idx_int_b using ivfflat on t_int(b) lists=4 op_type 'vector_l2_ops';
 explain select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4;
 -- @regex("(?i)ap query plan on multicn", true)
--- @regex("Table Function on ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 4  𝄀
-        ->  Table Function on ivf_search  𝄀
-              Index Reader Param:  Limit: 4
+        ->  Vector Index Scan on idx_int_b [l2_distance]  𝄀
+              Vector Index: idx_int_b, Metric: l2_distance, Candidate Limit: 4, NProbe: 4
 explain analyze select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4;
 -- @regex("(?i)ap query plan on multicn", true)
--- @regex("Table Function on ivf_search", true)
--- @regex("Table Scan on vector_ivf_multicn_search.__mo_index_secondary_", true)
-➤ ap query plan on multicn(8 core)[12,-1,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ ap query plan on multicn(32 core)[12,-1,0]  𝄀
 Project  𝄀
   Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=32 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32 bytes (min=32 bytes, max=32 bytes)  𝄀
   ->  Sort  𝄀
         Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=32 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32 bytes (min=32 bytes, max=32 bytes)  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 4  𝄀
-        ->  Table Function on ivf_search  𝄀
-              Analyze: timeConsumed=10ms waitTime=0ms inputRows=0 outputRows=4 (min=4, max=4) InputSize=0 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
-              Index Reader Param:  Limit: 4  𝄀
-Project  𝄀
-  Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
-  ->  Sort  𝄀
-        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
-        Sort Key: __dist_func__ INTERNAL  𝄀
-        Limit: 4  𝄀
-        ->  Table Scan on vector_ivf_multicn_search.__mo_index_secondary_019fecb5-6a9d-7bdc-b9c1-1313ae61ba4b  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=4 outputRows=4 (min=4, max=4) InputSize=320 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=388 bytes (min=388 bytes, max=388 bytes)  𝄀
-              Index Reader Param:  Sort Key: l2_distance_sq(__mo_index_centroid_fk_entry, ) INTERNAL  Limit: 4  𝄀
-              Filter Cond: prefix_in(__mo_cpkey_col)  𝄀
-              Block Filter Cond: prefix_in(__mo_cpkey_col), (__mo_index_centroid_fk_version = 0), __mo_index_centroid_fk_id in ([0 1 2 3])
+        ->  Vector Index Scan on idx_int_b [l2_distance]  𝄀
+              Analyze: timeConsumed=0ms waitTime=4ms inputRows=4 outputRows=4 (min=4, max=4) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=128 bytes (min=128 bytes, max=128 bytes)  𝄀
+              Vector Index: idx_int_b, Metric: l2_distance, Candidate Limit: 4, NProbe: 4
 select group_concat(a order by a) as nearest_ids, count(*) as row_count, count(distinct a) as distinct_count
 from (select a from t_int order by l2_distance(b, '[0,0,0,0]') limit 4) s;
 ➤ nearest_ids[12,0,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀

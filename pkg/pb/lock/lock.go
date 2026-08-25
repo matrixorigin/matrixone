@@ -53,7 +53,7 @@ func (m *Request) DebugString() string {
 		buffer.WriteString(m.GetBind.DebugString())
 	case Method_GetTxnLock:
 		buffer.WriteString(m.GetTxnLock.DebugString())
-	case Method_GetWaitingList:
+	case Method_GetWaitingList, Method_GetTxnWaitingListOnLockTable:
 		buffer.WriteString(m.GetWaitingList.DebugString())
 	case Method_KeepLockTableBind:
 		buffer.WriteString(m.KeepLockTableBind.DebugString())
@@ -90,7 +90,7 @@ func (m *Response) DebugString() string {
 		buffer.WriteString(m.GetBind.DebugString())
 	case Method_GetTxnLock:
 		buffer.WriteString(m.GetTxnLock.DebugString())
-	case Method_GetWaitingList:
+	case Method_GetWaitingList, Method_GetTxnWaitingListOnLockTable:
 		buffer.WriteString(m.GetWaitingList.DebugString())
 	case Method_KeepLockTableBind:
 		buffer.WriteString(m.KeepLockTableBind.DebugString())

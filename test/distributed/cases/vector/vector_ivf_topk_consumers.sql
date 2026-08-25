@@ -2,7 +2,7 @@
 -- ORDER BY (#25967) or a relational JOIN (#25974). Both used to disable the IVFFLAT /
 -- HNSW rewrite and silently fall back to a full scan with an exact sort -- correct
 -- results, but the index unused, which is a large regression on real vector tables and
--- invisible from the result set. Every EXPLAIN below therefore asserts ivf_search is
+-- invisible from the result set. Every EXPLAIN below therefore asserts VECTOR_INDEX_SCAN is
 -- present, and every query is checked against the same Top-K computed without the index
 -- (mode=force) so a plan that reaches the index but returns the wrong rows still fails.
 drop database if exists ivf_topk_consumers;
@@ -24,22 +24,22 @@ insert into meta values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e'),(6,'f');
 -- A Top-K whose parent IS a project must still be anchored there, not by the SORT entry
 -- point added for the consumer shapes below. The sort anchor has no project to read
 -- column requirements from, so it disables the index-only scan: catching that needs the
--- ABSENCE of a base table scan, not just the presence of ivf_search. Without this
+-- ABSENCE of a base table scan, not just the presence of VECTOR_INDEX_SCAN. Without this
 -- assertion the anchor arbitration can regress and every plain Top-K silently grows a
 -- join back to the base table while all the consumer assertions still pass.
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 -- @regex("Table Scan on", false)
 explain select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf order by l2_distance(v,'[1,1,1,1]') limit 3;
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 -- @regex("Table Scan on", false)
 explain select id from t_ivf order by l2_distance(v,'[1,1,1,1]') limit 3;
 
 -- ---------------- #25967: outer ORDER BY -------------------------------------
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
     order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -71,7 +71,7 @@ with knn as (
 
 -- ---------------- #25974: JOIN consumer --------------------------------------
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
     order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -88,7 +88,7 @@ with knn as (
 ) select k.id, k.d, m.name from knn k left join meta m on k.id = m.id order by k.d;
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
     order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -116,7 +116,7 @@ select count(*) as n from (
 
 -- ---------------- both consumers at once -------------------------------------
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
     order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -141,7 +141,7 @@ create index g_vec using ivfflat on t_guard(v) lists=2 op_type 'vector_l2_ops';
 create index g_tag on t_guard(tag);
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
     where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -162,7 +162,7 @@ with knn as (
 -- exercises no index path. pre/post/auto are the index-using modes and they differ
 -- precisely on filtered queries -- run each against the same reference.
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
     where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=pre'
@@ -174,7 +174,7 @@ with knn as (
 ) select k.id, k.d from knn k order by k.d;
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
     where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=post'
@@ -186,7 +186,7 @@ with knn as (
 ) select k.id, k.d from knn k order by k.d;
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
     where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=auto'
@@ -199,7 +199,7 @@ with knn as (
 
 -- same, consumed by an outer ORDER BY instead of a join
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
     where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -215,7 +215,7 @@ with knn as (
 -- Top-Ks in one statement can collide there. Both must be rewritten and both must keep
 -- their own rows.
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with a as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
     order by l2_distance(v,'[1,1,1,1]') limit 2
@@ -236,7 +236,7 @@ with a as (
 -- The candidate budget and the result pagination are separate; a consumer must still see
 -- the offset applied exactly once.
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
     order by l2_distance(v,'[1,1,1,1]') limit 2 offset 1
@@ -259,7 +259,7 @@ with knn as (
 -- -- panicking the CN with "interface conversion: interface {} is int64, not float64".
 -- Pre-existing on main and reachable from plain SQL, so keep a case on it.
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select l2_distance(v,'[1,1,1,1]') as d from t_ivf order by l2_distance(v,'[1,1,1,1]') limit 3;
 
 select l2_distance(v,'[1,1,1,1]') as d from t_ivf order by l2_distance(v,'[1,1,1,1]') limit 3;
@@ -269,13 +269,13 @@ select count(*) as n from (
 ) x;
 
 -- ---------------- index-only scan under a consumer ---------------------------
--- An index-only scan drops the base table and answers straight from ivf_search. It needs
+-- An index-only scan drops the base table and answers straight from VECTOR_INDEX_SCAN. It needs
 -- a projection bounding which base columns can still be read; a sort-anchored rewrite has
 -- no project above the Top-K, so the Top-K's OWN projection is that bound -- a consumer
 -- can only read what the derived table exposes. Assert the base scan is gone, not merely
--- that ivf_search appears: without the bound these shapes keep a join back to the table.
+-- that VECTOR_INDEX_SCAN appears: without the bound these shapes keep a join back to the table.
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 -- @regex("Table Scan on", false)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
@@ -297,7 +297,7 @@ with knn as (
 -- is neither the pk nor an INCLUDE column, so dropping the base scan would lose it. The
 -- base scan must survive here -- this is the assertion that keeps the optimization honest.
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 -- @regex("Table Scan on", true)
 explain with knn as (
     select id, tag, l2_distance(v,'[1,1,1,1]') as d from t_ivf
@@ -315,10 +315,9 @@ with knn as (
 ) select id, tag, d from knn order by d;
 
 -- #25974 join consumer: the Top-K side goes index-only, so the user's own join binds
--- directly to the table function's pkid instead of to a second scan of the base table.
+-- directly to VECTOR_INDEX_SCAN instead of to a second scan of the base table.
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
--- @regex("mo_ivf_alias_0.pkid", true)
+-- @regex("Vector Index Scan", true)
 explain with knn as (
     select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
     order by l2_distance(v,'[1,1,1,1]') limit 3

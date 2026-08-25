@@ -24,7 +24,7 @@ lists=2 op_type "vector_l2_ops" include(title, category);
 -- Check that each mode has an IVF search path without binding the test to
 -- AP/TP scheduling, runtime filters, hidden-table UUIDs, or row-count statistics.
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select id, title, category
 from phase9_main
 where category >= 20
@@ -32,7 +32,7 @@ order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select id, title, category
 from phase9_main
 where category >= 20
@@ -40,7 +40,7 @@ order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=post';
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select id, title, category
 from phase9_main
 where category >= 20

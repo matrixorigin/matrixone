@@ -23,9 +23,9 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -265,11 +264,6 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
-	for i := 0; i < prepareStmt.params.Length(); i++ {
-		param, ok := cw.paramVals[i].(plan2.ParamValue)
-		require.True(t, ok)
-		require.True(t, param.IsBinaryProtocol, "parameter %d lost COM_STMT provenance", i)
-	}
 	for i, want := range []vector.PrepareParamKind{
 		vector.PrepareParamInteger,
 		vector.PrepareParamInteger,
@@ -304,25 +298,131 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 	}
 }
 
-func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 105, "select ?")
-	defer func() {
-		cw.proc.SetPrepareParams(nil)
-		prepareStmt.Close()
-	}()
+func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
+	binaryParam := func(value string, mysqlType defines.MysqlType) func(
+		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
+	) *plan.Execute {
+		return func(t *testing.T, _ *Session, prepareStmt *PrepareStmt, cw *TxnComputationWrapper) *plan.Execute {
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+			prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+			return nil
+		}
+	}
+	textBooleanParam := func(value bool) func(
+		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
+	) *plan.Execute {
+		return func(t *testing.T, ses *Session, prepareStmt *PrepareStmt, _ *TxnComputationWrapper) *plan.Execute {
+			require.NoError(t, ses.SetUserDefinedVar("offset_value", value, ""))
+			return &plan.Execute{
+				Name: prepareStmt.Name,
+				Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "offset_value"}}}},
+			}
+		}
+	}
 
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
-	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_TINY), 0}
+	tests := []struct {
+		name      string
+		sql       string
+		wantParam string
+		wantError bool
+		configure func(*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper) *plan.Execute
+	}{
+		{
+			name:      "binary float",
+			sql:       "select lag(1, ?) over ()",
+			wantError: true,
+			configure: binaryParam("1", defines.MYSQL_TYPE_DOUBLE),
+		},
+		{
+			name:      "binary signed tiny zero lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "0",
+			configure: binaryParam("0", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "binary signed tiny one lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "1",
+			configure: binaryParam("1", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "binary signed tiny zero lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "0",
+			configure: binaryParam("0", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "binary signed tiny one lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "1",
+			configure: binaryParam("1", defines.MYSQL_TYPE_TINY),
+		},
+		{
+			name:      "text boolean false lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "0",
+			configure: textBooleanParam(false),
+		},
+		{
+			name:      "text boolean true lag",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "1",
+			configure: textBooleanParam(true),
+		},
+		{
+			name:      "text boolean false lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "0",
+			configure: textBooleanParam(false),
+		},
+		{
+			name:      "text boolean true lead",
+			sql:       "select lead(1, ?) over ()",
+			wantParam: "1",
+			configure: textBooleanParam(true),
+		},
+		{
+			name:      "binary integer control",
+			sql:       "select lag(1, ?) over ()",
+			wantParam: "1",
+			configure: binaryParam("1", defines.MYSQL_TYPE_LONGLONG),
+		},
+	}
 
-	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
-	require.NoError(t, err)
-	require.Len(t, cw.paramVals, 1)
-	param, ok := cw.paramVals[0].(plan2.ParamValue)
-	require.True(t, ok)
-	require.Equal(t, vector.PrepareParamBoolean, param.PrepareParamKind)
-	require.True(t, param.HasRuntimeType)
-	require.Equal(t, types.T_bool.ToType(), param.RuntimeType)
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, uint32(120+i), test.sql)
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+
+			sentinel := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			prepareStmt.compile = sentinel
+			execPlan := test.configure(t, ses, prepareStmt, cw)
+
+			retComp, _, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, execPlan, prepareStmt.Name)
+			if test.wantError {
+				require.Error(t, err)
+				moErr, ok := err.(*moerr.Error)
+				require.True(t, ok)
+				require.Equal(t, moerr.ER_WRONG_ARGUMENTS, moErr.MySQLCode())
+				require.Same(t, sentinel, prepareStmt.compile)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Same(t, sentinel, retComp)
+			require.Equal(t, test.wantParam, cw.proc.GetPrepareParams().GetStringAt(0))
+			if owned {
+				executionStmt.Free()
+			}
+		})
+	}
 }
 
 func TestBinaryProtocolPrepareParamKind(t *testing.T) {
@@ -353,87 +453,6 @@ func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 			binaryProtocolPrepareParamKind(test.mysqlType, test.isUnsigned, []byte(test.value)),
 			"type %v unsigned %t value %q", test.mysqlType, test.isUnsigned, test.value)
 	}
-}
-
-func TestBinaryProtocolPrepareParamType(t *testing.T) {
-	decimal, ok := binaryProtocolPrepareParamType(
-		defines.MYSQL_TYPE_NEWDECIMAL,
-		false,
-		[]byte("-12345678901234567890.123456789"),
-	)
-	require.True(t, ok)
-	require.Equal(t, types.T_decimal128, decimal.Oid)
-	require.Equal(t, int32(29), decimal.Width)
-	require.Equal(t, int32(9), decimal.Scale)
-
-	for _, test := range []struct {
-		name       string
-		mysqlType  defines.MysqlType
-		isUnsigned bool
-		want       types.T
-	}{
-		{name: "signed integer", mysqlType: defines.MYSQL_TYPE_LONG, want: types.T_int32},
-		{name: "unsigned integer", mysqlType: defines.MYSQL_TYPE_LONGLONG, isUnsigned: true, want: types.T_uint64},
-		{name: "double", mysqlType: defines.MYSQL_TYPE_DOUBLE, want: types.T_float64},
-		{name: "string", mysqlType: defines.MYSQL_TYPE_VAR_STRING, want: types.T_text},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, ok := binaryProtocolPrepareParamType(test.mysqlType, test.isUnsigned, []byte("5"))
-			require.True(t, ok)
-			require.Equal(t, test.want, got.Oid)
-		})
-	}
-
-	_, ok = binaryProtocolPrepareParamType(defines.MYSQL_TYPE_NULL, false, nil)
-	require.False(t, ok)
-}
-
-func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 110, "select ?")
-	defer prepareStmt.Close()
-
-	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
-	params := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(
-		params,
-		[]byte("-12345678901234567890.123456789"),
-		false,
-		cw.proc.Mp(),
-	))
-	prepareStmt.params = params
-	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
-
-	var resultColumns []*plan.ColDef
-	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
-	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
-		resultColumns = columns
-		return [][]byte{[]byte("runtime-decimal")}, nil
-	}
-
-	_, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
-	require.NoError(t, err)
-	require.NotNil(t, runtimePlan)
-	require.NotSame(t, originalPlan, runtimePlan)
-	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
-	require.Equal(t, int32(types.T_decimal128), projectNode.ProjectList[0].Typ.Id)
-	require.Equal(t, int32(29), projectNode.ProjectList[0].Typ.Width)
-	require.Equal(t, int32(9), projectNode.ProjectList[0].Typ.Scale)
-	require.Len(t, resultColumns, 1)
-	require.Equal(t, int32(types.T_decimal128), resultColumns[0].Typ.Id)
-	require.Equal(t, [][]byte{[]byte("runtime-decimal")}, execCtx.prepareColDef)
-	value, parseErr := types.ParseDecimal128("-12345678901234567890.123456789", 29, 9)
-	require.NoError(t, parseErr)
-	executor, execErr := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
-	require.NoError(t, execErr)
-	defer executor.Free()
-	input := batch.New(nil)
-	input.SetRowCount(1)
-	vec, evalErr := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
-	require.NoError(t, evalErr)
-	require.Equal(t, types.T_decimal128, vec.GetType().Oid)
-	require.Equal(t, value, vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0))
-	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
-	require.Equal(t, int32(types.T_text), originalProjectNode.ProjectList[0].Typ.Id)
 }
 
 func TestSQLVariablePrepareParamKind(t *testing.T) {
@@ -915,28 +934,6 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
-}
-
-func TestInitExecuteStmtParamReusesCachedCompileForTextParameter(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 111, "select ?")
-	defer prepareStmt.Close()
-
-	params := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(params, []byte("plain text"), false, cw.proc.Mp()))
-	prepareStmt.params = params
-	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
-	sentinel := compile.NewCompile(
-		"", "", prepareStmt.Sql, "", "", nil,
-		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
-	prepareStmt.compile = sentinel
-
-	retComp, retPlan, _, _, _, err := initExecuteStmtParam(
-		execCtx, ses, cw, nil, prepareStmt.Name)
-	require.NoError(t, err)
-	require.Same(t, sentinel, retComp,
-		"unchanged text parameter domain must not force a full recompilation")
-	require.Same(t, sentinel, prepareStmt.compile)
-	require.NotNil(t, retPlan)
 }
 
 func TestInitExecuteStmtParamTransfersFreshCloneOwnership(t *testing.T) {

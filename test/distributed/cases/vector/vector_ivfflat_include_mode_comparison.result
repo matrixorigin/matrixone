@@ -22,60 +22,57 @@ from phase9_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
--- @regex("Table Function on ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Table Function on ivf_search  𝄀
-              Index Reader Param:  Limit: 3  𝄀
-              Filter Cond: (`__mo_index_include_category` >= 20)
+        ->  Vector Index Scan on idx_ivf_include_phase9 [l2_distance]  𝄀
+              Vector Index: idx_ivf_include_phase9, Metric: l2_distance, Candidate Limit: 3, NProbe: 8, Index Filter: (__mo_index_include_category >= 20)
 explain select id, title, category
 from phase9_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=post';
--- @regex("Table Function on ivf_search", true)
-➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,3] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (phase9_main.id = mo_ivf_alias_0.pkid)  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
+              Join Cond: (phase9_main.id = #[1,0])  𝄀
               ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
                     Filter Cond: (phase9_main.category >= 20)  𝄀
-                    Runtime Filter Probe: phase9_main.id  𝄀
-              ->  Table Function on ivf_search  𝄀
-                    Index Reader Param:  Limit: 3  OverFetchLimit: 15
+              ->  Vector Index Scan on idx_ivf_include_phase9 [l2_distance]  𝄀
+                    Vector Index: idx_ivf_include_phase9, Metric: l2_distance, Candidate Limit: 3, NProbe: 8
 explain select id, title, category
 from phase9_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=pre';
--- @regex("Table Function on ivf_search", true)
-➤ AP QUERY PLAN ON ONE CN(8 core)[12,0,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON ONE CN(32 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,3] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (phase9_main.id = mo_ivf_alias_0.pkid)  𝄀
+              Join Cond: (phase9_main.id = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
                     Filter Cond: (phase9_main.category >= 20)  𝄀
                     Runtime Filter Probe: phase9_main.id  𝄀
               ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (mo_ivf_alias_0.pkid = phase9_main.id)  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = phase9_main.id)  𝄀
                     Runtime Filter Build: #[10,0]  𝄀
-                    ->  Table Function on ivf_search  𝄀
-                          Index Reader Param:  Limit: 3  𝄀
+                    ->  Vector Index Scan on idx_ivf_include_phase9 [l2_distance]  𝄀
                           Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: idx_ivf_include_phase9, Metric: l2_distance, Candidate Limit: 3, NProbe: 8  𝄀
                     ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
                           Filter Cond: (phase9_main.category >= 20)
 select id, title, category
@@ -83,7 +80,7 @@ from phase9_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 2  ¦  beta  ¦  20  𝄀
 4  ¦  delta  ¦  40  𝄀
 3  ¦  gamma  ¦  30
@@ -92,7 +89,7 @@ from phase9_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=post';
-➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 2  ¦  beta  ¦  20  𝄀
 4  ¦  delta  ¦  40  𝄀
 3  ¦  gamma  ¦  30
@@ -101,7 +98,7 @@ from phase9_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=pre';
-➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 2  ¦  beta  ¦  20  𝄀
 4  ¦  delta  ¦  40  𝄀
 3  ¦  gamma  ¦  30

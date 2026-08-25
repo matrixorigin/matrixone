@@ -1,0 +1,48 @@
+name: esql_tvf E2E
+
+# Manual only while the E2E remains under stabilization. Restore a pull_request
+# trigger once it is stable.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  esql-tvf-e2e-local:
+    name: esql_tvf E2E Local
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MO_ESQL_REPORT_DIR: test/esqltvf/reports/e2e-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run esql_tvf E2E
+        run: make test-esql-tvf-e2e-local
+
+      - name: Summarize esql_tvf E2E
+        if: always()
+        run: |
+          {
+            echo "## esql_tvf E2E"
+            echo ""
+            echo "Artifact: \`esql-tvf-e2e-local-${{ github.sha }}-${{ github.run_id }}\`"
+            echo ""
+            if [ -f "${MO_ESQL_REPORT_DIR}/summary.md" ]; then
+              cat "${MO_ESQL_REPORT_DIR}/summary.md"
+            else
+              echo "No summary was created."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: esql-tvf-e2e-local-${{ github.sha }}-${{ github.run_id }}
+          path: test/esqltvf/reports/**

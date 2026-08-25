@@ -5,7 +5,7 @@
 -- silently no index, which is invisible from the result set and only shows in EXPLAIN.
 --
 -- A view makes that boundary permanent: the fallback is baked into every query the view
--- ever serves. So each EXPLAIN below asserts ivf_search is present, and each query is
+-- ever serves. So each EXPLAIN below asserts VECTOR_INDEX_SCAN is present, and each query is
 -- cross-checked against the same Top-K computed WITHOUT the index (mode=force) so a plan
 -- that reaches the index but returns the wrong rows still fails.
 --
@@ -32,14 +32,14 @@ create view knn as
 
 -- ---------------- control: selecting from the view directly --------------------
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select id, d from knn;
 
 select id, d from knn order by id;
 
 -- ---------------- #25967 shape: an outer ORDER BY above the view ---------------
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select id, d from knn order by d;
 
 select id, d from knn order by d;
@@ -55,7 +55,7 @@ select id, d from knn order by d desc;
 
 -- ---------------- #25974 shape: a join against the view ------------------------
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select knn.id, knn.d, m.name from knn join meta m on m.id = knn.id;
 
 select knn.id, knn.d, m.name from knn join meta m on m.id = knn.id order by knn.d;
@@ -68,14 +68,14 @@ with force_knn as (
 
 -- ---------------- an aggregate above the view ----------------------------------
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select count(*) as n from knn;
 
 select count(*) as n from knn;
 
 -- ---------------- a filter above the view --------------------------------------
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select id from knn where d > 0;
 
 select id from knn where d > 0 order by id;
@@ -85,7 +85,7 @@ create view knn_ids as
     select id from t_ivf order by l2_distance(v,'[1,1,1,1]') limit 3;
 
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select id from knn_ids order by id;
 
 select id from knn_ids order by id;

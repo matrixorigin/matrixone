@@ -62,6 +62,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	}()
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
+	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
 	if capture != nil {
@@ -401,7 +402,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
-		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnStatementBuildUpdateHistogram.Observe(time.Since(start).Seconds())
 	}()
 	if err := validateMultiTableUpdateClauses(ctx, stmt); err != nil {
 		return nil, err
@@ -424,15 +425,6 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		route, reason, routedErr := classifyUpdatePlannerError(err)
 		switch route {
-		case updatePlannerLegacy:
-			recordUpdatePlannerRoute(route, reason, "selected")
-			if stmt.HasReturning() {
-				if reason == updateRouteReasonExternalTable {
-					return nil, returningNotSupported(builder, "external table")
-				}
-				return nil, returningNotSupported(builder, "legacy UPDATE path")
-			}
-			return buildTableUpdate(stmt, ctx, isPrepareStmt)
 		case updatePlannerSpecialized:
 			recordUpdatePlannerRoute(route, reason, "selected")
 			if stmt.HasReturning() {
@@ -784,6 +776,33 @@ func applySQLSelectLimit(stmt *tree.Select, queryPlan *Plan) {
 	if query != nil {
 		query.ApplySqlSelectLimit = stmt != nil && !stmt.IsPerform &&
 			!selectHasExplicitTopLevelLimit(stmt)
+	}
+}
+
+func selectHasSQLCalcFoundRows(stmt *tree.Select) bool {
+	for stmt != nil {
+		switch body := stmt.Select.(type) {
+		case *tree.SelectClause:
+			return body.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0
+		case *tree.ParenSelect:
+			stmt = body.Select
+		case *tree.UnionClause:
+			return selectStatementHasSQLCalcFoundRows(body.Left)
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func selectStatementHasSQLCalcFoundRows(stmt tree.SelectStatement) bool {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return selectHasSQLCalcFoundRows(stmt)
+	case *tree.ParenSelect:
+		return selectHasSQLCalcFoundRows(stmt.Select)
+	default:
+		return false
 	}
 }
 
@@ -1195,7 +1214,7 @@ func resultColumnRefsMatchByName(left, right *plan.ColRef) bool {
 
 func isResultColumnSourceNode(nodeType plan.Node_NodeType) bool {
 	switch nodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		return true
 	default:
 		return false

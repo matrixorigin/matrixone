@@ -76,15 +76,27 @@ func (c *compilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planp
 }
 
 func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
-	panic("not supported in internal sql executor")
+	delegate, err := c.sessionCompilerContext()
+	if err != nil {
+		return err
+	}
+	return delegate.CheckSubscriptionValid(subName, accName, pubName)
 }
 
 func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef, error) {
-	panic("not supported in internal sql executor")
+	delegate, err := c.sessionCompilerContext()
+	if err != nil {
+		return nil, nil, err
+	}
+	return delegate.ResolveSubscriptionTableById(tableId, pubmeta)
 }
 
 func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
-	panic("not supported in internal sql executor")
+	delegate, err := c.sessionCompilerContext()
+	if err != nil {
+		return false, err
+	}
+	return delegate.IsPublishing(dbName)
 }
 
 func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.TableDef, error) {
@@ -99,18 +111,31 @@ func (c *compilerContext) BuildTableDefByMoColumns(dbName, table string) (*plan.
 }
 
 func (c *compilerContext) ResolveSnapshotWithSnapshotName(snapshotName string) (*plan.Snapshot, error) {
-	panic("not supported in internal sql executor")
+	delegate, err := c.sessionCompilerContext()
+	if err != nil {
+		return nil, err
+	}
+	return delegate.ResolveSnapshotWithSnapshotName(snapshotName)
 }
 
 func (c *compilerContext) CheckTimeStampValid(ts int64) (bool, error) {
-	panic("not supported in internal sql executor")
+	delegate, err := c.sessionCompilerContext()
+	if err != nil {
+		return false, err
+	}
+	return delegate.CheckTimeStampValid(ts)
 }
 
 func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
-	panic("not supported in internal sql executor")
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		delegate.SetQueryingSubscription(meta)
+	}
 }
 
 func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		return delegate.GetQueryingSubscription()
+	}
 	return nil
 }
 
@@ -192,7 +217,41 @@ func (c *compilerContext) GetStatsCache() *plan.StatsCache {
 }
 
 func (c *compilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snapshot) (*plan.SubscriptionMeta, error) {
-	return nil, nil
+	delegate := c.sessionCompilerContextValue()
+	if delegate == nil {
+		// Most internal executor queries are unrelated to subscriptions and do
+		// not originate from a frontend session. Preserve their historical
+		// non-subscription result; CTAS has the session delegate installed and
+		// therefore takes the branch below.
+		return nil, nil
+	}
+	return delegate.GetSubscriptionMeta(dbName, snapshot)
+}
+
+func (c *compilerContext) sessionCompilerContext() (plan.CompilerContext, error) {
+	errCtx := c.ctx
+	if errCtx == nil {
+		errCtx = context.Background()
+	}
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		return delegate, nil
+	}
+	return nil, moerr.NewInternalError(errCtx,
+		"session compiler context is unavailable in internal sql executor")
+}
+
+func (c *compilerContext) sessionCompilerContextValue() plan.CompilerContext {
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		return delegate
+	}
+	if c.proc == nil || c.proc.GetSessionInfo().SqlHelper == nil {
+		return nil
+	}
+	delegate, ok := c.proc.GetSessionInfo().SqlHelper.GetCompilerContext().(plan.CompilerContext)
+	if !ok || delegate == nil || delegate == c {
+		return nil
+	}
+	return delegate
 }
 
 func (c *compilerContext) GetProcess() *process.Process {
@@ -320,6 +379,13 @@ func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName st
 }
 
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	// CTAS follow-up compilation carries the original frontend compiler
+	// context. Delegate relation resolution as one operation so subscription,
+	// snapshot, tenant, and physical-account mapping cannot diverge between
+	// GetSubscriptionMeta and the actual catalog lookup.
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		return delegate.Resolve(dbName, tableName, snapshot)
+	}
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
 		dbName = strings.ToLower(dbName)
@@ -440,6 +506,12 @@ func (c *compilerContext) getRelation(
 
 	db, err := c.engine.Database(ctx, dbName, txnOpt)
 	if err != nil {
+		// A database that is not visible at this transaction's snapshot is
+		// indistinguishable from a missing database for name resolution. Let
+		// callers such as DROP TABLE IF EXISTS build their normal no-op plan.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return ctx, nil, nil
+		}
 		return nil, nil, err
 	}
 

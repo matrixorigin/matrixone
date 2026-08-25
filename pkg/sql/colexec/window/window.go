@@ -260,6 +260,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
+			if err = ctr.validateLagLeadOffsets(0, window, proc); err != nil {
+				return result, err
+			}
 			for i := range window.Aggs {
 				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
 					arg := ctr.aggVecs[i].Vec[0]
@@ -927,6 +930,32 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 	return ctr.processValueFuncRange(idx, ap, proc, 0, ctr.bat.RowCount())
 }
 
+// validateLagLeadOffsets checks the complete evaluated offset vector before
+// the first output chunk is emitted. Literal offsets are rejected by the
+// binder; this pass covers prepared parameters and row-dependent expressions.
+func (ctr *container) validateLagLeadOffsets(idx int, ap *Window, proc *process.Process) error {
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	if (w.Name != "lag" && w.Name != "lead") ||
+		idx >= len(ctr.aggVecs) || len(ctr.aggVecs[idx].Vec) < 2 {
+		return nil
+	}
+
+	offsetVec := ctr.aggVecs[idx].Vec[1]
+	rows := offsetVec.Length()
+	if offsetVec.IsConst() && rows > 1 {
+		rows = 1
+	}
+	for row := 0; row < rows; row++ {
+		if err := checkCanceled(proc, row); err != nil {
+			return err
+		}
+		if _, err := getLagLeadOffsetFromVec(proc.Ctx, w.Name, offsetVec, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ctr *container) processValueFuncRange(
 	idx int,
 	ap *Window,
@@ -955,11 +984,14 @@ func (ctr *container) processValueFuncRange(
 	switch funcName {
 	case "lag":
 		var offsetVec *vector.Vector
-		constOffset, constOK := int64(1), true
+		constOffset := int64(1)
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			offsetVec = ctr.aggVecs[idx].Vec[1]
 			if offsetVec.IsConst() {
-				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+				constOffset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		var defaultVec *vector.Vector
@@ -970,15 +1002,12 @@ func (ctr *container) processValueFuncRange(
 			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
-			offset, ok := constOffset, constOK
+			offset := constOffset
 			if offsetVec != nil && !offsetVec.IsConst() {
-				offset, ok = getInt64FromVec(offsetVec, j)
-			}
-			if !ok || offset < 0 {
-				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
+				offset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, j)
+				if err != nil {
 					return nil, err
 				}
-				continue
 			}
 			start, _ := 0, n
 			if ctr.ps != nil {
@@ -998,11 +1027,14 @@ func (ctr *container) processValueFuncRange(
 
 	case "lead":
 		var offsetVec *vector.Vector
-		constOffset, constOK := int64(1), true
+		constOffset := int64(1)
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			offsetVec = ctr.aggVecs[idx].Vec[1]
 			if offsetVec.IsConst() {
-				constOffset, constOK = getInt64FromVec(offsetVec, 0)
+				constOffset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		var defaultVec *vector.Vector
@@ -1013,15 +1045,12 @@ func (ctr *container) processValueFuncRange(
 			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
-			offset, ok := constOffset, constOK
+			offset := constOffset
 			if offsetVec != nil && !offsetVec.IsConst() {
-				offset, ok = getInt64FromVec(offsetVec, j)
-			}
-			if !ok || offset < 0 {
-				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
+				offset, err = getLagLeadOffsetFromVec(proc.Ctx, funcName, offsetVec, j)
+				if err != nil {
 					return nil, err
 				}
-				continue
 			}
 			_, end := 0, n
 			if ctr.ps != nil {
@@ -1213,6 +1242,17 @@ func getInt64FromVec(vec *vector.Vector, row int) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func getLagLeadOffsetFromVec(ctx context.Context, name string, vec *vector.Vector, row int) (int64, error) {
+	if vec.IsConst() {
+		row = 0
+	}
+	offset, ok := getInt64FromVec(vec, row)
+	if !ok || offset < 0 {
+		return 0, moerr.NewWrongArguments(ctx, name)
+	}
+	return offset, nil
 }
 
 // appendDefaultOrNull appends the default value (if provided) or NULL to the result vector.
@@ -1648,14 +1688,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint64], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_int8:
 		col := vector.MustFixedColNoTypeCheck[int8](vec)
@@ -1667,11 +1704,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int8], cmpl)
 		} else {
 			c := int8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I8Val).I8Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int8], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int8], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int8], cmpl)
 		}
 	case types.T_int16:
 		col := vector.MustFixedColNoTypeCheck[int16](vec)
@@ -1683,11 +1720,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int16], cmpl)
 		} else {
 			c := int16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I16Val).I16Val)
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int16], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int16], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int16], cmpl)
 		}
 	case types.T_int32:
 		col := vector.MustFixedColNoTypeCheck[int32](vec)
@@ -1699,11 +1736,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int32], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I32Val).I32Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int32], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int32], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int32], cmpl)
 		}
 	case types.T_int64:
 		col := vector.MustFixedColNoTypeCheck[int64](vec)
@@ -1715,11 +1752,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int64], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[int64], cmpl)
-			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[int64], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int64], cmpl)
 		}
 	case types.T_uint8:
 		col := vector.MustFixedColNoTypeCheck[uint8](vec)
@@ -1788,14 +1825,11 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[uint64], cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, !plus)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			left = genericSearchLeft(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
@@ -2072,14 +2106,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint64])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_int8:
 		col := vector.MustFixedColNoTypeCheck[int8](vec)
@@ -2091,11 +2122,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int8])
 		} else {
 			c := int8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I8Val).I8Val)
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int8], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int8], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int8], cmpl)
 		}
 	case types.T_int16:
 		col := vector.MustFixedColNoTypeCheck[int16](vec)
@@ -2107,11 +2138,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int16])
 		} else {
 			c := int16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I16Val).I16Val)
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int16], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int16], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int16], cmpl)
 		}
 	case types.T_int32:
 		col := vector.MustFixedColNoTypeCheck[int32](vec)
@@ -2123,11 +2154,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int32])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I32Val).I32Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int32], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int32], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int32], cmpl)
 		}
 	case types.T_int64:
 		col := vector.MustFixedColNoTypeCheck[int64](vec)
@@ -2139,11 +2170,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int64])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[int64], cmpl)
-			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[int64], cmpl)
+			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[int64], cmpl)
 		}
 	case types.T_uint8:
 		col := vector.MustFixedColNoTypeCheck[uint8](vec)
@@ -2212,14 +2243,11 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[uint64])
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[uint64], cmpl)
-			} else {
-				if col[rowIdx] <= c {
-					return start, nil
-				}
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[uint64], cmpl)
+			bound, aboveDomain, ok := uint64RangeBound(col[rowIdx], c, sub)
+			if !ok {
+				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
+			right = genericSearchRight(start, end-1, col, bound, genericEqual[uint64], cmpl)
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
@@ -2416,6 +2444,54 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 	// genericSearchRight returns high in [start-1, end-1]. When all values > target,
 	// high = start-1, so right+1 = start (correct exclusive upper bound).
 	return right + 1, nil
+}
+
+// uint64RangeBound computes a finite RANGE search key without allowing
+// unsigned arithmetic to wrap into the opposite end of the type domain.
+// aboveDomain distinguishes addition overflow from subtraction underflow.
+func uint64RangeBound(value, offset uint64, subtract bool) (bound uint64, aboveDomain bool, ok bool) {
+	if subtract {
+		if value < offset {
+			return 0, false, false
+		}
+		return value - offset, false, true
+	}
+	if value > math.MaxUint64-offset {
+		return 0, true, false
+	}
+	return value + offset, false, true
+}
+
+type signedRangeInteger interface {
+	~int8 | ~int16 | ~int32 | ~int64
+}
+
+// signedRangeBound computes a finite RANGE search key without allowing signed
+// arithmetic to wrap into the opposite end of the type domain. aboveDomain
+// distinguishes overflow above the maximum from underflow below the minimum.
+func signedRangeBound[T signedRangeInteger](value, offset T, subtract bool) (bound T, aboveDomain bool, ok bool) {
+	if subtract {
+		bound = value - offset
+		if (offset > 0 && bound > value) || (offset < 0 && bound < value) {
+			return 0, offset < 0, false
+		}
+		return bound, false, true
+	}
+
+	bound = value + offset
+	if (offset > 0 && bound < value) || (offset < 0 && bound > value) {
+		return 0, offset > 0, false
+	}
+	return bound, false, true
+}
+
+// outOfDomainRangeBoundary maps a conceptual search key outside a numeric type
+// domain to its insertion boundary in the current SQL sort direction.
+func outOfDomainRangeBoundary(start, end int, aboveDomain, desc bool) int {
+	if aboveDomain != desc {
+		return end
+	}
+	return start
 }
 
 func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {

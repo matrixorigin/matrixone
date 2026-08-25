@@ -23,11 +23,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -137,6 +140,71 @@ func TestNewReadRequestUsesVersionedMethodForPrepareParamMetadata(t *testing.T) 
 	)
 	require.Equal(t, shard.Method_ShardReadV2, booleanReq.RPCMethod)
 	s.remote.pool.ReleaseRequest(booleanReq)
+
+	crossDomain := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value:       &plan.Literal_Sval{Sval: "selected"},
+			LiteralForm: plan.StringLiteralForm_STRING_LITERAL_TEXT,
+		}},
+	}
+	readerReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{ReaderBuildParam: shard.ReaderBuildParam{Expr: crossDomain}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, readerReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(readerReq)
+
+	rangesReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{RangesParam: shard.RangesParam{Exprs: []*plan.Expr{crossDomain}}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, rangesReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(rangesReq)
+
+	boolColumn := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	textColumn := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	binaryColumn := &plan.Expr{Typ: crossDomain.Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}
+	implicitCast := &plan.Expr{Typ: crossDomain.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "cast"}, Args: []*plan.Expr{textColumn},
+	}}}
+	dynamic := &plan.Expr{Typ: crossDomain.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "if"}, Args: []*plan.Expr{boolColumn, implicitCast, binaryColumn},
+	}}}
+	dynamicReaderReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{ReaderBuildParam: shard.ReaderBuildParam{Expr: dynamic}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, dynamicReaderReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(dynamicReaderReq)
+	dynamicRangesReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{RangesParam: shard.RangesParam{Exprs: []*plan.Expr{dynamic}}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, dynamicRangesReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(dynamicRangesReq)
+
+	sameDomain := proto.Clone(crossDomain).(*plan.Expr)
+	sameDomain.Typ = plan.Type{Id: int32(types.T_varchar)}
+	sameDomainReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{ReaderBuildParam: shard.ReaderBuildParam{Expr: sameDomain}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardRead, sameDomainReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(sameDomainReq)
 }
 
 func TestOldReceiverRejectsVersionedShardReadBeforeHandler(t *testing.T) {

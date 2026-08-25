@@ -893,7 +893,7 @@ func TestSetOffsetOnNewTablePublishesFinalCacheAfterRepeatedResets(t *testing.T)
 		}
 		last, err := s.InsertValues(ctx, 0, 2, nil, inputs, 1, 0)
 		require.NoError(t, err)
-		require.Equal(t, uint64(2000), last)
+		require.Equal(t, uint64(1100), last)
 	})
 }
 

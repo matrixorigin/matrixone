@@ -41,11 +41,11 @@ select id from v_match order by id;
 
 -- and it genuinely reaches the index rather than scanning
 -- @separator:table
--- @regex("Table Function on ivf_search", true)
+-- @regex("Vector Index Scan", true)
 explain select id from v_match;
 
 -- ---------------- a CONSUMER above the view falls back to a scan ---------------
--- Selecting straight from the view reaches ivf_search (asserted above), but putting a
+-- Selecting straight from the view reaches the vector index (asserted above), but putting a
 -- consumer above it -- an outer ORDER BY, or a join -- currently makes the rewrite miss,
 -- and the plan falls back to a full scan plus sort. Correct rows, silently no index.
 --
@@ -57,7 +57,7 @@ explain select id from v_match;
 --
 -- Only the ROWS are asserted here, deliberately. Whether these shapes reach the index is
 -- the planner's business and is fixed by the sort-anchored rewrite (#25967 / #25974),
--- which asserts ivf_search for exactly these shapes in vector_view_consumers. Pinning the
+-- which asserts Vector Index Scan for exactly these shapes in vector_view_consumers. Pinning the
 -- current fallback here too would mean one branch or the other lands with a red test.
 select id from v_match order by id;
 select v_match.id from v_match join t m on m.id = v_match.id order by v_match.id;

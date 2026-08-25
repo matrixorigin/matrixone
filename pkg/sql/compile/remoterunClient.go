@@ -102,6 +102,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 		return nil, err
 	}
+	sender.proc = s.Proc
 	if sink, ok := s.Proc.GetSession().(warningDiagnosticSink); ok {
 		sender.warningSink = sink
 	}
@@ -236,7 +237,7 @@ func prepareRemoteRunSendingData(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeScope(encodedScope); err != nil {
+	if scopeData, err = encodeRemoteScope(encodedScope, proc); err != nil {
 		return nil, false, nil, false, err
 	}
 
@@ -430,6 +431,7 @@ type messageSenderOnClient struct {
 
 	// anal was used to merge remote-run's cost analysis information.
 	anal *AnalyzeModule
+	proc *process.Process
 
 	// warningSink is the session-owned diagnostic destination on the initiating
 	// process. Remote terminal warnings are applied here only after the remote
@@ -914,6 +916,9 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	var envelope remoteTerminalEnvelope
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return err
+	}
+	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
+		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
 	}
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)

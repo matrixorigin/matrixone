@@ -1438,6 +1438,12 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			paramCount: 1,
 		},
 		{
+			name:       "sequential update dynamic abs inherits target",
+			sql:        "update constraint_test.emp set sal = abs(?), comm = sal where empno = 1",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 1,
+		},
+		{
 			name: "update double sibling overrides target",
 			sql:  "update constraint_test.emp set sal = (? + ?) + cast(1 as double) where empno = 1",
 			want: planpb.Type{Id: int32(types.T_float64)},

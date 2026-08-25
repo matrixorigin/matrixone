@@ -59,13 +59,6 @@ func splitFiltersByVectorIndexCoverage(
 	return pushdownFilters, remainingFilters
 }
 
-func vectorIndexColumnNameFromColRef(col *plan.ColRef, scanNode *plan.Node, scanTag int32) (string, bool) {
-	if col == nil || scanNode == nil || scanNode.TableDef == nil {
-		return "", false
-	}
-	return vectorIndexColumnNameFromTableDef(col, scanNode.TableDef, scanTag)
-}
-
 func vectorIndexColumnNameFromTableDef(col *plan.ColRef, tableDef *plan.TableDef, scanTag int32) (string, bool) {
 	if col == nil || tableDef == nil {
 		return "", false
@@ -102,7 +95,8 @@ func vectorIndexExprRefsOnlyCoveredColumns(expr *plan.Expr, scanTag, partPos int
 			}
 		}
 		return true
-	case *plan.Expr_Lit:
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw,
+		*plan.Expr_Vec, *plan.Expr_Max, *plan.Expr_T, *plan.Expr_Fold:
 		return true
 	case *plan.Expr_List:
 		for _, sub := range impl.List.List {
@@ -110,8 +104,6 @@ func vectorIndexExprRefsOnlyCoveredColumns(expr *plan.Expr, scanTag, partPos int
 				return false
 			}
 		}
-		return true
-	case *plan.Expr_T:
 		return true
 	default:
 		return false
