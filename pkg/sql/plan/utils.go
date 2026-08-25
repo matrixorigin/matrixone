@@ -3243,6 +3243,9 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
 	}
+	if err := ValidatePreparedLagLeadParams(ctx, preparePlan, paramVals); err != nil {
+		return nil, err
+	}
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, err
 	}
@@ -3264,6 +3267,98 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 		}
 	}
 	return copied, nil
+}
+
+// ValidatePreparedLagLeadParams validates LAG/LEAD offset markers before the
+// generic expression cast path can discard their protocol source type. This is
+// also called by the cached prepared-execution path, which does not replace
+// ParamRefs in the plan for each execution.
+func ValidatePreparedLagLeadParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
+	if preparePlan == nil || len(paramVals) == 0 {
+		return nil
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.GetWinSpecList() {
+			window := expr.GetW()
+			if window == nil {
+				continue
+			}
+			function := window.GetWindowFunc().GetF()
+			if function == nil || len(function.Args) < 2 {
+				continue
+			}
+			name := function.GetFunc().GetObjName()
+			if name != "lag" && name != "lead" {
+				continue
+			}
+			if position, ok := preparedWindowArgumentParamPosition(function.Args[1]); ok {
+				if position < 0 || int(position) >= len(paramVals) {
+					continue
+				}
+				if !isNonNegativePreparedInteger(paramVals[position]) {
+					return moerr.NewWrongArguments(ctx, name)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// PreparedLagLeadParamPositions returns the zero-based parameter positions
+// used as prepared LAG/LEAD offsets.
+func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
+	positions := make(map[int32]struct{})
+	if preparePlan == nil {
+		return nil
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.GetWinSpecList() {
+			window := expr.GetW()
+			if window == nil {
+				continue
+			}
+			function := window.GetWindowFunc().GetF()
+			if function == nil || len(function.Args) < 2 {
+				continue
+			}
+			name := function.GetFunc().GetObjName()
+			if name != "lag" && name != "lead" {
+				continue
+			}
+			if position, ok := preparedWindowArgumentParamPosition(function.Args[1]); ok {
+				positions[position] = struct{}{}
+			}
+		}
+	}
+
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
 }
 
 // ValidatePreparedPaginationParams validates parameter markers used by LIMIT
@@ -3404,7 +3499,7 @@ type ParamValue struct {
 	PrepareParamKind vector.PrepareParamKind
 }
 
-func preparedNthValueParamPosition(expr *Expr) (int32, bool) {
+func preparedWindowArgumentParamPosition(expr *Expr) (int32, bool) {
 	if param := expr.GetP(); param != nil {
 		return param.Pos, true
 	}
@@ -3463,6 +3558,35 @@ func isPositivePreparedInteger(value any) bool {
 	}
 }
 
+func isNonNegativePreparedInteger(value any) bool {
+	kind := vector.PrepareParamNone
+	if paramValue, ok := value.(ParamValue); ok {
+		value = paramValue.Value
+		kind = paramValue.PrepareParamKind
+	}
+	if value == nil || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal {
+		return false
+	}
+	if kind == vector.PrepareParamBoolean {
+		switch value := value.(type) {
+		case bool:
+			return true
+		case string:
+			return value == "0" || value == "1"
+		default:
+			return false
+		}
+	}
+	if _, ok := value.(bool); ok {
+		return true
+	}
+	valid, negative := validatePreparedPaginationValue(ParamValue{
+		Value:            value,
+		PrepareParamKind: kind,
+	})
+	return valid && !negative
+}
+
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
@@ -3496,7 +3620,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		if name != "nth_value" || len(args) != 2 {
 			return nil
 		}
-		pos, ok := preparedNthValueParamPosition(args[1])
+		pos, ok := preparedWindowArgumentParamPosition(args[1])
 		if !ok {
 			return nil
 		}
@@ -3504,7 +3628,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 			return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
 		}
 		if !isPositivePreparedInteger(paramVals[pos]) {
-			return moerr.NewWrongArguments(ctx, "nth_value")
+			return moerr.NewWrongArguments(ctx, name)
 		}
 		return nil
 	}

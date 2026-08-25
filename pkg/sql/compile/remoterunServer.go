@@ -1094,7 +1094,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	}
 	var transport bytes.Buffer
 	data, err := b.MarshalBinaryWithPrepareParamKindsForProtocol(
-		&transport, false, version >= defines.MORPCVersion29)
+		&transport, false, version >= defines.MORPCVersion30)
 	if err != nil {
 		return err
 	}

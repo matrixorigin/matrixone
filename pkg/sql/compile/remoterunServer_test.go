@@ -819,6 +819,18 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 		})
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion29)
 	require.NoError(t, receiver.sendBatch(bat))
+	decodedWithoutSources := batch.NewOffHeapEmpty()
+	defer decodedWithoutSources.Clean(mp)
+	require.NoError(t, decodedWithoutSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
+	require.False(t, decodedWithoutSources.Vecs[0].HasStringSourceMetadata())
+
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion30)
+	require.NoError(t, receiver.sendBatch(bat))
 	decodedWithSources := batch.NewOffHeapEmpty()
 	defer decodedWithSources.Clean(mp)
 	require.NoError(t, decodedWithSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
