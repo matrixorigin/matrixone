@@ -1455,7 +1455,7 @@ func TestPreparedComparisonTextFallbackPreservesNumericSemantics(t *testing.T) {
 		{name: "integer range overflow", value: "2147483648", target: int32Type, want: true},
 		{name: "double range overflow", value: "1e309", target: int32Type, want: true},
 		{name: "floating target", value: "0.9", target: float64Type, want: false},
-		{name: "decimal target uses common domain", value: "1", target: decimalType, want: true},
+		{name: "decimal target keeps its domain", value: "1", target: decimalType, want: false},
 		{name: "missing prefix coerces zero", value: "foo", target: int32Type, want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

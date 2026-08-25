@@ -793,11 +793,6 @@ func preparedComparisonTextNeedsDoubleFallback(value string, target plan.Type) b
 		return math.Trunc(numeric) != numeric || numeric < 0 || numeric > math.MaxUint32
 	case types.T_uint64:
 		return math.Trunc(numeric) != numeric || numeric < 0 || numeric >= math.Exp2(64)
-	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
-		// Decimal-vs-text comparisons use the floating common domain here; an
-		// intermediate DOUBLE-to-DECIMAL cast would lose scale/precision before
-		// comparison.
-		return true
 	default:
 		return false
 	}
