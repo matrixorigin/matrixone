@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -98,14 +97,23 @@ func TestMultiInsertFirstAndElseRouting(t *testing.T) {
 	qry := logicPlan.GetQuery()
 	require.Len(t, qry.Steps, 4)
 
-	// Each target step carries exactly one FILTER: branch i keeps
-	// cond_i AND (cond_1 IS NOT TRUE) ... ; ELSE keeps every cond IS NOT TRUE.
-	expectedFilterLens := []int{1, 2, 2}
+	// Each target step carries exactly one FILTER. With INSERT FIRST the
+	// selectors are already mutually exclusive (each is masked by the earlier
+	// ones), so a WHEN branch needs a single conjunct and only ELSE tests that
+	// nothing claimed the row.
+	expectedFilterLens := []int{1, 1, 2}
 	for i, step := range qry.Steps[1:] {
 		var filters []*plan.Node
 		collectFilterNodes(qry, step, &filters)
 		require.Len(t, filters, 1, "step %d", i+1)
 		require.Len(t, filters[0].FilterList, expectedFilterLens[i], "step %d", i+1)
+	}
+	// A WHEN branch reads its selector column directly — no predicate is
+	// re-evaluated and no exclusion term is needed.
+	for _, step := range qry.Steps[1:3] {
+		var filters []*plan.Node
+		collectFilterNodes(qry, step, &filters)
+		require.NotNil(t, filters[0].FilterList[0].GetCol())
 	}
 	// The ELSE step's conditions are all IS NOT TRUE over a selector column.
 	var elseFilters []*plan.Node
@@ -116,21 +124,77 @@ func TestMultiInsertFirstAndElseRouting(t *testing.T) {
 		require.Equal(t, "isnottrue", fn.Func.ObjName)
 		require.NotNil(t, fn.Args[0].GetCol(), "IS NOT TRUE must read a materialized selector, not re-evaluate")
 	}
-	// The second WHEN keeps its own selector plus one exclusion; the selector is
-	// a plain column reference, never a re-bound predicate.
-	var secondFilters []*plan.Node
-	collectFilterNodes(qry, qry.Steps[2], &secondFilters)
-	var bare, notTrue int
-	for _, expr := range secondFilters[0].FilterList {
-		if expr.GetCol() != nil {
-			bare++
-			continue
+	testDeepCopy(logicPlan)
+}
+
+// INSERT FIRST must not evaluate a later WHEN for a row an earlier WHEN already
+// claimed: an unreachable predicate that errors would otherwise turn a correct
+// first-match route into a statement failure. The plan expresses this by masking
+// each later condition with if(matched, false, cond), which evaluates cond only
+// on the rows still unclaimed.
+func TestMultiInsertFirstMasksLaterConditions(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"insert first"+
+			" when deptno = 1 then into t3 (a) values (deptno)"+
+			" when deptno = 2 then into t2 (a, b) values (deptno, deptno)"+
+			" when deptno = 3 then into dept (deptno, dname) values (deptno, dname)"+
+			" select deptno, dname from dept")
+	require.NoError(t, err)
+	qry := logicPlan.GetQuery()
+
+	// One projection per WHEN, and every condition after the first is wrapped in
+	// the masking if().
+	var masked int
+	var countMasked func(*plan.Expr)
+	countMasked = func(expr *plan.Expr) {
+		if expr == nil {
+			return
 		}
-		require.Equal(t, "isnottrue", expr.GetF().Func.ObjName)
-		notTrue++
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func.ObjName == "iff" || fn.Func.ObjName == "if" {
+				// arg0 is the "already matched" mask, arg1 the false constant
+				require.Len(t, fn.Args, 3)
+				require.Nil(t, fn.Args[0].GetCol(), "mask must be computed from selector columns")
+				masked++
+			}
+			for _, arg := range fn.Args {
+				countMasked(arg)
+			}
+		}
 	}
-	require.Equal(t, 1, bare)
-	require.Equal(t, 1, notTrue)
+	for _, node := range qry.Nodes {
+		for _, expr := range node.ProjectList {
+			countMasked(expr)
+		}
+	}
+	require.Equal(t, 2, masked, "WHENs 2 and 3 must be masked by the earlier ones")
+
+	// Each condition still appears exactly once: masking must not duplicate it.
+	var eq int
+	var countEq func(*plan.Expr)
+	countEq = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func.ObjName == "=" {
+				eq++
+			}
+			for _, arg := range fn.Args {
+				countEq(arg)
+			}
+		}
+	}
+	for _, node := range qry.Nodes {
+		for _, expr := range node.ProjectList {
+			countEq(expr)
+		}
+		for _, expr := range node.FilterList {
+			countEq(expr)
+		}
+	}
+	require.Equal(t, 3, eq, "each of the 3 WHEN predicates must be bound exactly once")
 	testDeepCopy(logicPlan)
 }
 
@@ -403,46 +467,32 @@ func TestMultiInsertBranchSinkScansAreRepositionedAfterSinkPruning(t *testing.T)
 // Merged same-table clauses must not mix an explicit auto_increment value with a
 // generated one: the union branches feed one PRE_INSERT concurrently, so the
 // generated values race the explicit ones and can collide.
-func TestValidateMergedAutoIncrColumns(t *testing.T) {
-	tableDef := &plan.TableDef{
-		Name: "t",
-		Cols: []*plan.ColDef{
-			{Name: "seq", Typ: plan.Type{AutoIncr: true}},
-			{Name: "val", Typ: plan.Type{}},
-		},
+func TestClassifyAutoIncrValue(t *testing.T) {
+	nullLit := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	intLit := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 7}}}}
+	notNullExpr := &plan.Expr{
+		Typ:  plan.Type{NotNullable: true},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
 	}
-	branch := func(cols ...string) *multiInsertBranch {
-		return &multiInsertBranch{insertColumns: cols}
+	nullableExpr := &plan.Expr{
+		Typ:  plan.Type{NotNullable: false},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
 	}
-	tests := []struct {
-		name     string
-		branches []*multiInsertBranch
-		rejected bool
-	}{
-		{name: "mixed explicit and generated", branches: []*multiInsertBranch{branch("seq", "val"), branch("val")}, rejected: true},
-		{name: "mixed, different case", branches: []*multiInsertBranch{branch("SEQ"), branch("val")}, rejected: true},
-		{name: "mixed across three clauses", branches: []*multiInsertBranch{branch("val"), branch("val"), branch("seq")}, rejected: true},
-		{name: "every clause sets it", branches: []*multiInsertBranch{branch("seq", "val"), branch("seq")}},
-		{name: "no clause sets it", branches: []*multiInsertBranch{branch("val"), branch("val")}},
-		{name: "single clause", branches: []*multiInsertBranch{branch("seq", "val")}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := validateMergedAutoIncrColumns(context.Background(), tableDef, test.branches)
-			if test.rejected {
-				require.Error(t, err)
-				require.Contains(t, err.Error(), "auto_increment")
-				require.Contains(t, err.Error(), "seq")
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
+	zeroLit := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}}}
 
-	// a table without an auto_increment column is never rejected
-	plainDef := &plan.TableDef{Name: "t", Cols: []*plan.ColDef{{Name: "a"}, {Name: "b"}}}
-	require.NoError(t, validateMergedAutoIncrColumns(context.Background(),
-		plainDef, []*multiInsertBranch{branch("a"), branch("b")}))
+	// default sql_mode: an explicit 0 is converted to NULL and generated
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nil, true), "an omitted column is generated")
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nullLit, true), "a listed column holding NULL is still generated")
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(zeroLit, true), "0 is generated unless NO_AUTO_VALUE_ON_ZERO")
+	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(intLit, true))
+	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(notNullExpr, true), "a non-literal could still evaluate to 0")
+	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(nullableExpr, true), "a nullable expression may be either per row")
+
+	// NO_AUTO_VALUE_ON_ZERO: 0 keeps its value, so non-NULL means explicit
+	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(zeroLit, false))
+	require.Equal(t, autoIncrExplicit, classifyAutoIncrValue(notNullExpr, false))
+	require.Equal(t, autoIncrGenerated, classifyAutoIncrValue(nullLit, false))
+	require.Equal(t, autoIncrUnknown, classifyAutoIncrValue(nullableExpr, false))
 }
 
 func TestMultiInsertRejectsTooManyTargets(t *testing.T) {

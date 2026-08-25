@@ -288,6 +288,37 @@ select (select count(*) from v3) + (select count(*) from v4) = (select count(*) 
 select count(*) from v3 a join v4 b on a.id = b.id;
 ➤ count(*)[-5,64,0]  𝄀
 0
+create table e1 (id int primary key);
+create table e2 (id int primary key);
+create table esrc (id int, s varchar(16));
+insert into esrc values (1, 'bad'), (0, '1');
+insert first
+when id = 1 then into e1 (id) values (id)
+when cast(s as signed) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+select * from e1 order by id;
+➤ id[4,32,0]  𝄀
+1
+select * from e2 order by id;
+➤ id[4,32,0]  𝄀
+0
+delete from e1; delete from e2;
+insert first
+when id = 99 then into e1 (id) values (id)
+when cast(s as signed) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+invalid argument cast to int, bad value bad
+select count(*) from e1;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from e2;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert all
+when id = 1 then into e1 (id) values (id)
+when cast(s as signed) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+invalid argument cast to int, bad value bad
 delete from t_big; delete from t_rest;
 insert first when id > 0 then into t_big (id, val) values (id, val) else into t_rest (id, val) values (id, val) select id, val from src where id > 100000;
 select count(*) from t_big;

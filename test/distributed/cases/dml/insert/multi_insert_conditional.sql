@@ -196,6 +196,33 @@ select count(*) from v1;
 select (select count(*) from v3) + (select count(*) from v4) = (select count(*) from src) as covers_source_once;
 select count(*) from v3 a join v4 b on a.id = b.id;
 
+-- ================= INSERT FIRST must not evaluate a later WHEN for an already-matched row.
+-- The second predicate errors on the row the first clause claims; first-match
+-- semantics mean it is never reached, so the statement must succeed.
+create table e1 (id int primary key);
+create table e2 (id int primary key);
+create table esrc (id int, s varchar(16));
+insert into esrc values (1, 'bad'), (0, '1');
+insert first
+  when id = 1 then into e1 (id) values (id)
+  when cast(s as signed) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+select * from e1 order by id;
+select * from e2 order by id;
+-- the same predicate still errors when it IS reached (no row matches earlier)
+delete from e1; delete from e2;
+insert first
+  when id = 99 then into e1 (id) values (id)
+  when cast(s as signed) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+select count(*) from e1;
+select count(*) from e2;
+-- INSERT ALL has no first-match rule, so every WHEN applies and the error surfaces
+insert all
+  when id = 1 then into e1 (id) values (id)
+  when cast(s as signed) = 1 then into e2 (id) values (id)
+select id, s from esrc;
+
 -- ================= empty source: nothing written, no error
 delete from t_big; delete from t_rest;
 insert first when id > 0 then into t_big (id, val) values (id, val) else into t_rest (id, val) values (id, val) select id, val from src where id > 100000;

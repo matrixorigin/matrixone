@@ -141,13 +141,30 @@ select * from narrow where id > 2000 order by id;
 2001  ¦  10  ¦  small  𝄀
 2002  ¦  200  ¦  big
 create table seqs (seq int auto_increment primary key, val int);
-insert all into seqs (seq, val) values (id * 100, lo) into seqs (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
+insert all into seqs (seq, val) values (7, lo) into seqs (seq, val) values (8, hi) select id, lo, hi from wide where id = 1;
 select * from seqs order by seq;
 ➤ seq[4,32,0]  ¦  val[4,32,0]  𝄀
-100  ¦  10  𝄀
-101  ¦  100  𝄀
-200  ¦  20  𝄀
-201  ¦  200
+7  ¦  10  𝄀
+8  ¦  100
+create table seqs0 (seq int auto_increment primary key, val int);
+insert all into seqs0 (seq, val) values (id * 100, lo) into seqs0 (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
+not supported: multi-table INSERT where INTO clauses disagree on whether auto_increment column 'seq' of table 'seqs0' is generated (every clause must omit it or supply a value that cannot be NULL)
+select count(*) from seqs0;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table seqs5 (seq int auto_increment primary key, val int);
+insert all into seqs5 (seq, val) values (5, lo) into seqs5 (seq, val) values (null, hi) select id, lo, hi from wide;
+not supported: multi-table INSERT where INTO clauses disagree on whether auto_increment column 'seq' of table 'seqs5' is generated (every clause must omit it or supply a value that cannot be NULL)
+select count(*) from seqs5;
+➤ count(*)[-5,64,0]  𝄀
+0
+set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
+create table seqs6 (seq int auto_increment primary key, val int);
+insert all into seqs6 (seq, val) values (id * 100, lo) into seqs6 (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
+select count(*) from seqs6;
+➤ count(*)[-5,64,0]  𝄀
+4
+set sql_mode = default;
 create table seqs2 (seq int auto_increment primary key, val int);
 insert all into seqs2 (val) values (lo) into seqs2 (val) values (hi) select id, lo, hi from wide;
 select count(*), count(distinct seq), min(seq) from seqs2;
@@ -155,7 +172,7 @@ select count(*), count(distinct seq), min(seq) from seqs2;
 4  ¦  4  ¦  1
 create table seqs3 (seq int auto_increment primary key, val int);
 insert all into seqs3 (seq, val) values (id * 100, lo) into seqs3 (val) values (hi) select id, lo, hi from wide;
-not supported: multi-table INSERT where some INTO clauses set auto_increment column 'seq' of table 'seqs3' and others do not
+not supported: multi-table INSERT where INTO clauses disagree on whether auto_increment column 'seq' of table 'seqs3' is generated (every clause must omit it or supply a value that cannot be NULL)
 select count(*) from seqs3;
 ➤ count(*)[-5,64,0]  𝄀
 0

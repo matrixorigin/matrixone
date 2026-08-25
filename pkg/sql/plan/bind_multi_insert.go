@@ -113,11 +113,10 @@ type multiInsertBranch struct {
 	// condIdx is the WHEN whose selector must be true for a source row to reach
 	// this target; -1 for an unconditional clause and for ELSE.
 	condIdx int
-	// excludedIdx are the WHENs whose selectors must NOT be true: every earlier
-	// WHEN for INSERT FIRST, and all WHENs for the ELSE targets. A NULL selector
-	// counts as "not true", so a row whose condition evaluated to NULL is still
-	// eligible here.
-	excludedIdx []int
+	// isElse marks an ELSE target: it takes the rows no WHEN claimed. A NULL
+	// condition counts as "not matched", so a row whose condition evaluated to
+	// NULL reaches ELSE.
+	isElse bool
 	// insertColumns are the target columns this clause writes, in clause
 	// order (the explicit column list, or every insertable column).
 	insertColumns []string
@@ -139,27 +138,13 @@ func multiInsertBranches(stmt *tree.MultiInsert) []*multiInsertBranch {
 	for _, target := range stmt.Targets {
 		branches = append(branches, &multiInsertBranch{target: target, condIdx: -1})
 	}
-	all := make([]int, 0, len(stmt.Whens))
 	for i, when := range stmt.Whens {
-		var excluded []int
-		if stmt.First {
-			excluded = append([]int(nil), all...)
-		}
 		for _, target := range when.Targets {
-			branches = append(branches, &multiInsertBranch{
-				target:      target,
-				condIdx:     i,
-				excludedIdx: excluded,
-			})
+			branches = append(branches, &multiInsertBranch{target: target, condIdx: i})
 		}
-		all = append(all, i)
 	}
 	for _, target := range stmt.Else {
-		branches = append(branches, &multiInsertBranch{
-			target:      target,
-			condIdx:     -1,
-			excludedIdx: append([]int(nil), all...),
-		})
+		branches = append(branches, &multiInsertBranch{target: target, condIdx: -1, isElse: true})
 	}
 	return branches
 }
@@ -214,13 +199,13 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 	// re-binding the predicate, so one WHEN occurrence is one route decision for
 	// a row — the property that makes INSERT FIRST a partition and makes all
 	// INTO clauses of one WHEN agree, even for volatile predicates like rand().
-	selectorID, err := builder.appendMultiInsertSelectors(bindCtx, srcID, srcCols, stmt.Whens)
+	selectors, err := builder.appendMultiInsertSelectors(bindCtx, srcID, srcCols, stmt.Whens, stmt.First)
 	if err != nil {
 		return err
 	}
 
 	sinkTag := builder.genNewBindTag()
-	sinkID := appendSinkNodeWithTag(builder, bindCtx, selectorID, sinkTag)
+	sinkID := appendSinkNodeWithTag(builder, bindCtx, selectors.nodeID, sinkTag)
 	sourceStep := builder.appendStep(sinkID)
 
 	// 2. Resolve every target and group the clauses by table, in source order.
@@ -248,7 +233,7 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 
 	// 3. One write pipeline per table, every branch reading the sink.
 	for _, group := range groups {
-		if err = builder.bindMultiInsertGroup(bindCtx, group, sourceStep, srcCols); err != nil {
+		if err = builder.bindMultiInsertGroup(bindCtx, group, sourceStep, srcCols, selectors, len(stmt.Whens)); err != nil {
 			return err
 		}
 	}
@@ -258,21 +243,55 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 // appendMultiInsertSelectors projects the source columns unchanged and appends
 // one boolean column per WHEN, evaluated once per source row. It returns the new
 // top node; the selector for WHEN i lives at position len(srcCols)+i.
+// multiInsertSelectors describes the materialized route decisions: selector j
+// for WHEN j lives at column selectorBase+j of the returned node. For INSERT
+// FIRST the selectors are mutually exclusive by construction, so "no selector
+// is true" is exactly the ELSE predicate for both statement forms.
+type multiInsertSelectors struct {
+	nodeID       int32
+	selectorBase int
+}
+
+// appendMultiInsertSelectors projects the source columns unchanged and appends
+// one boolean column per WHEN, each condition evaluated exactly once.
+//
+// INSERT ALL evaluates every WHEN for every row by definition, so all selectors
+// are computed in a single projection.
+//
+// INSERT FIRST must not evaluate a later WHEN for a row an earlier WHEN already
+// claimed: a projection evaluates each expression over the whole batch, so an
+// unreachable later predicate that errors (`cast('bad' as signed)`) or is
+// expensive would still run. The selectors are therefore chained, one
+// projection per WHEN, each computing
+//
+//	sel_i     = if(matched_{i-1}, false, cond_i)
+//	matched_i = matched_{i-1} or istrue(sel_i)
+//
+// `if` evaluates a branch only on the rows selected for it (EvalIff compacts
+// the parameters and evaluates just those rows), so cond_i runs exactly once
+// and only for rows still unclaimed. sel_i is then already "matched here and
+// nowhere earlier", so the branch filters need no exclusion terms at all.
 func (builder *QueryBuilder) appendMultiInsertSelectors(
 	bindCtx *BindContext,
 	srcID int32,
 	srcCols []*plan.ColDef,
 	whens []*tree.MultiInsertWhen,
-) (int32, error) {
+	first bool,
+) (multiInsertSelectors, error) {
+	out := multiInsertSelectors{nodeID: srcID, selectorBase: len(srcCols)}
+	if len(whens) == 0 {
+		return out, nil
+	}
+
 	// The conditions are written against the source query's output columns, so
 	// bind them in a context where that output is a table.
 	condCtx := NewBindContext(builder, nil)
 	condCtx.snapshot = bindCtx.snapshot
 	if err := builder.addBinding(srcID, tree.AliasClause{Alias: multiInsertSourceAlias}, condCtx); err != nil {
-		return 0, err
+		return out, err
 	}
 	if len(condCtx.bindings) != 1 {
-		return 0, moerr.NewInternalError(builder.GetContext(), "multi-table insert failed to bind its source query")
+		return out, moerr.NewInternalError(builder.GetContext(), "multi-table insert failed to bind its source query")
 	}
 	// addBinding already exposes a derived-table binding's columns unqualified;
 	// unlike the SINK_SCAN case below, no manual bindingByCol fixup is needed
@@ -282,45 +301,203 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 
 	srcTag := binding.tag
 	lastNodeID := srcID
-	selectors := make([]*plan.Expr, 0, len(whens))
+	conds := make([]*plan.Expr, 0, len(whens))
 	for _, when := range whens {
-		conds, err := splitAndBindCondition(when.Cond, NoAlias, condCtx)
+		cond, nodeID, err := builder.bindMultiInsertCondition(condCtx, when.Cond, lastNodeID)
 		if err != nil {
-			return 0, err
+			return out, err
 		}
-		selector := conds[0]
-		for _, cond := range conds[1:] {
-			if selector, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and",
-				[]*plan.Expr{selector, cond}); err != nil {
-				return 0, err
+		lastNodeID = nodeID
+		conds = append(conds, cond)
+	}
+
+	passthrough := func(tag int32, cols []*plan.ColDef) []*plan.Expr {
+		list := make([]*plan.Expr, len(cols))
+		for i, col := range cols {
+			list[i] = &plan.Expr{
+				Typ:  col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: int32(i), Name: col.Name}},
 			}
 		}
-		if lastNodeID, selector, err = builder.flattenSubqueries(lastNodeID, selector, condCtx); err != nil {
-			return 0, err
-		}
-		if selector == nil {
-			return 0, moerr.NewInternalError(builder.GetContext(), "multi-table insert WHEN condition vanished during binding")
-		}
-		selectors = append(selectors, selector)
+		return list
 	}
 
-	projList := make([]*plan.Expr, 0, len(srcCols)+len(selectors))
-	for i, col := range srcCols {
-		projList = append(projList, &plan.Expr{
-			Typ: col.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{RelPos: srcTag, ColPos: int32(i), Name: col.Name},
-			},
-		})
+	if !first {
+		projList := append(passthrough(srcTag, srcCols), conds...)
+		out.nodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeID},
+			ProjectList: projList,
+			BindingTags: []int32{builder.genNewBindTag()},
+		}, condCtx)
+		return out, nil
 	}
-	projList = append(projList, selectors...)
 
-	return builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{lastNodeID},
-		ProjectList: projList,
-		BindingTags: []int32{builder.genNewBindTag()},
-	}, condCtx), nil
+	// INSERT FIRST: one projection per WHEN. Level i masks cond_i by the
+	// selectors materialized at level i-1, so no condition is evaluated more
+	// than once and none is evaluated for a row an earlier WHEN already claimed.
+	//
+	// A condition is bound against the node below level 0, whose tags are not
+	// visible higher up, so every column any condition reads is carried through
+	// each level and the condition's refs are rewritten to the carrier. That
+	// covers subqueries too: flattenSubqueries turns them into joins below
+	// level 0 and leaves a plain column ref behind, which is just another
+	// carrier.
+	carrierRefs, carrierIdx := collectMultiInsertCarriers(conds)
+	base := len(srcCols) + len(carrierRefs)
+	prevTag := srcTag
+	for i, cond := range conds {
+		projList := passthrough(prevTag, srcCols)
+		for k, ref := range carrierRefs {
+			if i == 0 {
+				projList = append(projList, ref)
+				continue
+			}
+			projList = append(projList, &plan.Expr{
+				Typ:  ref.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: prevTag, ColPos: int32(len(srcCols) + k)}},
+			})
+		}
+		selRef := func(j int) *plan.Expr {
+			return &plan.Expr{
+				Typ:  boolType,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: prevTag, ColPos: int32(base + j)}},
+			}
+		}
+		for j := 0; j < i; j++ {
+			projList = append(projList, selRef(j))
+		}
+
+		selector := cond
+		if i > 0 {
+			rewriteMultiInsertColRefs(selector, carrierIdx, prevTag, len(srcCols))
+			// matched = istrue(sel_0) OR ... OR istrue(sel_{i-1}) over columns
+			// already materialized: cheap booleans, no condition re-evaluated.
+			var matched *plan.Expr
+			for j := 0; j < i; j++ {
+				isTrue, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{selRef(j)})
+				if err != nil {
+					return out, err
+				}
+				if matched == nil {
+					matched = isTrue
+					continue
+				}
+				if matched, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or",
+					[]*plan.Expr{matched, isTrue}); err != nil {
+					return out, err
+				}
+			}
+			// if(matched, false, cond) evaluates cond only on rows still
+			// unclaimed: EvalIff compacts the parameters to the selected rows, so
+			// an unreachable later predicate never runs — and never errors — for
+			// a row an earlier WHEN already took.
+			var err error
+			if selector, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if",
+				[]*plan.Expr{matched, makePlan2BoolConstExprWithType(false), cond}); err != nil {
+				return out, err
+			}
+		}
+		projList = append(projList, selector)
+
+		tag := builder.genNewBindTag()
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeID},
+			ProjectList: projList,
+			BindingTags: []int32{tag},
+		}, condCtx)
+		prevTag = tag
+	}
+
+	out.nodeID = lastNodeID
+	out.selectorBase = base
+	return out, nil
+}
+
+// collectMultiInsertCarriers returns, in stable order, every distinct column a
+// WHEN condition reads, plus an index from (RelPos,ColPos) to its position.
+func collectMultiInsertCarriers(conds []*plan.Expr) ([]*plan.Expr, map[[2]int32]int) {
+	idx := make(map[[2]int32]int)
+	var refs []*plan.Expr
+	var walk func(*plan.Expr)
+	walk = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			key := [2]int32{e.Col.RelPos, e.Col.ColPos}
+			if _, ok := idx[key]; ok {
+				return
+			}
+			idx[key] = len(refs)
+			refs = append(refs, &plan.Expr{
+				Typ:  expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: e.Col.RelPos, ColPos: e.Col.ColPos, Name: e.Col.Name}},
+			})
+		case *plan.Expr_F:
+			for _, arg := range e.F.Args {
+				walk(arg)
+			}
+		case *plan.Expr_List:
+			for _, item := range e.List.List {
+				walk(item)
+			}
+		}
+	}
+	for _, cond := range conds {
+		walk(cond)
+	}
+	return refs, idx
+}
+
+// rewriteMultiInsertColRefs repoints a condition at the carrier columns of the
+// level below it. Positions are stable: carriers follow the source columns.
+func rewriteMultiInsertColRefs(expr *plan.Expr, idx map[[2]int32]int, tag int32, carrierBase int) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if pos, ok := idx[[2]int32{e.Col.RelPos, e.Col.ColPos}]; ok {
+			e.Col.RelPos = tag
+			e.Col.ColPos = int32(carrierBase + pos)
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			rewriteMultiInsertColRefs(arg, idx, tag, carrierBase)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			rewriteMultiInsertColRefs(item, idx, tag, carrierBase)
+		}
+	}
+}
+
+// bindMultiInsertCondition binds one WHEN condition against the source binding,
+// ANDing its conjuncts back into a single boolean and flattening any subquery.
+func (builder *QueryBuilder) bindMultiInsertCondition(
+	condCtx *BindContext, astCond tree.Expr, lastNodeID int32,
+) (*plan.Expr, int32, error) {
+	conds, err := splitAndBindCondition(astCond, NoAlias, condCtx)
+	if err != nil {
+		return nil, 0, err
+	}
+	cond := conds[0]
+	for _, extra := range conds[1:] {
+		if cond, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and",
+			[]*plan.Expr{cond, extra}); err != nil {
+			return nil, 0, err
+		}
+	}
+	if lastNodeID, cond, err = builder.flattenSubqueries(lastNodeID, cond, condCtx); err != nil {
+		return nil, 0, err
+	}
+	if cond == nil {
+		return nil, 0, moerr.NewInternalError(builder.GetContext(), "multi-table insert WHEN condition vanished during binding")
+	}
+	return cond, lastNodeID, nil
 }
 
 // validateMultiInsertTarget rejects target tables the multi-table INSERT does
@@ -387,6 +564,8 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 	group *multiInsertGroup,
 	sourceStep int32,
 	srcCols []*plan.ColDef,
+	selectors multiInsertSelectors,
+	whenCount int,
 ) error {
 	tableDef := group.tableDef
 	objRef := group.objRef
@@ -411,7 +590,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 		// Single clause: bind its row image in clause column order and hand it
 		// to the regular insert tail, which casts and fills defaults.
 		branch := group.branches[0]
-		lastNodeID, err = builder.bindMultiInsertBranchSource(bindCtx, branch, sourceStep, srcCols, nil, tableDef)
+		lastNodeID, err = builder.bindMultiInsertBranchSource(bindCtx, branch, sourceStep, srcCols, nil, tableDef, selectors, whenCount)
 		if err != nil {
 			return err
 		}
@@ -425,17 +604,20 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 		// their column lists (defaults for the columns a clause does not set),
 		// cast to the target types, and UNION ALL the branches so the table is
 		// written by one pipeline with one dedup pass.
-		if err = validateMergedAutoIncrColumns(builder.GetContext(), tableDef, group.branches); err != nil {
-			return err
-		}
 		insertColumns := multiInsertUnionColumns(group.branches)
 		branchIDs := make([]int32, 0, len(group.branches))
 		for _, branch := range group.branches {
-			branchID, err := builder.bindMultiInsertBranchSource(bindCtx, branch, sourceStep, srcCols, insertColumns, tableDef)
+			branchID, err := builder.bindMultiInsertBranchSource(bindCtx, branch, sourceStep, srcCols, insertColumns, tableDef, selectors, whenCount)
 			if err != nil {
 				return err
 			}
 			branchIDs = append(branchIDs, branchID)
+		}
+		// Classify from the BOUND value expressions, not the column lists: a
+		// clause that lists the column but supplies NULL still gets a generated
+		// value from PRE_INSERT.
+		if err = builder.validateMergedAutoIncrColumns(tableDef, insertColumns, branchIDs); err != nil {
+			return err
 		}
 		unionID := builder.appendMultiInsertUnionAll(tCtx, branchIDs)
 		unionNode := builder.qry.Nodes[unionID]
@@ -484,43 +666,144 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 	return nil
 }
 
-// validateMergedAutoIncrColumns rejects a same-table merge in which one INTO
-// clause supplies an AUTO_INCREMENT column explicitly while another leaves it to
-// the engine.
+// autoIncrValueKind classifies what a merged clause supplies for an
+// AUTO_INCREMENT column.
+type autoIncrValueKind int
+
+const (
+	// autoIncrGenerated: the value is certainly produced by PRE_INSERT — the
+	// clause omitted the column, or supplied a NULL constant.
+	autoIncrGenerated autoIncrValueKind = iota
+	// autoIncrExplicit: the value certainly comes from the statement, because
+	// the bound expression is provably non-nullable.
+	autoIncrExplicit
+	// autoIncrUnknown: a nullable expression, which may be either per row.
+	autoIncrUnknown
+)
+
+// classifyAutoIncrValue decides what a clause supplies for an AUTO_INCREMENT
+// column. zeroIsGenerated reflects sql_mode: unless NO_AUTO_VALUE_ON_ZERO is
+// set, an explicit 0 is converted to NULL and generated like an omitted value
+// (see shouldConvertZeroToNull in the preinsert operator), so a literal 0 is
+// not an explicit value in the default mode.
+func classifyAutoIncrValue(expr *plan.Expr, zeroIsGenerated bool) autoIncrValueKind {
+	if expr == nil {
+		return autoIncrGenerated
+	}
+	// The branch projection holds the value already cast to the column type, so
+	// look through the cast to reach the literal underneath.
+	expr = unwrapAutoIncrCast(expr)
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Isnull {
+			return autoIncrGenerated
+		}
+		if zeroIsGenerated && isZeroIntLiteral(lit) {
+			return autoIncrGenerated
+		}
+		return autoIncrExplicit
+	}
+	if expr.Typ.NotNullable {
+		// Provably non-NULL, but a non-literal could still evaluate to 0 and be
+		// generated in the default mode, so it is only explicit when zero keeps
+		// its value.
+		if zeroIsGenerated {
+			return autoIncrUnknown
+		}
+		return autoIncrExplicit
+	}
+	return autoIncrUnknown
+}
+
+// unwrapAutoIncrCast strips assignment casts so a literal value stays
+// recognizable as one.
+func unwrapAutoIncrCast(expr *plan.Expr) *plan.Expr {
+	for {
+		fn := expr.GetF()
+		if fn == nil || len(fn.Args) == 0 {
+			return expr
+		}
+		switch fn.Func.ObjName {
+		case "cast", "assignment_cast":
+			expr = fn.Args[0]
+		default:
+			return expr
+		}
+	}
+}
+
+func isZeroIntLiteral(lit *plan.Literal) bool {
+	switch v := lit.Value.(type) {
+	case *plan.Literal_I64Val:
+		return v.I64Val == 0
+	case *plan.Literal_U64Val:
+		return v.U64Val == 0
+	}
+	return false
+}
+
+// validateMergedAutoIncrColumns rejects a same-table merge whose clauses do not
+// agree on whether an AUTO_INCREMENT column is generated or supplied.
 //
-// Merged clauses become UNION ALL branches feeding one PRE_INSERT. The branch
-// that omits the column contributes NULLs that PRE_INSERT fills from the table
-// counter, but the branch supplying explicit values runs concurrently and has
-// not necessarily advanced that counter yet, so the generated values are
-// nondeterministic and can collide with the explicit ones (observed: 1 run in 8
-// produced a duplicate key, and without a primary key the collision is silent).
-// The same race exists for a hand-written INSERT ... SELECT ... UNION ALL, but
-// multi-table INSERT synthesizes the union, so ordinary SQL would hit it.
-// Refuse the combination rather than write nondeterministic keys; every clause
-// setting the column, or every clause omitting it, stays supported.
-func validateMergedAutoIncrColumns(ctx context.Context, tableDef *plan.TableDef, branches []*multiInsertBranch) error {
+// Merged clauses become UNION ALL branches feeding one PRE_INSERT. A branch
+// that leaves the column to the engine contributes NULLs that PRE_INSERT fills
+// from the table counter, while a branch supplying explicit values runs
+// concurrently and has not necessarily advanced that counter yet, so the
+// generated values are nondeterministic and can collide with the explicit ones
+// (measured: a duplicate key in 1 run of 8, and a silent collision without a
+// primary key; with explicit values inside the generated range it fails every
+// time). The same race exists for a hand-written INSERT ... SELECT ... UNION
+// ALL, but multi-table INSERT synthesizes the union, so ordinary SQL hits it.
+//
+// Membership in the clause's column list does NOT decide this: a listed column
+// holding NULL is still generated. The decision is therefore made on the bound
+// value expression, and a nullable expression — which could be either per row —
+// is refused rather than assumed safe. Every clause generating, or every clause
+// supplying a provably non-null value, both stay supported.
+func (builder *QueryBuilder) validateMergedAutoIncrColumns(
+	tableDef *plan.TableDef, insertColumns []string, branchIDs []int32,
+) error {
 	for _, col := range tableDef.Cols {
 		if !col.Typ.AutoIncr {
 			continue
 		}
-		set, omitted := false, false
-		for _, branch := range branches {
-			found := false
-			for _, column := range branch.insertColumns {
-				if strings.EqualFold(column, col.Name) {
-					found = true
-					break
-				}
-			}
-			if found {
-				set = true
-			} else {
-				omitted = true
+		pos := -1
+		for i, column := range insertColumns {
+			if strings.EqualFold(column, col.Name) {
+				pos = i
+				break
 			}
 		}
-		if set && omitted {
-			return moerr.NewNotSupportedf(ctx,
-				"multi-table INSERT where some INTO clauses set auto_increment column '%s' of table '%s' and others do not",
+		if pos < 0 {
+			// no clause writes it: every row is generated, which is safe
+			continue
+		}
+
+		zeroIsGenerated := true
+		if mode, err := builder.compCtx.ResolveVariable("sql_mode", true, false); err == nil {
+			if text, ok := mode.(string); ok {
+				zeroIsGenerated = !strings.Contains(strings.ToUpper(text), "NO_AUTO_VALUE_ON_ZERO")
+			}
+		}
+
+		var generated, explicit, unknown bool
+		for _, id := range branchIDs {
+			node := builder.qry.Nodes[id]
+			if pos >= len(node.ProjectList) {
+				return moerr.NewInternalErrorf(builder.GetContext(),
+					"multi-table insert branch is missing column %s", col.Name)
+			}
+			switch classifyAutoIncrValue(node.ProjectList[pos], zeroIsGenerated) {
+			case autoIncrGenerated:
+				generated = true
+			case autoIncrExplicit:
+				explicit = true
+			default:
+				unknown = true
+			}
+		}
+		if unknown || (generated && explicit) {
+			return moerr.NewNotSupportedf(builder.GetContext(),
+				"multi-table INSERT where INTO clauses disagree on whether auto_increment column '%s' of table '%s' is generated (every clause must omit it or supply a value that cannot be NULL)",
 				col.Name, tableDef.Name)
 		}
 	}
@@ -559,6 +842,8 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 	srcCols []*plan.ColDef,
 	unionColumns []string,
 	tableDef *plan.TableDef,
+	selectors multiInsertSelectors,
+	whenCount int,
 ) (int32, error) {
 	target := branch.target
 	sysCtx := builder.GetContext()
@@ -606,29 +891,35 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 	}
 	lastNodeID := scanID
 
-	// FILTER: read the route decisions this clause depends on straight out of
-	// the materialized selector columns. Nothing is re-evaluated here, so every
-	// clause of one WHEN sees the identical decision and INSERT FIRST stays a
-	// partition even when the predicate is volatile.
+	// FILTER: read the route decisions straight out of the materialized selector
+	// columns. Nothing is re-evaluated here, so every clause of one WHEN sees the
+	// identical decision. For INSERT FIRST the selector is already masked by the
+	// earlier WHENs, so a WHEN branch needs no exclusion terms and ELSE is simply
+	// "nothing claimed this row".
 	bCtx.binder = NewWhereBinder(builder, bCtx)
-	filterList := make([]*plan.Expr, 0, len(branch.excludedIdx)+1)
-	selector := func(idx int) *plan.Expr {
-		pos := int32(len(srcCols) + idx)
+	selector := func(pos int) *plan.Expr {
 		return &plan.Expr{
 			Typ:  boolType,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: pos}},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: int32(pos)}},
 		}
 	}
-	if branch.condIdx >= 0 {
-		filterList = append(filterList, selector(branch.condIdx))
-	}
-	for _, idx := range branch.excludedIdx {
-		notTrue, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnottrue",
-			[]*plan.Expr{selector(idx)})
-		if err != nil {
-			return 0, err
+	var filterList []*plan.Expr
+	switch {
+	case branch.condIdx >= 0:
+		filterList = append(filterList, selector(selectors.selectorBase+branch.condIdx))
+	case branch.isElse:
+		// ELSE takes the rows no WHEN claimed. A NULL selector counts as "not
+		// matched", hence IS NOT TRUE rather than NOT. This is the same test for
+		// INSERT ALL and INSERT FIRST: a FIRST selector is already masked by the
+		// earlier WHENs, so "no selector is true" means "nothing claimed it".
+		for idx := 0; idx < whenCount; idx++ {
+			notTrue, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnottrue",
+				[]*plan.Expr{selector(selectors.selectorBase + idx)})
+			if err != nil {
+				return 0, err
+			}
+			filterList = append(filterList, notTrue)
 		}
-		filterList = append(filterList, notTrue)
 	}
 	if len(filterList) > 0 {
 		lastNodeID = builder.appendNode(&plan.Node{

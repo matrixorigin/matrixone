@@ -98,11 +98,29 @@ insert first
   else into narrow (id, val, tag) values (id + 2000, hi, 'big')
 select id, lo, hi from wide;
 select * from narrow where id > 2000 order by id;
--- auto-increment in a merged group: every clause must agree on whether it sets the column.
--- All clauses set it explicitly:
+-- auto-increment in a merged group: every clause must agree on whether the value
+-- is generated. Classification is on the VALUE, not the column list, because a
+-- listed column holding NULL is still generated -- and in the default sql_mode an
+-- explicit 0 is converted to NULL and generated too, so only a non-zero literal
+-- counts as certainly explicit.
+-- All clauses supply a non-zero literal:
 create table seqs (seq int auto_increment primary key, val int);
-insert all into seqs (seq, val) values (id * 100, lo) into seqs (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
+insert all into seqs (seq, val) values (7, lo) into seqs (seq, val) values (8, hi) select id, lo, hi from wide where id = 1;
 select * from seqs order by seq;
+-- A non-literal expression could evaluate to 0, hence be generated: refused.
+create table seqs0 (seq int auto_increment primary key, val int);
+insert all into seqs0 (seq, val) values (id * 100, lo) into seqs0 (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
+select count(*) from seqs0;
+-- A listed column holding NULL is generated, so mixing it with a literal is refused.
+create table seqs5 (seq int auto_increment primary key, val int);
+insert all into seqs5 (seq, val) values (5, lo) into seqs5 (seq, val) values (null, hi) select id, lo, hi from wide;
+select count(*) from seqs5;
+-- Under NO_AUTO_VALUE_ON_ZERO a 0 keeps its value, so non-NULL means explicit.
+set sql_mode = 'NO_AUTO_VALUE_ON_ZERO';
+create table seqs6 (seq int auto_increment primary key, val int);
+insert all into seqs6 (seq, val) values (id * 100, lo) into seqs6 (seq, val) values (id * 100 + 1, hi) select id, lo, hi from wide;
+select count(*) from seqs6;
+set sql_mode = default;
 -- No clause sets it, so every row is numbered by the engine:
 create table seqs2 (seq int auto_increment primary key, val int);
 insert all into seqs2 (val) values (lo) into seqs2 (val) values (hi) select id, lo, hi from wide;
