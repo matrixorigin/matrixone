@@ -720,6 +720,37 @@ Fixed during the review:
   `forceModePre`) did not reach a `MultiInsert`'s source query. Added, with
   a unit test.
 
+From the Opus correctness pass (both reproduced on a live server):
+
+- **Crash:** the branch `SINK_SCAN` was not registered in
+  `builder.positionalSinkScans`, so when `createQuery` pruned the columns no
+  branch referenced from the shared sink, the branch kept pre-prune positions
+  into a narrower batch and panicked with index-out-of-range. Reachable from
+  ordinary SQL (`insert all into t(a) values(c2) select c1, c2 from s`). The
+  BVT suite missed it because every case happened to reference all source
+  columns; `TestMultiInsertBranchSinkScansAreRepositionedAfterSinkPruning`
+  now covers it and was verified to fail without the registration.
+- **Nondeterministic auto-increment:** in a merged same-table group, a clause
+  that omitted an `AUTO_INCREMENT` column raced the clause that supplied it
+  (1 run in 8 gave a duplicate key; silent collisions without a primary key).
+  The underlying `PRE_INSERT` race is pre-existing for hand-written
+  `UNION ALL` inserts, but multi-insert synthesizes the union. The
+  combination is now rejected; all-explicit and all-generated stay supported,
+  distinct tables are unaffected. One BVT case relied on the racy mix and was
+  replaced by the three deterministic shapes.
+
+From the Opus unhappy-path pass (no hang, leak, double-free or goroutine
+growth found — see below — but three hardening gaps):
+
+- INTO clauses are capped at 127 (as Oracle): each adds a write pipeline with
+  its own dedup hash build over the whole source, and 60 targets x 100k rows
+  moved RSS from 0.96 GB to 3.72 GB.
+- The per-table merge key is the resolved table id, not the lower-cased name:
+  under `lower_case_table_names=0` the old key would collapse two
+  case-distinct tables and write a clause's rows to the wrong table.
+- `IgnoreForeignKey` is restored with `defer`, so a panic in `ResolveTables`
+  cannot leave FK rejection disabled on the shared CompilerContext.
+
 Accepted as designed (with the reason):
 
 - `INSERT FIRST` evaluates earlier conditions again as `IS NOT TRUE` filters
@@ -737,6 +768,20 @@ Accepted as designed (with the reason):
   plain `INSERT`.
 - S3-object assertions in the BVT are limited to dominant and empty
   targets because the write mode is an estimate-based compile-time decision.
+
+Execution-safety audit (unhappy-path pass, recorded so it is not repeated):
+a failing target cannot block the dispatcher or its siblings — `merge.Reset`
+keeps draining its edge on a detached cleanup context, then `runOnce` cancels
+every scope; the DEDUP(FAIL) join builds its hashmap on the sink-scan side, so
+every consumer fully drains the sink before it can raise an error (this is why
+the lock-step spool is safe here, and why the synthesized UNION ALL must stay
+eagerly compiled — noted in the code). Batches are refcounted single copies and
+`filter.shrinkWithSels` mutates only its own buffer, so per-branch WHEN filters
+cannot corrupt siblings. Measured fail-fast: 16 targets over a 200k-row source
+with one failing target errored in 2.9 s, and a mid-statement client kill left
+zero leaked goroutines. Cross-target lock ordering is nondeterministic within a
+statement — a new surface versus single-table INSERT — but the existing
+deadlock detector handles it.
 
 Verified without change: runtime errors in the source, in one branch's
 `VALUES`, or in a `WHEN` fail the statement promptly with nothing written and
