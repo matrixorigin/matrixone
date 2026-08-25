@@ -87,7 +87,7 @@ type Fulltext2Search struct {
 	pendingCancel  bool
 }
 
-var errLoadGenerationSuperseded = moerr.NewInternalErrorNoCtx("fulltext2 load superseded by a newer generation")
+var errLoadGenerationSuperseded = moerr.NewInvalidStateNoCtx("fulltext2 load superseded by a newer generation")
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
 

@@ -431,6 +431,12 @@ func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, r
 	return true
 }
 
+func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch) {
+	if c.IndexMap.CompareAndDelete(key, algo) {
+		algo.destroyFailedLoad()
+	}
+}
+
 // house keeping to check expired keys and delete from cache
 func (c *VectorIndexCache) HouseKeeping() {
 
@@ -449,6 +455,9 @@ func (c *VectorIndexCache) HouseKeeping() {
 	})
 
 	for _, entry := range expiredkeys {
+		if !entry.algo.Expired() && !entry.algo.stale.Load() {
+			continue
+		}
 		reason := "ttl_expired"
 		if entry.algo.stale.Load() {
 			reason = "generation_changed"
@@ -534,7 +543,11 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			// key-wide invalidation hook; the loader owns reusable-state rollback.
 			err := algo.Load(sqlproc)
 			if err != nil {
-				if algo.evicting.Load() || moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+				if algo.evicting.Load() {
+					continue
+				}
+				if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+					c.discardFailedLoad(key, algo)
 					continue
 				}
 				if c.IndexMap.CompareAndDelete(key, algo) {
@@ -568,7 +581,11 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
 			if err := algo.Load(sqlproc); err != nil {
-				if algo.evicting.Load() || moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+				if algo.evicting.Load() {
+					continue
+				}
+				if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+					c.discardFailedLoad(key, algo)
 					continue
 				}
 				if c.IndexMap.CompareAndDelete(key, algo) {

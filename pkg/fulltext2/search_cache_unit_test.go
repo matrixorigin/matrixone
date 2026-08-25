@@ -19,6 +19,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -350,6 +351,83 @@ func TestHouseKeepingPublishesGenerationBeforeReplacementLoad(t *testing.T) {
 	}
 	require.True(t, loadGenerationCurrent(loadGen))
 	veccache.Cache.Remove(cfg.IndexTable)
+}
+
+func TestFulltext2SupersededLoadIsRetryable(t *testing.T) {
+	require.True(t, moerr.IsMoErrCode(errLoadGenerationSuperseded, moerr.ErrInvalidState))
+	require.Contains(t, errLoadGenerationSuperseded.Error(), "fulltext2 load superseded by a newer generation")
+}
+
+func TestVectorIndexCacheRetriesSupersededFulltext2Load(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(*sqlexec.SqlProcess, *Fulltext2Search, TableConfig) error
+	}{
+		{
+			name: "Search",
+			call: func(proc *sqlexec.SqlProcess, loader *Fulltext2Search, cfg TableConfig) error {
+				_, _, err := veccache.Cache.Search(proc, cfg.IndexTable, loader,
+					Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 1})
+				return err
+			},
+		},
+		{
+			name: "SearchInto",
+			call: func(proc *sqlexec.SqlProcess, loader *Fulltext2Search, cfg TableConfig) error {
+				return veccache.Cache.SearchInto(proc, cfg.IndexTable, loader,
+					Fulltext2Query{Pattern: []byte("x")}, vectorindex.RuntimeConfig{Limit: 1}, &vectorindex.SearchOutput{})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previousCache := veccache.Cache
+			veccache.Cache = veccache.NewVectorIndexCache()
+			t.Cleanup(func() { veccache.Cache = previousCache })
+
+			pendingLoadReasons.Lock()
+			previousReasons := pendingLoadReasons.m
+			pendingLoadReasons.m = make(map[string]pendingLoadReason)
+			pendingLoadReasons.Unlock()
+			t.Cleanup(func() {
+				pendingLoadReasons.Lock()
+				pendingLoadReasons.m = previousReasons
+				pendingLoadReasons.Unlock()
+			})
+			loadGenerations.Lock()
+			previousGenerations := loadGenerations.m
+			loadGenerations.m = make(map[string]loadGenerationState)
+			loadGenerations.Unlock()
+			t.Cleanup(func() {
+				loadGenerations.Lock()
+				loadGenerations.m = previousGenerations
+				loadGenerations.Unlock()
+			})
+
+			cfg := testStorageCfg()
+			proc, mp := mockSqlProc(t)
+			var invalidated atomic.Bool
+			swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				if strings.Contains(sql, "index_id") && strings.Contains(sql, "__meta") {
+					if invalidated.CompareAndSwap(false, true) {
+						// This is the production publication-before-remove window: the
+						// loading cache entry still owns the key while the generation bump
+						// becomes visible to its Fulltext2Search.Load.
+						NewFulltext2Search(cfg).OnCacheInvalidated(string(LoadMissCDCFlush))
+					}
+					return executor.Result{Mp: mp}, nil
+				}
+				if strings.Contains(sql, "chunk_id, data") {
+					return executor.Result{Mp: mp}, nil
+				}
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+			})
+
+			loader := NewFulltext2Search(cfg)
+			require.NoError(t, tc.call(proc, loader, cfg))
+			require.True(t, invalidated.Load())
+			veccache.Cache.Remove(cfg.IndexTable)
+		})
+	}
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the

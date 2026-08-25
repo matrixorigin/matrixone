@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
 
@@ -325,4 +326,64 @@ func TestVectorIndexCacheHouseKeepingSkipsReplacedSnapshotEntry(t *testing.T) {
 	require.Same(t, replacement, value)
 	_, loaded = c.IndexMap.Load(capturedKey)
 	require.False(t, loaded, "the captured expired entry should be evicted")
+}
+
+func TestVectorIndexCacheHouseKeepingSkipsConcurrentlyRenewedSnapshotEntry(t *testing.T) {
+	makeExpiredLoaded := func(mock *observerMock) *VectorIndexSearch {
+		s := &VectorIndexSearch{Algo: mock}
+		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		s.Status.Store(STATUS_LOADED)
+		s.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+		return s
+	}
+	firstMock := &observerMock{
+		invalidatedReady:  make(chan struct{}),
+		allowInvalidation: make(chan struct{}),
+	}
+	secondMock := &observerMock{
+		invalidatedReady:  make(chan struct{}),
+		allowInvalidation: make(chan struct{}),
+	}
+	first := makeExpiredLoaded(firstMock)
+	second := makeExpiredLoaded(secondMock)
+	c := NewVectorIndexCache()
+	c.IndexMap.Store("first", first)
+	c.IndexMap.Store("second", second)
+
+	done := make(chan struct{})
+	go func() {
+		c.HouseKeeping()
+		close(done)
+	}()
+
+	var renewedKey string
+	select {
+	case <-firstMock.invalidatedReady:
+		renewedKey = "second"
+	case <-secondMock.invalidatedReady:
+		renewedKey = "first"
+	case <-time.After(time.Second):
+		t.Fatal("housekeeping did not start evicting an expired snapshot entry")
+	}
+
+	_, _, err := c.Search(nil, renewedKey, &MockSearch{}, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	value, loaded := c.IndexMap.Load(renewedKey)
+	require.True(t, loaded)
+	renewed := value.(*VectorIndexSearch)
+	require.False(t, renewed.Expired(), "the concurrent search must renew the snapshot entry")
+
+	close(firstMock.allowInvalidation)
+	close(secondMock.allowInvalidation)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("housekeeping did not finish after invalidation was released")
+	}
+
+	value, loaded = c.IndexMap.Load(renewedKey)
+	require.True(t, loaded, "a successful concurrent search must prevent snapshot eviction")
+	require.Same(t, renewed, value)
+	c.Remove("first")
+	c.Remove("second")
 }
