@@ -150,12 +150,22 @@ Targets never re-bind a predicate; their `FILTER` reads the selector columns:
 |-------------------------------|--------------------------------------------------------|
 | `INSERT ALL WHEN`             | `sel_i`                                                |
 | `INSERT FIRST WHEN`           | `sel_i` alone — the selector is already masked by the earlier WHENs (see below), so no exclusion terms are needed |
+| `ELSE` under `INSERT FIRST`   | `matched IS NOT TRUE` — one carried flag, not one term per WHEN |
 | `ELSE`                        | `sel_1 IS NOT TRUE AND ... AND sel_n IS NOT TRUE`      |
 | unconditional `INSERT ALL`    | none                                                   |
 
 `IS NOT TRUE` (function `isnottrue`) rather than `NOT` so that a NULL
 condition is treated as "did not match": the row stays eligible for later
 `WHEN`s and for `ELSE`, matching Snowflake.
+
+`INSERT FIRST` builds the selectors as a chain of two projections per WHEN:
+one computes `sel_i = if(matched, false, cond_i)`, the next accumulates
+`matched = matched OR istrue(sel_i)` from the columns the first just
+materialized. The split exists because a projection cannot reference its own
+outputs, and carrying the flag keeps the routing bookkeeping **linear** in the
+WHEN count — rebuilding the "any earlier selector matched" prefix at each level
+would be O(W²) in plan size and per-row work, which at the 127-clause cap is
+thousands of prior-selector visits per row.
 
 Materializing the decision is not an optimization, it is required for
 correctness. An earlier version copied the `WHEN` AST into every branch and

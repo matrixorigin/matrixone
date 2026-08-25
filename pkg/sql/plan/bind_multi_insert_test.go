@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -101,7 +102,9 @@ func TestMultiInsertFirstAndElseRouting(t *testing.T) {
 	// selectors are already mutually exclusive (each is masked by the earlier
 	// ones), so a WHEN branch needs a single conjunct and only ELSE tests that
 	// nothing claimed the row.
-	expectedFilterLens := []int{1, 1, 2}
+	// INSERT FIRST carries a cumulative "already matched" flag, so ELSE is a
+	// single column test rather than one term per WHEN.
+	expectedFilterLens := []int{1, 1, 1}
 	for i, step := range qry.Steps[1:] {
 		var filters []*plan.Node
 		collectFilterNodes(qry, step, &filters)
@@ -115,15 +118,14 @@ func TestMultiInsertFirstAndElseRouting(t *testing.T) {
 		collectFilterNodes(qry, step, &filters)
 		require.NotNil(t, filters[0].FilterList[0].GetCol())
 	}
-	// The ELSE step's conditions are all IS NOT TRUE over a selector column.
+	// The ELSE step tests the carried flag, not each selector in turn.
 	var elseFilters []*plan.Node
 	collectFilterNodes(qry, qry.Steps[3], &elseFilters)
-	for _, expr := range elseFilters[0].FilterList {
-		fn := expr.GetF()
-		require.NotNil(t, fn)
-		require.Equal(t, "isnottrue", fn.Func.ObjName)
-		require.NotNil(t, fn.Args[0].GetCol(), "IS NOT TRUE must read a materialized selector, not re-evaluate")
-	}
+	require.Len(t, elseFilters[0].FilterList, 1)
+	fn := elseFilters[0].FilterList[0].GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, "isnottrue", fn.Func.ObjName)
+	require.NotNil(t, fn.Args[0].GetCol(), "IS NOT TRUE must read a materialized column, not re-evaluate")
 	testDeepCopy(logicPlan)
 }
 
@@ -153,9 +155,11 @@ func TestMultiInsertFirstMasksLaterConditions(t *testing.T) {
 		}
 		if fn := expr.GetF(); fn != nil {
 			if fn.Func.ObjName == "iff" || fn.Func.ObjName == "if" {
-				// arg0 is the "already matched" mask, arg1 the false constant
+				// arg0 is the carried "already matched" flag — a single column,
+				// not an OR chain rebuilt from every earlier selector, which is
+				// what keeps the routing bookkeeping linear in the WHEN count.
 				require.Len(t, fn.Args, 3)
-				require.Nil(t, fn.Args[0].GetCol(), "mask must be computed from selector columns")
+				require.NotNil(t, fn.Args[0].GetCol(), "mask must be the carried matched flag")
 				masked++
 			}
 			for _, arg := range fn.Args {
@@ -546,4 +550,58 @@ func TestMultiInsertMergedAutoIncrRejectsGeneratedMixes(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// The routing bookkeeping must stay LINEAR in the number of WHEN clauses.
+// Rebuilding "did any earlier selector match" at every level is O(W^2) in plan
+// size and per-row work; the carried flag makes each level O(1). Measured on
+// the plan: doubling the WHEN count must not quadruple the boolean bookkeeping.
+func TestMultiInsertFirstSelectorChainIsLinear(t *testing.T) {
+	boolOps := func(whens int) int {
+		mock := NewMockOptimizer(true)
+		var sb strings.Builder
+		sb.WriteString("insert first")
+		for i := 0; i < whens; i++ {
+			sb.WriteString(" when deptno = ")
+			sb.WriteString(strconv.Itoa(i))
+			sb.WriteString(" then into t3 (a) values (deptno)")
+		}
+		sb.WriteString(" else into t3 (a) values (deptno + 1000) select deptno from dept")
+		logicPlan, err := runOneStmt(mock, t, sb.String())
+		require.NoError(t, err)
+
+		count := 0
+		var walk func(*plan.Expr)
+		walk = func(expr *plan.Expr) {
+			if expr == nil {
+				return
+			}
+			if fn := expr.GetF(); fn != nil {
+				switch fn.Func.ObjName {
+				case "or", "istrue", "isnottrue":
+					count++
+				}
+				for _, arg := range fn.Args {
+					walk(arg)
+				}
+			}
+		}
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				walk(expr)
+			}
+			for _, expr := range node.FilterList {
+				walk(expr)
+			}
+		}
+		return count
+	}
+
+	small := boolOps(4)
+	large := boolOps(8)
+	require.Positive(t, small)
+	// Linear growth would roughly double; quadratic would roughly quadruple.
+	// Allow generous slack and still catch a return to the prefix rebuild.
+	require.Less(t, large, small*3,
+		"boolean bookkeeping grew faster than linearly: %d ops for 4 WHENs, %d for 8", small, large)
 }

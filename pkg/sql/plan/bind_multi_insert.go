@@ -252,6 +252,10 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 type multiInsertSelectors struct {
 	nodeID       int32
 	selectorBase int
+	// matchedPos is the column holding "some WHEN already claimed this row",
+	// carried forward level by level for INSERT FIRST; -1 for INSERT ALL, which
+	// has no first-match rule and therefore no cumulative flag.
+	matchedPos int
 }
 
 // appendMultiInsertSelectors projects the source columns unchanged and appends
@@ -280,7 +284,7 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 	whens []*tree.MultiInsertWhen,
 	first bool,
 ) (multiInsertSelectors, error) {
-	out := multiInsertSelectors{nodeID: srcID, selectorBase: len(srcCols)}
+	out := multiInsertSelectors{nodeID: srcID, selectorBase: len(srcCols), matchedPos: -1}
 	if len(whens) == 0 {
 		return out, nil
 	}
@@ -353,73 +357,60 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 		return out, nil
 	}
 
-	// INSERT FIRST: one projection per WHEN. Level i masks cond_i by the
-	// selectors materialized at level i-1, so no condition is evaluated more
-	// than once and none is evaluated for a row an earlier WHEN already claimed.
+	// INSERT FIRST: two projections per WHEN, so each level does O(1) work.
 	//
-	// A condition is bound against the node below level 0, whose tags are not
-	// visible higher up, so every column any condition reads is carried through
-	// each level and the condition's refs are rewritten to the carrier. That
-	// covers subqueries too: flattenSubqueries turns them into joins below
-	// level 0 and leaves a plain column ref behind, which is just another
-	// carrier.
+	//   level i-A:  sel_i     = if(matched_{i-1}, false, cond_i)
+	//   level i-B:  matched_i = matched_{i-1} OR istrue(sel_i)
+	//
+	// The split exists because a projection cannot reference its own outputs:
+	// matched_i needs sel_i, which is produced in the same projection, so it is
+	// accumulated in the next one from materialized columns. Carrying the flag
+	// this way keeps the routing bookkeeping LINEAR in the number of WHENs —
+	// rebuilding the full "any earlier selector is true" prefix at every level
+	// would be O(W^2) in both plan size and per-row work.
+	//
+	// Column layout, stable at every level:
+	//   [0, M)            source columns
+	//   [M, M+C)          carriers: every column a condition reads, because a
+	//                     condition is bound against the node below level 0
+	//                     whose tags are not visible higher up (this also
+	//                     covers a flattened subquery's output column)
+	//   base = M+C        matched
+	//   base+1 ...        sel_0, sel_1, ...
 	carrierRefs, carrierIdx := collectMultiInsertCarriers(conds)
 	base := len(srcCols) + len(carrierRefs)
+	selectorBase := base + 1
 	prevTag := srcTag
-	for i, cond := range conds {
-		projList := passthrough(prevTag, srcCols)
+
+	// carriedPrefix rebuilds the stable prefix (source columns, carriers,
+	// matched) from the level below.
+	carriedPrefix := func(level int) []*plan.Expr {
+		list := passthrough(prevTag, srcCols)
 		for k, ref := range carrierRefs {
-			if i == 0 {
-				projList = append(projList, ref)
+			if level == 0 {
+				list = append(list, ref)
 				continue
 			}
-			projList = append(projList, &plan.Expr{
+			list = append(list, &plan.Expr{
 				Typ:  ref.Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: prevTag, ColPos: int32(len(srcCols) + k)}},
 			})
 		}
-		selRef := func(j int) *plan.Expr {
-			return &plan.Expr{
-				Typ:  boolType,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: prevTag, ColPos: int32(base + j)}},
-			}
+		return list
+	}
+	matchedRef := func() *plan.Expr {
+		return &plan.Expr{
+			Typ:  boolType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: prevTag, ColPos: int32(base)}},
 		}
-		for j := 0; j < i; j++ {
-			projList = append(projList, selRef(j))
+	}
+	selRef := func(j int) *plan.Expr {
+		return &plan.Expr{
+			Typ:  boolType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: prevTag, ColPos: int32(selectorBase + j)}},
 		}
-
-		selector := cond
-		if i > 0 {
-			rewriteMultiInsertColRefs(selector, carrierIdx, prevTag, len(srcCols))
-			// matched = istrue(sel_0) OR ... OR istrue(sel_{i-1}) over columns
-			// already materialized: cheap booleans, no condition re-evaluated.
-			var matched *plan.Expr
-			for j := 0; j < i; j++ {
-				isTrue, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{selRef(j)})
-				if err != nil {
-					return out, err
-				}
-				if matched == nil {
-					matched = isTrue
-					continue
-				}
-				if matched, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or",
-					[]*plan.Expr{matched, isTrue}); err != nil {
-					return out, err
-				}
-			}
-			// if(matched, false, cond) evaluates cond only on rows still
-			// unclaimed: EvalIff compacts the parameters to the selected rows, so
-			// an unreachable later predicate never runs — and never errors — for
-			// a row an earlier WHEN already took.
-			var err error
-			if selector, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if",
-				[]*plan.Expr{matched, makePlan2BoolConstExprWithType(false), cond}); err != nil {
-				return out, err
-			}
-		}
-		projList = append(projList, selector)
-
+	}
+	appendLevel := func(projList []*plan.Expr) {
 		tag := builder.genNewBindTag()
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -430,8 +421,53 @@ func (builder *QueryBuilder) appendMultiInsertSelectors(
 		prevTag = tag
 	}
 
+	for i, cond := range conds {
+		// level i-A: the masked selector.
+		projList := carriedPrefix(i)
+		selector := cond
+		if i == 0 {
+			projList = append(projList, makePlan2BoolConstExprWithType(false))
+		} else {
+			rewriteMultiInsertColRefs(selector, carrierIdx, prevTag, len(srcCols))
+			// if(matched, false, cond) evaluates cond only on rows still
+			// unclaimed: EvalIff compacts the parameters to the selected rows, so
+			// an unreachable later predicate never runs — and never errors — for
+			// a row an earlier WHEN already took.
+			var err error
+			if selector, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if",
+				[]*plan.Expr{matchedRef(), makePlan2BoolConstExprWithType(false), cond}); err != nil {
+				return out, err
+			}
+			projList = append(projList, matchedRef())
+		}
+		for j := 0; j < i; j++ {
+			projList = append(projList, selRef(j))
+		}
+		projList = append(projList, selector)
+		appendLevel(projList)
+
+		// level i-B: accumulate the flag from columns now materialized.
+		matched, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{selRef(i)})
+		if err != nil {
+			return out, err
+		}
+		if i > 0 {
+			if matched, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or",
+				[]*plan.Expr{matchedRef(), matched}); err != nil {
+				return out, err
+			}
+		}
+		projList = carriedPrefix(i + 1)
+		projList = append(projList, matched)
+		for j := 0; j <= i; j++ {
+			projList = append(projList, selRef(j))
+		}
+		appendLevel(projList)
+	}
+
 	out.nodeID = lastNodeID
-	out.selectorBase = base
+	out.selectorBase = selectorBase
+	out.matchedPos = base
 	return out, nil
 }
 
@@ -983,11 +1019,19 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 	switch {
 	case branch.condIdx >= 0:
 		filterList = append(filterList, selector(selectors.selectorBase+branch.condIdx))
+	case branch.isElse && selectors.matchedPos >= 0:
+		// INSERT FIRST already carries the cumulative flag, so ELSE is one
+		// column test rather than one per WHEN.
+		notMatched, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnottrue",
+			[]*plan.Expr{selector(selectors.matchedPos)})
+		if err != nil {
+			return 0, err
+		}
+		filterList = append(filterList, notMatched)
 	case branch.isElse:
-		// ELSE takes the rows no WHEN claimed. A NULL selector counts as "not
-		// matched", hence IS NOT TRUE rather than NOT. This is the same test for
-		// INSERT ALL and INSERT FIRST: a FIRST selector is already masked by the
-		// earlier WHENs, so "no selector is true" means "nothing claimed it".
+		// INSERT ALL has no first-match rule and so no cumulative flag: a row
+		// reaches ELSE only when no WHEN matched it. A NULL selector counts as
+		// "not matched", hence IS NOT TRUE rather than NOT.
 		for idx := 0; idx < whenCount; idx++ {
 			notTrue, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnottrue",
 				[]*plan.Expr{selector(selectors.selectorBase + idx)})
