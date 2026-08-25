@@ -382,6 +382,24 @@ func (e LogEntry) ForEachEntry(
 
 type SkipCmd []byte
 
+type skipCmdSorter struct {
+	dsns []uint64
+	psns []uint64
+}
+
+func (s skipCmdSorter) Len() int {
+	return len(s.dsns)
+}
+
+func (s skipCmdSorter) Less(i, j int) bool {
+	return s.dsns[i] < s.dsns[j]
+}
+
+func (s skipCmdSorter) Swap(i, j int) {
+	s.dsns[i], s.dsns[j] = s.dsns[j], s.dsns[i]
+	s.psns[i], s.psns[j] = s.psns[j], s.psns[i]
+}
+
 func NewSkipCmd(cnt int) SkipCmd {
 	return make([]byte, 16*cnt)
 }
@@ -425,14 +443,9 @@ func (s *SkipCmd) Reset(n int) {
 }
 
 func (s SkipCmd) Sort() {
-	dsns := s.GetDSNSlice()
-	psns := s.GetPSNSlice()
-	sort.Slice(dsns, func(i, j int) bool {
-		less := dsns[i] < dsns[j]
-		if less {
-			psns[i], psns[j] = psns[j], psns[i]
-		}
-		return less
+	sort.Sort(skipCmdSorter{
+		dsns: s.GetDSNSlice(),
+		psns: s.GetPSNSlice(),
 	})
 }
 

@@ -43,6 +43,20 @@ func Test_SkipCmd(t *testing.T) {
 	assert.Equal(t, []uint64{3, 2, 1}, psns)
 }
 
+func Test_SkipCmdSortKeepsDSNPSNPairs(t *testing.T) {
+	dsns := []uint64{7, 2, 19, 4, 11, 0, 15, 6, 1, 18, 9, 3, 14, 8, 5, 17, 10, 13, 12, 16}
+	cmd := NewSkipCmd(len(dsns))
+	for i, dsn := range dsns {
+		cmd.Set(i, dsn, 100+dsn)
+	}
+
+	cmd.Sort()
+	for i, dsn := range cmd.GetDSNSlice() {
+		assert.Equal(t, uint64(i), dsn)
+		assert.Equal(t, 100+dsn, cmd.GetPSNSlice()[i])
+	}
+}
+
 func Test_LogEntry1(t *testing.T) {
 	e := NewLogEntry()
 	assert.Equal(t, EmptyLogEntrySize, len(e))

@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	storeDriver "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -766,6 +767,101 @@ func Test_ReplayerSkipThenReuseDSNAcrossBatches(t *testing.T) {
 
 	require.NoError(t, r.Replay(ctx))
 	require.Equal(t, []uint64{1, 2, 3, 4, 5, 6}, appliedDSNs)
+}
+
+func Test_ReplayerIgnoresDuplicateSkipAcrossBatches(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		[][5]uint64{
+			{uint64(Cmd_Normal), 1, 1, 1, 0},
+			{uint64(Cmd_Normal), 2, 3, 3, 0},
+			{uint64(Cmd_SkipDSN), 3, 0, 0, 0},
+			{uint64(Cmd_SkipDSN), 4, 0, 0, 0},
+			{uint64(Cmd_Normal), 5, 2, 2, 1},
+		},
+		30,
+	)
+	mockDriver.addSkipMap(3, 3, 2)
+	mockDriver.addSkipMap(4, 3, 2)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.DSN)
+	})
+	r := newReplayer(
+		mockHandle,
+		mockDriver,
+		1,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	require.NoError(t, r.Replay(ctx))
+	require.Equal(t, []uint64{1, 2}, appliedDSNs)
+}
+
+func Test_ReplayerDoesNotApplyStaleSkipToReusedDSN(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		[][5]uint64{
+			{uint64(Cmd_Normal), 1, 1, 1, 0},
+			{uint64(Cmd_Normal), 2, 3, 3, 0},
+			{uint64(Cmd_SkipDSN), 3, 0, 0, 0},
+			{uint64(Cmd_Normal), 4, 3, 3, 0},
+			{uint64(Cmd_SkipDSN), 5, 0, 0, 0},
+			{uint64(Cmd_Normal), 6, 2, 2, 1},
+		},
+		30,
+	)
+	mockDriver.addSkipMap(3, 3, 2)
+	mockDriver.addSkipMap(5, 3, 2)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(1, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.DSN)
+	})
+	r := newReplayer(
+		mockHandle,
+		mockDriver,
+		1,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	require.NoError(t, r.Replay(ctx))
+	require.Equal(t, []uint64{1, 2, 3}, appliedDSNs)
+}
+
+func Test_ReplayerPanicDoesNotHang(t *testing.T) {
+	const panicValue = "decode failed"
+	mockDriver := newMockDriver(
+		0,
+		[][5]uint64{{uint64(Cmd_Normal), 1, 1, 1, 0}},
+		30,
+	)
+	r := newReplayer(
+		mockHandleFactory(1, nil),
+		mockDriver,
+		1,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(func(logservice.LogRecord) LogEntry {
+			panic(panicValue)
+		}),
+	)
+	replayDone := make(chan any, 1)
+	go func() {
+		defer func() {
+			replayDone <- recover()
+		}()
+		_ = r.Replay(context.Background())
+	}()
+
+	select {
+	case recovered := <-replayDone:
+		require.Equal(t, panicValue, recovered)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Replay hung while unwinding a panic")
+	}
 }
 
 func Test_Replayer2(t *testing.T) {

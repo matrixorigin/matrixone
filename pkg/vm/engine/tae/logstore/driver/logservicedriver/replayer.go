@@ -400,9 +400,16 @@ func (r *replayer) Replay(
 		readDone      bool
 		resultC       = make(chan error, 1)
 		applyC        = make(chan *entry.Entry, 20)
+		applyCClosed  bool
 		lastScheduled *entry.Entry
 		errMsg        string
 	)
+	closeApplyC := func() {
+		if !applyCClosed {
+			close(applyC)
+			applyCClosed = true
+		}
+	}
 	defer func() {
 		fields := r.exportFields(0)
 		logger := logutil.Info
@@ -432,12 +439,15 @@ func (r *replayer) Replay(
 	)
 
 	wg.Add(2)
+	ctx2, cancel := context.WithCancel(ctx)
 	// a dedicated goroutine to replay entries from the applyC
 	go r.streamApplying(ctx, applyC, resultC, &wg)
-	ctx2, cancel := context.WithCancel(ctx)
 	go r.pollTruncateLoop(ctx2, &wg)
 
 	defer func() {
+		// Replay is the only owner that closes applyC. Closing it here also
+		// releases streamApplying when the read path unwinds through a panic.
+		closeApplyC()
 		cancel()
 		wg.Wait()
 	}()
@@ -447,7 +457,7 @@ func (r *replayer) Replay(
 		select {
 		case <-ctx.Done():
 			err = context.Cause(ctx)
-			close(applyC)
+			closeApplyC()
 			logutil.Error(
 				"Wal-Replay-Context-Done",
 				zap.Error(err),
@@ -471,7 +481,7 @@ func (r *replayer) Replay(
 			}
 			if err != nil {
 				errMsg = fmt.Sprintf("read loop schedule apply error: %v", err)
-				close(applyC)
+				closeApplyC()
 				return
 			}
 			time.Sleep(waitTime)
@@ -500,7 +510,7 @@ func (r *replayer) Replay(
 
 	if err != nil {
 		errMsg = fmt.Sprintf("read and schedule error in loop: %v", err)
-		close(applyC)
+		closeApplyC()
 		return
 	}
 
@@ -516,7 +526,7 @@ func (r *replayer) Replay(
 
 	if err != nil {
 		errMsg = fmt.Sprintf("schedule apply error: %v", err)
-		close(applyC)
+		closeApplyC()
 		return
 	}
 
@@ -526,7 +536,7 @@ func (r *replayer) Replay(
 		lastScheduled.WaitDone()
 	}
 
-	close(applyC)
+	closeApplyC()
 
 	// wait for the replay to finish
 	if applyErr := <-resultC; applyErr != nil {
@@ -859,28 +869,42 @@ func (r *replayer) readNextBatch(
 			if entry.GetCmdType() == uint16(Cmd_SkipDSN) {
 				cmd := SkipCmd(entry.GetEntry(0))
 				skipDSNs := cmd.GetDSNSlice()
+				skipPSNs := cmd.GetPSNSlice()
 				logutil.Info(
 					"Wal-Read-Skip-Entry",
 					zap.Any("skip-dsns", skipDSNs),
-					zap.Any("skip-psns", cmd.GetPSNSlice()),
+					zap.Any("skip-psns", skipPSNs),
 					zap.Uint64("psn", psn),
 					zap.Uint64("safe-dsn", entry.GetSafeDSN()),
 					// zap.Any("dsn-psn", r.pendingDSNToPSNMap()),
 				)
 
-				for _, dsn := range skipDSNs {
-					// A later record may reuse a skipped DSN. Remove both the logical
-					// mapping and cached physical record so the old copy cannot be
-					// scheduled or left orphaned.
+				for i, dsn := range skipDSNs {
+					targetPSN := skipPSNs[i]
 					skippedRecord, ok := r.replayedState.pendingRecords.Get(
 						pendingDSNRange{start: dsn},
 					)
-					if !ok {
-						panic(fmt.Sprintf("dsn %d not found in pending records", dsn))
+					// Skip commands use the same retrying append path as normal WAL
+					// records, so the command itself may have duplicate physical copies.
+					// Match its complete (DSN, PSN) target: an absent target was already
+					// consumed, while a different PSN means this DSN has since been reused.
+					// Both cases are stale, idempotent no-ops.
+					if !ok || skippedRecord.psn != targetPSN {
+						logutil.Info(
+							"Wal-Replay-Stale-Skip-Entry",
+							zap.Uint64("dsn", dsn),
+							zap.Uint64("target-psn", targetPSN),
+							zap.Uint64("pending-psn", skippedRecord.psn),
+							zap.Bool("pending-found", ok),
+						)
+						continue
 					}
+					// Remove both owners only for the exact target so the skipped copy
+					// cannot be scheduled or retained in the read cache.
 					r.replayedState.readCache.removeRecord(skippedRecord.psn)
 					r.replayedState.pendingRecords.Delete(skippedRecord)
 				}
+				r.replayedState.readCache.removeRecord(psn)
 
 				continue
 			}
