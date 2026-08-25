@@ -228,6 +228,11 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.UUID(u)
 		text = commonutil.Abbreviate(envStmt, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 	}
+	// A prepared execution adds its prepared SQL and parameter values after
+	// envStmt has been redacted. Redact the completed diagnostic payload too:
+	// this is the final boundary before either session state or statement
+	// telemetry can retain it.
+	text = redactStatementTextForLogging(nil, text)
 	ses.SetStmtId(stmID)
 	stmtTyp := getStatementType(statement).GetStatementType()
 	queryTyp := getStatementType(statement).GetQueryType()
@@ -352,7 +357,7 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	// session state and statement telemetry retain the SQL text. Redact the
 	// whole statement rather than trying to recognize one SQL expression shape:
 	// invalid, nested, or future selector forms must not become a logging leak.
-	if strings.Contains(strings.ToLower(text), catalog.ExternalQuery) {
+	if containsASCIIFold(text, catalog.ExternalQuery) {
 		return "<redacted MongoDB __mo_query statement>"
 	}
 
@@ -373,6 +378,42 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	default:
 		return text
 	}
+}
+
+// containsASCIIFold reports whether text contains the ASCII identifier needle
+// without allocating a lowercase copy of every statement. SQL identifiers are
+// ASCII here, so Unicode case folding is neither needed nor desirable on this
+// hot statement-recording boundary.
+func containsASCIIFold(text, needle string) bool {
+	if len(needle) == 0 {
+		return true
+	}
+	for i := 0; i+len(needle) <= len(text); i++ {
+		matched := true
+		for j := range needle {
+			ch := text[i+j]
+			if ch >= 'A' && ch <= 'Z' {
+				ch += 'a' - 'A'
+			}
+			if ch != needle[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+// redactStatementErrorForLogging replaces a parser echo of __mo_query before it
+// reaches a client, statement telemetry, or the terminal statement logger.
+func redactStatementErrorForLogging(err error, text string) error {
+	if err == nil || !containsASCIIFold(text, catalog.ExternalQuery) {
+		return err
+	}
+	return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
 }
 
 func isIgnoreStatement(statement tree.Statement) bool {
@@ -5758,6 +5799,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			ses.resetDiagnostics()
 		}
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
+		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
 		var recordErr error
 		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
 			execCtx.reqCtx,
@@ -5766,15 +5808,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			beginInstant,
 			parsers.HandleSqlForRecord(errorInput.getSql()),
 			errorInput.getSqlSourceTypes(),
-			parseErr,
+			diagnosticErr,
 		)
 		if recordErr != nil {
 			return recordErr
 		}
-		if _, ok := parseErr.(*moerr.Error); !ok {
+		if containsASCIIFold(errorInput.getSql(), catalog.ExternalQuery) {
+			parseErr = diagnosticErr
+		} else if _, ok := parseErr.(*moerr.Error); !ok {
 			parseErr = moerr.NewParseError(execCtx.reqCtx, parseErr.Error())
 		}
-		logStatementStringStatus(execCtx.reqCtx, ses, errorInput.getSql(), fail, parseErr)
+		// Keep the terminal error log on the same diagnostic boundary as
+		// RecordParseErrorStatement. Parse failures have no AST, so use the raw
+		// text scanner and never pass the original selector to the logger.
+		logStatementStringStatus(execCtx.reqCtx, ses, redactStatementTextForLogging(nil, errorInput.getSql()), fail, diagnosticErr)
 		return parseErr
 	}
 
