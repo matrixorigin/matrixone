@@ -624,34 +624,6 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 		return err
 	}
 
-	// Host admission for the id storage this load allocates. VRAM is claimed in
-	// C++ (see above); host memory was not claimed here at all, so a load could
-	// take capacity*HostIDBytesPerRow for host_ids with nothing checking the CN
-	// has it -- and an allocation failure at load leaves the index UNLOADABLE,
-	// which is worse than being refused up front.
-	//
-	// Settled once Unpack returns: by then the constructor has committed the
-	// host_ids pages (resize+clear) and load_ids has filled them, so the bytes
-	// are visible to MemoryAvailableIncludingCache and holding the claim longer
-	// would count them twice.
-	//
-	// Skipped when IndexCapacity is 0: the constructor then sizes host_ids to 0
-	// and allocates nothing here, so there is no claim to take. (load_ids still
-	// grows it from the tar, which this cannot size in advance -- an index
-	// persisted without a capacity stays unadmitted on this path, as it was
-	// before.) ReserveHostMemory refuses a zero claim by design, so the guard is
-	// required, not cosmetic.
-	var idClaim *vimemory.HostReservation
-	if idxcfg.IndexCapacity > 0 {
-		var herr error
-		idClaim, herr = vimemory.ReserveHostMemory(
-			uint64(idxcfg.IndexCapacity)*vimemory.HostIDBytesPerRow, "ivfpq load ids")
-		if herr != nil {
-			return herr
-		}
-	}
-	defer idClaim.Settle()
-
 	gi, err := cuvs.NewGpuIvfPqEmpty[B, Q](
 		uint64(idxcfg.IndexCapacity),
 		uint32(idxcfg.CuvsIvfpq.Dimensions),
@@ -674,11 +646,39 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 
 	// idx.Path lives in HostSpillDir; extract into the same directory so the
 	// intermediate (same-size scratch as the tar) does NOT land in /tmp.
+	// Host admission for the ids array Unpack is about to materialise. load_ids
+	// grows host_ids from ids.bin during Unpack, so the claim has to be taken here
+	// -- before the allocation, after the artifact is on disk.
+	//
+	// Sized from the ARTIFACT, not from config. idxcfg.IndexCapacity is zero on
+	// every search-path load: it is resolved by the build operator and never
+	// written back to algo_params, and ParamsFromTree persists max_index_capacity
+	// only when the user supplied a positive value. Sizing from it would claim
+	// nothing at all. ids.bin is exactly rows*sizeof(IdT), so its length IS the
+	// demand, and it is right for legacy artifacts and short final sub-indexes too.
+	tarSizes, cerr := cuvs.MeasureTar(idx.Path)
+	if cerr != nil {
+		gi.Destroy()
+		return cerr
+	}
+	var idClaim *vimemory.HostReservation
+	if idsBytes := tarSizes.Files["ids.bin"]; idsBytes > 0 {
+		var herr error
+		idClaim, herr = vimemory.ReserveHostMemory(uint64(idsBytes), "ivfpq load ids")
+		if herr != nil {
+			gi.Destroy()
+			return herr
+		}
+	}
+	// Covers the error returns below and a panic out of Unpack; the explicit
+	// Settle after it makes this a no-op on the success path.
+	defer idClaim.Settle()
+
 	if err = gi.Unpack(idx.Path, filepath.Dir(idx.Path), mode); err != nil {
 		gi.Destroy()
 		return err
 	}
-	// host_ids is materialised now; the deferred Settle below becomes a no-op.
+	// host_ids is materialised and visible to MemoryAvailableIncludingCache now.
 	idClaim.Settle()
 
 	// Replay the event log now that we know the INCLUDE col layout.

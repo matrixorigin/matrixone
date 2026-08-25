@@ -54,6 +54,67 @@ var hostResidentComponents = map[string]bool{
 // as device-resident; see hostResidentComponents.
 func IsHostResidentComponent(name string) bool { return hostResidentComponents[name] }
 
+// MeasureTar is the tar counterpart of MeasureComponents: same PackSizes, same
+// host/device classification, read from a packed archive instead of the component
+// directory it was built from.
+//
+// The load path needs this BEFORE Unpack: load_ids grows host_ids from ids.bin
+// while Unpack runs, and the admission for that allocation has to be taken first.
+// The artifact is the only authoritative source at that point -- idxcfg.IndexCapacity
+// is zero on every search-path load (it is resolved by the build operator and never
+// written back to algo_params), so sizing a claim from config would silently claim
+// nothing.
+//
+// ids.bin is a uint64 count header plus rows*sizeof(IdT), so Files["ids.bin"] is the
+// host_ids demand plus 8 bytes: no row count to model, and correct for legacy
+// artifacts and short final sub-indexes alike.
+//
+// Header scan only. Production archives are uncompressed (saveToFile names the file
+// without a .gz suffix) and tar headers carry the sizes, so this seeks past member
+// data rather than reading it.
+func MeasureTar(tarPath string) (PackSizes, error) {
+	out := PackSizes{Files: make(map[string]int64)}
+	in, err := os.Open(tarPath)
+	if err != nil {
+		return out, err
+	}
+	defer in.Close()
+
+	var tr *tar.Reader
+	if strings.HasSuffix(tarPath, ".gz") || strings.HasSuffix(tarPath, ".tgz") {
+		gr, gerr := gzip.NewReader(in)
+		if gerr != nil {
+			return out, gerr
+		}
+		defer gr.Close()
+		tr = tar.NewReader(gr)
+	} else {
+		tr = tar.NewReader(in)
+	}
+
+	for {
+		hdr, herr := tr.Next()
+		if herr == io.EOF {
+			break
+		}
+		if herr != nil {
+			return out, herr
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		name := filepath.Base(hdr.Name)
+		out.Files[name] = hdr.Size
+		out.Total += hdr.Size
+		if hostResidentComponents[name] {
+			out.Host += hdr.Size
+		} else {
+			out.Device += hdr.Size
+		}
+	}
+	return out, nil
+}
+
 // PackSizes reports what a save_dir wrote, split by where each component becomes
 // resident when the index is loaded again. Callers admitting VRAM want Device;
 // callers sizing a download or a temp file want Total.

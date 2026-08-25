@@ -108,3 +108,37 @@ func TestMeasureComponents(t *testing.T) {
 		require.Error(t, err, "an unreadable directory must not report zero bytes")
 	})
 }
+
+// MeasureTar must classify a packed archive exactly as MeasureComponents
+// classifies the directory it came from. The load path depends on that: it reads
+// the tar before Unpack to size the host_ids claim, and a tar-vs-directory
+// disagreement would mean the build and load paths disagree about what an index
+// costs.
+func TestMeasureTarMatchesMeasureComponents(t *testing.T) {
+	dir := t.TempDir()
+	for name, n := range map[string]int{
+		"index.bin": 900, "ids.bin": 88, "filter_data.bin": 40,
+		"bitset.bin": 16, "manifest.json": 6, "something_new.bin": 12,
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), make([]byte, n), 0o600))
+	}
+	fromDir, err := MeasureComponents(dir)
+	require.NoError(t, err)
+
+	tarPath := filepath.Join(t.TempDir(), "packed.tar")
+	require.NoError(t, Pack(dir, tarPath))
+	fromTar, err := MeasureTar(tarPath)
+	require.NoError(t, err)
+
+	require.Equal(t, fromDir.Files, fromTar.Files, "per-component sizes must agree")
+	require.Equal(t, fromDir.Device, fromTar.Device, "device split must agree")
+	require.Equal(t, fromDir.Host, fromTar.Host, "host split must agree")
+	require.Equal(t, fromDir.Total, fromTar.Total)
+	// Including the conservative default for an unclassified component.
+	require.Equal(t, int64(900+12), fromTar.Device)
+
+	t.Run("missing tar errors rather than reporting zero", func(t *testing.T) {
+		_, err := MeasureTar(filepath.Join(t.TempDir(), "nope.tar"))
+		require.Error(t, err, "a silent zero would size the load claim to nothing")
+	})
+}
