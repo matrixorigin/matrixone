@@ -196,6 +196,44 @@ func TestApplyIndicesForSort_YieldsToProjectAnchor(t *testing.T) {
 	require.NotNil(t, tc.sortNode.Limit, "the Top-K limit must survive untouched")
 }
 
+func TestApplyIndicesForSortSQLCalcFoundRowsKeepsExactTopK(t *testing.T) {
+	tc := newTopKPlan(t, 1, 2)
+	tc.builder.sqlCalcFoundRows = true
+
+	gotID, err := tc.builder.applyIndicesForSort(tc.sortNodeID, tc.sortNode,
+		map[[2]int32]int{}, map[[2]int32]*plan.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, tc.sortNodeID, gotID)
+	require.Equal(t, plan.Node_SORT, tc.sortNode.NodeType)
+	require.Equal(t, uint64(1), tc.sortNode.Limit.GetLit().GetU64Val())
+
+	// The valid vector Top-K shape remains recognizable, proving this is the
+	// SQL_CALC_FOUND_ROWS guard rather than an unrelated failure to match it.
+	require.NotNil(t, tc.builder.buildVectorSortContextFromSort(tc.sortNode))
+}
+
+func TestApplyIndicesForProjectSQLCalcFoundRowsKeepsExactTopK(t *testing.T) {
+	tc := newTopKPlan(t, 1, 2)
+	projectNode := &plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{tc.sortNodeID},
+		ProjectList: tc.childNode.ProjectList[:1],
+		BindingTags: []int32{tc.builder.genNewBindTag()},
+	}
+	projectNodeID := tc.builder.appendNode(projectNode, tc.ctx)
+	tc.builder.sqlCalcFoundRows = true
+	require.NotNil(t, tc.builder.buildVectorSortContext(projectNode),
+		"the test must use a vector-index-rewritable project shape")
+
+	gotID, err := tc.builder.applyIndicesForProject(projectNodeID, projectNode,
+		map[[2]int32]int{}, map[[2]int32]*plan.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, projectNodeID, gotID)
+	require.Equal(t, []int32{tc.sortNodeID}, projectNode.Children)
+	require.Equal(t, plan.Node_SORT, tc.sortNode.NodeType)
+	require.Equal(t, uint64(1), tc.sortNode.Limit.GetLit().GetU64Val())
+}
+
 // TestApplyVectorIndexForSortContext_NilIdxColMap: a sort-anchored rewrite has nowhere to
 // publish its column remap without idxColMap, so it must decline rather than write to a
 // nil map (panic) or splice a tree whose ancestors still point at the replaced project.
