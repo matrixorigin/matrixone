@@ -582,6 +582,29 @@ Run it with:
    -s ../matrixone/test/distributed/resources/ -n -g)      # whole directory, or one multi_insert*.sql
 ```
 
+### Adding a new statement type — the closure that must be swept
+
+A new `tree.Statement` is only "wired up" once every statement-type switch
+in the engine has been considered. For this feature the sweep covered, and
+the entries were needed in: `frontend/stmt_kind.go` (DML classification),
+`authenticate.go` (privilege; its `default:` **panics**), `status_stmt.go`
+(`last_insert_id`), `remap_db.go`, `mysql_cmd_executor.go` (buildPlan list),
+`plan/build.go` + `build_dcl.go` (dispatch and PREPARE), `compile2.go` (both
+vector-search auto-mode rewrites), `parsers/sqlparse.go` (rewrite policy —
+the bypass above), plus `StmtKind()` on the node itself.
+
+Deliberately *not* needed, with the reason: the VALUES-only fast paths
+(no VALUES-only form exists for multi-insert, and both fall through to the
+general lists), `back_exec.go` restore hooks (restore SQL is generated
+internally and is always single-table `INSERT ... VALUES`),
+`isIgnoreStatement` (no `INSERT ALL IGNORE` in the grammar),
+`returning.go` (grammar forbids RETURNING here), and the empty-privilege-tips
+fallback in `authenticate.go` (a multi-insert plan always yields at least one
+tip per target). Audit/statement_info/metrics and txn handling key off
+`GetStatementType()`/`GetQueryType()`, which report `"Insert"`/`"DML"`, so
+they were correct without changes. `pkg/cdc`, `pkg/backup`, `pkg/cnservice`
+and `pkg/util` contain no statement type switches at all.
+
 ### Adding or regenerating BVT cases
 
 - Generate expected results against a server that runs the feature build
@@ -681,6 +704,15 @@ review rounds do not re-litigate them.
 
 Fixed during the review:
 
+- **Access-control bypass:** `AddRewriteHints` (`pkg/sql/parsers/sqlparse.go`)
+  attaches the table→query rewrite policy to the statement that reads tables;
+  `*tree.Insert` has an explicit case for its inner `SELECT`, but
+  `*tree.MultiInsert` fell into the `default:` branch that frees the option,
+  so `INSERT ALL/FIRST ... SELECT` read the raw base table and ignored role
+  rules, `remap_rewrites`, and inline rewrite hints (prepared statements
+  included). Now attached to `MultiInsert.Source` like the `Insert` case;
+  regression test `TestAddRewriteHints_AttachesToDMLSourceQuery`.
+  (`RemapDb` uses a different channel and was already handled.)
 - `remap_db.go` remapped a target's schema twice (table expr remap plus
   `remapInsertTarget` on the same field); now only the qualified column names
   go through `remapInsertTarget`. Unit test added.
