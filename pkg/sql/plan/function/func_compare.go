@@ -16,6 +16,8 @@ package function
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -25,6 +27,143 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
+
+// comparePreparedJSON applies the SQL comparison category carried by a binary
+// protocol parameter. The parameter is physically transported as JSON by the
+// planner adapter, but its PrepareParamKind still selects the same coercion
+// category as the equivalent typed SQL literal.
+func comparePreparedJSON(parameters []*vector.Vector, result *vector.FunctionResult[bool], proc *process.Process, length int, nullSafe bool, cmp func(int) bool, selectList *FunctionSelectList) error {
+	jsonPos := 0
+	paramPos := 1
+	if parameters[0].HasPrepareParamKind() {
+		jsonPos, paramPos = 1, 0
+	}
+	kindVector := parameters[paramPos]
+	for i := 0; i < length; i++ {
+		jsonNull := parameters[jsonPos].IsNull(uint64(i))
+		paramNull := parameters[paramPos].IsNull(uint64(i))
+		if jsonNull || paramNull {
+			if nullSafe {
+				if err := result.Append(jsonNull && paramNull, false); err != nil {
+					return err
+				}
+			} else if err := result.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		left, err := preparedJSONValue(parameters[jsonPos].GetBytesAt(i))
+		if err != nil {
+			return err
+		}
+		right, err := preparedJSONValue(parameters[paramPos].GetBytesAt(i))
+		if err != nil {
+			return err
+		}
+		kind := kindVector.GetPrepareParamKindAt(i)
+		left, leftNull, err := coercePreparedJSON(left, kind, proc)
+		if err != nil {
+			return err
+		}
+		right, rightNull, err := coercePreparedJSON(right, kind, proc)
+		if err != nil {
+			return err
+		}
+		if leftNull || rightNull {
+			if nullSafe {
+				if err := result.Append(false, false); err != nil {
+					return err
+				}
+			} else if err := result.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := result.Append(cmp(comparePreparedValues(left, right, kind)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func preparedJSONValue(data []byte) (any, error) {
+	var value any
+	encoded, err := types.DecodeJson(data).MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(encoded, &value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func coercePreparedJSON(value any, kind vector.PrepareParamKind, _ *process.Process) (any, bool, error) {
+	switch kind {
+	case vector.PrepareParamBoolean:
+		switch v := value.(type) {
+		case bool:
+			return v, false, nil
+		case float64:
+			return v != 0, false, nil
+		default:
+			return nil, true, nil
+		}
+	case vector.PrepareParamInteger, vector.PrepareParamFloat, vector.PrepareParamDecimal:
+		switch v := value.(type) {
+		case float64:
+			return v, false, nil
+		case string:
+			var n float64
+			if _, err := fmt.Sscan(v, &n); err != nil {
+				return nil, true, nil
+			}
+			return n, false, nil
+		default:
+			return nil, true, nil
+		}
+	default:
+		if s, ok := value.(string); ok {
+			return s, false, nil
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, false, err
+		}
+		return string(encoded), false, nil
+	}
+}
+
+func comparePreparedValues(left, right any, kind vector.PrepareParamKind) int {
+	if kind == vector.PrepareParamBoolean {
+		l, r := left.(bool), right.(bool)
+		if l == r {
+			return 0
+		}
+		if !l {
+			return -1
+		}
+		return 1
+	}
+	if kind == vector.PrepareParamInteger || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal {
+		l, r := left.(float64), right.(float64)
+		if l < r {
+			return -1
+		}
+		if l > r {
+			return 1
+		}
+		return 0
+	}
+	l, r := left.(string), right.(string)
+	if l < r {
+		return -1
+	}
+	if l > r {
+		return 1
+	}
+	return 0
+}
 
 func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	if isDatetimeTimestampComparison(typ1, typ2) {
@@ -302,6 +441,9 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 			return a == b
 		}, selectList)
 	case types.T_json:
+		if parameters[0].HasPrepareParamKind() || parameters[1].HasPrepareParamKind() {
+			return comparePreparedJSON(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList)
+		}
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) == 0
 		}, selectList)
@@ -465,6 +607,9 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return a == b
 		}, selectList)
 	case types.T_json:
+		if parameters[0].HasPrepareParamKind() || parameters[1].HasPrepareParamKind() {
+			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList)
+		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) == 0
 		}, selectList)
@@ -878,6 +1023,9 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return a > b
 		}, selectList)
 	case types.T_json:
+		if parameters[0].HasPrepareParamKind() || parameters[1].HasPrepareParamKind() {
+			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c > 0 }, selectList)
+		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) > 0
 		}, selectList)
@@ -1040,6 +1188,9 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 			return a >= b
 		}, selectList)
 	case types.T_json:
+		if parameters[0].HasPrepareParamKind() || parameters[1].HasPrepareParamKind() {
+			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c >= 0 }, selectList)
+		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) >= 0
 		}, selectList)
@@ -1202,6 +1353,9 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return a != b
 		}, selectList)
 	case types.T_json:
+		if parameters[0].HasPrepareParamKind() || parameters[1].HasPrepareParamKind() {
+			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList)
+		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) != 0
 		}, selectList)
@@ -1364,6 +1518,9 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return a < b
 		}, selectList)
 	case types.T_json:
+		if parameters[0].HasPrepareParamKind() || parameters[1].HasPrepareParamKind() {
+			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c < 0 }, selectList)
+		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) < 0
 		}, selectList)
@@ -1526,6 +1683,9 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return a <= b
 		}, selectList)
 	case types.T_json:
+		if parameters[0].HasPrepareParamKind() || parameters[1].HasPrepareParamKind() {
+			return comparePreparedJSON(parameters, rs, proc, length, false, func(c int) bool { return c <= 0 }, selectList)
+		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) <= 0
 		}, selectList)

@@ -54,6 +54,7 @@ func TestJsonComparisonParamPreservesPreparedScalarType(t *testing.T) {
 	})
 	ok, info := testCase.Run()
 	require.True(t, ok, info)
+	require.True(t, testCase.GetResultVectorDirectly().HasPrepareParamKind())
 
 	t.Run("invalid prepared value", func(t *testing.T) {
 		invalid := NewFunctionTestCase(proc,

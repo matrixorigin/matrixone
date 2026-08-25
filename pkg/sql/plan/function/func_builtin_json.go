@@ -51,6 +51,7 @@ func normalizeJsonComparisonParam(
 ) error {
 	from := vector.GenerateFunctionStrParameter(parameters[0])
 	to := vector.MustFunctionResult[types.Varlena](result)
+	kinds := make([]vector.PrepareParamKind, length)
 	for i := uint64(0); i < uint64(length); i++ {
 		value, null := from.GetStrValue(i)
 		if null {
@@ -62,6 +63,7 @@ func normalizeJsonComparisonParam(
 
 		var scalar any = string(value)
 		kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
+		kinds[i] = kind
 		if kind != vector.PrepareParamNone {
 			var err error
 			scalar, err = preparedTextToJSONValue(proc.Ctx, string(value), kind)
@@ -81,6 +83,7 @@ func normalizeJsonComparisonParam(
 			return err
 		}
 	}
+	to.GetResultVector().SetPrepareParamKinds(kinds)
 	return nil
 }
 

@@ -104,38 +104,48 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		assertIDs("select id from "+dbName+`.docs where json_extract(meta, '$.active') = true order by id`, 1)
 		assertIDs("select id from "+dbName+`.docs where json_extract(meta, '$.active') = false order by id`, 2)
 
-		queryPreparedBool := func(query string, arg any) bool {
+		queryPreparedBool := func(query string, arg any) (bool, bool) {
 			t.Helper()
 			stmt, prepareErr := db.PrepareContext(ctx, query)
 			require.NoError(t, prepareErr)
 			defer stmt.Close()
 			var got sql.NullBool
 			require.NoError(t, stmt.QueryRowContext(ctx, arg).Scan(&got))
-			require.True(t, got.Valid)
-			return got.Bool
+			return got.Bool, got.Valid
 		}
 		for _, tc := range []struct {
-			name     string
-			query    string
-			arg      any
-			expected bool
+			name       string
+			query      string
+			arg        any
+			expected   bool
+			expectNull bool
 		}{
 			{name: "null-safe equality JSON left boolean", query: `select json_extract(json_object('v', true), '$.v') <=> ?`, arg: true, expected: true},
+			{name: "equality preserves JSON number to boolean coercion", query: `select json_extract(json_array(1), '$[0]') = ?`, arg: true, expected: true},
+			{name: "null-safe equality preserves JSON number to boolean coercion", query: `select ? <=> json_extract(json_array(1), '$[0]')`, arg: true, expected: true},
+			{name: "IN preserves JSON number to boolean coercion", query: `select json_extract(json_array(1), '$[0]') in (?)`, arg: true, expected: true},
+			{name: "NOT IN preserves JSON number to boolean coercion", query: `select json_extract(json_array(1), '$[0]') not in (?)`, arg: true, expected: false},
 			{name: "null-safe equality JSON right boolean", query: `select ? <=> json_extract(json_object('v', true), '$.v')`, arg: true, expected: true},
-			{name: "null-safe equality boolean differs from string parameter", query: `select json_extract(json_object('v', true), '$.v') <=> ?`, arg: "true", expected: false},
+			{name: "null-safe equality boolean coerces to string parameter", query: `select json_extract(json_object('v', true), '$.v') <=> ?`, arg: "true", expected: true},
 			{name: "null-safe equality string matches string parameter", query: `select ? <=> json_extract(json_object('v', 'true'), '$.v')`, arg: "true", expected: true},
 			{name: "null-safe equality distinguishes JSON string", query: `select json_extract(json_object('v', 'true'), '$.v') <=> ?`, arg: true, expected: false},
 			{name: "null-safe equality missing JSON and SQL NULL", query: `select json_extract(json_object('v', true), '$.missing') <=> ?`, arg: nil, expected: true},
 			{name: "null-safe equality SQL NULL left and missing JSON", query: `select ? <=> json_extract(json_object('v', true), '$.missing')`, arg: nil, expected: true},
 			{name: "IN matches JSON boolean", query: `select json_extract(json_object('v', true), '$.v') in (?)`, arg: true, expected: true},
 			{name: "IN matches JSON string", query: `select json_extract(json_object('v', 'true'), '$.v') in (?)`, arg: "true", expected: true},
-			{name: "IN keeps JSON string distinct", query: `select json_extract(json_object('v', 'true'), '$.v') in (?)`, arg: true, expected: false},
+			{name: "IN keeps JSON string distinct", query: `select json_extract(json_object('v', 'true'), '$.v') in (?)`, arg: true, expectNull: true},
 			{name: "NOT IN rejects matching JSON boolean", query: `select json_extract(json_object('v', true), '$.v') not in (?)`, arg: true, expected: false},
 			{name: "NOT IN rejects matching JSON string", query: `select json_extract(json_object('v', 'true'), '$.v') not in (?)`, arg: "true", expected: false},
-			{name: "NOT IN keeps JSON string distinct", query: `select json_extract(json_object('v', 'true'), '$.v') not in (?)`, arg: true, expected: true},
+			{name: "NOT IN keeps JSON string distinct", query: `select json_extract(json_object('v', 'true'), '$.v') not in (?)`, arg: true, expectNull: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				require.Equal(t, tc.expected, queryPreparedBool(tc.query, tc.arg))
+				actual, valid := queryPreparedBool(tc.query, tc.arg)
+				if tc.expectNull {
+					require.False(t, valid)
+				} else {
+					require.True(t, valid)
+					require.Equal(t, tc.expected, actual)
+				}
 			})
 		}
 
