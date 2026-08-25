@@ -164,6 +164,7 @@ type VectorIndexSearch struct {
 	Algo        VectorIndexSearchIf
 	Cond        *sync.Cond // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
 	loadWaiters atomic.Int64
+	ttlMu       sync.Mutex  // serializes sliding TTL renewal with eviction claims
 	stale       atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
 	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
 	evicting         atomic.Bool
@@ -185,7 +186,16 @@ func (s *VectorIndexSearch) notifyCacheInvalidated(reason string) {
 	})
 }
 
-func (s *VectorIndexSearch) beginEviction() bool {
+func (s *VectorIndexSearch) beginEviction(recheckTTL bool) bool {
+	s.ttlMu.Lock()
+	defer s.ttlMu.Unlock()
+	if recheckTTL {
+		// Search renews ExpireAt under the same gate. The final TTL check and
+		// claim are therefore atomic with respect to a sliding renewal.
+		if !s.stale.Load() && !s.Expired() {
+			return false
+		}
+	}
 	return s.evicting.CompareAndSwap(false, true)
 }
 
@@ -234,8 +244,14 @@ func (s *VectorIndexSearch) Load(sqlproc *sqlexec.SqlProcess) error {
 		finisher.FinishLoadObservation()
 	}
 	if err != nil {
-		// load error
-		s.Status.Store(STATUS_ERROR)
+		// Superseded loads are retryable for both the initiating caller and
+		// waiters already blocked on this entry. Publish the destroyed state
+		// before Broadcast so every waiter takes the retry path.
+		if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+			s.Status.Store(STATUS_DESTROYED)
+		} else {
+			s.Status.Store(STATUS_ERROR)
+		}
 		return err
 	}
 	// Loaded
@@ -263,12 +279,28 @@ func (s *VectorIndexSearch) markStale() {
 }
 
 func (s *VectorIndexSearch) extend(update bool) {
+	s.ttlMu.Lock()
+	defer s.ttlMu.Unlock()
+	s.extendLocked(update)
+}
+
+func (s *VectorIndexSearch) extendLocked(update bool) {
 	now := time.Now()
 	if update {
 		s.LastUpdate.Store(now.UnixMicro())
 	}
 	ts := time.Now().Add(VectorIndexCacheTTL).UnixMicro()
 	s.ExpireAt.Store(ts)
+}
+
+func (s *VectorIndexSearch) extendForSearch() bool {
+	s.ttlMu.Lock()
+	defer s.ttlMu.Unlock()
+	if s.evicting.Load() {
+		return false
+	}
+	s.extendLocked(false)
+	return true
 }
 
 func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -305,7 +337,9 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	// evicts the entry via Cache.Remove), so there is nothing to refresh from newalgo
 	// here. Search is therefore pure-read under the shared read lock — no mutation of the
 	// cached algo, so concurrent searches on one entry cannot race on its config.
-	s.extend(false)
+	if !s.extendForSearch() {
+		return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
+	}
 	return s.Algo.Search(sqlproc, query, rt)
 }
 
@@ -336,7 +370,9 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 		}
 		return moerr.NewInternalErrorNoCtx("Load index error")
 	}
-	s.extend(false)
+	if !s.extendForSearch() {
+		return moerr.NewInvalidStateNoCtx("Index destroyed")
+	}
 	return s.Algo.SearchInto(sqlproc, query, rt, out)
 }
 
@@ -413,7 +449,7 @@ func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, r
 		return false
 	}
 	algo, ok := value.(*VectorIndexSearch)
-	if !ok || (expected != nil && algo != expected) || !algo.beginEviction() {
+	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == "ttl_expired") {
 		return false
 	}
 	value, loaded = c.IndexMap.Load(key)

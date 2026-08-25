@@ -387,3 +387,33 @@ func TestVectorIndexCacheHouseKeepingSkipsConcurrentlyRenewedSnapshotEntry(t *te
 	c.Remove("first")
 	c.Remove("second")
 }
+
+func TestVectorIndexCacheEvictEntrySkipsRenewedTTLAfterHousekeepingCheck(t *testing.T) {
+	c := NewVectorIndexCache()
+	entry := &VectorIndexSearch{Algo: &MockSearch{}}
+	entry.Cond = sync.NewCond(entry.Mutex.RLocker())
+	entry.Status.Store(STATUS_LOADED)
+	entry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	c.IndexMap.Store("renewed", entry)
+
+	// HouseKeeping already observed expiry. A search in the gap must renew the
+	// entry, and the eviction claim must recheck TTL while excluding renewal.
+	require.True(t, entry.Expired())
+	_, _, err := c.Search(nil, "renewed", &MockSearch{}, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.False(t, entry.Expired())
+	require.False(t, c.evictEntry("renewed", entry, "ttl_expired"))
+	value, loaded := c.IndexMap.Load("renewed")
+	require.True(t, loaded)
+	require.Same(t, entry, value)
+
+	stale := &VectorIndexSearch{Algo: &MockSearch{}}
+	stale.Cond = sync.NewCond(stale.Mutex.RLocker())
+	stale.Status.Store(STATUS_LOADED)
+	stale.ExpireAt.Store(time.Now().Add(time.Minute).UnixMicro())
+	stale.markStale()
+	c.IndexMap.Store("stale", stale)
+	require.True(t, c.evictEntry("stale", stale, "generation_changed"))
+
+	require.True(t, c.evictEntry("renewed", entry, ""))
+}
