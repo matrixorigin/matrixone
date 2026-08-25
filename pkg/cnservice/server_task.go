@@ -213,14 +213,17 @@ func (s *service) publishTaskRunner() error {
 	return nil
 }
 
-func (s *service) revokeTaskRunner() {
+func (s *service) detachRevokedTaskRunner() taskservice.TaskRunner {
 	s.task.Lock()
+	defer s.task.Unlock()
 	s.task.generationRevoked = true
 	s.task.runnerReady.Store(false)
 	runner := s.task.runner
 	s.task.runner = nil
-	s.task.Unlock()
+	return runner
+}
 
+func (s *service) stopRevokedTaskRunner(runner taskservice.TaskRunner) {
 	if runner != nil {
 		if err := runner.Stop(); err != nil {
 			s.logger.Error("stop revoked generation task runner failed", zap.Error(err))

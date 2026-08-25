@@ -123,9 +123,10 @@ func (s *service) revokeViewMetadataGeneration(authoritative uint64) {
 		s.viewMetadataIngressReady.Store(false)
 		_ = s.closePipelineAdmission()
 		s.queryWork.beginClose()
-		s.revokeTaskRunner()
-		// Serialize physical frontend shutdown with MOServer.Start without waiting
-		// for the broader lifecycleMu held by the complete Start sequence.
+		runner := s.detachRevokedTaskRunner()
+		// Serialize physical frontend shutdown with MOServer.Start before waiting
+		// for task executors, whose Stop may block indefinitely. Do not wait for
+		// the broader lifecycleMu held by the complete Start sequence.
 		if s.mo != nil {
 			if err := s.stopFrontendSerialized(); err != nil && s.logger != nil {
 				s.logger.Error("failed to stop superseded CN frontend",
@@ -134,6 +135,7 @@ func (s *service) revokeViewMetadataGeneration(authoritative uint64) {
 					zap.Error(err))
 			}
 		}
+		s.stopRevokedTaskRunner(runner)
 		if s.stopper != nil || s.viewMetadataCloseFn != nil {
 			closeFn := s.Close
 			if s.viewMetadataCloseFn != nil {

@@ -62,6 +62,18 @@ func (s *admissionRevocationMOServer) Stop() error {
 	return nil
 }
 
+type blockedStopTaskRunner struct {
+	*testRunner
+	stopEntered chan struct{}
+	releaseStop chan struct{}
+}
+
+func (r *blockedStopTaskRunner) Stop() error {
+	close(r.stopEntered)
+	<-r.releaseStop
+	return r.testRunner.Stop()
+}
+
 type admissionCNHAKeeperClient struct {
 	logservice.CNHAKeeperClient
 	id          uint64
@@ -216,6 +228,53 @@ func TestCNViewMetadataAdmissionRevokesIngressForHigherGeneration(t *testing.T) 
 
 	releasePipeline()
 	releaseQuery()
+}
+
+func TestCNGenerationRevocationStopsFrontendBeforeTaskRunnerDrain(t *testing.T) {
+	mo := &admissionRevocationMOServer{stopped: make(chan struct{})}
+	runner := &blockedStopTaskRunner{
+		testRunner:  &testRunner{},
+		stopEntered: make(chan struct{}),
+		releaseStop: make(chan struct{}),
+	}
+	s := &service{
+		cfg:                             &Config{UUID: "task-runner-blocked-stop"},
+		logger:                          zap.NewNop(),
+		mo:                              mo,
+		viewMetadataAdmissionGeneration: 8,
+		viewMetadataCloseFn:             func() error { return nil },
+	}
+	s.task.runner = runner
+	s.task.runnerReady.Store(true)
+
+	revokeDone := make(chan struct{})
+	go func() {
+		s.revokeViewMetadataGeneration(9)
+		close(revokeDone)
+	}()
+	select {
+	case <-runner.stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("generation revocation did not start draining the task runner")
+	}
+	select {
+	case <-mo.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("frontend was not stopped before the task runner drain blocked")
+	}
+	select {
+	case <-revokeDone:
+		t.Fatal("generation revocation returned before the task runner stopped")
+	default:
+	}
+	close(runner.releaseStop)
+	select {
+	case <-revokeDone:
+	case <-time.After(time.Second):
+		t.Fatal("generation revocation did not finish after the task runner stopped")
+	}
+	require.Equal(t, 1, runner.stopped)
+	require.Nil(t, s.GetTaskRunner())
 }
 
 func TestCNGenerationRevocationStopsTaskRunnerStartInFlight(t *testing.T) {
