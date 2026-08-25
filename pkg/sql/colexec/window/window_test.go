@@ -2704,6 +2704,123 @@ func TestSearchLeftRightAllUintTypes(t *testing.T) {
 	})
 }
 
+func uint64RangeOffset(value uint64) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_U64Val{U64Val: value},
+	}}}
+}
+
+func TestUint64RangeBound(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		value       uint64
+		offset      uint64
+		subtract    bool
+		wantBound   uint64
+		wantAbove   bool
+		wantInRange bool
+	}{
+		{name: "add", value: 1, offset: 10, wantBound: 11, wantInRange: true},
+		{name: "subtract", value: 10, offset: 10, subtract: true, wantBound: 0, wantInRange: true},
+		{name: "subtract underflow", value: 9, offset: 10, subtract: true},
+		{name: "add maximum", value: math.MaxUint64, wantBound: math.MaxUint64, wantInRange: true},
+		{name: "add overflow", value: math.MaxUint64, offset: 1, wantAbove: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, above, ok := uint64RangeBound(tc.value, tc.offset, tc.subtract)
+			require.Equal(t, tc.wantBound, bound)
+			require.Equal(t, tc.wantAbove, above)
+			require.Equal(t, tc.wantInRange, ok)
+		})
+	}
+
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 21, false, false))
+	require.Equal(t, 21, outOfDomainRangeBoundary(0, 21, true, false))
+	require.Equal(t, 21, outOfDomainRangeBoundary(0, 21, false, true))
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 21, true, true))
+}
+
+func TestBuildRangeIntervalUint64Boundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	currentToFollowing := func(offset uint64) *plan.FrameClause {
+		return &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			End: &plan.FrameBound{
+				Type: plan.FrameBound_FOLLOWING,
+				Val:  uint64RangeOffset(offset),
+			},
+		}
+	}
+	precedingOnly := func(offset uint64) *plan.FrameClause {
+		return &plan.FrameClause{
+			Type: plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{
+				Type: plan.FrameBound_PRECEDING,
+				Val:  uint64RangeOffset(offset),
+			},
+			End: &plan.FrameBound{
+				Type: plan.FrameBound_PRECEDING,
+				Val:  uint64RangeOffset(offset),
+			},
+		}
+	}
+	check := func(t *testing.T, oid types.T, values []uint64, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	asc := make([]uint64, 21)
+	desc := make([]uint64, 21)
+	for i := range asc {
+		asc[i] = uint64(i)
+		desc[i] = uint64(20 - i)
+	}
+
+	for _, oid := range []types.T{types.T_uint64, types.T_bit} {
+		t.Run(oid.String(), func(t *testing.T) {
+			check(t, oid, asc, false, 0, currentToFollowing(10), 0, 11)
+			check(t, oid, asc, false, 0, currentToFollowing(0), 0, 1)
+			check(t, oid, asc, false, 10, currentToFollowing(10), 10, 21)
+			check(t, oid, desc, true, 11, currentToFollowing(10), 11, 21)
+			check(t, oid, asc, false, 10, precedingOnly(10), 0, 1)
+			check(t, oid, asc, false, 5, precedingOnly(10), 0, 0)
+			check(t, oid, []uint64{math.MaxUint64 - 2, math.MaxUint64 - 1, math.MaxUint64}, false, 0, currentToFollowing(10), 0, 3)
+		})
+	}
+
+	t.Run("null peers", func(t *testing.T) {
+		vec := vector.NewVec(types.T_uint64.ToType())
+		for i, value := range []uint64{0, 0, 0, 1} {
+			require.NoError(t, vector.AppendFixed(vec, value, i < 2, mp))
+		}
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{false},
+		}
+		start, end, err := ctr.buildRangeInterval(0, 0, vec.Length(), currentToFollowing(10))
+		require.NoError(t, err)
+		require.Equal(t, 0, start)
+		require.Equal(t, 2, end)
+		start, end, err = ctr.buildRangeInterval(2, 0, vec.Length(), currentToFollowing(10))
+		require.NoError(t, err)
+		require.Equal(t, 2, start)
+		require.Equal(t, 4, end)
+	})
+}
+
 // TestSearchLeftRightAllFloatTypes covers float32/64.
 func TestSearchLeftRightAllFloatTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
