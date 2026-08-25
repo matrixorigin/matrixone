@@ -13946,7 +13946,7 @@ func TestTimestampAddDatetimeWithMicrosecondScale(t *testing.T) {
 	}
 }
 
-// TestTimestampAddDatetimeWithScaleZero tests TimestampAddDatetime with scale=0 input (should become scale=1)
+// TestTimestampAddDatetimeWithScaleZero tests TimestampAddDatetime with scale=0 input.
 func TestTimestampAddDatetimeWithScaleZero(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -13971,7 +13971,7 @@ func TestTimestampAddDatetimeWithScaleZero(t *testing.T) {
 	require.NoError(t, err)
 
 	v := result.GetResultVector()
-	require.Equal(t, int32(1), v.GetType().Scale) // Should have scale 1 (mark as DATETIME type input)
+	require.Equal(t, int32(0), v.GetType().Scale)
 
 	// Cleanup
 	for _, v := range parameters {

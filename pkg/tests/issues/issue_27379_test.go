@@ -96,6 +96,29 @@ func TestIssue27379TimestampAddPreservesFSP(t *testing.T) {
 		require.Equal(t, "2026-08-12 10:00:00.123001", casted)
 		require.Equal(t, int64(1), delta)
 
+		var nested string
+		require.NoError(t, db.QueryRowContext(ctx, `select
+			cast(timestampadd(second, 1, dt0) as char)
+			from `+dbName+`.t`).Scan(&nested))
+		require.Equal(t, "2026-08-12 10:00:01", nested)
+
+		execSQLRequire(t, ctx, db, "create view "+dbName+`.timestampadd_v as
+			select timestampadd(second, 1, dt0) as shifted from `+dbName+`.t`)
+		defer execSQLMaybe(t, ctx, db, "drop view if exists "+dbName+".timestampadd_v")
+		viewRows, err := db.QueryContext(ctx, "select shifted from "+dbName+".timestampadd_v")
+		require.NoError(t, err)
+		viewTypes, err := viewRows.ColumnTypes()
+		require.NoError(t, err)
+		require.Len(t, viewTypes, 1)
+		_, viewScale, ok := viewTypes[0].DecimalSize()
+		require.True(t, ok)
+		require.Equal(t, int64(0), viewScale)
+		require.True(t, viewRows.Next())
+		var viewValue string
+		require.NoError(t, viewRows.Scan(&viewValue))
+		require.Equal(t, "2026-08-12 10:00:01", viewValue)
+		require.NoError(t, viewRows.Close())
+
 		windowRows, err := db.QueryContext(ctx, `select
 			_wstart, timestampadd(second, 1, _wstart),
 			date_format(timestampadd(microsecond, 1, _wstart), '%Y-%m-%d %H:%i:%s.%f')
