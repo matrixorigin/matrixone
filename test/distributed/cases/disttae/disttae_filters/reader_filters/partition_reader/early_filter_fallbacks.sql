@@ -22,7 +22,7 @@ select mo_ctl('dn', 'flush', 'early_filter_fallbacks.committed_spk');
 -- Prove that all rows reached persisted objects before exercising the persisted
 -- reader path; a fixed delay did not establish that precondition.
 -- @wait_expect(1, 10)
-select sum(rows_cnt) from metadata_scan('early_filter_fallbacks.committed_spk') g;
+select sum(rows_cnt) from metadata_scan('early_filter_fallbacks.committed_spk', 'pk') g;
 select pk from committed_spk
 where pk between 2 and 8 and abs(v - 5) >= 2
 order by pk;

@@ -37,7 +37,7 @@ select mo_ctl('dn', 'flush', 'early_filter_fallbacks.committed_spk');
   ]
 }
 
-select sum(rows_cnt) from metadata_scan('early_filter_fallbacks.committed_spk') g;
+select sum(rows_cnt) from metadata_scan('early_filter_fallbacks.committed_spk', 'pk') g;
 ➤ sum(rows_cnt)[5,38,0]  𝄀
 10
 select pk from committed_spk
