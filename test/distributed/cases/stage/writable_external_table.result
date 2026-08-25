@@ -94,6 +94,8 @@ infile{'filepath'='stage://wstage/wext_remote_*.csv', 'format'='csv', 'write_fil
 fields terminated by ',';
 explain insert into ext_remote select * from big_src;
 -- @regex("(?i)ap query plan on multicn", true)
+➤ AP QUERY PLAN ON MULTICN(16 core)[12,-1,0]  𝄀
+Multi Update
 insert into ext_remote select * from big_src;
 select count(*), min(a), max(a) from ext_remote;
 ➤ count(*)[-5,64,0]  ¦  min(a)[4,32,0]  ¦  max(a)[4,32,0]  𝄀
