@@ -165,6 +165,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -567,6 +570,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
+		if err := validateRemoteStatementLastInsertIDProtocol(proc, t.HasAutoCol); err != nil {
+			return ctxId, nil, err
+		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
@@ -659,6 +665,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *limit.Limit:
 		in.Limit = t.LimitExpr
 	case *hashjoin.HashJoin:
+		if err := validateRemoteJoinProtocol(proc, t.JoinType); err != nil {
+			return ctxId, nil, err
+		}
 		relList, colList := getRelColList(t.ResultCols)
 		in.HashJoin = &pipeline.HashJoin{
 			JoinType:               t.JoinType,
@@ -677,6 +686,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			NonEqCond:              t.NonEqCond,
 			JoinMapTag:             t.JoinMapTag,
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			AsofRightCol:           t.AsofRightCol,
+			AsofBuildLeft:          t.AsofBuildLeft,
 		}
 		in.SpillMem = t.SpillThreshold
 	case *loopjoin.LoopJoin:
@@ -805,6 +816,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IcebergDeleteMaxMemoryBytes: t.Es.IcebergDeleteMaxMemoryBytes,
 			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
 			DatastreamScan:              t.Es.DatastreamScan,
+			ForeignScan:                 t.Es.ForeignScan,
+			KafkaScan:                   t.Es.KafkaScan,
 		}
 		in.ProjectList = t.ProjectList
 	case *mongoscan.MongoScan:
@@ -1219,6 +1232,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
 		arg.SpillThreshold = opr.SpillMem
+		arg.AsofRightCol = t.AsofRightCol
+		arg.AsofBuildLeft = t.AsofBuildLeft
 		op = arg
 	case vm.Limit:
 		op = limit.NewArgument().WithLimit(opr.Limit)
@@ -1362,6 +1377,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					IcebergDeleteMaxMemoryBytes: t.IcebergDeleteMaxMemoryBytes,
 					IcebergDeleteSpillEnabled:   t.IcebergDeleteSpillEnabled,
 					DatastreamScan:              t.DatastreamScan,
+					ForeignScan:                 t.ForeignScan,
+					KafkaScan:                   t.KafkaScan,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
@@ -1632,6 +1649,18 @@ func validateRemoteAggregateProtocol(
 	return nil
 }
 
+func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinType) error {
+	if joinType != plan.Node_ASOF && joinType != plan.Node_ASOF_LEFT {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAsofJoin(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"native ASOF join remote execution requires MORPC protocol version 27",
+		)
+	}
+	return nil
+}
+
 func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware bool) error {
 	if !targetAware {
 		return nil
@@ -1663,6 +1692,18 @@ func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inpu
 	if proc == nil || !supportsRemoteRightDedupInputKeysUnique(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
 			"lookup-only RIGHT DEDUP remote execution requires MORPC protocol version 21",
+		)
+	}
+	return nil
+}
+
+func validateRemoteStatementLastInsertIDProtocol(proc *process.Process, hasAutoCol bool) error {
+	if !hasAutoCol {
+		return nil
+	}
+	if proc == nil || !supportsRemoteStatementLastInsertID(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"remote auto-increment PRE_INSERT requires MORPC protocol version 26",
 		)
 	}
 	return nil
@@ -1705,6 +1746,28 @@ func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	}
 	for _, child := range p.Children {
 		if err := validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteStatementLastInsertIDPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsert(); preInsert != nil {
+			if err := validateRemoteStatementLastInsertIDProtocol(proc, preInsert.HasAutoCol); err != nil {
+				return err
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteStatementLastInsertIDPipelineProtocol(proc, child); err != nil {
 			return err
 		}
 	}

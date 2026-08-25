@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -31,29 +32,27 @@ import (
 )
 
 func TestForceSingleScanDistinctAgg(t *testing.T) {
-	node := &plan.Node{
-		AggList: []*plan.Expr{
-			{
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{
-							ObjName: "sum",
+	newNode := func(name string, id int32) *plan.Node {
+		node := &plan.Node{
+			AggList: []*plan.Expr{{
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: name},
+					Args: []*plan.Expr{{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}},
 						},
-						Args: []*plan.Expr{
-							{
-								Expr: &plan.Expr_Lit{
-									Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+					}},
+				}},
+			}},
+		}
+		encoded := function.EncodeOverloadID(id, 0)
+		node.AggList[0].GetF().Func.Obj = int64(uint64(encoded) | uint64(function.Distinct))
+		return node
 	}
-	node.AggList[0].Expr.(*plan.Expr_F).F.Func.Obj = -9223372036854775808
 
-	require.True(t, forceSingleScan(node))
+	require.False(t, forceSingleScan(newNode("count", function.COUNT)))
+	require.True(t, forceSingleScan(newNode("sum", function.SUM)))
+	require.True(t, forceSingleScan(newNode("avg", function.AVG)))
 }
 
 func TestToScheduledQueryWorkersKeepsLocalIdentityWithoutRoute(t *testing.T) {

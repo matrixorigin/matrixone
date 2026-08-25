@@ -50,6 +50,12 @@ func AddColumn(
 	if col := FindColumn(tableDef.Cols, newColName); col != nil {
 		return false, moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
 	}
+	// same reservation as CREATE TABLE: these names are hidden by name in
+	// external-scan star expansion and readers.
+	if catalog.IsReservedExternalColName(newColName) {
+		return false, moerr.NewInvalidInputf(ctx.GetContext(),
+			"column name %s is reserved for external table scans", newColName)
+	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
 	if err != nil {
@@ -163,8 +169,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			constrNames := map[string]bool{}
 			// Check not empty constraint name whether is duplicated.
 			for _, idx := range alterPlan.CopyTableDef.Indexes {
-				nameLower := strings.ToLower(idx.IndexName)
-				constrNames[nameLower] = true
+				constrNames[indexNameKey(idx.IndexName)] = true
 			}
 			// set empty constraint names(index and unique index)
 			setEmptyUniqueIndexName(constrNames, uniqueIndex)

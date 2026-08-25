@@ -29,7 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
+	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -752,6 +754,26 @@ func constructCreateTableSQL(
 			}
 			return createStr, stmt, err
 		}
+		if fCfg, found, parseErr := IsForeignTableDef(ctx.GetContext(), tableDef); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatForeignTableOptionsForShowCreate(fCfg, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
+		if kCfg, found, parseErr := IsKafkaTableDef(ctx.GetContext(), tableDef); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatKafkaTableOptionsForShowCreate(kCfg, sqlMode)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
+			}
+			return createStr, stmt, err
+		}
 
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
@@ -1186,8 +1208,15 @@ func FormatColType(colType plan.Type) string {
 	typ := types.T(colType.Id).ToType()
 
 	ts := typ.String()
-	if typ.Oid == types.T_text && colType.Width == types.MaxTinyTextLen {
-		ts = "TINYTEXT"
+	if typ.Oid == types.T_text {
+		switch colType.Width {
+		case types.MaxTinyTextLen:
+			ts = "TINYTEXT"
+		case types.MaxMediumTextLen:
+			ts = "MEDIUMTEXT"
+		case types.MaxLongTextLen:
+			ts = "LONGTEXT"
+		}
 	}
 	// after decimal fix, remove this
 	if typ.Oid.IsDecimal() {
@@ -1367,6 +1396,73 @@ func formatDataStreamTableOptionsForShowCreate(cfg sqldatastream.Config, sqlMode
 		builder.WriteString("'")
 	}
 	builder.WriteString(")")
+	return builder.String()
+}
+
+// formatKafkaTableOptionsForShowCreate renders the ENGINE = KAFKA clause of
+// SHOW CREATE TABLE. No option carries a credential in v1, so everything is
+// emitted verbatim and the output round-trips through CREATE.
+func formatKafkaTableOptionsForShowCreate(cfg sqlkafka.Config, sqlMode string) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "brokers", value: cfg.Brokers},
+		{key: "topic", value: cfg.Topic},
+		{key: "partition", value: fmt.Sprintf("%d", cfg.Partition)},
+		{key: "autocommit", value: fmt.Sprintf("%t", cfg.Autocommit)},
+		{key: "group", value: cfg.Group},
+		{key: "format", value: cfg.Format},
+	}
+	if cfg.Format == sqlkafka.FormatCSV {
+		options = append(options, struct{ key, value string }{key: "separator", value: cfg.Separator})
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = KAFKA WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, sqlMode string) string {
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = ")
+	builder.WriteString(strings.ToUpper(cfg.Kind))
+	options := make([]struct{ key, value string }, 0, 2)
+	if cfg.ConfigJSON != "" {
+		// A config carries credentials (ES password, DSN password): SHOW
+		// CREATE output is widely visible, so it is always redacted. A table
+		// restored from SHOW CREATE (snapshot/PITR replay) must have its
+		// 'config' re-supplied, or be created without one and use the
+		// @esql_tvf_config / @sql_tvf_config session variable.
+		options = append(options, struct{ key, value string }{"config", "<redacted>"})
+	}
+	if cfg.DefaultQuery != "" {
+		options = append(options, struct{ key, value string }{"query", cfg.DefaultQuery})
+	}
+	if len(options) > 0 {
+		builder.WriteString(" WITH (")
+		for i, option := range options {
+			if i > 0 {
+				builder.WriteString(", ")
+			}
+			builder.WriteString("\"")
+			builder.WriteString(option.key)
+			builder.WriteString("\" = '")
+			builder.WriteString(formatStrInSingleQuotesForSQLMode(option.value, sqlMode))
+			builder.WriteString("'")
+		}
+		builder.WriteString(")")
+	}
 	return builder.String()
 }
 

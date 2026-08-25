@@ -4129,13 +4129,18 @@ func TestDropJobsByDBName(t *testing.T) {
 
 	target1 := registerFn("src_table", "job1")
 	target2 := registerFn("src_table2", "job2")
+	// Shared CI runners can pause the embedded TN/logtail path for longer than
+	// the normal ten-second propagation window (a recent run spent about ten
+	// seconds in one commit). Keep the assertion bounded, but leave enough
+	// budget for the watermark to catch up under scheduler pressure.
+	const watermarkWait = 30 * time.Second
 	waitForISCPWatermark(
 		t,
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "job1")
 		},
 		target1,
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4147,7 +4152,7 @@ func TestDropJobsByDBName(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID2, "job2")
 		},
 		target2,
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID2,
@@ -4166,7 +4171,7 @@ func TestDropJobsByDBName(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "job1")
 		},
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4177,7 +4182,7 @@ func TestDropJobsByDBName(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID2, "job2")
 		},
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID2,

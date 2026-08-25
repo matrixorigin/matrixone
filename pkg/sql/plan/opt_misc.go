@@ -81,7 +81,8 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	switch node.NodeType {
 	case plan.Node_JOIN:
 		leftFlag := flag || node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_OUTER
-		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER
+		rightFlag := flag || node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER ||
+			node.JoinType == plan.Node_ASOF_LEFT
 
 		newChildID, childProjMap := builder.removeSimpleProjections(node.Children[0], plan.Node_JOIN, leftFlag, colRefCnt)
 		node.Children[0] = newChildID
@@ -726,7 +727,7 @@ func increaseTagCnt(expr *plan.Expr, inc int, tagCnt map[int32]int) {
 func findHashOnPKTable(nodeID, tag int32, builder *QueryBuilder) *plan.TableDef {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		if node.BindingTags[0] == tag {
+		if len(node.BindingTags) > 0 && node.BindingTags[0] == tag {
 			return node.TableDef
 		}
 	} else if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER {
@@ -744,7 +745,7 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 	node := builder.qry.Nodes[nodeID]
 
 	if node.NodeType == plan.Node_TABLE_SCAN {
-		if node.TableDef.Pkey == nil {
+		if node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
 			return nil
 		}
 		tag := uint64(node.BindingTags[0]) << 32

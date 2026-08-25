@@ -2706,6 +2706,243 @@ func TestSearchLeftRightAllUintTypes(t *testing.T) {
 	})
 }
 
+func uint64RangeOffset(value uint64) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_U64Val{U64Val: value},
+	}}}
+}
+
+func TestUint64RangeBound(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		value       uint64
+		offset      uint64
+		subtract    bool
+		wantBound   uint64
+		wantAbove   bool
+		wantInRange bool
+	}{
+		{name: "add", value: 1, offset: 10, wantBound: 11, wantInRange: true},
+		{name: "subtract", value: 10, offset: 10, subtract: true, wantBound: 0, wantInRange: true},
+		{name: "subtract underflow", value: 9, offset: 10, subtract: true},
+		{name: "add maximum", value: math.MaxUint64, wantBound: math.MaxUint64, wantInRange: true},
+		{name: "add overflow", value: math.MaxUint64, offset: 1, wantAbove: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, above, ok := uint64RangeBound(tc.value, tc.offset, tc.subtract)
+			require.Equal(t, tc.wantBound, bound)
+			require.Equal(t, tc.wantAbove, above)
+			require.Equal(t, tc.wantInRange, ok)
+		})
+	}
+
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 21, false, false))
+	require.Equal(t, 21, outOfDomainRangeBoundary(0, 21, true, false))
+	require.Equal(t, 21, outOfDomainRangeBoundary(0, 21, false, true))
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 21, true, true))
+}
+
+func TestBuildRangeIntervalUint64Boundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	currentToFollowing := func(offset uint64) *plan.FrameClause {
+		return &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			End: &plan.FrameBound{
+				Type: plan.FrameBound_FOLLOWING,
+				Val:  uint64RangeOffset(offset),
+			},
+		}
+	}
+	precedingOnly := func(offset uint64) *plan.FrameClause {
+		return &plan.FrameClause{
+			Type: plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{
+				Type: plan.FrameBound_PRECEDING,
+				Val:  uint64RangeOffset(offset),
+			},
+			End: &plan.FrameBound{
+				Type: plan.FrameBound_PRECEDING,
+				Val:  uint64RangeOffset(offset),
+			},
+		}
+	}
+	check := func(t *testing.T, oid types.T, values []uint64, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	asc := make([]uint64, 21)
+	desc := make([]uint64, 21)
+	for i := range asc {
+		asc[i] = uint64(i)
+		desc[i] = uint64(20 - i)
+	}
+
+	for _, oid := range []types.T{types.T_uint64, types.T_bit} {
+		t.Run(oid.String(), func(t *testing.T) {
+			check(t, oid, asc, false, 0, currentToFollowing(10), 0, 11)
+			check(t, oid, asc, false, 0, currentToFollowing(0), 0, 1)
+			check(t, oid, asc, false, 10, currentToFollowing(10), 10, 21)
+			check(t, oid, desc, true, 11, currentToFollowing(10), 11, 21)
+			check(t, oid, asc, false, 10, precedingOnly(10), 0, 1)
+			check(t, oid, asc, false, 5, precedingOnly(10), 0, 0)
+			check(t, oid, []uint64{math.MaxUint64 - 2, math.MaxUint64 - 1, math.MaxUint64}, false, 0, currentToFollowing(10), 0, 3)
+		})
+	}
+
+	t.Run("null peers", func(t *testing.T) {
+		vec := vector.NewVec(types.T_uint64.ToType())
+		for i, value := range []uint64{0, 0, 0, 1} {
+			require.NoError(t, vector.AppendFixed(vec, value, i < 2, mp))
+		}
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{false},
+		}
+		start, end, err := ctr.buildRangeInterval(0, 0, vec.Length(), currentToFollowing(10))
+		require.NoError(t, err)
+		require.Equal(t, 0, start)
+		require.Equal(t, 2, end)
+		start, end, err = ctr.buildRangeInterval(2, 0, vec.Length(), currentToFollowing(10))
+		require.NoError(t, err)
+		require.Equal(t, 2, start)
+		require.Equal(t, 4, end)
+	})
+}
+
+func signedRangeOffset(oid types.T, value int64) *plan.Expr {
+	lit := &plan.Literal{}
+	switch oid {
+	case types.T_int8:
+		lit.Value = &plan.Literal_I8Val{I8Val: int32(value)}
+	case types.T_int16:
+		lit.Value = &plan.Literal_I16Val{I16Val: int32(value)}
+	case types.T_int32:
+		lit.Value = &plan.Literal_I32Val{I32Val: int32(value)}
+	case types.T_int64:
+		lit.Value = &plan.Literal_I64Val{I64Val: value}
+	default:
+		panic("unsupported signed RANGE type")
+	}
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: lit}}
+}
+
+func TestSignedRangeBound(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		value       int8
+		offset      int8
+		subtract    bool
+		wantBound   int8
+		wantAbove   bool
+		wantInRange bool
+	}{
+		{name: "add", value: 1, offset: 1, wantBound: 2, wantInRange: true},
+		{name: "subtract", value: 1, offset: 1, subtract: true, wantBound: 0, wantInRange: true},
+		{name: "add maximum zero", value: math.MaxInt8, wantBound: math.MaxInt8, wantInRange: true},
+		{name: "subtract minimum zero", value: math.MinInt8, subtract: true, wantBound: math.MinInt8, wantInRange: true},
+		{name: "add overflow", value: math.MaxInt8, offset: 1, wantAbove: true},
+		{name: "subtract underflow", value: math.MinInt8, offset: 1, subtract: true},
+		{name: "add negative underflow", value: math.MinInt8, offset: -1},
+		{name: "subtract negative overflow", value: math.MaxInt8, offset: -1, subtract: true, wantAbove: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, above, ok := signedRangeBound(tc.value, tc.offset, tc.subtract)
+			require.Equal(t, tc.wantBound, bound)
+			require.Equal(t, tc.wantAbove, above)
+			require.Equal(t, tc.wantInRange, ok)
+		})
+	}
+
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 3, false, false))
+	require.Equal(t, 3, outOfDomainRangeBoundary(0, 3, true, false))
+	require.Equal(t, 3, outOfDomainRangeBoundary(0, 3, false, true))
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 3, true, true))
+}
+
+func testBuildRangeIntervalSignedBoundaries[T types.OrderedT](
+	t *testing.T,
+	mp *mpool.MPool,
+	oid types.T,
+	minValue T,
+	maxValue T,
+) {
+	t.Helper()
+
+	currentToFollowing := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  signedRangeOffset(oid, 1),
+		},
+	}
+	precedingToCurrent := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  signedRangeOffset(oid, 1),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	check := func(t *testing.T, values []T, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	var zeroValue T
+	asc := []T{minValue, zeroValue, maxValue}
+	desc := []T{maxValue, zeroValue, minValue}
+
+	// ASC addition overflow and subtraction underflow both retain the current row.
+	check(t, asc, false, 2, currentToFollowing, 2, 3)
+	check(t, asc, false, 0, precedingToCurrent, 0, 1)
+
+	// DESC reverses the arithmetic direction while preserving the same frame invariant.
+	check(t, desc, true, 2, currentToFollowing, 2, 3)
+	check(t, desc, true, 0, precedingToCurrent, 0, 1)
+}
+
+func TestBuildRangeIntervalSignedBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("int8", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int8, int8(math.MinInt8), int8(math.MaxInt8))
+	})
+	t.Run("int16", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int16, int16(math.MinInt16), int16(math.MaxInt16))
+	})
+	t.Run("int32", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int32, int32(math.MinInt32), int32(math.MaxInt32))
+	})
+	t.Run("int64", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int64, int64(math.MinInt64), int64(math.MaxInt64))
+	})
+}
+
 // TestSearchLeftRightAllFloatTypes covers float32/64.
 func TestSearchLeftRightAllFloatTypes(t *testing.T) {
 	mp := mpool.MustNewZero()

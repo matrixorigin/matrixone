@@ -615,6 +615,53 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, combinedPipeline))
 }
 
+func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	autoPreInsert := &preinsert.PreInsert{HasAutoCol: true}
+	ordinaryPreInsert := &preinsert.PreInsert{}
+	autoPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op:        int32(vm.PreInsert),
+			PreInsert: &pipeline.PreInsert{HasAutoCol: true},
+		}},
+	}}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion25)
+	_, _, err := convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 26")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline),
+		"requires MORPC protocol version 26")
+	encodedPipeline, err := autoPipeline.Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(encodedPipeline, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 26")
+
+	_, _, err = convertToPipelineInstruction(ordinaryPreInsert, proc, ctx, 1)
+	require.NoError(t, err, "PRE_INSERT without generated IDs remains wire-compatible")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion26)
+	_, instruction, err := convertToPipelineInstruction(autoPreInsert, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.PreInsert.HasAutoCol)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
+	decoded, err := decodeScope(encodedPipeline, proc, true, nil)
+	require.NoError(t, err)
+	decoded.release()
+}
+
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
 	proc := testutil.NewProcess(t)
@@ -2834,10 +2881,12 @@ func TestSendNotifyMessageReportsSenderFactoryError(t *testing.T) {
 func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 	duplicateErr := moerr.NewDuplicateEntryNoCtx("1", "primary")
 	tests := []struct {
-		name        string
-		cancelCause error
-		factoryErr  func(context.Context) error
-		wantErr     error
+		name               string
+		cancelCause        error
+		cancelQuery        bool
+		keepPipelineActive bool
+		factoryErr         func(context.Context) error
+		wantErr            error
 	}{
 		{
 			name:        "query interruption recovers substantive cancellation cause",
@@ -2862,7 +2911,22 @@ func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 			wantErr: duplicateErr,
 		},
 		{
-			name: "raw cancellation without substantive cause remains visible",
+			name: "raw pipeline cancellation without substantive cause is secondary",
+			factoryErr: func(context.Context) error {
+				return context.Canceled
+			},
+		},
+		{
+			name:        "raw query cancellation remains visible",
+			cancelQuery: true,
+			factoryErr: func(context.Context) error {
+				return context.Canceled
+			},
+			wantErr: context.Canceled,
+		},
+		{
+			name:               "raw cancellation while pipeline is active remains visible",
+			keepPipelineActive: true,
 			factoryErr: func(context.Context) error {
 				return context.Canceled
 			},
@@ -2875,7 +2939,13 @@ func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
 			proc.BuildPipelineContext(queryCtx)
 			scopeProc := proc.NewContextChildProc(1)
-			scopeProc.Cancel(tt.cancelCause)
+			if tt.cancelQuery {
+				_, cancelQuery := process.GetQueryCtxFromProc(proc)
+				require.NotNil(t, cancelQuery)
+				cancelQuery()
+			} else if !tt.keepPipelineActive {
+				scopeProc.Cancel(tt.cancelCause)
+			}
 
 			uid, err := uuid.NewV7()
 			require.NoError(t, err)
@@ -3201,7 +3271,8 @@ func TestSendNotifyMessageSuccessfulAttachUsesQueryContext(t *testing.T) {
 
 func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	proc.BuildPipelineContext(context.Background())
+	queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+	proc.BuildPipelineContext(queryCtx)
 	scopeProc := proc.NewContextChildProc(1)
 
 	uid, err := uuid.NewV7()
@@ -3251,7 +3322,9 @@ func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 	resultCh := make(chan notifyMessageResult, 1)
 	s.sendNotifyMessageWithFactoryAndWait(&wg, resultCh, factory, waitRetry)
 	<-retryEntered
-	scopeProc.Cancel(nil)
+	_, cancelQuery := process.GetQueryCtxFromProc(proc)
+	require.NotNil(t, cancelQuery)
+	cancelQuery()
 
 	select {
 	case result := <-resultCh:

@@ -120,6 +120,12 @@ func sqlTaskInt64(v any) int64 {
     datastreamOption *tree.DataStreamOption
     datastreamOptions tree.DataStreamOptions
     datastreamTableParam *tree.DataStreamTableParam
+    kafkaTableParam *tree.KafkaTableParam
+    kafkaTableOptions tree.KafkaTableOptions
+    kafkaTableOption *tree.KafkaTableOption
+    foreignTableOption tree.ForeignTableOption
+    foreignTableOptions tree.ForeignTableOptions
+    foreignTableParam *tree.ForeignTableParam
 
     functionName *tree.FunctionName
     funcArg tree.FunctionArg
@@ -596,7 +602,7 @@ func sqlTaskInt64(v any) int64 {
 // Iceberg
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
-%token <str> DATASTREAM
+%token <str> DATASTREAM ESQL KAFKA
 
 // ROLLUP
 %token <str> GROUPING SETS CUBE ROLLUP 
@@ -695,6 +701,7 @@ func sqlTaskInt64(v any) int64 {
 %type <selectOption> select_option_opt
 %type <tableExprs> table_name_wild_list
 %type <joinTableExpr>  join_table
+%type <expr> tolerance_opt
 %type <applyTableExpr> apply_table
 %type <tableExpr> into_table_name table_function table_factor table_reference escaped_table_reference table_references
 %type <direction> asc_desc_opt
@@ -756,6 +763,13 @@ func sqlTaskInt64(v any) int64 {
 %type <datastreamOptions> datastream_option_list_opt datastream_option_list
 %type <datastreamOption> datastream_option
 %type <str> datastream_option_key datastream_option_value
+%type <foreignTableParam> foreign_table_param
+%type <kafkaTableParam> kafka_table_param
+%type <kafkaTableOptions> kafka_option_list_opt kafka_option_list
+%type <kafkaTableOption> kafka_option
+%type <foreignTableOptions> foreign_option_list_opt foreign_option_list
+%type <foreignTableOption> foreign_option
+%type <str> foreign_engine_kind
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -784,7 +798,7 @@ func sqlTaskInt64(v any) int64 {
 %type <aliasedTableExpr> aliased_table_name
 %type <unionTypeRecord> union_op
 %type <parenTableExpr> table_subquery
-%type <str> inner_join straight_join outer_join natural_join apply_type dedup_join
+%type <str> inner_join straight_join outer_join natural_join apply_type dedup_join asof_join
 %type <funcType> func_type_opt
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
@@ -973,6 +987,12 @@ func sqlTaskInt64(v any) int64 {
 // declarations so adding them does not renumber the existing generated lexer
 // constants and downstream serialized plans.
 %token <str> WITHIN PERCENTILE_CONT PERCENTILE_DISC
+%token <str> ASOF TOLERANCE
+// ASOF has higher precedence than the empty table alias. In the only
+// ambiguous legacy form, `t asof JOIN u`, this shifts ASOF into table_alias.
+// Once an alias or table-factor suffix is complete, ASOF can only be reduced
+// as the native join modifier.
+%left ASOF
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -7653,6 +7673,20 @@ join_table:
             Cond: $4,
         }
     }
+|   table_reference asof_join table_factor join_condition tolerance_opt
+    {
+		if !hasAsofLeftFactorAlias($1) {
+			yylex.Error("native ASOF JOIN requires an aliased left table factor")
+			goto ret1
+		}
+        $$ = &tree.JoinTableExpr{
+            Left: $1,
+            JoinType: $2,
+            Right: $3,
+            Cond: $4,
+            Tolerance: $5,
+        }
+    }
 
 apply_table:
     table_reference apply_type table_factor
@@ -7721,6 +7755,29 @@ dedup_join:
     DEDUP JOIN
     {
         $$ = tree.JOIN_TYPE_DEDUP
+    }
+
+asof_join:
+    ASOF JOIN
+    {
+        $$ = tree.JOIN_TYPE_ASOF
+    }
+|   ASOF LEFT JOIN
+    {
+        $$ = tree.JOIN_TYPE_ASOF_LEFT
+    }
+|   ASOF LEFT OUTER JOIN
+    {
+        $$ = tree.JOIN_TYPE_ASOF_LEFT
+    }
+
+tolerance_opt:
+    {
+        $$ = nil
+    }
+|   TOLERANCE interval_expr
+    {
+        $$ = $2
     }
 
 values_stmt:
@@ -9312,7 +9369,7 @@ create_index_stmt:
             io = tree.NewIndexOption()
             io.IType = tree.INDEX_TYPE_INVALID
 	    }
-        var Name = tree.Identifier($4.Compare())
+        var Name = tree.Identifier($4.Origin())
         var Table = $7
         var ifNotExists = false
         var IndexCat = $2
@@ -10215,6 +10272,24 @@ create_table_stmt:
         t.DataStreamParam = $9
         $$ = t
     }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' foreign_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.ForeignParam = $9
+        $$ = t
+    }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' kafka_table_param
+    {
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.KafkaParam = $9
+        $$ = t
+    }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name iceberg_table_param
     {
         t := tree.NewCreateTable()
@@ -11075,6 +11150,78 @@ datastream_option:
         $$ = tree.NewDataStreamOption(tree.Identifier($1), $3)
     }
 
+foreign_table_param:
+    ENGINE equal_opt foreign_engine_kind foreign_option_list_opt
+    {
+        $$ = tree.NewForeignTableParam($3, $4)
+    }
+
+kafka_table_param:
+    ENGINE equal_opt KAFKA kafka_option_list_opt
+    {
+        $$ = tree.NewKafkaTableParam($4)
+    }
+
+kafka_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' kafka_option_list ')'
+    {
+        $$ = $3
+    }
+
+kafka_option_list:
+    kafka_option
+    {
+        $$ = tree.KafkaTableOptions{$1}
+    }
+|   kafka_option_list ',' kafka_option
+    {
+        $$ = append($1, $3)
+    }
+
+kafka_option:
+    datastream_option_key '=' datastream_option_value
+    {
+        $$ = tree.NewKafkaTableOption(tree.Identifier($1), $3)
+    }
+
+foreign_engine_kind:
+    ESQL
+    {
+        $$ = "esql"
+    }
+|   SQL
+    {
+        $$ = "sql"
+    }
+
+foreign_option_list_opt:
+    {
+        $$ = nil
+    }
+|   WITH '(' foreign_option_list ')'
+    {
+        $$ = $3
+    }
+
+foreign_option_list:
+    foreign_option
+    {
+        $$ = tree.ForeignTableOptions{$1}
+    }
+|   foreign_option_list ',' foreign_option
+    {
+        $$ = append($1, $3)
+    }
+
+foreign_option:
+    datastream_option_key '=' datastream_option_value
+    {
+        $$ = tree.NewForeignTableOption(tree.Identifier($1), $3)
+    }
+
 datastream_option_key:
     ident
     {
@@ -11705,7 +11852,7 @@ constraint_elem:
     {
         var IfNotExists = $3
         var KeyParts = $6
-        var Name = $4
+        var Name = tree.NewCStr($4, 1).Compare()
         var Refer = $8
         var Empty = true
         $$ = tree.NewForeignKey(
@@ -11761,7 +11908,7 @@ index_name_and_type_opt:
 |   ident TYPE index_type
     {
         $$ = make([]string, 2)
-        $$[0] = $1.Compare()
+        $$[0] = $1.Origin()
         $$[1] = $3
     }
 
@@ -11789,7 +11936,7 @@ index_name:
     }
 |    ident
 	{
-		$$ = $1.Compare()
+		$$ = $1.Origin()
 	}
 
 column_def:
@@ -15623,6 +15770,8 @@ non_reserved_keyword:
 |   MONGODB_PATH
 |   MONGODB_CONVERT
 |   DATASTREAM
+|   ESQL
+|   KAFKA
 |   CONNECTIONS
 |   INTERMEDIATE_GRAPH_DEGREE
 |   ISOLATION
@@ -15885,6 +16034,8 @@ non_reserved_keyword:
 |	SUPER
 |	TABLESPACE
 |	TRUNCATE
+|   ASOF
+|   TOLERANCE
 |	VISIBLE
 |	WITHOUT
 |	VALIDATION
