@@ -43,6 +43,9 @@ type RemoteCache struct {
 	keyRouter client.KeyRouter[query.CacheKey]
 	// We only init the key router for the first time.
 	init sync.Once
+	// allocator owns remote cache hits before they are exposed to callers.
+	// This keeps remote data on the destination FileService's accounting path.
+	allocator CacheDataAllocator
 }
 
 var _ IOVectorCache = new(RemoteCache)
@@ -51,6 +54,13 @@ func NewRemoteCache(client client.QueryClient, factory KeyRouterFactory[query.Ca
 	return &RemoteCache{
 		client:           client,
 		keyRouterFactory: factory,
+		allocator:        DefaultCacheDataAllocator(),
+	}
+}
+
+func (r *RemoteCache) setAllocator(allocator CacheDataAllocator) {
+	if allocator != nil {
+		r.allocator = allocator
 	}
 }
 
@@ -130,7 +140,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 					idx := int(cacheData.Index)
 					if cacheData.Hit {
 						vector.Entries[idx].done = true
-						vector.Entries[idx].CachedData = &Bytes{bytes: cacheData.Data}
+						vector.Entries[idx].CachedData = r.allocator.CopyToCacheData(ctx, cacheData.Data)
 						vector.Entries[idx].fromCache = r
 						numHit++
 					}

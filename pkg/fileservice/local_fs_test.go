@@ -164,6 +164,36 @@ func BenchmarkLocalFS(b *testing.B) {
 	})
 }
 
+func BenchmarkLocalFSAllocateCacheData(b *testing.B) {
+	ctx := context.Background()
+	fs, err := NewLocalFS(
+		ctx,
+		"local",
+		b.TempDir(),
+		CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024)},
+		nil,
+	)
+	assert.NoError(b, err)
+	b.Cleanup(func() { fs.Close(ctx) })
+
+	benchmarkFileServiceAllocateCacheData(b, fs.AllocateCacheData, 42, 1)
+}
+
+func BenchmarkLocalFSAllocateCacheDataHighCardinality(b *testing.B) {
+	ctx := context.Background()
+	fs, err := NewLocalFS(
+		ctx,
+		"local",
+		b.TempDir(),
+		CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024)},
+		nil,
+	)
+	assert.NoError(b, err)
+	b.Cleanup(func() { fs.Close(ctx) })
+
+	benchmarkFileServiceAllocateCacheData(b, fs.AllocateCacheData, 1, 1024)
+}
+
 func TestLocalFSWithDiskCache(t *testing.T) {
 	ctx := context.Background()
 	var counter perfcounter.CounterSet
@@ -294,8 +324,9 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 	assert.Nil(t, err)
 	vec.Release()
 
-	assert.Equal(t, int64(8), memCache1.cache.Used())
-	assert.Equal(t, int64(8), memCache2.cache.Used())
+	backingSize := int64(DefaultCacheDataAllocator().BackingSize(8))
+	assert.Equal(t, backingSize, memCache1.cache.Used())
+	assert.Equal(t, backingSize, memCache2.cache.Used())
 	memCache1.cache.Flush(ctx)
 	memCache2.cache.Flush(ctx)
 	fs.FlushCache(ctx)

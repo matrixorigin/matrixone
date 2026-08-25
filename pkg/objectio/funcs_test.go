@@ -40,6 +40,10 @@ func (r *releaseTrackingData) Size() int64 {
 	return int64(len(r.bytes))
 }
 
+func (r *releaseTrackingData) Capacity() int64 {
+	return int64(cap(r.bytes))
+}
+
 func (r *releaseTrackingData) Bytes() []byte {
 	return r.bytes
 }
@@ -90,6 +94,10 @@ func (t *trackingCacheDataAllocator) AllocateCacheDataWithHint(context.Context, 
 
 func (t *trackingCacheDataAllocator) CopyToCacheData(context.Context, []byte) fscache.Data {
 	return t.data
+}
+
+func (t *trackingCacheDataAllocator) BackingSize(size int) int {
+	return size
 }
 
 func TestReadOneBlockWithMetaReleasesPartialReadOnError(t *testing.T) {

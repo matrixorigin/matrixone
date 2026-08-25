@@ -973,7 +973,7 @@ func TestDiskCacheReadEnsuresMemoryCacheCapacity(t *testing.T) {
 	err = cache.Read(ctx, vec)
 	require.Nil(t, err)
 	require.Equal(t, 1, dataCache.ensureCalls)
-	require.Equal(t, 10, dataCache.ensureBytes)
+	require.Equal(t, DefaultCacheDataAllocator().BackingSize(10), dataCache.ensureBytes)
 	require.True(t, vec.Entries[0].done)
 	require.NotNil(t, vec.Entries[0].CachedData)
 }
@@ -1014,8 +1014,8 @@ func (*countingDataCache) Get(context.Context, fscache.CacheKey) (fscache.Data, 
 	return nil, false
 }
 
-func (*countingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) error {
-	return nil
+func (*countingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) (bool, error) {
+	return true, nil
 }
 
 func (*countingDataCache) DeletePaths(context.Context, []string) {}

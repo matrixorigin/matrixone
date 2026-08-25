@@ -22,3 +22,7 @@ const (
 func ptrTo[T any](v T) *T {
 	return &v
 }
+
+func maxIntValue() int {
+	return int(^uint(0) >> 1)
+}
