@@ -272,7 +272,7 @@ func (c *compare[T]) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Proc
 		return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 	}
 	if c.isConstNull[vecSrc] || c.ns[vecSrc].Contains(uint64(src)) {
-		nulls.Add(c.ns[vecDst], uint64(dst))
+		return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
 	} else {
 		nulls.Del(c.ns[vecDst], uint64(dst))
 		c.cpy(c.xs[vecDst], c.xs[vecSrc], dst, src)

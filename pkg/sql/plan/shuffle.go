@@ -775,7 +775,8 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 			return
 		}
 
-	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_OUTER, plan.Node_MARK:
+	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_OUTER, plan.Node_MARK,
+		plan.Node_ASOF, plan.Node_ASOF_LEFT:
 
 	default:
 		return

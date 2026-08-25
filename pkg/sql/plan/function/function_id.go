@@ -834,15 +834,18 @@ const (
 	JSON_ARRAY_APPEND = 571
 
 	// Foreign-data TVF connection management (esql_tvf / sql_tvf).
-	ESQL_TVF_CONNECT               = 572
-	ESQL_TVF_DISCONNECT            = 573
-	SQL_TVF_CONNECT                = 574
-	SQL_TVF_DISCONNECT             = 575
-	INTERNAL_JSON_COMPARISON_PARAM = 576
+	ESQL_TVF_CONNECT    = 572
+	ESQL_TVF_DISCONNECT = 573
+	SQL_TVF_CONNECT     = 574
+	SQL_TVF_DISCONNECT  = 575
+	// Kafka external table (issue #27518).
+	LAST_KAFKA_MESSAGE_ID = 576
+
+	INTERNAL_JSON_COMPARISON_PARAM = 577
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 577
+	FUNCTION_END_NUMBER = 578
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1166,6 +1169,7 @@ var functionIdRegister = map[string]int32{
 	"esql_tvf_disconnect":            ESQL_TVF_DISCONNECT,
 	"sql_tvf_connect":                SQL_TVF_CONNECT,
 	"sql_tvf_disconnect":             SQL_TVF_DISCONNECT,
+	"last_kafka_message_id":          LAST_KAFKA_MESSAGE_ID,
 	"uuid_v7":                        UUID,
 	"uuid_v1":                        UUID_V1,
 	"uuid_v4":                        UUID_V4,
