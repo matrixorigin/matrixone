@@ -15,6 +15,7 @@
 package sidecarflight
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -23,9 +24,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -40,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/require"
@@ -75,6 +79,11 @@ type testFlightServer struct {
 	doGetStarted        chan struct{}
 	blockDoGet          chan struct{}
 	doGetOnce           sync.Once
+	doPutBatch          chan struct{}
+	blockDoPutAck       chan struct{}
+	doPutOnce           sync.Once
+	doPutBatches        atomic.Int32
+	notNeededInput      bool
 	cancelFailures      atomic.Int32
 	deadlineUnixMS      atomic.Int64
 }
@@ -284,6 +293,169 @@ func TestExecutionStreamsOneOwnedBatchAndCancelsOnWriterFailure(t *testing.T) {
 	require.Equal(t, int32(1), server.cancels.Load())
 	require.Equal(t, int64(0), mp.CurrNB())
 	require.NoError(t, runtime.Close(cleanupCtx))
+}
+
+func TestNativeInputStreamsOneConsumedBatchAtATime(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+	}
+	runtime := &Runtime{
+		config:     Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Second, CleanupTimeout: time.Second},
+		conn:       testFlightConnection(t, server),
+		executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"),
+		typesOut, headings, testFlightDeadline(), testFlightRelease)
+	require.NoError(t, err)
+	input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
+	require.NoError(t, err)
+	_, err = execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
+	require.ErrorContains(t, err, "duplicate native input identity")
+	require.NoError(t, input.Start(context.Background()))
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{"value"}
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	require.NoError(t, input.Send(context.Background(), bat, mp))
+	require.NoError(t, input.Finish(context.Background()))
+	require.NoError(t, input.Err())
+}
+
+func TestNativeInputAbortCancelsBlockedAcknowledgement(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+		doPutBatch: make(chan struct{}), blockDoPutAck: make(chan struct{}),
+	}
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 128, RequestTimeout: time.Second, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"),
+		typesOut, headings, testFlightDeadline(), testFlightRelease)
+	require.NoError(t, err)
+	input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
+	require.NoError(t, err)
+	require.NoError(t, input.Start(context.Background()))
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	for row := int64(0); row < 20; row++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, mp))
+	}
+	bat.SetRowCount(20)
+	defer bat.Clean(mp)
+	sendDone := make(chan error, 1)
+	go func() { sendDone <- input.Send(context.Background(), bat, mp) }()
+	select {
+	case <-server.doPutBatch:
+	case <-time.After(time.Second):
+		t.Fatal("native input batch did not reach the server")
+	}
+	input.Abort(errors.New("injected cancellation"))
+	select {
+	case sendErr := <-sendDone:
+		require.Error(t, sendErr)
+	case <-time.After(time.Second):
+		t.Fatal("Abort did not release the blocked acknowledgement")
+	}
+}
+
+func TestNativeInputSplitsOversizedBatchesWithinNegotiatedLimit(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+	}
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 128, RequestTimeout: time.Second, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"),
+		typesOut, headings, testFlightDeadline(), testFlightRelease)
+	require.NoError(t, err)
+	input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
+	require.NoError(t, err)
+	require.NoError(t, input.Start(context.Background()))
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	for row := int64(0); row < 20; row++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, mp))
+	}
+	bat.SetRowCount(20)
+	defer bat.Clean(mp)
+	require.NoError(t, input.Send(context.Background(), bat, mp))
+	require.NoError(t, input.Finish(context.Background()))
+	require.Greater(t, input.sequence, uint64(1))
+	require.Equal(t, uint64(20), input.rows)
+	require.LessOrEqual(t, input.bytes, input.sequence*runtime.config.MaxBatchBytes)
+}
+
+func TestNativeInputAcceptsEarlyNotNeeded(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+		notNeededInput: true,
+	}
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 128, RequestTimeout: time.Second, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"),
+		typesOut, headings, testFlightDeadline(), testFlightRelease)
+	require.NoError(t, err)
+	input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
+	require.NoError(t, err)
+	require.NoError(t, input.Start(context.Background()))
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	for row := int64(0); row < 20; row++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, mp))
+	}
+	bat.SetRowCount(20)
+	defer bat.Clean(mp)
+	require.NoError(t, input.Send(context.Background(), bat, mp))
+	require.True(t, input.notNeeded)
+	require.Equal(t, int32(1), server.doPutBatches.Load())
+	require.NoError(t, input.Send(context.Background(), bat, mp))
+	require.Equal(t, int32(1), server.doPutBatches.Load())
+	require.NoError(t, input.Finish(context.Background()))
+}
+
+func TestCleanupAfterResultEOFStillJoinsNativeInputs(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+	}
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Second, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"),
+		typesOut, headings, testFlightDeadline(), testFlightRelease)
+	require.NoError(t, err)
+	input, err := execution.NewNativeInput(bytes.Repeat([]byte{7}, 32))
+	require.NoError(t, err)
+	require.NoError(t, input.Start(context.Background()))
+	execution.mu.Lock()
+	execution.quiesced = true
+	execution.mu.Unlock()
+	require.NoError(t, execution.Cleanup(context.Background()))
+	require.ErrorIs(t, input.Err(), context.Canceled)
+	require.Equal(t, int32(1), server.cancels.Load())
 }
 
 func TestPrepareCancelsByIdempotencyWhenTicketIsUnknown(t *testing.T) {
@@ -587,6 +759,7 @@ func testFlightConnection(t *testing.T, implementation *testFlightServer) *grpc.
 		Methods:     []grpc.MethodDesc{{MethodName: "GetFlightInfo", Handler: testGetFlightInfo}},
 		Streams: []grpc.StreamDesc{
 			{StreamName: "DoGet", Handler: testDoGet, ServerStreams: true},
+			{StreamName: "DoPut", Handler: testDoPut, ServerStreams: true, ClientStreams: true},
 			{StreamName: "DoAction", Handler: testDoAction, ServerStreams: true},
 		},
 	}, implementation)
@@ -610,6 +783,7 @@ func testGetFlightInfo(service any, ctx context.Context, decode func(any) error,
 	if request.Type != commandDescriptor || len(request.Path) != 0 || proto.Unmarshal(request.Cmd, command) != nil ||
 		command.ProtocolVersion != protocolVersion || command.SubstraitVersion != substraitVersion ||
 		len(command.CapabilityHash) != sha256.Size || command.MaxBatchBytes == 0 || command.DeadlineUnixMS == 0 ||
+		command.MaxInputBatchBytes == 0 ||
 		len(command.Plan) == 0 || len(command.QueryID) != 16 || len(command.IdempotencyKey) != sha256.Size || command.AccountID == nil {
 		return nil, status.Error(codes.InvalidArgument, "malformed ExecuteSubstrait command")
 	}
@@ -660,6 +834,65 @@ func testDoGet(service any, stream grpc.ServerStream) error {
 		return err
 	}
 	return stream.SendMsg(&flightData{DataHeader: server.header, DataBody: server.body})
+}
+
+func testDoPut(service any, stream grpc.ServerStream) error {
+	server := service.(*testFlightServer)
+	first := new(flightData)
+	if err := stream.RecvMsg(first); err != nil {
+		return err
+	}
+	request := new(uploadInputRequest)
+	if first.Descriptor == nil || first.Descriptor.Type != commandDescriptor ||
+		proto.Unmarshal(first.Descriptor.Cmd, request) != nil || len(request.Ticket) != ticketBytes ||
+		len(request.StreamRef) != 32 {
+		return status.Error(codes.InvalidArgument, "malformed native input descriptor")
+	}
+	attached, _ := proto.Marshal(&uploadInputAck{Ready: true})
+	if err := stream.SendMsg(&flightPutResult{AppMetadata: attached}); err != nil {
+		return err
+	}
+	var batches, rows, bytesSeen uint64
+	for {
+		message := new(flightData)
+		err := stream.RecvMsg(message)
+		if err == io.EOF {
+			ack, _ := proto.Marshal(&uploadInputAck{AcknowledgedBatches: batches, Rows: rows, Bytes: bytesSeen, Complete: true})
+			return stream.SendMsg(&flightPutResult{AppMetadata: ack})
+		}
+		if err != nil {
+			return err
+		}
+		if len(message.AppMetadata) < nativeBatchFrameHeaderBytes || string(message.AppMetadata[:4]) != "MOB1" {
+			return status.Error(codes.InvalidArgument, "malformed native input frame")
+		}
+		batches++
+		server.doPutBatches.Add(1)
+		if binary.LittleEndian.Uint64(message.AppMetadata[8:16]) != batches {
+			return status.Error(codes.InvalidArgument, "non-contiguous native input sequence")
+		}
+		payload := message.AppMetadata[nativeBatchFrameHeaderBytes:]
+		if server.notNeededInput {
+			ack, _ := proto.Marshal(&uploadInputAck{Complete: true, NotNeeded: true})
+			return stream.SendMsg(&flightPutResult{AppMetadata: ack})
+		}
+		rows += binary.LittleEndian.Uint64(payload[:8])
+		bytesSeen += uint64(len(payload))
+		if server.doPutBatch != nil {
+			server.doPutOnce.Do(func() { close(server.doPutBatch) })
+		}
+		if server.blockDoPutAck != nil {
+			select {
+			case <-server.blockDoPutAck:
+			case <-stream.Context().Done():
+				return context.Cause(stream.Context())
+			}
+		}
+		ack, _ := proto.Marshal(&uploadInputAck{AcknowledgedBatches: batches, Rows: rows, Bytes: bytesSeen})
+		if err = stream.SendMsg(&flightPutResult{AppMetadata: ack}); err != nil {
+			return err
+		}
+	}
 }
 
 func testDoAction(service any, stream grpc.ServerStream) error {
@@ -745,6 +978,7 @@ func testTLSFlightServer(t *testing.T, implementation *testFlightServer) (string
 		Methods: []grpc.MethodDesc{{MethodName: "GetFlightInfo", Handler: testGetFlightInfo}},
 		Streams: []grpc.StreamDesc{
 			{StreamName: "DoGet", Handler: testDoGet, ServerStreams: true},
+			{StreamName: "DoPut", Handler: testDoPut, ServerStreams: true, ClientStreams: true},
 			{StreamName: "DoAction", Handler: testDoAction, ServerStreams: true},
 		},
 	}, implementation)

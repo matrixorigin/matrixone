@@ -46,6 +46,7 @@ type Output struct {
 
 	Data interface{}
 	Func func(*batch.Batch, *perfcounter.CounterSet) error
+	stop func() bool
 
 	// IsAdaptive enables the adaptive vector search fallback mechanism.
 	// When set to true and the query completes with zero results (rowCount == 0),
@@ -96,6 +97,14 @@ func (output *Output) WithData(data interface{}) *Output {
 
 func (output *Output) WithFunc(Func func(*batch.Batch, *perfcounter.CounterSet) error) *Output {
 	output.Func = Func
+	return output
+}
+
+// WithShouldStop lets a sink end only its own producer pipeline after a
+// successful callback. It is used when a remote consumer declares that this
+// input relation is no longer needed; nil preserves the ordinary output path.
+func (output *Output) WithShouldStop(stop func() bool) *Output {
+	output.stop = stop
 	return output
 }
 

@@ -89,6 +89,9 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Status = vm.ExecStop
 			return result, err
 		}
+		if output.stop != nil && output.stop() {
+			result.Status = vm.ExecStop
+		}
 
 		// TODO: analyzer.Output(result.Batch)
 		return result, nil
@@ -139,6 +142,9 @@ func (output *Output) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					result.Status = vm.ExecStop
 					return result, err
+				}
+				if output.stop != nil && output.stop() {
+					result.Status = vm.ExecStop
 				}
 
 				result.Batch = bat

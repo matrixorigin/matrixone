@@ -35,14 +35,18 @@ import (
 )
 
 const (
-	flightService       = "/arrow.flight.protocol.FlightService/"
-	getFlightInfoMethod = flightService + "GetFlightInfo"
-	doGetMethod         = flightService + "DoGet"
-	doActionMethod      = flightService + "DoAction"
-	commandDescriptor   = int32(2)
-	ticketBytes         = 32
-	protocolVersion     = uint32(3)
-	substraitVersion    = "0.78.0"
+	flightService            = "/arrow.flight.protocol.FlightService/"
+	getFlightInfoMethod      = flightService + "GetFlightInfo"
+	doGetMethod              = flightService + "DoGet"
+	doPutMethod              = flightService + "DoPut"
+	doActionMethod           = flightService + "DoAction"
+	commandDescriptor        = int32(2)
+	ticketBytes              = 32
+	protocolVersion          = uint32(4)
+	substraitVersion         = "0.78.0"
+	maxNativeInputBatchBytes = uint64(4 << 20)
+	maxNativeInputs          = 16
+	maxPlanBytes             = uint64(16 << 20)
 )
 
 var serverStream = &grpc.StreamDesc{ServerStreams: true}
@@ -104,6 +108,7 @@ type Execution struct {
 	releaseDone    chan struct{}
 	releaseErr     error
 	reconciling    bool
+	inputs         []*NativeInput
 }
 
 // quiescenceUnknownError means the client could not prove that a possibly
@@ -139,14 +144,18 @@ func NewRuntime(ctx context.Context, config Config, capabilityDocument string) (
 	if tlsConfig.MinVersion < tls.VersionTLS12 {
 		tlsConfig.MinVersion = tls.VersionTLS12
 	}
-	if config.MaxBatchBytes > uint64(maxInt())-(1<<20) {
-		return nil, internalErrorf("sidecar flight: max batch bytes overflows platform int")
+	wirePayloadLimit := max(config.MaxBatchBytes, maxPlanBytes)
+	if wirePayloadLimit > uint64(maxInt())-(1<<20) {
+		return nil, internalErrorf("sidecar flight: transport payload limit overflows platform int")
 	}
-	maximumMessage := config.MaxBatchBytes + 1<<20
+	maximumMessage := wirePayloadLimit + 1<<20
 	conn, err := grpc.NewClient(
 		config.Address,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(int(maximumMessage))),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(int(maximumMessage)),
+			grpc.MaxCallSendMsgSize(int(maximumMessage)),
+		),
 	)
 	if err != nil {
 		return nil, internalErrorf("sidecar flight: create client: %w", err)
@@ -190,7 +199,7 @@ func (r *Runtime) Prepare(
 	if release == nil {
 		return nil, internalErrorf("sidecar flight: lease release owner is required")
 	}
-	if len(queryID) != 16 || len(plan) == 0 || len(plan) > 16<<20 {
+	if len(queryID) != 16 || len(plan) == 0 || uint64(len(plan)) > maxPlanBytes {
 		primary := internalErrorf("sidecar flight: query identity and Substrait plan are required")
 		return nil, r.failBeforeVisibility(ctx, primary, release)
 	}
@@ -237,7 +246,8 @@ func (r *Runtime) Prepare(
 		CapabilityHash: r.capabilityHash[:], MaxBatchBytes: r.config.MaxBatchBytes,
 		DeadlineUnixMS: uint64(deadline.UnixMilli()), Plan: plan,
 		QueryID: append([]byte(nil), queryID...), IdempotencyKey: idempotencyKey[:],
-		AccountID: proto.Uint64(accountID),
+		AccountID:          proto.Uint64(accountID),
+		MaxInputBatchBytes: min(maxNativeInputBatchBytes, r.config.MaxBatchBytes),
 	}
 	command, err := proto.Marshal(request)
 	if err != nil {

@@ -173,10 +173,37 @@ func TestSiriusCompileFastRejections(t *testing.T) {
 	offloaded, err := (&Compile{}).tryCompileSiriusRead(context.Background(), nil)
 	require.NoError(t, err)
 	require.False(t, offloaded)
+	offloaded, err = (&Compile{stmt: &tree.ExplainAnalyze{}}).tryCompileSiriusRead(WithSiriusStreamOffload(context.Background()), nil)
+	require.False(t, offloaded)
+	require.ErrorContains(t, err, "requires a SELECT statement")
 
 	require.NoError(t, (*siriusReadOwner)(nil).finish(context.Background(), false))
-	err = (&Compile{}).runSiriusRead(context.Background())
+	err = (&Compile{}).runSiriusRead(context.Background(), nil)
 	require.ErrorContains(t, err, "missing Sirius execution owner")
+}
+
+func TestSiriusStreamCompileInitializesOneCNPhysicalState(t *testing.T) {
+	query := &planpb.Query{
+		StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"},
+		Nodes: []*planpb.Node{{
+			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{},
+			ObjRef: &planpb.ObjectRef{Obj: 42, ObjName: "t"},
+			TableDef: &planpb.TableDef{DbId: 7, TblId: 42, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{
+				Name: "a", Typ: planpb.Type{Id: int32(types.T_int64)},
+			}}},
+		}},
+	}
+	queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: query}}
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	c := &Compile{proc: proc, ncpu: 8}
+	c.initSiriusStreamCompile(queryPlan)
+	require.NotNil(t, c.anal)
+	require.Same(t, query, c.anal.qry)
+	require.NotNil(t, query.Nodes[0].AnalyzeInfo)
+	require.GreaterOrEqual(t, query.Nodes[0].Stats.Dop, int32(1))
+	require.NotEqual(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	c.anal.release()
 }
 
 func TestSQLSelectLimitIsMaterializedBeforeSiriusExport(t *testing.T) {

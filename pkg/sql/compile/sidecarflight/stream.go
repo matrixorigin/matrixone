@@ -162,7 +162,10 @@ func (e *Execution) CancelAndJoin(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	e.mu.Lock()
-	if e.terminal || e.quiesced {
+	// Result EOF proves the execution worker is quiescent, but streamed reads
+	// may still own live DoPut handlers. Only direct executions can return from
+	// that state without explicitly aborting and joining their input streams.
+	if e.terminal || (e.quiesced && len(e.inputs) == 0) {
 		e.mu.Unlock()
 		return nil
 	}
@@ -183,12 +186,16 @@ func (e *Execution) CancelAndJoin(ctx context.Context) error {
 	e.cleanupDone = make(chan struct{})
 	done := e.cleanupDone
 	cancel := e.streamCancel
+	inputs := append([]*NativeInput(nil), e.inputs...)
 	ticket := slices.Clone(e.ticket)
 	var idempotencyKey []byte
 	if len(ticket) == 0 {
 		idempotencyKey = slices.Clone(e.idempotencyKey)
 	}
 	e.mu.Unlock()
+	for _, input := range inputs {
+		input.Abort(context.Canceled)
+	}
 	if cancel != nil {
 		cancel()
 	}
