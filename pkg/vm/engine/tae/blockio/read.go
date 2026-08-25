@@ -200,7 +200,7 @@ func BlockDataReadNoCopy(
 		tombstones.Release()
 	}
 	outputBat := batch.NewWithSize(len(columns))
-	actualRows := -1
+	var actualRows int
 	if phyAddrColumnPos < 0 || len(columns) > 1 || info.IsAppendable() {
 		actualRows = cacheVectors[0].Length()
 	} else {

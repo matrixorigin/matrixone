@@ -2528,7 +2528,6 @@ func (sm *SnapshotMeta) rebuildObjectMutationsLocked(
 			continue
 		}
 	}
-	return
 }
 
 func (sm *SnapshotMeta) Rebuild(
