@@ -220,6 +220,73 @@ update parent_generated_unique set id = 2 where id = 1;
 select * from parent_generated_unique order by id;
 select * from child_generated_unique order by id;
 
+create table update_generated_chain (
+    id int primary key,
+    base_value int,
+    g1 int generated always as (id + base_value) stored,
+    g2 int generated always as (g1 * 2) stored,
+    key idx_generated_chain_g2(g2)
+);
+insert into update_generated_chain(id, base_value) values (1, 2);
+update update_generated_chain set id = 10, base_value = 5 where id = 1;
+select id, base_value, g1, g2 from update_generated_chain order by id;
+select id, base_value, g1, g2 from update_generated_chain
+    force index(idx_generated_chain_g2) where g2 = 30;
+
+create table self_update_cascade (
+    id int primary key,
+    parent_id int,
+    key idx_self_update_parent(parent_id),
+    constraint fk_self_update_cascade foreign key (parent_id)
+        references self_update_cascade(id) on update cascade
+);
+insert into self_update_cascade values (1, null), (2, 1), (3, 2), (4, 2);
+update self_update_cascade set id = 11 where id = 1;
+select row_count();
+select * from self_update_cascade force index(idx_self_update_parent) order by id;
+update self_update_cascade set id = id + 10 where id in (2, 3);
+select row_count();
+select * from self_update_cascade force index(idx_self_update_parent) order by id;
+update self_update_cascade set id = id where id = 11;
+select row_count();
+
+create table parent_child_pk_action (
+    id int primary key
+);
+create table child_pk_action (
+    parent_id int,
+    seq int,
+    payload int,
+    primary key (parent_id, seq),
+    key idx_child_pk_payload(payload),
+    constraint fk_child_pk_action foreign key (parent_id)
+        references parent_child_pk_action(id) on update cascade
+);
+insert into parent_child_pk_action values (1);
+insert into child_pk_action values (1, 1, 10), (1, 2, 20);
+update parent_child_pk_action set id = 2 where id = 1;
+select row_count();
+select * from parent_child_pk_action order by id;
+select * from child_pk_action order by parent_id, seq;
+select * from child_pk_action force index(idx_child_pk_payload)
+    where payload in (10, 20) order by payload;
+
+create table parent_child_pk_nullable_idx (
+    id int primary key
+);
+create table child_pk_nullable_idx (
+    parent_id int primary key,
+    payload int,
+    key idx_child_nullable_payload(payload),
+    constraint fk_child_pk_nullable_idx foreign key (parent_id)
+        references parent_child_pk_nullable_idx(id) on update cascade
+);
+insert into parent_child_pk_nullable_idx values (1);
+insert into child_pk_nullable_idx values (1, null);
+update parent_child_pk_nullable_idx set id = 2 where id = 1;
+select row_count();
+select * from child_pk_nullable_idx order by parent_id;
+
 set foreign_key_checks = 0;
 create table update_preinsert_index (
     a int not null auto_increment primary key,
@@ -281,6 +348,10 @@ drop table parent_nonunique_prefix;
 
 drop table child_generated_unique;
 drop table parent_generated_unique;
+drop table update_generated_chain;
+drop table child_pk_action;
+drop table parent_child_pk_action;
+drop table self_update_cascade;
 drop table child_dual_fk;
 drop table parent_dual_b;
 drop table parent_dual_a;

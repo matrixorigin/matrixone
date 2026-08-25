@@ -156,6 +156,5 @@ func (b *ProjectionBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*p
 }
 
 func (b *ProjectionBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
 	return b.havingBinder.BindTimeWindowFunc(funcName, astExpr, depth, isRoot)
 }

@@ -1186,6 +1186,13 @@ func TestS3FSFullObjectDiskCacheFillDoesNotRetainWholeObjectBuffer(t *testing.T)
 	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
 	vec.Release()
 
+	// A read in async-update mode guarantees cache admission, not publication.
+	// Wait on the explicit barrier before asserting that a later read hits disk.
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
+	defer cancel()
+	fs.FlushCache(flushCtx)
+	require.NoError(t, flushCtx.Err())
+
 	hitVec := &IOVector{
 		FilePath: "foo/bar",
 		Entries: []IOEntry{

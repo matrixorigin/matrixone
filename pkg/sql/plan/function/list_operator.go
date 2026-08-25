@@ -2870,13 +2870,11 @@ var supportedOperators = []FuncNew{
 	},
 
 	// operator `cast_assign`
-	// Used by DML assignment paths (INSERT/UPDATE projection) for width-constrained strings
-	// targets. Unlike `cast_strict` (which always rejects over-length writes),
-	// `cast_assign` honors `sql_mode` at runtime: strict mode rejects (1406),
-	// non-strict mode truncates. For CHAR/VARCHAR only, excess trailing spaces
-	// are accepted in strict mode too. The overload is marked volatile so it is
-	// not constant-folded, letting prepared statements resolve sql_mode at
-	// execution time rather than at prepare time.
+	// Used by DML assignment paths (INSERT/UPDATE projection) for SQL-mode-sensitive
+	// targets. It applies strict/non-strict behavior at runtime to width-constrained
+	// strings and YEAR values. The overload is marked volatile so it is not
+	// constant-folded, letting prepared statements resolve sql_mode at execution
+	// time rather than at prepare time.
 	{
 		functionId: CAST_ASSIGN,
 		class:      plan.Function_STRICT,
@@ -2906,7 +2904,7 @@ var supportedOperators = []FuncNew{
 
 	// operator `cast_ignore`
 	// Used by INSERT IGNORE and UPDATE IGNORE assignment paths. It always
-	// truncates over-width string values and records warning 1265.
+	// adjusts invalid assignments regardless of sql_mode.
 	{
 		functionId: CAST_IGNORE,
 		class:      plan.Function_STRICT,
@@ -3398,7 +3396,7 @@ var supportedOperators = []FuncNew{
 
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
-	case types.T_char, types.T_varchar, types.T_text, types.T_date, types.T_datetime, types.T_timestamp:
+	case types.T_char, types.T_varchar, types.T_text, types.T_date, types.T_datetime, types.T_timestamp, types.T_year:
 		return true
 	default:
 		return false

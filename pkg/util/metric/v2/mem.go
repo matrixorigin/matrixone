@@ -59,6 +59,23 @@ var (
 )
 
 var (
+	MemMPoolOnHeapOutstandingBytesGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "mem",
+			Name:      "mpool_onheap_outstanding_bytes",
+			Help:      "Go-heap-backed bytes still logically owned by MPool and awaiting Free.",
+		})
+	MemMPoolOnHeapOutstandingObjectsGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "mem",
+			Name:      "mpool_onheap_outstanding_objects",
+			Help:      "Go-heap-backed objects still logically owned by MPool and awaiting Free.",
+		})
+)
+
+var (
 	MemTotalCrossPoolFreeCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "mo",

@@ -127,6 +127,123 @@ func TestCompare(t *testing.T) {
 	}
 }
 
+func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
+	testCases := []struct {
+		name   string
+		typ    types.Type
+		append func(*vector.Vector, bool, *mpool.MPool) error
+	}{
+		{
+			name: "fixed",
+			typ:  types.T_int64.ToType(),
+			append: func(vec *vector.Vector, isNull bool, mp *mpool.MPool) error {
+				return vector.AppendFixed(vec, int64(7), isNull, mp)
+			},
+		},
+		{
+			name: "varchar",
+			typ:  types.T_varchar.ToType(),
+			append: func(vec *vector.Vector, isNull bool, mp *mpool.MPool) error {
+				return vector.AppendBytes(vec, []byte("value"), isNull, mp)
+			},
+		},
+		{
+			name: "array",
+			typ:  types.T_array_float32.ToType(),
+			append: func(vec *vector.Vector, isNull bool, mp *mpool.MPool) error {
+				return vector.AppendArray(vec, []float32{1, 2}, isNull, mp)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		for _, metadata := range []string{"null", "const-null", "grouping"} {
+			t.Run(tc.name+"/"+metadata, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				proc := testutil.NewProcessWithMPool(t, "", mp)
+				registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+				require.NoError(t, err)
+				account, err := registry.Open(1 << 20)
+				require.NoError(t, err)
+				selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+				require.NoError(t, err)
+
+				destination := vector.NewOffHeapVecWithType(tc.typ)
+				require.NoError(t, destination.SetAllocationAccount(selection))
+				require.NoError(t, tc.append(destination, false, mp))
+				require.Zero(t, destination.GetNulls().GetBitmap().ExternalStorageCapacity())
+				require.Zero(t, destination.GetGrouping().GetBitmap().ExternalStorageCapacity())
+
+				var source *vector.Vector
+				if metadata == "const-null" {
+					source = vector.NewConstNull(tc.typ, 1, mp)
+				} else {
+					source = vector.NewVec(tc.typ)
+					require.NoError(t, tc.append(source, metadata == "null", mp))
+					if metadata == "grouping" {
+						source.GetGrouping().Add(0)
+					}
+				}
+
+				cmp := New(tc.typ, false, false)
+				cmp.Set(0, source)
+				cmp.Set(1, destination)
+				require.NoError(t, cmp.Copy(0, 1, 0, 0, proc))
+
+				require.Equal(t, metadata == "null" || metadata == "const-null", destination.GetNulls().Contains(0))
+				require.Equal(t, metadata == "grouping", destination.GetGrouping().Contains(0))
+				require.Positive(t, account.Snapshot().Used)
+
+				source.Free(mp)
+				destination.Free(mp)
+				snapshot, first, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+				require.True(t, first)
+				require.Zero(t, snapshot.Used)
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
+func TestCopyAccountedNullAdmissionFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	destination := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, destination.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(destination, int64(7), false, mp))
+	used := account.Snapshot().Used
+
+	source := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source, int64(0), true, mp))
+	cmp := New(types.T_int64.ToType(), false, false)
+	cmp.Set(0, source)
+	cmp.Set(1, destination)
+
+	err = cmp.Copy(0, 1, 0, 0, proc)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.False(t, destination.GetNulls().Contains(0))
+	require.Equal(t, int64(7), vector.MustFixedColWithTypeCheck[int64](destination)[0])
+	require.Equal(t, used, account.Snapshot().Used)
+
+	source.Free(mp)
+	destination.Free(mp)
+	snapshot, first, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.True(t, first)
+	require.Zero(t, snapshot.Used)
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func newTestCase(t *testing.T, desc bool, m *mpool.MPool, typ types.Type) testCase {
 	vecs := make([]*vector.Vector, 2)
 	vecs[0] = testutil.NewVector(Rows, typ, m, true, nil)

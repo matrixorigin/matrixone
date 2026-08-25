@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,7 +71,8 @@ func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
 		// explicit stress runs.
 		accounts[0].roundCount = 1
 	}
-	base := strings.ToLower(testutils.GetDatabaseName(t))
+	// Leave room for the account, operation, and round suffixes below.
+	base := fmt.Sprintf("db_issue26095_%d", time.Now().Nanosecond())
 	for _, account := range accounts {
 		t.Run(account.name, func(t *testing.T) {
 			for round := 0; round < account.roundCount; round++ {
