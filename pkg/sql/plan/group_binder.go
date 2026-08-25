@@ -624,6 +624,11 @@ func canonicalizeMedianAstValue(
 					if node.FuncName != nil {
 						node.FuncName = tree.NewCStr(node.FuncName.Compare(), 0)
 					}
+				case *tree.VarExpr:
+					// User, local, and system variable names are resolved
+					// case-insensitively.  Keep System/Global unchanged so the
+					// variable scope remains part of the semantic identity.
+					node.Name = strings.ToLower(node.Name)
 				}
 			}
 		}

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -43,6 +44,62 @@ func TestMedianSetOrderReferenceMarkerPreservesCaseSensitiveKeys(t *testing.T) {
 	require.NotEqual(t, upper, lower)
 	require.Equal(t, strings.ToLower(upper), upper)
 	require.Equal(t, strings.ToLower(lower), lower)
+}
+
+func TestMedianVariableCanonicalizationIsCaseInsensitiveAndScopeAware(t *testing.T) {
+	userLower, valid := canonicalMedianWithinGroupAstKey(nil, nil,
+		tree.NewVarExpr("review_var", false, false, nil))
+	require.True(t, valid)
+	userUpper, valid := canonicalMedianWithinGroupAstKey(nil, nil,
+		tree.NewVarExpr("REVIEW_VAR", false, false, nil))
+	require.True(t, valid)
+	session, valid := canonicalMedianWithinGroupAstKey(nil, nil,
+		tree.NewVarExpr("REVIEW_VAR", true, false, nil))
+	require.True(t, valid)
+	global, valid := canonicalMedianWithinGroupAstKey(nil, nil,
+		tree.NewVarExpr("review_var", true, true, nil))
+	require.True(t, valid)
+
+	require.Equal(t, userLower, userUpper)
+	require.NotEqual(t, userLower, session)
+	require.NotEqual(t, session, global)
+}
+
+func TestBuildMedianWithinGroupCanonicalizesVariableNames(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	fallback := NewMockCompilerContext(true)
+	ctx.ResolveVariableFunc = func(name string, system, global bool) (any, error) {
+		if !system && strings.EqualFold(name, "review_var") {
+			return int64(1), nil
+		}
+		return fallback.ResolveVariable(name, system, global)
+	}
+	ctx.ResolveVariableTypeFunc = func(name string, system, global bool) (Type, error) {
+		if !system && strings.EqualFold(name, "review_var") {
+			return makeSimplePlan2Type(types.T_int64), nil
+		}
+		return fallback.ResolveVariableType(name, system, global)
+	}
+
+	for _, sql := range []string{
+		"select median(@review_var) within group (order by @REVIEW_VAR) from select_test.bind_select",
+		"select median(cast(@@session.auto_increment_offset as signed)) within group " +
+			"(order by cast(@@SESSION.AUTO_INCREMENT_OFFSET as signed)) from select_test.bind_select",
+	} {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err)
+	}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select median(cast(@@session.auto_increment_offset as signed)) within group "+
+			"(order by cast(@@global.auto_increment_offset as signed)) from select_test.bind_select", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorContains(t, err, "median requires the WITHIN GROUP ORDER BY expression to match")
 }
 
 func TestBuildOrderedSetAggregates(t *testing.T) {
